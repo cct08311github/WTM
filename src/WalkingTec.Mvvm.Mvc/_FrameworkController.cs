@@ -754,5 +754,37 @@ namespace WalkingTec.Mvvm.Mvc
             await Wtm.RemoveUserCacheByGroup(groupcode);
             return Ok();
         }
+
+        [AllowAnonymous]
+        [HttpPost("api/_account/refreshtoken")]
+        public async Task<IActionResult> RefreshToken([FromBody] RefreshTokenRequest req)
+        {
+            if (string.IsNullOrEmpty(req?.RefreshToken))
+                return BadRequest(new { message = "RefreshToken is required" });
+            var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+            var tokenService = HttpContext.RequestServices
+                .GetRequiredService<ITokenService>();
+            var token = await tokenService.RefreshTokenAsync(req.RefreshToken, ip);
+            if (token == null)
+                return Unauthorized(new { message = "Invalid or expired refresh token" });
+            return Ok(token);
+        }
+
+        [HttpPost("api/_account/revoketoken")]
+        public async Task<IActionResult> RevokeToken([FromBody] RefreshTokenRequest req)
+        {
+            if (string.IsNullOrEmpty(req?.RefreshToken))
+                return BadRequest(new { message = "RefreshToken is required" });
+            var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+            var tokenService = HttpContext.RequestServices
+                .GetRequiredService<ITokenService>();
+            await tokenService.RevokeTokenAsync(req.RefreshToken, ip);
+            return Ok(new { message = "Token revoked" });
+        }
+    }
+
+    public class RefreshTokenRequest
+    {
+        public string RefreshToken { get; set; }
     }
 }
