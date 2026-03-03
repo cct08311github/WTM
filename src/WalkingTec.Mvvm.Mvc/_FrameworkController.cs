@@ -770,6 +770,7 @@ namespace WalkingTec.Mvvm.Mvc
             return Ok(token);
         }
 
+        [AllowAnonymous]
         [HttpPost("api/_account/revoketoken")]
         public async Task<IActionResult> RevokeToken([FromBody] RefreshTokenRequest req)
         {

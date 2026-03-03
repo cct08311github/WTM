@@ -1,5 +1,8 @@
 -- WTM 8.1.13 Database Migration (run BEFORE deploying)
 
+-- ============================================================
+-- SQL Server / Azure SQL
+-- ============================================================
 -- P0-1: Widen Password column for PBKDF2 hashes
 ALTER TABLE [FrameworkUser] ALTER COLUMN [Password] NVARCHAR(256) NOT NULL;
 
