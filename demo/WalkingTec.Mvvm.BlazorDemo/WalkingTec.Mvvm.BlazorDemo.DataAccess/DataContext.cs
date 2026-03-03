@@ -58,7 +58,7 @@ namespace WalkingTec.Mvvm.BlazorDemo.DataAccess
                 var user = new FrameworkUser
                 {
                     ITCode = "admin",
-                    Password = Utils.GetMD5String("000000"),
+                    Password = PasswordHashHelper.HashPassword("000000"),
                     IsValid = true,
                     Name = "Admin",
                     CreateBy = "Admin"

@@ -103,7 +103,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.ViewModels.FrameworkTenantVMs
             var admin = dc.Set<FrameworkUser>().AsNoTracking().IgnoreQueryFilters().Where(x => x.ITCode == itcode && x.TenantCode == Entity.TCode).FirstOrDefault();
             if (admin == null)
             {
-                admin = new FrameworkUser() { ITCode = "admin", Name = Entity.TCode + "_admin", Password = Utils.GetMD5String("000000"), TenantCode = Entity.TCode, IsValid = true };
+                admin = new FrameworkUser() { ITCode = "admin", Name = Entity.TCode + "_admin", Password = PasswordHashHelper.HashPassword("000000"), TenantCode = Entity.TCode, IsValid = true };
                 dc.AddEntity(admin);
             }
             var middle = dc.Set<FrameworkUserRole>().AsNoTracking().IgnoreQueryFilters().Where(x => x.UserCode == "admin" && x.RoleCode == "001" && x.TenantCode == Entity.TCode).FirstOrDefault();

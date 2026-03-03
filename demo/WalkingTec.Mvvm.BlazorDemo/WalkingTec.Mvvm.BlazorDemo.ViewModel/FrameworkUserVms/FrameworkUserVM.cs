@@ -66,7 +66,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.ViewModels.FrameworkUserVms
                     }
                 }
                 Entity.IsValid = true;
-                Entity.Password = Utils.GetMD5String(Entity.Password);
+                Entity.Password = PasswordHashHelper.HashPassword(Entity.Password);
                 await base.DoAddAsync();
                 if (MSD.IsValid)
                 {
@@ -164,7 +164,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.ViewModels.FrameworkUserVms
 
         public void ChangePassword()
         {
-            Entity.Password = Utils.GetMD5String(Entity.Password);
+            Entity.Password = PasswordHashHelper.HashPassword(Entity.Password);
             DC.UpdateProperty(Entity, x => x.Password);
             DC.SaveChanges();
         }

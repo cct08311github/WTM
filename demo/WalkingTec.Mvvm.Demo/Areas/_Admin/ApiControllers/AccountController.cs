@@ -115,7 +115,7 @@ namespace WalkingTec.Mvvm.Admin.Api
             {
                 ITCode = regInfo.ITCode,
                 Name = regInfo.Name,
-                Password = Utils.GetMD5String(regInfo.Password),
+                Password = PasswordHashHelper.HashPassword(regInfo.Password),
                 IsValid = true,
                 PhotoId = regInfo.PhotoId,
             };

@@ -445,7 +445,37 @@ namespace WalkingTec.Mvvm.Core
                 }
                 else
                 {
-                    exist = BaseUserQuery.IgnoreQueryFilters().Any(x => x.ITCode == username && x.Password == Utils.GetMD5String(password) && x.TenantCode == tenant && x.IsValid==true);
+                    var userRecord = BaseUserQuery.IgnoreQueryFilters()
+                        .Where(x => x.ITCode == username &&
+                                    x.TenantCode == tenant &&
+                                    x.IsValid == true)
+                        .Select(x => new { x.ITCode, x.Password })
+                        .FirstOrDefault();
+                    if (userRecord != null)
+                    {
+                        var verifyResult = PasswordHashHelper.VerifyPassword(
+                            userRecord.Password, password);
+                        if (verifyResult == PasswordVerifyResult.Failed)
+                        {
+                            exist = false;
+                        }
+                        else
+                        {
+                            exist = true;
+                            // Auto-upgrade: if old MD5 hash, rehash on successful login
+                            if (verifyResult == PasswordVerifyResult.SuccessRehashNeeded)
+                            {
+                                var fullUser = BaseUserQuery.IgnoreQueryFilters()
+                                    .FirstOrDefault(x => x.ITCode == username &&
+                                                         x.TenantCode == tenant);
+                                if (fullUser != null)
+                                {
+                                    fullUser.Password = PasswordHashHelper.HashPassword(password);
+                                    DC.SaveChanges();
+                                }
+                            }
+                        }
+                    }
                 }
                 if (exist == false)
                 {

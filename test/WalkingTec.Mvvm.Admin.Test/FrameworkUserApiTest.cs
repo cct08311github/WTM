@@ -50,7 +50,8 @@ namespace WalkingTec.Mvvm.Admin.Test
                 var data = context.Set<FrameworkUser>().FirstOrDefault();
                 Assert.AreEqual(data.ITCode, "itcode");
                 Assert.AreEqual(data.Name, "name");
-                Assert.AreEqual(data.Password, Utils.GetMD5String("password"));
+                var verifyResult = PasswordHashHelper.VerifyPassword(data.Password, "password");
+                Assert.AreNotEqual(PasswordVerifyResult.Failed, verifyResult);
                 Assert.AreEqual(data.CreateBy, "user");
                 Assert.IsTrue(DateTime.Now.Subtract(data.CreateTime.Value).Seconds < 10);
             }

@@ -2,6 +2,14 @@
 
 ## v8.x.x
 
+## 8.1.13 (2026-03-04)
+
+* **安全(Breaking Change)：** 密碼儲存從 MD5 升級至 PBKDF2（ASP.NET Core Identity PasswordHasher），自動向下相容舊 MD5 帳號；**部署前必須執行 db-migration-8.1.13.sql 以擴展 Password 欄位至 256 字元**
+* **安全：** JWT 新增 Refresh Token 機制，支援 Token Rotation 防止重複使用，提供 /api/_account/refreshtoken 與 /api/_account/revoketoken 端點
+* **依賴：** DotNetCore.NPOI 1.2.3 → NPOI 2.7.6
+* **依賴：** 移除 .NET Core 2.1.x 舊版依賴套件
+* **CI：** 新增 GitHub Actions 建置、測試與套件弱點掃描工作流
+
 ##8.1.12(2024-10-10)
 * **修改：**   修复Blazor和Vue下多租户工作流的Bug
 

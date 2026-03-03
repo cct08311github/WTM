@@ -368,9 +368,9 @@ namespace WalkingTec.Mvvm.Core
                     rowspan = maxLevel - col.MaxLevel;
                 }
                 var cellRangeAddress = new CellRangeAddress(rowIndex, rowIndex + rowspan, colIndex, colIndex + bcount - 1);
-                sheet.AddMergedRegion(cellRangeAddress);
                 if (rowspan > 0 || bcount > 1)
                 {
+                    sheet.AddMergedRegion(cellRangeAddress); // NPOI 2.6+: must span 2+ cells
                     cell.CellStyle.Alignment = HorizontalAlignment.Center;
                     cell.CellStyle.VerticalAlignment = VerticalAlignment.Center;
                 }

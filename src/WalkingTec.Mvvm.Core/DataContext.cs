@@ -48,6 +48,7 @@ namespace WalkingTec.Mvvm.Core
         public DbSet<Elsa_WorkflowDefinition> Elsa_WorkflowDefinitions { get; set; }
         public DbSet<Elsa_WorkflowExecutionLogRecord> Elsa_WorkflowExecutionLogRecords { get; set; }
         public DbSet<Elsa_WorkflowInstance> Elsa_WorkflowInstances { get; set; }
+        public DbSet<RefreshTokenEntity> FrameworkRefreshTokens { get; set; }
 
         /// <summary>
         /// FrameworkContext

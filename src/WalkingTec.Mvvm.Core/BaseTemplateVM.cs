@@ -259,8 +259,8 @@ namespace WalkingTec.Mvvm.Core
             }
 
             //隐藏前2个Sheet
-            workbook.SetSheetHidden(1, SheetState.Hidden);
-            workbook.SetSheetHidden(2, SheetState.Hidden);
+            workbook.SetSheetVisibility(1, SheetVisibility.Hidden);
+            workbook.SetSheetVisibility(2, SheetVisibility.Hidden);
 
             //返回byte数组
             MemoryStream ms = new MemoryStream();
