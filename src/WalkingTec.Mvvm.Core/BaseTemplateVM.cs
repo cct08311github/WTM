@@ -259,8 +259,8 @@ namespace WalkingTec.Mvvm.Core
             }
 
             //隐藏前2个Sheet
-            workbook.SetSheetHidden(1, SheetState.Hidden);
-            workbook.SetSheetHidden(2, SheetState.Hidden);
+            workbook.SetSheetHidden(1, 1); // SheetState.Hidden = 1 (API changed to int in NPOI 2.6+)
+            workbook.SetSheetHidden(2, 1);
 
             //返回byte数组
             MemoryStream ms = new MemoryStream();

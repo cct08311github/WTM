@@ -10,11 +10,8 @@
   <Import Project="..\..\common.props" />
 
   <ItemGroup>
-    <FrameworkReference Include="Microsoft.AspNetCore.App" />
-  </ItemGroup>
-
-  <ItemGroup>
     <PackageReference Include="Aliyun.OSS.SDK.NetCore" Version="2.13.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Identity" Version="8.0.3" />
     <PackageReference Include="NPOI" Version="2.7.6" />
     <PackageReference Include="Elsa.Server.Core" Version="2.14.1" />
     <PackageReference Include="Fare" Version="2.2.1" />

@@ -237,7 +237,7 @@ namespace WalkingTec.Mvvm.Core
                 ISheet sheet = xssfworkbook.GetSheetAt(0);
                 sheet.ForceFormulaRecalculation = true;
                 XSSFFormulaEvaluator XE = new XSSFFormulaEvaluator(xssfworkbook);
-                IEnumerator rows = sheet.GetRowEnumerator();
+                IEnumerator rows = sheet.GetEnumerator();
                 var cells = sheet.GetRow(0).Cells;
 
                 //获取模板中所有字段的属性
