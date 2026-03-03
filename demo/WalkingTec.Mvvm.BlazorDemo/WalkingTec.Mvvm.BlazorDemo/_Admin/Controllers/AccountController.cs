@@ -32,7 +32,7 @@ namespace WalkingTec.Mvvm.Admin.Api
         public async Task<IActionResult> Login([FromForm] string account, [FromForm] string password, [FromForm] string tenant = null, [FromForm] bool rememberLogin = false)
         {
 
-            var user = Wtm.DoLogin(account, password, tenant);
+            var user = await Wtm.DoLoginAsync(account, password, tenant);
             if (user == null)
             {
                 return BadRequest(Localizer["Sys.LoginFailed"].Value);
@@ -62,7 +62,7 @@ namespace WalkingTec.Mvvm.Admin.Api
         [HttpPost("LoginJwt")]
         public async Task<IActionResult> LoginJwt(SimpleLogin loginInfo)
         {
-            var user = Wtm.DoLogin(loginInfo.Account, loginInfo.Password, loginInfo.Tenant);
+            var user = await Wtm.DoLoginAsync(loginInfo.Account, loginInfo.Password, loginInfo.Tenant);
             if (user == null)
             {
                 ModelState.AddModelError(" ", Localizer["Sys.LoginFailed"]);
