@@ -287,7 +287,7 @@ namespace WalkingTec.Mvvm.Core
             {
                 return null;
             }
-            var user = DoLogin(itcode, null, null);
+            var user = DoLoginAsync(itcode, null, null).GetAwaiter().GetResult();
             return user;
         }
 
@@ -365,11 +365,11 @@ namespace WalkingTec.Mvvm.Core
             this._serviceProvider = sp;
         }
 
-        public LoginUserInfo DoLogin(string username, string password, string tenant)
+        public async Task<LoginUserInfo> DoLoginAsync(string username, string password, string tenant)
         {
             if(string.IsNullOrEmpty(tenant))
             {
-                tenant = DC.TenantCode;               
+                tenant = DC.TenantCode;
             }
             if (tenant == null && HttpContext.User.Identity.IsAuthenticated)
             {
@@ -382,12 +382,12 @@ namespace WalkingTec.Mvvm.Core
                 {
                     remoteToken = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.RToken).Select(x => x.Value).FirstOrDefault();
                 }
-                    LoginUserInfo rv = null;
+                LoginUserInfo rv = null;
                 if (string.IsNullOrEmpty(remoteToken) == false)
                 {
                     Dictionary<string, string> headers = new Dictionary<string, string>();
                     headers.Add("Authorization", "Bearer " + remoteToken);
-                    var user = CallAPI<LoginUserInfo>("mainhost", "/api/_account/checkuserinfo?IsApi=false", HttpMethodEnum.GET, new { }, 10, headers: headers).Result;
+                    var user = await CallAPI<LoginUserInfo>("mainhost", "/api/_account/checkuserinfo?IsApi=false", HttpMethodEnum.GET, new { }, 10, headers: headers);
                     rv = user.Data;
                     if (rv != null)
                     {
@@ -396,13 +396,13 @@ namespace WalkingTec.Mvvm.Core
                 }
                 else if(string.IsNullOrEmpty(password)==false)
                 {
-                    var loginjwt = CallAPI<Token>("mainhost", "/api/_account/loginjwt", HttpMethodEnum.POST, new { Account = username, Password = password }, 10).Result;
+                    var loginjwt = await CallAPI<Token>("mainhost", "/api/_account/loginjwt", HttpMethodEnum.POST, new { Account = username, Password = password }, 10);
                     if (string.IsNullOrEmpty(loginjwt?.Data?.AccessToken) == false)
                     {
                         remoteToken = loginjwt?.Data?.AccessToken;
                         Dictionary<string, string> headers = new Dictionary<string, string>();
                         headers.Add("Authorization", "Bearer " + remoteToken);
-                        var user = CallAPI<LoginUserInfo>("mainhost", "/api/_account/checkuserinfo?IsApi=false", HttpMethodEnum.GET, new { }, 10, headers: headers).Result;
+                        var user = await CallAPI<LoginUserInfo>("mainhost", "/api/_account/checkuserinfo?IsApi=false", HttpMethodEnum.GET, new { }, 10, headers: headers);
                         rv = user.Data;
                         if (rv != null)
                         {
@@ -412,16 +412,7 @@ namespace WalkingTec.Mvvm.Core
                 }
                 if (rv != null)
                 {
-                    //var cacheKey = $"{GlobalConstants.CacheKey.UserInfo}:{rv.ITCode + "$`$" + rv.TenantCode}";
-                    //var cacheuser = Cache.Get<LoginUserInfo>(cacheKey);
-                    //if (cacheuser != null && cacheuser.TimeTick >= rv.TimeTick)
-                    //{
-                    //    rv = cacheuser;
-                    //}
-                    //else
-                    //{
-                        rv.LoadBasicInfoAsync(this).Wait();
-                    //}
+                    await rv.LoadBasicInfoAsync(this);
                 }
                 return rv;
             }
@@ -430,7 +421,6 @@ namespace WalkingTec.Mvvm.Core
                 bool exist = false;
                 username = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject).Select(x => x.Value).FirstOrDefault() ?? username;
                 var ct = GlobaInfo.AllTenant.Where(x => x.TCode == tenant).FirstOrDefault();
-                //如果找不到指定的tenant，说明租户不存在，直接返回null
                 if(ct == null && string.IsNullOrEmpty(tenant) == false)
                 {
                     return null;
@@ -462,7 +452,6 @@ namespace WalkingTec.Mvvm.Core
                         else
                         {
                             exist = true;
-                            // Auto-upgrade: if old MD5 hash, rehash on successful login
                             if (verifyResult == PasswordVerifyResult.SuccessRehashNeeded)
                             {
                                 var fullUser = BaseUserQuery.IgnoreQueryFilters()
@@ -471,7 +460,7 @@ namespace WalkingTec.Mvvm.Core
                                 if (fullUser != null)
                                 {
                                     fullUser.Password = PasswordHashHelper.HashPassword(password);
-                                    DC.SaveChanges();
+                                    await DC.SaveChangesAsync();
                                 }
                             }
                         }
@@ -487,22 +476,19 @@ namespace WalkingTec.Mvvm.Core
                     ITCode = username,
                     TenantCode = tenant
                 };
-                //var cacheKey = $"{GlobalConstants.CacheKey.UserInfo}:{username + "$`$" + tenant}";
-                //var cacheuser = Cache.Get<LoginUserInfo>(cacheKey);
-                //if (cacheuser != null)
-                //{
-                //    user = cacheuser;
-                //}
-                //else
-                //{
-                    user.LoadBasicInfoAsync(this).Wait();
-                //}
+                await user.LoadBasicInfoAsync(this);
                 user.RemoteToken = null;
                 var authService = HttpContext.RequestServices.GetService(typeof(ITokenService)) as ITokenService;
-                var token = authService.IssueTokenAsync(user).Result;
+                var token = await authService.IssueTokenAsync(user);
                 user.RemoteToken = token.AccessToken;
                 return user;
             }
+        }
+
+        [Obsolete("Use DoLoginAsync to avoid ThreadPool starvation. DoLogin blocks threads on every auth request.")]
+        public LoginUserInfo DoLogin(string username, string password, string tenant)
+        {
+            return DoLoginAsync(username, password, tenant).GetAwaiter().GetResult();
         }
 
         public Token RefreshToken()
