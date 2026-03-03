@@ -25,7 +25,7 @@ namespace WalkingTec.Mvvm.Core
 
         [Display(Name = "_Admin.Password")]
         [Required(AllowEmptyStrings = false, ErrorMessage = "Validate.{0}required")]
-        [StringLength(32, ErrorMessage = "Validate.{0}stringmax{1}")]
+        [StringLength(256, ErrorMessage = "Validate.{0}stringmax{1}")]
         public string Password { get; set; }
 
         [Display(Name = "_Admin.Name")]
