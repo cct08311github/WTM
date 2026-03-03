@@ -11,7 +11,7 @@
 
   <ItemGroup>
     <PackageReference Include="Aliyun.OSS.SDK.NetCore" Version="2.13.0" />
-    <PackageReference Include="DotNetCore.NPOI" Version="1.2.3" />
+    <PackageReference Include="NPOI" Version="2.7.6" />
     <PackageReference Include="Elsa.Server.Core" Version="2.14.1" />
     <PackageReference Include="Fare" Version="2.2.1" />
     <PackageReference Include="Microsoft.AspNetCore.Http" Version="2.1.34" />
