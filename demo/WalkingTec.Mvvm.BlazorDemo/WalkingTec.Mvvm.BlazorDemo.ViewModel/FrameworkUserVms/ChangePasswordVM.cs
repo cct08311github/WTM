@@ -29,7 +29,8 @@ namespace WalkingTec.Mvvm.Mvc.Admin.ViewModels.FrameworkUserVms
         public override void Validate()
         {
             List<ValidationResult> rv = new List<ValidationResult>();
-            if (DC.Set<FrameworkUser>().Where(x => x.ITCode == LoginUserInfo.ITCode && x.Password == Utils.GetMD5String(OldPassword)).SingleOrDefault() == null)
+            var currentUser = DC.Set<FrameworkUser>().Where(x => x.ITCode == LoginUserInfo.ITCode).SingleOrDefault();
+            if (currentUser == null || PasswordHashHelper.VerifyPassword(currentUser.Password, OldPassword) == PasswordVerifyResult.Failed)
             {
                 MSD.AddModelError("OldPassword", Localizer["Login.OldPasswrodWrong"]);
             }
@@ -44,7 +45,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.ViewModels.FrameworkUserVms
             var user = DC.Set<FrameworkUser>().Where(x => x.ITCode == LoginUserInfo.ITCode).SingleOrDefault();
             if (user != null)
             {
-                user.Password = Utils.GetMD5String(NewPassword);
+                user.Password = PasswordHashHelper.HashPassword(NewPassword);
             }
             DC.SaveChanges();
         }

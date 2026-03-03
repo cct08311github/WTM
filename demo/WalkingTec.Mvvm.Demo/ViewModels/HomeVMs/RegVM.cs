@@ -63,7 +63,7 @@ namespace WalkingTec.Mvvm.Demo.ViewModels.HomeVMs
             {
                 ITCode = ITCode,
                 Name = Name,
-                Password = Utils.GetMD5String(Password),
+                Password = PasswordHashHelper.HashPassword(Password),
                 IsValid = false,
                 CellPhone = CellPhone,
                 Email = Email

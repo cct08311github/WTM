@@ -754,6 +754,7 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         /// <param name="str"></param>
         /// <returns>返回大写32位MD5值</returns>
+        [Obsolete("Use PasswordHashHelper.HashPassword() for passwords. MD5 is cryptographically broken for password storage.")]
         public static string GetMD5String(string str)
         {
             if(str == null)
@@ -772,9 +773,12 @@ namespace WalkingTec.Mvvm.Core
         /// <returns></returns>
         public static string GetMD5Stream(Stream stream)
         {
-            byte[] buffer = new byte[stream.Length];
-            stream.Read(buffer, 0, buffer.Length);
-            return MD5String(buffer);
+            using var md5 = MD5.Create();
+            byte[] hash = md5.ComputeHash(stream);
+            var sb = new StringBuilder(32);
+            foreach (byte b in hash)
+                sb.Append(b.ToString("X2"));
+            return sb.ToString();
         }
 
         /// <summary>
