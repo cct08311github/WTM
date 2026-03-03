@@ -72,7 +72,7 @@ namespace WalkingTec.Mvvm.Demo.ViewModels.HomeVMs
             DC.Set<FrameworkUser>().Add(user);
             DC.SaveChanges();
             var vm = Wtm.CreateVM<FrameworkUserVM>(user.ID);
-            _=vm.StartWorkflowAsync().Result;
+            _=vm.StartWorkflowAsync().GetAwaiter().GetResult();
             return true;
         }
     }

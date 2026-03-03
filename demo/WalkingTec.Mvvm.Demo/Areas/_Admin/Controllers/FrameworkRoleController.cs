@@ -23,12 +23,12 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
         }
         [ActionDescription("Sys.Search")]
         [HttpPost]
-        public IActionResult Search(FrameworkRoleSearcher searcher)
+        public async Task<IActionResult> Search(FrameworkRoleSearcher searcher)
         {
             if (ConfigInfo.HasMainHost && Wtm.LoginUserInfo?.CurrentTenant == null)
             {
                 searcher.IsPlainText = false;
-                return Wtm.CallAPI<string>("mainhost", "/api/_frameworkrole/search", HttpMethodEnum.POST, searcher).Result.ToActionResult();
+                return (await Wtm.CallAPI<string>("mainhost", "/api/_frameworkrole/search", HttpMethodEnum.POST, searcher)).ToActionResult();
             }
             var vm = Wtm.CreateVM<FrameworkRoleListVM>(passInit: true);
             if (ModelState.IsValid)
@@ -184,7 +184,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
 
         [HttpPost]
         [ActionDescription("Sys.Import")]
-        public ActionResult Import(FrameworkRoleImportVM vm, IFormCollection nouse)
+        public async Task<ActionResult> Import(FrameworkRoleImportVM vm, IFormCollection nouse)
         {
             if (ConfigInfo.HasMainHost && Wtm.LoginUserInfo?.CurrentTenant == null)
             {
@@ -196,7 +196,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
             }
             else
             {
-                Wtm.RemoveRoleCache(Wtm.LoginUserInfo.CurrentTenant).Wait();
+                await Wtm.RemoveRoleCache(Wtm.LoginUserInfo.CurrentTenant);
                 return FFResult().CloseDialog().RefreshGrid().Alert(Localizer["Sys.ImportSuccess", vm.EntityList.Count.ToString()]);
             }
         }

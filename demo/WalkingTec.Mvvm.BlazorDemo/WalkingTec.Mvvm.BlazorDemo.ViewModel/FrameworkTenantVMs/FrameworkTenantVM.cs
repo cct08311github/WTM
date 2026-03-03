@@ -79,7 +79,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.ViewModels.FrameworkTenantVMs
                     if (tenantdc.Database.EnsureCreated() == true)
                     {
                         tenantdc.SetTenantCode(Entity.TCode);
-                        tenantdc.DataInit(Wtm.GlobaInfo.AllModule, Wtm.GlobaInfo.IsSpa).Wait();
+                        tenantdc.DataInit(Wtm.GlobaInfo.AllModule, Wtm.GlobaInfo.IsSpa).GetAwaiter().GetResult();
                     }
                     AddTenantData(tenantdc, fps);
                 }
@@ -127,7 +127,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.ViewModels.FrameworkTenantVMs
             }
             dc.SaveChanges();
             var key = $"{GlobalConstants.CacheKey.UserInfo}:{"admin" + "$`$" + Entity.TCode}";
-            Cache.DeleteAsync(key).Wait();
+            Cache.DeleteAsync(key).GetAwaiter().GetResult();
         }
         public override void DoDelete()
         {

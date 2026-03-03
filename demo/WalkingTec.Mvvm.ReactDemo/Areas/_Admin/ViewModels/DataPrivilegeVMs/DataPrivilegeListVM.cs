@@ -130,7 +130,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.ViewModels.DataPrivilegeVMs
             Dictionary<string, string> groupdata = new Dictionary<string, string>();
             if (ConfigInfo.HasMainHost && Wtm.LoginUserInfo?.CurrentTenant == null)
             {
-                var dd = Wtm.CallAPI<List<ComboSelectListItem>>("mainhost", "/api/_account/GetFrameworkGroups").Result;
+                var dd = Wtm.CallAPI<List<ComboSelectListItem>>("mainhost", "/api/_account/GetFrameworkGroups").GetAwaiter().GetResult();
                 if(dd.Data != null)
                 {
                     foreach (var item in dd.Data)

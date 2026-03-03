@@ -40,14 +40,14 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpGet("[action]")]
         [NoLog]
         [Public]
-        public IActionResult GetWorkflowUsers([FromQuery]string[] itcode)
+        public async Task<IActionResult> GetWorkflowUsers([FromQuery]string[] itcode)
         {
 
 
 
                 if (ConfigInfo.HasMainHost)
                 {
-                    return Request.RedirectCall(Wtm, "/_WorkflowApi/GetWorkflowUsers").Result;
+                    return await Request.RedirectCall(Wtm, "/_WorkflowApi/GetWorkflowUsers");
                 }
                 var tenant = Wtm.LoginUserInfo?.CurrentTenant;
                 var rv = Wtm.BaseUserQuery.IgnoreQueryFilters().CheckContain(itcode.ToList(), x => x.ITCode).Where(x => x.TenantCode == tenant)
@@ -62,11 +62,11 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpGet("[action]")]
         [Public]
         [NoLog]
-        public IActionResult GetWorkflowGroups([FromQuery] string[] ids)
+        public async Task<IActionResult> GetWorkflowGroups([FromQuery] string[] ids)
         {
                 if (ConfigInfo.HasMainHost)
                 {
-                    return Request.RedirectCall(Wtm, "/_WorkflowApi/GetWorkflowGroups").Result;
+                    return await Request.RedirectCall(Wtm, "/_WorkflowApi/GetWorkflowGroups");
                 }
                 var tenant = Wtm.LoginUserInfo?.CurrentTenant;
                 var rv = Wtm.DC.Set<FrameworkGroup>().CheckIDs(ids.ToList())
@@ -80,11 +80,11 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpGet("[action]")]
         [Public]
         [NoLog]
-        public IActionResult GetWorkflowGroupManagers([FromQuery] string[] ids)
+        public async Task<IActionResult> GetWorkflowGroupManagers([FromQuery] string[] ids)
         {
             if (ConfigInfo.HasMainHost)
             {
-                return Request.RedirectCall(Wtm, "/_WorkflowApi/GetWorkflowGroupManagers").Result;
+                return await Request.RedirectCall(Wtm, "/_WorkflowApi/GetWorkflowGroupManagers");
             }
             var tenant = Wtm.LoginUserInfo?.CurrentTenant;
             var rv = Wtm.DC.Set<FrameworkGroup>().CheckIDs(ids.ToList())
@@ -98,11 +98,11 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpGet("[action]")]
         [Public]
         [NoLog]
-        public IActionResult GetWorkflowMyGroupManagers([FromQuery] string itcode)
+        public async Task<IActionResult> GetWorkflowMyGroupManagers([FromQuery] string itcode)
         {
             if (ConfigInfo.HasMainHost)
             {
-                return Request.RedirectCall(Wtm, "/_WorkflowApi/GetWorkflowMyGroupManagers").Result;
+                return await Request.RedirectCall(Wtm, "/_WorkflowApi/GetWorkflowMyGroupManagers");
             }
             var tenant = Wtm.LoginUserInfo?.CurrentTenant;
             var rv = Wtm.DC.Set<FrameworkUserGroup>().Where(x=>x.UserCode == itcode)
@@ -115,13 +115,13 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpGet("[action]")]
         [Public]
         [NoLog]
-        public IActionResult GetWorkflowRoles([FromQuery] string[] ids)
+        public async Task<IActionResult> GetWorkflowRoles([FromQuery] string[] ids)
         {
 
 
                 if (ConfigInfo.HasMainHost)
                 {
-                    return Request.RedirectCall(Wtm, "/_WorkflowApi/GetWorkflowRoles").Result;
+                    return await Request.RedirectCall(Wtm, "/_WorkflowApi/GetWorkflowRoles");
                 }
                 var tenant = Wtm.LoginUserInfo?.CurrentTenant;
                 var rv = Wtm.DC.Set<FrameworkRole>().CheckIDs(ids.ToList())

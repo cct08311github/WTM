@@ -19,11 +19,11 @@ namespace WalkingTec.Mvvm.Admin.Api
     {
         [ActionDescription("Sys.Search")]
         [HttpPost("[action]")]
-        public IActionResult Search(FrameworkRoleSearcher searcher)
+        public async Task<IActionResult> Search(FrameworkRoleSearcher searcher)
         {
             if (ConfigInfo.HasMainHost && Wtm.LoginUserInfo?.CurrentTenant == null)
             {
-                return Request.RedirectCall(Wtm).Result;
+                return await Request.RedirectCall(Wtm);
             }
             if (ModelState.IsValid)
             {
@@ -216,7 +216,7 @@ namespace WalkingTec.Mvvm.Admin.Api
 
         [ActionDescription("Sys.Import")]
         [HttpPost("[action]")]
-        public ActionResult Import(FrameworkRoleImportVM vm)
+        public async Task<ActionResult> Import(FrameworkRoleImportVM vm)
         {
             if (ConfigInfo.HasMainHost && Wtm.LoginUserInfo?.CurrentTenant == null)
             {
@@ -229,7 +229,7 @@ namespace WalkingTec.Mvvm.Admin.Api
             }
             else
             {
-                Wtm.RemoveRoleCache(Wtm.LoginUserInfo.CurrentTenant).Wait();
+                await Wtm.RemoveRoleCache(Wtm.LoginUserInfo.CurrentTenant);
                 return Ok(vm.EntityList.Count);
             }
         }

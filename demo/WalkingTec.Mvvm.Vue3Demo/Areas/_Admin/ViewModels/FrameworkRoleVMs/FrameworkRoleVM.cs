@@ -21,13 +21,13 @@ namespace WalkingTec.Mvvm.Mvc.Admin.ViewModels.FrameworkRoleVMs
         public override void DoAdd()
         {
             base.DoAdd();
-            Wtm.RemoveRoleCache(Wtm.LoginUserInfo.CurrentTenant).Wait();
+            Wtm.RemoveRoleCache(Wtm.LoginUserInfo.CurrentTenant).GetAwaiter().GetResult();
         }
 
         public override void DoEdit(bool updateAllFields = false)
         {
             base.DoEdit(updateAllFields);
-            Wtm.RemoveRoleCache(Wtm.LoginUserInfo.CurrentTenant).Wait();
+            Wtm.RemoveRoleCache(Wtm.LoginUserInfo.CurrentTenant).GetAwaiter().GetResult();
         }
 
         public override async Task DoDeleteAsync()

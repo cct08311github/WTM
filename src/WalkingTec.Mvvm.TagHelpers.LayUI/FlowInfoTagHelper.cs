@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.Razor.TagHelpers;
 using WalkingTec.Mvvm.Core;
@@ -12,12 +13,12 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     public class FlowInfoTagHelper : BaseElementTag
     {
         public ModelExpression Vm { get; set; }
-        public override void Process(TagHelperContext context, TagHelperOutput output)
+        public override async Task ProcessAsync(TagHelperContext context, TagHelperOutput output)
         {
-            List<ApproveTimeLine> data = new List<ApproveTimeLine>(); 
+            List<ApproveTimeLine> data = new List<ApproveTimeLine>();
             if (Vm?.Model is IBaseCRUDVM<TopBasePoco> vm)
             {
-                data = vm.GetWorkflowTimeLineAsync().Result;
+                data = await vm.GetWorkflowTimeLineAsync();
             }
             
             output.TagName = "ul";

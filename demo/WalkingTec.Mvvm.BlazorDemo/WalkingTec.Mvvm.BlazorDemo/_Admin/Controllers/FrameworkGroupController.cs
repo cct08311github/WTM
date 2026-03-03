@@ -19,11 +19,11 @@ namespace WalkingTec.Mvvm.Admin.Api
     {
         [ActionDescription("Sys.Search")]
         [HttpPost("[action]")]
-        public IActionResult Search(FrameworkGroupSearcher searcher)
+        public async Task<IActionResult> Search(FrameworkGroupSearcher searcher)
         {
             if (ConfigInfo.HasMainHost && Wtm.LoginUserInfo?.CurrentTenant == null)
             {
-                return Request.RedirectCall(Wtm).Result;
+                return await Request.RedirectCall(Wtm);
             }
             if (ModelState.IsValid)
             {
@@ -128,7 +128,7 @@ namespace WalkingTec.Mvvm.Admin.Api
                 DC.Set<FrameworkUserGroup>().RemoveRange(gr);
                 DC.SaveChanges();
                 await Wtm.RemoveUserCacheByGroup(GroupCode.ToArray());
-                Wtm.RemoveGroupCache(Wtm.LoginUserInfo.CurrentTenant).Wait();
+                await Wtm.RemoveGroupCache(Wtm.LoginUserInfo.CurrentTenant);
                 return Ok(ids.Count());
             }
         }
@@ -185,7 +185,7 @@ namespace WalkingTec.Mvvm.Admin.Api
 
         [ActionDescription("Sys.Import")]
         [HttpPost("[action]")]
-        public ActionResult Import(FrameworkGroupImportVM vm)
+        public async Task<ActionResult> Import(FrameworkGroupImportVM vm)
         {
 
             if (ConfigInfo.HasMainHost && Wtm.LoginUserInfo?.CurrentTenant == null)
@@ -198,18 +198,18 @@ namespace WalkingTec.Mvvm.Admin.Api
             }
             else
             {
-                Wtm.RemoveGroupCache(Wtm.LoginUserInfo.CurrentTenant).Wait();
+                await Wtm.RemoveGroupCache(Wtm.LoginUserInfo.CurrentTenant);
                 return Ok(vm.EntityList.Count);
             }
         }
 
         [AllRights]
         [HttpGet("[action]")]
-        public IActionResult GetParents()
+        public async Task<IActionResult> GetParents()
         {
             if (ConfigInfo.HasMainHost && Wtm.LoginUserInfo?.CurrentTenant == null)
             {
-                return Request.RedirectCall(Wtm, "/api/_frameworkgroup/GetParents").Result;
+                return await Request.RedirectCall(Wtm, "/api/_frameworkgroup/GetParents");
             }
             var data = DC.Set<FrameworkGroup>().GetSelectListItems(Wtm, x => x.GroupName);
             return Ok(data);
@@ -217,11 +217,11 @@ namespace WalkingTec.Mvvm.Admin.Api
 
         [AllRights]
         [HttpGet("[action]")]
-        public IActionResult GetParentsTree()
+        public async Task<IActionResult> GetParentsTree()
         {
             if (ConfigInfo.HasMainHost && Wtm.LoginUserInfo?.CurrentTenant == null)
             {
-                return Request.RedirectCall(Wtm, "/api/_frameworkgroup/GetParentsTree").Result;
+                return await Request.RedirectCall(Wtm, "/api/_frameworkgroup/GetParentsTree");
             }
             var data = DC.Set<FrameworkGroup>().GetTreeSelectListItems(Wtm, x => x.GroupName);
             return Ok(data);

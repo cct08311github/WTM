@@ -26,12 +26,12 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
 
         [ActionDescription("Sys.Search")]
         [HttpPost]
-        public IActionResult Search(FrameworkGroupSearcher searcher)
+        public async Task<IActionResult> Search(FrameworkGroupSearcher searcher)
         {
             if (ConfigInfo.HasMainHost && Wtm.LoginUserInfo?.CurrentTenant == null)
             {
                 searcher.IsPlainText = false;
-                return Wtm.CallAPI<string>("mainhost", "/api/_frameworkgroup/search", HttpMethodEnum.POST, searcher).Result.ToActionResult();
+                return (await Wtm.CallAPI<string>("mainhost", "/api/_frameworkgroup/search", HttpMethodEnum.POST, searcher)).ToActionResult();
             }
             var vm = Wtm.CreateVM<FrameworkGroupListVM>(passInit: true);
             if (ModelState.IsValid)
@@ -188,7 +188,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
 
         [HttpPost]
         [ActionDescription("Sys.Import")]
-        public ActionResult Import(FrameworkGroupImportVM vm, IFormCollection nouse)
+        public async Task<ActionResult> Import(FrameworkGroupImportVM vm, IFormCollection nouse)
         {
             if (ConfigInfo.HasMainHost && Wtm.LoginUserInfo?.CurrentTenant == null)
             {
@@ -200,7 +200,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
             }
             else
             {
-                Wtm.RemoveGroupCache(Wtm.LoginUserInfo.CurrentTenant).Wait();
+                await Wtm.RemoveGroupCache(Wtm.LoginUserInfo.CurrentTenant);
                 return FFResult().CloseDialog().RefreshGrid().Alert(Localizer["Sys.ImportSuccess", vm.EntityList.Count.ToString()]);
             }
         }
