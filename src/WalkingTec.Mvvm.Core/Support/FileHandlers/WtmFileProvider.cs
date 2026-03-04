@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core.Extensions;
 using WalkingTec.Mvvm.Core.Models;
@@ -142,7 +143,7 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
             {
                 dc = _wtm.CreateDC();
             }
-            rv = dc.Set<FileAttachment>().CheckID(id).Select(x => new FileAttachment
+            rv = dc.Set<FileAttachment>().IgnoreQueryFilters().CheckID(id).Select(x => new FileAttachment
             {
                 ID = x.ID,
                 ExtraInfo = x.ExtraInfo,
@@ -175,7 +176,7 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
             {
                 dc = _wtm.CreateDC();
             }
-            file = dc.Set<FileAttachment>().CheckID(id)
+            file = dc.Set<FileAttachment>().IgnoreQueryFilters().CheckID(id)
                 .Select(x => new FileAttachment
                 {
                     ID = x.ID,
@@ -210,7 +211,7 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
             {
                 dc = _wtm.CreateDC();
             }
-            rv = dc.Set<FileAttachment>().CheckID(id).Select(x => x.FileName).FirstOrDefault();
+            rv = dc.Set<FileAttachment>().IgnoreQueryFilters().CheckID(id).Select(x => x.FileName).FirstOrDefault();
             if(rv == null)
             {
                 rv = "unknown";
