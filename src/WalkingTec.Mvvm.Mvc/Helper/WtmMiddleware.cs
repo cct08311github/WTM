@@ -34,7 +34,7 @@ namespace WalkingTec.Mvvm.Mvc
             }
             if (context.Request.Path == "/v1/activities" && context.Request.QueryString.Value != "?inneruse=1")
             {
-                var txt = wtm.CallAPI("", $"{wtm.HostAddress}/v1/activities?inneruse=1").Result.Data;
+                var txt = (await wtm.CallAPI("", $"{wtm.HostAddress}/v1/activities?inneruse=1")).Data;
                 //Assembly assembly = Assembly.GetExecutingAssembly();
                 //var loc = "WalkingTec.Mvvm.Mvc.Workflow.json";
                 //var textStreamReader = new StreamReader(assembly.GetManifestResourceStream(loc));
@@ -68,7 +68,7 @@ namespace WalkingTec.Mvvm.Mvc
                     context.Request.EnableBuffering();
                     context.Request.Body.Position = 0;
                     StreamReader tr = new StreamReader(context.Request.Body);
-                    string body = tr.ReadToEndAsync().Result;
+                    string body = await tr.ReadToEndAsync();
                     context.Request.Body.Position = 0;
                     if (context.Items.ContainsKey("DONOTUSE_REQUESTBODY") == false)
                     {

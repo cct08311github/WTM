@@ -1,3 +1,4 @@
+#nullable disable
 using System;
 using System.Collections.Generic;
 using System.IdentityModel.Tokens.Jwt;
@@ -491,30 +492,36 @@ namespace WalkingTec.Mvvm.Core
             return DoLoginAsync(username, password, tenant).GetAwaiter().GetResult();
         }
 
-        public Token RefreshToken()
+        public async Task<Token> RefreshTokenAsync()
         {
-            if(LoginUserInfo == null)
+            if (LoginUserInfo == null)
             {
                 return null;
             }
             string rt = null;
             if (ConfigInfo.HasMainHost && LoginUserInfo?.CurrentTenant == null)
             {
-                var r = CallAPI<Token>("mainhost", $"/api/_account/RefreshToken", HttpMethodEnum.POST, new { }).Result;
+                var r = await CallAPI<Token>("mainhost", $"/api/_account/RefreshToken", HttpMethodEnum.POST, new { });
                 rt = r?.Data?.AccessToken;
             }
             else
             {
                 rt = LoginUserInfo.RemoteToken;
-           }
+            }
             var _authService = ServiceProvider.GetRequiredService<ITokenService>();
-            var rv = _authService.IssueTokenAsync(new LoginUserInfo
+            var rv = await _authService.IssueTokenAsync(new LoginUserInfo
             {
                 ITCode = LoginUserInfo.ITCode,
                 TenantCode = LoginUserInfo.TenantCode,
                 RemoteToken = rt
-            }).Result;
+            });
             return rv;
+        }
+
+        [Obsolete("Use RefreshTokenAsync to avoid ThreadPool starvation. RefreshToken blocks threads on every token refresh.")]
+        public Token RefreshToken()
+        {
+            return RefreshTokenAsync().GetAwaiter().GetResult();
         }
 
         public T ReadFromCache<T>(string key, Func<T> setFunc, int? timeout = null)

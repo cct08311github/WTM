@@ -1,3 +1,4 @@
+#nullable disable
 namespace WalkingTec.Mvvm.Core.Auth
 {
     public static class AuthConstants

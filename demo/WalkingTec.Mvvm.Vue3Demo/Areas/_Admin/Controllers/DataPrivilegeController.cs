@@ -137,22 +137,22 @@ namespace WalkingTec.Mvvm.Admin.Api
 
         [AllRights]
         [HttpGet("[action]")]
-        public IActionResult GetUserGroups()
+        public async Task<IActionResult> GetUserGroups()
         {
             if (ConfigInfo.HasMainHost && Wtm.LoginUserInfo?.CurrentTenant == null)
             {
-                return Request.RedirectCall(Wtm, "/api/_DataPrivilege/GetUserGroups").Result;
+                return await Request.RedirectCall(Wtm, "/api/_DataPrivilege/GetUserGroups");
             }
             return Ok(DC.Set<FrameworkGroup>().GetSelectListItems(Wtm, x => x.GroupName, x => x.GroupCode));
         }
 
         [AllRights]
         [HttpGet("[action]")]
-        public IActionResult GetUserGroupsTree()
+        public async Task<IActionResult> GetUserGroupsTree()
         {
             if (ConfigInfo.HasMainHost && Wtm.LoginUserInfo?.CurrentTenant == null)
             {
-                return Request.RedirectCall(Wtm, "/api/_DataPrivilege/GetUserGroupsTree").Result;
+                return await Request.RedirectCall(Wtm, "/api/_DataPrivilege/GetUserGroupsTree");
             }
             return Ok(DC.Set<FrameworkGroup>().GetTreeSelectListItems(Wtm, x => x.GroupName, x => x.GroupCode));
         }

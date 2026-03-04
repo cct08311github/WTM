@@ -34,13 +34,13 @@ namespace WalkingTec.Mvvm.Mvc.Admin.ViewModels.FrameworkGroupVMs
         public override void DoAdd()
         {
             base.DoAdd();
-            Wtm.RemoveGroupCache(LoginUserInfo.CurrentTenant).Wait();
+            Wtm.RemoveGroupCache(LoginUserInfo.CurrentTenant).GetAwaiter().GetResult();
         }
 
         public override void DoEdit(bool updateAllFields = false)
         {
             base.DoEdit(updateAllFields);
-            Wtm.RemoveGroupCache(LoginUserInfo.CurrentTenant).Wait();
+            Wtm.RemoveGroupCache(LoginUserInfo.CurrentTenant).GetAwaiter().GetResult();
         }
 
         public override async Task DoDeleteAsync()

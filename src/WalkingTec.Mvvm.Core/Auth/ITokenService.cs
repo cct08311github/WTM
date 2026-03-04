@@ -6,10 +6,10 @@ namespace WalkingTec.Mvvm.Core
     public interface ITokenService
     {
         Task<Token> IssueTokenAsync(LoginUserInfo loginUserInfo,
-            string ipAddress = null);
+            string? ipAddress = null);
         Task<Token> RefreshTokenAsync(string refreshToken,
-            string ipAddress = null);
+            string? ipAddress = null);
         Task RevokeTokenAsync(string refreshToken,
-            string ipAddress = null, string reason = null);
+            string? ipAddress = null, string? reason = null);
     }
 }

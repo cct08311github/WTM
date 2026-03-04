@@ -1089,12 +1089,14 @@ namespace WalkingTec.Mvvm.Mvc
                     foreach (var item in cs)
                     {
                         var dc = item.CreateDC();
-                        dc.DataInit(gd.AllModule, isspa == true || test != null).Wait();
+                        // TODO: UseWtmContext is a sync IApplicationBuilder extension; GetAwaiter().GetResult() used at startup
+                        dc.DataInit(gd.AllModule, isspa == true || test != null).GetAwaiter().GetResult();
                     }
                 }
                 else
                 {
-                    fixdc.DataInit(gd.AllModule, isspa == true || test != null).Wait();
+                    // TODO: UseWtmContext is a sync IApplicationBuilder extension; GetAwaiter().GetResult() used at startup
+                    fixdc.DataInit(gd.AllModule, isspa == true || test != null).GetAwaiter().GetResult();
                 }
 
             }

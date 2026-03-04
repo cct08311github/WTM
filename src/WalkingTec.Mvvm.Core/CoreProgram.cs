@@ -1,3 +1,4 @@
+#nullable disable
 using System.Text.Json;
 using Microsoft.Extensions.Localization;
 using Microsoft.Extensions.Options;

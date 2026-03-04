@@ -8,7 +8,8 @@ namespace WalkingTec.Mvvm.Mvc
         public static void Set<T>(this ISession session, string key, T value)
         {
             session.SetString(key, JsonSerializer.Serialize(value));
-            session.CommitAsync().Wait();
+            // TODO: Set<T> is a sync extension; CommitAsync().GetAwaiter().GetResult() avoids Wait() deadlock
+            session.CommitAsync().GetAwaiter().GetResult();
         }
 
         public static T Get<T>(this ISession session, string key)

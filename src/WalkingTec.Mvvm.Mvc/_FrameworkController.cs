@@ -128,7 +128,7 @@ namespace WalkingTec.Mvvm.Mvc
         /// <returns></returns>
         [HttpPost]
         [ActionDescription("GetPagingData")]
-        public IActionResult GetPagingData(string _DONOT_USE_VMNAME, string _DONOT_USE_CS)
+        public async Task<IActionResult> GetPagingData(string _DONOT_USE_VMNAME, string _DONOT_USE_CS)
         {
             var qs = new Dictionary<string, object>();
             foreach (var item in Request.Form.Keys)
@@ -164,7 +164,7 @@ namespace WalkingTec.Mvvm.Mvc
                 }
                 if(string.IsNullOrEmpty(url) == false)
                 {
-                    var result = Wtm.CallAPI<string>("mainhost", url, HttpMethodEnum.POST, listVM.Searcher, 10).Result;
+                    var result = await Wtm.CallAPI<string>("mainhost", url, HttpMethodEnum.POST, listVM.Searcher, 10);
                     var rv = new ContentResult
                     {
                         ContentType = "application/json",
@@ -571,7 +571,8 @@ namespace WalkingTec.Mvvm.Mvc
         {
             return Wtm.ReadFromCache<string>("githubstar", () =>
             {
-                var s = Wtm.CallAPI<Github>("github", "/repos/dotnetcore/wtm").Result.Data;
+                // TODO: ReadFromCache factory is sync Func<T>; GetAwaiter().GetResult() used inside sync callback
+                var s = Wtm.CallAPI<Github>("github", "/repos/dotnetcore/wtm").GetAwaiter().GetResult().Data;
                 return s == null ? "" : s.stargazers_count.ToString();
             }, 1800);
         }
@@ -582,7 +583,8 @@ namespace WalkingTec.Mvvm.Mvc
         {
             var rv = Wtm.ReadFromCache<string>("githubinfo", () =>
             {
-                var s = Wtm.CallAPI<Github>("github", "/repos/dotnetcore/wtm").Result;
+                // TODO: ReadFromCache factory is sync Func<T>; GetAwaiter().GetResult() used inside sync callback
+                var s = Wtm.CallAPI<Github>("github", "/repos/dotnetcore/wtm").GetAwaiter().GetResult();
                 return JsonSerializer.Serialize(s);
             }, 1800);
             return Content(rv, "application/json");

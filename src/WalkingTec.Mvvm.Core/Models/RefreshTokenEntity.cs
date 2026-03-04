@@ -11,30 +11,30 @@ namespace WalkingTec.Mvvm.Core
         public Guid ID { get; set; } = Guid.NewGuid();
 
         [Required, StringLength(256)]
-        public string Token { get; set; }
+        public string Token { get; set; } = null!;
 
         [Required, StringLength(50)]
-        public string ITCode { get; set; }
+        public string ITCode { get; set; } = null!;
 
         [StringLength(50)]
-        public string TenantCode { get; set; }
+        public string? TenantCode { get; set; }
 
         public DateTime ExpiresUtc { get; set; }
         public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
 
         [StringLength(50)]
-        public string CreatedByIp { get; set; }
+        public string? CreatedByIp { get; set; }
 
         public DateTime? RevokedUtc { get; set; }
 
         [StringLength(50)]
-        public string RevokedByIp { get; set; }
+        public string? RevokedByIp { get; set; }
 
         [StringLength(256)]
-        public string ReplacedByToken { get; set; }
+        public string? ReplacedByToken { get; set; }
 
         [StringLength(100)]
-        public string RevokeReason { get; set; }
+        public string? RevokeReason { get; set; }
 
         [NotMapped]
         public bool IsExpired => DateTime.UtcNow >= ExpiresUtc;

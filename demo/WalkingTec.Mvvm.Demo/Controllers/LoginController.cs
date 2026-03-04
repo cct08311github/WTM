@@ -129,7 +129,7 @@ namespace WalkingTec.Mvvm.Demo.Controllers
             }
             else
             {
-                Wtm.CallAPI<string>("mainhost", "/api/_account/logout", HttpMethodEnum.GET, new { }, 10).Wait();
+                await Wtm.CallAPI<string>("mainhost", "/api/_account/logout", HttpMethodEnum.GET, new { }, 10);
                 HttpContext.Response.Redirect(ConfigInfo.MainHost);
             }
         }
@@ -146,11 +146,11 @@ namespace WalkingTec.Mvvm.Demo.Controllers
         [AllRights]
         [HttpPost]
         [ActionDescription("ChangePassword")]
-        public ActionResult ChangePassword(ChangePasswordVM vm)
+        public async Task<ActionResult> ChangePassword(ChangePasswordVM vm)
         {
             if (ConfigInfo.HasMainHost && Wtm.LoginUserInfo?.CurrentTenant == null)
             {
-                var result = Wtm.CallAPI<string>("mainhost", "/api/_account/ChangePassword", HttpMethodEnum.POST, vm, 10).Result;
+                var result = await Wtm.CallAPI<string>("mainhost", "/api/_account/ChangePassword", HttpMethodEnum.POST, vm, 10);
                 if (result.StatusCode == System.Net.HttpStatusCode.OK)
                 {
                     return FFResult().CloseDialog().Alert(Localizer["Login.ChangePasswordSuccess"]);

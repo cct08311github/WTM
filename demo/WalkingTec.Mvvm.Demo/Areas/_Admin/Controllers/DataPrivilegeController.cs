@@ -133,11 +133,11 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
             return vm.GetExportData();
         }
         [AllRights]
-        public IActionResult GetUserGroups()
+        public async Task<IActionResult> GetUserGroups()
         {
             WalkingTec.Mvvm.Admin.Api.DataPrivilegeController userapi = new Mvvm.Admin.Api.DataPrivilegeController();
             userapi.Wtm = Wtm;
-            var rv = userapi.GetUserGroupsTree() as OkObjectResult;
+            var rv = (await userapi.GetUserGroupsTree()) as OkObjectResult;
             List<TreeSelectListItem> users = new List<TreeSelectListItem>();
             if (rv != null && rv.Value is string && rv.Value != null)
             {

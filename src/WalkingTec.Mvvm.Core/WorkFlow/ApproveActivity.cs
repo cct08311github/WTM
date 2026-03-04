@@ -1,3 +1,4 @@
+#nullable disable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -94,7 +95,8 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
             {
                 try
                 {
-                    var check = _wtm.CallAPI<List<ComboSelectListItem>>("", $"{_wtm.HostAddress}/_workflowapi/GetWorkflowRoles").Result;
+                    // TODO: GetOptions() is constrained by IActivityPropertyOptionsProvider (sync); use GetAwaiter().GetResult()
+                    var check = _wtm.CallAPI<List<ComboSelectListItem>>("", $"{_wtm.HostAddress}/_workflowapi/GetWorkflowRoles").GetAwaiter().GetResult();
                     if (check.Data != null)
                     {
                         rv = check.Data;
@@ -107,7 +109,8 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
             {
                 try
                 {
-                    var check = _wtm.CallAPI<List<ComboSelectListItem>>("", $"{_wtm.HostAddress}/_workflowapi/GetWorkflowGroups").Result;
+                    // TODO: GetOptions() is constrained by IActivityPropertyOptionsProvider (sync); use GetAwaiter().GetResult()
+                    var check = _wtm.CallAPI<List<ComboSelectListItem>>("", $"{_wtm.HostAddress}/_workflowapi/GetWorkflowGroups").GetAwaiter().GetResult();
                     if (check.Data != null)
                     {
                         rv = check.Data;
@@ -120,7 +123,8 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
             {
                 try
                 {
-                    var check = _wtm.CallAPI<List<ComboSelectListItem>>("", $"{_wtm.HostAddress}/_workflowapi/GetWorkflowGroups").Result;
+                    // TODO: GetOptions() is constrained by IActivityPropertyOptionsProvider (sync); use GetAwaiter().GetResult()
+                    var check = _wtm.CallAPI<List<ComboSelectListItem>>("", $"{_wtm.HostAddress}/_workflowapi/GetWorkflowGroups").GetAwaiter().GetResult();
                     if (check.Data != null)
                     {
                         rv = check.Data;
@@ -171,7 +175,8 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
                     {
                         query = $"itcode={submitter}";
 
-                        var names = _wtm.CallAPI<List<ComboSelectListItem>>("", $"{_wtm.HostAddress}/_workflowapi/GetWorkflowMyGroupManagers?{query}").Result;
+                        // TODO: OnExecute() is constrained by Elsa Activity base class (sync); use GetAwaiter().GetResult()
+                        var names = _wtm.CallAPI<List<ComboSelectListItem>>("", $"{_wtm.HostAddress}/_workflowapi/GetWorkflowMyGroupManagers?{query}").GetAwaiter().GetResult();
                         users = names.Data ?? new List<ComboSelectListItem>();
                         if (users.Count > 0)
                         {
@@ -189,7 +194,8 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
                     query += $"ids={item}&";
                 }
                 query += "1=1";
-                var names = _wtm.CallAPI<List<ComboSelectListItem>>("", $"{_wtm.HostAddress}/_workflowapi/GetWorkflowGroupManagers?{query}").Result;
+                // TODO: OnExecute() is constrained by Elsa Activity base class (sync); use GetAwaiter().GetResult()
+                var names = _wtm.CallAPI<List<ComboSelectListItem>>("", $"{_wtm.HostAddress}/_workflowapi/GetWorkflowGroupManagers?{query}").GetAwaiter().GetResult();
                 managers = names.Data ?? new List<ComboSelectListItem>();
                 foreach (var item in managers)
                 {
@@ -208,7 +214,8 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
                     query += $"itcode={item}&";
                 }
                 query += "1=1";
-                var names = _wtm.CallAPI<List<ComboSelectListItem>>("", $"{_wtm.HostAddress}/_workflowapi/GetWorkflowUsers?{query}").Result;
+                // TODO: OnExecute() is constrained by Elsa Activity base class (sync); use GetAwaiter().GetResult()
+                var names = _wtm.CallAPI<List<ComboSelectListItem>>("", $"{_wtm.HostAddress}/_workflowapi/GetWorkflowUsers?{query}").GetAwaiter().GetResult();
                 users = names.Data ?? new List<ComboSelectListItem>();
                 ApproveUsersFullText.AddRange(users.Select(x => $"{x.Text}({x.Value})").ToList());
                 foreach (var item in ApproveUsers)
@@ -236,7 +243,8 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
                     query += $"ids={item}&";
                 }
                 query += "1=1";
-                var names = _wtm.CallAPI<List<ComboSelectListItem>>("", $"{_wtm.HostAddress}/_workflowapi/GetWorkflowRoles?{query}").Result;
+                // TODO: OnExecute() is constrained by Elsa Activity base class (sync); use GetAwaiter().GetResult()
+                var names = _wtm.CallAPI<List<ComboSelectListItem>>("", $"{_wtm.HostAddress}/_workflowapi/GetWorkflowRoles?{query}").GetAwaiter().GetResult();
                 roles = names.Data ?? new List<ComboSelectListItem>();
                 ApproveUsersFullText.AddRange(roles.Select(x => $"{x.Text}").ToList());
                 foreach (var item in ApproveRoles)
@@ -264,7 +272,8 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
                     query += $"ids={item}&";
                 }
                 query += "1=1";
-                var names = _wtm.CallAPI<List<ComboSelectListItem>>("", $"{_wtm.HostAddress}/_workflowapi/GetWorkflowGroups?{query}").Result;
+                // TODO: OnExecute() is constrained by Elsa Activity base class (sync); use GetAwaiter().GetResult()
+                var names = _wtm.CallAPI<List<ComboSelectListItem>>("", $"{_wtm.HostAddress}/_workflowapi/GetWorkflowGroups?{query}").GetAwaiter().GetResult();
                 groups = names.Data ?? new List<ComboSelectListItem>();
                 ApproveUsersFullText.AddRange(groups.Select(x => $"{x.Text}").ToList());
                 foreach (var item in ApproveGroups)

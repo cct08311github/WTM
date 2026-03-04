@@ -1,3 +1,4 @@
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.Razor.TagHelpers;
 using System.Text.Json;
@@ -121,7 +122,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
             typeof(IEnumerable<ComboSelectListItem>)
         };
 
-        public override void Process(TagHelperContext context, TagHelperOutput output)
+        public override async Task ProcessAsync(TagHelperContext context, TagHelperOutput output)
         {
             if (context.Items.ContainsKey("inselector") == false)
             {
@@ -254,7 +255,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
                     searcher.CopyContext(listVM);
                     searcher.DoInit();
                 }
-                var content = output.GetChildContentAsync().Result.GetContent().Trim();
+                var content = (await output.GetChildContentAsync()).GetContent().Trim();
 
                 #region 移除因 RowTagHelper 生成的外层 div 即 <div class="layui-col-xs6"></div>
 
