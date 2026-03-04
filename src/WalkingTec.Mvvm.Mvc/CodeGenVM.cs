@@ -76,10 +76,21 @@ namespace WalkingTec.Mvvm.Mvc
                     int? index = EntryDir?.IndexOf($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}Debug{Path.DirectorySeparatorChar}");
                     if (index == null || index < 0)
                     {
-                        index = EntryDir?.IndexOf($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}") ?? 0;
+                        index = EntryDir?.IndexOf($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}");
                     }
 
-                    _mainDir = EntryDir?.Substring(0, index.Value);
+                    if (index == null || index < 0)
+                    {
+                        // BaseDirectory does not contain \bin\Debug\ or \bin\Release\
+                        // (e.g. dotnet run from repo root, or published app).
+                        // Fall back to the current working directory, which is typically
+                        // the project source root in development.
+                        _mainDir = Directory.GetCurrentDirectory();
+                    }
+                    else
+                    {
+                        _mainDir = EntryDir!.Substring(0, index.Value);
+                    }
                 }
                 return _mainDir;
             }
