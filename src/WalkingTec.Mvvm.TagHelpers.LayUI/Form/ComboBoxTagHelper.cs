@@ -214,15 +214,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                         {
                             listItems = (Items.Model as IEnumerable<ComboSelectListItem>).ToList();
                         }
-                        foreach (var item in listItems)
+                        if (selectVal.Count > 0)
                         {
-                            if (selectVal.Contains(item.Value?.ToString()))
+                            foreach (var item in listItems)
                             {
-                                item.Selected = true;
-                            }
-                            else
-                            {
-                                item.Selected = false;
+                                item.Selected = selectVal.Contains(item.Value?.ToString());
                             }
                         }
                     }
