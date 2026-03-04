@@ -112,7 +112,10 @@ namespace WalkingTec.Mvvm.Mvc.Auth
                 new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwtOptions.SecurityKey)),
                 SecurityAlgorithms.HmacSha256);
             var claims = new List<Claim>
-                { new(AuthConstants.JwtClaimTypes.Subject, info.ITCode) };
+            {
+                new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("N")),
+                new(AuthConstants.JwtClaimTypes.Subject, info.ITCode)
+            };
             if (!string.IsNullOrEmpty(info.TenantCode))
                 claims.Add(new(AuthConstants.JwtClaimTypes.TenantCode, info.TenantCode));
             if (!string.IsNullOrEmpty(info.RemoteToken))
