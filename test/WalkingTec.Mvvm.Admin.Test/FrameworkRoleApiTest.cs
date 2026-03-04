@@ -40,8 +40,9 @@ namespace WalkingTec.Mvvm.Admin.Test
             v.RoleCode = "101";
             v.RoleName = "TestRole";
             vm.Entity = v;
+            // Add() returns IActionResult (sync), not Task<IActionResult>
             var rv = _controller.Add(vm);
-            Assert.IsInstanceOfType(rv.Result, typeof(OkObjectResult));
+            Assert.IsInstanceOfType(rv, typeof(OkObjectResult));
 
             using (var context = new Demo.DataContext(_seed, DBTypeEnum.Memory))
             {
@@ -74,8 +75,9 @@ namespace WalkingTec.Mvvm.Admin.Test
             vm.Entity = v;
             vm.FC = new Dictionary<string, object>();
             vm.FC.Add("Entity.RoleName", "");
+            // Edit() returns IActionResult (sync), not Task<IActionResult>
             var rv = _controller.Edit(vm);
-            Assert.IsInstanceOfType(rv.Result, typeof(OkObjectResult));
+            Assert.IsInstanceOfType(rv, typeof(OkObjectResult));
 
             using (var context = new Demo.DataContext(_seed, DBTypeEnum.Memory))
             {
@@ -120,6 +122,7 @@ namespace WalkingTec.Mvvm.Admin.Test
                 context.SaveChanges();
             }
 
+            // BatchDelete() returns Task<IActionResult> (async)
             var rv = _controller.BatchDelete(new string[] { v1.ID.ToString(), v2.ID.ToString() });
             Assert.IsInstanceOfType(rv.Result, typeof(OkObjectResult));
 

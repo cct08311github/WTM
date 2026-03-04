@@ -40,16 +40,16 @@ namespace WalkingTec.Mvvm.Admin.Test
             v.GroupCode = "001";
             v.GroupName = "TestGroup";
             vm.Entity = v;
+            // Add() returns IActionResult (sync), not Task<IActionResult>
             var rv = _controller.Add(vm);
-            Assert.IsInstanceOfType(rv.Result, typeof(OkObjectResult));
+            Assert.IsInstanceOfType(rv, typeof(OkObjectResult));
 
             using (var context = new Demo.DataContext(_seed, DBTypeEnum.Memory))
             {
                 var data = context.Set<FrameworkGroup>().FirstOrDefault();
                 Assert.AreEqual(data.GroupCode, "001");
                 Assert.AreEqual(data.GroupName, "TestGroup");
-                Assert.AreEqual(data.CreateBy, "user");
-                Assert.IsTrue(DateTime.Now.Subtract(data.CreateTime.Value).Seconds < 10);
+                // Note: FrameworkGroup : TreePoco : TopBasePoco (no audit fields)
             }
         }
 
@@ -74,15 +74,14 @@ namespace WalkingTec.Mvvm.Admin.Test
             vm.Entity = v;
             vm.FC = new Dictionary<string, object>();
             vm.FC.Add("Entity.GroupName", "");
+            // Edit() returns IActionResult (sync), not Task<IActionResult>
             var rv = _controller.Edit(vm);
-            Assert.IsInstanceOfType(rv.Result, typeof(OkObjectResult));
+            Assert.IsInstanceOfType(rv, typeof(OkObjectResult));
 
             using (var context = new Demo.DataContext(_seed, DBTypeEnum.Memory))
             {
                 var data = context.Set<FrameworkGroup>().FirstOrDefault();
                 Assert.AreEqual(data.GroupName, "UpdatedName");
-                Assert.AreEqual(data.UpdateBy, "user");
-                Assert.IsTrue(DateTime.Now.Subtract(data.UpdateTime.Value).Seconds < 10);
             }
         }
 
@@ -120,6 +119,7 @@ namespace WalkingTec.Mvvm.Admin.Test
                 context.SaveChanges();
             }
 
+            // BatchDelete() returns Task<IActionResult> (async)
             var rv = _controller.BatchDelete(new string[] { v1.ID.ToString(), v2.ID.ToString() });
             Assert.IsInstanceOfType(rv.Result, typeof(OkObjectResult));
 
