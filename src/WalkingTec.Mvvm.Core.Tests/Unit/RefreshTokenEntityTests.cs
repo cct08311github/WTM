@@ -3,7 +3,7 @@ using FluentAssertions;
 using WalkingTec.Mvvm.Core;
 using Xunit;
 
-namespace WalkingTec.Mvvm.Core.Tests
+namespace WalkingTec.Mvvm.Core.Tests.Unit
 {
     public class RefreshTokenEntityTests
     {
@@ -49,10 +49,45 @@ namespace WalkingTec.Mvvm.Core.Tests
         }
 
         [Fact]
+        public void Token_ExpiresExactlyNow_IsExpired()
+        {
+            var token = new RefreshTokenEntity
+            {
+                Token = "t",
+                ITCode = "u",
+                ExpiresUtc = DateTime.UtcNow.AddMilliseconds(-1)
+            };
+            token.IsExpired.Should().BeTrue();
+            token.IsActive.Should().BeFalse();
+        }
+
+        [Fact]
+        public void Token_RevokedButNotExpired_IsInactive()
+        {
+            var token = new RefreshTokenEntity
+            {
+                Token = "t",
+                ITCode = "u",
+                ExpiresUtc = DateTime.UtcNow.AddDays(7),
+                RevokedUtc = DateTime.UtcNow
+            };
+            token.IsActive.Should().BeFalse();
+            token.IsRevoked.Should().BeTrue();
+            token.IsExpired.Should().BeFalse();
+        }
+
+        [Fact]
         public void NewToken_HasGeneratedID()
         {
             var token = new RefreshTokenEntity();
             token.ID.Should().NotBe(Guid.Empty);
+        }
+
+        [Fact]
+        public void TwoTokens_HaveDistinctIDs()
+        {
+            new RefreshTokenEntity().ID.Should()
+                .NotBe(new RefreshTokenEntity().ID);
         }
 
         [Fact]
