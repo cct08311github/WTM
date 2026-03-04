@@ -15,20 +15,27 @@ using WalkingTec.Mvvm.Test.Mock;
 namespace WalkingTec.Mvvm.Core.Tests.Fixtures
 {
     /// <summary>
+    /// Minimal concrete user for DoLoginAsync tests.
+    /// FrameworkUserBase is abstract; each application defines its own subclass.
+    /// Core.Tests defines this lightweight version to avoid depending on demo projects.
+    /// </summary>
+    public class TestLoginUser : FrameworkUserBase { }
+
+    /// <summary>
     /// Common helpers for creating test data and configured WTM contexts.
     /// </summary>
     public static class WtmTestHelper
     {
         // ─── Test Data Factories ───────────────────────────────────────────────
 
-        /// <summary>Create a FrameworkUser with PBKDF2 password.</summary>
-        public static FrameworkUser CreateUser(
+        /// <summary>Create a TestLoginUser with PBKDF2 password.</summary>
+        public static TestLoginUser CreateUser(
             string itCode = "testuser",
             string password = "000000",
             string? tenantCode = null,
             bool isValid = true)
         {
-            return new FrameworkUser
+            return new TestLoginUser
             {
                 ID = Guid.NewGuid(),
                 ITCode = itCode,
@@ -39,13 +46,13 @@ namespace WalkingTec.Mvvm.Core.Tests.Fixtures
             };
         }
 
-        /// <summary>Create a FrameworkUser with legacy MD5 password hash (for migration tests).</summary>
-        public static FrameworkUser CreateLegacyMd5User(
+        /// <summary>Create a TestLoginUser with legacy MD5 password hash (for migration tests).</summary>
+        public static TestLoginUser CreateLegacyMd5User(
             string itCode = "legacy_user",
             string password = "000000",
             string? tenantCode = null)
         {
-            return new FrameworkUser
+            return new TestLoginUser
             {
                 ID = Guid.NewGuid(),
                 ITCode = itCode,
@@ -85,7 +92,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Fixtures
         /// <summary>
         /// Create a WTMContext fully configured for DoLoginAsync testing.
         /// Unlike MockWtmContext.CreateWtmContext(), this fixture:
-        /// - Sets GlobaInfo.CustomUserType = typeof(FrameworkUser)
+        /// - Sets GlobaInfo.CustomUserType = typeof(TestLoginUser)
         /// - Sets GlobaInfo.TenantGetFunc to return empty list (prevents NPE)
         /// - Registers ITokenService in HttpContext.RequestServices
         /// </summary>
@@ -100,7 +107,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Fixtures
             gd.AllAccessUrls = new List<string>();
             gd.AllAssembly = new List<System.Reflection.Assembly>();
             gd.AllModule = new List<Core.Support.Json.SimpleModule>();
-            gd.CustomUserType = typeof(FrameworkUser);
+            gd.CustomUserType = typeof(TestLoginUser);
             // AllTenant calls TenantGetFunc?.Invoke() — must not return null to avoid NPE
             gd.SetTenantGetFunc(() => new List<FrameworkTenant>());
 
