@@ -131,7 +131,8 @@ namespace WalkingTec.Mvvm.Core.Tests.Fixtures
             mockHttpContext.Setup(x => x.Request).Returns(mockHttpRequest.Object);
             mockHttpContext.Setup(x => x.RequestServices).Returns(mockService.Object);
             mockHttpContext.Setup(x => x.User)
-                .Returns(new System.Security.Claims.ClaimsPrincipal());
+                .Returns(new System.Security.Claims.ClaimsPrincipal(
+                    new System.Security.Claims.ClaimsIdentity()));
             var mockSession = new MockHttpSession();
             mockHttpContext.Setup(x => x.Session).Returns(mockSession);
 

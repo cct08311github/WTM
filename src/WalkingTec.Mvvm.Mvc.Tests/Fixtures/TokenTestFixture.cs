@@ -31,10 +31,10 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Fixtures
         {
             var services = new ServiceCollection();
 
-            // InMemory EF that also implements IDataContext
-            services.AddDbContext<EmptyContext>(opt =>
-                opt.UseInMemoryDatabase(DbName), ServiceLifetime.Scoped);
-
+            // Use the (string, DBTypeEnum) constructor so OnConfiguring picks Memory provider.
+            // Avoid AddDbContext() here — it passes DbContextOptions which combines with
+            // OnConfiguring's SqlServer default, causing "two providers" InvalidOperationException.
+            services.AddScoped<EmptyContext>(_ => new EmptyContext(DbName, DBTypeEnum.Memory));
             services.AddScoped<IDataContext>(sp => sp.GetRequiredService<EmptyContext>());
 
             // Build minimal Configs with JWT options
