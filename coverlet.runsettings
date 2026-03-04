@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat Code Coverage">
+        <Configuration>
+          <!-- Output in Cobertura format for ReportGenerator compatibility -->
+          <Format>cobertura</Format>
+
+          <!-- Exclude test projects and generated scaffolding from coverage metrics -->
+          <Exclude>
+            [*.Tests]*,
+            [*.Test]*,
+            [WalkingTec.Mvvm.Demo]*,
+            [WalkingTec.Mvvm.BlazorDemo*]*,
+            [WalkingTec.Mvvm.ReactDemo*]*,
+            [WalkingTec.Mvvm.Vue*]*
+          </Exclude>
+
+          <!-- Skip auto-generated and explicitly excluded code -->
+          <ExcludeByAttribute>
+            GeneratedCodeAttribute,
+            ExcludeFromCodeCoverageAttribute
+          </ExcludeByAttribute>
+
+          <!-- Merge coverage from multiple test runs -->
+          <MergeWith>/tmp/coverage/coverage.json</MergeWith>
+          <SingleHit>false</SingleHit>
+          <IncludeTestAssembly>false</IncludeTestAssembly>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>

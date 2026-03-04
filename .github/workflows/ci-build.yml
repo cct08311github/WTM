@@ -22,14 +22,41 @@ jobs:
         dotnet-version: '8.0.x'
     - run: dotnet restore WalkingTec.Mvvm.sln
     - run: dotnet build WalkingTec.Mvvm.sln --no-restore -c Release
-    - name: Test
-      run: dotnet test WalkingTec.Mvvm.sln --no-build -c Release --verbosity normal --logger "trx;LogFileName=test-results.trx"
+
+    - name: Test with coverage
+      run: |
+        dotnet test WalkingTec.Mvvm.sln \
+          --no-build -c Release \
+          --verbosity normal \
+          --logger "trx;LogFileName=test-results.trx" \
+          --collect:"XPlat Code Coverage" \
+          --settings coverlet.runsettings \
+          --results-directory ./TestResults
+
+    - name: Install ReportGenerator
+      run: dotnet tool install -g dotnet-reportgenerator-globaltool
+
+    - name: Generate coverage report
+      run: |
+        reportgenerator \
+          -reports:"TestResults/**/coverage.cobertura.xml" \
+          -targetdir:"TestResults/CoverageReport" \
+          -reporttypes:"Html;lcov;Cobertura" \
+          -title:"WTM Coverage Report"
+
     - name: Upload test results
       uses: actions/upload-artifact@v4
       if: always()
       with:
         name: test-results
-        path: "**/test-results.trx"
+        path: "TestResults/**/*.trx"
+
+    - name: Upload coverage report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: coverage-report
+        path: TestResults/CoverageReport/
   js-test:
     runs-on: ubuntu-latest
     steps:
