@@ -1,7 +1,20 @@
-namespace WalkingTec.Mvvm.Core.Analysis;
-
-[Flags]
-public enum AggregateFunc
+namespace WalkingTec.Mvvm.Core.Analysis
 {
-    Count = 1, Sum = 2, Avg = 4, Max = 8, Min = 16
+    /// <summary>
+    /// 分析模式中可用的聚合函式，支援 Flag 組合
+    /// </summary>
+    [Flags]
+    public enum AggregateFunc
+    {
+        /// <summary>記錄筆數</summary>
+        Count = 1,
+        /// <summary>加總</summary>
+        Sum = 2,
+        /// <summary>平均值</summary>
+        Avg = 4,
+        /// <summary>最大值</summary>
+        Max = 8,
+        /// <summary>最小值</summary>
+        Min = 16
+    }
 }
