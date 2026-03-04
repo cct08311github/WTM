@@ -352,10 +352,14 @@ namespace WalkingTec.Mvvm.Mvc
             }
             var FileData = Request.Form.Files[0];
 
-            Image oimage = Image.Load(FileData.OpenReadStream());
-            if (oimage == null)
+            Image oimage;
+            try
             {
-                return JsonMore(new { Id = string.Empty, Name = string.Empty }, StatusCodes.Status404NotFound);
+                oimage = Image.Load(FileData.OpenReadStream());
+            }
+            catch (Exception)
+            {
+                return JsonMore(new { Id = string.Empty, Name = string.Empty }, StatusCodes.Status400BadRequest);
             }
             if (width == null)
             {

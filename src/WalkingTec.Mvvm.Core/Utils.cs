@@ -612,7 +612,7 @@ namespace WalkingTec.Mvvm.Core
                 return null;
             }
 
-            if (config.Connections.Any(x => x.Key.ToLower() == cs.ToLower()) == false)
+            if (config.Connections.Any(x => x.Key.ToLower() == cs.ToLower() && x.Enabled) == false)
             {
                 cs = "default";
             }
@@ -623,7 +623,7 @@ namespace WalkingTec.Mvvm.Core
             }
             if (mode?.ToLower() == "read")
             {
-                var reads = config.Connections.Where(x => x.Key.StartsWith(cs + "_")).Select(x => x.Key).ToList();
+                var reads = config.Connections.Where(x => x.Key.StartsWith(cs + "_") && x.Enabled).Select(x => x.Key).ToList();
                 if (reads.Count > 0)
                 {
                     Random r = new Random();

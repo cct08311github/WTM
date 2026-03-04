@@ -542,11 +542,19 @@ namespace WalkingTec.Mvvm.Mvc
                 y.MultipartBodyLengthLimit = conf.FileUploadOptions.UploadLimit;
             });
             services.AddHostedService<QuartzHostService>();
-            var cs = conf.Connections;
+            services.AddHostedService<DbConnectionWarmupService>();
+            var cs = conf.Connections.Where(x => x.Enabled).ToList();
             foreach (var item in cs)
             {
-                var dc = item.CreateDC();
-                dc.EnsureCreate();
+                try
+                {
+                    var dc = item.CreateDC();
+                    dc.EnsureCreate();
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[WTM] Warning: could not initialize database connection '{item.Key}' ({item.DbType}): {ex.Message}");
+                }
             }
             services.AddVersionedApiExplorer(o=>
             {

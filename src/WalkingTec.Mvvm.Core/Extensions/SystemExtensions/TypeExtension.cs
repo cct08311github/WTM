@@ -204,6 +204,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                 string val = "";
                 var notmapped = pro.GetCustomAttribute<NotMappedAttribute>();
                 if (notmapped == null &&
+                    pro.SetMethod != null &&
                     pro.PropertyType.IsList() == false &&
                     pro.PropertyType.IsSubclassOf(typeof(TopBasePoco)) == false &&
                     skipFields.Contains(key) == false

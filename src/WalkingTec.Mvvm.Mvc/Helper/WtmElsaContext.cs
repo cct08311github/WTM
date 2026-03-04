@@ -13,7 +13,10 @@ namespace WalkingTec.Mvvm.Mvc.Helper
         {
             get
             {
-                if (Database.IsOracle())
+                // MySQL and Oracle do not support schemas the way SQL Server does.
+                // MySQL treats schema = database, so returning a schema prefix like "Elsa"
+                // would cause EF Core to look for a different database and fail to create tables.
+                if (Database.IsOracle() || Database.ProviderName?.Contains("MySql") == true)
                 {
                     return null;
                 }

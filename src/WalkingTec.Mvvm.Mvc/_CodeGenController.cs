@@ -131,7 +131,9 @@ namespace WalkingTec.Mvvm.Mvc
             var models = new List<Type>();
             
             //获取所有模型
-            var pros = Wtm.ConfigInfo.Connections.SelectMany(x => x.DcConstructor.DeclaringType.GetProperties(BindingFlags.DeclaredOnly | BindingFlags.Public | BindingFlags.Instance));
+            var pros = Wtm.ConfigInfo.Connections
+                .Where(x => x.Enabled && x.DcConstructor != null)
+                .SelectMany(x => x.DcConstructor.DeclaringType.GetProperties(BindingFlags.DeclaredOnly | BindingFlags.Public | BindingFlags.Instance));
             if (pros != null)
             {
                 foreach (var pro in pros)
