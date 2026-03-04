@@ -1,3 +1,4 @@
+#nullable disable
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;

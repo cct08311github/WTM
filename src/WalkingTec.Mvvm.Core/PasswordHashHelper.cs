@@ -12,14 +12,14 @@ namespace WalkingTec.Mvvm.Core
         private static readonly Regex _md5Pattern =
             new(@"^[0-9A-F]{32}$", RegexOptions.Compiled);
 
-        public static string HashPassword(string password)
+        public static string HashPassword(string? password)
         {
             if (string.IsNullOrEmpty(password)) return string.Empty;
             return _hasher.HashPassword(string.Empty, password);
         }
 
         public static PasswordVerifyResult VerifyPassword(
-            string storedHash, string password)
+            string? storedHash, string? password)
         {
             if (string.IsNullOrEmpty(storedHash) ||
                 string.IsNullOrEmpty(password))
@@ -45,13 +45,13 @@ namespace WalkingTec.Mvvm.Core
             };
         }
 
-        public static bool IsLegacyMD5Hash(string hash)
+        public static bool IsLegacyMD5Hash(string? hash)
         {
             if (string.IsNullOrEmpty(hash) || hash.Length != 32) return false;
             return _md5Pattern.IsMatch(hash);
         }
 
-        internal static string ComputeMD5(string input)
+        internal static string ComputeMD5(string? input)
         {
             if (string.IsNullOrEmpty(input)) return string.Empty;
             byte[] buffer = Encoding.UTF8.GetBytes(input);

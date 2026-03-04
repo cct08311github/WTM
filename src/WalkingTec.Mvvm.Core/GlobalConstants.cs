@@ -1,3 +1,4 @@
+#nullable disable
 namespace WalkingTec.Mvvm.Core
 {
     public static class GlobalConstants

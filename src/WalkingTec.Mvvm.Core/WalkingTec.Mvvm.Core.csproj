@@ -5,6 +5,7 @@
     <AssemblyName>WalkingTec.Mvvm.Core</AssemblyName>
     <Title>$(AssemblyName)</Title>
     <IsPackable>true</IsPackable>
+    <Nullable>enable</Nullable>
   </PropertyGroup>
 
   <Import Project="..\..\common.props" />
@@ -34,6 +35,10 @@
     <PackageReference Include="Quartz" Version="3.16.0" />
     <PackageReference Include="System.Runtime.Loader" Version="4.3.0" />
     <PackageReference Include="Microsoft.AspNetCore.Authorization" Version="8.0.22" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="WalkingTec.Mvvm.Core.Tests" />
   </ItemGroup>
 
 </Project>
