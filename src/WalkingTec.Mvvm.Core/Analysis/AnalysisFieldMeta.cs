@@ -1,0 +1,33 @@
+#nullable disable
+using System;
+
+namespace WalkingTec.Mvvm.Core.Analysis
+{
+    /// <summary>分析欄位的種類</summary>
+    public enum AnalysisFieldKind
+    {
+        /// <summary>維度（GROUP BY 候選）</summary>
+        Dimension,
+        /// <summary>度量（聚合計算目標）</summary>
+        Measure
+    }
+
+    /// <summary>描述一個可分析欄位的 Metadata</summary>
+    public class AnalysisFieldMeta
+    {
+        /// <summary>C# 屬性名稱</summary>
+        public string FieldName { get; set; }
+
+        /// <summary>前端顯示名稱</summary>
+        public string DisplayName { get; set; }
+
+        /// <summary>欄位種類（Dimension 或 Measure）</summary>
+        public AnalysisFieldKind Kind { get; set; }
+
+        /// <summary>允許的聚合函式（僅 Measure 有效）</summary>
+        public AggregateFunc AllowedFuncs { get; set; }
+
+        /// <summary>欄位的 CLR 型別</summary>
+        public Type ClrType { get; set; }
+    }
+}
