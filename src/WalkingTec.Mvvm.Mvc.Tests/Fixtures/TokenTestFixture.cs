@@ -31,11 +31,12 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Fixtures
         {
             var services = new ServiceCollection();
 
-            // Use the (string, DBTypeEnum) constructor so OnConfiguring picks Memory provider.
-            // Avoid AddDbContext() here — it passes DbContextOptions which combines with
+            // Use FrameworkContext (not EmptyContext) so RefreshTokenEntity is in the EF model.
+            // Use the (string, DBTypeEnum) constructor so OnConfiguring picks Memory provider only.
+            // Avoid AddDbContext() — it would pass DbContextOptions that combines with
             // OnConfiguring's SqlServer default, causing "two providers" InvalidOperationException.
-            services.AddScoped<EmptyContext>(_ => new EmptyContext(DbName, DBTypeEnum.Memory));
-            services.AddScoped<IDataContext>(sp => sp.GetRequiredService<EmptyContext>());
+            services.AddScoped<FrameworkContext>(_ => new FrameworkContext(DbName, DBTypeEnum.Memory));
+            services.AddScoped<IDataContext>(sp => sp.GetRequiredService<FrameworkContext>());
 
             // Build minimal Configs with JWT options
             var configs = new Configs();
@@ -58,10 +59,10 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Fixtures
         /// Access the InMemory DbContext directly for seeding or assertion queries.
         /// Caller is responsible for disposing the scope.
         /// </summary>
-        public EmptyContext CreateDbContext()
+        public FrameworkContext CreateDbContext()
         {
             var scope = _serviceProvider.CreateScope();
-            return scope.ServiceProvider.GetRequiredService<EmptyContext>();
+            return scope.ServiceProvider.GetRequiredService<FrameworkContext>();
         }
 
         /// <summary>Seed a RefreshTokenEntity and save to InMemory DB.</summary>
