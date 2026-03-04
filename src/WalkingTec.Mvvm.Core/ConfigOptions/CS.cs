@@ -16,6 +16,13 @@ namespace WalkingTec.Mvvm.Core
         public string Version { get; set; }
         public string DbContext { get; set; }
 
+        /// <summary>
+        /// Whether this connection is active. Defaults to true for backward compatibility.
+        /// Set to false in appsettings.json to disable a connection without removing it —
+        /// useful for graceful degradation when a secondary database (e.g. Oracle) is unreachable.
+        /// </summary>
+        public bool Enabled { get; set; } = true;
+
         public ConstructorInfo DcConstructor;
         private static List<ConstructorInfo> _cis;
         public static List<ConstructorInfo> Cis

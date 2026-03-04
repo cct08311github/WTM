@@ -742,7 +742,12 @@ params string[] groupcode)
             {
                 cs = "default";
             }
-            var rv = ConfigInfo.Connections.Where(x => x.Key.ToLower() == cs.ToLower()).FirstOrDefault().CreateDC();
+            var csConfig = ConfigInfo.Connections.Where(x => x.Key.ToLower() == cs.ToLower()).FirstOrDefault();
+            if (csConfig != null && !csConfig.Enabled)
+            {
+                throw new InvalidOperationException($"Database connection '{csConfig.Key}' ({csConfig.DbType}) is disabled. Enable it in appsettings.json (set Enabled: true).");
+            }
+            var rv = csConfig.CreateDC();
             rv.IsDebug = ConfigInfo.IsQuickDebug;
             rv.SetTenantCode(tenantCode);
             if (logerror == true)
