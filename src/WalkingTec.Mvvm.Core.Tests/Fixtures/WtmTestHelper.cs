@@ -9,6 +9,7 @@ using Moq;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Auth;
 using WalkingTec.Mvvm.Core.Implement;
+using WalkingTec.Mvvm.Core.Support.Json;
 using WalkingTec.Mvvm.Core.Support.FileHandlers;
 using WalkingTec.Mvvm.Test.Mock;
 
@@ -149,15 +150,15 @@ namespace WalkingTec.Mvvm.Core.Tests.Fixtures
         {
             var mock = new Mock<ITokenService>();
             mock.Setup(x => x.IssueTokenAsync(It.IsAny<LoginUserInfo>(), It.IsAny<string?>()))
-                .ReturnsAsync(new Token
+                .Returns(Task.FromResult(new Token
                 {
                     AccessToken = "test_access_token",
                     RefreshToken = "test_refresh_token",
                     ExpiresIn = 3600,
                     TokenType = "Bearer"
-                });
+                }));
             mock.Setup(x => x.RefreshTokenAsync(It.IsAny<string>(), It.IsAny<string?>()))
-                .ReturnsAsync((Token?)null);
+                .Returns(Task.FromResult<Token>(null!));
             mock.Setup(x => x.RevokeTokenAsync(
                     It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()))
                 .Returns(System.Threading.Tasks.Task.CompletedTask);
