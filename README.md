@@ -2,22 +2,16 @@ English | [简体中文](./README.zh-CN.md)
 
 # WalkingTec.Mvvm for asp.net core
 
-Walkingtec.mvvm framework (WTM) is a rapid development framework based on .net core. It supports LayUI, React, VUE. WTM has built-in code generator to maximize development efficiency. It is a powerful tool for efficient web development.
+WalkingTec.Mvvm framework (WTM) is a rapid development framework based on .NET 8. It supports LayUI, React, Vue 2/3, and Blazor. WTM has a built-in code generator to maximize development efficiency. It is a powerful tool for efficient web development.
 
-[![Coverage Status](https://coveralls.io/repos/github/dotnetcore/WTM/badge.svg?branch=master)](https://coveralls.io/github/dotnetcore/WTM?branch=master)
-[![Member project of .NET Core Community](https://img.shields.io/badge/member%20project%20of-NCC-9e20c9.svg)](https://github.com/dotnetcore)
-[![Gitter](https://badges.gitter.im/dotnetcore/WTM.svg)](https://gitter.im/dotnetcore/WTM?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
+[![Build Status](https://github.com/cct08311github/WTM/actions/workflows/build.yml/badge.svg?branch=dotnet8)](https://github.com/cct08311github/WTM/actions/workflows/build.yml)
 [![GitHub license](https://img.shields.io/github/license/dotnetcore/WTM.svg)](https://github.com/dotnetcore/WTM/blob/master/LICENSE)
-[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fdotnetcore%2FWTM.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fdotnetcore%2FWTM?ref=badge_shield)
 
 ## CI Build Status
 
-| Platform | Build Server | SDK | Master Status  | Develop Status  |
-| -------- | ------------ | ---- |---------|---------|
-| Azure Pipelines |  Windows/Linux/OSX |  v2.2.300 | [![Build Status](https://dev.azure.com/vitowu/WTM/_apis/build/status/WTM-CI?branchName=master)](https://dev.azure.com/vitowu/WTM/_build/latest?definitionId=12&branchName=master) | [![Build Status](https://dev.azure.com/vitowu/WTM/_apis/build/status/WTM-CI?branchName=develop)](https://dev.azure.com/vitowu/WTM/_build/latest?definitionId=12&branchName=develop) |
-| Azure Pipelines |  Windows/Linux/OSX |  v3.1.101 | [![Build Status](https://dev.azure.com/vitowu/WTM/_apis/build/status/WTM-CI-sdk_v3.1?branchName=feature/dotnet3)](https://dev.azure.com/vitowu/WTM/_build/latest?definitionId=28&branchName=master) | [![Build Status](https://dev.azure.com/vitowu/WTM/_apis/build/status/WTM-CI-sdk_v3.1?branchName=feature/dotnet3)](https://dev.azure.com/vitowu/WTM/_build/latest?definitionId=28&branchName=feature/dotnet3) |
-| Azure Pipelines |  Windows/Linux/OSX |  v5.0.103 | [![Build Status](https://dev.azure.com/vitowu/WTM/_apis/build/status/WTM-CI-sdk_v5.0?branchName=feature/vNext)](https://dev.azure.com/vitowu/WTM/_build/latest?definitionId=30&branchName=master) | [![Build Status](https://dev.azure.com/vitowu/WTM/_apis/build/status/WTM-CI-sdk_v5.0?branchName=feature%2FvNext)](https://dev.azure.com/vitowu/WTM/_build/latest?definitionId=30&branchName=feature/vNext) |
-| Azure Pipelines |  Windows/Linux/OSX |  v6.0.101 | [![Build Status](https://dev.azure.com/vitowu/WTM/_apis/build/status/WTM-CI-sdk_v6.0?branchName=dotnet6)](https://dev.azure.com/vitowu/WTM/_build/latest?definitionId=31&branchName=master) | [![Build Status](https://dev.azure.com/vitowu/WTM/_apis/build/status/WTM-CI-sdk_v6.0?branchName=dotnet6)](https://dev.azure.com/vitowu/WTM/_build/latest?definitionId=31&branchName=dotnet6) |
+| Platform | Build Server | SDK | Branch | Status |
+| -------- | ------------ | ---- |--------|--------|
+| GitHub Actions | Ubuntu | .NET 8 | dotnet8 | [![Build Status](https://github.com/cct08311github/WTM/actions/workflows/build.yml/badge.svg?branch=dotnet8)](https://github.com/cct08311github/WTM/actions/workflows/build.yml) |
 ## Nuget Packages
 
 Package name                              | Version                     | Downloads
