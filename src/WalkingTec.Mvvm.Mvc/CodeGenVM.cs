@@ -1212,6 +1212,7 @@ namespace WalkingTec.Mvvm.Mvc
                     if (pro.Value == "$fk$")
                     {
                         var fktype = modelType.GetSingleProperty(pro.Key[0..^2])?.PropertyType;
+                        if (fktype == null) continue;
                         cpros += $@"
             v.{pro.Key} = Add{fktype.Name}();";
                         pros += $@"
@@ -1301,6 +1302,7 @@ namespace WalkingTec.Mvvm.Mvc
 
         private string GenerateAddFKModel(string keyname, Type t, List<Type> exist)
         {
+            if (t == null) return "";
             if (exist == null)
             {
                 exist = new List<Type>();
@@ -1319,7 +1321,7 @@ namespace WalkingTec.Mvvm.Mvc
                 if (pro.Value == "$fk$")
                 {
                     var fktype = t.GetSingleProperty(pro.Key[0..^2])?.PropertyType;
-                    if (fktype != t)
+                    if (fktype != null && fktype != t)
                     {
                         rv += GenerateAddFKModel(pro.Key[0..^2], fktype, exist);
                     }
@@ -1332,7 +1334,7 @@ namespace WalkingTec.Mvvm.Mvc
                 if (pro.Value == "$fk$")
                 {
                     var fktype = t.GetSingleProperty(pro.Key[0..^2])?.PropertyType;
-                    if (fktype != t)
+                    if (fktype != null && fktype != t)
                     {
                         cpros += $@"
                 v.{pro.Key} = Add{fktype.Name}();";
