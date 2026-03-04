@@ -54,5 +54,26 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             var fields = AnalysisFieldScanner.ScanModel(typeof(OrderModel)).ToList();
             Assert.IsFalse(fields.Any(f => f.FieldName == "Ignored"));
         }
+
+        [TestMethod]
+        public void ScanModel_null_throws_ArgumentNullException()
+        {
+            Assert.ThrowsException<ArgumentNullException>(
+                () => AnalysisFieldScanner.ScanModel(null).ToList());
+        }
+
+        private class NoDisplayNameModel
+        {
+            [Dimension]
+            public string Category { get; set; }
+        }
+
+        [TestMethod]
+        public void DisplayName_falls_back_to_property_name_when_null()
+        {
+            var fields = AnalysisFieldScanner.ScanModel(typeof(NoDisplayNameModel)).ToList();
+            Assert.AreEqual(1, fields.Count);
+            Assert.AreEqual("Category", fields[0].DisplayName);
+        }
     }
 }

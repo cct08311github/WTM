@@ -15,7 +15,14 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// 掃描指定型別的所有 public instance 屬性，
         /// 回傳有 [Dimension] 或 [Measure] 標記的欄位 Metadata。
         /// </summary>
+        /// <exception cref="ArgumentNullException">當 modelType 為 null 時立即擲回。</exception>
         public static IEnumerable<AnalysisFieldMeta> ScanModel(Type modelType)
+        {
+            if (modelType == null) throw new ArgumentNullException(nameof(modelType));
+            return ScanModelCore(modelType);
+        }
+
+        private static IEnumerable<AnalysisFieldMeta> ScanModelCore(Type modelType)
         {
             foreach (var prop in modelType.GetProperties(BindingFlags.Public | BindingFlags.Instance))
             {
