@@ -176,10 +176,11 @@ namespace WalkingTec.Mvvm.Core.Tests.Integration
 
     /// <summary>
     /// Minimal DataContext for DoLoginAsync tests.
-    /// Uses FrameworkContext base so EF knows about FrameworkUserBase hierarchy.
+    /// Uses EmptyContext (not FrameworkContext) to avoid complex navigation relationships
+    /// (UserRoles, UserGroups, etc.) that EF InMemory cannot translate in LINQ projections.
     /// TestLoginUser is registered as a DbSet to map it to the InMemory store.
     /// </summary>
-    internal class LoginTestDataContext : FrameworkContext
+    internal class LoginTestDataContext : EmptyContext
     {
         public LoginTestDataContext(string cs, DBTypeEnum dbtype)
             : base(cs, dbtype) { }
