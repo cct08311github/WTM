@@ -372,11 +372,11 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
         }
 
         [AllRights]
-        public ActionResult GetUserById(string keywords)
+        public async Task<ActionResult> GetUserById(string keywords)
         {
             WalkingTec.Mvvm.Admin.Api.AccountController userapi = new WalkingTec.Mvvm.Admin.Api.AccountController();
             userapi.Wtm = Wtm;
-            var rv = userapi.GetUserById(keywords) as OkObjectResult;
+            var rv = (await userapi.GetUserById(keywords)) as OkObjectResult;
             List<ComboSelectListItem> users = new List<ComboSelectListItem>();
             if (rv != null && rv.Value is string && rv.Value != null)
             {
@@ -402,11 +402,11 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
         }
 
         [AllRights]
-        public IActionResult GetFrameworkRoles()
+        public async Task<IActionResult> GetFrameworkRoles()
         {
             WalkingTec.Mvvm.Admin.Api.AccountController userapi = new WalkingTec.Mvvm.Admin.Api.AccountController();
             userapi.Wtm = Wtm;
-            var rv = userapi.GetFrameworkRoles() as OkObjectResult;
+            var rv = (await userapi.GetFrameworkRoles()) as OkObjectResult;
             List<ComboSelectListItem> users = new List<ComboSelectListItem>();
             if (rv != null && rv.Value is string && rv.Value != null)
             {
@@ -420,11 +420,11 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
         }
 
         [AllRights]
-        public IActionResult GetFrameworkGroups()
+        public async Task<IActionResult> GetFrameworkGroups()
         {
             WalkingTec.Mvvm.Admin.Api.AccountController userapi = new WalkingTec.Mvvm.Admin.Api.AccountController();
             userapi.Wtm = Wtm;
-            var rv = userapi.GetFrameworkGroupsTree() as OkObjectResult;
+            var rv = (await userapi.GetFrameworkGroupsTree()) as OkObjectResult;
             List<TreeSelectListItem> users = new List<TreeSelectListItem>();
             if (rv != null && rv.Value is string && rv.Value != null)
             {

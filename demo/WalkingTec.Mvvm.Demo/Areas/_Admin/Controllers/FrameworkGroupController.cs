@@ -232,11 +232,11 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
         }
 
         [AllRights]
-        public IActionResult GetParents()
+        public async Task<IActionResult> GetParents()
         {
             WalkingTec.Mvvm.Admin.Api.FrameworkGroupController userapi = new Mvvm.Admin.Api.FrameworkGroupController();
             userapi.Wtm = Wtm;
-            var rv = userapi.GetParentsTree() as OkObjectResult;
+            var rv = (await userapi.GetParentsTree()) as OkObjectResult;
             List<TreeSelectListItem> users = new List<TreeSelectListItem>();
             if (rv != null && rv.Value is string && rv.Value != null)
             {
