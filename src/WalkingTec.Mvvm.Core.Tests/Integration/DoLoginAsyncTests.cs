@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Tests.Fixtures;
@@ -19,17 +20,31 @@ namespace WalkingTec.Mvvm.Core.Tests.Integration
     /// - MD5 → PBKDF2 migration (SuccessRehashNeeded → DB updated)
     /// - Disabled user rejection
     /// - Non-existent user rejection
+    ///
+    /// Uses SQLite shared in-memory (not EF InMemory) because LoadBasicInfoAsync has
+    /// correlated collection subqueries that EF Core InMemory cannot translate.
+    /// A single SqliteConnection is kept open throughout the test lifetime to keep
+    /// the shared in-memory database alive across multiple context instances.
     /// </summary>
-    public class DoLoginAsyncTests
+    public class DoLoginAsyncTests : IDisposable
     {
         private readonly string _seed;
+        private readonly SqliteConnection _keepAlive;
 
         public DoLoginAsyncTests()
         {
             _seed = Guid.NewGuid().ToString();
+            // Shared named SQLite in-memory database — stays alive as long as this connection is open
+            _keepAlive = new SqliteConnection($"DataSource={_seed}?mode=memory&cache=shared");
+            _keepAlive.Open();
+            // Create all tables (FrameworkUsers, FrameworkUserRoles, etc.)
+            using var db = CreateDb();
+            ((DbContext)db).Database.EnsureCreated();
         }
 
-        private IDataContext CreateDb() => new LoginTestDataContext(_seed, DBTypeEnum.Memory);
+        public void Dispose() => _keepAlive.Dispose();
+
+        private IDataContext CreateDb() => new LoginTestDataContext(_seed);
 
         // ─── PBKDF2 Happy Path ─────────────────────────────────────────────────
 
@@ -176,14 +191,17 @@ namespace WalkingTec.Mvvm.Core.Tests.Integration
 
     /// <summary>
     /// Minimal DataContext for DoLoginAsync tests.
-    /// Uses EmptyContext (not FrameworkContext) to avoid complex navigation relationships
-    /// (UserRoles, UserGroups, etc.) that EF InMemory cannot translate in LINQ projections.
-    /// TestLoginUser is registered as a DbSet to map it to the InMemory store.
+    /// Inherits FrameworkContext so all related entity types (FrameworkUserRole, etc.)
+    /// are in the model — required by LoadBasicInfoAsync's correlated LINQ queries.
+    /// Uses SQLite (not EF InMemory) because the correlated subqueries in LoadBasicInfoAsync
+    /// cannot be translated by the EF Core InMemory provider.
+    /// Overrides OnConfiguring to prevent the base SqlServer/InMemory config from running
+    /// (the connection is configured by the DoLoginAsyncTests ctor via EnsureCreated).
     /// </summary>
-    internal class LoginTestDataContext : EmptyContext
+    internal class LoginTestDataContext : FrameworkContext
     {
-        public LoginTestDataContext(string cs, DBTypeEnum dbtype)
-            : base(cs, dbtype) { }
+        public LoginTestDataContext(string seed)
+            : base($"DataSource={seed}?mode=memory&cache=shared", DBTypeEnum.SQLite) { }
 
         public DbSet<TestLoginUser> TestLoginUsers { get; set; } = null!;
     }
