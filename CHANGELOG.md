@@ -2,6 +2,45 @@
 
 ## v8.x.x
 
+## 8.1.17 (2026-03-05)
+
+* **新增（Analysis Mode）：** `[Dimension]` / `[Measure]` / `[EnableAnalysis]` 屬性標注系統，無需額外程式碼即可在列表頁切換分析模式
+* **新增（Analysis Mode）：** `/_analysis/meta`、`/_analysis/query`、`/_analysis/export` 三個 API，支援動態 GroupBy 聚合（Sum / Count / Avg / Max / Min）
+* **新增（Analysis Mode）：** `DataTableTagHelper.EnableAnalysis` 屬性，一行 HTML 啟用分析按鈕
+* **新增（Analysis Mode）：** `framework_analysis.js` 前端 UI，含 ECharts 自動選型圖表（Bar / Stacked Bar / Line / 數字卡片）
+* **新增（Analysis Mode）：** Excel (.xlsx) 與 CSV 匯出；CSV 防 formula injection（`=`, `+`, `-`, `@` 前置 tab）
+* **安全：** `AnalysisVmRegistry` 白名單機制；`AnalysisQueryEngine` 全程 Expression Tree，無 SQL 字串拼接
+* **修正：** `ExecuteDynamic` 未 unwrap `TargetInvocationException`，導致無效欄位回 500 而非 400
+* **修正：** 移除未實作的 `FilterOperator.In`（宣告但無 switch case，原回 `NotSupportedException`）
+* **效能：** 資料載入硬上限 `MaxMaterializeRows = 50,000` 防止 OOM；結果超過 10,000 列自動截斷
+* **測試：** Engine 30 tests + Exporter 6 tests + Controller 16 tests + JS 42 tests，全部 CI ✅
+
+## 8.1.16 (2026-03-04)
+
+* **修正（BUG-1）：** CodeGenVM `GetRandomValues()` 對 readonly 欄位 NullReferenceException；`GenerateAddFKModel` null guard
+* **修正（BUG-2）：** `UploadImage` 上傳非圖片檔回 500，改為 try-catch 回 400 Bad Request
+* **修正（BUG-3）：** 多租戶下 `FileAttachment`（實作 `ITenant`）受 EF global query filter 影響不可見；改用 `IgnoreQueryFilters()`
+* **修正（BUG-4）：** Elsa + MySQL 不自動建表；MySQL treats schema=database，`WtmElsaContext.Schema` 對 MySQL 回 null
+* **修正（BUG-5）：** CodeGen 路徑在非標準環境 `IndexOf("\bin\Debug\")` 回 -1 導致 `Substring(0,-1)` 例外；改用 `Directory.GetCurrentDirectory()` fallback
+* **修正（BUG-6）：** ComboBox `selectVal` 空時強制所有 `item.Selected = false`；改為只在 `selectVal.Count > 0` 時覆蓋
+* **新增（BUG-7）：** Oracle 連線新增 `Enabled` 屬性（預設 true），`appsettings.json` 可設 `Enabled: false` 停用個別連線
+* **效能（BUG-8）：** 新增 `DbConnectionWarmupService`（BackgroundService），啟動 2s 後呼叫 `CanConnectAsync()` 消除 Oracle 冷啟動延遲
+
+## 8.1.15 (2026-03-04)
+
+* **測試：** 50+ MSTest 測試，覆蓋 BaseCRUDVM、BasePagedListVM、BatchVM、RBAC、TokenService、PasswordHelper
+* **CI：** 新增覆蓋率流水線（dotnet-coverage + Coverlet）
+* **修正：** JWT `GenerateAccessToken` 新增 `jti` claim（`Guid.NewGuid().ToString("N")`），避免同秒產生相同 Token
+
+## 8.1.14 (2026-03-04)
+
+* **非同步（ASYNC-1）：** 消除全部 `.Result` / `.Wait()` 同步等待，解決 ThreadPool 飢餓風險
+* **依賴（DEPS-1）：** EF Core → 8.0.22, Quartz → 3.16.0, Elsa → 2.15.2, Swashbuckle → 6.6.2
+* **程式碼品質（QUALITY-1）：** 更新 `.editorconfig` 規則
+* **程式碼品質（QUALITY-2）：** 啟用 Nullable，168 個遺留檔案加 `#nullable disable`
+* **測試（TEST-1）：** 建立 xUnit 測試專案，17 個基礎測試
+* **CI：** dotnet test TRX logger + artifact 上傳
+
 ## 8.1.13 (2026-03-04)
 
 * **安全(Breaking Change)：** 密碼儲存從 MD5 升級至 PBKDF2（ASP.NET Core Identity PasswordHasher），自動向下相容舊 MD5 帳號；**部署前必須執行 db-migration-8.1.13.sql 以擴展 Password 欄位至 256 字元**

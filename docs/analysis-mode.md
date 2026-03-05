@@ -1,6 +1,6 @@
 # WTM Analysis Mode — 新組件開發使用手冊
 
-**適用版本**：WTM 8.1.17+（Phase 1）
+**適用版本**：WTM 8.1.17+
 **最後更新**：2026-03-05
 
 ---
@@ -513,20 +513,26 @@ Analysis Mode 透過 `/_analysis` 路由提供三個 API，供前端 `framework_
 
 ---
 
-### GET `/_analysis/export`
+### POST `/_analysis/export`
 
-匯出分析結果為 Excel（目前版本固定 `.xlsx`）。
+匯出分析結果為 Excel 或 CSV。
 
 **Query 參數**：
 
-| 參數 | 型別 | 說明 |
-|------|------|------|
-| `listVmType` | `string` | ListVM FullName |
-| `requestJson` | `string` | URL 編碼的 `AnalysisQueryRequest` JSON |
+| 參數 | 型別 | 預設 | 說明 |
+|------|------|------|------|
+| `format` | `string` | `xlsx` | 匯出格式：`xlsx` 或 `csv` |
 
-**回應**：`application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
+**Request Body**：與 `/query` 端點相同的 `AnalysisQueryRequest` JSON。
 
-瀏覽器直接下載 `analysis-{timestamp}.xlsx`。
+**回應**：
+- `xlsx`：`application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`，檔名 `analysis.xlsx`
+- `csv`：`text/csv`，檔名 `analysis.csv`，UTF-8 編碼，RFC 4180 格式
+
+**安全**：CSV 值以公式字元（`=`, `+`, `-`, `@`）開頭時自動前置 tab，防止 CSV formula injection。
+
+**錯誤**：
+- `400 Bad Request` — 維度/度量超過 3 個、欄位不在白名單、`listVmType` 不在白名單
 
 ---
 
@@ -538,7 +544,8 @@ Analysis Mode 透過 `/_analysis` 路由提供三個 API，供前端 `framework_
 | **欄位名注入** | 所有 Dimension / Measure / Filter 欄位在 `ValidateFields()` 中對白名單驗證後才進 Expression Tree |
 | **SQL Injection** | 全程 Expression Tree（非字串拼接），由 EF Core 生成參數化查詢 |
 | **Filter 型別混淆** | `Value` 統一傳 `string`，server-side 依欄位的 `ClrType` 做型別安全轉換，失敗回 400 |
-| **大量資料 DoS** | GroupBy 結果強制 `Take(10,001)`，超過截斷並標記 `Truncated: true` |
+| **CSV Formula Injection** | CSV 匯出時，值以 `=` / `+` / `-` / `@` 開頭者自動前置 tab，防止惡意公式在 Excel 中執行 |
+| **大量資料 DoS** | GroupBy 結果強制 `Take(10,001)` 截斷並標記 `Truncated: true`；載入上限 50,000 筆防 OOM |
 | **多租戶隔離** | 複用同一 `DC` 實例，EF Core global query filter 自動生效，租戶資料隔離無需額外處理 |
 | **未授權存取** | `_AnalysisController` 標注 `[AllRights]`（需登入），Phase 2 評估欄位級權限 |
 
@@ -556,13 +563,13 @@ Analysis Mode 透過 `/_analysis` 路由提供三個 API，供前端 `framework_
 - [x] `DataTableTagHelper.EnableAnalysis` — 一鍵啟用
 - [x] `framework_analysis.js` — 前端 UI（維度/度量選擇、結果表格、圖表）
 - [x] ECharts 自動選型（Bar / Stacked Bar / Line / 數字卡片）
-- [x] 100% 單元測試覆蓋（Engine 26 tests + Exporter 6 tests + JS 10 tests）
+- [x] 100% 單元測試覆蓋（Engine 30 tests + Exporter 6 tests + Controller 16 tests + JS 42 tests）
 
 ### Phase 1 已知限制
 
 | 限制 | 說明 |
 |------|------|
-| **In-process GroupBy** | 目前先 `.ToList()` 再 in-process GroupBy，高基數欄位或大資料量時效能較低。Phase 2 改為 EF Core server-side GroupBy。 |
+| **In-process GroupBy** | 先 `Take(50,000).ToList()` 再 in-process GroupBy，高基數欄位或大資料量時效能較低。Phase 2 改為 EF Core server-side GroupBy。 |
 | **無日期鑽取** | `DateHierarchy` 已預留，Phase 2 實作年/季/月/週/日鑽取 |
 | **無 Pivot 表** | Phase 2 功能 |
 | **無圖表 drill-down** | Phase 2 功能 |
@@ -611,4 +618,4 @@ ListVM 的 FullName 沒有在 `AnalysisVmRegistry` 中登記。確認：
 
 **Q：`FilterOperator.In` 支援嗎？**
 
-Phase 1 尚未支援，使用會拋 `NotSupportedException`。Phase 2 補充實作。
+`In` 運算子已從 `FilterOperator` enum 移除（8.1.17）。若需多值過濾，目前可用多個 `Eq` + `Contains` 條件組合替代；Phase 2 評估重新加入完整的 `In` 支援。
