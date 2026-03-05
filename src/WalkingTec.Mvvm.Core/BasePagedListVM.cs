@@ -1,6 +1,7 @@
 #nullable disable
 using System;
 using System.Collections.Generic;
+using WalkingTec.Mvvm.Core.Analysis;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Data;
 using System.Data.Common;
@@ -129,6 +130,13 @@ namespace WalkingTec.Mvvm.Core
         {
             return new List<GridAction>();
         }
+
+        /// <summary>
+        /// 回傳此 ListVM 可供分析的欄位 Metadata（掃描 TModel 上的 [Dimension]/[Measure] attribute）。
+        /// 子類別可覆寫以自訂欄位清單。
+        /// </summary>
+        public virtual IEnumerable<AnalysisFieldMeta> GetAnalysisFields()
+            => AnalysisFieldScanner.ScanModel(typeof(TModel));
 
         #region GenerateExcel
 

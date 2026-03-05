@@ -284,6 +284,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         /// 是否显示删选列按钮
         /// </summary>
         public bool? NeedShowFilter { get; set; }
+
+        /// <summary>
+        /// 啟用分析模式（在 toolbar 加入「分析模式」切換按鈕）
+        /// </summary>
+        public bool EnableAnalysis { get; set; }
         /// <summary>
         /// 排除的搜索条件
         /// </summary>
@@ -524,6 +529,14 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 }
             }
 
+            if (EnableAnalysis)
+            {
+                var vmFullName = ListVM?.GetType()?.FullName ?? "";
+                toolBarBtnStrBuilder.Append(
+                    $@"<button type=""button"" class=""layui-btn layui-btn-sm"" " +
+                    $@"onclick=""wtmAnalysis.toggle('{Id}','{vmFullName}')"">&#xe67e; 分析模式</button>");
+            }
+
             #endregion
 
             #region DataTable
@@ -666,6 +679,14 @@ setTimeout(function(){{
                             }}
                             }});
                             }},500);</script>");
+            }
+
+            if (EnableAnalysis)
+            {
+                output.PostElement.AppendHtml(
+                    $@"<div id=""analysis-panel-{Id}"" style=""display:none;margin-top:10px;""></div>");
+                output.PostElement.AppendHtml(
+                    @"<script src=""/_js/framework_analysis.js""></script>");
             }
 
             base.Process(context, output);

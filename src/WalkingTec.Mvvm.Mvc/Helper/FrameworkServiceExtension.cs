@@ -543,6 +543,9 @@ namespace WalkingTec.Mvvm.Mvc
             });
             services.AddHostedService<QuartzHostService>();
             services.AddHostedService<DbConnectionWarmupService>();
+            var analysisRegistry = new WalkingTec.Mvvm.Core.Analysis.AnalysisVmRegistry();
+            analysisRegistry.Build(AppDomain.CurrentDomain.GetAssemblies());
+            services.AddSingleton(analysisRegistry);
             var cs = conf.Connections.Where(x => x.Enabled).ToList();
             foreach (var item in cs)
             {
