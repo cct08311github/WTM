@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Razor.TagHelpers;
+using Microsoft.AspNetCore.Razor.TagHelpers;
 
 namespace WalkingTec.Mvvm.TagHelpers.LayUI
 {
@@ -9,6 +9,10 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     public class RowTagHelper : TagHelper
     {
         public ItemsPerRowEnum? ItemsPerRow { get; set; }
+
+        public ItemsPerRowEnum? ItemsPerRowXs { get; set; }
+
+        public ItemsPerRowEnum? ItemsPerRowSm { get; set; }
 
         public AlignEnum? Align { get; set; }
 
@@ -50,6 +54,24 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             else
             {
                 context.Items.Add("ipr", (int?)ItemsPerRow);
+            }
+
+            // xs breakpoint
+            if (ItemsPerRowXs.HasValue)
+            {
+                if (context.Items.ContainsKey("ipr_xs"))
+                    context.Items["ipr_xs"] = (int?)ItemsPerRowXs;
+                else
+                    context.Items.Add("ipr_xs", (int?)ItemsPerRowXs);
+            }
+
+            // sm breakpoint
+            if (ItemsPerRowSm.HasValue)
+            {
+                if (context.Items.ContainsKey("ipr_sm"))
+                    context.Items["ipr_sm"] = (int?)ItemsPerRowSm;
+                else
+                    context.Items.Add("ipr_sm", (int?)ItemsPerRowSm);
             }
         }
 

@@ -73,8 +73,34 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     {
                         col *= Colspan.Value;
                     }
+
+                    // Build responsive column class starting with md breakpoint
+                    var colClass = $"layui-col-md{col}";
+
+                    if (context.Items.ContainsKey("ipr_sm"))
+                    {
+                        int? iprSm = (int?)context.Items["ipr_sm"];
+                        if (iprSm > 0)
+                        {
+                            int colSm = 12 / iprSm.Value;
+                            if (Colspan != null) colSm *= Colspan.Value;
+                            colClass = $"layui-col-sm{colSm} " + colClass;
+                        }
+                    }
+
+                    if (context.Items.ContainsKey("ipr_xs"))
+                    {
+                        int? iprXs = (int?)context.Items["ipr_xs"];
+                        if (iprXs > 0)
+                        {
+                            int colXs = 12 / iprXs.Value;
+                            if (Colspan != null) colXs *= Colspan.Value;
+                            colClass = $"layui-col-xs{colXs} " + colClass;
+                        }
+                    }
+
                     preHtml = $@"
-<div class=""layui-col-md{col}"">
+<div class=""{colClass}"">
 " + preHtml;
                     postHtml += @"
 </div>
