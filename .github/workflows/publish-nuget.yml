@@ -40,13 +40,19 @@ jobs:
           fi
 
       - name: Pack WalkingTec.Mvvm.Core
-        run: dotnet pack src/WalkingTec.Mvvm.Core/WalkingTec.Mvvm.Core.csproj -c Release -o nupkgs
+        env:
+          PKG_VERSION: ${{ steps.version.outputs.version }}
+        run: dotnet pack src/WalkingTec.Mvvm.Core/WalkingTec.Mvvm.Core.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION
 
       - name: Pack WalkingTec.Mvvm.TagHelpers.LayUI
-        run: dotnet pack src/WalkingTec.Mvvm.TagHelpers.LayUI/WalkingTec.Mvvm.TagHelpers.LayUI.csproj -c Release -o nupkgs
+        env:
+          PKG_VERSION: ${{ steps.version.outputs.version }}
+        run: dotnet pack src/WalkingTec.Mvvm.TagHelpers.LayUI/WalkingTec.Mvvm.TagHelpers.LayUI.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION
 
       - name: Pack WalkingTec.Mvvm.Mvc
-        run: dotnet pack src/WalkingTec.Mvvm.Mvc/WalkingTec.Mvvm.Mvc.csproj -c Release -o nupkgs
+        env:
+          PKG_VERSION: ${{ steps.version.outputs.version }}
+        run: dotnet pack src/WalkingTec.Mvvm.Mvc/WalkingTec.Mvvm.Mvc.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION
 
       - name: List packages
         run: ls -lh nupkgs/

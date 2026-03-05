@@ -78,7 +78,7 @@
             headers: { 'Content-Type': 'application/json' }
         })
         .then(function (res) {
-            if (!res.ok) throw new Error('HTTP ' + res.status);
+            if (!res.ok) return res.text().then(function (t) { throw new Error(t || 'HTTP ' + res.status); });
             return res.json();
         })
         .then(function (fields) {
@@ -345,7 +345,7 @@
             })
         })
         .then(function (res) {
-            if (!res.ok) throw new Error('HTTP ' + res.status);
+            if (!res.ok) return res.text().then(function (t) { throw new Error(t || 'HTTP ' + res.status); });
             return res.blob();
         })
         .then(function (blob) {
