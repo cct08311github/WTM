@@ -508,3 +508,75 @@ describe('wtmAnalysis.parseFuncs', () => {
         expect(wa.parseFuncs(undefined)).toEqual([]);
     });
 });
+
+// ─── renderChart — forceChartType ─────────────────────────────────────────────
+describe('renderChart — forceChartType parameter', () => {
+    function makeChartEnv(forcedType) {
+        const capturedOptions = [];
+        const { wa } = makeEnv({
+            echarts: {
+                init: jest.fn(() => ({
+                    setOption: jest.fn((opt) => { capturedOptions.push(opt); }),
+                    dispose: jest.fn(),
+                })),
+            },
+        });
+        return { wa, capturedOptions };
+    }
+
+    function makeContainer() {
+        const children = [];
+        return {
+            appendChild: jest.fn(function(c) { children.push(c); }),
+            children,
+            style: {},
+            id: '',
+        };
+    }
+
+    const sampleResult = {
+        columns: ['Region', 'Amount_Sum'],
+        rows: [{ Region: 'North', Amount_Sum: 100 }],
+    };
+    const sampleReq = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }] };
+    const sampleDimFields = [{ fieldName: 'Region', isDate: false }];
+
+    test('forceChartType=line overrides detectChartType (which would return bar)', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const container = makeContainer();
+        wa.renderChart('g1', sampleResult, sampleReq, sampleDimFields, container, 'line');
+        expect(capturedOptions.length).toBe(1);
+        expect(capturedOptions[0].series[0].type).toBe('line');
+    });
+
+    test('forceChartType=bar uses bar type', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const container = makeContainer();
+        wa.renderChart('g1', sampleResult, sampleReq, sampleDimFields, container, 'bar');
+        expect(capturedOptions[0].series[0].type).toBe('bar');
+        expect(capturedOptions[0].series[0].stack).toBeUndefined();
+    });
+
+    test('forceChartType=bar-stacked sets stack=total', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const container = makeContainer();
+        wa.renderChart('g1', sampleResult, sampleReq, sampleDimFields, container, 'bar-stacked');
+        expect(capturedOptions[0].series[0].type).toBe('bar');
+        expect(capturedOptions[0].series[0].stack).toBe('total');
+    });
+
+    test('no forceChartType uses detectChartType result', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const container = makeContainer();
+        // sampleDimFields has isDate:false, single dim → detectChartType returns 'bar'
+        wa.renderChart('g1', sampleResult, sampleReq, sampleDimFields, container);
+        expect(capturedOptions[0].series[0].type).toBe('bar');
+    });
+
+    test('renderChart skips when echarts not available', () => {
+        const { wa } = makeEnv({ /* no echarts */ });
+        const container = makeContainer();
+        // should not throw
+        expect(() => wa.renderChart('g1', sampleResult, sampleReq, sampleDimFields, container, 'bar')).not.toThrow();
+    });
+});

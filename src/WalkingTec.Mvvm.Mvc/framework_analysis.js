@@ -134,6 +134,29 @@
         btnRow.appendChild(exportCsvBtn);
         body.appendChild(btnRow);
 
+        var chartToggleRow = document.createElement('div');
+        chartToggleRow.id = 'analysis-chart-toggle-' + gridId;
+        chartToggleRow.style.marginTop = '8px';
+        chartToggleRow.style.display = 'none'; // shown after first query
+        ['bar', 'line', 'bar-stacked', 'card'].forEach(function (ct) {
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'layui-btn layui-btn-xs';
+            btn.style.marginRight = '4px';
+            btn.textContent = ct;
+            btn.addEventListener('click', function () {
+                var st = _state[gridId];
+                if (!st || !st.lastResult) return;
+                var resultDiv = document.getElementById('analysis-result-' + gridId);
+                if (!resultDiv) return;
+                var oldChart = document.getElementById('analysis-chart-' + gridId);
+                if (oldChart && oldChart.parentNode) oldChart.parentNode.removeChild(oldChart);
+                renderChart(gridId, st.lastResult, st.lastReq, st.lastDimFields, resultDiv, ct);
+            });
+            chartToggleRow.appendChild(btn);
+        });
+        body.appendChild(chartToggleRow);
+
         var resultDiv = document.createElement('div');
         resultDiv.id = 'analysis-result-' + gridId;
         resultDiv.style.marginTop = '15px';
@@ -286,6 +309,13 @@
                 return f.kind === 'Dimension' && dims.indexOf(f.fieldName) >= 0;
             });
             renderChart(gridId, result, { dimensions: dims, measures: msrs }, dimFields, resultDiv);
+
+            // Store for chart type toggle
+            st.lastResult = result;
+            st.lastReq = { dimensions: dims, measures: msrs };
+            st.lastDimFields = dimFields;
+            var toggleRow = document.getElementById('analysis-chart-toggle-' + gridId);
+            if (toggleRow) toggleRow.style.display = 'block';
         })
         .catch(function (err) {
             if (resultDiv) resultDiv.textContent = '查詢失敗：' + err.message;
@@ -328,7 +358,7 @@
     /**
      * 渲染 ECharts 圖表（若 echarts 全域變數不存在則略過）
      */
-    function renderChart(gridId, result, req, dimFields, container) {
+    function renderChart(gridId, result, req, dimFields, container, forceChartType) {
         if (typeof window.echarts === 'undefined') return;
 
         var chartDiv = document.createElement('div');
@@ -343,7 +373,7 @@
             return { fieldName: d, isDate: f ? f.isDate === true : false };
         });
 
-        var chartType = detectChartType(dimMeta, req.measures);
+        var chartType = forceChartType || detectChartType(dimMeta, req.measures);
         var chart = window.echarts.init(chartDiv);
         var firstDim = req.dimensions[0];
         var categories = result.rows.map(function (r) { return String(r[firstDim] || ''); });
@@ -428,7 +458,8 @@
         detectChartType: detectChartType,
         validateSelection: validateSelection,
         collectSelection: collectSelection,
-        parseFuncs: parseFuncs
+        parseFuncs: parseFuncs,
+        renderChart: renderChart
     };
 
 }(typeof window !== 'undefined' ? window : global));
