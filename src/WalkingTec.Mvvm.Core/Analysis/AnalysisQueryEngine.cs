@@ -60,7 +60,14 @@ namespace WalkingTec.Mvvm.Core.Analysis
             var method = typeof(AnalysisQueryEngine)
                 .GetMethod(nameof(Execute))
                 .MakeGenericMethod(elementType);
-            return (AnalysisQueryResponse)method.Invoke(this, new object[] { baseQuery, req, whitelist });
+            try
+            {
+                return (AnalysisQueryResponse)method.Invoke(this, new object[] { baseQuery, req, whitelist });
+            }
+            catch (System.Reflection.TargetInvocationException ex)
+            {
+                throw ex.InnerException ?? ex;
+            }
         }
 
         private static void ValidateFields(AnalysisQueryRequest req, Dictionary<string, AnalysisFieldMeta> wl)
@@ -127,7 +134,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                             constant);
                         break;
                     default:
-                        throw new NotSupportedException($"Operator {filter.Operator} not supported.");
+                        throw new InvalidOperationException($"Operator '{filter.Operator}' is not supported.");
                 }
 
                 query = query.Where(Expression.Lambda<Func<TModel, bool>>(body, param));
