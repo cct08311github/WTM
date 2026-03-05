@@ -14,6 +14,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
     public class AnalysisQueryEngine
     {
         private const int MaxRows = 10_000;
+        // 防止全表載入造成記憶體耗盡（C-1）
+        private const int MaxMaterializeRows = 50_000;
 
         /// <summary>
         /// 執行分析查詢，回傳聚合結果。
@@ -28,6 +30,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
             var filtered = ApplyFilters(baseQuery, req.Filters, wl);
             var rows = ExecuteGroupBy(filtered, req, wl);
+            int totalCount = rows.Count;   // 截斷前的真實筆數（I-3）
             bool truncated = rows.Count > MaxRows;
             if (truncated) rows = rows.Take(MaxRows).ToList();
 
@@ -39,7 +42,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             {
                 Columns = columns,
                 Rows = rows,
-                TotalCount = rows.Count,
+                TotalCount = totalCount,
                 Truncated = truncated,
                 QueryHash = ComputeHash(req)
             };
@@ -116,6 +119,9 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         body = Expression.LessThanOrEqual(prop, constant);
                         break;
                     case FilterOperator.Contains:
+                        if (meta.ClrType != typeof(string))
+                            throw new InvalidOperationException(
+                                $"Contains 只適用於字串欄位，'{filter.Field}' 的型別為 {meta.ClrType.Name}。");
                         body = Expression.Call(prop,
                             typeof(string).GetMethod(nameof(string.Contains), new[] { typeof(string) }),
                             constant);
@@ -136,9 +142,9 @@ namespace WalkingTec.Mvvm.Core.Analysis
             {
                 return Convert.ChangeType(value, underlying);
             }
-            catch
+            catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException)
             {
-                throw new InvalidOperationException($"Cannot convert '{value}' to {underlying.Name}.");
+                throw new InvalidOperationException($"Cannot convert '{value}' to {underlying.Name}.", ex);
             }
         }
 
@@ -148,8 +154,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
             Dictionary<string, AnalysisFieldMeta> wl)
         {
             // Phase 1: materialise then group in-process (SQLite + InMemory safe)
-            // Production note: verify actual SQL with ToQueryString() to ensure server-side execution
-            var items = query.ToList();
+            // 限制載入筆數防止 OOM（C-1）；超出上限時查詢結果可能不完整，由呼叫端決策
+            var items = query.Take(MaxMaterializeRows).ToList();
 
             return items
                 .GroupBy(row => BuildGroupKey(row, req.Dimensions))
@@ -164,15 +170,20 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     foreach (var m in req.Measures)
                     {
                         var propInfo = typeof(TModel).GetProperty(m.Field);
-                        var values = g.Select(row => Convert.ToDecimal(propInfo.GetValue(row))).ToList();
+                        // 過濾 null 值，避免 nullable 型別的 Convert.ToDecimal 例外（I-10）
+                        var values = g
+                            .Select(row => propInfo.GetValue(row))
+                            .Where(v => v != null)
+                            .Select(v => Convert.ToDecimal(v))
+                            .ToList();
                         decimal aggValue;
                         switch (m.Func)
                         {
-                            case AggregateFunc.Sum:   aggValue = values.Sum(); break;
-                            case AggregateFunc.Count: aggValue = values.Count; break;
-                            case AggregateFunc.Avg:   aggValue = values.Average(); break;
-                            case AggregateFunc.Max:   aggValue = values.Max(); break;
-                            case AggregateFunc.Min:   aggValue = values.Min(); break;
+                            case AggregateFunc.Sum:   aggValue = values.Count == 0 ? 0m : values.Sum(); break;
+                            case AggregateFunc.Count: aggValue = g.Count(); break;
+                            case AggregateFunc.Avg:   aggValue = values.Count == 0 ? 0m : values.Average(); break;
+                            case AggregateFunc.Max:   aggValue = values.Count == 0 ? 0m : values.Max(); break;
+                            case AggregateFunc.Min:   aggValue = values.Count == 0 ? 0m : values.Min(); break;
                             default: throw new NotSupportedException($"Unsupported func {m.Func}");
                         }
                         dict[$"{m.Field}_{m.Func}"] = aggValue;

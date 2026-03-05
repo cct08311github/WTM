@@ -85,6 +85,10 @@ namespace WalkingTec.Mvvm.Mvc
         public IActionResult Export([FromBody] AnalysisQueryRequest req,
                                     [FromQuery] string format = "xlsx")
         {
+            // 與 Query 端點一致的維度/度量上限驗證（I-5）
+            if (req.Dimensions.Count > 3) return BadRequest("最多選取 3 個維度。");
+            if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
+
             Type vmType;
             try { vmType = _registry.Resolve(req.ListVmType); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
@@ -114,9 +118,18 @@ namespace WalkingTec.Mvvm.Mvc
 
         private BaseVM CreateAnalysisVm(Type vmType)
         {
-            var vm = (BaseVM)Activator.CreateInstance(vmType);
-            vm.Wtm = Wtm;
-            return vm;
+            // Activator.CreateInstance 在 VM 無 public parameterless constructor 時拋 MissingMethodException（I-7）
+            try
+            {
+                var vm = (BaseVM)Activator.CreateInstance(vmType);
+                vm.Wtm = Wtm;
+                return vm;
+            }
+            catch (MissingMethodException)
+            {
+                throw new InvalidOperationException(
+                    $"VM 型別 '{vmType.FullName}' 必須有 public parameterless constructor 才能用於 Analysis Mode。");
+            }
         }
 
         private BaseVM CreateAndBindVm(Type vmType, string searcherFormData)
@@ -128,11 +141,19 @@ namespace WalkingTec.Mvvm.Mvc
                 var searcherProp = vmType.GetProperty("Searcher");
                 if (searcherProp != null)
                 {
-                    var searcher = JsonSerializer.Deserialize(
-                        searcherFormData,
-                        searcherProp.PropertyType,
-                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                    searcherProp.SetValue(vm, searcher);
+                    // JsonException → 400（I-8）
+                    try
+                    {
+                        var searcher = JsonSerializer.Deserialize(
+                            searcherFormData,
+                            searcherProp.PropertyType,
+                            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                        searcherProp.SetValue(vm, searcher);
+                    }
+                    catch (JsonException ex)
+                    {
+                        throw new InvalidOperationException($"搜尋條件格式錯誤：{ex.Message}", ex);
+                    }
                 }
             }
 
@@ -141,14 +162,48 @@ namespace WalkingTec.Mvvm.Mvc
 
         private static IEnumerable<AnalysisFieldMeta> InvokeGetAnalysisFields(BaseVM vm, Type vmType)
         {
-            var method = vmType.GetMethod("GetAnalysisFields");
-            return (IEnumerable<AnalysisFieldMeta>)method.Invoke(vm, null);
+            // 明確指定 binding flags 與無參數多載，避免 null 或 AmbiguousMatchException（C-3）
+            var method = vmType.GetMethod(
+                "GetAnalysisFields",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
+                null,
+                Type.EmptyTypes,
+                null);
+            if (method == null)
+                throw new InvalidOperationException(
+                    $"VM 型別 '{vmType.FullName}' 找不到 GetAnalysisFields() 方法。");
+            try
+            {
+                return (IEnumerable<AnalysisFieldMeta>)method.Invoke(vm, null);
+            }
+            catch (System.Reflection.TargetInvocationException ex)
+            {
+                throw ex.InnerException ?? ex;
+            }
         }
 
         private static System.Linq.IQueryable InvokeGetSearchQuery(BaseVM vm, Type vmType)
         {
-            var method = vmType.GetMethod("GetSearchQuery");
-            return method?.Invoke(vm, null) as System.Linq.IQueryable;
+            // 明確指定無參數多載，避免 AmbiguousMatchException（C-4）
+            var method = vmType.GetMethod(
+                "GetSearchQuery",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
+                null,
+                Type.EmptyTypes,
+                null);
+            if (method == null) return null;
+            try
+            {
+                var result = method.Invoke(vm, null);
+                if (result == null) return null;
+                if (result is System.Linq.IQueryable q) return q;
+                throw new InvalidOperationException(
+                    $"VM 型別 '{vmType.FullName}' 的 GetSearchQuery() 未回傳 IQueryable。");
+            }
+            catch (System.Reflection.TargetInvocationException ex)
+            {
+                throw ex.InnerException ?? ex;
+            }
         }
 
         private static string[] GetAllowedFuncNames(AggregateFunc funcs)
@@ -160,19 +215,26 @@ namespace WalkingTec.Mvvm.Mvc
         private static string BuildCsv(AnalysisQueryResponse result)
         {
             var sb = new StringBuilder();
-            sb.AppendLine(string.Join(",", result.Columns));
+            sb.AppendLine(string.Join(",", result.Columns.Select(EscapeCsvCell)));
             foreach (var row in result.Rows)
             {
                 var values = result.Columns.Select(c =>
-                {
-                    var val = row.GetValueOrDefault(c)?.ToString() ?? "";
-                    // 包含逗號或換行時用引號包圍
-                    return val.Contains(',') || val.Contains('\n')
-                        ? $"\"{val.Replace("\"", "\"\"")}\"" : val;
-                });
+                    EscapeCsvCell(row.GetValueOrDefault(c)?.ToString() ?? ""));
                 sb.AppendLine(string.Join(",", values));
             }
             return sb.ToString();
+        }
+
+        private static string EscapeCsvCell(string val)
+        {
+            if (string.IsNullOrEmpty(val)) return "";
+            // 防 CSV formula injection（I-2）：以公式字元開頭時前置 tab
+            if (val[0] is '=' or '+' or '-' or '@' or '\t' or '\r')
+                val = "\t" + val;
+            // 包含逗號、換行或引號時用 RFC 4180 引號包圍
+            if (val.Contains(',') || val.Contains('\n') || val.Contains('"'))
+                val = $"\"{val.Replace("\"", "\"\"")}\"";
+            return val;
         }
     }
 }
