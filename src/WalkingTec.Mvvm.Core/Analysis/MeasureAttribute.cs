@@ -1,4 +1,6 @@
 #nullable disable
+using System;
+
 namespace WalkingTec.Mvvm.Core.Analysis
 {
     /// <summary>
