@@ -143,6 +143,26 @@
         panelEl.appendChild(container);
     }
 
+    var _FUNC_FLAGS = [
+        { value: 1, name: 'Count' },
+        { value: 2, name: 'Sum' },
+        { value: 4, name: 'Avg' },
+        { value: 8, name: 'Max' },
+        { value: 16, name: 'Min' },
+    ];
+
+    /**
+     * 將 [Flags] AggregateFunc 整數轉換為函式名稱陣列
+     * @param {number} flags - 來自 API 的 allowedFuncs 整數（如 6 = Sum+Avg）
+     * @returns {string[]} 例如 ['Sum', 'Avg']
+     */
+    function parseFuncs(flags) {
+        flags = flags | 0; // coerce to int32: handles NaN/undefined → 0
+        return _FUNC_FLAGS
+            .filter(function (f) { return (flags & f.value) !== 0; })
+            .map(function (f) { return f.name; });
+    }
+
     function createFieldSection(gridId, fields, kind, label) {
         var section = document.createElement('div');
         section.style.marginBottom = '8px';
@@ -162,8 +182,22 @@
             cb.dataset.kind = kind;
             cb.dataset.fieldName = f.fieldName;
             cb.dataset.displayName = f.displayName;
-            if (kind === 'Measure' && f.allowedFuncs && f.allowedFuncs.length > 0) {
-                cb.dataset.defaultFunc = f.allowedFuncs[0];
+            if (kind === 'Measure') {
+                var funcs = parseFuncs(f.allowedFuncs || 0);
+                if (funcs.length === 1) {
+                    cb.dataset.defaultFunc = funcs[0]; // single func: no UI needed
+                } else if (funcs.length > 1) {
+                    var funcSelect = document.createElement('select');
+                    funcSelect.className = 'analysis-func-select';
+                    funcSelect.style.marginLeft = '4px';
+                    funcs.forEach(function (fn) {
+                        var opt = document.createElement('option');
+                        opt.value = fn;
+                        opt.textContent = fn;
+                        funcSelect.appendChild(opt);
+                    });
+                    wrapper.appendChild(funcSelect);
+                }
             }
 
             var text = document.createTextNode('\u00a0' + f.displayName);
@@ -379,7 +413,8 @@
         exportData: exportData,
         detectChartType: detectChartType,
         validateSelection: validateSelection,
-        collectSelection: collectSelection
+        collectSelection: collectSelection,
+        parseFuncs: parseFuncs
     };
 
 }(typeof window !== 'undefined' ? window : global));

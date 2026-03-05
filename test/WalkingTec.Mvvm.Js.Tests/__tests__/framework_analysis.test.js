@@ -393,3 +393,40 @@ describe('wtmAnalysis.collectSelection', () => {
         expect(result.msrs).toEqual([{ field: 'Amount', func: 'Min' }]);
     });
 });
+
+// ─── parseFuncs ───────────────────────────────────────────────────────────────
+describe('wtmAnalysis.parseFuncs', () => {
+    test('flags=0 returns empty array', () => {
+        expect(wa.parseFuncs(0)).toEqual([]);
+    });
+    test('flags=1 returns [Count]', () => {
+        expect(wa.parseFuncs(1)).toEqual(['Count']);
+    });
+    test('flags=2 returns [Sum]', () => {
+        expect(wa.parseFuncs(2)).toEqual(['Sum']);
+    });
+    test('flags=4 returns [Avg]', () => {
+        expect(wa.parseFuncs(4)).toEqual(['Avg']);
+    });
+    test('flags=8 returns [Max]', () => {
+        expect(wa.parseFuncs(8)).toEqual(['Max']);
+    });
+    test('flags=16 returns [Min]', () => {
+        expect(wa.parseFuncs(16)).toEqual(['Min']);
+    });
+    test('flags=6 returns [Sum, Avg]', () => {
+        expect(wa.parseFuncs(6)).toEqual(['Sum', 'Avg']);
+    });
+    test('flags=30 returns [Sum, Avg, Max, Min]', () => {
+        expect(wa.parseFuncs(30)).toEqual(['Sum', 'Avg', 'Max', 'Min']);
+    });
+    test('flags=31 returns all 5 funcs in order', () => {
+        expect(wa.parseFuncs(31)).toEqual(['Count', 'Sum', 'Avg', 'Max', 'Min']);
+    });
+    test('flags=NaN returns empty array (bitwise & NaN = 0)', () => {
+        expect(wa.parseFuncs(NaN)).toEqual([]);
+    });
+    test('flags=undefined treated as 0, returns empty', () => {
+        expect(wa.parseFuncs(undefined)).toEqual([]);
+    });
+});
