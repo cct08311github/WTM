@@ -11,15 +11,18 @@
     "jest-environment-jsdom": "^29.7.0"
   },
   "jest": {
+    "rootDir": "../..",
     "testEnvironment": "jsdom",
+    "coverageProvider": "v8",
     "setupFiles": [
-      "./setup.js"
+      "<rootDir>/test/WalkingTec.Mvvm.Js.Tests/setup.js"
     ],
     "testMatch": [
-      "**/__tests__/**/*.test.js"
+      "<rootDir>/test/WalkingTec.Mvvm.Js.Tests/__tests__/**/*.test.js"
     ],
     "collectCoverageFrom": [
-      "../../src/WalkingTec.Mvvm.Mvc/framework_layui.js"
+      "src/WalkingTec.Mvvm.Mvc/framework_layui.js",
+      "src/WalkingTec.Mvvm.Mvc/framework_analysis.js"
     ]
   }
 }
