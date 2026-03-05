@@ -329,3 +329,67 @@ describe('wtmAnalysis.validateSelection', () => {
         expect(wa.validateSelection([1, 2, 3], [1, 2, 3])).toHaveLength(0);
     });
 });
+
+// ─── collectSelection ─────────────────────────────────────────────────────────
+describe('wtmAnalysis.collectSelection', () => {
+    test('returns empty dims/msrs when no checkboxes checked', () => {
+        const { wa, mockDocument } = makeEnv();
+        mockDocument.querySelectorAll.mockReturnValue([]);
+        const result = wa.collectSelection('grid1');
+        expect(result.dims).toEqual([]);
+        expect(result.msrs).toEqual([]);
+    });
+
+    test('checked Dimension checkbox added to dims', () => {
+        const { wa, mockDocument } = makeEnv();
+        const cb = { dataset: { kind: 'Dimension', fieldName: 'Region', gridId: 'grid1' }, nextElementSibling: null };
+        mockDocument.querySelectorAll.mockReturnValue([cb]);
+        const result = wa.collectSelection('grid1');
+        expect(result.dims).toEqual(['Region']);
+        expect(result.msrs).toEqual([]);
+    });
+
+    test('checked Measure with no select uses dataset.defaultFunc', () => {
+        const { wa, mockDocument } = makeEnv();
+        const cb = { dataset: { kind: 'Measure', fieldName: 'Amount', gridId: 'grid1', defaultFunc: 'Max' }, nextElementSibling: null };
+        mockDocument.querySelectorAll.mockReturnValue([cb]);
+        const result = wa.collectSelection('grid1');
+        expect(result.msrs).toEqual([{ field: 'Amount', func: 'Max' }]);
+    });
+
+    test('checked Measure falls back to Sum when no defaultFunc and no select', () => {
+        const { wa, mockDocument } = makeEnv();
+        const cb = { dataset: { kind: 'Measure', fieldName: 'Amount', gridId: 'grid1' }, nextElementSibling: null };
+        mockDocument.querySelectorAll.mockReturnValue([cb]);
+        const result = wa.collectSelection('grid1');
+        expect(result.msrs).toEqual([{ field: 'Amount', func: 'Sum' }]);
+    });
+
+    test('checked Measure uses select.value when nextElementSibling is SELECT', () => {
+        const { wa, mockDocument } = makeEnv();
+        const sel = { tagName: 'SELECT', value: 'Avg' };
+        const cb = { dataset: { kind: 'Measure', fieldName: 'Revenue', gridId: 'grid1' }, nextElementSibling: sel };
+        mockDocument.querySelectorAll.mockReturnValue([cb]);
+        const result = wa.collectSelection('grid1');
+        expect(result.msrs).toEqual([{ field: 'Revenue', func: 'Avg' }]);
+    });
+
+    test('mixed dimension and measure', () => {
+        const { wa, mockDocument } = makeEnv();
+        const cb1 = { dataset: { kind: 'Dimension', fieldName: 'Region', gridId: 'grid1' }, nextElementSibling: null };
+        const cb2 = { dataset: { kind: 'Measure', fieldName: 'Amount', gridId: 'grid1', defaultFunc: 'Sum' }, nextElementSibling: null };
+        mockDocument.querySelectorAll.mockReturnValue([cb1, cb2]);
+        const result = wa.collectSelection('grid1');
+        expect(result.dims).toEqual(['Region']);
+        expect(result.msrs).toEqual([{ field: 'Amount', func: 'Sum' }]);
+    });
+
+    test('nextElementSibling that is not SELECT is ignored', () => {
+        const { wa, mockDocument } = makeEnv();
+        const span = { tagName: 'SPAN', value: 'ignored' };
+        const cb = { dataset: { kind: 'Measure', fieldName: 'Amount', gridId: 'grid1', defaultFunc: 'Min' }, nextElementSibling: span };
+        mockDocument.querySelectorAll.mockReturnValue([cb]);
+        const result = wa.collectSelection('grid1');
+        expect(result.msrs).toEqual([{ field: 'Amount', func: 'Min' }]);
+    });
+});

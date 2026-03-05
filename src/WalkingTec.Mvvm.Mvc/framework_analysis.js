@@ -176,23 +176,39 @@
     }
 
     /**
+     * 收集選取的維度/度量（供 query 和 exportData 共用）
+     * 若度量旁有 <select>（聚合函式選擇器），讀取其 value；否則讀 dataset.defaultFunc。
+     * @param {string} gridId
+     * @returns {{ dims: string[], msrs: Array<{field:string, func:string}> }}
+     */
+    function collectSelection(gridId) {
+        var dims = [];
+        var msrs = [];
+        document.querySelectorAll('.analysis-field-cb[data-grid-id="' + gridId + '"]:checked')
+            .forEach(function (cb) {
+                if (cb.dataset.kind === 'Dimension') {
+                    dims.push(cb.dataset.fieldName);
+                } else {
+                    var sel = cb.nextElementSibling;
+                    var func = (sel && sel.tagName === 'SELECT')
+                        ? sel.value
+                        : (cb.dataset.defaultFunc || 'Sum');
+                    msrs.push({ field: cb.dataset.fieldName, func: func });
+                }
+            });
+        return { dims: dims, msrs: msrs };
+    }
+
+    /**
      * 收集選取的維度/度量並 POST /_analysis/query
      */
     function query(gridId) {
         var st = _state[gridId];
         if (!st) return;
 
-        var dims = [];
-        var msrs = [];
-
-        document.querySelectorAll('.analysis-field-cb[data-grid-id="' + gridId + '"]:checked')
-            .forEach(function (cb) {
-                if (cb.dataset.kind === 'Dimension') {
-                    dims.push(cb.dataset.fieldName);
-                } else {
-                    msrs.push({ field: cb.dataset.fieldName, func: cb.dataset.defaultFunc || 'Sum' });
-                }
-            });
+        var sel = collectSelection(gridId);
+        var dims = sel.dims;
+        var msrs = sel.msrs;
 
         var errors = validateSelection(dims, msrs);
         if (errors.length > 0) {
@@ -323,16 +339,9 @@
         var st = _state[gridId];
         if (!st) return;
 
-        var dims = [];
-        var msrs = [];
-        document.querySelectorAll('.analysis-field-cb[data-grid-id="' + gridId + '"]:checked')
-            .forEach(function (cb) {
-                if (cb.dataset.kind === 'Dimension') {
-                    dims.push(cb.dataset.fieldName);
-                } else {
-                    msrs.push({ field: cb.dataset.fieldName, func: cb.dataset.defaultFunc || 'Sum' });
-                }
-            });
+        var sel = collectSelection(gridId);
+        var dims = sel.dims;
+        var msrs = sel.msrs;
 
         fetch('/_analysis/export?format=' + encodeURIComponent(format), {
             method: 'POST',
@@ -369,7 +378,8 @@
         query: query,
         exportData: exportData,
         detectChartType: detectChartType,
-        validateSelection: validateSelection
+        validateSelection: validateSelection,
+        collectSelection: collectSelection
     };
 
 }(typeof window !== 'undefined' ? window : global));
