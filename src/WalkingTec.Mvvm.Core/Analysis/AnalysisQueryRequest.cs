@@ -56,6 +56,6 @@ namespace WalkingTec.Mvvm.Core.Analysis
     /// </summary>
     public enum FilterOperator
     {
-        Eq, Gt, Gte, Lt, Lte, Contains, In
+        Eq, Gt, Gte, Lt, Lte, Contains
     }
 }

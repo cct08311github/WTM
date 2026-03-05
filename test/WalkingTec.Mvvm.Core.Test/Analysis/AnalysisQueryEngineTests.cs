@@ -228,16 +228,64 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.AreEqual(300m, Convert.ToDecimal(result.Rows[0]["Amount_Sum"])); // 100+200
         }
 
-        /// <summary>未支援的運算子（FilterOperator.In）→ 拋 NotSupportedException</summary>
+        /// <summary>未知運算子（超出 enum 範圍的 cast 值）→ 拋 InvalidOperationException（讓 controller 轉 400）</summary>
         [TestMethod]
-        public void Filter_unsupported_operator_throws()
+        public void Filter_unknown_operator_throws_InvalidOperationException()
         {
             var req = Req(
                 dims: new[] { "Region" },
                 msrs: new[] { ("Amount", AggregateFunc.Sum) },
-                filters: new[] { ("Region", FilterOperator.In, "華東") });
+                filters: new[] { ("Region", (FilterOperator)99, "華東") });
 
-            Assert.ThrowsException<NotSupportedException>(() => Engine().Execute(Q(), req, _whitelist));
+            Assert.ThrowsException<InvalidOperationException>(() => Engine().Execute(Q(), req, _whitelist));
+        }
+
+        /// <summary>Contains 運算子用於非字串欄位 → 拋 InvalidOperationException</summary>
+        [TestMethod]
+        public void Filter_Contains_on_non_string_field_throws()
+        {
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) },
+                filters: new[] { ("Amount", FilterOperator.Contains, "100") });
+
+            Assert.ThrowsException<InvalidOperationException>(() => Engine().Execute(Q(), req, _whitelist));
+        }
+
+        /// <summary>TotalCount 應為截斷前的真實分組數，非截斷後的數量</summary>
+        [TestMethod]
+        public void TotalCount_reflects_pre_truncation_group_count()
+        {
+            var extras = Enumerable.Range(1, 10_001)
+                .Select(i => new SaleRecord { ID = Guid.NewGuid(), Region = $"R{i}", Category = "X", Amount = i });
+            _ctx.SaleRecords.AddRange(extras);
+            _ctx.SaveChanges();
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Count) });
+
+            var result = Engine().Execute(Q(), req, _whitelist);
+
+            Assert.IsTrue(result.Truncated);
+            Assert.AreEqual(10_000, result.Rows.Count);
+            // TotalCount 必須 > MaxRows（截斷前有 10,001+2=10,003 個分組）
+            Assert.IsTrue(result.TotalCount > 10_000,
+                $"TotalCount 應大於 10000，實際為 {result.TotalCount}");
+        }
+
+        /// <summary>零維度（純聚合）→ 所有資料折疊成 1 列</summary>
+        [TestMethod]
+        public void Zero_dimensions_produces_single_aggregate_row()
+        {
+            var req = Req(
+                dims: new string[0],
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var result = Engine().Execute(Q(), req, _whitelist);
+
+            Assert.AreEqual(1, result.Rows.Count);
+            Assert.AreEqual(600m, Convert.ToDecimal(result.Rows[0]["Amount_Sum"])); // 100+200+300
         }
 
         /// <summary>過濾值無法轉換為目標型別 → 拋 InvalidOperationException</summary>

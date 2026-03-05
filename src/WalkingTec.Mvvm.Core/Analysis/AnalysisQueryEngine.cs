@@ -127,7 +127,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                             constant);
                         break;
                     default:
-                        throw new NotSupportedException($"Operator {filter.Operator} not supported.");
+                        throw new InvalidOperationException($"Operator '{filter.Operator}' is not supported.");
                 }
 
                 query = query.Where(Expression.Lambda<Func<TModel, bool>>(body, param));
