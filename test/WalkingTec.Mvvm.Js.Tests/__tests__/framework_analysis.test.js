@@ -353,6 +353,10 @@ describe('wtmAnalysis.validateSelection', () => {
     test('剛好 3 維度 3 度量 → 無錯誤', () => {
         expect(wa.validateSelection([1, 2, 3], [1, 2, 3])).toHaveLength(0);
     });
+
+    test('1 dim 0 msrs → valid (returns empty errors)', () => {
+        expect(wa.validateSelection(['Region'], [])).toHaveLength(0);
+    });
 });
 
 // ─── collectSelection ─────────────────────────────────────────────────────────
@@ -480,7 +484,9 @@ describe('exportData — layui loading state', () => {
 
     test('no crash when layui is undefined', async () => {
         const { wa } = makeEnv({
-            fetch: jest.fn().mockResolvedValue({ ok: true, blob: () => Promise.resolve(new Blob()) }),
+            fetch: jest.fn()
+                .mockResolvedValueOnce({ ok: false, text: async () => 'meta error' })
+                .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(['data']) }),
             URL: { createObjectURL: jest.fn(() => 'blob:url'), revokeObjectURL: jest.fn() },
             document: {
                 getElementById: jest.fn((id) => id === 'analysis-panel-gridX' ? { style: {}, appendChild: jest.fn(), removeChild: jest.fn(), firstChild: null } : null),
@@ -813,7 +819,7 @@ describe('[cov] waReq.query — branches', () => {
     afterEach(() => { spyTeardown(); global.fetch = _fetchOrig; global.alert = _alertOrig; });
 
     test('query with no _state → silent return', () => {
-        expect(() => waReq.query('scovQNone_' + Date.now())).not.toThrow();
+        expect(() => waReq.query('scovQNone_never_used_grid')).not.toThrow();
     });
 
     test('query with empty selection → alert validation error', async () => {
@@ -1005,7 +1011,7 @@ describe('[cov] waReq.exportData — branches', () => {
     });
 
     test('exportData with no _state → silent return', () => {
-        expect(() => waReq.exportData('scovENone_' + Date.now(), 'xlsx')).not.toThrow();
+        expect(() => waReq.exportData('scovENone_never_used_grid', 'xlsx')).not.toThrow();
     });
 
     test('exportData success → blob downloaded (createObjectURL + revokeObjectURL called)', async () => {
@@ -1196,8 +1202,8 @@ describe('[cov] waReq.renderPanel — createFieldSection allowedFuncs branches',
         // Panel got renderPanel output appended — verify checkboxes and select
         const checkboxes = panel.querySelectorAll('input[type="checkbox"]');
         const selects = panel.querySelectorAll('select');
-        expect(checkboxes.length).toBeGreaterThan(0);
-        expect(selects.length).toBeGreaterThan(0);
+        expect(checkboxes.length).toBe(4);
+        expect(selects.length).toBe(1);
     });
 });
 
@@ -1323,6 +1329,6 @@ describe('[cov] query with real meta — dimFields filter + chart toggle click',
         // Click the button — this fires lines 148-154
         chartTypeBtn.click();
         // After click, renderChart should have been called (echarts.init called again)
-        expect(global.echarts.init.mock.calls.length).toBeGreaterThan(1);
+        expect(global.echarts.init.mock.calls.length).toBe(2);
     });
 });
