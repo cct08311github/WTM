@@ -95,7 +95,8 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
             if (!(this is DisplayTagHelper) && ((Field.Metadata.IsRequired && Field.Name.Contains("[-1]")==false) || Required == true))
             {
-                requiredDot = "<font color='red'>*</font>";
+                requiredDot = "<span aria-hidden=\"true\" style=\"color:red\">*</span>";
+                output.Attributes.SetAttribute("aria-required", "true");
                 if (!(this is UploadTagHelper || this is RadioTagHelper || this is CheckBoxTagHelper || this is MultiUploadTagHelper || this is ColorPickerTagHelper  || this is SliderTagHelper || this is TransferTagHelper)) // 上传组件自定义验证
                 {
                     //richtextbox不需要进行必填验证
