@@ -685,8 +685,12 @@ setTimeout(function(){{
             {
                 output.PostElement.AppendHtml(
                     $@"<div id=""analysis-panel-{Id}"" style=""display:none;margin-top:10px;""></div>");
-                output.PostElement.AppendHtml(
-                    @"<script src=""/_js/framework_analysis.js""></script>");
+                if (!context.Items.ContainsKey("analysis_js_loaded"))
+                {
+                    context.Items["analysis_js_loaded"] = true;
+                    output.PostElement.AppendHtml(
+                        @"<script src=""/_js/framework_analysis.js""></script>");
+                }
             }
 
             base.Process(context, output);
