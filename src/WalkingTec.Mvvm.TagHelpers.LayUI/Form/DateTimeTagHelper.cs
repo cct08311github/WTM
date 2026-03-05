@@ -140,6 +140,9 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         /// <summary>範圍結束日期的 hidden input name（IsRange=true 時有效）</summary>
         public string RangeEndName { get; set; }
 
+        /// <summary>範圍選擇器的 placeholder 文字（IsRange=true 時有效）。留空則不顯示 placeholder。</summary>
+        public string RangePlaceholder { get; set; } = "";
+
         public static Dictionary<DateTimeTypeEnum, string> DateTimeFormatDic = new Dictionary<DateTimeTypeEnum, string>()
         {
             { DateTimeTypeEnum.Date,"yyyy-MM-dd"},
@@ -249,7 +252,9 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 }
             }
 
-            var content = $@"
+            if (!IsRange)
+            {
+                var content = $@"
 <script>
 layui.use(['laydate'],function(){{
   var laydate = layui.laydate;
@@ -273,23 +278,40 @@ layui.use(['laydate'],function(){{
 }})
 </script>
 ";
-            output.PostElement.AppendHtml(content);
+                output.PostElement.AppendHtml(content);
+            }
 
             if (IsRange && !string.IsNullOrEmpty(RangeStartName) && !string.IsNullOrEmpty(RangeEndName))
             {
-                output.Attributes.SetAttribute("placeholder", "開始日期 - 結束日期");
+                if (!string.IsNullOrEmpty(RangePlaceholder))
+                {
+                    output.Attributes.SetAttribute("placeholder", RangePlaceholder);
+                }
                 var rangeScript = $@"
 <input type=""hidden"" id=""{RangeStartName}"" name=""{RangeStartName}"" />
 <input type=""hidden"" id=""{RangeEndName}"" name=""{RangeEndName}"" />
 <script>
 layui.use(['laydate'], function() {{
     var laydate = layui.laydate;
-    laydate.render({{
+    var dateIns = laydate.render({{
         elem: '#{Id}',
-        range: true,
-        done: function(value, date, endDate) {{
+        type: '{Type.ToString().ToLower()}',
+        range: true
+        {(string.IsNullOrEmpty(Format) ? string.Empty : $",format: '{Format}'")}
+        {(string.IsNullOrEmpty(Min) ? string.Empty : $",min: {Min}")}
+        {(string.IsNullOrEmpty(Max) ? string.Empty : $",max: {Max}")}
+        {(!ZIndex.HasValue ? string.Empty : $",zIndex: {ZIndex.Value}")}
+        {(!ShowBottom.HasValue ? string.Empty : $",showBottom: {ShowBottom.Value.ToString().ToLower()}")}
+        {(!ConfirmOnly.HasValue ? string.Empty : ShowBottom.HasValue && ShowBottom.Value && ConfirmOnly.Value || !ShowBottom.HasValue && ConfirmOnly.Value ? $",btns: ['confirm']" : string.Empty)}
+        {(!Calendar.HasValue ? string.Empty : $",calendar: {Calendar.Value.ToString().ToLower()}")}
+        {(!Lang.HasValue ? string.Empty : $",lang: '{Lang.Value.ToString().ToLower()}'")}
+        {(Mark == null || Mark.Count == 0 ? string.Empty : $",mark: {JsonSerializer.Serialize(Mark)}")}
+        {(string.IsNullOrEmpty(ReadyFunc) ? string.Empty : $",ready: function(value){{{ReadyFunc}(value,dateIns)}}")}
+        {(string.IsNullOrEmpty(ChangeFunc) ? string.Empty : $",change: function(value,date,endDate){{{ChangeFunc}(value,date,endDate,dateIns)}}")}
+        ,done: function(value, date, endDate) {{
             document.getElementById('{RangeStartName}').value = value.split(' - ')[0] || '';
             document.getElementById('{RangeEndName}').value = value.split(' - ')[1] || '';
+            {(string.IsNullOrEmpty(DoneFunc) ? string.Empty : $"{DoneFunc}(value,date,endDate,dateIns);")}
         }}
     }});
 }});
