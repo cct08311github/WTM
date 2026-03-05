@@ -131,6 +131,15 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         /// </summary>
         public string DoneFunc { get; set; }
 
+        /// <summary>启用日期範圍選擇（輸出兩個隱藏 input + LayUI laydate range 模式）</summary>
+        public bool IsRange { get; set; }
+
+        /// <summary>範圍開始日期的 hidden input name（IsRange=true 時有效）</summary>
+        public string RangeStartName { get; set; }
+
+        /// <summary>範圍結束日期的 hidden input name（IsRange=true 時有效）</summary>
+        public string RangeEndName { get; set; }
+
         public static Dictionary<DateTimeTypeEnum, string> DateTimeFormatDic = new Dictionary<DateTimeTypeEnum, string>()
         {
             { DateTimeTypeEnum.Date,"yyyy-MM-dd"},
@@ -265,6 +274,29 @@ layui.use(['laydate'],function(){{
 </script>
 ";
             output.PostElement.AppendHtml(content);
+
+            if (IsRange && !string.IsNullOrEmpty(RangeStartName) && !string.IsNullOrEmpty(RangeEndName))
+            {
+                output.Attributes.SetAttribute("placeholder", "開始日期 - 結束日期");
+                var rangeScript = $@"
+<input type=""hidden"" id=""{RangeStartName}"" name=""{RangeStartName}"" />
+<input type=""hidden"" id=""{RangeEndName}"" name=""{RangeEndName}"" />
+<script>
+layui.use(['laydate'], function() {{
+    var laydate = layui.laydate;
+    laydate.render({{
+        elem: '#{Id}',
+        range: true,
+        done: function(value, date, endDate) {{
+            document.getElementById('{RangeStartName}').value = value.split(' - ')[0] || '';
+            document.getElementById('{RangeEndName}').value = value.split(' - ')[1] || '';
+        }}
+    }});
+}});
+</script>";
+                output.PostElement.AppendHtml(rangeScript);
+            }
+
             base.Process(context, output);
         }
     }
