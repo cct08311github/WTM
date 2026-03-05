@@ -1,0 +1,59 @@
+name: Publish NuGet to GitHub Packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_suffix:
+        description: 'Optional pre-release suffix (e.g. alpha, beta, rc1). Leave blank for stable.'
+        required: false
+        default: ''
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Determine package version
+        id: version
+        env:
+          VERSION_SUFFIX: ${{ github.event.inputs.version_suffix }}
+        run: |
+          BASE=$(grep -oP '(?<=<VersionPrefix>)[^<]+' version.props)
+          if [ -n "$VERSION_SUFFIX" ]; then
+            echo "version=${BASE}-${VERSION_SUFFIX}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${BASE}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Pack WalkingTec.Mvvm.Core
+        run: dotnet pack src/WalkingTec.Mvvm.Core/WalkingTec.Mvvm.Core.csproj -c Release -o nupkgs
+
+      - name: Pack WalkingTec.Mvvm.TagHelpers.LayUI
+        run: dotnet pack src/WalkingTec.Mvvm.TagHelpers.LayUI/WalkingTec.Mvvm.TagHelpers.LayUI.csproj -c Release -o nupkgs
+
+      - name: Pack WalkingTec.Mvvm.Mvc
+        run: dotnet pack src/WalkingTec.Mvvm.Mvc/WalkingTec.Mvvm.Mvc.csproj -c Release -o nupkgs
+
+      - name: List packages
+        run: ls -lh nupkgs/
+
+      - name: Push to GitHub Packages
+        run: |
+          dotnet nuget push "nupkgs/*.nupkg" \
+            --api-key ${{ secrets.GITHUB_TOKEN }} \
+            --source https://nuget.pkg.github.com/cct08311github/index.json \
+            --skip-duplicate
