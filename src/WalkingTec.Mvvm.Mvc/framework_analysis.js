@@ -377,7 +377,19 @@
         var dims = sel.dims;
         var msrs = sel.msrs;
 
-        fetch('/_analysis/export?format=' + encodeURIComponent(format), {
+        // Loading indicator
+        var loaderId = null;
+        if (window.layui && window.layui.layer) {
+            loaderId = window.layui.layer.load(2);
+        }
+
+        function closeLoader() {
+            if (loaderId !== null && window.layui && window.layui.layer) {
+                window.layui.layer.close(loaderId);
+            }
+        }
+
+        return fetch('/_analysis/export?format=' + encodeURIComponent(format), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -392,6 +404,7 @@
             return res.blob();
         })
         .then(function (blob) {
+            closeLoader();
             var url = window.URL.createObjectURL(blob);
             var a = document.createElement('a');
             a.href = url;
@@ -402,6 +415,7 @@
             window.URL.revokeObjectURL(url);
         })
         .catch(function (err) {
+            closeLoader();
             window.alert('匯出失敗：' + err.message);
         });
     }

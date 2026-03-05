@@ -394,6 +394,84 @@ describe('wtmAnalysis.collectSelection', () => {
     });
 });
 
+// ─── exportData loading state ─────────────────────────────────────────────────
+describe('exportData — layui loading state', () => {
+    test('layer.load(2) called before fetch, layer.close called on success', async () => {
+        const exportCallOrder = [];
+        const layerLoad = jest.fn(() => { exportCallOrder.push('load'); return 55; });
+        const layerClose = jest.fn(() => { exportCallOrder.push('close'); });
+        // Use a two-call fetch: first for loadMeta (toggle), second for exportData
+        const fetchMock = jest.fn()
+            .mockResolvedValueOnce({ ok: false, text: jest.fn().mockResolvedValue('err') }) // loadMeta
+            .mockImplementationOnce(() => { exportCallOrder.push('fetch'); return Promise.resolve({ ok: true, blob: () => Promise.resolve(new Blob()) }); }); // exportData
+        const { wa } = makeEnv({
+            fetch: fetchMock,
+            layui: { layer: { load: layerLoad, close: layerClose } },
+            URL: { createObjectURL: jest.fn(() => 'blob:url'), revokeObjectURL: jest.fn() },
+            document: {
+                getElementById: jest.fn((id) => id === 'analysis-panel-gridX' ? { style: {}, appendChild: jest.fn(), removeChild: jest.fn(), firstChild: null } : null),
+                querySelectorAll: jest.fn(() => []),
+                createElement: jest.fn((tag) => ({ tag, style: {}, href: '', download: '', click: jest.fn(), children: [], textContent: '', className: '', appendChild: jest.fn(function(c){ this.children.push(c); }), removeChild: jest.fn() })),
+                createTextNode: jest.fn((t) => t),
+                body: { appendChild: jest.fn(), removeChild: jest.fn() },
+            },
+        });
+        wa.toggle('gridX', 'MyVm');
+        // Wait for loadMeta fetch to settle before exportData so toggle doesn't pollute callOrder
+        await new Promise(r => setTimeout(r, 10));
+        await wa.exportData('gridX', 'xlsx');
+
+        expect(layerLoad).toHaveBeenCalledWith(2);
+        expect(layerClose).toHaveBeenCalledWith(55);
+        // load must be called before fetch (within exportData's own operations)
+        expect(exportCallOrder[0]).toBe('load');
+        expect(exportCallOrder[1]).toBe('fetch');
+        expect(exportCallOrder[2]).toBe('close');
+    });
+
+    test('layer.close called on fetch error', async () => {
+        const layerLoad = jest.fn().mockReturnValue(77);
+        const layerClose = jest.fn();
+        const alertMock = jest.fn();
+        const { wa } = makeEnv({
+            fetch: jest.fn().mockRejectedValue(new Error('network down')),
+            layui: { layer: { load: layerLoad, close: layerClose } },
+            alert: alertMock,
+            document: {
+                getElementById: jest.fn((id) => id === 'analysis-panel-gridX' ? { style: {}, appendChild: jest.fn(), removeChild: jest.fn(), firstChild: null } : null),
+                querySelectorAll: jest.fn(() => []),
+                createElement: jest.fn((tag) => ({ tag, style: {}, children: [], textContent: '', className: '', appendChild: jest.fn(function(c){ this.children.push(c); }), removeChild: jest.fn() })),
+                createTextNode: jest.fn((t) => t),
+                body: { appendChild: jest.fn(), removeChild: jest.fn() },
+            },
+        });
+        wa.toggle('gridX', 'MyVm');
+        await wa.exportData('gridX', 'xlsx');
+
+        expect(layerLoad).toHaveBeenCalledWith(2);
+        expect(layerClose).toHaveBeenCalledWith(77);
+        expect(alertMock).toHaveBeenCalledWith(expect.stringContaining('network down'));
+    });
+
+    test('no crash when layui is undefined', async () => {
+        const { wa } = makeEnv({
+            fetch: jest.fn().mockResolvedValue({ ok: true, blob: () => Promise.resolve(new Blob()) }),
+            URL: { createObjectURL: jest.fn(() => 'blob:url'), revokeObjectURL: jest.fn() },
+            document: {
+                getElementById: jest.fn((id) => id === 'analysis-panel-gridX' ? { style: {}, appendChild: jest.fn(), removeChild: jest.fn(), firstChild: null } : null),
+                querySelectorAll: jest.fn(() => []),
+                createElement: jest.fn((tag) => ({ tag, style: {}, href: '', download: '', click: jest.fn(), children: [], textContent: '', className: '', appendChild: jest.fn(function(c){ this.children.push(c); }), removeChild: jest.fn() })),
+                createTextNode: jest.fn((t) => t),
+                body: { appendChild: jest.fn(), removeChild: jest.fn() },
+            },
+            // no layui property — simulates page without layui loaded
+        });
+        wa.toggle('gridX', 'MyVm');
+        // Should complete without throwing (layui absent is gracefully handled)
+        await wa.exportData('gridX', 'xlsx');
+    });
+});
+
 // ─── parseFuncs ───────────────────────────────────────────────────────────────
 describe('wtmAnalysis.parseFuncs', () => {
     test('flags=0 returns empty array', () => {
