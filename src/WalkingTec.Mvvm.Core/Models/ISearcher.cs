@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using WalkingTec.Mvvm.Core;
@@ -36,19 +36,19 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         Dictionary<string, object> FC { get; set; }
 
-        IDataContext DC { get; set; }
+        IDataContext? DC { get; set; }
         /// <summary>
         /// VMFullName
         /// </summary>
         string VMFullName { get; }
 
-        ISessionService Session { get;  }
+        ISessionService? Session { get;  }
 
-        LoginUserInfo LoginUserInfo { get; }
+        LoginUserInfo? LoginUserInfo { get; }
         /// <summary>
         /// 排序信息
         /// </summary>
-        SortInfo SortInfo { get; set; }
+        SortInfo? SortInfo { get; set; }
         /// <summary>
         /// 用于框架判断列表页是否全局刷新
         /// </summary>
@@ -60,11 +60,11 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// InitVM 完成后触发的事件
         /// </summary>
-        event Action<ISearcher> OnAfterInit;
+        event Action<ISearcher>? OnAfterInit;
         /// <summary>
         /// ReInitVM 完成后触发的事件
         /// </summary>
-        event Action<ISearcher> OnAfterReInit;
+        event Action<ISearcher>? OnAfterReInit;
 
         #endregion
 
