@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
@@ -18,7 +18,7 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 下载模板显示名称
         /// </summary>
-        public string FileDisplayName { get; set; }
+        public string? FileDisplayName { get; set; }
 
         /// <summary>
         /// 是否验证模板类型（当其他系统模板导入到某模块时可设置为False）
@@ -28,7 +28,7 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 需要导出的数据
         /// </summary>
-        public DataTable TemplateDataTable { get; set; }
+        public DataTable? TemplateDataTable { get; set; }
 
         /// <summary>
         /// 下载模版页面参数
@@ -49,7 +49,7 @@ namespace WalkingTec.Mvvm.Core
             var propetys = this.GetType().GetFields().Where(x => x.FieldType == typeof(ExcelPropety)).ToList();
             for (int porpetyIndex = 0; porpetyIndex < propetys.Count(); porpetyIndex++)
             {
-                ExcelPropety excelPropety = (ExcelPropety)propetys[porpetyIndex].GetValue(this);
+                ExcelPropety excelPropety = (ExcelPropety)propetys[porpetyIndex].GetValue(this)!;
                 if (propetys[porpetyIndex].GetCustomAttributes(typeof(DisplayAttribute), false).Length == 0)
                 {
                     excelPropety.ColumnName = excelPropety.FieldDisplayName;
@@ -122,8 +122,8 @@ namespace WalkingTec.Mvvm.Core
 
             ISheet enumSheet = workbook.CreateSheet();
             IRow enumSheetRow1 = enumSheet.CreateRow(0);
-            enumSheetRow1.CreateCell(0).SetCellValue(CoreProgram._localizer?["Sys.Yes"]);
-            enumSheetRow1.CreateCell(1).SetCellValue(CoreProgram._localizer?["Sys.No"]);
+            enumSheetRow1.CreateCell(0).SetCellValue(CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.Yes"] : "Yes");
+            enumSheetRow1.CreateCell(1).SetCellValue(CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.No"] : "No");
             enumSheetRow1.CreateCell(2).SetCellValue(this.GetType().Name); //为模板添加标记,必要时可添加版本号
 
             ISheet dataSheet = workbook.CreateSheet();
@@ -154,7 +154,7 @@ namespace WalkingTec.Mvvm.Core
             for (int porpetyIndex = 0; porpetyIndex < propetys.Count(); porpetyIndex++)
             {
                 //依次获取属性字段
-                ExcelPropety excelPropety = (ExcelPropety)propetys[porpetyIndex].GetValue(this);
+                ExcelPropety excelPropety = (ExcelPropety)propetys[porpetyIndex].GetValue(this)!;
                 ColumnDataType dateType = (excelPropety.DataType == ColumnDataType.DateTime || excelPropety.DataType == ColumnDataType.Date) ? ColumnDataType.Text : excelPropety.DataType; //日期类型默认设置成Text类型,在赋值时会进行日期验证
 
                 //设置是否保护Excel
@@ -242,9 +242,9 @@ namespace WalkingTec.Mvvm.Core
                     IRow dataRow = sheet.CreateRow(1 + i);
                     for (int porpetyIndex = 0; porpetyIndex < propetys.Count(); porpetyIndex++)
                     {
-                        string colName = propetys[porpetyIndex].Name;
-                        tableRow[colName].ToString();
-                        dataRow.CreateCell(porpetyIndex).SetCellValue(tableRow[colName].ToString());
+                        string colName2 = propetys[porpetyIndex].Name;
+                        tableRow[colName2].ToString();
+                        dataRow.CreateCell(porpetyIndex).SetCellValue(tableRow[colName2].ToString());
                     }
                 }
             }
@@ -315,7 +315,7 @@ namespace WalkingTec.Mvvm.Core
             var propetys = this.GetType().GetFields().Where(x => x.FieldType == typeof(ExcelPropety)).ToList();
             foreach (var p in propetys)
             {
-                ExcelPropety excelPropety = (ExcelPropety)p.GetValue(this);
+                ExcelPropety excelPropety = (ExcelPropety)p.GetValue(this)!;
                 ColumnDataType dateType = excelPropety.DataType;
                 switch (dateType)
                 {

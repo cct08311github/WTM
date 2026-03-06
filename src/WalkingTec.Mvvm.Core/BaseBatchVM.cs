@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Primitives;
@@ -24,18 +24,18 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 批量修改的VM
         /// </summary>
-        TEditModel LinkedVM { get; }
+        TEditModel? LinkedVM { get; }
 
         /// <summary>
         /// 批量列表VM
         /// </summary>
-        IBasePagedListVM<TopBasePoco, ISearcher> ListVM { get; }
+        IBasePagedListVM<TopBasePoco, ISearcher>? ListVM { get; }
 
         /// <summary>
         /// 列表数据的Id数组
         /// </summary>
         //IEnumerable<Guid> Ids { get; set; }
-        string[] Ids { get; set; }
+        string[]? Ids { get; set; }
 
         /// <summary>
         /// 批量操作的错误
@@ -53,14 +53,14 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 批量修改的VM
         /// </summary>
-        
-        public TLinkModel LinkedVM { get; set; }
+
+        public TLinkModel? LinkedVM { get; set; }
 
         /// <summary>
         /// 批量列表VM
         /// </summary>
         [JsonIgnore]
-        public IBasePagedListVM<TopBasePoco, ISearcher> ListVM { get; set; }
+        public IBasePagedListVM<TopBasePoco, ISearcher>? ListVM { get; set; }
 
         /// <summary>
         /// 批量操作的错误
@@ -71,7 +71,7 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 列表数据的Id数组
         /// </summary>
-        public string[] Ids { get; set; }
+        public string[]? Ids { get; set; }
 
         /// <summary>
         /// 构造函数
@@ -87,7 +87,7 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         /// <param name="e">错误</param>
         /// <param name="id">数据Id</param>
-        protected void SetExceptionMessage(Exception e, string id)
+        protected void SetExceptionMessage(Exception e, string? id)
         {
             if (id != null)
             {
@@ -101,7 +101,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="id">数据Id</param>
         /// <param name="errorMessage">错误信息</param>
         /// <returns>true代表可以删除，false代表不能删除</returns>
-        protected virtual bool CheckIfCanDelete(object id, out string errorMessage)
+        protected virtual bool CheckIfCanDelete(object id, out string? errorMessage)
         {
             errorMessage = null;
             return true;
@@ -115,7 +115,7 @@ namespace WalkingTec.Mvvm.Core
         {
             bool rv = true;
             //循环所有数据Id
-            List<string> idsData = Ids.ToList();
+            List<string> idsData = Ids!.ToList();
             var modelType = typeof(TModel);
             var pros = modelType.GetAllProperties();
             //如果包含附件，则先删除附件
@@ -123,7 +123,7 @@ namespace WalkingTec.Mvvm.Core
             var fa = pros.Where(x => x.PropertyType == typeof(FileAttachment) || typeof(TopBasePoco).IsAssignableFrom(x.PropertyType)).ToList();
             var isPersist =typeof(IPersistPoco).IsAssignableFrom(modelType);
             var isBasePoco = typeof(IBasePoco).IsAssignableFrom(modelType);
-            var query = DC.Set<TModel>().AsQueryable();
+            var query = DC!.Set<TModel>().AsQueryable();
             var fas = pros.Where(x => typeof(IEnumerable<ISubFile>).IsAssignableFrom(x.PropertyType)).ToList();
             foreach (var f in fas)
             {
@@ -133,11 +133,11 @@ namespace WalkingTec.Mvvm.Core
             var entityList = query.ToList();
             for (int i = 0; i < entityList.Count; i++)
             {
-                string checkErro = null;
+                string? checkErro = null;
                 //检查是否可以删除，如不能删除则直接跳过
                 if (CheckIfCanDelete(idsData[i], out checkErro) == false)
                 {
-                    ErrorMessage.Add(idsData[i], checkErro);
+                    ErrorMessage.Add(idsData[i], checkErro!);
                     rv = false;
                     break;
                 }
@@ -147,14 +147,14 @@ namespace WalkingTec.Mvvm.Core
                     var Entity = entityList[i];
                     if (isPersist)
                     {
-                        (Entity as IPersistPoco).IsValid = false;
-                        DC.UpdateProperty(Entity, "IsValid");
+                        (Entity as IPersistPoco)!.IsValid = false;
+                        DC!.UpdateProperty(Entity, "IsValid");
                         if (isBasePoco)
                         {
-                            (Entity as IBasePoco).UpdateTime = DateTime.Now;
-                            (Entity as IBasePoco).UpdateBy = LoginUserInfo.ITCode;
-                            DC.UpdateProperty(Entity, "UpdateTime");
-                            DC.UpdateProperty(Entity, "UpdateBy");
+                            (Entity as IBasePoco)!.UpdateTime = DateTime.Now;
+                            (Entity as IBasePoco)!.UpdateBy = LoginUserInfo?.ITCode;
+                            DC!.UpdateProperty(Entity, "UpdateTime");
+                            DC!.UpdateProperty(Entity, "UpdateBy");
                         }
                     }
                     else
@@ -164,9 +164,9 @@ namespace WalkingTec.Mvvm.Core
                         {
                             if (f.PropertyType == typeof(FileAttachment))
                             {
-                                string fidfield =  DC.GetFKName2(modelType, f.Name);
+                                string fidfield =  DC!.GetFKName2(modelType, f.Name);
                                 var fidpro = pros.Where(x => x.Name == fidfield).FirstOrDefault();
-                                var idresult = fidpro.GetValue(Entity);
+                                var idresult = fidpro?.GetValue(Entity);
                                 if(idresult != null)
                                 {
                                     Guid fid = Guid.Empty;
@@ -205,18 +205,18 @@ namespace WalkingTec.Mvvm.Core
                                 }
                             }
                         }
-                        DC.DeleteEntity(Entity);
+                        DC!.DeleteEntity(Entity);
 
                         if (typeof(IWorkflow).IsAssignableFrom(typeof(TModel)))
                         {
-                            var wi = DC.Set<Elsa_WorkflowInstance>().CheckEqual(typeof(TModel).FullName, x => x.ContextType).CheckEqual(Entity.GetID().ToString(), x => x.ContextId).ToList();
+                            var wi = DC!.Set<Elsa_WorkflowInstance>().CheckEqual(typeof(TModel).FullName, x => x.ContextType).CheckEqual(Entity.GetID().ToString(), x => x.ContextId).ToList();
                             if (wi.Count > 0)
                             {
-                                DC.Set<Elsa_WorkflowInstance>().RemoveRange(wi);
-                                var wl = DC.Set<Elsa_WorkflowExecutionLogRecord>().CheckContain(wi.Select(x => x.ID).ToList(), x => x.WorkflowInstanceId).ToList();
-                                DC.Set<Elsa_WorkflowExecutionLogRecord>().RemoveRange(wl);
-                                var ww = DC.Set<FrameworkWorkflow>().CheckContain(wi.Select(x => x.ID).ToList(), x => x.WorkflowId).ToList();
-                                DC.Set<FrameworkWorkflow>().RemoveRange(ww);
+                                DC!.Set<Elsa_WorkflowInstance>().RemoveRange(wi);
+                                var wl = DC!.Set<Elsa_WorkflowExecutionLogRecord>().CheckContain(wi.Select(x => x.ID).ToList(), x => x.WorkflowInstanceId).ToList();
+                                DC!.Set<Elsa_WorkflowExecutionLogRecord>().RemoveRange(wl);
+                                var ww = DC!.Set<FrameworkWorkflow>().CheckContain(wi.Select(x => x.ID).ToList(), x => x.WorkflowId).ToList();
+                                DC!.Set<FrameworkWorkflow>().RemoveRange(ww);
                             }
                         }
 
@@ -233,11 +233,11 @@ namespace WalkingTec.Mvvm.Core
             {
                 try
                 {
-                    DC.SaveChanges();
-                    var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
+                    DC!.SaveChanges();
+                    var fp = Wtm!.ServiceProvider.GetRequiredService<WtmFileProvider>();
                     foreach (var item in fileids)
                     {
-                        fp.DeleteFile(item.ToString(), DC.ReCreate());
+                        fp.DeleteFile(item.ToString(), DC!.ReCreate());
                     }
                 }
                 catch (Exception e)
@@ -255,19 +255,19 @@ namespace WalkingTec.Mvvm.Core
                     {
                         if (!ErrorMessage.ContainsKey(id))
                         {
-                            ErrorMessage.Add(id, CoreProgram._localizer?["Sys.Rollback"]);
+                            ErrorMessage.Add(id, (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.Rollback"] : null) ?? "");
                         }
                     }
                 }
                 ListVM?.DoSearch();
                 if (ListVM != null)
                 {
-                    foreach (var item in ListVM?.GetEntityList())
+                    foreach (var item in ListVM.GetEntityList())
                     {
                         item.BatchError = ErrorMessage.Where(x => x.Key == item.GetID().ToString()).Select(x => x.Value).FirstOrDefault();
                     }
                 }
-                MSD.AddModelError("", CoreProgram._localizer?["Sys.DataCannotDelete"]);
+                MSD?.AddModelError("", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DataCannotDelete"] : "");
             }
             return rv;
         }
@@ -280,11 +280,11 @@ namespace WalkingTec.Mvvm.Core
         public virtual bool DoBatchEdit()
         {
             //获取批量修改VM的所有属性
-            var pros = LinkedVM.GetType().GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly);
+            var pros = LinkedVM!.GetType().GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly);
             bool rv = true;
-            List<string> idsData = Ids.ToList();
+            List<string> idsData = Ids!.ToList();
             string currentvmname = this.GetType().Name;
-            Type vmtype = null;
+            Type? vmtype = null;
             //找到对应的BaseCRUDVM，并初始化
             if (currentvmname.ToLower().Contains("apibatchvm"))
             {
@@ -294,11 +294,11 @@ namespace WalkingTec.Mvvm.Core
             {
                 vmtype = this.GetType().Assembly.GetExportedTypes().Where(x => x.IsSubclassOf(typeof(BaseCRUDVM<TModel>)) && x.Name.ToLower().Contains("apivm") == false).FirstOrDefault();
             }
-            IBaseCRUDVM<TModel> vm = null;
+            IBaseCRUDVM<TModel>? vm = null;
             if (vmtype != null)
             {
-                vm = vmtype.GetConstructor(System.Type.EmptyTypes).Invoke(null) as IBaseCRUDVM<TModel>;
-                vm.CopyContext(this);
+                vm = vmtype.GetConstructor(System.Type.EmptyTypes)?.Invoke(null) as IBaseCRUDVM<TModel>;
+                vm?.CopyContext(this);
             }
             //循环所有数据
             for (int i = 0; i < idsData.Count; i++)
@@ -328,17 +328,11 @@ namespace WalkingTec.Mvvm.Core
                             if (hasvalue)
                             {
                                 proToSet.SetValue(entity, valuetoset);
-                                DC.UpdateProperty(entity, proToSet.Name);
+                                DC!.UpdateProperty(entity, proToSet.Name);
                             }
                         }
                     }
 
-                    //调用controller方法验证model
-                    //try
-                    //{
-                    //    Controller.GetType().GetMethod("RedoValidation").Invoke(Controller, new object[] { entity });
-                    //}
-                    //catch { }
                     //如果有对应的BaseCRUDVM则使用其进行数据验证
                     if (vm != null)
                     {
@@ -364,16 +358,16 @@ namespace WalkingTec.Mvvm.Core
                     }
                     if (typeof(IBasePoco).IsAssignableFrom( typeof(TModel)))
                     {
-                        IBasePoco ent = entity as IBasePoco;
+                        IBasePoco ent = (entity as IBasePoco)!;
                         if (ent.UpdateTime == null)
                         {
                             ent.UpdateTime = DateTime.Now;
-                            DC.UpdateProperty(entity, nameof(ent.UpdateTime));
+                            DC!.UpdateProperty(entity, nameof(ent.UpdateTime));
                         }
                         if (string.IsNullOrEmpty(ent.UpdateBy))
                         {
                             ent.UpdateBy = LoginUserInfo?.ITCode;
-                            DC.UpdateProperty(entity, nameof(ent.UpdateBy));
+                            DC!.UpdateProperty(entity, nameof(ent.UpdateBy));
                         }
                     }
                 }
@@ -388,7 +382,7 @@ namespace WalkingTec.Mvvm.Core
             {
                 try
                 {
-                    DC.SaveChanges();
+                    DC!.SaveChanges();
                 }
                 catch (Exception e)
                 {
@@ -406,7 +400,7 @@ namespace WalkingTec.Mvvm.Core
                     {
                         if (!ErrorMessage.ContainsKey(id))
                         {
-                            ErrorMessage.Add(id, CoreProgram._localizer?["Sys.Rollback"]);
+                            ErrorMessage.Add(id, (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.Rollback"] : null) ?? "");
                         }
                     }
                 }
@@ -417,12 +411,14 @@ namespace WalkingTec.Mvvm.Core
 
         protected void RefreshErrorList()
         {
-            ListVM.DoSearch();
-            foreach (var item in ListVM.GetEntityList())
+            ListVM?.DoSearch();
+            if (ListVM != null)
             {
-                item.BatchError = ErrorMessage.Where(x => x.Key == item.GetID().ToString()).Select(x => x.Value).FirstOrDefault();
+                foreach (var item in ListVM.GetEntityList())
+                {
+                    item.BatchError = ErrorMessage.Where(x => x.Key == item.GetID().ToString()).Select(x => x.Value).FirstOrDefault();
+                }
             }
-
         }
     }
 }
