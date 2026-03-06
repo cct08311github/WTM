@@ -137,6 +137,8 @@ namespace WalkingTec.Mvvm.Core
                 if (_dc == null)
                 {
                     _dc = this.CreateDC();
+                    if (_dc != null)
+                        _dc.CurrentUserCode = LoginUserInfo?.ITCode;
                 }
                 return _dc;
             }
@@ -727,7 +729,9 @@ params string[] groupcode)
                 //如果租户指定了数据库，则返回
                 if (string.IsNullOrEmpty(cs) && item?.IsUsingDB == true)
                 {
-                    return item.CreateDC(this);
+                    var tenantDc = item.CreateDC(this);
+                    tenantDc.CurrentUserCode = LoginUserInfo?.ITCode;
+                    return tenantDc;
                 }
             }
 
@@ -750,6 +754,7 @@ params string[] groupcode)
             var rv = csConfig.CreateDC();
             rv.IsDebug = ConfigInfo.IsQuickDebug;
             rv.SetTenantCode(tenantCode);
+            rv.CurrentUserCode = LoginUserInfo?.ITCode;
             if (logerror == true)
             {
                 rv.SetLoggerFactory(_loggerFactory);

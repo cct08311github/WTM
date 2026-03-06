@@ -23,6 +23,7 @@ namespace WalkingTec.Mvvm.Core
         bool IsFake { get; set; }
 
         bool IsDebug { get; set; }
+        string CurrentUserCode { get; set; }
         string TenantCode { get; }
         DBTypeEnum DBType { get; set; }
         /// <summary>

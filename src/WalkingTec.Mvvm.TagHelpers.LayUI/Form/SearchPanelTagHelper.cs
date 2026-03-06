@@ -1,6 +1,5 @@
 using Microsoft.AspNetCore.Razor.TagHelpers;
 using Microsoft.Extensions.Options;
-using Newtonsoft.Json.Schema;
 using System;
 using System.Threading.Tasks;
 using WalkingTec.Mvvm.Core;
