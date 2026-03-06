@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 ﻿namespace WalkingTec.Mvvm.Core
 {
     /// <summary>
@@ -6,7 +6,7 @@
     /// </summary>
     public interface ISessionService
     {
-        T Get<T>(string key);
+        T? Get<T>(string key);
         void Set<T>(string key, T val);
         string SessionId { get; }
     }
