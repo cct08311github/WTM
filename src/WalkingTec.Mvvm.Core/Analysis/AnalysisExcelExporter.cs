@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System.Collections.Generic;
 using System.IO;
 using NPOI.SS.UserModel;
@@ -16,7 +16,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// </summary>
         public static byte[] Export(AnalysisQueryResponse result)
         {
-            var workbook = new XSSFWorkbook();
+            using var workbook = new XSSFWorkbook();
             var sheet = workbook.CreateSheet("Analysis");
 
             // Header row
@@ -34,6 +34,14 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     var cell = row.CreateCell(c);
                     if (val is decimal d)
                         cell.SetCellValue((double)d);
+                    else if (val is double db)
+                        cell.SetCellValue(db);
+                    else if (val is float f)
+                        cell.SetCellValue(f);
+                    else if (val is int i)
+                        cell.SetCellValue(i);
+                    else if (val is long l)
+                        cell.SetCellValue(l);
                     else
                         cell.SetCellValue(val?.ToString() ?? "");
                 }

@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System.Collections.Generic;
 using System.IO;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -20,7 +20,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         private static AnalysisQueryResponse MakeResponse(
             List<string> columns,
-            List<Dictionary<string, object>> rows)
+            List<Dictionary<string, object?>> rows)
         {
             return new AnalysisQueryResponse
             {
@@ -46,7 +46,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         {
             var resp = MakeResponse(
                 new List<string> { "Region", "Amount_Sum" },
-                new List<Dictionary<string, object>>
+                new List<Dictionary<string, object?>>
                 {
                     new() { ["Region"] = "華東", ["Amount_Sum"] = 300m }
                 });
@@ -64,7 +64,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         {
             var resp = MakeResponse(
                 new List<string> { "Region", "Category", "Amount_Sum" },
-                new List<Dictionary<string, object>>());
+                new List<Dictionary<string, object?>>());
 
             var wb     = OpenWorkbook(AnalysisExcelExporter.Export(resp));
             var sheet  = wb.GetSheetAt(0);
@@ -81,7 +81,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         [TestMethod]
         public void Export_produces_correct_row_count()
         {
-            var rows = new List<Dictionary<string, object>>
+            var rows = new List<Dictionary<string, object?>>
             {
                 new() { ["Region"] = "華東", ["Amount_Sum"] = 100m },
                 new() { ["Region"] = "華南", ["Amount_Sum"] = 300m },
@@ -102,7 +102,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         {
             var resp = MakeResponse(
                 new List<string> { "Amount_Sum" },
-                new List<Dictionary<string, object>>
+                new List<Dictionary<string, object?>>
                 {
                     new() { ["Amount_Sum"] = 123.45m }
                 });
@@ -121,7 +121,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         {
             var resp = MakeResponse(
                 new List<string> { "Region" },
-                new List<Dictionary<string, object>>
+                new List<Dictionary<string, object?>>
                 {
                     new() { ["Region"] = "華東" }
                 });
@@ -141,7 +141,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             // TryGetValue 找不到 key 時 val=null → SetCellValue("")
             var resp = MakeResponse(
                 new List<string> { "Region" },
-                new List<Dictionary<string, object>>
+                new List<Dictionary<string, object?>>
                 {
                     new() { ["Region"] = null }
                 });
@@ -160,7 +160,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         {
             var resp = MakeResponse(
                 new List<string> { "Region", "Amount_Sum" },
-                new List<Dictionary<string, object>>());
+                new List<Dictionary<string, object?>>());
 
             var wb    = OpenWorkbook(AnalysisExcelExporter.Export(resp));
             var sheet = wb.GetSheetAt(0);
