@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -40,16 +40,16 @@ namespace WalkingTec.Mvvm.Core
         /// <returns>Excel文件</returns>
         byte[] GenerateExcel();
 
-        string TotalText { get; set; }
+        string? TotalText { get; set; }
 
-        List<FrameworkWorkflow> GetMyApproves(string flowname = null);
+        List<FrameworkWorkflow> GetMyApproves(string? flowname = null);
         #region Old
-        event Action<IBasePagedListVM<T, S>> OnAfterInitList;
+        event Action<IBasePagedListVM<T, S>>? OnAfterInitList;
         /// <summary>
         ///记录批量操作时列表中选择的Id
         /// </summary>
         List<string> Ids { get; set; }
-        string SelectorValueField { get; set; }
+        string? SelectorValueField { get; set; }
 
         /// <summary>
         /// 获取Model集合
@@ -102,7 +102,7 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 移除操作列
         /// </summary>
-        void RemoveActionColumn(object root = null);
+        void RemoveActionColumn(object? root = null);
 
         void RemoveAction();
 
@@ -134,7 +134,7 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// ReplaceWhere
         /// </summary>
-        Expression ReplaceWhere { get; set; }
+        Expression? ReplaceWhere { get; set; }
 
         /// <summary>
         /// SetFullRowColor
@@ -154,7 +154,7 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 用于为子表生成可编辑Grid时，内部控件名称前缀
         /// </summary>
-        string DetailGridPrix { get; set; }
+        string? DetailGridPrix { get; set; }
 
         void DoInitListVM();
 
