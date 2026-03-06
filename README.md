@@ -60,6 +60,12 @@ Framework document address: http://wtmdoc.walkingtec.cn
 
 Frame QQ communication group: 694148336(full), 892848149 (group2)
 
+## Local Docs
+
+- [WTM System Architecture Guide](./docs/system-architecture.md)
+- [WTM Analysis Mode Guide](./docs/analysis-mode.md)
+- [GitHub Packages Guide](./docs/github-packages.md)
+
 version 5.0x is in VNext branch
 
 ## Click <a href="http://wtmdoc.walkingtec.cn/setup">here</a>  to generate a WTM project online and experience the beauty of WTM immediately~~~
