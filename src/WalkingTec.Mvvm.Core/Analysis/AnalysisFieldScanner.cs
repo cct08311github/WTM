@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Reflection;
@@ -18,7 +18,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// <exception cref="ArgumentNullException">當 modelType 為 null 時立即擲回。</exception>
         public static IEnumerable<AnalysisFieldMeta> ScanModel(Type modelType)
         {
-            if (modelType == null) throw new ArgumentNullException(nameof(modelType));
+            ArgumentNullException.ThrowIfNull(modelType);
             return ScanModelCore(modelType);
         }
 

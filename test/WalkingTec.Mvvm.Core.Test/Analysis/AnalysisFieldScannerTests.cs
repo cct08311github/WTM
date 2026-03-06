@@ -11,15 +11,15 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         private class OrderModel
         {
             [Dimension(DisplayName = "地區")]
-            public string Region { get; set; }
+            public string Region { get; set; } = string.Empty;
 
             [Dimension(DisplayName = "業務員")]
-            public string SalesRep { get; set; }
+            public string SalesRep { get; set; } = string.Empty;
 
             [Measure(AllowedFuncs = AggregateFunc.Sum | AggregateFunc.Count, DisplayName = "金額")]
             public decimal Amount { get; set; }
 
-            public string Ignored { get; set; }
+            public string Ignored { get; set; } = string.Empty;
         }
 
         [TestMethod]
@@ -59,13 +59,13 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         public void ScanModel_null_throws_ArgumentNullException()
         {
             Assert.ThrowsException<ArgumentNullException>(
-                () => AnalysisFieldScanner.ScanModel(null).ToList());
+                () => AnalysisFieldScanner.ScanModel(null!).ToList());
         }
 
         private class NoDisplayNameModel
         {
             [Dimension]
-            public string Category { get; set; }
+            public string Category { get; set; } = string.Empty;
         }
 
         [TestMethod]
