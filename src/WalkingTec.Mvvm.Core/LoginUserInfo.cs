@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -16,42 +16,42 @@ namespace WalkingTec.Mvvm.Core
     /// </summary>
     public class LoginUserInfo
     {
-        public string UserId { get; set; }
+        public string? UserId { get; set; }
 
         /// <summary>
         /// 登录用户
         /// </summary>
-        public string ITCode { get; set; }
+        public string? ITCode { get; set; }
 
-        public string TenantCode { get; set; }
+        public string? TenantCode { get; set; }
 
-        private string _currentTenant;
-        public string CurrentTenant {
+        private string? _currentTenant;
+        public string? CurrentTenant {
             get { return _currentTenant ?? TenantCode; }
             set { _currentTenant = value; }
         }
 
-        public string RemoteToken { get; set; }
+        public string? RemoteToken { get; set; }
 
-        public string Name { get; set; }
+        public string? Name { get; set; }
 
-        public string Memo { get; set; }
+        public string? Memo { get; set; }
 
         public Guid? PhotoId { get; set; }
 
-        public List<SimpleRole> Roles { get; set; }
+        public List<SimpleRole>? Roles { get; set; }
 
-        public List<SimpleGroup> Groups { get; set; }
+        public List<SimpleGroup>? Groups { get; set; }
 
-        public Dictionary<string, object> Attributes { get; set; }
+        public Dictionary<string, object>? Attributes { get; set; }
         /// <summary>
         /// 用户的页面权限列表
         /// </summary>
-        public List<SimpleFunctionPri> FunctionPrivileges { get; set; }
+        public List<SimpleFunctionPri>? FunctionPrivileges { get; set; }
         /// <summary>
         /// 用户的数据权限列表
         /// </summary>
-        public List<SimpleDataPri> DataPrivileges { get; set; }
+        public List<SimpleDataPri>? DataPrivileges { get; set; }
         public long TimeTick { get; set; } = DateTime.Now.Ticks;
         public async System.Threading.Tasks.Task LoadBasicInfoAsync(WTMContext context)
         {
@@ -105,7 +105,7 @@ namespace WalkingTec.Mvvm.Core
                     {
                         if (Attributes.ContainsKey(item.Name) == false)
                         {
-                            Attributes.Add(item.Name, item.GetValue(userInfo.user));
+                            Attributes.Add(item.Name, item.GetValue(userInfo.user)!);
                         }
                     }
                     this.Roles = roles;
@@ -113,7 +113,7 @@ namespace WalkingTec.Mvvm.Core
                 }
             }
 
-            var moregroups = this.Groups.ToList();
+            var moregroups = this.Groups!.ToList();
             for (int i = 0; i < moregroups.Count; i++)
             {
                 var group = moregroups[i];
@@ -127,7 +127,7 @@ namespace WalkingTec.Mvvm.Core
                 }
             }
             var gc = moregroups.Select(x => x.GroupCode).ToList();
-            var rc = this.Roles.Select(x=>x.RoleCode).ToList();
+            var rc = this.Roles!.Select(x=>x.RoleCode).ToList();
 
             //查找登录用户的页面权限
             var funcPrivileges = await DC.Set<FunctionPrivilege>().AsNoTracking()
@@ -151,11 +151,11 @@ namespace WalkingTec.Mvvm.Core
                 if (typeof(TreePoco).IsAssignableFrom(dp.ModelType))
                 {
                     var ids = dps.Where(x => x.TableName == dp.ModelName).Select(x => x.RelateId).ToList();
-                    if (ids.Count > 0 && ids.Contains(null) == false)
+                    if (ids.Count > 0 && ids.Contains(null!) == false)
                     {
                         var skipids = dp.GetTreeParentIds(context, dps);
                         List<string> subids = new List<string>();
-                        subids.AddRange(GetSubIds(dp, ids, dp.ModelType, skipids,context));
+                        subids.AddRange(GetSubIds(dp, ids!, dp.ModelType, skipids,context));
                         subids = subids.Distinct().ToList();
                         subids.ForEach(x => dps.Add(new DataPrivilege
                         {
@@ -185,7 +185,7 @@ namespace WalkingTec.Mvvm.Core
         {
             var ms = new List<SimpleMenuApi>();
             List<string> urls = new List<string>();
-            List<SimpleMenu> menudata = null;
+            List<SimpleMenu>? menudata = null;
 
             if (context.ConfigInfo.IsQuickDebug == false)
             {
@@ -235,8 +235,8 @@ namespace WalkingTec.Mvvm.Core
 
             LocalizeMenu(ms);
 
-            urls.AddRange(context.GlobaInfo.AllMenus.Where(x => allowedids.Contains(x.ID) && x.Url != null).Select(x => x.Url).Distinct());
-            urls.AddRange(context.GlobaInfo.AllModule.Where(x => x.IsApi == true).SelectMany(x => x.Actions).Where(x => (x.IgnorePrivillege == true || x.Module.IgnorePrivillege == true) && x.Url != null).Select(x => x.Url));
+            urls.AddRange(context.GlobaInfo.AllMenus.Where(x => allowedids!.Contains(x.ID) && x.Url != null).Select(x => x.Url!).Distinct());
+            urls.AddRange(context.GlobaInfo.AllModule.Where(x => x.IsApi == true).SelectMany(x => x.Actions).Where(x => (x.IgnorePrivillege == true || x.Module.IgnorePrivillege == true) && x.Url != null).Select(x => x.Url!));
 
             if (this.Attributes == null)
             {
@@ -256,28 +256,24 @@ namespace WalkingTec.Mvvm.Core
 
         private void LocalizeMenu(List<SimpleMenuApi> menus)
         {
-            if (menus == null)
-            {
-                return;
-            }
             foreach (var menu in menus)
             {
                 if (menu.Text?.StartsWith("MenuKey.") == true)
                 {
-                    menu.Text = CoreProgram._localizer[menu.Text];
+                    menu.Text = CoreProgram._localizer != null ? (string?)CoreProgram._localizer[menu.Text] : menu.Text;
                 }
             }
         }
 
         public IDataContext GetUserDC(WTMContext context)
         {
-            if (context?.LoginUserInfo?.CurrentTenant == null)
+            if (context.LoginUserInfo?.CurrentTenant == null)
             {
                 return context.CreateDC(cskey: "default");
             }
             else
             {
-                var item = context.GlobaInfo.AllTenant.Where(x => x.TCode == context?.LoginUserInfo?.CurrentTenant).FirstOrDefault();
+                var item = context.GlobaInfo.AllTenant.Where(x => x.TCode == context.LoginUserInfo?.CurrentTenant).FirstOrDefault();
                 if (item != null)
                 {
                     return item.CreateDC(context);
