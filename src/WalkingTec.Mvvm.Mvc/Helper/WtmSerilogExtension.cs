@@ -1,3 +1,4 @@
+#nullable enable
 using System;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
