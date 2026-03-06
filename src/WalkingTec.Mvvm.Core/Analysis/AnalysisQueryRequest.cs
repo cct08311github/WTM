@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System.Collections.Generic;
 
 namespace WalkingTec.Mvvm.Core.Analysis
@@ -9,10 +9,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
     public class AnalysisQueryRequest
     {
         /// <summary>ListVM 的 FullName，在 AnalysisVmRegistry 白名單中查找。</summary>
-        public string ListVmType { get; set; }
+        public string ListVmType { get; set; } = string.Empty;
 
         /// <summary>SearchPanel 的 form data（JSON 字串），傳入後 bind 到 Searcher 實例。</summary>
-        public string SearcherFormData { get; set; }
+        public string? SearcherFormData { get; set; }
 
         /// <summary>選取的維度欄位名稱（最多 3 個）。</summary>
         public List<string> Dimensions { get; set; } = new List<string>();
@@ -30,7 +30,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
     public class MeasureRequest
     {
         /// <summary>度量欄位名稱。</summary>
-        public string Field { get; set; }
+        public string Field { get; set; } = string.Empty;
 
         /// <summary>聚合函式（必須在欄位的 AllowedFuncs 範圍內）。</summary>
         public AggregateFunc Func { get; set; }
@@ -42,13 +42,13 @@ namespace WalkingTec.Mvvm.Core.Analysis
     public class FilterCondition
     {
         /// <summary>欄位名稱（白名單驗證）。</summary>
-        public string Field { get; set; }
+        public string Field { get; set; } = string.Empty;
 
         /// <summary>比較運算子。</summary>
         public FilterOperator Operator { get; set; }
 
         /// <summary>過濾值（統一 string，server-side 做 type conversion）。</summary>
-        public string Value { get; set; }
+        public string Value { get; set; } = string.Empty;
     }
 
     /// <summary>

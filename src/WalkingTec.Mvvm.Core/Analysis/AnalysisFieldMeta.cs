@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 
 namespace WalkingTec.Mvvm.Core.Analysis
@@ -16,10 +16,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
     public class AnalysisFieldMeta
     {
         /// <summary>C# 屬性名稱</summary>
-        public string FieldName { get; set; }
+        public string FieldName { get; set; } = string.Empty;
 
         /// <summary>前端顯示名稱</summary>
-        public string DisplayName { get; set; }
+        public string DisplayName { get; set; } = string.Empty;
 
         /// <summary>欄位種類（Dimension 或 Measure）</summary>
         public AnalysisFieldKind Kind { get; set; }
@@ -28,6 +28,6 @@ namespace WalkingTec.Mvvm.Core.Analysis
         public AggregateFunc AllowedFuncs { get; set; }
 
         /// <summary>欄位的 CLR 型別</summary>
-        public Type ClrType { get; set; }
+        public Type ClrType { get; set; } = typeof(object);
     }
 }

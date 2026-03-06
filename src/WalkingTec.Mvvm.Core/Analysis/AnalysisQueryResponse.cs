@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System.Collections.Generic;
 
 namespace WalkingTec.Mvvm.Core.Analysis
@@ -12,7 +12,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
         public List<string> Columns { get; set; } = new List<string>();
 
         /// <summary>資料列（每列為 欄位名→值 的字典）。</summary>
-        public List<Dictionary<string, object>> Rows { get; set; } = new List<Dictionary<string, object>>();
+        public List<Dictionary<string, object?>> Rows { get; set; } = new List<Dictionary<string, object?>>();
 
         /// <summary>GroupBy 後總筆數。</summary>
         public int TotalCount { get; set; }
@@ -21,6 +21,6 @@ namespace WalkingTec.Mvvm.Core.Analysis
         public bool Truncated { get; set; }
 
         /// <summary>Phase 2 快取識別用，目前留空。</summary>
-        public string QueryHash { get; set; }
+        public string QueryHash { get; set; } = string.Empty;
     }
 }
