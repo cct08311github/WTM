@@ -136,6 +136,31 @@ workflow dispatch 時可帶 `version_suffix`，例如：
 - 使用 `GITHUB_TOKEN` 發佈到 GitHub Packages
 - 目標 source 為 `https://nuget.pkg.github.com/cct08311github/index.json`
 
+### 一鍵發佈腳本
+
+repo 內提供：
+
+- [`scripts/release-github-package.sh`](/Users/openclaw/.openclaw/shared/projects/WTM/scripts/release-github-package.sh)
+
+穩定版：
+
+```bash
+./scripts/release-github-package.sh 8.2.2
+```
+
+預發布版：
+
+```bash
+./scripts/release-github-package.sh 8.2.2 beta.1
+```
+
+這個腳本會：
+
+1. 修改 [version.props](/Users/openclaw/.openclaw/shared/projects/WTM/version.props) 的 `VersionPrefix`
+2. 建立 release commit
+3. push 到 `origin/dotnet8`
+4. 觸發 `publish-nuget.yml`
+
 ### 手動發佈穩定版
 
 1. 先把 `VersionPrefix` 改到目標版本，例如 `8.2.1`
@@ -217,4 +242,3 @@ NuGet package version 應視為不可變。若已發過：
 ### 為什麼 workflow 用 tag 觸發，但版本不是 tag 名稱
 
 因為目前 workflow 的版本來源是 [version.props](/Users/openclaw/.openclaw/shared/projects/WTM/version.props) 與 `version_suffix`，不是從 tag 名稱解析。
-
