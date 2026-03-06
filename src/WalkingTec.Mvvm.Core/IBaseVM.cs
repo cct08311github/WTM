@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using Microsoft.Extensions.Caching.Distributed;
@@ -12,7 +12,7 @@ namespace WalkingTec.Mvvm.Core
     {
         #region Property
 
-        WTMContext Wtm { get; set; }
+        WTMContext? Wtm { get; set; }
 
         /// <summary>
         /// UniqueId
@@ -21,7 +21,7 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// WindowIds
         /// </summary>
-        string WindowIds { get;}
+        string? WindowIds { get;}
         /// <summary>
         /// ViewDivId
         /// </summary>
@@ -29,7 +29,7 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// DC
         /// </summary>
-        IDataContext DC { get; set; }
+        IDataContext? DC { get; set; }
         /// <summary>
         /// VMFullName
         /// </summary>
@@ -37,11 +37,11 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// CreatorAssembly
         /// </summary>
-        string CreatorAssembly { get; set; }
+        string? CreatorAssembly { get; set; }
         /// <summary>
         /// CurrentCS
         /// </summary>
-        string CurrentCS { get; }
+        string? CurrentCS { get; }
         /// <summary>
         /// FC
         /// </summary>
@@ -49,13 +49,13 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// Config
         /// </summary>
-        Configs ConfigInfo { get;  }
+        Configs? ConfigInfo { get;  }
 
-        ISessionService Session { get;  }
+        ISessionService? Session { get;  }
 
-        IDistributedCache Cache { get;  }
+        IDistributedCache? Cache { get;  }
 
-        LoginUserInfo LoginUserInfo { get; }
+        LoginUserInfo? LoginUserInfo { get; }
         #endregion
 
         #region Event
@@ -63,11 +63,11 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// InitVM 完成后触发的事件
         /// </summary>
-        event Action<IBaseVM> OnAfterInit;
+        event Action<IBaseVM>? OnAfterInit;
         /// <summary>
         /// ReInitVM 完成后触发的事件
         /// </summary>
-        event Action<IBaseVM> OnAfterReInit;
+        event Action<IBaseVM>? OnAfterReInit;
 
         #endregion
 
