@@ -161,6 +161,11 @@ repo 內提供：
 3. push 到 `origin/dotnet8`
 4. 觸發 `publish-nuget.yml`
 
+補充：
+
+- 若 `VersionPrefix` 已經等於目標版本，腳本不會重複 commit，只會直接觸發發佈 workflow
+- 腳本會先檢查 `gh auth` 是否已登入
+
 ### 手動發佈穩定版
 
 1. 先把 `VersionPrefix` 改到目標版本，例如 `8.2.1`

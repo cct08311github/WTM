@@ -64,6 +64,36 @@ if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
   exit 1
 fi
 
+if ! gh auth status >/dev/null 2>&1; then
+  echo "gh is not authenticated. Run 'gh auth login' first." >&2
+  exit 1
+fi
+
+CURRENT_VERSION="$(python3 - <<'PY' "$VERSION_FILE"
+from pathlib import Path
+import re
+import sys
+
+text = Path(sys.argv[1]).read_text()
+match = re.search(r"<VersionPrefix>([^<]+)</VersionPrefix>", text)
+if not match:
+    raise SystemExit("Cannot find VersionPrefix")
+print(match.group(1))
+PY
+)"
+
+if [[ "$CURRENT_VERSION" == "$VERSION" ]]; then
+  echo "VersionPrefix is already $VERSION"
+  if [[ -n "$SUFFIX" ]]; then
+    gh workflow run publish-nuget.yml --ref "$BRANCH" -f "version_suffix=$SUFFIX"
+    echo "Triggered GitHub Packages publish for $VERSION-$SUFFIX"
+  else
+    gh workflow run publish-nuget.yml --ref "$BRANCH"
+    echo "Triggered GitHub Packages publish for $VERSION"
+  fi
+  exit 0
+fi
+
 python3 - <<'PY' "$VERSION_FILE" "$VERSION"
 from pathlib import Path
 import re
@@ -94,4 +124,3 @@ else
   gh workflow run publish-nuget.yml --ref "$BRANCH"
   echo "Triggered GitHub Packages publish for $VERSION"
 fi
-
