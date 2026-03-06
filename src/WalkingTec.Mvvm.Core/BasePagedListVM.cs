@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using WalkingTec.Mvvm.Core.Analysis;
@@ -54,9 +54,9 @@ namespace WalkingTec.Mvvm.Core
 
 
         [JsonIgnore]
-        public string TotalText { get; set; } = CoreProgram._localizer?["Sys.Total"];
+        public string? TotalText { get; set; } = CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.Total"] : null;
 
-        public virtual DbCommand GetSearchCommand()
+        public virtual DbCommand? GetSearchCommand()
         {
             return null;
         }
@@ -79,7 +79,7 @@ namespace WalkingTec.Mvvm.Core
         /// GridHeaders
         /// </summary>
         [JsonIgnore]
-        private IEnumerable<IGridColumn<TModel>> GridHeaders { get; set; }
+        private IEnumerable<IGridColumn<TModel>>? GridHeaders { get; set; }
 
         /// <summary>
         /// GetHeaders
@@ -104,7 +104,7 @@ namespace WalkingTec.Mvvm.Core
             return headers.Max(x => x.MaxDepth);
         }
 
-        private List<GridAction> _gridActions;
+        private List<GridAction>? _gridActions;
 
         /// <summary>
         /// 页面动作
@@ -174,8 +174,8 @@ namespace WalkingTec.Mvvm.Core
             {
                 Guid g = Guid.NewGuid();
                 var FileName = typeof(TModel).Name + "_" + DateTime.Now.ToString("yyyyMMddHHmmssffff");
-                //文件根目录            
-                string RootPath = $"{Wtm.ConfigInfo.HostRoot}\\export{g}";
+                //文件根目录
+                string RootPath = $"{Wtm!.ConfigInfo.HostRoot}\\export{g}";
 
                 //文件夹目录
                 string FilePath = $"{RootPath}//FileFolder";
@@ -270,7 +270,7 @@ namespace WalkingTec.Mvvm.Core
             cellStyle.BorderRight = BorderStyle.Thin;
 
             //生成表头
-            int max = MakeExcelHeader(sheet, GridHeaders, 0, 0, headerStyle);
+            int max = MakeExcelHeader(sheet, GridHeaders!, 0, 0, headerStyle);
 
             //放入数据
             var ColIndex = 0;
@@ -278,7 +278,7 @@ namespace WalkingTec.Mvvm.Core
             {
                 ColIndex = 0;
                 var DR = sheet.CreateRow(i + max);
-                foreach (var baseCol in GridHeaders)
+                foreach (var baseCol in GridHeaders!)
                 {
                     foreach (var col in baseCol.BottomChildren)
                     {
@@ -289,7 +289,7 @@ namespace WalkingTec.Mvvm.Core
                         {
                             IsEmunBoolParp = true;
                         }                       //获取数据，并过滤特殊字符
-                        string text = Regex.Replace(col.GetText(List[i]).ToString(), @"<[^>]*>", String.Empty);
+                        string text = Regex.Replace(col.GetText(List[i]).ToString() ?? "", @"<[^>]*>", String.Empty);
 
                         //处理枚举变量的多语言
                         if (IsEmunBoolParp)
@@ -310,7 +310,7 @@ namespace WalkingTec.Mvvm.Core
                         }
 
                         //建立excel单元格
-                        ICell cell=null;
+                        ICell cell;
                         if (col.FieldType?.IsNumber() == true)
                         {
                             double trydouble = 0;
@@ -330,14 +330,14 @@ namespace WalkingTec.Mvvm.Core
                         ColIndex++;
                     }
                 }
-            }            
+            }
             return book;
         }
 
         private byte[] DownLoadExcel(List<TModel> data)
         {
             var book = GenerateWorkBook(data);
-            byte[] rv = new byte[] { };
+            byte[] rv = Array.Empty<byte>();
             using (MemoryStream ms = new MemoryStream())
             {
                 book.Write(ms);
@@ -417,13 +417,13 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// InitList后触发的事件
         /// </summary>
-        public event Action<IBasePagedListVM<TModel, TSearcher>> OnAfterInitList;
+        public event Action<IBasePagedListVM<TModel, TSearcher>>? OnAfterInitList;
 
         /// <summary>
         ///记录批量操作时列表中选择的Id
         /// </summary>
-        public List<string> Ids { get; set; }
-        public string SelectorValueField { get; set; }
+        public List<string> Ids { get; set; } = new List<string>();
+        public string? SelectorValueField { get; set; }
         /// <summary>
         /// 是否已经搜索过
         /// </summary>
@@ -474,7 +474,6 @@ namespace WalkingTec.Mvvm.Core
         [JsonIgnore]
         public List<TModel> EntityList { get; set; }
 
-
         /// <summary>
         /// 搜索条件
         /// </summary>
@@ -495,7 +494,7 @@ namespace WalkingTec.Mvvm.Core
         /// 替换查询条件，如果被赋值，则列表会使用里面的Lambda来替换原有Query里面的Where条件
         /// </summary>
         [JsonIgnore()]
-        public Expression ReplaceWhere { get; set; }
+        public Expression? ReplaceWhere { get; set; }
 
         /// <summary>
         /// 构造函数
@@ -507,7 +506,7 @@ namespace WalkingTec.Mvvm.Core
             //初始化数据列表
             EntityList = new List<TModel>();
             //初始化搜索条件
-            Searcher = typeof(TSearcher).GetConstructor(Type.EmptyTypes).Invoke(null) as TSearcher;
+            Searcher = (TSearcher)typeof(TSearcher).GetConstructor(Type.EmptyTypes)!.Invoke(null);
         }
 
         /// <summary>
@@ -520,7 +519,7 @@ namespace WalkingTec.Mvvm.Core
             {
                 DoSearch();
             }
-            return EntityList?.AsEnumerable();
+            return EntityList?.AsEnumerable() ?? Enumerable.Empty<TModel>();
         }
 
 
@@ -578,7 +577,7 @@ namespace WalkingTec.Mvvm.Core
         /// <returns>搜索语句</returns>
         public virtual IOrderedQueryable<TModel> GetSearchQuery()
         {
-            return DC.Set<TModel>().OrderByDescending(x => x.ID);
+            return DC!.Set<TModel>().OrderByDescending(x => x.ID);
         }
 
         /// <summary>
@@ -618,7 +617,7 @@ namespace WalkingTec.Mvvm.Core
             var baseQuery = GetSearchQuery();
             if (ReplaceWhere == null)
             {
-                Expression peid = null;
+                Expression? peid = null;
                 if (string.IsNullOrEmpty(SelectorValueField) == false && SelectorValueField.ToLower() != "id")
                 {
                     var pe = Expression.Parameter(typeof(TModel));
@@ -627,7 +626,7 @@ namespace WalkingTec.Mvvm.Core
                 var mod = new WhereReplaceModifier<TModel>(Ids.GetContainIdExpression<TModel>(peid));
                 var newExp = mod.Modify(baseQuery.Expression);
                 var newQuery = baseQuery.Provider.CreateQuery<TModel>(newExp) as IOrderedQueryable<TModel>;
-                return newQuery;
+                return newQuery!;
             }
             else
             {
@@ -652,7 +651,7 @@ namespace WalkingTec.Mvvm.Core
             var cmd = GetSearchCommand();
             if (cmd == null)
             {
-                IOrderedQueryable<TModel> query = null;
+                IOrderedQueryable<TModel>? query = null;
                 //根据搜索模式调用不同的函数
                 switch (SearcherMode)
                 {
@@ -683,14 +682,14 @@ namespace WalkingTec.Mvvm.Core
                     //如果设定了替换条件，则使用替换条件替换Query中的Where语句
                     if (ReplaceWhere != null)
                     {
-                        var mod = new WhereReplaceModifier<TModel>(ReplaceWhere as Expression<Func<TModel, bool>>);
-                        var newExp = mod.Modify(query.Expression);
+                        var mod = new WhereReplaceModifier<TModel>((ReplaceWhere as Expression<Func<TModel, bool>>)!);
+                        var newExp = mod.Modify(query!.Expression);
                         query = query.Provider.CreateQuery<TModel>(newExp) as IOrderedQueryable<TModel>;
                     }
                     if (Searcher.SortInfo != null)
                     {
                         var mod = new OrderReplaceModifier(Searcher.SortInfo);
-                        var newExp = mod.Modify(query.Expression);
+                        var newExp = mod.Modify(query!.Expression);
                         query = query.Provider.CreateQuery<TModel>(newExp) as IOrderedQueryable<TModel>;
                     }
                     //if (typeof(IPersistPoco).IsAssignableFrom( typeof(TModel)))
@@ -705,7 +704,7 @@ namespace WalkingTec.Mvvm.Core
                         if (NeedPage && Searcher.Limit != -1)
                         {
                             //获取返回数据的数量
-                            var count = query.Count();
+                            var count = query!.Count();
                             if (count < 0)
                             {
                                 count = 0;
@@ -725,11 +724,11 @@ namespace WalkingTec.Mvvm.Core
                             {
                                 Searcher.Page = Searcher.PageCount;
                             }
-                            EntityList = query.Skip((Searcher.Page - 1) * Searcher.Limit).Take(Searcher.Limit).AsNoTracking().ToList();
+                            EntityList = query!.Skip((Searcher.Page - 1) * Searcher.Limit).Take(Searcher.Limit).AsNoTracking().ToList();
                         }
                         else //如果不需要分页则直接获取数据
                         {
-                            EntityList = query.AsNoTracking().ToList();
+                            EntityList = query!.AsNoTracking().ToList();
                             Searcher.Count = EntityList.Count();
                             Searcher.Limit = EntityList.Count();
                             Searcher.PageCount = 1;
@@ -738,7 +737,7 @@ namespace WalkingTec.Mvvm.Core
                     }
                     else
                     {
-                        EntityList = query.AsNoTracking().ToList();
+                        EntityList = query!.AsNoTracking().ToList();
                     }
                 }
             }
@@ -754,13 +753,13 @@ namespace WalkingTec.Mvvm.Core
 
         private void ProcessCommand(DbCommand cmd)
         {
-            object total;
+            object? total;
 
             if (Searcher.Page <= 0)
             {
                 Searcher.Page = 1;
             }
-            if (DC.Database.IsMySql())
+            if (DC!.Database.IsMySql())
             {
                 List<MySqlParameter> parms = new List<MySqlParameter>();
                 foreach (MySqlParameter item in cmd.Parameters)
@@ -876,7 +875,7 @@ namespace WalkingTec.Mvvm.Core
                 {
                     try
                     {
-                        Searcher.Count = long.Parse(total.ToString());
+                        Searcher.Count = long.Parse(total.ToString()!);
                         Searcher.PageCount = (int)((Searcher.Count - 1) / Searcher.Limit + 1);
                     }
                     catch { }
@@ -922,7 +921,7 @@ namespace WalkingTec.Mvvm.Core
                     if (string.IsNullOrEmpty(SelectorValueField) || SelectorValueField.ToLower() == "id")
                     {
                         var id = item.GetID();
-                        if (Ids.Contains(id.ToString()))
+                        if (Ids.Contains(id.ToString()!))
                         {
                             item.Checked = true;
                         }
@@ -930,7 +929,7 @@ namespace WalkingTec.Mvvm.Core
                     else
                     {
                         var v = item.GetPropertyValue(SelectorValueField);
-                        if (Ids.Contains(v.ToString()))
+                        if (Ids.Contains(v.ToString()!))
                         {
                             item.Checked = true;
                         }
@@ -942,7 +941,7 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 删除所有ActionGridColumn的列
         /// </summary>
-        public void RemoveActionColumn(object root = null)
+        public void RemoveActionColumn(object? root = null)
         {
             if (root == null)
             {
@@ -956,13 +955,19 @@ namespace WalkingTec.Mvvm.Core
             {
                 //IEnumerable<IGridColumn<TModel>>
                 var aroot = root as List<GridColumn<TModel>>;
-                var toRemove = aroot.Where(x => x.ColumnType == GridColumnTypeEnum.Action).FirstOrDefault();
-                aroot.Remove(toRemove);
-                foreach (var child in aroot)
+                if (aroot != null)
                 {
-                    if (child.Children != null && child.Children.Count() > 0)
+                    var toRemove = aroot.Where(x => x.ColumnType == GridColumnTypeEnum.Action).FirstOrDefault();
+                    if (toRemove != null)
                     {
-                        RemoveActionColumn(child.Children);
+                        aroot.Remove(toRemove);
+                    }
+                    foreach (var child in aroot)
+                    {
+                        if (child.Children != null && child.Children.Count() > 0)
+                        {
+                            RemoveActionColumn(child.Children);
+                        }
                     }
                 }
             }
@@ -973,7 +978,7 @@ namespace WalkingTec.Mvvm.Core
             _gridActions = new List<GridAction>();
         }
 
-        public void RemoveActionAndIdColumn(IEnumerable<IGridColumn<TModel>> root = null)
+        public void RemoveActionAndIdColumn(IEnumerable<IGridColumn<TModel>>? root = null)
         {
             if (root == null)
             {
@@ -986,25 +991,28 @@ namespace WalkingTec.Mvvm.Core
             if (root != null)
             {
                 var aroot = root as List<GridColumn<TModel>>;
-                List<GridColumn<TModel>> remove = null;
+                List<GridColumn<TModel>>? remove = null;
                 var idpro = typeof(TModel).GetSingleProperty("ID")?.PropertyType;
-                if (idpro == typeof(string))
+                if (aroot != null)
                 {
-                    remove = aroot.Where(x => x.ColumnType == GridColumnTypeEnum.Action || x.Hide == true || x.DisableExport).ToList();
-                }
-                else
-                {
-                    remove = aroot.Where(x => x.ColumnType == GridColumnTypeEnum.Action || x.Hide == true || x.DisableExport || x.FieldName?.ToLower() == "id").ToList();
-                }
-                foreach (var item in remove)
-                {
-                    aroot.Remove(item);
-                }
-                foreach (var child in root)
-                {
-                    if (child.Children != null && child.Children.Count() > 0)
+                    if (idpro == typeof(string))
                     {
-                        RemoveActionAndIdColumn(child.Children);
+                        remove = aroot.Where(x => x.ColumnType == GridColumnTypeEnum.Action || x.Hide == true || x.DisableExport).ToList();
+                    }
+                    else
+                    {
+                        remove = aroot.Where(x => x.ColumnType == GridColumnTypeEnum.Action || x.Hide == true || x.DisableExport || x.FieldName?.ToLower() == "id").ToList();
+                    }
+                    foreach (var item in remove)
+                    {
+                        aroot.Remove(item);
+                    }
+                    foreach (var child in root)
+                    {
+                        if (child.Children != null && child.Children.Count() > 0)
+                        {
+                            RemoveActionAndIdColumn(child.Children);
+                        }
                     }
                 }
             }
@@ -1018,21 +1026,25 @@ namespace WalkingTec.Mvvm.Core
         {
             GetHeaders();
             //寻找所有Header为错误信息的列，如果没有则添加
-            if (GridHeaders.Where(x => x.Field == "BatchError").FirstOrDefault() == null)
+            if (GridHeaders!.Where(x => x.Field == "BatchError").FirstOrDefault() == null)
             {
                 var temp = GridHeaders as List<GridColumn<TModel>>;
-                if (temp.Where(x => x.ColumnType == GridColumnTypeEnum.Action).FirstOrDefault() == null)
+                if (temp != null)
                 {
-                    temp.Add(this.MakeGridColumn(x => x.BatchError, Width: 200, Header: Core.CoreProgram._localizer?["Sys.Error"]).SetForeGroundFunc(x => "ff0000").SetFixed(GridColumnFixedEnum.Right));
-                }
-                else
-                {
-                    temp.Insert(temp.Count - 1, this.MakeGridColumn(x => x.BatchError, Width: 200, Header: Core.CoreProgram._localizer?["Sys.Error"]).SetForeGroundFunc(x => "ff0000").SetFixed(GridColumnFixedEnum.Right));
+                    string? errorHeader = CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.Error"] : null;
+                    if (temp.Where(x => x.ColumnType == GridColumnTypeEnum.Action).FirstOrDefault() == null)
+                    {
+                        temp.Add(this.MakeGridColumn(x => x.BatchError, Width: 200, Header: errorHeader).SetForeGroundFunc(x => "ff0000").SetFixed(GridColumnFixedEnum.Right));
+                    }
+                    else
+                    {
+                        temp.Insert(temp.Count - 1, this.MakeGridColumn(x => x.BatchError, Width: 200, Header: errorHeader).SetForeGroundFunc(x => "ff0000").SetFixed(GridColumnFixedEnum.Right));
+                    }
                 }
             }
         }
 
-        public void ProcessListError(List<TModel> Entities)
+        public void ProcessListError(List<TModel>? Entities)
         {
             if(Entities == null)
             {
@@ -1050,7 +1062,7 @@ namespace WalkingTec.Mvvm.Core
                 }
                 else
                 {
-                    foreach (var item in MSD.Keys)
+                    foreach (var item in MSD!.Keys)
                     {
                         if (item.StartsWith(DetailGridPrix+"["))
                         {
@@ -1085,7 +1097,7 @@ namespace WalkingTec.Mvvm.Core
 
         public TModel CreateEmptyEntity()
         {
-            return typeof(TModel).GetConstructor(Type.EmptyTypes).Invoke(null) as TModel;
+            return (TModel)typeof(TModel).GetConstructor(Type.EmptyTypes)!.Invoke(null);
         }
 
         public void ClearEntityList()
@@ -1093,7 +1105,7 @@ namespace WalkingTec.Mvvm.Core
             EntityList?.Clear();
         }
 
-        public string DetailGridPrix { get; set; }
+        public string? DetailGridPrix { get; set; }
 
         public Type ModelType => typeof(TModel);
 
@@ -1111,7 +1123,7 @@ namespace WalkingTec.Mvvm.Core
                     var subtype = newitem.GetType();
                     if (typeof(IBasePoco).IsAssignableFrom( subtype))
                     {
-                        IBasePoco ent = newitem as IBasePoco;
+                        IBasePoco ent = (IBasePoco)newitem;
                         if (ent.UpdateTime == null)
                         {
                             ent.UpdateTime = DateTime.Now;
@@ -1131,16 +1143,16 @@ namespace WalkingTec.Mvvm.Core
                     }
                 }
 
-                IEnumerable<TopBasePoco> data = null;
+                IEnumerable<TopBasePoco>? data = null;
                 //打开新的数据库联接,获取数据库中的主表和子表数据
-                using (var ndc = DC.CreateNew())
+                using (var ndc = DC!.CreateNew())
                 {
                     var ids = EntityList.Select(x => x.GetID().ToString()).ToList();
                     data = ndc.Set<TModel>().AsNoTracking().Where(ids.GetContainIdExpression<TModel>()).ToList();
                 }
                 //比较子表原数据和新数据的区别
-                IEnumerable<TopBasePoco> toadd = null;
-                IEnumerable<TopBasePoco> toremove = null;
+                IEnumerable<TopBasePoco>? toadd = null;
+                IEnumerable<TopBasePoco>? toremove = null;
                 Utils.CheckDifference(data, EntityList, out toremove, out toadd);
                 //设定子表应该更新的字段
                 List<string> setnames = new List<string>();
@@ -1157,7 +1169,7 @@ namespace WalkingTec.Mvvm.Core
                 foreach (var newitem in EntityList)
                 {
                     //数据库中的数据
-                    foreach (var item in data)
+                    foreach (var item in data!)
                     {
                         //需要更新的数据
                         if (newitem.GetID().ToString() == item.GetID().ToString())
@@ -1184,16 +1196,16 @@ namespace WalkingTec.Mvvm.Core
                     }
                 }
                 //需要删除的数据
-                foreach (var item in toremove)
+                foreach (var item in toremove!)
                 {
                     //如果是PersistPoco，则把IsValid设为false，并不进行物理删除
                     if (typeof(IPersistPoco).IsAssignableFrom( ftype))
                     {
-                        (item as IPersistPoco).IsValid = false;
+                        (item as IPersistPoco)!.IsValid = false;
                         if (typeof(IBasePoco).IsAssignableFrom(ftype))
                         {
-                            (item as IBasePoco).UpdateTime = DateTime.Now;
-                            (item as IBasePoco).UpdateBy = LoginUserInfo?.ITCode;
+                            (item as IBasePoco)!.UpdateTime = DateTime.Now;
+                            (item as IBasePoco)!.UpdateBy = LoginUserInfo?.ITCode;
                         }
                         dynamic i = item;
                         DC.UpdateEntity(i);
@@ -1212,11 +1224,11 @@ namespace WalkingTec.Mvvm.Core
                     }
                 }
                 //需要添加的数据
-                foreach (var item in toadd)
+                foreach (var item in toadd!)
                 {
                     if (typeof(IBasePoco).IsAssignableFrom( item.GetType()))
                     {
-                        IBasePoco ent = item as IBasePoco;
+                        IBasePoco ent = (IBasePoco)item;
                         if (ent.CreateTime == null)
                         {
                             ent.CreateTime = DateTime.Now;
@@ -1235,21 +1247,21 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
-        public List<FrameworkWorkflow> GetMyApproves(string flowname = null)
+        public List<FrameworkWorkflow> GetMyApproves(string? flowname = null)
         {
             var mt = ModelType.GetParentWorkflowPoco();
             if (mt != null)
             {
-                var roleids = Wtm.LoginUserInfo.Roles?.Select(x => "r:" + x.ID).ToList();
-                var groupids = Wtm.LoginUserInfo.Groups?.Select(x => "g:" + x.ID).ToList();
+                var roleids = Wtm!.LoginUserInfo?.Roles?.Select(x => "r:" + x.ID).ToList();
+                var groupids = Wtm.LoginUserInfo?.Groups?.Select(x => "g:" + x.ID).ToList();
 
-                var ids = DC.Set<FrameworkWorkflow>()
+                var ids = DC!.Set<FrameworkWorkflow>()
                      .CheckEqual(flowname, x => x.WorkflowName)
                      .CheckEqual(mt.FullName, x => x.ModelType)
-                     .Where(x => x.UserCode == Wtm.LoginUserInfo.ITCode
-                        || roleids.Contains(x.UserCode)
-                        || groupids.Contains(x.UserCode))
-                     .Where(x => x.TenantCode == Wtm.LoginUserInfo.CurrentTenant).ToList();
+                     .Where(x => x.UserCode == Wtm.LoginUserInfo!.ITCode
+                        || roleids!.Contains(x.UserCode)
+                        || groupids!.Contains(x.UserCode))
+                     .Where(x => x.TenantCode == Wtm.LoginUserInfo!.CurrentTenant).ToList();
                 return ids;
             }
             else
