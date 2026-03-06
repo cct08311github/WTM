@@ -5,6 +5,14 @@ on:
   pull_request:
     branches: [ dotnet8 ]
 jobs:
+  release-tooling-test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Validate release script syntax
+      run: bash -n scripts/release-github-package.sh
+    - name: Run release script smoke tests
+      run: bash test/release-script-tests.sh
   build-and-test:
     runs-on: ubuntu-latest
     steps:
@@ -37,7 +45,7 @@ jobs:
       working-directory: test/WalkingTec.Mvvm.Js.Tests
   security-scan:
     runs-on: ubuntu-latest
-    needs: build-and-test
+    needs: [release-tooling-test, build-and-test]
     steps:
     - uses: actions/checkout@v4
     - uses: actions/setup-dotnet@v4
