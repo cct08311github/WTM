@@ -86,19 +86,7 @@ jobs:
               --source "${{ env.PACKAGE_SOURCE }}" \
               --exact-match \
               --format json)"
-            if python3 - <<'PY' "$result" "$PKG_VERSION"
-import json
-import sys
-
-payload = json.loads(sys.argv[1] or "{}")
-version = sys.argv[2]
-for search_result in payload.get("searchResult", []):
-    for package in search_result.get("packages", []):
-        for item in package.get("versions", []):
-            if item.get("version") == version:
-                raise SystemExit(0)
-raise SystemExit(1)
-PY
+            if python3 -c 'import json, sys; payload = json.loads(sys.argv[1] or "{}"); version = sys.argv[2]; raise SystemExit(0 if any(item.get("version") == version for search_result in payload.get("searchResult", []) for package in search_result.get("packages", []) for item in package.get("versions", [])) else 1)' "$result" "$PKG_VERSION"
             then
               echo "Package version $PKG_VERSION is visible in feed."
               exit 0
@@ -120,5 +108,5 @@ PY
           dotnet add package WalkingTec.Mvvm.Core --version "$PKG_VERSION" --source "${{ env.PACKAGE_SOURCE }}"
           dotnet add package WalkingTec.Mvvm.Mvc --version "$PKG_VERSION" --source "${{ env.PACKAGE_SOURCE }}"
           dotnet add package WalkingTec.Mvvm.TagHelpers.LayUI --version "$PKG_VERSION" --source "${{ env.PACKAGE_SOURCE }}"
-          dotnet restore --source "${{ env.PACKAGE_SOURCE }}"
+          dotnet restore
           dotnet build -c Release --no-restore
