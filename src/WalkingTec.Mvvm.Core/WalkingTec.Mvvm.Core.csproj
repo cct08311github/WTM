@@ -39,6 +39,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="WalkingTec.Mvvm.Core.Tests" />
+    <InternalsVisibleTo Include="WalkingTec.Mvvm.Core.Test" />
   </ItemGroup>
 
 </Project>

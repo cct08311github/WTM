@@ -33,8 +33,7 @@ namespace WalkingTec.Mvvm.Core.Test
         [TestMethod]
         public void VerifyPassword_WithLegacyMD5_ReturnsSuccessRehashNeeded()
         {
-            // Use Utils.GetMD5String to simulate a legacy stored hash
-            var md5Hash = Utils.GetMD5String("legacypassword");
+            var md5Hash = PasswordHashHelper.ComputeMD5("legacypassword");
             var result = PasswordHashHelper.VerifyPassword(md5Hash, "legacypassword");
             Assert.AreEqual(PasswordVerifyResult.SuccessRehashNeeded, result);
         }
@@ -42,7 +41,7 @@ namespace WalkingTec.Mvvm.Core.Test
         [TestMethod]
         public void VerifyPassword_WithLegacyMD5_WrongPassword_ReturnsFailed()
         {
-            var md5Hash = Utils.GetMD5String("legacypassword");
+            var md5Hash = PasswordHashHelper.ComputeMD5("legacypassword");
             var result = PasswordHashHelper.VerifyPassword(md5Hash, "wrong");
             Assert.AreEqual(PasswordVerifyResult.Failed, result);
         }
@@ -50,7 +49,7 @@ namespace WalkingTec.Mvvm.Core.Test
         [TestMethod]
         public void IsLegacyMD5Hash_ValidMd5_ReturnsTrue()
         {
-            var md5 = Utils.GetMD5String("test");
+            var md5 = PasswordHashHelper.ComputeMD5("test");
             Assert.IsTrue(PasswordHashHelper.IsLegacyMD5Hash(md5));
         }
 
