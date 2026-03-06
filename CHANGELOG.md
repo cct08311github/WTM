@@ -2,6 +2,14 @@
 
 ## v8.x.x
 
+## 8.2.0 (2026-03-06)
+
+* **新增（結構化日誌）：** Opt-in Serilog 整合，透過 `AddWtmSerilog()` / `UseWtmSerilog()` 啟用。支援 Console + JSON 檔案 Sink，每日滾動、30 天保留、HTTP 請求記錄、自訂 Sink 擴充。與現有 WTMLogger / ActionLog 並存不衝突
+* **新增（ProblemDetails）：** Opt-in RFC 7807 錯誤回應，透過 `UseWtmProblemDetails()` 啟用。API 路由（`/api/*` 或 `Accept: application/json`）回傳結構化 JSON 錯誤含 traceId 串聯。MVC 頁面行為不受影響
+* **文件：** 新增 `docs/structured-logging.md` — 完整使用手冊，含設定、生產環境建議、log 查詢技巧、前端整合範例
+* **依賴：** 新增 `Serilog.AspNetCore` 8.0.3
+* **測試：** Serilog 6 tests + ProblemDetails 7 tests，全部 CI ✅
+
 ## 8.1.17 (2026-03-05)
 
 * **新增（Analysis Mode）：** `[Dimension]` / `[Measure]` / `[EnableAnalysis]` 屬性標注系統，無需額外程式碼即可在列表頁切換分析模式
