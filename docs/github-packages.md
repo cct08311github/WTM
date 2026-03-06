@@ -154,6 +154,12 @@ repo 內提供：
 ./scripts/release-github-package.sh 8.2.2 beta.1
 ```
 
+預覽但不執行：
+
+```bash
+./scripts/release-github-package.sh --dry-run 8.2.2
+```
+
 這個腳本會：
 
 1. 修改 [version.props](/Users/openclaw/.openclaw/shared/projects/WTM/version.props) 的 `VersionPrefix`
@@ -165,6 +171,7 @@ repo 內提供：
 
 - 若 `VersionPrefix` 已經等於目標版本，腳本不會重複 commit，只會直接觸發發佈 workflow
 - 腳本會先檢查 `gh auth` 是否已登入
+- `--dry-run` 可用於確認版本、commit 與 workflow 參數，不會修改檔案
 
 ### 手動發佈穩定版
 

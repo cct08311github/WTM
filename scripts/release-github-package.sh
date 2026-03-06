@@ -5,11 +5,12 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  ./scripts/release-github-package.sh <version> [suffix]
+  ./scripts/release-github-package.sh [--dry-run] <version> [suffix]
 
 Examples:
   ./scripts/release-github-package.sh 8.2.2
   ./scripts/release-github-package.sh 8.2.2 beta.1
+  ./scripts/release-github-package.sh --dry-run 8.2.2
 
 Behavior:
   1. Updates VersionPrefix in version.props
@@ -20,8 +21,15 @@ Behavior:
 Notes:
   - If suffix is omitted, a stable release is published.
   - If suffix is provided, a pre-release is published as <version>-<suffix>.
+  - --dry-run prints the actions without changing files or triggering workflows.
 EOF
 }
+
+DRY_RUN=0
+if [[ "${1:-}" == "--dry-run" ]]; then
+  DRY_RUN=1
+  shift
+fi
 
 if [[ $# -lt 1 || $# -gt 2 ]]; then
   usage
@@ -84,12 +92,32 @@ PY
 
 if [[ "$CURRENT_VERSION" == "$VERSION" ]]; then
   echo "VersionPrefix is already $VERSION"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    if [[ -n "$SUFFIX" ]]; then
+      echo "[dry-run] Would trigger GitHub Packages publish for $VERSION-$SUFFIX"
+    else
+      echo "[dry-run] Would trigger GitHub Packages publish for $VERSION"
+    fi
+    exit 0
+  fi
   if [[ -n "$SUFFIX" ]]; then
     gh workflow run publish-nuget.yml --ref "$BRANCH" -f "version_suffix=$SUFFIX"
     echo "Triggered GitHub Packages publish for $VERSION-$SUFFIX"
   else
     gh workflow run publish-nuget.yml --ref "$BRANCH"
     echo "Triggered GitHub Packages publish for $VERSION"
+  fi
+  exit 0
+fi
+
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  echo "[dry-run] Would update VersionPrefix from $CURRENT_VERSION to $VERSION"
+  echo "[dry-run] Would commit: chore: release $VERSION"
+  echo "[dry-run] Would push to origin/$BRANCH"
+  if [[ -n "$SUFFIX" ]]; then
+    echo "[dry-run] Would trigger GitHub Packages publish for $VERSION-$SUFFIX"
+  else
+    echo "[dry-run] Would trigger GitHub Packages publish for $VERSION"
   fi
   exit 0
 fi
