@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
@@ -39,10 +39,10 @@ namespace WalkingTec.Mvvm.Core
         /// 记录 Controller 中的表单数据
         /// </summary>
         [JsonIgnore]
-        public Dictionary<string, object> FC { get; set; }
+        public Dictionary<string, object> FC { get; set; } = new Dictionary<string, object>();
 
         [JsonIgnore]
-        public IModelStateService MSD { get => Wtm?.MSD; }
+        public IModelStateService? MSD { get => Wtm?.MSD; }
 
         public bool? IsPlainText { get; set; }
         public bool? IsEnumToString { get; set; }
@@ -54,18 +54,19 @@ namespace WalkingTec.Mvvm.Core
         {
             get
             {
-                var name = GetType().AssemblyQualifiedName;
-                name = name.Substring(0, name.LastIndexOf(", Version="));
+                var name = GetType().AssemblyQualifiedName
+                    ?? throw new InvalidOperationException("Unable to resolve searcher type name.");
+                name = name.Substring(0, name.LastIndexOf(", Version=", StringComparison.Ordinal));
                 return name;
             }
         }
 
-        private IDataContext _dc;
+        private IDataContext? _dc;
         /// <summary>
         /// 数据库环境
         /// </summary>
         [JsonIgnore]
-        public IDataContext DC
+        public IDataContext? DC
         {
             get
             {
@@ -88,21 +89,21 @@ namespace WalkingTec.Mvvm.Core
         /// Session信息
         /// </summary>
         [JsonIgnore]
-        public ISessionService Session { get => Wtm?.Session; }
+        public ISessionService? Session { get => Wtm?.Session; }
 
         /// <summary>
         /// 当前登录人信息
         /// </summary>
         [JsonIgnore]
-        public LoginUserInfo LoginUserInfo { get => Wtm?.LoginUserInfo; }
+        public LoginUserInfo? LoginUserInfo { get => Wtm?.LoginUserInfo; }
 
         [JsonIgnore]
-        public string ViewDivId { get; set; }
+        public string? ViewDivId { get; set; }
         #region 未使用
         /// <summary>
         /// 排序信息
         /// </summary>
-        public SortInfo SortInfo { get; set; }
+        public SortInfo? SortInfo { get; set; }
 
         /// <summary>
         /// 前台搜索框是否展开
@@ -125,7 +126,7 @@ namespace WalkingTec.Mvvm.Core
         }
 
         [JsonIgnore]
-        public WTMContext Wtm { get; set; }
+        public WTMContext? Wtm { get; set; }
         #endregion
 
         #endregion
@@ -135,11 +136,11 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// InitVM 完成后触发的事件
         /// </summary>
-        public event Action<ISearcher> OnAfterInit;
+        public event Action<ISearcher>? OnAfterInit;
         /// <summary>
         /// ReInitVM 完成后触发的事件
         /// </summary>
-        public event Action<ISearcher> OnAfterReInit;
+        public event Action<ISearcher>? OnAfterReInit;
 
         #endregion
 
