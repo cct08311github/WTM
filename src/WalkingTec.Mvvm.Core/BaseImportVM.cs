@@ -576,7 +576,7 @@ namespace WalkingTec.Mvvm.Core
             if (vmtype != null)
             {
                 vm = vmtype.GetConstructor(System.Type.EmptyTypes)?.Invoke(null) as IBaseCRUDVM<P>;
-                vm!.CopyContext(this);
+                vm?.CopyContext(this);
                 dinfo = (vm as dynamic)?.SetDuplicatedCheck();
             }
             var cinfo = this.SetDuplicatedCheck();
@@ -855,39 +855,40 @@ namespace WalkingTec.Mvvm.Core
                         string errorMessage = "Error";
                         if (!string.IsNullOrEmpty(rule.ErrorMessage))
                         {
+                            var loc = Wtm?.Localizer;
                             if (rule is RangeAttribute range)
                             {
                                 if (range.Minimum != null && range.Maximum != null)
                                 {
-                                    errorMessage = Wtm!.Localizer[rule.ErrorMessage, displayName, range.Minimum, range.Maximum];
+                                    errorMessage = loc != null ? (string)loc[rule.ErrorMessage, displayName, range.Minimum, range.Maximum] : rule.ErrorMessage;
                                 }
                                 else if (range.Minimum != null)
                                 {
-                                    errorMessage = Wtm!.Localizer[rule.ErrorMessage, displayName, range.Minimum];
+                                    errorMessage = loc != null ? (string)loc[rule.ErrorMessage, displayName, range.Minimum] : rule.ErrorMessage;
                                 }
                                 else if (range.Maximum != null)
                                 {
-                                    errorMessage = Wtm!.Localizer[rule.ErrorMessage, displayName, range.Maximum];
+                                    errorMessage = loc != null ? (string)loc[rule.ErrorMessage, displayName, range.Maximum] : rule.ErrorMessage;
                                 }
                             }
                             else if (rule is StringLengthAttribute sl)
                             {
                                 if (sl.MaximumLength > 0 && sl.MinimumLength > 0)
                                 {
-                                    errorMessage = Wtm!.Localizer[rule.ErrorMessage, displayName, sl.MinimumLength, sl.MaximumLength];
+                                    errorMessage = loc != null ? (string)loc[rule.ErrorMessage, displayName, sl.MinimumLength, sl.MaximumLength] : rule.ErrorMessage;
                                 }
                                 else if (sl.MinimumLength > 0)
                                 {
-                                    errorMessage = Wtm!.Localizer[rule.ErrorMessage, displayName, sl.MinimumLength];
+                                    errorMessage = loc != null ? (string)loc[rule.ErrorMessage, displayName, sl.MinimumLength] : rule.ErrorMessage;
                                 }
                                 else if (sl.MaximumLength > 0)
                                 {
-                                    errorMessage = Wtm!.Localizer[rule.ErrorMessage, displayName, sl.MaximumLength];
+                                    errorMessage = loc != null ? (string)loc[rule.ErrorMessage, displayName, sl.MaximumLength] : rule.ErrorMessage;
                                 }
                             }
                             else
                             {
-                                errorMessage = Wtm!.Localizer[rule.ErrorMessage, displayName];
+                                errorMessage = loc != null ? (string)loc[rule.ErrorMessage, displayName] : rule.ErrorMessage;
                             }
                         }
                         results.Add(new ValidationResult(errorMessage, new string[] { memberName }));
@@ -1022,7 +1023,8 @@ namespace WalkingTec.Mvvm.Core
                 }
 
                 //如果是SqlServer数据库，而且没有主子表功能，进行Bulk插入
-                if (ConfigInfo!.Connections.Where(x => x.Key == (CurrentCS ?? "default")).FirstOrDefault()!.DbType == DBTypeEnum.SqlServer && !HasSubTable && UseBulkSave == true)
+                var connInfo = ConfigInfo?.Connections.Where(x => x.Key == (CurrentCS ?? "default")).FirstOrDefault();
+                if (connInfo != null && connInfo.DbType == DBTypeEnum.SqlServer && !HasSubTable && UseBulkSave == true)
                 {
                     //ListAdd.Add(item);
                 }

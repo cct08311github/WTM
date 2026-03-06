@@ -540,7 +540,7 @@ namespace WalkingTec.Mvvm.Core
             }
             catch
             {
-                MSD!.AddModelError(" ", Localizer!["Sys.EditFailed"]);
+                MSD?.AddModelError(" ", Localizer?["Sys.EditFailed"] ?? "Edit failed");
             }
             //删除不需要的附件
             if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm?.ServiceProvider != null)
@@ -973,7 +973,7 @@ namespace WalkingTec.Mvvm.Core
                 }
                 catch (DbUpdateException)
                 {
-                    MSD!.AddModelError("", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DeleteFailed"] ?? "" : "");
+                    MSD?.AddModelError("", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DeleteFailed"] ?? "" : "");
                 }
             }
             //如果是普通的TopBasePoco，则进行物理删除
@@ -1058,7 +1058,7 @@ namespace WalkingTec.Mvvm.Core
             }
             catch (Exception)
             {
-                MSD!.AddModelError("", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DeleteFailed"] ?? "" : "");
+                MSD?.AddModelError("", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DeleteFailed"] ?? "" : "");
             }
         }
 
@@ -1130,7 +1130,7 @@ namespace WalkingTec.Mvvm.Core
             }
             catch (Exception)
             {
-                MSD!.AddModelError("", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DeleteFailed"] ?? "" : "");
+                MSD?.AddModelError("", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DeleteFailed"] ?? "" : "");
             }
         }
 
@@ -1427,20 +1427,25 @@ namespace WalkingTec.Mvvm.Core
             {
                 return null;
             }
+            var loginUser = Wtm?.LoginUserInfo;
+            if (loginUser == null)
+            {
+                return null;
+            }
 
             try
             {
                 var lp = Wtm!.ServiceProvider!.GetRequiredService<IWorkflowLaunchpad>();
                 //不直接使用Wtm.LoginUserInfo，否则elsa会把所有信息序列化保存到WorkflowInstances表中
                 LoginUserInfo li = new LoginUserInfo();
-                li.ITCode = Wtm!.LoginUserInfo!.ITCode;
-                li.Name = Wtm!.LoginUserInfo!.Name;
-                li.UserId = Wtm!.LoginUserInfo!.UserId;
-                li.PhotoId = Wtm!.LoginUserInfo!.PhotoId;
-                li.Groups = Wtm!.LoginUserInfo!.Groups;
-                li.Roles = Wtm!.LoginUserInfo!.Roles;
-                li.TenantCode = Wtm!.LoginUserInfo!.CurrentTenant;
-                var query = new WorkflowsQuery(nameof(WtmApproveActivity), new WtmApproveBookmark(Wtm!.LoginUserInfo!.ITCode, string.IsNullOrEmpty(flowName)?typeof(TModel).FullName!:flowName, tag, Entity.GetID().ToString()), null, null, null, Wtm!.LoginUserInfo!.CurrentTenant);
+                li.ITCode = loginUser.ITCode;
+                li.Name = loginUser.Name;
+                li.UserId = loginUser.UserId;
+                li.PhotoId = loginUser.PhotoId;
+                li.Groups = loginUser.Groups;
+                li.Roles = loginUser.Roles;
+                li.TenantCode = loginUser.CurrentTenant;
+                var query = new WorkflowsQuery(nameof(WtmApproveActivity), new WtmApproveBookmark(loginUser.ITCode, string.IsNullOrEmpty(flowName)?typeof(TModel).FullName!:flowName, tag, Entity.GetID().ToString()), null, null, null, loginUser.CurrentTenant);
                 if (query != null)
                 {
                     var flows = await lp.FindWorkflowsAsync(query);
@@ -1453,11 +1458,11 @@ namespace WalkingTec.Mvvm.Core
                         }
                     }
                 }
-                if(Wtm!.LoginUserInfo!.Roles != null)
+                if(loginUser.Roles != null)
                 {
-                    foreach (var role in Wtm!.LoginUserInfo!.Roles)
+                    foreach (var role in loginUser.Roles)
                     {
-                        query = new WorkflowsQuery(nameof(WtmApproveActivity), new WtmApproveBookmark(role.ID.ToString(), string.IsNullOrEmpty(flowName) ? typeof(TModel).FullName! : flowName, tag, Entity.GetID().ToString()), null, null, null, Wtm!.LoginUserInfo!.CurrentTenant);
+                        query = new WorkflowsQuery(nameof(WtmApproveActivity), new WtmApproveBookmark(role.ID.ToString(), string.IsNullOrEmpty(flowName) ? typeof(TModel).FullName! : flowName, tag, Entity.GetID().ToString()), null, null, null, loginUser.CurrentTenant);
                         if (query != null)
                         {
                             var flows = await lp.FindWorkflowsAsync(query);
@@ -1473,11 +1478,11 @@ namespace WalkingTec.Mvvm.Core
 
                     }
                 }
-                if (Wtm!.LoginUserInfo!.Groups != null)
+                if (loginUser.Groups != null)
                 {
-                    foreach (var group in Wtm!.LoginUserInfo!.Groups)
+                    foreach (var group in loginUser.Groups)
                     {
-                        query = new WorkflowsQuery(nameof(WtmApproveActivity), new WtmApproveBookmark(group.ID.ToString(), string.IsNullOrEmpty(flowName) ? typeof(TModel).FullName! : flowName, tag, Entity.GetID().ToString()), null, null, null, Wtm!.LoginUserInfo!.CurrentTenant);
+                        query = new WorkflowsQuery(nameof(WtmApproveActivity), new WtmApproveBookmark(group.ID.ToString(), string.IsNullOrEmpty(flowName) ? typeof(TModel).FullName! : flowName, tag, Entity.GetID().ToString()), null, null, null, loginUser.CurrentTenant);
                         if (query != null)
                         {
 

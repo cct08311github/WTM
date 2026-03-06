@@ -113,7 +113,12 @@ namespace WalkingTec.Mvvm.Core
                 }
             }
 
-            var moregroups = this.Groups!.ToList();
+            if (this.Groups == null || this.Roles == null)
+            {
+                return;
+            }
+
+            var moregroups = this.Groups.ToList();
             for (int i = 0; i < moregroups.Count; i++)
             {
                 var group = moregroups[i];
@@ -127,7 +132,7 @@ namespace WalkingTec.Mvvm.Core
                 }
             }
             var gc = moregroups.Select(x => x.GroupCode).ToList();
-            var rc = this.Roles!.Select(x=>x.RoleCode).ToList();
+            var rc = this.Roles.Select(x=>x.RoleCode).ToList();
 
             //查找登录用户的页面权限
             var funcPrivileges = await DC.Set<FunctionPrivilege>().AsNoTracking()
@@ -235,7 +240,7 @@ namespace WalkingTec.Mvvm.Core
 
             LocalizeMenu(ms);
 
-            urls.AddRange(context.GlobaInfo.AllMenus.Where(x => allowedids!.Contains(x.ID) && x.Url != null).Select(x => x.Url!).Distinct());
+            urls.AddRange(context.GlobaInfo.AllMenus.Where(x => allowedids != null && allowedids.Contains(x.ID) && x.Url != null).Select(x => x.Url!).Distinct());
             urls.AddRange(context.GlobaInfo.AllModule.Where(x => x.IsApi == true).SelectMany(x => x.Actions).Where(x => (x.IgnorePrivillege == true || x.Module.IgnorePrivillege == true) && x.Url != null).Select(x => x.Url!));
 
             if (this.Attributes == null)
