@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -58,11 +58,16 @@ namespace WalkingTec.Mvvm.Core.Analysis
         {
             var elementType = baseQuery.ElementType;
             var method = typeof(AnalysisQueryEngine)
-                .GetMethod(nameof(Execute))
-                .MakeGenericMethod(elementType);
+                .GetMethod(nameof(Execute));
+            if (method is null)
+                throw new InvalidOperationException("Execute method not found.");
+            method = method.MakeGenericMethod(elementType);
             try
             {
-                return (AnalysisQueryResponse)method.Invoke(this, new object[] { baseQuery, req, whitelist });
+                var result = method.Invoke(this, new object[] { baseQuery, req, whitelist }) as AnalysisQueryResponse;
+                if (result is null)
+                    throw new InvalidOperationException("ExecuteDynamic did not return a valid AnalysisQueryResponse.");
+                return result;
             }
             catch (System.Reflection.TargetInvocationException ex)
             {
@@ -129,8 +134,11 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         if (meta.ClrType != typeof(string))
                             throw new InvalidOperationException(
                                 $"Contains 只適用於字串欄位，'{filter.Field}' 的型別為 {meta.ClrType.Name}。");
+                        var containsMethod = typeof(string).GetMethod(nameof(string.Contains), new[] { typeof(string) });
+                        if (containsMethod is null)
+                            throw new InvalidOperationException("string.Contains(string) method not found.");
                         body = Expression.Call(prop,
-                            typeof(string).GetMethod(nameof(string.Contains), new[] { typeof(string) }),
+                            containsMethod,
                             constant);
                         break;
                     default:
@@ -142,7 +150,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             return query;
         }
 
-        private static object ConvertValue(string value, Type targetType)
+        private static object? ConvertValue(string value, Type targetType)
         {
             var underlying = Nullable.GetUnderlyingType(targetType) ?? targetType;
             try
@@ -155,7 +163,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             }
         }
 
-        private static List<Dictionary<string, object>> ExecuteGroupBy<TModel>(
+        private static List<Dictionary<string, object?>> ExecuteGroupBy<TModel>(
             IQueryable<TModel> query,
             AnalysisQueryRequest req,
             Dictionary<string, AnalysisFieldMeta> wl)
@@ -169,7 +177,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 .Take(MaxRows + 1)
                 .Select(g =>
                 {
-                    var dict = new Dictionary<string, object>();
+                    var dict = new Dictionary<string, object?>();
                     var keyParts = g.Key.Split('\0');
                     for (int i = 0; i < req.Dimensions.Count; i++)
                         dict[req.Dimensions[i]] = keyParts[i];
@@ -177,6 +185,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     foreach (var m in req.Measures)
                     {
                         var propInfo = typeof(TModel).GetProperty(m.Field);
+                        if (propInfo is null)
+                            throw new InvalidOperationException($"Property '{m.Field}' not found on {typeof(TModel).Name}.");
                         // 過濾 null 值，避免 nullable 型別的 Convert.ToDecimal 例外（I-10）
                         var values = g
                             .Select(row => propInfo.GetValue(row))
@@ -202,7 +212,12 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
         private static string BuildGroupKey<TModel>(TModel row, List<string> dimensions)
             => string.Join('\0', dimensions.Select(d =>
-                   typeof(TModel).GetProperty(d).GetValue(row)?.ToString() ?? ""));
+               {
+                   var propInfo = typeof(TModel).GetProperty(d);
+                   if (propInfo is null)
+                       throw new InvalidOperationException($"Property '{d}' not found on {typeof(TModel).Name}.");
+                   return propInfo.GetValue(row)?.ToString() ?? string.Empty;
+               }));
 
         private static string ComputeHash(AnalysisQueryRequest req)
         {
