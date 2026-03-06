@@ -372,6 +372,7 @@ namespace WalkingTec.Mvvm.Core
             }
         }
         public bool IsDebug { get; set; }
+        public string CurrentUserCode { get; set; }
         /// <summary>
         /// CSName
         /// </summary>
@@ -806,6 +807,58 @@ namespace WalkingTec.Mvvm.Core
             return rv;
         }
 
+        private void ApplyAuditFields()
+        {
+            if (ChangeTracker == null) return;
+
+            foreach (var entry in ChangeTracker.Entries())
+            {
+                if (entry.Entity is IBasePoco entity)
+                {
+                    switch (entry.State)
+                    {
+                        case EntityState.Added:
+                            if (entity.CreateTime == null)
+                                entity.CreateTime = DateTime.Now;
+                            if (string.IsNullOrEmpty(entity.CreateBy))
+                                entity.CreateBy = CurrentUserCode;
+                            break;
+
+                        case EntityState.Modified:
+                            if (entity.UpdateTime == null)
+                                entity.UpdateTime = DateTime.Now;
+                            if (string.IsNullOrEmpty(entity.UpdateBy))
+                                entity.UpdateBy = CurrentUserCode;
+                            break;
+                    }
+                }
+            }
+        }
+
+        public override int SaveChanges()
+        {
+            ApplyAuditFields();
+            return base.SaveChanges();
+        }
+
+        public override int SaveChanges(bool acceptAllChangesOnSuccess)
+        {
+            ApplyAuditFields();
+            return base.SaveChanges(acceptAllChangesOnSuccess);
+        }
+
+        public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+        {
+            ApplyAuditFields();
+            return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+        }
+
+        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            ApplyAuditFields();
+            return base.SaveChangesAsync(cancellationToken);
+        }
+
         public void EnsureCreate()
         {
             this.Database.EnsureCreated();
@@ -826,6 +879,7 @@ namespace WalkingTec.Mvvm.Core
         public string CSName { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
         public DBTypeEnum DBType { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
         public bool IsDebug { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+        public string CurrentUserCode { get; set; }
 
         public void AddEntity<T>(T entity) where T : TopBasePoco
         {
