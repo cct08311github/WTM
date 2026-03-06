@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 
 using System;
 using System.Collections.Generic;
@@ -32,7 +32,7 @@ namespace WalkingTec.Mvvm.Core
         #region Property
 
         [JsonIgnore]
-        public WTMContext Wtm { get; set; }
+        public WTMContext? Wtm { get; set; }
 
         private Guid _uniqueId;
         /// <summary>
@@ -56,9 +56,9 @@ namespace WalkingTec.Mvvm.Core
         /// 前台传递过来的弹出窗口ID，多层弹出窗口用逗号分隔
         /// </summary>
         [JsonIgnore]
-        public string WindowIds { get => Wtm?.WindowIds; }
+        public string? WindowIds { get => Wtm?.WindowIds; }
 
-        private string _viewdivid;
+        private string? _viewdivid;
         /// <summary>
         /// PartialView中主Div的Id
         /// </summary>
@@ -77,12 +77,12 @@ namespace WalkingTec.Mvvm.Core
         }
 
 
-        private IDataContext _dc;
+        private IDataContext? _dc;
         /// <summary>
         /// 数据库环境
         /// </summary>
         [JsonIgnore]
-        public IDataContext DC
+        public IDataContext? DC
         {
             get
             {
@@ -110,7 +110,7 @@ namespace WalkingTec.Mvvm.Core
             get
             {
                 var name = GetType().AssemblyQualifiedName;
-                name = name.Substring(0, name.LastIndexOf(", Version="));
+                name = name!.Substring(0, name.LastIndexOf(", Version="));
                 return name;
             }
         }
@@ -119,7 +119,7 @@ namespace WalkingTec.Mvvm.Core
         /// 获取VM所在Dll
         /// </summary>
         [JsonIgnore]
-        public string CreatorAssembly
+        public string? CreatorAssembly
         {
             get; set;
         }
@@ -128,7 +128,7 @@ namespace WalkingTec.Mvvm.Core
         /// 获取当前使用的连接字符串
         /// </summary>
         [JsonIgnore]
-        public string CurrentCS { get => Wtm?.CurrentCS; }
+        public string? CurrentCS { get => Wtm?.CurrentCS; }
 
         /// <summary>
         /// 记录Controller中传递过来的表单数据
@@ -140,62 +140,62 @@ namespace WalkingTec.Mvvm.Core
         /// 获取配置文件的信息
         /// </summary>
         [JsonIgnore]
-        public Configs ConfigInfo { get => Wtm?.ConfigInfo; }
+        public Configs? ConfigInfo { get => Wtm?.ConfigInfo; }
 
 
         [JsonIgnore]
-        public IUIService UIService { get => Wtm?.UIService; }
+        public IUIService? UIService { get => Wtm?.UIService; }
 
         /// <summary>
         /// 当前弹出层ID
         /// </summary>
         [JsonIgnore]
-        public string CurrentWindowId { get => Wtm?.CurrentWindowId; }
+        public string? CurrentWindowId { get => Wtm?.CurrentWindowId; }
 
         /// <summary>
         /// 父级弹出层ID
         /// </summary>
         [JsonIgnore]
-        public string ParentWindowId { get => Wtm?.ParentWindowId; }
+        public string? ParentWindowId { get => Wtm?.ParentWindowId; }
 
         [JsonIgnore]
-        public IDistributedCache Cache { get => Wtm?.Cache; }
+        public IDistributedCache? Cache { get => Wtm?.Cache; }
 
         /// <summary>
         /// 当前登录人信息
         /// </summary>
         [JsonIgnore]
-        public LoginUserInfo LoginUserInfo { get => Wtm?.LoginUserInfo; }
+        public LoginUserInfo? LoginUserInfo { get => Wtm?.LoginUserInfo; }
 
         /// <summary>
         /// 当前Url
         /// </summary>
         [JsonIgnore]
-        public string CurrentUrl { get => Wtm?.BaseUrl; }
+        public string? CurrentUrl { get => Wtm?.BaseUrl; }
 
         /// <summary>
         /// 记录原始提交页面
         /// </summary>
         [JsonIgnore]
-        public string FromView { get; set; }
+        public string? FromView { get; set; }
 
         /// <summary>
         /// 记录当前页面
         /// </summary>
         [JsonIgnore]
-        public string CurrentView { get; set; }
+        public string? CurrentView { get; set; }
 
         /// <summary>
         /// Session信息
         /// </summary>
         [JsonIgnore]
-        public ISessionService Session { get => Wtm?.Session; }
+        public ISessionService? Session { get => Wtm?.Session; }
 
         /// <summary>
         /// Controller传递过来的ModelState信息
         /// </summary>
         [JsonIgnore]
-        public IModelStateService MSD { get => Wtm?.MSD; }
+        public IModelStateService? MSD { get => Wtm?.MSD; }
 
         /// <summary>
         /// 用于保存删除的附件ID
@@ -203,18 +203,18 @@ namespace WalkingTec.Mvvm.Core
         public List<string> DeletedFileIds { get; set; } = new List<string>();
 
         [JsonIgnore]
-        public string ControllerName { get; set; }
+        public string? ControllerName { get; set; }
 
         [JsonIgnore]
-        public IStringLocalizer Localizer { get => Wtm?.Localizer; }
+        public IStringLocalizer? Localizer { get => Wtm?.Localizer; }
 
         [JsonIgnore]
-        public string PropertyNameInParent { get; set; }
+        public string? PropertyNameInParent { get; set; }
         [JsonIgnore]
-        public BaseVM ParentVM { get; set; }
+        public BaseVM? ParentVM { get; set; }
         [Display(Name = "_Admin.Remark")]
-        public string Remark { get; set; }
-        public string ActionName { get; set; }
+        public string? Remark { get; set; }
+        public string? ActionName { get; set; }
         #endregion
 
         #region Event
@@ -222,11 +222,11 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// InitVM完成后触发的事件
         /// </summary>
-        public event Action<IBaseVM> OnAfterInit;
+        public event Action<IBaseVM>? OnAfterInit;
         /// <summary>
         /// ReInitVM完成后触发的事件
         /// </summary>
-        public event Action<IBaseVM> OnAfterReInit;
+        public event Action<IBaseVM>? OnAfterReInit;
 
         #endregion
 
@@ -260,8 +260,8 @@ namespace WalkingTec.Mvvm.Core
                 if (subins != null)
                 {
                     subins.DoInit();
+                    InitSubVM(subins);
                 }
-                InitSubVM(subins);
             }
         }
 
@@ -274,8 +274,8 @@ namespace WalkingTec.Mvvm.Core
                 if (subins != null)
                 {
                     subins.DoReInit();
+                    ReInitSubVM(subins);
                 }
-                ReInitSubVM(subins);
             }
         }
         /// <summary>
