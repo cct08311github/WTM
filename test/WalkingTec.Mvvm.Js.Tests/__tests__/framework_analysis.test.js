@@ -33,6 +33,7 @@ jest.resetModules();
 require('../../../src/WalkingTec.Mvvm.Mvc/framework_analysis.js');
 // Capture the require()'d version before vm.Script tests overwrite global.wtmAnalysis
 const waReq = global.wtmAnalysis;
+let consoleErrorSpy;
 
 beforeAll(() => {
     if (global.window && global.window.HTMLAnchorElement) {
@@ -46,6 +47,15 @@ afterAll(() => {
         global.window.HTMLAnchorElement.prototype.click.mockRestore) {
         global.window.HTMLAnchorElement.prototype.click.mockRestore();
     }
+});
+
+beforeEach(() => {
+    consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+});
+
+afterEach(() => {
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
+    consoleErrorSpy.mockRestore();
 });
 
 // ─── 載入 framework_analysis.js ──────────────────────────────────────────────
