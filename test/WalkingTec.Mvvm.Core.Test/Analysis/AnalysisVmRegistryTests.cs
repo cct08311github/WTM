@@ -62,5 +62,13 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.ThrowsException<InvalidOperationException>(
                 () => registry.Resolve("Some.Unknown.Type"));
         }
+
+        [TestMethod]
+        public void Throws_for_empty_type_name()
+        {
+            var registry = BuildRegistry();
+            Assert.ThrowsException<InvalidOperationException>(
+                () => registry.Resolve(string.Empty));
+        }
     }
 }

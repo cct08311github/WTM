@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -30,7 +30,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 catch (ReflectionTypeLoadException ex)
                 {
                     // 部分型別載入失敗（常見於 plugin 或依賴版本衝突），取回已成功載入的型別繼續掃描
-                    types = ex.Types.Where(t => t != null).ToArray();
+                    types = ex.Types.Where(t => t != null).Cast<Type>().ToArray();
                 }
 
                 foreach (var type in types)
@@ -39,7 +39,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         && IsBasePagedListVm(type)
                         && type.GetCustomAttribute<EnableAnalysisAttribute>() != null)
                     {
-                        _whitelist[type.FullName] = type;
+                        if (!string.IsNullOrEmpty(type.FullName))
+                        {
+                            _whitelist[type.FullName] = type;
+                        }
                     }
                 }
             }
@@ -50,6 +53,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// </summary>
         public Type Resolve(string fullName)
         {
+            if (string.IsNullOrWhiteSpace(fullName))
+                throw new InvalidOperationException("VM type name is required.");
             if (_whitelist.TryGetValue(fullName, out var t))
                 return t;
             throw new InvalidOperationException($"VM type not registered for analysis: {fullName}");
