@@ -10,12 +10,12 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         private class SampleModel
         {
             [Dimension(DisplayName = "地區")]
-            public string Region { get; set; }
+            public string Region { get; set; } = string.Empty;
 
             [Measure(AllowedFuncs = AggregateFunc.Sum | AggregateFunc.Count, DisplayName = "金額")]
             public decimal Amount { get; set; }
 
-            public string NotAnnotated { get; set; }
+            public string NotAnnotated { get; set; } = string.Empty;
         }
 
         [TestMethod]

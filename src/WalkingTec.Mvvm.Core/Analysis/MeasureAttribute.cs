@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 
 namespace WalkingTec.Mvvm.Core.Analysis
@@ -13,6 +13,6 @@ namespace WalkingTec.Mvvm.Core.Analysis
         public AggregateFunc AllowedFuncs { get; set; }
 
         /// <summary>前端顯示名稱（可為 null，預設使用屬性名）</summary>
-        public string DisplayName { get; set; }
+        public string? DisplayName { get; set; }
     }
 }
