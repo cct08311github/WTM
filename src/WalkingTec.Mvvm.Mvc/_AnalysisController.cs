@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -121,7 +121,12 @@ namespace WalkingTec.Mvvm.Mvc
             // Activator.CreateInstance 在 VM 無 public parameterless constructor 時拋 MissingMethodException（I-7）
             try
             {
-                var vm = (BaseVM)Activator.CreateInstance(vmType);
+                var vm = Activator.CreateInstance(vmType) as BaseVM;
+                if (vm is null)
+                {
+                    throw new InvalidOperationException(
+                        $"VM 型別 '{vmType.FullName}' 必須繼承 BaseVM 才能用於 Analysis Mode。");
+                }
                 vm.Wtm = Wtm;
                 return vm;
             }
@@ -132,7 +137,7 @@ namespace WalkingTec.Mvvm.Mvc
             }
         }
 
-        private BaseVM CreateAndBindVm(Type vmType, string searcherFormData)
+        private BaseVM CreateAndBindVm(Type vmType, string? searcherFormData)
         {
             var vm = CreateAnalysisVm(vmType);
 
@@ -174,7 +179,13 @@ namespace WalkingTec.Mvvm.Mvc
                     $"VM 型別 '{vmType.FullName}' 找不到 GetAnalysisFields() 方法。");
             try
             {
-                return (IEnumerable<AnalysisFieldMeta>)method.Invoke(vm, null);
+                var result = method.Invoke(vm, null) as IEnumerable<AnalysisFieldMeta>;
+                if (result is null)
+                {
+                    throw new InvalidOperationException(
+                        $"VM 型別 '{vmType.FullName}' 的 GetAnalysisFields() 未回傳欄位集合。");
+                }
+                return result;
             }
             catch (System.Reflection.TargetInvocationException ex)
             {
@@ -182,7 +193,7 @@ namespace WalkingTec.Mvvm.Mvc
             }
         }
 
-        private static System.Linq.IQueryable InvokeGetSearchQuery(BaseVM vm, Type vmType)
+        private static System.Linq.IQueryable? InvokeGetSearchQuery(BaseVM vm, Type vmType)
         {
             // 明確指定無參數多載，避免 AmbiguousMatchException（C-4）
             var method = vmType.GetMethod(
