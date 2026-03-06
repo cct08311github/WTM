@@ -13,6 +13,8 @@
     <PackageReference Include="Moq" Version="4.20.70" />
     <PackageReference Include="MSTest.TestAdapter" Version="3.2.2" />
     <PackageReference Include="MSTest.TestFramework" Version="3.2.2" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="8.0.22" />
+    <PackageReference Include="Serilog.Sinks.InMemory" Version="0.11.0" />
   </ItemGroup>
 
   <ItemGroup>
