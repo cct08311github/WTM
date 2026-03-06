@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using Elsa.Models;
 using Elsa.Persistence.Specifications;
 using Elsa.Persistence;
@@ -65,10 +65,10 @@ namespace WalkingTec.Mvvm.Core
         void DoDelete();
         Task DoDeleteAsync();
 
-        Task<RunWorkflowResult> StartWorkflowAsync(string flowName=null);
-        Task<RunWorkflowResult> ContinueWorkflowAsync(string actionName, string remark, string flowName=null, string tag = null);
-        Task<List<ApproveTimeLine>> GetWorkflowTimeLineAsync(string flowName = null);
-        Task<WorkflowInstance> GetWorkflowInstanceAsync(string flowName = null);
+        Task<RunWorkflowResult?> StartWorkflowAsync(string? flowName=null);
+        Task<RunWorkflowResult?> ContinueWorkflowAsync(string actionName, string remark, string? flowName=null, string? tag = null);
+        Task<List<ApproveTimeLine>> GetWorkflowTimeLineAsync(string? flowName = null);
+        Task<WorkflowInstance?> GetWorkflowInstanceAsync(string? flowName = null);
         /// <summary>
         /// 彻底删除，对PersistPoco进行物理删除
         /// </summary>
@@ -87,7 +87,7 @@ namespace WalkingTec.Mvvm.Core
         bool ByPassBaseValidation { get; set; }
 
         void Validate();
-        IModelStateService MSD { get; }
+        IModelStateService? MSD { get; }
     }
 
     /// <summary>
@@ -111,7 +111,7 @@ namespace WalkingTec.Mvvm.Core
         public bool ByPassBaseValidation { get; set; }
 
         //保存读取时Include的内容
-        private List<Expression<Func<TModel, object>>> _toInclude { get; set; }
+        private List<Expression<Func<TModel, object>>>? _toInclude { get; set; }
 
         /// <summary>
         /// 构造函数
@@ -120,7 +120,7 @@ namespace WalkingTec.Mvvm.Core
         {
             //初始化Entity
             var ctor = typeof(TModel).GetConstructor(Type.EmptyTypes);
-            Entity = ctor.Invoke(null) as TModel;
+            Entity = (TModel)ctor!.Invoke(null)!;
             //初始化VM中所有List<>的类
             //var lists = typeof(TModel).GetAllProperties().Where(x => x.PropertyType.IsGeneric(typeof(List<>)));
             //foreach (var li in lists)
@@ -133,13 +133,13 @@ namespace WalkingTec.Mvvm.Core
 
         public IQueryable<TModel> GetBaseQuery()
         {
-            return DC.Set<TModel>();
+            return DC!.Set<TModel>();
         }
         /// <summary>
         /// 设定添加和修改时对于重复数据的判断，子类进行相关操作时应重载这个函数
         /// </summary>
         /// <returns>唯一性属性</returns>
-        public virtual DuplicatedInfo<TModel> SetDuplicatedCheck()
+        public virtual DuplicatedInfo<TModel>? SetDuplicatedCheck()
         {
             return null;
         }
@@ -169,7 +169,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="entity">要设定的TopBasePoco</param>
         public void SetEntity(object entity)
         {
-            this.Entity = entity as TModel;
+            this.Entity = (entity as TModel)!;
         }
 
         /// <summary>
@@ -179,10 +179,10 @@ namespace WalkingTec.Mvvm.Core
         /// <returns>Entity</returns>
         protected virtual TModel GetById(object Id)
         {
-            TModel rv = null;
+            TModel? rv = null;
             var ModelType = typeof(TModel);
             //建立基础查询
-            var query = DC.Set<TModel>().AsQueryable();
+            var query = DC!.Set<TModel>().AsQueryable();
             List<IncludeInfo> includeInfo = new List<IncludeInfo>();
             //循环添加其他设定的Include
             if (_toInclude != null)
@@ -195,7 +195,7 @@ namespace WalkingTec.Mvvm.Core
                     {
                         if (current.NodeType == ExpressionType.MemberAccess)
                         {
-                            MemberExpression me = current as MemberExpression;
+                            MemberExpression me = (current as MemberExpression)!;
                             Type mt = me.Member.GetMemberType();
                             Type testTypt = mt;
                             if (testTypt.IsList())
@@ -217,16 +217,16 @@ namespace WalkingTec.Mvvm.Core
                                 }
                                 exps.Insert(0, newinfo);
                             }
-                            current = me.Expression;
+                            current = me.Expression!;
                         }
                         else if (current.NodeType == ExpressionType.Call)
                         {
-                            MethodCallExpression mc = current as MethodCallExpression;
-                            current = mc.Object;
+                            MethodCallExpression mc = (current as MethodCallExpression)!;
+                            current = mc.Object!;
                         }
                         else if (current.NodeType == ExpressionType.Convert)
                         {
-                            UnaryExpression ue = current as UnaryExpression;
+                            UnaryExpression ue = (current as UnaryExpression)!;
                             current = ue.Operand;
                         }
                     }
@@ -316,7 +316,7 @@ namespace WalkingTec.Mvvm.Core
                         var soft = softincludes.Where(x => x.mi.Name == pro.Name).FirstOrDefault();
                         if (soft != null)
                         {
-                            var right = soft.SoftSelect(pe, DC);
+                            var right = soft.SoftSelect(pe, DC!);
                             if (right != null)
                             {
                                 MemberBinding bind = Expression.Bind(pro, right);
@@ -340,12 +340,12 @@ namespace WalkingTec.Mvvm.Core
             var fa = pros.Where(x => x.PropertyType == typeof(FileAttachment)).ToList();
             foreach (var f in fa)
             {
-                var fname = DC.GetFKName2<TModel>(f.Name);
-                var fid = typeof(TModel).GetSingleProperty(fname).GetValue(rv);
-                if (fid != null && Wtm.ServiceProvider != null)
+                var fname = DC!.GetFKName2<TModel>(f.Name);
+                var fid = typeof(TModel).GetSingleProperty(fname)?.GetValue(rv);
+                if (fid != null && Wtm?.ServiceProvider != null)
                 {
                     var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
-                    var file = fp.GetFile(fid?.ToString(), false, DC);
+                    var file = fp.GetFile(fid?.ToString(), false, DC!);
                     rv.SetPropertyValue(f.Name, file);
                 }
             }
@@ -359,32 +359,32 @@ namespace WalkingTec.Mvvm.Core
         {
             DoAddPrepare();
             //删除不需要的附件
-            if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm.ServiceProvider != null)
+            if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm?.ServiceProvider != null)
             {
                 var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
 
                 foreach (var item in DeletedFileIds)
                 {
-                    fp.DeleteFile(item.ToString(), DC);
+                    fp.DeleteFile(item.ToString(), DC!);
                 }
             }
-            DC.SaveChanges();
+            DC!.SaveChanges();
         }
 
         public virtual async Task DoAddAsync()
         {
             DoAddPrepare();
             //删除不需要的附件
-            if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm.ServiceProvider != null)
+            if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm?.ServiceProvider != null)
             {
                 var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
 
                 foreach (var item in DeletedFileIds)
                 {
-                    fp.DeleteFile(item.ToString(), DC.ReCreate());
+                    fp.DeleteFile(item.ToString(), DC!.ReCreate());
                 }
             }
-            await DC.SaveChangesAsync();
+            await DC!.SaveChangesAsync();
         }
 
         private void DoAddPrepare()
@@ -398,7 +398,7 @@ namespace WalkingTec.Mvvm.Core
                     if (pro.PropertyType.GetTypeInfo().IsSubclassOf(typeof(TopBasePoco)))
                     {
                         pro.SetValue(Entity, null);
-                        string fkname = DC.GetFKName2<TModel>(pro.Name);
+                        string fkname = DC!.GetFKName2<TModel>(pro.Name);
                         var fkpro = pros.Where(x => x.Name == fkname).FirstOrDefault();
                         if (fkpro != null)
                         {
@@ -413,7 +413,7 @@ namespace WalkingTec.Mvvm.Core
             //自动设定添加日期和添加人
             if (typeof(IBasePoco).IsAssignableFrom(typeof(TModel)))
             {
-                IBasePoco ent = Entity as IBasePoco;
+                IBasePoco ent = (Entity as IBasePoco)!;
                 if (ent.CreateTime == null)
                 {
                     ent.CreateTime = DateTime.Now;
@@ -425,12 +425,12 @@ namespace WalkingTec.Mvvm.Core
             }
             if (typeof(ITenant).IsAssignableFrom(typeof(TModel)))
             {
-                ITenant ent = Entity as ITenant;
+                ITenant ent = (Entity as ITenant)!;
                 ent.TenantCode = LoginUserInfo?.CurrentTenant;
             }
             if (typeof(IPersistPoco).IsAssignableFrom(typeof(TModel)))
             {
-                (Entity as IPersistPoco).IsValid = true;
+                (Entity as IPersistPoco)!.IsValid = true;
             }
 
             #region 更新子表
@@ -446,16 +446,16 @@ namespace WalkingTec.Mvvm.Core
                     {
                         string softkey = "";
                         //界面传过来的子表数据
-                        IEnumerable<TopBasePoco> list = pro.GetValue(Entity) as IEnumerable<TopBasePoco>;
+                        IEnumerable<TopBasePoco>? list = pro.GetValue(Entity) as IEnumerable<TopBasePoco>;
                         if (list != null && list.Count() > 0)
                         {
-                            string fkname = DC.GetFKName<TModel>(pro.Name);
+                            string fkname = DC!.GetFKName<TModel>(pro.Name);
                             if (string.IsNullOrEmpty(fkname))
                             {
                                 if (pro.GetCustomAttribute<NotMappedAttribute>() != null)
                                 {
-                                    fkname = pro.GetCustomAttribute<SoftFKAttribute>()?.PropertyName;
-                                    softkey = typeof(TModel).GetCustomAttribute<SoftKeyAttribute>()?.PropertyName;
+                                    fkname = pro.GetCustomAttribute<SoftFKAttribute>()?.PropertyName ?? "";
+                                    softkey = typeof(TModel).GetCustomAttribute<SoftKeyAttribute>()?.PropertyName ?? "";
                                 }
                             }
                             var itemPros = ftype.GetAllProperties();
@@ -484,7 +484,7 @@ namespace WalkingTec.Mvvm.Core
                                 }
                                 if (string.IsNullOrEmpty(softkey) == false)
                                 {
-                                    DC.AddEntity(newitem);
+                                    DC!.AddEntity(newitem);
                                 }
                             }
                             //如果没有找到相应的外建字段，则可能是多对多的关系，或者做了特殊的设定，这种情况框架无法支持，直接退出本次循环
@@ -498,7 +498,7 @@ namespace WalkingTec.Mvvm.Core
                                 var subtype = newitem.GetType();
                                 if (typeof(IBasePoco).IsAssignableFrom(subtype))
                                 {
-                                    IBasePoco ent = newitem as IBasePoco;
+                                    IBasePoco ent = (newitem as IBasePoco)!;
                                     if (ent.CreateTime == null)
                                     {
                                         ent.CreateTime = DateTime.Now;
@@ -510,7 +510,7 @@ namespace WalkingTec.Mvvm.Core
                                 }
                                 if (typeof(ITenant).IsAssignableFrom(subtype))
                                 {
-                                    ITenant ent = newitem as ITenant;
+                                    ITenant ent = (newitem as ITenant)!;
                                     ent.TenantCode = LoginUserInfo?.CurrentTenant;
                                 }
                             }
@@ -522,7 +522,7 @@ namespace WalkingTec.Mvvm.Core
 
 
             //添加数据
-            DC.Set<TModel>().Add(Entity);
+            DC!.Set<TModel>().Add(Entity);
 
         }
 
@@ -536,20 +536,20 @@ namespace WalkingTec.Mvvm.Core
 
             try
             {
-                DC.SaveChanges();
+                DC!.SaveChanges();
             }
             catch
             {
-                MSD.AddModelError(" ", Localizer["Sys.EditFailed"]);
+                MSD!.AddModelError(" ", Localizer!["Sys.EditFailed"]);
             }
             //删除不需要的附件
-            if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm.ServiceProvider != null)
+            if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm?.ServiceProvider != null)
             {
                 var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
 
                 foreach (var item in DeletedFileIds)
                 {
-                    fp.DeleteFile(item.ToString(), DC.ReCreate());
+                    fp.DeleteFile(item.ToString(), DC!.ReCreate());
                 }
             }
 
@@ -559,15 +559,15 @@ namespace WalkingTec.Mvvm.Core
         {
             DoEditPrepare(updateAllFields);
 
-            await DC.SaveChangesAsync();
+            await DC!.SaveChangesAsync();
             //删除不需要的附件
-            if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm.ServiceProvider != null)
+            if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm?.ServiceProvider != null)
             {
                 var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
 
                 foreach (var item in DeletedFileIds)
                 {
-                    fp.DeleteFile(item.ToString(), DC);
+                    fp.DeleteFile(item.ToString(), DC!);
                 }
             }
         }
@@ -576,7 +576,7 @@ namespace WalkingTec.Mvvm.Core
         {
             if (typeof(IBasePoco).IsAssignableFrom(typeof(TModel)))
             {
-                IBasePoco ent = Entity as IBasePoco;
+                IBasePoco ent = (Entity as IBasePoco)!;
                 //if (ent.UpdateTime == null)
                 //{
                 ent.UpdateTime = DateTime.Now;
@@ -595,7 +595,7 @@ namespace WalkingTec.Mvvm.Core
                     if (pro.PropertyType.GetTypeInfo().IsSubclassOf(typeof(TopBasePoco)))
                     {
                         pro.SetValue(Entity, null);
-                        string fkname = DC.GetFKName2<TModel>(pro.Name);
+                        string fkname = DC!.GetFKName2<TModel>(pro.Name);
                         var fkpro = pros.Where(x => x.Name == fkname).FirstOrDefault();
                         if (fkpro != null)
                         {
@@ -620,14 +620,14 @@ namespace WalkingTec.Mvvm.Core
                     {
                         //界面传过来的子表数据
                         //获取外键字段名称
-                        string fkname = DC.GetFKName<TModel>(pro.Name);
+                        string fkname = DC!.GetFKName<TModel>(pro.Name);
                         string softkey = "";
                         if (string.IsNullOrEmpty(fkname))
                         {
                             if (pro.GetCustomAttribute<NotMappedAttribute>() != null)
                             {
-                                fkname = pro.GetCustomAttribute<SoftFKAttribute>()?.PropertyName;
-                                softkey = typeof(TModel).GetCustomAttribute<SoftKeyAttribute>()?.PropertyName;
+                                fkname = pro.GetCustomAttribute<SoftFKAttribute>()?.PropertyName ?? "";
+                                softkey = typeof(TModel).GetCustomAttribute<SoftKeyAttribute>()?.PropertyName ?? "";
                             }
                         }
                         if (pro.GetValue(Entity) is IEnumerable<TopBasePoco> list && list.Count() > 0)
@@ -639,7 +639,7 @@ namespace WalkingTec.Mvvm.Core
                                 var subtype = newitem.GetType();
                                 if (typeof(IBasePoco).IsAssignableFrom(subtype))
                                 {
-                                    IBasePoco ent = newitem as IBasePoco;
+                                    IBasePoco ent = (newitem as IBasePoco)!;
                                     if (ent.UpdateTime == null)
                                     {
                                         ent.UpdateTime = DateTime.Now;
@@ -676,10 +676,10 @@ namespace WalkingTec.Mvvm.Core
                                 continue;
                             }
 
-                            var set = DC.GetType().GetMethod("Set", Type.EmptyTypes).MakeGenericMethod(ftype);
-                            var dataquery = set.Invoke(DC, null) as IQueryable<TopBasePoco>;
+                            var set = DC!.GetType().GetMethod("Set", Type.EmptyTypes)!.MakeGenericMethod(ftype);
+                            var dataquery = set.Invoke(DC!, null) as IQueryable<TopBasePoco>;
                             ParameterExpression pe = Expression.Parameter(ftype);
-                            Expression member = Expression.MakeMemberAccess(pe, ftype.GetSingleProperty(fkname));
+                            Expression member = Expression.MakeMemberAccess(pe, ftype.GetSingleProperty(fkname)!);
                             //member = Expression.Call(member, "ToString", new Type[] { });
                             Expression right = Expression.Constant(string.IsNullOrEmpty(softkey) ? Entity.GetID() : Entity.GetPropertyValue(softkey), member.Type);
                             Expression condition = Expression.Equal(member, right);
@@ -687,13 +687,13 @@ namespace WalkingTec.Mvvm.Core
                                   typeof(Queryable),
                                   "Where",
                                   new Type[] { ftype },
-                                  dataquery.Expression,
+                                  dataquery!.Expression,
                                   Expression.Lambda(condition, new ParameterExpression[] { pe }));
                             var q = dataquery.Provider.CreateQuery(exp) as IQueryable<TopBasePoco>;
-                            IEnumerable<TopBasePoco> data = q.AsNoTracking().ToList();
+                            IEnumerable<TopBasePoco> data = q!.AsNoTracking().ToList();
                             //比较子表原数据和新数据的区别
-                            IEnumerable<TopBasePoco> toadd = null;
-                            IEnumerable<TopBasePoco> toremove = null;
+                            IEnumerable<TopBasePoco>? toadd = null;
+                            IEnumerable<TopBasePoco>? toremove = null;
                             Utils.CheckDifference(data, list, out toremove, out toadd);
                             //设定子表应该更新的字段
                             List<string> setnames = new List<string>();
@@ -727,32 +727,32 @@ namespace WalkingTec.Mvvm.Core
                                                 var cannotedit = itempro.GetCustomAttribute<CanNotEditAttribute>();
                                                 if (itempro.Name != "ID" && notmapped == null && itempro.PropertyType.IsList() == false && cannotedit == null)
                                                 {
-                                                    DC.UpdateProperty(i, itempro.Name);
+                                                    DC!.UpdateProperty(i, itempro.Name);
                                                 }
                                             }
                                         }
                                         if (typeof(IBasePoco).IsAssignableFrom(item.GetType()))
                                         {
-                                            DC.UpdateProperty(i, "UpdateTime");
-                                            DC.UpdateProperty(i, "UpdateBy");
+                                            DC!.UpdateProperty(i, "UpdateTime");
+                                            DC!.UpdateProperty(i, "UpdateBy");
                                         }
                                     }
                                 }
                             }
                             //需要删除的数据
-                            foreach (var item in toremove)
+                            foreach (var item in toremove!)
                             {
                                 //如果是PersistPoco，则把IsValid设为false，并不进行物理删除
                                 if (typeof(IPersistPoco).IsAssignableFrom(ftype))
                                 {
-                                    (item as IPersistPoco).IsValid = false;
+                                    (item as IPersistPoco)!.IsValid = false;
                                     if (typeof(IBasePoco).IsAssignableFrom(ftype))
                                     {
-                                        (item as IBasePoco).UpdateTime = DateTime.Now;
-                                        (item as IBasePoco).UpdateBy = LoginUserInfo?.ITCode;
+                                        (item as IBasePoco)!.UpdateTime = DateTime.Now;
+                                        (item as IBasePoco)!.UpdateBy = LoginUserInfo?.ITCode;
                                     }
                                     dynamic i = item;
-                                    DC.UpdateEntity(i);
+                                    DC!.UpdateEntity(i);
                                 }
                                 else
                                 {
@@ -764,15 +764,15 @@ namespace WalkingTec.Mvvm.Core
                                         }
                                     }
                                     dynamic i = item;
-                                    DC.DeleteEntity(i);
+                                    DC!.DeleteEntity(i);
                                 }
                             }
                             //需要添加的数据
-                            foreach (var item in toadd)
+                            foreach (var item in toadd!)
                             {
                                 if (typeof(IBasePoco).IsAssignableFrom(item.GetType()))
                                 {
-                                    IBasePoco ent = item as IBasePoco;
+                                    IBasePoco ent = (item as IBasePoco)!;
                                     if (ent.CreateTime == null)
                                     {
                                         ent.CreateTime = DateTime.Now;
@@ -784,10 +784,10 @@ namespace WalkingTec.Mvvm.Core
                                 }
                                 if (typeof(ITenant).IsAssignableFrom(item.GetType()))
                                 {
-                                    ITenant ent = item as ITenant;
+                                    ITenant ent = (item as ITenant)!;
                                     ent.TenantCode = LoginUserInfo?.CurrentTenant;
                                 }
-                                DC.AddEntity(item);
+                                DC!.AddEntity(item);
                             }
                         }
                         else if ((pro.GetValue(Entity) is IEnumerable<TopBasePoco> list2 && list2?.Count() == 0))
@@ -797,10 +797,10 @@ namespace WalkingTec.Mvvm.Core
                                 continue;
                             }
                             var itemPros = ftype.GetAllProperties();
-                            var set = DC.GetType().GetMethod("Set", Type.EmptyTypes).MakeGenericMethod(ftype);
-                            var dataquery = set.Invoke(DC, null) as IQueryable<TopBasePoco>;
+                            var set = DC!.GetType().GetMethod("Set", Type.EmptyTypes)!.MakeGenericMethod(ftype);
+                            var dataquery = set.Invoke(DC!, null) as IQueryable<TopBasePoco>;
                             ParameterExpression pe = Expression.Parameter(ftype);
-                            Expression member = Expression.MakeMemberAccess(pe, ftype.GetSingleProperty(fkname));
+                            Expression member = Expression.MakeMemberAccess(pe, ftype.GetSingleProperty(fkname)!);
                             //member = Expression.Call(member, "ToString", new Type[] { });
                             Expression right = Expression.Constant(string.IsNullOrEmpty(softkey) ? Entity.GetID() : Entity.GetPropertyValue(softkey), member.Type);
                             Expression condition = Expression.Equal(member, right);
@@ -808,24 +808,24 @@ namespace WalkingTec.Mvvm.Core
                                   typeof(Queryable),
                                   "Where",
                                   new Type[] { ftype },
-                                  dataquery.Expression,
+                                  dataquery!.Expression,
                                   Expression.Lambda(condition, new ParameterExpression[] { pe }));
                             var q = dataquery.Provider.CreateQuery(exp) as IQueryable<TopBasePoco>;
-                            IEnumerable<TopBasePoco> removeData = q.AsNoTracking().ToList();
+                            IEnumerable<TopBasePoco> removeData = q!.AsNoTracking().ToList();
 
                             foreach (var item in removeData)
                             {
                                 //如果是PersistPoco，则把IsValid设为false，并不进行物理删除
                                 if (typeof(IPersistPoco).IsAssignableFrom(ftype))
                                 {
-                                    (item as IPersistPoco).IsValid = false;
+                                    (item as IPersistPoco)!.IsValid = false;
                                     if (typeof(IBasePoco).IsAssignableFrom(ftype))
                                     {
-                                        (item as IBasePoco).UpdateTime = DateTime.Now;
-                                        (item as IBasePoco).UpdateBy = LoginUserInfo?.ITCode;
+                                        (item as IBasePoco)!.UpdateTime = DateTime.Now;
+                                        (item as IBasePoco)!.UpdateBy = LoginUserInfo?.ITCode;
                                     }
                                     dynamic i = item;
-                                    DC.UpdateEntity(i);
+                                    DC!.UpdateEntity(i);
                                 }
                                 else
                                 {
@@ -837,7 +837,7 @@ namespace WalkingTec.Mvvm.Core
                                         }
                                     }
                                     dynamic i = item;
-                                    DC.DeleteEntity(i);
+                                    DC!.DeleteEntity(i);
                                 }
                             }
                         }
@@ -871,11 +871,11 @@ namespace WalkingTec.Mvvm.Core
                         try
                         {
                             var itempro = pros.Where(x => x.Name.ToLower() == name).FirstOrDefault();
-                            var notmapped = itempro.GetCustomAttribute<NotMappedAttribute>();
-                            var cannotedit = itempro.GetCustomAttribute<CanNotEditAttribute>();
-                            if (itempro.Name != "ID" && notmapped == null && itempro.PropertyType.IsList() == false && cannotedit == null)
+                            var notmapped = itempro?.GetCustomAttribute<NotMappedAttribute>();
+                            var cannotedit = itempro?.GetCustomAttribute<CanNotEditAttribute>();
+                            if (itempro != null && itempro.Name != "ID" && notmapped == null && itempro.PropertyType.IsList() == false && cannotedit == null)
                             {
-                                DC.UpdateProperty(Entity, itempro.Name);
+                                DC!.UpdateProperty(Entity, itempro.Name);
                             }
                         }
                         catch (Exception)
@@ -887,8 +887,8 @@ namespace WalkingTec.Mvvm.Core
                 {
                     try
                     {
-                        DC.UpdateProperty(Entity, "UpdateTime");
-                        DC.UpdateProperty(Entity, "UpdateBy");
+                        DC!.UpdateProperty(Entity, "UpdateTime");
+                        DC!.UpdateProperty(Entity, "UpdateBy");
                     }
                     catch (Exception)
                     {
@@ -914,7 +914,7 @@ namespace WalkingTec.Mvvm.Core
                         }
                     }
                 }
-                DC.UpdateEntity(Entity);
+                DC!.UpdateEntity(Entity);
             }
         }
 
@@ -927,18 +927,18 @@ namespace WalkingTec.Mvvm.Core
             if (typeof(IPersistPoco).IsAssignableFrom(typeof(TModel)))
             {
                 FC.Add("Entity.IsValid", 0);
-                (Entity as IPersistPoco).IsValid = false;
+                (Entity as IPersistPoco)!.IsValid = false;
 
                 var pros = typeof(TModel).GetAllProperties();
                 //如果包含List<PersistPoco>，将子表IsValid也设置为false
                 var fas = pros.Where(x => typeof(IEnumerable<IPersistPoco>).IsAssignableFrom(x.PropertyType)).ToList();
                 foreach (var f in fas)
                 {
-                    f.SetValue(Entity, f.PropertyType.GetConstructor(Type.EmptyTypes).Invoke(null));
+                    f.SetValue(Entity, f.PropertyType.GetConstructor(Type.EmptyTypes)!.Invoke(null));
                 }
 
                 DoEditPrepare(false);
-                DC.SaveChanges();
+                DC!.SaveChanges();
             }
             //如果是普通的TopBasePoco，则进行物理删除
             else if (typeof(TModel).GetTypeInfo().IsSubclassOf(typeof(TopBasePoco)))
@@ -953,13 +953,13 @@ namespace WalkingTec.Mvvm.Core
             if (typeof(IPersistPoco).IsAssignableFrom(typeof(TModel)))
             {
                 FC.Add("Entity.IsValid", 0);
-                (Entity as IPersistPoco).IsValid = false;
+                (Entity as IPersistPoco)!.IsValid = false;
                 var pros = typeof(TModel).GetAllProperties();
                 //如果包含List<PersistPoco>，将子表IsValid也设置为false
                 var fas = pros.Where(x => typeof(IEnumerable<IPersistPoco>).IsAssignableFrom(x.PropertyType)).ToList();
                 foreach (var f in fas)
                 {
-                    f.SetValue(Entity, f.PropertyType.GetConstructor(Type.EmptyTypes).Invoke(null));
+                    f.SetValue(Entity, f.PropertyType.GetConstructor(Type.EmptyTypes)!.Invoke(null));
                 }
                 fas = pros.Where(x => typeof(TopBasePoco).IsAssignableFrom(x.PropertyType)).ToList();
                 foreach (var f in fas)
@@ -969,11 +969,11 @@ namespace WalkingTec.Mvvm.Core
                 DoEditPrepare(false);
                 try
                 {
-                    await DC.SaveChangesAsync();
+                    await DC!.SaveChangesAsync();
                 }
                 catch (DbUpdateException)
                 {
-                    MSD.AddModelError("", CoreProgram._localizer?["Sys.DeleteFailed"]);
+                    MSD!.AddModelError("", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DeleteFailed"] ?? "" : "");
                 }
             }
             //如果是普通的TopBasePoco，则进行物理删除
@@ -1010,8 +1010,8 @@ namespace WalkingTec.Mvvm.Core
                     var subs = f.GetValue(Entity) as IEnumerable<ISubFile>;
                     if (subs == null)
                     {
-                        var fullEntity = DC.Set<TModel>().AsQueryable().Include(f.Name).AsNoTracking().CheckID(Entity.ID).FirstOrDefault();
-                        subs = f.GetValue(fullEntity) as IEnumerable<ISubFile>;
+                        var fullEntity = DC!.Set<TModel>().AsQueryable().Include(f.Name).AsNoTracking().CheckID(Entity.ID).FirstOrDefault();
+                        subs = fullEntity != null ? f.GetValue(fullEntity) as IEnumerable<ISubFile> : null;
                     }
                     if (subs != null)
                     {
@@ -1032,33 +1032,33 @@ namespace WalkingTec.Mvvm.Core
                         }
                     }
                 }
-                DC.DeleteEntity(Entity);
-                DC.SaveChanges();
+                DC!.DeleteEntity(Entity);
+                DC!.SaveChanges();
                 if (typeof(IWorkflow).IsAssignableFrom(typeof(TModel)))
                 {
-                    var wi = DC.Set<Elsa_WorkflowInstance>().CheckEqual(typeof(TModel).FullName, x => x.ContextType).CheckEqual(Entity.GetID().ToString(), x => x.ContextId).ToList();
+                    var wi = DC!.Set<Elsa_WorkflowInstance>().CheckEqual(typeof(TModel).FullName, x => x.ContextType).CheckEqual(Entity.GetID().ToString(), x => x.ContextId).ToList();
                     if (wi.Count > 0)
                     {
-                        DC.Set<Elsa_WorkflowInstance>().RemoveRange(wi);
-                        var wl = DC.Set<Elsa_WorkflowExecutionLogRecord>().CheckContain(wi.Select(x => x.ID).ToList(), x => x.WorkflowInstanceId).ToList();
-                        DC.Set<Elsa_WorkflowExecutionLogRecord>().RemoveRange(wl);
-                        var ww = DC.Set<FrameworkWorkflow>().CheckContain(wi.Select(x => x.ID).ToList(), x => x.WorkflowId).ToList();
-                        DC.Set<FrameworkWorkflow>().RemoveRange(ww);
-                        DC.SaveChanges();
+                        DC!.Set<Elsa_WorkflowInstance>().RemoveRange(wi);
+                        var wl = DC!.Set<Elsa_WorkflowExecutionLogRecord>().CheckContain(wi.Select(x => x.ID).ToList(), x => x.WorkflowInstanceId).ToList();
+                        DC!.Set<Elsa_WorkflowExecutionLogRecord>().RemoveRange(wl);
+                        var ww = DC!.Set<FrameworkWorkflow>().CheckContain(wi.Select(x => x.ID).ToList(), x => x.WorkflowId).ToList();
+                        DC!.Set<FrameworkWorkflow>().RemoveRange(ww);
+                        DC!.SaveChanges();
                     }
                 }
-                if (Wtm.ServiceProvider != null)
+                if (Wtm?.ServiceProvider != null)
                 {
                     var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
                     foreach (var item in fileids)
                     {
-                        fp.DeleteFile(item.ToString(), DC.ReCreate());
+                        fp.DeleteFile(item.ToString(), DC!.ReCreate());
                     }
                 }
             }
             catch (Exception)
             {
-                MSD.AddModelError("", CoreProgram._localizer?["Sys.DeleteFailed"]);
+                MSD!.AddModelError("", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DeleteFailed"] ?? "" : "");
             }
         }
 
@@ -1085,9 +1085,12 @@ namespace WalkingTec.Mvvm.Core
                 foreach (var f in fas)
                 {
                     var subs = f.GetValue(Entity) as IEnumerable<ISubFile>;
-                    foreach (var sub in subs)
+                    if (subs != null)
                     {
-                        fileids.Add(sub.FileId);
+                        foreach (var sub in subs)
+                        {
+                            fileids.Add(sub.FileId);
+                        }
                     }
                     f.SetValue(Entity, null);
                 }
@@ -1101,33 +1104,33 @@ namespace WalkingTec.Mvvm.Core
                         }
                     }
                 }
-                DC.DeleteEntity(Entity);
-                await DC.SaveChangesAsync();
+                DC!.DeleteEntity(Entity);
+                await DC!.SaveChangesAsync();
                 if (typeof(IWorkflow).IsAssignableFrom(typeof(TModel)))
                 {
-                    var wi = DC.Set<Elsa_WorkflowInstance>().CheckEqual(typeof(TModel).FullName, x => x.ContextType).CheckEqual(Entity.GetID().ToString(), x => x.ContextId).ToList();
+                    var wi = DC!.Set<Elsa_WorkflowInstance>().CheckEqual(typeof(TModel).FullName, x => x.ContextType).CheckEqual(Entity.GetID().ToString(), x => x.ContextId).ToList();
                     if (wi.Count > 0)
                     {
-                        DC.Set<Elsa_WorkflowInstance>().RemoveRange(wi);
-                        var wl = DC.Set<Elsa_WorkflowExecutionLogRecord>().CheckContain(wi.Select(x => x.ID).ToList(), x => x.WorkflowInstanceId).ToList();
-                        DC.Set<Elsa_WorkflowExecutionLogRecord>().RemoveRange(wl);
-                        var ww = DC.Set<FrameworkWorkflow>().CheckContain(wi.Select(x => x.ID).ToList(), x => x.WorkflowId).ToList();
-                        DC.Set<FrameworkWorkflow>().RemoveRange(ww);
-                        await DC.SaveChangesAsync();
+                        DC!.Set<Elsa_WorkflowInstance>().RemoveRange(wi);
+                        var wl = DC!.Set<Elsa_WorkflowExecutionLogRecord>().CheckContain(wi.Select(x => x.ID).ToList(), x => x.WorkflowInstanceId).ToList();
+                        DC!.Set<Elsa_WorkflowExecutionLogRecord>().RemoveRange(wl);
+                        var ww = DC!.Set<FrameworkWorkflow>().CheckContain(wi.Select(x => x.ID).ToList(), x => x.WorkflowId).ToList();
+                        DC!.Set<FrameworkWorkflow>().RemoveRange(ww);
+                        await DC!.SaveChangesAsync();
                     }
                 }
-                if (Wtm.ServiceProvider != null)
+                if (Wtm?.ServiceProvider != null)
                 {
                     var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
                     foreach (var item in fileids)
                     {
-                        fp.DeleteFile(item.ToString(), DC.ReCreate());
+                        fp.DeleteFile(item.ToString(), DC!.ReCreate());
                     }
                 }
             }
             catch (Exception)
             {
-                MSD.AddModelError("", CoreProgram._localizer?["Sys.DeleteFailed"]);
+                MSD!.AddModelError("", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DeleteFailed"] ?? "" : "");
             }
         }
 
@@ -1243,7 +1246,7 @@ namespace WalkingTec.Mvvm.Core
             if (checkCondition != null && checkCondition.Groups.Count > 0)
             {
                 //生成基础Query
-                var baseExp = DC.Set<TModel>().IgnoreQueryFilters().AsQueryable();
+                var baseExp = DC!.Set<TModel>().IgnoreQueryFilters().AsQueryable();
                 var modelType = typeof(TModel);
                 ParameterExpression para = Expression.Parameter(modelType, "tm");
                 //循环所有重复字段组
@@ -1253,7 +1256,7 @@ namespace WalkingTec.Mvvm.Core
                     List<Expression> conditions = new List<Expression>();
                     //生成一个表达式，类似于 x=>x.Id != id，这是为了当修改数据时验证重复性的时候，排除当前正在修改的数据
                     var idproperty = typeof(TModel).GetSingleProperty("ID");
-                    MemberExpression idLeft = Expression.Property(para, idproperty);
+                    MemberExpression idLeft = Expression.Property(para, idproperty!);
                     ConstantExpression idRight = Expression.Constant(Entity.GetID());
                     BinaryExpression idNotEqual = Expression.NotEqual(idLeft, idRight);
                     conditions.Add(idNotEqual);
@@ -1261,7 +1264,7 @@ namespace WalkingTec.Mvvm.Core
                     //在每个组中循环所有字段
                     foreach (var field in group.Fields)
                     {
-                        Expression exp = field.GetExpression(Entity, para);
+                        Expression? exp = field.GetExpression(Entity, para);
                         if (exp != null)
                         {
                             conditions.Add(exp);
@@ -1269,21 +1272,27 @@ namespace WalkingTec.Mvvm.Core
                         //将字段名保存，为后面生成错误信息作准备
                         props.AddRange(field.GetProperties());
                     }
-                    if (typeof(ITenant).IsAssignableFrom(typeof(TModel)) && props.Any(x => x.Name.ToLower() == "tenantcode") == false && Wtm?.ConfigInfo.EnableTenant == true && group.UseTenant == true)
+                    if (typeof(ITenant).IsAssignableFrom(typeof(TModel)) && props.Any(x => x.Name.ToLower() == "tenantcode") == false && Wtm?.ConfigInfo?.EnableTenant == true && group.UseTenant == true)
                     {
-                        ITenant ent = Entity as ITenant;
-                        ent.TenantCode = LoginUserInfo.CurrentTenant;
-                        var f = new DuplicatedField<TModel>(x => (x as ITenant).TenantCode);
-                        Expression exp = f.GetExpression(Entity, para);
-                        conditions.Add(exp);
+                        ITenant ent = (Entity as ITenant)!;
+                        ent.TenantCode = LoginUserInfo?.CurrentTenant;
+                        var f = new DuplicatedField<TModel>(x => (x as ITenant)!.TenantCode);
+                        Expression? exp = f.GetExpression(Entity, para);
+                        if (exp != null)
+                        {
+                            conditions.Add(exp);
+                        }
                     }
                     if (typeof(IPersistPoco).IsAssignableFrom(typeof(TModel)) && props.Any(x => x.Name.ToLower() == "isvalid") == false)
                     {
-                        IPersistPoco ent = Entity as IPersistPoco;
+                        IPersistPoco ent = (Entity as IPersistPoco)!;
                         ent.IsValid = true;
-                        var f = new DuplicatedField<TModel>(x => (x as IPersistPoco).IsValid);
-                        Expression exp = f.GetExpression(Entity, para);
-                        conditions.Add(exp);
+                        var f = new DuplicatedField<TModel>(x => (x as IPersistPoco)!.IsValid);
+                        Expression? exp = f.GetExpression(Entity, para);
+                        if (exp != null)
+                        {
+                            conditions.Add(exp);
+                        }
                     }
 
                     //如果要求判断id不重复，则去掉id不相等的判断，加入id相等的判断
@@ -1333,12 +1342,12 @@ namespace WalkingTec.Mvvm.Core
                         //如果只有一个字段重复，则拼接形成 xxx字段重复 这种提示
                         if (props.Count == 1)
                         {
-                            MSD.AddModelError(GetValidationFieldName(props[0])[0], CoreProgram._localizer?["Sys.DuplicateError", AllName]);
+                            MSD!.AddModelError(GetValidationFieldName(props[0])[0], CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DuplicateError", AllName] ?? "" : "");
                         }
                         //如果多个字段重复，则拼接形成 xx，yy，zz组合字段重复 这种提示
                         else if (props.Count > 1)
                         {
-                            MSD.AddModelError(GetValidationFieldName(props.First())[0], CoreProgram._localizer?["Sys.DuplicateGroupError", AllName]);
+                            MSD!.AddModelError(GetValidationFieldName(props.First())[0], CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DuplicateGroupError", AllName] ?? "" : "");
                         }
                     }
                 }
@@ -1357,11 +1366,11 @@ namespace WalkingTec.Mvvm.Core
             return new[] { "Entity." + pi.Name };
         }
 
-        public virtual async Task<RunWorkflowResult> StartWorkflowAsync(string flowName=null)
+        public virtual async Task<RunWorkflowResult?> StartWorkflowAsync(string? flowName=null)
         {
             if (typeof(IWorkflow).IsAssignableFrom(typeof(TModel)) == false)
             {
-                MSD.AddModelError(" noworkflow", CoreProgram._localizer?["Sys.NoWorkflow"]);
+                MSD!.AddModelError(" noworkflow", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.NoWorkflow"] ?? "" : "");
                 return null;
             }
             if(Entity.HasID() == false)
@@ -1369,35 +1378,35 @@ namespace WalkingTec.Mvvm.Core
                 return null;
             }
 
-            string workflowId = null;
-            string workflowname = null;
+            string? workflowId = null;
+            string? workflowname = null;
             if (string.IsNullOrEmpty(flowName))
             {
-                var temp = DC.Set<Elsa_WorkflowDefinition>().Where(x => x.Data.Contains($"\"contextType\": \"{typeof(TModel).FullName}, {typeof(TModel).Assembly.GetName().Name}\"")).Select(x => new { id = x.DefinitionId, name = x.Name }).FirstOrDefault();
-                workflowId = temp.id;
-                workflowname = temp.name;
+                var temp = DC!.Set<Elsa_WorkflowDefinition>().Where(x => x.Data.Contains($"\"contextType\": \"{typeof(TModel).FullName}, {typeof(TModel).Assembly.GetName().Name}\"")).Select(x => new { id = x.DefinitionId, name = x.Name }).FirstOrDefault();
+                workflowId = temp?.id;
+                workflowname = temp?.name;
             }
             else
             {
-                var temp = DC.Set<Elsa_WorkflowDefinition>().Where(x => x.Name == flowName).Select(x=> new { id = x.DefinitionId, name = x.Name }).FirstOrDefault();
-                workflowId = temp.id;
-                workflowname = temp.name;
+                var temp = DC!.Set<Elsa_WorkflowDefinition>().Where(x => x.Name == flowName).Select(x=> new { id = x.DefinitionId, name = x.Name }).FirstOrDefault();
+                workflowId = temp?.id;
+                workflowname = temp?.name;
             }
             if (string.IsNullOrEmpty(workflowId))
             {
-                MSD.AddModelError(" noworkflow", CoreProgram._localizer?["Sys.NoWorkflow"]);
+                MSD!.AddModelError(" noworkflow", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.NoWorkflow"] ?? "" : "");
                 return null;
             }
-            var lp = Wtm.ServiceProvider.GetRequiredService<IWorkflowLaunchpad>();
-            var workflow = await lp.FindStartableWorkflowAsync(workflowId, contextId: Entity.GetID().ToString(), tenantId: Wtm.LoginUserInfo?.CurrentTenant);
+            var lp = Wtm!.ServiceProvider!.GetRequiredService<IWorkflowLaunchpad>();
+            var workflow = await lp.FindStartableWorkflowAsync(workflowId, contextId: Entity.GetID().ToString(), tenantId: Wtm!.LoginUserInfo?.CurrentTenant);
             if (workflow != null)
             {
-                workflow.WorkflowInstance.Variables.Set("Submitter", Wtm.LoginUserInfo?.ITCode);
+                workflow.WorkflowInstance.Variables.Set("Submitter", Wtm!.LoginUserInfo?.ITCode);
                 workflow.WorkflowInstance.Name = workflowname;
                 var rv = await lp.ExecuteStartableWorkflowAsync(workflow);
                 if(rv?.WorkflowInstance?.Faults?.Count > 0)
                 {
-                    MSD.AddModelError(" workflowfault", rv?.WorkflowInstance?.Faults[0].Message);
+                    MSD!.AddModelError(" workflowfault", rv?.WorkflowInstance?.Faults[0].Message ?? "");
 
                 }
                 return rv;
@@ -1407,11 +1416,11 @@ namespace WalkingTec.Mvvm.Core
 
         }
 
-        public virtual async Task<RunWorkflowResult> ContinueWorkflowAsync(string actionName, string remark, string flowName=null, string tag = null)
+        public virtual async Task<RunWorkflowResult?> ContinueWorkflowAsync(string actionName, string remark, string? flowName=null, string? tag = null)
         {
             if (typeof(IWorkflow).IsAssignableFrom(typeof(TModel)) == false)
             {
-                MSD.AddModelError(" noworkflow", CoreProgram._localizer?["Sys.NoWorkflow"]);
+                MSD!.AddModelError(" noworkflow", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.NoWorkflow"] ?? "" : "");
                 return null;
             }
             if (Entity.HasID() == false)
@@ -1421,17 +1430,17 @@ namespace WalkingTec.Mvvm.Core
 
             try
             {
-                var lp = Wtm.ServiceProvider.GetRequiredService<IWorkflowLaunchpad>();
+                var lp = Wtm!.ServiceProvider!.GetRequiredService<IWorkflowLaunchpad>();
                 //不直接使用Wtm.LoginUserInfo，否则elsa会把所有信息序列化保存到WorkflowInstances表中
                 LoginUserInfo li = new LoginUserInfo();
-                li.ITCode = Wtm.LoginUserInfo.ITCode;
-                li.Name = Wtm.LoginUserInfo.Name;
-                li.UserId = Wtm.LoginUserInfo.UserId;
-                li.PhotoId = Wtm.LoginUserInfo.PhotoId;
-                li.Groups = Wtm.LoginUserInfo.Groups;
-                li.Roles = Wtm.LoginUserInfo.Roles;
-                li.TenantCode = Wtm.LoginUserInfo.CurrentTenant;
-                var query = new WorkflowsQuery(nameof(WtmApproveActivity), new WtmApproveBookmark(Wtm.LoginUserInfo.ITCode, string.IsNullOrEmpty(flowName)?typeof(TModel).FullName:flowName, tag, Entity.GetID().ToString()), null, null, null, Wtm.LoginUserInfo.CurrentTenant);
+                li.ITCode = Wtm!.LoginUserInfo!.ITCode;
+                li.Name = Wtm!.LoginUserInfo!.Name;
+                li.UserId = Wtm!.LoginUserInfo!.UserId;
+                li.PhotoId = Wtm!.LoginUserInfo!.PhotoId;
+                li.Groups = Wtm!.LoginUserInfo!.Groups;
+                li.Roles = Wtm!.LoginUserInfo!.Roles;
+                li.TenantCode = Wtm!.LoginUserInfo!.CurrentTenant;
+                var query = new WorkflowsQuery(nameof(WtmApproveActivity), new WtmApproveBookmark(Wtm!.LoginUserInfo!.ITCode, string.IsNullOrEmpty(flowName)?typeof(TModel).FullName!:flowName, tag, Entity.GetID().ToString()), null, null, null, Wtm!.LoginUserInfo!.CurrentTenant);
                 if (query != null)
                 {
                     var flows = await lp.FindWorkflowsAsync(query);
@@ -1444,11 +1453,11 @@ namespace WalkingTec.Mvvm.Core
                         }
                     }
                 }
-                if(Wtm.LoginUserInfo.Roles != null)
+                if(Wtm!.LoginUserInfo!.Roles != null)
                 {
-                    foreach (var role in Wtm.LoginUserInfo.Roles)
+                    foreach (var role in Wtm!.LoginUserInfo!.Roles)
                     {
-                        query = new WorkflowsQuery(nameof(WtmApproveActivity), new WtmApproveBookmark(role.ID.ToString(), string.IsNullOrEmpty(flowName) ? typeof(TModel).FullName : flowName, tag, Entity.GetID().ToString()), null, null, null, Wtm.LoginUserInfo.CurrentTenant);
+                        query = new WorkflowsQuery(nameof(WtmApproveActivity), new WtmApproveBookmark(role.ID.ToString(), string.IsNullOrEmpty(flowName) ? typeof(TModel).FullName! : flowName, tag, Entity.GetID().ToString()), null, null, null, Wtm!.LoginUserInfo!.CurrentTenant);
                         if (query != null)
                         {
                             var flows = await lp.FindWorkflowsAsync(query);
@@ -1464,11 +1473,11 @@ namespace WalkingTec.Mvvm.Core
 
                     }
                 }
-                if (Wtm.LoginUserInfo.Groups != null)
+                if (Wtm!.LoginUserInfo!.Groups != null)
                 {
-                    foreach (var group in Wtm.LoginUserInfo.Groups)
+                    foreach (var group in Wtm!.LoginUserInfo!.Groups)
                     {
-                        query = new WorkflowsQuery(nameof(WtmApproveActivity), new WtmApproveBookmark(group.ID.ToString(), string.IsNullOrEmpty(flowName) ? typeof(TModel).FullName : flowName, tag, Entity.GetID().ToString()), null, null, null, Wtm.LoginUserInfo.CurrentTenant);
+                        query = new WorkflowsQuery(nameof(WtmApproveActivity), new WtmApproveBookmark(group.ID.ToString(), string.IsNullOrEmpty(flowName) ? typeof(TModel).FullName! : flowName, tag, Entity.GetID().ToString()), null, null, null, Wtm!.LoginUserInfo!.CurrentTenant);
                         if (query != null)
                         {
 
@@ -1485,7 +1494,7 @@ namespace WalkingTec.Mvvm.Core
 
                     }
                 }
-                MSD.AddModelError(" noworkflow", CoreProgram._localizer?["Sys.NoWorkflow"]);
+                MSD!.AddModelError(" noworkflow", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.NoWorkflow"] ?? "" : "");
                 return null;
             }
             catch { }
@@ -1493,14 +1502,14 @@ namespace WalkingTec.Mvvm.Core
             return null;
         }
 
-        public virtual async Task<List<ApproveTimeLine>> GetWorkflowTimeLineAsync(string flowName = null)
+        public virtual async Task<List<ApproveTimeLine>> GetWorkflowTimeLineAsync(string? flowName = null)
         {
-            var rv = await Wtm.CallAPI<List<ApproveTimeLine>>("", $"{Wtm.HostAddress}/_workflowapi/GetTimeLine?flowname={flowName}&entitytype={typeof(TModel).FullName}&entityid={Entity.GetID()}");
-            return rv.Data;
+            var rv = await Wtm!.CallAPI<List<ApproveTimeLine>>("", $"{Wtm!.HostAddress}/_workflowapi/GetTimeLine?flowname={flowName}&entitytype={typeof(TModel).FullName}&entityid={Entity.GetID()}");
+            return rv.Data!;
         }
-        public virtual async Task<WorkflowInstance> GetWorkflowInstanceAsync(string flowName = null)
+        public virtual async Task<WorkflowInstance?> GetWorkflowInstanceAsync(string? flowName = null)
         {
-            var rv = await Wtm.CallAPI<WorkflowInstance>("", $"{Wtm.HostAddress}/_workflowapi/GetWorkflow?flowname={flowName}&entitytype={typeof(TModel).FullName}&entityid={Entity.GetID()}");
+            var rv = await Wtm!.CallAPI<WorkflowInstance>("", $"{Wtm!.HostAddress}/_workflowapi/GetWorkflow?flowname={flowName}&entitytype={typeof(TModel).FullName}&entityid={Entity.GetID()}");
             return rv.Data;
         }
 
@@ -1508,10 +1517,10 @@ namespace WalkingTec.Mvvm.Core
 
     class IncludeInfo
     {
-        public MemberInfo mi { get; set; }
-        public Type t { get; set; }
-        public IncludeInfo Next { get; set; }
-        public IncludeInfo Pre { get; set; }
+        public MemberInfo mi { get; set; } = null!;
+        public Type t { get; set; } = null!;
+        public IncludeInfo? Next { get; set; }
+        public IncludeInfo? Pre { get; set; }
 
         private bool? _isnotmapped;
         public bool IsNotMapped
@@ -1530,7 +1539,7 @@ namespace WalkingTec.Mvvm.Core
         {
             get
             {
-                var cur = this;
+                var cur = (IncludeInfo?)this;
                 while (cur != null)
                 {
                     if (cur.IsNotMapped == true)
@@ -1543,7 +1552,7 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
-        private string _softkey;
+        private string? _softkey;
         public string SoftKey
         {
             get
@@ -1557,7 +1566,7 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
-        private string _softfk;
+        private string? _softfk;
         public string SoftFK
         {
             get
@@ -1571,7 +1580,7 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
-        private Type _innerType;
+        private Type? _innerType;
         public Type InnerType
         {
             get
@@ -1589,13 +1598,13 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
-        public Expression SoftSelect(ParameterExpression parentpe, IDataContext DC)
+        public Expression? SoftSelect(ParameterExpression parentpe, IDataContext DC)
         {
-            Expression rv = null;
+            Expression? rv = null;
 
             if (this.IsNotMapped == false)
             {
-                rv = Expression.MakeMemberAccess(parentpe, parentpe.Type.GetSingleProperty(this.mi.Name));
+                rv = Expression.MakeMemberAccess(parentpe, parentpe.Type.GetSingleProperty(this.mi.Name)!);
             }
             else
             {
@@ -1605,11 +1614,11 @@ namespace WalkingTec.Mvvm.Core
                     {
                         return rv;
                     }
-                    var set = DC.GetType().GetMethod("Set", Type.EmptyTypes).MakeGenericMethod(InnerType);
+                    var set = DC.GetType().GetMethod("Set", Type.EmptyTypes)!.MakeGenericMethod(InnerType);
                     rv = Expression.Call(Expression.Constant(DC), set);
                     ParameterExpression pe = Expression.Parameter(InnerType);
-                    Expression member = Expression.MakeMemberAccess(pe, InnerType.GetSingleProperty(this.SoftKey));
-                    Expression right = Expression.MakeMemberAccess(parentpe, parentpe.Type.GetSingleProperty(this.mi.Name + "Id"));
+                    Expression member = Expression.MakeMemberAccess(pe, InnerType.GetSingleProperty(this.SoftKey)!);
+                    Expression right = Expression.MakeMemberAccess(parentpe, parentpe.Type.GetSingleProperty(this.mi.Name + "Id")!);
                     Expression condition = Expression.Equal(member, right);
                     rv = Expression.Call(
                          typeof(Queryable),
@@ -1629,11 +1638,11 @@ namespace WalkingTec.Mvvm.Core
                     {
                         return rv;
                     }
-                    var set = DC.GetType().GetMethod("Set", Type.EmptyTypes).MakeGenericMethod(InnerType);
+                    var set = DC.GetType().GetMethod("Set", Type.EmptyTypes)!.MakeGenericMethod(InnerType);
                     rv = Expression.Call(Expression.Constant(DC), set);
                     ParameterExpression pe = Expression.Parameter(InnerType);
-                    Expression member = Expression.MakeMemberAccess(pe, InnerType.GetSingleProperty(this.SoftFK));
-                    Expression right = Expression.MakeMemberAccess(parentpe, parentpe.Type.GetSingleProperty(parentkey));
+                    Expression member = Expression.MakeMemberAccess(pe, InnerType.GetSingleProperty(this.SoftFK)!);
+                    Expression right = Expression.MakeMemberAccess(parentpe, parentpe.Type.GetSingleProperty(parentkey)!);
                     Expression condition = Expression.Equal(member, right);
                     rv = Expression.Call(
                          typeof(Queryable),
@@ -1660,8 +1669,11 @@ namespace WalkingTec.Mvvm.Core
                     else if (this.Next.mi.Name == pro.Name)
                     {
                         var right = this.Next.SoftSelect(pe, DC);
-                        MemberBinding bind = Expression.Bind(pro, right);
-                        bindExps.Add(bind);
+                        if (right != null)
+                        {
+                            MemberBinding bind = Expression.Bind(pro, right);
+                            bindExps.Add(bind);
+                        }
                     }
                 }
 
@@ -1672,7 +1684,7 @@ namespace WalkingTec.Mvvm.Core
                typeof(Queryable),
                "Select",
                new Type[] { InnerType, InnerType },
-               rv,
+               rv!,
                lambda);
             }
 
@@ -1682,7 +1694,7 @@ namespace WalkingTec.Mvvm.Core
                    typeof(Enumerable),
                    "FirstOrDefault",
                    new Type[] { InnerType },
-                   rv);
+                   rv!);
             }
             else
             {
@@ -1690,7 +1702,7 @@ namespace WalkingTec.Mvvm.Core
               typeof(Enumerable),
               "ToList",
               new Type[] { InnerType },
-              rv);
+              rv!);
             }
             return rv;
         }

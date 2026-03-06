@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -47,13 +47,13 @@ namespace WalkingTec.Mvvm.Core
         /// 上传文件的Id，方便导入等操作中进行绑定，这类操作需要上传文件但不需要记录在数据库中，所以Model层中没有文件Id的字段
         /// </summary>
         [Display(Name = "UploadFile")]
-        public string UploadFileId { get; set; }
+        public string? UploadFileId { get; set; }
 
         /// <summary>
         /// 下载模板显示名称
         /// </summary>
         [JsonIgnore]
-        public string FileDisplayName { get; set; }
+        public string? FileDisplayName { get; set; }
 
         /// <summary>
         /// 错误列表
@@ -71,9 +71,9 @@ namespace WalkingTec.Mvvm.Core
         /// 下载模版页面的参数
         /// </summary>
         [JsonIgnore]
-        public Dictionary<string, string> Parms { get; set; }
+        public Dictionary<string, string>? Parms { get; set; }
 
-        protected List<T> TemplateData;
+        protected List<T>? TemplateData;
 
         /// <summary>
         /// 要导入的Model列表
@@ -95,12 +95,12 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 声明XSSF
         /// </summary>
-        protected XSSFWorkbook xssfworkbook;
+        protected XSSFWorkbook? xssfworkbook;
 
         /// <summary>
         /// 唯一性验证
         /// </summary>
-        protected DuplicatedInfo<P> finalInfo;
+        protected DuplicatedInfo<P>? finalInfo;
 
         /// <summary>
         /// 是否存在主子表
@@ -124,6 +124,7 @@ namespace WalkingTec.Mvvm.Core
             ErrorListVM = new TemplateErrorListVM();
             ValidityTemplateType = true;
             Template = new T();
+            EntityList = new List<P>();
         }
         #endregion
 
@@ -156,7 +157,7 @@ namespace WalkingTec.Mvvm.Core
         /// 设置数据唯一性验证，子类中如果需要数据唯一性验证，应重写此方法
         /// </summary>
         /// <returns>唯一性属性</returns>
-        public virtual DuplicatedInfo<P> SetDuplicatedCheck()
+        public virtual DuplicatedInfo<P>? SetDuplicatedCheck()
         {
             return null;
         }
@@ -205,20 +206,20 @@ namespace WalkingTec.Mvvm.Core
                 //【CHECK】上传附件的ID为空
                 if (UploadFileId == null)
                 {
-                    ErrorListVM.EntityList.Add(new ErrorMessage { Message = CoreProgram._localizer?["Sys.PleaseUploadTemplate"] });
+                    ErrorListVM.EntityList.Add(new ErrorMessage { Message = (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.PleaseUploadTemplate"] : null) });
                     return;
                 }
-                Models.IWtmFile file = null;
-                if (Wtm.ServiceProvider != null)
+                Models.IWtmFile? file = null;
+                if (Wtm!.ServiceProvider != null)
                 {
-                    var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
+                    var fp = Wtm!.ServiceProvider.GetRequiredService<WtmFileProvider>();
                    // var tempdc = Wtm.DC;
-                    file = fp.GetFile(UploadFileId, true,Wtm.CreateDC(false));
+                    file = fp.GetFile(UploadFileId, true,Wtm!.CreateDC(false));
                     //Wtm.DC = tempdc;
                 }
                 if (file == null)
                 {
-                    ErrorListVM.EntityList.Add(new ErrorMessage { Message = CoreProgram._localizer?["Sys.WrongTemplate"] });
+                    ErrorListVM.EntityList.Add(new ErrorMessage { Message = (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.WrongTemplate"] : null) });
                     return;
                 }
                 xssfworkbook = new XSSFWorkbook(file.DataStream);
@@ -227,10 +228,10 @@ namespace WalkingTec.Mvvm.Core
                 Template.InitCustomFormat();
 
                 //【CHECK】判断是否上传的是正确的模板数据
-                string TemplateHiddenName = xssfworkbook.GetSheetAt(1).GetRow(0).Cells[2].ToString();
-                if (ValidityTemplateType && !TemplateHiddenName.Equals(typeof(T).Name))
+                string? TemplateHiddenName = xssfworkbook.GetSheetAt(1)?.GetRow(0)?.Cells[2]?.ToString();
+                if (ValidityTemplateType && !string.Equals(TemplateHiddenName, typeof(T).Name))
                 {
-                    ErrorListVM.EntityList.Add(new ErrorMessage { Message = CoreProgram._localizer?["Sys.WrongTemplate"] });
+                    ErrorListVM.EntityList.Add(new ErrorMessage { Message = (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.WrongTemplate"] : null) });
                     return;
                 }
 
@@ -246,16 +247,16 @@ namespace WalkingTec.Mvvm.Core
                 var ListPropetys = Template.GetType().GetFields().Where(x => x.FieldType == typeof(ExcelPropety)).ToList();
                 for (int i = 0; i < ListPropetys.Count(); i++)
                 {
-                    ExcelPropety ep = (ExcelPropety)ListPropetys[i].GetValue(Template);
+                    ExcelPropety ep = (ExcelPropety)ListPropetys[i].GetValue(Template)!;
                     ListTemplateProptetys.Add(ep);
                 }
 
                 //【CHECK】验证模板的列数是否正确
-                var dynamicColumn = ListTemplateProptetys.Where(x => x.DataType == ColumnDataType.Dynamic).FirstOrDefault();
+                ExcelPropety? dynamicColumn = ListTemplateProptetys.Where(x => x.DataType == ColumnDataType.Dynamic).FirstOrDefault();
                 int columnCount = dynamicColumn == null ? ListTemplateProptetys.Count : (ListTemplateProptetys.Count + dynamicColumn.DynamicColumns.Count - 1);
                 if (columnCount != cells.Count)
                 {
-                    ErrorListVM.EntityList.Add(new ErrorMessage { Message = CoreProgram._localizer?["Sys.WrongTemplate"] });
+                    ErrorListVM.EntityList.Add(new ErrorMessage { Message = (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.WrongTemplate"] : null) });
                     return;
                 }
 
@@ -270,7 +271,7 @@ namespace WalkingTec.Mvvm.Core
                     //{
                     //    if (cells[i].ToString().Trim('*') != ListTemplateProptetys[pIndex].ColumnName)
                     //    {
-                    //        ErrorListVM.EntityList.Add(new ErrorMessage { Message = CoreProgram._localizer?["Sys.WrongTemplate"] });
+                    //        ErrorListVM.EntityList.Add(new ErrorMessage { Message = (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.WrongTemplate"] : null) });
                     //        return;
                     //    }
                     //    pIndex++;
@@ -283,7 +284,7 @@ namespace WalkingTec.Mvvm.Core
                     //    {
                     //        if (cells[i].ToString().Trim('*') != listDynamicColumns[dclIndex].ColumnName)
                     //        {
-                    //            ErrorListVM.EntityList.Add(new ErrorMessage { Message = CoreProgram._localizer?["Sys.WrongTemplate"] });
+                    //            ErrorListVM.EntityList.Add(new ErrorMessage { Message = (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.WrongTemplate"] : null) });
                     //            break;
                     //        }
                     //        i = i + 1;
@@ -318,7 +319,7 @@ namespace WalkingTec.Mvvm.Core
                     for (int i = 0; i < columnCount; i++)
                     {
                         //获取列的值
-                        string value = row.GetCell(i, MissingCellPolicy.CREATE_NULL_AS_BLANK).ToString();
+                        string value = row.GetCell(i, MissingCellPolicy.CREATE_NULL_AS_BLANK).ToString() ?? string.Empty;
                         ExcelPropety excelPropety = CopyExcelPropety(ListTemplateProptetys[pIndex]);
 
                         if (excelPropety.DataType == ColumnDataType.Text)
@@ -359,21 +360,21 @@ namespace WalkingTec.Mvvm.Core
             }
             catch
             {
-                ErrorListVM.EntityList.Add(new ErrorMessage { Message = CoreProgram._localizer?["Sys.WrongTemplate"] });
+                ErrorListVM.EntityList.Add(new ErrorMessage { Message = (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.WrongTemplate"] : null) });
             }
         }
 
         #region 进行公式计算
-        public string GetCellFormulaValue(XSSFFormulaEvaluator XE, ICell cell, string Value)
+        public string GetCellFormulaValue(XSSFFormulaEvaluator XE, ICell? cell, string Value)
         {
             if (!string.IsNullOrEmpty(Value) && Value.IndexOf("=") == 0)
             {
                 try
                 {
                     string Formula = Value.Substring(1);
-                    cell.SetCellFormula(Formula);
-                    XE.EvaluateFormulaCell(cell);
-                    Value = cell.NumericCellValue.ToString();
+                    cell!.SetCellFormula(Formula);
+                    XE.EvaluateFormulaCell(cell!);
+                    Value = cell!.NumericCellValue.ToString();
                 }
                 catch (Exception)
                 {
@@ -395,7 +396,7 @@ namespace WalkingTec.Mvvm.Core
             List<FieldInfo> ListExcelFields = typeof(T).GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance).Where(x => x.FieldType == typeof(ExcelPropety)).ToList();
 
             //循环Excel中的数据
-            foreach (var item in TemplateData)
+            foreach (var item in TemplateData!)
             {
                 int rowIndex = 2;
                 bool isMainData = false;
@@ -412,7 +413,7 @@ namespace WalkingTec.Mvvm.Core
                 foreach (var ExcelField in ListExcelFields)
                 {
                     //获取本列的ExcelProperty的值
-                    if (typeof(T).GetField(ExcelField.Name).GetValue(item) is ExcelPropety ep)
+                    if (typeof(T).GetField(ExcelField.Name)?.GetValue(item) is ExcelPropety ep)
                     {
                         //如果是子表的字段
                         if (ep.SubTableType != null)
@@ -439,13 +440,13 @@ namespace WalkingTec.Mvvm.Core
                     string subVal = string.Empty;
                     foreach (var field in sub.Value)
                     {
-                        ExcelPropety ep = typeof(T).GetField(field.Name).GetValue(item) as ExcelPropety;
-                        subVal += ep.Value;
+                        ExcelPropety? ep = typeof(T).GetField(field.Name)?.GetValue(item) as ExcelPropety;
+                        subVal += ep?.Value;
                     }
                     ChildrenEntityDic.Add(sub.Key, subVal);
                 }
 
-                P entity = null;
+                P? entity = null;
 
                 //说明主表信息为空
                 if (string.IsNullOrEmpty(ParentEntityValues))
@@ -463,10 +464,10 @@ namespace WalkingTec.Mvvm.Core
                     {
                         SetEntityFieldValue(entity, mep.Value, rowIndex, mep.Key, item);
                     }
-                    if (typeof(ITenant).IsAssignableFrom(entity.GetType()))
+                    if (typeof(ITenant).IsAssignableFrom(entity!.GetType()))
                     {
-                        ITenant ent = entity as ITenant;
-                        ent.TenantCode = LoginUserInfo?.CurrentTenant;
+                        ITenant? ent = entity as ITenant;
+                        if (ent != null) ent.TenantCode = LoginUserInfo?.CurrentTenant;
                     }
 
                 }
@@ -483,17 +484,17 @@ namespace WalkingTec.Mvvm.Core
                             if (gtype == sub.Key)
                             {
                                 //子表
-                                var subList = entity.GetType().GetSingleProperty(pro.Name).GetValue(entity);
-                                string fk = DC.GetFKName<P>(pro.Name);
+                                var subList = entity!.GetType().GetSingleProperty(pro.Name)?.GetValue(entity);
+                                string fk = DC!.GetFKName<P>(pro.Name);
 
                                 //如果子表不为空
                                 if (!string.IsNullOrEmpty(ChildrenEntityDic.Where(x => x.Key == sub.Key).FirstOrDefault().Value))
                                 {
-                                    IList list = null;
+                                    IList? list = null;
                                     if (subList == null)
                                     {
                                         //初始化List<SubTableType>
-                                        list = typeof(List<>).MakeGenericType(gtype).GetConstructor(Type.EmptyTypes).Invoke(null) as IList;
+                                        list = typeof(List<>).MakeGenericType(gtype).GetConstructor(Type.EmptyTypes)?.Invoke(null) as IList;
                                     }
                                     else
                                     {
@@ -501,13 +502,13 @@ namespace WalkingTec.Mvvm.Core
                                     }
 
                                     //初始化一个SubTableType
-                                    var SubTypeEntity = gtype.GetConstructor(System.Type.EmptyTypes).Invoke(null);
+                                    var SubTypeEntity = gtype.GetConstructor(System.Type.EmptyTypes)!.Invoke(null);
 
                                     //给SubTableType中和本ExcelProperty同名的字段赋值
                                     foreach (var field in sub.Value)
                                     {
-                                        ExcelPropety ep = typeof(T).GetField(field.Name).GetValue(item) as ExcelPropety;
-                                        SetEntityFieldValue(SubTypeEntity, ep, rowIndex, ep.FieldName, item);
+                                        ExcelPropety? ep = typeof(T).GetField(field.Name)?.GetValue(item) as ExcelPropety;
+                                        SetEntityFieldValue(SubTypeEntity, ep!, rowIndex, ep!.FieldName, item);
                                     }
 
                                     if (string.IsNullOrEmpty(fk) == false)
@@ -517,13 +518,13 @@ namespace WalkingTec.Mvvm.Core
 
                                     if (typeof(IBasePoco).IsAssignableFrom(SubTypeEntity.GetType()))
                                     {
-                                        (SubTypeEntity as IBasePoco).CreateTime = DateTime.Now;
-                                        (SubTypeEntity as IBasePoco).CreateBy = LoginUserInfo?.ITCode;
+                                        (SubTypeEntity as IBasePoco)!.CreateTime = DateTime.Now;
+                                        (SubTypeEntity as IBasePoco)!.CreateBy = LoginUserInfo?.ITCode;
                                     }
                                     if (typeof(ITenant).IsAssignableFrom(SubTypeEntity.GetType()))
                                     {
-                                        ITenant ent = SubTypeEntity as ITenant;
-                                        ent.TenantCode = LoginUserInfo?.CurrentTenant;
+                                        ITenant? ent = SubTypeEntity as ITenant;
+                                        if (ent != null) ent.TenantCode = LoginUserInfo?.CurrentTenant;
                                     }
 
                                     //var context = new ValidationContext(SubTypeEntity);
@@ -532,9 +533,9 @@ namespace WalkingTec.Mvvm.Core
                                     //if (validationResults.Count == 0)
                                     //{
                                     //将付好值得SubTableType实例添加到List中
-                                    list.Add(SubTypeEntity);
+                                    list!.Add(SubTypeEntity);
 
-                                    PropertyHelper.SetPropertyValue(entity, pro.Name, list);
+                                    PropertyHelper.SetPropertyValue(entity!, pro.Name, list);
                                     //}
                                     //else
                                     //{
@@ -549,10 +550,10 @@ namespace WalkingTec.Mvvm.Core
                     }
 
                 }
-                entity.ExcelIndex = item.ExcelIndex;
+                entity!.ExcelIndex = item.ExcelIndex;
                 if (isMainData)
                 {
-                    EntityList.Add(entity);
+                    EntityList.Add(entity!);
                 }
             }
         }
@@ -570,13 +571,13 @@ namespace WalkingTec.Mvvm.Core
                 vmtype = vms.FirstOrDefault();
             }
 
-            IBaseCRUDVM<P> vm = null;
-            DuplicatedInfo<P> dinfo = null;
+            IBaseCRUDVM<P>? vm = null;
+            DuplicatedInfo<P>? dinfo = null;
             if (vmtype != null)
             {
-                vm = vmtype.GetConstructor(System.Type.EmptyTypes).Invoke(null) as IBaseCRUDVM<P>;
-                vm.CopyContext(this);
-                dinfo = (vm as dynamic).SetDuplicatedCheck();
+                vm = vmtype.GetConstructor(System.Type.EmptyTypes)?.Invoke(null) as IBaseCRUDVM<P>;
+                vm!.CopyContext(this);
+                dinfo = (vm as dynamic)?.SetDuplicatedCheck();
             }
             var cinfo = this.SetDuplicatedCheck();
             finalInfo = new DuplicatedInfo<P>
@@ -585,14 +586,14 @@ namespace WalkingTec.Mvvm.Core
             };
             if (cinfo != null)
             {
-                foreach (var item in cinfo?.Groups)
+                foreach (var item in cinfo.Groups)
                 {
                     finalInfo.Groups.Add(item);
                 }
             }
             else if (dinfo != null)
             {
-                foreach (var item in dinfo?.Groups)
+                foreach (var item in dinfo.Groups)
                 {
                     finalInfo.Groups.Add(item);
                 }
@@ -624,7 +625,7 @@ namespace WalkingTec.Mvvm.Core
                         }
                     }
                 }
-                (vm as BaseVM)?.MSD.Clear();
+                (vm as BaseVM)?.MSD?.Clear();
 
                 //在本地EntityList中验证是否有重复
                 ValidateDuplicateData(finalInfo, entity);
@@ -811,12 +812,12 @@ namespace WalkingTec.Mvvm.Core
                         //如果只有一个字段重复，则拼接形成 xxx字段重复 这种提示
                         if (props.Count == 1)
                         {
-                            ErrorListVM.EntityList.Add(new ErrorMessage { Message = CoreProgram._localizer?["Sys.DuplicateError", AllName], Index = entity.ExcelIndex });
+                            ErrorListVM.EntityList.Add(new ErrorMessage { Message = (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DuplicateError", AllName] : null), Index = entity.ExcelIndex });
                         }
                         //如果多个字段重复，则拼接形成 xx，yy，zz组合字段重复 这种提示
                         else if (props.Count > 1)
                         {
-                            ErrorListVM.EntityList.Add(new ErrorMessage { Message = CoreProgram._localizer?["Sys.DuplicateGroupError", AllName], Index = entity.ExcelIndex });
+                            ErrorListVM.EntityList.Add(new ErrorMessage { Message = (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DuplicateGroupError", AllName] : null), Index = entity.ExcelIndex });
                         }
                     }
                 }
@@ -834,7 +835,7 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
-        private void TryValidateProperty(object value, ValidationContext context, ICollection<ValidationResult> results, PropertyInfo propertyInfo = null)
+        private void TryValidateProperty(object? value, ValidationContext context, ICollection<ValidationResult> results, PropertyInfo? propertyInfo = null)
         {
             var modelType = context.ObjectType;
             if (propertyInfo == null)
@@ -858,35 +859,35 @@ namespace WalkingTec.Mvvm.Core
                             {
                                 if (range.Minimum != null && range.Maximum != null)
                                 {
-                                    errorMessage = Wtm.Localizer[rule.ErrorMessage, displayName, range.Minimum, range.Maximum];
+                                    errorMessage = Wtm!.Localizer[rule.ErrorMessage, displayName, range.Minimum, range.Maximum];
                                 }
                                 else if (range.Minimum != null)
                                 {
-                                    errorMessage = Wtm.Localizer[rule.ErrorMessage, displayName, range.Minimum];
+                                    errorMessage = Wtm!.Localizer[rule.ErrorMessage, displayName, range.Minimum];
                                 }
                                 else if (range.Maximum != null)
                                 {
-                                    errorMessage = Wtm.Localizer[rule.ErrorMessage, displayName, range.Maximum];
+                                    errorMessage = Wtm!.Localizer[rule.ErrorMessage, displayName, range.Maximum];
                                 }
                             }
                             else if (rule is StringLengthAttribute sl)
                             {
                                 if (sl.MaximumLength > 0 && sl.MinimumLength > 0)
                                 {
-                                    errorMessage = Wtm.Localizer[rule.ErrorMessage, displayName, sl.MinimumLength, sl.MaximumLength];
+                                    errorMessage = Wtm!.Localizer[rule.ErrorMessage, displayName, sl.MinimumLength, sl.MaximumLength];
                                 }
                                 else if (sl.MinimumLength > 0)
                                 {
-                                    errorMessage = Wtm.Localizer[rule.ErrorMessage, displayName, sl.MinimumLength];
+                                    errorMessage = Wtm!.Localizer[rule.ErrorMessage, displayName, sl.MinimumLength];
                                 }
                                 else if (sl.MaximumLength > 0)
                                 {
-                                    errorMessage = Wtm.Localizer[rule.ErrorMessage, displayName, sl.MaximumLength];
+                                    errorMessage = Wtm!.Localizer[rule.ErrorMessage, displayName, sl.MaximumLength];
                                 }
                             }
                             else
                             {
-                                errorMessage = Wtm.Localizer[rule.ErrorMessage, displayName];
+                                errorMessage = Wtm!.Localizer[rule.ErrorMessage, displayName];
                             }
                         }
                         results.Add(new ValidationResult(errorMessage, new string[] { memberName }));
@@ -903,13 +904,13 @@ namespace WalkingTec.Mvvm.Core
         public virtual bool BatchSaveData()
         {
             //删除不必要的附件
-            if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm.ServiceProvider != null)
+            if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm!.ServiceProvider != null)
             {
-                var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
+                var fp = Wtm!.ServiceProvider.GetRequiredService<WtmFileProvider>();
 
                 foreach (var item in DeletedFileIds)
                 {
-                    fp.DeleteFile(item.ToString(), Wtm.CreateDC(false));
+                    fp.DeleteFile(item.ToString(), Wtm!.CreateDC(false));
                 }
             }
 
@@ -944,7 +945,7 @@ namespace WalkingTec.Mvvm.Core
             foreach (var item in EntityList)
             {
                 //根据唯一性的设定查找数据库中是否有同样的数据
-                P exist = IsDuplicateData(item, finalInfo);
+                P? exist = IsDuplicateData(item, finalInfo);
                 //如果设置了覆盖功能
                 if (IsOverWriteExistData)
                 {
@@ -954,15 +955,15 @@ namespace WalkingTec.Mvvm.Core
                         var tempPros = typeof(T).GetFields();
                         foreach (var pro in tempPros)
                         {
-                            var excelProp = Template.GetType().GetField(pro.Name).GetValue(Template) as ExcelPropety;
-                            var proToSet = typeof(P).GetSingleProperty(excelProp.FieldName);
+                            var excelProp = Template.GetType().GetField(pro.Name)?.GetValue(Template) as ExcelPropety;
+                            var proToSet = excelProp != null ? typeof(P).GetSingleProperty(excelProp.FieldName) : null;
                             if (proToSet != null)
                             {
                                 var val = proToSet.GetValue(item);
-                                PropertyHelper.SetPropertyValue(exist, excelProp.FieldName, val, stringBasedValue: true);
+                                PropertyHelper.SetPropertyValue(exist, excelProp!.FieldName, val, stringBasedValue: true);
                                 try
                                 {
-                                    DC.UpdateProperty(exist, proToSet.Name);
+                                    DC!.UpdateProperty(exist, proToSet.Name);
                                 }
                                 catch { }
                             }
@@ -972,8 +973,8 @@ namespace WalkingTec.Mvvm.Core
                         {
                             if (typeof(IBasePoco).IsAssignableFrom(exist.GetType()))
                             {
-                                (exist as IBasePoco).UpdateTime = DateTime.Now;
-                                DC.UpdateProperty(exist, "UpdateTime");
+                                (exist as IBasePoco)!.UpdateTime = DateTime.Now;
+                                DC!.UpdateProperty(exist, "UpdateTime");
                             }
                         }
 
@@ -981,8 +982,8 @@ namespace WalkingTec.Mvvm.Core
                         {
                             if (typeof(IBasePoco).IsAssignableFrom(exist.GetType()))
                             {
-                                (exist as IBasePoco).UpdateBy = LoginUserInfo.ITCode;
-                                DC.UpdateProperty(exist, "UpdateBy");
+                                (exist as IBasePoco)!.UpdateBy = LoginUserInfo?.ITCode;
+                                DC!.UpdateProperty(exist, "UpdateBy");
                             }
                         }
                         exist.ExcelIndex = item.ExcelIndex;
@@ -994,7 +995,7 @@ namespace WalkingTec.Mvvm.Core
                     {
                         if (typeof(IPersistPoco).IsAssignableFrom(item.GetType()))
                         {
-                            (item as IPersistPoco).IsValid = true;
+                            (item as IPersistPoco)!.IsValid = true;
                         }
                     }
                 }
@@ -1004,30 +1005,30 @@ namespace WalkingTec.Mvvm.Core
                     {
                         if (typeof(IPersistPoco).IsAssignableFrom(ModelType))
                         {
-                            (item as IPersistPoco).IsValid = true;
+                            (item as IPersistPoco)!.IsValid = true;
                         }
                     }
                 }
                 //进行添加操作
                 if (typeof(IBasePoco).IsAssignableFrom(item.GetType()))
                 {
-                    (item as IBasePoco).CreateTime = DateTime.Now;
-                    (item as IBasePoco).CreateBy = LoginUserInfo?.ITCode;
+                    (item as IBasePoco)!.CreateTime = DateTime.Now;
+                    (item as IBasePoco)!.CreateBy = LoginUserInfo?.ITCode;
                 }
                 if (typeof(ITenant).IsAssignableFrom(ModelType))
                 {
-                    ITenant ent = item as ITenant;
-                    ent.TenantCode = LoginUserInfo?.CurrentTenant;
+                    ITenant? ent = item as ITenant;
+                    if (ent != null) ent.TenantCode = LoginUserInfo?.CurrentTenant;
                 }
 
                 //如果是SqlServer数据库，而且没有主子表功能，进行Bulk插入
-                if (ConfigInfo.Connections.Where(x => x.Key == (CurrentCS ?? "default")).FirstOrDefault().DbType == DBTypeEnum.SqlServer && !HasSubTable && UseBulkSave == true)
+                if (ConfigInfo!.Connections.Where(x => x.Key == (CurrentCS ?? "default")).FirstOrDefault()!.DbType == DBTypeEnum.SqlServer && !HasSubTable && UseBulkSave == true)
                 {
                     //ListAdd.Add(item);
                 }
                 else
                 {
-                    DC.Set<P>().Add(item);
+                    DC!.Set<P>().Add(item);
                 }
             }
 
@@ -1042,11 +1043,11 @@ namespace WalkingTec.Mvvm.Core
             {
                 try
                 {
-                    DC.SaveChanges();
+                    DC!.SaveChanges();
 
                     if (ListAdd.Count > 0)
                     {
-                        BulkInsert<P>(DC, DC.GetTableName<P>(), ListAdd);
+                        BulkInsert<P>(DC!, DC!.GetTableName<P>(), ListAdd);
                     }
                 }
                 catch (Exception e)
@@ -1056,10 +1057,10 @@ namespace WalkingTec.Mvvm.Core
                     return false;
                 }
             }
-            if (string.IsNullOrEmpty(UploadFileId) == false && Wtm.ServiceProvider != null)
+            if (string.IsNullOrEmpty(UploadFileId) == false && Wtm!.ServiceProvider != null)
             {
-                var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
-                fp.DeleteFile(UploadFileId, Wtm.CreateDC(false, "default"));
+                var fp = Wtm!.ServiceProvider.GetRequiredService<WtmFileProvider>();
+                fp.DeleteFile(UploadFileId, Wtm!.CreateDC(false, "default"));
             }
 
             return true;
@@ -1140,7 +1141,7 @@ namespace WalkingTec.Mvvm.Core
             bool result = true;
             for (int i = 0; i < colCount; i++)
             {
-                string value = row.GetCell(i, MissingCellPolicy.CREATE_NULL_AS_BLANK).ToString();
+                string? value = row.GetCell(i, MissingCellPolicy.CREATE_NULL_AS_BLANK).ToString();
                 if (!string.IsNullOrEmpty(value))
                 {
                     result = false;
@@ -1198,7 +1199,7 @@ namespace WalkingTec.Mvvm.Core
             //检查是否为数据库操作错误
             if (e is DbUpdateException)
             {
-                var de = e as DbUpdateException;
+                var de = (DbUpdateException)e;
                 if (de.Entries != null)
                 {
                     if (de.Entries.Count == 0)
@@ -1209,15 +1210,15 @@ namespace WalkingTec.Mvvm.Core
                     foreach (var ent in de.Entries)
                     {
                         //获取错误数据Id
-                        var errorId = (long)((ent.Entity as TopBasePoco).ExcelIndex);
+                        var errorId = (long)((ent.Entity as TopBasePoco)!.ExcelIndex);
                         //根据State判断修改或删除操作，输出不同的错误信息
                         if (ent.State == EntityState.Deleted)
                         {
-                            ErrorListVM.EntityList.Add(new ErrorMessage { Index = errorId, Message = CoreProgram._localizer?["Sys.DataCannotDelete"] });
+                            ErrorListVM.EntityList.Add(new ErrorMessage { Index = errorId, Message = (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DataCannotDelete"] : null) });
                         }
                         else if (ent.State == EntityState.Modified)
                         {
-                            ErrorListVM.EntityList.Add(new ErrorMessage { Index = errorId, Message = CoreProgram._localizer?["Sys.EditFailed"] });
+                            ErrorListVM.EntityList.Add(new ErrorMessage { Index = errorId, Message = (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.EditFailed"] : null) });
                         }
                         else
                         {
@@ -1249,13 +1250,13 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="Entity">要验证的数据</param>
         /// <param name="checkCondition">验证表达式</param>
         /// <returns>null代表没有重复</returns>
-        protected P IsDuplicateData(P Entity, DuplicatedInfo<P> checkCondition)
+        protected P? IsDuplicateData(P Entity, DuplicatedInfo<P>? checkCondition)
         {
             //获取设定的重复字段信息
             if (checkCondition != null && checkCondition.Groups.Count > 0)
             {
                 //生成基础Query
-                var baseExp = DC.Set<P>().AsQueryable();
+                var baseExp = DC!.Set<P>().AsQueryable();
                 var modelType = typeof(P);
                 ParameterExpression para = Expression.Parameter(modelType, "tm");
                 //循环所有重复字段组
@@ -1276,13 +1277,13 @@ namespace WalkingTec.Mvvm.Core
                         //将字段名保存，为后面生成错误信息作准备
                         props.AddRange(field.GetProperties());
                     }
-                    if (typeof(ITenant).IsAssignableFrom(modelType) && props.Any(x => x.Name.ToLower() == "tenantcode") == false && Wtm?.ConfigInfo.EnableTenant == true && group.UseTenant == true)
+                    if (typeof(ITenant).IsAssignableFrom(modelType) && props.Any(x => x.Name.ToLower() == "tenantcode") == false && Wtm?.ConfigInfo?.EnableTenant == true && group.UseTenant == true)
                     {
-                        ITenant ent = Entity as ITenant;
-                        ent.TenantCode = LoginUserInfo.CurrentTenant;
-                        var f = new DuplicatedField<P>(x => (x as ITenant).TenantCode);
+                        ITenant? ent = Entity as ITenant;
+                        if (ent != null) ent.TenantCode = LoginUserInfo?.CurrentTenant;
+                        var f = new DuplicatedField<P>(x => (x as ITenant)!.TenantCode);
                         Expression exp = f.GetExpression(Entity, para);
-                        conditions.Add(exp);
+                        if (exp != null) conditions.Add(exp);
                     }
                     if (conditions.Count > 0)
                     {
@@ -1318,12 +1319,12 @@ namespace WalkingTec.Mvvm.Core
                                 //如果只有一个字段重复，则拼接形成 xxx字段重复 这种提示
                                 if (props.Count == 1)
                                 {
-                                    ErrorListVM.EntityList.Add(new ErrorMessage { Message = CoreProgram._localizer?["Sys.DuplicateError", AllName], Index = Entity.ExcelIndex });
+                                    ErrorListVM.EntityList.Add(new ErrorMessage { Message = (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DuplicateError", AllName] : null), Index = Entity.ExcelIndex });
                                 }
                                 //如果多个字段重复，则拼接形成 xx，yy，zz组合字段重复 这种提示
                                 else if (props.Count > 1)
                                 {
-                                    ErrorListVM.EntityList.Add(new ErrorMessage { Message = CoreProgram._localizer?["Sys.DuplicateGroupError", AllName], Index = Entity.ExcelIndex });
+                                    ErrorListVM.EntityList.Add(new ErrorMessage { Message = (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DuplicateGroupError", AllName] : null), Index = Entity.ExcelIndex });
                                 }
 
                             }
@@ -1372,19 +1373,19 @@ namespace WalkingTec.Mvvm.Core
             var err = ErrorListVM?.EntityList?.Where(x => x.Index == 0).FirstOrDefault()?.Message;
             if (string.IsNullOrEmpty(err))
             {
-                Models.IWtmFile fa = null;
-                if(Wtm.ServiceProvider == null) {
+                Models.IWtmFile? fa = null;
+                if(Wtm!.ServiceProvider == null) {
                     return mse;
                 }
-                var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
-                fa = fp.GetFile(UploadFileId, true, DC);
-                xssfworkbook = new XSSFWorkbook(fa.DataStream);
-                fa.DataStream.Dispose();
+                var fp = Wtm!.ServiceProvider.GetRequiredService<WtmFileProvider>();
+                fa = fp.GetFile(UploadFileId, true, DC!);
+                xssfworkbook = new XSSFWorkbook(fa!.DataStream);
+                fa!.DataStream.Dispose();
                 var propetys = Template.GetType().GetFields().Where(x => x.FieldType == typeof(ExcelPropety)).ToList();
                 List<ExcelPropety> excelPropetys = new List<ExcelPropety>();
                 for (int porpetyIndex = 0; porpetyIndex < propetys.Count(); porpetyIndex++)
                 {
-                    ExcelPropety ep = (ExcelPropety)propetys[porpetyIndex].GetValue(Template);
+                    ExcelPropety ep = (ExcelPropety)propetys[porpetyIndex].GetValue(Template)!;
                     excelPropetys.Add(ep);
                 }
                 int columnCount = excelPropetys.Count;
@@ -1400,29 +1401,29 @@ namespace WalkingTec.Mvvm.Core
                 f.Color = HSSFColor.Red.Index;
                 errorStyle.SetFont(f);
                 errorStyle.IsLocked = true;
-                foreach (var e in ErrorListVM?.EntityList)
+                foreach (var e in ErrorListVM!.EntityList)
                 {
                     if (e.Index > 0)
                     {
                         var c = sheet.GetRow((int)(e.Index - 1)).CreateCell(columnCount);
                         c.CellStyle = errorStyle;
-                        c.SetCellValue(e.Message);
+                        c.SetCellValue(e.Message ?? string.Empty);
                     }
                 }
                 MemoryStream ms = new MemoryStream();
                 xssfworkbook.Write(ms);
                 ms.Position = 0;
 
-                var newfile = fp.Upload("Error-" + fa.FileName, ms.Length, ms);
+                var newfile = fp.Upload("Error-" + fa!.FileName, ms.Length, ms);
                 ms.Close();
                 ms.Dispose();
-                err = CoreProgram._localizer?["Sys.ImportError"];
-                mse.Form.Add("Entity.Import", err);
+                err = CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.ImportError"] : null;
+                mse.Form.Add("Entity.Import", err ?? string.Empty);
                 mse.Form.Add("Entity.ErrorFileId", newfile.GetID());
             }
             else
             {
-                mse.Form.Add("Entity.Import", err);
+                mse.Form.Add("Entity.Import", err ?? string.Empty);
             }
             return mse;
         }
@@ -1437,7 +1438,7 @@ namespace WalkingTec.Mvvm.Core
         [Display(Name = "Sys.CellIndex")]
         public long Cell { get; set; }
         [Display(Name = "Sys.ErrorMsg")]
-        public string Message { get; set; }
+        public string? Message { get; set; }
     }
 
     /// <summary>
