@@ -65,6 +65,7 @@ Frame QQ communication group: 694148336(full), 892848149 (group2)
 - [WTM System Architecture Guide](./docs/system-architecture.md)
 - [WTM Analysis Mode Guide](./docs/analysis-mode.md)
 - [GitHub Packages Guide](./docs/github-packages.md)
+- [WTM 8.3 Roadmap](./docs/roadmap-8.3.md)
 
 version 5.0x is in VNext branch
 

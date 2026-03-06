@@ -34,6 +34,20 @@ require('../../../src/WalkingTec.Mvvm.Mvc/framework_analysis.js');
 // Capture the require()'d version before vm.Script tests overwrite global.wtmAnalysis
 const waReq = global.wtmAnalysis;
 
+beforeAll(() => {
+    if (global.window && global.window.HTMLAnchorElement) {
+        jest.spyOn(global.window.HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    }
+});
+
+afterAll(() => {
+    if (global.window && global.window.HTMLAnchorElement &&
+        global.window.HTMLAnchorElement.prototype.click &&
+        global.window.HTMLAnchorElement.prototype.click.mockRestore) {
+        global.window.HTMLAnchorElement.prototype.click.mockRestore();
+    }
+});
+
 // ─── 載入 framework_analysis.js ──────────────────────────────────────────────
 const src = fs.readFileSync(
     path.resolve(__dirname, '../../../src/WalkingTec.Mvvm.Mvc/framework_analysis.js'),
