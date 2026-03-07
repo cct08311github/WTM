@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
@@ -16,7 +16,7 @@ namespace WalkingTec.Mvvm.Core
     public class DuplicatedGroup<T>
     {
         public bool UseTenant { get; set; } = true;
-        public List<DuplicatedField<T>> Fields { get; set; }
+        public List<DuplicatedField<T>> Fields { get; set; } = new();
     }
 
     /// <summary>
@@ -77,7 +77,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="Entity">要验证字段的实体类</param>
         /// <param name="para">ParameterExpression</param>
         /// <returns></returns>
-        public virtual Expression GetExpression(T Entity, ParameterExpression para)
+        public virtual Expression? GetExpression(T Entity, ParameterExpression para)
         {
             var propName = PropertyHelper.GetPropertyName(_directFieldExp);
             var prop = PropertyHelper.GetPropertyInfo(_directFieldExp);
@@ -91,7 +91,7 @@ namespace WalkingTec.Mvvm.Core
             //}
 
             //如果字段值是空字符串，则跳过
-            if (val is string && val.ToString() == string.Empty)
+            if (val is string && val!.ToString() == string.Empty)
             {
                 var requiredAttrs = prop.GetCustomAttributes(typeof(RequiredAttribute), false).ToList();
 
@@ -102,7 +102,7 @@ namespace WalkingTec.Mvvm.Core
                 else
                 {
                     var requiredAtt = requiredAttrs[0] as RequiredAttribute;
-                    if (requiredAtt.AllowEmptyStrings == true)
+                    if (requiredAtt?.AllowEmptyStrings == true)
                     {
                         return null;
                     }
@@ -125,11 +125,11 @@ namespace WalkingTec.Mvvm.Core
             }
             if (left.Type == typeof(string))
             {
-                left = Expression.Call(left, typeof(String).GetMethod("Trim", Type.EmptyTypes));
+                left = Expression.Call(left, typeof(String).GetMethod("Trim", Type.EmptyTypes)!);
             }
             if (val is string)
             {
-                val = val.ToString().Trim();
+                val = val!.ToString()!.Trim();
             }
             var right = Expression.Constant(val);
             var equal = Expression.Equal(left, right);
@@ -138,7 +138,7 @@ namespace WalkingTec.Mvvm.Core
 
         protected DuplicatedField()
         {
-
+            _directFieldExp = null!;
         }
 
         /// <summary>
@@ -180,7 +180,8 @@ namespace WalkingTec.Mvvm.Core
 
         protected ComplexDuplicatedField()
         {
-
+            _middleExp = null!;
+            _subFieldExps = null!;
         }
 
         /// <summary>
@@ -207,7 +208,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="Entity">源数据</param>
         /// <param name="para">源数据类型</param>
         /// <returns>Where语句</returns>
-        public override Expression GetExpression(T Entity, ParameterExpression para)
+        public override Expression? GetExpression(T Entity, ParameterExpression para)
         {
             ParameterExpression midPara = Expression.Parameter(typeof(V), "tm2");
             //获取中间表的List
@@ -217,7 +218,7 @@ namespace WalkingTec.Mvvm.Core
                 return null;
             }
             List<Expression> allExp = new List<Expression>();
-            Expression rv = null;
+            Expression? rv = null;
             //循环中间表数据
             foreach (var li in list)
             {
@@ -236,7 +237,7 @@ namespace WalkingTec.Mvvm.Core
                     //如果字段是string类型，则拼接trim，形成类似 x.field.Trim()的形式
                     if (left.Type == typeof(string))
                     {
-                        left = Expression.Call(left, typeof(String).GetMethod("Trim", Type.EmptyTypes));
+                        left = Expression.Call(left, typeof(String).GetMethod("Trim", Type.EmptyTypes)!);
                     }
                     //使用当前循环的中间表的数据获取字段的值
                     object vv = SubFieldExp.Compile().Invoke(li);
@@ -247,9 +248,10 @@ namespace WalkingTec.Mvvm.Core
                         continue;
                     }
                     //如果值为空字符串且没要求必填，则跳过
-                    if (vv is string && vv.ToString() == "")
+                    if (vv is string && vv!.ToString() == "")
                     {
-                        var requiredAttrs = li.GetType().GetSingleProperty(SubFieldExp.GetPropertyName()).GetCustomAttributes(typeof(RequiredAttribute), false).ToList();
+                        var prop = li!.GetType().GetSingleProperty(SubFieldExp.GetPropertyName());
+                        var requiredAttrs = prop?.GetCustomAttributes(typeof(RequiredAttribute), false)?.ToList();
 
                         if (requiredAttrs == null || requiredAttrs.Count == 0)
                         {
@@ -259,7 +261,7 @@ namespace WalkingTec.Mvvm.Core
                         else
                         {
                             var requiredAtt = requiredAttrs[0] as RequiredAttribute;
-                            if (requiredAtt.AllowEmptyStrings == true)
+                            if (requiredAtt?.AllowEmptyStrings == true)
                             {
                                 needBreak = true;
                                 continue;
@@ -269,7 +271,7 @@ namespace WalkingTec.Mvvm.Core
                     //如果值为字符串，调用trim函数
                     if (vv is string)
                     {
-                        vv = vv.ToString().Trim();
+                        vv = vv!.ToString()!.Trim();
                     }
                     //拼接形成 x.field == value的形式
                     ConstantExpression right = Expression.Constant(vv);
@@ -281,7 +283,7 @@ namespace WalkingTec.Mvvm.Core
                     continue;
                 }
                 //拼接多个 x.field==value，形成 x.field==value && x.field1==value1 .....的形式
-                Expression exp = null;
+                Expression? exp = null;
                 if (innerExp.Count == 1)
                 {
                     exp = innerExp[0];
