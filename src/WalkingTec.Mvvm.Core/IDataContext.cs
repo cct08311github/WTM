@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
@@ -23,8 +23,8 @@ namespace WalkingTec.Mvvm.Core
         bool IsFake { get; set; }
 
         bool IsDebug { get; set; }
-        string CurrentUserCode { get; set; }
-        string TenantCode { get; }
+        string? CurrentUserCode { get; set; }
+        string? TenantCode { get; }
         DBTypeEnum DBType { get; set; }
         /// <summary>
         /// AddEntity
@@ -118,7 +118,7 @@ namespace WalkingTec.Mvvm.Core
 
         void EnsureCreate();
         IDataContext CreateNew();
-        IDataContext ReCreate(ILoggerFactory _logger = null);
+        IDataContext ReCreate(ILoggerFactory? _logger = null);
 
         /// <summary>
         /// 执行存储过程，返回datatable
