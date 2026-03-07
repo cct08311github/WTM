@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -13,11 +13,11 @@ namespace WalkingTec.Mvvm.Core
 {
     public static class IServiceExtension
     {
-        public static IServiceCollection AddWtmContextForConsole(this IServiceCollection services, string jsonFileDir = null, string jsonFileName = null, Func<IWtmFileHandler, string> fileSubDirSelector = null)
+        public static IServiceCollection AddWtmContextForConsole(this IServiceCollection services, string? jsonFileDir = null, string? jsonFileName = null, Func<IWtmFileHandler, string>? fileSubDirSelector = null)
         {
             var configBuilder = new ConfigurationBuilder();
             IConfigurationRoot ConfigRoot = configBuilder.WTMConfig(null,jsonFileDir,jsonFileName).Build();
-            var WtmConfigs = ConfigRoot.Get<Configs>();
+            var WtmConfigs = ConfigRoot.Get<Configs>()!;
             services.Configure<Configs>(ConfigRoot);
             services.AddLogging(builder =>
             {
@@ -41,7 +41,7 @@ namespace WalkingTec.Mvvm.Core
                 {
                     services.AddHttpClient(item.Key, x =>
                     {
-                        x.BaseAddress = new Uri(item.Value.Url);
+                        x.BaseAddress = new Uri(item.Value.Url!);
                         x.DefaultRequestHeaders.Add("Cache-Control", "no-cache");
                         x.DefaultRequestHeaders.Add("User-Agent", "Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.2; SV1; .NET CLR 1.1.4322; .NET CLR 2.0.50727)");
                     });
@@ -51,7 +51,7 @@ namespace WalkingTec.Mvvm.Core
             var cs = WtmConfigs.Connections;
             foreach (var item in cs)
             {
-                var dc = item.CreateDC();
+                var dc = item.CreateDC()!;
                 dc.Database.EnsureCreated();
             }
             WtmFileProvider.Init(WtmConfigs, gd);

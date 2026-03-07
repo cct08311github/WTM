@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Data;
@@ -28,10 +28,10 @@ namespace WalkingTec.Mvvm.Core
                 foreach (DataRow row in table.Rows)
                 {
                     //新建Entity
-                    T entity = (T)Activator.CreateInstance(typeof(T));
+                    T entity = (T)Activator.CreateInstance(typeof(T))!;
                     foreach (DataColumn col in table.Columns)
                     {
-                        (entity as DynamicData).Add(col.ColumnName, row[col] == DBNull.Value ? null : row[col]);
+                        ((DynamicData)(object)entity).Add(col.ColumnName, row[col] == DBNull.Value ? null : row[col]);
                     }
                     entityList.Add(entity);
                 }
@@ -44,7 +44,7 @@ namespace WalkingTec.Mvvm.Core
                 foreach (DataRow row in table.Rows)
                 {
                     //新建Entity
-                    T entity = (T)Activator.CreateInstance(typeof(T));
+                    T entity = (T)Activator.CreateInstance(typeof(T))!;
                     //循环Entity的每一个属性
                     foreach (var item in properties)
                     {
@@ -66,7 +66,7 @@ namespace WalkingTec.Mvvm.Core
                                 //如果是Guid或Guid?类型
                                 if (ptype == typeof(Guid))
                                 {
-                                    item.SetValue(entity, Guid.Parse(row[item.Name].ToString()));
+                                    item.SetValue(entity, Guid.Parse(row[item.Name].ToString()!));
                                 }
                                 //如果是enum或enum?类型
                                 else if (ptype.IsEnum)
@@ -94,7 +94,7 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         /// <param name="modelList">实体类列表</param>
         /// <returns>DataSet</returns>
-        public static DataSet ToDataSet<T>(List<T> modelList) where T : new()
+        public static DataSet? ToDataSet<T>(List<T> modelList) where T : new()
         {
             if (modelList == null || modelList.Count == 0)
             {
@@ -103,7 +103,7 @@ namespace WalkingTec.Mvvm.Core
             else
             {
                 DataSet ds = new DataSet();
-                ds.Tables.Add(ToDataTable(modelList));
+                ds.Tables.Add(ToDataTable(modelList)!);
                 return ds;
             }
         }
@@ -113,7 +113,7 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         /// <param name="modelList">实体类列表</param>
         /// <returns>DataTable</returns>
-        public static DataTable ToDataTable<T>(List<T> modelList) where T : new()
+        public static DataTable? ToDataTable<T>(List<T> modelList) where T : new()
         {
             if (modelList == null || modelList.Count == 0)
             {
