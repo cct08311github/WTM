@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using Microsoft.Data.SqlClient;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -33,24 +33,24 @@ namespace WalkingTec.Mvvm.Core
     /// </summary>
     public partial class FrameworkContext : EmptyContext, IDataContext
     {
-        public DbSet<FrameworkMenu> BaseFrameworkMenus { get; set; }
-        public DbSet<FunctionPrivilege> BaseFunctionPrivileges { get; set; }
-        public DbSet<DataPrivilege> BaseDataPrivileges { get; set; }
-        public DbSet<FileAttachment> BaseFileAttachments { get; set; }
-        public DbSet<FrameworkGroup> BaseFrameworkGroups { get; set; }
-        public DbSet<FrameworkRole> BaseFrameworkRoles { get; set; }
-        public DbSet<FrameworkUserRole> BaseFrameworkUserRoles { get; set; }
-        public DbSet<FrameworkUserGroup> BaseFrameworkUserGroups { get; set; }
-        public DbSet<FrameworkWorkflow> FrameworkWorkflows { get; set; }
-        public DbSet<ActionLog> BaseActionLogs { get; set; }
-        public DbSet<FrameworkTenant> FrameworkTenants { get; set; }
+        public DbSet<FrameworkMenu> BaseFrameworkMenus { get; set; } = null!;
+        public DbSet<FunctionPrivilege> BaseFunctionPrivileges { get; set; } = null!;
+        public DbSet<DataPrivilege> BaseDataPrivileges { get; set; } = null!;
+        public DbSet<FileAttachment> BaseFileAttachments { get; set; } = null!;
+        public DbSet<FrameworkGroup> BaseFrameworkGroups { get; set; } = null!;
+        public DbSet<FrameworkRole> BaseFrameworkRoles { get; set; } = null!;
+        public DbSet<FrameworkUserRole> BaseFrameworkUserRoles { get; set; } = null!;
+        public DbSet<FrameworkUserGroup> BaseFrameworkUserGroups { get; set; } = null!;
+        public DbSet<FrameworkWorkflow> FrameworkWorkflows { get; set; } = null!;
+        public DbSet<ActionLog> BaseActionLogs { get; set; } = null!;
+        public DbSet<FrameworkTenant> FrameworkTenants { get; set; } = null!;
         // [Elsa removed] DbSet properties
         // public DbSet<Elsa_Bookmark> Elsa_Bookmarks { get; set; }
         // public DbSet<Elsa_Trigger> Elsa_Triggers { get; set; }
         // public DbSet<Elsa_WorkflowDefinition> Elsa_WorkflowDefinitions { get; set; }
         // public DbSet<Elsa_WorkflowExecutionLogRecord> Elsa_WorkflowExecutionLogRecords { get; set; }
         // public DbSet<Elsa_WorkflowInstance> Elsa_WorkflowInstances { get; set; }
-        public DbSet<RefreshTokenEntity> FrameworkRefreshTokens { get; set; }
+        public DbSet<RefreshTokenEntity> FrameworkRefreshTokens { get; set; } = null!;
 
         /// <summary>
         /// FrameworkContext
@@ -67,7 +67,7 @@ namespace WalkingTec.Mvvm.Core
         {
         }
 
-        public FrameworkContext(string cs, DBTypeEnum dbtype, string version = null) : base(cs, dbtype, version)
+        public FrameworkContext(string cs, DBTypeEnum dbtype, string? version = null) : base(cs, dbtype, version)
         {
         }
 
@@ -97,8 +97,8 @@ namespace WalkingTec.Mvvm.Core
                     var pros = item.GetProperties().Where(x => x.PropertyType == typeof(FileAttachment)).ToList();
                     foreach (var filepro in pros)
                     {
-                        var builder = typeof(ModelBuilder).GetMethod("Entity", Type.EmptyTypes).MakeGenericMethod(item).Invoke(modelBuilder, null) as EntityTypeBuilder;
-                        builder.HasOne(filepro.Name).WithMany().OnDelete(DeleteBehavior.Restrict);
+                        var builder = typeof(ModelBuilder).GetMethod("Entity", Type.EmptyTypes)!.MakeGenericMethod(item).Invoke(modelBuilder, null) as EntityTypeBuilder;
+                        builder!.HasOne(filepro.Name).WithMany().OnDelete(DeleteBehavior.Restrict);
                     }
                 }
                 List<Expression> list = new List<Expression>();
@@ -122,8 +122,8 @@ namespace WalkingTec.Mvvm.Core
                         {
                             finalexp = Expression.AndAlso(finalexp, list[i]);
                         }
-                        var builder = typeof(ModelBuilder).GetMethod("Entity", Type.EmptyTypes).MakeGenericMethod(item).Invoke(modelBuilder, null) as EntityTypeBuilder;
-                        builder.HasQueryFilter(Expression.Lambda(finalexp, pe));
+                        var builder = typeof(ModelBuilder).GetMethod("Entity", Type.EmptyTypes)!.MakeGenericMethod(item).Invoke(modelBuilder, null) as EntityTypeBuilder;
+                        builder!.HasQueryFilter(Expression.Lambda(finalexp, pe));
                     }
                 }
             }
@@ -136,7 +136,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="allModules"></param>
         /// <param name="IsSpa"></param>
         /// <returns>返回true表示需要进行初始化数据操作，返回false即数据库已经存在或不需要初始化数据</returns>
-        public async override Task<bool> DataInit(object allModules, bool IsSpa)
+        public async override Task<bool> DataInit(object? allModules, bool IsSpa)
         {
             bool rv = await Database.EnsureCreatedAsync();
             //判断是否存在初始数据
@@ -152,8 +152,8 @@ namespace WalkingTec.Mvvm.Core
                 var AllModules = allModules as List<SimpleModule>;
                 var roles = new FrameworkRole[]
                 {
-                    new FrameworkRole{ ID = Guid.NewGuid(), RoleCode = "001", RoleName = CoreProgram._localizer?["Sys.Admin"], TenantCode=TenantCode},
-                    new FrameworkRole{ ID = Guid.NewGuid(), RoleCode = "002", RoleName = CoreProgram._localizer?["_Admin.User"], TenantCode=TenantCode},
+                    new FrameworkRole{ ID = Guid.NewGuid(), RoleCode = "001", RoleName = CoreProgram._localizer != null ? (string)CoreProgram._localizer["Sys.Admin"] : "Sys.Admin", TenantCode=TenantCode},
+                    new FrameworkRole{ ID = Guid.NewGuid(), RoleCode = "002", RoleName = CoreProgram._localizer != null ? (string)CoreProgram._localizer["_Admin.User"] : "_Admin.User", TenantCode=TenantCode},
                 };
 
                 var adminRole = roles[0];
@@ -169,12 +169,12 @@ namespace WalkingTec.Mvvm.Core
                     var tenantList = IsSpa ? GetMenu2(AllModules, "FrameworkTenant", "MenuKey.FrameworkTenant", 6) : GetMenu(AllModules, "_Admin", "FrameworkTenant", "Index", "MenuKey.FrameworkTenant", 7);
                     if (logList != null)
                     {
-                        var menus = new FrameworkMenu[] { logList, userList, roleList, groupList, menuList, dpList, tenantList };
+                        var menus = new FrameworkMenu?[] { logList, userList, roleList, groupList, menuList, dpList, tenantList };
                         foreach (var item in menus)
                         {
                             if (item != null)
                             {
-                                systemManagement.Children.Add(item);
+                                systemManagement.Children?.Add(item);
                             }
                         }
                         Set<FrameworkMenu>().Add(systemManagement);
@@ -201,7 +201,7 @@ namespace WalkingTec.Mvvm.Core
                             var menuList2 = GetMenu2(AllModules, "FrameworkMenu", "MenuKey.MenuMangement", 5);
                             var dpList2 = GetMenu2(AllModules, "DataPrivilege", "MenuKey.DataPrivilege", 6);
                             var tenantList2 = GetMenu2(AllModules, "FrameworkTenant", "MenuKey.FrameworkTenant", 7);
-                            var apis = new FrameworkMenu[] { logList2, userList2, roleList2, groupList2, menuList2, dpList2, tenantList2 };
+                            var apis = new FrameworkMenu?[] { logList2, userList2, roleList2, groupList2, menuList2, dpList2, tenantList2 };
                             //apis.ToList().ForEach(x => { x.ShowOnMenu = false;x.PageName += $"({Program._localizer["BuildinApi"]})"; });
                             foreach (var item in apis)
                             {
@@ -209,7 +209,7 @@ namespace WalkingTec.Mvvm.Core
                                 {
                                     item.ModuleName += "Api";
                                     item.ShowOnMenu = false;
-                                    apifolder.Children.Add(item);
+                                    apifolder.Children?.Add(item);
 
                                 }
                             }
@@ -252,14 +252,15 @@ namespace WalkingTec.Mvvm.Core
             return menu;
         }
 
-        private FrameworkMenu GetMenu(List<SimpleModule> allModules, string areaName, string controllerName, string actionName, string pageKey, int displayOrder)
+        private FrameworkMenu? GetMenu(List<SimpleModule>? allModules, string? areaName, string controllerName, string actionName, string pageKey, int displayOrder)
         {
-            var acts = allModules.Where(x => x.ClassName == controllerName && (areaName == null || x.Area?.Prefix?.ToLower() == areaName.ToLower())).SelectMany(x => x.Actions).ToList();
+            if (allModules == null) return null;
+            var acts = allModules.Where(x => x.ClassName == controllerName && (areaName == null || x.Area?.Prefix?.ToLower() == areaName.ToLower())).SelectMany(x => x.Actions ?? new List<SimpleAction>()).ToList();
             var act = acts.Where(x => x.MethodName == actionName).SingleOrDefault();
             var rest = acts.Where(x => x.MethodName != actionName && x.IgnorePrivillege == false).ToList();
             bool allowtenant = controllerName != "FrameworkMenu";
-            FrameworkMenu menu = GetMenuFromAction(act, true, displayOrder, allowtenant);
-            if (act?.Module?.IsApi == true)
+            FrameworkMenu? menu = GetMenuFromAction(act, true, displayOrder, allowtenant);
+            if (act?.Module?.IsApi == true && menu != null)
             {
                 menu.ModuleName += "Api";
             }
@@ -271,52 +272,59 @@ namespace WalkingTec.Mvvm.Core
                     if (rest[i] != null)
                     {
                         var sub = GetMenuFromAction(rest[i], false, (i + 1), allowtenant);
-                        sub.PageName = pageKey;
-                        if (rest[i].Module.IsApi == true)
+                        if (sub != null)
                         {
-                            sub.ModuleName += "Api";
+                            sub.PageName = pageKey;
+                            if (rest[i].Module?.IsApi == true)
+                            {
+                                sub.ModuleName += "Api";
+                            }
+                            menu.Children?.Add(sub);
                         }
-                        menu.Children.Add(sub);
                     }
                 }
             }
             return menu;
         }
 
-        private FrameworkMenu GetMenu2(List<SimpleModule> allModules, string controllerName, string pageKey, int displayOrder)
+        private FrameworkMenu? GetMenu2(List<SimpleModule>? allModules, string controllerName, string pageKey, int displayOrder)
         {
+            if (allModules == null) return null;
             bool allowtenant = controllerName != "FrameworkMenu";
-            var acts = allModules.Where(x => (x.FullName == $"WalkingTec.Mvvm.Admin.Api,{controllerName}") && x.IsApi == true).SelectMany(x => x.Actions).ToList();
+            var acts = allModules.Where(x => (x.FullName == $"WalkingTec.Mvvm.Admin.Api,{controllerName}") && x.IsApi == true).SelectMany(x => x.Actions ?? new List<SimpleAction>()).ToList();
             var rest = acts.Where(x => x.IgnorePrivillege == false).ToList();
-            SimpleAction act = null;
+            SimpleAction? act = null;
             if (acts.Count > 0)
             {
                 act = acts[0];
             }
-            FrameworkMenu menu = GetMenuFromAction(act, true, displayOrder, allowtenant);
+            FrameworkMenu? menu = GetMenuFromAction(act, true, displayOrder, allowtenant);
             if (menu != null)
             {
                 menu.PageName = pageKey;
-                menu.Url = "/" + acts[0].Module.ClassName.ToLower();
+                menu.Url = "/" + acts[0].Module?.ClassName?.ToLower();
                 menu.ActionName = "MainPage";
-                menu.ClassName = acts[0].Module.FullName;
+                menu.ClassName = acts[0].Module?.FullName;
                 menu.MethodName = null;
                 for (int i = 0; i < rest.Count; i++)
                 {
                     if (rest[i] != null)
                     {
                         var sub = GetMenuFromAction(rest[i], false, (i + 1), allowtenant);
-                        sub.PageName = pageKey;
-                        menu.Children.Add(sub);
+                        if (sub != null)
+                        {
+                            sub.PageName = pageKey;
+                            menu.Children?.Add(sub);
+                        }
                     }
                 }
             }
             return menu;
         }
 
-        private FrameworkMenu GetMenuFromAction(SimpleAction act, bool isMainLink, int displayOrder = 1, bool allowtenant = true)
+        private FrameworkMenu? GetMenuFromAction(SimpleAction? act, bool isMainLink, int displayOrder = 1, bool allowtenant = true)
         {
-            if (act == null)
+            if (act == null || act.Module == null)
             {
                 return null;
             }
@@ -353,7 +361,7 @@ namespace WalkingTec.Mvvm.Core
 
     public partial class EmptyContext : DbContext, IDataContext
     {
-        private ILoggerFactory _loggerFactory;
+        private ILoggerFactory? _loggerFactory;
 
         /// <summary>
         /// Commited
@@ -364,8 +372,8 @@ namespace WalkingTec.Mvvm.Core
         /// IsFake
         /// </summary>
         public bool IsFake { get; set; }
-        private string _tenantCode;
-        public string TenantCode
+        private string? _tenantCode;
+        public string? TenantCode
         {
             get
             {
@@ -373,16 +381,16 @@ namespace WalkingTec.Mvvm.Core
             }
         }
         public bool IsDebug { get; set; }
-        public string CurrentUserCode { get; set; }
+        public string? CurrentUserCode { get; set; }
         /// <summary>
         /// CSName
         /// </summary>
-        public string CSName { get; set; }
+        public string CSName { get; set; } = "default";
 
         public DBTypeEnum DBType { get; set; }
 
-        public string Version { get; set; }
-        public CS ConnectionString { get; set; }
+        public string? Version { get; set; }
+        public CS ConnectionString { get; set; } = null!;
 
 
         /// <summary>
@@ -404,7 +412,7 @@ namespace WalkingTec.Mvvm.Core
             DBType = DBTypeEnum.SqlServer;
         }
 
-        public EmptyContext(string cs, DBTypeEnum dbtype, string version = null)
+        public EmptyContext(string cs, DBTypeEnum dbtype, string? version = null)
         {
             CSName = cs;
             DBType = dbtype;
@@ -413,7 +421,7 @@ namespace WalkingTec.Mvvm.Core
 
         public EmptyContext(CS cs)
         {
-            CSName = cs.Value;
+            CSName = cs.Value ?? "default";
             DBType = cs.DbType ?? DBTypeEnum.SqlServer;
             Version = cs.Version;
             ConnectionString = cs;
@@ -425,15 +433,15 @@ namespace WalkingTec.Mvvm.Core
         {
             if (ConnectionString != null)
             {
-                return (IDataContext)this.GetType().GetConstructor(new Type[] { typeof(CS) }).Invoke(new object[] { ConnectionString }); ;
+                return (IDataContext)this.GetType().GetConstructor(new Type[] { typeof(CS) })!.Invoke(new object[] { ConnectionString });
             }
             else
             {
-                return (IDataContext)this.GetType().GetConstructor(new Type[] { typeof(string), typeof(DBTypeEnum), typeof(string) }).Invoke(new object[] { CSName, DBType, Version });
+                return (IDataContext)this.GetType().GetConstructor(new Type[] { typeof(string), typeof(DBTypeEnum), typeof(string) })!.Invoke(new object[] { CSName, DBType, Version! });
             }
         }
 
-        public IDataContext ReCreate(ILoggerFactory _logger=null)
+        public IDataContext ReCreate(ILoggerFactory? _logger=null)
         {
             if (this?.Database?.CurrentTransaction != null)
             {
@@ -441,14 +449,14 @@ namespace WalkingTec.Mvvm.Core
             }
             else
             {
-                IDataContext rv = null;
+                IDataContext rv = null!;
                 if (ConnectionString != null)
                 {
-                    rv = (IDataContext)this.GetType().GetConstructor(new Type[] { typeof(CS) }).Invoke(new object[] { ConnectionString }); ;
+                    rv = (IDataContext)this.GetType().GetConstructor(new Type[] { typeof(CS) })!.Invoke(new object[] { ConnectionString });
                 }
                 else
                 {
-                   rv =(IDataContext)this.GetType().GetConstructor(new Type[] { typeof(string), typeof(DBTypeEnum) }).Invoke(new object[] { CSName, DBType });
+                   rv =(IDataContext)this.GetType().GetConstructor(new Type[] { typeof(string), typeof(DBTypeEnum) })!.Invoke(new object[] { CSName, DBType });
                 }
                 rv.SetTenantCode(this.TenantCode);
                 if (_logger != null)
@@ -572,16 +580,16 @@ namespace WalkingTec.Mvvm.Core
                     {
                         return typeof(string);
                     }
-                    return Nullable.GetUnderlyingType(t);
+                    return Nullable.GetUnderlyingType(t)!;
                 }
             }
             else
             {
-                if ("DateTime".Equals(t.Name))
+                if (t != null && "DateTime".Equals(t.Name))
                 {
                     return typeof(string);
                 }
-                return t;
+                return t!;
             }
         }
 
@@ -620,7 +628,7 @@ namespace WalkingTec.Mvvm.Core
                     optionsBuilder.UseSqlServer(CSName,o => o.UseCompatibilityLevel(ver));
                     break;
                 case DBTypeEnum.MySql:
-                    ServerVersion sv = null;
+                    ServerVersion? sv = null;
                     if (string.IsNullOrEmpty(Version) == false)
                     {
                         ServerVersion.TryParse(Version, out sv);
@@ -684,7 +692,7 @@ namespace WalkingTec.Mvvm.Core
             this._loggerFactory = factory;
         }
 
-        public void SetTenantCode(string code)
+        public void SetTenantCode(string? code)
         {
             this._tenantCode = code;
         }
@@ -694,7 +702,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="allModules"></param>
         /// <param name="IsSpa"></param>
         /// <returns>返回true表示需要进行初始化数据操作，返回false即数据库已经存在或不需要初始化数据</returns>
-        public async virtual Task<bool> DataInit(object allModules, bool IsSpa)
+        public async virtual Task<bool> DataInit(object? allModules, bool IsSpa)
         {
             bool rv = await Database.EnsureCreatedAsync();
             return rv;
@@ -787,7 +795,7 @@ namespace WalkingTec.Mvvm.Core
 
         public object CreateCommandParameter(string name, object value, ParameterDirection dir)
         {
-            object rv = null;
+            object rv = null!;
             switch (this.DBType)
             {
                 case DBTypeEnum.SqlServer:
@@ -871,7 +879,7 @@ namespace WalkingTec.Mvvm.Core
     {
 
 
-        public string TenantCode { get; }
+        public string? TenantCode { get; } = null;
         public bool IsFake { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
 
         public IModel Model => throw new NotImplementedException();
@@ -881,7 +889,7 @@ namespace WalkingTec.Mvvm.Core
         public string CSName { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
         public DBTypeEnum DBType { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
         public bool IsDebug { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
-        public string CurrentUserCode { get; set; }
+        public string? CurrentUserCode { get; set; }
 
         public void AddEntity<T>(T entity) where T : TopBasePoco
         {
@@ -903,7 +911,7 @@ namespace WalkingTec.Mvvm.Core
             throw new NotImplementedException();
         }
 
-        public Task<bool> DataInit(object AllModel, bool IsSpa)
+        public Task<bool> DataInit(object? AllModel, bool IsSpa)
         {
             throw new NotImplementedException();
         }
@@ -918,7 +926,7 @@ namespace WalkingTec.Mvvm.Core
 
         }
 
-        public IDataContext ReCreate(ILoggerFactory _logger = null)
+        public IDataContext ReCreate(ILoggerFactory? _logger = null)
         {
             throw new NotImplementedException();
         }
@@ -977,7 +985,7 @@ namespace WalkingTec.Mvvm.Core
         {
             throw new NotImplementedException();
         }
-        public void SetTenantCode(string code)
+        public void SetTenantCode(string? code)
         {
             throw new NotImplementedException();
         }

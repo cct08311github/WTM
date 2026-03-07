@@ -114,7 +114,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="AllModel"></param>
         /// <param name="IsSpa"></param>
         /// <returns>返回true即数据新建完成，进入初始化操作，返回false即数据库已经存在</returns>
-        Task<bool> DataInit(object AllModel, bool IsSpa);
+        Task<bool> DataInit(object? AllModel, bool IsSpa);
 
         void EnsureCreate();
         IDataContext CreateNew();
@@ -142,6 +142,6 @@ namespace WalkingTec.Mvvm.Core
         object CreateCommandParameter(string name, object value, ParameterDirection dir);
 
         void SetLoggerFactory(ILoggerFactory factory);
-        void SetTenantCode(string tc);
+        void SetTenantCode(string? tc);
     }
 }
