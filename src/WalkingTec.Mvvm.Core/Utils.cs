@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Distributed;
 using NPOI.HSSF.Util;
@@ -22,8 +22,8 @@ namespace WalkingTec.Mvvm.Core
     public class Utils
     {
 
-        private static List<Assembly> _allAssemblies;
-        private static List<Type> _allModels;
+        private static List<Assembly>? _allAssemblies;
+        private static List<Type>? _allModels;
         public static string GetCurrentComma()
         {
             if (CultureInfo.CurrentUICulture.Name == "zh-cn")
@@ -41,8 +41,8 @@ namespace WalkingTec.Mvvm.Core
             if (_allAssemblies == null)
             {
                 _allAssemblies = new List<Assembly>();
-                string path = null;
-                string singlefile = null;
+                string? path = null;
+                string? singlefile = null;
                 try
                 {
                     path = Assembly.GetEntryAssembly()?.Location;
@@ -50,10 +50,12 @@ namespace WalkingTec.Mvvm.Core
                 catch { }
                 if (string.IsNullOrEmpty(path))
                 {
-                    singlefile = System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName;
+                    singlefile = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
                     path = Path.GetDirectoryName(singlefile);
                 }
-                var dir = new DirectoryInfo(Path.GetDirectoryName(path));
+                path ??= AppContext.BaseDirectory;
+                var dirPath = Path.GetDirectoryName(path) ?? path;
+                var dir = new DirectoryInfo(dirPath);
 
                 var dlls = dir.GetFiles("*.dll", SearchOption.TopDirectoryOnly);
                 string[] systemdll = new string[]
@@ -92,7 +94,7 @@ namespace WalkingTec.Mvvm.Core
                     {
                     }
                 }
-                var dlllist = AssemblyLoadContext.Default.Assemblies.Where(x => systemdll.Any(y => x.FullName.StartsWith(y)) == false).ToList();
+                var dlllist = AssemblyLoadContext.Default.Assemblies.Where(x => systemdll.Any(y => (x.FullName ?? string.Empty).StartsWith(y)) == false).ToList();
                 _allAssemblies.AddRange(dlllist);
             }
             return _allAssemblies;
@@ -134,7 +136,7 @@ namespace WalkingTec.Mvvm.Core
             return _allModels;
         }
 
-        private static List<Type> _allVMs;
+        private static List<Type>? _allVMs;
         public static List<Type> GetAllVms()
         {
             if (_allVMs == null)
@@ -157,7 +159,7 @@ namespace WalkingTec.Mvvm.Core
 
         }
 
-        public static SimpleMenu FindMenu(string url, List<SimpleMenu> menus)
+        public static SimpleMenu? FindMenu(string? url, List<SimpleMenu>? menus)
         {
             if (url == null)
             {
@@ -254,8 +256,12 @@ namespace WalkingTec.Mvvm.Core
                 {
                     continue;
                 }
-                var hex = pro.GetValue(null);
-                var rgb = hex.ToString().Split(':');
+                var hex = pro.GetValue(null) as string;
+                if (string.IsNullOrEmpty(hex))
+                {
+                    continue;
+                }
+                var rgb = hex.Split(':');
                 for (int i = 0; i < rgb.Length; i++)
                 {
                     if (rgb[i].Length > 2)
@@ -282,7 +288,12 @@ namespace WalkingTec.Mvvm.Core
 
                 if (r == r1 && g == g1 && b == b1)
                 {
-                    return (short)col.GetField("index").GetValue(null);
+                    var indexField = col.GetField("index");
+                    var indexValue = indexField?.GetValue(null);
+                    if (indexValue is short shortIndex)
+                    {
+                        return shortIndex;
+                    }
                 }
             }
             return HSSFColor.COLOR_NORMAL;
@@ -297,7 +308,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="falseText"></param>
         /// <param name="selectText"></param>
         /// <returns></returns>
-        public static List<ComboSelectListItem> GetBoolCombo(BoolComboTypes boolType, bool? defaultValue = null, string trueText = null, string falseText = null, string selectText = null)
+        public static List<ComboSelectListItem> GetBoolCombo(BoolComboTypes boolType, bool? defaultValue = null, string? trueText = null, string? falseText = null, string? selectText = null)
         {
             List<ComboSelectListItem> rv = new List<ComboSelectListItem>();
             string yesText = "";
@@ -305,24 +316,24 @@ namespace WalkingTec.Mvvm.Core
             switch (boolType)
             {
                 case BoolComboTypes.YesNo:
-                    yesText = CoreProgram._localizer?["Sys.Yes"];
-                    noText = CoreProgram._localizer?["Sys.No"];
+                    yesText = CoreProgram._localizer != null ? (string)CoreProgram._localizer["Sys.Yes"] : "";
+                    noText = CoreProgram._localizer != null ? (string)CoreProgram._localizer["Sys.No"] : "";
                     break;
                 case BoolComboTypes.ValidInvalid:
-                    yesText = CoreProgram._localizer?["Sys.Valid"];
-                    noText = CoreProgram._localizer?["Sys.Invalid"];
+                    yesText = CoreProgram._localizer != null ? (string)CoreProgram._localizer["Sys.Valid"] : "";
+                    noText = CoreProgram._localizer != null ? (string)CoreProgram._localizer["Sys.Invalid"] : "";
                     break;
                 case BoolComboTypes.MaleFemale:
-                    yesText = CoreProgram._localizer?["Sys.Male"];
-                    noText = CoreProgram._localizer?["Sys.Female"];
+                    yesText = CoreProgram._localizer != null ? (string)CoreProgram._localizer["Sys.Male"] : "";
+                    noText = CoreProgram._localizer != null ? (string)CoreProgram._localizer["Sys.Female"] : "";
                     break;
                 case BoolComboTypes.HaveNotHave:
-                    yesText = CoreProgram._localizer?["Sys.Have"];
-                    noText = CoreProgram._localizer?["Sys.NotHave"];
+                    yesText = CoreProgram._localizer != null ? (string)CoreProgram._localizer["Sys.Have"] : "";
+                    noText = CoreProgram._localizer != null ? (string)CoreProgram._localizer["Sys.NotHave"] : "";
                     break;
                 case BoolComboTypes.Custom:
-                    yesText = trueText ?? CoreProgram._localizer?["Sys.Yes"];
-                    noText = falseText ?? CoreProgram._localizer?["Sys.No"];
+                    yesText = trueText ?? (CoreProgram._localizer != null ? (string)CoreProgram._localizer["Sys.Yes"] : "");
+                    noText = falseText ?? (CoreProgram._localizer != null ? (string)CoreProgram._localizer["Sys.No"] : "");
                     break;
                 default:
                     break;
@@ -605,7 +616,7 @@ namespace WalkingTec.Mvvm.Core
         }
 
 
-        public static string GetCS(string cs, string mode, Configs config)
+        public static string? GetCS(string? cs, string? mode, Configs config)
         {
             if(cs == null)
             {
@@ -634,9 +645,13 @@ namespace WalkingTec.Mvvm.Core
             return cs;
         }
 
-        public static string GetUrlByFileAttachmentId(IDataContext dc, Guid? fileAttachmentId, bool isIntranetUrl = false, string urlHeader = null)
+        public static string GetUrlByFileAttachmentId(IDataContext dc, Guid? fileAttachmentId, bool isIntranetUrl = false, string? urlHeader = null)
         {
             string url = string.Empty;
+            if (fileAttachmentId == null)
+            {
+                return url;
+            }
             var fileAttachment = dc.Set<FileAttachment>().Where(x => x.ID == fileAttachmentId.Value).FirstOrDefault();
             if (fileAttachment != null)
             {
@@ -862,7 +877,7 @@ namespace WalkingTec.Mvvm.Core
                         {
                             m.Add(new SimpleModule
                             {
-                                ModuleName = pages[j].ActionDes._localizer[pages[j].ActionDes.Description],
+                                ModuleName = pages[j].ActionDes?._localizer[pages[j].ActionDes.Description] ?? pages[j].ActionDes?.Description,
                                 NameSpace = m[i].NameSpace,
                                 ClassName = pages[j].MethodName,
                                 Actions = m[i].Actions,
@@ -878,7 +893,7 @@ namespace WalkingTec.Mvvm.Core
                             {
                                 m.Add(new SimpleModule
                                 {
-                                    ModuleName = pages[j].ActionDes._localizer[pages[j].ActionDes.Description],
+                                    ModuleName = pages[j].ActionDes?._localizer[pages[j].ActionDes.Description] ?? pages[j].ActionDes?.Description,
                                     NameSpace = m[i].NameSpace,
                                     ClassName = pages[j].Module.ClassName + pages[j].MethodName,
                                     Actions = submit ? new List<SimpleAction>() : new List<SimpleAction>() { pages[j] },
