@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Web;
@@ -81,22 +81,22 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 按钮Id，一般不需要设定，系统会自动生成唯一Id。如果设定请确保 Id 的唯一性
         /// </summary>
-        public string ButtonId { get; set; }
+        public string? ButtonId { get; set; }
 
         /// <summary>
         /// 按钮名称
         /// </summary>
-        public string Name { get; set; }
+        public string? Name { get; set; }
 
         /// <summary>
         /// 弹出窗口的标题
         /// </summary>
-        public string DialogTitle { get; set; }
+        public string? DialogTitle { get; set; }
 
         /// <summary>
         /// 如果不为null，则只运行这个变量设定的script，其他的属性都不起作用
         /// </summary>
-        public string OnClickFunc { get; set; }
+        public string? OnClickFunc { get; set; }
 
         /// <summary>
         /// 是否在每行都显示
@@ -110,12 +110,12 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// bind to a column name to deside whether or not to show this action
         /// </summary>
-        public string BindVisiableColName { get; set; }
+        public string? BindVisiableColName { get; set; }
 
         /// <summary>
         /// additional css class of button
         /// </summary>
-        public string ButtonClass { get; set;}
+        public string? ButtonClass { get; set;}
         /// <summary>
         /// if the dialog need to be maximax
         /// </summary>
@@ -131,18 +131,18 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 动作的Area
         /// </summary>
-        public string Area { get; set; }
+        public string? Area { get; set; }
 
         public bool IsExport { get; set; }
         /// <summary>
         /// 动作的Controller
         /// </summary>
-        public string ControllerName { get; set; }
+        public string? ControllerName { get; set; }
 
         /// <summary>
         /// 动作的Action
         /// </summary>
-        public string ActionName { get; set; }
+        public string? ActionName { get; set; }
 
         public string Url
         {
@@ -178,7 +178,7 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 弹出问询框
         /// </summary>
-        public string PromptMessage { get; set; }
+        public string? PromptMessage { get; set; }
 
         /// <summary>
         /// 动作类型
@@ -196,11 +196,11 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 动作图标css
         /// </summary>
-        public string IconCls { get; set; }
+        public string? IconCls { get; set; }
         /// <summary>
         /// 动作的QueryString
         /// </summary>
-        public string QueryString { get; set; }
+        public string? QueryString { get; set; }
         /// <summary>
         /// 弹出窗口的宽度
         /// </summary>
@@ -217,9 +217,9 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 如果设定了SubActions，则代表需要用SplitButton的形式展示，主GridAction将不起作用
         /// </summary>
-        public List<GridAction> SubActions { get; set; }
+        public List<GridAction>? SubActions { get; set; }
 
-        public string[] whereStr { get; set; }
+        public string[]? whereStr { get; set; }
 
         #endregion
     }
