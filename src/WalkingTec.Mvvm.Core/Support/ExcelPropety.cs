@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using NPOI.HSSF.UserModel;
 using NPOI.OpenXmlFormats.Spreadsheet;
 using NPOI.SS.UserModel;
@@ -15,8 +15,11 @@ namespace WalkingTec.Mvvm.Core
 {
     public class ExcelPropety
     {
+        private static string L(string key) => CoreProgram._localizer != null ? (string)CoreProgram._localizer[key] : string.Empty;
+        private static string L(string key, params object[] args) => CoreProgram._localizer != null ? (string)CoreProgram._localizer[key, args] : string.Format(key, args);
+
         #region 属性
-        private string _columnName;
+        private string? _columnName;
         /// <summary>
         /// 列名
         /// </summary>
@@ -24,8 +27,7 @@ namespace WalkingTec.Mvvm.Core
         {
             get
             {
-                string col = _columnName;
-                return col;
+                return _columnName ?? string.Empty;
             }
             set
             {
@@ -33,9 +35,9 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
-        public string FieldDisplayName { get; set; }
+        public string FieldDisplayName { get; set; } = string.Empty;
 
-        public string FieldName { get; set; }
+        public string FieldName { get; set; } = string.Empty;
 
         //private string _backgroudColor;
         ///// <summary>
@@ -52,11 +54,11 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         public BackgroudColorEnum BackgroudColor { get; set; }
 
-        private Type _resourceType;
+        private Type? _resourceType;
         /// <summary>
         /// 多语言
         /// </summary>
-        public Type ResourceType
+        public Type? ResourceType
         {
             get { return _resourceType; }
             set { _resourceType = value; }
@@ -72,32 +74,32 @@ namespace WalkingTec.Mvvm.Core
             set { _dataType = value; }
         }
 
-        private Type _enumType;
-        public Type EnumType
+        private Type? _enumType;
+        public Type? EnumType
         {
             get { return _enumType; }
             set
             {
                 _enumType = value;
-                this.ListItems = _enumType.ToListItems();
+                this.ListItems = _enumType?.ToListItems() ?? new List<ComboSelectListItem>();
             }
         }
 
-        private string _minValueOrLength;
+        private string? _minValueOrLength;
         /// <summary>
         /// 最小长度
         /// </summary>
-        public string MinValueOrLength
+        public string? MinValueOrLength
         {
             get { return _minValueOrLength; }
             set { _minValueOrLength = value; }
         }
 
-        private string _maxValuseOrLength;
+        private string? _maxValuseOrLength;
         /// <summary>
         /// 最大长度
         /// </summary>
-        public string MaxValuseOrLength
+        public string? MaxValuseOrLength
         {
             get { return _maxValuseOrLength; }
             set { _maxValuseOrLength = value; }
@@ -113,27 +115,27 @@ namespace WalkingTec.Mvvm.Core
             set { _isNullAble = value; }
         }
 
-        private IEnumerable<ComboSelectListItem> _listItems;
+        private IEnumerable<ComboSelectListItem>? _listItems;
         /// <summary>
         /// 类表中数据
         /// </summary>
         public IEnumerable<ComboSelectListItem> ListItems
         {
-            get { return _listItems; }
+            get { return _listItems ?? Enumerable.Empty<ComboSelectListItem>(); }
             set { _listItems = value; }
         }
 
-        private object _value;
+        private object? _value;
         /// <summary>
         /// Value
         /// </summary>
-        public object Value
+        public object? Value
         {
             get { return _value; }
             set { _value = value; }
         }
 
-        private List<ExcelPropety> _dynamicColumns;
+        private List<ExcelPropety>? _dynamicColumns;
         /// <summary>
         /// 动态列
         /// </summary>
@@ -143,7 +145,7 @@ namespace WalkingTec.Mvvm.Core
             set { _dynamicColumns = value; }
         }
 
-        public Type SubTableType { get; set; }
+        public Type? SubTableType { get; set; }
 
         public bool ReadOnly { get; set; }
         /// <summary>
@@ -167,8 +169,8 @@ namespace WalkingTec.Mvvm.Core
         {
             XSSFDataValidationHelper dvHelper = new XSSFDataValidationHelper((XSSFSheet)sheet);
             CellRangeAddressList CellRangeList = new CellRangeAddressList(1, 1048576 - 1, porpetyIndex, porpetyIndex); //超过1048576最大行数，打开Excel会报错
-            XSSFDataValidationConstraint dvConstraint = null;
-            XSSFDataValidation dataValidation = null;
+            XSSFDataValidationConstraint? dvConstraint = null;
+            XSSFDataValidation? dataValidation = null;
 
             switch (dateType)
             {
@@ -182,33 +184,33 @@ namespace WalkingTec.Mvvm.Core
                     this.MaxValuseOrLength = string.IsNullOrEmpty(this.MaxValuseOrLength) ? long.MaxValue.ToString() : this.MaxValuseOrLength;
                     dvConstraint = (XSSFDataValidationConstraint)dvHelper.CreateNumericConstraint(ValidationType.INTEGER, OperatorType.BETWEEN, this.MinValueOrLength, this.MaxValuseOrLength);
                     dataValidation = (XSSFDataValidation)dvHelper.CreateValidation(dvConstraint, CellRangeList);
-                    dataValidation.CreateErrorBox(CoreProgram._localizer?["Sys.Error"], CoreProgram._localizer?["Sys.PleaseInputNumber"]);
+                    dataValidation.CreateErrorBox(L("Sys.Error"), L("Sys.PleaseInputNumber"));
                     dataStyle.DataFormat = dataFormat.GetFormat("0");
-                    dataValidation.CreatePromptBox(CoreProgram._localizer?["Sys.PleaseInputNumberFormat"], CoreProgram._localizer?["Sys.DataRange", MinValueOrLength, MaxValuseOrLength]);
+                    dataValidation.CreatePromptBox(L("Sys.PleaseInputNumberFormat"), L("Sys.DataRange", MinValueOrLength, MaxValuseOrLength));
                     break;
                 case ColumnDataType.Float:
                     this.MinValueOrLength = string.IsNullOrEmpty(this.MinValueOrLength) ? decimal.MinValue.ToString() : this.MinValueOrLength;
                     this.MaxValuseOrLength = string.IsNullOrEmpty(this.MaxValuseOrLength) ? decimal.MaxValue.ToString() : this.MaxValuseOrLength;
                     dvConstraint = (XSSFDataValidationConstraint)dvHelper.CreateNumericConstraint(ValidationType.DECIMAL, OperatorType.BETWEEN, this.MinValueOrLength, this.MaxValuseOrLength);
                     dataValidation = (XSSFDataValidation)dvHelper.CreateValidation(dvConstraint, CellRangeList);
-                    dataValidation.CreateErrorBox(CoreProgram._localizer?["Sys.Error"], CoreProgram._localizer?["Sys.PleaseInputDecimal"]);
+                    dataValidation.CreateErrorBox(L("Sys.Error"), L("Sys.PleaseInputDecimal"));
                     dataStyle.DataFormat = HSSFDataFormat.GetBuiltinFormat("0.00");
-                    dataValidation.CreatePromptBox(CoreProgram._localizer?["Sys.PleaseInputDecimalFormat"], CoreProgram._localizer?["Sys.DataRange", MinValueOrLength, MaxValuseOrLength]);
+                    dataValidation.CreatePromptBox(L("Sys.PleaseInputDecimalFormat"), L("Sys.DataRange", MinValueOrLength, MaxValuseOrLength));
                     break;
                 case ColumnDataType.Bool:
                     dvConstraint = (XSSFDataValidationConstraint)dvHelper.CreateFormulaListConstraint("Sheet1!$A$1:$B$1");
                     dataValidation = (XSSFDataValidation)dvHelper.CreateValidation(dvConstraint, CellRangeList);
-                    dataValidation.CreateErrorBox(CoreProgram._localizer?["Sys.Error"], CoreProgram._localizer?["Sys.PleaseInputExistData"]);
-                    dataValidation.CreatePromptBox(CoreProgram._localizer?["Sys.ComboBox"], CoreProgram._localizer?["Sys.PleaseInputExistData"]);
+                    dataValidation.CreateErrorBox(L("Sys.Error"), L("Sys.PleaseInputExistData"));
+                    dataValidation.CreatePromptBox(L("Sys.ComboBox"), L("Sys.PleaseInputExistData"));
                     break;
                 case ColumnDataType.Text:
                     this.MinValueOrLength = string.IsNullOrEmpty(this.MinValueOrLength) ? "0" : this.MinValueOrLength;
                     this.MaxValuseOrLength = string.IsNullOrEmpty(this.MaxValuseOrLength) ? "2000" : this.MaxValuseOrLength;
                     dvConstraint = (XSSFDataValidationConstraint)dvHelper.CreateNumericConstraint(ValidationType.TEXT_LENGTH, OperatorType.BETWEEN, this.MinValueOrLength, this.MaxValuseOrLength);
                     dataValidation = (XSSFDataValidation)dvHelper.CreateValidation(dvConstraint, CellRangeList);
-                    dataValidation.CreateErrorBox(CoreProgram._localizer?["Sys.Error"], CoreProgram._localizer?["Sys.WrongTextLength"]);
+                    dataValidation.CreateErrorBox(L("Sys.Error"), L("Sys.WrongTextLength"));
                     dataStyle.DataFormat = dataFormat.GetFormat("@");
-                    dataValidation.CreatePromptBox(CoreProgram._localizer?["Sys.PleaseInputText"], CoreProgram._localizer?["Sys.DataRange", MinValueOrLength, MaxValuseOrLength]);
+                    dataValidation.CreatePromptBox(L("Sys.PleaseInputText"), L("Sys.DataRange", MinValueOrLength, MaxValuseOrLength));
                     break;
                 case ColumnDataType.ComboBox:
                 case ColumnDataType.Enum:
@@ -224,7 +226,7 @@ namespace WalkingTec.Mvvm.Core
                     range.NameName = "dicRange" + porpetyIndex;
                     dvConstraint = (XSSFDataValidationConstraint)dvHelper.CreateFormulaListConstraint("dicRange" + porpetyIndex);
                     dataValidation = (XSSFDataValidation)dvHelper.CreateValidation(dvConstraint, CellRangeList);
-                    dataValidation.CreateErrorBox(CoreProgram._localizer?["Sys.Error"], CoreProgram._localizer?["Sys.PleaseInputExistData"]);
+                    dataValidation.CreateErrorBox(L("Sys.Error"), L("Sys.PleaseInputExistData"));
                     var listItemsTemp = this.ListItems.ToList();
                     for (int rowIndex = 0; rowIndex < this.ListItems.Count(); rowIndex++)
                     {
@@ -235,14 +237,18 @@ namespace WalkingTec.Mvvm.Core
                         }
                         dataSheetRow.CreateCell(porpetyIndex).SetCellValue(listItemsTemp[rowIndex].Text);
                         dataStyle.DataFormat = dataFormat.GetFormat("@");
-                        dataSheetRow.Cells.Where(x => x.ColumnIndex == porpetyIndex).FirstOrDefault().CellStyle = dataStyle;
+                        var targetCell = dataSheetRow.Cells.Where(x => x.ColumnIndex == porpetyIndex).FirstOrDefault();
+                        if (targetCell != null)
+                        {
+                            targetCell.CellStyle = dataStyle;
+                        }
                     }
-                    dataValidation.CreatePromptBox(CoreProgram._localizer?["Sys.ComboBox"], CoreProgram._localizer?["Sys.PleaseInputExistData"]);
+                    dataValidation.CreatePromptBox(L("Sys.ComboBox"), L("Sys.PleaseInputExistData"));
                     break;
                 default:
                     dvConstraint = (XSSFDataValidationConstraint)dvHelper.CreateNumericConstraint(ValidationType.TEXT_LENGTH, OperatorType.BETWEEN, this.MinValueOrLength, this.MaxValuseOrLength);
                     dataValidation = (XSSFDataValidation)dvHelper.CreateValidation(dvConstraint, CellRangeList);
-                    dataValidation.CreateErrorBox(CoreProgram._localizer?["Sys.Error"], CoreProgram._localizer?["Sys.WrongTextLength"]);
+                    dataValidation.CreateErrorBox(L("Sys.Error"), L("Sys.WrongTextLength"));
                     dataStyle.DataFormat = HSSFDataFormat.GetBuiltinFormat("@");
                     break;
             }
@@ -267,7 +273,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="value"></param>
         /// <param name="errorMessage"></param>
         /// <param name="rowIndex"></param>
-        public void ValueValidity(string value, List<ErrorMessage> errorMessage, int rowIndex)
+        public void ValueValidity(string? value, List<ErrorMessage> errorMessage, int rowIndex)
         {
             if (this.IsNullAble && string.IsNullOrEmpty(value))
             {
@@ -275,7 +281,7 @@ namespace WalkingTec.Mvvm.Core
             }
             else
             {
-                ErrorMessage err = null;
+                ErrorMessage? err = null;
                 switch (this.DataType)
                 {
                     case ColumnDataType.Date:
@@ -283,7 +289,7 @@ namespace WalkingTec.Mvvm.Core
                         DateTime tryDateTimeResult;
                         if (!DateTime.TryParse(value, out tryDateTimeResult))
                         {
-                            err = new ErrorMessage { Index = rowIndex, Message = CoreProgram._localizer?["Sys.{0}formaterror", this.ColumnName] };
+                            err = new ErrorMessage { Index = rowIndex, Message = L("Sys.{0}formaterror", this.ColumnName) };
                         }
                         this.Value = tryDateTimeResult;
                         break;
@@ -291,7 +297,7 @@ namespace WalkingTec.Mvvm.Core
                         int tryIntResult;
                         if (!int.TryParse(value, out tryIntResult))
                         {
-                            err = new ErrorMessage { Index = rowIndex, Message = CoreProgram._localizer?["Sys.{0}formaterror", this.ColumnName] };
+                            err = new ErrorMessage { Index = rowIndex, Message = L("Sys.{0}formaterror", this.ColumnName) };
                         }
                         this.Value = tryIntResult;
                         break;
@@ -299,22 +305,22 @@ namespace WalkingTec.Mvvm.Core
                         decimal tryDecimalResult;
                         if (!decimal.TryParse(value, out tryDecimalResult))
                         {
-                            err = new ErrorMessage { Index = rowIndex, Message = CoreProgram._localizer?["Sys.{0}formaterror", this.ColumnName] };
+                            err = new ErrorMessage { Index = rowIndex, Message = L("Sys.{0}formaterror", this.ColumnName) };
                         }
                         this.Value = tryDecimalResult;
                         break;
                     case ColumnDataType.Bool:
-                        if (value == CoreProgram._localizer?["Sys.Yes"])
+                        if (value == L("Sys.Yes"))
                         {
                             this.Value = true;
                         }
-                        else if (value == CoreProgram._localizer?["Sys.No"])
+                        else if (value == L("Sys.No"))
                         {
                             this.Value = false;
                         }
                         else
                         {
-                            err = new ErrorMessage { Index = rowIndex, Message = CoreProgram._localizer?["Sys.{0}formaterror", this.ColumnName] };
+                            err = new ErrorMessage { Index = rowIndex, Message = L("Sys.{0}formaterror", this.ColumnName) };
                         }
                         break;
                     case ColumnDataType.Text:
@@ -324,15 +330,15 @@ namespace WalkingTec.Mvvm.Core
                     case ColumnDataType.Enum:
                         if (!this.ListItems.Any(x => x.Text == value))
                         {
-                            err = new ErrorMessage { Index = rowIndex, Message = CoreProgram._localizer?["Sys.{0}ValueNotExist", this.ColumnName] };
+                            err = new ErrorMessage { Index = rowIndex, Message = L("Sys.{0}ValueNotExist", this.ColumnName) };
                         }
                         else
                         {
-                            this.Value = this.ListItems.Where(x => x.Text == value).FirstOrDefault().Value;
+                            this.Value = this.ListItems.Where(x => x.Text == value).FirstOrDefault()?.Value;
                         }
                         break;
                     default:
-                        err = new ErrorMessage { Index = rowIndex, Message = CoreProgram._localizer?["Sys.{0}ValueTypeNotAllowed", this.ColumnName] };
+                        err = new ErrorMessage { Index = rowIndex, Message = L("Sys.{0}ValueTypeNotAllowed", this.ColumnName) };
                         break;
                 }
 
@@ -348,11 +354,11 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 处理为多列数据
         /// </summary>
-        public CopyData FormatData;
+        public CopyData? FormatData;
         /// <summary>
         /// 处理为单列数据
         /// </summary>
-        public CopySingleData FormatSingleData;
+        public CopySingleData? FormatSingleData;
 
         #endregion
 
@@ -361,12 +367,13 @@ namespace WalkingTec.Mvvm.Core
             ExcelPropety cp = new ExcelPropety();
             cp.FieldDisplayName = field.GetPropertyDisplayName();
             var fname = field.GetPropertyName();
-            Type t = field.GetPropertyInfo().PropertyType;
+            var propertyInfo = field.GetPropertyInfo();
+            Type t = propertyInfo.PropertyType;
             if (fname.Contains('.'))
             {
                 int index = fname.LastIndexOf('.');
                 cp.FieldName = fname.Substring(index + 1);
-                cp.SubTableType = field.GetPropertyInfo().DeclaringType;
+                cp.SubTableType = propertyInfo.DeclaringType;
             }
             else
             {
@@ -374,7 +381,7 @@ namespace WalkingTec.Mvvm.Core
             }
             if (t.IsGenericType && t.GetGenericTypeDefinition() == typeof(Nullable<>))
             {
-                var req = field.GetPropertyInfo().GetCustomAttributes(typeof(RequiredAttribute), false).Cast<RequiredAttribute>().FirstOrDefault();
+                var req = propertyInfo.GetCustomAttributes(typeof(RequiredAttribute), false).Cast<RequiredAttribute>().FirstOrDefault();
                 if (req == null)
                 {
                     cp.IsNullAble = true;
@@ -418,8 +425,8 @@ namespace WalkingTec.Mvvm.Core
             }
             else
             {
-                var sl = field.GetPropertyInfo().GetCustomAttributes(typeof(StringLengthAttribute), false).Cast<StringLengthAttribute>().FirstOrDefault();
-                var req = field.GetPropertyInfo().GetCustomAttributes(typeof(RequiredAttribute), false).Cast<RequiredAttribute>().FirstOrDefault();
+                var sl = propertyInfo.GetCustomAttributes(typeof(StringLengthAttribute), false).Cast<StringLengthAttribute>().FirstOrDefault();
+                var req = propertyInfo.GetCustomAttributes(typeof(RequiredAttribute), false).Cast<RequiredAttribute>().FirstOrDefault();
                 cp.DataType = ColumnDataType.Text;
                 if (req == null)
                 {
@@ -452,14 +459,14 @@ namespace WalkingTec.Mvvm.Core
     /// <param name="excelTemplate">excel中的值</param>
     /// <param name="entityValue">实体的值</param>
     /// <param name="errorMsg">错误消息，没有错误为空</param>
-    public delegate void CopySingleData(object excelValue, BaseTemplateVM excelTemplate, out string entityValue, out string errorMsg);
+        public delegate void CopySingleData(object? excelValue, BaseTemplateVM excelTemplate, out string entityValue, out string errorMsg);
     /// <summary>
     /// 定义处理excel为多个字段的委托
     /// </summary>
     /// <param name="excelValue">excel中的值</param>
     /// <param name="excelTemplate">excel中的值</param>
     /// <returns>返回的处理结果</returns>
-    public delegate ProcessResult CopyData(object excelValue, BaseTemplateVM excelTemplate);
+        public delegate ProcessResult CopyData(object? excelValue, BaseTemplateVM excelTemplate);
 
     /// <summary>
     /// 处理结果
@@ -481,15 +488,15 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 字段名称
         /// </summary>
-        public string FieldName { get; set; }
+        public string? FieldName { get; set; }
         /// <summary>
         /// 字段值
         /// </summary>
-        public string FieldValue { get; set; }
+        public string? FieldValue { get; set; }
         /// <summary>
         /// 错误消息
         /// </summary>
-        public string ErrorMsg { get; set; }
+        public string? ErrorMsg { get; set; }
     }
 
     public enum ColumnDataType { Text, Number, Date, Float, Bool, ComboBox, Enum, Dynamic, DateTime }
