@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -8,12 +8,12 @@ namespace WalkingTec.Mvvm.Core
     public class Cors
     {
         public bool EnableAll { get; set; }
-        public List<CorsPolicy> Policy { get; set; }
+        public List<CorsPolicy> Policy { get; set; } = new List<CorsPolicy>();
     }
 
     public class CorsPolicy
     {
-        public string Name { get; set; }
-        public string Domain { get; set; }
+        public string? Name { get; set; }
+        public string? Domain { get; set; }
     }
 }
