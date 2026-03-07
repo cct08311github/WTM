@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq.Expressions;
@@ -35,11 +35,11 @@ namespace WalkingTec.Mvvm.Core
             , string controllerName
             , GridActionStandardTypesEnum standardType
             , string dialogTitle
-            , string areaName = null
+            , string? areaName = null
             , int? dialogWidth = null
             , int? dialogHeight = null
-            , string name = null
-            , string buttonId = null
+            , string? name = null
+            , string? buttonId = null
             , params Expression<Func<T, object>>[] whereStr)
             where T : TopBasePoco
             where V : ISearcher
@@ -52,45 +52,46 @@ namespace WalkingTec.Mvvm.Core
             var hideOnToolBar = false;
             var showDialog = true;
             var isexport = false;
-            string msg = null;
+            string? msg = null;
             var ispost = false;
-            string qs = null;
+            string? qs = null;
+            var loc = CoreProgram._localizer;
             switch (standardType)
             {
                 case GridActionStandardTypesEnum.Approve:
                     iconcls = "layui-icon layui-icon-form";
-                    gridname = CoreProgram._localizer?["Sys.Approve"];
+                    gridname = loc != null ? (string?)loc["Sys.Approve"] ?? string.Empty : string.Empty;
                     paraType = GridActionParameterTypesEnum.SingleId;
                     showInRow = true;
                     hideOnToolBar = true;
                     break;
                 case GridActionStandardTypesEnum.Create:
                     iconcls = "layui-icon layui-icon-add-1";
-                    gridname = CoreProgram._localizer?["Sys.Create"];
+                    gridname = loc != null ? (string?)loc["Sys.Create"] ?? string.Empty : string.Empty;
                     paraType = GridActionParameterTypesEnum.NoId;
                     break;
                 case GridActionStandardTypesEnum.AddRow:
                     iconcls = "layui-icon layui-icon-add-1";
-                    gridname = CoreProgram._localizer?["Sys.Create"];
+                    gridname = loc != null ? (string?)loc["Sys.Create"] ?? string.Empty : string.Empty;
                     paraType = GridActionParameterTypesEnum.AddRow;
                     break;
                 case GridActionStandardTypesEnum.Edit:
                     iconcls = "layui-icon layui-icon-edit";
-                    gridname = CoreProgram._localizer?["Sys.Edit"];
+                    gridname = loc != null ? (string?)loc["Sys.Edit"] ?? string.Empty : string.Empty;
                     paraType = GridActionParameterTypesEnum.SingleId;
                     showInRow = true;
                     hideOnToolBar = true;
                     break;
                 case GridActionStandardTypesEnum.Delete:
                     iconcls = "layui-icon layui-icon-delete";
-                    gridname = CoreProgram._localizer?["Sys.Delete"];
+                    gridname = loc != null ? (string?)loc["Sys.Delete"] ?? string.Empty : string.Empty;
                     paraType = GridActionParameterTypesEnum.SingleId;
                     showInRow = true;
                     hideOnToolBar = true;
                     break;
                 case GridActionStandardTypesEnum.SimpleDelete:
                     iconcls = "layui-icon layui-icon-delete";
-                    gridname = CoreProgram._localizer?["Sys.Delete"];
+                    gridname = loc != null ? (string?)loc["Sys.Delete"] ?? string.Empty : string.Empty;
                     paraType = GridActionParameterTypesEnum.SingleIdWithNull;
                     showInRow = true;
                     hideOnToolBar = true;
@@ -98,52 +99,52 @@ namespace WalkingTec.Mvvm.Core
                     actionName = "BatchDelete";
                     qs = "_donotuse_sd=1";
                     ispost = true;
-                    msg = CoreProgram._localizer?["Sys.DeleteConfirm"];
+                    msg = loc != null ? (string?)loc["Sys.DeleteConfirm"] : null;
                     break;
 
                 case GridActionStandardTypesEnum.RemoveRow:
                     iconcls = "layui-icon layui-icon-delete";
-                    gridname = CoreProgram._localizer?["Sys.Delete"];
+                    gridname = loc != null ? (string?)loc["Sys.Delete"] ?? string.Empty : string.Empty;
                     paraType = GridActionParameterTypesEnum.RemoveRow;
                     showInRow = true;
                     hideOnToolBar = true;
                     break;
                 case GridActionStandardTypesEnum.Details:
                     iconcls = "layui-icon layui-icon-form";
-                    gridname = CoreProgram._localizer?["Sys.Details"];
+                    gridname = loc != null ? (string?)loc["Sys.Details"] ?? string.Empty : string.Empty;
                     paraType = GridActionParameterTypesEnum.SingleId;
                     showInRow = true;
                     hideOnToolBar = true;
                     break;
                 case GridActionStandardTypesEnum.BatchEdit:
                     iconcls = "layui-icon layui-icon-edit";
-                    gridname = CoreProgram._localizer?["Sys.BatchEdit"];
+                    gridname = loc != null ? (string?)loc["Sys.BatchEdit"] ?? string.Empty : string.Empty;
                     paraType = GridActionParameterTypesEnum.MultiIds;
                     break;
                 case GridActionStandardTypesEnum.BatchDelete:
                     iconcls = "layui-icon layui-icon-delete";
-                    gridname = CoreProgram._localizer?["Sys.BatchDelete"];
+                    gridname = loc != null ? (string?)loc["Sys.BatchDelete"] ?? string.Empty : string.Empty;
                     paraType = GridActionParameterTypesEnum.MultiIds;
                     break;
                 case GridActionStandardTypesEnum.SimpleBatchDelete:
                     iconcls = "layui-icon layui-icon-delete";
-                    gridname = CoreProgram._localizer?["Sys.BatchDelete"];
+                    gridname = loc != null ? (string?)loc["Sys.BatchDelete"] ?? string.Empty : string.Empty;
                     paraType = GridActionParameterTypesEnum.MultiIds;
                     showDialog = false;
-                    msg = CoreProgram._localizer?["Sys.BatchDeleteConfirm"];
+                    msg = loc != null ? (string?)loc["Sys.BatchDeleteConfirm"] : null;
                     actionName = "BatchDelete";
                     ispost = true;
                     break;
                 case GridActionStandardTypesEnum.Import:
                     iconcls = "layui-icon layui-icon-templeate-1";
-                    gridname = CoreProgram._localizer?["Sys.Import"];
+                    gridname = loc != null ? (string?)loc["Sys.Import"] ?? string.Empty : string.Empty;
                     paraType = GridActionParameterTypesEnum.NoId;
                     break;
                 case GridActionStandardTypesEnum.ExportExcel:
                     iconcls = "layui-icon layui-icon-download-circle";
-                    gridname = CoreProgram._localizer?["Sys.Export"];
+                    gridname = loc != null ? (string?)loc["Sys.Export"] ?? string.Empty : string.Empty;
                     paraType = GridActionParameterTypesEnum.MultiIdWithNull;
-                    name = CoreProgram._localizer?["Sys.ExportExcel"];                    
+                    name = loc != null ? (string?)loc["Sys.ExportExcel"] : null;
                     showInRow = false;
                     showDialog = false;
                     hideOnToolBar = false;
@@ -216,10 +217,10 @@ namespace WalkingTec.Mvvm.Core
             , string name
             , string dialogTitle
             , GridActionParameterTypesEnum paraType
-            , string areaName = null
+            , string? areaName = null
             , int? dialogWidth = null
             , int? dialogHeight = null
-            , string buttonId = null
+            , string? buttonId = null
             , params Expression<Func<T, object>>[] whereStr)
             where T : TopBasePoco
             where V : ISearcher
@@ -299,19 +300,20 @@ namespace WalkingTec.Mvvm.Core
         /// <returns></returns>
         [Obsolete("Will be removed in future, use MakeStandardAction with GridActionStandardTypesEnum.ExportExcel instead")]
         public static GridAction MakeStandardExportAction<T, V>(this IBasePagedListVM<T, V> self
-            , string gridid = null
+            , string? gridid = null
             , bool MustSelect = false
             , ExportEnum? exportType = null
             , params KeyValuePair<string, string>[] param)
             where T : TopBasePoco
             where V : ISearcher
         {
+            var loc = CoreProgram._localizer;
             exportType = ExportEnum.Excel;
 
             var action = new GridAction
             {
-                Name = CoreProgram._localizer?["Sys.ExportExcel"],
-                DialogTitle = CoreProgram._localizer?["Sys.ExportExcel"],
+                Name = loc != null ? (string?)loc["Sys.ExportExcel"] : null,
+                DialogTitle = loc != null ? (string?)loc["Sys.ExportExcel"] : null,
                 Area = string.Empty,
                 ControllerName = "_Framework",
                 ActionName = "GetExportExcel",
