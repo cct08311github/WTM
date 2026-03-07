@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -11,7 +11,7 @@ namespace System.Text.Json.Serialization
     /// </summary>
     public class StringIgnoreLTGTConverter : JsonConverter<string>
     {
-        public override string Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        public override string? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {
             if (reader.TokenType == JsonTokenType.Null)
             {
@@ -20,7 +20,7 @@ namespace System.Text.Json.Serialization
 
             if (reader.TokenType == JsonTokenType.String)
             {
-                return reader.GetString().Replace("<", string.Empty).Replace(">", string.Empty);
+                return reader.GetString()?.Replace("<", string.Empty).Replace(">", string.Empty);
             }
 
             return null;

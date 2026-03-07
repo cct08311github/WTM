@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -60,7 +60,7 @@ namespace WalkingTec.Mvvm.Core.Json
                 }
                 if (reader.TokenType == JsonTokenType.PropertyName)
                 {
-                    var pname = reader.GetString();
+                    var pname = reader.GetString() ?? "";
                     lastObjecName = pname;
                     var p = prefix.Take(depth).ToSepratedString(seperator: ".");
                     if (string.IsNullOrEmpty(p) == false)
@@ -101,6 +101,6 @@ namespace WalkingTec.Mvvm.Core.Json
 
     public class PostedBody
     {
-        public List<string> ProNames { get; set; }
+        public List<string>? ProNames { get; set; }
     }
 }

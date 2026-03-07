@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -41,7 +41,7 @@ namespace WalkingTec.Mvvm.Core.Json
                 BindingFlags.Instance | BindingFlags.Public,
                 binder: null,
                 args: new object[] { temp },
-                culture: null);
+                culture: null)!;
 
             return converter;
         }
@@ -75,7 +75,7 @@ namespace WalkingTec.Mvvm.Core.Json
                 _options = options;
             }
 
-            public override T Read(
+            public override T? Read(
                 ref Utf8JsonReader reader,
                 Type typeToConvert,
                 JsonSerializerOptions options)
@@ -97,7 +97,7 @@ namespace WalkingTec.Mvvm.Core.Json
             private void RemoveCycleReference(object Entity, Dictionary<string, int> datacache)
             {
                 var pros = Entity.GetType().GetAllProperties();
-                var mainkey = Entity.GetType().FullName + (Entity as TopBasePoco).GetID();
+                var mainkey = Entity.GetType().FullName + (Entity as TopBasePoco)!.GetID();
                 datacache.TryAdd(mainkey, 1);
 
                 foreach (var pro in pros)
@@ -132,7 +132,7 @@ namespace WalkingTec.Mvvm.Core.Json
                                 {
                                     if (newitem != null)
                                     {
-                                        string subkey = ftype.FullName + newitem?.GetID() ?? "";
+                                        string subkey = ftype.FullName + newitem!.GetID();
                                         if (datacache.ContainsKey(subkey) == false || (Entity is TreePoco && pro.Name == "Children"))
                                         {
                                             RemoveCycleReference(newitem, datacache.ToDictionary(x=>x.Key,x=>x.Value));

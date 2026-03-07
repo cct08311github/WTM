@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -41,7 +41,7 @@ namespace WalkingTec.Mvvm.Core.Json
                 BindingFlags.Instance | BindingFlags.Public,
                 binder: null,
                 args: new object[] { temp },
-                culture: null);
+                culture: null)!;
 
             return converter;
         }
@@ -78,7 +78,7 @@ namespace WalkingTec.Mvvm.Core.Json
                 _options = options;
             }
 
-            public override T Read(
+            public override T? Read(
                 ref Utf8JsonReader reader,
                 Type typeToConvert,
                 JsonSerializerOptions options)
@@ -87,7 +87,7 @@ namespace WalkingTec.Mvvm.Core.Json
                 {
                     if (string.IsNullOrEmpty(reader.GetString()) || string.IsNullOrWhiteSpace(reader.GetString()))
                     {
-                        return default(T);
+                        return default;
                     }
                 }
                 return JsonSerializer.Deserialize<T>(ref reader, _options);

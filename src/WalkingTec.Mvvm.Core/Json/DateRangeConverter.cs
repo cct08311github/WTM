@@ -1,16 +1,13 @@
-#nullable disable
+#nullable enable
 using System;
-using System.Collections.Generic;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using WalkingTec.Mvvm.Core;
 
 namespace WalkingTec.Mvvm.Core.Json
 {
     public class DateRangeConverter : JsonConverter<DateRange>
     {
-        public override DateRange Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        public override DateRange? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {
             if (reader.TokenType == JsonTokenType.Null)
             {
@@ -22,12 +19,12 @@ namespace WalkingTec.Mvvm.Core.Json
                 if (reader.TokenType == JsonTokenType.StartArray)
                 {
                     reader.Read();
-                    string[] ds = new string[2];
+                    string?[] ds = new string?[2];
                     ds[0] = reader.GetString();
                     reader.Read();
                     ds[1] = reader.GetString();
                     reader.Read();
-                    if (DateRange.TryParse(ds, out var dateRange))
+                    if (DateRange.TryParse(ds!, out var dateRange))
                     {
                         return dateRange;
                     }
@@ -51,7 +48,6 @@ namespace WalkingTec.Mvvm.Core.Json
             }
             else
             {
-                //writer.WriteStringValue(JsonSerializer.Serialize(value),);
                 writer.WriteStartArray();
                 writer.WriteStringValue(value.GetStartTime().ToString());
                 writer.WriteStringValue(value.GetEndTime().ToString());
