@@ -1,23 +1,18 @@
-#nullable disable
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+#nullable enable
 
 namespace WalkingTec.Mvvm.Core.ConfigOptions
 {
     public class Domain
     {
-        public string Name { get; set; }
+        public string? Name { get; set; }
 
-        public string Address { get; set; }
+        public string? Address { get; set; }
 
-        public string InnerAddress { get; set; }
+        public string? InnerAddress { get; set; }
 
-        public string EntryUrl { get; set; }
+        public string? EntryUrl { get; set; }
 
-        public string Url
+        public string? Url
         {
             get
             {
@@ -30,7 +25,7 @@ namespace WalkingTec.Mvvm.Core.ConfigOptions
             }
         }
 
-        public string InnerUrl
+        public string? InnerUrl
         {
             get
             {

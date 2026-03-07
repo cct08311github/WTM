@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 ﻿using System.Collections.Generic;
 
 namespace WalkingTec.Mvvm.Core
@@ -31,6 +31,6 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// Trackers
         /// </summary>
-        public List<DFSTracker> Trackers { get; set; }
+        public List<DFSTracker>? Trackers { get; set; }
     }
 }

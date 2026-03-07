@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -15,7 +15,7 @@ namespace WalkingTec.Mvvm.Core
     {
         #region ConnectionStrings
 
-        private List<CS> _connectStrings;
+        private List<CS>? _connectStrings;
 
         /// <summary>
         /// ConnectionStrings
@@ -40,7 +40,7 @@ namespace WalkingTec.Mvvm.Core
 
         #region Domains
 
-        private Dictionary<string, Domain> _domains;
+        private Dictionary<string, Domain>? _domains;
 
         /// <summary>
         /// ConnectionStrings
@@ -86,8 +86,8 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
-        private string _mainHost;
-        public string MainHost
+        private string? _mainHost;
+        public string? MainHost
         {
             get
             {
@@ -153,7 +153,7 @@ namespace WalkingTec.Mvvm.Core
 
         #region Cookie prefix
 
-        private string _cookiePre;
+        private string? _cookiePre;
 
         /// <summary>
         /// Cookie prefix
@@ -247,7 +247,7 @@ namespace WalkingTec.Mvvm.Core
 
         #region Custom settings
 
-        private Dictionary<string, string> _appSettings;
+        private Dictionary<string, string>? _appSettings;
 
         /// <summary>
         /// Custom settings
@@ -272,7 +272,7 @@ namespace WalkingTec.Mvvm.Core
 
         #region FileOptions
 
-        private FileUploadOptions _fileUploadOptions;
+        private FileUploadOptions? _fileUploadOptions;
 
         /// <summary>
         /// FileOptions
@@ -302,7 +302,7 @@ namespace WalkingTec.Mvvm.Core
 
         #region UIOptions
 
-        private UIOptions _uiOptions;
+        private UIOptions? _uiOptions;
 
         /// <summary>
         /// UIOptions
@@ -371,7 +371,7 @@ namespace WalkingTec.Mvvm.Core
 
         #region UEditorOptions
 
-        private UEditorOptions _ueditorOptions;
+        private UEditorOptions? _ueditorOptions;
 
         /// <summary>
         /// UEditor配置
@@ -396,7 +396,7 @@ namespace WalkingTec.Mvvm.Core
 
         #region Cors configs
 
-        private Cors _cors;
+        private Cors? _cors;
 
         /// <summary>
         ///  Cors configs
@@ -422,7 +422,7 @@ namespace WalkingTec.Mvvm.Core
 
         #region Support Languages
 
-        private string _languages;
+        private string? _languages;
 
         /// <summary>
         /// Support Languages
@@ -443,7 +443,7 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
-        private List<CultureInfo> _supportLanguages;
+        private List<CultureInfo>? _supportLanguages;
         public List<CultureInfo> SupportLanguages
         {
             get
@@ -469,7 +469,7 @@ namespace WalkingTec.Mvvm.Core
 
         #region CookieOption configs
 
-        private CookieOption _cookieOption;
+        private CookieOption? _cookieOption;
 
         /// <summary>
         ///  Cors configs
@@ -494,7 +494,7 @@ namespace WalkingTec.Mvvm.Core
 
         #region JwtOption configs
 
-        private JwtOption _jwtOption;
+        private JwtOption? _jwtOption;
 
         /// <summary>
         ///  Cors configs

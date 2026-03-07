@@ -1,20 +1,19 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
-using System.Text;
 using Microsoft.EntityFrameworkCore;
 
 namespace WalkingTec.Mvvm.Core
 {
     public class CS
     {
-        public string Key { get; set; }
-        public string Value { get; set; }
+        public string? Key { get; set; }
+        public string? Value { get; set; }
         public DBTypeEnum? DbType { get; set; }
-        public string Version { get; set; }
-        public string DbContext { get; set; }
+        public string? Version { get; set; }
+        public string? DbContext { get; set; }
 
         /// <summary>
         /// Whether this connection is active. Defaults to true for backward compatibility.
@@ -23,8 +22,8 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         public bool Enabled { get; set; } = true;
 
-        public ConstructorInfo DcConstructor;
-        private static List<ConstructorInfo> _cis;
+        public ConstructorInfo? DcConstructor;
+        private static List<ConstructorInfo>? _cis;
         public static List<ConstructorInfo> Cis
         {
             get
@@ -57,7 +56,7 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
-        private static List<ConstructorInfo> _cisFull;
+        private static List<ConstructorInfo>? _cisFull;
         public static List<ConstructorInfo> CisFull
         {
             get
@@ -90,22 +89,22 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
-        public IDataContext CreateDC()
+        public IDataContext? CreateDC()
         {
             if (DcConstructor == null)
             {
-                string dcname = DbContext;
+                string? dcname = DbContext;
                 if (string.IsNullOrEmpty(dcname))
                 {
                     dcname = "DataContext";
                 }
-                DcConstructor = Cis.Where(x => x.DeclaringType.Name.ToLower() == dcname.ToLower()).FirstOrDefault();
+                DcConstructor = Cis.Where(x => x.DeclaringType?.Name.ToLower() == dcname.ToLower()).FirstOrDefault();
                 if (DcConstructor == null)
                 {
                     DcConstructor = Cis.FirstOrDefault();
                 }
             }
-            return (IDataContext)DcConstructor?.Invoke(new object[] { this });
+            return (IDataContext?)DcConstructor?.Invoke(new object[] { this });
         }
     }
 }

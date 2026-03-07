@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 ﻿namespace WalkingTec.Mvvm.Core
 {
     /// <summary>
@@ -9,7 +9,7 @@
         /// <summary>
         /// IP
         /// </summary>
-        public string IP { get; set; }
+        public string? IP { get; set; }
 
         /// <summary>
         /// Port
