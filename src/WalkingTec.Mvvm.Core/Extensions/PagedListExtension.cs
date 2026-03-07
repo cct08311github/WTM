@@ -1,5 +1,5 @@
-#nullable disable
-﻿using System;
+#nullable enable
+using System;
 using System.Linq.Expressions;
 
 namespace WalkingTec.Mvvm.Core.Extensions
@@ -25,14 +25,14 @@ namespace WalkingTec.Mvvm.Core.Extensions
         /// <returns>返回设置好的GridColumn类的实例</returns>
         public static GridColumn<T> MakeGridColumn<T, V>(this IBasePagedListVM<T, V> self
             , Expression<Func<T, object>> ColumnExp
-            , ColumnFormatCallBack<T> Format = null
-            , string Header = null
+            , ColumnFormatCallBack<T>? Format = null
+            , string? Header = null
             , int? Width = null
             , int? Flex = null
             , bool AllowMultiLine = true
             , bool NeedGroup = false
-            , Func<T, string> ForeGroundFunc = null
-            , Func<T, string> BackGroundFunc = null)
+            , Func<T, string>? ForeGroundFunc = null
+            , Func<T, string>? BackGroundFunc = null)
             where T : TopBasePoco
             where V : ISearcher
         {

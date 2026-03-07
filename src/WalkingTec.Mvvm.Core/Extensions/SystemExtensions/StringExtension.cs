@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -56,7 +56,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
         /// <param name="Format">转化文本字段的表达式</param>
         /// <param name="seperator">分隔符，默认为逗号</param>
         /// <returns>转化后的字符串</returns>
-        public static string ToSepratedString<T, V>(this IEnumerable<T> self, Expression<Func<T, V>> textField, Func<V, string> Format = null, string seperator = ",")
+        public static string ToSepratedString<T, V>(this IEnumerable<T> self, Expression<Func<T, V>> textField, Func<V, string>? Format = null, string seperator = ",")
         {
             string rv = "";
             if (self == null)
@@ -78,7 +78,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                     }
                     else
                     {
-                        str = text.ToString();
+                        str = text?.ToString() ?? "";
                     }
                 }
                 else
@@ -96,7 +96,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             return rv;
         }
 
-        public static string ToSepratedString(this IEnumerable self, Func<object, string> Format = null, string seperator = ",")
+        public static string ToSepratedString(this IEnumerable self, Func<object, string>? Format = null, string seperator = ",")
         {
             string rv = "";
             if (self == null)
@@ -144,7 +144,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             return rv;
         }
 
-        public static string AppendQuery(this string self,string query)
+        public static string? AppendQuery(this string? self,string query)
         {
             if(self == null)
             {
@@ -161,7 +161,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             return self;
         }
 
-        public static string AppendQuery(this string self, IDictionary data)
+        public static string? AppendQuery(this string? self, IDictionary data)
         {
             if (self == null)
             {
@@ -184,7 +184,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             return self;
         }
 
-        public static string AppendQuery(this string self, List<KeyValuePair<string, string>> data)
+        public static string? AppendQuery(this string? self, List<KeyValuePair<string, string>> data)
         {
             if (self == null)
             {
@@ -207,7 +207,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             return self;
         }
 
-        public static string ToQueryString(this IEnumerable self, string name=null)
+        public static string ToQueryString(this IEnumerable self, string? name=null)
         {
             if(self == null)
             {

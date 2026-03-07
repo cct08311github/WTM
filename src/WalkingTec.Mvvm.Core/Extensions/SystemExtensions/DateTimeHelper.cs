@@ -1,5 +1,5 @@
-#nullable disable
-﻿using System;
+#nullable enable
+using System;
 
 namespace WalkingTec.Mvvm.Core.Extensions
 {

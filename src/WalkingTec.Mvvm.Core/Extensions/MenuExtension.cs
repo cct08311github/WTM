@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -77,7 +77,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             }
         }
 
-        private static void RemoveUnAccessableMenu(List<LayUIMenu> menus, WTMContext wtm)
+        private static void RemoveUnAccessableMenu(List<LayUIMenu>? menus, WTMContext wtm)
         {
             if (menus == null)
             {
@@ -117,7 +117,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
         /// RemoveEmptyMenu
         /// </summary>
         /// <param name="menus"></param>
-        private static void RemoveEmptyMenu(List<LayUIMenu> menus)
+        private static void RemoveEmptyMenu(List<LayUIMenu>? menus)
         {
             if (menus == null)
             {
@@ -139,7 +139,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             }
         }
 
-        private static void LocalizeMenu(List<LayUIMenu> menus)
+        private static void LocalizeMenu(List<LayUIMenu>? menus)
         {
             if (menus == null)
             {
@@ -149,7 +149,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             foreach (var menu in menus)
             {
                 LocalizeMenu(menu.Children);
-                menu.Title = Core.CoreProgram._localizer?[menu.Title];
+                menu.Title = (menu.Title != null ? Core.CoreProgram._localizer?[menu.Title]?.Value : null) ?? menu.Title;
             }
         }
 

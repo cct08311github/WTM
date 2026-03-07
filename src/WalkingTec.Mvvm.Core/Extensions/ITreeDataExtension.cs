@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -18,7 +18,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
         /// <param name="self">树形结构实例</param>
         /// <param name="order">排序字段，可为空</param>
         /// <returns>树形结构列表，包含所有子节点</returns>
-        public static List<T> GetAllChildren<T>(this T self, Func<T, object> order = null)
+        public static List<T> GetAllChildren<T>(this T self, Func<T, object>? order = null)
             where T : TreePoco<T>
         {
             List<T> rv = new List<T>();
@@ -62,18 +62,18 @@ namespace WalkingTec.Mvvm.Core.Extensions
         /// <returns>所有级别子节点ID</returns>
         public static List<Guid> GetAllChildrenIDs<T>(this T self
             , IDataContext dc
-            , List<Guid> subids = null)
+            , List<Guid>? subids = null)
             where T : TreePoco<T>
         {
             List<Guid> rv = new List<Guid>();
-            List<Guid> ids = null;
+            List<Guid>? ids = null;
             if (subids == null)
             {
                 ids = dc.Set<T>().Where(x => x.ParentId == self.ID).Select(x => x.ID).ToList();
             }
             else
             {
-                ids = dc.Set<T>().Where(x => subids.Contains(x.ParentId.Value)).Select(x => x.ID).ToList();
+                ids = dc.Set<T>().Where(x => subids!.Contains(x.ParentId!.Value)).Select(x => x.ID).ToList();
             }
             if (ids != null && ids.Count > 0)
             {
@@ -90,7 +90,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
         /// <param name="self">树形结构实例</param>
         /// <param name="order">排序字段，可以为空</param>
         /// <returns>返回标准列表，所有节点都在同一级上</returns>
-        public static List<T> FlatTree<T>(this List<T> self, Func<T,object> order = null)
+        public static List<T> FlatTree<T>(this List<T> self, Func<T,object>? order = null)
             where T :TreePoco<T>
         {
             List<T> rv = new List<T>();
@@ -106,7 +106,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             return rv;
         }
 
-        public static List<T> FlatTree<T>(this T self, Func<T, object> order = null)
+        public static List<T> FlatTree<T>(this T self, Func<T, object>? order = null)
     where T : TreePoco<T>
         {
             List<T> rv = new List<T>();
@@ -115,7 +115,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             return rv;
         }
 
-        public static List<T> MakeTree<T>(this List<T> self, Func<T, object> order = null)
+        public static List<T> MakeTree<T>(this List<T> self, Func<T, object>? order = null)
       where T : TreePoco<T>
         {
             List<T> rv = new List<T>();
@@ -142,7 +142,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
         /// <param name="self">树形结构实例</param>
         /// <param name="order">排序字段，可以为空</param>
         /// <returns>返回标准列表，所有节点都在同一级上</returns>
-        public static IEnumerable<TreeSelectListItem> FlatTreeSelectList(this IEnumerable<TreeSelectListItem> self, Func<TreeSelectListItem, object> order = null)
+        public static IEnumerable<TreeSelectListItem> FlatTreeSelectList(this IEnumerable<TreeSelectListItem> self, Func<TreeSelectListItem, object>? order = null)
         {
             List<TreeSelectListItem> rv = new List<TreeSelectListItem>();
             if (order != null)
@@ -166,7 +166,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
         /// <param name="self"></param>
         /// <param name="order"></param>
         /// <returns></returns>
-        public static List<TreeSelectListItem> GetTreeSelectChildren(this TreeSelectListItem self, Func<TreeSelectListItem, object> order = null)
+        public static List<TreeSelectListItem> GetTreeSelectChildren(this TreeSelectListItem self, Func<TreeSelectListItem, object>? order = null)
         {
             List<TreeSelectListItem> rv = new List<TreeSelectListItem>();
             var children = self.Children;

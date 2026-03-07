@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 //
 // DistributedCacheExtensions.cs
 //
@@ -42,14 +42,14 @@ namespace WalkingTec.Mvvm.Core.Extensions
         /// </summary>
         private const string SPLIT_CHAR = ":";
 
-        private static string _instanceName;
+        private static string? _instanceName;
         private static string InstanceName
         {
             get
             {
                 if (_instanceName == null)
                 {
-                    _instanceName = Assembly.GetEntryAssembly().GetName().Name + SPLIT_CHAR;
+                    _instanceName = (Assembly.GetEntryAssembly()?.GetName().Name ?? "app") + SPLIT_CHAR;
                 }
                 return _instanceName;
             }
@@ -64,7 +64,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
 
         #region Get
 
-        public static T Get<T>(
+        public static T? Get<T>(
             this IDistributedCache cache,
             string key)
         {
@@ -75,7 +75,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                 return JsonSerializer.Deserialize<T>(value,Core.CoreProgram.DefaultJsonOption);
         }
 
-        public static async Task<T> GetAsync<T>(
+        public static async Task<T?> GetAsync<T>(
             this IDistributedCache cache,
             string key,
             CancellationToken token = default)
@@ -90,7 +90,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
         public static bool TryGetValue<T>(
             this IDistributedCache cache,
             string key,
-            out T outValue)
+            out T? outValue)
         {
             var value = cache.GetString(InstanceName + key.ToLower());
             if (value == null)
@@ -113,7 +113,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             this IDistributedCache cache,
             string key,
             T value,
-            DistributedCacheEntryOptions options = null)
+            DistributedCacheEntryOptions? options = null)
         {
             if(options == null && typeof(T) == typeof(LoginUserInfo) ){
                 options = new DistributedCacheEntryOptions()
@@ -131,7 +131,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             this IDistributedCache cache,
             string key,
             T value,
-            DistributedCacheEntryOptions options = null,
+            DistributedCacheEntryOptions? options = null,
             CancellationToken token = default)
         {
             if (options == null)

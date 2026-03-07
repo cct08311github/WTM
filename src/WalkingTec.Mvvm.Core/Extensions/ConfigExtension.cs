@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -19,7 +19,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
         /// <param name="jsonFileDir"></param>
         /// <param name="jsonFileName"></param>
         /// <returns></returns>
-        public static IConfigurationBuilder WTMConfig(this IConfigurationBuilder configBuilder, IHostEnvironment env, string jsonFileDir=null, string jsonFileName = null)
+        public static IConfigurationBuilder WTMConfig(this IConfigurationBuilder configBuilder, IHostEnvironment? env, string? jsonFileDir=null, string? jsonFileName = null)
         {
             IConfigurationBuilder rv = configBuilder;
             if (string.IsNullOrEmpty(jsonFileDir))
@@ -41,11 +41,11 @@ namespace WalkingTec.Mvvm.Core.Extensions
             rv = rv.AddEnvironmentVariables();
             if (env != null)
             {
-                rv = rv.AddInMemoryCollection(new Dictionary<string, string> { { "HostRoot", env.ContentRootPath } });
+                rv = rv.AddInMemoryCollection(new Dictionary<string, string?> { { "HostRoot", env.ContentRootPath } });
             }
             else
             {
-                rv = rv.AddInMemoryCollection(new Dictionary<string, string> { { "HostRoot", Directory.GetCurrentDirectory() } });
+                rv = rv.AddInMemoryCollection(new Dictionary<string, string?> { { "HostRoot", Directory.GetCurrentDirectory() } });
             }
             return rv;
         }
@@ -61,7 +61,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                 if (!string.IsNullOrEmpty(binLocation))
                 {
                     var binPath = new FileInfo(binLocation).Directory?.FullName;
-                    if (File.Exists(Path.Combine(binPath, "appsettings.json")))
+                    if (binPath != null && File.Exists(Path.Combine(binPath, "appsettings.json")))
                     {
                         Directory.SetCurrentDirectory(binPath);
                         cb.SetBasePath(binPath);

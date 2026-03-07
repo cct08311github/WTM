@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -11,7 +11,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
 {
     public static class DictionaryExtension
     {
-        public static T GetValue<T>(this Dictionary<string,object> self, string key)
+        public static T? GetValue<T>(this Dictionary<string,object> self, string key)
         {
             if (self.ContainsKey(key))
             {
