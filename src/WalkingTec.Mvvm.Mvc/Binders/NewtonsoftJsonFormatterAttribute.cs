@@ -11,9 +11,6 @@ using System.Buffers;
 using Microsoft.Extensions.DependencyInjection;
 using System.Linq;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
-using Elsa.Server.Api.Services;
-using Elsa.Server.Api.Helpers;
-
 namespace WalkingTec.Mvvm.Mvc.Binders
 {
     public class NewtonsoftJsonFormatterAttribute : ActionFilterAttribute, IControllerModelConvention, IActionModelConvention
@@ -40,17 +37,6 @@ namespace WalkingTec.Mvvm.Mvc.Binders
         {
             var jsonOptions = context.HttpContext.RequestServices.GetService<IOptions<MvcNewtonsoftJsonOptions>>();
             var jsonSettings = jsonOptions.Value.SerializerSettings;
-            if (context.Controller.GetType().FullName.StartsWith("Elsa.Server.Api"))
-            {
-                if (context.Controller.GetType().FullName.StartsWith("Elsa.Server.Api.Endpoints.WorkflowDefinitions"))
-                {
-                    jsonSettings = SerializationHelper.GetSettingsForWorkflowDefinition();
-                }
-                else
-                {
-                    jsonSettings = SerializationHelper.GetSettingsForEndpoint();
-                }
-            }
             if (context.Result is ObjectResult objectResult)
             {
 
