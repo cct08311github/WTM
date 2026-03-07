@@ -97,7 +97,7 @@ namespace WalkingTec.Mvvm.Core
             rv.FormatType = ColumnFormatTypeEnum.Download;
             rv.ButtonType = buttonType;
             rv.FileID = fileID;
-            rv.Text = buttonText?? CoreProgram._localizer?["Sys.Download"];
+            rv.Text = buttonText ?? CoreProgram._localizer?["Sys.Download"]?.Value;
             rv.ButtonClass = buttonclass;
             rv.Style = style;
             return rv;
@@ -112,8 +112,8 @@ namespace WalkingTec.Mvvm.Core
             rv.Width = width;
             rv.Height = height;
             rv.WindowID = windowID;
-            rv.Text = buttonText ?? CoreProgram._localizer?["Sys.Preview"];
-            rv.Title = title ?? CoreProgram._localizer?["Sys.Preview"];
+            rv.Text = buttonText ?? CoreProgram._localizer?["Sys.Preview"]?.Value;
+            rv.Title = title ?? CoreProgram._localizer?["Sys.Preview"]?.Value;
             rv.Resizable = resizable;
             rv.Maxed = maxed;
             rv.ButtonClass = buttonclass;

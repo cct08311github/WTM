@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -16,7 +16,7 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
         {
         }
 
-        public WtmApproveBookmark(string user,string name,string tag,string endityid)
+        public WtmApproveBookmark(string user,string name,string? tag,string endityid)
         {
             User = user;
             Tag = tag;
@@ -24,10 +24,10 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
             EntityId = endityid;
         }
 
-        public string User { get; set; }
-        public string Tag { get; set; }
-        public string Name { get; set; }
-        public string EntityId { get; set; }
+        public string User { get; set; } = "";
+        public string? Tag { get; set; }
+        public string Name { get; set; } = "";
+        public string EntityId { get; set; } = "";
     }
 
     public class WtmApproveBookmarkProvider : BookmarkProvider<WtmApproveBookmark, WtmApproveActivity>

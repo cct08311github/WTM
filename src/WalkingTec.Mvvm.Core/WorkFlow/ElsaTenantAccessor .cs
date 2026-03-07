@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -20,20 +20,22 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
             _hca = hca;
         }
 
-        public Task<string> GetTenantIdAsync(CancellationToken cancellationToken = default)
+        public Task<string?> GetTenantIdAsync(CancellationToken cancellationToken = default)
         {
 
-            string t = null;
-            var wtm = _hca.HttpContext.RequestServices.GetRequiredService<WTMContext>();
+            string? t = null;
+            var httpContext = _hca.HttpContext;
+            if (httpContext == null) return Task.FromResult(t);
+            var wtm = httpContext.RequestServices.GetRequiredService<WTMContext>();
             if (wtm?.LoginUserInfo != null)
             {
-                t = wtm?.LoginUserInfo?.CurrentTenant;
+                t = wtm.LoginUserInfo.CurrentTenant;
             }
             else
             {
-                if (_hca.HttpContext.Request.Cookies.ContainsKey("workflowtenant"))
+                if (httpContext.Request.Cookies.ContainsKey("workflowtenant"))
                 {
-                    t = _hca.HttpContext.Request.Cookies["workflowtenant"];
+                    t = httpContext.Request.Cookies["workflowtenant"];
                 }
             }
             return Task.FromResult(t);
