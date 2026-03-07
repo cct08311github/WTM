@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -89,12 +89,12 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 设定字段名
         /// </summary>
-        string Field { get; set; }
+        string? Field { get; set; }
 
         /// <summary>
         /// 标题名称
         /// </summary>
-        string Title { get; set; }
+        string? Title { get; set; }
 
         /// <summary>
         /// 列宽
@@ -103,7 +103,7 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// //监听单元格事件
         /// </summary>
-        string Event { get; set; }
+        string? Event { get; set; }
         /// <summary>
         /// 是否允许排序
         /// </summary>
@@ -137,7 +137,7 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 子列
         /// </summary>
-        IEnumerable<IGridColumn<T>> Children { get; }
+        IEnumerable<IGridColumn<T>>? Children { get; }
 
         /// <summary>
         /// 底层子列数量
@@ -146,7 +146,7 @@ namespace WalkingTec.Mvvm.Core
 
         EditTypeEnum? EditType { get; set; }
 
-        List<ComboSelectListItem> ListItems { get; set; }
+        List<ComboSelectListItem>? ListItems { get; set; }
 
         DateTimeTypeEnum? DateType { get; set; }
 
@@ -179,7 +179,7 @@ namespace WalkingTec.Mvvm.Core
 
         #region 暂时没有用
 
-        string Id { get; set; }
+        string? Id { get; set; }
 
         /// <summary>
         /// 是否需要分组
@@ -198,9 +198,9 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         int? Flex { get; set; }
 
-        Type FieldType { get; }
+        Type? FieldType { get; }
 
-        string FieldName { get; }
+        string? FieldName { get; }
 
         /// <summary>
         /// 获取内容
@@ -210,7 +210,7 @@ namespace WalkingTec.Mvvm.Core
         /// <returns>内容</returns>
         object GetText(object source, bool needFormat = true);
 
-        object GetObject(object source);
+        object? GetObject(object source);
         /// <summary>
         /// 获取前景色
         /// </summary>
