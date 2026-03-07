@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -26,11 +26,11 @@ namespace WalkingTec.Mvvm.Core
         /// 表头类型
         /// </summary>
         public GridColumnTypeEnum ColumnType { get; set; }
-        private string _field;
+        private string? _field;
         /// <summary>
         /// 设定字段名
         /// </summary>
-        public string Field
+        public string? Field
         {
             get
             {
@@ -39,7 +39,7 @@ namespace WalkingTec.Mvvm.Core
                     _field = PI?.Name;
                     if (_field == null)
                     {
-                        _field = CompiledCol?.Invoke(null).ToString();
+                        _field = CompiledCol?.Invoke(null!).ToString();
                     }
                 }
                 return _field;
@@ -50,11 +50,11 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
-        private string _title;
+        private string? _title;
         /// <summary>
         /// 标题名称
         /// </summary>
-        public string Title
+        public string? Title
         {
             get
             {
@@ -77,7 +77,7 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// //监听单元格事件
         /// </summary>
-        public string Event { get; set; }
+        public string? Event { get; set; }
         /// <summary>
         /// 是否允许排序
         /// </summary>
@@ -111,7 +111,7 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 子列
         /// </summary>
-        public IEnumerable<IGridColumn<T>> Children { get; set; }
+        public IEnumerable<IGridColumn<T>>? Children { get; set; }
         private int? _childrenLen;
         /// <summary>
         /// 底层子列数量
@@ -140,7 +140,7 @@ namespace WalkingTec.Mvvm.Core
 
         public EditTypeEnum? EditType { get; set; }
 
-        public List<ComboSelectListItem> ListItems { get; set; }
+        public List<ComboSelectListItem>? ListItems { get; set; }
 
         public DateTimeTypeEnum? DateType { get; set; }
 
@@ -195,8 +195,8 @@ namespace WalkingTec.Mvvm.Core
 
         #endregion
 
-        private PropertyInfo _pi;
-        protected PropertyInfo PI
+        private PropertyInfo? _pi;
+        protected PropertyInfo? PI
         {
             get
             {
@@ -211,7 +211,7 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// ColumnExp
         /// </summary>
-        public Expression<Func<T, object>> ColumnExp { get; set; }
+        public Expression<Func<T, object>>? ColumnExp { get; set; }
 
         private int? _maxDepth;
 
@@ -238,9 +238,9 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         ///
         /// </summary>
-        public string Id { get; set; }
+        public string? Id { get; set; }
 
-        private Func<T, object> _compiledCol;
+        private Func<T, object>? _compiledCol;
         protected Func<T, object> CompiledCol
         {
             get
@@ -261,12 +261,12 @@ namespace WalkingTec.Mvvm.Core
         }
 
 
-        private Type _fieldType;
+        private Type? _fieldType;
         /// <summary>
         /// 获取值域类型
         /// </summary>
         /// <returns></returns>
-        public Type FieldType
+        public Type? FieldType
         {
             get
             {
@@ -278,7 +278,7 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
-        public string FieldName
+        public string? FieldName
         {
             get
             {
@@ -303,16 +303,16 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 列内容的格式化函数
         /// </summary>
-        public ColumnFormatCallBack<T> Format { get; set; }
+        public ColumnFormatCallBack<T>? Format { get; set; }
 
         /// <summary>
         /// 本列前景色函数
         /// </summary>
-        public Func<T, string> ForeGroundFunc { get; set; }
+        public Func<T, string>? ForeGroundFunc { get; set; }
         /// <summary>
         /// 本列背景色函数
         /// </summary>
-        public Func<T, string> BackGroundFunc { get; set; }
+        public Func<T, string>? BackGroundFunc { get; set; }
 
 
         /// <summary>
@@ -351,7 +351,7 @@ namespace WalkingTec.Mvvm.Core
             }
             else
             {
-                return ForeGroundFunc.Invoke(source as T);
+                return ForeGroundFunc.Invoke((T)source);
             }
         }
 
@@ -368,7 +368,7 @@ namespace WalkingTec.Mvvm.Core
             }
             else
             {
-                return BackGroundFunc.Invoke(source as T);
+                return BackGroundFunc.Invoke((T)source);
             }
         }
 
@@ -393,11 +393,11 @@ namespace WalkingTec.Mvvm.Core
         /// <returns>Html内容</returns>
         public virtual object GetText(object source, bool needFormat = true)
         {
-            object rv = null;
-            var col = CompiledCol?.Invoke(source as T);
+            object? rv = null;
+            var col = CompiledCol?.Invoke((T)source);
             if(needFormat == false && Format != null)
             {
-                var test = Format.Invoke(source as T, col);
+                var test = Format.Invoke((T)source, col!);
                 if(test is ColumnFormatInfo == false && test is List<ColumnFormatInfo> == false)
                 {
                     return test??"";
@@ -433,7 +433,7 @@ namespace WalkingTec.Mvvm.Core
                 {
                     rv = col.ToString();
                 }
-                else if (col.GetType().Namespace.Equals("System") == false)
+                else if (col.GetType().Namespace?.Equals("System") == false)
                 {
                     if (needFormat == false)
                     {
@@ -451,7 +451,7 @@ namespace WalkingTec.Mvvm.Core
             }
             else
             {
-                rv = Format.Invoke(source as T, col);
+                rv = Format.Invoke((T)source, col!);
             }
             if (rv == null)
             {
@@ -460,9 +460,9 @@ namespace WalkingTec.Mvvm.Core
             return rv;
         }
 
-        public virtual object GetObject(object source)
+        public virtual object? GetObject(object source)
         {
-            object rv = CompiledCol?.Invoke(source as T);
+            object? rv = CompiledCol?.Invoke((T)source);
             return rv;
         }
 
@@ -472,7 +472,7 @@ namespace WalkingTec.Mvvm.Core
         /// <returns>Html内容</returns>
         protected virtual string GetHeader()
         {
-            string rv = PropertyHelper.GetPropertyDisplayName(PI);
+            string? rv = PropertyHelper.GetPropertyDisplayName(PI);
             return rv ?? "";
         }
         /// <summary>
@@ -496,7 +496,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="ForeGroundFunc"></param>
         /// <param name="BackGroundFunc"></param>
         /// <param name="sortable"></param>
-        public GridColumn(Expression<Func<T, object>> ColumnExp, ColumnFormatCallBack<T> Format = null, string Header = null, int? Width = null, int? Flex = null, bool AllowMultiLine = true, bool NeedGroup = false, Func<T, string> ForeGroundFunc = null, Func<T, string> BackGroundFunc = null, bool sortable = true)
+        public GridColumn(Expression<Func<T, object>>? ColumnExp, ColumnFormatCallBack<T>? Format = null, string? Header = null, int? Width = null, int? Flex = null, bool AllowMultiLine = true, bool NeedGroup = false, Func<T, string>? ForeGroundFunc = null, Func<T, string>? BackGroundFunc = null, bool sortable = true)
         {
             this.ColumnExp = ColumnExp;
             this.Format = Format;
