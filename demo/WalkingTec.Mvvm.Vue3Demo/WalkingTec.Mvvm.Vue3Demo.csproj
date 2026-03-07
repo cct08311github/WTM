@@ -39,7 +39,6 @@
     <None Include="tsconfig.json" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="Elsa.Designer.Components.Web" Version="2.14.1" />
     <PackageReference Include="Microsoft.TypeScript.MSBuild" Version="5.4.2">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
