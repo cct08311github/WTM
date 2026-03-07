@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System.Text;
 
 namespace WalkingTec.Mvvm.Core
@@ -26,6 +26,6 @@ namespace WalkingTec.Mvvm.Core
 
             }
         }
-        public string LoginPath { get; set; }
+        public string? LoginPath { get; set; }
     }
 }
