@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 
 namespace WalkingTec.Mvvm.Core.Support.Json
@@ -7,10 +7,10 @@ namespace WalkingTec.Mvvm.Core.Support.Json
     public class SimpleGroup
     {
         public Guid ID { get; set; }
-        public string GroupCode { get; set; }
-        public string GroupName { get; set; }
-        public string Manager { get; set; }
+        public string? GroupCode { get; set; }
+        public string? GroupName { get; set; }
+        public string? Manager { get; set; }
         public Guid? ParentId { get; set; }
-        public string Tenant { get; set; }
+        public string? Tenant { get; set; }
     }
 }

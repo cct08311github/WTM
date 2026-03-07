@@ -1,18 +1,16 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
 
 namespace WalkingTec.Mvvm.Core.Support.Json
 {
-    public class SimpleModule 
+    public class SimpleModule
     {
         public Guid ID { get; set; }
 
-        public ActionDescriptionAttribute ActionDes { get; set; }
+        public ActionDescriptionAttribute? ActionDes { get; set; }
 
-        public string _name;
+        public string? _name;
         public string ModuleName
         {
             get
@@ -21,7 +19,7 @@ namespace WalkingTec.Mvvm.Core.Support.Json
                 {
                     if (ActionDes?._localizer != null && string.IsNullOrEmpty(ActionDes?.Description) == false)
                     {
-                        _name= ActionDes._localizer[ActionDes.Description];
+                        _name= ActionDes!._localizer![ActionDes.Description];
                     }
                     else
                     {
@@ -36,14 +34,14 @@ namespace WalkingTec.Mvvm.Core.Support.Json
             }
         }
 
-        public string ClassName { get; set; }
+        public string? ClassName { get; set; }
 
-        public List<SimpleAction> Actions { get; set; }
+        public List<SimpleAction>? Actions { get; set; }
 
         public Guid? AreaId { get; set; }
-        public SimpleArea Area { get; set; }
+        public SimpleArea? Area { get; set; }
 
-        public string NameSpace { get; set; }
+        public string? NameSpace { get; set; }
 
         public bool IgnorePrivillege { get; set; }
 

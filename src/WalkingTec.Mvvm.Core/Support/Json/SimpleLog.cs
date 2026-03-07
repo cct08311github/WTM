@@ -1,7 +1,5 @@
-#nullable disable
+#nullable enable
 using System;
-using System.Collections.Generic;
-using System.Text;
 
 namespace WalkingTec.Mvvm.Core.Support.Json
 {
@@ -29,21 +27,21 @@ namespace WalkingTec.Mvvm.Core.Support.Json
             };
         }
 
-        public string ModuleName { get; set; }
+        public string? ModuleName { get; set; }
 
-        public string ActionName { get; set; }
+        public string? ActionName { get; set; }
 
-        public string ITCode { get; set; }
+        public string? ITCode { get; set; }
 
-        public string ActionUrl { get; set; }
+        public string? ActionUrl { get; set; }
 
         public DateTime ActionTime { get; set; }
 
         public double Duration { get; set; }
 
-        public string Remark { get; set; }
+        public string? Remark { get; set; }
 
-        public string IP { get; set; }
+        public string? IP { get; set; }
 
         public ActionLogTypesEnum LogType { get; set; }
 
@@ -51,7 +49,7 @@ namespace WalkingTec.Mvvm.Core.Support.Json
         /// <summary>
         /// CreateBy
         /// </summary>
-        public string CreateBy { get; set; }
+        public string? CreateBy { get; set; }
         /// <summary>
         /// UpdateTime
         /// </summary>
@@ -59,6 +57,6 @@ namespace WalkingTec.Mvvm.Core.Support.Json
         /// <summary>
         /// UpdateBy
         /// </summary>
-        public string UpdateBy { get; set; }
+        public string? UpdateBy { get; set; }
     }
 }

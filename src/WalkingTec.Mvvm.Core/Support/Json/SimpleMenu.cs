@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -15,20 +15,20 @@ namespace WalkingTec.Mvvm.Core.Support.Json
 
         public bool? IsPublic { get; set; }
 
-        public string Url { get; set; }
+        public string? Url { get; set; }
 
         public Guid? ParentId { get; set; }
 
-        public string PageName { get; set; }
+        public string? PageName { get; set; }
 
         public int? DisplayOrder { get; set; }
 
-        public string Icon { get; set; }
+        public string? Icon { get; set; }
 
         public bool ShowOnMenu { get; set; }
         public bool? IsInside { get; set; }
         public bool FolderOnly { get; set; }
-        public string MethodName { get; set; }
+        public string? MethodName { get; set; }
         public bool? TenantAllowed { get; set; }
         public bool IsParentShowOnMenu(List<SimpleMenu> all)
         {
@@ -53,8 +53,8 @@ namespace WalkingTec.Mvvm.Core.Support.Json
         public  int GetLevel(List<SimpleMenu> all)
         {
             int level = 0;
-            var self = this;
-            while (self.ParentId != null)
+            SimpleMenu? self = this;
+            while (self?.ParentId != null)
             {
                 level++;
                 self = all.Where(x=>x.ID == self.ParentId).FirstOrDefault();
@@ -67,15 +67,15 @@ namespace WalkingTec.Mvvm.Core.Support.Json
 
     public class SimpleMenuApi
     {
-        public string Id { get; set; }
+        public string? Id { get; set; }
 
-        public string ParentId { get; set; }
+        public string? ParentId { get; set; }
 
-        public string Text { get; set; }
+        public string? Text { get; set; }
 
-        public string Url { get; set; }
+        public string? Url { get; set; }
 
-        public string Icon { get; set; }
+        public string? Icon { get; set; }
 
         public bool ShowOnMenu { get; set; }
     }
@@ -87,25 +87,25 @@ namespace WalkingTec.Mvvm.Core.Support.Json
 
         /// <summary>
         /// Name
-        /// 默认用不上name，但是 v1.2.1 有问题：“默认展开了所有节点，并将所有子节点标蓝”
+        /// 默认用不上name，但是 v1.2.1 有问题："默认展开了所有节点，并将所有子节点标蓝"
         /// </summary>
         /// <value></value>
         [JsonPropertyName("name")]
-        public string Name => Title;
+        public string? Name => Title;
 
         /// <summary>
         /// Title
         /// </summary>
         /// <value></value>
         [JsonPropertyName("title")]
-        public string Title { get; set; }
+        public string? Title { get; set; }
 
         /// <summary>
         /// 图标
         /// </summary>
         /// <value></value>
         [JsonPropertyName("icon")]
-        public string Icon { get; set; }
+        public string? Icon { get; set; }
 
         /// <summary>
         /// 是否展开节点
@@ -119,10 +119,10 @@ namespace WalkingTec.Mvvm.Core.Support.Json
         /// </summary>
         /// <value></value>
         [JsonPropertyName("jump")]
-        public string Url { get; set; }
+        public string? Url { get; set; }
 
         [JsonPropertyName("list")]
-        public List<LayUIMenu> Children { get; set; }
+        public List<LayUIMenu>? Children { get; set; }
 
         /// <summary>
         /// order

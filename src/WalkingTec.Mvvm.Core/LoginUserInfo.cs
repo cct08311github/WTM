@@ -81,8 +81,8 @@ namespace WalkingTec.Mvvm.Core
                     // 初始化用户信息
                     var roleIDs = userInfo.UserRoles.ToList();
                     var groupIDs = userInfo.UserGroups.ToList();
-                    List<SimpleGroup> groups = allgroups.Where(x => groupIDs.Contains(x.GroupCode)).ToList();
-                    List<SimpleRole>roles = allroles.Where(x => roleIDs.Contains(x.RoleCode)).ToList();
+                    List<SimpleGroup> groups = allgroups.Where(x => x.GroupCode != null && groupIDs.Contains(x.GroupCode)).ToList();
+                    List<SimpleRole>roles = allroles.Where(x => x.RoleCode != null && roleIDs.Contains(x.RoleCode)).ToList();
                     this.UserId = userInfo.user.ID.ToString();
                     this.ITCode = userInfo.user.ITCode;
                     if (string.IsNullOrEmpty(this.Name))
@@ -241,7 +241,7 @@ namespace WalkingTec.Mvvm.Core
             LocalizeMenu(ms);
 
             urls.AddRange(context.GlobaInfo.AllMenus.Where(x => allowedids != null && allowedids.Contains(x.ID) && x.Url != null).Select(x => x.Url!).Distinct());
-            urls.AddRange(context.GlobaInfo.AllModule.Where(x => x.IsApi == true).SelectMany(x => x.Actions).Where(x => (x.IgnorePrivillege == true || x.Module.IgnorePrivillege == true) && x.Url != null).Select(x => x.Url!));
+            urls.AddRange(context.GlobaInfo.AllModule.Where(x => x.IsApi == true).SelectMany(x => x.Actions ?? Enumerable.Empty<Support.Json.SimpleAction>()).Where(x => (x.IgnorePrivillege == true || x.Module?.IgnorePrivillege == true) && x.Url != null).Select(x => x.Url!));
 
             if (this.Attributes == null)
             {

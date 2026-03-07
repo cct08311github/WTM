@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 
 namespace WalkingTec.Mvvm.Core.Support.Json
@@ -8,12 +8,12 @@ namespace WalkingTec.Mvvm.Core.Support.Json
     {
         public Guid ID { get; set; }
 
-        public string UserCode { get; set; }
-        public string GroupCode { get; set; }
+        public string? UserCode { get; set; }
+        public string? GroupCode { get; set; }
 
-        public string TableName { get; set; }
+        public string? TableName { get; set; }
 
-        public string RelateId { get; set; }
+        public string? RelateId { get; set; }
 
 
     }
