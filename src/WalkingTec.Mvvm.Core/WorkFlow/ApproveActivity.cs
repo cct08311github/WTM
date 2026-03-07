@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -25,10 +25,10 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
             SupportedSyntaxes = new[] { "Json", "Liquid","JavaScript" },
             IsDesignerCritical = true,
             Label = "审批人ITCode")]
-        public List<string> ApproveUsers { get; set; }
+        public List<string> ApproveUsers { get; set; } = null!;
 
         [ActivityInput(IsBrowsable = false, DefaultSyntax = "Json")]
-        public List<string> ApproveUsersFullText { get; set; }
+        public List<string> ApproveUsersFullText { get; set; } = null!;
 
 
         [ActivityInput(
@@ -38,7 +38,7 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
             IsDesignerCritical = true,
             OptionsProvider = typeof(WtmApproveActivity),
             Label = "角色审批")]
-        public ICollection<string> ApproveRoles { get; set; }
+        public ICollection<string> ApproveRoles { get; set; } = null!;
 
 
         [ActivityInput(
@@ -49,7 +49,7 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
             Hint = "请选择",
             OptionsProvider = typeof(WtmApproveActivity),
             Label = "部门审批")]
-        public ICollection<string> ApproveGroups { get; set; }
+        public ICollection<string> ApproveGroups { get; set; } = null!;
 
 
         [ActivityInput(
@@ -59,7 +59,7 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
             IsDesignerCritical = true,
             OptionsProvider = typeof(WtmApproveActivity),
             Label = "部门主管审批")]
-        public ICollection<string> ApproveManagers { get; set; }
+        public ICollection<string> ApproveManagers { get; set; } = null!;
 
         [ActivityInput(
             UIHint = ActivityInputUIHints.MultiText,
@@ -68,18 +68,18 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
             IsDesignerCritical = true,
             OptionsProvider = typeof(WtmApproveActivity),
             Label = "特殊审批")]
-        public ICollection<string> ApproveSpecials { get; set; }
+        public ICollection<string> ApproveSpecials { get; set; } = null!;
 
         [ActivityInput(IsBrowsable = false, Label = "备注")]
-        public string Remark { get; set; }
+        public string? Remark { get; set; }
 
         [ActivityInput(IsBrowsable = false, Label = "审批人")]
-        public string ApprovedBy { get; set; }
+        public string? ApprovedBy { get; set; }
 
         [ActivityInput(
            UIHint = ActivityInputUIHints.SingleLine,
            Label = "标签")]
-        public string Tag { get; set; }
+        public string? Tag { get; set; }
 
         private WTMContext _wtm;
         public WtmApproveActivity(WTMContext wtm)
@@ -180,7 +180,8 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
                         users = names.Data ?? new List<ComboSelectListItem>();
                         if (users.Count > 0)
                         {
-                            ApproveUsers.Add(users.FirstOrDefault()?.Text);
+                            var text = users.FirstOrDefault()?.Text;
+                            if (text != null) ApproveUsers.Add(text);
                         }
                     }
                 }
@@ -307,9 +308,9 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
                         FlowName = context.WorkflowExecutionContext.WorkflowBlueprint.Name,
                         SubmitBy = context.WorkflowInstance.Variables.Get("Submitter")?.ToString(),
                         TagName = this.Tag,
-                        Approvers = users.Select(x => new LoginUserInfo { ITCode = x.Value.ToString(), Name = x.Text }).ToList(),
-                        ApproveRoles = roles.Select(x => new Support.Json.SimpleRole { ID = Guid.Parse(x.Value.ToString()), RoleName = x.Text }).ToList(),
-                        ApproveGroups = groups.Select(x => new Support.Json.SimpleGroup { ID = Guid.Parse(x.Value.ToString()), GroupName = x.Text }).ToList(),
+                        Approvers = users.Select(x => new LoginUserInfo { ITCode = x.Value?.ToString() ?? "", Name = x.Text }).ToList(),
+                        ApproveRoles = roles.Select(x => new Support.Json.SimpleRole { ID = Guid.Parse(x.Value?.ToString() ?? ""), RoleName = x.Text }).ToList(),
+                        ApproveGroups = groups.Select(x => new Support.Json.SimpleGroup { ID = Guid.Parse(x.Value?.ToString() ?? ""), GroupName = x.Text }).ToList(),
                     };
                     notify.OnStart(info);
                 }
@@ -320,9 +321,9 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
 
         protected override IActivityExecutionResult OnResume(ActivityExecutionContext context)
         {
-            WtmApproveInput input = context.Input as WtmApproveInput;
+            WtmApproveInput? input = context.Input as WtmApproveInput;
             Remark = input?.Remark;
-            ApprovedBy = input.CurrentUser.Name + "(" + input.CurrentUser.ITCode.ToLower() + ")";
+            ApprovedBy = input?.CurrentUser?.Name + "(" + input?.CurrentUser?.ITCode?.ToLower() + ")";
             if (input?.Action == "同意" || input?.Action == "拒绝")
             {
                 var exist = _wtm.DC.Set<FrameworkWorkflow>().IgnoreQueryFilters()
@@ -352,7 +353,7 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
                 }
                 catch { }
 
-                return Outcome(input?.Action);
+                return Outcome(input?.Action ?? "");
 
             }
             else

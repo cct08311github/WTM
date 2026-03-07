@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using Elsa.Services;
 using Elsa.Services.Models;
 using Microsoft.EntityFrameworkCore;
@@ -20,23 +20,23 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
             this._wtm = wtm;
         }
 
-        public override async ValueTask<T> LoadAsync(LoadWorkflowContext context, CancellationToken cancellationToken = default)
+        public override async ValueTask<T?> LoadAsync(LoadWorkflowContext context, CancellationToken cancellationToken = default)
         {
-            T rv = context.WorkflowExecutionContext.WorkflowContext as T;
+            T? rv = context.WorkflowExecutionContext.WorkflowContext as T;
             if (rv == null)
             {
                 var vmType = Utils.GetAllVms().Where(x => typeof(IBaseCRUDVM<TopBasePoco>).IsAssignableFrom(x) && x.GetInterface("IBaseCRUDVM`1")?.GenericTypeArguments[0] == typeof(T)).FirstOrDefault();
-                IBaseCRUDVM<TopBasePoco> vm = null;
+                IBaseCRUDVM<TopBasePoco>? vm = null;
                 if (vmType != null)
                 {
-                    vm = vmType.GetConstructor(System.Type.EmptyTypes).Invoke(null) as IBaseCRUDVM<TopBasePoco>;
+                    vm = vmType.GetConstructor(System.Type.EmptyTypes)?.Invoke(null) as IBaseCRUDVM<TopBasePoco>;
                 }
                 using (var dc = _wtm.DC.ReCreate())
                 {
                     if (vm != null)
                     {
-                        (vm as BaseVM).Wtm = this._wtm;
-                        (vm as BaseVM).DC = dc;
+                        ((BaseVM)vm).Wtm = this._wtm;
+                        ((BaseVM)vm).DC = dc;
 
                         vm.SetEntityById(context.ContextId);
                         rv = vm.Entity as T;
@@ -51,16 +51,19 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
             return rv;
         }
 
-        public override async ValueTask<string> SaveAsync(SaveWorkflowContext<T> context, CancellationToken cancellationToken = default)
+        public override async ValueTask<string?> SaveAsync(SaveWorkflowContext<T> context, CancellationToken cancellationToken = default)
         {
             var data = context.Context;
                 using (var dc = _wtm.DC.ReCreate(_wtm.LoggerFactory))
                 {
-                    var existing = await dc.Set<T>().CheckID(data.GetID()).FirstOrDefaultAsync(cancellationToken);
-                    (dc as DbContext).Entry(existing).CurrentValues.SetValues(data);
+                    var existing = await dc.Set<T>().CheckID(data!.GetID()).FirstOrDefaultAsync(cancellationToken);
+                    if (existing != null)
+                    {
+                        ((DbContext)dc).Entry(existing).CurrentValues.SetValues(data);
+                    }
                     await dc.SaveChangesAsync(cancellationToken);
                 }
-            
+
             return data.GetID().ToString();
         }
     }

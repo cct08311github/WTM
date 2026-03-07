@@ -38,7 +38,7 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
             var roleinfo = (await context.ReadActivityPropertyAsync<WtmApproveActivity, ICollection<string>>(x => x.ApproveRoles, cancellationToken))?.ToList() ?? new List<string>();
             var groupinfo = (await context.ReadActivityPropertyAsync<WtmApproveActivity, ICollection<string>>(x => x.ApproveGroups, cancellationToken))?.ToList() ?? new List<string>();
             var managerinfo = (await context.ReadActivityPropertyAsync<WtmApproveActivity, ICollection<string>>(x => x.ApproveManagers, cancellationToken))?.ToList() ?? new List<string>();
-            var tag = (await context.ReadActivityPropertyAsync<WtmApproveActivity, string>(x => x.Tag, cancellationToken));
+            var tag = (await context.ReadActivityPropertyAsync<WtmApproveActivity, string?>(x => x.Tag, cancellationToken));
             var name = context.ActivityExecutionContext.WorkflowExecutionContext.WorkflowBlueprint.Name??"";
             var model = context.ActivityExecutionContext.WorkflowExecutionContext.WorkflowBlueprint.ContextOptions?.ContextType?.FullName;
             var id = context.ActivityExecutionContext.WorkflowExecutionContext.ContextId?.ToString()??"";
