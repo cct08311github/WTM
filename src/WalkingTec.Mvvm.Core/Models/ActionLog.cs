@@ -1,6 +1,5 @@
-#nullable disable
+#nullable enable
 using System;
-using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
@@ -26,19 +25,19 @@ namespace WalkingTec.Mvvm.Core
     {
         [Display(Name = "_Admin.Module")]
         [StringLength(255, ErrorMessage = "Validate.{0}stringmax{1}")]
-        public string ModuleName { get; set; }
+        public string? ModuleName { get; set; }
 
         [Display(Name = "_Admin.Action")]
         [StringLength(255, ErrorMessage = "Validate.{0}stringmax{1}")]
-        public string ActionName { get; set; }
+        public string? ActionName { get; set; }
 
         [Display(Name = "_Admin.Account")]
         [StringLength(50, ErrorMessage = "Validate.{0}stringmax{1}")]
-        public string ITCode { get; set; }
+        public string? ITCode { get; set; }
 
         [Display(Name = "Url")]
         [StringLength(250, ErrorMessage = "Validate.{0}stringmax{1}")]
-        public string ActionUrl { get; set; }
+        public string? ActionUrl { get; set; }
 
         [Display(Name = "_Admin.ActionTime")]
         public DateTime ActionTime { get; set; }
@@ -47,17 +46,17 @@ namespace WalkingTec.Mvvm.Core
         public double Duration { get; set; }
 
         [Display(Name = "_Admin.Remark")]
-        public string Remark { get; set; }
+        public string? Remark { get; set; }
 
         [StringLength(50, ErrorMessage = "Validate.{0}stringmax{1}")]
         [Display(Name = "IP")]
-        public string IP { get; set; }
+        public string? IP { get; set; }
 
         [Display(Name = "_Admin.LogType")]
         public ActionLogTypesEnum LogType { get; set; }
         [Display(Name = "_Admin.Tenant")]
         [StringLength(50, ErrorMessage = "Validate.{0}stringmax{1}")]
-        public string TenantCode { get; set; }
+        public string? TenantCode { get; set; }
 
         public object Clone()
         {

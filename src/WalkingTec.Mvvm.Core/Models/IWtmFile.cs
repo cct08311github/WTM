@@ -8,8 +8,8 @@ namespace WalkingTec.Mvvm.Core.Models
     {
         string? Path { get; set; }
 
-        string? FileName { get; set; }
-        string? FileExt { get; set; }
+        string FileName { get; set; }
+        string FileExt { get; set; }
         long Length { get; set; }
 
         DateTime UploadTime { get; set; }

@@ -1,9 +1,7 @@
-#nullable disable
+#nullable enable
 using System;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
-using System.Linq;
-using System.Reflection;
 using System.Text.Json.Serialization;
 using WalkingTec.Mvvm.Core.Extensions;
 
@@ -38,7 +36,7 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         [NotMapped]
         [JsonIgnore]
-        public string BatchError { get; set; }
+        public string? BatchError { get; set; }
 
         /// <summary>
         /// ExcelIndex
@@ -50,7 +48,7 @@ namespace WalkingTec.Mvvm.Core
         public object GetID()
         {
             var idpro = this.GetType().GetSingleProperty("ID");
-            var id = idpro.GetValue(this);
+            var id = idpro.GetValue(this)!;
             return id;
         }
 

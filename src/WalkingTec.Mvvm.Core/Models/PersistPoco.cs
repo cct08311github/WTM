@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System.ComponentModel.DataAnnotations;
 
 namespace WalkingTec.Mvvm.Core

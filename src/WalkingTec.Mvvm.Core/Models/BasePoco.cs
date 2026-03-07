@@ -1,7 +1,6 @@
-#nullable disable
+#nullable enable
 using System;
 using System.ComponentModel.DataAnnotations;
-using System.Text.Json.Serialization;
 
 namespace WalkingTec.Mvvm.Core
 {
@@ -9,9 +8,9 @@ namespace WalkingTec.Mvvm.Core
     public interface IBasePoco
     {
         DateTime? CreateTime { get; set; }
-        string CreateBy { get; set; }
+        string? CreateBy { get; set; }
         DateTime? UpdateTime { get; set; }
-        string UpdateBy { get; set; }
+        string? UpdateBy { get; set; }
     }
 
     /// <summary>
@@ -29,7 +28,7 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         [Display(Name = "_Admin.CreateBy")]
         [StringLength(50,ErrorMessage = "Validate.{0}stringmax{1}")]
-        public string CreateBy { get; set; }
+        public string? CreateBy { get; set; }
         /// <summary>
         /// UpdateTime
         /// </summary>
@@ -40,6 +39,6 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         [Display(Name = "_Admin.UpdateBy")]
         [StringLength(50,ErrorMessage = "Validate.{0}stringmax{1}")]
-        public string UpdateBy { get; set; }
+        public string? UpdateBy { get; set; }
     }
 }

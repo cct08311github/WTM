@@ -1,9 +1,6 @@
-#nullable disable
-using System.Collections.Generic;
+#nullable enable
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
-using System.Text.Json.Serialization;
-using System.Xml.Serialization;
 
 namespace WalkingTec.Mvvm.Core
 {
@@ -19,19 +16,19 @@ namespace WalkingTec.Mvvm.Core
         [RegularExpression("^[0-9]*$", ErrorMessage = "Validate.{0}number")]
         [StringLength(50, ErrorMessage = "Validate.{0}stringmax{1}")]
         [CanNotEdit]
-        public string RoleCode { get; set; }
+        public string RoleCode { get; set; } = "";
 
         [Display(Name = "_Admin.RoleName")]
         [StringLength(50, ErrorMessage = "Validate.{0}stringmax{1}")]
         [Required(ErrorMessage = "Validate.{0}required")]
-        public string RoleName { get; set; }
+        public string RoleName { get; set; } = "";
 
         [Display(Name = "_Admin.Remark")]
-        public string RoleRemark { get; set; }
+        public string? RoleRemark { get; set; }
 
         [Display(Name = "_Admin.Tenant")]
         [StringLength(50, ErrorMessage = "Validate.{0}stringmax{1}")]
-        public string TenantCode { get; set; }
+        public string? TenantCode { get; set; }
 
 
         [NotMapped]

@@ -1,7 +1,5 @@
-#nullable disable
-using Microsoft.EntityFrameworkCore;
+#nullable enable
 using System;
-using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.IO;
@@ -18,35 +16,35 @@ namespace WalkingTec.Mvvm.Core
     {
         [Display(Name = "_Admin.FileName")]
         [Required(ErrorMessage = "Validate.{0}required")]
-        public string FileName { get; set; }
+        public string FileName { get; set; } = "";
 
         [Display(Name = "_Admin.FileExt")]
         [Required(ErrorMessage = "Validate.{0}required")]
         [StringLength(10)]
-        public string FileExt { get; set; }
+        public string FileExt { get; set; } = "";
 
         [Display(Name = "_Admin.Path")]
-        public string Path { get; set; }
+        public string? Path { get; set; }
 
         [Display(Name = "_Admin.Length")]
         public long Length { get; set; }
 
         public DateTime UploadTime { get; set; }
 
-        public string SaveMode { get; set; }
+        public string? SaveMode { get; set; }
 
-        public byte[] FileData { get; set; }
+        public byte[]? FileData { get; set; }
 
-        public string ExtraInfo { get; set; }
-        public string HandlerInfo { get; set; }
+        public string? ExtraInfo { get; set; }
+        public string? HandlerInfo { get; set; }
 
         [Display(Name = "_Admin.Tenant")]
         [StringLength(50, ErrorMessage = "Validate.{0}stringmax{1}")]
-        public string TenantCode { get; set; }
+        public string? TenantCode { get; set; }
 
         [NotMapped]
         [JsonIgnore]
-        public Stream DataStream { get; set; }
+        public Stream? DataStream { get; set; }
 
         public void Dispose()
         {

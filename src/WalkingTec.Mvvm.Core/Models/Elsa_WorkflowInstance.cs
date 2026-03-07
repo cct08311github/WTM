@@ -1,11 +1,7 @@
-#nullable disable
+#nullable enable
 using System;
-using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace WalkingTec.Mvvm.Core.Models
 {
@@ -15,14 +11,14 @@ namespace WalkingTec.Mvvm.Core.Models
         [Key]
         [Column("Id")]
         [StringLength(450)]
-        public new string ID { get; set; }
+        public new string ID { get; set; } = "";
 
         [Required]
         [StringLength(450)]
-        public string DefinitionId { get; set; }
+        public string DefinitionId { get; set; } = "";
 
         [StringLength(450)]
-        public string TenantId { get; set; }
+        public string? TenantId { get; set; }
 
         public int Version { get; set; }
 
@@ -30,16 +26,16 @@ namespace WalkingTec.Mvvm.Core.Models
 
         [StringLength(450)]
         [Required]
-        public string CorrelationId { get; set; }
+        public string CorrelationId { get; set; } = "";
 
         [StringLength(450)]
-        public string ContextType { get; set; }
+        public string? ContextType { get; set; }
 
         [StringLength(450)]
-        public string ContextId { get; set; }
+        public string? ContextId { get; set; }
 
         [StringLength(450)]
-        public string Name { get; set; }
+        public string? Name { get; set; }
 
         [Required]
         public DateTimeOffset? CreatedAt { get; set; }
@@ -49,11 +45,11 @@ namespace WalkingTec.Mvvm.Core.Models
         public DateTimeOffset? FinishedAt { get; set; }
         public DateTimeOffset? CancelledAt { get; set; }
         public DateTimeOffset? FaultedAt { get; set; }
-        public string Data { get; set; }
-        public string LastExecutedActivityId { get; set; }
+        public string? Data { get; set; }
+        public string? LastExecutedActivityId { get; set; }
         [StringLength(450)]
         [Required]
-        public string DefinitionVersionId { get; set; }
+        public string DefinitionVersionId { get; set; } = "";
 
     }
 }

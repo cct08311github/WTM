@@ -1,9 +1,6 @@
-#nullable disable
-using System.Collections.Generic;
+#nullable enable
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
-using System.Text.Json.Serialization;
-using System.Xml.Serialization;
 
 namespace WalkingTec.Mvvm.Core
 {
@@ -17,18 +14,18 @@ namespace WalkingTec.Mvvm.Core
         [RegularExpression("^[0-9]*$", ErrorMessage = "Validate.{0}number")]
         [StringLength(50, ErrorMessage = "Validate.{0}stringmax{1}")]
         [CanNotEdit]
-        public string GroupCode { get; set; }
+        public string GroupCode { get; set; } = "";
 
         [Display(Name = "_Admin.GroupName")]
         [StringLength(50, ErrorMessage = "Validate.{0}stringmax{1}")]
         [Required(ErrorMessage = "Validate.{0}required")]
-        public string GroupName { get; set; }
+        public string GroupName { get; set; } = "";
 
         [Display(Name = "_Admin.Remark")]
-        public string GroupRemark { get; set; }
+        public string? GroupRemark { get; set; }
 
         [Display(Name = "_Admin.GroupManager")]
-        public string Manager { get; set; }
+        public string? Manager { get; set; }
 
         [NotMapped]
         [Display(Name = "_Admin.UsersCount")]
@@ -36,7 +33,7 @@ namespace WalkingTec.Mvvm.Core
 
         [Display(Name = "_Admin.Tenant")]
         [StringLength(50, ErrorMessage = "Validate.{0}stringmax{1}")]
-        public string TenantCode { get; set; }
+        public string? TenantCode { get; set; }
 
     }
 }

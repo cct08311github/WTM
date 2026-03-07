@@ -281,7 +281,7 @@ namespace WalkingTec.Mvvm.Core
                 var item = context.GlobaInfo.AllTenant.Where(x => x.TCode == context.LoginUserInfo?.CurrentTenant).FirstOrDefault();
                 if (item != null)
                 {
-                    return item.CreateDC(context);
+                    return item.CreateDC(context) ?? context.CreateDC(cskey: "default");
                 }
                 else
                 {

@@ -1,12 +1,10 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Linq;
-using System.Text;
 using System.Text.Json.Serialization;
-using System.Threading.Tasks;
 
 namespace WalkingTec.Mvvm.Core
 {
@@ -22,10 +20,10 @@ namespace WalkingTec.Mvvm.Core
 
         [Display(Name = "_Admin.Parent")]
         [JsonIgnore]
-        public T Parent { get; set; }
+        public T? Parent { get; set; }
         [InverseProperty("Parent")]
         [Display(Name = "_Admin.Children")]
-        public List<T> Children { get; set; }
+        public List<T>? Children { get; set; }
 
         [NotMapped]
         public bool HasChildren

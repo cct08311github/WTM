@@ -1382,7 +1382,7 @@ namespace WalkingTec.Mvvm.Core
             string? workflowname = null;
             if (string.IsNullOrEmpty(flowName))
             {
-                var temp = DC!.Set<Elsa_WorkflowDefinition>().Where(x => x.Data.Contains($"\"contextType\": \"{typeof(TModel).FullName}, {typeof(TModel).Assembly.GetName().Name}\"")).Select(x => new { id = x.DefinitionId, name = x.Name }).FirstOrDefault();
+                var temp = DC!.Set<Elsa_WorkflowDefinition>().Where(x => x.Data != null && x.Data.Contains($"\"contextType\": \"{typeof(TModel).FullName}, {typeof(TModel).Assembly.GetName().Name}\"")).Select(x => new { id = x.DefinitionId, name = x.Name }).FirstOrDefault();
                 workflowId = temp?.id;
                 workflowname = temp?.name;
             }
