@@ -1,27 +1,24 @@
 #nullable enable
-using System;
+// [Elsa removed] BookMark.cs previously contained WtmApproveBookmark (IBookmark)
+// and WtmApproveBookmarkProvider (BookmarkProvider<>). Both depended on Elsa.Services.
+// Stubbed to allow compilation without Elsa packages.
+
 using System.Collections.Generic;
-using System.Linq;
-using System.Runtime.CompilerServices;
-using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
-using Elsa.Services;
 
 namespace WalkingTec.Mvvm.Core.WorkFlow
 {
-    public class WtmApproveBookmark : IBookmark
+    /// <summary>
+    /// Stub bookmark — preserves the type name for compile compatibility.
+    /// </summary>
+    public class WtmApproveBookmark
     {
-        public WtmApproveBookmark()
-        {
-        }
-
-        public WtmApproveBookmark(string user,string name,string? tag,string endityid)
+        public WtmApproveBookmark() { }
+        public WtmApproveBookmark(string user, string name, string? tag, string entityId)
         {
             User = user;
             Tag = tag;
             Name = name;
-            EntityId = endityid;
+            EntityId = entityId;
         }
 
         public string User { get; set; } = "";
@@ -30,53 +27,11 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
         public string EntityId { get; set; } = "";
     }
 
-    public class WtmApproveBookmarkProvider : BookmarkProvider<WtmApproveBookmark, WtmApproveActivity>
+    /// <summary>
+    /// Stub bookmark provider — no longer active.
+    /// </summary>
+    public class WtmApproveBookmarkProvider
     {
-        public override async ValueTask<IEnumerable<BookmarkResult>> GetBookmarksAsync(BookmarkProviderContext<WtmApproveActivity> context, CancellationToken cancellationToken)
-        {
-            var userinfo = (await context.ReadActivityPropertyAsync<WtmApproveActivity, ICollection<string>>(x => x.ApproveUsers, cancellationToken))?.ToList() ?? new List<string>();
-            var roleinfo = (await context.ReadActivityPropertyAsync<WtmApproveActivity, ICollection<string>>(x => x.ApproveRoles, cancellationToken))?.ToList() ?? new List<string>();
-            var groupinfo = (await context.ReadActivityPropertyAsync<WtmApproveActivity, ICollection<string>>(x => x.ApproveGroups, cancellationToken))?.ToList() ?? new List<string>();
-            var managerinfo = (await context.ReadActivityPropertyAsync<WtmApproveActivity, ICollection<string>>(x => x.ApproveManagers, cancellationToken))?.ToList() ?? new List<string>();
-            var tag = (await context.ReadActivityPropertyAsync<WtmApproveActivity, string?>(x => x.Tag, cancellationToken));
-            var name = context.ActivityExecutionContext.WorkflowExecutionContext.WorkflowBlueprint.Name??"";
-            var model = context.ActivityExecutionContext.WorkflowExecutionContext.WorkflowBlueprint.ContextOptions?.ContextType?.FullName;
-            var id = context.ActivityExecutionContext.WorkflowExecutionContext.ContextId?.ToString()??"";
-            if(tag == "")
-            {
-                tag = null;
-            }
-            List<BookmarkResult> rv = new List<BookmarkResult>();
-            if (userinfo?.Any() == true)
-            {
-                rv.AddRange(userinfo.Select(x => Result(new WtmApproveBookmark(x, name,tag,id))));
-                if(string.IsNullOrEmpty(model) == false)
-                {
-                    rv.AddRange(userinfo.Select(x => Result(new WtmApproveBookmark(x, model, tag, id))));
-                }
-            }
-            if (roleinfo?.Any() == true)
-            {
-                rv.AddRange(roleinfo.Select(x => Result(new WtmApproveBookmark(x, name, tag, id))));
-                if (string.IsNullOrEmpty(model) == false)
-                {
-                    rv.AddRange(roleinfo.Select(x => Result(new WtmApproveBookmark(x, model, tag, id))));
-                }
-            }
-            if (groupinfo?.Any() == true)
-            {
-                rv.AddRange(groupinfo.Select(x => Result(new WtmApproveBookmark(x, name, tag, id))));
-                if (string.IsNullOrEmpty(model) == false)
-                {
-                    rv.AddRange(groupinfo.Select(x => Result(new WtmApproveBookmark(x, model, tag, id))));
-                }
-            }
-            if(rv.Count > 0)
-            {
-                return rv;
-            }
-            return new BookmarkResult[0];
-        }
-
+        // No-op after Elsa removal
     }
 }

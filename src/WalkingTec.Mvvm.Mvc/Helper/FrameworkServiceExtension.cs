@@ -618,7 +618,7 @@ namespace WalkingTec.Mvvm.Mvc
             //         services.AddTransient(typeof(IWorkflowContextProvider), type);
             //     }
             // }
-            services.AddBookmarkProvider<WtmApproveBookmarkProvider>();
+            // services.AddBookmarkProvider<WtmApproveBookmarkProvider>();
 
             return services;
         }

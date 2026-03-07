@@ -1,9 +1,9 @@
 #nullable enable
-using Elsa.Models;
-using Elsa.Persistence.Specifications;
-using Elsa.Persistence;
-using Elsa.Services;
-using Elsa.Services.Models;
+// using Elsa.Models;
+// using Elsa.Persistence.Specifications;
+// using Elsa.Persistence;
+// using Elsa.Services;
+// using Elsa.Services.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
@@ -65,10 +65,10 @@ namespace WalkingTec.Mvvm.Core
         void DoDelete();
         Task DoDeleteAsync();
 
-        Task<RunWorkflowResult?> StartWorkflowAsync(string? flowName=null);
-        Task<RunWorkflowResult?> ContinueWorkflowAsync(string actionName, string remark, string? flowName=null, string? tag = null);
+        Task<object?> StartWorkflowAsync(string? flowName=null);
+        Task<object?> ContinueWorkflowAsync(string actionName, string remark, string? flowName=null, string? tag = null);
         Task<List<ApproveTimeLine>> GetWorkflowTimeLineAsync(string? flowName = null);
-        Task<WorkflowInstance?> GetWorkflowInstanceAsync(string? flowName = null);
+        Task<object?> GetWorkflowInstanceAsync(string? flowName = null);
         /// <summary>
         /// 彻底删除，对PersistPoco进行物理删除
         /// </summary>
@@ -1034,19 +1034,7 @@ namespace WalkingTec.Mvvm.Core
                 }
                 DC!.DeleteEntity(Entity);
                 DC!.SaveChanges();
-                if (typeof(IWorkflow).IsAssignableFrom(typeof(TModel)))
-                {
-                    var wi = DC!.Set<Elsa_WorkflowInstance>().CheckEqual(typeof(TModel).FullName, x => x.ContextType).CheckEqual(Entity.GetID().ToString(), x => x.ContextId).ToList();
-                    if (wi.Count > 0)
-                    {
-                        DC!.Set<Elsa_WorkflowInstance>().RemoveRange(wi);
-                        var wl = DC!.Set<Elsa_WorkflowExecutionLogRecord>().CheckContain(wi.Select(x => x.ID).ToList(), x => x.WorkflowInstanceId).ToList();
-                        DC!.Set<Elsa_WorkflowExecutionLogRecord>().RemoveRange(wl);
-                        var ww = DC!.Set<FrameworkWorkflow>().CheckContain(wi.Select(x => x.ID).ToList(), x => x.WorkflowId).ToList();
-                        DC!.Set<FrameworkWorkflow>().RemoveRange(ww);
-                        DC!.SaveChanges();
-                    }
-                }
+                // [Elsa removed] workflow instance cleanup was here
                 if (Wtm?.ServiceProvider != null)
                 {
                     var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
@@ -1106,19 +1094,7 @@ namespace WalkingTec.Mvvm.Core
                 }
                 DC!.DeleteEntity(Entity);
                 await DC!.SaveChangesAsync();
-                if (typeof(IWorkflow).IsAssignableFrom(typeof(TModel)))
-                {
-                    var wi = DC!.Set<Elsa_WorkflowInstance>().CheckEqual(typeof(TModel).FullName, x => x.ContextType).CheckEqual(Entity.GetID().ToString(), x => x.ContextId).ToList();
-                    if (wi.Count > 0)
-                    {
-                        DC!.Set<Elsa_WorkflowInstance>().RemoveRange(wi);
-                        var wl = DC!.Set<Elsa_WorkflowExecutionLogRecord>().CheckContain(wi.Select(x => x.ID).ToList(), x => x.WorkflowInstanceId).ToList();
-                        DC!.Set<Elsa_WorkflowExecutionLogRecord>().RemoveRange(wl);
-                        var ww = DC!.Set<FrameworkWorkflow>().CheckContain(wi.Select(x => x.ID).ToList(), x => x.WorkflowId).ToList();
-                        DC!.Set<FrameworkWorkflow>().RemoveRange(ww);
-                        await DC!.SaveChangesAsync();
-                    }
-                }
+                // [Elsa removed] workflow instance cleanup was here
                 if (Wtm?.ServiceProvider != null)
                 {
                     var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
@@ -1366,156 +1342,28 @@ namespace WalkingTec.Mvvm.Core
             return new[] { "Entity." + pi.Name };
         }
 
-        public virtual async Task<RunWorkflowResult?> StartWorkflowAsync(string? flowName=null)
+        // [Elsa removed] StartWorkflowAsync — stubbed, returns null
+        public virtual Task<object?> StartWorkflowAsync(string? flowName=null)
         {
-            if (typeof(IWorkflow).IsAssignableFrom(typeof(TModel)) == false)
-            {
-                MSD!.AddModelError(" noworkflow", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.NoWorkflow"] ?? "" : "");
-                return null;
-            }
-            if(Entity.HasID() == false)
-            {
-                return null;
-            }
-
-            string? workflowId = null;
-            string? workflowname = null;
-            if (string.IsNullOrEmpty(flowName))
-            {
-                var temp = DC!.Set<Elsa_WorkflowDefinition>().Where(x => x.Data != null && x.Data.Contains($"\"contextType\": \"{typeof(TModel).FullName}, {typeof(TModel).Assembly.GetName().Name}\"")).Select(x => new { id = x.DefinitionId, name = x.Name }).FirstOrDefault();
-                workflowId = temp?.id;
-                workflowname = temp?.name;
-            }
-            else
-            {
-                var temp = DC!.Set<Elsa_WorkflowDefinition>().Where(x => x.Name == flowName).Select(x=> new { id = x.DefinitionId, name = x.Name }).FirstOrDefault();
-                workflowId = temp?.id;
-                workflowname = temp?.name;
-            }
-            if (string.IsNullOrEmpty(workflowId))
-            {
-                MSD!.AddModelError(" noworkflow", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.NoWorkflow"] ?? "" : "");
-                return null;
-            }
-            var lp = Wtm!.ServiceProvider!.GetRequiredService<IWorkflowLaunchpad>();
-            var workflow = await lp.FindStartableWorkflowAsync(workflowId, contextId: Entity.GetID().ToString(), tenantId: Wtm!.LoginUserInfo?.CurrentTenant);
-            if (workflow != null)
-            {
-                workflow.WorkflowInstance.Variables.Set("Submitter", Wtm!.LoginUserInfo?.ITCode);
-                workflow.WorkflowInstance.Name = workflowname;
-                var rv = await lp.ExecuteStartableWorkflowAsync(workflow);
-                if(rv?.WorkflowInstance?.Faults?.Count > 0)
-                {
-                    MSD!.AddModelError(" workflowfault", rv?.WorkflowInstance?.Faults[0].Message ?? "");
-
-                }
-                return rv;
-            }
-
-            return null;
-
+            return Task.FromResult<object?>(null);
         }
 
-        public virtual async Task<RunWorkflowResult?> ContinueWorkflowAsync(string actionName, string remark, string? flowName=null, string? tag = null)
+        // [Elsa removed] ContinueWorkflowAsync — stubbed, returns null
+        public virtual Task<object?> ContinueWorkflowAsync(string actionName, string remark, string? flowName=null, string? tag = null)
         {
-            if (typeof(IWorkflow).IsAssignableFrom(typeof(TModel)) == false)
-            {
-                MSD!.AddModelError(" noworkflow", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.NoWorkflow"] ?? "" : "");
-                return null;
-            }
-            if (Entity.HasID() == false)
-            {
-                return null;
-            }
-            var loginUser = Wtm?.LoginUserInfo;
-            if (loginUser == null)
-            {
-                return null;
-            }
-
-            try
-            {
-                var lp = Wtm!.ServiceProvider!.GetRequiredService<IWorkflowLaunchpad>();
-                //不直接使用Wtm.LoginUserInfo，否则elsa会把所有信息序列化保存到WorkflowInstances表中
-                LoginUserInfo li = new LoginUserInfo();
-                li.ITCode = loginUser.ITCode;
-                li.Name = loginUser.Name;
-                li.UserId = loginUser.UserId;
-                li.PhotoId = loginUser.PhotoId;
-                li.Groups = loginUser.Groups;
-                li.Roles = loginUser.Roles;
-                li.TenantCode = loginUser.CurrentTenant;
-                var query = new WorkflowsQuery(nameof(WtmApproveActivity), new WtmApproveBookmark(loginUser.ITCode, string.IsNullOrEmpty(flowName)?typeof(TModel).FullName!:flowName, tag, Entity.GetID().ToString()), null, null, null, loginUser.CurrentTenant);
-                if (query != null)
-                {
-                    var flows = await lp.FindWorkflowsAsync(query);
-                    foreach (var item in flows)
-                    {
-                        if (item.WorkflowInstance == null)
-                        {
-                            var result = await lp.ExecutePendingWorkflowAsync(item, new WorkflowInput { Input = new WtmApproveInput { Action = actionName, CurrentUser = li, Remark = remark } });
-                            return result;
-                        }
-                    }
-                }
-                if(loginUser.Roles != null)
-                {
-                    foreach (var role in loginUser.Roles)
-                    {
-                        query = new WorkflowsQuery(nameof(WtmApproveActivity), new WtmApproveBookmark(role.ID.ToString(), string.IsNullOrEmpty(flowName) ? typeof(TModel).FullName! : flowName, tag, Entity.GetID().ToString()), null, null, null, loginUser.CurrentTenant);
-                        if (query != null)
-                        {
-                            var flows = await lp.FindWorkflowsAsync(query);
-                            foreach (var item in flows)
-                            {
-                                if (item.WorkflowInstance == null)
-                                {
-                                    var result = await lp.ExecutePendingWorkflowAsync(item, new WorkflowInput { Input = new WtmApproveInput { Action = actionName, CurrentUser = li, Remark = remark } });
-                                    return result;
-                                }
-                            }
-                        }
-
-                    }
-                }
-                if (loginUser.Groups != null)
-                {
-                    foreach (var group in loginUser.Groups)
-                    {
-                        query = new WorkflowsQuery(nameof(WtmApproveActivity), new WtmApproveBookmark(group.ID.ToString(), string.IsNullOrEmpty(flowName) ? typeof(TModel).FullName! : flowName, tag, Entity.GetID().ToString()), null, null, null, loginUser.CurrentTenant);
-                        if (query != null)
-                        {
-
-                            var flows = await lp.FindWorkflowsAsync(query);
-                            foreach (var item in flows)
-                            {
-                                if (item.WorkflowInstance == null)
-                                {
-                                    var result = await lp.ExecutePendingWorkflowAsync(item, new WorkflowInput { Input = new WtmApproveInput { Action = actionName, CurrentUser = li, Remark = remark } });
-                                    return result;
-                                }
-                            }
-                        }
-
-                    }
-                }
-                MSD!.AddModelError(" noworkflow", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.NoWorkflow"] ?? "" : "");
-                return null;
-            }
-            catch { }
-
-            return null;
+            return Task.FromResult<object?>(null);
         }
 
-        public virtual async Task<List<ApproveTimeLine>> GetWorkflowTimeLineAsync(string? flowName = null)
+        // [Elsa removed] GetWorkflowTimeLineAsync — returns empty list
+        public virtual Task<List<ApproveTimeLine>> GetWorkflowTimeLineAsync(string? flowName = null)
         {
-            var rv = await Wtm!.CallAPI<List<ApproveTimeLine>>("", $"{Wtm!.HostAddress}/_workflowapi/GetTimeLine?flowname={flowName}&entitytype={typeof(TModel).FullName}&entityid={Entity.GetID()}");
-            return rv.Data!;
+            return Task.FromResult(new List<ApproveTimeLine>());
         }
-        public virtual async Task<WorkflowInstance?> GetWorkflowInstanceAsync(string? flowName = null)
+
+        // [Elsa removed] GetWorkflowInstanceAsync — returns null
+        public virtual Task<object?> GetWorkflowInstanceAsync(string? flowName = null)
         {
-            var rv = await Wtm!.CallAPI<WorkflowInstance>("", $"{Wtm!.HostAddress}/_workflowapi/GetWorkflow?flowname={flowName}&entitytype={typeof(TModel).FullName}&entityid={Entity.GetID()}");
-            return rv.Data;
+            return Task.FromResult<object?>(null);
         }
 
     }

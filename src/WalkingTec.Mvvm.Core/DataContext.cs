@@ -44,11 +44,12 @@ namespace WalkingTec.Mvvm.Core
         public DbSet<FrameworkWorkflow> FrameworkWorkflows { get; set; }
         public DbSet<ActionLog> BaseActionLogs { get; set; }
         public DbSet<FrameworkTenant> FrameworkTenants { get; set; }
-        public DbSet<Elsa_Bookmark> Elsa_Bookmarks { get; set; }
-        public DbSet<Elsa_Trigger> Elsa_Triggers { get; set; }
-        public DbSet<Elsa_WorkflowDefinition> Elsa_WorkflowDefinitions { get; set; }
-        public DbSet<Elsa_WorkflowExecutionLogRecord> Elsa_WorkflowExecutionLogRecords { get; set; }
-        public DbSet<Elsa_WorkflowInstance> Elsa_WorkflowInstances { get; set; }
+        // [Elsa removed] DbSet properties
+        // public DbSet<Elsa_Bookmark> Elsa_Bookmarks { get; set; }
+        // public DbSet<Elsa_Trigger> Elsa_Triggers { get; set; }
+        // public DbSet<Elsa_WorkflowDefinition> Elsa_WorkflowDefinitions { get; set; }
+        // public DbSet<Elsa_WorkflowExecutionLogRecord> Elsa_WorkflowExecutionLogRecords { get; set; }
+        // public DbSet<Elsa_WorkflowInstance> Elsa_WorkflowInstances { get; set; }
         public DbSet<RefreshTokenEntity> FrameworkRefreshTokens { get; set; }
 
         /// <summary>
@@ -593,11 +594,12 @@ namespace WalkingTec.Mvvm.Core
             if (DBType == DBTypeEnum.Oracle)
             {
                 modelBuilder.Model.SetMaxIdentifierLength(30);
-                modelBuilder.Entity<Elsa_Bookmark>().ToTable("Bookmarks");
-                modelBuilder.Entity<Elsa_Trigger>().ToTable("Triggers");
-                modelBuilder.Entity<Elsa_WorkflowDefinition>().ToTable("WorkflowDefinitions");
-                modelBuilder.Entity<Elsa_WorkflowExecutionLogRecord>().ToTable("WorkflowExecutionLogRecords");
-                modelBuilder.Entity<Elsa_WorkflowInstance>().ToTable("WorkflowInstances");
+                // [Elsa removed] table mappings
+                // modelBuilder.Entity<Elsa_Bookmark>().ToTable("Bookmarks");
+                // modelBuilder.Entity<Elsa_Trigger>().ToTable("Triggers");
+                // modelBuilder.Entity<Elsa_WorkflowDefinition>().ToTable("WorkflowDefinitions");
+                // modelBuilder.Entity<Elsa_WorkflowExecutionLogRecord>().ToTable("WorkflowExecutionLogRecords");
+                // modelBuilder.Entity<Elsa_WorkflowInstance>().ToTable("WorkflowInstances");
             }
         }
 

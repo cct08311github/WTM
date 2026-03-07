@@ -207,18 +207,7 @@ namespace WalkingTec.Mvvm.Core
                         }
                         DC!.DeleteEntity(Entity);
 
-                        if (typeof(IWorkflow).IsAssignableFrom(typeof(TModel)))
-                        {
-                            var wi = DC!.Set<Elsa_WorkflowInstance>().CheckEqual(typeof(TModel).FullName, x => x.ContextType).CheckEqual(Entity.GetID().ToString(), x => x.ContextId).ToList();
-                            if (wi.Count > 0)
-                            {
-                                DC!.Set<Elsa_WorkflowInstance>().RemoveRange(wi);
-                                var wl = DC!.Set<Elsa_WorkflowExecutionLogRecord>().CheckContain(wi.Select(x => x.ID).ToList(), x => x.WorkflowInstanceId).ToList();
-                                DC!.Set<Elsa_WorkflowExecutionLogRecord>().RemoveRange(wl);
-                                var ww = DC!.Set<FrameworkWorkflow>().CheckContain(wi.Select(x => x.ID).ToList(), x => x.WorkflowId).ToList();
-                                DC!.Set<FrameworkWorkflow>().RemoveRange(ww);
-                            }
-                        }
+                        // [Elsa removed] workflow instance cleanup was here
 
                     }
                 }
