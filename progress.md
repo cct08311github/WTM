@@ -2,17 +2,18 @@
 
 Purpose: current handoff for the next AI collaborator. This file is repo-tracked in the current branch history, so keep it consistent with actual code and test status.
 
-Last updated: 2026-03-07
+Last updated: 2026-03-08
 Primary branch: `dotnet8`
-Current HEAD: `99942071` (`fix(tests): use SQLite shared in-memory for DoLoginAsync; add jti to JWT`)
+Current HEAD: `bfc58961` (`docs: reconcile progress handoff with verified repo state`)
 
 ## Branch Status
 
 - `dotnet8` is the active mainline in this fork
-- local `dotnet8` is ahead of `origin/dotnet8` by 7 commits
-- local `main` is behind `dotnet8` by 35 commits and should be fast-forwarded if you want `main` to mirror the active line
-- `feature/8.1.15-testing` has been merged into `dotnet8` by cherry-picking its 7 commits
-- old `codex/*` branches that looked unmerged were checked with `git cherry`; their patches are already effectively present in `dotnet8`
+- `dotnet8` is the only branch that should be treated as source of truth
+- local `dotnet8` is ahead of `origin/dotnet8` by 8 commits
+- all local `codex/*`, `feature/*`, and `main` branches/worktrees have been removed to stop branch drift and handoff confusion
+- the test coverage work from `feature/8.1.15-testing` is already merged into local `dotnet8`
+- several stale remote branches still exist on `origin`; ignore them unless you are explicitly doing remote branch cleanup
 
 ## Verified System State
 
@@ -75,7 +76,6 @@ The previously separate `feature/8.1.15-testing` work is now merged into `dotnet
 
 ## Recommended Next Work
 
-1. Fast-forward `main` to `dotnet8` if both branches are meant to represent the same line locally.
-2. Push `dotnet8` if the new test coverage work should exist on the remote.
-3. Continue nullable cleanup from the real baseline of `56` Core warnings, not the obsolete `10/21/25` numbers.
-4. Focus first on `PropertyHelper.cs` warning cleanup, then decide whether `ListVMExtension.cs` or `WTMContext.cs` is the safer next conversion.
+1. Push `dotnet8` if the new test coverage work should exist on the remote.
+2. Continue nullable cleanup from the real baseline of `56` Core warnings, not the obsolete `10/21/25` numbers.
+3. Focus first on `PropertyHelper.cs` warning cleanup, then decide whether `ListVMExtension.cs` or `WTMContext.cs` is the safer next conversion.
