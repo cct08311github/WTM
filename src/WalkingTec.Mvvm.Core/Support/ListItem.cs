@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System.Collections.Generic;
 using System.Linq;
 
@@ -9,12 +9,12 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// The value to display
         /// </summary>
-        public string Text { get; set; }
+        public string? Text { get; set; }
 
         /// <summary>
         /// The value to be submitted
         /// </summary>
-        public string Value { get; set; }
+        public string? Value { get; set; }
 
     }
 
@@ -24,7 +24,7 @@ namespace WalkingTec.Mvvm.Core
         /// Icon
         /// </summary>
         /// <value></value>
-        public string Icon { get; set; }
+        public string? Icon { get; set; }
     }
 
     /// <summary>
@@ -45,13 +45,13 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// ParentId
         /// </summary>
-        public string ParentId { get; set; }
+        public string? ParentId { get; set; }
 
         /// <summary>
         /// Icon
         /// </summary>
         /// <value></value>
-        public string Icon { get; set; }
+        public string? Icon { get; set; }
 
     }
 
@@ -61,11 +61,11 @@ namespace WalkingTec.Mvvm.Core
     public class TreeSelectListItem: ComboSelectListItem
     {
         public bool Expended { get; set; }
-        public string Url { get; set; }
-        public string Tag { get; set; }
-        public string Id { get; set; }
+        public string? Url { get; set; }
+        public string? Tag { get; set; }
+        public string? Id { get; set; }
         public bool Leaf => Children == null || Children.Count() == 0;
-        public List<TreeSelectListItem> Children { get; set; }
+        public List<TreeSelectListItem>? Children { get; set; }
     }
 
 }

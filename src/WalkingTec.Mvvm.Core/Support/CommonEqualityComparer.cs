@@ -1,7 +1,6 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
-using System.Text;
 
 namespace WalkingTec.Mvvm.Core
 {
@@ -14,14 +13,14 @@ namespace WalkingTec.Mvvm.Core
             this.keySelector = keySelector;
         }
 
-        public bool Equals(T x, T y)
+        public bool Equals(T? x, T? y)
         {
-            return EqualityComparer<V>.Default.Equals(keySelector(x), keySelector(y));
+            return EqualityComparer<V>.Default.Equals(keySelector(x!), keySelector(y!));
         }
 
         public int GetHashCode(T obj)
         {
-            return EqualityComparer<V>.Default.GetHashCode(keySelector(obj));
+            return EqualityComparer<V>.Default.GetHashCode(keySelector(obj)!);
         }
     }
 }

@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Security.Claims;
@@ -44,7 +44,7 @@ namespace WalkingTec.Mvvm.Core.Auth
         }
 
         /// <inheritdoc/>
-        public override bool Equals(Claim x, Claim y)
+        public override bool Equals(Claim? x, Claim? y)
         {
             if (x == null && y == null) return true;
             if (x == null && y != null) return false;
@@ -53,7 +53,7 @@ namespace WalkingTec.Mvvm.Core.Auth
             StringComparison valueComparison = StringComparison.Ordinal;
             if (_options.IgnoreValueCase == true) valueComparison = StringComparison.OrdinalIgnoreCase;
 
-            var equal = (String.Equals(x.Type, y.Type, StringComparison.OrdinalIgnoreCase) &&
+            var equal = (String.Equals(x!.Type, y!.Type, StringComparison.OrdinalIgnoreCase) &&
                          String.Equals(x.Value, y.Value, valueComparison) &&
                          String.Equals(x.ValueType, y.ValueType, StringComparison.Ordinal));
 

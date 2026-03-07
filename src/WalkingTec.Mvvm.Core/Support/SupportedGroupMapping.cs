@@ -1,5 +1,5 @@
-#nullable disable
-﻿using System.Collections.Generic;
+#nullable enable
+using System.Collections.Generic;
 
 namespace WalkingTec.Mvvm.Core
 {
@@ -8,8 +8,8 @@ namespace WalkingTec.Mvvm.Core
     /// </summary>
     public class SupportedBusinessTypeMapping
     {
-        public string BusinessTypeName { get; set; }
-        public List<SupportedGroupMapping> GroupMappings { get; set; }
+        public string? BusinessTypeName { get; set; }
+        public List<SupportedGroupMapping>? GroupMappings { get; set; }
     }
 
     /// <summary>
@@ -20,14 +20,14 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 群组名
         /// </summary>
-        public string Group { get; set; }
+        public string? Group { get; set; }
         /// <summary>
         /// 内网地址头
         /// </summary>
-        public string InsideUrlHeader { get; set; }
+        public string? InsideUrlHeader { get; set; }
         /// <summary>
         /// 外网地址头
         /// </summary>
-        public string OutsideUrlHeader { get; set; }
+        public string? OutsideUrlHeader { get; set; }
     }
 }

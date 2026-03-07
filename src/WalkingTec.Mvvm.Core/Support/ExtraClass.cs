@@ -1,7 +1,5 @@
-#nullable disable
+#nullable enable
 using System.Collections.Generic;
-using System.Linq;
-using System.Net;
 
 namespace WalkingTec.Mvvm.Core
 {
@@ -11,9 +9,9 @@ namespace WalkingTec.Mvvm.Core
     public class SimpleTreeTextAndValue
     {
 
-        public object Id { get; set; }
-        public object Text { get; set; }
-        public object ParentId { get; set; }
+        public object? Id { get; set; }
+        public object? Text { get; set; }
+        public object? ParentId { get; set; }
     }
 
     /// <summary>
@@ -21,8 +19,8 @@ namespace WalkingTec.Mvvm.Core
     /// </summary>
     public class SimpleTextAndValue
     {
-        public object Text { get; set; }
-        public object Value { get; set; }
+        public object? Text { get; set; }
+        public object? Value { get; set; }
     }
 
     /// <summary>
@@ -30,37 +28,40 @@ namespace WalkingTec.Mvvm.Core
     /// </summary>
     public class SortInfo
     {
-        public string Property { get; set; }
+        public string? Property { get; set; }
         public SortDir Direction { get; set; }
     }
 
     public class ApiResult<T>
     {
-        public T Data { get; set; }
-        public HttpStatusCode? StatusCode { get; set; }
-        public ErrorObj Errors { get; set; }
-        public string ErrorMsg { get; set; }
+        public T? Data { get; set; }
+        public System.Net.HttpStatusCode? StatusCode { get; set; }
+        public ErrorObj? Errors { get; set; }
+        public string? ErrorMsg { get; set; }
 
         public ApiResult()
         {
-            Data = default(T);
+            Data = default;
         }
     }
 
     public class ErrorObj
     {
-        public Dictionary<string, string> Form { get; set; }
-        public List<string> Message { get; set; }
+        public Dictionary<string, string>? Form { get; set; }
+        public List<string>? Message { get; set; }
 
         public string GetFirstError()
         {
-            if(Message != null && Message.Any())
+            if(Message != null && Message.Count > 0)
             {
-                return Message.First();
+                return Message[0];
             }
-            if(Form != null && Form.Any())
+            if(Form != null && Form.Count > 0)
             {
-                return Form.First().Value;
+                foreach (var kvp in Form)
+                {
+                    return kvp.Value;
+                }
             }
             return "";
         }

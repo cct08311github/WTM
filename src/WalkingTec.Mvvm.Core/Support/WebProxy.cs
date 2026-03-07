@@ -1,5 +1,5 @@
-#nullable disable
-﻿using System;
+#nullable enable
+using System;
 using System.Net;
 
 namespace WalkingTec.Mvvm.Core
@@ -18,7 +18,7 @@ namespace WalkingTec.Mvvm.Core
 
         public Uri ProxyUri { get; set; }
 
-        public ICredentials Credentials { get; set; }
+        public ICredentials? Credentials { get; set; }
 
         public Uri GetProxy(Uri destination)
         {
