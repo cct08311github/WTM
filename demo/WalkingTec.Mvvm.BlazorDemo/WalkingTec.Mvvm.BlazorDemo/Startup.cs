@@ -107,7 +107,7 @@ namespace WalkingTec.Mvvm.BlazorDemo.Server
             app.UseSession();
             app.UseWtmSwagger();
             app.UseWtm();
-            app.UseHttpActivities();
+            // app.UseHttpActivities();
 
             if (configs.BlazorMode == BlazorModeEnum.Server)
             {
