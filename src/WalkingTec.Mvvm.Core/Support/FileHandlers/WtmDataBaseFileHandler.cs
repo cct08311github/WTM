@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
@@ -19,18 +19,18 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
         {
         }
 
-        public override Stream GetFileData(IWtmFile file)
+        public override Stream? GetFileData(IWtmFile file)
         {
             var rv = wtm.DC.Set<FileAttachment>().CheckID(file.GetID()).FirstOrDefault();
             if (rv != null)
             {
-                return new MemoryStream((rv as FileAttachment).FileData);
+                return new MemoryStream(((FileAttachment)rv).FileData!);
             }
             return null;
         }
 
 
-        public  IWtmFile UploadToDB(string fileName, long fileLength, Stream data, string groupName = null, string subdir = null, string extra = null)
+        public  IWtmFile UploadToDB(string fileName, long fileLength, Stream data, string? groupName = null, string? subdir = null, string? extra = null)
         {
             FileAttachment file = new FileAttachment();
             file.FileName = fileName;

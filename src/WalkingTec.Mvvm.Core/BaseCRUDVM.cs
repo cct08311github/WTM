@@ -345,7 +345,7 @@ namespace WalkingTec.Mvvm.Core
                 if (fid != null && Wtm?.ServiceProvider != null)
                 {
                     var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
-                    var file = fp.GetFile(fid?.ToString(), false, DC!);
+                    var file = fp.GetFile(fid!.ToString()!, false, DC!);
                     rv.SetPropertyValue(f.Name, file);
                 }
             }

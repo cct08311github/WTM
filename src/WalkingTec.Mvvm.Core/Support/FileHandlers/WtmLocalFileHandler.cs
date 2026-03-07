@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
@@ -19,23 +19,23 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
         {
         }
 
-        public override Stream GetFileData(IWtmFile file)
+        public override Stream? GetFileData(IWtmFile file)
         {
-            return File.OpenRead(GetFullPath(file.Path));          
+            return File.OpenRead(GetFullPath(file.Path!));
         }
 
 
-        public override (string path, string handlerInfo) Upload(string fileName, long fileLength, Stream data, string group = null, string subdir = null, string extra = null)
+        public override (string? path, string? handlerInfo) Upload(string fileName, long fileLength, Stream data, string? group = null, string? subdir = null, string? extra = null)
         {
             var localSettings = wtm.ConfigInfo.FileUploadOptions.Settings.Where(x => x.Key.ToLower() == "local").Select(x => x.Value).FirstOrDefault();
 
             var groupdir = "";
             if (string.IsNullOrEmpty(group))
             {
-                groupdir = localSettings?.FirstOrDefault().GroupLocation;
+                groupdir = localSettings?.FirstOrDefault()?.GroupLocation;
             }
             else {
-               groupdir = localSettings?.Where(x => x.GroupName.ToLower() == group.ToLower()).FirstOrDefault().GroupLocation;
+               groupdir = localSettings?.Where(x => x.GroupName?.ToLower() == group!.ToLower()).FirstOrDefault()?.GroupLocation;
             }
             if (string.IsNullOrEmpty(groupdir))
             {
@@ -81,7 +81,7 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
             {
                 try
                 {
-                    File.Delete(GetFullPath(file?.Path));
+                    File.Delete(GetFullPath(file?.Path!));
                 }
                 catch { }
             }

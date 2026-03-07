@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -16,7 +16,7 @@ namespace WalkingTec.Mvvm.Core.Support.Quartz
     {
         private readonly IServiceProvider _sp;
         private readonly GlobalData _gd;
-        private IScheduler _scheduler;
+        private IScheduler? _scheduler;
         public QuartzHostService(IServiceProvider sp,GlobalData gd)
         {
             _sp = sp;
@@ -104,7 +104,7 @@ namespace WalkingTec.Mvvm.Core.Support.Quartz
 
         public async Task StopAsync(CancellationToken cancellationToken)
         {
-            await _scheduler.Shutdown(cancellationToken);
+            if (_scheduler != null) await _scheduler.Shutdown(cancellationToken);
         }
     }
 }

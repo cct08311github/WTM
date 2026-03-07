@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
@@ -103,7 +103,7 @@ namespace WalkingTec.Mvvm.Core
         {
             if (_startTime == null)
                 return null;
-            return _startTime <= DateTimeOffset.MinValue.LocalDateTime ? DateTimeOffset.MinValue : new DateTimeOffset(GetStartTime().Value);
+            return _startTime <= DateTimeOffset.MinValue.LocalDateTime ? DateTimeOffset.MinValue : new DateTimeOffset(GetStartTime()!.Value);
         }
 
         public void SetStartOffset(DateTimeOffset? value)
@@ -116,7 +116,7 @@ namespace WalkingTec.Mvvm.Core
         {
             if (_endTime == null)
                 return null;
-            return _endTime <= DateTimeOffset.MinValue.LocalDateTime ? DateTimeOffset.MinValue : new DateTimeOffset(GetEndTime().Value);
+            return _endTime <= DateTimeOffset.MinValue.LocalDateTime ? DateTimeOffset.MinValue : new DateTimeOffset(GetEndTime()!.Value);
         }
 
         public void SetEndOffset(DateTimeOffset? value)
@@ -340,7 +340,7 @@ namespace WalkingTec.Mvvm.Core
             { DateTimeTypeEnum.Year,@"(\d{4}|\d{3}|\d{2}|\d{1})"},
         };
 
-        public static bool TryParse(string input, out DateRange result)
+        public static bool TryParse(string input, out DateRange? result)
         {
             if (TryParse(input, new[] { '~' }, out result)) return true;
             result = null;
@@ -355,7 +355,7 @@ namespace WalkingTec.Mvvm.Core
             return false;
         }
 
-        public static bool TryParse(string input, char[] separator, out DateRange result)
+        public static bool TryParse(string input, char[] separator, out DateRange? result)
         {
             result = null;
             if (string.IsNullOrEmpty(input))
@@ -366,7 +366,7 @@ namespace WalkingTec.Mvvm.Core
             return values.Length == 2 && TryParse(values[0], values[1], DefaultEpoch, out result);
         }
 
-        public static bool TryParse(string input, string[] separator, out DateRange result)
+        public static bool TryParse(string input, string[] separator, out DateRange? result)
         {
             result = null;
             if (string.IsNullOrEmpty(input))
@@ -377,14 +377,14 @@ namespace WalkingTec.Mvvm.Core
             return values.Length == 2 && TryParse(values[0], values[1], DefaultEpoch, out result);
         }
 
-        public static bool TryParse(string[] input, out DateRange result)
+        public static bool TryParse(string[] input, out DateRange? result)
         {
             result = null;
             return input.Length == 2 && TryParse(input[0], input[1], DefaultEpoch, out result);
         }
 
 
-        public static bool TryParse(string startTime, string endTime, DateTime epoch, out DateRange result)
+        public static bool TryParse(string startTime, string endTime, DateTime epoch, out DateRange? result)
         {
             result = null;
             switch (startTime.Trim().Length)

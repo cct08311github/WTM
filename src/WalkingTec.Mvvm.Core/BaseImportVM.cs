@@ -1380,9 +1380,9 @@ namespace WalkingTec.Mvvm.Core
                     return mse;
                 }
                 var fp = Wtm!.ServiceProvider.GetRequiredService<WtmFileProvider>();
-                fa = fp.GetFile(UploadFileId, true, DC!);
+                fa = fp.GetFile(UploadFileId!, true, DC!);
                 xssfworkbook = new XSSFWorkbook(fa!.DataStream);
-                fa!.DataStream.Dispose();
+                fa!.DataStream?.Dispose();
                 var propetys = Template.GetType().GetFields().Where(x => x.FieldType == typeof(ExcelPropety)).ToList();
                 List<ExcelPropety> excelPropetys = new List<ExcelPropety>();
                 for (int porpetyIndex = 0; porpetyIndex < propetys.Count(); porpetyIndex++)
@@ -1421,7 +1421,7 @@ namespace WalkingTec.Mvvm.Core
                 ms.Dispose();
                 err = CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.ImportError"] : null;
                 mse.Form.Add("Entity.Import", err ?? string.Empty);
-                mse.Form.Add("Entity.ErrorFileId", newfile.GetID());
+                mse.Form.Add("Entity.ErrorFileId", newfile?.GetID() ?? "");
             }
             else
             {

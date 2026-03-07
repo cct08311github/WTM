@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -13,7 +13,7 @@ namespace WalkingTec.Mvvm.Core.Support.Quartz
     {
         public IJob NewJob(TriggerFiredBundle bundle, IScheduler scheduler)
         {
-            var rv = Activator.CreateInstance(bundle.JobDetail.GetType()) as IJob;
+            var rv = (Activator.CreateInstance(bundle.JobDetail.JobType) as IJob)!;
             return rv;
         }
 

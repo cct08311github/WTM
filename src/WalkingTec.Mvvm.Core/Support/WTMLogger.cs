@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -26,7 +26,7 @@ namespace WalkingTec.Mvvm.Core
     [ProviderAlias("WTM")]
     public class WTMLoggerProvider : ILoggerProvider
     {
-        private IServiceProvider sp = null;
+        private IServiceProvider? sp = null;
         private LoggerFilterOptions logConfig;
 
         public WTMLoggerProvider( IOptionsMonitor<LoggerFilterOptions> _logConfig, IServiceProvider sp)
@@ -37,7 +37,7 @@ namespace WalkingTec.Mvvm.Core
 
         public ILogger CreateLogger(string categoryName)
         {
-            return new WTMLogger(categoryName, logConfig,sp);
+            return new WTMLogger(categoryName, logConfig, sp!);
         }
         public void Dispose() { }
     }
@@ -45,8 +45,8 @@ namespace WalkingTec.Mvvm.Core
     public class WTMLogger : ILogger
     {
         private readonly string categoryName;
-        private IServiceProvider sp;
-        private LoggerFilterOptions logConfig;
+        private readonly IServiceProvider sp;
+        private readonly LoggerFilterOptions logConfig;
 
         public WTMLogger(string categoryName, LoggerFilterOptions logConfig, IServiceProvider sp)
         {
@@ -83,11 +83,11 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {
             if (IsEnabled(logLevel))
             {
-                ActionLog log = null;
+                ActionLog? log = null;
                 if (typeof(TState) != typeof(ActionLog))
                 {
                     ActionLogTypesEnum ll = ActionLogTypesEnum.Normal;
@@ -115,7 +115,7 @@ namespace WalkingTec.Mvvm.Core
                     log = state as ActionLog;
                 }
 
-                WTMContext wtm = null;
+                WTMContext? wtm = null;
                 var hc = sp.GetRequiredService<IHttpContextAccessor>().HttpContext;
                 if (hc == null)
                 {
@@ -128,7 +128,7 @@ namespace WalkingTec.Mvvm.Core
                 {
                     wtm = hc.RequestServices.GetRequiredService<WTMContext>();
                 }
-                if (wtm != null)
+                if (wtm != null && log != null)
                 {
                     try
                     {
@@ -151,6 +151,6 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
-        public IDisposable BeginScope<TState>(TState state) => null;
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
     }
 }

@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -11,8 +11,8 @@ namespace WalkingTec.Mvvm.Core.Support.Quartz
 {
     public class WtmJob : IJob, IDisposable
     {
-        private IServiceScope _ss;
-        private WTMContext _wtm;
+        private IServiceScope? _ss;
+        private WTMContext? _wtm;
         protected WTMContext Wtm
         {
             get
@@ -27,7 +27,7 @@ namespace WalkingTec.Mvvm.Core.Support.Quartz
             }
         }
 
-        public IServiceProvider Sp { get; set; }
+        public IServiceProvider Sp { get; set; } = null!;
 
         public virtual async Task Execute(IJobExecutionContext context)
         {

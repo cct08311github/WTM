@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
@@ -22,17 +22,17 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
         {
         }
 
-        public override Stream GetFileData(IWtmFile file)
+        public override Stream? GetFileData(IWtmFile file)
         {
             var ossSettings = wtm.ConfigInfo.FileUploadOptions.Settings.Where(x => x.Key.ToLower() == "oss").Select(x => x.Value).FirstOrDefault();
-            FileHandlerOptions groupInfo = null;
+            FileHandlerOptions? groupInfo = null;
             if (string.IsNullOrEmpty(file.HandlerInfo))
             {
                 groupInfo = ossSettings?.FirstOrDefault();
             }
             else
             {
-                groupInfo = ossSettings?.Where(x => x.GroupName.ToLower() == file.HandlerInfo.ToLower()).FirstOrDefault();
+                groupInfo = ossSettings?.Where(x => x.GroupName?.ToLower() == file.HandlerInfo!.ToLower()).FirstOrDefault();
                 if (groupInfo == null)
                 {
                     groupInfo = ossSettings?.FirstOrDefault();
@@ -52,7 +52,7 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
         }
 
 
-        public override (string path, string handlerInfo) Upload(string fileName, long fileLength, Stream data, string group = null, string subdir = null, string extra = null)
+        public override (string? path, string? handlerInfo) Upload(string fileName, long fileLength, Stream data, string? group = null, string? subdir = null, string? extra = null)
         {
             var ext = string.Empty;
             if (string.IsNullOrEmpty(fileName) == false)
@@ -62,14 +62,14 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
             }
 
             var ossSettings = wtm.ConfigInfo.FileUploadOptions.Settings.Where(x => x.Key.ToLower() == "oss").Select(x => x.Value).FirstOrDefault();
-            FileHandlerOptions groupInfo = null;
+            FileHandlerOptions? groupInfo = null;
             if (string.IsNullOrEmpty(group))
             {
                 groupInfo = ossSettings?.FirstOrDefault();
             }
             else
             {
-                groupInfo = ossSettings?.Where(x => x.GroupName.ToLower() == group.ToLower()).FirstOrDefault();
+                groupInfo = ossSettings?.Where(x => x.GroupName?.ToLower() == group!.ToLower()).FirstOrDefault();
                 if (groupInfo == null)
                 {
                     groupInfo = ossSettings?.FirstOrDefault();
@@ -118,14 +118,14 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
         public override void DeleteFile(IWtmFile file)
         {
             var ossSettings = wtm.ConfigInfo.FileUploadOptions.Settings.Where(x => x.Key.ToLower() == "oss").Select(x => x.Value).FirstOrDefault();
-            FileHandlerOptions groupInfo = null;
+            FileHandlerOptions? groupInfo = null;
             if (string.IsNullOrEmpty(file.HandlerInfo))
             {
                 groupInfo = ossSettings?.FirstOrDefault();
             }
             else
             {
-                groupInfo = ossSettings?.Where(x => x.GroupName.ToLower() == file.HandlerInfo.ToLower()).FirstOrDefault();
+                groupInfo = ossSettings?.Where(x => x.GroupName?.ToLower() == file.HandlerInfo!.ToLower()).FirstOrDefault();
                 if (groupInfo == null)
                 {
                     groupInfo = ossSettings?.FirstOrDefault();

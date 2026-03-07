@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -23,12 +23,12 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
         {
         }
 
-        public virtual Stream GetFileData(IWtmFile file)
+        public virtual Stream? GetFileData(IWtmFile file)
         {
             return null;
         }
 
-        public virtual (string path, string handlerInfo) Upload(string fileName, long fileLength, Stream data, string group=null, string subdir = null, string extra=null)
+        public virtual (string? path, string? handlerInfo) Upload(string fileName, long fileLength, Stream data, string? group=null, string? subdir = null, string? extra=null)
         {
             return ("", "");
         }
