@@ -110,12 +110,12 @@ namespace WalkingTec.Mvvm.Core
             }
             //生成一个表达式，类似于 x=>x.field == val
             var splits = propName.Split('.');
-            var idproperty = typeof(T).GetSingleProperty(splits[0]);
+            var idproperty = typeof(T).GetSingleProperty(splits[0])!;
 
             Expression left = Expression.Property(para, idproperty);
             for (int i = 1; i < splits.Length; i++)
             {
-                var tempproperty = typeof(T).GetSingleProperty(splits[i]);
+                var tempproperty = typeof(T).GetSingleProperty(splits[i])!;
                 left = Expression.Property(left, tempproperty);
             }
 

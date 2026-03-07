@@ -696,7 +696,7 @@ namespace WalkingTec.Mvvm.Core
                 {
                     List<Expression> conditions = new List<Expression>();
                     //生成一个表达式，类似于 x=>x.Id != id，这是为了当修改数据时验证重复性的时候，排除当前正在修改的数据
-                    var idproperty = modelType.GetSingleProperty("ID");
+                    var idproperty = modelType.GetSingleProperty("ID")!;
                     MemberExpression idLeft = Expression.Property(para, idproperty);
                     ConstantExpression idRight = Expression.Constant(entity.GetID());
                     BinaryExpression idNotEqual = Expression.NotEqual(idLeft, idRight);
@@ -705,7 +705,7 @@ namespace WalkingTec.Mvvm.Core
                     //在每个组中循环所有字段
                     foreach (var field in group.Fields)
                     {
-                        Expression exp = field.GetExpression(entity, para);
+                        Expression? exp = field.GetExpression(entity, para);
                         if (exp != null)
                         {
                             conditions.Add(exp);
@@ -758,7 +758,7 @@ namespace WalkingTec.Mvvm.Core
                 {
                     List<Expression> conditions = new List<Expression>();
                     //生成一个表达式，类似于 x=>x.Id != id，这是为了当修改数据时验证重复性的时候，排除当前正在修改的数据
-                    var idproperty = modelType.GetSingleProperty("ExcelIndex");
+                    var idproperty = modelType.GetSingleProperty("ExcelIndex")!;
                     MemberExpression idLeft = Expression.Property(para, idproperty);
                     ConstantExpression idRight = Expression.Constant(entity.ExcelIndex);
                     BinaryExpression idNotEqual = Expression.NotEqual(idLeft, idRight);
@@ -767,7 +767,7 @@ namespace WalkingTec.Mvvm.Core
                     //在每个组中循环所有字段
                     foreach (var field in group.Fields)
                     {
-                        Expression exp = field.GetExpression(entity, para);
+                        Expression? exp = field.GetExpression(entity, para);
                         if (exp != null)
                         {
                             conditions.Add(exp);
@@ -1271,7 +1271,7 @@ namespace WalkingTec.Mvvm.Core
                     //在每个组中循环所有字段
                     foreach (var field in group.Fields)
                     {
-                        Expression exp = field.GetExpression(Entity, para);
+                        Expression? exp = field.GetExpression(Entity, para);
                         if (exp != null)
                         {
                             conditions.Add(exp);
@@ -1283,8 +1283,8 @@ namespace WalkingTec.Mvvm.Core
                     {
                         ITenant? ent = Entity as ITenant;
                         if (ent != null) ent.TenantCode = LoginUserInfo?.CurrentTenant;
-                        var f = new DuplicatedField<P>(x => (x as ITenant)!.TenantCode);
-                        Expression exp = f.GetExpression(Entity, para);
+                        var f = new DuplicatedField<P>(x => (x as ITenant)!.TenantCode!);
+                        Expression? exp = f.GetExpression(Entity, para);
                         if (exp != null) conditions.Add(exp);
                     }
                     if (conditions.Count > 0)

@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -219,8 +219,8 @@ namespace WalkingTec.Mvvm.Core.Extensions
                         {
                             try
                             {
-                                start = (int)Math.Truncate(double.Parse(range.Minimum.ToString()));
-                                end = (int)Math.Truncate(double.Parse(range.Maximum.ToString()));
+                                start = (int)Math.Truncate(double.Parse(range.Minimum.ToString()!));
+                                end = (int)Math.Truncate(double.Parse(range.Maximum.ToString()!));
                             }
                             catch { }
                         }
@@ -241,7 +241,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                     else if (pro.PropertyType.IsEnumOrNullableEnum())
                     {
                         List<string> enumvalues = new List<string>();
-                        Type enumtype = null;
+                        Type? enumtype = null;
                         if (pro.PropertyType.IsNullable())
                         {
                             enumtype = pro.PropertyType.GenericTypeArguments[0];
@@ -251,10 +251,10 @@ namespace WalkingTec.Mvvm.Core.Extensions
                         {
                             enumtype = pro.PropertyType;
                         }
-                        var vs = Enum.GetValues(enumtype);
+                        var vs = Enum.GetValues(enumtype!);
                         Random r = new Random();
                         var index = r.Next(0, vs.Length);
-                        val = enumtype.FullName+"."+ vs.GetValue(index).ToString();
+                        val = enumtype.FullName+"."+ vs.GetValue(index)?.ToString();
                     }
                     else if (pro.PropertyType == typeof(string))
                     {
@@ -364,8 +364,8 @@ namespace WalkingTec.Mvvm.Core.Extensions
                             {
                                 try
                                 {
-                                    start = (int)Math.Truncate(double.Parse(range.Minimum.ToString()));
-                                    end = (int)Math.Truncate(double.Parse(range.Maximum.ToString()));
+                                    start = (int)Math.Truncate(double.Parse(range.Minimum.ToString()!));
+                                    end = (int)Math.Truncate(double.Parse(range.Maximum.ToString()!));
                                 }
                                 catch { }
                             }
@@ -390,7 +390,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                     else if (pro.PropertyType.IsEnumOrNullableEnum())
                     {
                         List<string> enumvalues = new List<string>();
-                        Type enumtype = null;
+                        Type? enumtype = null;
                         if (pro.PropertyType.IsNullable())
                         {
                             enumtype = pro.PropertyType.GenericTypeArguments[0];
@@ -403,7 +403,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                         {
                             enumtype = pro.PropertyType;
                         }
-                        var vs = Enum.GetValues(enumtype);
+                        var vs = Enum.GetValues(enumtype!);
                         foreach (var item in vs)
                         {
                             enumvalues.Add((int)item + "");
@@ -485,67 +485,67 @@ namespace WalkingTec.Mvvm.Core.Extensions
         }
 
 
-        public static PropertyInfo GetSingleProperty(this Type self, string name)
+        public static PropertyInfo? GetSingleProperty(this Type self, string name)
         {
-            if (_propertyCache.ContainsKey(self.FullName) == false)
+            if (_propertyCache.ContainsKey(self.FullName!) == false)
             {
                 var properties = self.GetProperties().ToList();
                 try
                 {
-                    _propertyCache = _propertyCache.Add(self.FullName, properties);
+                    _propertyCache = _propertyCache.Add(self.FullName!, properties);
                 }
                 catch { }
                 return properties.Where(x => x.Name == name).FirstOrDefault();
             }
             else
             {
-                return _propertyCache[self.FullName].Where(x => x.Name == name).FirstOrDefault();
+                return _propertyCache[self.FullName!].Where(x => x.Name == name).FirstOrDefault();
             }
         }
 
-        public static PropertyInfo GetSingleProperty(this Type self, Func<PropertyInfo,bool> where)
+        public static PropertyInfo? GetSingleProperty(this Type self, Func<PropertyInfo,bool> where)
         {
-            if (_propertyCache.ContainsKey(self.FullName) == false)
+            if (_propertyCache.ContainsKey(self.FullName!) == false)
             {
                 var properties = self.GetProperties().ToList();
                 try
                 {
-                    _propertyCache = _propertyCache.Add(self.FullName, properties);
+                    _propertyCache = _propertyCache.Add(self.FullName!, properties);
                 }
                 catch { }
                 return properties.Where(where).FirstOrDefault();
             }
             else
             {
-                return _propertyCache[self.FullName].Where(where).FirstOrDefault();
+                return _propertyCache[self.FullName!].Where(where).FirstOrDefault();
             }
         }
 
         public static List<PropertyInfo> GetAllProperties(this Type self)
         {
-            if (_propertyCache.ContainsKey(self.FullName) == false)
+            if (_propertyCache.ContainsKey(self.FullName!) == false)
             {
                 var properties = self.GetProperties().ToList();
                 try
                 {
-                    _propertyCache = _propertyCache.Add(self.FullName, properties);
+                    _propertyCache = _propertyCache.Add(self.FullName!, properties);
                 }
                 catch
                 {
-                    if (_propertyCache.ContainsKey(self.FullName) == true)
+                    if (_propertyCache.ContainsKey(self.FullName!) == true)
                     {
-                        return _propertyCache[self.FullName];
+                        return _propertyCache[self.FullName!];
                     }
                 }
                 return properties;
             }
             else
             {
-                return _propertyCache[self.FullName];
+                return _propertyCache[self.FullName!];
             }
         }
 
-        public static Type GetParentWorkflowPoco(this Type self)
+        public static Type? GetParentWorkflowPoco(this Type self)
         {
             if(self == typeof(object))
             {
@@ -557,8 +557,8 @@ namespace WalkingTec.Mvvm.Core.Extensions
                 return self;
             }
             else
-            {               
-                return self.BaseType.GetParentWorkflowPoco();
+            {
+                return self.BaseType?.GetParentWorkflowPoco();
             }
         }
     }

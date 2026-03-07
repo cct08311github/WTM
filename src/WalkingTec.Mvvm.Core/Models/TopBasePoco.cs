@@ -47,7 +47,7 @@ namespace WalkingTec.Mvvm.Core
 
         public object GetID()
         {
-            var idpro = this.GetType().GetSingleProperty("ID");
+            var idpro = this.GetType().GetSingleProperty("ID")!;
             var id = idpro.GetValue(this)!;
             return id;
         }
@@ -76,7 +76,7 @@ namespace WalkingTec.Mvvm.Core
 
         public object GetParentID()
         {
-            var idpro = this.GetType().GetSingleProperty("ParentId");
+            var idpro = this.GetType().GetSingleProperty("ParentId")!;
             var id = idpro.GetValue(this) ?? "";
             return id;
         }
@@ -84,13 +84,13 @@ namespace WalkingTec.Mvvm.Core
 
         public Type GetIDType()
         {
-            var idpro = this.GetType().GetSingleProperty("ID");
+            var idpro = this.GetType().GetSingleProperty("ID")!;
             return idpro.PropertyType;
         }
 
         public void SetID(object id)
         {
-            var idpro = this.GetType().GetSingleProperty("ID");
+            var idpro = this.GetType().GetSingleProperty("ID")!;
             idpro.SetValue(this, id.ConvertValue(idpro.PropertyType));
 
         }

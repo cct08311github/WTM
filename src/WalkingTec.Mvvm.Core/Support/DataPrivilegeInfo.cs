@@ -115,7 +115,7 @@ namespace WalkingTec.Mvvm.Core
         public List<string> GetTreeSubIds(WTMContext wtmcontext, List<string> pids)
         {
             ParameterExpression pe = Expression.Parameter(typeof(T));
-            Expression parentid = Expression.Property(pe, typeof(T).GetSingleProperty("ParentId"));
+            Expression parentid = Expression.Property(pe, typeof(T).GetSingleProperty("ParentId")!);
             return wtmcontext.DC.Set<T>().Where(pids.GetContainIdExpression<T>(parentid)).DynamicSelect("ID").ToList();
         }
     }

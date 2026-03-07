@@ -621,7 +621,7 @@ namespace WalkingTec.Mvvm.Core
                 if (string.IsNullOrEmpty(SelectorValueField) == false && SelectorValueField.ToLower() != "id")
                 {
                     var pe = Expression.Parameter(typeof(TModel));
-                    peid = Expression.Property(pe, typeof(TModel).GetSingleProperty(SelectorValueField));
+                    peid = Expression.Property(pe, typeof(TModel).GetSingleProperty(SelectorValueField)!);
                 }
                 var mod = new WhereReplaceModifier<TModel>(Ids.GetContainIdExpression<TModel>(peid));
                 var newExp = mod.Modify(baseQuery.Expression);
