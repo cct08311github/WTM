@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using Microsoft.EntityFrameworkCore.Query;
 using Microsoft.EntityFrameworkCore.Query.Internal;
 using System;
@@ -41,7 +41,7 @@ namespace WalkingTec.Mvvm.Core
                 var pi = PropertyHelper.GetPropertyName(node.Left.NodeType == ExpressionType.Convert ? ((UnaryExpression)node.Left).Operand : node.Left);
                 if (!_rv.ContainsKey(pi))
                 {
-                    _rv.Add(pi, Expression.Lambda(node.Right).Compile().DynamicInvoke());
+                    _rv.Add(pi, Expression.Lambda(node.Right).Compile().DynamicInvoke()!);
                 }
             }
             return base.VisitBinary(node);
@@ -140,17 +140,17 @@ Expression.Lambda(trueExp, new ParameterExpression[] { pe }));
             {
                 var modelType = node.Type.GenericTypeArguments[0];
                 List<SortInfo> info = new List<SortInfo>() { _sortinfo };
-                Expression rv = null;
+                Expression? rv = null;
                 foreach (var item in info)
                 {
-                    var idproperty = modelType.GetSingleProperty(item.Property);
+                    var idproperty = modelType.GetSingleProperty(item.Property!);
                     if (idproperty == null)
                     {
                         return node;
                     }
-                    var reftype = idproperty.DeclaringType;
+                    var reftype = idproperty.DeclaringType!;
                     ParameterExpression pe = Expression.Parameter(modelType, "x");
-                    Expression pro = Expression.Property(pe, reftype.GetSingleProperty(item.Property));
+                    Expression pro = Expression.Property(pe, reftype.GetSingleProperty(item.Property!)!);
                     Type proType = idproperty.PropertyType;
                     if (item.Direction == SortDir.Asc)
                     {
@@ -195,10 +195,10 @@ Expression.Lambda(trueExp, new ParameterExpression[] { pe }));
                         }
                     }
                 }
-                return rv;
+                return rv!;
 
             }
-            return base.VisitMethodCall(node);
+            return base.VisitMethodCall(node!)!;
         }
     }
 
@@ -208,7 +208,7 @@ Expression.Lambda(trueExp, new ParameterExpression[] { pe }));
     /// </summary>
     public class WhereReplaceModifier<T> : ExpressionVisitor where T : TopBasePoco
     {
-        private Type _modelType;
+        private Type _modelType = null!;
         private bool _addMode = false;
         private Expression<Func<T, bool>> _where;
 
@@ -226,12 +226,12 @@ Expression.Lambda(trueExp, new ParameterExpression[] { pe }));
         /// </summary>
         /// <param name="expression">表达式</param>
         /// <returns>表达式的源数据类型</returns>
-        private Type GetDCModel(Expression expression)
+        private Type? GetDCModel(Expression expression)
         {
             //如果表达式是方法调用的类型，则一直向上寻找，知道找到参数为ObjectQuery<>的表达式，它的类型就是整个表达式的源数据类型
             if (expression.NodeType == ExpressionType.Call)
             {
-                var exp = (expression as MethodCallExpression).Arguments[0];
+                var exp = ((MethodCallExpression)expression).Arguments[0];
                 if (exp is QueryRootExpression)
                 {
                     return exp.Type.GenericTypeArguments[0];
@@ -374,7 +374,7 @@ Expression.Lambda(trueExp, new ParameterExpression[] { pe }));
     /// </summary>
     public class IsValidModifier : ExpressionVisitor
     {
-        private Type _modelType;
+        private Type _modelType = null!;
         private bool _needAdd = true;
         private int _mode = 0; //0是搜素模式，1是添加模式
         private Expression<Func<IPersistPoco, bool>> _where;
@@ -392,12 +392,12 @@ Expression.Lambda(trueExp, new ParameterExpression[] { pe }));
         /// </summary>
         /// <param name="expression">表达式</param>
         /// <returns>表达式的源数据类型</returns>
-        private Type GetDCModel(Expression expression)
+        private Type? GetDCModel(Expression expression)
         {
             //如果表达式是方法调用的类型，则一直向上寻找，知道找到参数为ObjectQuery<>的表达式，它的类型就是整个表达式的源数据类型
             if (expression.NodeType == ExpressionType.Call)
             {
-                var exp = (expression as MethodCallExpression).Arguments[0];
+                var exp = ((MethodCallExpression)expression).Arguments[0];
                 if (exp is QueryRootExpression)
                 {
                     return exp.Type.GenericTypeArguments[0];
@@ -527,7 +527,7 @@ Expression.Lambda(trueExp, new ParameterExpression[] { pe }));
     /// </summary>
     public class ChangePara : ExpressionVisitor
     {
-        ParameterExpression _pe;
+        ParameterExpression _pe = null!;
 
         /// <summary>
         /// 修改参数
@@ -558,9 +558,9 @@ Expression.Lambda(trueExp, new ParameterExpression[] { pe }));
         /// <returns>修改后的表达式</returns>
         protected override Expression VisitMember(MemberExpression node)
         {
-            if (node.Expression.NodeType == ExpressionType.Parameter)
+            if (node.Expression!.NodeType == ExpressionType.Parameter)
             {
-                var rv = Expression.MakeMemberAccess(_pe, _pe.Type.GetSingleProperty(node.Member.Name));
+                var rv = Expression.MakeMemberAccess(_pe, _pe.Type.GetSingleProperty(node.Member.Name)!);
                 return rv;
             }
             else
@@ -575,7 +575,7 @@ Expression.Lambda(trueExp, new ParameterExpression[] { pe }));
     /// </summary>
     public class SelectInfo : ExpressionVisitor
     {
-        private List<string> _columns;
+        private List<string> _columns = null!;
         private bool _found;
         /// <summary>
         /// 构造函数
@@ -610,7 +610,7 @@ Expression.Lambda(trueExp, new ParameterExpression[] { pe }));
                     if (node.Arguments[1] is UnaryExpression ue)
                     {
                         var inner = ue.Operand as LambdaExpression;
-                        if (inner.Body is MemberInitExpression memberinit)
+                        if (inner?.Body is MemberInitExpression memberinit)
                         {
                             _columns = new List<string>();
                             foreach (var m in memberinit.Bindings)
