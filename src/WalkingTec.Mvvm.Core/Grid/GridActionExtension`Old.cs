@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System.Collections.Generic;
 
 namespace WalkingTec.Mvvm.Core
@@ -14,7 +14,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="self"></param>
         /// <param name="buttonId"></param>
         /// <returns></returns>
-        public static GridAction SetButtonId(this GridAction self, string buttonId)
+        public static GridAction SetButtonId(this GridAction self, string? buttonId)
         {
             self.ButtonId = buttonId;
             return self;
@@ -25,7 +25,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="self"></param>
         /// <param name="name"></param>
         /// <returns></returns>
-        public static GridAction SetName(this GridAction self, string name)
+        public static GridAction SetName(this GridAction self, string? name)
         {
             self.Name = name;
             return self;
@@ -36,7 +36,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="self"></param>
         /// <param name="dialogTitle"></param>
         /// <returns></returns>
-        public static GridAction SetDialogTitle(this GridAction self, string dialogTitle)
+        public static GridAction SetDialogTitle(this GridAction self, string? dialogTitle)
         {
             self.DialogTitle = dialogTitle;
             return self;
@@ -47,7 +47,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="self"></param>
         /// <param name="iconCls"></param>
         /// <returns></returns>
-        public static GridAction SetIconCls(this GridAction self, string iconCls)
+        public static GridAction SetIconCls(this GridAction self, string? iconCls)
         {
             self.IconCls = iconCls;
             return self;
@@ -58,7 +58,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="self"></param>
         /// <param name="area"></param>
         /// <returns></returns>
-        public static GridAction SetArea(this GridAction self, string area)
+        public static GridAction SetArea(this GridAction self, string? area)
         {
             self.Area = area;
             return self;
@@ -69,7 +69,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="self"></param>
         /// <param name="controllerName"></param>
         /// <returns></returns>
-        public static GridAction SetControllerName(this GridAction self, string controllerName)
+        public static GridAction SetControllerName(this GridAction self, string? controllerName)
         {
             self.ControllerName = controllerName;
             return self;
@@ -80,7 +80,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="self"></param>
         /// <param name="actionName"></param>
         /// <returns></returns>
-        public static GridAction SetActionName(this GridAction self, string actionName)
+        public static GridAction SetActionName(this GridAction self, string? actionName)
         {
             self.ActionName = actionName;
             return self;
@@ -91,7 +91,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="self"></param>
         /// <param name="queryString"></param>
         /// <returns></returns>
-        public static GridAction SetQueryString(this GridAction self, string queryString)
+        public static GridAction SetQueryString(this GridAction self, string? queryString)
         {
             self.QueryString = queryString;
             return self;
@@ -161,7 +161,7 @@ namespace WalkingTec.Mvvm.Core
         /// ids是勾选的id数组，datas是勾选的所有字段数组
         /// </remarks>
         /// <returns></returns>
-        public static GridAction SetOnClickScript(this GridAction self, string onClickScript)
+        public static GridAction SetOnClickScript(this GridAction self, string? onClickScript)
         {
             self.OnClickFunc = onClickScript;
             return self;
@@ -199,7 +199,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="self"></param>
         /// <param name="colName"></param>
         /// <returns></returns>
-        public static GridAction SetBindVisiableColName(this GridAction self, string colName)
+        public static GridAction SetBindVisiableColName(this GridAction self, string? colName)
         {
             self.BindVisiableColName = colName;
             return self;
