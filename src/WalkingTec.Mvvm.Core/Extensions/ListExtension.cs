@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -20,7 +20,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
         public static List<ComboSelectListItem> ToListItems<T>(this List<T> self
             , Expression<Func<T, object>> textField
             , Expression<Func<T, object>> valueField
-            , Expression<Func<T, bool>> selectedCondition = null)
+            , Expression<Func<T, bool>>? selectedCondition = null)
         {
             var rv = new List<ComboSelectListItem>();
             if (self != null)
@@ -29,9 +29,9 @@ namespace WalkingTec.Mvvm.Core.Extensions
                 foreach (var item in self)
                 {
                     //获取textField的值作为text
-                    string text = textField.Compile().Invoke(item).ToString();
+                    string text = textField.Compile().Invoke(item)?.ToString() ?? "";
                     //获取valueField的值作为value
-                    string value = valueField.Compile().Invoke(item).ToString();
+                    string value = valueField.Compile().Invoke(item)?.ToString() ?? "";
                     //添加到下拉菜单List中
                     ComboSelectListItem li = new ComboSelectListItem();
                     li.Text = text;
@@ -55,7 +55,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             //var data = string.Empty;
             if (self != null && self.Count > 0)
             {
-                var cd = self as List<ChartData>;
+                var cd = (self as List<ChartData>)!;
                 var i = 0;
                 for (i = 0; i < cd.Count; i++)
                 {
@@ -64,7 +64,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                         cd[i].Series = "Data";
                     }
                 }
-                string[] series = cd.Select(x => x.Series).Distinct().ToArray();
+                string[] series = cd.Select(x => x.Series ?? "Data").Distinct().ToArray();
 
 
                 var yCount = cd.GroupBy(x => x.Category).ToList();
@@ -108,7 +108,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                     i = 0;
                     foreach (var item in yCount)
                     {
-                        rtc[i + 1, 0] = item.Key;
+                        rtc[i + 1, 0] = item.Key ?? "";
                         for (int j = 0; j < series.Length; j++)
                         {
                             var ser = item.Where(x => x.Series == series[j])?.FirstOrDefault();

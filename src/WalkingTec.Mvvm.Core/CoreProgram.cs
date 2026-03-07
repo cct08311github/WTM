@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System.Text.Json;
 using Microsoft.Extensions.Localization;
 using Microsoft.Extensions.Options;
@@ -7,7 +7,7 @@ namespace WalkingTec.Mvvm.Core
 {
     public class CoreProgram
     {
-        public static IStringLocalizer _localizer {
+        public static IStringLocalizer? _localizer {
             get;
             set;
         }
@@ -15,12 +15,12 @@ namespace WalkingTec.Mvvm.Core
         public static JsonSerializerOptions DefaultJsonOption
         {
             get;set;
-        }
+        } = null!;
 
         public static JsonSerializerOptions DefaultPostJsonOption
         {
             get; set;
-        }
+        } = null!;
 
 
         public static string[] Buildindll = new string[]

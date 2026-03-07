@@ -267,7 +267,7 @@ namespace WalkingTec.Mvvm.Core
                         item.BatchError = ErrorMessage.Where(x => x.Key == item.GetID().ToString()).Select(x => x.Value).FirstOrDefault();
                     }
                 }
-                MSD?.AddModelError("", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DataCannotDelete"] : "");
+                MSD?.AddModelError("", CoreProgram._localizer?["Sys.DataCannotDelete"]?.Value ?? "");
             }
             return rv;
         }

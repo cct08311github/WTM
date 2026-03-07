@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -41,8 +41,8 @@ namespace WalkingTec.Mvvm.Core
     /// </summary>
     public class MsdError
     {
-        public string ErrorMessage { get; set; }
-        public Exception Exception { get; set; }
+        public string? ErrorMessage { get; set; }
+        public Exception? Exception { get; set; }
     }
 
 
@@ -90,7 +90,7 @@ namespace WalkingTec.Mvvm.Core
             {
                 if (this[key].Count > 0)
                 {
-                    rv = this[key].First().ErrorMessage;
+                    rv = this[key].First().ErrorMessage ?? "";
                 }
             }
             return rv;
