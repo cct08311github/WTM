@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -17,17 +17,17 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 程序集
         /// </summary>
-        public List<Assembly> AllAssembly { get; set; }
+        public List<Assembly> AllAssembly { get; set; } = new List<Assembly>();
 
         /// <summary>
         /// 可访问的url地址
         /// </summary>
-        public List<string> AllAccessUrls { get; set; }
-        public List<string> AllMainTenantOnlyUrls { get; set; }
-        public Type CustomUserType { get; set; }
+        public List<string> AllAccessUrls { get; set; } = new List<string>();
+        public List<string> AllMainTenantOnlyUrls { get; set; } = new List<string>();
+        public Type? CustomUserType { get; set; }
 
         public bool IsSpa { get; set; }
-        private List<PropertyInfo> _customUserProperties;
+        private List<PropertyInfo>? _customUserProperties;
        public List<PropertyInfo> CustomUserProperties
         {
             get {
@@ -45,13 +45,13 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 模块
         /// </summary>
-        public List<SimpleModule> AllModule { get; set; }
+        public List<SimpleModule> AllModule { get; set; } = new List<SimpleModule>();
 
-        private Func<List<SimpleMenu>> MenuGetFunc;
-        private Func<List<FrameworkTenant>> TenantGetFunc;
+        private Func<List<SimpleMenu>>? MenuGetFunc;
+        private Func<List<FrameworkTenant>>? TenantGetFunc;
 
-        public List<SimpleMenu> AllMenus => MenuGetFunc?.Invoke();
-        public List<FrameworkTenant> AllTenant => TenantGetFunc?.Invoke();
+        public List<SimpleMenu> AllMenus => MenuGetFunc?.Invoke() ?? new List<SimpleMenu>();
+        public List<FrameworkTenant> AllTenant => TenantGetFunc?.Invoke() ?? new List<FrameworkTenant>();
         /// <summary>
         /// 设置菜单委托
         /// </summary>
