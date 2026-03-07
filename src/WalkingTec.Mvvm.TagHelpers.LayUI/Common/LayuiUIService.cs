@@ -1,3 +1,4 @@
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -8,7 +9,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
 {
     public class LayuiUIService : IUIService
     {
-        public string MakeDialogButton(ButtonTypesEnum buttonType, string url, string buttonText, int? width, int? height, string title = null, string buttonID = null, bool showDialog = true, bool resizable = true, bool max = false, string buttonClass = null,string style=null)
+        public string MakeDialogButton(ButtonTypesEnum buttonType, string url, string buttonText, int? width, int? height, string? title = null, string? buttonID = null, bool showDialog = true, bool resizable = true, bool max = false, string? buttonClass = null,string? style=null)
         {
             if (buttonID == null)
             {
@@ -39,7 +40,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
             return rv;
         }
 
-        public string MakeDownloadButton(ButtonTypesEnum buttonType, Guid fileID, string buttonText = null, string _DONOT_USE_CS = "default", string buttonClass = null, string style = null)
+        public string MakeDownloadButton(ButtonTypesEnum buttonType, Guid fileID, string? buttonText = null, string _DONOT_USE_CS = "default", string? buttonClass = null, string? style = null)
         {
             string rv = "";
             if (buttonType == ButtonTypesEnum.Link)
@@ -53,21 +54,21 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
             return rv;
         }
 
-        public string MakeCheckBox(bool ischeck, string text = null, string name = null, string value = null, bool isReadOnly = false)
+        public string MakeCheckBox(bool ischeck, string? text = null, string? name = null, string? value = null, bool isReadOnly = false)
         {
             var disable = isReadOnly ? " disabled='' class='layui-disabled'" : " ";
             var selected = ischeck ? " checked" : " ";
             return $@"<input lay-skin='primary' type='checkbox' name='{name ?? ""}' id='{(name == null ? "" : Utils.GetIdByName(name))}' value='{value ?? ""}' title='{text ?? ""}' {selected} {disable}/>";
         }
 
-        public string MakeRadio(bool ischeck, string text = null, string name = null, string value = null, bool isReadOnly = false)
+        public string MakeRadio(bool ischeck, string? text = null, string? name = null, string? value = null, bool isReadOnly = false)
         {
             var selected = ischeck ? " checked" : " ";
             var disable = isReadOnly ? " disabled='' class='layui-disabled'" : " ";
             return $@"<input lay-skin='primary' type='radio' name='{name ?? ""}' id='{(name == null ? "" : Utils.GetIdByName(name))}' value='{value ?? ""}' title='{text ?? ""}' {selected} {disable}/>";
         }
 
-        public string MakeCombo(string name = null, List<ComboSelectListItem> value = null, string selectedValue = null, string emptyText = null, bool isReadOnly = false)
+        public string MakeCombo(string? name = null, List<ComboSelectListItem>? value = null, string? selectedValue = null, string? emptyText = null, bool isReadOnly = false)
         {
             var disable = isReadOnly ? " disabled='' class='layui-disabled'" : " ";
             string rv = $"<select name='{name}' id='{(name == null ? "" : Utils.GetIdByName(name))}' class='layui-input' style='height:28px'   {disable} lay-ignore>";
@@ -99,15 +100,16 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
             return rv;
         }
 
-        public string MakeTextBox(string name = null, string value = null, string emptyText = null, bool isReadOnly = false)
+        public string MakeTextBox(string? name = null, string? value = null, string? emptyText = null, bool isReadOnly = false)
         {
             var disable = isReadOnly ? " disabled='' class='layui-disabled'" : " ";
             return $@"<input class='layui-input' style='height:28px'  name='{name ?? ""}' id='{(name == null ? "" : Utils.GetIdByName(name))}' value='{value ?? ""}' {disable} />";
         }
 
-        public string MakeDateTime(string name = null, string value = null, string emptyText = null, bool isReadOnly = false, DateTimeTypeEnum? dateType = DateTimeTypeEnum.DateTime)
+        public string MakeDateTime(string? name = null, string? value = null, string? emptyText = null, bool isReadOnly = false, DateTimeTypeEnum? dateType = DateTimeTypeEnum.DateTime)
         {
             var id = (name == null ? "" : Utils.GetIdByName(name));
+            var effectiveDateType = (dateType ?? DateTimeTypeEnum.DateTime).ToString().ToLower();
             var disable = isReadOnly ? " disabled='' class='layui-disabled'" : " ";
             if (string.IsNullOrEmpty(value) == false)
             {
@@ -118,11 +120,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
                     value = "";
                 }
             }
-            return $@"<input class='layui-input' style='height:28px'  name='{name ?? ""}' id='{id}' value='{value ?? ""}' {disable}  onclick='ff.SetGridCellDate(""{id}"",""{dateType.ToString().ToLower()}"")'/>";
+            return $@"<input class='layui-input' style='height:28px'  name='{name ?? ""}' id='{id}' value='{value ?? ""}' {disable}  onclick='ff.SetGridCellDate(""{id}"",""{effectiveDateType}"")'/>";
         }
 
 
-        public string MakeButton(ButtonTypesEnum buttonType, string url, string buttonText, int? width, int? height, string title = null, string buttonID = null, bool resizable = true, bool max = false, string currentdivid = "", string buttonClass = null, string style = null, RedirectTypesEnum rtype= RedirectTypesEnum.Layer)
+        public string MakeButton(ButtonTypesEnum buttonType, string url, string buttonText, int? width, int? height, string? title = null, string? buttonID = null, bool resizable = true, bool max = false, string currentdivid = "", string? buttonClass = null, string? style = null, RedirectTypesEnum rtype= RedirectTypesEnum.Layer)
         {
             if (buttonID == null)
             {
@@ -163,7 +165,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
             return rv;
         }
 
-        public string MakeViewButton(ButtonTypesEnum buttonType, Guid fileID, string buttonText = null, int? width = null, int? height = null, string title = null, bool resizable = true, string _DONOT_USE_CS = "default", bool maxed = false, string buttonClass = null, string style = null)
+        public string MakeViewButton(ButtonTypesEnum buttonType, Guid fileID, string? buttonText = null, int? width = null, int? height = null, string? title = null, bool resizable = true, string _DONOT_USE_CS = "default", bool maxed = false, string? buttonClass = null, string? style = null)
         {
             var  buttonID = Guid.NewGuid().ToString();
             var innerClick = "";
@@ -199,7 +201,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
             return rv;
         }
 
-        public string MakeScriptButton(ButtonTypesEnum buttonType, string buttonText, string script = "", string buttonID = null, string url = null, string buttonClass = null, string style=null)
+        public string MakeScriptButton(ButtonTypesEnum buttonType, string buttonText, string script = "", string? buttonID = null, string? url = null, string? buttonClass = null, string? style=null)
         {
             if (buttonID == null)
             {
