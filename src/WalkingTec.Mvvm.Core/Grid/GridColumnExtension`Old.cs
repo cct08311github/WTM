@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -33,7 +33,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="self"></param>
         /// <param name="id"></param>
         /// <returns></returns>
-        public static GridColumn<T> SetId<T>(this GridColumn<T> self, string id) where T : TopBasePoco
+        public static GridColumn<T> SetId<T>(this GridColumn<T> self, string? id) where T : TopBasePoco
         {
             self.Id = id;
             return self;
@@ -45,7 +45,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="self"></param>
         /// <param name="header"></param>
         /// <returns></returns>
-        public static GridColumn<T> SetHeader<T>(this GridColumn<T> self, string header) where T : TopBasePoco
+        public static GridColumn<T> SetHeader<T>(this GridColumn<T> self, string? header) where T : TopBasePoco
         {
             self.Title = header;
             return self;
@@ -127,7 +127,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="self"></param>
         /// <param name="format"></param>
         /// <returns></returns>
-        public static GridColumn<T> SetFormat<T>(this GridColumn<T> self, ColumnFormatCallBack<T> format) where T : TopBasePoco
+        public static GridColumn<T> SetFormat<T>(this GridColumn<T> self, ColumnFormatCallBack<T>? format) where T : TopBasePoco
         {
             self.Format = format;
             return self;
@@ -139,7 +139,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="self"></param>
         /// <param name="columnExp"></param>
         /// <returns></returns>
-        public static GridColumn<T> SetColumnExp<T>(this GridColumn<T> self, Expression<Func<T, object>> columnExp) where T : TopBasePoco
+        public static GridColumn<T> SetColumnExp<T>(this GridColumn<T> self, Expression<Func<T, object>>? columnExp) where T : TopBasePoco
         {
             self.ColumnExp = columnExp;
             return self;
@@ -173,7 +173,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="self"></param>
         /// <param name="foreGroundFunc"></param>
         /// <returns></returns>
-        public static GridColumn<T> SetForeGroundFunc<T>(this GridColumn<T> self, Func<T, string> foreGroundFunc) where T : TopBasePoco
+        public static GridColumn<T> SetForeGroundFunc<T>(this GridColumn<T> self, Func<T, string>? foreGroundFunc) where T : TopBasePoco
         {
             self.ForeGroundFunc = foreGroundFunc;
             return self;
@@ -185,7 +185,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="self"></param>
         /// <param name="backGroundFunc"></param>
         /// <returns></returns>
-        public static GridColumn<T> SetBackGroundFunc<T>(this GridColumn<T> self, Func<T, string> backGroundFunc) where T : TopBasePoco
+        public static GridColumn<T> SetBackGroundFunc<T>(this GridColumn<T> self, Func<T, string>? backGroundFunc) where T : TopBasePoco
         {
             self.BackGroundFunc = backGroundFunc;
             return self;
