@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq.Expressions;
@@ -27,7 +27,7 @@ namespace WalkingTec.Mvvm.Core
             where T : TopBasePoco
             where V : ISearcher
         {
-            MemberExpression me = null;
+            MemberExpression? me = null;
             if (columnExp is MemberExpression)
             {
                 me = columnExp as MemberExpression;
@@ -75,7 +75,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="self"></param>
         /// <param name="title">标题</param>
         /// <returns></returns>
-        public static GridColumn<T> MakeGridHeaderParent<T, V>(this IBasePagedListVM<T, V> self, string title
+        public static GridColumn<T> MakeGridHeaderParent<T, V>(this IBasePagedListVM<T, V> self, string? title
         )
             where T : TopBasePoco
             where V : ISearcher
@@ -84,7 +84,7 @@ namespace WalkingTec.Mvvm.Core
         }
 
         public static GridColumn<T> MakeGridHeaderAction<T, V>(this IBasePagedListVM<T, V> self
-            , string title = null
+            , string? title = null
             , int? width = 160
             , int? rowspan = null
         )
@@ -96,7 +96,7 @@ namespace WalkingTec.Mvvm.Core
                 ColumnType = GridColumnTypeEnum.Action,
                 Width = width,
                 Fixed = GridColumnFixedEnum.Right,
-                Title = title ?? CoreProgram._localizer?["Sys.Operation"]
+                Title = title ?? (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.Operation"] : null)
             };
         }
 
@@ -109,7 +109,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="self"></param>
         /// <param name="field">字段名的设定非常重要，是表格数据列的唯一标识，默认属性对应的名字</param>
         /// <returns></returns>
-        public static GridColumn<T> SetField<T>(this GridColumn<T> self, string field)
+        public static GridColumn<T> SetField<T>(this GridColumn<T> self, string? field)
             where T : TopBasePoco
         {
             self.Field = field;
@@ -123,7 +123,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="self"></param>
         /// <param name="title">即表头各列的标题，默认属性对应的 DisplayName 或 属性名 </param>
         /// <returns></returns>
-        public static GridColumn<T> SetTitle<T>(this GridColumn<T> self, string title)
+        public static GridColumn<T> SetTitle<T>(this GridColumn<T> self, string? title)
             where T : TopBasePoco
         {
             self.Title = title;
@@ -150,7 +150,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="self"></param>
         /// <param name="eEvent"></param>
         /// <returns></returns>
-        public static GridColumn<T> SetEvent<T>(this GridColumn<T> self, string eEvent) where T : TopBasePoco
+        public static GridColumn<T> SetEvent<T>(this GridColumn<T> self, string? eEvent) where T : TopBasePoco
         {
             self.Event = eEvent;
             return self;
@@ -300,7 +300,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="dateType"></param>
         /// <param name="readOnly"></param>
         /// <returns></returns>
-        public static GridColumn<T> SetEditType<T>(this GridColumn<T> self, EditTypeEnum editType = EditTypeEnum.Text, List<ComboSelectListItem> listitems = null, DateTimeTypeEnum dateType = DateTimeTypeEnum.DateTime, bool readOnly = false)
+        public static GridColumn<T> SetEditType<T>(this GridColumn<T> self, EditTypeEnum editType = EditTypeEnum.Text, List<ComboSelectListItem>? listitems = null, DateTimeTypeEnum dateType = DateTimeTypeEnum.DateTime, bool readOnly = false)
             where T : TopBasePoco
         {
             self.EditType = editType;
