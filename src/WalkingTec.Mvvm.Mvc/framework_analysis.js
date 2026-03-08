@@ -241,7 +241,13 @@
     function collectSelection(gridId) {
         var dims = [];
         var msrs = [];
-        document.querySelectorAll('.analysis-field-cb[data-grid-id="' + gridId + '"]:checked')
+        var panel = document.getElementById('analysis-panel-' + gridId);
+        
+        var hasQsa = panel && typeof panel.querySelectorAll === 'function';
+        var root = hasQsa ? panel : document;
+        var selector = hasQsa ? '.analysis-field-cb:checked' : '.analysis-field-cb[data-grid-id="' + gridId + '"]:checked';
+
+        root.querySelectorAll(selector)
             .forEach(function (cb) {
                 if (cb.dataset.kind === 'Dimension') {
                     dims.push(cb.dataset.fieldName);
