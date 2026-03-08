@@ -111,6 +111,8 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 if(this is CardTagHelper || this is FormTagHelper || this is ContainerTagHelper || this is TreeContainerTagHelper || this is SearchPanelTagHelper)
                 {
                     context.Items.Remove("ipr");
+                    context.Items.Remove("ipr_xs");
+                    context.Items.Remove("ipr_sm");
                 }
             }
             //输出事件
