@@ -16,7 +16,7 @@
     "axios": "^0.30.3",
     "core-js": "^3.6.4",
     "chartist": "0.11.4",
-    "echarts": "^4.6.0",
+    "echarts": "^6.0.0",
     "element-ui": "^2.8.2",
     "fuse.js": "^3.4.5",
     "gsap": "^2.1.3",
