@@ -223,7 +223,7 @@ namespace WalkingTec.Mvvm.Core
                     return;
                 }
                 xssfworkbook = new XSSFWorkbook(file.DataStream);
-                file.DataStream.Dispose();
+                file.DataStream?.Dispose();
                 Template.InitExcelData();
                 Template.InitCustomFormat();
 
@@ -1459,14 +1459,16 @@ namespace WalkingTec.Mvvm.Core
         {
             return new List<GridColumn<ErrorMessage>>{
                 this.MakeGridHeader(x => x.Index, 60),
-                this.MakeGridHeader(x => x.Message)
+                this.MakeGridHeader(x => x.Message!)
             };
         }
 
+#nullable disable
         public override IOrderedQueryable<ErrorMessage> GetSearchQuery()
         {
             return EntityList.AsQueryable().OrderBy(x => x.Index);
         }
+#nullable enable
     }
 
     #endregion

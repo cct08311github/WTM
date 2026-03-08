@@ -196,18 +196,18 @@ namespace WalkingTec.Mvvm.Core
                         if (current.NodeType == ExpressionType.MemberAccess)
                         {
                             MemberExpression me = (current as MemberExpression)!;
-                            Type mt = me.Member.GetMemberType();
-                            Type testTypt = mt;
-                            if (testTypt.IsList())
+                            Type? mt = me.Member.GetMemberType();
+                            Type? testTypt = mt;
+                            if (testTypt != null && testTypt.IsList())
                             {
                                 testTypt = testTypt.GetGenericArguments()[0];
                             }
-                            if (typeof(TopBasePoco).IsAssignableFrom(testTypt))
+                            if (testTypt != null && typeof(TopBasePoco).IsAssignableFrom(testTypt))
                             {
                                 IncludeInfo newinfo = new IncludeInfo
                                 {
                                     mi = me.Member,
-                                    t = mt
+                                    t = mt!
                                 };
                                 var top = exps.FirstOrDefault();
                                 if (top != null)
@@ -1252,7 +1252,7 @@ namespace WalkingTec.Mvvm.Core
                     {
                         ITenant ent = (Entity as ITenant)!;
                         ent.TenantCode = LoginUserInfo?.CurrentTenant;
-                        var f = new DuplicatedField<TModel>(x => (x as ITenant)!.TenantCode);
+                        var f = new DuplicatedField<TModel>(x => (x as ITenant)!.TenantCode!);
                         Expression? exp = f.GetExpression(Entity, para);
                         if (exp != null)
                         {

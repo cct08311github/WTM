@@ -623,7 +623,7 @@ namespace WalkingTec.Mvvm.Core
                 return null;
             }
 
-            if (config.Connections.Any(x => x.Key.ToLower() == cs.ToLower() && x.Enabled) == false)
+            if (config.Connections.Any(x => x.Key?.ToLower() == cs.ToLower() && x.Enabled) == false)
             {
                 cs = "default";
             }
@@ -634,7 +634,7 @@ namespace WalkingTec.Mvvm.Core
             }
             if (mode?.ToLower() == "read")
             {
-                var reads = config.Connections.Where(x => x.Key.StartsWith(cs + "_") && x.Enabled).Select(x => x.Key).ToList();
+                var reads = config.Connections.Where(x => x.Key?.StartsWith(cs + "_") == true && x.Enabled).Select(x => x.Key).ToList();
                 if (reads.Count > 0)
                 {
                     Random r = new Random();
@@ -841,7 +841,7 @@ namespace WalkingTec.Mvvm.Core
             var m = modules.Select(x => new SimpleModule
             {
                 ActionDes = x.ActionDes,
-                Actions = x.Actions.Select(y => new SimpleAction
+                Actions = x.Actions?.Select(y => new SimpleAction
                 {
                     ActionDes = y.ActionDes,
                     ActionName = y.ActionName,
@@ -873,33 +873,33 @@ namespace WalkingTec.Mvvm.Core
                 {
                     for (int j = 0; j < pages.Count; j++)
                     {
-                        if (j == 0 && !m[i].Actions.Any(x => x.MethodName.ToLower() == "index"))
+                        if (j == 0 && m[i].Actions != null && !m[i].Actions!.Any(x => x.MethodName?.ToLower() == "index"))
                         {
                             m.Add(new SimpleModule
                             {
-                                ModuleName = pages[j].ActionDes?._localizer[pages[j].ActionDes.Description] ?? pages[j].ActionDes?.Description,
+                                ModuleName = (pages[j].ActionDes?._localizer != null && pages[j].ActionDes?.Description != null ? pages[j].ActionDes?._localizer![pages[j].ActionDes!.Description]?.Value : pages[j].ActionDes?.Description) ?? "",
                                 NameSpace = m[i].NameSpace,
                                 ClassName = pages[j].MethodName,
                                 Actions = m[i].Actions,
                                 Area = m[i].Area
                             });
                             if (submit)
-                                m[i].Actions.Remove(pages[j]);
+                                m[i].Actions?.Remove(pages[j]);
                             toRemove.Add(m[i]);
                         }
                         else
                         {
-                            if (pages[j].MethodName.ToLower() != "index")
+                            if (pages[j].MethodName?.ToLower() != "index")
                             {
                                 m.Add(new SimpleModule
                                 {
-                                    ModuleName = pages[j].ActionDes?._localizer[pages[j].ActionDes.Description] ?? pages[j].ActionDes?.Description,
+                                    ModuleName = (pages[j].ActionDes?._localizer != null && pages[j].ActionDes?.Description != null ? pages[j].ActionDes?._localizer![pages[j].ActionDes!.Description]?.Value : pages[j].ActionDes?.Description) ?? "",
                                     NameSpace = m[i].NameSpace,
-                                    ClassName = pages[j].Module.ClassName + pages[j].MethodName,
+                                    ClassName = pages[j].Module?.ClassName + pages[j].MethodName,
                                     Actions = submit ? new List<SimpleAction>() : new List<SimpleAction>() { pages[j] },
                                     Area = m[i].Area
                                 });
-                                m[i].Actions.Remove(pages[j]);
+                                m[i].Actions?.Remove(pages[j]);
                             }
                         }
                     }

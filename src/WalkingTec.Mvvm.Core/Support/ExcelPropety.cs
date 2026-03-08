@@ -367,7 +367,7 @@ namespace WalkingTec.Mvvm.Core
             ExcelPropety cp = new ExcelPropety();
             cp.FieldDisplayName = field.GetPropertyDisplayName();
             var fname = field.GetPropertyName();
-            var propertyInfo = field.GetPropertyInfo();
+            var propertyInfo = field.GetPropertyInfo()!;
             Type t = propertyInfo.PropertyType;
             if (fname.Contains('.'))
             {
@@ -381,7 +381,7 @@ namespace WalkingTec.Mvvm.Core
             }
             if (t.IsGenericType && t.GetGenericTypeDefinition() == typeof(Nullable<>))
             {
-                var req = propertyInfo.GetCustomAttributes(typeof(RequiredAttribute), false).Cast<RequiredAttribute>().FirstOrDefault();
+                var req = propertyInfo?.GetCustomAttributes(typeof(RequiredAttribute), false)?.Cast<RequiredAttribute>().FirstOrDefault();
                 if (req == null)
                 {
                     cp.IsNullAble = true;
@@ -425,8 +425,8 @@ namespace WalkingTec.Mvvm.Core
             }
             else
             {
-                var sl = propertyInfo.GetCustomAttributes(typeof(StringLengthAttribute), false).Cast<StringLengthAttribute>().FirstOrDefault();
-                var req = propertyInfo.GetCustomAttributes(typeof(RequiredAttribute), false).Cast<RequiredAttribute>().FirstOrDefault();
+                var sl = propertyInfo?.GetCustomAttributes(typeof(StringLengthAttribute), false)?.Cast<StringLengthAttribute>().FirstOrDefault();
+                var req = propertyInfo?.GetCustomAttributes(typeof(RequiredAttribute), false)?.Cast<RequiredAttribute>().FirstOrDefault();
                 cp.DataType = ColumnDataType.Text;
                 if (req == null)
                 {

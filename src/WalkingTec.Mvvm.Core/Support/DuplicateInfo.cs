@@ -63,10 +63,12 @@ namespace WalkingTec.Mvvm.Core
 
         public virtual List<PropertyInfo> GetProperties()
         {
-            List<PropertyInfo> rv = new List<PropertyInfo>
+            List<PropertyInfo> rv = new List<PropertyInfo>();
+            var prop = PropertyHelper.GetPropertyInfo(_directFieldExp);
+            if (prop != null)
             {
-                PropertyHelper.GetPropertyInfo(_directFieldExp)
-            };
+                rv.Add(prop);
+            }
             return rv;
         }
 
@@ -93,7 +95,7 @@ namespace WalkingTec.Mvvm.Core
             //如果字段值是空字符串，则跳过
             if (val is string && val!.ToString() == string.Empty)
             {
-                var requiredAttrs = prop.GetCustomAttributes(typeof(RequiredAttribute), false).ToList();
+                var requiredAttrs = prop?.GetCustomAttributes(typeof(RequiredAttribute), false)?.ToList();
 
                 if (requiredAttrs == null || requiredAttrs.Count == 0)
                 {
