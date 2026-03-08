@@ -129,7 +129,7 @@ namespace WalkingTec.Mvvm.Core
             {
                 query = query.Include(f.Name);
             }
-            query = query.AsNoTracking().CheckIDs(idsData);
+            query = query.AsNoTracking().CheckIDs(idsData.Select(x => (string?)x).ToList());
             var entityList = query.ToList();
             for (int i = 0; i < entityList.Count; i++)
             {

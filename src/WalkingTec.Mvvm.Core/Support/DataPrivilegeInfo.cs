@@ -63,7 +63,7 @@ namespace WalkingTec.Mvvm.Core
 
             if (ids != null)
             {
-                where = ids.GetContainIdExpression<T>();
+                where = ids.Select(x => (string?)x).ToList().GetContainIdExpression<T>();
             }
             else
             {
@@ -116,7 +116,7 @@ namespace WalkingTec.Mvvm.Core
         {
             ParameterExpression pe = Expression.Parameter(typeof(T));
             Expression parentid = Expression.Property(pe, typeof(T).GetSingleProperty("ParentId")!);
-            return wtmcontext.DC.Set<T>().Where(pids.GetContainIdExpression<T>(parentid)).DynamicSelect("ID").ToList();
+            return wtmcontext.DC.Set<T>().Where(pids.Select(x => (string?)x).ToList().GetContainIdExpression<T>(parentid)).DynamicSelect("ID").ToList();
         }
     }
 

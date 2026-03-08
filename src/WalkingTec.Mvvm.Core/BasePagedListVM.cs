@@ -285,7 +285,7 @@ namespace WalkingTec.Mvvm.Core
                         //处理枚举变量的多语言
                         bool IsEmunBoolParp = false;
                         var proType = col.FieldType;
-                        if (proType.IsEnumOrNullableEnum())
+                        if (proType != null && proType.IsEnumOrNullableEnum())
                         {
                             IsEmunBoolParp = true;
                         }                       //获取数据，并过滤特殊字符
@@ -623,7 +623,7 @@ namespace WalkingTec.Mvvm.Core
                     var pe = Expression.Parameter(typeof(TModel));
                     peid = Expression.Property(pe, typeof(TModel).GetSingleProperty(SelectorValueField)!);
                 }
-                var mod = new WhereReplaceModifier<TModel>(Ids.GetContainIdExpression<TModel>(peid));
+                var mod = new WhereReplaceModifier<TModel>(Ids.Cast<string?>().ToList().GetContainIdExpression<TModel>(peid));
                 var newExp = mod.Modify(baseQuery.Expression);
                 var newQuery = baseQuery.Provider.CreateQuery<TModel>(newExp) as IOrderedQueryable<TModel>;
                 return newQuery!;
@@ -929,7 +929,7 @@ namespace WalkingTec.Mvvm.Core
                     else
                     {
                         var v = item.GetPropertyValue(SelectorValueField);
-                        if (Ids.Contains(v.ToString()!))
+                        if (v != null && Ids.Contains(v.ToString()!))
                         {
                             item.Checked = true;
                         }
@@ -1034,11 +1034,11 @@ namespace WalkingTec.Mvvm.Core
                     string? errorHeader = CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.Error"] : null;
                     if (temp.Where(x => x.ColumnType == GridColumnTypeEnum.Action).FirstOrDefault() == null)
                     {
-                        temp.Add(this.MakeGridColumn(x => x.BatchError, Width: 200, Header: errorHeader).SetForeGroundFunc(x => "ff0000").SetFixed(GridColumnFixedEnum.Right));
+                        temp.Add(this.MakeGridColumn(x => x.BatchError!, Width: 200, Header: errorHeader).SetForeGroundFunc(x => "ff0000").SetFixed(GridColumnFixedEnum.Right));
                     }
                     else
                     {
-                        temp.Insert(temp.Count - 1, this.MakeGridColumn(x => x.BatchError, Width: 200, Header: errorHeader).SetForeGroundFunc(x => "ff0000").SetFixed(GridColumnFixedEnum.Right));
+                        temp.Insert(temp.Count - 1, this.MakeGridColumn(x => x.BatchError!, Width: 200, Header: errorHeader).SetForeGroundFunc(x => "ff0000").SetFixed(GridColumnFixedEnum.Right));
                     }
                 }
             }
@@ -1256,8 +1256,8 @@ namespace WalkingTec.Mvvm.Core
                 var groupids = Wtm.LoginUserInfo?.Groups?.Select(x => "g:" + x.ID).ToList();
 
                 var ids = DC!.Set<FrameworkWorkflow>()
-                     .CheckEqual(flowname, x => x.WorkflowName)
-                     .CheckEqual(mt.FullName, x => x.ModelType)
+                     .CheckEqual(flowname!, x => x.WorkflowName!)
+                     .CheckEqual(mt.FullName!, x => x.ModelType!)
                      .Where(x => x.UserCode == Wtm.LoginUserInfo!.ITCode
                         || roleids!.Contains(x.UserCode)
                         || groupids!.Contains(x.UserCode))
