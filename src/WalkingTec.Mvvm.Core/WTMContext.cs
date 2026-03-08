@@ -1,4 +1,4 @@
-#nullable disable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.IdentityModel.Tokens.Jwt;
@@ -28,36 +28,29 @@ namespace WalkingTec.Mvvm.Core
 {
     public class WTMContext : IDisposable
     {
-        private HttpContext _httpContext;
-        public HttpContext HttpContext { get => _httpContext; }
+        private HttpContext? _httpContext;
+        public HttpContext? HttpContext { get => _httpContext; }
 
-        private IServiceProvider _serviceProvider;
-        public IServiceProvider ServiceProvider { get => _serviceProvider ?? _httpContext?.RequestServices; }
+        private IServiceProvider? _serviceProvider;
+        public IServiceProvider? ServiceProvider { get => _serviceProvider ?? _httpContext?.RequestServices; }
 
 
-        private List<IDataPrivilege> _dps;
-        public List<IDataPrivilege> DataPrivilegeSettings { get => _dps; }
+        private List<IDataPrivilege>? _dps;
+        public List<IDataPrivilege>? DataPrivilegeSettings { get => _dps; }
 
-        private Configs _configInfo;
-        public Configs ConfigInfo { get => _configInfo; }
+        private Configs? _configInfo;
+        public Configs? ConfigInfo { get => _configInfo; }
 
-        private GlobalData _globaInfo;
-        public GlobalData GlobaInfo { get => _globaInfo; }
+        private GlobalData? _globaInfo;
+        public GlobalData? GlobaInfo { get => _globaInfo; }
 
-        private IUIService _uiservice;
-        public IUIService UIService { get => _uiservice; }
+        private IUIService? _uiservice;
+        public IUIService? UIService { get => _uiservice; }
 
-        private IDistributedCache _cache;
-        public IDistributedCache Cache
-        {
-            get
-            {
-                return _cache;
-            }
-        }
+        private IDistributedCache? _cache;
+        public IDistributedCache? Cache { get { return _cache; } }
 
-        public string CurrentCS
-        {
+        public string? CurrentCS {
             get;
             set;
         }
@@ -68,7 +61,7 @@ namespace WalkingTec.Mvvm.Core
         {
             get
             {
-                string rv = null;
+                string? rv = null;
                 if (WindowIds != null)
                 {
                     var ids = WindowIds.Split(new char[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
@@ -86,7 +79,7 @@ namespace WalkingTec.Mvvm.Core
         {
             get
             {
-                string rv = null;
+                string? rv = null;
                 if (WindowIds != null)
                 {
                     var ids = WindowIds.Split(new char[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
@@ -107,10 +100,10 @@ namespace WalkingTec.Mvvm.Core
                 string rv = string.Empty;
                 try
                 {
-                    if (HttpContext.Request.Cookies.TryGetValue($"{ConfigInfo?.CookiePre}windowguid", out string windowguid) == true)
+                    if (HttpContext?.Request.Cookies.TryGetValue($"{ConfigInfo?.CookiePre}windowguid", out string windowguid) == true)
                     {
 
-                        if (HttpContext.Request.Cookies.TryGetValue($"{ConfigInfo?.CookiePre}{windowguid}windowids", out string windowid) == true)
+                        if (HttpContext?.Request.Cookies.TryGetValue($"{ConfigInfo?.CookiePre}{windowguid}windowids", out string windowid) == true)
                         {
                             rv = windowid;
                         }
@@ -121,17 +114,16 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
-        public ISessionService Session { get; set; }
+        public ISessionService? Session { get; set; }
 
-        public IModelStateService MSD { get; set; }
+        public IModelStateService? MSD { get; set; }
 
-        public static Func<WTMContext, string, LoginUserInfo> ReloadUserFunc { get; set; }
+        public static Func<WTMContext, string, LoginUserInfo>? ReloadUserFunc { get; set; }
 
         #region DataContext
 
-        private IDataContext _dc;
-        public IDataContext DC
-        {
+        private IDataContext? _dc;
+        public IDataContext? DC {
             get
             {
                 if (_dc == null)
@@ -152,18 +144,17 @@ namespace WalkingTec.Mvvm.Core
 
         #region Current User
 
-        private LoginUserInfo _loginUserInfo;
-        public LoginUserInfo LoginUserInfo
-        {
+        private LoginUserInfo? _loginUserInfo;
+        public LoginUserInfo? LoginUserInfo {
             get
             {
                 if (_loginUserInfo == null && HttpContext?.User?.Identity?.IsAuthenticated == true) // 用户认证通过后，当前上下文不包含用户数据
                 {
                     var userIdStr = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject).Select(x => x.Value).FirstOrDefault();
                     var tenant = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.TenantCode).Select(x => x.Value).FirstOrDefault();
-                    string usercode = userIdStr;
+                    string? usercode = userIdStr;
                     var cacheKey = $"{GlobalConstants.CacheKey.UserInfo}:{userIdStr + "$`$" + tenant}";
-                    _loginUserInfo = Cache.Get<LoginUserInfo>(cacheKey);
+                    _loginUserInfo = Cache?.Get<LoginUserInfo>(cacheKey);
                     if (_loginUserInfo == null)
                     {
                         try
@@ -173,18 +164,18 @@ namespace WalkingTec.Mvvm.Core
                         catch { }
                         if (_loginUserInfo != null)
                         {
-                            Cache.Add(cacheKey, _loginUserInfo);
+                            Cache?.Add(cacheKey, _loginUserInfo);
                         }
                         else
                         {
-                            return null;
+                            return null!;
                         }
                     }
                 }
                 if (_loginUserInfo == null && HttpContext?.Request.Query.Any(x => x.Key == "_remotetoken") == true)
                 {
                     var remoteToken = HttpContext?.Request.Query["_remotetoken"][0];
-                    if (ConfigInfo.HasMainHost == false)
+                    if (ConfigInfo?.HasMainHost == false)
                     {
                         JwtSecurityToken token = new JwtSecurityToken();
                         try
@@ -194,9 +185,9 @@ namespace WalkingTec.Mvvm.Core
                         catch { }
                         var userIdStr = token.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject).Select(x => x.Value).FirstOrDefault();
                         var tenant = token.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.TenantCode).Select(x => x.Value).FirstOrDefault();
-                        string usercode = userIdStr;
+                        string? usercode = userIdStr;
                         var cacheKey = $"{GlobalConstants.CacheKey.UserInfo}:{userIdStr + "$`$" + tenant}";
-                        _loginUserInfo = Cache.Get<LoginUserInfo>(cacheKey);
+                        _loginUserInfo = Cache?.Get<LoginUserInfo>(cacheKey);
                         if (_loginUserInfo == null)
                         {
                             try
@@ -206,11 +197,11 @@ namespace WalkingTec.Mvvm.Core
                             catch { }
                             if (_loginUserInfo != null)
                             {
-                                Cache.Add(cacheKey, _loginUserInfo);
+                                Cache?.Add(cacheKey, _loginUserInfo);
                             }
                             else
                             {
-                                return null;
+                                return null!;
                             }
                         }
                     }
@@ -224,11 +215,11 @@ namespace WalkingTec.Mvvm.Core
                         if (_loginUserInfo != null)
                         {
                             var cacheKey = $"{GlobalConstants.CacheKey.UserInfo}:{_loginUserInfo.ITCode + "$`$" + _loginUserInfo.TenantCode}";
-                            Cache.Add(cacheKey, _loginUserInfo);
+                            Cache?.Add(cacheKey, _loginUserInfo);
                         }
                         else
                         {
-                            return null;
+                            return null!;
                         }
                     }
                 }
@@ -238,33 +229,32 @@ namespace WalkingTec.Mvvm.Core
             {
                 if (value == null)
                 {
-                    Cache.Delete($"{GlobalConstants.CacheKey.UserInfo}:{_loginUserInfo?.ITCode + "$`$" + _loginUserInfo?.TenantCode}");
+                    Cache?.Delete($"{GlobalConstants.CacheKey.UserInfo}:{_loginUserInfo?.ITCode + "$`$" + _loginUserInfo?.TenantCode}");
                     _loginUserInfo = value;
                 }
                 else
                 {
                     _loginUserInfo = value;
-                    Cache.Add($"{GlobalConstants.CacheKey.UserInfo}:{_loginUserInfo.ITCode + "$`$" + _loginUserInfo?.TenantCode}", value);
+                    Cache?.Add($"{GlobalConstants.CacheKey.UserInfo}:{_loginUserInfo.ITCode + "$`$" + _loginUserInfo?.TenantCode}", value);
                 }
             }
         }
 
-        private Type _localizerType;
-        private IStringLocalizerFactory _stringLocalizerFactory;
-        private IStringLocalizer _localizer;
-        private ILoggerFactory _loggerFactory;
-        public ILoggerFactory LoggerFactory { get { return _loggerFactory; } }
-        public IStringLocalizer Localizer
-        {
+        private Type? _localizerType;
+        private IStringLocalizerFactory? _stringLocalizerFactory;
+        private IStringLocalizer? _localizer;
+        private ILoggerFactory? _loggerFactory;
+        public ILoggerFactory? LoggerFactory { get { return _loggerFactory; } }
+        public IStringLocalizer? Localizer {
             get
             {
                 if (_localizer == null && _stringLocalizerFactory != null)
                 {
                     if (_localizerType == null)
                     {
-                        _localizerType = Assembly.GetEntryAssembly().GetTypes().Where(x => x.Name == "Program").FirstOrDefault();
+                        _localizerType = Assembly.GetEntryAssembly()?.GetTypes().Where(x => x.Name == "Program").FirstOrDefault();
                     }
-                    _localizer = _stringLocalizerFactory.Create(_localizerType);
+                    _localizer = _stringLocalizerFactory.Create(_localizerType!);
                 }
                 return _localizer ?? WalkingTec.Mvvm.Core.CoreProgram._localizer;
             }
@@ -275,12 +265,12 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         /// <param name="itcode">用户名</param>
         /// <returns>用户信息</returns>
-        public virtual LoginUserInfo
-            ReloadUser(string itcode)
+        public virtual LoginUserInfo?
+            ReloadUser(string? itcode)
         {
             if (ReloadUserFunc != null)
             {
-                var reload = ReloadUserFunc.Invoke(this, itcode);
+                var reload = ReloadUserFunc?.Invoke(this, itcode);
                 if (reload != null)
                 {
                     return reload;
@@ -288,7 +278,7 @@ namespace WalkingTec.Mvvm.Core
             }
             if (DC == null)
             {
-                return null;
+                return null!;
             }
             var user = DoLoginAsync(itcode, null, null).GetAwaiter().GetResult();
             return user;
@@ -297,14 +287,14 @@ namespace WalkingTec.Mvvm.Core
         #endregion
 
         #region URL
-        public string BaseUrl { get; set; }
+        public string? BaseUrl { get; set; }
         #endregion
 
         public string HostAddress { get
             {
                 if (this.HttpContext?.Request != null)
                 {
-                    return $"{this.HttpContext.Request.Scheme}://{this.HttpContext.Request.Host}";
+                    return $"{this.HttpContext?.Request.Scheme}://{this.HttpContext?.Request.Host}";
                 }
                 else
                 {
@@ -313,26 +303,25 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
-        public SimpleLog Log { get; set; }
+        public SimpleLog? Log { get; set; }
 
-        protected ILogger<ActionLog> Logger { get; set; }
+        protected ILogger<ActionLog>? Logger { get; set; }
 
 
-        private IQueryable<FrameworkUserBase> _baseUserQuery;
-        public IQueryable<FrameworkUserBase> BaseUserQuery
-        {
+        private IQueryable<FrameworkUserBase>? _baseUserQuery;
+        public IQueryable<FrameworkUserBase>? BaseUserQuery {
             get
             {
                 if (_baseUserQuery == null && this.GlobaInfo?.CustomUserType != null && DC != null)
                 {
-                    var set = DC.GetType().GetMethod("Set", Type.EmptyTypes).MakeGenericMethod(GlobaInfo.CustomUserType);
-                    _baseUserQuery = set.Invoke(DC, null) as IQueryable<FrameworkUserBase>;
+                    var set = DC?.GetType()?.GetMethod("Set", Type.EmptyTypes).MakeGenericMethod(GlobaInfo?.CustomUserType);
+                    _baseUserQuery = set!.Invoke(DC, null) as IQueryable<FrameworkUserBase>;
                 }
                 return _baseUserQuery;
             }
         }
 
-        public WTMContext(IOptionsMonitor<Configs> _config, GlobalData _gd = null, IHttpContextAccessor _http = null, IUIService _ui = null, List<IDataPrivilege> _dp = null, IDataContext dc = null, IStringLocalizerFactory stringLocalizer = null, ILoggerFactory loggerFactory = null, WtmLocalizationOption lop = null, IDistributedCache cache = null, IServiceProvider sp=null)
+        public WTMContext(IOptionsMonitor<Configs>? _config, GlobalData? _gd = null, IHttpContextAccessor? _http = null, IUIService? _ui = null, List<IDataPrivilege>? _dp = null, IDataContext? dc = null, IStringLocalizerFactory? stringLocalizer = null, ILoggerFactory? loggerFactory = null, WtmLocalizationOption? lop = null, IDistributedCache? cache = null, IServiceProvider? sp=null)
         {
             _configInfo = _config?.CurrentValue ?? new Configs();
             _globaInfo = _gd ?? new GlobalData();
@@ -363,12 +352,12 @@ namespace WalkingTec.Mvvm.Core
             _serviceProvider = sp;
         }
 
-        public void SetServiceProvider(IServiceProvider sp)
+        public void SetServiceProvider(IServiceProvider? sp)
         {
             this._serviceProvider = sp;
         }
 
-        public async Task<LoginUserInfo> DoLoginAsync(string username, string password, string tenant)
+        public async Task<LoginUserInfo?> DoLoginAsync(string? username, string? password, string? tenant)
         {
             if(string.IsNullOrEmpty(tenant))
             {
@@ -378,14 +367,14 @@ namespace WalkingTec.Mvvm.Core
             {
                 tenant = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.TenantCode).Select(x => x.Value).FirstOrDefault() ?? tenant;
             }
-            if (ConfigInfo.HasMainHost && string.IsNullOrEmpty(tenant) == true)
+            if (ConfigInfo?.HasMainHost == true && string.IsNullOrEmpty(tenant) == true)
             {
                 var remoteToken = _loginUserInfo?.RemoteToken ?? HttpContext?.Request.Query?.Where(x => x.Key == "_remotetoken").Select(x => x.Value.First()).FirstOrDefault();
                 if (HttpContext.User.Identity.IsAuthenticated)
                 {
                     remoteToken = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.RToken).Select(x => x.Value).FirstOrDefault();
                 }
-                LoginUserInfo rv = null;
+                LoginUserInfo? rv = null;
                 if (string.IsNullOrEmpty(remoteToken) == false)
                 {
                     Dictionary<string, string> headers = new Dictionary<string, string>();
@@ -423,10 +412,10 @@ namespace WalkingTec.Mvvm.Core
             {
                 bool exist = false;
                 username = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject).Select(x => x.Value).FirstOrDefault() ?? username;
-                var ct = GlobaInfo.AllTenant.Where(x => x.TCode == tenant).FirstOrDefault();
+                var ct = GlobaInfo?.AllTenant.Where(x => x.TCode == tenant).FirstOrDefault();
                 if(ct == null && string.IsNullOrEmpty(tenant) == false)
                 {
-                    return null;
+                    return null!;
                 }
                 if (ct != null)
                 {
@@ -471,17 +460,17 @@ namespace WalkingTec.Mvvm.Core
                 }
                 if (exist == false)
                 {
-                    return null;
+                    return null!;
                 }
 
-                LoginUserInfo user = new LoginUserInfo
+                LoginUserInfo? user = new LoginUserInfo
                 {
                     ITCode = username,
                     TenantCode = tenant
                 };
                 await user.LoadBasicInfoAsync(this);
                 user.RemoteToken = null;
-                var authService = HttpContext.RequestServices.GetService(typeof(ITokenService)) as ITokenService;
+                var authService = HttpContext?.RequestServices.GetService(typeof(ITokenService)) as ITokenService;
                 var token = await authService.IssueTokenAsync(user);
                 user.RemoteToken = token.AccessToken;
                 return user;
@@ -489,39 +478,39 @@ namespace WalkingTec.Mvvm.Core
         }
 
         [Obsolete("Use DoLoginAsync to avoid ThreadPool starvation. DoLogin blocks threads on every auth request.")]
-        public LoginUserInfo DoLogin(string username, string password, string tenant)
+        public LoginUserInfo? DoLogin(string? username, string? password, string? tenant)
         {
             return DoLoginAsync(username, password, tenant).GetAwaiter().GetResult();
         }
 
-        public async Task<Token> RefreshTokenAsync()
+        public async Task<Token?> RefreshTokenAsync()
         {
             if (LoginUserInfo == null)
             {
-                return null;
+                return null!;
             }
             string rt = null;
-            if (ConfigInfo.HasMainHost && LoginUserInfo?.CurrentTenant == null)
+            if (ConfigInfo?.HasMainHost == true && LoginUserInfo?.CurrentTenant == null)
             {
                 var r = await CallAPI<Token>("mainhost", $"/api/_account/RefreshToken", HttpMethodEnum.POST, new { });
                 rt = r?.Data?.AccessToken;
             }
             else
             {
-                rt = LoginUserInfo.RemoteToken;
+                rt = LoginUserInfo?.RemoteToken;
             }
-            var _authService = ServiceProvider.GetRequiredService<ITokenService>();
+            var _authService = ServiceProvider?.GetRequiredService<ITokenService>();
             var rv = await _authService.IssueTokenAsync(new LoginUserInfo
             {
-                ITCode = LoginUserInfo.ITCode,
-                TenantCode = LoginUserInfo.TenantCode,
+                ITCode = LoginUserInfo?.ITCode,
+                TenantCode = LoginUserInfo?.TenantCode,
                 RemoteToken = rt
             });
             return rv;
         }
 
         [Obsolete("Use RefreshTokenAsync to avoid ThreadPool starvation. RefreshToken blocks threads on every token refresh.")]
-        public Token RefreshToken()
+        public Token? RefreshToken()
         {
             return RefreshTokenAsync().GetAwaiter().GetResult();
         }
@@ -533,11 +522,11 @@ namespace WalkingTec.Mvvm.Core
                 T data = setFunc();
                 if (timeout == null)
                 {
-                    Cache.Add(key, data);
+                    Cache?.Add(key, data);
                 }
                 else
                 {
-                    Cache.Add(key, data, new DistributedCacheEntryOptions()
+                    Cache?.Add(key, data, new DistributedCacheEntryOptions()
                     {
                         AbsoluteExpirationRelativeToNow = new TimeSpan(0, 0, timeout.Value)
                     });
@@ -556,7 +545,7 @@ namespace WalkingTec.Mvvm.Core
             foreach (var userId in userIds)
             {
                 var key = $"{GlobalConstants.CacheKey.UserInfo}:{userId + "$`$" + LoginUserInfo?.CurrentTenant}";
-                await Cache.DeleteAsync(key);
+                await Cache?.DeleteAsync(key);
             }
         }
 
@@ -564,7 +553,7 @@ namespace WalkingTec.Mvvm.Core
     params string[] rolecode)
         {
             List<string> userids = new List<string>();
-            if (ConfigInfo.HasMainHost && string.IsNullOrEmpty(LoginUserInfo?.CurrentTenant) == true)
+            if (ConfigInfo?.HasMainHost == true && string.IsNullOrEmpty(LoginUserInfo?.CurrentTenant) == true)
             {
                 foreach (var item in rolecode)
                 {
@@ -582,7 +571,7 @@ namespace WalkingTec.Mvvm.Core
             foreach (var userId in userids)
             {
                 var key = $"{GlobalConstants.CacheKey.UserInfo}:{userId + "$`$" + LoginUserInfo?.CurrentTenant}";
-                await Cache.DeleteAsync(key);
+                await Cache?.DeleteAsync(key);
             }
         }
 
@@ -590,7 +579,7 @@ namespace WalkingTec.Mvvm.Core
 params string[] groupcode)
         {
             List<string> userids = new List<string>();
-            if (ConfigInfo.HasMainHost && string.IsNullOrEmpty(LoginUserInfo?.CurrentTenant) == true)
+            if (ConfigInfo?.HasMainHost == true && string.IsNullOrEmpty(LoginUserInfo?.CurrentTenant) == true)
             {
                 foreach (var item in groupcode)
                 {
@@ -608,7 +597,7 @@ params string[] groupcode)
             foreach (var userId in userids)
             {
                 var key = $"{GlobalConstants.CacheKey.UserInfo}:{userId + "$`$" + LoginUserInfo?.CurrentTenant}";
-                await Cache.DeleteAsync(key);
+                await Cache?.DeleteAsync(key);
             }
         }
 
@@ -616,30 +605,30 @@ params string[] groupcode)
         {
 
                 var key = $"{GlobalConstants.CacheKey.TenantGroups}:{tenant}";
-                await Cache.DeleteAsync(key);
+                await Cache?.DeleteAsync(key);
         }
 
         public async Task RemoveRoleCache(string tenant)
         {
 
                 var key = $"{GlobalConstants.CacheKey.TenantRoles}:{tenant}";
-                await Cache.DeleteAsync(key);
+                await Cache?.DeleteAsync(key);
             
         }
 
-        public List<SimpleGroup> GetTenantGroups(string tenant)
+        public List<SimpleGroup>? GetTenantGroups(string? tenant)
         {
             var key = $"{GlobalConstants.CacheKey.TenantGroups}:{tenant}";
             var rv = ReadFromCache<List<SimpleGroup>>(key, () =>
             {
                 
-                List<SimpleGroup> groups = null;
+                List<SimpleGroup>? groups = null;
                 try
                 {
-                    var dbtenant = GlobaInfo.AllTenant.Where(x => x.TCode == tenant && x.IsUsingDB == true).FirstOrDefault();
-                    using (var dc = dbtenant == null ? ConfigInfo.Connections.Where(x => x.Key.ToLower() == "default").FirstOrDefault().CreateDC() : dbtenant.CreateDC(this))
+                    var dbtenant = GlobaInfo?.AllTenant.Where(x => x.TCode == tenant && x.IsUsingDB == true).FirstOrDefault();
+                    using (var dc = dbtenant == null ? ConfigInfo?.Connections.Where(x => x.Key.ToLower() == "default").FirstOrDefault().CreateDC() : dbtenant.CreateDC(this))
                     {
-                        groups = dc.Set<FrameworkGroup>().IgnoreQueryFilters().Where(x => x.TenantCode == tenant).Select(x => new SimpleGroup
+                        groups = dc?.Set<FrameworkGroup>().IgnoreQueryFilters().Where(x => x.TenantCode == tenant).Select(x => new SimpleGroup
                         {
                             ID = x.ID,
                             GroupCode = x.GroupCode,
@@ -659,18 +648,18 @@ params string[] groupcode)
             return rv;
         }
 
-        public List<SimpleRole> GetTenantRoles(string tenant)
+        public List<SimpleRole>? GetTenantRoles(string? tenant)
         {
             var key = $"{GlobalConstants.CacheKey.TenantRoles}:{tenant}";
             var rv = ReadFromCache<List<SimpleRole>>(key, () =>
             {
-                List<SimpleRole> roles = null;
+                List<SimpleRole>? roles = null;
                 try
                 {
-                    var dbtenant = GlobaInfo.AllTenant.Where(x => x.TCode == tenant && x.IsUsingDB == true).FirstOrDefault();
-                    using (var dc = dbtenant == null ? ConfigInfo.Connections.Where(x => x.Key.ToLower() == "default").FirstOrDefault().CreateDC() : dbtenant.CreateDC(this))
+                    var dbtenant = GlobaInfo?.AllTenant.Where(x => x.TCode == tenant && x.IsUsingDB == true).FirstOrDefault();
+                    using (var dc = dbtenant == null ? ConfigInfo?.Connections.Where(x => x.Key.ToLower() == "default").FirstOrDefault().CreateDC() : dbtenant.CreateDC(this))
                     {
-                        roles = dc.Set<FrameworkRole>().IgnoreQueryFilters().Where(x => x.TenantCode == tenant).Select(x => new SimpleRole
+                        roles = dc?.Set<FrameworkRole>().IgnoreQueryFilters().Where(x => x.TenantCode == tenant).Select(x => new SimpleRole
                         {
                             ID = x.ID,
                             RoleCode = x.RoleCode,
@@ -689,13 +678,13 @@ params string[] groupcode)
         }
 
 
-        public bool SetCurrentTenant(string tenant)
+        public bool SetCurrentTenant(string? tenant)
         {
             if (LoginUserInfo != null)
             {
-                if (LoginUserInfo.TenantCode == null || LoginUserInfo.TenantCode == tenant || GlobaInfo.AllTenant.Any(x => x.TCode == tenant && x.TenantCode == LoginUserInfo.TenantCode))
+                if (LoginUserInfo?.TenantCode == null || LoginUserInfo?.TenantCode == tenant || GlobaInfo?.AllTenant?.Any(x => x.TCode == tenant && x.TenantCode == LoginUserInfo?.TenantCode) == true)
                 {
-                    LoginUserInfo.CurrentTenant = tenant;
+                    if(LoginUserInfo != null) LoginUserInfo.CurrentTenant = tenant;
                     LoginUserInfo = LoginUserInfo;
                     return true;
                 }
@@ -704,13 +693,13 @@ params string[] groupcode)
         }
 
         #region CreateDC
-        public virtual IDataContext CreateDC(bool isLog = false, string cskey = null, bool logerror = true)
+        public virtual IDataContext? CreateDC(bool isLog = false, string? cskey = null, bool logerror = true)
         {
-            string cs = cskey ?? CurrentCS;
-            string tenantCode = null;
+            string? cs = cskey ?? CurrentCS;
+            string? tenantCode = null;
 
-            var tenants = GlobaInfo.AllTenant ?? new List<FrameworkTenant>();
-            string tc = _loginUserInfo?.CurrentTenant;
+            var tenants = GlobaInfo?.AllTenant ?? new List<FrameworkTenant>();
+            string? tc = _loginUserInfo?.CurrentTenant;
             if (tc == null && HttpContext?.Request.Headers.ContainsKey("Referer")==true)
             {
                 Regex r = new Regex("(http://|https://)?(.+?)(/)?$");
@@ -730,14 +719,14 @@ params string[] groupcode)
                 if (string.IsNullOrEmpty(cs) && item?.IsUsingDB == true)
                 {
                     var tenantDc = item.CreateDC(this);
-                    tenantDc.CurrentUserCode = LoginUserInfo?.ITCode;
+                    if(tenantDc != null) tenantDc.CurrentUserCode = LoginUserInfo?.ITCode;
                     return tenantDc;
                 }
             }
 
             if (isLog == true)
             {
-                if (ConfigInfo.Connections?.Where(x => x.Key.ToLower() == "defaultlog").FirstOrDefault() != null)
+                if (ConfigInfo?.Connections?.Where(x => x.Key.ToLower() == "defaultlog").FirstOrDefault() != null)
                 {
                     cs = "defaultlog";
                 }
@@ -746,18 +735,18 @@ params string[] groupcode)
             {
                 cs = "default";
             }
-            var csConfig = ConfigInfo.Connections.Where(x => x.Key.ToLower() == cs.ToLower()).FirstOrDefault();
+            var csConfig = ConfigInfo?.Connections.Where(x => x.Key.ToLower() == cs.ToLower()).FirstOrDefault();
             if (csConfig != null && !csConfig.Enabled)
             {
                 throw new InvalidOperationException($"Database connection '{csConfig.Key}' ({csConfig.DbType}) is disabled. Enable it in appsettings.json (set Enabled: true).");
             }
-            var rv = csConfig.CreateDC();
-            rv.IsDebug = ConfigInfo.IsQuickDebug;
-            rv.SetTenantCode(tenantCode);
-            rv.CurrentUserCode = LoginUserInfo?.ITCode;
+            var rv = csConfig?.CreateDC();
+            if(rv!=null) rv.IsDebug = ConfigInfo?.IsQuickDebug == true;
+            rv?.SetTenantCode(tenantCode);
+            if(rv != null) rv.CurrentUserCode = LoginUserInfo?.ITCode;
             if (logerror == true)
             {
-                rv.SetLoggerFactory(_loggerFactory);
+                rv?.SetLoggerFactory(_loggerFactory);
             }
             return rv;
         }
@@ -769,10 +758,10 @@ params string[] groupcode)
         /// </summary>
         /// <param name="url">url地址</param>
         /// <returns>true代表可以访问，false代表不能访问</returns>
-        public bool IsAccessable(string url)
+        public bool IsAccessable(string? url)
         {
             // 如果是调试 或者 url 为 null or 空字符串
-            if (_configInfo.IsQuickDebug || string.IsNullOrEmpty(url) || IsUrlPublic(url))
+            if (_configInfo?.IsQuickDebug == true || string.IsNullOrEmpty(url) || IsUrlPublic(url))
             {
                 return true;
             }
@@ -807,7 +796,7 @@ params string[] groupcode)
             }
 
 
-            url = Regex.Replace(url, "/do(batch.*)", "/$1", RegexOptions.IgnoreCase);
+            url = Regex.Replace(url ?? "", "/do(batch.*)", "/$1", RegexOptions.IgnoreCase);
 
             //如果url以#开头，一般是javascript使用的临时地址，不需要判断，直接返回true
             url = url.Trim();
@@ -817,7 +806,7 @@ params string[] groupcode)
                 return true;
             }
             var menus = _globaInfo.AllMenus;
-            var menu = Utils.FindMenu(url, GlobaInfo.AllMenus);
+            var menu = Utils.FindMenu(url, GlobaInfo?.AllMenus);
             //如果最终没有找到，说明系统菜单中并没有配置这个url，返回false
             if (menu == null)
             {
@@ -836,14 +825,14 @@ params string[] groupcode)
         /// <param name="menu">菜单项</param>
         /// <param name="menus">所有系统菜单</param>
         /// <returns>true代表可以访问，false代表不能访问</returns>
-        protected bool IsAccessable(SimpleMenu menu, List<SimpleMenu> menus)
+        protected bool IsAccessable(SimpleMenu? menu, List<SimpleMenu>? menus)
         {
-            if (LoginUserInfo.CurrentTenant != null && menu.TenantAllowed == false)
+            if (LoginUserInfo?.CurrentTenant != null && menu?.TenantAllowed == false)
             {
                 return false;
             }
             //寻找当前菜单的页面权限
-            var find = LoginUserInfo?.FunctionPrivileges.Where(x => x.MenuItemId == menu.ID && x.Allowed == true).FirstOrDefault();
+            var find = LoginUserInfo?.FunctionPrivileges.Where(x => x.MenuItemId == menu?.ID && x.Allowed == true).FirstOrDefault();
             //如果能找到直接对应的页面权限
             if (find != null)
             {
@@ -852,19 +841,19 @@ params string[] groupcode)
             return false;
         }
 
-        public bool IsUrlPublic(string url)
+        public bool IsUrlPublic(string? url)
         {
             var isPublic = false;
             try
             {
-                url = Regex.Replace(url, "/do(batch.*)", "/$1", RegexOptions.IgnoreCase);
+                url = Regex.Replace(url ?? "", "/do(batch.*)", "/$1", RegexOptions.IgnoreCase);
                 url = url.Trim();
 
                 if (url.StartsWith("#"))
                 {
                     isPublic = true;
                 }
-                var menus = GlobaInfo.AllMenus;
+                var menus = GlobaInfo?.AllMenus;
                 var menu = Utils.FindMenu(url, menus);
                 if (menu != null && menu.IsPublic == true)
                 {
@@ -875,7 +864,7 @@ params string[] groupcode)
             return isPublic;
         }
 
-        public void DoLog(string msg, ActionLogTypesEnum logtype = ActionLogTypesEnum.Normal, string moduleName = "", string actionName = "", string ip = "", string url = "", double duration = 0)
+        public void DoLog(string? msg, ActionLogTypesEnum logtype = ActionLogTypesEnum.Normal, string? moduleName = "", string? actionName = "", string? ip = "", string? url = "", double duration = 0)
         {
             var log = this.Log?.GetActionLog();
             if (log == null)
@@ -893,7 +882,7 @@ params string[] groupcode)
             log.IP = ip;
             if (string.IsNullOrEmpty(url) && this.HttpContext?.Request != null)
             {
-                log.ActionUrl = this.HttpContext.Request.Path.ToString();
+                log.ActionUrl = this.HttpContext?.Request.Path.ToString();
             }
             LogLevel ll = LogLevel.Information;
             switch (logtype)
@@ -935,33 +924,33 @@ params string[] groupcode)
         /// <param name="values">properties of the viewmodel that you want to assign values</param>
         /// <param name="passInit">if true, the viewmodel will not call InitVM internally</param>
         /// <returns>ViewModel</returns>
-        private BaseVM CreateVM(Type VMType, object Id = null, object[] Ids = null, Dictionary<string, object> values = null, bool passInit = false)
+        private BaseVM CreateVM(Type? VMType, object? Id = null, object[]? Ids = null, Dictionary<string, object>? values = null, bool passInit = false)
         {
             //Use reflection to create viewmodel
-            var ctor = VMType.GetConstructor(Type.EmptyTypes);
-            BaseVM rv = ctor.Invoke(null) as BaseVM;
-            rv.Wtm = this;
+            var ctor = VMType?.GetConstructor(Type.EmptyTypes);
+            BaseVM rv = ctor?.Invoke(null) as BaseVM;
+            if(rv!=null) rv.Wtm = this;
 
             rv.FC = new Dictionary<string, object>();
             rv.CreatorAssembly = this.GetType().AssemblyQualifiedName;
             rv.ControllerName = this.HttpContext?.Request?.Path;
-            if (HttpContext != null && HttpContext.Request != null)
+            if (HttpContext != null && HttpContext?.Request != null)
             {
                 try
                 {
-                    if (HttpContext.Request.QueryString != QueryString.Empty)
+                    if (HttpContext?.Request.QueryString != QueryString.Empty)
                     {
-                        foreach (var key in HttpContext.Request.Query.Keys)
+                        foreach (var key in HttpContext?.Request.Query.Keys)
                         {
                             if (rv.FC.Keys.Contains(key) == false)
                             {
-                                rv.FC.Add(key, HttpContext.Request.Query[key]);
+                                rv.FC.Add(key, HttpContext?.Request.Query[key]);
                             }
                         }
                     }
-                    if (HttpContext.Request.HasFormContentType)
+                    if (HttpContext?.Request?.HasFormContentType == true)
                     {
-                        var f = HttpContext.Request.Form;
+                        var f = HttpContext?.Request.Form;
                         foreach (var key in f.Keys)
                         {
                             if (rv.FC.Keys.Contains(key) == false)
@@ -996,7 +985,7 @@ params string[] groupcode)
                     var tempids = new List<string>();
                     foreach (var iid in Ids)
                     {
-                        tempids.Add(iid.ToString());
+                        tempids.Add(iid?.ToString() ?? "");
                     }
                     temp.Ids = tempids.ToArray();
                 }
@@ -1066,16 +1055,16 @@ params string[] groupcode)
             return rv;
         }
 
-        private void SetSubVm(BaseVM vm, bool passInit)
+        private void SetSubVm(BaseVM? vm, bool passInit)
         {
-            var sub = vm.GetType().GetAllProperties().Where(x => typeof(BaseVM).IsAssignableFrom(x.PropertyType) && x.Name != "ParentVM");
+            var sub = vm?.GetType()?.GetAllProperties().Where(x => typeof(BaseVM).IsAssignableFrom(x.PropertyType) && x.Name != "ParentVM");
             foreach (var prop in sub)
             {
                 var subins = prop.GetValue(vm) as BaseVM;
                 bool exist = subins == null ? false : true;
                 if (subins == null)
                 {
-                    subins = prop.PropertyType.GetConstructor(Type.EmptyTypes).Invoke(null) as BaseVM;
+                    subins = prop?.PropertyType?.GetConstructor(Type.EmptyTypes).Invoke(null) as BaseVM;
                 }
                 if (subins != null)
                 {
@@ -1104,7 +1093,7 @@ params string[] groupcode)
         /// <param name="values">use Lambda to set viewmodel's properties,use && for multiply properties, for example Wtm.CreateVM<Test>(values: x=>x.Field1=='a' && x.Field2 == 'b'); will set viewmodel's Field1 to 'a' and Field2 to 'b'</param>
         /// <param name="passInit">if true, the viewmodel will not call InitVM internally</param>
         /// <returns>ViewModel</returns>
-        public T CreateVM<T>(Expression<Func<T, object>> values = null, bool passInit = false) where T : BaseVM
+        public T CreateVM<T>(Expression<Func<T, object>>? values = null, bool passInit = false) where T : BaseVM
         {
             SetValuesParser p = new SetValuesParser();
             var dir = p.Parse(values);
@@ -1119,7 +1108,7 @@ params string[] groupcode)
         /// <param name="values">properties of the viewmodel that you want to assign values</param>
         /// <param name="passInit">if true, the viewmodel will not call InitVM internally</param>
         /// <returns>ViewModel</returns>
-        public T CreateVM<T>(object Id, Expression<Func<T, object>> values = null, bool passInit = false) where T : BaseVM
+        public T CreateVM<T>(object Id, Expression<Func<T, object>>? values = null, bool passInit = false) where T : BaseVM
         {
             SetValuesParser p = new SetValuesParser();
             var dir = p.Parse(values);
@@ -1134,7 +1123,7 @@ params string[] groupcode)
         /// <param name="values">use Lambda to set viewmodel's properties,use && for multiply properties, for example Wtm.CreateVM<Test>(values: x=>x.Field1=='a' && x.Field2 == 'b'); will set viewmodel's Field1 to 'a' and Field2 to 'b'</param>
         /// <param name="passInit">if true, the viewmodel will not call InitVM internally</param>
         /// <returns>ViewModel</returns>
-        public T CreateVM<T>(object[] Ids, Expression<Func<T, object>> values = null, bool passInit = false) where T : BaseVM
+        public T CreateVM<T>(object[] Ids, Expression<Func<T, object>>? values = null, bool passInit = false) where T : BaseVM
         {
             SetValuesParser p = new SetValuesParser();
             var dir = p.Parse(values);
@@ -1150,7 +1139,7 @@ params string[] groupcode)
         /// <param name="values">use Lambda to set viewmodel's properties,use && for multiply properties, for example Wtm.CreateVM<Test>(values: x=>x.Field1=='a' && x.Field2 == 'b'); will set viewmodel's Field1 to 'a' and Field2 to 'b'</param>
         /// <param name="passInit">if true, the viewmodel will not call InitVM internally</param>
         /// <returns>ViewModel</returns>
-        public T CreateVM<T>(Guid[] Ids, Expression<Func<T, object>> values = null, bool passInit = false) where T : BaseVM
+        public T CreateVM<T>(Guid[] Ids, Expression<Func<T, object>>? values = null, bool passInit = false) where T : BaseVM
         {
             SetValuesParser p = new SetValuesParser();
             var dir = p.Parse(values);
@@ -1165,7 +1154,7 @@ params string[] groupcode)
         /// <param name="values">use Lambda to set viewmodel's properties,use && for multiply properties, for example Wtm.CreateVM<Test>(values: x=>x.Field1=='a' && x.Field2 == 'b'); will set viewmodel's Field1 to 'a' and Field2 to 'b'</param>
         /// <param name="passInit">if true, the viewmodel will not call InitVM internally</param>
         /// <returns>ViewModel</returns>
-        public T CreateVM<T>(int[] Ids, Expression<Func<T, object>> values = null, bool passInit = false) where T : BaseVM
+        public T CreateVM<T>(int[] Ids, Expression<Func<T, object>>? values = null, bool passInit = false) where T : BaseVM
         {
             SetValuesParser p = new SetValuesParser();
             var dir = p.Parse(values);
@@ -1180,7 +1169,7 @@ params string[] groupcode)
         /// <param name="values">use Lambda to set viewmodel's properties,use && for multiply properties, for example Wtm.CreateVM<Test>(values: x=>x.Field1=='a' && x.Field2 == 'b'); will set viewmodel's Field1 to 'a' and Field2 to 'b'</param>
         /// <param name="passInit">if true, the viewmodel will not call InitVM internally</param>
         /// <returns>ViewModel</returns>
-        public T CreateVM<T>(long[] Ids, Expression<Func<T, object>> values = null, bool passInit = false) where T : BaseVM
+        public T CreateVM<T>(long[] Ids, Expression<Func<T, object>>? values = null, bool passInit = false) where T : BaseVM
         {
             SetValuesParser p = new SetValuesParser();
             var dir = p.Parse(values);
@@ -1194,7 +1183,7 @@ params string[] groupcode)
         /// <param name="values">use Lambda to set viewmodel's properties,use && for multiply properties, for example Wtm.CreateVM<Test>(values: x=>x.Field1=='a' && x.Field2 == 'b'); will set viewmodel's Field1 to 'a' and Field2 to 'b'</param>
         /// <param name="passInit">if true, the viewmodel will not call InitVM internally</param>
         /// <returns>ViewModel</returns>
-        public T CreateVM<T>(string[] Ids, Expression<Func<T, object>> values = null, bool passInit = false) where T : BaseVM
+        public T CreateVM<T>(string[] Ids, Expression<Func<T, object>>? values = null, bool passInit = false) where T : BaseVM
         {
             SetValuesParser p = new SetValuesParser();
             var dir = p.Parse(values);
@@ -1209,25 +1198,25 @@ params string[] groupcode)
         /// <param name="Ids">If the viewmodel is a BatchVM, the BatchVM's Ids property will be assigned</param>
         /// <param name="passInit">if true, the viewmodel will not call InitVM internally</param>
         /// <returns>ViewModel</returns>
-        public BaseVM CreateVM(string VmFullName, object Id = null, object[] Ids = null, bool passInit = false)
+        public BaseVM CreateVM(string? VmFullName, object? Id = null, object[]? Ids = null, bool passInit = false)
         {
-            return CreateVM(Type.GetType(VmFullName), Id, Ids, null, passInit);
+            return CreateVM(Type.GetType(VmFullName ?? ""), Id, Ids, null, passInit);
         }
         #endregion
 
         #region CallApi
-        public async Task<ApiResult<T>> CallAPI<T>(string domainName, string url, HttpMethodEnum method, HttpContent content, int? timeout = null, string proxy = null, Dictionary<string, string> headers = null) where T : class
+        public async Task<ApiResult<T>> CallAPI<T>(string? domainName, string? url, HttpMethodEnum method, HttpContent content, int? timeout = null, string? proxy = null, Dictionary<string, string>? headers = null) where T : class
         {
             ApiResult<T> rv = new ApiResult<T>();
             try
             {
-                var factory = this.ServiceProvider.GetRequiredService<IHttpClientFactory>();
+                var factory = this.ServiceProvider?.GetRequiredService<IHttpClientFactory>();
                 if (string.IsNullOrEmpty(url))
                 {
                     return rv;
                 }
                 //新建http请求
-                HttpClient client = null;
+                HttpClient? client = null;
                 if (string.IsNullOrEmpty(domainName))
                 {
                     client = factory.CreateClient();
@@ -1250,7 +1239,7 @@ params string[] groupcode)
                 }
                 if (client.DefaultRequestHeaders.Any(x => x.Key == "Authorization") == false && string.IsNullOrEmpty(LoginUserInfo?.RemoteToken) == false)
                 {
-                    client.DefaultRequestHeaders.Add("Authorization", "Bearer " + LoginUserInfo.RemoteToken);
+                    client.DefaultRequestHeaders.Add("Authorization", "Bearer " + LoginUserInfo?.RemoteToken);
                 }
 
                 //如果配置了代理，则使用代理
@@ -1260,7 +1249,7 @@ params string[] groupcode)
                     client.Timeout = new TimeSpan(0, 0, 0, timeout.Value, 0);
                 }
                 //填充表单数据
-                HttpResponseMessage res = null;
+                HttpResponseMessage? res = null;
                 switch (method)
                 {
                     case HttpMethodEnum.GET:
@@ -1285,14 +1274,14 @@ params string[] groupcode)
                 rv.StatusCode = res.StatusCode;
                 if (res.IsSuccessStatusCode == true)
                 {
-                    Type dt = typeof(T);
+                    Type? dt = typeof(T);
                     if (dt == typeof(byte[]))
                     {
                         rv.Data = await res.Content.ReadAsByteArrayAsync() as T;
                     }
                     else
                     {
-                        string responseTxt = await res.Content.ReadAsStringAsync();
+                        string? responseTxt = await res.Content.ReadAsStringAsync();
                         if (dt == typeof(string))
                         {
                             rv.Data = responseTxt as T;
@@ -1305,7 +1294,7 @@ params string[] groupcode)
                 }
                 else
                 {
-                    string responseTxt = await res.Content.ReadAsStringAsync();
+                    string? responseTxt = await res.Content.ReadAsStringAsync();
                     if (res.StatusCode == System.Net.HttpStatusCode.BadRequest)
                     {
 
@@ -1337,9 +1326,9 @@ params string[] groupcode)
         /// <param name="proxy">代理地址</param>
         /// <param name="headers">http headers</param>
         /// <returns></returns>
-        public async Task<ApiResult<T>> CallAPI<T>(string domainName, string url, int? timeout = null, string proxy = null, Dictionary<string, string> headers = null) where T : class
+        public async Task<ApiResult<T>> CallAPI<T>(string? domainName, string? url, int? timeout = null, string? proxy = null, Dictionary<string, string>? headers = null) where T : class
         {
-            HttpContent content = null;
+            HttpContent? content = null;
             //填充表单数据
             return await CallAPI<T>(domainName, url, HttpMethodEnum.GET, content, timeout, proxy, headers);
         }
@@ -1356,9 +1345,9 @@ params string[] groupcode)
         /// <param name="proxy">代理地址</param>
         /// <param name="headers">http headers</param>
         /// <returns></returns>
-        public async Task<ApiResult<T>> CallAPI<T>(string domainName, string url, HttpMethodEnum method, IDictionary<string, string> postdata, int? timeout = null, string proxy = null, Dictionary<string, string> headers = null) where T : class
+        public async Task<ApiResult<T>> CallAPI<T>(string? domainName, string? url, HttpMethodEnum method, IDictionary<string, string>? postdata, int? timeout = null, string? proxy = null, Dictionary<string, string>? headers = null) where T : class
         {
-            HttpContent content = null;
+            HttpContent? content = null;
             //填充表单数据
             if (!(postdata == null || postdata.Count == 0))
             {
@@ -1384,13 +1373,13 @@ params string[] groupcode)
         /// <param name="proxy">代理地址</param>
         /// <param name="headers">http headers</param>
         /// <returns></returns>
-        public async Task<ApiResult<T>> CallAPI<T>(string domainName, string url, HttpMethodEnum method, object postdata, int? timeout = null, string proxy = null, Dictionary<string, string> headers = null) where T : class
+        public async Task<ApiResult<T>> CallAPI<T>(string? domainName, string? url, HttpMethodEnum method, object? postdata, int? timeout = null, string? proxy = null, Dictionary<string, string>? headers = null) where T : class
         {
             HttpContent content = new StringContent(JsonSerializer.Serialize(postdata, CoreProgram.DefaultPostJsonOption), System.Text.Encoding.UTF8, "application/json");
             return await CallAPI<T>(domainName, url, method, content, timeout, proxy, headers);
         }
 
-        public async Task<ApiResult<string>> CallAPI(string domainName, string url, HttpMethodEnum method, HttpContent content, int? timeout = null, string proxy = null, Dictionary<string, string> headers = null)
+        public async Task<ApiResult<string>> CallAPI(string? domainName, string? url, HttpMethodEnum method, HttpContent content, int? timeout = null, string? proxy = null, Dictionary<string, string>? headers = null)
         {
             return await CallAPI<string>(domainName, url, method, content, timeout, proxy, headers);
         }
@@ -1404,7 +1393,7 @@ params string[] groupcode)
         /// <param name="proxy">代理地址</param>
         /// <param name="headers">http headers</param>
         /// <returns></returns>
-        public async Task<ApiResult<string>> CallAPI(string domainName, string url, int? timeout = null, string proxy = null, Dictionary<string, string> headers = null)
+        public async Task<ApiResult<string>> CallAPI(string? domainName, string? url, int? timeout = null, string? proxy = null, Dictionary<string, string>? headers = null)
         {
             return await CallAPI<string>(domainName, url, timeout, proxy, headers);
         }
@@ -1420,7 +1409,7 @@ params string[] groupcode)
         /// <param name="proxy">代理地址</param>
         /// <param name="headers">自定义header</param>
         /// <returns></returns>
-        public async Task<ApiResult<string>> CallAPI(string domainName, string url, HttpMethodEnum method, IDictionary<string, string> postdata, int? timeout = null, string proxy = null, Dictionary<string, string> headers = null)
+        public async Task<ApiResult<string>> CallAPI(string? domainName, string? url, HttpMethodEnum method, IDictionary<string, string>? postdata, int? timeout = null, string? proxy = null, Dictionary<string, string>? headers = null)
         {
             return await CallAPI<string>(domainName, url, method, postdata, timeout, proxy, headers);
 
@@ -1437,7 +1426,7 @@ params string[] groupcode)
         /// <param name="proxy">代理地址</param>
         /// <param name="headers">http headers</param>
         /// <returns></returns>
-        public async Task<ApiResult<string>> CallAPI(string domainName, string url, HttpMethodEnum method, object postdata, int? timeout = null, string proxy = null, Dictionary<string, string> headers = null)
+        public async Task<ApiResult<string>> CallAPI(string? domainName, string? url, HttpMethodEnum method, object? postdata, int? timeout = null, string? proxy = null, Dictionary<string, string>? headers = null)
         {
             return await CallAPI<string>(domainName, url, method, postdata, timeout, proxy, headers);
         }
@@ -1445,10 +1434,10 @@ params string[] groupcode)
 
         private string GetServerUrl()
         {
-            var server = ConfigInfo.Domains.Where(x => x.Key.ToLower() == "serverpub").Select(x => x.Value).FirstOrDefault();
+            var server = ConfigInfo?.Domains.Where(x => x.Key.ToLower() == "serverpub").Select(x => x.Value).FirstOrDefault();
             if (server == null)
             {
-                server = ConfigInfo.Domains.Where(x => x.Key.ToLower() == "server").Select(x => x.Value).FirstOrDefault();
+                server = ConfigInfo?.Domains.Where(x => x.Key.ToLower() == "server").Select(x => x.Value).FirstOrDefault();
             }
             if (server != null && string.IsNullOrEmpty(server.Address) == false)
             {
@@ -1456,7 +1445,7 @@ params string[] groupcode)
             }
             else
             {
-                return this.HttpContext.Request.Scheme + "://" + this.HttpContext.Request.Host.ToString();
+                return this.HttpContext?.Request.Scheme + "://" + this.HttpContext?.Request.Host.ToString();
             }
         }
 
