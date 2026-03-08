@@ -555,7 +555,7 @@ namespace WalkingTec.Mvvm.Core
                             var gs = propertyType.GenericTypeArguments;
                             try
                             {
-                                if (value.GetType() == typeof(StringValues))
+                                if (value!.GetType() == typeof(StringValues))
                                 {
                                     var strVals = (StringValues)value;
                                     var a = strVals.ToArray();
@@ -606,8 +606,8 @@ namespace WalkingTec.Mvvm.Core
                     {
                         if (isArray)
                         {
-                            var a = (value as object[]);
-                            if (a.Length == 1)
+                            var a = value as object[];
+                            if (a != null && a.Length == 1)
                             {
                                 value = a[0];
                             }
@@ -680,9 +680,10 @@ namespace WalkingTec.Mvvm.Core
                     val = null;
                 }
             }
-            if (val != null && val.GetType() != mi.GetMemberType())
+            var memberType = mi.GetMemberType();
+            if (val != null && memberType != null && val.GetType() != memberType)
             {
-                newval = val.ConvertValue(mi.GetMemberType());
+                newval = val.ConvertValue(memberType);
             }
             if (mi.MemberType == MemberTypes.Property)
             {
@@ -729,7 +730,7 @@ namespace WalkingTec.Mvvm.Core
                 return "";
             }
             string rv = "";
-            FieldInfo field = null;
+            FieldInfo? field = null;
 
             if (enumType.IsEnum())
             {
@@ -768,18 +769,18 @@ namespace WalkingTec.Mvvm.Core
                 return "";
             }
             string rv = "";
-            FieldInfo field = null;
-            string ename = "";
+            FieldInfo? field = null;
+            string? ename = "";
             if (enumType.IsEnum())
             {
                 ename = enumType.GetEnumName(value);
-                field = enumType.GetField(ename);
+                if (ename != null) field = enumType.GetField(ename);
             }
             //如果是nullable的枚举
             if (enumType.IsGeneric(typeof(Nullable<>)) && enumType.GetGenericArguments()[0].IsEnum())
             {
                 ename = enumType.GenericTypeArguments[0].GetEnumName(value);
-                field = enumType.GenericTypeArguments[0].GetField(ename);
+                if (ename != null) field = enumType.GenericTypeArguments[0].GetField(ename);
             }
 
             if (field != null)
@@ -788,15 +789,15 @@ namespace WalkingTec.Mvvm.Core
                 var attribs = field.GetCustomAttributes(typeof(DisplayAttribute), true).ToList();
                 if (attribs.Count > 0)
                 {
-                    rv = ((DisplayAttribute)attribs[0]).GetName();
-                    if (CoreProgram._localizer != null)
+                    rv = ((DisplayAttribute)attribs[0]).GetName() ?? "";
+                    if (CoreProgram._localizer != null && !string.IsNullOrEmpty(rv))
                     {
                         rv = CoreProgram._localizer[rv];
                     }
                 }
                 else
                 {
-                    rv = ename;
+                    rv = ename ?? "";
                 }
             }
             return rv;
@@ -888,14 +889,14 @@ namespace WalkingTec.Mvvm.Core
 
         public static object MakeList(Type innerType, string propertyName, object[] values)
         {
-            object rv = typeof(List<>).MakeGenericType(innerType).GetConstructor(Type.EmptyTypes).Invoke(null);
+            object rv = typeof(List<>).MakeGenericType(innerType).GetConstructor(Type.EmptyTypes)!.Invoke(null)!;
             var mi = rv.GetType().GetMethod("Add");
             var con = innerType.GetConstructor(Type.EmptyTypes);
             foreach (var item in values)
             {
-                var newobj = con.Invoke(null);
+                var newobj = con!.Invoke(null);
                 newobj.SetPropertyValue(propertyName, item);
-                mi.Invoke(rv, new object[] { newobj });
+                mi!.Invoke(rv, new object[] { newobj });
             }
             return rv;
         }
