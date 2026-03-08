@@ -104,7 +104,20 @@ describe('wtmAnalysis.detectChartType', () => {
 function makeEnv(overrides) {
     const domNodes = {};
     const mockDocument = {
-        getElementById: jest.fn((id) => domNodes[id] || null),
+        getElementById: jest.fn((id) => {
+            var el = domNodes[id] || null;
+            if (!el && id && id.startsWith('analysis-panel-')) {
+                el = { style: { display: 'none' }, children: [], appendChild: jest.fn(), removeChild: jest.fn() };
+            }
+            if (el) {
+                var originalQsa = el.querySelectorAll ? el.querySelectorAll.bind(el) : function() { return []; };
+                el.querySelectorAll = function(sel) {
+                    if (sel && sel.indexOf('.analysis-field-cb') >= 0) return mockDocument.querySelectorAll();
+                    return originalQsa(sel);
+                };
+            }
+            return el;
+        }),
         querySelectorAll: jest.fn(() => []),
         createElement: jest.fn((tag) => ({
             tag,
@@ -172,7 +185,8 @@ function makeEnv(overrides) {
 // ─── toggle ──────────────────────────────────────────────────────────────────
 describe('wtmAnalysis.toggle', () => {
     test('panel 元素不存在 → silent return，不拋例外', () => {
-        const { wa } = makeEnv();
+        const { wa, mockDocument } = makeEnv();
+        mockDocument.getElementById.mockReturnValue(null);
         expect(() => wa.toggle('grid1', 'MyVm')).not.toThrow();
     });
 
@@ -652,7 +666,17 @@ let _qsaSpy = null;
 function spySetup(idImpl, qsaImpl) {
     if (_idSpy) { _idSpy.mockRestore(); }
     if (_qsaSpy) { _qsaSpy.mockRestore(); }
-    _idSpy = jest.spyOn(document, 'getElementById').mockImplementation(idImpl || function() { return null; });
+    _idSpy = jest.spyOn(document, 'getElementById').mockImplementation(function(id) {
+        var el = idImpl ? idImpl(id) : null;
+        if (el) {
+            var originalQsa = el.querySelectorAll ? el.querySelectorAll.bind(el) : function() { return []; };
+            el.querySelectorAll = function(sel) {
+                if (sel && sel.indexOf('.analysis-field-cb') >= 0 && qsaImpl) return qsaImpl(sel);
+                return originalQsa(sel);
+            };
+        }
+        return el;
+    });
     _qsaSpy = jest.spyOn(document, 'querySelectorAll').mockImplementation(qsaImpl || function() { return []; });
 }
 
