@@ -74,8 +74,13 @@ The previously separate `feature/8.1.15-testing` work is now merged into `dotnet
 - `96dc0446` `fix(tests): use EmptyContext for DoLoginAsync tests, FrameworkContext for TokenFixture`
 - `99942071` `fix(tests): use SQLite shared in-memory for DoLoginAsync; add jti to JWT`
 
-## Recommended Next Work
+## Backlog Tracking
 
-1. Push `dotnet8` if the new test coverage work should exist on the remote.
-2. Continue nullable cleanup from the real baseline of `56` Core warnings, not the obsolete `10/21/25` numbers.
-3. Focus first on `PropertyHelper.cs` warning cleanup, then decide whether `ListVMExtension.cs` or `WTMContext.cs` is the safer next conversion.
+Detailed backlog is tracked in GitHub Issues, not in this file.
+
+- #50 Continue Core nullable cleanup from the verified `56 warnings / 0 errors` baseline
+- #51 Clean up nullable warnings in `PropertyHelper.cs`
+- #52 Evaluate and convert `ListVMExtension.cs`
+- #53 Evaluate and convert `WTMContext.cs`
+
+Use this document for verified repo state and handoff notes only.
