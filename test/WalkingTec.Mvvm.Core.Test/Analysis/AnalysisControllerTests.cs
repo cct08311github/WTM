@@ -62,11 +62,46 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             _registry.Build(new[] { typeof(AnalysisControllerTests).Assembly });
         }
 
-        private _AnalysisController CreateController()
+        private _AnalysisController CreateController(IAnalysisFieldPolicy policy = null)
         {
-            var controller = new _AnalysisController(_registry);
+            var controller = new _AnalysisController(_registry, null, policy);
             controller.Wtm = MockWtmContext.CreateWtmContext();
             return controller;
+        }
+
+        private class MockFieldPolicy : IAnalysisFieldPolicy
+        {
+            public IEnumerable<AnalysisFieldMeta> Filter(IEnumerable<AnalysisFieldMeta> fields, System.Security.Claims.ClaimsPrincipal user)
+            {
+                return fields.Where(f => f.FieldName != "Region");
+            }
+        }
+
+        [TestMethod]
+        public void GetMeta_with_policy_filters_fields()
+        {
+            var controller = CreateController(new MockFieldPolicy());
+            var result = controller.GetMeta(typeof(SaleRecordListVM).FullName) as OkObjectResult;
+            Assert.IsNotNull(result);
+
+            var value = result.Value as IEnumerable<object>;
+            Assert.IsNotNull(value);
+            
+            // Should not contain "Region"
+            var json = System.Text.Json.JsonSerializer.Serialize(value);
+            Assert.IsFalse(json.Contains("\"FieldName\":\"Region\""));
+            Assert.IsTrue(json.Contains("\"FieldName\":\"Category\""));
+        }
+
+        [TestMethod]
+        public void Query_returns_400_for_filtered_dimension_field()
+        {
+            var controller = CreateController(new MockFieldPolicy());
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+            var result = controller.Query(req) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "存取被 Policy 過濾的欄位應回傳 400");
         }
 
         private static AnalysisQueryRequest Req(

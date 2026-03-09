@@ -19,14 +19,24 @@ namespace WalkingTec.Mvvm.Core.Analysis
         private readonly IAnalysisCache? _cache;
 
         /// <summary>
-        /// 使用預設 Resolver（Phase 1 一律 InProcess），保持向後相容。
+        /// 建立不帶快取的引擎，使用預設 Resolver（向後相容）。
         /// </summary>
         public AnalysisQueryEngine() : this(GroupByStrategyResolver.Default, null) { }
 
         /// <summary>
-        /// 使用指定的 GroupByStrategyResolver，供測試或 Phase 2 注入。
+        /// 使用指定的 Resolver，不帶快取。
         /// </summary>
-        public AnalysisQueryEngine(GroupByStrategyResolver resolver, IAnalysisCache? cache = null)
+        public AnalysisQueryEngine(GroupByStrategyResolver resolver) : this(resolver, null) { }
+
+        /// <summary>
+        /// 使用指定的快取，預設 Resolver。
+        /// </summary>
+        public AnalysisQueryEngine(IAnalysisCache? cache) : this(GroupByStrategyResolver.Default, cache) { }
+
+        /// <summary>
+        /// 使用指定的 Resolver 和快取。
+        /// </summary>
+        public AnalysisQueryEngine(GroupByStrategyResolver resolver, IAnalysisCache? cache)
         {
             _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
             _cache = cache;
