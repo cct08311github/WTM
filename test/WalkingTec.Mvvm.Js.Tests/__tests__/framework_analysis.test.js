@@ -1766,3 +1766,258 @@ describe('drill-down integration', () => {
         expect(() => env.wa.drillDown('nonexistent', 'X', 'Y', false)).not.toThrow();
     });
 });
+
+// ─── renderPivotTable ─────────────────────────────────────────────────────────
+describe('wtmAnalysis.renderPivotTable', () => {
+    function makePivotResult() {
+        return {
+            rowDimensions: ['Region'],
+            pivotValues: ['2026-Q1', '2026-Q2'],
+            measureNames: ['Amount_Sum'],
+            columns: ['Region', '2026-Q1_Amount_Sum', '2026-Q2_Amount_Sum'],
+            rows: [
+                { Region: '華東', '2026-Q1_Amount_Sum': 100, '2026-Q2_Amount_Sum': 200 },
+                { Region: '華南', '2026-Q1_Amount_Sum': null, '2026-Q2_Amount_Sum': 150 },
+            ],
+        };
+    }
+
+    test('動態表頭生成 — columns 全部渲染為 th', () => {
+        const { wa, mockDocument } = makeEnv();
+        const createdElements = [];
+        mockDocument.createElement.mockImplementation((tag) => {
+            const el = {
+                tag, style: {}, className: '', textContent: '', id: '',
+                dataset: {}, children: [],
+                appendChild: jest.fn(function(c) { this.children.push(c); return c; }),
+                removeChild: jest.fn(), addEventListener: jest.fn(),
+            };
+            createdElements.push(el);
+            return el;
+        });
+
+        const container = { appendChild: jest.fn() };
+        wa.renderPivotTable('pv1', makePivotResult(), container, {});
+
+        var ths = createdElements.filter(function(e) { return e.tag === 'th'; });
+        expect(ths.length).toBe(3);
+        expect(ths[0].textContent).toBe('Region');
+        expect(ths[1].textContent).toBe('2026-Q1_Amount_Sum');
+        expect(ths[2].textContent).toBe('2026-Q2_Amount_Sum');
+    });
+
+    test('缺值（null）顯示 "-"', () => {
+        const { wa, mockDocument } = makeEnv();
+        const createdElements = [];
+        mockDocument.createElement.mockImplementation((tag) => {
+            const el = {
+                tag, style: {}, className: '', textContent: '', id: '',
+                dataset: {}, children: [],
+                appendChild: jest.fn(function(c) { this.children.push(c); return c; }),
+                removeChild: jest.fn(), addEventListener: jest.fn(),
+            };
+            createdElements.push(el);
+            return el;
+        });
+
+        const container = { appendChild: jest.fn() };
+        wa.renderPivotTable('pv2', makePivotResult(), container, {});
+
+        var tds = createdElements.filter(function(e) { return e.tag === 'td'; });
+        // Row 2 (華南): Region=華南, Q1=null→"-", Q2=150
+        expect(tds[3].textContent).toBe('華南');
+        expect(tds[4].textContent).toBe('-');
+        expect(tds[5].textContent).toBe('150');
+    });
+
+    test('date dimension key 在 dateDims 中會被 formatDateKey 格式化', () => {
+        const { wa, mockDocument } = makeEnv();
+        const createdElements = [];
+        mockDocument.createElement.mockImplementation((tag) => {
+            const el = {
+                tag, style: {}, className: '', textContent: '', id: '',
+                dataset: {}, children: [],
+                appendChild: jest.fn(function(c) { this.children.push(c); return c; }),
+                removeChild: jest.fn(), addEventListener: jest.fn(),
+            };
+            createdElements.push(el);
+            return el;
+        });
+
+        var result = {
+            rowDimensions: ['OrderDate'],
+            pivotValues: ['East'],
+            measureNames: ['Amount_Sum'],
+            columns: ['OrderDate', 'East_Amount_Sum'],
+            rows: [{ OrderDate: 202603, 'East_Amount_Sum': 100 }],
+        };
+        var container = { appendChild: jest.fn() };
+        wa.renderPivotTable('pv3', result, container, { OrderDate: true });
+
+        var tds = createdElements.filter(function(e) { return e.tag === 'td'; });
+        expect(tds[0].textContent).toBe('2026-03');
+    });
+
+    test('水平捲動 wrapper 使用 overflowX: auto', () => {
+        const { wa, mockDocument } = makeEnv();
+        const createdElements = [];
+        mockDocument.createElement.mockImplementation((tag) => {
+            const el = {
+                tag, style: {}, className: '', textContent: '', id: '',
+                dataset: {}, children: [],
+                appendChild: jest.fn(function(c) { this.children.push(c); return c; }),
+                removeChild: jest.fn(), addEventListener: jest.fn(),
+            };
+            createdElements.push(el);
+            return el;
+        });
+
+        var container = { appendChild: jest.fn() };
+        wa.renderPivotTable('pv4', makePivotResult(), container, {});
+
+        var wrapper = createdElements.find(function(e) { return e.tag === 'div'; });
+        expect(wrapper.style.overflowX).toBe('auto');
+    });
+});
+
+// ─── renderPivotChart ─────────────────────────────────────────────────────────
+describe('wtmAnalysis.renderPivotChart', () => {
+    test('Pivot chart 建立 stacked bar series（pivotValue × measure）', () => {
+        const capturedOptions = [];
+        const { wa } = makeEnv({
+            echarts: {
+                init: jest.fn(() => ({
+                    setOption: jest.fn((opt) => { capturedOptions.push(opt); }),
+                    on: jest.fn(),
+                    dispose: jest.fn(),
+                })),
+            },
+        });
+
+        var result = {
+            rowDimensions: ['Region'],
+            pivotValues: ['Q1', 'Q2'],
+            measureNames: ['Amount_Sum'],
+            columns: ['Region', 'Q1_Amount_Sum', 'Q2_Amount_Sum'],
+            rows: [
+                { Region: '華東', 'Q1_Amount_Sum': 100, 'Q2_Amount_Sum': 200 },
+                { Region: '華南', 'Q1_Amount_Sum': 50, 'Q2_Amount_Sum': 150 },
+            ],
+        };
+        var container = { appendChild: jest.fn() };
+
+        wa.renderPivotChart('pc1', result, {}, container);
+
+        expect(capturedOptions.length).toBe(1);
+        var opt = capturedOptions[0];
+        expect(opt.xAxis.data).toEqual(['華東', '華南']);
+        expect(opt.series.length).toBe(2);
+        expect(opt.series[0].name).toBe('Q1_Amount_Sum');
+        expect(opt.series[0].type).toBe('bar');
+        expect(opt.series[0].stack).toBe('Amount_Sum');
+        expect(opt.series[0].data).toEqual([100, 50]);
+        expect(opt.series[1].name).toBe('Q2_Amount_Sum');
+        expect(opt.series[1].data).toEqual([200, 150]);
+    });
+
+    test('無 echarts 時不拋錯', () => {
+        const { wa } = makeEnv();
+        var container = { appendChild: jest.fn() };
+        expect(() => wa.renderPivotChart('pc2', {
+            rowDimensions: [], pivotValues: [], measureNames: [],
+            columns: [], rows: []
+        }, {}, container)).not.toThrow();
+    });
+
+    test('rowDimensions 為空時 X 軸顯示 "總計"', () => {
+        const capturedOptions = [];
+        const { wa } = makeEnv({
+            echarts: {
+                init: jest.fn(() => ({
+                    setOption: jest.fn((opt) => { capturedOptions.push(opt); }),
+                    on: jest.fn(),
+                    dispose: jest.fn(),
+                })),
+            },
+        });
+        var result = {
+            rowDimensions: [],
+            pivotValues: ['A'],
+            measureNames: ['M_Sum'],
+            columns: ['A_M_Sum'],
+            rows: [{ 'A_M_Sum': 42 }],
+        };
+        wa.renderPivotChart('pc3', result, {}, { appendChild: jest.fn() });
+        expect(capturedOptions[0].xAxis.data).toEqual(['總計']);
+    });
+});
+
+// ─── Pivot mode in query ──────────────────────────────────────────────────────
+describe('Pivot mode in query()', () => {
+    test('pivot toggle on → 查詢 /_analysis/pivot 並傳送 pivotDimension', async () => {
+        const { wa, makePanel, mockFetch, mockDocument } = makeEnv();
+        var panel = makePanel('analysis-panel-pvq1');
+        var resultDiv = {
+            id: 'analysis-result-pvq1', textContent: '', children: [],
+            appendChild: jest.fn(), firstChild: null, removeChild: jest.fn(),
+        };
+        mockDocument.getElementById.mockImplementation((id) => {
+            if (id === 'analysis-panel-pvq1') return panel;
+            if (id === 'analysis-result-pvq1') return resultDiv;
+            return null;
+        });
+        mockDocument.querySelectorAll.mockReturnValue([
+            { dataset: { kind: 'Dimension', fieldName: 'Region', gridId: 'pvq1' } },
+            { dataset: { kind: 'Dimension', fieldName: 'Quarter', gridId: 'pvq1' } },
+            { dataset: { kind: 'Measure', fieldName: 'Amount', gridId: 'pvq1', defaultFunc: 'Sum' } },
+        ]);
+        mockDocument.querySelector.mockImplementation((sel) => {
+            if (sel.indexOf('pivot-toggle') >= 0) return { checked: true };
+            if (sel.indexOf('pivot-dim-select') >= 0) return { value: 'Region' };
+            return null;
+        });
+
+        mockFetch
+            .mockResolvedValueOnce({ ok: false, text: jest.fn().mockResolvedValue('err') })
+            .mockResolvedValueOnce({
+                ok: true,
+                json: jest.fn().mockResolvedValue({
+                    rowDimensions: ['Quarter'],
+                    pivotValues: ['華東', '華南'],
+                    measureNames: ['Amount_Sum'],
+                    columns: ['Quarter', '華東_Amount_Sum', '華南_Amount_Sum'],
+                    rows: [{ Quarter: '2026 Q1', '華東_Amount_Sum': 100, '華南_Amount_Sum': 200 }],
+                })
+            });
+
+        wa.toggle('pvq1', 'TestVm');
+        wa.query('pvq1');
+        await new Promise(r => setTimeout(r, 50));
+
+        var queryCall = mockFetch.mock.calls.find(c => c[0] === '/_analysis/pivot');
+        expect(queryCall).toBeDefined();
+        var body = JSON.parse(queryCall[1].body);
+        expect(body.pivotDimension).toBe('Region');
+        expect(body.dimensions).toEqual(['Region', 'Quarter']);
+    });
+
+    test('pivot toggle on 但未選 pivot 維度 → alert 錯誤', () => {
+        const { wa, makePanel, mockFetch, mockDocument, mockAlert } = makeEnv();
+        makePanel('analysis-panel-pvq2');
+        mockDocument.querySelectorAll.mockReturnValue([
+            { dataset: { kind: 'Dimension', fieldName: 'Region', gridId: 'pvq2' } },
+            { dataset: { kind: 'Measure', fieldName: 'Amount', gridId: 'pvq2', defaultFunc: 'Sum' } },
+        ]);
+        mockDocument.querySelector.mockImplementation((sel) => {
+            if (sel.indexOf('pivot-toggle') >= 0) return { checked: true };
+            if (sel.indexOf('pivot-dim-select') >= 0) return null;
+            return null;
+        });
+        mockFetch.mockResolvedValue({ ok: false, text: jest.fn().mockResolvedValue('err') });
+
+        wa.toggle('pvq2', 'TestVm');
+        wa.query('pvq2');
+
+        expect(mockAlert).toHaveBeenCalledWith('請選擇一個樞紐(Pivot)維度');
+    });
+});
