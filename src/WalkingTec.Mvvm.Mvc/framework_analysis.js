@@ -36,6 +36,26 @@
     }
 
     /**
+     * 建構 drill-down 用的 filter 條件（純函式）
+     * @param {string} dimField - 維度欄位名
+     * @param {*} value - 點擊的維度值
+     * @returns {{ field: string, operator: string, value: * }}
+     */
+    function buildDrillFilter(dimField, value) {
+        return { field: dimField, operator: 'Eq', value: value };
+    }
+
+    /**
+     * 日期階層自動降級（純函式）
+     * @param {string} current - 'Year'|'Quarter'|'Month'|'Day'
+     * @returns {string|null} 下一層，Day 時回傳 null
+     */
+    function nextHierarchy(current) {
+        var map = { Year: 'Quarter', Quarter: 'Month', Month: 'Day' };
+        return map[current] || null;
+    }
+
+    /**
      * 格式化日期整數 key 為人類可讀字串
      * @param {number|string} key - 日期整數 key（如 2026, 20263, 202603, 20260309）
      * @returns {string} 格式化後的字串
@@ -67,7 +87,7 @@
         if (!panel) return;
 
         if (!_state[gridId]) {
-            _state[gridId] = { visible: false, listVmType: listVmType, fields: null };
+            _state[gridId] = { visible: false, listVmType: listVmType, fields: null, drillStack: [] };
         }
 
         var st = _state[gridId];
@@ -204,6 +224,12 @@
             chartToggleRow.appendChild(btn);
         });
         body.appendChild(chartToggleRow);
+
+        var drillBar = document.createElement('div');
+        drillBar.id = 'analysis-drill-bar-' + gridId;
+        drillBar.style.marginTop = '6px';
+        drillBar.style.display = 'none';
+        body.appendChild(drillBar);
 
         var resultDiv = document.createElement('div');
         resultDiv.id = 'analysis-result-' + gridId;
@@ -441,10 +467,18 @@
                 renderTable(gridId, result, resultDiv, dateDimSet);
                 renderChart(gridId, result, { dimensions: dims, measures: msrs }, dimFields, resultDiv);
 
-                // Store for chart type toggle
+                // Store for chart type toggle + drill
                 st.lastResult = result;
-                st.lastReq = { dimensions: dims, measures: msrs };
+                st.lastReq = {
+                    dimensions: dims, measures: msrs,
+                    dimensionHierarchies: Object.keys(sel.dimensionHierarchies).length > 0
+                        ? sel.dimensionHierarchies : undefined
+                };
                 st.lastDimFields = dimFields;
+                // Reset drill state on fresh query
+                st.drillStack = [];
+                st.drillFilters = [];
+                updateDrillBar(gridId);
                 var toggleRow = document.getElementById('analysis-chart-toggle-' + gridId);
                 if (toggleRow) toggleRow.style.display = 'block';
             }
@@ -623,6 +657,188 @@
             yAxis: { type: 'value' },
             series: series
         });
+
+        // drill-down click handler
+        chart.on('click', function (params) {
+            if (!firstDim) return;
+            var rawRow = result.rows[params.dataIndex];
+            if (!rawRow) return;
+            var rawValue = rawRow[firstDim];
+            drillDown(gridId, firstDim, rawValue, firstDimIsDate);
+        });
+    }
+
+    /**
+     * 更新 drill 路徑列（顯示麵包屑 + 返回/重置按鈕）
+     */
+    function updateDrillBar(gridId) {
+        var drillBar = document.getElementById('analysis-drill-bar-' + gridId);
+        if (!drillBar) return;
+
+        var st = _state[gridId];
+        if (!st || st.drillStack.length === 0) {
+            drillBar.style.display = 'none';
+            clearChildren(drillBar);
+            return;
+        }
+
+        drillBar.style.display = 'block';
+        clearChildren(drillBar);
+
+        var pathSpan = document.createElement('span');
+        pathSpan.textContent = '全部';
+        st.drillStack.forEach(function (frame) {
+            pathSpan.textContent += ' > ' + String(frame.label);
+        });
+        drillBar.appendChild(pathSpan);
+
+        var backBtn = document.createElement('button');
+        backBtn.type = 'button';
+        backBtn.className = 'layui-btn layui-btn-xs layui-btn-primary';
+        backBtn.style.marginLeft = '8px';
+        backBtn.textContent = '返回上層';
+        backBtn.addEventListener('click', function () { drillBack(gridId); });
+        drillBar.appendChild(backBtn);
+
+        var resetBtn = document.createElement('button');
+        resetBtn.type = 'button';
+        resetBtn.className = 'layui-btn layui-btn-xs layui-btn-danger';
+        resetBtn.style.marginLeft = '4px';
+        resetBtn.textContent = '重置';
+        resetBtn.addEventListener('click', function () { drillReset(gridId); });
+        drillBar.appendChild(resetBtn);
+    }
+
+    /**
+     * 執行 drill-down：push 當前狀態到 stack，加 filter，重新查詢
+     */
+    function drillDown(gridId, dimField, value, isDate) {
+        var st = _state[gridId];
+        if (!st || !st.lastReq) return;
+
+        // push current state
+        var currentFilters = (st.drillFilters || []).slice();
+        var currentHierarchies = {};
+        if (st.lastReq.dimensionHierarchies) {
+            Object.keys(st.lastReq.dimensionHierarchies).forEach(function (k) {
+                currentHierarchies[k] = st.lastReq.dimensionHierarchies[k];
+            });
+        }
+        var label = isDate ? formatDateKey(value) : String(value);
+        st.drillStack.push({
+            filters: currentFilters,
+            dimensionHierarchies: currentHierarchies,
+            label: label
+        });
+
+        // add new filter
+        var newFilters = currentFilters.concat([buildDrillFilter(dimField, value)]);
+        st.drillFilters = newFilters;
+
+        // auto-downgrade date hierarchy
+        var newHierarchies = {};
+        Object.keys(currentHierarchies).forEach(function (k) {
+            newHierarchies[k] = currentHierarchies[k];
+        });
+        if (isDate && newHierarchies[dimField]) {
+            var next = nextHierarchy(newHierarchies[dimField]);
+            if (next) {
+                newHierarchies[dimField] = next;
+            }
+        }
+
+        updateDrillBar(gridId);
+        drillQuery(gridId, newFilters, newHierarchies);
+    }
+
+    /**
+     * 返回上一層 drill
+     */
+    function drillBack(gridId) {
+        var st = _state[gridId];
+        if (!st || st.drillStack.length === 0) return;
+
+        var frame = st.drillStack.pop();
+        st.drillFilters = frame.filters;
+
+        updateDrillBar(gridId);
+        drillQuery(gridId, frame.filters, frame.dimensionHierarchies);
+    }
+
+    /**
+     * 重置 drill 回到最頂層
+     */
+    function drillReset(gridId) {
+        var st = _state[gridId];
+        if (!st) return;
+
+        st.drillStack = [];
+        st.drillFilters = [];
+
+        updateDrillBar(gridId);
+        // re-query with no drill filters and original hierarchies from collectSelection
+        drillQuery(gridId, [], st.lastReq.dimensionHierarchies || {});
+    }
+
+    /**
+     * drill 專用查詢（帶自訂 filters 和 hierarchies）
+     */
+    function drillQuery(gridId, filters, hierarchies) {
+        var st = _state[gridId];
+        if (!st) return;
+
+        var req = {
+            listVmType: st.listVmType,
+            dimensions: st.lastReq.dimensions,
+            measures: st.lastReq.measures,
+            filters: filters,
+            dimensionHierarchies: Object.keys(hierarchies).length > 0 ? hierarchies : undefined
+        };
+
+        var resultDiv = document.getElementById('analysis-result-' + gridId);
+        if (resultDiv) resultDiv.textContent = '查詢中...';
+
+        fetch('/_analysis/query', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(req)
+        })
+        .then(function (res) {
+            if (!res.ok) return res.text().then(function (t) { throw new Error(t); });
+            return res.json();
+        })
+        .then(function (result) {
+            if (!resultDiv) return;
+            clearChildren(resultDiv);
+
+            if (result.truncated) {
+                var warn = document.createElement('div');
+                warn.className = 'layui-alert layui-alert-warm';
+                warn.textContent = '結果已截斷，僅顯示前 10,000 列。';
+                resultDiv.appendChild(warn);
+            }
+
+            var dimFields = (st.fields || []).filter(function (f) {
+                return f.kind === 'Dimension' && st.lastReq.dimensions.indexOf(f.fieldName) >= 0;
+            });
+            var dateDimSet = {};
+            dimFields.forEach(function (f) { if (f.isDate) dateDimSet[f.fieldName] = true; });
+
+            // Update lastReq with current drill state
+            st.lastReq = {
+                dimensions: st.lastReq.dimensions,
+                measures: st.lastReq.measures,
+                dimensionHierarchies: hierarchies
+            };
+            st.lastResult = result;
+            st.lastDimFields = dimFields;
+
+            renderTable(gridId, result, resultDiv, dateDimSet);
+            renderChart(gridId, result, st.lastReq, dimFields, resultDiv);
+        })
+        .catch(function (err) {
+            if (resultDiv) resultDiv.textContent = '查詢失敗：' + err.message;
+        });
     }
 
     /**
@@ -711,7 +927,13 @@
         renderChart: renderChart,
         renderPivotTable: renderPivotTable,
         renderPivotChart: renderPivotChart,
-        formatDateKey: formatDateKey
+        formatDateKey: formatDateKey,
+        buildDrillFilter: buildDrillFilter,
+        nextHierarchy: nextHierarchy,
+        drillDown: drillDown,
+        drillBack: drillBack,
+        drillReset: drillReset,
+        _getState: function (gridId) { return _state[gridId]; }
     };
 
 }(typeof window !== 'undefined' ? window : global));
