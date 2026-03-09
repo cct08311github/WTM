@@ -150,40 +150,66 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 var param = Expression.Parameter(typeof(TModel), "x");
                 var prop = Expression.Property(param, filter.Field);
                 var meta = wl[filter.Field];
-                var converted = ConvertValue(filter.Value, meta.ClrType);
-                var constant = Expression.Constant(converted, meta.ClrType);
-
+                
                 Expression body;
-                switch (filter.Operator)
+                if (filter.Operator == FilterOperator.In)
                 {
-                    case FilterOperator.Eq:
-                        body = Expression.Equal(prop, constant);
-                        break;
-                    case FilterOperator.Gt:
-                        body = Expression.GreaterThan(prop, constant);
-                        break;
-                    case FilterOperator.Gte:
-                        body = Expression.GreaterThanOrEqual(prop, constant);
-                        break;
-                    case FilterOperator.Lt:
-                        body = Expression.LessThan(prop, constant);
-                        break;
-                    case FilterOperator.Lte:
-                        body = Expression.LessThanOrEqual(prop, constant);
-                        break;
-                    case FilterOperator.Contains:
-                        if (meta.ClrType != typeof(string))
-                            throw new InvalidOperationException(
-                                $"Contains 只適用於字串欄位，'{filter.Field}' 的型別為 {meta.ClrType.Name}。");
-                        var containsMethod = typeof(string).GetMethod(nameof(string.Contains), new[] { typeof(string) });
-                        if (containsMethod is null)
-                            throw new InvalidOperationException("string.Contains(string) method not found.");
-                        body = Expression.Call(prop,
-                            containsMethod,
-                            constant);
-                        break;
-                    default:
-                        throw new InvalidOperationException($"Operator '{filter.Operator}' is not supported.");
+                    var valueList = filter.Values ?? filter.Value.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).ToList();
+                    if (valueList.Count == 0)
+                        throw new InvalidOperationException($"In 運算子至少需要一個值。({filter.Field})");
+                    if (valueList.Count > 100)
+                        throw new InvalidOperationException($"In 運算子最多支援 100 個值，實際傳入 {valueList.Count} 個。({filter.Field})");
+
+                    var listType = typeof(List<>).MakeGenericType(meta.ClrType);
+                    var typedList = Activator.CreateInstance(listType) as System.Collections.IList;
+                    if (typedList != null)
+                    {
+                        foreach (var v in valueList)
+                        {
+                            typedList.Add(ConvertValue(v, meta.ClrType));
+                        }
+                    }
+
+                    body = Expression.Call(
+                        typeof(Enumerable), "Contains", new[] { meta.ClrType },
+                        Expression.Constant(typedList, listType), prop);
+                }
+                else
+                {
+                    var converted = ConvertValue(filter.Value, meta.ClrType);
+                    var constant = Expression.Constant(converted, meta.ClrType);
+
+                    switch (filter.Operator)
+                    {
+                        case FilterOperator.Eq:
+                            body = Expression.Equal(prop, constant);
+                            break;
+                        case FilterOperator.Gt:
+                            body = Expression.GreaterThan(prop, constant);
+                            break;
+                        case FilterOperator.Gte:
+                            body = Expression.GreaterThanOrEqual(prop, constant);
+                            break;
+                        case FilterOperator.Lt:
+                            body = Expression.LessThan(prop, constant);
+                            break;
+                        case FilterOperator.Lte:
+                            body = Expression.LessThanOrEqual(prop, constant);
+                            break;
+                        case FilterOperator.Contains:
+                            if (meta.ClrType != typeof(string))
+                                throw new InvalidOperationException(
+                                    $"Contains 只適用於字串欄位，'{filter.Field}' 的型別為 {meta.ClrType.Name}。");
+                            var containsMethod = typeof(string).GetMethod(nameof(string.Contains), new[] { typeof(string) });
+                            if (containsMethod is null)
+                                throw new InvalidOperationException("string.Contains(string) method not found.");
+                            body = Expression.Call(prop,
+                                containsMethod,
+                                constant);
+                            break;
+                        default:
+                            throw new InvalidOperationException($"Operator '{filter.Operator}' is not supported.");
+                    }
                 }
 
                 query = query.Where(Expression.Lambda<Func<TModel, bool>>(body, param));
