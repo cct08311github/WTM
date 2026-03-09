@@ -98,6 +98,92 @@ namespace WalkingTec.Mvvm.Core.Analysis
         }
 
         /// <summary>
+        /// 執行 Pivot 樞紐分析。
+        /// </summary>
+        public AnalysisPivotResponse ExecutePivot<TModel>(
+            IQueryable<TModel> baseQuery,
+            AnalysisPivotRequest req,
+            IEnumerable<AnalysisFieldMeta> whitelist,
+            DBTypeEnum dbType = DBTypeEnum.SQLite)
+        {
+            if (!req.Dimensions.Contains(req.PivotDimension))
+            {
+                throw new InvalidOperationException($"PivotDimension '{req.PivotDimension}' must be in Dimensions list.");
+            }
+
+            // 1. Get raw grouped data
+            var groupRes = Execute(baseQuery, req, whitelist, dbType);
+            var rawRows = groupRes.Rows;
+
+            // 2. Identify row dimensions and pivot dimension
+            var rowDims = req.Dimensions.Where(d => d != req.PivotDimension).ToList();
+            var measureNames = req.Measures.Select(m => $"{m.Field}_{m.Func}").ToList();
+
+            // 3. Extract unique PivotValues
+            var pivotValues = rawRows
+                .Select(r => r[req.PivotDimension]?.ToString() ?? string.Empty)
+                .Distinct()
+                .OrderBy(v => v)
+                .ToList();
+
+            if (pivotValues.Count > 50)
+            {
+                throw new InvalidOperationException($"Pivot dimension '{req.PivotDimension}' has {pivotValues.Count} unique values. Maximum allowed is 50.");
+            }
+
+            // 4. Build pivoted rows
+            var pivotRowsMap = new Dictionary<string, Dictionary<string, object?>>();
+
+            foreach (var row in rawRows)
+            {
+                var rowKey = string.Join('\0', rowDims.Select(d => row[d]?.ToString() ?? string.Empty));
+                
+                if (!pivotRowsMap.TryGetValue(rowKey, out var pivotRow))
+                {
+                    pivotRow = new Dictionary<string, object?>();
+                    foreach (var d in rowDims)
+                    {
+                        pivotRow[d] = row[d];
+                    }
+                    
+                    // Initialize all pivot cells with 0/null
+                    foreach (var pv in pivotValues)
+                    {
+                        foreach (var m in measureNames)
+                        {
+                            pivotRow[$"{pv}_{m}"] = 0m;
+                        }
+                    }
+                    pivotRowsMap[rowKey] = pivotRow;
+                }
+
+                var pvValue = row[req.PivotDimension]?.ToString() ?? string.Empty;
+                foreach (var m in measureNames)
+                {
+                    pivotRow[$"{pvValue}_{m}"] = row[$"{m}"];
+                }
+            }
+
+            var columns = new List<string>(rowDims);
+            foreach (var pv in pivotValues)
+            {
+                foreach (var m in measureNames)
+                {
+                    columns.Add($"{pv}_{m}");
+                }
+            }
+
+            return new AnalysisPivotResponse
+            {
+                RowDimensions = rowDims,
+                PivotValues = pivotValues,
+                MeasureNames = measureNames,
+                Rows = pivotRowsMap.Values.ToList(),
+                Columns = columns
+            };
+        }
+
+        /// <summary>
         /// 非泛型入口，供 Controller 使用（IQueryable 無型別參數時）。
         /// </summary>
         public AnalysisQueryResponse ExecuteDynamic(
