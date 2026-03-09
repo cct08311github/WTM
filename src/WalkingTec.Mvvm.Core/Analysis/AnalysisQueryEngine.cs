@@ -9,13 +9,26 @@ namespace WalkingTec.Mvvm.Core.Analysis
 {
     /// <summary>
     /// 動態 GroupBy 聚合引擎。
-    /// 驗證白名單 → 套用 Filter → 執行 GroupBy + 聚合 → 強制截斷。
+    /// 驗證白名單 → 套用 Filter → 委託 IGroupByStrategy 執行 GroupBy + 聚合 → 強制截斷。
     /// </summary>
     public class AnalysisQueryEngine
     {
         private const int MaxRows = 10_000;
-        // 防止全表載入造成記憶體耗盡（C-1）
-        private const int MaxMaterializeRows = 50_000;
+
+        private readonly GroupByStrategyResolver _resolver;
+
+        /// <summary>
+        /// 使用預設 Resolver（Phase 1 一律 InProcess），保持向後相容。
+        /// </summary>
+        public AnalysisQueryEngine() : this(GroupByStrategyResolver.Default) { }
+
+        /// <summary>
+        /// 使用指定的 GroupByStrategyResolver，供測試或 Phase 2 注入。
+        /// </summary>
+        public AnalysisQueryEngine(GroupByStrategyResolver resolver)
+        {
+            _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
+        }
 
         private readonly IAnalysisCache? _cache;
 
@@ -38,7 +51,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
         public AnalysisQueryResponse Execute<TModel>(
             IQueryable<TModel> baseQuery,
             AnalysisQueryRequest req,
-            IEnumerable<AnalysisFieldMeta> whitelist)
+            IEnumerable<AnalysisFieldMeta> whitelist,
+            DBTypeEnum dbType = DBTypeEnum.SQLite)
         {
             var wl = whitelist.ToDictionary(f => f.FieldName);
             ValidateFields(req, wl);
@@ -51,7 +65,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 return cached;
 
             var filtered = ApplyFilters(baseQuery, req.Filters, wl);
-            var rows = ExecuteGroupBy(filtered, req, wl);
+
+            var strategy = _resolver.Resolve(dbType, req);
+            var rows = strategy.Execute(filtered, req, wl);
+
             int totalCount = rows.Count;   // 截斷前的真實筆數（I-3）
             bool truncated = rows.Count > MaxRows;
             if (truncated) rows = rows.Take(MaxRows).ToList();
@@ -80,7 +97,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
         public AnalysisQueryResponse ExecuteDynamic(
             IQueryable baseQuery,
             AnalysisQueryRequest req,
-            IEnumerable<AnalysisFieldMeta> whitelist)
+            IEnumerable<AnalysisFieldMeta> whitelist,
+            DBTypeEnum dbType = DBTypeEnum.SQLite)
         {
             var elementType = baseQuery.ElementType;
             var method = typeof(AnalysisQueryEngine)
@@ -90,7 +108,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             method = method.MakeGenericMethod(elementType);
             try
             {
-                var result = method.Invoke(this, new object[] { baseQuery, req, whitelist }) as AnalysisQueryResponse;
+                var result = method.Invoke(this, new object[] { baseQuery, req, whitelist, dbType }) as AnalysisQueryResponse;
                 if (result is null)
                     throw new InvalidOperationException("ExecuteDynamic did not return a valid AnalysisQueryResponse.");
                 return result;
