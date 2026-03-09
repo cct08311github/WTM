@@ -143,9 +143,43 @@
         exportCsvBtn.textContent = '匯出 CSV';
         exportCsvBtn.addEventListener('click', function () { exportData(gridId, 'csv'); });
 
+        var pivotWrapper = document.createElement('label');
+        pivotWrapper.style.marginLeft = '15px';
+        pivotWrapper.style.display = 'inline-flex';
+        pivotWrapper.style.alignItems = 'center';
+        pivotWrapper.style.cursor = 'pointer';
+        
+        var pivotToggle = document.createElement('input');
+        pivotToggle.type = 'checkbox';
+        pivotToggle.className = 'analysis-pivot-toggle';
+        pivotToggle.dataset.gridId = gridId;
+        pivotToggle.style.marginRight = '5px';
+        
+        pivotToggle.addEventListener('change', function() {
+            var selects = document.querySelectorAll('.analysis-pivot-dim-select[data-grid-id="' + gridId + '"]');
+            var isChecked = this.checked;
+            selects.forEach(function(s) { s.style.display = isChecked ? 'inline-block' : 'none'; });
+            if (isChecked) {
+                // Ensure only one pivot dim is selected initially
+                var hasChecked = false;
+                document.querySelectorAll('.analysis-pivot-dim-select[data-grid-id="' + gridId + '"]').forEach(function(r) {
+                    if (r.checked) hasChecked = true;
+                });
+                if (!hasChecked && selects.length > 0) selects[0].checked = true;
+            }
+        });
+
+        var pivotText = document.createElement('span');
+        pivotText.textContent = '樞紐模式';
+        pivotText.style.fontWeight = 'bold';
+
+        pivotWrapper.appendChild(pivotToggle);
+        pivotWrapper.appendChild(pivotText);
+
         btnRow.appendChild(queryBtn);
         btnRow.appendChild(exportXlsxBtn);
         btnRow.appendChild(exportCsvBtn);
+        btnRow.appendChild(pivotWrapper);
         body.appendChild(btnRow);
 
         var chartToggleRow = document.createElement('div');
@@ -211,6 +245,19 @@
         fields.filter(function (f) { return f.kind === kind; }).forEach(function (f) {
             var wrapper = document.createElement('label');
             wrapper.style.marginLeft = '12px';
+
+            var pivotRadio = null;
+            if (kind === 'Dimension') {
+                pivotRadio = document.createElement('input');
+                pivotRadio.type = 'radio';
+                pivotRadio.name = 'pivot-dim-' + gridId;
+                pivotRadio.value = f.fieldName;
+                pivotRadio.className = 'analysis-pivot-dim-select';
+                pivotRadio.dataset.gridId = gridId;
+                pivotRadio.style.display = 'none'; // hidden by default until pivot mode enabled
+                pivotRadio.style.marginRight = '4px';
+                wrapper.appendChild(pivotRadio);
+            }
 
             var cb = document.createElement('input');
             cb.type = 'checkbox';
@@ -322,6 +369,24 @@
             return;
         }
 
+        var isPivot = false;
+        var pivotDim = null;
+        var pivotToggle = document.querySelector('.analysis-pivot-toggle[data-grid-id="' + gridId + '"]');
+        if (pivotToggle && pivotToggle.checked) {
+            isPivot = true;
+            var pivotRadio = document.querySelector('.analysis-pivot-dim-select[data-grid-id="' + gridId + '"]:checked');
+            if (pivotRadio) pivotDim = pivotRadio.value;
+            
+            if (!pivotDim) {
+                window.alert('請選擇一個樞紐(Pivot)維度');
+                return;
+            }
+            if (dims.indexOf(pivotDim) < 0) {
+                window.alert('樞紐(Pivot)維度必須是已勾選的維度之一');
+                return;
+            }
+        }
+
         var req = {
             listVmType: st.listVmType,
             dimensions: dims,
@@ -330,11 +395,16 @@
             dimensionHierarchies: Object.keys(sel.dimensionHierarchies).length > 0
                 ? sel.dimensionHierarchies : undefined
         };
+        
+        if (isPivot) {
+            req.pivotDimension = pivotDim;
+        }
 
         var resultDiv = document.getElementById('analysis-result-' + gridId);
         if (resultDiv) resultDiv.textContent = '查詢中...';
 
-        fetch('/_analysis/query', {
+        var endpoint = isPivot ? '/_analysis/pivot' : '/_analysis/query';
+        fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(req)
@@ -359,18 +429,116 @@
             });
             var dateDimSet = {};
             dimFields.forEach(function (f) { if (f.isDate) dateDimSet[f.fieldName] = true; });
-            renderTable(gridId, result, resultDiv, dateDimSet);
-            renderChart(gridId, result, { dimensions: dims, measures: msrs }, dimFields, resultDiv);
+            
+            if (isPivot) {
+                renderPivotTable(gridId, result, resultDiv, dateDimSet);
+                renderPivotChart(gridId, result, req, resultDiv);
+                
+                // Keep chart toggles hidden or disabled for pivot as it's typically stacked bar
+                var toggleRow = document.getElementById('analysis-chart-toggle-' + gridId);
+                if (toggleRow) toggleRow.style.display = 'none';
+            } else {
+                renderTable(gridId, result, resultDiv, dateDimSet);
+                renderChart(gridId, result, { dimensions: dims, measures: msrs }, dimFields, resultDiv);
 
-            // Store for chart type toggle
-            st.lastResult = result;
-            st.lastReq = { dimensions: dims, measures: msrs };
-            st.lastDimFields = dimFields;
-            var toggleRow = document.getElementById('analysis-chart-toggle-' + gridId);
-            if (toggleRow) toggleRow.style.display = 'block';
+                // Store for chart type toggle
+                st.lastResult = result;
+                st.lastReq = { dimensions: dims, measures: msrs };
+                st.lastDimFields = dimFields;
+                var toggleRow = document.getElementById('analysis-chart-toggle-' + gridId);
+                if (toggleRow) toggleRow.style.display = 'block';
+            }
         })
         .catch(function (err) {
             if (resultDiv) resultDiv.textContent = '查詢失敗：' + err.message;
+        });
+    }
+
+    /**
+     * 渲染 Pivot 結果表格
+     */
+    function renderPivotTable(gridId, result, container, dateDims) {
+        var wrapper = document.createElement('div');
+        wrapper.style.overflowX = 'auto'; // allow horizontal scrolling
+        
+        var table = document.createElement('table');
+        table.className = 'layui-table';
+        table.style.marginTop = '10px';
+        table.style.whiteSpace = 'nowrap';
+
+        var thead = document.createElement('thead');
+        var headerRow = document.createElement('tr');
+        result.columns.forEach(function (col) {
+            var th = document.createElement('th');
+            th.textContent = col;
+            headerRow.appendChild(th);
+        });
+        thead.appendChild(headerRow);
+        table.appendChild(thead);
+
+        var tbody = document.createElement('tbody');
+        result.rows.forEach(function (row) {
+            var tr = document.createElement('tr');
+            result.columns.forEach(function (col) {
+                var td = document.createElement('td');
+                var val = row[col];
+                if (val !== null && val !== undefined) {
+                    td.textContent = dateDims[col] ? formatDateKey(val) : String(val);
+                } else {
+                    td.textContent = '-'; // empty for pivot
+                }
+                tr.appendChild(td);
+            });
+            tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        wrapper.appendChild(table);
+        container.appendChild(wrapper);
+    }
+
+    /**
+     * 渲染 Pivot 圖表 (Stacked Bar)
+     */
+    function renderPivotChart(gridId, result, req, container) {
+        if (typeof window.echarts === 'undefined') return;
+
+        var chartDiv = document.createElement('div');
+        chartDiv.id = 'analysis-chart-' + gridId;
+        chartDiv.style.width = '100%';
+        chartDiv.style.height = '350px';
+        chartDiv.style.marginTop = '15px';
+        container.appendChild(chartDiv);
+
+        var chart = window.echarts.init(chartDiv);
+        
+        // Use first row dimension as X axis, fallback to something empty if none
+        var firstRowDim = result.rowDimensions.length > 0 ? result.rowDimensions[0] : '';
+        var categories = result.rows.map(function (r) {
+            return firstRowDim ? String(r[firstRowDim] || '') : '總計';
+        });
+
+        // Create a series for each (PivotValue x Measure)
+        var series = [];
+        var legendData = [];
+        result.pivotValues.forEach(function (pv) {
+            result.measureNames.forEach(function (m) {
+                var key = pv + '_' + m;
+                legendData.push(key);
+                series.push({
+                    name: key,
+                    type: 'bar',
+                    stack: m, // Stack by measure
+                    data: result.rows.map(function (r) { return r[key] || 0; })
+                });
+            });
+        });
+
+        chart.setOption({
+            tooltip: { trigger: 'axis' },
+            legend: { data: legendData },
+            xAxis: { type: 'category', data: categories },
+            yAxis: { type: 'value' },
+            series: series
         });
     }
 
@@ -482,16 +650,33 @@
 
         var exportHierarchies = Object.keys(sel.dimensionHierarchies).length > 0
             ? sel.dimensionHierarchies : undefined;
-        return fetch('/_analysis/export?format=' + encodeURIComponent(format), {
+
+        var isPivot = false;
+        var pivotDim = null;
+        var pivotToggle = document.querySelector('.analysis-pivot-toggle[data-grid-id="' + gridId + '"]');
+        if (pivotToggle && pivotToggle.checked) {
+            isPivot = true;
+            var pivotRadio = document.querySelector('.analysis-pivot-dim-select[data-grid-id="' + gridId + '"]:checked');
+            if (pivotRadio) pivotDim = pivotRadio.value;
+        }
+
+        var req = {
+            listVmType: st.listVmType,
+            dimensions: dims,
+            measures: msrs,
+            filters: [],
+            dimensionHierarchies: exportHierarchies
+        };
+
+        if (isPivot) {
+            req.pivotDimension = pivotDim;
+        }
+
+        var endpoint = isPivot ? '/_analysis/pivot/export' : '/_analysis/export';
+        return fetch(endpoint + '?format=' + encodeURIComponent(format), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                listVmType: st.listVmType,
-                dimensions: dims,
-                measures: msrs,
-                filters: [],
-                dimensionHierarchies: exportHierarchies
-            })
+            body: JSON.stringify(req)
         })
         .then(function (res) {
             if (!res.ok) return res.text().then(function (t) { throw new Error(t || 'HTTP ' + res.status); });
@@ -524,6 +709,8 @@
         collectSelection: collectSelection,
         parseFuncs: parseFuncs,
         renderChart: renderChart,
+        renderPivotTable: renderPivotTable,
+        renderPivotChart: renderPivotChart,
         formatDateKey: formatDateKey
     };
 

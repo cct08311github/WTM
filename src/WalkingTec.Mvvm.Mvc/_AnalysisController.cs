@@ -171,6 +171,59 @@ namespace WalkingTec.Mvvm.Mvc
                 "analysis.xlsx");
         }
 
+        /// <summary>
+        /// POST /_analysis/pivot/export?format=xlsx|csv
+        /// 匯出 Pivot 分析結果為 Excel 或 CSV。
+        /// </summary>
+        [HttpPost("pivot/export")]
+        public IActionResult PivotExport([FromBody] AnalysisPivotRequest req,
+                                         [FromQuery] string format = "xlsx")
+        {
+            if (req.Dimensions.Count > 3) return BadRequest("最多選取 3 個維度。");
+            if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
+            if (string.IsNullOrEmpty(req.PivotDimension)) return BadRequest("必須指定 PivotDimension。");
+
+            Type vmType;
+            try { vmType = _registry.Resolve(req.ListVmType); }
+            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+
+            var vm = CreateAndBindVm(vmType, req.SearcherFormData);
+            var fields = InvokeGetAnalysisFields(vm, vmType);
+            if (_fieldPolicy != null)
+            {
+                fields = _fieldPolicy.Filter(fields, HttpContext?.User ?? new System.Security.Claims.ClaimsPrincipal()).ToList();
+            }
+            var baseQuery = InvokeGetSearchQuery(vm, vmType);
+            if (baseQuery == null) return BadRequest("無法取得查詢來源。");
+
+            var hierarchyError = ValidateDimensionHierarchies(req.DimensionHierarchies, fields);
+            if (hierarchyError != null) return BadRequest(hierarchyError);
+
+            AnalysisPivotResponse result;
+            try { result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields); }
+            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+
+            // Adapt AnalysisPivotResponse to AnalysisQueryResponse format for CSV/Excel export
+            var queryResult = new AnalysisQueryResponse
+            {
+                Columns = result.Columns,
+                Rows = result.Rows,
+                TotalCount = result.Rows.Count,
+                Truncated = false
+            };
+
+            if (format.Equals("csv", StringComparison.OrdinalIgnoreCase))
+            {
+                var csv = BuildCsv(queryResult);
+                return File(Encoding.UTF8.GetBytes(csv), "text/csv", "analysis_pivot.csv");
+            }
+
+            var xlsx = AnalysisExcelExporter.Export(queryResult);
+            return File(xlsx,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "analysis_pivot.xlsx");
+        }
+
         // ─── Helpers ───────────────────────────────────────────────────────
 
         private BaseVM CreateAnalysisVm(Type vmType)
