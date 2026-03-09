@@ -123,7 +123,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             var whitelist = AnalysisFieldScanner.ScanModel(typeof(SaleRecord));
             var mc = new MemoryCache(new MemoryCacheOptions());
             var cache = new MemoryAnalysisCache(mc);
-            var engine = new AnalysisQueryEngine(cache);
+            var engine = new AnalysisQueryEngine(GroupByStrategyResolver.Default, cache);
 
             var req = new AnalysisQueryRequest
             {
