@@ -30,6 +30,21 @@ namespace WalkingTec.Mvvm.Core.Analysis
             _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
         }
 
+        private readonly IAnalysisCache? _cache;
+
+        /// <summary>
+        /// 建立不帶快取的引擎（向後相容）。
+        /// </summary>
+        public AnalysisQueryEngine() : this(null) { }
+
+        /// <summary>
+        /// 建立帶快取的引擎。傳入 null 表示不使用快取。
+        /// </summary>
+        public AnalysisQueryEngine(IAnalysisCache? cache)
+        {
+            _cache = cache;
+        }
+
         /// <summary>
         /// 執行分析查詢，回傳聚合結果。
         /// </summary>
@@ -41,6 +56,13 @@ namespace WalkingTec.Mvvm.Core.Analysis
         {
             var wl = whitelist.ToDictionary(f => f.FieldName);
             ValidateFields(req, wl);
+
+            // 先計算 hash，用於快取查詢（hash 僅由 request 決定，與資料無關）
+            var queryHash = ComputeHash(req);
+
+            // 快取命中時直接回傳
+            if (_cache != null && _cache.TryGet(queryHash, out var cached) && cached != null)
+                return cached;
 
             var filtered = ApplyFilters(baseQuery, req.Filters, wl);
 
@@ -55,14 +77,18 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 .Concat(req.Measures.Select(m => $"{m.Field}_{m.Func}"))
                 .ToList();
 
-            return new AnalysisQueryResponse
+            var response = new AnalysisQueryResponse
             {
                 Columns = columns,
                 Rows = rows,
                 TotalCount = totalCount,
                 Truncated = truncated,
-                QueryHash = ComputeHash(req)
+                QueryHash = queryHash
             };
+
+            _cache?.Set(queryHash, response);
+
+            return response;
         }
 
         /// <summary>
@@ -180,6 +206,62 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 throw new InvalidOperationException($"Cannot convert '{value}' to {underlying.Name}.", ex);
             }
         }
+
+        private static List<Dictionary<string, object?>> ExecuteGroupBy<TModel>(
+            IQueryable<TModel> query,
+            AnalysisQueryRequest req,
+            Dictionary<string, AnalysisFieldMeta> wl)
+        {
+            // Phase 1: materialise then group in-process (SQLite + InMemory safe)
+            // 限制載入筆數防止 OOM（C-1）；超出上限時查詢結果可能不完整，由呼叫端決策
+            var items = query.Take(MaxMaterializeRows).ToList();
+
+            return items
+                .GroupBy(row => BuildGroupKey(row, req.Dimensions))
+                .Take(MaxRows + 1)
+                .Select(g =>
+                {
+                    var dict = new Dictionary<string, object?>();
+                    var keyParts = g.Key.Split('\0');
+                    for (int i = 0; i < req.Dimensions.Count; i++)
+                        dict[req.Dimensions[i]] = keyParts[i];
+
+                    foreach (var m in req.Measures)
+                    {
+                        var propInfo = typeof(TModel).GetProperty(m.Field);
+                        if (propInfo is null)
+                            throw new InvalidOperationException($"Property '{m.Field}' not found on {typeof(TModel).Name}.");
+                        // 過濾 null 值，避免 nullable 型別的 Convert.ToDecimal 例外（I-10）
+                        var values = g
+                            .Select(row => propInfo.GetValue(row))
+                            .Where(v => v != null)
+                            .Select(v => Convert.ToDecimal(v))
+                            .ToList();
+                        decimal aggValue;
+                        switch (m.Func)
+                        {
+                            case AggregateFunc.Sum:   aggValue = values.Count == 0 ? 0m : values.Sum(); break;
+                            case AggregateFunc.Count: aggValue = g.Count(); break;
+                            case AggregateFunc.Avg:   aggValue = values.Count == 0 ? 0m : values.Average(); break;
+                            case AggregateFunc.Max:   aggValue = values.Count == 0 ? 0m : values.Max(); break;
+                            case AggregateFunc.Min:   aggValue = values.Count == 0 ? 0m : values.Min(); break;
+                            default: throw new NotSupportedException($"Unsupported func {m.Func}");
+                        }
+                        dict[$"{m.Field}_{m.Func}"] = aggValue;
+                    }
+                    return dict;
+                })
+                .ToList();
+        }
+
+        private static string BuildGroupKey<TModel>(TModel row, List<string> dimensions)
+            => string.Join('\0', dimensions.Select(d =>
+               {
+                   var propInfo = typeof(TModel).GetProperty(d);
+                   if (propInfo is null)
+                       throw new InvalidOperationException($"Property '{d}' not found on {typeof(TModel).Name}.");
+                   return propInfo.GetValue(row)?.ToString() ?? string.Empty;
+               }));
 
         private static string ComputeHash(AnalysisQueryRequest req)
         {

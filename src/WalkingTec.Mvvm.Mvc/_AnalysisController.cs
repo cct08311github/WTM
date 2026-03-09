@@ -21,9 +21,13 @@ namespace WalkingTec.Mvvm.Mvc
     public class _AnalysisController : BaseController
     {
         private readonly AnalysisVmRegistry _registry;
+        private readonly IAnalysisCache? _cache;
 
-        public _AnalysisController(AnalysisVmRegistry registry)
-            => _registry = registry;
+        public _AnalysisController(AnalysisVmRegistry registry, IAnalysisCache? cache = null)
+        {
+            _registry = registry;
+            _cache = cache;
+        }
 
         /// <summary>
         /// GET /_analysis/meta?listVmType=Foo.BarListVM
@@ -71,7 +75,7 @@ namespace WalkingTec.Mvvm.Mvc
 
             try
             {
-                var result = new AnalysisQueryEngine().ExecuteDynamic(baseQuery, req, fields);
+                var result = new AnalysisQueryEngine(_cache).ExecuteDynamic(baseQuery, req, fields);
                 return Ok(result);
             }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
@@ -99,7 +103,7 @@ namespace WalkingTec.Mvvm.Mvc
             if (baseQuery == null) return BadRequest("無法取得查詢來源。");
 
             AnalysisQueryResponse result;
-            try { result = new AnalysisQueryEngine().ExecuteDynamic(baseQuery, req, fields); }
+            try { result = new AnalysisQueryEngine(_cache).ExecuteDynamic(baseQuery, req, fields); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
 
             if (format.Equals("csv", StringComparison.OrdinalIgnoreCase))

@@ -546,6 +546,8 @@ namespace WalkingTec.Mvvm.Mvc
             var analysisRegistry = new WalkingTec.Mvvm.Core.Analysis.AnalysisVmRegistry();
             analysisRegistry.Build(AppDomain.CurrentDomain.GetAssemblies());
             services.AddSingleton(analysisRegistry);
+            services.AddMemoryCache();
+            services.AddSingleton<WalkingTec.Mvvm.Core.Analysis.IAnalysisCache, WalkingTec.Mvvm.Core.Analysis.MemoryAnalysisCache>();
             var cs = conf.Connections.Where(x => x.Enabled).ToList();
             foreach (var item in cs)
             {
