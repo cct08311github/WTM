@@ -1,0 +1,214 @@
+#nullable enable
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Linq.Expressions;
+
+namespace WalkingTec.Mvvm.Core.Analysis
+{
+    /// <summary>
+    /// 伺服器端 GroupBy 聚合策略。
+    /// 透過 Expression Tree 動態建構 IQueryable.GroupBy().Select()，
+    /// 將 GROUP BY + 聚合推送至資料庫引擎執行，避免載入大量原始列到記憶體。
+    /// 聚合使用 double（SQLite 相容），結果轉回 decimal 以保持與 InProcess 策略一致。
+    /// </summary>
+    public class ServerSideGroupByStrategy : IGroupByStrategy
+    {
+        private const int MaxRows = 10_000;
+        // Separator for composite GroupBy key; must be SQL-safe and unlikely in real data
+        internal const string KeySeparator = "|||";
+
+        public List<Dictionary<string, object?>> Execute<TModel>(
+            IQueryable<TModel> query,
+            AnalysisQueryRequest req,
+            Dictionary<string, AnalysisFieldMeta> whitelist)
+        {
+            if (req.Dimensions.Count == 0)
+                return new List<Dictionary<string, object?>>();
+
+            var param = Expression.Parameter(typeof(TModel), "x");
+
+            // --- Step 1: Build GroupBy key selector ---
+            // String-based composite key: x => x.Dim1 + "|||" + x.Dim2 + ...
+            // EF Core translates string.Concat to || (SQLite) / CONCAT (MSSQL/Oracle)
+            Expression keyExpr = BuildDimensionToString(param, req.Dimensions[0], whitelist);
+            for (int i = 1; i < req.Dimensions.Count; i++)
+            {
+                // Use a separator unlikely to appear in real data; \0 is invalid in SQL strings
+                var separator = Expression.Constant(KeySeparator);
+                var nextDim = BuildDimensionToString(param, req.Dimensions[i], whitelist);
+                keyExpr = Expression.Call(
+                    typeof(string).GetMethod(nameof(string.Concat),
+                        new[] { typeof(string), typeof(string), typeof(string) })!,
+                    keyExpr, separator, nextDim);
+            }
+            var keySelector = Expression.Lambda<Func<TModel, string>>(keyExpr, param);
+
+            // --- Step 2: Call .GroupBy(keySelector) ---
+            var grouped = query.GroupBy(keySelector);
+
+            // --- Step 3: Build Select projection ---
+            // Use Tuple<string, double, double, double> (max 3 measures).
+            // double is used because SQLite cannot aggregate decimal.
+            // Convert back to decimal after materialization.
+            var gParam = Expression.Parameter(typeof(IGrouping<string, TModel>), "g");
+
+            var keyAccess = Expression.Property(gParam, nameof(IGrouping<string, TModel>.Key));
+
+            var measureExprs = new Expression[3];
+            for (int i = 0; i < 3; i++)
+            {
+                if (i < req.Measures.Count)
+                {
+                    measureExprs[i] = BuildAggregateExpression<TModel>(
+                        gParam, req.Measures[i], whitelist);
+                }
+                else
+                {
+                    measureExprs[i] = Expression.Constant(0.0);
+                }
+            }
+
+            var tupleType = typeof(Tuple<string, double, double, double>);
+            var tupleCtor = tupleType.GetConstructor(
+                new[] { typeof(string), typeof(double), typeof(double), typeof(double) })!;
+            var tupleNew = Expression.New(tupleCtor, keyAccess,
+                measureExprs[0], measureExprs[1], measureExprs[2]);
+            var selectLambda = Expression.Lambda<
+                Func<IGrouping<string, TModel>, Tuple<string, double, double, double>>>(
+                tupleNew, gParam);
+
+            // --- Step 4: Execute query ---
+            var projected = grouped.Select(selectLambda);
+            var materialized = projected.Take(MaxRows + 1).ToList();
+
+            // --- Step 5: Map to dictionaries ---
+            var results = new List<Dictionary<string, object?>>(materialized.Count);
+            foreach (var row in materialized)
+            {
+                var dict = new Dictionary<string, object?>();
+
+                var keyParts = row.Item1.Split(KeySeparator);
+                for (int i = 0; i < req.Dimensions.Count; i++)
+                {
+                    dict[req.Dimensions[i]] = i < keyParts.Length ? keyParts[i] : string.Empty;
+                }
+
+                for (int i = 0; i < req.Measures.Count; i++)
+                {
+                    var m = req.Measures[i];
+                    double raw = i switch
+                    {
+                        0 => row.Item2,
+                        1 => row.Item3,
+                        2 => row.Item4,
+                        _ => 0.0
+                    };
+                    // Convert double back to decimal for consistency with InProcess strategy
+                    dict[$"{m.Field}_{m.Func}"] = (decimal)raw;
+                }
+
+                results.Add(dict);
+            }
+
+            return results;
+        }
+
+        /// <summary>
+        /// 將維度屬性轉為 string 表達式。
+        /// 字串型別直接使用 ?? ""；非字串型別呼叫 ToString()。
+        /// </summary>
+        private static Expression BuildDimensionToString(
+            ParameterExpression param, string dimName,
+            Dictionary<string, AnalysisFieldMeta> whitelist)
+        {
+            var meta = whitelist[dimName];
+            var prop = Expression.Property(param, dimName);
+
+            if (meta.ClrType == typeof(string))
+            {
+                return Expression.Coalesce(prop, Expression.Constant(string.Empty));
+            }
+
+            var underlying = Nullable.GetUnderlyingType(meta.ClrType);
+            if (underlying != null)
+            {
+                var hasValue = Expression.Property(prop, "HasValue");
+                var getValue = Expression.Property(prop, "Value");
+                var toString = Expression.Call(
+                    Expression.Convert(getValue, typeof(object)),
+                    typeof(object).GetMethod(nameof(object.ToString))!);
+                return Expression.Condition(hasValue, toString, Expression.Constant(string.Empty));
+            }
+
+            var boxed = Expression.Convert(prop, typeof(object));
+            return Expression.Call(boxed, typeof(object).GetMethod(nameof(object.ToString))!);
+        }
+
+        /// <summary>
+        /// 為單一 Measure 建構聚合表達式，回傳型別一律為 double。
+        /// </summary>
+        private static Expression BuildAggregateExpression<TModel>(
+            ParameterExpression gParam,
+            MeasureRequest measure,
+            Dictionary<string, AnalysisFieldMeta> whitelist)
+        {
+            var innerParam = Expression.Parameter(typeof(TModel), "e");
+            var meta = whitelist[measure.Field];
+
+            if (measure.Func == AggregateFunc.Count)
+            {
+                // g.Count() → (double)g.Count()
+                var countMethod = typeof(Enumerable)
+                    .GetMethods()
+                    .First(m => m.Name == nameof(Enumerable.Count) && m.GetParameters().Length == 1)
+                    .MakeGenericMethod(typeof(TModel));
+                return Expression.Convert(
+                    Expression.Call(countMethod, gParam),
+                    typeof(double));
+            }
+
+            // Build property selector: e => (double)e.Field
+            Expression propAccess = Expression.Property(innerParam, measure.Field);
+            var propType = meta.ClrType;
+            var underlyingType = Nullable.GetUnderlyingType(propType);
+
+            if (underlyingType != null)
+            {
+                propAccess = Expression.Coalesce(propAccess,
+                    Expression.Constant(Convert.ChangeType(0, underlyingType), underlyingType));
+                propAccess = Expression.Convert(propAccess, typeof(double));
+            }
+            else if (propType != typeof(double))
+            {
+                propAccess = Expression.Convert(propAccess, typeof(double));
+            }
+
+            var valueSelector = Expression.Lambda<Func<TModel, double>>(propAccess, innerParam);
+
+            string methodName = measure.Func switch
+            {
+                AggregateFunc.Sum => nameof(Enumerable.Sum),
+                AggregateFunc.Avg => nameof(Enumerable.Average),
+                AggregateFunc.Max => nameof(Enumerable.Max),
+                AggregateFunc.Min => nameof(Enumerable.Min),
+                _ => throw new NotSupportedException($"Unsupported aggregate function: {measure.Func}")
+            };
+
+            // Find Enumerable.Method<TSource>(IEnumerable<TSource>, Func<TSource, double>)
+            var aggMethod = typeof(Enumerable)
+                .GetMethods()
+                .Where(m => m.Name == methodName && m.GetParameters().Length == 2)
+                .First(m =>
+                {
+                    if (!m.IsGenericMethod) return false;
+                    var gm = m.MakeGenericMethod(typeof(TModel));
+                    var selectorParam = gm.GetParameters()[1];
+                    return selectorParam.ParameterType == typeof(Func<TModel, double>);
+                })
+                .MakeGenericMethod(typeof(TModel));
+
+            return Expression.Call(aggMethod, gParam, valueSelector);
+        }
+    }
+}
