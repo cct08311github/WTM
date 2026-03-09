@@ -22,11 +22,13 @@ namespace WalkingTec.Mvvm.Mvc
     {
         private readonly AnalysisVmRegistry _registry;
         private readonly IAnalysisCache? _cache;
+        private readonly IAnalysisFieldPolicy? _fieldPolicy;
 
-        public _AnalysisController(AnalysisVmRegistry registry, IAnalysisCache? cache = null)
+        public _AnalysisController(AnalysisVmRegistry registry, IAnalysisCache? cache = null, IAnalysisFieldPolicy? fieldPolicy = null)
         {
             _registry = registry;
             _cache = cache;
+            _fieldPolicy = fieldPolicy;
         }
 
         /// <summary>
@@ -42,6 +44,10 @@ namespace WalkingTec.Mvvm.Mvc
 
             var vm = CreateAnalysisVm(vmType);
             var fields = InvokeGetAnalysisFields(vm, vmType);
+            if (_fieldPolicy != null)
+            {
+                fields = _fieldPolicy.Filter(fields, HttpContext?.User ?? new System.Security.Claims.ClaimsPrincipal()).ToList();
+            }
 
             return Ok(fields.Select(f => new
             {
@@ -70,12 +76,16 @@ namespace WalkingTec.Mvvm.Mvc
 
             var vm = CreateAndBindVm(vmType, req.SearcherFormData);
             var fields = InvokeGetAnalysisFields(vm, vmType);
+            if (_fieldPolicy != null)
+            {
+                fields = _fieldPolicy.Filter(fields, HttpContext?.User ?? new System.Security.Claims.ClaimsPrincipal()).ToList();
+            }
             var baseQuery = InvokeGetSearchQuery(vm, vmType);
             if (baseQuery == null) return BadRequest("無法取得查詢來源。");
 
             try
             {
-                var result = new AnalysisQueryEngine(_cache).ExecuteDynamic(baseQuery, req, fields);
+                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields);
                 return Ok(result);
             }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
@@ -99,11 +109,15 @@ namespace WalkingTec.Mvvm.Mvc
 
             var vm = CreateAndBindVm(vmType, req.SearcherFormData);
             var fields = InvokeGetAnalysisFields(vm, vmType);
+            if (_fieldPolicy != null)
+            {
+                fields = _fieldPolicy.Filter(fields, HttpContext?.User ?? new System.Security.Claims.ClaimsPrincipal()).ToList();
+            }
             var baseQuery = InvokeGetSearchQuery(vm, vmType);
             if (baseQuery == null) return BadRequest("無法取得查詢來源。");
 
             AnalysisQueryResponse result;
-            try { result = new AnalysisQueryEngine(_cache).ExecuteDynamic(baseQuery, req, fields); }
+            try { result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
 
             if (format.Equals("csv", StringComparison.OrdinalIgnoreCase))
