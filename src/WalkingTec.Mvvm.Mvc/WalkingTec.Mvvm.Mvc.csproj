@@ -82,7 +82,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="DUWENINK.Captcha" Version="0.7.0" />
+    <PackageReference Include="DUWENINK.Captcha" Version="0.8.0" />
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
+    <PackageReference Include="SixLabors.ImageSharp.Drawing" Version="2.1.7" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.NewtonsoftJson" Version="8.0.22" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Versioning" Version="5.1.0" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Versioning.ApiExplorer" Version="5.1.0" />
