@@ -35,6 +35,20 @@
         return errors;
     }
 
+    /**
+     * 格式化日期整數 key 為人類可讀字串
+     * @param {number|string} key - 日期整數 key（如 2026, 20263, 202603, 20260309）
+     * @returns {string} 格式化後的字串
+     */
+    function formatDateKey(key) {
+        var s = String(key);
+        if (s.length === 4) return s;                                         // Year: 2026
+        if (s.length === 5) return s.substring(0, 4) + ' Q' + s.substring(4); // Quarter: 2026 Q3
+        if (s.length === 6) return s.substring(0, 4) + '-' + s.substring(4);  // Month: 2026-03
+        if (s.length === 8) return s.substring(0, 4) + '-' + s.substring(4, 6) + '-' + s.substring(6); // Day: 2026-03-09
+        return s; // fallback
+    }
+
     /** 清空 DOM 節點的所有子節點 */
     function clearChildren(el) {
         while (el.firstChild) {
@@ -205,6 +219,26 @@
             cb.dataset.kind = kind;
             cb.dataset.fieldName = f.fieldName;
             cb.dataset.displayName = f.displayName;
+            if (kind === 'Dimension' && f.isDate) {
+                cb.dataset.isDate = 'true';
+                var hierarchySelect = document.createElement('select');
+                hierarchySelect.className = 'analysis-hierarchy-select';
+                hierarchySelect.dataset.field = f.fieldName;
+                hierarchySelect.style.marginLeft = '4px';
+                [
+                    { value: 'Year', text: '年' },
+                    { value: 'Quarter', text: '季' },
+                    { value: 'Month', text: '月' },
+                    { value: 'Day', text: '日' }
+                ].forEach(function (h) {
+                    var opt = document.createElement('option');
+                    opt.value = h.value;
+                    opt.textContent = h.text;
+                    if (h.value === 'Month') opt.selected = true;
+                    hierarchySelect.appendChild(opt);
+                });
+                wrapper.appendChild(hierarchySelect);
+            }
             if (kind === 'Measure') {
                 var funcs = parseFuncs(f.allowedFuncs || 0);
                 if (funcs.length === 1) {
@@ -241,8 +275,9 @@
     function collectSelection(gridId) {
         var dims = [];
         var msrs = [];
+        var dimensionHierarchies = {};
         var panel = document.getElementById('analysis-panel-' + gridId);
-        
+
         var hasQsa = panel && typeof panel.querySelectorAll === 'function';
         var root = hasQsa ? panel : document;
         var selector = hasQsa ? '.analysis-field-cb:checked' : '.analysis-field-cb[data-grid-id="' + gridId + '"]:checked';
@@ -251,6 +286,14 @@
             .forEach(function (cb) {
                 if (cb.dataset.kind === 'Dimension') {
                     dims.push(cb.dataset.fieldName);
+                    if (cb.dataset.isDate === 'true') {
+                        var hSel = cb.parentNode && cb.parentNode.querySelector
+                            ? cb.parentNode.querySelector('.analysis-hierarchy-select')
+                            : null;
+                        if (hSel) {
+                            dimensionHierarchies[cb.dataset.fieldName] = hSel.value;
+                        }
+                    }
                 } else {
                     var sel = cb.nextElementSibling;
                     var func = (sel && sel.tagName === 'SELECT')
@@ -259,7 +302,7 @@
                     msrs.push({ field: cb.dataset.fieldName, func: func });
                 }
             });
-        return { dims: dims, msrs: msrs };
+        return { dims: dims, msrs: msrs, dimensionHierarchies: dimensionHierarchies };
     }
 
     /**
@@ -283,7 +326,9 @@
             listVmType: st.listVmType,
             dimensions: dims,
             measures: msrs,
-            filters: []
+            filters: [],
+            dimensionHierarchies: Object.keys(sel.dimensionHierarchies).length > 0
+                ? sel.dimensionHierarchies : undefined
         };
 
         var resultDiv = document.getElementById('analysis-result-' + gridId);
@@ -309,11 +354,12 @@
                 resultDiv.appendChild(warn);
             }
 
-            renderTable(gridId, result, resultDiv);
-
             var dimFields = (st.fields || []).filter(function (f) {
                 return f.kind === 'Dimension' && dims.indexOf(f.fieldName) >= 0;
             });
+            var dateDimSet = {};
+            dimFields.forEach(function (f) { if (f.isDate) dateDimSet[f.fieldName] = true; });
+            renderTable(gridId, result, resultDiv, dateDimSet);
             renderChart(gridId, result, { dimensions: dims, measures: msrs }, dimFields, resultDiv);
 
             // Store for chart type toggle
@@ -331,7 +377,8 @@
     /**
      * 渲染聚合結果表格（所有值用 textContent 設值，XSS 安全）
      */
-    function renderTable(gridId, result, container) {
+    function renderTable(gridId, result, container, dateDims) {
+        dateDims = dateDims || {};
         var table = document.createElement('table');
         table.className = 'layui-table';
         table.style.marginTop = '10px';
@@ -352,7 +399,11 @@
             result.columns.forEach(function (col) {
                 var td = document.createElement('td');
                 var val = row[col];
-                td.textContent = (val !== null && val !== undefined) ? String(val) : '';
+                if (val !== null && val !== undefined) {
+                    td.textContent = dateDims[col] ? formatDateKey(val) : String(val);
+                } else {
+                    td.textContent = '';
+                }
                 tr.appendChild(td);
             });
             tbody.appendChild(tr);
@@ -382,7 +433,11 @@
         var chartType = forceChartType || detectChartType(dimMeta, req.measures);
         var chart = window.echarts.init(chartDiv);
         var firstDim = req.dimensions[0];
-        var categories = result.rows.map(function (r) { return String(r[firstDim] || ''); });
+        var firstDimIsDate = dimMeta.length > 0 && dimMeta[0].isDate;
+        var categories = result.rows.map(function (r) {
+            var v = r[firstDim];
+            return firstDimIsDate ? formatDateKey(v) : String(v || '');
+        });
         var series = req.measures.map(function (m) {
             var key = m.field + '_' + m.func;
             return {
@@ -425,6 +480,8 @@
             }
         }
 
+        var exportHierarchies = Object.keys(sel.dimensionHierarchies).length > 0
+            ? sel.dimensionHierarchies : undefined;
         return fetch('/_analysis/export?format=' + encodeURIComponent(format), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -432,7 +489,8 @@
                 listVmType: st.listVmType,
                 dimensions: dims,
                 measures: msrs,
-                filters: []
+                filters: [],
+                dimensionHierarchies: exportHierarchies
             })
         })
         .then(function (res) {
@@ -465,7 +523,8 @@
         validateSelection: validateSelection,
         collectSelection: collectSelection,
         parseFuncs: parseFuncs,
-        renderChart: renderChart
+        renderChart: renderChart,
+        formatDateKey: formatDateKey
     };
 
 }(typeof window !== 'undefined' ? window : global));
