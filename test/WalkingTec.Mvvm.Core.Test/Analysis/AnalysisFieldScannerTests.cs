@@ -75,5 +75,67 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.AreEqual(1, fields.Count);
             Assert.AreEqual("Category", fields[0].DisplayName);
         }
+
+        // --- DateHierarchy tests (#91, #92, #93) ---
+
+        private class DateModel
+        {
+            [Dimension(DisplayName = "訂單日期", Hierarchy = DateHierarchy.Month)]
+            public DateTime OrderDate { get; set; }
+
+            [Dimension(DisplayName = "取消日期")]
+            public DateTime? CancelDate { get; set; }
+
+            [Dimension(DisplayName = "地區")]
+            public string Region { get; set; } = string.Empty;
+
+            [Dimension(Hierarchy = DateHierarchy.Year)]
+            public DateTime CreatedAt { get; set; }
+        }
+
+        [TestMethod]
+        public void DateTime_property_sets_IsDate_true_and_Hierarchy()
+        {
+            var field = AnalysisFieldScanner.ScanModel(typeof(DateModel))
+                            .Single(f => f.FieldName == "OrderDate");
+            Assert.IsTrue(field.IsDate);
+            Assert.AreEqual(DateHierarchy.Month, field.Hierarchy);
+        }
+
+        [TestMethod]
+        public void Nullable_DateTime_property_sets_IsDate_true()
+        {
+            var field = AnalysisFieldScanner.ScanModel(typeof(DateModel))
+                            .Single(f => f.FieldName == "CancelDate");
+            Assert.IsTrue(field.IsDate);
+            Assert.AreEqual(DateHierarchy.None, field.Hierarchy);
+        }
+
+        [TestMethod]
+        public void String_dimension_sets_IsDate_false()
+        {
+            var field = AnalysisFieldScanner.ScanModel(typeof(DateModel))
+                            .Single(f => f.FieldName == "Region");
+            Assert.IsFalse(field.IsDate);
+            Assert.AreEqual(DateHierarchy.None, field.Hierarchy);
+        }
+
+        [TestMethod]
+        public void Non_date_dimension_has_Hierarchy_None()
+        {
+            var field = AnalysisFieldScanner.ScanModel(typeof(OrderModel))
+                            .Single(f => f.FieldName == "Region");
+            Assert.IsFalse(field.IsDate);
+            Assert.AreEqual(DateHierarchy.None, field.Hierarchy);
+        }
+
+        [TestMethod]
+        public void DateTime_with_Year_hierarchy()
+        {
+            var field = AnalysisFieldScanner.ScanModel(typeof(DateModel))
+                            .Single(f => f.FieldName == "CreatedAt");
+            Assert.IsTrue(field.IsDate);
+            Assert.AreEqual(DateHierarchy.Year, field.Hierarchy);
+        }
     }
 }

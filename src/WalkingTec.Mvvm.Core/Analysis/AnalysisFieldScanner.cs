@@ -29,12 +29,18 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 var dim = prop.GetCustomAttribute<DimensionAttribute>();
                 if (dim != null)
                 {
+                    var clrType = prop.PropertyType;
+                    var underlying = Nullable.GetUnderlyingType(clrType) ?? clrType;
+                    var isDate = underlying == typeof(DateTime);
+
                     yield return new AnalysisFieldMeta
                     {
                         FieldName = prop.Name,
                         DisplayName = dim.DisplayName ?? prop.Name,
                         Kind = AnalysisFieldKind.Dimension,
-                        ClrType = prop.PropertyType
+                        ClrType = clrType,
+                        IsDate = isDate,
+                        Hierarchy = isDate ? dim.Hierarchy : DateHierarchy.None
                     };
                     continue;
                 }
