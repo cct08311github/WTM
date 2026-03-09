@@ -11,5 +11,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
     {
         /// <summary>前端顯示名稱（可為 null，預設使用屬性名）</summary>
         public string? DisplayName { get; set; }
+
+        /// <summary>日期維度的時間層級（僅對 DateTime/DateTime? 屬性有效）</summary>
+        public DateHierarchy Hierarchy { get; set; } = DateHierarchy.None;
     }
 }

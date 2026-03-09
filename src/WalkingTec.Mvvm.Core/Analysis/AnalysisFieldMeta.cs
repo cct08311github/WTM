@@ -29,5 +29,11 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
         /// <summary>欄位的 CLR 型別</summary>
         public Type ClrType { get; set; } = typeof(object);
+
+        /// <summary>是否為日期型別的維度欄位</summary>
+        public bool IsDate { get; set; }
+
+        /// <summary>日期維度的時間層級（僅 IsDate=true 時有意義）</summary>
+        public DateHierarchy Hierarchy { get; set; } = DateHierarchy.None;
     }
 }
