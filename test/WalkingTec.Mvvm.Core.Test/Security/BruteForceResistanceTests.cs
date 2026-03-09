@@ -3,21 +3,22 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using FluentAssertions;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
-using Xunit;
 
-namespace WalkingTec.Mvvm.Core.Tests.Security
+namespace WalkingTec.Mvvm.Core.Test.Security
 {
     /// <summary>
     /// Verifies PBKDF2 work-factor properties that make offline brute-force attacks expensive.
     /// These tests assert measurable computational cost and salt diversity —
     /// properties that MD5 lacks and which motivated the v8.1.13 security upgrade.
     /// </summary>
+    [TestClass]
     public class BruteForceResistanceTests
     {
         // ─── Work-Factor Timing ─────────────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public void HashPassword_PBKDF2_TakesNonTrivialTime()
         {
             // Hash 5 passwords and assert total wall-clock time > 5ms (conservative).
@@ -36,7 +37,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Security
                 $"a trivially fast result indicates a weak algorithm");
         }
 
-        [Fact]
+        [TestMethod]
         public void VerifyPassword_CorrectPBKDF2_TakesNonTrivialTime()
         {
             var hash = PasswordHashHelper.HashPassword("benchmark_password");
@@ -54,7 +55,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Security
 
         // ─── Salt Diversity ─────────────────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public void HashPassword_100Calls_AllDistinct()
         {
             const int count = 100;
@@ -67,7 +68,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Security
                 "every hash call must use a unique random salt, producing 100 unique hashes");
         }
 
-        [Fact]
+        [TestMethod]
         public void HashPassword_SaltedOutput_MeansNoTwoHashesAreEqual()
         {
             var h1 = PasswordHashHelper.HashPassword("p@ssw0rd");
@@ -78,7 +79,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Security
 
         // ─── MD5 vs PBKDF2 Security Gap ─────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public void MD5Hash_IsDeterministic_DemonstrationOfWeakness()
         {
             // This test documents the security gap that PBKDF2 migration closes.
@@ -91,7 +92,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Security
                 "MD5 is deterministic — this is a known weakness that PBKDF2 migration addresses");
         }
 
-        [Fact]
+        [TestMethod]
         public void PBKDF2Hash_IsNonDeterministic_SaltPreventsRainbowTables()
         {
             var hash1 = PasswordHashHelper.HashPassword("admin");
@@ -103,7 +104,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Security
 
         // ─── Verification Still Works After Distinct Salts ──────────────────
 
-        [Fact]
+        [TestMethod]
         public void VerifyPassword_AllHashes_FromSamePassword_VerifyCorrectly()
         {
             const string password = "consistent_pass";

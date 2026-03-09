@@ -1,20 +1,21 @@
 using System;
 using FluentAssertions;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
-using Xunit;
 
-namespace WalkingTec.Mvvm.Core.Tests.Security
+namespace WalkingTec.Mvvm.Core.Test.Security
 {
     /// <summary>
     /// Security property tests for the MD5 → PBKDF2 migration path.
     /// Verifies guarantees that prevent stored-hash downgrade and
     /// rainbow-table/precomputation attacks.
     /// </summary>
+    [TestClass]
     public class PasswordMigrationFlowTests
     {
         // ─── Post-Migration Hash Properties ────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public void Migrate_MD5ToNewHash_StoredHashIsNolongerMD5()
         {
             // Simulate migration: detect legacy hash, then replace with PBKDF2
@@ -26,7 +27,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Security
                 "after migration the stored value is PBKDF2, not MD5");
         }
 
-        [Fact]
+        [TestMethod]
         public void Migrate_MD5ToNewHash_NewHashVerifiesSuccessWithoutRehash()
         {
             var newHash = PasswordHashHelper.HashPassword("pass@word1");
@@ -35,7 +36,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Security
                     "migrated PBKDF2 hash must not require another rehash");
         }
 
-        [Fact]
+        [TestMethod]
         public void Migrate_MD5ToNewHash_LegacyHashIsReplacedNotAppended()
         {
             // The new hash must be longer than the 32-char MD5
@@ -50,7 +51,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Security
 
         // ─── Salt Uniqueness (Rainbow-Table Resistance) ─────────────────────
 
-        [Fact]
+        [TestMethod]
         public void TwoUsers_SamePassword_GetDistinctHashes()
         {
             var hash1 = PasswordHashHelper.HashPassword("commonpass");
@@ -60,7 +61,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Security
                 "each hash has a unique salt, so identical passwords produce different stored values");
         }
 
-        [Fact]
+        [TestMethod]
         public void MD5_IsNotSalted_SamePasswordProducesSameHash()
         {
             // Demonstrates WHY migration is necessary: MD5 is deterministic
@@ -70,7 +71,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Security
                 "MD5 has no salt — same input always produces same hash (rainbow-table risk)");
         }
 
-        [Fact]
+        [TestMethod]
         public void VerifyPassword_MD5Hash_WrongPassword_NeverSucceeds()
         {
             var md5Hash = PasswordHashHelper.ComputeMD5("correct");
@@ -81,7 +82,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Security
 
         // ─── Cross-User Hash Isolation ──────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public void UserA_Hash_CannotVerify_UserB_Password()
         {
             var hashA = PasswordHashHelper.HashPassword("passwordA");
@@ -91,7 +92,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Security
                     "hash computed from one password must not verify a different password");
         }
 
-        [Fact]
+        [TestMethod]
         public void LegacyMD5_CannotVerify_AsDifferentUser()
         {
             // Even if attacker knows Alice's MD5 hash, it cannot be used to authenticate as Bob

@@ -3,11 +3,11 @@ using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Test.Mock;
-using Xunit;
 
-namespace WalkingTec.Mvvm.Core.Tests.Integration
+namespace WalkingTec.Mvvm.Core.Test.Integration
 {
     /// <summary>
     /// Tests for async ViewModel methods added in v8.1.13/v8.1.14.
@@ -17,11 +17,13 @@ namespace WalkingTec.Mvvm.Core.Tests.Integration
     /// Uses a minimal TestNote entity to avoid complex relationship setup.
     /// Elsa workflow is NOT triggered because TestNote does not implement IWorkflow.
     /// </summary>
+    [TestClass]
     public class BaseCRUDVMAsyncTests
     {
-        private readonly string _seed;
+        private string _seed = null!;
 
-        public BaseCRUDVMAsyncTests()
+        [TestInitialize]
+        public void Initialize()
         {
             _seed = Guid.NewGuid().ToString();
         }
@@ -31,7 +33,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Integration
 
         // ─── DoAddAsync ────────────────────────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public async Task DoAddAsync_ValidEntity_PersistsToDbWithAuditFields()
         {
             var vm = new BaseCRUDVM<TestNote>
@@ -52,7 +54,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Integration
             vm.MSD.Count.Should().Be(0);
         }
 
-        [Fact]
+        [TestMethod]
         public async Task DoAddAsync_TwoEntities_BothPersist()
         {
             var vm1 = new BaseCRUDVM<TestNote>
@@ -76,7 +78,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Integration
 
         // ─── DoEditAsync ───────────────────────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public async Task DoEditAsync_ExistingEntity_UpdatesFieldsAndAuditInfo()
         {
             // Arrange: add entity via sync first
@@ -116,7 +118,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Integration
             updated.UpdateTime!.Value.Should().BeCloseTo(DateTime.Now, TimeSpan.FromSeconds(10));
         }
 
-        [Fact]
+        [TestMethod]
         public async Task DoEditAsync_FieldSubset_UpdatesOnlySpecifiedFields()
         {
             // Arrange
@@ -158,7 +160,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Integration
 
         // ─── DoDeleteAsync ─────────────────────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public async Task DoDeleteAsync_ExistingEntity_RemovesFromDb()
         {
             // Arrange
@@ -187,7 +189,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Integration
             ((DbContext)assertDb).Set<TestNote>().Count().Should().Be(0);
         }
 
-        [Fact]
+        [TestMethod]
         public async Task DoDeleteAsync_MultipleEntities_DeletesOnlyTarget()
         {
             // Arrange: two entities
