@@ -4,14 +4,15 @@ namespace WalkingTec.Mvvm.Core.Analysis
 {
     /// <summary>
     /// 根據資料庫類型和查詢特徵選擇 GroupBy 策略。
-    /// Phase 1：一律回傳 InProcessGroupByStrategy（保持現有行為）。
-    /// Phase 2：SqlServer/Oracle 等可回傳 ServerSideGroupByStrategy。
+    /// SqlServer/Oracle 使用 ServerSideGroupByStrategy（SQL 推送 GroupBy）；
+    /// 其餘（SQLite、MySQL、PgSql、Memory、DaMeng）使用 InProcessGroupByStrategy。
     /// </summary>
     public class GroupByStrategyResolver
     {
         private static readonly InProcessGroupByStrategy InProcess = new();
+        private static readonly ServerSideGroupByStrategy ServerSide = new();
 
-        /// <summary>預設 Resolver 實例（Phase 1 一律 InProcess）。</summary>
+        /// <summary>預設 Resolver 實例。</summary>
         public static GroupByStrategyResolver Default { get; } = new();
 
         /// <summary>
@@ -19,9 +20,12 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// </summary>
         public virtual IGroupByStrategy Resolve(DBTypeEnum dbType, AnalysisQueryRequest req)
         {
-            // Phase 2 will add ServerSideGroupByStrategy for SqlServer/Oracle
-            // For now, always return InProcess (preserves Phase 1 behavior)
-            return InProcess;
+            return dbType switch
+            {
+                DBTypeEnum.SqlServer => ServerSide,
+                DBTypeEnum.Oracle => ServerSide,
+                _ => InProcess
+            };
         }
     }
 }
