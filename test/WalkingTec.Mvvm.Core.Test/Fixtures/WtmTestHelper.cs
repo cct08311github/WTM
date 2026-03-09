@@ -14,12 +14,12 @@ using WalkingTec.Mvvm.Core.Support.Json;
 using WalkingTec.Mvvm.Core.Support.FileHandlers;
 using WalkingTec.Mvvm.Test.Mock;
 
-namespace WalkingTec.Mvvm.Core.Tests.Fixtures
+namespace WalkingTec.Mvvm.Core.Test.Fixtures
 {
     /// <summary>
     /// Minimal concrete user for DoLoginAsync tests.
     /// FrameworkUserBase is abstract; each application defines its own subclass.
-    /// Core.Tests defines this lightweight version to avoid depending on demo projects.
+    /// Core.Test defines this lightweight version to avoid depending on demo projects.
     /// </summary>
     public class TestLoginUser : FrameworkUserBase { }
 

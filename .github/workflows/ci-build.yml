@@ -41,8 +41,30 @@ jobs:
         reportgenerator \
           -reports:"TestResults/**/coverage.cobertura.xml" \
           -targetdir:"TestResults/CoverageReport" \
-          -reporttypes:"Html;lcov;Cobertura" \
+          -reporttypes:"Html;lcov;Cobertura;Badges" \
           -title:"WTM Coverage Report"
+
+    - name: Enforce Coverage Gate
+      run: |
+        # Current baseline: ~20% line, ~16% branch (large legacy framework).
+        # Thresholds are set as ratchet — raise incrementally as tests are added.
+        # Target: Line 60%, Branch 40% (see docs/plans/2026-03-09-full-test-mission.md)
+        LINE_THRESHOLD=15.0
+        BRANCH_THRESHOLD=10.0
+        LINE_COV=$(grep -oP 'line-rate="\K[^"]+' TestResults/CoverageReport/Cobertura.xml | head -1)
+        BRANCH_COV=$(grep -oP 'branch-rate="\K[^"]+' TestResults/CoverageReport/Cobertura.xml | head -1)
+        LINE_PCT=$(awk -v cov="$LINE_COV" 'BEGIN {print cov * 100}')
+        BRANCH_PCT=$(awk -v cov="$BRANCH_COV" 'BEGIN {print cov * 100}')
+        echo "Line Coverage: ${LINE_PCT}% (threshold: ${LINE_THRESHOLD}%)"
+        echo "Branch Coverage: ${BRANCH_PCT}% (threshold: ${BRANCH_THRESHOLD}%)"
+        if (( $(echo "$LINE_PCT < $LINE_THRESHOLD" | bc -l) )); then
+          echo "::error::Line coverage (${LINE_PCT}%) is below threshold (${LINE_THRESHOLD}%)"
+          exit 1
+        fi
+        if (( $(echo "$BRANCH_PCT < $BRANCH_THRESHOLD" | bc -l) )); then
+          echo "::error::Branch coverage (${BRANCH_PCT}%) is below threshold (${BRANCH_THRESHOLD}%)"
+          exit 1
+        fi
 
     - name: Upload test results
       uses: actions/upload-artifact@v4

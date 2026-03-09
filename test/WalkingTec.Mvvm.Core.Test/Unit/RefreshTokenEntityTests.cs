@@ -1,13 +1,14 @@
 using System;
 using FluentAssertions;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
-using Xunit;
 
-namespace WalkingTec.Mvvm.Core.Tests.Unit
+namespace WalkingTec.Mvvm.Core.Test.Unit
 {
+    [TestClass]
     public class RefreshTokenEntityTests
     {
-        [Fact]
+        [TestMethod]
         public void NewToken_IsActive()
         {
             var token = new RefreshTokenEntity
@@ -21,7 +22,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Unit
             token.IsRevoked.Should().BeFalse();
         }
 
-        [Fact]
+        [TestMethod]
         public void ExpiredToken_IsNotActive()
         {
             var token = new RefreshTokenEntity
@@ -34,7 +35,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Unit
             token.IsExpired.Should().BeTrue();
         }
 
-        [Fact]
+        [TestMethod]
         public void RevokedToken_IsNotActive()
         {
             var token = new RefreshTokenEntity
@@ -48,7 +49,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Unit
             token.IsRevoked.Should().BeTrue();
         }
 
-        [Fact]
+        [TestMethod]
         public void Token_ExpiresExactlyNow_IsExpired()
         {
             var token = new RefreshTokenEntity
@@ -61,7 +62,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Unit
             token.IsActive.Should().BeFalse();
         }
 
-        [Fact]
+        [TestMethod]
         public void Token_RevokedButNotExpired_IsInactive()
         {
             var token = new RefreshTokenEntity
@@ -76,21 +77,21 @@ namespace WalkingTec.Mvvm.Core.Tests.Unit
             token.IsExpired.Should().BeFalse();
         }
 
-        [Fact]
+        [TestMethod]
         public void NewToken_HasGeneratedID()
         {
             var token = new RefreshTokenEntity();
             token.ID.Should().NotBe(Guid.Empty);
         }
 
-        [Fact]
+        [TestMethod]
         public void TwoTokens_HaveDistinctIDs()
         {
             new RefreshTokenEntity().ID.Should()
                 .NotBe(new RefreshTokenEntity().ID);
         }
 
-        [Fact]
+        [TestMethod]
         public void NewToken_HasCreatedUtcSet()
         {
             var before = DateTime.UtcNow.AddSeconds(-1);

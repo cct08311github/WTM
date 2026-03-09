@@ -1,14 +1,15 @@
 using FluentAssertions;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
-using Xunit;
 
-namespace WalkingTec.Mvvm.Core.Tests.Unit
+namespace WalkingTec.Mvvm.Core.Test.Unit
 {
+    [TestClass]
     public class PasswordHashHelperTests
     {
         // ─── HashPassword ──────────────────────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public void HashPassword_ReturnsNonEmptyString()
         {
             var hash = PasswordHashHelper.HashPassword("test123");
@@ -16,14 +17,14 @@ namespace WalkingTec.Mvvm.Core.Tests.Unit
             hash.Should().NotBe("test123");
         }
 
-        [Fact]
+        [TestMethod]
         public void HashPassword_EmptyInput_ReturnsEmpty()
         {
             PasswordHashHelper.HashPassword("").Should().BeEmpty();
             PasswordHashHelper.HashPassword(null).Should().BeEmpty();
         }
 
-        [Fact]
+        [TestMethod]
         public void HashPassword_DifferentCalls_ProduceDifferentHashes()
         {
             var hash1 = PasswordHashHelper.HashPassword("test123");
@@ -31,7 +32,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Unit
             hash1.Should().NotBe(hash2, "PBKDF2 uses random salt");
         }
 
-        [Fact]
+        [TestMethod]
         public void HashPassword_VeryLongPassword_RoundTrips()
         {
             var longPw = new string('A', 10000);
@@ -40,7 +41,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Unit
                 .Should().Be(PasswordVerifyResult.Success);
         }
 
-        [Fact]
+        [TestMethod]
         public void HashPassword_UnicodePassword_RoundTrips()
         {
             var pw = "密碼テスト🔐Ñoño";
@@ -51,7 +52,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Unit
 
         // ─── VerifyPassword ────────────────────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public void VerifyPassword_CorrectPassword_ReturnsSuccess()
         {
             var hash = PasswordHashHelper.HashPassword("myPassword");
@@ -59,7 +60,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Unit
                 .Should().Be(PasswordVerifyResult.Success);
         }
 
-        [Fact]
+        [TestMethod]
         public void VerifyPassword_WrongPassword_ReturnsFailed()
         {
             var hash = PasswordHashHelper.HashPassword("myPassword");
@@ -67,7 +68,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Unit
                 .Should().Be(PasswordVerifyResult.Failed);
         }
 
-        [Fact]
+        [TestMethod]
         public void VerifyPassword_NullInputs_ReturnsFailed()
         {
             PasswordHashHelper.VerifyPassword(null, "pw")
@@ -78,11 +79,11 @@ namespace WalkingTec.Mvvm.Core.Tests.Unit
                 .Should().Be(PasswordVerifyResult.Failed);
         }
 
-        [Theory]
-        [InlineData("password123")]
-        [InlineData("P@$w0rd!")]
-        [InlineData("a")]
-        [InlineData("   ")]
+        [DataTestMethod]
+        [DataRow("password123")]
+        [DataRow("P@$w0rd!")]
+        [DataRow("a")]
+        [DataRow("   ")]
         public void VerifyPassword_VariousPasswords_RoundTrips(string password)
         {
             var hash = PasswordHashHelper.HashPassword(password);
@@ -90,7 +91,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Unit
                 .Should().Be(PasswordVerifyResult.Success);
         }
 
-        [Fact]
+        [TestMethod]
         public void VerifyPassword_CaseSensitive()
         {
             var hash = PasswordHashHelper.HashPassword("MyPassword");
@@ -98,7 +99,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Unit
                 .Should().Be(PasswordVerifyResult.Failed);
         }
 
-        [Fact]
+        [TestMethod]
         public void VerifyPassword_LegacyMD5_ReturnsSuccessRehashNeeded()
         {
             var md5Hash = PasswordHashHelper.ComputeMD5("000000");
@@ -106,7 +107,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Unit
                 .Should().Be(PasswordVerifyResult.SuccessRehashNeeded);
         }
 
-        [Fact]
+        [TestMethod]
         public void VerifyPassword_LegacyMD5_WrongPassword_ReturnsFailed()
         {
             var md5Hash = PasswordHashHelper.ComputeMD5("000000");
@@ -116,34 +117,34 @@ namespace WalkingTec.Mvvm.Core.Tests.Unit
 
         // ─── IsLegacyMD5Hash ───────────────────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public void IsLegacyMD5Hash_ValidMD5_ReturnsTrue()
         {
             PasswordHashHelper.IsLegacyMD5Hash("670B14728AD9902AECBA32E22FA4F6BD")
                 .Should().BeTrue();
         }
 
-        [Fact]
+        [TestMethod]
         public void IsLegacyMD5Hash_PBKDF2Hash_ReturnsFalse()
         {
             var pbkdf2 = PasswordHashHelper.HashPassword("test");
             PasswordHashHelper.IsLegacyMD5Hash(pbkdf2).Should().BeFalse();
         }
 
-        [Fact]
+        [TestMethod]
         public void IsLegacyMD5Hash_NullOrEmpty_ReturnsFalse()
         {
             PasswordHashHelper.IsLegacyMD5Hash(null).Should().BeFalse();
             PasswordHashHelper.IsLegacyMD5Hash("").Should().BeFalse();
         }
 
-        [Fact]
+        [TestMethod]
         public void IsLegacyMD5Hash_WrongLength_ReturnsFalse()
         {
             PasswordHashHelper.IsLegacyMD5Hash("ABC123").Should().BeFalse();
         }
 
-        [Fact]
+        [TestMethod]
         public void IsLegacyMD5Hash_LowercaseHex_ReturnsFalse()
         {
             // WTM ComputeMD5 produces uppercase; lowercase should not match
@@ -153,14 +154,14 @@ namespace WalkingTec.Mvvm.Core.Tests.Unit
 
         // ─── ComputeMD5 ────────────────────────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public void ComputeMD5_KnownValue_MatchesExpected()
         {
             PasswordHashHelper.ComputeMD5("000000")
                 .Should().Be("670B14728AD9902AECBA32E22FA4F6BD");
         }
 
-        [Fact]
+        [TestMethod]
         public void ComputeMD5_SameInput_Deterministic()
         {
             PasswordHashHelper.ComputeMD5("abc")
@@ -169,7 +170,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Unit
 
         // ─── Migration Flow ────────────────────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public void MigrationFlow_MD5ToNewHash_Verify_Success()
         {
             var legacyMD5 = PasswordHashHelper.ComputeMD5("secretPassword");
@@ -181,7 +182,7 @@ namespace WalkingTec.Mvvm.Core.Tests.Unit
                 .Should().Be(PasswordVerifyResult.Success);
         }
 
-        [Fact]
+        [TestMethod]
         public void Migration_WrongPassword_NeverTriggered()
         {
             var md5Hash = PasswordHashHelper.ComputeMD5("correct");
