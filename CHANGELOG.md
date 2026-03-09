@@ -1,5 +1,38 @@
 # 更新日志
 
+## 8.3.1 (2026-03-10)
+
+### Analysis Mode Phase 2 — 跨 DB 分析引擎優化
+
+本版本完成 Analysis Mode Phase 2 全部 16 項子任務（#91–#106），涵蓋跨 DB 策略、日期鑽取、Pivot 樞紐表、圖表互動等功能。
+
+#### 基礎設施（Wave 1）
+
+* **feat(analysis)：** 新增 `DateHierarchy` enum（Year/Quarter/Month/Day）與 `AnalysisFieldMeta.IsDate` 自動偵測（#91, #92, #93）
+* **feat(analysis)：** 提取 `IGroupByStrategy` 策略模式 — `ServerSideGroupByStrategy`（EF Core SQL push）+ `InProcessGroupByStrategy`（記憶體聚合），`GroupByStrategyResolver` 依 DBType 路由（#94）
+* **feat(analysis)：** `ServerSideGroupByStrategy` 實作，MSSQL/Oracle 優先 server-side GroupBy（#95）
+* **feat(analysis)：** `AnalysisQueryEngine` 整合雙軌策略 + ServerSide → InProcess 自動 fallback（透過 exception filter）（#96）
+* **feat(analysis)：** `IAnalysisCache` + `QueryHash` 快取層，SHA256-based 查詢結果快取（#97）
+
+#### 功能擴展（Wave 2）
+
+* **feat(analysis)：** `DateTruncator` 跨 DB 日期截斷，用 `.Year`/`.Month`/`.Day` CLR 屬性 + 整數 key 格式（#98）
+* **feat(analysis)：** 前端日期鑽取 UI — hierarchy dropdown（年/季/月/日）、`formatDateKey` 純函式（#99）
+* **feat(analysis)：** API DTO 更新 — `DimensionHierarchies` 字典加入 `AnalysisQueryRequest`（#100）
+* **feat(analysis)：** `AnalysisPivotEngine` — 純記憶體 row-column 交叉轉置，max 50 pivot values（#101）
+* **feat(analysis)：** Pivot 前端 — 樞紐模式 toggle、pivot radio selector、`renderPivotTable`（動態表頭、null→"-"、水平捲動）、`renderPivotChart`（stacked bar）（#102）
+* **feat(analysis)：** `POST /_analysis/pivot` API endpoint（#103）
+
+#### 進階互動（Wave 3）
+
+* **feat(analysis)：** 圖表 drill-down 互動 — ECharts click handler、drill history stack（push/pop/reset）、日期自動降階（Year→Quarter→Month→Day）、麵包屑 UI（#104）
+* **feat(analysis)：** `IAnalysisFieldPolicy` 欄位級權限控制介面（#105）
+* **feat(analysis)：** `FilterOperator.In` 支援多值篩選（#106）
+
+#### 測試
+
+* 新增 Analysis Mode 相關 MSTest 與 Jest 測試，涵蓋 Engine fallback、DateTruncator、PivotEngine（9 tests）、Controller pivot endpoint（4 tests）、前端 drill-down（10 tests）、前端 pivot（9 tests）等
+
 ## 8.3.0 (2026-03-09)
 
 ### ⚠️ Breaking Changes
