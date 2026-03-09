@@ -204,15 +204,6 @@ namespace WalkingTec.Mvvm.Core.Analysis
             }
         }
 
-        private static string BuildGroupKey<TModel>(TModel row, List<string> dimensions)
-            => string.Join('\0', dimensions.Select(d =>
-               {
-                   var propInfo = typeof(TModel).GetProperty(d);
-                   if (propInfo is null)
-                       throw new InvalidOperationException($"Property '{d}' not found on {typeof(TModel).Name}.");
-                   return propInfo.GetValue(row)?.ToString() ?? string.Empty;
-               }));
-
         private static string ComputeHash(AnalysisQueryRequest req)
         {
             var raw = System.Text.Json.JsonSerializer.Serialize(req);
