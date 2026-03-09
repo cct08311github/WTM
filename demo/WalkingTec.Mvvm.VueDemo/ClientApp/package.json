@@ -26,7 +26,7 @@
     "reflect-metadata": "^0.1.13",
     "regenerator-runtime": "^0.13.3",
     "screenfull": "^4.2.1",
-    "vue": "^2.6.10",
+    "vue": "^3.0.0",
     "vue-i18n": "^8.14.0",
     "vue-nprogress": "^0.1.5",
     "vue-router": "^3.0.2",
