@@ -16,32 +16,19 @@ namespace WalkingTec.Mvvm.Core.Analysis
         private const int MaxRows = 10_000;
 
         private readonly GroupByStrategyResolver _resolver;
-
-        /// <summary>
-        /// 使用預設 Resolver（Phase 1 一律 InProcess），保持向後相容。
-        /// </summary>
-        public AnalysisQueryEngine() : this(GroupByStrategyResolver.Default) { }
-
-        /// <summary>
-        /// 使用指定的 GroupByStrategyResolver，供測試或 Phase 2 注入。
-        /// </summary>
-        public AnalysisQueryEngine(GroupByStrategyResolver resolver)
-        {
-            _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
-        }
-
         private readonly IAnalysisCache? _cache;
 
         /// <summary>
-        /// 建立不帶快取的引擎（向後相容）。
+        /// 使用預設 Resolver、不帶快取（向後相容）。
         /// </summary>
-        public AnalysisQueryEngine() : this(null) { }
+        public AnalysisQueryEngine() : this(GroupByStrategyResolver.Default, null) { }
 
         /// <summary>
-        /// 建立帶快取的引擎。傳入 null 表示不使用快取。
+        /// 使用指定的 Resolver 和快取。
         /// </summary>
-        public AnalysisQueryEngine(IAnalysisCache? cache)
+        public AnalysisQueryEngine(GroupByStrategyResolver resolver, IAnalysisCache? cache = null)
         {
+            _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
             _cache = cache;
         }
 
@@ -206,62 +193,6 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 throw new InvalidOperationException($"Cannot convert '{value}' to {underlying.Name}.", ex);
             }
         }
-
-        private static List<Dictionary<string, object?>> ExecuteGroupBy<TModel>(
-            IQueryable<TModel> query,
-            AnalysisQueryRequest req,
-            Dictionary<string, AnalysisFieldMeta> wl)
-        {
-            // Phase 1: materialise then group in-process (SQLite + InMemory safe)
-            // 限制載入筆數防止 OOM（C-1）；超出上限時查詢結果可能不完整，由呼叫端決策
-            var items = query.Take(MaxMaterializeRows).ToList();
-
-            return items
-                .GroupBy(row => BuildGroupKey(row, req.Dimensions))
-                .Take(MaxRows + 1)
-                .Select(g =>
-                {
-                    var dict = new Dictionary<string, object?>();
-                    var keyParts = g.Key.Split('\0');
-                    for (int i = 0; i < req.Dimensions.Count; i++)
-                        dict[req.Dimensions[i]] = keyParts[i];
-
-                    foreach (var m in req.Measures)
-                    {
-                        var propInfo = typeof(TModel).GetProperty(m.Field);
-                        if (propInfo is null)
-                            throw new InvalidOperationException($"Property '{m.Field}' not found on {typeof(TModel).Name}.");
-                        // 過濾 null 值，避免 nullable 型別的 Convert.ToDecimal 例外（I-10）
-                        var values = g
-                            .Select(row => propInfo.GetValue(row))
-                            .Where(v => v != null)
-                            .Select(v => Convert.ToDecimal(v))
-                            .ToList();
-                        decimal aggValue;
-                        switch (m.Func)
-                        {
-                            case AggregateFunc.Sum:   aggValue = values.Count == 0 ? 0m : values.Sum(); break;
-                            case AggregateFunc.Count: aggValue = g.Count(); break;
-                            case AggregateFunc.Avg:   aggValue = values.Count == 0 ? 0m : values.Average(); break;
-                            case AggregateFunc.Max:   aggValue = values.Count == 0 ? 0m : values.Max(); break;
-                            case AggregateFunc.Min:   aggValue = values.Count == 0 ? 0m : values.Min(); break;
-                            default: throw new NotSupportedException($"Unsupported func {m.Func}");
-                        }
-                        dict[$"{m.Field}_{m.Func}"] = aggValue;
-                    }
-                    return dict;
-                })
-                .ToList();
-        }
-
-        private static string BuildGroupKey<TModel>(TModel row, List<string> dimensions)
-            => string.Join('\0', dimensions.Select(d =>
-               {
-                   var propInfo = typeof(TModel).GetProperty(d);
-                   if (propInfo is null)
-                       throw new InvalidOperationException($"Property '{d}' not found on {typeof(TModel).Name}.");
-                   return propInfo.GetValue(row)?.ToString() ?? string.Empty;
-               }));
 
         private static string ComputeHash(AnalysisQueryRequest req)
         {
