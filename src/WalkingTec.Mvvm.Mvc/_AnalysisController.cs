@@ -96,6 +96,37 @@ namespace WalkingTec.Mvvm.Mvc
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
         }
 
+        [HttpPost("pivot")]
+        public IActionResult Pivot([FromBody] AnalysisPivotRequest req)
+        {
+            if (req.Dimensions.Count > 3) return BadRequest("最多選取 3 個維度。");
+            if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
+            if (string.IsNullOrEmpty(req.PivotDimension)) return BadRequest("必須指定 PivotDimension。");
+
+            Type vmType;
+            try { vmType = _registry.Resolve(req.ListVmType); }
+            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+
+            var vm = CreateAndBindVm(vmType, req.SearcherFormData);
+            var fields = InvokeGetAnalysisFields(vm, vmType);
+            if (_fieldPolicy != null)
+            {
+                fields = _fieldPolicy.Filter(fields, HttpContext?.User ?? new System.Security.Claims.ClaimsPrincipal()).ToList();
+            }
+            var baseQuery = InvokeGetSearchQuery(vm, vmType);
+            if (baseQuery == null) return BadRequest("無法取得查詢來源。");
+
+            var hierarchyError = ValidateDimensionHierarchies(req.DimensionHierarchies, fields);
+            if (hierarchyError != null) return BadRequest(hierarchyError);
+
+            try
+            {
+                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields);
+                return Ok(result);
+            }
+            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+        }
+
         /// <summary>
         /// POST /_analysis/export?format=xlsx|csv
         /// 匯出分析結果為 Excel 或 CSV。
