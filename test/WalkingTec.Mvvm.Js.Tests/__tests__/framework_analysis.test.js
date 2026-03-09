@@ -1380,3 +1380,147 @@ describe('[cov] query with real meta — dimFields filter + chart toggle click',
         expect(global.echarts.init.mock.calls.length).toBe(2);
     });
 });
+
+// ─── formatDateKey ──────────────────────────────────────────────────────────
+describe('wtmAnalysis.formatDateKey', () => {
+    test('4 位 → Year 格式', () => {
+        expect(wa.formatDateKey(2026)).toBe('2026');
+        expect(wa.formatDateKey('2026')).toBe('2026');
+    });
+
+    test('5 位 → Quarter 格式', () => {
+        expect(wa.formatDateKey(20261)).toBe('2026 Q1');
+        expect(wa.formatDateKey(20263)).toBe('2026 Q3');
+    });
+
+    test('6 位 → Month 格式', () => {
+        expect(wa.formatDateKey(202603)).toBe('2026-03');
+        expect(wa.formatDateKey(202612)).toBe('2026-12');
+    });
+
+    test('8 位 → Day 格式', () => {
+        expect(wa.formatDateKey(20260309)).toBe('2026-03-09');
+        expect(wa.formatDateKey(20261231)).toBe('2026-12-31');
+    });
+
+    test('其他長度 → 原樣回傳', () => {
+        expect(wa.formatDateKey(12)).toBe('12');
+        expect(wa.formatDateKey(1234567)).toBe('1234567');
+    });
+});
+
+// ─── Date hierarchy dropdown ────────────────────────────────────────────────
+describe('Date hierarchy dropdown', () => {
+    test('isDate 維度欄位旁渲染 hierarchy 下拉（createElement 追蹤）', async () => {
+        const { wa, makePanel, mockFetch, mockDocument } = makeEnv();
+        const panel = makePanel('analysis-panel-dateDim1');
+
+        // 追蹤所有 createElement 產生的元素
+        var createdElements = [];
+        var origCreate = mockDocument.createElement;
+        mockDocument.createElement = jest.fn(function (tag) {
+            var el = origCreate(tag);
+            createdElements.push(el);
+            return el;
+        });
+
+        mockFetch.mockResolvedValue({
+            ok: true,
+            json: jest.fn().mockResolvedValue([
+                { fieldName: 'OrderDate', displayName: '訂單日期', kind: 'Dimension', isDate: true, allowedFuncs: [] },
+                { fieldName: 'Region', displayName: '地區', kind: 'Dimension', isDate: false, allowedFuncs: [] },
+                { fieldName: 'Amount', displayName: '金額', kind: 'Measure', allowedFuncs: ['Sum'] },
+            ])
+        });
+
+        wa.toggle('dateDim1', 'TestVm');
+        await new Promise(r => setTimeout(r, 40));
+
+        // 從 createElement 紀錄中找 hierarchy select
+        var selects = createdElements.filter(function (el) {
+            return el.className === 'analysis-hierarchy-select';
+        });
+
+        // 只有 OrderDate 是 isDate，所以只有 1 個 hierarchy select
+        expect(selects.length).toBe(1);
+        expect(selects[0].dataset.field).toBe('OrderDate');
+        // 應有 4 個 option（Year, Quarter, Month, Day）
+        expect(selects[0].children.length).toBe(4);
+    });
+
+    test('isDate checkbox 有 data-is-date 屬性', async () => {
+        const { wa, makePanel, mockFetch, mockDocument } = makeEnv();
+        const panel = makePanel('analysis-panel-dateDim2');
+
+        var createdElements = [];
+        var origCreate = mockDocument.createElement;
+        mockDocument.createElement = jest.fn(function (tag) {
+            var el = origCreate(tag);
+            createdElements.push(el);
+            return el;
+        });
+
+        mockFetch.mockResolvedValue({
+            ok: true,
+            json: jest.fn().mockResolvedValue([
+                { fieldName: 'OrderDate', displayName: '訂單日期', kind: 'Dimension', isDate: true, allowedFuncs: [] },
+            ])
+        });
+
+        wa.toggle('dateDim2', 'TestVm');
+        await new Promise(r => setTimeout(r, 40));
+
+        var checkboxes = createdElements.filter(function (el) {
+            return el.className === 'analysis-field-cb' && el.dataset.fieldName === 'OrderDate';
+        });
+        expect(checkboxes.length).toBe(1);
+        expect(checkboxes[0].dataset.isDate).toBe('true');
+    });
+});
+
+// ─── collectSelection with hierarchy ────────────────────────────────────────
+describe('collectSelection with dimensionHierarchies', () => {
+    test('日期維度的 hierarchy 被收集到 dimensionHierarchies', () => {
+        const { wa, mockDocument } = makeEnv();
+
+        // 模擬 panel
+        const panel = {
+            querySelectorAll: jest.fn(function () {
+                return [dimCb];
+            })
+        };
+        mockDocument.getElementById.mockReturnValue(panel);
+
+        // 模擬 date dimension checkbox
+        var hierarchySelect = { value: 'Quarter', className: 'analysis-hierarchy-select' };
+        var dimCb = {
+            dataset: { kind: 'Dimension', fieldName: 'OrderDate', isDate: 'true', gridId: 'g1' },
+            parentNode: {
+                querySelector: jest.fn(function (sel) {
+                    if (sel === '.analysis-hierarchy-select') return hierarchySelect;
+                    return null;
+                })
+            }
+        };
+        panel.querySelectorAll = jest.fn(function () { return [dimCb]; });
+
+        var result = wa.collectSelection('g1');
+        expect(result.dims).toEqual(['OrderDate']);
+        expect(result.dimensionHierarchies).toEqual({ OrderDate: 'Quarter' });
+    });
+
+    test('非日期維度不加入 dimensionHierarchies', () => {
+        const { wa, mockDocument } = makeEnv();
+
+        var dimCb = {
+            dataset: { kind: 'Dimension', fieldName: 'Region', gridId: 'g2' },
+            parentNode: { querySelector: jest.fn(function () { return null; }) }
+        };
+        const panel = { querySelectorAll: jest.fn(function () { return [dimCb]; }) };
+        mockDocument.getElementById.mockReturnValue(panel);
+
+        var result = wa.collectSelection('g2');
+        expect(result.dims).toEqual(['Region']);
+        expect(result.dimensionHierarchies).toEqual({});
+    });
+});
