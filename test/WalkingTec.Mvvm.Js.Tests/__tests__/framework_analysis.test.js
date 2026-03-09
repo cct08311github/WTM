@@ -119,6 +119,7 @@ function makeEnv(overrides) {
             return el;
         }),
         querySelectorAll: jest.fn(() => []),
+        querySelector: jest.fn(() => null),
         createElement: jest.fn((tag) => ({
             tag,
             style: {},
@@ -478,6 +479,7 @@ describe('exportData — layui loading state', () => {
             document: {
                 getElementById: jest.fn((id) => id === 'analysis-panel-gridX' ? { style: {}, appendChild: jest.fn(), removeChild: jest.fn(), firstChild: null } : null),
                 querySelectorAll: jest.fn(() => []),
+                querySelector: jest.fn(() => null),
                 createElement: jest.fn((tag) => ({ tag, style: {}, href: '', download: '', click: jest.fn(), children: [], textContent: '', className: '', appendChild: jest.fn(function(c){ this.children.push(c); }), removeChild: jest.fn() })),
                 createTextNode: jest.fn((t) => t),
                 body: { appendChild: jest.fn(), removeChild: jest.fn() },
@@ -507,6 +509,7 @@ describe('exportData — layui loading state', () => {
             document: {
                 getElementById: jest.fn((id) => id === 'analysis-panel-gridX' ? { style: {}, appendChild: jest.fn(), removeChild: jest.fn(), firstChild: null } : null),
                 querySelectorAll: jest.fn(() => []),
+                querySelector: jest.fn(() => null),
                 createElement: jest.fn((tag) => ({ tag, style: {}, children: [], textContent: '', className: '', appendChild: jest.fn(function(c){ this.children.push(c); }), removeChild: jest.fn() })),
                 createTextNode: jest.fn((t) => t),
                 body: { appendChild: jest.fn(), removeChild: jest.fn() },
@@ -529,6 +532,7 @@ describe('exportData — layui loading state', () => {
             document: {
                 getElementById: jest.fn((id) => id === 'analysis-panel-gridX' ? { style: {}, appendChild: jest.fn(), removeChild: jest.fn(), firstChild: null } : null),
                 querySelectorAll: jest.fn(() => []),
+                querySelector: jest.fn(() => null),
                 createElement: jest.fn((tag) => ({ tag, style: {}, href: '', download: '', click: jest.fn(), children: [], textContent: '', className: '', appendChild: jest.fn(function(c){ this.children.push(c); }), removeChild: jest.fn() })),
                 createTextNode: jest.fn((t) => t),
                 body: { appendChild: jest.fn(), removeChild: jest.fn() },
@@ -1251,7 +1255,8 @@ describe('[cov] waReq.renderPanel — createFieldSection allowedFuncs branches',
         // Panel got renderPanel output appended — verify checkboxes and select
         const checkboxes = panel.querySelectorAll('input[type="checkbox"]');
         const selects = panel.querySelectorAll('select');
-        expect(checkboxes.length).toBe(4);
+        // 4 fields (1 dim + 3 measures) + 1 pivot mode toggle checkbox = 5 checkboxes
+        expect(checkboxes.length).toBe(5);
         expect(selects.length).toBe(1);
     });
 });
