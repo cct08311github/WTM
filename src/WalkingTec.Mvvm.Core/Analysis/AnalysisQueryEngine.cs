@@ -64,7 +64,16 @@ namespace WalkingTec.Mvvm.Core.Analysis
             var filtered = ApplyFilters(baseQuery, req.Filters, wl);
 
             var strategy = _resolver.Resolve(dbType, req);
-            var rows = strategy.Execute(filtered, req, wl);
+            List<Dictionary<string, object?>> rows;
+            try
+            {
+                rows = strategy.Execute(filtered, req, wl);
+            }
+            catch (InvalidOperationException) when (strategy is ServerSideGroupByStrategy)
+            {
+                // Server-side SQL 翻譯失敗 → fallback to in-process
+                rows = new InProcessGroupByStrategy().Execute(filtered, req, wl);
+            }
 
             int totalCount = rows.Count;   // 截斷前的真實筆數（I-3）
             bool truncated = rows.Count > MaxRows;

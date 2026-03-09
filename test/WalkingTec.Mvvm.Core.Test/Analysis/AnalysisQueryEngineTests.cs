@@ -535,6 +535,90 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.IsFalse(result.Truncated);
         }
 
+        // ─── Fallback 機制 ────────────────────────────────────────────────────
+
+        /// <summary>ServerSide 策略拋 InvalidOperationException → 自動降級到 InProcess</summary>
+        [TestMethod]
+        public void Fallback_to_InProcess_when_ServerSide_throws()
+        {
+            var resolver = new FailingServerSideResolver();
+            var engine = new AnalysisQueryEngine(resolver);
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            // dbType=SqlServer 觸發 FailingServerSideStrategy → fallback → InProcess 完成
+            var result = engine.Execute(Q(), req, _whitelist, DBTypeEnum.SqlServer);
+
+            Assert.AreEqual(2, result.Rows.Count);
+            var huaDong = result.Rows.Single(r => r["Region"].ToString() == "華東");
+            Assert.AreEqual(300m, Convert.ToDecimal(huaDong["Amount_Sum"]));
+        }
+
+        /// <summary>InProcess 策略拋 InvalidOperationException → 不攔截，直接往上拋</summary>
+        [TestMethod]
+        public void InProcess_exception_is_not_caught()
+        {
+            // 使用預設 Resolver（SQLite → InProcess），但資料有問題會自然拋
+            // 用 undefined func 觸發 InProcess 內的 NotSupportedException
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", (AggregateFunc)0) });
+
+            // InProcess 拋出的異常不被 fallback 攔截（因為 strategy 不是 ServerSideGroupByStrategy）
+            Assert.ThrowsException<NotSupportedException>(() =>
+                Engine().Execute(Q(), req, _whitelist));
+        }
+
+        /// <summary>Fallback 後的結果應有正確的 QueryHash 和 Columns</summary>
+        [TestMethod]
+        public void Fallback_result_has_correct_metadata()
+        {
+            var resolver = new FailingServerSideResolver();
+            var engine = new AnalysisQueryEngine(resolver);
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var result = engine.Execute(Q(), req, _whitelist, DBTypeEnum.SqlServer);
+
+            Assert.IsNotNull(result.QueryHash);
+            Assert.AreEqual(16, result.QueryHash.Length);
+            CollectionAssert.Contains(result.Columns, "Region");
+            CollectionAssert.Contains(result.Columns, "Amount_Sum");
+            Assert.IsFalse(result.Truncated);
+        }
+
+        /// <summary>模擬 ServerSide 失敗的策略：繼承 ServerSideGroupByStrategy 使 type check 成立</summary>
+        private class FailingServerSideStrategy : ServerSideGroupByStrategy
+        {
+            public override List<Dictionary<string, object?>> Execute<TModel>(
+                IQueryable<TModel> query,
+                AnalysisQueryRequest req,
+                Dictionary<string, AnalysisFieldMeta> whitelist)
+            {
+                throw new InvalidOperationException("Simulated SQL translation failure.");
+            }
+        }
+
+        /// <summary>回傳 FailingServerSide 的 Resolver</summary>
+        private class FailingServerSideResolver : GroupByStrategyResolver
+        {
+            private static readonly FailingServerSideStrategy Failing = new();
+
+            public override IGroupByStrategy Resolve(DBTypeEnum dbType, AnalysisQueryRequest req)
+            {
+                return dbType switch
+                {
+                    DBTypeEnum.SqlServer => Failing,
+                    DBTypeEnum.Oracle => Failing,
+                    _ => base.Resolve(dbType, req)
+                };
+            }
+        }
+
         // ─── Helper methods ────────────────────────────────────────────────────
 
         private static AnalysisQueryRequest Req(
