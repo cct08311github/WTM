@@ -586,6 +586,7 @@ describe('renderChart — forceChartType parameter', () => {
             echarts: {
                 init: jest.fn(() => ({
                     setOption: jest.fn((opt) => { capturedOptions.push(opt); }),
+                    on: jest.fn(),
                     dispose: jest.fn(),
                 })),
             },
@@ -1170,7 +1171,7 @@ describe('[cov] waReq.renderChart — all branches', () => {
 
     test('renderChart with echarts → calls init and setOption', () => {
         const setOption = jest.fn();
-        global.echarts = { init: jest.fn(function() { return { setOption, dispose: jest.fn() }; }) };
+        global.echarts = { init: jest.fn(function() { return { setOption, on: jest.fn(), dispose: jest.fn() }; }) };
         waReq.renderChart('scovR2', sampleResult, sampleReq, sampleDimFields, makeContainer(), 'bar');
         expect(global.echarts.init).toHaveBeenCalled();
         expect(setOption).toHaveBeenCalled();
@@ -1178,21 +1179,21 @@ describe('[cov] waReq.renderChart — all branches', () => {
 
     test('forceChartType=line → series[0].type=line', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), dispose: jest.fn() }; }) };
+        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }) };
         waReq.renderChart('scovR3', sampleResult, sampleReq, sampleDimFields, makeContainer(), 'line');
         expect(opts[0].series[0].type).toBe('line');
     });
 
     test('forceChartType=bar-stacked → stack=total', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), dispose: jest.fn() }; }) };
+        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }) };
         waReq.renderChart('scovR4', sampleResult, sampleReq, sampleDimFields, makeContainer(), 'bar-stacked');
         expect(opts[0].series[0].stack).toBe('total');
     });
 
     test('date dim (no force) → detectChartType → line', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), dispose: jest.fn() }; }) };
+        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }) };
         const dateDim = [{ fieldName: 'Date', isDate: true }];
         const dateReq = { dimensions: ['Date'], measures: [{ field: 'Amount', func: 'Sum' }] };
         waReq.renderChart('scovR5', sampleResult, dateReq, dateDim, makeContainer());
@@ -1201,7 +1202,7 @@ describe('[cov] waReq.renderChart — all branches', () => {
 
     test('2 dims (no force) → detectChartType → bar-stacked', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), dispose: jest.fn() }; }) };
+        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }) };
         const twoDimReq = { dimensions: ['R', 'C'], measures: [{ field: 'A', func: 'Sum' }] };
         const twoDimFields = [{ fieldName: 'R', isDate: false }, { fieldName: 'C', isDate: false }];
         waReq.renderChart('scovR6', { columns: ['R', 'C', 'A_Sum'], rows: [{ R: 'N', C: 'X', A_Sum: 10 }] }, twoDimReq, twoDimFields, makeContainer());
@@ -1210,7 +1211,7 @@ describe('[cov] waReq.renderChart — all branches', () => {
 
     test('no dims (card) → type=bar, no stack', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), dispose: jest.fn() }; }) };
+        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }) };
         const noDimReq = { dimensions: [], measures: [{ field: 'Amount', func: 'Sum' }] };
         waReq.renderChart('scovR7', { columns: ['Amount_Sum'], rows: [{ Amount_Sum: 42 }] }, noDimReq, [], makeContainer());
         expect(opts[0].series[0].type).toBe('bar');
@@ -1219,7 +1220,7 @@ describe('[cov] waReq.renderChart — all branches', () => {
 
     test('dim not in dimFields → isDate defaults false → bar type', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), dispose: jest.fn() }; }) };
+        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }) };
         const unknownReq = { dimensions: ['Unknown'], measures: [{ field: 'A', func: 'Sum' }] };
         waReq.renderChart('scovR8', { columns: ['Unknown', 'A_Sum'], rows: [{ Unknown: 'X', A_Sum: 1 }] }, unknownReq, [], makeContainer());
         expect(opts[0].series[0].type).toBe('bar');
@@ -1329,7 +1330,7 @@ describe('[cov] query with real meta — dimFields filter + chart toggle click',
         const setOptionCalls = [];
         global.echarts = {
             init: jest.fn(function() {
-                return { setOption: jest.fn(function(o) { setOptionCalls.push(o); }), dispose: jest.fn() };
+                return { setOption: jest.fn(function(o) { setOptionCalls.push(o); }), on: jest.fn(), dispose: jest.fn() };
             })
         };
         global.fetch = jest.fn()
@@ -1352,11 +1353,14 @@ describe('[cov] query with real meta — dimFields filter + chart toggle click',
         const msrCb = { dataset: { kind: 'Measure', fieldName: 'Amt', gridId, defaultFunc: 'Sum' }, nextElementSibling: null };
         const toggleRow = document.createElement('div');
         toggleRow.id = 'analysis-chart-toggle-' + gridId;
+        const drillBarToggle = document.createElement('div');
+        drillBarToggle.id = 'analysis-drill-bar-' + gridId;
         spySetup(
             function(id) {
                 if (id === 'analysis-panel-' + gridId) return panel;
                 if (id === 'analysis-result-' + gridId) return resultDiv;
                 if (id === 'analysis-chart-toggle-' + gridId) return toggleRow;
+                if (id === 'analysis-drill-bar-' + gridId) return drillBarToggle;
                 return null;
             },
             function() { return [dimCb, msrCb]; }
@@ -1522,5 +1526,238 @@ describe('collectSelection with dimensionHierarchies', () => {
         var result = wa.collectSelection('g2');
         expect(result.dims).toEqual(['Region']);
         expect(result.dimensionHierarchies).toEqual({});
+    });
+});
+
+// ─── buildDrillFilter ─────────────────────────────────────────────────────────
+describe('wtmAnalysis.buildDrillFilter', () => {
+    test('建構 Eq filter 物件', () => {
+        expect(wa.buildDrillFilter('Region', '華東')).toEqual({
+            field: 'Region', operator: 'Eq', value: '華東'
+        });
+    });
+
+    test('數值型 value 保持原型別', () => {
+        expect(wa.buildDrillFilter('Year', 2026)).toEqual({
+            field: 'Year', operator: 'Eq', value: 2026
+        });
+    });
+});
+
+// ─── nextHierarchy ────────────────────────────────────────────────────────────
+describe('wtmAnalysis.nextHierarchy', () => {
+    test('Year → Quarter', () => {
+        expect(wa.nextHierarchy('Year')).toBe('Quarter');
+    });
+
+    test('Quarter → Month', () => {
+        expect(wa.nextHierarchy('Quarter')).toBe('Month');
+    });
+
+    test('Month → Day', () => {
+        expect(wa.nextHierarchy('Month')).toBe('Day');
+    });
+
+    test('Day → null（已到最細層）', () => {
+        expect(wa.nextHierarchy('Day')).toBeNull();
+    });
+
+    test('未知值 → null', () => {
+        expect(wa.nextHierarchy('Unknown')).toBeNull();
+    });
+});
+
+// ─── drill-down 互動 ─────────────────────────────────────────────────────────
+describe('drill-down integration', () => {
+    function makeDrillEnv() {
+        const chartOnHandlers = {};
+        const { wa, mockDocument, mockFetch, domNodes } = makeEnv({
+            echarts: {
+                init: jest.fn(() => ({
+                    setOption: jest.fn(),
+                    on: jest.fn((event, handler) => { chartOnHandlers[event] = handler; }),
+                    dispose: jest.fn(),
+                })),
+            },
+        });
+        return { wa, mockDocument, mockFetch, domNodes, chartOnHandlers };
+    }
+
+    // Helper: create a mock node that supports clearChildren (firstChild-based loop)
+    function mockNode(id, extraProps) {
+        const node = {
+            id: id,
+            style: { display: 'none' },
+            _children: [],
+            get firstChild() { return this._children.length > 0 ? this._children[0] : null; },
+            appendChild: jest.fn(function(c) { this._children.push(c); return c; }),
+            removeChild: jest.fn(function(c) {
+                var idx = this._children.indexOf(c);
+                if (idx >= 0) this._children.splice(idx, 1);
+            }),
+            textContent: '',
+            ...(extraProps || {}),
+        };
+        return node;
+    }
+
+    // Helper: setup a full drill test env with panel, resultDiv, drillBar, and state initialized
+    function setupDrillState(suffix, env) {
+        const { wa, mockDocument, mockFetch } = env;
+        const panel = mockNode('analysis-panel-' + suffix);
+        const resultDiv = mockNode('analysis-result-' + suffix);
+        const drillBar = mockNode('analysis-drill-bar-' + suffix);
+
+        mockDocument.getElementById.mockImplementation((id) => {
+            if (id === 'analysis-panel-' + suffix) return panel;
+            if (id === 'analysis-result-' + suffix) return resultDiv;
+            if (id === 'analysis-drill-bar-' + suffix) return drillBar;
+            return null;
+        });
+
+        mockFetch.mockResolvedValue({ ok: false, text: jest.fn().mockResolvedValue('err') });
+        wa.toggle(suffix, 'TestVm');
+
+        // Manually set lastReq so drillDown/drillBack/drillReset work
+        var st = wa._getState(suffix);
+        st.lastReq = {
+            dimensions: ['Region'],
+            measures: [{ field: 'Amount', func: 'Sum' }],
+            dimensionHierarchies: undefined,
+        };
+        st.lastDimFields = [{ fieldName: 'Region', isDate: false }];
+        st.drillFilters = [];
+
+        return { panel, resultDiv, drillBar, st };
+    }
+
+    test('drillDown pushes to drillStack and calls fetch', () => {
+        const env = makeDrillEnv();
+        const { drillBar } = setupDrillState('dd1', env);
+
+        env.mockFetch.mockClear();
+        env.wa.drillDown('dd1', 'Region', '華東', false);
+
+        expect(env.mockFetch).toHaveBeenCalledWith(
+            '/_analysis/query',
+            expect.objectContaining({ method: 'POST' })
+        );
+        // drillBar should be visible after drill-down
+        expect(drillBar.style.display).toBe('block');
+    });
+
+    test('drillBack pops stack and re-queries', () => {
+        const env = makeDrillEnv();
+        setupDrillState('dd2', env);
+
+        env.wa.drillDown('dd2', 'Region', '華東', false);
+        env.mockFetch.mockClear();
+
+        env.wa.drillBack('dd2');
+        expect(env.mockFetch).toHaveBeenCalledWith(
+            '/_analysis/query',
+            expect.objectContaining({ method: 'POST' })
+        );
+    });
+
+    test('drillReset clears stack and re-queries', () => {
+        const env = makeDrillEnv();
+        const { drillBar } = setupDrillState('dd3', env);
+
+        env.wa.drillDown('dd3', 'Region', '華東', false);
+        env.wa.drillDown('dd3', 'Region', '上海', false);
+        env.mockFetch.mockClear();
+
+        env.wa.drillReset('dd3');
+        expect(drillBar.style.display).toBe('none');
+        expect(env.mockFetch).toHaveBeenCalled();
+    });
+
+    test('日期 drill-down 自動降階 hierarchy', () => {
+        const env = makeDrillEnv();
+        setupDrillState('dd4', env);
+
+        // Override with date dimension + hierarchy
+        var st = env.wa._getState('dd4');
+        st.lastReq.dimensions = ['OrderDate'];
+        st.lastReq.dimensionHierarchies = { OrderDate: 'Year' };
+        st.lastDimFields = [{ fieldName: 'OrderDate', isDate: true }];
+
+        env.mockFetch.mockClear();
+        env.wa.drillDown('dd4', 'OrderDate', 2026, true);
+
+        const lastCall = env.mockFetch.mock.calls[0];
+        const body = JSON.parse(lastCall[1].body);
+        expect(body.filters).toEqual([
+            { field: 'OrderDate', operator: 'Eq', value: 2026 }
+        ]);
+        // Hierarchy should have been downgraded from Year to Quarter
+        expect(body.dimensionHierarchies).toEqual({ OrderDate: 'Quarter' });
+    });
+
+    test('ECharts click handler triggers drillDown', () => {
+        const env = makeDrillEnv();
+        const { resultDiv } = setupDrillState('dd5', env);
+
+        const result = {
+            columns: ['Region', 'Amount_Sum'],
+            rows: [
+                { Region: '華東', Amount_Sum: 100 },
+                { Region: '華南', Amount_Sum: 200 },
+            ],
+        };
+        const dimFields = [{ fieldName: 'Region', isDate: false }];
+        const req = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }] };
+
+        env.wa.renderChart('dd5', result, req, dimFields, resultDiv);
+
+        expect(env.chartOnHandlers['click']).toBeDefined();
+
+        env.mockFetch.mockClear();
+        env.chartOnHandlers['click']({ dataIndex: 0, name: '華東' });
+
+        expect(env.mockFetch).toHaveBeenCalledWith(
+            '/_analysis/query',
+            expect.objectContaining({ method: 'POST' })
+        );
+    });
+
+    test('drill path 顯示麵包屑', () => {
+        const env = makeDrillEnv();
+        const { drillBar } = setupDrillState('dd6', env);
+
+        env.wa.drillDown('dd6', 'Region', '華東', false);
+
+        expect(drillBar.style.display).toBe('block');
+        // Should have path span + back button + reset button
+        expect(drillBar._children.length).toBe(3);
+        expect(drillBar._children[0].textContent).toBe('全部 > 華東');
+    });
+
+    test('drillBack 後堆疊為空則隱藏 drillBar', () => {
+        const env = makeDrillEnv();
+        const { drillBar } = setupDrillState('dd7', env);
+
+        env.wa.drillDown('dd7', 'Region', '華東', false);
+        expect(drillBar.style.display).toBe('block');
+
+        env.wa.drillBack('dd7');
+        expect(drillBar.style.display).toBe('none');
+    });
+
+    test('多層 drill-down 麵包屑疊加', () => {
+        const env = makeDrillEnv();
+        const { drillBar } = setupDrillState('dd8', env);
+
+        env.wa.drillDown('dd8', 'Region', '華東', false);
+        env.wa.drillDown('dd8', 'Region', '上海', false);
+
+        expect(drillBar._children[0].textContent).toBe('全部 > 華東 > 上海');
+    });
+
+    test('drillDown 無 lastReq 時 silent return', () => {
+        const env = makeDrillEnv();
+        // Don't call setupDrillState — no state at all
+        expect(() => env.wa.drillDown('nonexistent', 'X', 'Y', false)).not.toThrow();
     });
 });
