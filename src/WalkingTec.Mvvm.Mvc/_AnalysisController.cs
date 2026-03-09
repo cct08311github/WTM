@@ -75,7 +75,7 @@ namespace WalkingTec.Mvvm.Mvc
 
             try
             {
-                var result = new AnalysisQueryEngine(_cache).ExecuteDynamic(baseQuery, req, fields);
+                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields);
                 return Ok(result);
             }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
@@ -103,7 +103,7 @@ namespace WalkingTec.Mvvm.Mvc
             if (baseQuery == null) return BadRequest("無法取得查詢來源。");
 
             AnalysisQueryResponse result;
-            try { result = new AnalysisQueryEngine(_cache).ExecuteDynamic(baseQuery, req, fields); }
+            try { result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
 
             if (format.Equals("csv", StringComparison.OrdinalIgnoreCase))
