@@ -17,6 +17,21 @@ namespace WalkingTec.Mvvm.Core.Analysis
         // 防止全表載入造成記憶體耗盡（C-1）
         private const int MaxMaterializeRows = 50_000;
 
+        private readonly IAnalysisCache? _cache;
+
+        /// <summary>
+        /// 建立不帶快取的引擎（向後相容）。
+        /// </summary>
+        public AnalysisQueryEngine() : this(null) { }
+
+        /// <summary>
+        /// 建立帶快取的引擎。傳入 null 表示不使用快取。
+        /// </summary>
+        public AnalysisQueryEngine(IAnalysisCache? cache)
+        {
+            _cache = cache;
+        }
+
         /// <summary>
         /// 執行分析查詢，回傳聚合結果。
         /// </summary>
@@ -28,6 +43,13 @@ namespace WalkingTec.Mvvm.Core.Analysis
             var wl = whitelist.ToDictionary(f => f.FieldName);
             ValidateFields(req, wl);
 
+            // 先計算 hash，用於快取查詢（hash 僅由 request 決定，與資料無關）
+            var queryHash = ComputeHash(req);
+
+            // 快取命中時直接回傳
+            if (_cache != null && _cache.TryGet(queryHash, out var cached) && cached != null)
+                return cached;
+
             var filtered = ApplyFilters(baseQuery, req.Filters, wl);
             var rows = ExecuteGroupBy(filtered, req, wl);
             int totalCount = rows.Count;   // 截斷前的真實筆數（I-3）
@@ -38,14 +60,18 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 .Concat(req.Measures.Select(m => $"{m.Field}_{m.Func}"))
                 .ToList();
 
-            return new AnalysisQueryResponse
+            var response = new AnalysisQueryResponse
             {
                 Columns = columns,
                 Rows = rows,
                 TotalCount = totalCount,
                 Truncated = truncated,
-                QueryHash = ComputeHash(req)
+                QueryHash = queryHash
             };
+
+            _cache?.Set(queryHash, response);
+
+            return response;
         }
 
         /// <summary>
