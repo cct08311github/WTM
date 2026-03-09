@@ -108,7 +108,7 @@ namespace WalkingTec.Mvvm.Core.Test.Fixtures
             var gd = new GlobalData();
             gd.AllAccessUrls = new List<string>();
             gd.AllAssembly = new List<System.Reflection.Assembly>();
-            gd.AllModule = new List<Core.Support.Json.SimpleModule>();
+            gd.AllModule = new List<SimpleModule>();
             gd.CustomUserType = typeof(TestLoginUser);
             // AllTenant calls TenantGetFunc?.Invoke() — must not return null to avoid NPE
             gd.SetTenantGetFunc(() => new List<FrameworkTenant>());
@@ -163,7 +163,7 @@ namespace WalkingTec.Mvvm.Core.Test.Fixtures
                 .Returns(Task.FromResult<Token>(null!));
             mock.Setup(x => x.RevokeTokenAsync(
                     It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()))
-                .Returns(System.Threading.Tasks.Task.CompletedTask);
+                .Returns(Task.CompletedTask);
             return mock.Object;
         }
     }
