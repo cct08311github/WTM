@@ -211,6 +211,34 @@ namespace WalkingTec.Mvvm.Core.Analysis
             }
         }
 
+        /// <summary>
+        /// 非泛型 Pivot 入口，供 Controller 使用。
+        /// </summary>
+        public AnalysisPivotResponse ExecutePivotDynamic(
+            IQueryable baseQuery,
+            AnalysisPivotRequest req,
+            IEnumerable<AnalysisFieldMeta> whitelist,
+            DBTypeEnum dbType = DBTypeEnum.SQLite)
+        {
+            var elementType = baseQuery.ElementType;
+            var method = typeof(AnalysisQueryEngine)
+                .GetMethod(nameof(ExecutePivot));
+            if (method is null)
+                throw new InvalidOperationException("ExecutePivot method not found.");
+            method = method.MakeGenericMethod(elementType);
+            try
+            {
+                var result = method.Invoke(this, new object[] { baseQuery, req, whitelist, dbType }) as AnalysisPivotResponse;
+                if (result is null)
+                    throw new InvalidOperationException("ExecutePivotDynamic did not return a valid AnalysisPivotResponse.");
+                return result;
+            }
+            catch (System.Reflection.TargetInvocationException ex)
+            {
+                throw ex.InnerException ?? ex;
+            }
+        }
+
         private static void ValidateFields(AnalysisQueryRequest req, Dictionary<string, AnalysisFieldMeta> wl)
         {
             foreach (var dim in req.Dimensions)
