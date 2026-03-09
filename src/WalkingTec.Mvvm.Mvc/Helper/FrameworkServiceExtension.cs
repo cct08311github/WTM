@@ -548,6 +548,7 @@ namespace WalkingTec.Mvvm.Mvc
             services.AddSingleton(analysisRegistry);
             services.AddMemoryCache();
             services.AddSingleton<WalkingTec.Mvvm.Core.Analysis.IAnalysisCache, WalkingTec.Mvvm.Core.Analysis.MemoryAnalysisCache>();
+            services.AddSingleton<WalkingTec.Mvvm.Core.Analysis.IAnalysisFieldPolicy, WalkingTec.Mvvm.Core.Analysis.DefaultAnalysisFieldPolicy>();
             var cs = conf.Connections.Where(x => x.Enabled).ToList();
             foreach (var item in cs)
             {
