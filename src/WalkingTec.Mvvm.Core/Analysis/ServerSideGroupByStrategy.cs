@@ -18,7 +18,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
         // Separator for composite GroupBy key; must be SQL-safe and unlikely in real data
         internal const string KeySeparator = "|||";
 
-        public List<Dictionary<string, object?>> Execute<TModel>(
+        public virtual List<Dictionary<string, object?>> Execute<TModel>(
             IQueryable<TModel> query,
             AnalysisQueryRequest req,
             Dictionary<string, AnalysisFieldMeta> whitelist)
