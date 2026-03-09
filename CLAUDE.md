@@ -2,6 +2,46 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Project Mission
+
+This is a personal fork of WalkingTec MVVM Framework (WTM), taken over from the original (unmaintained) author in 2026-03. The goal is to transform it into a **stable, modernized, actively-evolved** .NET rapid-development framework for long-term use.
+
+Current phase: **Takeover & Revival** — stabilize existing code, modernize dependencies, improve quality, then add features.
+
+## Development Principles
+
+### Decision priorities (in order)
+1. **Compatibility** — avoid breaking existing users; deprecate before removing
+2. **Security** — fix vulnerabilities immediately (P0), no shortcuts
+3. **Quality** — nullable annotations, structured logging, test coverage
+4. **Performance** — optimize only with evidence (profiling, benchmarks)
+
+### Breaking changes & API modifications
+- **Default stance: avoid.** Prefer additive (opt-in) changes over breaking ones
+- If unavoidable: document in `CHANGELOG.md`, provide migration path, bump minor version
+- Never silently change default behaviour
+
+### Dependency upgrades
+- Upgrade for security patches and bug fixes — not for new features alone
+- Pin to stable releases; avoid preview/RC packages in release branches
+- After upgrading: run full test suite, check for behavioural changes in changelogs
+
+### .NET version strategy
+- Current target: **.NET 8** (LTS)
+- Upgrade to next LTS (.NET 10) only after it reaches GA and ecosystem stabilizes
+- Multi-target only if there is a concrete user need
+
+### Code style
+- New code: fully nullable-annotated, no `#nullable disable`
+- Prefer explicit over implicit; avoid magic strings
+- Follow existing naming conventions in the codebase
+- Comments only where logic is non-obvious; no boilerplate doc comments
+
+### Communication style
+- 繁體中文溝通
+- 先給結論，再給理由與可執行步驟
+- 重大變更前必須說明：影響範圍、風險、回滾方案
+
 ## Build & Test Commands
 
 ```bash
