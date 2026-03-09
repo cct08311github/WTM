@@ -9,26 +9,36 @@ namespace WalkingTec.Mvvm.Core.Analysis
 {
     /// <summary>
     /// 動態 GroupBy 聚合引擎。
-    /// 驗證白名單 → 套用 Filter → 執行 GroupBy + 聚合 → 強制截斷。
+    /// 驗證白名單 → 套用 Filter → 委託 IGroupByStrategy 執行 GroupBy + 聚合 → 強制截斷。
     /// </summary>
     public class AnalysisQueryEngine
     {
         private const int MaxRows = 10_000;
-        // 防止全表載入造成記憶體耗盡（C-1）
-        private const int MaxMaterializeRows = 50_000;
 
+        private readonly GroupByStrategyResolver _resolver;
         private readonly IAnalysisCache? _cache;
 
         /// <summary>
-        /// 建立不帶快取的引擎（向後相容）。
+        /// 建立不帶快取的引擎，使用預設 Resolver（向後相容）。
         /// </summary>
-        public AnalysisQueryEngine() : this(null) { }
+        public AnalysisQueryEngine() : this(GroupByStrategyResolver.Default, null) { }
 
         /// <summary>
-        /// 建立帶快取的引擎。傳入 null 表示不使用快取。
+        /// 使用指定的 Resolver，不帶快取。
         /// </summary>
-        public AnalysisQueryEngine(IAnalysisCache? cache)
+        public AnalysisQueryEngine(GroupByStrategyResolver resolver) : this(resolver, null) { }
+
+        /// <summary>
+        /// 使用指定的快取，預設 Resolver。
+        /// </summary>
+        public AnalysisQueryEngine(IAnalysisCache? cache) : this(GroupByStrategyResolver.Default, cache) { }
+
+        /// <summary>
+        /// 使用指定的 Resolver 和快取。
+        /// </summary>
+        public AnalysisQueryEngine(GroupByStrategyResolver resolver, IAnalysisCache? cache)
         {
+            _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
             _cache = cache;
         }
 
@@ -38,7 +48,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
         public AnalysisQueryResponse Execute<TModel>(
             IQueryable<TModel> baseQuery,
             AnalysisQueryRequest req,
-            IEnumerable<AnalysisFieldMeta> whitelist)
+            IEnumerable<AnalysisFieldMeta> whitelist,
+            DBTypeEnum dbType = DBTypeEnum.SQLite)
         {
             var wl = whitelist.ToDictionary(f => f.FieldName);
             ValidateFields(req, wl);
@@ -51,7 +62,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 return cached;
 
             var filtered = ApplyFilters(baseQuery, req.Filters, wl);
-            var rows = ExecuteGroupBy(filtered, req, wl);
+
+            var strategy = _resolver.Resolve(dbType, req);
+            var rows = strategy.Execute(filtered, req, wl);
+
             int totalCount = rows.Count;   // 截斷前的真實筆數（I-3）
             bool truncated = rows.Count > MaxRows;
             if (truncated) rows = rows.Take(MaxRows).ToList();
@@ -80,7 +94,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
         public AnalysisQueryResponse ExecuteDynamic(
             IQueryable baseQuery,
             AnalysisQueryRequest req,
-            IEnumerable<AnalysisFieldMeta> whitelist)
+            IEnumerable<AnalysisFieldMeta> whitelist,
+            DBTypeEnum dbType = DBTypeEnum.SQLite)
         {
             var elementType = baseQuery.ElementType;
             var method = typeof(AnalysisQueryEngine)
@@ -90,7 +105,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             method = method.MakeGenericMethod(elementType);
             try
             {
-                var result = method.Invoke(this, new object[] { baseQuery, req, whitelist }) as AnalysisQueryResponse;
+                var result = method.Invoke(this, new object[] { baseQuery, req, whitelist, dbType }) as AnalysisQueryResponse;
                 if (result is null)
                     throw new InvalidOperationException("ExecuteDynamic did not return a valid AnalysisQueryResponse.");
                 return result;
@@ -214,62 +229,6 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 throw new InvalidOperationException($"Cannot convert '{value}' to {underlying.Name}.", ex);
             }
         }
-
-        private static List<Dictionary<string, object?>> ExecuteGroupBy<TModel>(
-            IQueryable<TModel> query,
-            AnalysisQueryRequest req,
-            Dictionary<string, AnalysisFieldMeta> wl)
-        {
-            // Phase 1: materialise then group in-process (SQLite + InMemory safe)
-            // 限制載入筆數防止 OOM（C-1）；超出上限時查詢結果可能不完整，由呼叫端決策
-            var items = query.Take(MaxMaterializeRows).ToList();
-
-            return items
-                .GroupBy(row => BuildGroupKey(row, req.Dimensions))
-                .Take(MaxRows + 1)
-                .Select(g =>
-                {
-                    var dict = new Dictionary<string, object?>();
-                    var keyParts = g.Key.Split('\0');
-                    for (int i = 0; i < req.Dimensions.Count; i++)
-                        dict[req.Dimensions[i]] = keyParts[i];
-
-                    foreach (var m in req.Measures)
-                    {
-                        var propInfo = typeof(TModel).GetProperty(m.Field);
-                        if (propInfo is null)
-                            throw new InvalidOperationException($"Property '{m.Field}' not found on {typeof(TModel).Name}.");
-                        // 過濾 null 值，避免 nullable 型別的 Convert.ToDecimal 例外（I-10）
-                        var values = g
-                            .Select(row => propInfo.GetValue(row))
-                            .Where(v => v != null)
-                            .Select(v => Convert.ToDecimal(v))
-                            .ToList();
-                        decimal aggValue;
-                        switch (m.Func)
-                        {
-                            case AggregateFunc.Sum:   aggValue = values.Count == 0 ? 0m : values.Sum(); break;
-                            case AggregateFunc.Count: aggValue = g.Count(); break;
-                            case AggregateFunc.Avg:   aggValue = values.Count == 0 ? 0m : values.Average(); break;
-                            case AggregateFunc.Max:   aggValue = values.Count == 0 ? 0m : values.Max(); break;
-                            case AggregateFunc.Min:   aggValue = values.Count == 0 ? 0m : values.Min(); break;
-                            default: throw new NotSupportedException($"Unsupported func {m.Func}");
-                        }
-                        dict[$"{m.Field}_{m.Func}"] = aggValue;
-                    }
-                    return dict;
-                })
-                .ToList();
-        }
-
-        private static string BuildGroupKey<TModel>(TModel row, List<string> dimensions)
-            => string.Join('\0', dimensions.Select(d =>
-               {
-                   var propInfo = typeof(TModel).GetProperty(d);
-                   if (propInfo is null)
-                       throw new InvalidOperationException($"Property '{d}' not found on {typeof(TModel).Name}.");
-                   return propInfo.GetValue(row)?.ToString() ?? string.Empty;
-               }));
 
         private static string ComputeHash(AnalysisQueryRequest req)
         {
