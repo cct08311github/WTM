@@ -1,6 +1,40 @@
 # 更新日志
 
-## v8.x.x
+## 8.3.0 (2026-03-09)
+
+### ⚠️ Breaking Changes
+
+* **移除 Elsa 工作流整合：** 完全解耦 Elsa 2.x 依賴（Controller、Model、UI assets、NuGet 引用）。如需工作流功能，請自行整合 Elsa 或其他方案
+
+### 安全修復
+
+* **fix(deps)：** `System.Text.Json` 8.0.0 → 8.0.6 — 修復 2× High CVE（GHSA-hh2w-p6rv-4g7w, GHSA-8g4q-xg66-9fp4）
+* **fix(deps)：** `SixLabors.ImageSharp` 3.1.3 → 3.1.12 — 修復 2× High + 4× Moderate CVE
+* **fix(deps)：** `DUWENINK.Captcha` 0.7.0 → 0.8.0（最後一個 .NET 8 相容版本）
+* **chore(deps)：** ReactDemo 與 Vue3Demo npm audit fix（200→22, 46→3 殘留漏洞）
+
+### 品質改善
+
+* **refactor(nullable)：** 完成 Core 專案全部 168 個 `#nullable disable` 檔案的 nullable 現代化（Models, Support, Grid, Config, Helpers, ViewModels 等），僅餘 `BaseImportVM.cs` 內 5 行局部 scope
+* **fix(nullable)：** 修復 7 個高優先檔案中的 null-forgiving 問題（`MSD!` → `MSD?`、double-`!` chain 拆解、catch block null guard）
+* **quality：** 減少 Core nullable 警告基線（56 項清理）
+* **refactor(nullable)：** `WTMContext.cs`、`DataContext.cs`、`IDataContext.cs`、`DCExtension.cs`、`PropertyHelper.cs`、`ListVMExtension.cs` 等核心檔案 nullable 啟用
+
+### 功能改善
+
+* **feat(analysis)：** `collectSelection()` querySelector 從全域 `document` 改為 scoped 到 panel 元素，避免多 gridId 衝突
+* **fix(taghelper)：** 修復 `ipr_xs`/`ipr_sm` 巢狀 container 未清除的 context 洩漏問題
+* **test(taghelper)：** 新增 `DateTimeTagHelper` rendering-path 測試（`IsRange`/`RangeStartName`/`RangeEndName`）
+
+### 依賴更新
+
+* Dependabot 批次更新：cross-spawn, nanoid, zrender/echarts, vue, vite, @babel/helpers, @babel/runtime, lodash, axios, qs, express 等
+
+### 文件與工具
+
+* **docs：** 新增 Project Mission 與 Development Principles 至 `CLAUDE.md`
+* **feat：** 新增 dry-run 發布工作流 + package smoke QA + 一鍵發布腳本
+* **test：** CI 新增 release tooling 驗證
 
 ## 8.2.0 (2026-03-06)
 
