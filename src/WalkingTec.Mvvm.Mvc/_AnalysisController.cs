@@ -56,7 +56,9 @@ namespace WalkingTec.Mvvm.Mvc
                 Kind = f.Kind.ToString(),
                 AllowedFuncs = f.Kind == AnalysisFieldKind.Measure
                     ? GetAllowedFuncNames(f.AllowedFuncs)
-                    : Array.Empty<string>()
+                    : Array.Empty<string>(),
+                f.IsDate,
+                Hierarchy = f.Hierarchy.ToString()
             }));
         }
 
@@ -82,6 +84,9 @@ namespace WalkingTec.Mvvm.Mvc
             }
             var baseQuery = InvokeGetSearchQuery(vm, vmType);
             if (baseQuery == null) return BadRequest("無法取得查詢來源。");
+
+            var hierarchyError = ValidateDimensionHierarchies(req.DimensionHierarchies, fields);
+            if (hierarchyError != null) return BadRequest(hierarchyError);
 
             try
             {
@@ -115,6 +120,9 @@ namespace WalkingTec.Mvvm.Mvc
             }
             var baseQuery = InvokeGetSearchQuery(vm, vmType);
             if (baseQuery == null) return BadRequest("無法取得查詢來源。");
+
+            var hierarchyError = ValidateDimensionHierarchies(req.DimensionHierarchies, fields);
+            if (hierarchyError != null) return BadRequest(hierarchyError);
 
             AnalysisQueryResponse result;
             try { result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields); }
@@ -233,6 +241,27 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 throw ex.InnerException ?? ex;
             }
+        }
+
+        /// <summary>
+        /// 驗證 DimensionHierarchies 中的每個 key 都對應到 IsDate=true 的維度欄位。
+        /// 回傳 null 表示通過；否則回傳錯誤訊息字串。
+        /// </summary>
+        private static string? ValidateDimensionHierarchies(
+            Dictionary<string, DateHierarchy>? hierarchies,
+            IEnumerable<AnalysisFieldMeta> fields)
+        {
+            if (hierarchies == null || hierarchies.Count == 0) return null;
+
+            var fieldMap = fields.ToDictionary(f => f.FieldName, StringComparer.Ordinal);
+            foreach (var kvp in hierarchies)
+            {
+                if (!fieldMap.TryGetValue(kvp.Key, out var meta))
+                    return $"Field '{kvp.Key}' is not a valid analysis field.";
+                if (!meta.IsDate)
+                    return $"Field '{kvp.Key}' is not a date dimension.";
+            }
+            return null;
         }
 
         private static string[] GetAllowedFuncNames(AggregateFunc funcs)

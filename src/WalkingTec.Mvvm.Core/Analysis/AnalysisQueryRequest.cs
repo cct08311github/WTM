@@ -22,6 +22,9 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
         /// <summary>額外過濾條件（白名單驗證後進 Expression Tree）。</summary>
         public List<FilterCondition> Filters { get; set; } = new List<FilterCondition>();
+
+        /// <summary>維度對應的日期階層（僅日期維度需要，key=fieldName, value=hierarchy）</summary>
+        public Dictionary<string, DateHierarchy>? DimensionHierarchies { get; set; }
     }
 
     /// <summary>

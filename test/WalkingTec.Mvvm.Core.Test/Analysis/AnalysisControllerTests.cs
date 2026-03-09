@@ -49,6 +49,29 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 => _testData.AsQueryable().OrderByDescending(x => x.ID);
         }
 
+        // ─── 含日期維度的測試模型 ────────────────────────────────────────────────
+
+        private class OrderRecord : TopBasePoco
+        {
+            [Dimension(DisplayName = "訂單日期", Hierarchy = DateHierarchy.Month)]
+            public DateTime OrderDate { get; set; }
+
+            [Dimension(DisplayName = "地區")]
+            public string Region { get; set; }
+
+            [Measure(AllowedFuncs = AggregateFunc.Sum, DisplayName = "金額")]
+            public decimal Amount { get; set; }
+        }
+
+        private static IList<OrderRecord> _orderData = new List<OrderRecord>();
+
+        [EnableAnalysis]
+        private class OrderRecordListVM : BasePagedListVM<OrderRecord, BaseSearcher>
+        {
+            public override IOrderedQueryable<OrderRecord> GetSearchQuery()
+                => _orderData.AsQueryable().OrderByDescending(x => x.ID);
+        }
+
         // ─── 基礎設施 ──────────────────────────────────────────────────────────
 
         private AnalysisVmRegistry _registry;
@@ -57,6 +80,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         public void Setup()
         {
             _testData = new List<SaleRecord>();
+            _orderData = new List<OrderRecord>();
             _registry = new AnalysisVmRegistry();
             // 掃描本測試 assembly，會找到 SaleRecordListVM（帶 [EnableAnalysis]）
             _registry.Build(new[] { typeof(AnalysisControllerTests).Assembly });
@@ -352,6 +376,90 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
             Assert.IsFalse(csv.Contains(",+SUM"), "CSV 不應含未逸脫的 +SUM formula");
             Assert.IsTrue(csv.Contains("\t+SUM"), "危險值應以 tab 前置");
+        }
+
+        // ─── DimensionHierarchies 驗證 ─────────────────────────────────────────
+
+        [TestMethod]
+        public void Query_with_valid_DimensionHierarchies_on_date_field_returns_200()
+        {
+            _orderData = new List<OrderRecord>
+            {
+                new OrderRecord { ID = Guid.NewGuid(), OrderDate = new DateTime(2026, 1, 15), Region = "華東", Amount = 100m }
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(OrderRecordListVM).FullName,
+                Dimensions = new List<string> { "OrderDate" },
+                Measures = new List<MeasureRequest> { new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum } },
+                DimensionHierarchies = new Dictionary<string, DateHierarchy>
+                {
+                    ["OrderDate"] = DateHierarchy.Month
+                }
+            };
+
+            var result = CreateController().Query(req) as OkObjectResult;
+            Assert.IsNotNull(result, "帶有效 DimensionHierarchies 的查詢應回傳 200");
+        }
+
+        [TestMethod]
+        public void Query_with_DimensionHierarchies_on_non_date_field_returns_400()
+        {
+            _orderData = new List<OrderRecord>
+            {
+                new OrderRecord { ID = Guid.NewGuid(), OrderDate = new DateTime(2026, 1, 15), Region = "華東", Amount = 100m }
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(OrderRecordListVM).FullName,
+                Dimensions = new List<string> { "Region" },
+                Measures = new List<MeasureRequest> { new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum } },
+                DimensionHierarchies = new Dictionary<string, DateHierarchy>
+                {
+                    ["Region"] = DateHierarchy.Month
+                }
+            };
+
+            var result = CreateController().Query(req) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "非日期欄位設定 DimensionHierarchies 應回傳 400");
+            Assert.IsTrue(result.Value.ToString().Contains("not a date dimension"),
+                "錯誤訊息應包含 'not a date dimension'");
+        }
+
+        [TestMethod]
+        public void Query_without_DimensionHierarchies_works_as_before()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 100m }
+            };
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+            // DimensionHierarchies is null by default — backward compat
+            Assert.IsNull(req.DimensionHierarchies);
+
+            var result = CreateController().Query(req) as OkObjectResult;
+            Assert.IsNotNull(result, "不帶 DimensionHierarchies 的查詢應向下相容回傳 200");
+        }
+
+        [TestMethod]
+        public void GetMeta_returns_IsDate_and_Hierarchy_for_date_fields()
+        {
+            var controller = CreateController();
+            var result = controller.GetMeta(typeof(OrderRecordListVM).FullName) as OkObjectResult;
+            Assert.IsNotNull(result);
+
+            var json = System.Text.Json.JsonSerializer.Serialize(result.Value);
+            // OrderDate 應有 IsDate=true 和 Hierarchy=Month
+            Assert.IsTrue(json.Contains("\"IsDate\":true"), "日期欄位應有 IsDate=true");
+            Assert.IsTrue(json.Contains("\"Hierarchy\":\"Month\""), "日期欄位應有 Hierarchy=Month");
+
+            // Region 應有 IsDate=false
+            Assert.IsTrue(json.Contains("\"IsDate\":false"), "非日期欄位應有 IsDate=false");
         }
     }
 }
