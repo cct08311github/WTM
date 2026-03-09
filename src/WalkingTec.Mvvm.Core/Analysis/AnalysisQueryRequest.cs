@@ -49,6 +49,9 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
         /// <summary>過濾值（統一 string，server-side 做 type conversion）。</summary>
         public string Value { get; set; } = string.Empty;
+
+        /// <summary>In 運算子的多個值（以逗號分隔或 JSON array）</summary>
+        public List<string>? Values { get; set; }
     }
 
     /// <summary>
@@ -56,6 +59,6 @@ namespace WalkingTec.Mvvm.Core.Analysis
     /// </summary>
     public enum FilterOperator
     {
-        Eq, Gt, Gte, Lt, Lte, Contains
+        Eq, Gt, Gte, Lt, Lte, Contains, In
     }
 }

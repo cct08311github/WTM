@@ -240,6 +240,47 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.ThrowsException<InvalidOperationException>(() => Engine().Execute(Q(), req, _whitelist));
         }
 
+        /// <summary>In 過濾：正確縮減列數</summary>
+        [TestMethod]
+        public void Filter_In_reduces_rows()
+        {
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) },
+                filters: new[] { ("Region", FilterOperator.In, "華東,華北") });
+
+            var result = Engine().Execute(Q(), req, _whitelist);
+
+            Assert.AreEqual(1, result.Rows.Count); // 只有華東
+            Assert.AreEqual("華東", result.Rows[0]["Region"].ToString());
+            Assert.AreEqual(300m, Convert.ToDecimal(result.Rows[0]["Amount_Sum"]));
+        }
+
+        /// <summary>In 過濾 (超過100個值)：應拋出例外</summary>
+        [TestMethod]
+        public void Filter_In_throws_when_values_exceed_100()
+        {
+            var values = string.Join(",", Enumerable.Range(1, 101).Select(i => $"Val{i}"));
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) },
+                filters: new[] { ("Region", FilterOperator.In, values) });
+
+            Assert.ThrowsException<InvalidOperationException>(() => Engine().Execute(Q(), req, _whitelist));
+        }
+
+        /// <summary>In 過濾 (0個值)：應拋出例外</summary>
+        [TestMethod]
+        public void Filter_In_throws_when_values_empty()
+        {
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) },
+                filters: new[] { ("Region", FilterOperator.In, "") });
+
+            Assert.ThrowsException<InvalidOperationException>(() => Engine().Execute(Q(), req, _whitelist));
+        }
+
         /// <summary>Contains 運算子用於非字串欄位 → 拋 InvalidOperationException</summary>
         [TestMethod]
         public void Filter_Contains_on_non_string_field_throws()
