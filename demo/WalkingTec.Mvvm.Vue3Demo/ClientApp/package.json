@@ -19,7 +19,7 @@
     "echarts": "^5.4.2",
     "echarts-gl": "^2.0.9",
     "echarts-wordcloud": "^2.1.0",
-    "element-plus": "2.3.7",
+    "element-plus": "^2.13.5",
     "js-cookie": "^3.0.1",
     "js-table2excel": "^1.0.3",
     "jsplumb": "^2.15.6",
@@ -36,7 +36,7 @@
     "vue-clipboard3": "^2.0.0",
     "vue-demi": "^0.13.11",
     "vue-grid-layout": "^3.0.0-beta1",
-    "vue-i18n": "9.2.2",
+    "vue-i18n": "^9.14.5",
     "vue-router": "^4.1.6"
   },
   "devDependencies": {
@@ -52,7 +52,7 @@
     "prettier": "^2.8.7",
     "sass": "^1.61.0",
     "typescript": "^5.0.4",
-    "vite": "4.3.9",
+    "vite": "^4.5.14",
     "vite-plugin-cdn-import": "^0.3.5",
     "vite-plugin-compression": "^0.5.1",
     "vite-plugin-vue-setup-extend-plus": "^0.1.0",
