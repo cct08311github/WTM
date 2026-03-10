@@ -25,22 +25,38 @@ namespace WalkingTec.Mvvm.Core.Cache
     {
         private readonly IServiceProvider _serviceProvider;
         private readonly ILookupCacheService _cacheService;
+        private readonly IHostApplicationLifetime _lifetime;
         private readonly ILogger<LookupCacheWarmupService> _logger;
 
         public LookupCacheWarmupService(
             IServiceProvider serviceProvider,
             ILookupCacheService cacheService,
+            IHostApplicationLifetime lifetime,
             ILogger<LookupCacheWarmupService> logger)
         {
             _serviceProvider = serviceProvider;
             _cacheService = cacheService;
+            _lifetime = lifetime;
             _logger = logger;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            // 讓主應用完成 startup 後再預熱
-            await Task.Delay(TimeSpan.FromSeconds(3), stoppingToken).ConfigureAwait(false);
+            // 等待應用完全啟動後才開始預熱，取代硬編碼的 3 秒延遲
+            var tcs = new TaskCompletionSource();
+            using var reg = _lifetime.ApplicationStarted.Register(() => tcs.TrySetResult());
+
+            // 如果應用已停止或 stoppingToken 被取消，提前退出
+            using var stopReg = stoppingToken.Register(() => tcs.TrySetCanceled());
+
+            try
+            {
+                await tcs.Task.ConfigureAwait(false);
+            }
+            catch (TaskCanceledException)
+            {
+                return;
+            }
 
             var types = _cacheService.GetWarmupTypes();
             if (types.Count == 0) return;
