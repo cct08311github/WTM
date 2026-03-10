@@ -385,6 +385,8 @@ namespace WalkingTec.Mvvm.Core.Extensions
         public static IQueryable<T> DPWhere<T>(this IQueryable<T> baseQuery, WTMContext? wtmcontext, params Expression<Func<T, object>>[] IdFields) //where T : TopBasePoco
         {
             var dps = wtmcontext?.LoginUserInfo?.DataPrivileges;
+            bool isInMemory = baseQuery.Provider.GetType().IsGenericType
+                && baseQuery.Provider.GetType().GetGenericTypeDefinition() == typeof(EnumerableQuery<>);
 
             // var dpsSetting = BaseVM.AllDPS;
             ParameterExpression pe = Expression.Parameter(typeof(T));
@@ -464,6 +466,16 @@ namespace WalkingTec.Mvvm.Core.Extensions
                             {
                                 tableName = last!.Member.ReflectedType!.GetSingleProperty(pro2!)?.PropertyType.Name ?? "";
                             }
+                            // Convention-based fallback: strip trailing "Id" to derive navigation property name
+                            if (string.IsNullOrEmpty(tableName) && fieldname.Length > 2 && fieldname.EndsWith("Id", StringComparison.OrdinalIgnoreCase))
+                            {
+                                var navName = fieldname.Substring(0, fieldname.Length - 2);
+                                var navProp = last!.Member.ReflectedType?.GetSingleProperty(navName);
+                                if (navProp != null)
+                                {
+                                    tableName = navProp.PropertyType.Name;
+                                }
+                            }
                         }
                     }
                 }
@@ -513,18 +525,31 @@ namespace WalkingTec.Mvvm.Core.Extensions
                                 if (d.islist == true)
                                 {
                                     var lastd = data[i + 1];
-                                    var queryable = Expression.Call(
-                                         typeof(Queryable),
-                                         "AsQueryable",
-                                         new Type[] { lastd.pe.Type },
-                                         d.exp);
+                                    if (isInMemory)
+                                    {
+                                        // In-memory IQueryable: use Enumerable.Any directly
+                                        exp = Expression.Call(
+                                             typeof(Enumerable),
+                                             "Any",
+                                             new Type[] { lastd.pe.Type },
+                                             d.exp,
+                                             Expression.Lambda(typeof(Func<,>).MakeGenericType(lastd.pe.Type, typeof(bool)), exp, new ParameterExpression[] { lastd.pe }));
+                                    }
+                                    else
+                                    {
+                                        var queryable = Expression.Call(
+                                             typeof(Queryable),
+                                             "AsQueryable",
+                                             new Type[] { lastd.pe.Type },
+                                             d.exp);
 
-                                    exp = Expression.Call(
-                                         typeof(Queryable),
-                                         "Any",
-                                         new Type[] { lastd.pe.Type },
-                                         queryable,
-                                         Expression.Lambda(typeof(Func<,>).MakeGenericType(lastd.pe.Type, typeof(bool)), exp, new ParameterExpression[] { lastd.pe }));
+                                        exp = Expression.Call(
+                                             typeof(Queryable),
+                                             "Any",
+                                             new Type[] { lastd.pe.Type },
+                                             queryable,
+                                             Expression.Lambda(typeof(Func<,>).MakeGenericType(lastd.pe.Type, typeof(bool)), exp, new ParameterExpression[] { lastd.pe }));
+                                    }
 
                                 }
                                 else
