@@ -6,7 +6,7 @@
 
 城市代碼、狀態字典、品類、幣別等低異動頻率的參照表。每次請求都打 DB 查詢此類資料是不必要的開銷；貼一個 Attribute 即可讓框架自動快取。
 
-> **不適用**：資料量超過 10,000 筆、需要即時一致性（金融交易明細等）的表。
+> **不適用**：需要即時一致性（金融交易明細等）的表，或單表快取後估計佔用超過 50 MB 記憶體的大型表。10,000 筆以下的參照表通常安全；超過時請評估：筆數 × 每筆平均欄位總字元數 × 2 bytes。
 
 ---
 
@@ -35,6 +35,9 @@ var cities = Wtm.GetLookup<CityCode>();
 // 在記憶體中過濾（Func<T, bool>，不觸發額外 DB 查詢）
 var active = Wtm.GetLookup<CityCode>(x => x.IsActive && x.Province == "北部");
 
+// 查找單筆（回傳 T?，找不到時為 null）
+var city = Wtm.GetLookupItem<CityCode>(x => x.Name == "台北");
+
 // 非同步版本
 var cities = await Wtm.GetLookupAsync<CityCode>();
 var active = await Wtm.GetLookupAsync<CityCode>(x => x.IsActive);
@@ -42,9 +45,52 @@ var active = await Wtm.GetLookupAsync<CityCode>(x => x.IsActive);
 
 > **零設定**：快取失效已整合進 `FrameworkContext.SaveChanges()` 與 `SaveChangesAsync()`。只要透過 WTM 的 DC 寫入資料，快取即自動失效，無需任何 `Program.cs` 修改。
 
-> **注意**：透過 `EmptyContext` 或原生 EF Core `DbContext` 直接寫入時，**不會**觸發自動失效。
+### API 簽章
 
-> **IReadOnlyList 回傳型別**：`GetLookup` 和 `GetLookupAsync` 回傳 `IReadOnlyList<T>` 而非 `List<T>`，防止呼叫端意外修改快取中的物件。若需要可變集合，可 `.ToList()` 複製一份。
+```csharp
+// filter 為 Func<T, bool>，在記憶體中對已快取的完整集合執行過濾，不回 DB
+IReadOnlyList<T> GetLookup<T>(Func<T, bool>? filter = null);
+Task<IReadOnlyList<T>> GetLookupAsync<T>(Func<T, bool>? filter = null);
+
+// 從快取查找單筆，不觸發 DB
+T? GetLookupItem<T>(Func<T, bool> predicate);
+
+// 從快取生成下拉選單
+List<ComboSelectListItem> GetLookupSelectList<T>(valueField, textField, filter?);
+
+// 強制重新載入（Invalidate + 立即重查）
+Task RefreshLookupAsync<T>();
+```
+
+### 同步 vs 非同步
+
+| 方法 | 首次載入 | 快取命中 |
+|------|----------|----------|
+| `GetLookup<T>()` | 同步等待 DB 查詢 | 直接從記憶體回傳 |
+| `GetLookupAsync<T>()` | await DB 查詢（不阻塞執行緒） | 直接從記憶體回傳 |
+
+在 async VM 方法中優先使用 `GetLookupAsync`。在同步屬性 getter 中可用同步版本（快取通常已預熱）。
+
+---
+
+## 與下拉選單整合
+
+```csharp
+// 自訂欄位與過濾
+var items = Wtm.GetLookupSelectList<CityCode>(
+    valueField: x => x.ID,
+    textField: x => x.Name,
+    filter: x => x.IsActive
+);
+
+// 自訂顯示格式
+var items = Wtm.GetLookupSelectList<CityCode>(
+    valueField: x => x.ID,
+    textField: x => $"{x.Name} ({x.Province})"
+);
+```
+
+等同於 `Wtm.GetLookup<T>(filter).Select(...)` 但更簡潔，且不需要 `ignorDataPrivilege: true`。
 
 ---
 
@@ -112,25 +158,29 @@ var products = Wtm.GetLookup<OrssProduct>();
 
 ---
 
-## 便利方法
+## 非 FrameworkContext 的 DbContext（如 EmptyContext）
 
-### GetLookupItem — 查找單筆資料
+`FrameworkContext.SaveChanges` 的自動失效僅對繼承 `FrameworkContext` 的 DbContext 生效。對於繼承 `EmptyContext` 的唯讀外部庫，需注意以下兩點。
 
-```csharp
-// 從快取中查找單筆，回傳 T? （找不到時為 null）
-var city = Wtm.GetLookupItem<CityCode>(x => x.Name == "台北");
-```
+### 查詢來源
 
-### GetLookupSelectList — 下拉選單整合
+`[CacheLookup]` 預設從主 DataContext（`IDataContext`）查詢。若 Model 存在於其他 DbContext，需在 Attribute 指定 `ConnectionKey`：
 
 ```csharp
-// 從快取生成 ComboSelectListItem 下拉選項
-var options = Wtm.GetLookupSelectList<CityCode>(
-    valueField: x => x.ID,
-    textField: x => x.Name,
-    filter: x => x.IsActive
-);
+[CacheLookup(TtlMinutes = 120, ConnectionKey = "orss")]
+public class OrssExchangeRate : BasePoco { ... }
 ```
+
+### 自動失效
+
+| DbContext 類型 | 自動失效 | 說明 |
+|----------------|----------|------|
+| `FrameworkContext` 子類別 | ✅ | SaveChanges 時自動失效（內建） |
+| `EmptyContext` 及其他 DbContext | ❌ | 無自動失效，僅依賴 TTL 到期 |
+
+若需主動失效，呼叫 `ILookupCacheService.Invalidate<T>()` 或 `RefreshAsync<T>()`。
+
+**唯讀庫建議**：設定較長 TTL（如 120 分鐘）依賴自然到期即可。若有批次同步排程，在排程結束後呼叫一次 `Invalidate<T>()` 確保即時生效。
 
 ---
 
@@ -152,19 +202,30 @@ wtm:lookup:{type.FullName}:{tenantId}
 | TTL 到期 | IMemoryCache 自動 | 當前 key |
 | 手動 | `ILookupCacheService.Invalidate<T>()` | 指定型別 + 租戶 |
 | 手動（跨租戶） | `ILookupCacheService.InvalidateType(type)` | 指定型別全部租戶 |
+| 強制重載 | `RefreshAsync<T>()` / `Wtm.RefreshLookupAsync<T>()` | 指定型別 + 立即重查 |
 
-> **注意**：`EmptyContext` 不繼承 `FrameworkContext`，因此透過 `EmptyContext` 寫入不會觸發自動失效。
+### 共享實例警告
+
+`GetLookup<T>()` 回傳 `IReadOnlyList<T>`，其中的物件是快取中的**共享參考，不是深拷貝**。
+
+- **不可**修改回傳物件的屬性（`city.Name = "test"` 會污染後續所有請求）
+- **不可**將回傳物件直接 Attach 到 DbContext 做更新操作
+- 若需修改，先建立副本再操作
+
+> 框架使用 `AsNoTracking()` 載入資料，確保快取物件不被任何 DbContext 追蹤。
 
 ### Startup Warm-up
 
-標記 `WarmOnStartup = true`（預設）的型別會在應用啟動後 3 秒由 `LookupCacheWarmupService` 在後台預熱。
+標記 `WarmOnStartup = true`（預設）的型別會在應用完全啟動後由 `LookupCacheWarmupService` 在後台預熱。
 
+- 透過 `IHostApplicationLifetime.ApplicationStarted` 事件觸發，確保在 startup 完成後才開始
+- Warm-up 根據 `ConnectionKey` 參數解析對應的 DbContext；若無法解析，記 warning log 並跳過（不阻擋其他型別）
 - 失敗只記 warning log，不阻擋啟動
 - 僅預熱 main tenant（`TenantCode = null`），其他租戶在首次請求時自動暖機
 
 ### Stampede Protection
 
-`IMemoryCache.GetOrCreate` / `GetOrCreateAsync` 並非原子操作 — 在 cache miss 時，多個並發請求可能各自執行一次 DB 查詢。這是安全的，因為每個呼叫者使用自己的 scoped `DbContext`，最壞情況是一次 burst 內多讀一次 DB。
+cache miss 時，per-key `SemaphoreSlim(1,1)` + double-check 確保只有第一個執行緒執行 DB 查詢；後續等待執行緒直接讀取已填入的快取結果。Semaphore 等待逾時（10 秒）後 fallback 為直接查詢 DB，避免死鎖。
 
 ### 過濾語義
 
@@ -194,6 +255,13 @@ cacheSvc.Invalidate<CityCode>(tenantId: "tenant1");
 
 // 失效所有租戶的 CityCode 快取（admin 批次更新後呼叫）
 cacheSvc.InvalidateType(typeof(CityCode));
+
+// 強制重新載入（Invalidate + 立即重查），適用於 admin 批次匯入後
+// 透過 WTMContext（自動解析 ConnectionKey 和 TenantIsolation）
+await Wtm.RefreshLookupAsync<CityCode>();
+
+// 或透過 ILookupCacheService（需自行提供 DbContext）
+await cacheSvc.RefreshAsync<CityCode>(dc, tenantId: null);
 ```
 
 ---
@@ -205,8 +273,11 @@ cacheSvc.InvalidateType(typeof(CityCode));
         ↓
 LookupCacheService（Singleton）
   ├── startup 掃描所有 Assembly，建立型別白名單
-  ├── GetAll<T>(): IMemoryCache.GetOrCreate（防 stampede）
+  ├── GetAll<T>(): per-key SemaphoreSlim(1,1) + double-check 防 stampede
+  │     快取到期時，只有第一個執行緒執行 DB 查詢；後續等待執行緒直接讀取已填入的快取結果
+  │     Semaphore 等待逾時（10 秒）後 fallback 為直接查詢 DB，避免死鎖
   ├── InvalidateType(): 取消 per-type CancellationTokenSource，批次清除所有租戶 key
+  ├── RefreshAsync<T>(): InvalidateType + 立即 GetAllAsync 重查
   ├── GetAttribute(): 查詢型別的 CacheLookupAttribute
   ├── DefaultTenantIsolation: 全域預設值（從 LookupCacheOptions 取得）
   └── GetWarmupTypes(): 供 LookupCacheWarmupService 使用
@@ -217,7 +288,7 @@ FrameworkContext（內建，無需設定）
         └── InvalidateLookups(): 對每個型別呼叫 InvalidateType
 
 LookupCacheWarmupService（BackgroundService）
-  └── ExecuteAsync: 3s 延遲後預熱 WarmOnStartup=true 的型別
+  └── ExecuteAsync: IHostApplicationLifetime.ApplicationStarted 觸發後預熱 WarmOnStartup=true 的型別
 
 WTMContext.GetLookup<T>()
   ├── ConnectionKey → CreateDC(cskey) 或使用預設 DC
@@ -241,11 +312,17 @@ A: 保持 `TenantIsolation = true`（或不設定，使用全域預設 `true`）
 **Q: 可以關掉 Warm-up 嗎？**
 A: 在 Attribute 上設 `WarmOnStartup = false` 即可。
 
-**Q: 單租戶應用每個 Model 都要設 `TenantIsolation = false`？**
-A: 不用。註冊 `LookupCacheOptions { DefaultTenantIsolation = false }` 即可全域關閉，個別 Model 仍可覆蓋。
+**Q: 系統是單租戶，每個 Model 都要寫 `TenantIsolation = false` 嗎？**
+A: 不用。在 `Program.cs` 註冊 `LookupCacheOptions { DefaultTenantIsolation = false }` 即可全域關閉。個別 Model 仍可顯式設定 `TenantIsolation = true` 覆蓋全域值。
 
 **Q: Model 在不同的資料庫（如 ORSS）怎麼辦？**
 A: 在 Attribute 上設 `ConnectionKey = "orss"`（對應 appsettings.json 的 Connections Key），框架會自動使用該連線。
 
 **Q: `GetLookup<T>(predicate)` 是 DB 查詢嗎？**
 A: 不是。`predicate` 是 `Func<T, bool>`，在記憶體中對已快取的全表資料執行過濾。
+
+**Q: 使用 TPH/TPT 繼承時，`[CacheLookup]` 應標在哪裡？**
+A: 標在基底類別，會載入該表所有資料（含所有子型別）。不要在子型別上重複標記，會造成重複快取。若只需快取特定子型別，改在子型別上標記並搭配 filter 使用。
+
+**Q: 測試中如何驗證快取行為？**
+A: InMemory DB 的 `SaveChanges` 仍會觸發自動失效（`FrameworkContext` 子類別），行為與生產一致。若需繞過快取直接驗證 DB 資料，可手動呼叫 `ILookupCacheService.Invalidate<T>()` 後再取用。

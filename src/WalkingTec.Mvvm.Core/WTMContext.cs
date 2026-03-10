@@ -419,6 +419,48 @@ namespace WalkingTec.Mvvm.Core
             }).ToList();
         }
 
+        /// <summary>
+        /// 強制重新載入快取：先失效所有租戶的快取，再立即從 DB 重新查詢填入。
+        /// 適用於 admin 批次匯入後，避免失效後首次請求的冷查詢。
+        /// </summary>
+        public async System.Threading.Tasks.Task RefreshLookupAsync<T>(
+            System.Threading.CancellationToken ct = default) where T : TopBasePoco
+        {
+            var svc = ServiceProvider?.GetService(typeof(WalkingTec.Mvvm.Core.Cache.ILookupCacheService))
+                      as WalkingTec.Mvvm.Core.Cache.ILookupCacheService;
+            if (svc == null)
+                throw new InvalidOperationException(
+                    "ILookupCacheService is not registered. Call services.AddWtmContext() first.");
+
+            var attr = svc.GetAttribute(typeof(T));
+            Microsoft.EntityFrameworkCore.DbContext dbCtx;
+            IDataContext? altDc = null;
+            try
+            {
+                if (!string.IsNullOrEmpty(attr?.ConnectionKey))
+                {
+                    altDc = CreateDC(cskey: attr.ConnectionKey);
+                    dbCtx = altDc as Microsoft.EntityFrameworkCore.DbContext
+                        ?? throw new InvalidOperationException(
+                            $"ConnectionKey '{attr.ConnectionKey}' did not produce an EF Core DbContext.");
+                }
+                else
+                {
+                    dbCtx = DC as Microsoft.EntityFrameworkCore.DbContext
+                        ?? throw new InvalidOperationException(
+                            "RefreshLookupAsync requires an EF Core DbContext.");
+                }
+
+                bool useTenant = attr?.TenantIsolationOrNull ?? svc.DefaultTenantIsolation;
+                var tenantId = useTenant ? LoginUserInfo?.TenantCode : null;
+                await svc.RefreshAsync<T>(dbCtx, tenantId, ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                (altDc as IDisposable)?.Dispose();
+            }
+        }
+
         #endregion
 
         public string HostAddress { get

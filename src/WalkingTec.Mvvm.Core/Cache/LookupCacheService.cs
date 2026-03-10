@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -15,6 +16,7 @@ namespace WalkingTec.Mvvm.Core.Cache
     /// 基於 IMemoryCache 的靜態/參數表快取實作。
     /// <para>
     /// 快取鍵格式：<c>wtm:lookup:{type.FullName}:{tenantId}</c>（tenantId 為空時用 "_"）。
+    /// Stampede 防護：per-key SemaphoreSlim(1,1) + double-check，確保 cache miss 時只有一個執行緒查 DB。
     /// InvalidateType 使用 per-type CancellationTokenSource 實現批次清除。
     /// </para>
     /// </summary>
@@ -26,6 +28,10 @@ namespace WalkingTec.Mvvm.Core.Cache
         // per-type CTS，用於 InvalidateType（IMemoryCache 無 Clear 方法）
         private readonly Dictionary<Type, CancellationTokenSource> _ctsByType = new();
         private readonly object _ctsLock = new();
+
+        // per-key SemaphoreSlim，防 stampede
+        private readonly ConcurrentDictionary<string, SemaphoreSlim> _keyLocks = new();
+        private static readonly TimeSpan StampedeTimeout = TimeSpan.FromSeconds(10);
 
         // 啟動時掃描結果
         private readonly Dictionary<Type, CacheLookupAttribute> _registry;
@@ -42,11 +48,28 @@ namespace WalkingTec.Mvvm.Core.Cache
         public IReadOnlyList<T> GetAll<T>(DbContext dc, string? tenantId = null) where T : TopBasePoco
         {
             var key = BuildKey(typeof(T), tenantId);
-            return _cache.GetOrCreate(key, entry =>
+
+            // Fast path：快取命中直接回傳
+            if (_cache.TryGetValue<IReadOnlyList<T>>(key, out var cached) && cached != null)
+                return cached;
+
+            // Slow path：per-key lock 防 stampede
+            var semaphore = _keyLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+            bool acquired = semaphore.Wait(StampedeTimeout);
+            try
             {
-                ConfigureEntry<T>(entry, tenantId);
-                return LoadFromDb<T>(dc);
-            }) ?? new List<T>();
+                // Double-check：其他執行緒可能已填入
+                if (_cache.TryGetValue<IReadOnlyList<T>>(key, out cached) && cached != null)
+                    return cached;
+
+                // 此為唯一查 DB 的執行緒（或 timeout fallback）
+                var data = LoadFromDb<T>(dc);
+                return SetCache<T>(key, data, tenantId);
+            }
+            finally
+            {
+                if (acquired) semaphore.Release();
+            }
         }
 
         public async Task<IReadOnlyList<T>> GetAllAsync<T>(
@@ -56,15 +79,26 @@ namespace WalkingTec.Mvvm.Core.Cache
         {
             var key = BuildKey(typeof(T), tenantId);
 
-            // Note: GetOrCreateAsync is not atomic under concurrent misses — concurrent requests
-            // may each execute the factory once with their own scoped DbContext.
-            // The cost is at most one extra DB read per burst; data safety is preserved
-            // because each caller supplies its own DbContext instance.
-            return await _cache.GetOrCreateAsync(key, async entry =>
+            // Fast path
+            if (_cache.TryGetValue<IReadOnlyList<T>>(key, out var cached) && cached != null)
+                return cached;
+
+            // Slow path：per-key async lock 防 stampede
+            var semaphore = _keyLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+            bool acquired = await semaphore.WaitAsync(StampedeTimeout, ct).ConfigureAwait(false);
+            try
             {
-                ConfigureEntry<T>(entry, tenantId);
-                return await LoadFromDbAsync<T>(dc, ct).ConfigureAwait(false);
-            }).ConfigureAwait(false) ?? new List<T>();
+                // Double-check
+                if (_cache.TryGetValue<IReadOnlyList<T>>(key, out cached) && cached != null)
+                    return cached;
+
+                var data = await LoadFromDbAsync<T>(dc, ct).ConfigureAwait(false);
+                return SetCache<T>(key, data, tenantId);
+            }
+            finally
+            {
+                if (acquired) semaphore.Release();
+            }
         }
 
         public void Invalidate<T>(string? tenantId = null) where T : TopBasePoco
@@ -103,6 +137,13 @@ namespace WalkingTec.Mvvm.Core.Cache
 
         public bool DefaultTenantIsolation => _options.DefaultTenantIsolation;
 
+        public async Task RefreshAsync<T>(DbContext dc, string? tenantId = null, CancellationToken ct = default)
+            where T : TopBasePoco
+        {
+            InvalidateType(typeof(T));
+            await GetAllAsync<T>(dc, tenantId, ct).ConfigureAwait(false);
+        }
+
         // ─── 私有輔助 ─────────────────────────────────────────────────────────
 
         private static string BuildKey(Type type, string? tenantId)
@@ -111,8 +152,12 @@ namespace WalkingTec.Mvvm.Core.Cache
             return $"wtm:lookup:{type.FullName}:{tid}";
         }
 
-        private void ConfigureEntry<T>(ICacheEntry entry, string? tenantId)
+        /// <summary>將資料寫入快取並設定 TTL + CTS token。</summary>
+        private IReadOnlyList<T> SetCache<T>(string key, List<T> data, string? tenantId) where T : TopBasePoco
         {
+            using var entry = _cache.CreateEntry(key);
+            entry.Value = data;
+
             if (_registry.TryGetValue(typeof(T), out var attr))
             {
                 entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(attr.TtlMinutes);
@@ -130,6 +175,8 @@ namespace WalkingTec.Mvvm.Core.Cache
                 token = cts.Token;
             }
             entry.AddExpirationToken(new CancellationChangeToken(token));
+
+            return data;
         }
 
         private static List<T> LoadFromDb<T>(DbContext dc) where T : TopBasePoco =>
