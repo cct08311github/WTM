@@ -12,7 +12,7 @@ on:
       - 'v*'
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
@@ -110,3 +110,10 @@ jobs:
           dotnet add package WalkingTec.Mvvm.TagHelpers.LayUI --version "$PKG_VERSION" --source "${{ env.PACKAGE_SOURCE }}"
           dotnet restore
           dotnet build -c Release --no-restore
+
+      - name: Upload .nupkg to release assets
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: gh release upload "$TAG_NAME" nupkgs/*.nupkg --clobber
