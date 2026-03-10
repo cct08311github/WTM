@@ -40,22 +40,7 @@ var cities = await Wtm.GetLookupAsync<CityCode>();
 var active = await Wtm.GetLookupAsync<CityCode>(x => x.IsActive);
 ```
 
-### 3. 啟用自動失效（強烈建議）
-
-在應用的 `DbContextOptions` 加入攔截器，讓 SaveChanges 後快取自動失效：
-
-```csharp
-// Program.cs 或 DbContext 設定處
-builder.Services.AddDbContext<AppDbContext>((sp, options) =>
-{
-    options.UseSqlServer(connectionString);
-    options.AddInterceptors(
-        sp.GetRequiredService<WalkingTec.Mvvm.Core.Cache.LookupInvalidationInterceptor>()
-    );
-});
-```
-
-> 若未加入攔截器，快取仍會在 TTL 到期後自然失效（最終一致性）。
+> **零設定**：快取失效已整合進 `FrameworkContext.SaveChanges()` 與 `SaveChangesAsync()`。只要透過 WTM 的 DC 寫入資料，快取即自動失效，無需任何 `Program.cs` 修改。
 
 ---
 
@@ -83,7 +68,7 @@ wtm:lookup:{type.FullName}:{tenantId}
 
 | 時機 | 觸發 | 範圍 |
 |------|------|------|
-| 每次 `SaveChanges` / `SaveChangesAsync` | `LookupInvalidationInterceptor` | 被寫入實體的所有租戶 |
+| 每次 `SaveChanges` / `SaveChangesAsync` | `FrameworkContext` 內建 override | 被寫入實體的所有租戶 |
 | TTL 到期 | IMemoryCache 自動 | 當前 key |
 | 手動 | `ILookupCacheService.Invalidate<T>()` | 指定型別 + 租戶 |
 | 手動（跨租戶） | `ILookupCacheService.InvalidateType(type)` | 指定型別全部租戶 |
@@ -134,8 +119,10 @@ LookupCacheService（Singleton）
   ├── InvalidateType(): 取消 per-type CancellationTokenSource，批次清除所有租戶 key
   └── GetWarmupTypes(): 供 LookupCacheWarmupService 使用
 
-LookupInvalidationInterceptor（Singleton）
-  └── SavingChanges: 掃描 ChangeTracker → 呼叫 InvalidateType
+FrameworkContext（內建，無需設定）
+  └── SaveChanges/SaveChangesAsync override:
+        ├── CollectDirtyLookupTypes(): 從 ChangeTracker 取出有 [CacheLookup] 的型別
+        └── InvalidateLookups(): 對每個型別呼叫 InvalidateType
 
 LookupCacheWarmupService（BackgroundService）
   └── ExecuteAsync: 3s 延遲後預熱 WarmOnStartup=true 的型別
@@ -149,7 +136,7 @@ WTMContext.GetLookup<T>()
 ## 常見問題
 
 **Q: 貼了 `[CacheLookup]` 但快取沒有失效？**
-A: 確認 `LookupInvalidationInterceptor` 已加入 `DbContextOptions.AddInterceptors()`。
+A: 確認寫入是透過 WTM 的 `DC`（即 `FrameworkContext` 子類別）進行的。若使用原生 EF Core `DbContext` 直接寫入，則不會觸發自動失效。
 
 **Q: Warm-up 失敗日誌顯示「DbContext not available」？**
 A: `IDataContext` 必須設定正確。確認 `AddWtmContext()` 已在 `services.AddDbContext()` 之後呼叫。

@@ -130,7 +130,13 @@ namespace WalkingTec.Mvvm.Core
                 {
                     _dc = this.CreateDC();
                     if (_dc != null)
+                    {
                         _dc.CurrentUserCode = LoginUserInfo?.ITCode;
+                        // Property injection：讓 FrameworkContext.SaveChanges 能自動失效 [CacheLookup] 快取
+                        if (_dc is WalkingTec.Mvvm.Core.FrameworkContext fc)
+                            fc.LookupCacheService = ServiceProvider?.GetService(typeof(WalkingTec.Mvvm.Core.Cache.ILookupCacheService))
+                                                    as WalkingTec.Mvvm.Core.Cache.ILookupCacheService;
+                    }
                 }
                 return _dc;
             }

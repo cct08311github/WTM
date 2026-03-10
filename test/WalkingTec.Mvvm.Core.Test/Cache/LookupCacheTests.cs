@@ -253,26 +253,49 @@ namespace WalkingTec.Mvvm.Core.Test.Cache
         }
     }
 
-    // ─── Interceptor tests ───────────────────────────────────────────────────────
+    // ─── FrameworkContext 整合測試（SaveChanges 自動失效）────────────────────────
 
     [TestClass]
-    public class LookupInvalidationInterceptorTests
+    public class FrameworkContextInvalidationTests
     {
+        /// <summary>
+        /// FrameworkContext 子類別，加入測試用實體。
+        /// SaveChanges 繼承自 FrameworkContext 並透過 LookupCacheService property 自動失效快取。
+        /// </summary>
+        private class TestFwContext : FrameworkContext
+        {
+            public TestFwContext(DbContextOptions opts) : base(opts) { }
+            public DbSet<CityCode> CityCodes { get; set; } = null!;
+            public DbSet<OrderRecord> OrderRecords { get; set; } = null!;
+
+            // EmptyContext.OnConfiguring 在 options 已配置時仍會嘗試設 SqlServer，加此保護
+            protected override void OnConfiguring(DbContextOptionsBuilder b)
+            {
+                if (b.IsConfigured) return;
+                base.OnConfiguring(b);
+            }
+
+            // 跳過 FrameworkContext.OnModelCreating 中的 Utils.GetAllModels()，
+            // 避免掃描所有已載入 assembly 造成 MajorId 等重複欄名衝突。
+            // EF Core 透過 DbSet<> 屬性自動探索實體，不需要額外配置。
+            protected override void OnModelCreating(ModelBuilder modelBuilder)
+            {
+                // intentionally no base call
+            }
+        }
+
         [TestMethod]
-        public void SaveChanges_on_cacheable_entity_triggers_invalidation()
+        public void SaveChanges_on_cacheable_entity_auto_invalidates_via_FrameworkContext()
         {
             using var conn = new SqliteConnection("DataSource=:memory:");
             conn.Open();
             var mc = new MemoryCache(new MemoryCacheOptions());
             var svc = new LookupCacheService(mc, new[] { typeof(CityCode).Assembly });
-            var interceptor = new LookupInvalidationInterceptor(svc);
 
-            var opts = new DbContextOptionsBuilder<LookupTestContext>()
-                .UseSqlite(conn)
-                .AddInterceptors(interceptor)
-                .Options;
-            using var ctx = new LookupTestContext(opts);
+            var opts = new DbContextOptionsBuilder<TestFwContext>().UseSqlite(conn).Options;
+            using var ctx = new TestFwContext(opts);
             ctx.Database.EnsureCreated();
+            ctx.LookupCacheService = svc; // property injection（模擬 WTMContext 設定）
 
             ctx.CityCodes.Add(new CityCode { ID = Guid.NewGuid(), Name = "台北", Province = "北部" });
             ctx.SaveChanges();
@@ -281,34 +304,31 @@ namespace WalkingTec.Mvvm.Core.Test.Cache
             var first = svc.GetAll<CityCode>(ctx, null);
             Assert.AreEqual(1, first.Count);
 
-            // 透過 interceptor 自動失效
+            // 透過 FrameworkContext.SaveChanges 自動失效
             ctx.CityCodes.Add(new CityCode { ID = Guid.NewGuid(), Name = "高雄", Province = "南部" });
-            ctx.SaveChanges(); // interceptor 在此觸發 InvalidateType
+            ctx.SaveChanges();
 
             var second = svc.GetAll<CityCode>(ctx, null);
-            Assert.AreEqual(2, second.Count, "Cache should be invalidated after SaveChanges");
+            Assert.AreEqual(2, second.Count, "Cache should auto-invalidate via FrameworkContext.SaveChanges");
         }
 
         [TestMethod]
-        public void SaveChanges_on_non_cacheable_entity_does_not_invalidate_other_caches()
+        public void SaveChanges_on_non_cacheable_entity_does_not_invalidate_lookup_caches()
         {
             using var conn = new SqliteConnection("DataSource=:memory:");
             conn.Open();
             var mc = new MemoryCache(new MemoryCacheOptions());
             var svc = new LookupCacheService(mc, new[] { typeof(CityCode).Assembly });
-            var interceptor = new LookupInvalidationInterceptor(svc);
 
-            var opts = new DbContextOptionsBuilder<LookupTestContext>()
-                .UseSqlite(conn)
-                .AddInterceptors(interceptor)
-                .Options;
-            using var ctx = new LookupTestContext(opts);
+            var opts = new DbContextOptionsBuilder<TestFwContext>().UseSqlite(conn).Options;
+            using var ctx = new TestFwContext(opts);
             ctx.Database.EnsureCreated();
+            ctx.LookupCacheService = svc;
 
             ctx.CityCodes.Add(new CityCode { ID = Guid.NewGuid(), Name = "台北", Province = "北部" });
             ctx.SaveChanges();
 
-            // 暖機 CityCode 快取
+            // 暖機快取
             var cached = svc.GetAll<CityCode>(ctx, null);
             Assert.AreEqual(1, cached.Count);
 
@@ -318,6 +338,23 @@ namespace WalkingTec.Mvvm.Core.Test.Cache
 
             var stillCached = svc.GetAll<CityCode>(ctx, null);
             Assert.AreSame(cached, stillCached, "CityCode cache should not be invalidated by OrderRecord write");
+        }
+
+        [TestMethod]
+        public void SaveChanges_without_LookupCacheService_set_completes_normally()
+        {
+            // LookupCacheService 未設定時，SaveChanges 仍正常運作（不 throw）
+            using var conn = new SqliteConnection("DataSource=:memory:");
+            conn.Open();
+            var opts = new DbContextOptionsBuilder<TestFwContext>().UseSqlite(conn).Options;
+            using var ctx = new TestFwContext(opts);
+            ctx.Database.EnsureCreated();
+            // 故意不設定 LookupCacheService
+
+            ctx.CityCodes.Add(new CityCode { ID = Guid.NewGuid(), Name = "台南", Province = "南部" });
+            var count = ctx.SaveChanges();
+
+            Assert.AreEqual(1, count);
         }
     }
 

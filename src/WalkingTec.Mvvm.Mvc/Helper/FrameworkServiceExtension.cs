@@ -553,7 +553,6 @@ namespace WalkingTec.Mvvm.Mvc
                 new WalkingTec.Mvvm.Core.Cache.LookupCacheService(
                     sp.GetRequiredService<Microsoft.Extensions.Caching.Memory.IMemoryCache>(),
                     AppDomain.CurrentDomain.GetAssemblies()));
-            services.AddSingleton<WalkingTec.Mvvm.Core.Cache.LookupInvalidationInterceptor>();
             services.AddHostedService<WalkingTec.Mvvm.Core.Cache.LookupCacheWarmupService>();
             var cs = conf.Connections.Where(x => x.Enabled).ToList();
             foreach (var item in cs)

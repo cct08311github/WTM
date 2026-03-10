@@ -77,6 +77,61 @@ namespace WalkingTec.Mvvm.Core
         public FrameworkContext(DbContextOptions options) : base(options) { }
 
         /// <summary>
+        /// 由 WTMContext 在建立 DataContext 後透過 property injection 注入。
+        /// 設定後 SaveChanges 將在寫入含 [CacheLookup] 實體時自動失效快取；未設定時不影響正常 SaveChanges 行為。
+        /// </summary>
+        public WalkingTec.Mvvm.Core.Cache.ILookupCacheService? LookupCacheService { get; set; }
+
+        public override int SaveChanges()
+        {
+            var dirtyLookups = CollectDirtyLookupTypes();
+            var result = base.SaveChanges();
+            InvalidateLookups(dirtyLookups);
+            return result;
+        }
+
+        public override int SaveChanges(bool acceptAllChangesOnSuccess)
+        {
+            var dirtyLookups = CollectDirtyLookupTypes();
+            var result = base.SaveChanges(acceptAllChangesOnSuccess);
+            InvalidateLookups(dirtyLookups);
+            return result;
+        }
+
+        public override async Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+        {
+            var dirtyLookups = CollectDirtyLookupTypes();
+            var result = await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+            InvalidateLookups(dirtyLookups);
+            return result;
+        }
+
+        public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            var dirtyLookups = CollectDirtyLookupTypes();
+            var result = await base.SaveChangesAsync(cancellationToken);
+            InvalidateLookups(dirtyLookups);
+            return result;
+        }
+
+        private List<Type> CollectDirtyLookupTypes()
+        {
+            if (LookupCacheService == null) return new List<Type>();
+            return ChangeTracker.Entries()
+                .Where(e => e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
+                .Select(e => e.Entity.GetType())
+                .Where(t => LookupCacheService.IsCacheable(t))
+                .Distinct()
+                .ToList();
+        }
+
+        private void InvalidateLookups(List<Type> types)
+        {
+            foreach (var type in types)
+                LookupCacheService?.InvalidateType(type);
+        }
+
+        /// <summary>
         /// OnModelCreating
         /// </summary>
         /// <param name="modelBuilder"></param>
