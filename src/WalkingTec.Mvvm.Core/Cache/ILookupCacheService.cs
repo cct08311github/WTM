@@ -41,5 +41,12 @@ namespace WalkingTec.Mvvm.Core.Cache
 
         /// <summary>全域預設 TenantIsolation 值。</summary>
         bool DefaultTenantIsolation { get; }
+
+        /// <summary>
+        /// 強制重新載入：先失效指定型別的所有租戶快取，再立即從 DB 重新查詢填入快取。
+        /// 適用於 admin 批次匯入後，避免失效後首次請求的冷查詢。
+        /// </summary>
+        Task RefreshAsync<T>(DbContext dc, string? tenantId = null, CancellationToken ct = default)
+            where T : TopBasePoco;
     }
 }

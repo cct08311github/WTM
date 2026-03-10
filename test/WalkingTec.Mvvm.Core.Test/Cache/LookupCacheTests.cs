@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -318,6 +319,109 @@ namespace WalkingTec.Mvvm.Core.Test.Cache
             var (_, svc, _) = TestHelper.Create(conn, options);
 
             Assert.IsFalse(svc.DefaultTenantIsolation);
+        }
+    }
+
+    // ─── Stampede + RefreshAsync ─────────────────────────────────────────────────
+
+    [TestClass]
+    public class StampedeAndRefreshTests
+    {
+        [TestMethod]
+        public async Task GetAllAsync_concurrent_misses_only_query_db_once_via_semaphore()
+        {
+            using var conn = new SqliteConnection("DataSource=:memory:");
+            conn.Open();
+            var (ctx, svc, _) = TestHelper.Create(conn);
+            ctx.CityCodes.Add(new CityCode { ID = Guid.NewGuid(), Name = "台北", Province = "北部" });
+            ctx.SaveChanges();
+
+            // 並發 10 個 cache miss 請求
+            var tasks = Enumerable.Range(0, 10)
+                .Select(_ => svc.GetAllAsync<CityCode>(ctx, null))
+                .ToArray();
+
+            var results = await Task.WhenAll(tasks);
+
+            // 所有結果應相同（同一個快取參考）
+            foreach (var r in results)
+            {
+                Assert.AreEqual(1, r.Count);
+                Assert.AreEqual("台北", r[0].Name);
+            }
+
+            // 驗證快取命中：再查一次應回傳相同參考
+            var cached = svc.GetAll<CityCode>(ctx, null);
+            Assert.AreSame(results[0], cached, "All should return the same cached reference");
+        }
+
+        [TestMethod]
+        public void GetAll_concurrent_misses_only_query_db_once_via_semaphore()
+        {
+            using var conn = new SqliteConnection("DataSource=:memory:");
+            conn.Open();
+            var (ctx, svc, _) = TestHelper.Create(conn);
+            ctx.CityCodes.Add(new CityCode { ID = Guid.NewGuid(), Name = "高雄", Province = "南部" });
+            ctx.SaveChanges();
+
+            // 並發 10 個同步 cache miss
+            var results = new IReadOnlyList<CityCode>[10];
+            var threads = Enumerable.Range(0, 10).Select(i => new Thread(() =>
+            {
+                results[i] = svc.GetAll<CityCode>(ctx, null);
+            })).ToArray();
+
+            foreach (var t in threads) t.Start();
+            foreach (var t in threads) t.Join();
+
+            foreach (var r in results)
+            {
+                Assert.IsNotNull(r);
+                Assert.AreEqual(1, r!.Count);
+            }
+        }
+
+        [TestMethod]
+        public async Task RefreshAsync_invalidates_and_reloads()
+        {
+            using var conn = new SqliteConnection("DataSource=:memory:");
+            conn.Open();
+            var (ctx, svc, _) = TestHelper.Create(conn);
+            ctx.CityCodes.Add(new CityCode { ID = Guid.NewGuid(), Name = "台北", Province = "北部" });
+            ctx.SaveChanges();
+
+            // 暖機
+            var first = svc.GetAll<CityCode>(ctx, null);
+            Assert.AreEqual(1, first.Count);
+
+            // 新增資料後 Refresh
+            ctx.CityCodes.Add(new CityCode { ID = Guid.NewGuid(), Name = "高雄", Province = "南部" });
+            ctx.SaveChanges();
+
+            await svc.RefreshAsync<CityCode>(ctx, null);
+
+            // 應立即看到新資料，且快取已填入（不需再查 DB）
+            var after = svc.GetAll<CityCode>(ctx, null);
+            Assert.AreEqual(2, after.Count, "RefreshAsync should reload from DB immediately");
+        }
+
+        [TestMethod]
+        public async Task RefreshAsync_fills_cache_so_next_call_is_hit()
+        {
+            using var conn = new SqliteConnection("DataSource=:memory:");
+            conn.Open();
+            var (ctx, svc, _) = TestHelper.Create(conn);
+            ctx.CityCodes.Add(new CityCode { ID = Guid.NewGuid(), Name = "A", Province = "北部" });
+            ctx.SaveChanges();
+
+            await svc.RefreshAsync<CityCode>(ctx, null);
+
+            // 新增資料但不 refresh — 快取命中應看到舊資料
+            ctx.CityCodes.Add(new CityCode { ID = Guid.NewGuid(), Name = "B", Province = "南部" });
+            ctx.SaveChanges();
+
+            var cached = svc.GetAll<CityCode>(ctx, null);
+            Assert.AreEqual(1, cached.Count, "Cache should be hit after RefreshAsync");
         }
     }
 
