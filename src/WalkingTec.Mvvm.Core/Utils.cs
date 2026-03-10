@@ -662,12 +662,13 @@ namespace WalkingTec.Mvvm.Core
         }
 
         #region 加解密
+
         /// <summary>
-        /// 通过密钥将内容加密
+        /// 使用 AES-256-CBC 加密字串。每次加密產生隨機 IV，並將 IV 前置於密文中。
         /// </summary>
-        /// <param name="stringToEncrypt">要加密的字符串</param>
-        /// <param name="encryptKey">加密密钥</param>
-        /// <returns></returns>
+        /// <param name="stringToEncrypt">要加密的字串</param>
+        /// <param name="encryptKey">加密金鑰（任意長度，內部以 SHA-256 衍生 32 位元組金鑰）</param>
+        /// <returns>Base64 編碼的 (IV + 密文)，或空字串（若輸入為空）</returns>
         public static string EncryptString(string stringToEncrypt, string encryptKey)
         {
             if (string.IsNullOrEmpty(stringToEncrypt))
@@ -675,68 +676,145 @@ namespace WalkingTec.Mvvm.Core
                 return "";
             }
 
-            string stringEncrypted = string.Empty;
-            byte[] bytIn = UTF8Encoding.UTF8.GetBytes(stringToEncrypt);
-            MemoryStream encryptStream = new System.IO.MemoryStream();
-            CryptoStream encStream = new CryptoStream(encryptStream, GenerateDESCryptoServiceProvider(encryptKey).CreateEncryptor(), CryptoStreamMode.Write);
+            using var aes = CreateAes(encryptKey);
+            aes.GenerateIV();
+            byte[] iv = aes.IV;
+            byte[] plainBytes = UTF8Encoding.UTF8.GetBytes(stringToEncrypt);
 
-            try
+            using var encryptStream = new MemoryStream();
+            using (var cryptoStream = new CryptoStream(encryptStream, aes.CreateEncryptor(), CryptoStreamMode.Write))
             {
-                encStream.Write(bytIn, 0, bytIn.Length);
-                encStream.FlushFinalBlock();
-                stringEncrypted = Convert.ToBase64String(encryptStream.ToArray(), 0, (int)encryptStream.Length);
-            }
-            catch
-            {
-                return "";
-            }
-            finally
-            {
-                encryptStream.Close();
-                encStream.Close();
+                cryptoStream.Write(plainBytes, 0, plainBytes.Length);
+                cryptoStream.FlushFinalBlock();
             }
 
-            return stringEncrypted;
+            byte[] cipherBytes = encryptStream.ToArray();
+            byte[] result = new byte[iv.Length + cipherBytes.Length];
+            Buffer.BlockCopy(iv, 0, result, 0, iv.Length);
+            Buffer.BlockCopy(cipherBytes, 0, result, iv.Length, cipherBytes.Length);
+
+            return Convert.ToBase64String(result);
         }
 
         /// <summary>
-        /// 通过密钥讲内容解密
+        /// 使用 AES-256-CBC 解密字串。若 AES 解密失敗，自動嘗試舊版 DES 解密（向後相容）。
         /// </summary>
-        /// <param name="stringToDecrypt">要解密的字符串</param>
-        /// <param name="encryptKey">密钥</param>
-        /// <returns></returns>
+        /// <param name="stringToDecrypt">要解密的字串（Base64 編碼）</param>
+        /// <param name="encryptKey">解密金鑰</param>
+        /// <returns>解密後的明文，或空字串（若輸入為空或解密失敗）</returns>
         public static string DecryptString(string stringToDecrypt, string encryptKey)
         {
-            if (String.IsNullOrEmpty(stringToDecrypt))
+            if (string.IsNullOrEmpty(stringToDecrypt))
             {
                 return "";
             }
 
-            string stringDecrypted = string.Empty;
-            byte[] bytIn = Convert.FromBase64String(stringToDecrypt.Replace(" ", "+"));
-            MemoryStream decryptStream = new MemoryStream();
-            CryptoStream encStream = new CryptoStream(decryptStream, GenerateDESCryptoServiceProvider(encryptKey).CreateDecryptor(), CryptoStreamMode.Write);
+            // Try AES-256-CBC first
+            try
+            {
+                byte[] fullCipher = Convert.FromBase64String(stringToDecrypt.Replace(" ", "+"));
+
+                // AES-256-CBC requires at least 16 bytes for IV + at least 16 bytes for one cipher block
+                if (fullCipher.Length < 32)
+                {
+#pragma warning disable CS0618
+                    return DecryptStringLegacy(stringToDecrypt, encryptKey);
+#pragma warning restore CS0618
+                }
+
+                byte[] iv = new byte[16];
+                byte[] cipherBytes = new byte[fullCipher.Length - 16];
+                Buffer.BlockCopy(fullCipher, 0, iv, 0, 16);
+                Buffer.BlockCopy(fullCipher, 16, cipherBytes, 0, cipherBytes.Length);
+
+                using var aes = CreateAes(encryptKey);
+                aes.IV = iv;
+
+                var decryptStream = new MemoryStream();
+                var cryptoStream = new CryptoStream(decryptStream, aes.CreateDecryptor(), CryptoStreamMode.Write);
+
+                try
+                {
+                    cryptoStream.Write(cipherBytes, 0, cipherBytes.Length);
+                    cryptoStream.FlushFinalBlock();
+                    return UTF8Encoding.UTF8.GetString(decryptStream.ToArray());
+                }
+                finally
+                {
+                    decryptStream.Dispose();
+                    try { cryptoStream.Dispose(); } catch { /* suppress dispose errors */ }
+                }
+            }
+            catch (CryptographicException)
+            {
+                // AES failed — fall back to legacy DES decryption for migration period
+#pragma warning disable CS0618
+                return DecryptStringLegacy(stringToDecrypt, encryptKey);
+#pragma warning restore CS0618
+            }
+        }
+
+        /// <summary>
+        /// 使用舊版 DES 解密字串。僅供向後相容遷移期間使用。
+        /// </summary>
+        /// <param name="stringToDecrypt">要解密的字串（Base64 編碼）</param>
+        /// <param name="encryptKey">解密金鑰</param>
+        /// <returns>解密後的明文，或空字串</returns>
+        [Obsolete("Legacy DES decryption retained for backward compatibility. Use EncryptString/DecryptString (AES-256) for new data.")]
+        public static string DecryptStringLegacy(string stringToDecrypt, string encryptKey)
+        {
+            if (string.IsNullOrEmpty(stringToDecrypt))
+            {
+                return "";
+            }
 
             try
             {
-                encStream.Write(bytIn, 0, bytIn.Length);
-                encStream.FlushFinalBlock();
-                stringDecrypted = Encoding.Default.GetString(decryptStream.ToArray());
+                byte[] bytIn = Convert.FromBase64String(stringToDecrypt.Replace(" ", "+"));
+
+                using var des = CreateLegacyDes(encryptKey);
+                var decryptStream = new MemoryStream();
+                var cryptoStream = new CryptoStream(decryptStream, des.CreateDecryptor(), CryptoStreamMode.Write);
+
+                try
+                {
+                    cryptoStream.Write(bytIn, 0, bytIn.Length);
+                    cryptoStream.FlushFinalBlock();
+                    return UTF8Encoding.UTF8.GetString(decryptStream.ToArray());
+                }
+                finally
+                {
+                    decryptStream.Dispose();
+                    try { cryptoStream.Dispose(); } catch { /* suppress dispose errors */ }
+                }
             }
-            catch
+            catch (CryptographicException)
             {
                 return "";
             }
-            finally
+            catch (FormatException)
             {
-                decryptStream.Close();
-                encStream.Close();
+                return "";
             }
-
-            return stringDecrypted;
         }
 
-        private static DES GenerateDESCryptoServiceProvider(string key)
+        /// <summary>
+        /// 建立 AES-256-CBC 加密器，使用 SHA-256 從使用者金鑰衍生 32 位元組金鑰。
+        /// </summary>
+        private static Aes CreateAes(string key)
+        {
+            var aes = Aes.Create();
+            aes.Mode = CipherMode.CBC;
+            aes.Padding = PaddingMode.PKCS7;
+            aes.KeySize = 256;
+            aes.Key = SHA256.HashData(UTF8Encoding.UTF8.GetBytes(key));
+            return aes;
+        }
+
+        /// <summary>
+        /// 建立舊版 DES 加密器（僅供向後相容解密使用）。
+        /// </summary>
+        private static DES CreateLegacyDes(string key)
         {
             var dCrypter = DES.Create();
 
@@ -744,7 +822,7 @@ namespace WalkingTec.Mvvm.Core
             if (dCrypter.LegalKeySizes.Length > 0)
             {
                 int moreSize = dCrypter.LegalKeySizes[0].MinSize;
-                while (key.Length > 8)
+                if (key.Length > 8)
                 {
                     key = key.Substring(0, 8);
                 }
