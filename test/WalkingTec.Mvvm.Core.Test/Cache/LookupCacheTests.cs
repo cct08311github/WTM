@@ -54,7 +54,8 @@ namespace WalkingTec.Mvvm.Core.Test.Cache
 
     internal static class TestHelper
     {
-        public static (LookupTestContext ctx, LookupCacheService svc, IMemoryCache mc) Create(SqliteConnection conn)
+        public static (LookupTestContext ctx, LookupCacheService svc, IMemoryCache mc) Create(
+            SqliteConnection conn, LookupCacheOptions? options = null)
         {
             var opts = new DbContextOptionsBuilder<LookupTestContext>().UseSqlite(conn).Options;
             var ctx = new LookupTestContext(opts);
@@ -62,7 +63,7 @@ namespace WalkingTec.Mvvm.Core.Test.Cache
 
             var mc = new MemoryCache(new MemoryCacheOptions());
             // 只掃描含有測試 fixture 型別的 assembly
-            var svc = new LookupCacheService(mc, new[] { typeof(CityCode).Assembly });
+            var svc = new LookupCacheService(mc, new[] { typeof(CityCode).Assembly }, options);
             return (ctx, svc, mc);
         }
     }
@@ -151,6 +152,23 @@ namespace WalkingTec.Mvvm.Core.Test.Cache
 
             Assert.AreEqual(1, second.Count, "Cache hit: should return original cached list");
             Assert.AreSame(first, second, "Should be identical reference from cache");
+        }
+
+        // ── GetAll returns IReadOnlyList ─────────────────────────────────────────
+
+        [TestMethod]
+        public void GetAll_returns_IReadOnlyList()
+        {
+            using var conn = new SqliteConnection("DataSource=:memory:");
+            conn.Open();
+            var (ctx, svc, _) = TestHelper.Create(conn);
+            ctx.CityCodes.Add(new CityCode { ID = Guid.NewGuid(), Name = "台北", Province = "北部" });
+            ctx.SaveChanges();
+
+            IReadOnlyList<CityCode> result = svc.GetAll<CityCode>(ctx, tenantId: null);
+
+            Assert.IsInstanceOfType(result, typeof(IReadOnlyList<CityCode>));
+            Assert.AreEqual(1, result.Count);
         }
 
         // ── Invalidate<T> ────────────────────────────────────────────────────────
@@ -250,6 +268,56 @@ namespace WalkingTec.Mvvm.Core.Test.Cache
 
             Assert.AreEqual(sync.Count, async_.Count);
             Assert.AreEqual(sync[0].Name, async_[0].Name);
+        }
+
+        // ── GetAttribute ────────────────────────────────────────────────────────
+
+        [TestMethod]
+        public void GetAttribute_returns_attribute_for_cacheable_type()
+        {
+            using var conn = new SqliteConnection("DataSource=:memory:");
+            conn.Open();
+            var (_, svc, _) = TestHelper.Create(conn);
+
+            var attr = svc.GetAttribute(typeof(CityCode));
+
+            Assert.IsNotNull(attr);
+            Assert.AreEqual(10, attr!.TtlMinutes);
+        }
+
+        [TestMethod]
+        public void GetAttribute_returns_null_for_non_cacheable_type()
+        {
+            using var conn = new SqliteConnection("DataSource=:memory:");
+            conn.Open();
+            var (_, svc, _) = TestHelper.Create(conn);
+
+            var attr = svc.GetAttribute(typeof(OrderRecord));
+
+            Assert.IsNull(attr);
+        }
+
+        // ── DefaultTenantIsolation ──────────────────────────────────────────────
+
+        [TestMethod]
+        public void DefaultTenantIsolation_is_true_by_default()
+        {
+            using var conn = new SqliteConnection("DataSource=:memory:");
+            conn.Open();
+            var (_, svc, _) = TestHelper.Create(conn);
+
+            Assert.IsTrue(svc.DefaultTenantIsolation);
+        }
+
+        [TestMethod]
+        public void DefaultTenantIsolation_can_be_overridden_via_options()
+        {
+            using var conn = new SqliteConnection("DataSource=:memory:");
+            conn.Open();
+            var options = new LookupCacheOptions { DefaultTenantIsolation = false };
+            var (_, svc, _) = TestHelper.Create(conn, options);
+
+            Assert.IsFalse(svc.DefaultTenantIsolation);
         }
     }
 
@@ -369,8 +437,9 @@ namespace WalkingTec.Mvvm.Core.Test.Cache
             var attr = new CacheLookupAttribute();
 
             Assert.AreEqual(30, attr.TtlMinutes);
-            Assert.IsTrue(attr.TenantIsolation);
+            Assert.IsNull(attr.TenantIsolationOrNull, "TenantIsolation should be null (unset) by default");
             Assert.IsTrue(attr.WarmOnStartup);
+            Assert.IsNull(attr.ConnectionKey, "ConnectionKey should be null by default");
         }
 
         [TestMethod]
@@ -385,7 +454,51 @@ namespace WalkingTec.Mvvm.Core.Test.Cache
 
             Assert.AreEqual(120, attr.TtlMinutes);
             Assert.IsFalse(attr.TenantIsolation);
+            Assert.IsFalse(attr.TenantIsolationOrNull);
             Assert.IsFalse(attr.WarmOnStartup);
+        }
+
+        [TestMethod]
+        public void Attribute_TenantIsolation_null_by_default()
+        {
+            var attr = new CacheLookupAttribute();
+
+            Assert.IsNull(attr.TenantIsolationOrNull,
+                "TenantIsolation should be null (unset) by default, meaning use global default");
+        }
+
+        [TestMethod]
+        public void Attribute_TenantIsolation_explicit_true_overrides_null()
+        {
+            var attr = new CacheLookupAttribute { TenantIsolation = true };
+
+            Assert.IsTrue(attr.TenantIsolationOrNull);
+            Assert.IsTrue(attr.TenantIsolation);
+        }
+
+        [TestMethod]
+        public void Attribute_TenantIsolation_explicit_false_overrides_null()
+        {
+            var attr = new CacheLookupAttribute { TenantIsolation = false };
+
+            Assert.IsFalse(attr.TenantIsolationOrNull);
+            Assert.IsFalse(attr.TenantIsolation);
+        }
+
+        [TestMethod]
+        public void Attribute_ConnectionKey_null_by_default()
+        {
+            var attr = new CacheLookupAttribute();
+
+            Assert.IsNull(attr.ConnectionKey);
+        }
+
+        [TestMethod]
+        public void Attribute_ConnectionKey_can_be_set()
+        {
+            var attr = new CacheLookupAttribute { ConnectionKey = "orss" };
+
+            Assert.AreEqual("orss", attr.ConnectionKey);
         }
 
         [TestMethod]

@@ -21,6 +21,7 @@ namespace WalkingTec.Mvvm.Core.Cache
     public class LookupCacheService : ILookupCacheService
     {
         private readonly IMemoryCache _cache;
+        private readonly LookupCacheOptions _options;
 
         // per-type CTS，用於 InvalidateType（IMemoryCache 無 Clear 方法）
         private readonly Dictionary<Type, CancellationTokenSource> _ctsByType = new();
@@ -29,15 +30,16 @@ namespace WalkingTec.Mvvm.Core.Cache
         // 啟動時掃描結果
         private readonly Dictionary<Type, CacheLookupAttribute> _registry;
 
-        public LookupCacheService(IMemoryCache cache, IEnumerable<Assembly> assemblies)
+        public LookupCacheService(IMemoryCache cache, IEnumerable<Assembly> assemblies, LookupCacheOptions? options = null)
         {
             _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+            _options = options ?? new LookupCacheOptions();
             _registry = ScanAssemblies(assemblies);
         }
 
         // ─── ILookupCacheService ──────────────────────────────────────────────
 
-        public List<T> GetAll<T>(DbContext dc, string? tenantId = null) where T : TopBasePoco
+        public IReadOnlyList<T> GetAll<T>(DbContext dc, string? tenantId = null) where T : TopBasePoco
         {
             var key = BuildKey(typeof(T), tenantId);
             return _cache.GetOrCreate(key, entry =>
@@ -47,7 +49,7 @@ namespace WalkingTec.Mvvm.Core.Cache
             }) ?? new List<T>();
         }
 
-        public async Task<List<T>> GetAllAsync<T>(
+        public async Task<IReadOnlyList<T>> GetAllAsync<T>(
             DbContext dc,
             string? tenantId = null,
             CancellationToken ct = default) where T : TopBasePoco
@@ -95,6 +97,11 @@ namespace WalkingTec.Mvvm.Core.Cache
                 .Where(kv => kv.Value.WarmOnStartup)
                 .Select(kv => kv.Key)
                 .ToList();
+
+        public CacheLookupAttribute? GetAttribute(Type entityType) =>
+            _registry.TryGetValue(entityType, out var attr) ? attr : null;
+
+        public bool DefaultTenantIsolation => _options.DefaultTenantIsolation;
 
         // ─── 私有輔助 ─────────────────────────────────────────────────────────
 

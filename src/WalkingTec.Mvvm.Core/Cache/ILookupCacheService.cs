@@ -16,12 +16,12 @@ namespace WalkingTec.Mvvm.Core.Cache
         /// <summary>
         /// 取得指定型別的全表快取資料（cache miss 時自動從 DB 補充）。
         /// </summary>
-        List<T> GetAll<T>(DbContext dc, string? tenantId = null) where T : TopBasePoco;
+        IReadOnlyList<T> GetAll<T>(DbContext dc, string? tenantId = null) where T : TopBasePoco;
 
         /// <summary>
         /// 非同步取得指定型別的全表快取資料（cache miss 時自動從 DB 補充）。
         /// </summary>
-        Task<List<T>> GetAllAsync<T>(DbContext dc, string? tenantId = null, CancellationToken ct = default)
+        Task<IReadOnlyList<T>> GetAllAsync<T>(DbContext dc, string? tenantId = null, CancellationToken ct = default)
             where T : TopBasePoco;
 
         /// <summary>使指定型別、指定租戶的快取失效。</summary>
@@ -35,5 +35,11 @@ namespace WalkingTec.Mvvm.Core.Cache
 
         /// <summary>取得所有標記 WarmOnStartup=true 的型別清單（供 warmup service 使用）。</summary>
         IReadOnlyList<Type> GetWarmupTypes();
+
+        /// <summary>取得指定型別的 <see cref="CacheLookupAttribute"/>，未標記時回傳 null。</summary>
+        CacheLookupAttribute? GetAttribute(Type entityType);
+
+        /// <summary>全域預設 TenantIsolation 值。</summary>
+        bool DefaultTenantIsolation { get; }
     }
 }
