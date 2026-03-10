@@ -549,6 +549,12 @@ namespace WalkingTec.Mvvm.Mvc
             services.AddMemoryCache();
             services.AddSingleton<WalkingTec.Mvvm.Core.Analysis.IAnalysisCache, WalkingTec.Mvvm.Core.Analysis.MemoryAnalysisCache>();
             services.AddSingleton<WalkingTec.Mvvm.Core.Analysis.IAnalysisFieldPolicy, WalkingTec.Mvvm.Core.Analysis.DefaultAnalysisFieldPolicy>();
+            services.AddSingleton<WalkingTec.Mvvm.Core.Cache.ILookupCacheService>(sp =>
+                new WalkingTec.Mvvm.Core.Cache.LookupCacheService(
+                    sp.GetRequiredService<Microsoft.Extensions.Caching.Memory.IMemoryCache>(),
+                    AppDomain.CurrentDomain.GetAssemblies()));
+            services.AddSingleton<WalkingTec.Mvvm.Core.Cache.LookupInvalidationInterceptor>();
+            services.AddHostedService<WalkingTec.Mvvm.Core.Cache.LookupCacheWarmupService>();
             var cs = conf.Connections.Where(x => x.Enabled).ToList();
             foreach (var item in cs)
             {

@@ -290,6 +290,58 @@ namespace WalkingTec.Mvvm.Core
         public string? BaseUrl { get; set; }
         #endregion
 
+        #region LookupCache
+
+        /// <summary>
+        /// 取得靜態/參數表的快取資料（cache miss 時自動從 DB 補充）。
+        /// Model 必須標記 <see cref="WalkingTec.Mvvm.Core.Cache.CacheLookupAttribute"/>。
+        /// </summary>
+        /// <param name="predicate">可選的記憶體過濾條件，不觸發額外 DB 查詢。</param>
+        public System.Collections.Generic.List<T> GetLookup<T>(
+            System.Func<T, bool>? predicate = null) where T : TopBasePoco
+        {
+            var svc = ServiceProvider?.GetService(typeof(WalkingTec.Mvvm.Core.Cache.ILookupCacheService))
+                      as WalkingTec.Mvvm.Core.Cache.ILookupCacheService;
+            if (svc == null)
+                throw new InvalidOperationException(
+                    "ILookupCacheService is not registered. Call services.AddWtmContext() first.");
+
+            if (DC is not Microsoft.EntityFrameworkCore.DbContext dbCtx)
+                throw new InvalidOperationException(
+                    "GetLookup requires an EF Core DbContext. Ensure IDataContext is configured.");
+
+            var tenantId = LoginUserInfo?.TenantCode;
+            var all = svc.GetAll<T>(dbCtx, tenantId);
+            return predicate == null ? all : all.Where(predicate).ToList();
+        }
+
+        /// <summary>
+        /// 非同步取得靜態/參數表的快取資料（cache miss 時自動從 DB 補充）。
+        /// Model 必須標記 <see cref="WalkingTec.Mvvm.Core.Cache.CacheLookupAttribute"/>。
+        /// </summary>
+        /// <param name="predicate">可選的記憶體過濾條件，不觸發額外 DB 查詢。</param>
+        /// <param name="ct">取消 token。</param>
+        public async System.Threading.Tasks.Task<System.Collections.Generic.List<T>> GetLookupAsync<T>(
+            System.Func<T, bool>? predicate = null,
+            System.Threading.CancellationToken ct = default) where T : TopBasePoco
+        {
+            var svc = ServiceProvider?.GetService(typeof(WalkingTec.Mvvm.Core.Cache.ILookupCacheService))
+                      as WalkingTec.Mvvm.Core.Cache.ILookupCacheService;
+            if (svc == null)
+                throw new InvalidOperationException(
+                    "ILookupCacheService is not registered. Call services.AddWtmContext() first.");
+
+            if (DC is not Microsoft.EntityFrameworkCore.DbContext dbCtx)
+                throw new InvalidOperationException(
+                    "GetLookupAsync requires an EF Core DbContext. Ensure IDataContext is configured.");
+
+            var tenantId = LoginUserInfo?.TenantCode;
+            var all = await svc.GetAllAsync<T>(dbCtx, tenantId, ct).ConfigureAwait(false);
+            return predicate == null ? all : all.Where(predicate).ToList();
+        }
+
+        #endregion
+
         public string HostAddress { get
             {
                 if (this.HttpContext?.Request != null)
