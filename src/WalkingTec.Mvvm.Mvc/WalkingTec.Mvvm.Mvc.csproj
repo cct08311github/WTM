@@ -38,6 +38,10 @@
     </Content>
     <EmbeddedResource Include="framework_layui.js" />
     <EmbeddedResource Include="framework_analysis.js" />
+    <EmbeddedResource Include="framework_dashboard.js" />
+    <EmbeddedResource Include="framework_dashboard.css" />
+    <EmbeddedResource Include="lib\gridstack\gridstack-all.min.js" />
+    <EmbeddedResource Include="lib\gridstack\gridstack.min.css" />
     <EmbeddedResource Include="GeneratorFiles\ApiTest.txt" />
     <EmbeddedResource Include="GeneratorFiles\ApiTestTopPoco.txt" />
     <EmbeddedResource Include="GeneratorFiles\BatchVM.txt" />

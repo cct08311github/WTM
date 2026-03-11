@@ -60,6 +60,12 @@ namespace WalkingTec.Mvvm.Core.Analysis
             throw new InvalidOperationException($"VM type not registered for analysis: {fullName}");
         }
 
+        /// <summary>
+        /// 回傳所有已註冊的 VM 型別（FullName → Type）。
+        /// </summary>
+        public IReadOnlyDictionary<string, Type> GetRegisteredTypes()
+            => _whitelist;
+
         private static bool IsBasePagedListVm(Type t)
         {
             var bt = t.BaseType;
