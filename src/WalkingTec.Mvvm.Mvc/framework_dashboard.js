@@ -230,12 +230,115 @@
         }
     };
 
+    // --- DashboardManager ---------------------------------------------------
+    var _currentDashboard = null;
+    var _refreshTimer = null;
+    var _containerId = null;
+
+    var DashboardManager = {
+        init: function(containerId, dashboardId) {
+            _containerId = containerId;
+            return this._loadDashboard(dashboardId).then(function(def) {
+                _currentDashboard = def;
+                GridManager.init('#' + containerId, {});
+                if (def.layout) {
+                    GridManager.loadLayout(def.layout);
+                }
+                
+                DashboardManager._renderAllWidgets(def);
+                
+                if (def.links) {
+                    DashboardManager._registerLinks(def.links);
+                }
+                
+                if (def.refreshInterval && def.refreshInterval > 0) {
+                    DashboardManager.startRefresh(def.refreshInterval);
+                }
+                return def;
+            }).catch(function(e) {
+                if (console && console.error) console.error('Dashboard init failed', e);
+            });
+        },
+        
+        _loadDashboard: function(id) {
+            return global.fetch('/_dashboard/' + id)
+                .then(function(res) {
+                    if (!res.ok) throw new Error('Network response was not ok');
+                    return res.json();
+                });
+        },
+        
+        _renderAllWidgets: function(def) {
+            if (!def.widgets) return;
+            for (var widgetId in def.widgets) {
+                if (Object.prototype.hasOwnProperty.call(def.widgets, widgetId)) {
+                    this._fetchAndRenderWidget(widgetId, def.widgets[widgetId]);
+                }
+            }
+        },
+        
+        _fetchAndRenderWidget: function(widgetId, widgetDef) {
+            var container = document.getElementById(widgetId);
+            if (!container) return; // Grid item might not exist yet if layout wasn't set up perfectly, but assume it exists in grid
+            
+            // Show loading
+            container.textContent = 'Loading...';
+            
+            var url = '/_dashboard/' + _currentDashboard.id + '/widget/' + widgetId + '/data';
+            
+            global.fetch(url)
+                .then(function(res) {
+                    if (!res.ok) throw new Error('Widget data fetch failed');
+                    return res.json();
+                })
+                .then(function(data) {
+                    var renderer = WidgetRendererFactory.getRenderer(widgetDef.type);
+                    if (renderer) {
+                        renderer(container, data, widgetDef.config || {});
+                    } else {
+                        container.textContent = 'Unknown widget type: ' + widgetDef.type;
+                    }
+                })
+                .catch(function(e) {
+                    container.textContent = 'Error loading widget data.';
+                    if (console && console.error) console.error(e);
+                });
+        },
+        
+        _registerLinks: function(links) {
+            for (var i = 0; i < links.length; i++) {
+                var link = links[i];
+                EventBus.on(link.event, link.sourceWidget, function(payload) {
+                    // Logic to handle link action e.g., filter target widget
+                    // This will be expanded later
+                });
+            }
+        },
+        
+        startRefresh: function(intervalSec) {
+            this.stopRefresh();
+            _refreshTimer = setInterval(function() {
+                if (_currentDashboard) {
+                    DashboardManager._renderAllWidgets(_currentDashboard);
+                }
+            }, intervalSec * 1000);
+        },
+        
+        stopRefresh: function() {
+            if (_refreshTimer) {
+                clearInterval(_refreshTimer);
+                _refreshTimer = null;
+            }
+        }
+    };
+
     // --- API 導出 ------------------------------------------------------------
     var api = {
         EventBus: EventBus,
         GridManager: GridManager,
         Utils: Utils,
-        WidgetRendererFactory: WidgetRendererFactory
+        WidgetRendererFactory: WidgetRendererFactory,
+        DashboardManager: DashboardManager
     };
 
     if (typeof global.window !== "undefined") {
