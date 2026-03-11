@@ -156,6 +156,25 @@
         calculateTrend: function(current, previous) {
             if (!previous) return 0;
             return ((current - previous) / previous) * 100;
+        },
+        animateNumber: function(element, from, to, duration) {
+            if (!global.requestAnimationFrame) {
+                element.textContent = String(to);
+                return;
+            }
+            var start = null;
+            var diff = to - from;
+            duration = duration || 500;
+            function step(ts) {
+                if (!start) start = ts;
+                var progress = Math.min((ts - start) / duration, 1);
+                var current = from + diff * progress;
+                element.textContent = String(Math.round(current));
+                if (progress < 1) {
+                    global.requestAnimationFrame(step);
+                }
+            }
+            global.requestAnimationFrame(step);
         }
     };
 
@@ -356,6 +375,8 @@
     var _currentDashboard = null;
     var _refreshTimer = null;
     var _containerId = null;
+    var _failureCounts = {};
+    var MAX_RETRIES = 3;
 
     var DashboardManager = {
         init: function(containerId, dashboardId) {
@@ -401,19 +422,25 @@
         
         _fetchAndRenderWidget: function(widgetId, widgetDef) {
             var container = document.getElementById(widgetId);
-            if (!container) return; // Grid item might not exist yet if layout wasn't set up perfectly, but assume it exists in grid
-            
-            // Show loading
+            if (!container) return;
+
+            // Skip if max retries exceeded
+            if ((_failureCounts[widgetId] || 0) >= MAX_RETRIES) return;
+
+            // Show loading state
+            container.className = 'wtm-widget-loading';
             container.textContent = 'Loading...';
-            
+
             var url = '/_dashboard/' + _currentDashboard.id + '/widget/' + widgetId + '/data';
-            
+
             global.fetch(url)
                 .then(function(res) {
                     if (!res.ok) throw new Error('Widget data fetch failed');
                     return res.json();
                 })
                 .then(function(data) {
+                    container.className = '';
+                    _failureCounts[widgetId] = 0;
                     var renderer = WidgetRendererFactory.getRenderer(widgetDef.type);
                     if (renderer) {
                         renderer(container, data, widgetDef.config || {});
@@ -422,6 +449,8 @@
                     }
                 })
                 .catch(function(e) {
+                    _failureCounts[widgetId] = (_failureCounts[widgetId] || 0) + 1;
+                    container.className = 'wtm-widget-error';
                     container.textContent = 'Error loading widget data.';
                     if (console && console.error) console.error(e);
                 });
@@ -451,6 +480,18 @@
                 clearInterval(_refreshTimer);
                 _refreshTimer = null;
             }
+        },
+
+        getFailureCounts: function() {
+            return _failureCounts;
+        },
+
+        shouldRetry: function(widgetId) {
+            return (_failureCounts[widgetId] || 0) < MAX_RETRIES;
+        },
+
+        _setFailureCount: function(widgetId, count) {
+            _failureCounts[widgetId] = count;
         }
     };
 
