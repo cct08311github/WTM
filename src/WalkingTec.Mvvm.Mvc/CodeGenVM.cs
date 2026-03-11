@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Extensions;
 
@@ -36,6 +37,9 @@ namespace WalkingTec.Mvvm.Mvc
 
         [Display(Name = "Codegen.GenApi")]
         public bool IsApi { get; set; }
+
+        [Display(Name = "Codegen.EnableAnalysis")]
+        public bool EnableAnalysis { get; set; }
 
         [Display(Name = "Codegen.AuthMode")]
         public ApiAuthMode AuthMode { get; set; }
@@ -386,6 +390,143 @@ namespace WalkingTec.Mvvm.Mvc
             FieldList = new CodeGenListVM();
             FieldList.CopyContext(this);
         }
+        /// <summary>
+        /// 在 Model source file 中自動插入 [Dimension] / [Measure] attribute
+        /// </summary>
+        public string InjectAnalysisAttributes()
+        {
+            if (!EnableAnalysis) return "";
+
+            var analysisFields = FieldInfos?.Where(x => x.IsDimensionField || x.IsMeasureField).ToList();
+            if (analysisFields == null || analysisFields.Count == 0) return "";
+
+            // Find Model source file
+            string modelName = SelectedModel?.Split(',').FirstOrDefault()?.Split('.').LastOrDefault() ?? "";
+            if (string.IsNullOrEmpty(modelName)) return "Error: Cannot resolve model name.";
+
+            string modelFileName = modelName + ".cs";
+            string modelFilePath = FindModelFile(MainDir, modelFileName);
+            if (modelFilePath == null)
+            {
+                return $"Warning: Cannot find {modelFileName}. Please manually add [Dimension]/[Measure] attributes.";
+            }
+
+            string content = File.ReadAllText(modelFilePath, Encoding.UTF8);
+            string originalContent = content;
+            bool modified = false;
+
+            // Add using if missing
+            if (!content.Contains("using WalkingTec.Mvvm.Core.Analysis;"))
+            {
+                var lastUsingMatch = Regex.Match(
+                    content,
+                    @"^using [^;]+;\s*$",
+                    RegexOptions.Multiline | RegexOptions.RightToLeft);
+                if (lastUsingMatch.Success)
+                {
+                    int insertPos = lastUsingMatch.Index + lastUsingMatch.Length;
+                    content = content.Insert(insertPos, "\nusing WalkingTec.Mvvm.Core.Analysis;");
+                    modified = true;
+                }
+            }
+
+            // Try to resolve model type for DateTime detection
+            Type modelType = Type.GetType(SelectedModel);
+
+            foreach (var field in analysisFields)
+            {
+                string attrName = field.IsDimensionField ? "Dimension" : "Measure";
+
+                // Skip if attribute already exists on this property
+                var alreadyHasAttr = Regex.IsMatch(
+                    content,
+                    @"\[" + attrName + @"[\](]" + @".*\n\s*public\s+\S+\??\s+" + Regex.Escape(field.FieldName) + @"\s",
+                    RegexOptions.Multiline);
+                if (alreadyHasAttr) continue;
+
+                // Build attribute string
+                string attrStr;
+                if (field.IsDimensionField)
+                {
+                    bool isDateTime = false;
+                    if (modelType != null)
+                    {
+                        var propType = modelType.GetSingleProperty(field.FieldName)?.PropertyType;
+                        if (propType != null)
+                        {
+                            var underlying = Nullable.GetUnderlyingType(propType) ?? propType;
+                            isDateTime = underlying == typeof(DateTime);
+                        }
+                    }
+                    else
+                    {
+                        // Fallback: check source text for DateTime type
+                        isDateTime = Regex.IsMatch(
+                            content,
+                            @"public\s+DateTime\??\s+" + Regex.Escape(field.FieldName) + @"\s");
+                    }
+
+                    attrStr = isDateTime
+                        ? "[Dimension(Hierarchy = DateHierarchy.Month)]"
+                        : "[Dimension]";
+                }
+                else
+                {
+                    attrStr = "[Measure]";
+                }
+
+                // Find property declaration and insert attribute before it
+                var propPattern = @"(\n)((\s*)\[[\s\S]*?)?((\s*)(public\s+\S+\??\s+" + Regex.Escape(field.FieldName) + @"\s*\{))";
+                var propMatch = Regex.Match(content, propPattern);
+                if (propMatch.Success)
+                {
+                    string indent = propMatch.Groups[5].Value;
+                    if (string.IsNullOrEmpty(indent)) indent = propMatch.Groups[3].Value;
+                    if (string.IsNullOrEmpty(indent)) indent = "        ";
+                    string insertion = indent + attrStr + "\n";
+                    int insertPos = propMatch.Groups[4].Index;
+                    content = content.Insert(insertPos, insertion);
+                    modified = true;
+                }
+            }
+
+            if (modified && content != originalContent)
+            {
+                File.WriteAllText(modelFilePath, content, Encoding.UTF8);
+                return $"Analysis attributes injected into {modelFilePath}";
+            }
+
+            return "";
+        }
+
+        /// <summary>
+        /// Search for a model .cs file starting from startDir and going up
+        /// </summary>
+        public string FindModelFile(string startDir, string fileName)
+        {
+            var dir = new DirectoryInfo(startDir);
+            int levels = 0;
+            while (dir != null && levels < 5)
+            {
+                try
+                {
+                    var files = dir.GetFiles(fileName, SearchOption.AllDirectories);
+                    var match = files.FirstOrDefault(f =>
+                        !f.FullName.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}") &&
+                        !f.FullName.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"));
+                    if (match != null) return match.FullName;
+                }
+                catch
+                {
+                    // Permission or access errors, try parent
+                }
+
+                dir = dir.Parent;
+                levels++;
+            }
+            return null;
+        }
+
         public void DoGen()
         {
             File.WriteAllText($"{ControllerDir}{Path.DirectorySeparatorChar}{ModelName}{(IsApi == true ? "Api" : "")}Controller.cs", GenerateController(), Encoding.UTF8);
@@ -555,6 +696,12 @@ namespace WalkingTec.Mvvm.Mvc
                 {
                     File.WriteAllText($"{TestDir}{Path.DirectorySeparatorChar}{ModelName}ApiTest.cs", test, Encoding.UTF8);
                 }
+            }
+
+            // Inject Analysis Mode attributes into Model source file
+            if (EnableAnalysis)
+            {
+                InjectAnalysisAttributes();
             }
         }
 
@@ -866,6 +1013,16 @@ namespace WalkingTec.Mvvm.Mvc
                     }
                 }
                 rv = rv.Replace("$headers$", headerstring).Replace("$where$", wherestring).Replace("$select$", selectstring).Replace("$subpros$", subprostring).Replace("$format$", formatstring).Replace("$actions$", actionstring);
+                if (EnableAnalysis)
+                {
+                    rv = rv.Replace("$analysisusing$", "\nusing WalkingTec.Mvvm.Core.Analysis;\n");
+                    rv = rv.Replace("$analysisattr$", "[EnableAnalysis]\n    ");
+                }
+                else
+                {
+                    rv = rv.Replace("$analysisusing$", "");
+                    rv = rv.Replace("$analysisattr$", "");
+                }
                 rv = GetRelatedNamespace(pros, rv);
             }
             if (name == "CrudVM")
@@ -3129,6 +3286,8 @@ namespace WalkingTec.Mvvm.Mvc
 
         public bool IsImportField { get; set; }
         public bool IsBatchField { get; set; }
+        public bool IsDimensionField { get; set; }
+        public bool IsMeasureField { get; set; }
 
         public FieldInfoType InfoType
         {

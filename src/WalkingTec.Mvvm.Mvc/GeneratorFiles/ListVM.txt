@@ -7,11 +7,11 @@ using WalkingTec.Mvvm.Core.Extensions;
 using Microsoft.EntityFrameworkCore;
 using System.ComponentModel.DataAnnotations;
 using $modelnamespace$;
-$othernamespace$
+$othernamespace$$analysisusing$
 
 namespace $vmnamespace$
 {
-    public partial class $classname$ListVM : BasePagedListVM<$classname$_View, $classname$Searcher>
+    $analysisattr$public partial class $classname$ListVM : BasePagedListVM<$classname$_View, $classname$Searcher>
     {$actions$
 
         protected override IEnumerable<IGridColumn<$classname$_View>> InitGridHeader()

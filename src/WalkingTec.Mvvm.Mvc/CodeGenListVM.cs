@@ -30,7 +30,9 @@ namespace WalkingTec.Mvvm.Mvc
                 this.MakeGridHeader(x=>x.IsListField,150).SetFormat((entity,val)=>{return getCheckBox($"FieldInfos[{entity.Index}].IsListField",entity.IsListField); }),
                 this.MakeGridHeader(x=>x.IsFormField,150).SetFormat((entity,val)=>{return getCheckBox($"FieldInfos[{entity.Index}].IsFormField",entity.IsFormField); }),
                 this.MakeGridHeader(x=>x.IsImportField,150).SetFormat((entity,val)=>{return getCheckBox($"FieldInfos[{entity.Index}].IsImportField",entity.IsImportField); }),
-                this.MakeGridHeader(x=>x.IsBatchField,150).SetFormat((entity,val)=>{return getCheckBox($"FieldInfos[{entity.Index}].IsBatchField",entity.IsBatchField); })
+                this.MakeGridHeader(x=>x.IsBatchField,150).SetFormat((entity,val)=>{return getCheckBox($"FieldInfos[{entity.Index}].IsBatchField",entity.IsBatchField); }),
+                this.MakeGridHeader(x=>x.IsDimensionField,150).SetFormat((entity,val)=>{return getCheckBox($"FieldInfos[{entity.Index}].IsDimensionField",entity.IsDimensionField); }),
+                this.MakeGridHeader(x=>x.IsMeasureField,150).SetFormat((entity,val)=>{return getCheckBox($"FieldInfos[{entity.Index}].IsMeasureField",entity.IsMeasureField); })
           };
         }
 
@@ -137,6 +139,21 @@ namespace WalkingTec.Mvvm.Mvc
                     if (checktype.IsPrimitive || checktype == typeof(string) || checktype == typeof(DateTime) || checktype.IsEnum() || checktype == typeof(decimal))
                     {
                         show = true;
+
+                        // Analysis Mode smart defaults
+                        if (checktype == typeof(string) || checktype.IsEnum())
+                        {
+                            view.IsDimensionField = true;
+                        }
+                        else if (checktype == typeof(decimal) || checktype == typeof(int) || checktype == typeof(double)
+                            || checktype == typeof(float) || checktype == typeof(long) || checktype == typeof(short))
+                        {
+                            view.IsMeasureField = true;
+                        }
+                        else if (checktype == typeof(DateTime))
+                        {
+                            view.IsDimensionField = true;
+                        }
                     }
                     if (typeof(TopBasePoco).IsAssignableFrom(checktype)){
                         var fk = DC.GetFKName2(modeltype, pro.Name);
@@ -262,6 +279,12 @@ namespace WalkingTec.Mvvm.Mvc
 
         [Display(Name = "Codegen.IsBatchField")]
         public bool IsBatchField { get; set; }
+
+        [Display(Name = "Codegen.IsDimensionField")]
+        public bool IsDimensionField { get; set; }
+
+        [Display(Name = "Codegen.IsMeasureField")]
+        public bool IsMeasureField { get; set; }
 
         public int Index { get; set; }
 
