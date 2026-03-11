@@ -219,9 +219,131 @@
         chart.setOption(option);
     }
 
+    function renderTable(container, data, config) {
+        container.innerHTML = '';
+        if (!data || !data.columns || !data.rows) return;
+
+        var table = document.createElement('table');
+        table.className = 'wtm-widget-table';
+
+        // header row
+        var headerRow = document.createElement('tr');
+        for (var c = 0; c < data.columns.length; c++) {
+            var th = document.createElement('th');
+            th.textContent = data.columns[c];
+            headerRow.appendChild(th);
+        }
+        table.appendChild(headerRow);
+
+        // data rows
+        for (var i = 0; i < data.rows.length; i++) {
+            var tr = document.createElement('tr');
+            for (var j = 0; j < data.columns.length; j++) {
+                var td = document.createElement('td');
+                var val = data.rows[i][data.columns[j]];
+                td.textContent = val != null ? String(val) : '';
+                tr.appendChild(td);
+            }
+            table.appendChild(tr);
+        }
+
+        container.appendChild(table);
+    }
+
+    function renderProgress(container, data, config) {
+        container.innerHTML = '';
+        var value = (data && data.value != null) ? Number(data.value) : 0;
+        var pct = Math.max(0, Math.min(1, value));
+
+        if (config.title) {
+            var titleDiv = document.createElement('div');
+            titleDiv.className = 'wtm-progress-title';
+            titleDiv.textContent = config.title;
+            container.appendChild(titleDiv);
+        }
+
+        var track = document.createElement('div');
+        track.className = 'wtm-progress-track';
+
+        var bar = document.createElement('div');
+        bar.className = 'wtm-progress-bar';
+        bar.style.width = (pct * 100) + '%';
+        if (config.color) {
+            bar.style.backgroundColor = config.color;
+        }
+        track.appendChild(bar);
+        container.appendChild(track);
+
+        var label = document.createElement('div');
+        label.className = 'wtm-progress-label';
+        label.textContent = Math.round(pct * 100) + '%';
+        container.appendChild(label);
+    }
+
+    function renderList(container, data, config) {
+        container.innerHTML = '';
+
+        if (config.title) {
+            var titleDiv = document.createElement('div');
+            titleDiv.className = 'wtm-list-title';
+            titleDiv.textContent = config.title;
+            container.appendChild(titleDiv);
+        }
+
+        if (!data || !data.items) return;
+
+        var ul = document.createElement('ul');
+        ul.className = 'wtm-list';
+
+        for (var i = 0; i < data.items.length; i++) {
+            var item = data.items[i];
+            var li = document.createElement('li');
+            li.className = 'wtm-list-item';
+            // Security: all dynamic text via textContent only
+            var text = item.label || '';
+            if (item.description) {
+                text += ' \u2014 ' + item.description;
+            }
+            li.textContent = text;
+
+            if (item.url && config.clickAction === 'navigate') {
+                li.dataset = li.dataset || {};
+                li.dataset.href = item.url;
+            }
+            ul.appendChild(li);
+        }
+
+        container.appendChild(ul);
+    }
+
+    function renderEmbed(container, data, config) {
+        container.innerHTML = '';
+        var url = config.url || '';
+
+        // Security: block dangerous URL schemes
+        var lower = url.toLowerCase().replace(/\s/g, '');
+        if (lower.indexOf('javascript:') === 0 || lower.indexOf('data:') === 0 || lower.indexOf('vbscript:') === 0) {
+            container.textContent = 'Blocked: invalid URL scheme';
+            return;
+        }
+
+        var iframe = document.createElement('iframe');
+        iframe.className = 'wtm-embed-iframe';
+        iframe.src = url;
+        iframe.sandbox = 'allow-scripts'; // no allow-same-origin
+        iframe.style.width = '100%';
+        iframe.style.height = '100%';
+        iframe.style.border = 'none';
+        container.appendChild(iframe);
+    }
+
     var _renderers = {
         kpi: renderKpi,
-        chart: renderChart
+        chart: renderChart,
+        table: renderTable,
+        progress: renderProgress,
+        list: renderList,
+        embed: renderEmbed
     };
 
     var WidgetRendererFactory = {
