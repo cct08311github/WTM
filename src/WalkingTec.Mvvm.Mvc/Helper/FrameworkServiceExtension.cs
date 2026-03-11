@@ -549,6 +549,9 @@ namespace WalkingTec.Mvvm.Mvc
             services.AddMemoryCache();
             services.AddSingleton<WalkingTec.Mvvm.Core.Analysis.IAnalysisCache, WalkingTec.Mvvm.Core.Analysis.MemoryAnalysisCache>();
             services.AddSingleton<WalkingTec.Mvvm.Core.Analysis.IAnalysisFieldPolicy, WalkingTec.Mvvm.Core.Analysis.DefaultAnalysisFieldPolicy>();
+
+            // Dashboard module (opt-in via AddWtmDashboard in app startup)
+            // No auto-registration — apps call services.AddWtmDashboard() explicitly
             services.AddSingleton<WalkingTec.Mvvm.Core.Cache.ILookupCacheService>(sp =>
                 new WalkingTec.Mvvm.Core.Cache.LookupCacheService(
                     sp.GetRequiredService<Microsoft.Extensions.Caching.Memory.IMemoryCache>(),
