@@ -619,3 +619,26 @@ ListVM 的 FullName 沒有在 `AnalysisVmRegistry` 中登記。確認：
 **Q：`FilterOperator.In` 支援嗎？**
 
 `In` 運算子已從 `FilterOperator` enum 移除（8.1.17）。若需多值過濾，目前可用多個 `Eq` + `Contains` 條件組合替代；Phase 2 評估重新加入完整的 `In` 支援。
+
+---
+
+## Code Generator 整合
+
+WTM Code Generator 支援自動產生 Analysis Mode 所需的 attribute。
+
+### 使用方式
+
+1. 在 Code Generator 頁面勾選 **Enable Analysis**
+2. 表格會顯示 **IsDimension** 和 **IsMeasure** 兩欄
+3. 系統根據屬性型別自動推薦（string/enum→Dimension、數值→Measure、DateTime→Dimension）
+4. 開發者可覆寫預設值
+5. 點擊生成後，`[EnableAnalysis]` 自動加到 ListVM，`[Dimension]`/`[Measure]` 自動插入 Model 檔案
+
+### 智慧預設規則
+
+| 屬性型別 | 預設 |
+|----------|------|
+| `string`, `enum` | Dimension |
+| `decimal`, `int`, `double`, `float`, `long`, `short` | Measure |
+| `DateTime` | Dimension (Hierarchy = DateHierarchy.Month) |
+| 其他 | 無 |
