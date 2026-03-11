@@ -140,8 +140,19 @@ namespace WalkingTec.Mvvm.Core.Cache
         public async Task RefreshAsync<T>(DbContext dc, string? tenantId = null, CancellationToken ct = default)
             where T : TopBasePoco
         {
-            InvalidateType(typeof(T));
-            await GetAllAsync<T>(dc, tenantId, ct).ConfigureAwait(false);
+            var key = BuildKey(typeof(T), tenantId);
+            var semaphore = _keyLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+            bool acquired = await semaphore.WaitAsync(StampedeTimeout, ct).ConfigureAwait(false);
+            try
+            {
+                InvalidateType(typeof(T));
+                var data = await LoadFromDbAsync<T>(dc, ct).ConfigureAwait(false);
+                SetCache<T>(key, data, tenantId);
+            }
+            finally
+            {
+                if (acquired) semaphore.Release();
+            }
         }
 
         // ─── 私有輔助 ─────────────────────────────────────────────────────────
