@@ -52,7 +52,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         public async Task List_returns_200_with_empty_list()
         {
             SetUser("bob");
-            _service.Setup(x => x.ListAsync("bob", It.IsAny<string[]>()))
+            _service.Setup(x => x.ListAsync("bob", It.IsAny<string[]>(), It.IsAny<string?>()))
                 .ReturnsAsync(new List<DashboardSummary>());
 
             var result = await _controller.List() as OkObjectResult;
@@ -78,7 +78,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         [TestMethod]
         public async Task Get_returns_404_for_unknown()
         {
-            _service.Setup(x => x.GetAsync("unknown")).ReturnsAsync((DashboardDefinition?)null);
+            _service.Setup(x => x.GetAsync("unknown", It.IsAny<string?>())).ReturnsAsync((DashboardDefinition?)null);
 
             var result = await _controller.Get("unknown") as NotFoundResult;
 
@@ -90,7 +90,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         {
             SetUser("alice");
             var def = new DashboardDefinition { Id = "id1", Owner = "bob" };
-            _service.Setup(x => x.GetAsync("id1")).ReturnsAsync(def);
+            _service.Setup(x => x.GetAsync("id1", It.IsAny<string?>())).ReturnsAsync(def);
             _service.Setup(x => x.CanAccess(def, "alice", It.IsAny<string[]>())).Returns(false);
 
             var result = await _controller.Get("id1") as ForbidResult;
@@ -104,7 +104,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             SetUser("alice");
             var existing = new DashboardDefinition { Id = "id1", Owner = "bob" };
             var update = new DashboardDefinition { Id = "id1" };
-            _service.Setup(x => x.GetAsync("id1")).ReturnsAsync(existing);
+            _service.Setup(x => x.GetAsync("id1", It.IsAny<string?>())).ReturnsAsync(existing);
             _service.Setup(x => x.CanEdit(existing, "alice", It.IsAny<string[]>())).Returns(false);
 
             var result = await _controller.Update("id1", update) as ForbidResult;
@@ -115,7 +115,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         [TestMethod]
         public async Task Delete_returns_404_for_unknown()
         {
-            _service.Setup(x => x.GetAsync("unknown")).ReturnsAsync((DashboardDefinition?)null);
+            _service.Setup(x => x.GetAsync("unknown", It.IsAny<string?>())).ReturnsAsync((DashboardDefinition?)null);
 
             var result = await _controller.Delete("unknown") as NotFoundResult;
 
@@ -127,7 +127,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         {
             SetUser("alice");
             var existing = new DashboardDefinition { Id = "id1", Owner = "bob" };
-            _service.Setup(x => x.GetAsync("id1")).ReturnsAsync(existing);
+            _service.Setup(x => x.GetAsync("id1", It.IsAny<string?>())).ReturnsAsync(existing);
             _service.Setup(x => x.CanEdit(existing, "alice", It.IsAny<string[]>())).Returns(false);
 
             var result = await _controller.Delete("id1") as ForbidResult;
@@ -138,7 +138,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         [TestMethod]
         public async Task GetWidgetData_returns_404_for_unknown_dashboard()
         {
-            _service.Setup(x => x.GetAsync("unknown")).ReturnsAsync((DashboardDefinition?)null);
+            _service.Setup(x => x.GetAsync("unknown", It.IsAny<string?>())).ReturnsAsync((DashboardDefinition?)null);
 
             var result = await _controller.GetWidgetData("unknown", "w1", CancellationToken.None) as NotFoundResult;
 
@@ -150,7 +150,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         {
             SetUser("bob");
             var def = new DashboardDefinition { Id = "id1", Owner = "bob" };
-            _service.Setup(x => x.GetAsync("id1")).ReturnsAsync(def);
+            _service.Setup(x => x.GetAsync("id1", It.IsAny<string?>())).ReturnsAsync(def);
             _service.Setup(x => x.CanAccess(def, "bob", It.IsAny<string[]>())).Returns(true);
 
             var result = await _controller.GetWidgetData("id1", "w1", CancellationToken.None) as NotFoundResult;
@@ -163,7 +163,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         {
             SetUser("alice");
             var def = new DashboardDefinition { Id = "id1", Owner = "bob" };
-            _service.Setup(x => x.GetAsync("id1")).ReturnsAsync(def);
+            _service.Setup(x => x.GetAsync("id1", It.IsAny<string?>())).ReturnsAsync(def);
             _service.Setup(x => x.CanAccess(def, "alice", It.IsAny<string[]>())).Returns(false);
 
             var result = await _controller.GetWidgetData("id1", "w1", CancellationToken.None) as ForbidResult;
