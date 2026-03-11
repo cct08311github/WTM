@@ -1,0 +1,258 @@
+/* WTM Dashboard Module Styles */
+
+/* --- Container --- */
+.wtm-dashboard {
+    position: relative;
+    padding: 12px;
+}
+
+/* --- Toolbar --- */
+.wtm-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    background: #f8f9fa;
+    border-radius: 4px;
+    border: 1px solid #e6e6e6;
+}
+
+.wtm-toolbar .wtm-toolbar-title {
+    font-size: 16px;
+    font-weight: 600;
+    margin-right: auto;
+}
+
+/* --- Widget Card --- */
+.wtm-widget {
+    background: #fff;
+    border-radius: 4px;
+    border: 1px solid #e6e6e6;
+    overflow: hidden;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.wtm-widget-header {
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    border-bottom: 1px solid #f0f0f0;
+    font-size: 14px;
+    font-weight: 600;
+    color: #333;
+}
+
+.wtm-widget-header .wtm-widget-actions {
+    margin-left: auto;
+    display: none;
+}
+
+.wtm-dashboard.edit-mode .wtm-widget-header .wtm-widget-actions {
+    display: flex;
+    gap: 4px;
+}
+
+.wtm-widget-body {
+    flex: 1;
+    padding: 12px;
+    overflow: auto;
+}
+
+/* --- KPI Widget --- */
+.wtm-kpi-title {
+    font-size: 13px;
+    color: #666;
+    margin-bottom: 4px;
+}
+
+.wtm-kpi-value {
+    font-size: 28px;
+    font-weight: 700;
+    color: #1a1a1a;
+    line-height: 1.2;
+}
+
+.wtm-kpi-trend {
+    font-size: 13px;
+    margin-top: 4px;
+}
+
+.wtm-kpi-trend.up {
+    color: #52c41a;
+}
+
+.wtm-kpi-trend.down {
+    color: #f5222d;
+}
+
+/* --- Table Widget --- */
+.wtm-widget-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.wtm-widget-table th {
+    text-align: left;
+    padding: 6px 8px;
+    border-bottom: 2px solid #e6e6e6;
+    color: #666;
+    font-weight: 600;
+}
+
+.wtm-widget-table td {
+    padding: 6px 8px;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.wtm-widget-table tr:hover td {
+    background: #fafafa;
+}
+
+/* --- Progress Widget --- */
+.wtm-progress-title {
+    font-size: 13px;
+    color: #666;
+    margin-bottom: 8px;
+}
+
+.wtm-progress-track {
+    height: 8px;
+    background: #f0f0f0;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.wtm-progress-bar {
+    height: 100%;
+    background: #1890ff;
+    border-radius: 4px;
+    transition: width 0.3s ease;
+}
+
+.wtm-progress-label {
+    font-size: 13px;
+    color: #333;
+    margin-top: 4px;
+    font-weight: 600;
+}
+
+/* --- List Widget --- */
+.wtm-list-title {
+    font-size: 13px;
+    color: #666;
+    margin-bottom: 8px;
+}
+
+.wtm-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.wtm-list-item {
+    padding: 8px 0;
+    border-bottom: 1px solid #f0f0f0;
+    font-size: 13px;
+    color: #333;
+}
+
+.wtm-list-item:last-child {
+    border-bottom: none;
+}
+
+/* --- Embed Widget --- */
+.wtm-embed-iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+}
+
+/* --- Loading State --- */
+.wtm-widget-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: #999;
+    font-size: 13px;
+}
+
+.wtm-widget-loading::after {
+    content: '';
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    margin-left: 8px;
+    border: 2px solid #e6e6e6;
+    border-top-color: #1890ff;
+    border-radius: 50%;
+    animation: wtm-spin 0.6s linear infinite;
+}
+
+@keyframes wtm-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Skeleton pulse for loading placeholders */
+.wtm-skeleton {
+    background: linear-gradient(90deg, #f0f0f0 25%, #e6e6e6 50%, #f0f0f0 75%);
+    background-size: 200% 100%;
+    animation: wtm-pulse 1.5s ease-in-out infinite;
+    border-radius: 4px;
+}
+
+@keyframes wtm-pulse {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+/* --- Error State --- */
+.wtm-widget-error {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: #999;
+    font-size: 13px;
+    text-align: center;
+    padding: 12px;
+}
+
+.wtm-widget-error .wtm-error-icon {
+    font-size: 24px;
+    color: #f5222d;
+    margin-bottom: 8px;
+}
+
+.wtm-widget-error .wtm-retry-btn {
+    margin-top: 8px;
+    padding: 4px 12px;
+    border: 1px solid #d9d9d9;
+    border-radius: 4px;
+    background: #fff;
+    color: #333;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.wtm-widget-error .wtm-retry-btn:hover {
+    border-color: #1890ff;
+    color: #1890ff;
+}
+
+/* --- Gridstack Overrides --- */
+.grid-stack > .grid-stack-item > .grid-stack-item-content {
+    padding: 0;
+    overflow: visible;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    border-radius: 4px;
+}
+
+.grid-stack > .grid-stack-item.ui-draggable-dragging > .grid-stack-item-content {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}

@@ -156,6 +156,25 @@
         calculateTrend: function(current, previous) {
             if (!previous) return 0;
             return ((current - previous) / previous) * 100;
+        },
+        animateNumber: function(element, from, to, duration) {
+            if (!global.requestAnimationFrame) {
+                element.textContent = String(to);
+                return;
+            }
+            var start = null;
+            var diff = to - from;
+            duration = duration || 500;
+            function step(ts) {
+                if (!start) start = ts;
+                var progress = Math.min((ts - start) / duration, 1);
+                var current = from + diff * progress;
+                element.textContent = String(Math.round(current));
+                if (progress < 1) {
+                    global.requestAnimationFrame(step);
+                }
+            }
+            global.requestAnimationFrame(step);
         }
     };
 
@@ -219,9 +238,131 @@
         chart.setOption(option);
     }
 
+    function renderTable(container, data, config) {
+        container.innerHTML = '';
+        if (!data || !data.columns || !data.rows) return;
+
+        var table = document.createElement('table');
+        table.className = 'wtm-widget-table';
+
+        // header row
+        var headerRow = document.createElement('tr');
+        for (var c = 0; c < data.columns.length; c++) {
+            var th = document.createElement('th');
+            th.textContent = data.columns[c];
+            headerRow.appendChild(th);
+        }
+        table.appendChild(headerRow);
+
+        // data rows
+        for (var i = 0; i < data.rows.length; i++) {
+            var tr = document.createElement('tr');
+            for (var j = 0; j < data.columns.length; j++) {
+                var td = document.createElement('td');
+                var val = data.rows[i][data.columns[j]];
+                td.textContent = val != null ? String(val) : '';
+                tr.appendChild(td);
+            }
+            table.appendChild(tr);
+        }
+
+        container.appendChild(table);
+    }
+
+    function renderProgress(container, data, config) {
+        container.innerHTML = '';
+        var value = (data && data.value != null) ? Number(data.value) : 0;
+        var pct = Math.max(0, Math.min(1, value));
+
+        if (config.title) {
+            var titleDiv = document.createElement('div');
+            titleDiv.className = 'wtm-progress-title';
+            titleDiv.textContent = config.title;
+            container.appendChild(titleDiv);
+        }
+
+        var track = document.createElement('div');
+        track.className = 'wtm-progress-track';
+
+        var bar = document.createElement('div');
+        bar.className = 'wtm-progress-bar';
+        bar.style.width = (pct * 100) + '%';
+        if (config.color) {
+            bar.style.backgroundColor = config.color;
+        }
+        track.appendChild(bar);
+        container.appendChild(track);
+
+        var label = document.createElement('div');
+        label.className = 'wtm-progress-label';
+        label.textContent = Math.round(pct * 100) + '%';
+        container.appendChild(label);
+    }
+
+    function renderList(container, data, config) {
+        container.innerHTML = '';
+
+        if (config.title) {
+            var titleDiv = document.createElement('div');
+            titleDiv.className = 'wtm-list-title';
+            titleDiv.textContent = config.title;
+            container.appendChild(titleDiv);
+        }
+
+        if (!data || !data.items) return;
+
+        var ul = document.createElement('ul');
+        ul.className = 'wtm-list';
+
+        for (var i = 0; i < data.items.length; i++) {
+            var item = data.items[i];
+            var li = document.createElement('li');
+            li.className = 'wtm-list-item';
+            // Security: all dynamic text via textContent only
+            var text = item.label || '';
+            if (item.description) {
+                text += ' \u2014 ' + item.description;
+            }
+            li.textContent = text;
+
+            if (item.url && config.clickAction === 'navigate') {
+                li.dataset = li.dataset || {};
+                li.dataset.href = item.url;
+            }
+            ul.appendChild(li);
+        }
+
+        container.appendChild(ul);
+    }
+
+    function renderEmbed(container, data, config) {
+        container.innerHTML = '';
+        var url = config.url || '';
+
+        // Security: block dangerous URL schemes
+        var lower = url.toLowerCase().replace(/\s/g, '');
+        if (lower.indexOf('javascript:') === 0 || lower.indexOf('data:') === 0 || lower.indexOf('vbscript:') === 0) {
+            container.textContent = 'Blocked: invalid URL scheme';
+            return;
+        }
+
+        var iframe = document.createElement('iframe');
+        iframe.className = 'wtm-embed-iframe';
+        iframe.src = url;
+        iframe.sandbox = 'allow-scripts'; // no allow-same-origin
+        iframe.style.width = '100%';
+        iframe.style.height = '100%';
+        iframe.style.border = 'none';
+        container.appendChild(iframe);
+    }
+
     var _renderers = {
         kpi: renderKpi,
-        chart: renderChart
+        chart: renderChart,
+        table: renderTable,
+        progress: renderProgress,
+        list: renderList,
+        embed: renderEmbed
     };
 
     var WidgetRendererFactory = {
@@ -234,6 +375,8 @@
     var _currentDashboard = null;
     var _refreshTimer = null;
     var _containerId = null;
+    var _failureCounts = {};
+    var MAX_RETRIES = 3;
 
     var DashboardManager = {
         init: function(containerId, dashboardId) {
@@ -279,19 +422,25 @@
         
         _fetchAndRenderWidget: function(widgetId, widgetDef) {
             var container = document.getElementById(widgetId);
-            if (!container) return; // Grid item might not exist yet if layout wasn't set up perfectly, but assume it exists in grid
-            
-            // Show loading
+            if (!container) return;
+
+            // Skip if max retries exceeded
+            if ((_failureCounts[widgetId] || 0) >= MAX_RETRIES) return;
+
+            // Show loading state
+            container.className = 'wtm-widget-loading';
             container.textContent = 'Loading...';
-            
+
             var url = '/_dashboard/' + _currentDashboard.id + '/widget/' + widgetId + '/data';
-            
+
             global.fetch(url)
                 .then(function(res) {
                     if (!res.ok) throw new Error('Widget data fetch failed');
                     return res.json();
                 })
                 .then(function(data) {
+                    container.className = '';
+                    _failureCounts[widgetId] = 0;
                     var renderer = WidgetRendererFactory.getRenderer(widgetDef.type);
                     if (renderer) {
                         renderer(container, data, widgetDef.config || {});
@@ -300,6 +449,8 @@
                     }
                 })
                 .catch(function(e) {
+                    _failureCounts[widgetId] = (_failureCounts[widgetId] || 0) + 1;
+                    container.className = 'wtm-widget-error';
                     container.textContent = 'Error loading widget data.';
                     if (console && console.error) console.error(e);
                 });
@@ -329,6 +480,73 @@
                 clearInterval(_refreshTimer);
                 _refreshTimer = null;
             }
+        },
+
+        getFailureCounts: function() {
+            return _failureCounts;
+        },
+
+        shouldRetry: function(widgetId) {
+            return (_failureCounts[widgetId] || 0) < MAX_RETRIES;
+        },
+
+        _setFailureCount: function(widgetId, count) {
+            _failureCounts[widgetId] = count;
+        }
+    };
+
+    // --- DashboardEditor ----------------------------------------------------
+    var DashboardEditor = {
+        toggleEditMode: function() {
+            var newMode = !GridManager.isEditMode();
+            GridManager.setEditMode(newMode);
+            if (newMode) {
+                DashboardManager.stopRefresh();
+            } else if (_currentDashboard && _currentDashboard.refreshInterval > 0) {
+                DashboardManager.startRefresh(_currentDashboard.refreshInterval);
+            }
+        },
+
+        saveDashboard: function() {
+            if (!_currentDashboard) return Promise.resolve();
+            var layout = GridManager.saveLayout();
+            var body = {
+                name: _currentDashboard.name,
+                layout: layout,
+                widgets: _currentDashboard.widgets || {}
+            };
+            return global.fetch('/_dashboard/' + _currentDashboard.id, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            }).then(function(res) {
+                if (!res.ok) throw new Error('Save failed');
+                return res.json();
+            });
+        },
+
+        deleteDashboard: function() {
+            if (!_currentDashboard) return Promise.resolve();
+            return global.fetch('/_dashboard/' + _currentDashboard.id, {
+                method: 'DELETE'
+            }).then(function(res) {
+                if (!res.ok) throw new Error('Delete failed');
+                return res.json();
+            });
+        },
+
+        addWidget: function(widgetId, widgetDef, gridOpts) {
+            if (!_currentDashboard) return;
+            if (!_currentDashboard.widgets) _currentDashboard.widgets = {};
+            _currentDashboard.widgets[widgetId] = widgetDef;
+            if (_grid) {
+                _grid.addWidget(gridOpts || { id: widgetId, w: 4, h: 3 });
+            }
+        },
+
+        removeWidget: function(widgetId) {
+            if (!_currentDashboard || !_currentDashboard.widgets) return;
+            delete _currentDashboard.widgets[widgetId];
         }
     };
 
@@ -413,6 +631,7 @@
         Utils: Utils,
         WidgetRendererFactory: WidgetRendererFactory,
         DashboardManager: DashboardManager,
+        DashboardEditor: DashboardEditor,
         FilterBar: FilterBar
     };
 

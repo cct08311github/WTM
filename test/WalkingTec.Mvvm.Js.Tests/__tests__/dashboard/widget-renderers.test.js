@@ -108,12 +108,111 @@ describe('WtmDashboard.WidgetRendererFactory', () => {
             rows: [ { Region: 'North', Amount: 100 } ]
         };
         const config = { chartType: 'bar' };
-        
+
         wd.WidgetRendererFactory.getRenderer('chart')(container, data, config);
-        
+
         expect(mockEcharts.init).toHaveBeenCalledWith(container);
         expect(capturedOptions.length).toBe(1);
         expect(capturedOptions[0].xAxis.type).toBe('category');
         expect(capturedOptions[0].series[0].type).toBe('bar');
+    });
+
+    test('getRenderer returns function for table type', () => {
+        const { wd } = makeEnv();
+        expect(typeof wd.WidgetRendererFactory.getRenderer('table')).toBe('function');
+    });
+
+    test('renderTable creates table with headers and rows', () => {
+        const { wd, mockDocument } = makeEnv();
+        const container = mockDocument.createElement('div');
+        const data = {
+            columns: ['Name', 'Score'],
+            rows: [
+                { Name: 'Alice', Score: 95 },
+                { Name: 'Bob', Score: 88 }
+            ]
+        };
+        const config = {};
+
+        wd.WidgetRendererFactory.getRenderer('table')(container, data, config);
+
+        // Should create a table element
+        expect(mockDocument.createElement).toHaveBeenCalledWith('table');
+        expect(container.children.length).toBeGreaterThan(0);
+        const table = container.children[0];
+        expect(table.tag).toBe('table');
+        // thead row + 2 data rows
+        expect(table.children.length).toBe(3);
+        // header cells
+        const headerRow = table.children[0];
+        expect(headerRow.children.some(c => c.textContent === 'Name')).toBe(true);
+        expect(headerRow.children.some(c => c.textContent === 'Score')).toBe(true);
+    });
+
+    test('renderProgress creates bar with percentage', () => {
+        const { wd, mockDocument } = makeEnv();
+        const container = mockDocument.createElement('div');
+        const data = { value: 0.73 };
+        const config = { title: 'Completion', color: '#4caf50' };
+
+        wd.WidgetRendererFactory.getRenderer('progress')(container, data, config);
+
+        expect(container.children.length).toBeGreaterThan(0);
+        // Should have title and a progress bar container
+        expect(container.children.some(c => c.textContent === 'Completion')).toBe(true);
+        // The percentage label
+        expect(container.children.some(c => c.textContent === '73%')).toBe(true);
+    });
+
+    test('renderList creates list items with textContent only', () => {
+        const { wd, mockDocument } = makeEnv();
+        const container = mockDocument.createElement('div');
+        const data = {
+            items: [
+                { label: 'Task A', description: 'Do something' },
+                { label: 'Task B', description: 'Do another' }
+            ]
+        };
+        const config = { title: 'Recent Tasks' };
+
+        wd.WidgetRendererFactory.getRenderer('list')(container, data, config);
+
+        expect(container.children.length).toBeGreaterThan(0);
+        expect(container.children.some(c => c.textContent === 'Recent Tasks')).toBe(true);
+        // Should have a list container with items
+        const listContainer = container.children.find(c => c.tag === 'ul');
+        expect(listContainer).toBeDefined();
+        expect(listContainer.children.length).toBe(2);
+        expect(listContainer.children[0].textContent).toBe('Task A — Do something');
+    });
+
+    test('renderEmbed creates iframe with sandbox', () => {
+        const { wd, mockDocument } = makeEnv();
+        const container = mockDocument.createElement('div');
+        const data = {};
+        const config = { url: 'https://example.com/report' };
+
+        wd.WidgetRendererFactory.getRenderer('embed')(container, data, config);
+
+        expect(mockDocument.createElement).toHaveBeenCalledWith('iframe');
+        expect(container.children.length).toBe(1);
+        const iframe = container.children[0];
+        expect(iframe.tag).toBe('iframe');
+        expect(iframe.src).toBe('https://example.com/report');
+        expect(iframe.sandbox).toBe('allow-scripts');
+    });
+
+    test('renderEmbed rejects javascript: URLs', () => {
+        const { wd, mockDocument } = makeEnv();
+        const container = mockDocument.createElement('div');
+        const data = {};
+        const config = { url: 'javascript:alert(1)' };
+
+        wd.WidgetRendererFactory.getRenderer('embed')(container, data, config);
+
+        // Should not create an iframe, should show error
+        const hasIframe = container.children && container.children.some(c => c.tag === 'iframe');
+        expect(hasIframe).toBeFalsy();
+        expect(container.textContent).toMatch(/blocked|invalid/i);
     });
 });

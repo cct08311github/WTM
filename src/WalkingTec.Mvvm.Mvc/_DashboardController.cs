@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Core.Analysis;
 using WalkingTec.Mvvm.Core.Dashboard;
 
 namespace WalkingTec.Mvvm.Mvc
@@ -17,11 +18,19 @@ namespace WalkingTec.Mvvm.Mvc
     {
         private readonly IDashboardService _dashboardService;
         private readonly DashboardOptions _options;
+        private readonly IEnumerable<IWidgetDataSource> _dataSources;
+        private readonly AnalysisVmRegistry _registry;
 
-        public _DashboardController(IDashboardService dashboardService, IOptions<DashboardOptions> options)
+        public _DashboardController(
+            IDashboardService dashboardService,
+            IOptions<DashboardOptions> options,
+            IEnumerable<IWidgetDataSource> dataSources,
+            AnalysisVmRegistry registry = null)
         {
             _dashboardService = dashboardService;
             _options = options.Value;
+            _dataSources = dataSources;
+            _registry = registry;
         }
 
         private (string userId, string[] roles) GetUserInfo()
@@ -31,18 +40,25 @@ namespace WalkingTec.Mvvm.Mvc
             return (userId, roles);
         }
 
+        private string GetTenantId()
+        {
+            return Wtm?.LoginUserInfo?.TenantCode ?? "";
+        }
+
         [HttpGet("list")]
         public async Task<IActionResult> List()
         {
             var (userId, roles) = GetUserInfo();
-            var list = await _dashboardService.ListAsync(userId, roles);
+            var tenantId = GetTenantId();
+            var list = await _dashboardService.ListAsync(userId, roles, tenantId);
             return Ok(list);
         }
 
         [HttpGet("{id}")]
         public async Task<IActionResult> Get(string id)
         {
-            var dashboard = await _dashboardService.GetAsync(id);
+            var tenantId = GetTenantId();
+            var dashboard = await _dashboardService.GetAsync(id, tenantId);
             if (dashboard == null) return NotFound();
 
             var (userId, roles) = GetUserInfo();
@@ -61,6 +77,7 @@ namespace WalkingTec.Mvvm.Mvc
 
             var (userId, _) = GetUserInfo();
             dashboard.Owner = userId;
+            dashboard.TenantId = GetTenantId();
 
             var id = await _dashboardService.CreateAsync(dashboard);
             return Ok(id);
@@ -163,8 +180,57 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpGet("datasources")]
         public IActionResult GetDataSources()
         {
-            // Placeholder for MVP
-            return Ok(new List<object>());
+            var result = new List<object>();
+
+            // Custom data sources from DI
+            foreach (var ds in _dataSources)
+            {
+                result.Add(new { name = ds.Name, kind = ds.Kind.ToString().ToLowerInvariant() });
+            }
+
+            // Analysis Mode registered ListVMs
+            if (_registry != null)
+            {
+                foreach (var kvp in _registry.GetRegisteredTypes())
+                {
+                    var fields = AnalysisFieldScanner.ScanModel(
+                        GetModelType(kvp.Value)).ToList();
+
+                    result.Add(new
+                    {
+                        name = kvp.Key,
+                        kind = "analysis",
+                        dimensions = fields
+                            .Where(f => f.Kind == AnalysisFieldKind.Dimension)
+                            .Select(f => new { field = f.FieldName, displayName = f.DisplayName, isDate = f.IsDate })
+                            .ToList(),
+                        measures = fields
+                            .Where(f => f.Kind == AnalysisFieldKind.Measure)
+                            .Select(f => new { field = f.FieldName, displayName = f.DisplayName, allowedFuncs = GetAllowedFuncNames(f.AllowedFuncs) })
+                            .ToList()
+                    });
+                }
+            }
+
+            return Ok(result);
         }
+
+        private static Type GetModelType(Type vmType)
+        {
+            var t = vmType.BaseType;
+            while (t != null)
+            {
+                if (t.IsGenericType && t.GetGenericTypeDefinition() == typeof(BasePagedListVM<,>))
+                    return t.GetGenericArguments()[0];
+                t = t.BaseType;
+            }
+            return typeof(object);
+        }
+
+        private static string[] GetAllowedFuncNames(AggregateFunc funcs)
+            => Enum.GetValues<AggregateFunc>()
+                   .Where(f => funcs.HasFlag(f))
+                   .Select(f => f.ToString())
+                   .ToArray();
     }
 }

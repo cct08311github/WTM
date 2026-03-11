@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -10,6 +11,7 @@ using Microsoft.Extensions.Options;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Core.Analysis;
 using WalkingTec.Mvvm.Core.Dashboard;
 using WalkingTec.Mvvm.Core.Support.Json;
 using WalkingTec.Mvvm.Mvc;
@@ -28,7 +30,9 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         {
             _service = new Mock<IDashboardService>();
             var opts = Options.Create(new DashboardOptions());
-            _controller = new _DashboardController(_service.Object, opts)
+            _controller = new _DashboardController(
+                _service.Object, opts,
+                Enumerable.Empty<IWidgetDataSource>())
             {
                 Wtm = MockWtmContext.CreateWtmContext()
             };
@@ -52,7 +56,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         public async Task List_returns_200_with_empty_list()
         {
             SetUser("bob");
-            _service.Setup(x => x.ListAsync("bob", It.IsAny<string[]>()))
+            _service.Setup(x => x.ListAsync("bob", It.IsAny<string[]>(), It.IsAny<string?>()))
                 .ReturnsAsync(new List<DashboardSummary>());
 
             var result = await _controller.List() as OkObjectResult;
@@ -78,7 +82,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         [TestMethod]
         public async Task Get_returns_404_for_unknown()
         {
-            _service.Setup(x => x.GetAsync("unknown")).ReturnsAsync((DashboardDefinition?)null);
+            _service.Setup(x => x.GetAsync("unknown", It.IsAny<string?>())).ReturnsAsync((DashboardDefinition?)null);
 
             var result = await _controller.Get("unknown") as NotFoundResult;
 
@@ -90,7 +94,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         {
             SetUser("alice");
             var def = new DashboardDefinition { Id = "id1", Owner = "bob" };
-            _service.Setup(x => x.GetAsync("id1")).ReturnsAsync(def);
+            _service.Setup(x => x.GetAsync("id1", It.IsAny<string?>())).ReturnsAsync(def);
             _service.Setup(x => x.CanAccess(def, "alice", It.IsAny<string[]>())).Returns(false);
 
             var result = await _controller.Get("id1") as ForbidResult;
@@ -104,7 +108,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             SetUser("alice");
             var existing = new DashboardDefinition { Id = "id1", Owner = "bob" };
             var update = new DashboardDefinition { Id = "id1" };
-            _service.Setup(x => x.GetAsync("id1")).ReturnsAsync(existing);
+            _service.Setup(x => x.GetAsync("id1", It.IsAny<string?>())).ReturnsAsync(existing);
             _service.Setup(x => x.CanEdit(existing, "alice", It.IsAny<string[]>())).Returns(false);
 
             var result = await _controller.Update("id1", update) as ForbidResult;
@@ -115,7 +119,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         [TestMethod]
         public async Task Delete_returns_404_for_unknown()
         {
-            _service.Setup(x => x.GetAsync("unknown")).ReturnsAsync((DashboardDefinition?)null);
+            _service.Setup(x => x.GetAsync("unknown", It.IsAny<string?>())).ReturnsAsync((DashboardDefinition?)null);
 
             var result = await _controller.Delete("unknown") as NotFoundResult;
 
@@ -127,7 +131,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         {
             SetUser("alice");
             var existing = new DashboardDefinition { Id = "id1", Owner = "bob" };
-            _service.Setup(x => x.GetAsync("id1")).ReturnsAsync(existing);
+            _service.Setup(x => x.GetAsync("id1", It.IsAny<string?>())).ReturnsAsync(existing);
             _service.Setup(x => x.CanEdit(existing, "alice", It.IsAny<string[]>())).Returns(false);
 
             var result = await _controller.Delete("id1") as ForbidResult;
@@ -138,7 +142,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         [TestMethod]
         public async Task GetWidgetData_returns_404_for_unknown_dashboard()
         {
-            _service.Setup(x => x.GetAsync("unknown")).ReturnsAsync((DashboardDefinition?)null);
+            _service.Setup(x => x.GetAsync("unknown", It.IsAny<string?>())).ReturnsAsync((DashboardDefinition?)null);
 
             var result = await _controller.GetWidgetData("unknown", "w1", CancellationToken.None) as NotFoundResult;
 
@@ -150,7 +154,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         {
             SetUser("bob");
             var def = new DashboardDefinition { Id = "id1", Owner = "bob" };
-            _service.Setup(x => x.GetAsync("id1")).ReturnsAsync(def);
+            _service.Setup(x => x.GetAsync("id1", It.IsAny<string?>())).ReturnsAsync(def);
             _service.Setup(x => x.CanAccess(def, "bob", It.IsAny<string[]>())).Returns(true);
 
             var result = await _controller.GetWidgetData("id1", "w1", CancellationToken.None) as NotFoundResult;
@@ -163,12 +167,91 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         {
             SetUser("alice");
             var def = new DashboardDefinition { Id = "id1", Owner = "bob" };
-            _service.Setup(x => x.GetAsync("id1")).ReturnsAsync(def);
+            _service.Setup(x => x.GetAsync("id1", It.IsAny<string?>())).ReturnsAsync(def);
             _service.Setup(x => x.CanAccess(def, "alice", It.IsAny<string[]>())).Returns(false);
 
             var result = await _controller.GetWidgetData("id1", "w1", CancellationToken.None) as ForbidResult;
 
             result.Should().NotBeNull();
+        }
+
+        [TestMethod]
+        public void GetDataSources_returns_200_with_empty_list()
+        {
+            var result = _controller.GetDataSources() as OkObjectResult;
+
+            result.Should().NotBeNull();
+            result!.StatusCode.Should().Be(200);
+        }
+
+        [TestMethod]
+        public void GetDataSources_includes_custom_sources()
+        {
+            var mockSource = new Mock<IWidgetDataSource>();
+            mockSource.Setup(s => s.Name).Returns("test-source");
+            mockSource.Setup(s => s.Kind).Returns(WidgetDataSourceKind.Custom);
+
+            var opts = Options.Create(new DashboardOptions());
+            var controller = new _DashboardController(
+                _service.Object, opts,
+                new[] { mockSource.Object })
+            {
+                Wtm = MockWtmContext.CreateWtmContext()
+            };
+            controller.ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext()
+            };
+
+            var result = controller.GetDataSources() as OkObjectResult;
+
+            result.Should().NotBeNull();
+            var json = System.Text.Json.JsonSerializer.Serialize(result!.Value);
+            json.Should().Contain("test-source");
+            json.Should().Contain("custom");
+        }
+
+        // Test model for analysis datasource listing
+        private class DashCtrlTestRecord : TopBasePoco
+        {
+            [Dimension(DisplayName = "City")] public string City { get; set; } = "";
+            [Measure(AllowedFuncs = AggregateFunc.Sum, DisplayName = "Revenue")]
+            public decimal Revenue { get; set; }
+        }
+
+        [EnableAnalysis]
+        private class DashCtrlTestListVM : BasePagedListVM<DashCtrlTestRecord, BaseSearcher>
+        {
+            public override IOrderedQueryable<DashCtrlTestRecord> GetSearchQuery()
+                => new List<DashCtrlTestRecord>().AsQueryable().OrderBy(x => x.ID);
+        }
+
+        [TestMethod]
+        public void GetDataSources_includes_analysis_vms()
+        {
+            var registry = new AnalysisVmRegistry();
+            registry.Build(new[] { typeof(DashboardControllerTests).Assembly });
+
+            var opts = Options.Create(new DashboardOptions());
+            var controller = new _DashboardController(
+                _service.Object, opts,
+                Enumerable.Empty<IWidgetDataSource>(),
+                registry)
+            {
+                Wtm = MockWtmContext.CreateWtmContext()
+            };
+            controller.ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext()
+            };
+
+            var result = controller.GetDataSources() as OkObjectResult;
+
+            result.Should().NotBeNull();
+            var json = System.Text.Json.JsonSerializer.Serialize(result!.Value);
+            json.Should().Contain("analysis");
+            json.Should().Contain("City");
+            json.Should().Contain("Revenue");
         }
     }
 }
