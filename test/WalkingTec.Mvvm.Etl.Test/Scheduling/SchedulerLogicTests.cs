@@ -5,6 +5,8 @@ using WalkingTec.Mvvm.Etl.Models;
 using WalkingTec.Mvvm.Etl.Pipeline;
 using WalkingTec.Mvvm.Etl.Pipeline.Loaders;
 using WalkingTec.Mvvm.Etl.Pipeline.Sources;
+using OracleSource = WalkingTec.Mvvm.Etl.Pipeline.Sources.OracleSource;
+using OracleBulkLoader = WalkingTec.Mvvm.Etl.Pipeline.Loaders.OracleBulkLoader;
 using WalkingTec.Mvvm.Etl.Scheduling;
 
 namespace WalkingTec.Mvvm.Etl.Test.Scheduling;
@@ -105,5 +107,19 @@ public class SchedulerLogicTests
     public void EtlSourceFactory_CreateLoader_unsupported_throws()
     {
         EtlSourceFactory.CreateLoader(Core.DBTypeEnum.SQLite);
+    }
+
+    [TestMethod]
+    public void EtlSourceFactory_CreateSource_Oracle_returns_OracleSource()
+    {
+        using var source = EtlSourceFactory.CreateSource(Core.DBTypeEnum.Oracle);
+        Assert.IsInstanceOfType(source, typeof(OracleSource));
+    }
+
+    [TestMethod]
+    public void EtlSourceFactory_CreateLoader_Oracle_returns_OracleBulkLoader()
+    {
+        var loader = EtlSourceFactory.CreateLoader(Core.DBTypeEnum.Oracle);
+        Assert.IsInstanceOfType(loader, typeof(OracleBulkLoader));
     }
 }
