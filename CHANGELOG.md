@@ -1,5 +1,12 @@
 # 更新日志
 
+## 8.4.1 (2026-03-11)
+
+### 修復
+
+* **fix(cache)：** `RefreshAsync` 快取踩踏（Cache Stampede）漏洞 — 將 `InvalidateType` + `LoadFromDbAsync` + `SetCache` 三步移入 per-key SemaphoreSlim 鎖內，消除 invalidate 與 reload 之間的競爭條件（#153）
+* **fix(security)：** `DecryptString` 補上 `FormatException` catch — 傳入非法 Base64 字串時回傳空字串而非拋出例外，與舊版 `DecryptStringLegacy` 行為一致（#153）
+
 ## 8.4.0 (2026-03-11)
 
 ### Lookup Cache — 靜態表/查找表快取系統
