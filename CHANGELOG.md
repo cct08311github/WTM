@@ -1,5 +1,11 @@
 # 更新日志
 
+## 8.5.1 (2026-03-11)
+
+### 修復
+
+* **fix(codegen)：** `InjectAnalysisAttributes` 重複 attribute 注入問題 — 原正則要求 attribute 緊鄰屬性宣告，當中間有其他 attribute（如 `[Required]`）或註解時會重複插入導致編譯錯誤。改用字串區塊搜尋取代嚴格正則（#162）
+
 ## 8.5.0 (2026-03-11)
 
 ### Code Generator — Analysis Mode 整合
