@@ -332,13 +332,88 @@
         }
     };
 
+    // --- FilterBar ----------------------------------------------------------
+    var _filterValues = {};
+    var _filterChangeCallbacks = [];
+    var _filterDefs = [];
+
+    var FilterBar = {
+        init: function(filters, container) {
+            _filterDefs = filters || [];
+            _filterValues = {};
+            _filterChangeCallbacks = [];
+
+            for (var i = 0; i < _filterDefs.length; i++) {
+                var f = _filterDefs[i];
+                _filterValues[f.field] = f.defaultValue || '';
+
+                var wrapper = document.createElement('div');
+                wrapper.className = 'wtm-filter-item';
+
+                var label = document.createElement('label');
+                label.textContent = f.field;
+                wrapper.appendChild(label);
+
+                if (f.type === 'select' && f.options) {
+                    var sel = document.createElement('select');
+                    sel.name = f.field;
+                    for (var j = 0; j < f.options.length; j++) {
+                        var opt = document.createElement('option');
+                        opt.value = f.options[j];
+                        opt.textContent = f.options[j];
+                        sel.appendChild(opt);
+                    }
+                    if (f.defaultValue) sel.value = f.defaultValue;
+                    wrapper.appendChild(sel);
+                } else {
+                    var input = document.createElement('input');
+                    input.type = 'text';
+                    input.name = f.field;
+                    if (f.defaultValue) input.value = f.defaultValue;
+                    wrapper.appendChild(input);
+                }
+
+                container.appendChild(wrapper);
+            }
+        },
+
+        getValues: function() {
+            var copy = {};
+            for (var k in _filterValues) {
+                if (Object.prototype.hasOwnProperty.call(_filterValues, k)) {
+                    copy[k] = _filterValues[k];
+                }
+            }
+            return copy;
+        },
+
+        setValue: function(field, value) {
+            _filterValues[field] = value;
+            var vals = FilterBar.getValues();
+            for (var i = 0; i < _filterChangeCallbacks.length; i++) {
+                try {
+                    _filterChangeCallbacks[i](vals);
+                } catch (e) {
+                    if (console && console.error) console.error('FilterBar onChange error', e);
+                }
+            }
+        },
+
+        onChange: function(callback) {
+            if (typeof callback === 'function') {
+                _filterChangeCallbacks.push(callback);
+            }
+        }
+    };
+
     // --- API 導出 ------------------------------------------------------------
     var api = {
         EventBus: EventBus,
         GridManager: GridManager,
         Utils: Utils,
         WidgetRendererFactory: WidgetRendererFactory,
-        DashboardManager: DashboardManager
+        DashboardManager: DashboardManager,
+        FilterBar: FilterBar
     };
 
     if (typeof global.window !== "undefined") {
