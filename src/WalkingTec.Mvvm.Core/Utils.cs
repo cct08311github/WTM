@@ -752,6 +752,10 @@ namespace WalkingTec.Mvvm.Core
                 return DecryptStringLegacy(stringToDecrypt, encryptKey);
 #pragma warning restore CS0618
             }
+            catch (FormatException)
+            {
+                return "";
+            }
         }
 
         /// <summary>
