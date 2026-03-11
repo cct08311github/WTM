@@ -40,18 +40,25 @@ namespace WalkingTec.Mvvm.Mvc
             return (userId, roles);
         }
 
+        private string GetTenantId()
+        {
+            return Wtm?.LoginUserInfo?.TenantCode ?? "";
+        }
+
         [HttpGet("list")]
         public async Task<IActionResult> List()
         {
             var (userId, roles) = GetUserInfo();
-            var list = await _dashboardService.ListAsync(userId, roles);
+            var tenantId = GetTenantId();
+            var list = await _dashboardService.ListAsync(userId, roles, tenantId);
             return Ok(list);
         }
 
         [HttpGet("{id}")]
         public async Task<IActionResult> Get(string id)
         {
-            var dashboard = await _dashboardService.GetAsync(id);
+            var tenantId = GetTenantId();
+            var dashboard = await _dashboardService.GetAsync(id, tenantId);
             if (dashboard == null) return NotFound();
 
             var (userId, roles) = GetUserInfo();
@@ -70,6 +77,7 @@ namespace WalkingTec.Mvvm.Mvc
 
             var (userId, _) = GetUserInfo();
             dashboard.Owner = userId;
+            dashboard.TenantId = GetTenantId();
 
             var id = await _dashboardService.CreateAsync(dashboard);
             return Ok(id);

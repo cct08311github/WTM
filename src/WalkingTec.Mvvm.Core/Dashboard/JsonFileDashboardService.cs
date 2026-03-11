@@ -43,7 +43,8 @@ public class JsonFileDashboardService : IDashboardService
                 Directory.CreateDirectory(_baseDir);
             }
 
-            var files = Directory.GetFiles(_baseDir, "*.json");
+            // Scan all subdirectories (tenant dirs + _default)
+            var files = Directory.GetFiles(_baseDir, "*.json", SearchOption.AllDirectories);
             foreach (var file in files)
             {
                 try
@@ -57,6 +58,7 @@ public class JsonFileDashboardService : IDashboardService
                             Id = def.Id,
                             Title = def.Title,
                             Owner = def.Owner,
+                            TenantId = def.TenantId,
                             Sharing = def.Sharing,
                             UpdatedAt = def.UpdatedAt
                         };
@@ -81,15 +83,19 @@ public class JsonFileDashboardService : IDashboardService
         return _locks.GetOrAdd(id, _ => new SemaphoreSlim(1, 1));
     }
 
-    private string GetFilePath(string id)
+    private string GetFilePath(string id, string? tenantId = null)
     {
-        return Path.Combine(_baseDir, $"{id}.json");
+        var dir = string.IsNullOrEmpty(tenantId)
+            ? Path.Combine(_baseDir, "_default")
+            : Path.Combine(_baseDir, tenantId);
+        if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+        return Path.Combine(dir, $"{id}.json");
     }
 
-    public async Task<DashboardDefinition?> GetAsync(string dashboardId)
+    public async Task<DashboardDefinition?> GetAsync(string dashboardId, string? tenantId = null)
     {
         await EnsureInitializedAsync();
-        var path = GetFilePath(dashboardId);
+        var path = GetFilePath(dashboardId, tenantId);
         if (!File.Exists(path)) return null;
 
         var lockObj = GetLock(dashboardId);
@@ -110,15 +116,21 @@ public class JsonFileDashboardService : IDashboardService
         }
     }
 
-    public async Task<IReadOnlyList<DashboardSummary>> ListAsync(string userId, string[] userRoles)
+    public async Task<IReadOnlyList<DashboardSummary>> ListAsync(string userId, string[] userRoles, string? tenantId = null)
     {
         await EnsureInitializedAsync();
-        
+
         var result = new List<DashboardSummary>();
         var isAdmin = userRoles != null && userRoles.Contains("Admin", StringComparer.OrdinalIgnoreCase);
 
         foreach (var summary in _index.Values)
         {
+            // Tenant isolation: only show dashboards from same tenant (or _default)
+            if (tenantId != null && summary.TenantId != null &&
+                !string.Equals(summary.TenantId, tenantId, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
             var isOwner = string.Equals(summary.Owner, userId, StringComparison.OrdinalIgnoreCase);
             var isPublic = string.Equals(summary.Sharing?.Mode, "public", StringComparison.OrdinalIgnoreCase);
             var hasRole = userRoles != null && summary.Sharing?.Roles?.Any(r => userRoles.Contains(r, StringComparer.OrdinalIgnoreCase)) == true;
@@ -144,7 +156,7 @@ public class JsonFileDashboardService : IDashboardService
         dashboard.CreatedAt = DateTime.UtcNow;
         dashboard.UpdatedAt = dashboard.CreatedAt;
 
-        var path = GetFilePath(dashboard.Id);
+        var path = GetFilePath(dashboard.Id, dashboard.TenantId);
         var lockObj = GetLock(dashboard.Id);
 
         await lockObj.WaitAsync();
@@ -163,6 +175,7 @@ public class JsonFileDashboardService : IDashboardService
                 Id = dashboard.Id,
                 Title = dashboard.Title,
                 Owner = dashboard.Owner,
+                TenantId = dashboard.TenantId,
                 Sharing = dashboard.Sharing ?? new SharingDefinition(),
                 UpdatedAt = dashboard.UpdatedAt
             };
@@ -186,7 +199,7 @@ public class JsonFileDashboardService : IDashboardService
 
         dashboard.UpdatedAt = DateTime.UtcNow;
 
-        var path = GetFilePath(dashboard.Id);
+        var path = GetFilePath(dashboard.Id, dashboard.TenantId);
         var lockObj = GetLock(dashboard.Id);
 
         await lockObj.WaitAsync();
@@ -205,6 +218,7 @@ public class JsonFileDashboardService : IDashboardService
                 Id = dashboard.Id,
                 Title = dashboard.Title,
                 Owner = dashboard.Owner,
+                TenantId = dashboard.TenantId,
                 Sharing = dashboard.Sharing ?? new SharingDefinition(),
                 UpdatedAt = dashboard.UpdatedAt
             };
@@ -219,7 +233,12 @@ public class JsonFileDashboardService : IDashboardService
     {
         await EnsureInitializedAsync();
 
-        var path = GetFilePath(dashboardId);
+        string? tenantId = null;
+        if (_index.TryGetValue(dashboardId, out var summary))
+        {
+            tenantId = summary.TenantId;
+        }
+        var path = GetFilePath(dashboardId, tenantId);
         var lockObj = GetLock(dashboardId);
 
         await lockObj.WaitAsync();

@@ -11,6 +11,7 @@ public class DashboardDefinition
     public string Id { get; set; } = "";
     public string Title { get; set; } = "";
     public string Owner { get; set; } = "";
+    public string? TenantId { get; set; }
     public SharingDefinition Sharing { get; set; } = new();
     public int RefreshInterval { get; set; } = 60;
     public List<LayoutItem> Layout { get; set; } = new();
@@ -60,6 +61,7 @@ public class DashboardSummary
     public string Id { get; set; } = "";
     public string Title { get; set; } = "";
     public string Owner { get; set; } = "";
+    public string? TenantId { get; set; }
     public SharingDefinition Sharing { get; set; } = new();
     public DateTime UpdatedAt { get; set; }
 }

@@ -149,5 +149,30 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             _service.CanEdit(def, "user2", Array.Empty<string>()).Should().BeFalse();
             _service.CanEdit(def, "user2", new[] { "Manager" }).Should().BeFalse();
         }
+
+        [TestMethod]
+        public async Task Tenant_isolation_separates_dashboards()
+        {
+            await _service.CreateAsync(new DashboardDefinition { Owner = "user1", Title = "Tenant A", TenantId = "tenantA" });
+            await _service.CreateAsync(new DashboardDefinition { Owner = "user1", Title = "Tenant B", TenantId = "tenantB" });
+
+            var listA = await _service.ListAsync("user1", Array.Empty<string>(), "tenantA");
+            listA.Should().HaveCount(1);
+            listA[0].Title.Should().Be("Tenant A");
+
+            var listB = await _service.ListAsync("user1", Array.Empty<string>(), "tenantB");
+            listB.Should().HaveCount(1);
+            listB[0].Title.Should().Be("Tenant B");
+        }
+
+        [TestMethod]
+        public async Task Default_tenant_dashboards_visible_without_tenant_filter()
+        {
+            await _service.CreateAsync(new DashboardDefinition { Owner = "user1", Title = "Default" });
+
+            var list = await _service.ListAsync("user1", Array.Empty<string>());
+            list.Should().HaveCount(1);
+            list[0].Title.Should().Be("Default");
+        }
     }
 }

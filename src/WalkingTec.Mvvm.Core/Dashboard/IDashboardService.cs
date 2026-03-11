@@ -7,8 +7,8 @@ namespace WalkingTec.Mvvm.Core.Dashboard;
 
 public interface IDashboardService
 {
-    Task<DashboardDefinition?> GetAsync(string dashboardId);
-    Task<IReadOnlyList<DashboardSummary>> ListAsync(string userId, string[] userRoles);
+    Task<DashboardDefinition?> GetAsync(string dashboardId, string? tenantId = null);
+    Task<IReadOnlyList<DashboardSummary>> ListAsync(string userId, string[] userRoles, string? tenantId = null);
     Task<string> CreateAsync(DashboardDefinition dashboard);
     Task UpdateAsync(DashboardDefinition dashboard);
     Task DeleteAsync(string dashboardId);
