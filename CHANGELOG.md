@@ -1,5 +1,44 @@
 # 更新日志
 
+## 8.4.0 (2026-03-11)
+
+### Lookup Cache — 靜態表/查找表快取系統
+
+全新的 Cache-Aside 快取機制，為頻繁讀取但極少變更的查找表（如系統代碼、組織結構、角色列表等）提供零配置自動快取。
+
+#### 核心功能
+
+* **feat(cache)：** `[CacheLookup]` Attribute 標記模型即啟用快取，支援 `WarmOnStartup`、`TenantIsolation`、`ConnectionKey` 設定（#139）
+* **feat(cache)：** `ILookupCacheService` + `LookupCacheService` — `IMemoryCache` 為底層的 Cache-Aside 實作，per-type `CancellationTokenSource` 批次失效（#139）
+* **feat(cache)：** `WTMContext.GetLookup<T>()` / `GetLookupAsync<T>()` — 框架級快取存取 API，自動解析 `ConnectionKey` 與 `TenantIsolation`（#142）
+* **feat(cache)：** `GetLookupItem<T>(predicate)` 單筆查詢 + `GetLookupSelectList<T>()` 下拉選單整合（#142）
+
+#### 架構改善
+
+* **refactor(cache)：** 從 `LookupInvalidationInterceptor`（EF SaveChanges 攔截器）重構為 `FrameworkContext.SaveChanges()` override — 消除 Activator.CreateInstance 的 interceptor 注入限制（#139）
+* **refactor(cache)：** Warmup 從 `Task.Delay(3s)` 改為 `IHostApplicationLifetime.ApplicationStarted` 事件驅動 — 不再猜測啟動時間（#143）
+* **feat(cache)：** `IReadOnlyList<T>` 回傳型態防止快取被意外修改（#142）
+* **feat(cache)：** 全域 `LookupCacheOptions.DefaultTenantIsolation` + Attribute 三態覆寫（Unset/true/false sentinel pattern）（#142）
+
+#### 穩定性
+
+* **feat(cache)：** Per-key `SemaphoreSlim(1,1)` stampede 防護 — 10s timeout fallback，防止快取過期時大量並發同時打 DB（#146）
+* **feat(cache)：** `RefreshAsync<T>()` 手動刷新 API（#146）
+
+#### 測試
+
+* 36 個 MSTest 涵蓋：快取命中/失效/過期、tenant 隔離、warmup、stampede 競爭、ConnectionKey 多 DB、GetLookupItem/SelectList、RefreshAsync
+
+### 安全修復
+
+* **feat(security)：** 連線字串加密從 DES（56-bit）升級為 AES-256-CBC — SHA-256 key derivation、random IV、`DecryptString` 自動 fallback DES 相容舊資料（#148）
+
+### 品質改善
+
+* **fix(core)：** `DPWhere` / `AppendSelfDPWhere` 支援 in-memory `IQueryable` — 偵測 `EnumerableQuery<T>` 自動切換 `Enumerable.Any`，解決 Lookup Cache 整合及測試場景的 Expression Tree 失敗（#149）
+* **fix(ci)：** Tag push 時自動上傳 `.nupkg` 為 Release assets（#137）
+* **test：** 統一測試框架 + 覆蓋率門檻、DataPrivilege API / BaseImportVM / async BaseCRUDVM / 密碼遷移等 49 個新測試（#128–#132）
+
 ## 8.3.1 (2026-03-10)
 
 ### Analysis Mode Phase 2 — 跨 DB 分析引擎優化

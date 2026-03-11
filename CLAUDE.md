@@ -158,5 +158,6 @@ controller.Wtm = MockWtmContext.CreateWtmContext();
 ## Docs
 
 - `docs/analysis-mode.md` — developer manual for Analysis Mode (attributes, API spec, security, limits)
+- `docs/lookup-cache.md` — developer manual for Lookup Cache (`[CacheLookup]`, API, stampede protection, multi-DB)
 - `CHANGELOG.md` — version history (update when releasing)
 - `version.props` — single source of version number; bump `VersionPrefix` here
