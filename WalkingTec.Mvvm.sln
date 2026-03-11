@@ -1,4 +1,4 @@
-Microsoft Visual Studio Solution File, Format Version 12.00
+﻿Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
@@ -60,6 +60,10 @@ EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WalkingTec.Mvvm.Vue3Demo", "demo\WalkingTec.Mvvm.Vue3Demo\WalkingTec.Mvvm.Vue3Demo.csproj", "{411690A4-0021-4509-BF24-900437B5DC6E}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WalkingTec.Mvvm.Mvc.Tests", "src\WalkingTec.Mvvm.Mvc.Tests\WalkingTec.Mvvm.Mvc.Tests.csproj", "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WalkingTec.Mvvm.Etl", "src\WalkingTec.Mvvm.Etl\WalkingTec.Mvvm.Etl.csproj", "{BA66447E-9130-423D-9A5B-67F4394D27D5}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WalkingTec.Mvvm.Etl.Test", "test\WalkingTec.Mvvm.Etl.Test\WalkingTec.Mvvm.Etl.Test.csproj", "{62BB44F3-A478-42BF-B972-E6AD0347466B}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -139,6 +143,14 @@ Global
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BA66447E-9130-423D-9A5B-67F4394D27D5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BA66447E-9130-423D-9A5B-67F4394D27D5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BA66447E-9130-423D-9A5B-67F4394D27D5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BA66447E-9130-423D-9A5B-67F4394D27D5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{62BB44F3-A478-42BF-B972-E6AD0347466B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{62BB44F3-A478-42BF-B972-E6AD0347466B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{62BB44F3-A478-42BF-B972-E6AD0347466B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{62BB44F3-A478-42BF-B972-E6AD0347466B}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -163,6 +175,8 @@ Global
 		{D4104589-85BE-446A-A123-1E0FD1538A7B} = {840C6DED-B5D5-4763-A6A7-6F615B72EC10}
 		{411690A4-0021-4509-BF24-900437B5DC6E} = {DE184A47-CF5F-41C0-AB7D-CAD0AF2DAE75}
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890} = {46CFCDC6-4358-48EB-A901-5618B6530CEE}
+		{BA66447E-9130-423D-9A5B-67F4394D27D5} = {46CFCDC6-4358-48EB-A901-5618B6530CEE}
+		{62BB44F3-A478-42BF-B972-E6AD0347466B} = {55D5759D-10E9-4FC8-B2EC-A824CF6D74A1}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {8D25EAAD-E43A-466A-95DA-ECE1F3C462DC}
