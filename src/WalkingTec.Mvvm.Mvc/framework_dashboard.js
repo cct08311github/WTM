@@ -130,10 +130,112 @@
         }
     };
 
+    // --- Utils --------------------------------------------------------------
+    var Utils = {
+        formatValue: function(value, format, prefix) {
+            if (value == null || isNaN(value)) return value;
+            var num = Number(value);
+            
+            if (format === 'percent') {
+                return (num * 100).toFixed(1).replace(/\.0$/, '') + '%';
+            }
+            
+            var formatted = num.toLocaleString();
+            if (format === 'currency') {
+                // simple abbreviation logic
+                if (Math.abs(num) >= 1000000) {
+                    formatted = (num / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+                } else if (Math.abs(num) >= 1000) {
+                    formatted = (num / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
+                }
+                return (prefix || '') + formatted;
+            }
+            
+            return formatted;
+        },
+        calculateTrend: function(current, previous) {
+            if (!previous) return 0;
+            return ((current - previous) / previous) * 100;
+        }
+    };
+
+    // --- Widget Renderers ---------------------------------------------------
+    function renderKpi(container, data, config) {
+        container.innerHTML = ''; // reset
+        
+        var titleDiv = document.createElement('div');
+        titleDiv.className = 'wtm-kpi-title';
+        titleDiv.textContent = config.title || '';
+        
+        var valueDiv = document.createElement('div');
+        valueDiv.className = 'wtm-kpi-value';
+        var val = data ? data.value : 0;
+        valueDiv.textContent = Utils.formatValue(val, config.format, config.prefix);
+        
+        container.appendChild(titleDiv);
+        container.appendChild(valueDiv);
+        
+        if (data && typeof data.previousValue !== 'undefined') {
+            var trend = Utils.calculateTrend(val, data.previousValue);
+            var trendDiv = document.createElement('div');
+            trendDiv.className = 'wtm-kpi-trend ' + (trend >= 0 ? 'up' : 'down');
+            var arrow = trend >= 0 ? '▲' : '▼';
+            trendDiv.textContent = arrow + ' ' + Math.abs(trend).toFixed(2) + '%';
+            container.appendChild(trendDiv);
+        }
+    }
+
+    function renderChart(container, data, config) {
+        if (!global.echarts) return;
+        var chart = global.echarts.init(container);
+        
+        // Simple fallback
+        if (!data || !data.columns || !data.rows) return;
+        
+        var xAxisData = [];
+        var seriesData = [];
+        var dimField = data.columns[0];
+        var msrField = data.columns[1];
+        
+        for (var i = 0; i < data.rows.length; i++) {
+            xAxisData.push(data.rows[i][dimField]);
+            seriesData.push(data.rows[i][msrField]);
+        }
+        
+        var option = {
+            xAxis: {
+                type: 'category',
+                data: xAxisData
+            },
+            yAxis: {
+                type: 'value'
+            },
+            series: [{
+                data: seriesData,
+                type: config.chartType || 'bar'
+            }]
+        };
+        
+        chart.setOption(option);
+    }
+
+    var _renderers = {
+        kpi: renderKpi,
+        chart: renderChart
+    };
+
+    var WidgetRendererFactory = {
+        getRenderer: function(type) { 
+            return _renderers[type] || null; 
+        }
+    };
+
     // --- API 導出 ------------------------------------------------------------
     var api = {
         EventBus: EventBus,
-        GridManager: GridManager
+        GridManager: GridManager,
+        Utils: Utils,
+        WidgetRendererFactory: WidgetRendererFactory
     };
 
     if (typeof global.window !== "undefined") {
