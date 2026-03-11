@@ -48,7 +48,7 @@ public class EtlSchedulerService
     }
 
     /// <summary>▶ 立即執行（Trigger = Manual）</summary>
-    public async Task TriggerNowAsync(Guid jobId)
+    public virtual async Task TriggerNowAsync(Guid jobId)
     {
         EnsureScheduler();
 
@@ -69,7 +69,7 @@ public class EtlSchedulerService
     }
 
     /// <summary>⏸ 暫停</summary>
-    public async Task PauseAsync(Guid jobId)
+    public virtual async Task PauseAsync(Guid jobId)
     {
         EnsureScheduler();
         await _scheduler!.PauseTrigger(GetTriggerKey(jobId));
@@ -77,7 +77,7 @@ public class EtlSchedulerService
     }
 
     /// <summary>▶ 恢復</summary>
-    public async Task ResumeAsync(Guid jobId)
+    public virtual async Task ResumeAsync(Guid jobId)
     {
         EnsureScheduler();
         await _scheduler!.ResumeTrigger(GetTriggerKey(jobId));
@@ -85,7 +85,7 @@ public class EtlSchedulerService
     }
 
     /// <summary>✏️ 修改排程</summary>
-    public async Task RescheduleAsync(Guid jobId, string newCron)
+    public virtual async Task RescheduleAsync(Guid jobId, string newCron)
     {
         EnsureScheduler();
 
@@ -111,7 +111,7 @@ public class EtlSchedulerService
     }
 
     /// <summary>⛔ 中止執行中的 Job（透過 CancellationToken）</summary>
-    public async Task AbortAsync(Guid jobId)
+    public virtual async Task AbortAsync(Guid jobId)
     {
         EnsureScheduler();
         var result = await _scheduler!.Interrupt(GetJobKey(jobId));
@@ -120,7 +120,7 @@ public class EtlSchedulerService
     }
 
     /// <summary>⏭ 跳過下次</summary>
-    public async Task SkipNextAsync(Guid jobId)
+    public virtual async Task SkipNextAsync(Guid jobId)
     {
         using var scope = _sp.CreateScope();
         var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
@@ -134,7 +134,7 @@ public class EtlSchedulerService
     }
 
     /// <summary>🔄 啟用</summary>
-    public async Task EnableAsync(Guid jobId)
+    public virtual async Task EnableAsync(Guid jobId)
     {
         using var scope = _sp.CreateScope();
         var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
@@ -150,7 +150,7 @@ public class EtlSchedulerService
     }
 
     /// <summary>🔄 停用</summary>
-    public async Task DisableAsync(Guid jobId)
+    public virtual async Task DisableAsync(Guid jobId)
     {
         EnsureScheduler();
 
@@ -162,7 +162,7 @@ public class EtlSchedulerService
     }
 
     /// <summary>從 RunLog snapshot 重跑</summary>
-    public async Task RerunFromSnapshotAsync(Guid runLogId)
+    public virtual async Task RerunFromSnapshotAsync(Guid runLogId)
     {
         using var scope = _sp.CreateScope();
         var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
