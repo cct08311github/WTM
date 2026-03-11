@@ -1,5 +1,22 @@
 # 更新日志
 
+## 8.5.0 (2026-03-11)
+
+### Code Generator — Analysis Mode 整合
+
+Code Generator 新增 Analysis Mode 支援，自動產生 `[EnableAnalysis]`、`[Dimension]`、`[Measure]` attribute。
+
+* **feat(codegen)：** 新增 `EnableAnalysis` checkbox 及 `IsDimension`/`IsMeasure` 欄位選擇（#156）
+* **feat(codegen)：** 智慧預設 — string/enum→Dimension、數值→Measure、DateTime→Dimension(Month)（#156）
+* **feat(codegen)：** ListVM 模板自動加入 `[EnableAnalysis]` attribute + using（#157）
+* **feat(codegen)：** 生成後自動在 Model .cs 檔案插入 `[Dimension]`/`[Measure]` attribute — 正則插入、幂等保護、DateTime 自動 Hierarchy（#158）
+* **feat(codegen)：** `FindModelFile` 從 MainDir 往上搜尋 Model source file，排除 bin/obj（#158）
+
+### 測試與文件
+
+* 10 個新 MSTest 測試覆蓋 attribute 注入、幂等性、檔案搜尋（#159）
+* 更新 `docs/analysis-mode.md` 加入 Code Generator 整合說明（#159）
+
 ## 8.4.1 (2026-03-11)
 
 ### 修復
