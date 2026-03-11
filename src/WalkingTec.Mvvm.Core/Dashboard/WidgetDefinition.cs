@@ -1,0 +1,43 @@
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace WalkingTec.Mvvm.Core.Dashboard;
+
+public class WidgetDefinition
+{
+    public string Type { get; set; } = "";
+    public string Title { get; set; } = "";
+    public WidgetSourceDefinition Source { get; set; } = new();
+    public Dictionary<string, object?> Config { get; set; } = new();
+}
+
+public class WidgetSourceDefinition
+{
+    public string Kind { get; set; } = "custom";
+    public string? Name { get; set; }
+    public string? ListVmType { get; set; }
+    public List<DimensionConfig>? Dimensions { get; set; }
+    public List<MeasureConfig>? Measures { get; set; }
+    public List<FilterConfig>? Filters { get; set; }
+}
+
+public class DimensionConfig
+{
+    public string Field { get; set; } = "";
+    public string? Hierarchy { get; set; }
+}
+
+public class MeasureConfig
+{
+    public string Field { get; set; } = "";
+    public string Func { get; set; } = "Sum";
+}
+
+public class FilterConfig
+{
+    public string Field { get; set; } = "";
+    public string Op { get; set; } = "eq";
+    public string Value { get; set; } = "";
+}
