@@ -332,13 +332,69 @@
         }
     };
 
+    // --- DashboardEditor ----------------------------------------------------
+    var DashboardEditor = {
+        toggleEditMode: function() {
+            var newMode = !GridManager.isEditMode();
+            GridManager.setEditMode(newMode);
+            if (newMode) {
+                DashboardManager.stopRefresh();
+            } else if (_currentDashboard && _currentDashboard.refreshInterval > 0) {
+                DashboardManager.startRefresh(_currentDashboard.refreshInterval);
+            }
+        },
+
+        saveDashboard: function() {
+            if (!_currentDashboard) return Promise.resolve();
+            var layout = GridManager.saveLayout();
+            var body = {
+                name: _currentDashboard.name,
+                layout: layout,
+                widgets: _currentDashboard.widgets || {}
+            };
+            return global.fetch('/_dashboard/' + _currentDashboard.id, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            }).then(function(res) {
+                if (!res.ok) throw new Error('Save failed');
+                return res.json();
+            });
+        },
+
+        deleteDashboard: function() {
+            if (!_currentDashboard) return Promise.resolve();
+            return global.fetch('/_dashboard/' + _currentDashboard.id, {
+                method: 'DELETE'
+            }).then(function(res) {
+                if (!res.ok) throw new Error('Delete failed');
+                return res.json();
+            });
+        },
+
+        addWidget: function(widgetId, widgetDef, gridOpts) {
+            if (!_currentDashboard) return;
+            if (!_currentDashboard.widgets) _currentDashboard.widgets = {};
+            _currentDashboard.widgets[widgetId] = widgetDef;
+            if (_grid) {
+                _grid.addWidget(gridOpts || { id: widgetId, w: 4, h: 3 });
+            }
+        },
+
+        removeWidget: function(widgetId) {
+            if (!_currentDashboard || !_currentDashboard.widgets) return;
+            delete _currentDashboard.widgets[widgetId];
+        }
+    };
+
     // --- API 導出 ------------------------------------------------------------
     var api = {
         EventBus: EventBus,
         GridManager: GridManager,
         Utils: Utils,
         WidgetRendererFactory: WidgetRendererFactory,
-        DashboardManager: DashboardManager
+        DashboardManager: DashboardManager,
+        DashboardEditor: DashboardEditor
     };
 
     if (typeof global.window !== "undefined") {
