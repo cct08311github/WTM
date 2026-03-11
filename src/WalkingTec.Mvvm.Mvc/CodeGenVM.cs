@@ -37,6 +37,9 @@ namespace WalkingTec.Mvvm.Mvc
         [Display(Name = "Codegen.GenApi")]
         public bool IsApi { get; set; }
 
+        [Display(Name = "Codegen.EnableAnalysis")]
+        public bool EnableAnalysis { get; set; }
+
         [Display(Name = "Codegen.AuthMode")]
         public ApiAuthMode AuthMode { get; set; }
 
@@ -3129,6 +3132,8 @@ namespace WalkingTec.Mvvm.Mvc
 
         public bool IsImportField { get; set; }
         public bool IsBatchField { get; set; }
+        public bool IsDimensionField { get; set; }
+        public bool IsMeasureField { get; set; }
 
         public FieldInfoType InfoType
         {

@@ -263,6 +263,12 @@ namespace WalkingTec.Mvvm.Mvc
         [Display(Name = "Codegen.IsBatchField")]
         public bool IsBatchField { get; set; }
 
+        [Display(Name = "Codegen.IsDimensionField")]
+        public bool IsDimensionField { get; set; }
+
+        [Display(Name = "Codegen.IsMeasureField")]
+        public bool IsMeasureField { get; set; }
+
         public int Index { get; set; }
 
         [Display(Name = "Codegen.LinkedType")]
