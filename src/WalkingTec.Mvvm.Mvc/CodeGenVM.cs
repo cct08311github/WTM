@@ -869,6 +869,16 @@ namespace WalkingTec.Mvvm.Mvc
                     }
                 }
                 rv = rv.Replace("$headers$", headerstring).Replace("$where$", wherestring).Replace("$select$", selectstring).Replace("$subpros$", subprostring).Replace("$format$", formatstring).Replace("$actions$", actionstring);
+                if (EnableAnalysis)
+                {
+                    rv = rv.Replace("$analysisusing$", "\nusing WalkingTec.Mvvm.Core.Analysis;\n");
+                    rv = rv.Replace("$analysisattr$", "[EnableAnalysis]\n    ");
+                }
+                else
+                {
+                    rv = rv.Replace("$analysisusing$", "");
+                    rv = rv.Replace("$analysisattr$", "");
+                }
                 rv = GetRelatedNamespace(pros, rv);
             }
             if (name == "CrudVM")
