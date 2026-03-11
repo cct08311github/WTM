@@ -437,11 +437,19 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 string attrName = field.IsDimensionField ? "Dimension" : "Measure";
 
-                // Skip if attribute already exists on this property
-                var alreadyHasAttr = Regex.IsMatch(
-                    content,
-                    @"\[" + attrName + @"[\](]" + @".*\n\s*public\s+\S+\??\s+" + Regex.Escape(field.FieldName) + @"\s",
-                    RegexOptions.Multiline);
+                var propMatch = Regex.Match(content, @"\bpublic\s+\S+\??\s+" + Regex.Escape(field.FieldName) + @"\s*\{");
+                if (!propMatch.Success) continue;
+
+                int propIndex = propMatch.Index;
+                int prevBrace = content.LastIndexOf('}', propIndex);
+                int prevSemi = content.LastIndexOf(';', propIndex);
+                int prevOpen = content.LastIndexOf('{', propIndex);
+                
+                int startIdx = Math.Max(Math.Max(prevBrace, prevSemi), prevOpen);
+                if (startIdx == -1) startIdx = 0;
+                
+                string block = content.Substring(startIdx, propIndex - startIdx);
+                bool alreadyHasAttr = block.Contains("[" + attrName + "]") || block.Contains("[" + attrName + "(");
                 if (alreadyHasAttr) continue;
 
                 // Build attribute string
@@ -475,19 +483,17 @@ namespace WalkingTec.Mvvm.Mvc
                     attrStr = "[Measure]";
                 }
 
-                // Find property declaration and insert attribute before it
-                var propPattern = @"(\n)((\s*)\[[\s\S]*?)?((\s*)(public\s+\S+\??\s+" + Regex.Escape(field.FieldName) + @"\s*\{))";
-                var propMatch = Regex.Match(content, propPattern);
-                if (propMatch.Success)
+                int indentStart = propIndex - 1;
+                while (indentStart >= 0 && (content[indentStart] == ' ' || content[indentStart] == '\t'))
                 {
-                    string indent = propMatch.Groups[5].Value;
-                    if (string.IsNullOrEmpty(indent)) indent = propMatch.Groups[3].Value;
-                    if (string.IsNullOrEmpty(indent)) indent = "        ";
-                    string insertion = indent + attrStr + "\n";
-                    int insertPos = propMatch.Groups[4].Index;
-                    content = content.Insert(insertPos, insertion);
-                    modified = true;
+                    indentStart--;
                 }
+                string indent = content.Substring(indentStart + 1, propIndex - indentStart - 1);
+                if (string.IsNullOrEmpty(indent)) indent = "        ";
+
+                string insertion = attrStr + "\n" + indent;
+                content = content.Insert(propIndex, insertion);
+                modified = true;
             }
 
             if (modified && content != originalContent)
