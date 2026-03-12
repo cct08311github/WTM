@@ -23,6 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\WalkingTec.Mvvm.Mvc\WalkingTec.Mvvm.Mvc.csproj" />
     <ProjectReference Include="..\..\src\WalkingTec.Mvvm.TagHelpers.LayUI\WalkingTec.Mvvm.TagHelpers.LayUI.csproj" />
+    <ProjectReference Include="..\..\src\WalkingTec.Mvvm.Etl\WalkingTec.Mvvm.Etl.csproj" />
   </ItemGroup>
 
 

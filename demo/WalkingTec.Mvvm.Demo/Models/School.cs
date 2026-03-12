@@ -4,6 +4,8 @@ using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Text.Json.Serialization;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Core.Analysis;
+using WalkingTec.Mvvm.Core.Cache;
 
 namespace WalkingTec.Mvvm.Demo.Models
 {
@@ -15,6 +17,7 @@ namespace WalkingTec.Mvvm.Demo.Models
         PRI
     }
 
+    [CacheLookup(TtlMinutes = 60, WarmOnStartup = true)]
     public class School : BasePoco, IWorkflow
     {
         [Key]
@@ -30,10 +33,12 @@ namespace WalkingTec.Mvvm.Demo.Models
         [StringLength(50, ErrorMessage = "{0}最多输入{1}个字符")]
         [Required(ErrorMessage = "{0}是必填项")]
         [Column("SchoolName2")]
+        [Dimension(DisplayName = "学校名称")]
         public string SchoolName { get; set; }
 
         [Display(Name = "学校类型")]
         [Required(ErrorMessage = "{0}是必填项")]
+        [Dimension(DisplayName = "学校类型")]
         public SchoolTypeEnum? SchoolType { get; set; }
 
         [Display(Name = "备注")]
@@ -45,6 +50,7 @@ namespace WalkingTec.Mvvm.Demo.Models
         public TimeSpan Duration { get; set; }
 
         [Display(Name = "级别")]
+        [Measure(AllowedFuncs = AggregateFunc.Sum | AggregateFunc.Avg | AggregateFunc.Max | AggregateFunc.Min | AggregateFunc.Count, DisplayName = "级别")]
         public int Level { get; set; }
 
         [Display(Name = "专业")]

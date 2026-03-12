@@ -10,6 +10,7 @@ using WalkingTec.Mvvm.Core.Extensions;
 using WalkingTec.Mvvm.Demo.Models;
 using WalkingTec.Mvvm.Demo.Models._Admin;
 using WalkingTec.Mvvm.Demo.Models.Virus;
+using WalkingTec.Mvvm.Etl;
 
 namespace WalkingTec.Mvvm.Demo
 {
@@ -87,11 +88,10 @@ namespace WalkingTec.Mvvm.Demo
                 await SaveChangesAsync();
 
                 Dictionary<string, List<object>> data = new Dictionary<string, List<object>>();
-                SetTestData(typeof(School), data);
-                SetTestData(typeof(Major), data);
-                SetTestData(typeof(Student), data);
-                SetTestData(typeof(School), data);
-                SetTestData(typeof(City), data,1000);
+                SetTestData(typeof(School), data, 50);
+                SetTestData(typeof(Major), data, 100);
+                SetTestData(typeof(Student), data, 500);
+                SetTestData(typeof(City), data, 1000);
                 SetTestData(typeof(ControlCenter), data);
                 SetTestData(typeof(Hospital), data);
                 SetTestData(typeof(Patient), data);
@@ -188,7 +188,7 @@ namespace WalkingTec.Mvvm.Demo
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
-            //modelBuilder.Entity<Major>().HasOne(x => x.School).WithMany(x => x.Majors).OnDelete(DeleteBehavior.SetNull);
+            modelBuilder.ApplyEtlModels();
         }
     }
 

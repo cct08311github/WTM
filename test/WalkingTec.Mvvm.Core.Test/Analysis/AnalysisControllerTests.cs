@@ -113,8 +113,8 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             
             // Should not contain "Region"
             var json = System.Text.Json.JsonSerializer.Serialize(value);
-            Assert.IsFalse(json.Contains("\"FieldName\":\"Region\""));
-            Assert.IsTrue(json.Contains("\"FieldName\":\"Category\""));
+            Assert.IsFalse(json.Contains("\"fieldName\":\"Region\""));
+            Assert.IsTrue(json.Contains("\"fieldName\":\"Category\""));
         }
 
         [TestMethod]
@@ -227,7 +227,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 dims: new[] { "Region" },
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
-            var result = CreateController().Query(req) as OkObjectResult;
+            var result = CreateController().Query(req) as JsonResult;
             Assert.IsNotNull(result);
 
             var response = result.Value as AnalysisQueryResponse;
@@ -247,7 +247,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 dims: new[] { "Region" },
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
-            var result = CreateController().Query(req) as OkObjectResult;
+            var result = CreateController().Query(req) as JsonResult;
             Assert.IsNotNull(result);
 
             var response = result.Value as AnalysisQueryResponse;
@@ -399,7 +399,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 }
             };
 
-            var result = CreateController().Query(req) as OkObjectResult;
+            var result = CreateController().Query(req) as JsonResult;
             Assert.IsNotNull(result, "帶有效 DimensionHierarchies 的查詢應回傳 200");
         }
 
@@ -442,7 +442,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             // DimensionHierarchies is null by default — backward compat
             Assert.IsNull(req.DimensionHierarchies);
 
-            var result = CreateController().Query(req) as OkObjectResult;
+            var result = CreateController().Query(req) as JsonResult;
             Assert.IsNotNull(result, "不帶 DimensionHierarchies 的查詢應向下相容回傳 200");
         }
 
@@ -455,11 +455,11 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
             var json = System.Text.Json.JsonSerializer.Serialize(result.Value);
             // OrderDate 應有 IsDate=true 和 Hierarchy=Month
-            Assert.IsTrue(json.Contains("\"IsDate\":true"), "日期欄位應有 IsDate=true");
-            Assert.IsTrue(json.Contains("\"Hierarchy\":\"Month\""), "日期欄位應有 Hierarchy=Month");
+            Assert.IsTrue(json.Contains("\"isDate\":true"), "日期欄位應有 isDate=true");
+            Assert.IsTrue(json.Contains("\"hierarchy\":\"Month\""), "日期欄位應有 hierarchy=Month");
 
             // Region 應有 IsDate=false
-            Assert.IsTrue(json.Contains("\"IsDate\":false"), "非日期欄位應有 IsDate=false");
+            Assert.IsTrue(json.Contains("\"isDate\":false"), "非日期欄位應有 isDate=false");
         }
     }
 }

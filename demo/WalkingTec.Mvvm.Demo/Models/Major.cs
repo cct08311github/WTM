@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Core.Cache;
 
 namespace WalkingTec.Mvvm.Demo.Models
 {
@@ -15,6 +16,7 @@ namespace WalkingTec.Mvvm.Demo.Models
         Optional
     }
 
+    [CacheLookup(TtlMinutes = 60, WarmOnStartup = true)]
     public class Major : BasePoco
     {
         [Display(Name = "专业编码")]

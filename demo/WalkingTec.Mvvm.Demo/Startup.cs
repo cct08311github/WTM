@@ -12,6 +12,7 @@ using WalkingTec.Mvvm.Mvc;
 using Microsoft.AspNetCore.Mvc;
 using WalkingTec.Mvvm.Core.WorkFlow;
 using WalkingTec.Mvvm.Mvc.Helper;
+using WalkingTec.Mvvm.Etl;
 using System.Reflection;
 using System;
 // using Elsa.Retention.Extensions;
@@ -27,7 +28,8 @@ namespace WalkingTec.Mvvm.Demo
         {
             AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
             ConfigRoot = config;
-            ConfigRoot["Connections:0:Value"] = "Server=(localdb)\\mssqllocaldb;Database=next;Trusted_Connection=True;MultipleActiveResultSets=true";
+            ConfigRoot["Connections:0:Value"] = "Data Source=./demo.db";
+            ConfigRoot["Connections:0:DBType"] = "sqlite";
         }
 
 
@@ -70,6 +72,8 @@ namespace WalkingTec.Mvvm.Demo
             })
             .AddViewLocalization(LanguageViewLocationExpanderFormat.Suffix)
             .AddWtmDataAnnotationsLocalization(typeof(Program));
+
+            services.AddWtmEtl();
 
             services.AddWtmContext(ConfigRoot, (options) => {
                 options.DataPrivileges = DataPrivilegeSettings();
