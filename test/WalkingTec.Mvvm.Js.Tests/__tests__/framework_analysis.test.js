@@ -111,9 +111,20 @@ function makeEnv(overrides) {
         getElementById: jest.fn((id) => {
             var el = domNodes[id] || null;
             if (!el && id && id.startsWith('analysis-panel-')) {
-                el = { style: { display: 'none' }, children: [], appendChild: jest.fn(), removeChild: jest.fn() };
+                el = {
+                    style: { display: 'none' }, children: [],
+                    appendChild: jest.fn(), removeChild: jest.fn(),
+                    querySelector: jest.fn(function() { return null; }),
+                    querySelectorAll: jest.fn(function(sel) {
+                        if (sel && sel.indexOf('.analysis-field-cb') >= 0) return mockDocument.querySelectorAll();
+                        return [];
+                    }),
+                };
             }
             if (el) {
+                if (!el.querySelector) {
+                    el.querySelector = jest.fn(function() { return null; });
+                }
                 var originalQsa = el.querySelectorAll ? el.querySelectorAll.bind(el) : function() { return []; };
                 el.querySelectorAll = function(sel) {
                     if (sel && sel.indexOf('.analysis-field-cb') >= 0) return mockDocument.querySelectorAll();
@@ -151,6 +162,11 @@ function makeEnv(overrides) {
             appendChild: jest.fn(function(c) { this.children.push(c); }),
             firstChild: null,
             removeChild: jest.fn(),
+            querySelector: jest.fn(function() { return null; }),
+            querySelectorAll: jest.fn(function(sel) {
+                if (sel && sel.indexOf('.analysis-field-cb') >= 0) return mockDocument.querySelectorAll();
+                return [];
+            }),
         };
         domNodes[id] = node;
         return node;
@@ -481,7 +497,7 @@ describe('exportData — layui loading state', () => {
             layui: { layer: { load: layerLoad, close: layerClose } },
             URL: { createObjectURL: jest.fn(() => 'blob:url'), revokeObjectURL: jest.fn() },
             document: {
-                getElementById: jest.fn((id) => id === 'analysis-panel-gridX' ? { style: {}, appendChild: jest.fn(), removeChild: jest.fn(), firstChild: null } : null),
+                getElementById: jest.fn((id) => id === 'analysis-panel-gridX' ? { style: {}, appendChild: jest.fn(), removeChild: jest.fn(), firstChild: null, querySelector: jest.fn(() => null), querySelectorAll: jest.fn(() => []) } : null),
                 querySelectorAll: jest.fn(() => []),
                 querySelector: jest.fn(() => null),
                 createElement: jest.fn((tag) => ({ tag, style: {}, href: '', download: '', click: jest.fn(), children: [], textContent: '', className: '', appendChild: jest.fn(function(c){ this.children.push(c); }), removeChild: jest.fn() })),
@@ -511,7 +527,7 @@ describe('exportData — layui loading state', () => {
             layui: { layer: { load: layerLoad, close: layerClose } },
             alert: alertMock,
             document: {
-                getElementById: jest.fn((id) => id === 'analysis-panel-gridX' ? { style: {}, appendChild: jest.fn(), removeChild: jest.fn(), firstChild: null } : null),
+                getElementById: jest.fn((id) => id === 'analysis-panel-gridX' ? { style: {}, appendChild: jest.fn(), removeChild: jest.fn(), firstChild: null, querySelector: jest.fn(() => null), querySelectorAll: jest.fn(() => []) } : null),
                 querySelectorAll: jest.fn(() => []),
                 querySelector: jest.fn(() => null),
                 createElement: jest.fn((tag) => ({ tag, style: {}, children: [], textContent: '', className: '', appendChild: jest.fn(function(c){ this.children.push(c); }), removeChild: jest.fn() })),
@@ -534,7 +550,7 @@ describe('exportData — layui loading state', () => {
                 .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(['data']) }),
             URL: { createObjectURL: jest.fn(() => 'blob:url'), revokeObjectURL: jest.fn() },
             document: {
-                getElementById: jest.fn((id) => id === 'analysis-panel-gridX' ? { style: {}, appendChild: jest.fn(), removeChild: jest.fn(), firstChild: null } : null),
+                getElementById: jest.fn((id) => id === 'analysis-panel-gridX' ? { style: {}, appendChild: jest.fn(), removeChild: jest.fn(), firstChild: null, querySelector: jest.fn(() => null), querySelectorAll: jest.fn(() => []) } : null),
                 querySelectorAll: jest.fn(() => []),
                 querySelector: jest.fn(() => null),
                 createElement: jest.fn((tag) => ({ tag, style: {}, href: '', download: '', click: jest.fn(), children: [], textContent: '', className: '', appendChild: jest.fn(function(c){ this.children.push(c); }), removeChild: jest.fn() })),
@@ -775,41 +791,55 @@ describe('[cov] waReq pure functions — detectChartType / validateSelection / p
 describe('[cov] waReq.collectSelection via jest.spyOn', () => {
     afterEach(spyTeardown);
 
+    // v2 collectSelection requires a panel element from getElementById.
+    // We provide a real div that has no drop zones, so the v1 checkbox fallback triggers.
+    function makeCovPanel(gridId) {
+        const panel = document.createElement('div');
+        panel.id = 'analysis-panel-' + gridId;
+        return panel;
+    }
+
     test('no checked checkboxes → empty dims/msrs', () => {
-        spySetup(null, function() { return []; });
+        const panel = makeCovPanel('scg1');
+        spySetup(function(id) { return id === 'analysis-panel-scg1' ? panel : null; }, function() { return []; });
         const result = waReq.collectSelection('scg1');
         expect(result.dims).toEqual([]);
         expect(result.msrs).toEqual([]);
     });
     test('Dimension checkbox → added to dims', () => {
+        const panel = makeCovPanel('scg1');
         const cb = { dataset: { kind: 'Dimension', fieldName: 'Region' }, nextElementSibling: null };
-        spySetup(null, function() { return [cb]; });
+        spySetup(function(id) { return id === 'analysis-panel-scg1' ? panel : null; }, function() { return [cb]; });
         const result = waReq.collectSelection('scg1');
         expect(result.dims).toEqual(['Region']);
     });
     test('Measure with defaultFunc → uses defaultFunc', () => {
+        const panel = makeCovPanel('scg1');
         const cb = { dataset: { kind: 'Measure', fieldName: 'Amt', defaultFunc: 'Max' }, nextElementSibling: null };
-        spySetup(null, function() { return [cb]; });
+        spySetup(function(id) { return id === 'analysis-panel-scg1' ? panel : null; }, function() { return [cb]; });
         const result = waReq.collectSelection('scg1');
         expect(result.msrs).toEqual([{ field: 'Amt', func: 'Max' }]);
     });
     test('Measure with no defaultFunc → falls back to Sum', () => {
+        const panel = makeCovPanel('scg1');
         const cb = { dataset: { kind: 'Measure', fieldName: 'Amt' }, nextElementSibling: null };
-        spySetup(null, function() { return [cb]; });
+        spySetup(function(id) { return id === 'analysis-panel-scg1' ? panel : null; }, function() { return [cb]; });
         const result = waReq.collectSelection('scg1');
         expect(result.msrs).toEqual([{ field: 'Amt', func: 'Sum' }]);
     });
     test('Measure with SELECT sibling → uses select.value', () => {
+        const panel = makeCovPanel('scg1');
         const sel = { tagName: 'SELECT', value: 'Avg' };
         const cb = { dataset: { kind: 'Measure', fieldName: 'Rev' }, nextElementSibling: sel };
-        spySetup(null, function() { return [cb]; });
+        spySetup(function(id) { return id === 'analysis-panel-scg1' ? panel : null; }, function() { return [cb]; });
         const result = waReq.collectSelection('scg1');
         expect(result.msrs).toEqual([{ field: 'Rev', func: 'Avg' }]);
     });
     test('Measure with non-SELECT sibling → uses defaultFunc', () => {
+        const panel = makeCovPanel('scg1');
         const span = { tagName: 'SPAN', value: 'ignore' };
         const cb = { dataset: { kind: 'Measure', fieldName: 'Rev', defaultFunc: 'Min' }, nextElementSibling: span };
-        spySetup(null, function() { return [cb]; });
+        spySetup(function(id) { return id === 'analysis-panel-scg1' ? panel : null; }, function() { return [cb]; });
         const result = waReq.collectSelection('scg1');
         expect(result.msrs).toEqual([{ field: 'Rev', func: 'Min' }]);
     });
@@ -1021,7 +1051,7 @@ describe('[cov] waReq.query — branches', () => {
         await new Promise(r => setTimeout(r, 20));
         waReq.query('scovQ4');
         await new Promise(r => setTimeout(r, 40));
-        expect(toggleRow.style.display).toBe('block');
+        expect(toggleRow.style.display).toBe('flex');
     });
 
     test('renderTable with null/undefined cells → empty string, no crash', async () => {
@@ -1280,13 +1310,13 @@ describe('[cov] waReq.renderChart — all branches', () => {
     });
 });
 
-// ─── [cov] renderPanel — createFieldSection allowedFuncs branches ─────────────
-describe('[cov] waReq.renderPanel — createFieldSection allowedFuncs branches', () => {
+// ─── [cov] renderPanel — v2 drop zone + pool pills ───────────────────────────
+describe('[cov] waReq.renderPanel — v2 pool pills and drop zones', () => {
     let _fetchOrig;
     beforeEach(() => { _fetchOrig = global.fetch; });
     afterEach(() => { spyTeardown(); global.fetch = _fetchOrig; });
 
-    test('single-func measure → defaultFunc set; multi-func → select element; no-func → no extra UI', async () => {
+    test('pool pills created for all fields; drop zones present; checkboxes = pivot + chart export', async () => {
         const panel = document.createElement('div');
         panel.id = 'analysis-panel-scovP1';
         global.fetch = jest.fn().mockResolvedValue({
@@ -1294,19 +1324,24 @@ describe('[cov] waReq.renderPanel — createFieldSection allowedFuncs branches',
             json: jest.fn().mockResolvedValue([
                 { kind: 'Dimension', fieldName: 'Region', displayName: '地區', isDate: false, allowedFuncs: 0 },
                 { kind: 'Measure',   fieldName: 'Cnt',    displayName: '計數', allowedFuncs: 1 },  // Count only
-                { kind: 'Measure',   fieldName: 'Amt',    displayName: '金額', allowedFuncs: 6 },  // Sum+Avg → select
+                { kind: 'Measure',   fieldName: 'Amt',    displayName: '金額', allowedFuncs: 6 },  // Sum+Avg
                 { kind: 'Measure',   fieldName: 'Qty',    displayName: '數量', allowedFuncs: 0 },  // no flags
             ])
         });
         spySetup(function(id) { return id === 'analysis-panel-scovP1' ? panel : null; });
         waReq.toggle('scovP1', 'VmP1');
         await new Promise(r => setTimeout(r, 50));
-        // Panel got renderPanel output appended — verify checkboxes and select
+        // v2: pool pills for each field (4 total)
+        const poolPills = panel.querySelectorAll('.analysis-pill--available');
+        expect(poolPills.length).toBe(4);
+        // v2: drop zones exist
+        const dimZone = panel.querySelector('.analysis-dropzone--dim');
+        const msrZone = panel.querySelector('.analysis-dropzone--msr');
+        expect(dimZone).not.toBeNull();
+        expect(msrZone).not.toBeNull();
+        // v2: 2 checkboxes (pivot toggle + chart export)
         const checkboxes = panel.querySelectorAll('input[type="checkbox"]');
-        const selects = panel.querySelectorAll('select');
-        // 4 fields (1 dim + 3 measures) + 1 pivot mode toggle + 1 含圖表 export checkbox = 6 checkboxes
-        expect(checkboxes.length).toBe(6);
-        expect(selects.length).toBe(1);
+        expect(checkboxes.length).toBe(2);
     });
 });
 
@@ -1325,13 +1360,26 @@ describe('[cov] query with real meta — dimFields filter + chart toggle click',
         global.echarts = _echartsOrig;
     });
 
+    // Helper: after renderPanel populates the panel with drop zones, place pills
+    // into the zones to simulate user drag-drop. This is needed because v2
+    // collectSelection reads from drop zone pills, not checkboxes.
+    function addPillToZone(panel, zoneSelector, pillClass, fieldName, extraDataset) {
+        var zone = panel.querySelector(zoneSelector);
+        if (!zone) return;
+        var pill = document.createElement('span');
+        pill.className = 'analysis-pill ' + pillClass;
+        pill.dataset.fieldName = fieldName;
+        if (extraDataset) {
+            Object.keys(extraDataset).forEach(function(k) { pill.dataset[k] = extraDataset[k]; });
+        }
+        zone.appendChild(pill);
+    }
+
     test('query with loaded meta → dimFields filter callback executes (line 309 covered)', async () => {
         // This test uses a unique gridId so _state is fresh
         const gridId = 'scovLine309';
         const panel = document.createElement('div');
         panel.id = 'analysis-panel-' + gridId;
-        const resultDiv = document.createElement('div');
-        resultDiv.id = 'analysis-result-' + gridId;
         global.layui = undefined;
         global.echarts = undefined;
         // First fetch: loadMeta success with a Dimension field
@@ -1352,21 +1400,27 @@ describe('[cov] query with real meta — dimFields filter + chart toggle click',
                     rows: [{ Region: 'East', Amount_Sum: 100 }]
                 })
             });
-        const dimCb = { dataset: { kind: 'Dimension', fieldName: 'Region', gridId }, nextElementSibling: null };
-        const msrCb = { dataset: { kind: 'Measure', fieldName: 'Amount', gridId, defaultFunc: 'Sum' }, nextElementSibling: null };
         spySetup(
             function(id) {
                 if (id === 'analysis-panel-' + gridId) return panel;
-                if (id === 'analysis-result-' + gridId) return resultDiv;
-                return null;
-            },
-            function() { return [dimCb, msrCb]; }
+                // v2: renderPanel creates result div internally; let getElementById find it in the panel
+                var el = panel.querySelector('#' + id);
+                return el;
+            }
         );
         waReq.toggle(gridId, 'VmLine309');
-        await new Promise(r => setTimeout(r, 40));  // loadMeta completes
+        await new Promise(r => setTimeout(r, 40));  // loadMeta completes, renderPanel populates panel
+
+        // Place pills in drop zones (simulating user drag-drop)
+        addPillToZone(panel, '.analysis-dropzone--dim', 'analysis-pill--dim', 'Region');
+        addPillToZone(panel, '.analysis-dropzone--msr', 'analysis-pill--msr', 'Amount', { defaultFunc: 'Sum' });
+
         waReq.query(gridId);
         await new Promise(r => setTimeout(r, 40));  // query completes
+
         // Verify table rendered — dimFields filter executed internally
+        var resultDiv = panel.querySelector('#analysis-result-' + gridId);
+        expect(resultDiv).toBeTruthy();
         const table = resultDiv.querySelector('table');
         expect(table).toBeTruthy();
     });
@@ -1377,8 +1431,6 @@ describe('[cov] query with real meta — dimFields filter + chart toggle click',
         const gridId = 'scovLine148';
         const panel = document.createElement('div');
         panel.id = 'analysis-panel-' + gridId;
-        const resultDiv = document.createElement('div');
-        resultDiv.id = 'analysis-result-' + gridId;
         global.layui = undefined;
         // echarts needed to verify chart rendering path in button click handler
         const setOptionCalls = [];
@@ -1403,36 +1455,30 @@ describe('[cov] query with real meta — dimFields filter + chart toggle click',
                     rows: [{ Region: 'East', Amount_Sum: 100 }]
                 })
             });
-        const dimCb = { dataset: { kind: 'Dimension', fieldName: 'Region', gridId }, nextElementSibling: null };
-        const msrCb = { dataset: { kind: 'Measure', fieldName: 'Amt', gridId, defaultFunc: 'Sum' }, nextElementSibling: null };
-        const toggleRow = document.createElement('div');
-        toggleRow.id = 'analysis-chart-toggle-' + gridId;
-        const drillBarToggle = document.createElement('div');
-        drillBarToggle.id = 'analysis-drill-bar-' + gridId;
         spySetup(
             function(id) {
                 if (id === 'analysis-panel-' + gridId) return panel;
-                if (id === 'analysis-result-' + gridId) return resultDiv;
-                if (id === 'analysis-chart-toggle-' + gridId) return toggleRow;
-                if (id === 'analysis-drill-bar-' + gridId) return drillBarToggle;
-                return null;
-            },
-            function() { return [dimCb, msrCb]; }
+                var el = panel.querySelector('#' + id);
+                return el;
+            }
         );
         waReq.toggle(gridId, 'VmLine148');
         await new Promise(r => setTimeout(r, 40));  // loadMeta → renderPanel (buttons created in panel)
+
+        // Place pills in drop zones
+        addPillToZone(panel, '.analysis-dropzone--dim', 'analysis-pill--dim', 'Region');
+        addPillToZone(panel, '.analysis-dropzone--msr', 'analysis-pill--msr', 'Amt', { defaultFunc: 'Sum' });
+
         waReq.query(gridId);
         await new Promise(r => setTimeout(r, 40));  // query → lastResult stored
 
         // Find the chart toggle buttons rendered by renderPanel inside `panel`
-        // They are <button> elements in the chart-toggle row (div#analysis-chart-toggle-...)
         const toggleButtons = panel.querySelectorAll('button');
-        // Filter for the ones in the chartToggleRow (their textContent is one of 'bar','line',etc.)
         const chartTypeBtn = Array.from(toggleButtons).find(function(b) {
             return b.textContent === 'line';
         });
         expect(chartTypeBtn).toBeDefined();
-        // Click the button — this fires lines 148-154
+        // Click the button — this fires the chart type toggle handler
         chartTypeBtn.click();
         // After click, renderChart should have been called (echarts.init called again)
         expect(global.echarts.init.mock.calls.length).toBe(2);
@@ -1467,9 +1513,9 @@ describe('wtmAnalysis.formatDateKey', () => {
     });
 });
 
-// ─── Date hierarchy dropdown ────────────────────────────────────────────────
-describe('Date hierarchy dropdown', () => {
-    test('isDate 維度欄位旁渲染 hierarchy 下拉（createElement 追蹤）', async () => {
+// ─── Date hierarchy — v2 pool pill isDate attribute ─────────────────────────
+describe('Date hierarchy — v2 pool pills', () => {
+    test('isDate 維度的 pool pill 有 data-is-date 屬性', async () => {
         const { wa, makePanel, mockFetch, mockDocument } = makeEnv();
         const panel = makePanel('analysis-panel-dateDim1');
 
@@ -1494,19 +1540,22 @@ describe('Date hierarchy dropdown', () => {
         wa.toggle('dateDim1', 'TestVm');
         await new Promise(r => setTimeout(r, 40));
 
-        // 從 createElement 紀錄中找 hierarchy select
-        var selects = createdElements.filter(function (el) {
-            return el.className === 'analysis-hierarchy-select';
+        // v2: pool pills are created via createPoolPill. isDate fields get dataset.isDate='true'
+        var poolPills = createdElements.filter(function (el) {
+            return el.className === 'analysis-pill analysis-pill--available';
         });
+        expect(poolPills.length).toBe(3);
 
-        // 只有 OrderDate 是 isDate，所以只有 1 個 hierarchy select
-        expect(selects.length).toBe(1);
-        expect(selects[0].dataset.field).toBe('OrderDate');
-        // 應有 4 個 option（Year, Quarter, Month, Day）
-        expect(selects[0].children.length).toBe(4);
+        var datePill = poolPills.find(function (el) { return el.dataset.fieldName === 'OrderDate'; });
+        expect(datePill).toBeDefined();
+        expect(datePill.dataset.isDate).toBe('true');
+
+        var regionPill = poolPills.find(function (el) { return el.dataset.fieldName === 'Region'; });
+        expect(regionPill).toBeDefined();
+        expect(regionPill.dataset.isDate).toBeUndefined();
     });
 
-    test('isDate checkbox 有 data-is-date 屬性', async () => {
+    test('非日期維度的 pool pill 不帶 data-is-date 屬性', async () => {
         const { wa, makePanel, mockFetch, mockDocument } = makeEnv();
         const panel = makePanel('analysis-panel-dateDim2');
 
@@ -1521,18 +1570,19 @@ describe('Date hierarchy dropdown', () => {
         mockFetch.mockResolvedValue({
             ok: true,
             json: jest.fn().mockResolvedValue([
-                { fieldName: 'OrderDate', displayName: '訂單日期', kind: 'Dimension', isDate: true, allowedFuncs: [] },
+                { fieldName: 'Region', displayName: '地區', kind: 'Dimension', isDate: false, allowedFuncs: [] },
             ])
         });
 
         wa.toggle('dateDim2', 'TestVm');
         await new Promise(r => setTimeout(r, 40));
 
-        var checkboxes = createdElements.filter(function (el) {
-            return el.className === 'analysis-field-cb' && el.dataset.fieldName === 'OrderDate';
+        var poolPills = createdElements.filter(function (el) {
+            return el.className === 'analysis-pill analysis-pill--available';
         });
-        expect(checkboxes.length).toBe(1);
-        expect(checkboxes[0].dataset.isDate).toBe('true');
+        expect(poolPills.length).toBe(1);
+        expect(poolPills[0].dataset.fieldName).toBe('Region');
+        expect(poolPills[0].dataset.isDate).toBeUndefined();
     });
 });
 
@@ -1540,14 +1590,6 @@ describe('Date hierarchy dropdown', () => {
 describe('collectSelection with dimensionHierarchies', () => {
     test('日期維度的 hierarchy 被收集到 dimensionHierarchies', () => {
         const { wa, mockDocument } = makeEnv();
-
-        // 模擬 panel
-        const panel = {
-            querySelectorAll: jest.fn(function () {
-                return [dimCb];
-            })
-        };
-        mockDocument.getElementById.mockReturnValue(panel);
 
         // 模擬 date dimension checkbox
         var hierarchySelect = { value: 'Quarter', className: 'analysis-hierarchy-select' };
@@ -1560,7 +1602,13 @@ describe('collectSelection with dimensionHierarchies', () => {
                 })
             }
         };
-        panel.querySelectorAll = jest.fn(function () { return [dimCb]; });
+
+        // 模擬 panel — v2 需要 querySelector 回傳 null 才能觸發 v1 fallback
+        const panel = {
+            querySelector: jest.fn(function () { return null; }),
+            querySelectorAll: jest.fn(function () { return [dimCb]; })
+        };
+        mockDocument.getElementById.mockReturnValue(panel);
 
         var result = wa.collectSelection('g1');
         expect(result.dims).toEqual(['OrderDate']);
@@ -1574,7 +1622,10 @@ describe('collectSelection with dimensionHierarchies', () => {
             dataset: { kind: 'Dimension', fieldName: 'Region', gridId: 'g2' },
             parentNode: { querySelector: jest.fn(function () { return null; }) }
         };
-        const panel = { querySelectorAll: jest.fn(function () { return [dimCb]; }) };
+        const panel = {
+            querySelector: jest.fn(function () { return null; }),
+            querySelectorAll: jest.fn(function () { return [dimCb]; })
+        };
         mockDocument.getElementById.mockReturnValue(panel);
 
         var result = wa.collectSelection('g2');
@@ -1696,8 +1747,8 @@ describe('drill-down integration', () => {
             '/_analysis/query',
             expect.objectContaining({ method: 'POST' })
         );
-        // drillBar should be visible after drill-down
-        expect(drillBar.style.display).toBe('block');
+        // drillBar should be visible after drill-down (v2 uses flex layout)
+        expect(drillBar.style.display).toBe('flex');
     });
 
     test('drillBack pops stack and re-queries', () => {
@@ -1782,7 +1833,7 @@ describe('drill-down integration', () => {
 
         env.wa.drillDown('dd6', 'Region', '華東', false);
 
-        expect(drillBar.style.display).toBe('block');
+        expect(drillBar.style.display).toBe('flex');
         // Should have path span + back button + reset button
         expect(drillBar._children.length).toBe(3);
         expect(drillBar._children[0].textContent).toBe('全部 > 華東');
@@ -1793,7 +1844,7 @@ describe('drill-down integration', () => {
         const { drillBar } = setupDrillState('dd7', env);
 
         env.wa.drillDown('dd7', 'Region', '華東', false);
-        expect(drillBar.style.display).toBe('block');
+        expect(drillBar.style.display).toBe('flex');
 
         env.wa.drillBack('dd7');
         expect(drillBar.style.display).toBe('none');

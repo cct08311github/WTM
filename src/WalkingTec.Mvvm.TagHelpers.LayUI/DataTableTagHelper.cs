@@ -689,6 +689,10 @@ setTimeout(function(){{
                 {
                     context.Items["analysis_js_loaded"] = true;
                     output.PostElement.AppendHtml(
+                        @"<link rel=""stylesheet"" href=""/_js/framework_analysis.css"" />");
+                    output.PostElement.AppendHtml(
+                        @"<script src=""/_js/lib/sortablejs/sortable.min.js""></script>");
+                    output.PostElement.AppendHtml(
                         @"<script src=""/_js/framework_analysis.js""></script>");
                 }
             }

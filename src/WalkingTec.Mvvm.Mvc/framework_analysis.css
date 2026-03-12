@@ -1,0 +1,296 @@
+/* framework_analysis.css — Analysis Mode v2 drag-and-drop BI panel styles */
+
+/* ─── Panel Container ─────────────────────────────────────────────── */
+.analysis-panel {
+    margin-top: 10px;
+    border: 1px solid #e6e6e6;
+    border-radius: 4px;
+    background: #fff;
+}
+
+.analysis-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 15px;
+    background: #fafafa;
+    border-bottom: 1px solid #e6e6e6;
+    cursor: pointer;
+    user-select: none;
+}
+
+.analysis-panel-header:hover {
+    background: #f2f2f2;
+}
+
+.analysis-panel-title {
+    font-weight: bold;
+    font-size: 14px;
+    color: #333;
+}
+
+.analysis-panel-toggle {
+    font-size: 12px;
+    color: #999;
+    transition: transform 250ms ease-out;
+}
+
+.analysis-panel-toggle.collapsed {
+    transform: rotate(-90deg);
+}
+
+.analysis-panel-body {
+    padding: 12px 15px;
+    overflow: hidden;
+    transition: max-height 250ms ease-out, opacity 250ms ease-out, padding 250ms ease-out;
+}
+
+.analysis-panel-body.collapsed {
+    max-height: 0 !important;
+    opacity: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+}
+
+/* ─── Summary Bar (visible when collapsed) ────────────────────────── */
+.analysis-summary-bar {
+    display: none;
+    padding: 6px 15px;
+    font-size: 12px;
+    color: #666;
+    background: #fafafa;
+    border-top: 1px solid #e6e6e6;
+}
+
+.analysis-summary-bar.visible {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.analysis-summary-bar .summary-label {
+    font-weight: bold;
+    color: #333;
+}
+
+/* ─── Field Selector ──────────────────────────────────────────────── */
+.analysis-field-pool {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 0;
+    min-height: 32px;
+}
+
+/* ─── Drop Zones ──────────────────────────────────────────────────── */
+.analysis-dropzone-row {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 10px;
+}
+
+.analysis-dropzone-group {
+    flex: 1;
+}
+
+.analysis-dropzone-label {
+    font-weight: bold;
+    font-size: 13px;
+    margin-bottom: 4px;
+}
+
+.analysis-dropzone-label--dim {
+    color: #16a085;
+}
+
+.analysis-dropzone-label--msr {
+    color: #2980b9;
+}
+
+.analysis-dropzone {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-height: 38px;
+    padding: 6px 8px;
+    border: 2px dashed #d9d9d9;
+    border-radius: 4px;
+    background: #fafafa;
+    transition: border-color 200ms, background-color 200ms;
+}
+
+.analysis-dropzone--dim {
+    border-color: #b2dfdb;
+}
+
+.analysis-dropzone--msr {
+    border-color: #bbdefb;
+}
+
+.analysis-dropzone--highlight {
+    border-color: #999;
+    background: #f0f0f0;
+}
+
+.analysis-dropzone-placeholder {
+    color: #bbb;
+    font-size: 12px;
+    line-height: 26px;
+    pointer-events: none;
+}
+
+/* ─── Pills ───────────────────────────────────────────────────────── */
+.analysis-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    border-radius: 14px;
+    font-size: 12px;
+    cursor: grab;
+    user-select: none;
+    white-space: nowrap;
+    transition: opacity 200ms, background-color 200ms;
+}
+
+.analysis-pill:active {
+    cursor: grabbing;
+}
+
+.analysis-pill--available {
+    background: #fff;
+    border: 1px solid #d9d9d9;
+    color: #333;
+}
+
+.analysis-pill--dim {
+    background: #e0f2f1;
+    border: 1px solid #80cbc4;
+    color: #00695c;
+}
+
+.analysis-pill--msr {
+    background: #e3f2fd;
+    border: 1px solid #90caf9;
+    color: #1565c0;
+}
+
+.analysis-pill--used {
+    background: #f5f5f5;
+    border: 1px solid #e0e0e0;
+    color: #bbb;
+    text-decoration: line-through;
+    cursor: default;
+    opacity: 0.6;
+}
+
+.analysis-pill .pill-remove {
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    color: inherit;
+    opacity: 0.5;
+    margin-left: 2px;
+}
+
+.analysis-pill .pill-remove:hover {
+    opacity: 1;
+}
+
+.analysis-pill select {
+    font-size: 11px;
+    padding: 0 2px;
+    border: 1px solid rgba(0,0,0,0.15);
+    border-radius: 3px;
+    background: rgba(255,255,255,0.7);
+    cursor: pointer;
+}
+
+/* SortableJS ghost/drag styling */
+.analysis-pill.sortable-ghost {
+    opacity: 0.4;
+}
+
+.analysis-pill.sortable-chosen {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+
+/* ─── Button Row ──────────────────────────────────────────────────── */
+.analysis-btn-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid #f0f0f0;
+}
+
+/* ─── Result Section ──────────────────────────────────────────────── */
+.analysis-result-section {
+    margin-top: 10px;
+    border: 1px solid #e6e6e6;
+    border-radius: 4px;
+    background: #fff;
+}
+
+.analysis-result-body {
+    padding: 12px 15px;
+    overflow: hidden;
+    transition: max-height 250ms ease-out, opacity 250ms ease-out;
+}
+
+.analysis-result-body.collapsed {
+    max-height: 0 !important;
+    opacity: 0;
+    padding: 0 15px;
+}
+
+/* ─── Chart Toggle Bar ────────────────────────────────────────────── */
+.analysis-chart-toggle-bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+
+.analysis-chart-toggle-bar button {
+    font-size: 12px;
+}
+
+/* ─── Cards (no-dimension aggregate) ──────────────────────────────── */
+.analysis-cards {
+    display: flex;
+    gap: 16px;
+    margin-top: 15px;
+}
+
+.analysis-card-item {
+    flex: 1;
+    text-align: center;
+    padding: 20px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    border: 1px solid #e0e0e0;
+}
+
+/* ─── Drill Bar ───────────────────────────────────────────────────── */
+.analysis-drill-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 0;
+    font-size: 13px;
+    color: #666;
+}
+
+/* ─── Pivot Radio ─────────────────────────────────────────────────── */
+.analysis-pivot-radio {
+    display: none;
+    margin-right: 4px;
+}
+
+.pivot-enabled .analysis-pivot-radio {
+    display: inline-block;
+}
