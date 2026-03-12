@@ -88,7 +88,8 @@ namespace WalkingTec.Mvvm.Mvc
         {
             if (dashboard == null || dashboard.Id != id) return BadRequest();
 
-            var existing = await _dashboardService.GetAsync(id);
+            var tenantId = GetTenantId();
+            var existing = await _dashboardService.GetAsync(id, tenantId);
             if (existing == null) return NotFound();
 
             var (userId, roles) = GetUserInfo();
@@ -98,7 +99,8 @@ namespace WalkingTec.Mvvm.Mvc
             }
 
             dashboard.Owner = existing.Owner; // preserve owner
-            
+            dashboard.TenantId = tenantId;    // server-side tenant, prevent spoofing
+
             await _dashboardService.UpdateAsync(dashboard);
             return Ok();
         }
@@ -106,7 +108,8 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpDelete("{id}")]
         public async Task<IActionResult> Delete(string id)
         {
-            var existing = await _dashboardService.GetAsync(id);
+            var tenantId = GetTenantId();
+            var existing = await _dashboardService.GetAsync(id, tenantId);
             if (existing == null) return NotFound();
 
             var (userId, roles) = GetUserInfo();
@@ -122,7 +125,8 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpGet("{id}/widget/{wid}/data")]
         public async Task<IActionResult> GetWidgetData(string id, string wid, CancellationToken ct)
         {
-            var dashboard = await _dashboardService.GetAsync(id);
+            var tenantId = GetTenantId();
+            var dashboard = await _dashboardService.GetAsync(id, tenantId);
             if (dashboard == null) return NotFound();
 
             var (userId, roles) = GetUserInfo();
@@ -152,7 +156,8 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpPost("{id}/widget/{wid}/data")]
         public async Task<IActionResult> PostWidgetData(string id, string wid, [FromBody] Dictionary<string, string> filters, CancellationToken ct)
         {
-            var dashboard = await _dashboardService.GetAsync(id);
+            var tenantId = GetTenantId();
+            var dashboard = await _dashboardService.GetAsync(id, tenantId);
             if (dashboard == null) return NotFound();
 
             var (userId, roles) = GetUserInfo();

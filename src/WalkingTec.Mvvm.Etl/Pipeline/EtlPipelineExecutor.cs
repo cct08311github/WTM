@@ -163,9 +163,11 @@ public class EtlPipelineExecutor
         if (!batch.Columns.Contains(columnName) || batch.Rows.Count == 0)
             return null;
 
-        return batch.AsEnumerable()
+        var values = batch.AsEnumerable()
             .Select(r => r[columnName])
             .Where(v => v != null && v != DBNull.Value)
-            .Max();
+            .ToList();
+
+        return values.Count == 0 ? null : values.Max();
     }
 }

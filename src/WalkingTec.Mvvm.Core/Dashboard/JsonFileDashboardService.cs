@@ -85,11 +85,27 @@ public class JsonFileDashboardService : IDashboardService
 
     private string GetFilePath(string id, string? tenantId = null)
     {
+        ValidatePathSegment(id, nameof(id));
+        if (!string.IsNullOrEmpty(tenantId))
+            ValidatePathSegment(tenantId, nameof(tenantId));
+
         var dir = string.IsNullOrEmpty(tenantId)
             ? Path.Combine(_baseDir, "_default")
             : Path.Combine(_baseDir, tenantId);
         if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-        return Path.Combine(dir, $"{id}.json");
+
+        var fullPath = Path.GetFullPath(Path.Combine(dir, $"{id}.json"));
+        var baseFullPath = Path.GetFullPath(_baseDir);
+        if (!fullPath.StartsWith(baseFullPath, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException($"Path traversal detected in dashboard ID or tenant ID.");
+
+        return fullPath;
+    }
+
+    private static void ValidatePathSegment(string value, string paramName)
+    {
+        if (value.Contains("..") || value.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+            throw new ArgumentException($"Invalid characters in {paramName}: '{value}'");
     }
 
     public async Task<DashboardDefinition?> GetAsync(string dashboardId, string? tenantId = null)
