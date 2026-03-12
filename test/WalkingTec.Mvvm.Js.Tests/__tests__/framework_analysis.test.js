@@ -2502,3 +2502,353 @@ describe('drop zone validation (v2)', function () {
         }
     });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Drag-Drop Lifecycle Interaction Tests
+// Note: SortableJS is not available in Node — tests focus on state management
+// and DOM class manipulation that can be verified without real drag events.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── Pill drag-to-dim-zone: field marked as used ──────────────────────────────
+describe('drag-drop: dimension zone pill state (v2)', function () {
+    test('pill HTML for dimension has analysis-pill class and not --used initially', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        var html = _test.buildPillHtml({
+            fieldName: 'Region',
+            title: '地區',
+            kind: 'Dimension',
+            isDate: false,
+        }, 'grid1');
+
+        // Pill in drop zone starts as analysis-pill (no --used on the drop-zone pill itself)
+        expect(html).toContain('analysis-pill');
+        expect(html).toContain('data-field="Region"');
+        expect(html).toContain('data-kind="Dimension"');
+        // The --used class would be applied to the source pill in the field list by SortableJS;
+        // we verify the drop-zone pill HTML does not pre-apply --used
+        expect(html).not.toContain('analysis-pill--used');
+    });
+
+    test('collectDropZoneData reads a pill added to dim drop zone', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        // Simulate a pill that has been dropped into the dimension zone
+        var droppedPill = {
+            dataset: { field: 'Region', kind: 'Dimension' },
+            querySelector: jest.fn(function () { return null; }),
+        };
+        var dimZone = {
+            id: 'dim-dropzone-ddlc1',
+            querySelectorAll: jest.fn(function (sel) {
+                if (sel.indexOf('analysis-pill') >= 0) return [droppedPill];
+                return [];
+            }),
+        };
+        env.domNodes['dim-dropzone-ddlc1'] = dimZone;
+
+        var result = _test.collectDropZoneData('ddlc1');
+        // After a pill is dropped, collectDropZoneData reflects it in dims
+        expect(result.dims).toContain('Region');
+        expect(result.msrs).toEqual([]);
+    });
+});
+
+// ─── Pill drag-to-measure-zone: func select appears ──────────────────────────
+describe('drag-drop: measure zone pill has func select (v2)', function () {
+    test('measure pill HTML contains a <select> element for aggregate function', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        var html = _test.buildPillHtml({
+            fieldName: 'Amount',
+            title: '金額',
+            kind: 'Measure',
+            isDate: false,
+            defaultFunc: 'Sum',
+        }, 'grid1');
+
+        // Measure pill in drop zone must include a <select> for func selection
+        expect(html).toContain('<select');
+        expect(html).toContain('analysis-pill__select');
+        // Verify options present
+        expect(html).toContain('Sum');
+        expect(html).toContain('Avg');
+        expect(html).toContain('Count');
+    });
+
+    test('collectDropZoneData reads measure pill with selected func from <select>', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        var funcSelect = { value: 'Max' };
+        var msrPill = {
+            dataset: { field: 'Revenue', kind: 'Measure' },
+            querySelector: jest.fn(function (sel) {
+                if (sel.indexOf('select') >= 0) return funcSelect;
+                return null;
+            }),
+        };
+        var msrZone = {
+            id: 'msr-dropzone-ddlc2',
+            querySelectorAll: jest.fn(function (sel) {
+                if (sel.indexOf('analysis-pill') >= 0) return [msrPill];
+                return [];
+            }),
+        };
+        env.domNodes['msr-dropzone-ddlc2'] = msrZone;
+
+        var result = _test.collectDropZoneData('ddlc2');
+        // func should be read from the select element value
+        expect(result.msrs).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({ field: 'Revenue', func: 'Max' }),
+            ])
+        );
+    });
+});
+
+// ─── Pill remove (✕ click): field restored in source list ────────────────────
+describe('drag-drop: pill remove restores source field (v2)', function () {
+    test('pill HTML includes a remove button with ✕', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        var html = _test.buildPillHtml({
+            fieldName: 'Region',
+            title: '地區',
+            kind: 'Dimension',
+            isDate: false,
+        }, 'grid1');
+
+        expect(html).toContain('analysis-pill__remove');
+        expect(html).toContain('\u2715'); // ✕
+    });
+
+    test('after removing pill from drop zone, collectDropZoneData returns empty dims', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        // Simulate empty drop zone after pill removal
+        var dimZone = {
+            id: 'dim-dropzone-ddlc3',
+            querySelectorAll: jest.fn(function (sel) {
+                if (sel.indexOf('analysis-pill') >= 0) return []; // empty after removal
+                return [];
+            }),
+        };
+        env.domNodes['dim-dropzone-ddlc3'] = dimZone;
+
+        var result = _test.collectDropZoneData('ddlc3');
+        expect(result.dims).toEqual([]);
+    });
+});
+
+// ─── Collapse/expand panel toggle ─────────────────────────────────────────────
+describe('collapse/expand panel toggle (v2)', function () {
+    test('collapsePanel sets state.collapsed = true', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        env.makePanel('analysis-panel-cp1');
+        env.mockFetch.mockResolvedValue({ ok: false, text: jest.fn().mockResolvedValue('err') });
+
+        env.wa.toggle('cp1', 'TestVm');
+
+        var st = _test.getState('cp1');
+        expect(st).toBeDefined();
+        expect(st.collapsed).toBe(false);
+
+        _test.collapsePanel('cp1');
+        expect(st.collapsed).toBe(true);
+    });
+
+    test('expandPanel sets state.collapsed = false after collapse', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        env.makePanel('analysis-panel-cp2');
+        env.mockFetch.mockResolvedValue({ ok: false, text: jest.fn().mockResolvedValue('err') });
+
+        env.wa.toggle('cp2', 'TestVm');
+
+        _test.collapsePanel('cp2');
+        var st = _test.getState('cp2');
+        expect(st.collapsed).toBe(true);
+
+        _test.expandPanel('cp2');
+        expect(st.collapsed).toBe(false);
+    });
+
+    test('collapsePanel on unknown gridId does not throw', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        expect(function () { _test.collapsePanel('nonexistent_cp'); }).not.toThrow();
+    });
+});
+
+// ─── Collapse/expand result block toggle ─────────────────────────────────────
+describe('collapse/expand result block toggle (v2)', function () {
+    test('collapseResult sets state.resultCollapsed = true', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        env.makePanel('analysis-panel-cr1');
+        env.mockFetch.mockResolvedValue({ ok: false, text: jest.fn().mockResolvedValue('err') });
+
+        env.wa.toggle('cr1', 'TestVm');
+
+        var st = _test.getState('cr1');
+        expect(st.resultCollapsed).toBe(false);
+
+        _test.collapseResult('cr1');
+        expect(st.resultCollapsed).toBe(true);
+    });
+
+    test('expandResult sets state.resultCollapsed = false after collapse', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        env.makePanel('analysis-panel-cr2');
+        env.mockFetch.mockResolvedValue({ ok: false, text: jest.fn().mockResolvedValue('err') });
+
+        env.wa.toggle('cr2', 'TestVm');
+
+        _test.collapseResult('cr2');
+        var st = _test.getState('cr2');
+        expect(st.resultCollapsed).toBe(true);
+
+        _test.expandResult('cr2');
+        expect(st.resultCollapsed).toBe(false);
+    });
+
+    test('panel collapse and result collapse are independent state fields', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        env.makePanel('analysis-panel-cr3');
+        env.mockFetch.mockResolvedValue({ ok: false, text: jest.fn().mockResolvedValue('err') });
+
+        env.wa.toggle('cr3', 'TestVm');
+
+        _test.collapsePanel('cr3');
+        var st = _test.getState('cr3');
+        // Panel collapsed but result should still be expanded
+        expect(st.collapsed).toBe(true);
+        expect(st.resultCollapsed).toBe(false);
+
+        _test.collapseResult('cr3');
+        // Both collapsed now
+        expect(st.collapsed).toBe(true);
+        expect(st.resultCollapsed).toBe(true);
+
+        _test.expandPanel('cr3');
+        // Panel expanded but result still collapsed
+        expect(st.collapsed).toBe(false);
+        expect(st.resultCollapsed).toBe(true);
+    });
+});
+
+// ─── Export uses drop zone data, not old checkboxes ──────────────────────────
+describe('export reads from drop zones (v2)', function () {
+    test('collectDropZoneData is used instead of querySelectorAll checkboxes', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        // Set up drop zones with data
+        var dimPill = {
+            dataset: { field: 'Region', kind: 'Dimension' },
+            querySelector: jest.fn(function () { return null; }),
+        };
+        var dimZone = {
+            id: 'dim-dropzone-exp1',
+            querySelectorAll: jest.fn(function (sel) {
+                if (sel.indexOf('analysis-pill') >= 0) return [dimPill];
+                return [];
+            }),
+        };
+        var funcSelect = { value: 'Sum' };
+        var msrPill = {
+            dataset: { field: 'Amount', kind: 'Measure' },
+            querySelector: jest.fn(function (sel) {
+                if (sel.indexOf('select') >= 0) return funcSelect;
+                return null;
+            }),
+        };
+        var msrZone = {
+            id: 'msr-dropzone-exp1',
+            querySelectorAll: jest.fn(function (sel) {
+                if (sel.indexOf('analysis-pill') >= 0) return [msrPill];
+                return [];
+            }),
+        };
+        env.domNodes['dim-dropzone-exp1'] = dimZone;
+        env.domNodes['msr-dropzone-exp1'] = msrZone;
+
+        // collectDropZoneData returns data from drop zones (not checkboxes)
+        var result = _test.collectDropZoneData('exp1');
+        expect(result.dims).toEqual(['Region']);
+        expect(result.msrs).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({ field: 'Amount', func: 'Sum' }),
+            ])
+        );
+        // Should not have called mockDocument.querySelectorAll for checkboxes
+        // (drop zone approach reads from pill DOM elements, not .analysis-field-cb inputs)
+        var cbCalls = env.mockDocument.querySelectorAll.mock.calls.filter(function (c) {
+            return c[0] && c[0].indexOf('analysis-field-cb') >= 0;
+        });
+        expect(cbCalls.length).toBe(0);
+    });
+
+    test('collectDropZoneData returns both dims and msrs together for export payload', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        var dimPill1 = { dataset: { field: 'Region', kind: 'Dimension' }, querySelector: jest.fn(function() { return null; }) };
+        var dimPill2 = { dataset: { field: 'Category', kind: 'Dimension' }, querySelector: jest.fn(function() { return null; }) };
+        var dimZone = {
+            id: 'dim-dropzone-exp2',
+            querySelectorAll: jest.fn(function (sel) {
+                if (sel.indexOf('analysis-pill') >= 0) return [dimPill1, dimPill2];
+                return [];
+            }),
+        };
+        var s1 = { value: 'Avg' };
+        var s2 = { value: 'Count' };
+        var msrPill1 = { dataset: { field: 'Sales', kind: 'Measure' }, querySelector: jest.fn(function(sel) { return sel.indexOf('select') >= 0 ? s1 : null; }) };
+        var msrPill2 = { dataset: { field: 'Qty', kind: 'Measure' }, querySelector: jest.fn(function(sel) { return sel.indexOf('select') >= 0 ? s2 : null; }) };
+        var msrZone = {
+            id: 'msr-dropzone-exp2',
+            querySelectorAll: jest.fn(function (sel) {
+                if (sel.indexOf('analysis-pill') >= 0) return [msrPill1, msrPill2];
+                return [];
+            }),
+        };
+        env.domNodes['dim-dropzone-exp2'] = dimZone;
+        env.domNodes['msr-dropzone-exp2'] = msrZone;
+
+        var result = _test.collectDropZoneData('exp2');
+        expect(result.dims).toEqual(['Region', 'Category']);
+        expect(result.msrs).toHaveLength(2);
+        expect(result.msrs[0]).toEqual({ field: 'Sales', func: 'Avg' });
+        expect(result.msrs[1]).toEqual({ field: 'Qty', func: 'Count' });
+    });
+});
