@@ -2,20 +2,18 @@ using System;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
-using Microsoft.AspNetCore.Identity;
 
 namespace WalkingTec.Mvvm.Core
 {
     public static class PasswordHashHelper
     {
-        private static readonly PasswordHasher<string> _hasher = new();
         private static readonly Regex _md5Pattern =
             new(@"^[0-9A-F]{32}$", RegexOptions.Compiled);
 
         public static string HashPassword(string? password)
         {
             if (string.IsNullOrEmpty(password)) return string.Empty;
-            return _hasher.HashPassword(string.Empty, password);
+            return BCrypt.Net.BCrypt.HashPassword(password);
         }
 
         public static PasswordVerifyResult VerifyPassword(
@@ -33,16 +31,17 @@ namespace WalkingTec.Mvvm.Core
                     : PasswordVerifyResult.Failed;
             }
 
-            var result = _hasher.VerifyHashedPassword(
-                string.Empty, storedHash, password);
-            return result switch
+            try
             {
-                PasswordVerificationResult.Success
-                    => PasswordVerifyResult.Success,
-                PasswordVerificationResult.SuccessRehashNeeded
-                    => PasswordVerifyResult.SuccessRehashNeeded,
-                _ => PasswordVerifyResult.Failed
-            };
+                bool isMatch = BCrypt.Net.BCrypt.Verify(password, storedHash);
+                return isMatch 
+                    ? PasswordVerifyResult.Success 
+                    : PasswordVerifyResult.Failed;
+            }
+            catch
+            {
+                return PasswordVerifyResult.Failed;
+            }
         }
 
         public static bool IsLegacyMD5Hash(string? hash)

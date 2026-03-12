@@ -10,11 +10,11 @@ using WalkingTec.Mvvm.Core.Test.Fixtures;
 namespace WalkingTec.Mvvm.Core.Test.Security
 {
     /// <summary>
-    /// Integration tests for MD5 → PBKDF2 password migration via DoLoginAsync.
+    /// Integration tests for MD5 → BCrypt password migration via DoLoginAsync.
     ///
     /// Verifies:
-    /// - MD5 login triggers SuccessRehashNeeded and upgrades stored hash to PBKDF2
-    /// - PBKDF2 login works and does NOT re-hash
+    /// - MD5 login triggers SuccessRehashNeeded and upgrades stored hash to BCrypt
+    /// - BCrypt login works and does NOT re-hash
     /// - Wrong password on MD5 hash rejects without migration
     /// - Disabled and non-existent users are rejected
     /// - Tenant mismatch is rejected
@@ -65,7 +65,7 @@ namespace WalkingTec.Mvvm.Core.Test.Security
         }
 
         [TestMethod]
-        public async Task DoLoginAsync_LegacyMD5_CorrectPassword_UpgradesHashToPBKDF2()
+        public async Task DoLoginAsync_LegacyMD5_CorrectPassword_UpgradesHashToBCrypt()
         {
             var userId = Guid.NewGuid();
             using (var db = CreateDb())
@@ -89,17 +89,17 @@ namespace WalkingTec.Mvvm.Core.Test.Security
             var result = await wtm.DoLoginAsync("migrating", "000000", null);
             result.Should().NotBeNull("Login should succeed with correct MD5 password");
 
-            // Assert: password in DB is now PBKDF2
+            // Assert: password in DB is now BCrypt
             using (var db = CreateDb())
             {
                 var after = await ((DbContext)db).Set<TestLoginUser>().FindAsync(userId);
                 after!.Password.Length.Should().BeGreaterThan(32,
-                    "Password should be upgraded from MD5 to PBKDF2");
+                    "Password should be upgraded from MD5 to BCrypt");
                 PasswordHashHelper.IsLegacyMD5Hash(after.Password)
                     .Should().BeFalse("Upgraded hash is no longer MD5");
                 PasswordHashHelper.VerifyPassword(after.Password, "000000")
                     .Should().Be(PasswordVerifyResult.Success,
-                        "New PBKDF2 hash verifies without rehash needed");
+                        "New BCrypt hash verifies without rehash needed");
             }
         }
 
@@ -129,10 +129,10 @@ namespace WalkingTec.Mvvm.Core.Test.Security
             }
         }
 
-        // ─── PBKDF2 Happy Path ─────────────────────────────────────────────────
+        // ─── BCrypt Happy Path ─────────────────────────────────────────────────
 
         [TestMethod]
-        public async Task DoLoginAsync_PBKDF2User_CorrectPassword_LoginSucceeds()
+        public async Task DoLoginAsync_BCryptUser_CorrectPassword_LoginSucceeds()
         {
             using var db = CreateDb();
             var user = WtmTestHelper.CreateUser("alice", "pass123");
@@ -147,7 +147,7 @@ namespace WalkingTec.Mvvm.Core.Test.Security
         }
 
         [TestMethod]
-        public async Task DoLoginAsync_PBKDF2User_WrongPassword_ReturnsNull()
+        public async Task DoLoginAsync_BCryptUser_WrongPassword_ReturnsNull()
         {
             using var db = CreateDb();
             var user = WtmTestHelper.CreateUser("bob", "correct");
@@ -161,7 +161,7 @@ namespace WalkingTec.Mvvm.Core.Test.Security
         }
 
         [TestMethod]
-        public async Task DoLoginAsync_PBKDF2User_DoesNotRehash()
+        public async Task DoLoginAsync_BCryptUser_DoesNotRehash()
         {
             var userId = Guid.NewGuid();
             string originalHash;
@@ -181,7 +181,7 @@ namespace WalkingTec.Mvvm.Core.Test.Security
             {
                 var after = await ((DbContext)db).Set<TestLoginUser>().FindAsync(userId);
                 after!.Password.Should().Be(originalHash,
-                    "PBKDF2 password should not be rehashed on successful login");
+                    "BCrypt password should not be rehashed on successful login");
             }
         }
 

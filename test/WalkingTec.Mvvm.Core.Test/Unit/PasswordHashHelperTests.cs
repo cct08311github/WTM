@@ -29,7 +29,7 @@ namespace WalkingTec.Mvvm.Core.Test.Unit
         {
             var hash1 = PasswordHashHelper.HashPassword("test123");
             var hash2 = PasswordHashHelper.HashPassword("test123");
-            hash1.Should().NotBe(hash2, "PBKDF2 uses random salt");
+            hash1.Should().NotBe(hash2, "BCrypt uses random salt");
         }
 
         [TestMethod]
@@ -125,10 +125,10 @@ namespace WalkingTec.Mvvm.Core.Test.Unit
         }
 
         [TestMethod]
-        public void IsLegacyMD5Hash_PBKDF2Hash_ReturnsFalse()
+        public void IsLegacyMD5Hash_BCryptHash_ReturnsFalse()
         {
-            var pbkdf2 = PasswordHashHelper.HashPassword("test");
-            PasswordHashHelper.IsLegacyMD5Hash(pbkdf2).Should().BeFalse();
+            var bcrypt = PasswordHashHelper.HashPassword("test");
+            PasswordHashHelper.IsLegacyMD5Hash(bcrypt).Should().BeFalse();
         }
 
         [TestMethod]

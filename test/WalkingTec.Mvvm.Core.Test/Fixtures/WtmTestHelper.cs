@@ -30,7 +30,7 @@ namespace WalkingTec.Mvvm.Core.Test.Fixtures
     {
         // ─── Test Data Factories ───────────────────────────────────────────────
 
-        /// <summary>Create a TestLoginUser with PBKDF2 password.</summary>
+        /// <summary>Create a TestLoginUser with BCrypt password.</summary>
         public static TestLoginUser CreateUser(
             string itCode = "testuser",
             string password = "000000",

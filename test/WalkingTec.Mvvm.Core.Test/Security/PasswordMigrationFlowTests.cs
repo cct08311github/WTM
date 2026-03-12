@@ -6,7 +6,7 @@ using WalkingTec.Mvvm.Core;
 namespace WalkingTec.Mvvm.Core.Test.Security
 {
     /// <summary>
-    /// Security property tests for the MD5 → PBKDF2 migration path.
+    /// Security property tests for the MD5 → BCrypt migration path.
     /// Verifies guarantees that prevent stored-hash downgrade and
     /// rainbow-table/precomputation attacks.
     /// </summary>
@@ -18,13 +18,13 @@ namespace WalkingTec.Mvvm.Core.Test.Security
         [TestMethod]
         public void Migrate_MD5ToNewHash_StoredHashIsNolongerMD5()
         {
-            // Simulate migration: detect legacy hash, then replace with PBKDF2
+            // Simulate migration: detect legacy hash, then replace with BCrypt
             var legacyHash = PasswordHashHelper.ComputeMD5("secret");
             PasswordHashHelper.IsLegacyMD5Hash(legacyHash).Should().BeTrue();
 
             var newHash = PasswordHashHelper.HashPassword("secret");
             PasswordHashHelper.IsLegacyMD5Hash(newHash).Should().BeFalse(
-                "after migration the stored value is PBKDF2, not MD5");
+                "after migration the stored value is BCrypt, not MD5");
         }
 
         [TestMethod]
@@ -33,7 +33,7 @@ namespace WalkingTec.Mvvm.Core.Test.Security
             var newHash = PasswordHashHelper.HashPassword("pass@word1");
             PasswordHashHelper.VerifyPassword(newHash, "pass@word1")
                 .Should().Be(PasswordVerifyResult.Success,
-                    "migrated PBKDF2 hash must not require another rehash");
+                    "migrated BCrypt hash must not require another rehash");
         }
 
         [TestMethod]
@@ -44,7 +44,7 @@ namespace WalkingTec.Mvvm.Core.Test.Security
             var newHash = PasswordHashHelper.HashPassword("password");
 
             newHash.Length.Should().BeGreaterThan(legacyHash.Length,
-                "PBKDF2 Base64 encoding is longer than 32-char MD5 hex");
+                "BCrypt Base64 encoding is longer than 32-char MD5 hex");
             newHash.Should().NotContain(legacyHash,
                 "new hash must not embed the old MD5 value");
         }
