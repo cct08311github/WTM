@@ -8,14 +8,14 @@ namespace WalkingTec.Mvvm.Core
 {
     public static class PasswordHashHelper
     {
-        private static readonly PasswordHasher<string> _hasher = new();
+        private static readonly PasswordHasher<string> _pbkdf2Hasher = new();
         private static readonly Regex _md5Pattern =
             new(@"^[0-9A-F]{32}$", RegexOptions.Compiled);
 
         public static string HashPassword(string? password)
         {
             if (string.IsNullOrEmpty(password)) return string.Empty;
-            return _hasher.HashPassword(string.Empty, password);
+            return BCrypt.Net.BCrypt.HashPassword(password);
         }
 
         public static PasswordVerifyResult VerifyPassword(
@@ -33,22 +33,46 @@ namespace WalkingTec.Mvvm.Core
                     : PasswordVerifyResult.Failed;
             }
 
-            var result = _hasher.VerifyHashedPassword(
-                string.Empty, storedHash, password);
-            return result switch
+            // Detect PBKDF2 hashes from v8.1.13–v8.6.x (ASP.NET Identity PasswordHasher).
+            // These use a version-byte prefix: 0x00 (v2) or 0x01 (v3), Base64-encoded
+            // as "AAAAA..." or "AQAAAA..." respectively. Rehash to BCrypt on success.
+            if (IsLegacyPBKDF2Hash(storedHash))
             {
-                PasswordVerificationResult.Success
-                    => PasswordVerifyResult.Success,
-                PasswordVerificationResult.SuccessRehashNeeded
-                    => PasswordVerifyResult.SuccessRehashNeeded,
-                _ => PasswordVerifyResult.Failed
-            };
+                var result = _pbkdf2Hasher.VerifyHashedPassword(
+                    string.Empty, storedHash, password);
+                return result != PasswordVerificationResult.Failed
+                    ? PasswordVerifyResult.SuccessRehashNeeded
+                    : PasswordVerifyResult.Failed;
+            }
+
+            try
+            {
+                bool isMatch = BCrypt.Net.BCrypt.Verify(password, storedHash);
+                return isMatch
+                    ? PasswordVerifyResult.Success
+                    : PasswordVerifyResult.Failed;
+            }
+            catch
+            {
+                return PasswordVerifyResult.Failed;
+            }
         }
 
         public static bool IsLegacyMD5Hash(string? hash)
         {
             if (string.IsNullOrEmpty(hash) || hash.Length != 32) return false;
             return _md5Pattern.IsMatch(hash);
+        }
+
+        /// <summary>
+        /// Detects PBKDF2 hashes produced by ASP.NET Identity PasswordHasher.
+        /// V2 hashes start with 0x00 (Base64: "AAAAA"), V3 with 0x01 (Base64: "AQAAAA").
+        /// </summary>
+        internal static bool IsLegacyPBKDF2Hash(string? hash)
+        {
+            if (string.IsNullOrEmpty(hash) || hash.Length < 20) return false;
+            return hash.StartsWith("AQAAAA", StringComparison.Ordinal)
+                || hash.StartsWith("AAAAA", StringComparison.Ordinal);
         }
 
         internal static string ComputeMD5(string? input)

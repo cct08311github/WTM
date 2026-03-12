@@ -15,9 +15,9 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
     /// Uses TestLoginUser (a concrete FrameworkUserBase subclass defined in Core.Test).
     ///
     /// Verifies:
-    /// - PBKDF2 auth happy path
+    /// - BCrypt auth happy path
     /// - Wrong password rejection
-    /// - MD5 → PBKDF2 migration (SuccessRehashNeeded → DB updated)
+    /// - MD5 → BCrypt migration (SuccessRehashNeeded → DB updated)
     /// - Disabled user rejection
     /// - Non-existent user rejection
     ///
@@ -50,10 +50,10 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
 
         private IDataContext CreateDb() => new LoginTestDataContext(_seed);
 
-        // ─── PBKDF2 Happy Path ─────────────────────────────────────────────────
+        // ─── BCrypt Happy Path ─────────────────────────────────────────────────
 
         [TestMethod]
-        public async Task DoLoginAsync_ValidPBKDF2User_ReturnsLoginUserInfo()
+        public async Task DoLoginAsync_ValidBCryptUser_ReturnsLoginUserInfo()
         {
             using var db = CreateDb();
             var user = WtmTestHelper.CreateUser("alice", "pass123");
@@ -68,7 +68,7 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
         }
 
         [TestMethod]
-        public async Task DoLoginAsync_ValidPBKDF2User_WrongPassword_ReturnsNull()
+        public async Task DoLoginAsync_ValidBCryptUser_WrongPassword_ReturnsNull()
         {
             using var db = CreateDb();
             var user = WtmTestHelper.CreateUser("bob", "correct");
@@ -139,17 +139,17 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
             var result = await wtm.DoLoginAsync("migrating", "000000", null);
             result.Should().NotBeNull("Login should succeed with correct MD5 password");
 
-            // Assert: password in DB is now PBKDF2 (longer than 32 chars)
+            // Assert: password in DB is now BCrypt (longer than 32 chars)
             using (var db = CreateDb())
             {
                 var after = await ((DbContext)db).Set<TestLoginUser>().FindAsync(userId);
                 after!.Password.Length.Should().BeGreaterThan(32,
-                    "Password should be upgraded from MD5 to PBKDF2");
+                    "Password should be upgraded from MD5 to BCrypt");
                 PasswordHashHelper.IsLegacyMD5Hash(after.Password)
                     .Should().BeFalse("Upgraded hash is no longer MD5");
                 PasswordHashHelper.VerifyPassword(after.Password, "000000")
                     .Should().Be(PasswordVerifyResult.Success,
-                        "New PBKDF2 hash verifies without rehash needed");
+                        "New BCrypt hash verifies without rehash needed");
             }
         }
 

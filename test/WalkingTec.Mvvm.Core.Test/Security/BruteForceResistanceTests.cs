@@ -9,7 +9,7 @@ using WalkingTec.Mvvm.Core;
 namespace WalkingTec.Mvvm.Core.Test.Security
 {
     /// <summary>
-    /// Verifies PBKDF2 work-factor properties that make offline brute-force attacks expensive.
+    /// Verifies BCrypt work-factor properties that make offline brute-force attacks expensive.
     /// These tests assert measurable computational cost and salt diversity —
     /// properties that MD5 lacks and which motivated the v8.1.13 security upgrade.
     /// </summary>
@@ -19,10 +19,10 @@ namespace WalkingTec.Mvvm.Core.Test.Security
         // ─── Work-Factor Timing ─────────────────────────────────────────────
 
         [TestMethod]
-        public void HashPassword_PBKDF2_TakesNonTrivialTime()
+        public void HashPassword_BCrypt_TakesNonTrivialTime()
         {
             // Hash 5 passwords and assert total wall-clock time > 5ms (conservative).
-            // PBKDF2-SHA256 with 100 000 iterations typically takes 20–200ms per hash.
+            // BCrypt-SHA256 with 100 000 iterations typically takes 20–200ms per hash.
             // This guards against accidentally switching to a fast (insecure) algorithm.
             const int iterations = 5;
             const int minExpectedMs = 5;
@@ -33,12 +33,12 @@ namespace WalkingTec.Mvvm.Core.Test.Security
             sw.Stop();
 
             sw.ElapsedMilliseconds.Should().BeGreaterThan(minExpectedMs,
-                $"PBKDF2 hashing {iterations} passwords must take at least {minExpectedMs}ms total; " +
+                $"BCrypt hashing {iterations} passwords must take at least {minExpectedMs}ms total; " +
                 $"a trivially fast result indicates a weak algorithm");
         }
 
         [TestMethod]
-        public void VerifyPassword_CorrectPBKDF2_TakesNonTrivialTime()
+        public void VerifyPassword_CorrectBCrypt_TakesNonTrivialTime()
         {
             var hash = PasswordHashHelper.HashPassword("benchmark_password");
             const int iterations = 5;
@@ -77,29 +77,29 @@ namespace WalkingTec.Mvvm.Core.Test.Security
             h1.Should().NotBe(h2, "unique salt per hash prevents precomputed table attacks");
         }
 
-        // ─── MD5 vs PBKDF2 Security Gap ─────────────────────────────────────
+        // ─── MD5 vs BCrypt Security Gap ─────────────────────────────────────
 
         [TestMethod]
         public void MD5Hash_IsDeterministic_DemonstrationOfWeakness()
         {
-            // This test documents the security gap that PBKDF2 migration closes.
+            // This test documents the security gap that BCrypt migration closes.
             // A deterministic hash means identical passwords share identical hashes —
             // enabling precomputed (rainbow-table) attacks against the full user table.
             var hash1 = PasswordHashHelper.ComputeMD5("admin");
             var hash2 = PasswordHashHelper.ComputeMD5("admin");
 
             hash1.Should().Be(hash2,
-                "MD5 is deterministic — this is a known weakness that PBKDF2 migration addresses");
+                "MD5 is deterministic — this is a known weakness that BCrypt migration addresses");
         }
 
         [TestMethod]
-        public void PBKDF2Hash_IsNonDeterministic_SaltPreventsRainbowTables()
+        public void BCryptHash_IsNonDeterministic_SaltPreventsRainbowTables()
         {
             var hash1 = PasswordHashHelper.HashPassword("admin");
             var hash2 = PasswordHashHelper.HashPassword("admin");
 
             hash1.Should().NotBe(hash2,
-                "PBKDF2 with random salt is non-deterministic — same password, different stored value");
+                "BCrypt with random salt is non-deterministic — same password, different stored value");
         }
 
         // ─── Verification Still Works After Distinct Salts ──────────────────
