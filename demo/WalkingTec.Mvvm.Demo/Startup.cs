@@ -12,6 +12,7 @@ using WalkingTec.Mvvm.Mvc;
 using Microsoft.AspNetCore.Mvc;
 using WalkingTec.Mvvm.Core.WorkFlow;
 using WalkingTec.Mvvm.Mvc.Helper;
+using WalkingTec.Mvvm.Core.Dashboard;
 using WalkingTec.Mvvm.Etl;
 using System.Reflection;
 using System;
@@ -81,6 +82,7 @@ namespace WalkingTec.Mvvm.Demo
                 options.FileSubDirSelector = SubDirSelector;
                 options.ReloadUserFunc = ReloadUser;
             });
+            services.AddWtmDashboard();
             services.AddSignalR();
             services.AddSingleton<IApproveNotification>(new WorkflowNotify());
         }
