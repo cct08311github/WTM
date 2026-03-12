@@ -2070,3 +2070,435 @@ describe('Pivot mode in query()', () => {
         expect(mockAlert).toHaveBeenCalledWith('請選擇一個樞紐(Pivot)維度');
     });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v2 Drag-Drop Panel Tests (RED phase — functions not yet implemented)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── buildPillHtml ────────────────────────────────────────────────────────────
+describe('buildPillHtml (v2)', function () {
+    test('dimension pill has correct class and data attributes', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        var html = _test.buildPillHtml({
+            fieldName: 'Region',
+            title: '地區',
+            kind: 'Dimension',
+            isDate: false,
+        }, 'grid1');
+
+        expect(html).toContain('analysis-pill');
+        expect(html).toContain('data-field="Region"');
+        expect(html).toContain('data-kind="Dimension"');
+        expect(html).toContain('地區');
+    });
+
+    test('measure pill includes aggregate function select', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        var html = _test.buildPillHtml({
+            fieldName: 'Amount',
+            title: '金額',
+            kind: 'Measure',
+            isDate: false,
+            defaultFunc: 'Sum',
+        }, 'grid1');
+
+        expect(html).toContain('<select');
+        expect(html).toContain('Sum');
+        expect(html).toContain('Avg');
+        expect(html).toContain('Count');
+        expect(html).toContain('Max');
+        expect(html).toContain('Min');
+    });
+
+    test('date dimension pill includes hierarchy select with Year/Quarter/Month/Day options', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        var html = _test.buildPillHtml({
+            fieldName: 'OrderDate',
+            title: '訂單日期',
+            kind: 'Dimension',
+            isDate: true,
+        }, 'grid1');
+
+        expect(html).toContain('<select');
+        expect(html).toContain('Year');
+        expect(html).toContain('Quarter');
+        expect(html).toContain('Month');
+        expect(html).toContain('Day');
+    });
+
+    test('pill includes remove button with ✕', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        var html = _test.buildPillHtml({
+            fieldName: 'Region',
+            title: '地區',
+            kind: 'Dimension',
+            isDate: false,
+        }, 'grid1');
+
+        expect(html).toContain('✕');
+    });
+
+    test('XSS: field name with HTML special chars is escaped', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        var html = _test.buildPillHtml({
+            fieldName: '<script>alert(1)</script>',
+            title: 'Safe Title',
+            kind: 'Dimension',
+            isDate: false,
+        }, 'grid1');
+
+        expect(html).not.toContain('<script>');
+        expect(html).toContain('&lt;script&gt;');
+    });
+
+    test('XSS: field title with HTML special chars is escaped', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        var html = _test.buildPillHtml({
+            fieldName: 'SafeName',
+            title: '"><img src=x onerror=alert(1)>',
+            kind: 'Dimension',
+            isDate: false,
+        }, 'grid1');
+
+        expect(html).not.toContain('onerror');
+        expect(html).toContain('&quot;');
+    });
+});
+
+// ─── collectDropZoneData ──────────────────────────────────────────────────────
+describe('collectDropZoneData (v2)', function () {
+    test('reads dimension pills from drop zone', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        // Set up mock DOM with dimension pills in drop zone
+        var dimPill = {
+            dataset: { field: 'Region', kind: 'Dimension' },
+            querySelector: jest.fn(function () { return null; }),
+        };
+        var dimZone = {
+            id: 'dim-dropzone-g1',
+            children: [dimPill],
+            querySelectorAll: jest.fn(function (sel) {
+                if (sel.indexOf('analysis-pill') >= 0) return [dimPill];
+                return [];
+            }),
+        };
+        env.domNodes['dim-dropzone-g1'] = dimZone;
+
+        var result = _test.collectDropZoneData('g1');
+        expect(result.dims).toContain('Region');
+        expect(result.dims.length).toBe(1);
+    });
+
+    test('reads measure pills with selected aggregate function', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        var msrSelect = { value: 'Avg' };
+        var msrPill = {
+            dataset: { field: 'Amount', kind: 'Measure' },
+            querySelector: jest.fn(function (sel) {
+                if (sel.indexOf('select') >= 0) return msrSelect;
+                return null;
+            }),
+        };
+        var msrZone = {
+            id: 'msr-dropzone-g1',
+            children: [msrPill],
+            querySelectorAll: jest.fn(function (sel) {
+                if (sel.indexOf('analysis-pill') >= 0) return [msrPill];
+                return [];
+            }),
+        };
+        env.domNodes['msr-dropzone-g1'] = msrZone;
+
+        var result = _test.collectDropZoneData('g1');
+        expect(result.msrs).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({ field: 'Amount', func: 'Avg' }),
+            ])
+        );
+    });
+
+    test('reads dimHierarchies from date dimension selects', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        var hierSelect = { value: 'Quarter' };
+        var datePill = {
+            dataset: { field: 'OrderDate', kind: 'Dimension', isDate: 'true' },
+            querySelector: jest.fn(function (sel) {
+                if (sel.indexOf('select') >= 0) return hierSelect;
+                return null;
+            }),
+        };
+        var dimZone = {
+            id: 'dim-dropzone-g2',
+            children: [datePill],
+            querySelectorAll: jest.fn(function (sel) {
+                if (sel.indexOf('analysis-pill') >= 0) return [datePill];
+                return [];
+            }),
+        };
+        env.domNodes['dim-dropzone-g2'] = dimZone;
+
+        var result = _test.collectDropZoneData('g2');
+        expect(result.dimHierarchies).toBeDefined();
+        expect(result.dimHierarchies['OrderDate']).toBe('Quarter');
+    });
+
+    test('reads pivotDim when pivot mode enabled and radio checked', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        env.mockDocument.querySelector.mockImplementation(function (sel) {
+            if (sel.indexOf('pivot-toggle') >= 0) return { checked: true };
+            if (sel.indexOf('pivot-dim-select') >= 0) return { value: 'Category' };
+            return null;
+        });
+
+        var result = _test.collectDropZoneData('g3');
+        expect(result.pivotDim).toBe('Category');
+    });
+
+    test('returns empty arrays and null pivotDim when drop zones are empty', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        var result = _test.collectDropZoneData('empty1');
+        expect(result.dims).toEqual([]);
+        expect(result.msrs).toEqual([]);
+        expect(result.pivotDim).toBeNull();
+    });
+});
+
+// ─── buildSummaryBar ──────────────────────────────────────────────────────────
+describe('buildSummaryBar (v2)', function () {
+    test('shows dimension and measure counts in Chinese', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        var html = _test.buildSummaryBar({
+            dims: ['Region', 'Category'],
+            msrs: [{ field: 'Amount', func: 'Sum' }],
+        });
+
+        // Should contain counts like "2 個維度" and "1 個度量"
+        expect(html).toContain('2');
+        expect(html).toContain('維度');
+        expect(html).toContain('1');
+        expect(html).toContain('度量');
+    });
+
+    test('shows field names as mini pill text', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        var html = _test.buildSummaryBar({
+            dims: ['Region'],
+            msrs: [{ field: 'Amount', func: 'Sum' }],
+        });
+
+        expect(html).toContain('Region');
+        expect(html).toContain('Amount');
+    });
+});
+
+// ─── escapeHtml ───────────────────────────────────────────────────────────────
+describe('escapeHtml (v2)', function () {
+    test('escapes < > & " characters', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        var result = _test.escapeHtml('<div class="a">&b</div>');
+        expect(result).toBe('&lt;div class=&quot;a&quot;&gt;&amp;b&lt;/div&gt;');
+    });
+
+    test('returns empty string for empty input', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        expect(_test.escapeHtml('')).toBe('');
+    });
+
+    test('passes through safe strings unchanged', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        expect(_test.escapeHtml('Hello World 123')).toBe('Hello World 123');
+    });
+});
+
+// ─── SortableJS lifecycle ─────────────────────────────────────────────────────
+describe('SortableJS lifecycle (v2)', function () {
+    test('sortableInstances array exists in state after toggle', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        env.makePanel('analysis-panel-sort1');
+        env.mockFetch.mockResolvedValue({ ok: true, json: jest.fn().mockResolvedValue({ fields: [] }) });
+
+        env.wa.toggle('sort1', 'TestVm');
+
+        // After toggle on, state should have sortableInstances array
+        var state = _test.getState && _test.getState('sort1');
+        if (state) {
+            expect(Array.isArray(state.sortableInstances)).toBe(true);
+        } else {
+            // Fallback: just check _test exposes getState
+            expect(_test.getState).toBeDefined();
+        }
+    });
+
+    test('toggle off clears sortableInstances from state', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        env.makePanel('analysis-panel-sort2');
+        env.mockFetch.mockResolvedValue({ ok: true, json: jest.fn().mockResolvedValue({ fields: [] }) });
+
+        env.wa.toggle('sort2', 'TestVm');
+        env.wa.toggle('sort2', 'TestVm'); // toggle off
+
+        var state = _test.getState && _test.getState('sort2');
+        if (state) {
+            expect(!state.sortableInstances || state.sortableInstances.length === 0).toBe(true);
+        } else {
+            expect(_test.getState).toBeDefined();
+        }
+    });
+});
+
+// ─── multi-grid isolation ─────────────────────────────────────────────────────
+describe('multi-grid isolation (v2)', function () {
+    test('two grids have independent state objects', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        env.makePanel('analysis-panel-iso1');
+        env.makePanel('analysis-panel-iso2');
+        env.mockFetch.mockResolvedValue({ ok: true, json: jest.fn().mockResolvedValue({ fields: [] }) });
+
+        env.wa.toggle('iso1', 'VmA');
+        env.wa.toggle('iso2', 'VmB');
+
+        var state1 = _test.getState && _test.getState('iso1');
+        var state2 = _test.getState && _test.getState('iso2');
+
+        if (state1 && state2) {
+            expect(state1).not.toBe(state2);
+            expect(state1.listVmType).toBe('VmA');
+            expect(state2.listVmType).toBe('VmB');
+        } else {
+            expect(_test.getState).toBeDefined();
+        }
+    });
+
+    test('collapsing one grid panel does not affect another', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        env.makePanel('analysis-panel-col1');
+        env.makePanel('analysis-panel-col2');
+        env.mockFetch.mockResolvedValue({ ok: true, json: jest.fn().mockResolvedValue({ fields: [] }) });
+
+        env.wa.toggle('col1', 'VmA');
+        env.wa.toggle('col2', 'VmB');
+
+        // Collapse grid 1 only
+        if (_test.collapsePanel) {
+            _test.collapsePanel('col1');
+        }
+
+        var state1 = _test.getState && _test.getState('col1');
+        var state2 = _test.getState && _test.getState('col2');
+
+        if (state1 && state2) {
+            expect(state1.collapsed).toBe(true);
+            expect(state2.collapsed).toBeFalsy();
+        } else {
+            expect(_test.getState).toBeDefined();
+        }
+    });
+});
+
+// ─── drop zone validation ─────────────────────────────────────────────────────
+describe('drop zone validation (v2)', function () {
+    test('max 3 dimensions enforced (via validateSelection)', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        // Attempt to validate with 4 dimensions
+        var result = _test.validateSelection
+            ? _test.validateSelection({
+                dims: ['A', 'B', 'C', 'D'],
+                msrs: [{ field: 'Amount', func: 'Sum' }],
+            })
+            : null;
+
+        if (result !== null) {
+            // validateSelection should return an error message or false
+            expect(result.valid === false || typeof result === 'string').toBe(true);
+        } else {
+            expect(_test.validateSelection).toBeDefined();
+        }
+    });
+
+    test('max 3 measures enforced (via validateSelection)', function () {
+        var env = makeEnv();
+        if (!env.wa._test) { expect(env.wa._test).toBeDefined(); return; }
+        var _test = env.wa._test;
+
+        var result = _test.validateSelection
+            ? _test.validateSelection({
+                dims: ['Region'],
+                msrs: [
+                    { field: 'A', func: 'Sum' },
+                    { field: 'B', func: 'Sum' },
+                    { field: 'C', func: 'Sum' },
+                    { field: 'D', func: 'Sum' },
+                ],
+            })
+            : null;
+
+        if (result !== null) {
+            expect(result.valid === false || typeof result === 'string').toBe(true);
+        } else {
+            expect(_test.validateSelection).toBeDefined();
+        }
+    });
+});
