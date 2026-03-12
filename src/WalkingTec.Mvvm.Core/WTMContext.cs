@@ -865,63 +865,81 @@ params string[] groupcode)
             return false;
         }
 
+        private bool _isCreatingDC;
+
         #region CreateDC
         public virtual IDataContext? CreateDC(bool isLog = false, string? cskey = null, bool logerror = true)
         {
-            string? cs = cskey ?? CurrentCS;
-            string? tenantCode = null;
-
-            var tenants = GlobaInfo?.AllTenant ?? new List<FrameworkTenant>();
-            string? tc = _loginUserInfo?.CurrentTenant;
-            if (tc == null && HttpContext?.Request.Headers.ContainsKey("Referer")==true)
+            bool isReentrant = _isCreatingDC;
+            if (!isReentrant)
             {
-                Regex r = new Regex("(http://|https://)?(.+?)(/)?$");
-                var m = r.Match(HttpContext?.Request.Headers["Referer"]);
-                string dom = "";
-                if (m.Success)
-                {
-                    dom = m.Groups[2].Value;
-                }
-                tc = tenants.Where(x => x.TDomain != null && x.TDomain.ToLower() == dom.ToLower()).Select(x => x.TCode).FirstOrDefault();
-            }
-            if (tc != null)
-            {
-                var item = tenants.Where(x => x.TCode == tc).FirstOrDefault();
-                tenantCode = tc;
-                //如果租户指定了数据库，则返回
-                if (string.IsNullOrEmpty(cs) && item?.IsUsingDB == true)
-                {
-                    var tenantDc = item.CreateDC(this);
-                    if(tenantDc != null) tenantDc.CurrentUserCode = LoginUserInfo?.ITCode;
-                    return tenantDc;
-                }
+                _isCreatingDC = true;
             }
 
-            if (isLog == true)
+            try
             {
-                if (ConfigInfo?.Connections?.Where(x => x.Key.ToLower() == "defaultlog").FirstOrDefault() != null)
+                string? cs = cskey ?? CurrentCS;
+                string? tenantCode = null;
+
+                var tenants = GlobaInfo?.AllTenant ?? new List<FrameworkTenant>();
+                string? tc = _loginUserInfo?.CurrentTenant;
+                if (tc == null && HttpContext?.Request.Headers.ContainsKey("Referer")==true)
                 {
-                    cs = "defaultlog";
+                    Regex r = new Regex("(http://|https://)?(.+?)(/)?$");
+                    var m = r.Match(HttpContext?.Request.Headers["Referer"]);
+                    string dom = "";
+                    if (m.Success)
+                    {
+                        dom = m.Groups[2].Value;
+                    }
+                    tc = tenants.Where(x => x.TDomain != null && x.TDomain.ToLower() == dom.ToLower()).Select(x => x.TCode).FirstOrDefault();
+                }
+                if (tc != null)
+                {
+                    var item = tenants.Where(x => x.TCode == tc).FirstOrDefault();
+                    tenantCode = tc;
+                    //如果租户指定了数据库，则返回
+                    if (string.IsNullOrEmpty(cs) && item?.IsUsingDB == true)
+                    {
+                        var tenantDc = item.CreateDC(this);
+                        if(tenantDc != null) tenantDc.CurrentUserCode = isReentrant ? _loginUserInfo?.ITCode : LoginUserInfo?.ITCode;
+                        return tenantDc;
+                    }
+                }
+
+                if (isLog == true)
+                {
+                    if (ConfigInfo?.Connections?.Where(x => x.Key.ToLower() == "defaultlog").FirstOrDefault() != null)
+                    {
+                        cs = "defaultlog";
+                    }
+                }
+                if (string.IsNullOrEmpty(cs))
+                {
+                    cs = "default";
+                }
+                var csConfig = ConfigInfo?.Connections.Where(x => x.Key.ToLower() == cs.ToLower()).FirstOrDefault();
+                if (csConfig != null && !csConfig.Enabled)
+                {
+                    throw new InvalidOperationException($"Database connection '{csConfig.Key}' ({csConfig.DbType}) is disabled. Enable it in appsettings.json (set Enabled: true).");
+                }
+                var rv = csConfig?.CreateDC();
+                if(rv!=null) rv.IsDebug = ConfigInfo?.IsQuickDebug == true;
+                rv?.SetTenantCode(tenantCode);
+                if(rv != null) rv.CurrentUserCode = isReentrant ? _loginUserInfo?.ITCode : LoginUserInfo?.ITCode;
+                if (logerror == true)
+                {
+                    rv?.SetLoggerFactory(_loggerFactory);
+                }
+                return rv;
+            }
+            finally
+            {
+                if (!isReentrant)
+                {
+                    _isCreatingDC = false;
                 }
             }
-            if (string.IsNullOrEmpty(cs))
-            {
-                cs = "default";
-            }
-            var csConfig = ConfigInfo?.Connections.Where(x => x.Key.ToLower() == cs.ToLower()).FirstOrDefault();
-            if (csConfig != null && !csConfig.Enabled)
-            {
-                throw new InvalidOperationException($"Database connection '{csConfig.Key}' ({csConfig.DbType}) is disabled. Enable it in appsettings.json (set Enabled: true).");
-            }
-            var rv = csConfig?.CreateDC();
-            if(rv!=null) rv.IsDebug = ConfigInfo?.IsQuickDebug == true;
-            rv?.SetTenantCode(tenantCode);
-            if(rv != null) rv.CurrentUserCode = LoginUserInfo?.ITCode;
-            if (logerror == true)
-            {
-                rv?.SetLoggerFactory(_loggerFactory);
-            }
-            return rv;
         }
 
         #endregion
