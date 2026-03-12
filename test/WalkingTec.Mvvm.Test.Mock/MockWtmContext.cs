@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -40,7 +41,11 @@ namespace WalkingTec.Mvvm.Test.Mock
             wtmcontext.Session = new SessionServiceProvider(mockSession);
             if (dataContext == null)
             {
-                wtmcontext.DC = new EmptyContext(Guid.NewGuid().ToString(), DBTypeEnum.Memory);
+                string cs = $"Data Source=file:memdb_{Guid.NewGuid().ToString().Replace("-", "")}?mode=memory&cache=shared";
+                var emptyContext = new EmptyContext(cs, DBTypeEnum.SQLite);
+                emptyContext.Database.OpenConnection();
+                emptyContext.Database.EnsureCreated();
+                wtmcontext.DC = emptyContext;
             }
             else
             {
