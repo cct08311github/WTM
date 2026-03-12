@@ -132,6 +132,37 @@ public class EdgeCaseTests
         result.LoadedRows.Should().Be(0);
     }
 
+    // ─── Watermark edge case ───
+
+    [TestMethod]
+    public async Task All_null_watermark_column_does_not_crash()
+    {
+        // All UpdatedAt values are DBNull — GetMaxValue should return null, not throw
+        var dt = new DataTable();
+        dt.Columns.Add("OrderNo", typeof(string));
+        dt.Columns.Add("Amount", typeof(decimal));
+        dt.Columns.Add("UpdatedAt", typeof(DateTime));
+        for (int i = 0; i < 10; i++)
+        {
+            var row = dt.NewRow();
+            row["OrderNo"] = $"ORD-{i:D4}";
+            row["Amount"] = 100m + i;
+            row["UpdatedAt"] = DBNull.Value;
+            dt.Rows.Add(row);
+        }
+        _source.SetData(dt);
+        var config = TestHelpers.CreateTestConfig();
+        var watermark = new WatermarkStrategy(EtlWatermarkType.Timestamp, "UpdatedAt", null);
+        var executor = new EtlPipelineExecutor(_source, _loader);
+
+        var result = await executor.ExecuteAsync(config, watermark);
+
+        result.Success.Should().BeTrue();
+        result.ExtractedRows.Should().Be(10);
+    }
+
+    // ─── Transform: computed column ───
+
     [TestMethod]
     public async Task Transform_adds_computed_column()
     {
