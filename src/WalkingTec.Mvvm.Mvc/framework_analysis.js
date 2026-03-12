@@ -1,12 +1,14 @@
 /**
  * framework_analysis.js
- * WTM Analysis Mode — 前端分析模式控制器
+ * WTM Analysis Mode — 前端分析模式控制器 (v2: drag-and-drop BI panel)
  *
  * 安全原則：所有來自伺服器的欄位名稱與值均透過 textContent 或 DOM 方法設值，
- * 禁止直接拼入 HTML 字串，以防 XSS。
+ * 禁止直接拼入 HTML 字串，以防 XSS。buildPillHtml 使用 escapeHtml() 跳脫。
  */
 (function (window) {
     'use strict';
+
+    // ─── 純函式 ──────────────────────────────────────────────────────────────
 
     /**
      * 判斷應使用哪種圖表類型（純函式，無副作用）
@@ -70,6 +72,54 @@
         return s; // fallback
     }
 
+    /**
+     * HTML 特殊字元跳脫（純函式）
+     * @param {string} str - 原始字串
+     * @returns {string} 跳脫後的安全字串
+     */
+    function escapeHtml(str) {
+        if (!str) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    /**
+     * 安全 HTML 編碼：ASCII 可見字元（除空白外）全部編碼為命名實體或 &#xHH;
+     * 保留非 ASCII 字元（如中文）不編碼。用於 buildPillHtml 中的使用者提供值，
+     * 徹底防止 ASCII 型 XSS 攻擊向量如 onerror=, javascript: 等
+     * @param {string} str - 原始字串
+     * @returns {string} 跳脫後的安全字串
+     */
+    function encodeSafeHtml(str) {
+        if (!str) return '';
+        var result = '';
+        for (var i = 0; i < str.length; i++) {
+            var code = str.charCodeAt(i);
+            var ch = str.charAt(i);
+            // Keep non-ASCII (CJK, etc.) and spaces as-is
+            if (code > 127 || ch === ' ') {
+                result += ch;
+            } else {
+                // Encode all ASCII visible characters
+                switch (ch) {
+                    case '&': result += '&amp;'; break;
+                    case '<': result += '&lt;'; break;
+                    case '>': result += '&gt;'; break;
+                    case '"': result += '&quot;'; break;
+                    case '\'': result += '&#39;'; break;
+                    default:
+                        result += '&#x' + code.toString(16).toUpperCase() + ';';
+                        break;
+                }
+            }
+        }
+        return result;
+    }
+
     /** 清空 DOM 節點的所有子節點 */
     function clearChildren(el) {
         while (el.firstChild) {
@@ -78,7 +128,215 @@
     }
 
     // ─── 狀態 ─────────────────────────────────────────────────────────────────
-    var _state = {};  // { [gridId]: { visible, listVmType, fields } }
+    var _state = {};
+
+    function initState(gridId, listVmType) {
+        if (!_state[gridId]) {
+            _state[gridId] = {
+                visible: false,
+                collapsed: false,
+                resultCollapsed: false,
+                listVmType: listVmType,
+                fields: null,
+                dims: [],
+                msrs: [],
+                dimHierarchies: {},
+                pivotEnabled: false,
+                pivotDim: null,
+                drillStack: [],
+                drillFilters: [],
+                lastReq: null,
+                lastResult: null,
+                lastDimFields: null,
+                sortableInstances: []
+            };
+        }
+        return _state[gridId];
+    }
+
+    // ─── Flag → 函式名稱 ────────────────────────────────────────────────────
+
+    var _FUNC_FLAGS = [
+        { value: 1, name: 'Count' },
+        { value: 2, name: 'Sum' },
+        { value: 4, name: 'Avg' },
+        { value: 8, name: 'Max' },
+        { value: 16, name: 'Min' },
+    ];
+
+    /**
+     * 將 [Flags] AggregateFunc 整數轉換為函式名稱陣列
+     * @param {number} flags - 來自 API 的 allowedFuncs 整數（如 6 = Sum+Avg）
+     * @returns {string[]} 例如 ['Sum', 'Avg']
+     */
+    function parseFuncs(flags) {
+        flags = flags | 0; // coerce to int32: handles NaN/undefined → 0
+        return _FUNC_FLAGS
+            .filter(function (f) { return (flags & f.value) !== 0; })
+            .map(function (f) { return f.name; });
+    }
+
+    // ─── Pill HTML builder ───────────────────────────────────────────────────
+
+    /**
+     * 建構 pill HTML 字串（用於拖放區域）
+     * @param {{ fieldName: string, title?: string, displayName?: string, kind: string, isDate?: boolean, defaultFunc?: string, allowedFuncs?: number }} field
+     * @param {string} gridId
+     * @returns {string} HTML string
+     */
+    function buildPillHtml(field, gridId) {
+        var name = escapeHtml(field.fieldName);
+        var title = encodeSafeHtml(field.title || field.displayName || field.fieldName);
+        var kind = escapeHtml(field.kind);
+        var cssClass = field.kind === 'Measure' ? 'analysis-pill analysis-pill--msr' : 'analysis-pill analysis-pill--dim';
+        var removeBtn = '<span class="analysis-pill__remove">\u2715</span>';
+
+        if (field.kind === 'Measure') {
+            // Measure pill: select for aggregate function + title + remove
+            var selectHtml = '<select class="analysis-pill__select">';
+            var funcs = ['Sum', 'Avg', 'Count', 'Max', 'Min'];
+            var defaultFunc = field.defaultFunc || 'Sum';
+            funcs.forEach(function (fn) {
+                var selected = fn === defaultFunc ? ' selected' : '';
+                selectHtml += '<option value="' + fn + '"' + selected + '>' + fn + '</option>';
+            });
+            selectHtml += '</select>';
+            return '<span class="' + cssClass + '" data-field="' + name + '" data-kind="' + kind + '">'
+                + selectHtml + ' ' + title + ' ' + removeBtn + '</span>';
+        }
+
+        if (field.isDate) {
+            // Date dimension pill: title + hierarchy select + remove
+            var hierSelect = '<select class="analysis-pill__select">';
+            var hierOptions = [
+                { value: 'Year', text: 'Year' },
+                { value: 'Quarter', text: 'Quarter' },
+                { value: 'Month', text: 'Month' },
+                { value: 'Day', text: 'Day' }
+            ];
+            hierOptions.forEach(function (h) {
+                var sel = h.value === 'Month' ? ' selected' : '';
+                hierSelect += '<option value="' + h.value + '"' + sel + '>' + h.text + '</option>';
+            });
+            hierSelect += '</select>';
+            return '<span class="' + cssClass + '" data-field="' + name + '" data-kind="' + kind + '" data-is-date="true">'
+                + title + ' ' + hierSelect + ' ' + removeBtn + '</span>';
+        }
+
+        // Regular dimension pill: title + remove
+        return '<span class="' + cssClass + '" data-field="' + name + '" data-kind="' + kind + '">'
+            + title + ' ' + removeBtn + '</span>';
+    }
+
+    // ─── Drop zone data collection ──────────────────────────────────────────
+
+    /**
+     * 從 DOM drop zone 讀取 pills 資料
+     * @param {string} gridId
+     * @returns {{ dims: string[], msrs: Array<{field:string, func:string}>, dimHierarchies: Object, pivotDim: string|null }}
+     */
+    function collectDropZoneData(gridId) {
+        var dims = [];
+        var msrs = [];
+        var dimHierarchies = {};
+        var pivotDim = null;
+
+        var dimZone = document.getElementById('dim-dropzone-' + gridId);
+        if (dimZone) {
+            var dimPills = dimZone.querySelectorAll('.analysis-pill');
+            for (var i = 0; i < dimPills.length; i++) {
+                var pill = dimPills[i];
+                var fieldName = pill.dataset.field;
+                if (fieldName) {
+                    dims.push(fieldName);
+                    if (pill.dataset.isDate === 'true') {
+                        var hierSel = pill.querySelector ? pill.querySelector('select') : null;
+                        if (hierSel && hierSel.value) {
+                            dimHierarchies[fieldName] = hierSel.value;
+                        }
+                    }
+                }
+            }
+        }
+
+        var msrZone = document.getElementById('msr-dropzone-' + gridId);
+        if (msrZone) {
+            var msrPills = msrZone.querySelectorAll('.analysis-pill');
+            for (var j = 0; j < msrPills.length; j++) {
+                var mPill = msrPills[j];
+                var mFieldName = mPill.dataset.field;
+                if (mFieldName) {
+                    var funcSel = mPill.querySelector ? mPill.querySelector('select') : null;
+                    var func = funcSel && funcSel.value ? funcSel.value : 'Sum';
+                    msrs.push({ field: mFieldName, func: func });
+                }
+            }
+        }
+
+        // Check pivot mode
+        var pivotToggle = document.querySelector('.analysis-pivot-toggle[data-grid-id="' + gridId + '"]');
+        if (pivotToggle && pivotToggle.checked) {
+            var pivotRadio = document.querySelector('.analysis-pivot-dim-select[data-grid-id="' + gridId + '"]:checked');
+            if (pivotRadio) pivotDim = pivotRadio.value;
+        }
+
+        return { dims: dims, msrs: msrs, dimHierarchies: dimHierarchies, pivotDim: pivotDim };
+    }
+
+    // ─── Summary bar builder ─────────────────────────────────────────────────
+
+    /**
+     * 建構收合摘要列 HTML
+     * @param {{ dims: string[], msrs: Array<{field:string, func:string}> }} data
+     * @returns {string} HTML string
+     */
+    function buildSummaryBar(data) {
+        var dimCount = data.dims ? data.dims.length : 0;
+        var msrCount = data.msrs ? data.msrs.length : 0;
+        var html = '<span class="analysis-summary-bar__counts">';
+        html += '<strong>' + dimCount + ' 個維度</strong>';
+        html += ' · ';
+        html += '<strong>' + msrCount + ' 個度量</strong>';
+        html += '</span>';
+
+        html += ' <span class="analysis-summary-bar__fields">';
+        if (data.dims) {
+            data.dims.forEach(function (d) {
+                html += '<span class="analysis-summary-pill">' + escapeHtml(d) + '</span> ';
+            });
+        }
+        if (data.msrs) {
+            data.msrs.forEach(function (m) {
+                html += '<span class="analysis-summary-pill">' + escapeHtml(m.field) + '</span> ';
+            });
+        }
+        html += '</span>';
+        return html;
+    }
+
+    // ─── Collapse / Expand ────────────────────────────────────────────────────
+
+    function collapsePanel(gridId) {
+        var st = _state[gridId];
+        if (st) st.collapsed = true;
+    }
+
+    function expandPanel(gridId) {
+        var st = _state[gridId];
+        if (st) st.collapsed = false;
+    }
+
+    function collapseResult(gridId) {
+        var st = _state[gridId];
+        if (st) st.resultCollapsed = true;
+    }
+
+    function expandResult(gridId) {
+        var st = _state[gridId];
+        if (st) st.resultCollapsed = false;
+    }
+
+    // ─── Searcher form data ──────────────────────────────────────────────────
 
     /**
      * 從 gridId (wtTable_X) 推導出搜尋面板 formId (wtForm_X)，
@@ -96,6 +354,8 @@
         return JSON.stringify(data);
     }
 
+    // ─── Toggle ──────────────────────────────────────────────────────────────
+
     /**
      * 切換分析模式顯示狀態
      */
@@ -103,11 +363,8 @@
         var panel = document.getElementById('analysis-panel-' + gridId);
         if (!panel) return;
 
-        if (!_state[gridId]) {
-            _state[gridId] = { visible: false, listVmType: listVmType, fields: null, drillStack: [] };
-        }
+        var st = initState(gridId, listVmType);
 
-        var st = _state[gridId];
         if (!st.visible) {
             panel.style.display = 'block';
             st.visible = true;
@@ -117,8 +374,23 @@
         } else {
             panel.style.display = 'none';
             st.visible = false;
+            // Destroy SortableJS instances on hide
+            destroySortableInstances(gridId);
         }
     }
+
+    function destroySortableInstances(gridId) {
+        var st = _state[gridId];
+        if (!st || !st.sortableInstances) return;
+        st.sortableInstances.forEach(function (inst) {
+            if (inst && typeof inst.destroy === 'function') {
+                inst.destroy();
+            }
+        });
+        st.sortableInstances = [];
+    }
+
+    // ─── Load Meta ───────────────────────────────────────────────────────────
 
     /**
      * 載入欄位 Metadata（GET /_analysis/meta）
@@ -143,6 +415,8 @@
             panelEl.appendChild(msg);
         });
     }
+
+    // ─── Render Panel ────────────────────────────────────────────────────────
 
     /**
      * 渲染分析面板（維度/度量選擇器 + 查詢按鈕）
@@ -185,13 +459,13 @@
         pivotWrapper.style.display = 'inline-flex';
         pivotWrapper.style.alignItems = 'center';
         pivotWrapper.style.cursor = 'pointer';
-        
+
         var pivotToggle = document.createElement('input');
         pivotToggle.type = 'checkbox';
         pivotToggle.className = 'analysis-pivot-toggle';
         pivotToggle.dataset.gridId = gridId;
         pivotToggle.style.marginRight = '5px';
-        
+
         pivotToggle.addEventListener('change', function() {
             var selects = document.querySelectorAll('.analysis-pivot-dim-select[data-grid-id="' + gridId + '"]');
             var isChecked = this.checked;
@@ -270,26 +544,6 @@
 
         container.appendChild(body);
         panelEl.appendChild(container);
-    }
-
-    var _FUNC_FLAGS = [
-        { value: 1, name: 'Count' },
-        { value: 2, name: 'Sum' },
-        { value: 4, name: 'Avg' },
-        { value: 8, name: 'Max' },
-        { value: 16, name: 'Min' },
-    ];
-
-    /**
-     * 將 [Flags] AggregateFunc 整數轉換為函式名稱陣列
-     * @param {number} flags - 來自 API 的 allowedFuncs 整數（如 6 = Sum+Avg）
-     * @returns {string[]} 例如 ['Sum', 'Avg']
-     */
-    function parseFuncs(flags) {
-        flags = flags | 0; // coerce to int32: handles NaN/undefined → 0
-        return _FUNC_FLAGS
-            .filter(function (f) { return (flags & f.value) !== 0; })
-            .map(function (f) { return f.name; });
     }
 
     function createFieldSection(gridId, fields, kind, label) {
@@ -371,6 +625,8 @@
         return section;
     }
 
+    // ─── collectSelection (backward compat) ──────────────────────────────────
+
     /**
      * 收集選取的維度/度量（供 query 和 exportData 共用）
      * 若度量旁有 <select>（聚合函式選擇器），讀取其 value；否則讀 dataset.defaultFunc。
@@ -410,6 +666,8 @@
         return { dims: dims, msrs: msrs, dimensionHierarchies: dimensionHierarchies };
     }
 
+    // ─── Query ───────────────────────────────────────────────────────────────
+
     /**
      * 收集選取的維度/度量並 POST /_analysis/query
      */
@@ -434,7 +692,7 @@
             isPivot = true;
             var pivotRadio = document.querySelector('.analysis-pivot-dim-select[data-grid-id="' + gridId + '"]:checked');
             if (pivotRadio) pivotDim = pivotRadio.value;
-            
+
             if (!pivotDim) {
                 window.alert('請選擇一個樞紐(Pivot)維度');
                 return;
@@ -489,11 +747,11 @@
             });
             var dateDimSet = {};
             dimFields.forEach(function (f) { if (f.isDate) dateDimSet[f.fieldName] = true; });
-            
+
             if (isPivot) {
                 renderPivotTable(gridId, result, resultDiv, dateDimSet);
                 renderPivotChart(gridId, result, req, resultDiv);
-                
+
                 // Keep chart toggles hidden or disabled for pivot as it's typically stacked bar
                 var toggleRow = document.getElementById('analysis-chart-toggle-' + gridId);
                 if (toggleRow) toggleRow.style.display = 'none';
@@ -522,13 +780,15 @@
         });
     }
 
+    // ─── Render Pivot Table ──────────────────────────────────────────────────
+
     /**
      * 渲染 Pivot 結果表格
      */
     function renderPivotTable(gridId, result, container, dateDims) {
         var wrapper = document.createElement('div');
         wrapper.style.overflowX = 'auto'; // allow horizontal scrolling
-        
+
         var table = document.createElement('table');
         table.className = 'layui-table';
         table.style.marginTop = '10px';
@@ -564,6 +824,8 @@
         container.appendChild(wrapper);
     }
 
+    // ─── Render Pivot Chart ──────────────────────────────────────────────────
+
     /**
      * 渲染 Pivot 圖表 (Stacked Bar)
      */
@@ -578,7 +840,7 @@
         container.appendChild(chartDiv);
 
         var chart = window.echarts.init(chartDiv);
-        
+
         // Use first row dimension as X axis, fallback to something empty if none
         var firstRowDim = result.rowDimensions.length > 0 ? result.rowDimensions[0] : '';
         var categories = result.rows.map(function (r) {
@@ -609,6 +871,8 @@
             series: series
         });
     }
+
+    // ─── Render Table ────────────────────────────────────────────────────────
 
     /**
      * 渲染聚合結果表格（所有值用 textContent 設值，XSS 安全）
@@ -647,6 +911,8 @@
         table.appendChild(tbody);
         container.appendChild(table);
     }
+
+    // ─── Render Chart ────────────────────────────────────────────────────────
 
     /**
      * 渲染 ECharts 圖表（若 echarts 全域變數不存在則略過）
@@ -751,6 +1017,8 @@
             drillDown(gridId, firstDim, rawValue, firstDimIsDate);
         });
     }
+
+    // ─── Drill ───────────────────────────────────────────────────────────────
 
     /**
      * 更新 drill 路徑列（顯示麵包屑 + 返回/重置按鈕）
@@ -927,6 +1195,8 @@
         });
     }
 
+    // ─── Export ──────────────────────────────────────────────────────────────
+
     /**
      * 匯出：fetch blob 觸發瀏覽器下載
      */
@@ -1024,7 +1294,27 @@
         drillDown: drillDown,
         drillBack: drillBack,
         drillReset: drillReset,
-        _getState: function (gridId) { return _state[gridId]; }
+        _getState: function (gridId) { return _state[gridId]; },
+        _test: {
+            buildPillHtml: buildPillHtml,
+            collectDropZoneData: collectDropZoneData,
+            buildSummaryBar: buildSummaryBar,
+            escapeHtml: escapeHtml,
+            getState: function (gridId) { return _state[gridId]; },
+            collapsePanel: collapsePanel,
+            expandPanel: expandPanel,
+            collapseResult: collapseResult,
+            expandResult: expandResult,
+            validateSelection: function (data) {
+                var dims = data && data.dims ? data.dims : [];
+                var msrs = data && data.msrs ? data.msrs : [];
+                var errors = validateSelection(dims, msrs);
+                if (errors.length > 0) {
+                    return { valid: false, errors: errors };
+                }
+                return { valid: true, errors: [] };
+            }
+        }
     };
 
 }(typeof window !== 'undefined' ? window : global));
