@@ -28,7 +28,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             var items = query.Take(MaxMaterializeRows).ToList();
 
             return items
-                .GroupBy(row => BuildGroupKey(row, req.Dimensions))
+                .GroupBy(row => BuildGroupKey(row, req.Dimensions, req.DimensionHierarchies, whitelist))
                 .Take(MaxRows + 1)
                 .Select(g =>
                 {
@@ -65,13 +65,37 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 .ToList();
         }
 
-        private static string BuildGroupKey<TModel>(TModel row, List<string> dimensions)
+        private static string BuildGroupKey<TModel>(
+            TModel row,
+            List<string> dimensions,
+            Dictionary<string, DateHierarchy>? hierarchies,
+            Dictionary<string, AnalysisFieldMeta> whitelist)
             => string.Join('\0', dimensions.Select(d =>
                {
                    var propInfo = typeof(TModel).GetProperty(d);
                    if (propInfo is null)
                        throw new InvalidOperationException($"Property '{d}' not found on {typeof(TModel).Name}.");
-                   return propInfo.GetValue(row)?.ToString() ?? string.Empty;
+                   var val = propInfo.GetValue(row);
+                   if (val == null) return string.Empty;
+
+                   // 日期維度按 hierarchy 截斷
+                   if (hierarchies != null
+                       && hierarchies.TryGetValue(d, out var h)
+                       && h != DateHierarchy.None
+                       && val is DateTime dt)
+                   {
+                       int key = h switch
+                       {
+                           DateHierarchy.Year => dt.Year,
+                           DateHierarchy.Quarter => dt.Year * 10 + ((dt.Month - 1) / 3 + 1),
+                           DateHierarchy.Month => dt.Year * 100 + dt.Month,
+                           DateHierarchy.Day => dt.Year * 10000 + dt.Month * 100 + dt.Day,
+                           _ => throw new ArgumentException($"Unsupported hierarchy: {h}")
+                       };
+                       return DateTruncator.FormatKey(key, h);
+                   }
+
+                   return val.ToString() ?? string.Empty;
                }));
     }
 }
