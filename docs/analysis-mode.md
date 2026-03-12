@@ -1,7 +1,7 @@
 # WTM Analysis Mode — 新組件開發使用手冊
 
-**適用版本**：WTM 8.1.17+
-**最後更新**：2026-03-05
+**適用版本**：WTM 8.1.17+（v2 拖曳面板自 8.7.0+）
+**最後更新**：2026-03-13
 
 ---
 
@@ -23,7 +23,7 @@
 
 Analysis Mode 讓已有的 CRUD 列表頁**無需另寫程式碼**，即可在同一頁切換至「分析模式」，提供：
 
-- **動態維度 / 度量選擇**（勾選欄位即分組聚合）
+- **動態維度 / 度量選擇**（拖曳欄位到維度/度量區域即分組聚合）
 - **聚合表格**（GroupBy + Sum / Count / Avg / Max / Min）
 - **自動選型圖表**（Bar / Stacked Bar / Line / 數字卡片，由維度組合自動決定）
 - **Excel 匯出**（.xlsx，NPOI 生成）
@@ -31,10 +31,14 @@ Analysis Mode 讓已有的 CRUD 列表頁**無需另寫程式碼**，即可在�
 ```
 列表頁                         分析模式（同一頁切換）
 ┌─────────────────────┐        ┌──────────────────────────────────┐
-│ [新增] [刪除] [分析] │  ──►  │ 維度 □ 地區  □ 業務員            │
-│ 訂單號 | 地區 | 金額 │        │ 度量 □ 金額 [SUM▼]  □ 筆數 [COUNT▼] │
-│ ...                 │        │ [查詢]  [匯出 Excel]              │
-└─────────────────────┘        │ 地區 | SUM(金額)                 │
+│ [新增] [刪除] [分析] │  ──►  │ 可用欄位：[地區] [業務員] [金額]  │
+│ 訂單號 | 地區 | 金額 │        │                                  │
+│ ...                 │        │ 維度區 ┤ 拖入 → [地區🗑]          │
+└─────────────────────┘        │ 度量區 ┤ 拖入 → [金額 SUM▼ 🗑]   │
+                                │ [查詢]  [匯出 Excel]              │
+                                ├──────────────────────────────────┤
+                                │ ▼ 分析結果（可收合）              │
+                                │ 地區 | SUM(金額)                 │
                                 │ 華東 | 1,234,567                 │
                                 └──────────────────────────────────┘
 ```
@@ -264,11 +268,17 @@ public class OrderListVM : BasePagedListVM<OrderModel, OrderSearcher>
 <button class="layui-btn layui-btn-sm" onclick="wtmAnalysis.toggle('gridId')">
     分析
 </button>
-<div id="analysis-panel-gridId" style="display:none"></div>
+<div id="analysis-panel-gridId" class="analysis-panel" style="display:none"></div>
+<div id="analysis-result-block-gridId" class="analysis-result" style="display:none"></div>
+<link rel="stylesheet" href="/_js/framework_analysis.css" />
+<script src="/_js/sortable.min.js"></script>
 <script src="/_js/framework_analysis.js"></script>
 ```
 
-**注意**：`framework_analysis.js` 使用懶載入，只在 `enable-analysis="true"` 時才引入，不影響未啟用的頁面效能。
+**注意**：
+- CSS/JS 使用懶載入，只在 `enable-analysis="true"` 時引入，不影響未啟用的頁面
+- 多個 Grid 共用同一份 CSS/JS（自動去重）
+- 分析面板和結果區塊是獨立的 `<div>`，各自可收合
 
 ---
 
@@ -400,22 +410,29 @@ public class SalesOrderController : BaseController
 
 ### 6.6 分析結果
 
-啟動後點擊「分析」按鈕，選取維度和度量：
+啟動後點擊「分析」按鈕，從可用欄位區拖曳欄位到維度/度量區：
 
 ```
-維度：[✓] 銷售地區   [✓] 產品類別   [ ] 業務員
-度量：[✓] 銷售金額 [SUM ▼]   [✓] 銷售金額 [COUNT ▼]
+┌─ 可用欄位 ──────────────────────────────────────┐
+│ [銷售地區] [業務員] [產品類別] [銷售金額] [數量]  │
+└─────────────────────────────────────────────────┘
 
-─────────────────────────────────
-[查詢]  [匯出 Excel]
-─────────────────────────────────
+┌─ 維度（拖入） ──────────────────────────────────┐
+│ [銷售地區 🗑]  [產品類別 🗑]                      │
+└─────────────────────────────────────────────────┘
 
+┌─ 度量（拖入） ──────────────────────────────────┐
+│ [銷售金額 SUM▼ 🗑]  [銷售金額 COUNT▼ 🗑]         │
+└─────────────────────────────────────────────────┘
+
+[查詢]  [匯出 Excel ▼]
+
+▼ 分析結果（查詢後面板自動收合，點擊可展開）
 銷售地區   │ 產品類別 │ SUM(銷售金額) │ COUNT(銷售金額)
 ──────────────────────────────────────────────────
 華東        │ 家電      │  2,345,678   │  156
 華東        │ 3C        │  1,876,543   │  234
 華南        │ 家電      │  1,234,567   │   98
-...
 ```
 
 ---
@@ -561,9 +578,20 @@ Analysis Mode 透過 `/_analysis` 路由提供三個 API，供前端 `framework_
 - [x] `/_analysis/query` — 動態 GroupBy 聚合 API（Sum / Count / Avg / Max / Min）
 - [x] `/_analysis/export` — Excel (.xlsx) 匯出
 - [x] `DataTableTagHelper.EnableAnalysis` — 一鍵啟用
-- [x] `framework_analysis.js` — 前端 UI（維度/度量選擇、結果表格、圖表）
 - [x] ECharts 自動選型（Bar / Stacked Bar / Line / 數字卡片）
-- [x] 100% 單元測試覆蓋（Engine 30 tests + Exporter 6 tests + Controller 16 tests + JS 42 tests）
+
+### v2 拖曳面板已實作（8.7.0+）
+
+- [x] SortableJS 拖曳式 BI 面板（取代 checkbox UI）
+- [x] 可用欄位 → 維度區 / 度量區拖曳操作
+- [x] 欄位 pill（含刪除按鈕、聚合函式選擇）
+- [x] 分析面板與結果區塊獨立收合
+- [x] 查詢後面板自動收合並顯示摘要列
+- [x] `framework_analysis.css` — 專用樣式（pill、dropzone、拖曳動畫）
+- [x] 雙層 XSS 防護（`escapeHtml` + `encodeSafeHtml`）
+- [x] SortableJS 實例生命週期管理（防記憶體洩漏）
+- [x] 多 Grid 隔離（同一頁面多個分析面板互不干擾）
+- [x] 測試覆蓋（Engine 30 + Exporter 6 + Controller 16 + JS 196）
 
 ### Phase 1 已知限制
 
