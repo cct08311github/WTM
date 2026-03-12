@@ -683,11 +683,19 @@ setTimeout(function(){{
 
             if (EnableAnalysis)
             {
+                // Field selector panel (collapsible)
                 output.PostElement.AppendHtml(
-                    $@"<div id=""analysis-panel-{Id}"" style=""display:none;margin-top:10px;""></div>");
+                    $@"<div id=""analysis-panel-{Id}"" class=""analysis-panel"" style=""display:none;margin-top:10px;""></div>");
+                // Result block (independent, collapsible)
+                output.PostElement.AppendHtml(
+                    $@"<div id=""analysis-result-block-{Id}"" class=""analysis-result"" style=""display:none;margin-top:6px;""></div>");
                 if (!context.Items.ContainsKey("analysis_js_loaded"))
                 {
                     context.Items["analysis_js_loaded"] = true;
+                    output.PostElement.AppendHtml(
+                        @"<link rel=""stylesheet"" href=""/_js/framework_analysis.css"" />");
+                    output.PostElement.AppendHtml(
+                        @"<script src=""/_js/sortable.min.js""></script>");
                     output.PostElement.AppendHtml(
                         @"<script src=""/_js/framework_analysis.js""></script>");
                 }
