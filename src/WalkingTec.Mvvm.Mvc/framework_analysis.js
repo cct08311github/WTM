@@ -12,12 +12,13 @@
      * 判斷應使用哪種圖表類型（純函式，無副作用）
      * @param {Array} dims - 選取的維度陣列（每項 {fieldName, isDate}）
      * @param {Array} msrs - 選取的度量陣列
-     * @returns {string} 'card'|'bar'|'bar-stacked'|'line'
+     * @returns {string} 'card'|'pie'|'bar'|'bar-stacked'|'line'
      */
     function detectChartType(dims, msrs) {
         if (dims.length === 0) return 'card';
         if (dims.some(function (d) { return d.isDate; })) return 'line';
         if (dims.length >= 2) return 'bar-stacked';
+        if (dims.length === 1 && msrs.length === 1) return 'pie';
         return 'bar';
     }
 
@@ -78,6 +79,22 @@
 
     // ─── 狀態 ─────────────────────────────────────────────────────────────────
     var _state = {};  // { [gridId]: { visible, listVmType, fields } }
+
+    /**
+     * 從 gridId (wtTable_X) 推導出搜尋面板 formId (wtForm_X)，
+     * 收集搜尋面板表單值並序列化為 JSON 字串，供後端 CreateAndBindVm 使用。
+     * @param {string} gridId - grid table ID (e.g. "wtTable_abc123")
+     * @returns {string|undefined} JSON string of searcher form data, or undefined if not available
+     */
+    function collectSearcherFormData(gridId) {
+        if (typeof ff === 'undefined' || typeof ff.GetSearchFormData !== 'function') return undefined;
+        var formId = gridId.replace(/^wtTable_/, 'wtForm_');
+        var formEl = document.getElementById(formId);
+        if (!formEl) return undefined;
+        var data = ff.GetSearchFormData(formId, 'Searcher');
+        if (!data || Object.keys(data).length === 0) return undefined;
+        return JSON.stringify(data);
+    }
 
     /**
      * 切換分析模式顯示狀態
@@ -196,9 +213,22 @@
         pivotWrapper.appendChild(pivotToggle);
         pivotWrapper.appendChild(pivotText);
 
+        var chartExportWrapper = document.createElement('label');
+        chartExportWrapper.style.cssText = 'display:inline-flex;align-items:center;margin-left:10px;cursor:pointer;';
+        var chartExportCb = document.createElement('input');
+        chartExportCb.type = 'checkbox';
+        chartExportCb.className = 'analysis-export-chart-cb';
+        chartExportCb.dataset.gridId = gridId;
+        chartExportCb.style.marginRight = '4px';
+        var chartExportLabel = document.createElement('span');
+        chartExportLabel.textContent = '含圖表';
+        chartExportWrapper.appendChild(chartExportCb);
+        chartExportWrapper.appendChild(chartExportLabel);
+
         btnRow.appendChild(queryBtn);
         btnRow.appendChild(exportXlsxBtn);
         btnRow.appendChild(exportCsvBtn);
+        btnRow.appendChild(chartExportWrapper);
         btnRow.appendChild(pivotWrapper);
         body.appendChild(btnRow);
 
@@ -206,7 +236,7 @@
         chartToggleRow.id = 'analysis-chart-toggle-' + gridId;
         chartToggleRow.style.marginTop = '8px';
         chartToggleRow.style.display = 'none'; // shown after first query
-        ['bar', 'line', 'bar-stacked', 'card'].forEach(function (ct) {
+        ['bar', 'line', 'bar-stacked', 'pie', 'card'].forEach(function (ct) {
             var btn = document.createElement('button');
             btn.type = 'button';
             btn.className = 'layui-btn layui-btn-xs';
@@ -219,6 +249,8 @@
                 if (!resultDiv) return;
                 var oldChart = document.getElementById('analysis-chart-' + gridId);
                 if (oldChart && oldChart.parentNode) oldChart.parentNode.removeChild(oldChart);
+                var oldCards = resultDiv.querySelector('.analysis-cards');
+                if (oldCards && oldCards.parentNode) oldCards.parentNode.removeChild(oldCards);
                 renderChart(gridId, st.lastResult, st.lastReq, st.lastDimFields, resultDiv, ct);
             });
             chartToggleRow.appendChild(btn);
@@ -413,15 +445,17 @@
             }
         }
 
+        var searcherJson = collectSearcherFormData(gridId);
         var req = {
             listVmType: st.listVmType,
             dimensions: dims,
             measures: msrs,
             filters: [],
             dimensionHierarchies: Object.keys(sel.dimensionHierarchies).length > 0
-                ? sel.dimensionHierarchies : undefined
+                ? sel.dimensionHierarchies : undefined,
+            searcherFormData: searcherJson
         };
-        
+
         if (isPivot) {
             req.pivotDimension = pivotDim;
         }
@@ -618,6 +652,41 @@
      * 渲染 ECharts 圖表（若 echarts 全域變數不存在則略過）
      */
     function renderChart(gridId, result, req, dimFields, container, forceChartType) {
+        var dimMeta = req.dimensions.map(function (d) {
+            var f = (dimFields || []).filter(function (fd) { return fd.fieldName === d; })[0];
+            return { fieldName: d, isDate: f ? f.isDate === true : false };
+        });
+
+        var chartType = forceChartType || detectChartType(dimMeta, req.measures);
+
+        // card: 渲染 HTML 數字卡片，不使用 ECharts
+        if (chartType === 'card') {
+            var cardContainer = document.createElement('div');
+            cardContainer.className = 'analysis-cards';
+            cardContainer.style.display = 'flex';
+            cardContainer.style.gap = '16px';
+            cardContainer.style.marginTop = '15px';
+            var row = result.rows && result.rows.length > 0 ? result.rows[0] : {};
+            req.measures.forEach(function (m) {
+                var key = m.field + '_' + m.func;
+                var val = row[key];
+                var card = document.createElement('div');
+                card.className = 'analysis-card-item';
+                card.style.cssText = 'flex:1;text-align:center;padding:20px;background:#f8f9fa;border-radius:8px;border:1px solid #e0e0e0;';
+                var label = document.createElement('div');
+                label.style.cssText = 'font-size:13px;color:#666;margin-bottom:8px;';
+                label.textContent = key;
+                var value = document.createElement('div');
+                value.style.cssText = 'font-size:28px;font-weight:bold;color:#333;';
+                value.textContent = val != null ? String(val) : '—';
+                card.appendChild(label);
+                card.appendChild(value);
+                cardContainer.appendChild(card);
+            });
+            container.appendChild(cardContainer);
+            return;
+        }
+
         if (typeof window.echarts === 'undefined') return;
 
         var chartDiv = document.createElement('div');
@@ -627,12 +696,6 @@
         chartDiv.style.marginTop = '15px';
         container.appendChild(chartDiv);
 
-        var dimMeta = req.dimensions.map(function (d) {
-            var f = (dimFields || []).filter(function (fd) { return fd.fieldName === d; })[0];
-            return { fieldName: d, isDate: f ? f.isDate === true : false };
-        });
-
-        var chartType = forceChartType || detectChartType(dimMeta, req.measures);
         var chart = window.echarts.init(chartDiv);
         var firstDim = req.dimensions[0];
         var firstDimIsDate = dimMeta.length > 0 && dimMeta[0].isDate;
@@ -640,23 +703,44 @@
             var v = r[firstDim];
             return firstDimIsDate ? formatDateKey(v) : String(v || '');
         });
-        var series = req.measures.map(function (m) {
-            var key = m.field + '_' + m.func;
-            return {
-                name: key,
-                type: chartType === 'line' ? 'line' : 'bar',
-                stack: chartType === 'bar-stacked' ? 'total' : undefined,
-                data: result.rows.map(function (r) { return r[key]; })
-            };
-        });
 
-        chart.setOption({
-            tooltip: { trigger: 'axis' },
-            legend: { data: req.measures.map(function (m) { return m.field + '_' + m.func; }) },
-            xAxis: { type: 'category', data: categories },
-            yAxis: { type: 'value' },
-            series: series
-        });
+        // pie: 圓餅圖
+        if (chartType === 'pie') {
+            var pieKey = req.measures[0].field + '_' + req.measures[0].func;
+            chart.setOption({
+                tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                legend: { orient: 'vertical', left: 'left', data: categories },
+                series: [{
+                    name: pieKey,
+                    type: 'pie',
+                    radius: '55%',
+                    center: ['50%', '55%'],
+                    data: categories.map(function (cat, i) {
+                        return { name: cat, value: result.rows[i][pieKey] };
+                    }),
+                    emphasis: { itemStyle: { shadowBlur: 10, shadowOffsetX: 0, shadowColor: 'rgba(0,0,0,0.5)' } }
+                }]
+            });
+        } else {
+            // bar / bar-stacked / line
+            var series = req.measures.map(function (m) {
+                var key = m.field + '_' + m.func;
+                return {
+                    name: key,
+                    type: chartType === 'line' ? 'line' : 'bar',
+                    stack: chartType === 'bar-stacked' ? 'total' : undefined,
+                    data: result.rows.map(function (r) { return r[key]; })
+                };
+            });
+
+            chart.setOption({
+                tooltip: { trigger: 'axis' },
+                legend: { data: req.measures.map(function (m) { return m.field + '_' + m.func; }) },
+                xAxis: { type: 'category', data: categories },
+                yAxis: { type: 'value' },
+                series: series
+            });
+        }
 
         // drill-down click handler
         chart.on('click', function (params) {
@@ -787,12 +871,14 @@
         var st = _state[gridId];
         if (!st) return;
 
+        var searcherJson = collectSearcherFormData(gridId);
         var req = {
             listVmType: st.listVmType,
             dimensions: st.lastReq.dimensions,
             measures: st.lastReq.measures,
             filters: filters,
-            dimensionHierarchies: Object.keys(hierarchies).length > 0 ? hierarchies : undefined
+            dimensionHierarchies: Object.keys(hierarchies).length > 0 ? hierarchies : undefined,
+            searcherFormData: searcherJson
         };
 
         var resultDiv = document.getElementById('analysis-result-' + gridId);
@@ -876,20 +962,25 @@
             if (pivotRadio) pivotDim = pivotRadio.value;
         }
 
+        var searcherJson = collectSearcherFormData(gridId);
         var req = {
             listVmType: st.listVmType,
             dimensions: dims,
             measures: msrs,
             filters: [],
-            dimensionHierarchies: exportHierarchies
+            dimensionHierarchies: exportHierarchies,
+            searcherFormData: searcherJson
         };
 
         if (isPivot) {
             req.pivotDimension = pivotDim;
         }
 
+        var chartCb = document.querySelector('.analysis-export-chart-cb[data-grid-id="' + gridId + '"]');
+        var includeChart = chartCb && chartCb.checked ? 'true' : 'false';
+
         var endpoint = isPivot ? '/_analysis/pivot/export' : '/_analysis/export';
-        return fetch(endpoint + '?format=' + encodeURIComponent(format), {
+        return fetch(endpoint + '?format=' + encodeURIComponent(format) + '&includeChart=' + includeChart, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(req)

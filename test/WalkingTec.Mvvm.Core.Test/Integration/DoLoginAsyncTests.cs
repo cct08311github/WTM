@@ -27,7 +27,6 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
     /// the shared in-memory database alive across multiple context instances.
     /// </summary>
     [TestClass]
-    [Ignore("Pre-existing: FrameworkContext.EnsureCreated() fails with 'duplicate column name: MajorId' in SQLite — requires schema fix in test infrastructure")]
     public class DoLoginAsyncTests
     {
         private string _seed = null!;
@@ -36,8 +35,11 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
         [TestInitialize]
         public void Initialize()
         {
-            // NOTE: This class is [Ignore]'d due to a pre-existing FrameworkContext schema issue.
-            // MSTest still runs [TestInitialize] for ignored classes, so we guard here.
+            _seed = Guid.NewGuid().ToString();
+            _keepAlive = new SqliteConnection($"DataSource={_seed}?mode=memory&cache=shared");
+            _keepAlive.Open();
+            using var db = CreateDb();
+            ((DbContext)db).Database.EnsureCreated();
         }
 
         [TestCleanup]
@@ -200,11 +202,26 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
     /// Overrides OnConfiguring to prevent the base SqlServer/InMemory config from running
     /// (the connection is configured by the DoLoginAsyncTests ctor via EnsureCreated).
     /// </summary>
+    /// <summary>
+    /// Minimal DataContext for DoLoginAsync tests.
+    /// Inherits FrameworkContext to get the framework entity DbSets.
+    /// Overrides OnModelCreating to SKIP the global Utils.GetAllModels() scan,
+    /// which would discover conflicting entities (StudentMajor/StudentMajorTop)
+    /// from the test project's DataContext and cause SQLite schema errors.
+    /// </summary>
     internal class LoginTestDataContext : FrameworkContext
     {
         public LoginTestDataContext(string seed)
             : base($"DataSource={seed}?mode=memory&cache=shared", DBTypeEnum.SQLite) { }
 
         public DbSet<TestLoginUser> TestLoginUsers { get; set; } = null!;
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            // Intentionally do NOT call base.OnModelCreating() to avoid
+            // Utils.GetAllModels() scanning the entire test assembly.
+            // The framework entities are discovered via DbSet properties
+            // on FrameworkContext, which is sufficient for EnsureCreated().
+        }
     }
 }
