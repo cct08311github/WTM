@@ -20,6 +20,11 @@ namespace WalkingTec.Mvvm.Mvc
     [ApiController]
     public class _AnalysisController : BaseController
     {
+        private static readonly JsonSerializerOptions _camelCase = new()
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        };
+
         private readonly AnalysisVmRegistry _registry;
         private readonly IAnalysisCache? _cache;
         private readonly IAnalysisFieldPolicy? _fieldPolicy;
@@ -51,14 +56,14 @@ namespace WalkingTec.Mvvm.Mvc
 
             return Ok(fields.Select(f => new
             {
-                f.FieldName,
-                f.DisplayName,
-                Kind = f.Kind.ToString(),
-                AllowedFuncs = f.Kind == AnalysisFieldKind.Measure
+                fieldName = f.FieldName,
+                displayName = f.DisplayName,
+                kind = f.Kind.ToString(),
+                allowedFuncs = f.Kind == AnalysisFieldKind.Measure
                     ? GetAllowedFuncNames(f.AllowedFuncs)
                     : Array.Empty<string>(),
-                f.IsDate,
-                Hierarchy = f.Hierarchy.ToString()
+                isDate = f.IsDate,
+                hierarchy = f.Hierarchy.ToString()
             }));
         }
 
@@ -91,7 +96,7 @@ namespace WalkingTec.Mvvm.Mvc
             try
             {
                 var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields);
-                return Ok(result);
+                return new JsonResult(result, _camelCase);
             }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
         }
@@ -122,7 +127,7 @@ namespace WalkingTec.Mvvm.Mvc
             try
             {
                 var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields);
-                return Ok(result);
+                return new JsonResult(result, _camelCase);
             }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
         }

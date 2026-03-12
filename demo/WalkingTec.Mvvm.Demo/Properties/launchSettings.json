@@ -23,7 +23,7 @@
         "ASPNETCORE_ENVIRONMENT": "Development",
         "ASPNETCORE_HOSTINGSTARTUPASSEMBLIES": "Microsoft.AspNetCore.Mvc.Razor.RuntimeCompilation"
       },
-      "applicationUrl": "http://localhost:52837/"
+      "applicationUrl": "http://0.0.0.0:52837/"
     }
   }
 }

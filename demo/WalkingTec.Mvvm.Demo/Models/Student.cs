@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Core.Analysis;
 
 namespace WalkingTec.Mvvm.Demo.Models
 {
@@ -29,9 +30,11 @@ namespace WalkingTec.Mvvm.Demo.Models
         [Display(Name = "姓名")]
         [Required(ErrorMessage = "{0}是必填项")]
         [StringLength(50, ErrorMessage = "{0}最多输入{1}个字符")]
+        [Dimension(DisplayName = "姓名")]
         public string Name { get; set; }
 
         [Display(Name = "性别")]
+        [Dimension(DisplayName = "性别")]
         public GenderEnum? Sex { get; set; }
 
         [Display(Name = "手机")]
@@ -40,6 +43,7 @@ namespace WalkingTec.Mvvm.Demo.Models
 
         [Display(Name = "住址")]
         [StringLength(200, ErrorMessage = "{0}最多输入{1}个字符")]
+        [Dimension(DisplayName = "住址")]
         public string Address { get; set; }
 
         [Display(Name = "邮编")]
@@ -53,10 +57,12 @@ namespace WalkingTec.Mvvm.Demo.Models
         public FileAttachment Photo { get; set; }
 
         [Display(Name = "是否有效")]
+        [Dimension(DisplayName = "是否有效")]
         public bool IsValid { get; set; }
 
         [Display(Name = "日期")]
         [Required]
+        [Dimension(DisplayName = "入学日期", Hierarchy = DateHierarchy.Month)]
         public DateTime EnRollDate { get; set; }
 
         [Display(Name = "专业")]
