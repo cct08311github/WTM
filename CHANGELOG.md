@@ -1,6 +1,6 @@
 # 更新日志
 
-## [8.6.0] - TBD
+## [8.6.0] - 2026-03-12
 
 ### Added
 - **ETL Module** (`WalkingTec.Mvvm.Etl`): Batch data import pipeline
@@ -16,6 +16,20 @@
   - Developer documentation (`docs/etl-module.md`)
   - Docker Compose test environment (`test/docker-compose.etl-test.yml`)
   - 65+ unit tests, 15 integration tests
+- **Developer Manual** (`docs/wtm-developer-manual.md`): 3000+ line comprehensive manual
+  - 16 sections covering all framework features with scene-based examples
+  - Full API Controller CRUD example, TagHelper scenarios (Selector, Upload, Dialog, Cascade)
+  - ETL end-to-end scenarios (MSSQL/Oracle/Transform), watermark lifecycle
+  - Security deep-dive: PBKDF2 migration flow, JWT token rotation diagram, DataPrivilege usage
+  - Multi-tenant Global Query Filter explanation with SaaS scenarios
+  - Lookup Cache stampede protection walkthrough, invalidation flow
+  - Code Generator step-by-step guide with generated file structure
+  - 10 FAQ entries including deployment checklist
+
+### Fixed
+- **fix(dashboard):** Path traversal vulnerability in dashboard file storage (#220)
+- **fix(dashboard):** Tenant isolation bypass — non-owner tenants could access dashboards by ID (#220)
+- **fix(etl):** `GetMaxValue` crash on empty result set (#220)
 
 ## 8.5.1 (2026-03-11)
 
