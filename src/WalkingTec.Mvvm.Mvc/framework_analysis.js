@@ -81,6 +81,22 @@
     var _state = {};  // { [gridId]: { visible, listVmType, fields } }
 
     /**
+     * 從 gridId (wtTable_X) 推導出搜尋面板 formId (wtForm_X)，
+     * 收集搜尋面板表單值並序列化為 JSON 字串，供後端 CreateAndBindVm 使用。
+     * @param {string} gridId - grid table ID (e.g. "wtTable_abc123")
+     * @returns {string|undefined} JSON string of searcher form data, or undefined if not available
+     */
+    function collectSearcherFormData(gridId) {
+        if (typeof ff === 'undefined' || typeof ff.GetSearchFormData !== 'function') return undefined;
+        var formId = gridId.replace(/^wtTable_/, 'wtForm_');
+        var formEl = document.getElementById(formId);
+        if (!formEl) return undefined;
+        var data = ff.GetSearchFormData(formId, 'Searcher');
+        if (!data || Object.keys(data).length === 0) return undefined;
+        return JSON.stringify(data);
+    }
+
+    /**
      * 切換分析模式顯示狀態
      */
     function toggle(gridId, listVmType) {
@@ -429,15 +445,17 @@
             }
         }
 
+        var searcherJson = collectSearcherFormData(gridId);
         var req = {
             listVmType: st.listVmType,
             dimensions: dims,
             measures: msrs,
             filters: [],
             dimensionHierarchies: Object.keys(sel.dimensionHierarchies).length > 0
-                ? sel.dimensionHierarchies : undefined
+                ? sel.dimensionHierarchies : undefined,
+            searcherFormData: searcherJson
         };
-        
+
         if (isPivot) {
             req.pivotDimension = pivotDim;
         }
@@ -853,12 +871,14 @@
         var st = _state[gridId];
         if (!st) return;
 
+        var searcherJson = collectSearcherFormData(gridId);
         var req = {
             listVmType: st.listVmType,
             dimensions: st.lastReq.dimensions,
             measures: st.lastReq.measures,
             filters: filters,
-            dimensionHierarchies: Object.keys(hierarchies).length > 0 ? hierarchies : undefined
+            dimensionHierarchies: Object.keys(hierarchies).length > 0 ? hierarchies : undefined,
+            searcherFormData: searcherJson
         };
 
         var resultDiv = document.getElementById('analysis-result-' + gridId);
@@ -942,12 +962,14 @@
             if (pivotRadio) pivotDim = pivotRadio.value;
         }
 
+        var searcherJson = collectSearcherFormData(gridId);
         var req = {
             listVmType: st.listVmType,
             dimensions: dims,
             measures: msrs,
             filters: [],
-            dimensionHierarchies: exportHierarchies
+            dimensionHierarchies: exportHierarchies,
+            searcherFormData: searcherJson
         };
 
         if (isPivot) {
