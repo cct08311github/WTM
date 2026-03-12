@@ -281,3 +281,4 @@ __pycache__/
 /demo/WalkingTec.Mvvm.VueDemo/ClientApp/yarn.lock
 *.lock
 /demo/WalkingTec.Mvvm.Vue3Demo/ClientApp/dist
+.superpowers/
