@@ -104,7 +104,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
             var catAxis = chart.ChartAxisFactory.CreateCategoryAxis(AxisPosition.Bottom);
             var valAxis = chart.ChartAxisFactory.CreateValueAxis(AxisPosition.Left);
-            valAxis.SetCrosses(AxisCrosses.AutoZero);
+            valAxis.Crosses = AxisCrosses.AutoZero;
 
             chart.Plot(data, catAxis, valAxis);
             chart.GetOrCreateLegend().Position = LegendPosition.Bottom;
