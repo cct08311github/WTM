@@ -138,7 +138,8 @@ namespace WalkingTec.Mvvm.Mvc
         /// </summary>
         [HttpPost("export")]
         public IActionResult Export([FromBody] AnalysisQueryRequest req,
-                                    [FromQuery] string format = "xlsx")
+                                    [FromQuery] string format = "xlsx",
+                                    [FromQuery] bool includeChart = false)
         {
             // 與 Query 端點一致的維度/度量上限驗證（I-5）
             if (req.Dimensions.Count > 3) return BadRequest("最多選取 3 個維度。");
@@ -170,7 +171,7 @@ namespace WalkingTec.Mvvm.Mvc
                 return File(Encoding.UTF8.GetBytes(csv), "text/csv", "analysis.csv");
             }
 
-            var xlsx = AnalysisExcelExporter.Export(result);
+            var xlsx = AnalysisExcelExporter.Export(result, includeChart);
             return File(xlsx,
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 "analysis.xlsx");
@@ -182,7 +183,8 @@ namespace WalkingTec.Mvvm.Mvc
         /// </summary>
         [HttpPost("pivot/export")]
         public IActionResult PivotExport([FromBody] AnalysisPivotRequest req,
-                                         [FromQuery] string format = "xlsx")
+                                         [FromQuery] string format = "xlsx",
+                                         [FromQuery] bool includeChart = false)
         {
             if (req.Dimensions.Count > 3) return BadRequest("最多選取 3 個維度。");
             if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
@@ -223,7 +225,7 @@ namespace WalkingTec.Mvvm.Mvc
                 return File(Encoding.UTF8.GetBytes(csv), "text/csv", "analysis_pivot.csv");
             }
 
-            var xlsx = AnalysisExcelExporter.Export(queryResult);
+            var xlsx = AnalysisExcelExporter.Export(queryResult, includeChart);
             return File(xlsx,
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 "analysis_pivot.xlsx");
