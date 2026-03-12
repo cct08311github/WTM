@@ -1,5 +1,22 @@
 # 更新日志
 
+## [8.6.0] - TBD
+
+### Added
+- **ETL Module** (`WalkingTec.Mvvm.Etl`): Batch data import pipeline
+  - Support for MSSQL and Oracle source databases
+  - `EtlBulkJob` (zero-transform) and `EtlMappedJob<TIn,TOut>` (with transform) base classes
+  - Staging Table → MERGE INTO pattern for idempotent upserts
+  - Three watermark modes: FullLoad, Timestamp, Identity
+  - Quartz.NET-based scheduling with dynamic cron management
+  - Management UI: Job CRUD, execution history, real-time progress monitoring
+  - Operations: trigger now, pause, resume, abort, skip next, reschedule
+  - RBAC integration via existing PrivilegeFilter
+  - `MockBulkLoader` and `MockEtlSource` for unit testing
+  - Developer documentation (`docs/etl-module.md`)
+  - Docker Compose test environment (`test/docker-compose.etl-test.yml`)
+  - 65+ unit tests, 15 integration tests
+
 ## 8.5.1 (2026-03-11)
 
 ### 修復
