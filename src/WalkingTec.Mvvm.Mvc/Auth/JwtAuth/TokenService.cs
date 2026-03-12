@@ -33,6 +33,8 @@ namespace WalkingTec.Mvvm.Mvc.Auth
         {
             if (loginUserInfo == null)
                 throw new ArgumentNullException(nameof(loginUserInfo));
+            if (string.IsNullOrEmpty(loginUserInfo.ITCode))
+                throw new ArgumentException("ITCode cannot be null or empty.", nameof(loginUserInfo.ITCode));
             var accessToken = GenerateAccessToken(loginUserInfo);
             var refreshEntity = await CreateRefreshTokenAsync(
                 loginUserInfo.ITCode, loginUserInfo.TenantCode, ipAddress);
@@ -50,7 +52,7 @@ namespace WalkingTec.Mvvm.Mvc.Auth
         {
             if (string.IsNullOrEmpty(refreshToken)) return null;
             using var scope = _sp.CreateScope();
-            var dc = scope.ServiceProvider.GetRequiredService<IDataContext>() as DbContext;
+            var dc = scope.ServiceProvider.GetService<IDataContext>() as DbContext;
             if (dc == null) return null;
             var dbSet = dc.Set<RefreshTokenEntity>();
             var existing = await dbSet.FirstOrDefaultAsync(x => x.Token == refreshToken);
@@ -95,7 +97,7 @@ namespace WalkingTec.Mvvm.Mvc.Auth
         {
             if (string.IsNullOrEmpty(refreshToken)) return;
             using var scope = _sp.CreateScope();
-            var dc = scope.ServiceProvider.GetRequiredService<IDataContext>() as DbContext;
+            var dc = scope.ServiceProvider.GetService<IDataContext>() as DbContext;
             if (dc == null) return;
             var existing = await dc.Set<RefreshTokenEntity>()
                 .FirstOrDefaultAsync(x => x.Token == refreshToken);
@@ -116,10 +118,12 @@ namespace WalkingTec.Mvvm.Mvc.Auth
                 new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("N")),
                 new(AuthConstants.JwtClaimTypes.Subject, info.ITCode)
             };
+            if (!string.IsNullOrEmpty(info.Name))
+                claims.Add(new Claim(AuthConstants.JwtClaimTypes.Name, info.Name));
             if (!string.IsNullOrEmpty(info.TenantCode))
-                claims.Add(new(AuthConstants.JwtClaimTypes.TenantCode, info.TenantCode));
+                claims.Add(new Claim(AuthConstants.JwtClaimTypes.TenantCode, info.TenantCode));
             if (!string.IsNullOrEmpty(info.RemoteToken))
-                claims.Add(new(AuthConstants.JwtClaimTypes.RToken, info.RemoteToken));
+                claims.Add(new Claim(AuthConstants.JwtClaimTypes.RToken, info.RemoteToken));
             var jwt = new JwtSecurityToken(
                 issuer: _jwtOptions.Issuer,
                 audience: _jwtOptions.Audience,
@@ -133,7 +137,7 @@ namespace WalkingTec.Mvvm.Mvc.Auth
             string itCode, string tenantCode, string ipAddress)
         {
             using var scope = _sp.CreateScope();
-            var dc = scope.ServiceProvider.GetRequiredService<IDataContext>() as DbContext;
+            var dc = scope.ServiceProvider.GetService<IDataContext>() as DbContext;
             var entity = new RefreshTokenEntity
             {
                 Token = GenerateRefreshTokenString(),
