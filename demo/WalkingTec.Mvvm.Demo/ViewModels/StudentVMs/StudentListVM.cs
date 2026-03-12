@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -79,7 +79,8 @@ namespace WalkingTec.Mvvm.Demo.ViewModels.StudentVMs
                     PhotoId = x.PhotoId,
                     IsValid = x.IsValid,
                     EnRollDate = x.EnRollDate,
-                    MajorName_view = x.StudentMajor.Select(y=>y.Major.MajorName).ToSepratedString(null,","), 
+                    RecordCount = 1,
+                    MajorName_view = x.StudentMajor.Select(y=>y.Major.MajorName).ToSepratedString(null,","),
                 })
                 .OrderBy(x => x.ID);
             return query;
@@ -91,5 +92,8 @@ namespace WalkingTec.Mvvm.Demo.ViewModels.StudentVMs
         [Display(Name = "专业名称")]
         public String MajorName_view { get; set; }
 
+        [Display(Name = "學生數")]
+        [Measure(DisplayName = "學生數", AllowedFuncs = AggregateFunc.Count | AggregateFunc.Sum)]
+        public int RecordCount { get; set; }
     }
 }
