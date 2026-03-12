@@ -1,0 +1,148 @@
+/* === Panel container === */
+.analysis-panel {
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #fafafa;
+}
+.analysis-panel--collapsed .analysis-panel-body {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+/* === Summary bar (visible when collapsed) === */
+.analysis-summary-bar {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 13px;
+  color: #666;
+}
+.analysis-panel--collapsed .analysis-summary-bar { display: flex; }
+
+/* === Drop zone row === */
+.analysis-dropzone-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-bottom: 8px;
+}
+.analysis-dropzone {
+  flex: 1;
+  min-height: 38px;
+  border: 2px dashed #ccc;
+  border-radius: 6px;
+  padding: 6px 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  transition: border-color 0.15s, background 0.15s;
+}
+.analysis-dropzone--dim { background: #e8f5e9; border-color: #4caf50; }
+.analysis-dropzone--msr { background: #e3f2fd; border-color: #2196f3; }
+.analysis-dropzone--highlight { border-color: #ff9800; background: #fff3e0; }
+
+/* === Pills === */
+.analysis-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 12px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: grab;
+  user-select: none;
+  white-space: nowrap;
+}
+.analysis-pill--dim { background: #4caf50; color: #fff; }
+.analysis-pill--msr { background: #2196f3; color: #fff; }
+.analysis-pill--used {
+  background: #e8e8e8;
+  color: #aaa;
+  text-decoration: line-through;
+  cursor: default;
+  pointer-events: none;
+}
+.analysis-pill__remove {
+  opacity: 0.7;
+  cursor: pointer;
+  margin-left: 2px;
+  font-size: 11px;
+}
+.analysis-pill__remove:hover { opacity: 1; }
+.analysis-pill__select {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: 11px;
+  padding: 0 2px;
+  cursor: pointer;
+}
+
+/* === Field list === */
+.analysis-field-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+  min-height: 30px;
+}
+
+/* === Result block === */
+.analysis-result {
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  background: #fff;
+}
+.analysis-result__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid #eee;
+  font-size: 13px;
+}
+.analysis-result__chart { padding: 8px 12px; min-height: 300px; }
+.analysis-result__table { padding: 0 12px 8px; overflow-x: auto; }
+.analysis-result--collapsed .analysis-result-body {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+}
+
+/* === Collapse button === */
+.analysis-collapse-btn {
+  background: none;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  color: #666;
+}
+.analysis-collapse-btn:hover { background: #f0f0f0; }
+
+/* === Transitions === */
+.analysis-panel-body,
+.analysis-result-body {
+  max-height: 2000px;
+  opacity: 1;
+  transition: max-height 250ms ease-out, opacity 250ms ease-out;
+}
+
+/* === SortableJS drag states === */
+.sortable-ghost { opacity: 0.4; }
+.sortable-chosen { box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+.sortable-drag { opacity: 0.9; }
+
+/* === Button row === */
+.analysis-btn-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 6px;
+}

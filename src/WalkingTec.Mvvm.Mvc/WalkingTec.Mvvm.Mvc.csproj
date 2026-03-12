@@ -41,6 +41,7 @@
     <EmbeddedResource Include="framework_dashboard.js" />
     <EmbeddedResource Include="framework_dashboard.css" />
     <EmbeddedResource Include="sortable.min.js" />
+    <EmbeddedResource Include="framework_analysis.css" />
     <EmbeddedResource Include="lib\gridstack\gridstack-all.min.js" />
     <EmbeddedResource Include="lib\gridstack\gridstack.min.css" />
     <EmbeddedResource Include="GeneratorFiles\ApiTest.txt" />
