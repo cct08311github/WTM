@@ -1,18 +1,98 @@
 using System;
 using FluentAssertions;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
 
 namespace WalkingTec.Mvvm.Core.Test.Security
 {
     /// <summary>
-    /// Security property tests for the MD5 → BCrypt migration path.
+    /// Security property tests for the MD5 → BCrypt and PBKDF2 → BCrypt migration paths.
     /// Verifies guarantees that prevent stored-hash downgrade and
     /// rainbow-table/precomputation attacks.
     /// </summary>
     [TestClass]
     public class PasswordMigrationFlowTests
     {
+        private static readonly PasswordHasher<string> _pbkdf2Hasher = new();
+
+        // ─── PBKDF2 → BCrypt Migration (Fixes #261) ──────────────────────────
+
+        [TestMethod]
+        public void IsLegacyPBKDF2Hash_ValidV3Hash_ReturnsTrue()
+        {
+            var pbkdf2Hash = _pbkdf2Hasher.HashPassword(string.Empty, "test123");
+            PasswordHashHelper.IsLegacyPBKDF2Hash(pbkdf2Hash).Should().BeTrue(
+                "PBKDF2 v3 hashes start with 'AQAAAA' (version byte 0x01)");
+        }
+
+        [TestMethod]
+        public void IsLegacyPBKDF2Hash_BCryptHash_ReturnsFalse()
+        {
+            var bcryptHash = PasswordHashHelper.HashPassword("test123");
+            PasswordHashHelper.IsLegacyPBKDF2Hash(bcryptHash).Should().BeFalse(
+                "BCrypt hashes start with '$2' prefix, not PBKDF2 version bytes");
+        }
+
+        [TestMethod]
+        public void IsLegacyPBKDF2Hash_MD5Hash_ReturnsFalse()
+        {
+            var md5Hash = PasswordHashHelper.ComputeMD5("test123");
+            PasswordHashHelper.IsLegacyPBKDF2Hash(md5Hash).Should().BeFalse(
+                "MD5 is 32-char hex, too short and wrong prefix for PBKDF2");
+        }
+
+        [TestMethod]
+        public void IsLegacyPBKDF2Hash_NullOrEmpty_ReturnsFalse()
+        {
+            PasswordHashHelper.IsLegacyPBKDF2Hash(null).Should().BeFalse();
+            PasswordHashHelper.IsLegacyPBKDF2Hash("").Should().BeFalse();
+        }
+
+        [TestMethod]
+        public void VerifyPassword_PBKDF2Hash_CorrectPassword_ReturnsSuccessRehashNeeded()
+        {
+            var pbkdf2Hash = _pbkdf2Hasher.HashPassword(string.Empty, "mypassword");
+
+            var result = PasswordHashHelper.VerifyPassword(pbkdf2Hash, "mypassword");
+
+            result.Should().Be(PasswordVerifyResult.SuccessRehashNeeded,
+                "existing PBKDF2 users must authenticate successfully and be flagged for rehash to BCrypt");
+        }
+
+        [TestMethod]
+        public void VerifyPassword_PBKDF2Hash_WrongPassword_ReturnsFailed()
+        {
+            var pbkdf2Hash = _pbkdf2Hasher.HashPassword(string.Empty, "correct");
+
+            var result = PasswordHashHelper.VerifyPassword(pbkdf2Hash, "wrong");
+
+            result.Should().Be(PasswordVerifyResult.Failed,
+                "wrong password against PBKDF2 hash must not succeed");
+        }
+
+        [TestMethod]
+        public void Migrate_PBKDF2ToBCrypt_FullFlow()
+        {
+            // Simulate: user has PBKDF2 hash from v8.1.13, logs in after BCrypt migration
+            var pbkdf2Hash = _pbkdf2Hasher.HashPassword(string.Empty, "secret");
+
+            // Step 1: verify returns SuccessRehashNeeded
+            var verifyResult = PasswordHashHelper.VerifyPassword(pbkdf2Hash, "secret");
+            verifyResult.Should().Be(PasswordVerifyResult.SuccessRehashNeeded);
+
+            // Step 2: DoLoginAsync would call HashPassword to create new BCrypt hash
+            var bcryptHash = PasswordHashHelper.HashPassword("secret");
+
+            // Step 3: new hash is BCrypt, not PBKDF2
+            PasswordHashHelper.IsLegacyPBKDF2Hash(bcryptHash).Should().BeFalse();
+            PasswordHashHelper.IsLegacyMD5Hash(bcryptHash).Should().BeFalse();
+
+            // Step 4: subsequent logins verify without rehash
+            PasswordHashHelper.VerifyPassword(bcryptHash, "secret")
+                .Should().Be(PasswordVerifyResult.Success,
+                    "after migration, BCrypt hash verifies cleanly without further rehash");
+        }
         // ─── Post-Migration Hash Properties ────────────────────────────────────
 
         [TestMethod]
