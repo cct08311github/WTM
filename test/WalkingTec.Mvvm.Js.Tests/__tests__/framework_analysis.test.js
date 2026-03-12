@@ -87,8 +87,12 @@ describe('wtmAnalysis.detectChartType', () => {
         expect(wa.detectChartType([{ fieldName: 'Date', isDate: true }], [{}])).toBe('line');
     });
 
-    test('單一非日期維度 → bar', () => {
-        expect(wa.detectChartType([{ fieldName: 'Region', isDate: false }], [{}])).toBe('bar');
+    test('單一非日期維度 + 單 measure → pie', () => {
+        expect(wa.detectChartType([{ fieldName: 'Region', isDate: false }], [{ field: 'Amount', func: 'Sum' }])).toBe('pie');
+    });
+
+    test('單一非日期維度 + 多 measure → bar', () => {
+        expect(wa.detectChartType([{ fieldName: 'Region', isDate: false }], [{ field: 'A' }, { field: 'B' }])).toBe('bar');
     });
 
     test('兩個維度 → bar-stacked', () => {
@@ -639,12 +643,42 @@ describe('renderChart — forceChartType parameter', () => {
         expect(capturedOptions[0].series[0].stack).toBe('total');
     });
 
+    test('forceChartType=pie renders pie series with name/value data', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const container = makeContainer();
+        wa.renderChart('g1', sampleResult, sampleReq, sampleDimFields, container, 'pie');
+        expect(capturedOptions.length).toBe(1);
+        expect(capturedOptions[0].series[0].type).toBe('pie');
+        expect(capturedOptions[0].series[0].data[0]).toEqual({ name: 'North', value: 100 });
+        // pie should not have xAxis/yAxis
+        expect(capturedOptions[0].xAxis).toBeUndefined();
+        expect(capturedOptions[0].yAxis).toBeUndefined();
+    });
+
+    test('forceChartType=card renders HTML cards, not ECharts', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const container = makeContainer();
+        const cardResult = {
+            columns: ['Amount_Sum', 'Qty_Count'],
+            rows: [{ Amount_Sum: 12345, Qty_Count: 99 }],
+        };
+        const cardReq = { dimensions: [], measures: [{ field: 'Amount', func: 'Sum' }, { field: 'Qty', func: 'Count' }] };
+        wa.renderChart('g1', cardResult, cardReq, [], container, 'card');
+        // card should NOT call echarts (no setOption)
+        expect(capturedOptions.length).toBe(0);
+        // should append a card container div
+        const appended = container.children;
+        expect(appended.length).toBeGreaterThanOrEqual(1);
+        const cardDiv = appended[appended.length - 1];
+        expect(cardDiv.className).toContain('analysis-cards');
+    });
+
     test('no forceChartType uses detectChartType result', () => {
         const { wa, capturedOptions } = makeChartEnv();
         const container = makeContainer();
-        // sampleDimFields has isDate:false, single dim → detectChartType returns 'bar'
+        // sampleDimFields has isDate:false, single dim, single measure → detectChartType returns 'pie'
         wa.renderChart('g1', sampleResult, sampleReq, sampleDimFields, container);
-        expect(capturedOptions[0].series[0].type).toBe('bar');
+        expect(capturedOptions[0].series[0].type).toBe('pie');
     });
 
     test('renderChart skips when echarts not available', () => {
@@ -698,8 +732,11 @@ describe('[cov] waReq pure functions — detectChartType / validateSelection / p
     test('detectChartType: date dim → line', () => {
         expect(waReq.detectChartType([{ isDate: true }], [{}])).toBe('line');
     });
-    test('detectChartType: single non-date dim → bar', () => {
-        expect(waReq.detectChartType([{ isDate: false }], [{}])).toBe('bar');
+    test('detectChartType: single non-date dim + single measure → pie', () => {
+        expect(waReq.detectChartType([{ isDate: false }], [{ field: 'A' }])).toBe('pie');
+    });
+    test('detectChartType: single non-date dim + multi measure → bar', () => {
+        expect(waReq.detectChartType([{ isDate: false }], [{ field: 'A' }, { field: 'B' }])).toBe('bar');
     });
     test('detectChartType: 2 dims → bar-stacked', () => {
         expect(waReq.detectChartType([{}, {}], [{}])).toBe('bar-stacked');
@@ -1213,21 +1250,33 @@ describe('[cov] waReq.renderChart — all branches', () => {
         expect(opts[0].series[0].stack).toBe('total');
     });
 
-    test('no dims (card) → type=bar, no stack', () => {
+    test('no dims (card) → renders HTML cards, no echarts', () => {
         const opts = [];
         global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }) };
         const noDimReq = { dimensions: [], measures: [{ field: 'Amount', func: 'Sum' }] };
-        waReq.renderChart('scovR7', { columns: ['Amount_Sum'], rows: [{ Amount_Sum: 42 }] }, noDimReq, [], makeContainer());
-        expect(opts[0].series[0].type).toBe('bar');
-        expect(opts[0].series[0].stack).toBeUndefined();
+        const container = makeContainer();
+        waReq.renderChart('scovR7', { columns: ['Amount_Sum'], rows: [{ Amount_Sum: 42 }] }, noDimReq, [], container);
+        // card should NOT call echarts
+        expect(opts.length).toBe(0);
+        // should have appended a card container
+        expect(container.querySelector('.analysis-cards')).not.toBeNull();
     });
 
-    test('dim not in dimFields → isDate defaults false → bar type', () => {
+    test('dim not in dimFields → isDate defaults false, single measure → pie type', () => {
         const opts = [];
         global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }) };
         const unknownReq = { dimensions: ['Unknown'], measures: [{ field: 'A', func: 'Sum' }] };
         waReq.renderChart('scovR8', { columns: ['Unknown', 'A_Sum'], rows: [{ Unknown: 'X', A_Sum: 1 }] }, unknownReq, [], makeContainer());
-        expect(opts[0].series[0].type).toBe('bar');
+        expect(opts[0].series[0].type).toBe('pie');
+    });
+
+    test('forceChartType=pie → pie series with name/value data', () => {
+        const opts = [];
+        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }) };
+        waReq.renderChart('scovR9', sampleResult, sampleReq, sampleDimFields, makeContainer(), 'pie');
+        expect(opts[0].series[0].type).toBe('pie');
+        expect(opts[0].series[0].data[0]).toEqual({ name: 'North', value: 100 });
+        expect(opts[0].xAxis).toBeUndefined();
     });
 });
 
@@ -1255,8 +1304,8 @@ describe('[cov] waReq.renderPanel — createFieldSection allowedFuncs branches',
         // Panel got renderPanel output appended — verify checkboxes and select
         const checkboxes = panel.querySelectorAll('input[type="checkbox"]');
         const selects = panel.querySelectorAll('select');
-        // 4 fields (1 dim + 3 measures) + 1 pivot mode toggle checkbox = 5 checkboxes
-        expect(checkboxes.length).toBe(5);
+        // 4 fields (1 dim + 3 measures) + 1 pivot mode toggle + 1 含圖表 export checkbox = 6 checkboxes
+        expect(checkboxes.length).toBe(6);
         expect(selects.length).toBe(1);
     });
 });

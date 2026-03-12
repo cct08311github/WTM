@@ -202,6 +202,13 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
     /// Overrides OnConfiguring to prevent the base SqlServer/InMemory config from running
     /// (the connection is configured by the DoLoginAsyncTests ctor via EnsureCreated).
     /// </summary>
+    /// <summary>
+    /// Minimal DataContext for DoLoginAsync tests.
+    /// Inherits FrameworkContext to get the framework entity DbSets.
+    /// Overrides OnModelCreating to SKIP the global Utils.GetAllModels() scan,
+    /// which would discover conflicting entities (StudentMajor/StudentMajorTop)
+    /// from the test project's DataContext and cause SQLite schema errors.
+    /// </summary>
     internal class LoginTestDataContext : FrameworkContext
     {
         public LoginTestDataContext(string seed)

@@ -1,0 +1,25 @@
+<Project>
+  <!--
+    Centralized test package versions for all .NET test projects.
+    Uses the Update pattern to override versions on packages
+    referenced with Include in individual .csproj files.
+
+    Shared versions:
+      Microsoft.NET.Test.Sdk  17.9.0
+      MSTest.TestAdapter       3.2.2
+      MSTest.TestFramework     3.2.2
+      Moq                      4.20.72
+      FluentAssertions         6.12.2
+      coverlet.collector       6.0.2
+
+    To add a new shared package, add an Update line here and
+    Include (without Version) in each consuming .csproj.
+  -->
+  <PropertyGroup>
+    <MoqVersion>4.20.72</MoqVersion>
+    <FluentAssertionsVersion>6.12.2</FluentAssertionsVersion>
+    <MSTestVersion>3.2.2</MSTestVersion>
+    <TestSdkVersion>17.9.0</TestSdkVersion>
+    <CoverletVersion>6.0.2</CoverletVersion>
+  </PropertyGroup>
+</Project>

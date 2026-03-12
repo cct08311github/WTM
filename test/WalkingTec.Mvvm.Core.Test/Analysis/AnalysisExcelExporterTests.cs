@@ -168,5 +168,69 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.AreEqual(0, sheet.LastRowNum); // 只有 row 0（header）
             Assert.IsNull(sheet.GetRow(1));       // 無資料列
         }
+
+        // ─── includeChart=false：不含圖表（預設行為）────────────────────────────
+
+        [TestMethod]
+        public void Export_without_chart_has_no_drawing()
+        {
+            var resp = MakeResponse(
+                new List<string> { "Region", "Amount_Sum" },
+                new List<Dictionary<string, object?>>
+                {
+                    new() { ["Region"] = "華東", ["Amount_Sum"] = 300m }
+                });
+
+            var wb    = OpenWorkbook(AnalysisExcelExporter.Export(resp, includeChart: false));
+            var sheet = wb.GetSheetAt(0) as XSSFSheet;
+
+            Assert.IsNotNull(sheet);
+            // 無圖表時不應有 Drawing
+            var drawing = sheet.GetDrawingPatriarch();
+            Assert.IsTrue(drawing == null || drawing.GetCharts().Count == 0);
+        }
+
+        // ─── includeChart=true：嵌入 bar chart ──────────────────────────────────
+
+        [TestMethod]
+        public void Export_with_chart_has_drawing_with_chart()
+        {
+            var resp = MakeResponse(
+                new List<string> { "Region", "Amount_Sum" },
+                new List<Dictionary<string, object?>>
+                {
+                    new() { ["Region"] = "華東", ["Amount_Sum"] = 100m },
+                    new() { ["Region"] = "華南", ["Amount_Sum"] = 300m },
+                });
+
+            var wb    = OpenWorkbook(AnalysisExcelExporter.Export(resp, includeChart: true));
+            var sheet = wb.GetSheetAt(0) as XSSFSheet;
+
+            Assert.IsNotNull(sheet);
+            var drawing = sheet.GetDrawingPatriarch() as XSSFDrawing;
+            Assert.IsNotNull(drawing, "includeChart=true 時應有 Drawing");
+            Assert.IsTrue(drawing.GetCharts().Count >= 1, "至少應有 1 個 chart");
+        }
+
+        // ─── includeChart 預設值為 false ─────────────────────────────────────────
+
+        [TestMethod]
+        public void Export_default_includeChart_is_false()
+        {
+            var resp = MakeResponse(
+                new List<string> { "Region", "Amount_Sum" },
+                new List<Dictionary<string, object?>>
+                {
+                    new() { ["Region"] = "華東", ["Amount_Sum"] = 300m }
+                });
+
+            // 不帶 includeChart 參數 → 預設不含圖表（向後相容）
+            var wb    = OpenWorkbook(AnalysisExcelExporter.Export(resp));
+            var sheet = wb.GetSheetAt(0) as XSSFSheet;
+
+            Assert.IsNotNull(sheet);
+            var drawing = sheet.GetDrawingPatriarch();
+            Assert.IsTrue(drawing == null || drawing.GetCharts().Count == 0);
+        }
     }
 }
