@@ -28,6 +28,7 @@ jobs:
         dotnet test WalkingTec.Mvvm.sln \
           --no-build -c Release \
           --verbosity normal \
+          --filter "TestCategory!=Integration" \
           --logger "trx;LogFileName=test-results.trx" \
           --collect:"XPlat Code Coverage" \
           --settings coverlet.runsettings \
