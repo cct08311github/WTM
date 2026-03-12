@@ -233,6 +233,8 @@
                 if (!resultDiv) return;
                 var oldChart = document.getElementById('analysis-chart-' + gridId);
                 if (oldChart && oldChart.parentNode) oldChart.parentNode.removeChild(oldChart);
+                var oldCards = resultDiv.querySelector('.analysis-cards');
+                if (oldCards && oldCards.parentNode) oldCards.parentNode.removeChild(oldCards);
                 renderChart(gridId, st.lastResult, st.lastReq, st.lastDimFields, resultDiv, ct);
             });
             chartToggleRow.appendChild(btn);
