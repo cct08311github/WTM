@@ -422,6 +422,7 @@
      * 渲染分析面板（維度/度量選擇器 + 查詢按鈕）
      */
     function renderPanel(gridId, fields, panelEl) {
+        destroySortableInstances(gridId);
         clearChildren(panelEl);
 
         var container = document.createElement('div');
