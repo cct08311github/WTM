@@ -1146,7 +1146,7 @@
         var chartCb = document.querySelector('.analysis-export-chart-cb[data-grid-id="' + gridId + '"]');
         var includeChart = chartCb && chartCb.checked ? 'true' : 'false';
         var dimMeta = dims.map(function (d) {
-            return st.fields.find(function (f) { return f.fieldName === d; }) || { isDate: false };
+            return (st.fields || []).find(function (f) { return f.fieldName === d; }) || { isDate: false };
         });
         var currentChartType = detectChartType(dimMeta, msrs);
         var endpoint = isPivot ? '/_analysis/pivot/export' : '/_analysis/export';
