@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Options;
@@ -285,7 +286,12 @@ public class JsonFileDashboardService : IDashboardService
             throw new KeyNotFoundException($"Widget {widgetId} not found on dashboard {dashboardId}.");
         }
 
+        // Resolve data source name: explicit Name, or fall back to Kind for analysis sources
         var sourceName = widget.Source?.Name;
+        if (string.IsNullOrEmpty(sourceName))
+        {
+            sourceName = widget.Source?.Kind;
+        }
         if (string.IsNullOrEmpty(sourceName))
         {
             throw new InvalidOperationException($"Widget {widgetId} has no data source name specified.");
@@ -297,9 +303,24 @@ public class JsonFileDashboardService : IDashboardService
             throw new InvalidOperationException($"Data source {sourceName} not found.");
         }
 
+        // Bridge structured WidgetSourceDefinition fields into request parameters
+        var parameters = new Dictionary<string, string>(filters ?? new Dictionary<string, string>());
+        var widgetSource = widget.Source;
+        if (widgetSource != null)
+        {
+            if (!string.IsNullOrEmpty(widgetSource.ListVmType) && !parameters.ContainsKey("listVmType"))
+                parameters["listVmType"] = widgetSource.ListVmType;
+            if (widgetSource.Dimensions != null && !parameters.ContainsKey("dimensions"))
+                parameters["dimensions"] = JsonSerializer.Serialize(widgetSource.Dimensions.Select(d => d.Field).ToList());
+            if (widgetSource.Measures != null && !parameters.ContainsKey("measures"))
+                parameters["measures"] = JsonSerializer.Serialize(widgetSource.Measures);
+            if (widgetSource.Filters != null && !parameters.ContainsKey("filters"))
+                parameters["filters"] = JsonSerializer.Serialize(widgetSource.Filters.Select(f => new { f.Field, f.Op, f.Value }).ToList());
+        }
+
         var request = new WidgetDataRequest
         {
-            Parameters = filters ?? new Dictionary<string, string>()
+            Parameters = parameters
         };
 
         return await source.GetDataAsync(request, ct);

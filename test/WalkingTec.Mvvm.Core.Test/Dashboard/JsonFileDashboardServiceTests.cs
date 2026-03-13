@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Microsoft.Extensions.Options;
@@ -188,6 +190,154 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         {
             Func<Task> act = async () => await _service.GetAsync("valid-id", "../other_tenant");
             act.Should().ThrowAsync<ArgumentException>();
+        }
+
+        // ─── Widget data parameter bridging tests ─────────────────────────
+
+        /// <summary>
+        /// Captures the WidgetDataRequest passed to GetDataAsync for assertion.
+        /// </summary>
+        private class CapturingDataSource : IWidgetDataSource
+        {
+            public string Name => "test-capture";
+            public WidgetDataSourceKind Kind => WidgetDataSourceKind.Custom;
+            public WidgetDataRequest? CapturedRequest { get; private set; }
+
+            public Task<WidgetDataResult> GetDataAsync(WidgetDataRequest request, CancellationToken ct = default)
+            {
+                CapturedRequest = request;
+                return Task.FromResult(new WidgetDataResult { Value = 42 });
+            }
+        }
+
+        private JsonFileDashboardService CreateServiceWithDataSource(IWidgetDataSource ds)
+        {
+            var options = Options.Create(new DashboardOptions { DashboardDirectory = _tempDir });
+            return new JsonFileDashboardService(options, new[] { ds });
+        }
+
+        [TestMethod]
+        public async Task GetWidgetData_bridges_source_ListVmType_into_parameters()
+        {
+            var capture = new CapturingDataSource();
+            var svc = CreateServiceWithDataSource(capture);
+
+            var def = new DashboardDefinition
+            {
+                Title = "Bridge Test",
+                Widgets = new Dictionary<string, WidgetDefinition>
+                {
+                    ["w1"] = new WidgetDefinition
+                    {
+                        Type = "chart",
+                        Title = "Test",
+                        Source = new WidgetSourceDefinition
+                        {
+                            Kind = "custom",
+                            Name = "test-capture",
+                            ListVmType = "MyApp.ViewModels.OrderListVM",
+                            Dimensions = new List<DimensionConfig>
+                            {
+                                new() { Field = "Region" },
+                                new() { Field = "Date", Hierarchy = "month" }
+                            },
+                            Measures = new List<MeasureConfig>
+                            {
+                                new() { Field = "Amount", Func = "Sum" }
+                            }
+                        }
+                    }
+                }
+            };
+
+            await svc.CreateAsync(def);
+            var result = await svc.GetWidgetDataAsync(def.Id, "w1");
+
+            result.Value.Should().Be(42);
+            capture.CapturedRequest.Should().NotBeNull();
+
+            var p = capture.CapturedRequest!.Parameters;
+            p.Should().ContainKey("listVmType");
+            p["listVmType"].Should().Be("MyApp.ViewModels.OrderListVM");
+            p.Should().ContainKey("dimensions");
+            p.Should().ContainKey("measures");
+
+            var dims = JsonSerializer.Deserialize<List<string>>(p["dimensions"]);
+            dims.Should().Contain("Region");
+            dims.Should().Contain("Date");
+        }
+
+        [TestMethod]
+        public async Task GetWidgetData_caller_filters_not_overwritten_by_source()
+        {
+            var capture = new CapturingDataSource();
+            var svc = CreateServiceWithDataSource(capture);
+
+            var def = new DashboardDefinition
+            {
+                Title = "Filter Priority Test",
+                Widgets = new Dictionary<string, WidgetDefinition>
+                {
+                    ["w1"] = new WidgetDefinition
+                    {
+                        Type = "kpi",
+                        Title = "Test",
+                        Source = new WidgetSourceDefinition
+                        {
+                            Name = "test-capture",
+                            ListVmType = "Default.VM"
+                        }
+                    }
+                }
+            };
+
+            await svc.CreateAsync(def);
+
+            // Caller explicitly passes listVmType — should NOT be overwritten
+            var callerFilters = new Dictionary<string, string> { ["listVmType"] = "Caller.VM" };
+            await svc.GetWidgetDataAsync(def.Id, "w1", callerFilters);
+
+            capture.CapturedRequest!.Parameters["listVmType"].Should().Be("Caller.VM",
+                "caller-supplied filters should take priority over widget source defaults");
+        }
+
+        [TestMethod]
+        public async Task GetWidgetData_falls_back_to_Kind_when_Name_is_null()
+        {
+            var ds = new CapturingDataSource();
+            // Create a data source whose Name matches the Kind value
+            var kindDs = new Mock<IWidgetDataSource>();
+            kindDs.Setup(x => x.Name).Returns("custom");
+            kindDs.Setup(x => x.Kind).Returns(WidgetDataSourceKind.Custom);
+            kindDs.Setup(x => x.GetDataAsync(It.IsAny<WidgetDataRequest>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new WidgetDataResult { Value = 99 });
+
+            var options = Options.Create(new DashboardOptions { DashboardDirectory = _tempDir });
+            var svc = new JsonFileDashboardService(options, new IWidgetDataSource[] { kindDs.Object });
+
+            var def = new DashboardDefinition
+            {
+                Title = "Kind Fallback Test",
+                Widgets = new Dictionary<string, WidgetDefinition>
+                {
+                    ["w1"] = new WidgetDefinition
+                    {
+                        Type = "kpi",
+                        Title = "Test",
+                        Source = new WidgetSourceDefinition
+                        {
+                            Kind = "custom",
+                            Name = null  // No explicit Name — should fall back to Kind
+                        }
+                    }
+                }
+            };
+
+            await svc.CreateAsync(def);
+            var result = await svc.GetWidgetDataAsync(def.Id, "w1");
+
+            result.Value.Should().Be(99);
+            kindDs.Verify(x => x.GetDataAsync(It.IsAny<WidgetDataRequest>(), It.IsAny<CancellationToken>()), Times.Once);
         }
     }
 }
