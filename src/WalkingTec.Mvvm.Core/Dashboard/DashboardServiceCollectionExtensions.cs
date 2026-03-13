@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
+using WalkingTec.Mvvm.Core.Analysis;
 
 namespace WalkingTec.Mvvm.Core.Dashboard
 {
@@ -14,9 +15,17 @@ namespace WalkingTec.Mvvm.Core.Dashboard
             {
                 services.Configure(setupAction);
             }
-            
+
             services.AddSingleton<IDashboardService, JsonFileDashboardService>();
-            
+
+            // Auto-register AnalysisWidgetDataSource when Analysis Mode dependencies are available
+            var hasRegistry = services.Any(d => d.ServiceType == typeof(AnalysisVmRegistry));
+            var hasEngine = services.Any(d => d.ServiceType == typeof(AnalysisQueryEngine));
+            if (hasRegistry && hasEngine)
+            {
+                services.AddTransient<IWidgetDataSource, AnalysisWidgetDataSource>();
+            }
+
             return services;
         }
 
