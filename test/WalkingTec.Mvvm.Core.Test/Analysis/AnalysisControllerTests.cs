@@ -72,6 +72,21 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 => _orderData.AsQueryable().OrderByDescending(x => x.ID);
         }
 
+        // ─── 含日期搜尋條件的測試模型（SearcherFormData 日期格式測試）────────────
+
+        private class DateSearcher : BaseSearcher
+        {
+            public DateTime? StartDate { get; set; }
+            public DateTime? EndDate { get; set; }
+        }
+
+        [EnableAnalysis]
+        private class DateSearchListVM : BasePagedListVM<SaleRecord, DateSearcher>
+        {
+            public override IOrderedQueryable<SaleRecord> GetSearchQuery()
+                => _testData.AsQueryable().OrderByDescending(x => x.ID);
+        }
+
         // ─── 基礎設施 ──────────────────────────────────────────────────────────
 
         private AnalysisVmRegistry _registry;
@@ -460,6 +475,54 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
             // Region 應有 IsDate=false
             Assert.IsTrue(json.Contains("\"isDate\":false"), "非日期欄位應有 isDate=false");
+        }
+
+        // ─── SearcherFormData 日期格式解析（Fixes #264） ─────────────────────
+
+        [DataTestMethod]
+        [DataRow("{\"StartDate\":\"2025/10/01\"}", "slash format")]
+        [DataRow("{\"StartDate\":\"2025-10-01\"}", "ISO short")]
+        [DataRow("{\"StartDate\":\"2025-10-01 14:30:00\"}", "ISO with time")]
+        [DataRow("{\"StartDate\":\"2025/10/01 14:30\"}", "slash with time")]
+        [DataRow("{\"StartDate\":\"2025.10.01\"}", "dot format")]
+        public void Query_accepts_various_date_formats_in_SearcherFormData(string json, string label)
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 100m }
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(DateSearchListVM).FullName,
+                Dimensions = new List<string> { "Region" },
+                Measures = new List<MeasureRequest> { new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum } },
+                SearcherFormData = json
+            };
+
+            var result = CreateController().Query(req);
+            Assert.IsNotInstanceOfType(result, typeof(BadRequestObjectResult),
+                $"日期格式 '{label}' 應被接受，不應回傳 400");
+        }
+
+        [TestMethod]
+        public void Query_returns_400_for_invalid_date_in_SearcherFormData()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 100m }
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(DateSearchListVM).FullName,
+                Dimensions = new List<string> { "Region" },
+                Measures = new List<MeasureRequest> { new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum } },
+                SearcherFormData = "{\"StartDate\":\"not-a-date\"}"
+            };
+
+            var result = CreateController().Query(req) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "無效日期格式應回傳 400");
         }
     }
 }

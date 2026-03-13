@@ -1,9 +1,11 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Mvc;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Analysis;
@@ -81,7 +83,10 @@ namespace WalkingTec.Mvvm.Mvc
             try { vmType = _registry.Resolve(req.ListVmType); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
 
-            var vm = CreateAndBindVm(vmType, req.SearcherFormData);
+            BaseVM vm;
+            try { vm = CreateAndBindVm(vmType, req.SearcherFormData); }
+            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+
             var fields = InvokeGetAnalysisFields(vm, vmType);
             if (_fieldPolicy != null)
             {
@@ -112,13 +117,16 @@ namespace WalkingTec.Mvvm.Mvc
             try { vmType = _registry.Resolve(req.ListVmType); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
 
-            var vm = CreateAndBindVm(vmType, req.SearcherFormData);
-            var fields = InvokeGetAnalysisFields(vm, vmType);
+            BaseVM pivotVm;
+            try { pivotVm = CreateAndBindVm(vmType, req.SearcherFormData); }
+            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+
+            var fields = InvokeGetAnalysisFields(pivotVm, vmType);
             if (_fieldPolicy != null)
             {
                 fields = _fieldPolicy.Filter(fields, HttpContext?.User ?? new System.Security.Claims.ClaimsPrincipal()).ToList();
             }
-            var baseQuery = InvokeGetSearchQuery(vm, vmType);
+            var baseQuery = InvokeGetSearchQuery(pivotVm, vmType);
             if (baseQuery == null) return BadRequest("無法取得查詢來源。");
 
             var hierarchyError = ValidateDimensionHierarchies(req.DimensionHierarchies, fields);
@@ -149,7 +157,10 @@ namespace WalkingTec.Mvvm.Mvc
             try { vmType = _registry.Resolve(req.ListVmType); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
 
-            var vm = CreateAndBindVm(vmType, req.SearcherFormData);
+            BaseVM vm;
+            try { vm = CreateAndBindVm(vmType, req.SearcherFormData); }
+            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+
             var fields = InvokeGetAnalysisFields(vm, vmType);
             if (_fieldPolicy != null)
             {
@@ -194,7 +205,10 @@ namespace WalkingTec.Mvvm.Mvc
             try { vmType = _registry.Resolve(req.ListVmType); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
 
-            var vm = CreateAndBindVm(vmType, req.SearcherFormData);
+            BaseVM vm;
+            try { vm = CreateAndBindVm(vmType, req.SearcherFormData); }
+            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+
             var fields = InvokeGetAnalysisFields(vm, vmType);
             if (_fieldPolicy != null)
             {
@@ -269,7 +283,7 @@ namespace WalkingTec.Mvvm.Mvc
                         var searcher = JsonSerializer.Deserialize(
                             searcherFormData,
                             searcherProp.PropertyType,
-                            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                            SearcherJsonOptions);
                         searcherProp.SetValue(vm, searcher);
                     }
                     catch (JsonException ex)
@@ -384,6 +398,50 @@ namespace WalkingTec.Mvvm.Mvc
             if (val.Contains(',') || val.Contains('\n') || val.Contains('"'))
                 val = $"\"{val.Replace("\"", "\"\"")}\"";
             return val;
+        }
+
+        private static readonly JsonSerializerOptions SearcherJsonOptions = new()
+        {
+            PropertyNameCaseInsensitive = true,
+            Converters = { new FlexibleDateTimeConverter() }
+        };
+
+        /// <summary>
+        /// Accepts common date/time formats from frontend date-pickers
+        /// (e.g. LayUI "yyyy/MM/dd", "yyyy-MM-dd", ISO 8601, etc.)
+        /// in addition to the default System.Text.Json DateTime handling.
+        /// </summary>
+        private sealed class FlexibleDateTimeConverter : JsonConverter<DateTime>
+        {
+            private static readonly string[] Formats =
+            {
+                "yyyy/MM/dd HH:mm:ss", "yyyy/MM/dd HH:mm", "yyyy/MM/dd",
+                "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd HH:mm", "yyyy-MM-dd",
+                "yyyy.MM.dd HH:mm:ss", "yyyy.MM.dd",
+            };
+
+            public override DateTime Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            {
+                var str = reader.GetString();
+                if (string.IsNullOrEmpty(str))
+                    return default;
+
+                if (DateTime.TryParseExact(str, Formats, CultureInfo.InvariantCulture,
+                        DateTimeStyles.None, out var dt))
+                    return dt;
+
+                // Last resort: let the runtime try its own parsing
+                if (DateTime.TryParse(str, CultureInfo.InvariantCulture,
+                        DateTimeStyles.None, out dt))
+                    return dt;
+
+                throw new JsonException($"Cannot parse '{str}' as DateTime.");
+            }
+
+            public override void Write(Utf8JsonWriter writer, DateTime value, JsonSerializerOptions options)
+            {
+                writer.WriteStringValue(value.ToString("yyyy-MM-ddTHH:mm:ss"));
+            }
         }
     }
 }
