@@ -232,5 +232,62 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             var drawing = sheet.GetDrawingPatriarch();
             Assert.IsTrue(drawing == null || drawing.GetCharts().Count == 0);
         }
+
+        // ─── chartType 參數測試 (#275) ──────────────────────────────────────
+
+        private static AnalysisQueryResponse MakeTwoRowResponse()
+        {
+            return MakeResponse(
+                new List<string> { "Region", "Amount_Sum" },
+                new List<Dictionary<string, object?>>
+                {
+                    new() { ["Region"] = "North", ["Amount_Sum"] = 100m },
+                    new() { ["Region"] = "South", ["Amount_Sum"] = 200m },
+                });
+        }
+
+        [TestMethod]
+        public void Export_chartType_pie_produces_chart()
+        {
+            var wb = OpenWorkbook(AnalysisExcelExporter.Export(MakeTwoRowResponse(), includeChart: true, chartType: "pie"));
+            var sheet = wb.GetSheetAt(0) as XSSFSheet;
+            Assert.IsNotNull(sheet);
+            var drawing = sheet.GetDrawingPatriarch() as XSSFDrawing;
+            Assert.IsNotNull(drawing, "pie chart 應有 Drawing");
+            Assert.IsTrue(drawing.GetCharts().Count >= 1);
+        }
+
+        [TestMethod]
+        public void Export_chartType_line_produces_chart()
+        {
+            var wb = OpenWorkbook(AnalysisExcelExporter.Export(MakeTwoRowResponse(), includeChart: true, chartType: "line"));
+            var sheet = wb.GetSheetAt(0) as XSSFSheet;
+            Assert.IsNotNull(sheet);
+            var drawing = sheet.GetDrawingPatriarch() as XSSFDrawing;
+            Assert.IsNotNull(drawing, "line chart 應有 Drawing");
+            Assert.IsTrue(drawing.GetCharts().Count >= 1);
+        }
+
+        [TestMethod]
+        public void Export_chartType_bar_stacked_produces_chart()
+        {
+            var wb = OpenWorkbook(AnalysisExcelExporter.Export(MakeTwoRowResponse(), includeChart: true, chartType: "bar-stacked"));
+            var sheet = wb.GetSheetAt(0) as XSSFSheet;
+            Assert.IsNotNull(sheet);
+            var drawing = sheet.GetDrawingPatriarch() as XSSFDrawing;
+            Assert.IsNotNull(drawing, "bar-stacked chart 應有 Drawing");
+            Assert.IsTrue(drawing.GetCharts().Count >= 1);
+        }
+
+        [TestMethod]
+        public void Export_chartType_null_defaults_to_bar()
+        {
+            var wb = OpenWorkbook(AnalysisExcelExporter.Export(MakeTwoRowResponse(), includeChart: true, chartType: null));
+            var sheet = wb.GetSheetAt(0) as XSSFSheet;
+            Assert.IsNotNull(sheet);
+            var drawing = sheet.GetDrawingPatriarch() as XSSFDrawing;
+            Assert.IsNotNull(drawing);
+            Assert.IsTrue(drawing.GetCharts().Count >= 1);
+        }
     }
 }
