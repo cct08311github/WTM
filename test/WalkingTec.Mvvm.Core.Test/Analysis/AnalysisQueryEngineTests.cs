@@ -20,10 +20,13 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
     {
         // ─── 測試模型 ──────────────────────────────────────────────────────────
 
+        private enum SaleChannel { Online, Offline, Hybrid }
+
         private class SaleRecord : TopBasePoco
         {
             [Dimension(DisplayName = "地區")]  public string Region   { get; set; }
             [Dimension(DisplayName = "類別")]  public string Category { get; set; }
+            [Dimension(DisplayName = "通路")]  public SaleChannel Channel { get; set; }
 
             /// Amount 允許全部 5 種聚合函式
             [Measure(AllowedFuncs =
@@ -63,9 +66,9 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
             // 基準資料：華東(100), 華東(200), 華南(300)
             _ctx.SaleRecords.AddRange(
-                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 100m },
-                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "B", Amount = 200m },
-                new SaleRecord { ID = Guid.NewGuid(), Region = "華南", Category = "A", Amount = 300m }
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Channel = SaleChannel.Online,  Amount = 100m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "B", Channel = SaleChannel.Offline, Amount = 200m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華南", Category = "A", Channel = SaleChannel.Online,  Amount = 300m }
             );
             _ctx.SaveChanges();
 
@@ -658,6 +661,94 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                     _ => base.Resolve(dbType, req)
                 };
             }
+        }
+
+        // ─── Enum Filter (Fixes #264) ───────────────────────────────────────────
+
+        /// <summary>Filter by enum name string (e.g. "Online")</summary>
+        [TestMethod]
+        public void Filter_Eq_enum_by_name()
+        {
+            var req = Req(
+                dims: new[] { "Channel" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) },
+                filters: new[] { ("Channel", FilterOperator.Eq, "Online") });
+
+            var result = Engine().Execute(Q(), req, _whitelist);
+
+            Assert.AreEqual(1, result.Rows.Count);
+            Assert.AreEqual(400m, Convert.ToDecimal(result.Rows[0]["Amount_Sum"])); // 100+300
+        }
+
+        /// <summary>Filter by enum integer value (e.g. "1" for Offline)</summary>
+        [TestMethod]
+        public void Filter_Eq_enum_by_integer_value()
+        {
+            var req = Req(
+                dims: new[] { "Channel" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) },
+                filters: new[] { ("Channel", FilterOperator.Eq, "1") }); // Offline=1
+
+            var result = Engine().Execute(Q(), req, _whitelist);
+
+            Assert.AreEqual(1, result.Rows.Count);
+            Assert.AreEqual(200m, Convert.ToDecimal(result.Rows[0]["Amount_Sum"]));
+        }
+
+        /// <summary>Filter In with multiple enum values</summary>
+        [TestMethod]
+        public void Filter_In_enum_multiple_values()
+        {
+            var req = Req(
+                dims: new[] { "Channel" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) },
+                filters: new[] { ("Channel", FilterOperator.In, "Online,Offline") });
+
+            var result = Engine().Execute(Q(), req, _whitelist);
+
+            Assert.AreEqual(2, result.Rows.Count);
+        }
+
+        /// <summary>Filter by enum name is case-insensitive</summary>
+        [TestMethod]
+        public void Filter_Eq_enum_case_insensitive()
+        {
+            var req = Req(
+                dims: new[] { "Channel" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) },
+                filters: new[] { ("Channel", FilterOperator.Eq, "online") });
+
+            var result = Engine().Execute(Q(), req, _whitelist);
+
+            Assert.AreEqual(1, result.Rows.Count);
+            Assert.AreEqual(400m, Convert.ToDecimal(result.Rows[0]["Amount_Sum"]));
+        }
+
+        /// <summary>Filter by invalid enum value → 400</summary>
+        [TestMethod]
+        public void Filter_Eq_enum_invalid_value_throws()
+        {
+            var req = Req(
+                dims: new[] { "Channel" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) },
+                filters: new[] { ("Channel", FilterOperator.Eq, "InvalidChannel") });
+
+            Assert.ThrowsException<InvalidOperationException>(() => Engine().Execute(Q(), req, _whitelist));
+        }
+
+        /// <summary>Enum dimension grouping works correctly</summary>
+        [TestMethod]
+        public void GroupBy_enum_dimension()
+        {
+            var req = Req(
+                dims: new[] { "Channel" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var result = Engine().Execute(Q(), req, _whitelist);
+
+            Assert.AreEqual(2, result.Rows.Count); // Online, Offline
+            var online = result.Rows.Single(r => r["Channel"].ToString() == "Online");
+            Assert.AreEqual(400m, Convert.ToDecimal(online["Amount_Sum"])); // 100+300
         }
 
         // ─── Helper methods ────────────────────────────────────────────────────

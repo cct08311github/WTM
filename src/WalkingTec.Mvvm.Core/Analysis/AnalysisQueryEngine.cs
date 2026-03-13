@@ -345,9 +345,12 @@ namespace WalkingTec.Mvvm.Core.Analysis
             var underlying = Nullable.GetUnderlyingType(targetType) ?? targetType;
             try
             {
+                if (underlying.IsEnum)
+                    return Enum.Parse(underlying, value, ignoreCase: true);
+
                 return Convert.ChangeType(value, underlying);
             }
-            catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException)
+            catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException or ArgumentException)
             {
                 throw new InvalidOperationException($"Cannot convert '{value}' to {underlying.Name}.", ex);
             }
