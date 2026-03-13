@@ -140,11 +140,15 @@ public class _EtlJobController : BaseController
 
     [ActionDescription("修改排程")]
     [HttpPost]
-    public async Task<IActionResult> Reschedule(Guid id, [FromBody] string newCron)
+    public async Task<IActionResult> Reschedule(Guid id, [FromBody] RescheduleRequest? request)
     {
-        if (!CronExpression.IsValidExpression(newCron))
+        if (string.IsNullOrWhiteSpace(request?.NewCron))
+            return BadRequest(new { error = "Cron 表達式不可為空" });
+        if (!CronExpression.IsValidExpression(request.NewCron))
             return BadRequest(new { error = "無效的 Cron 表達式" });
-        await _scheduler.RescheduleAsync(id, newCron);
+        await _scheduler.RescheduleAsync(id, request.NewCron);
         return Ok(new { success = true, message = "排程已更新" });
     }
 }
+
+public record RescheduleRequest(string NewCron);
