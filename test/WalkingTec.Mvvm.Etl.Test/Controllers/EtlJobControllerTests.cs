@@ -110,11 +110,34 @@ public class EtlJobControllerTests
     }
 
     [TestMethod]
+    public async Task Reschedule_rejects_null_request()
+    {
+        var id = Guid.NewGuid();
+
+        var result = await _controller.Reschedule(id, null) as BadRequestObjectResult;
+
+        Assert.IsNotNull(result);
+        Assert.AreEqual(400, result!.StatusCode);
+        _mockScheduler.Verify(x => x.RescheduleAsync(It.IsAny<Guid>(), It.IsAny<string>()), Times.Never);
+    }
+
+    [TestMethod]
+    public async Task Reschedule_rejects_empty_cron()
+    {
+        var id = Guid.NewGuid();
+
+        var result = await _controller.Reschedule(id, new RescheduleRequest("")) as BadRequestObjectResult;
+
+        Assert.IsNotNull(result);
+        Assert.AreEqual(400, result!.StatusCode);
+    }
+
+    [TestMethod]
     public async Task Reschedule_rejects_invalid_cron()
     {
         var id = Guid.NewGuid();
 
-        var result = await _controller.Reschedule(id, "not-a-cron") as BadRequestObjectResult;
+        var result = await _controller.Reschedule(id, new RescheduleRequest("not-a-cron")) as BadRequestObjectResult;
 
         Assert.IsNotNull(result);
         Assert.AreEqual(400, result!.StatusCode);
@@ -128,7 +151,7 @@ public class EtlJobControllerTests
         var validCron = "0 0 0 * * ?";
         _mockScheduler.Setup(x => x.RescheduleAsync(id, validCron)).Returns(Task.CompletedTask);
 
-        var result = await _controller.Reschedule(id, validCron) as OkObjectResult;
+        var result = await _controller.Reschedule(id, new RescheduleRequest(validCron)) as OkObjectResult;
 
         Assert.IsNotNull(result);
         Assert.AreEqual(200, result!.StatusCode);
