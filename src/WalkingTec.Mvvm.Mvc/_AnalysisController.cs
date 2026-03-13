@@ -148,7 +148,8 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpPost("export")]
         public IActionResult Export([FromBody] AnalysisQueryRequest? req,
                                     [FromQuery] string format = "xlsx",
-                                    [FromQuery] bool includeChart = false)
+                                    [FromQuery] bool includeChart = false,
+                                    [FromQuery] string? chartType = null)
         {
             if (req is null) return BadRequest("Invalid request body.");
             // 與 Query 端點一致的維度/度量上限驗證（I-5）
@@ -184,7 +185,7 @@ namespace WalkingTec.Mvvm.Mvc
                 return File(Encoding.UTF8.GetBytes(csv), "text/csv", "analysis.csv");
             }
 
-            var xlsx = AnalysisExcelExporter.Export(result, includeChart);
+            var xlsx = AnalysisExcelExporter.Export(result, includeChart, chartType);
             return File(xlsx,
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 "analysis.xlsx");
@@ -197,7 +198,8 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpPost("pivot/export")]
         public IActionResult PivotExport([FromBody] AnalysisPivotRequest req,
                                          [FromQuery] string format = "xlsx",
-                                         [FromQuery] bool includeChart = false)
+                                         [FromQuery] bool includeChart = false,
+                                         [FromQuery] string? chartType = null)
         {
             if (req.Dimensions.Count > 3) return BadRequest("最多選取 3 個維度。");
             if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
@@ -241,7 +243,7 @@ namespace WalkingTec.Mvvm.Mvc
                 return File(Encoding.UTF8.GetBytes(csv), "text/csv", "analysis_pivot.csv");
             }
 
-            var xlsx = AnalysisExcelExporter.Export(queryResult, includeChart);
+            var xlsx = AnalysisExcelExporter.Export(queryResult, includeChart, chartType);
             return File(xlsx,
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 "analysis_pivot.xlsx");
