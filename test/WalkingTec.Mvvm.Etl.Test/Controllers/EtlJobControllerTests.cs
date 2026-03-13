@@ -85,6 +85,19 @@ public class EtlJobControllerTests
     }
 
     [TestMethod]
+    public async Task Abort_returns_400_when_job_not_running()
+    {
+        var id = Guid.NewGuid();
+        _mockScheduler.Setup(x => x.AbortAsync(id))
+            .ThrowsAsync(new InvalidOperationException($"Job {id} is not currently running."));
+
+        var result = await _controller.Abort(id) as BadRequestObjectResult;
+
+        Assert.IsNotNull(result);
+        Assert.AreEqual(400, result!.StatusCode);
+    }
+
+    [TestMethod]
     public async Task SkipNext_calls_scheduler()
     {
         var id = Guid.NewGuid();

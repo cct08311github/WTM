@@ -126,8 +126,15 @@ public class _EtlJobController : BaseController
     [HttpPost]
     public async Task<IActionResult> Abort(Guid id)
     {
-        await _scheduler.AbortAsync(id);
-        return Ok(new { success = true, message = "已中止" });
+        try
+        {
+            await _scheduler.AbortAsync(id);
+            return Ok(new { success = true, message = "已中止" });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     [ActionDescription("跳過下次")]
