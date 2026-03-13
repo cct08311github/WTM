@@ -1,46 +1,17 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## Project Mission
 
-This is a personal fork of WalkingTec MVVM Framework (WTM), taken over from the original (unmaintained) author in 2026-03. The goal is to transform it into a **stable, modernized, actively-evolved** .NET rapid-development framework for long-term use.
+Personal fork of WalkingTec MVVM Framework (WTM), taken over 2026-03. Goal: **stable, modernized, actively-evolved** .NET rapid-development framework.
 
-Current phase: **Takeover & Revival** — stabilize existing code, modernize dependencies, improve quality, then add features.
+Current phase: **Takeover & Revival** — stabilize, modernize, improve quality, then add features.
 
-## Development Principles
+## Decision Priorities (in order)
 
-### Decision priorities (in order)
 1. **Compatibility** — avoid breaking existing users; deprecate before removing
 2. **Security** — fix vulnerabilities immediately (P0), no shortcuts
 3. **Quality** — nullable annotations, structured logging, test coverage
 4. **Performance** — optimize only with evidence (profiling, benchmarks)
-
-### Breaking changes & API modifications
-- **Default stance: avoid.** Prefer additive (opt-in) changes over breaking ones
-- If unavoidable: document in `CHANGELOG.md`, provide migration path, bump minor version
-- Never silently change default behaviour
-
-### Dependency upgrades
-- Upgrade for security patches and bug fixes — not for new features alone
-- Pin to stable releases; avoid preview/RC packages in release branches
-- After upgrading: run full test suite, check for behavioural changes in changelogs
-
-### .NET version strategy
-- Current target: **.NET 8** (LTS)
-- Upgrade to next LTS (.NET 10) only after it reaches GA and ecosystem stabilizes
-- Multi-target only if there is a concrete user need
-
-### Code style
-- New code: fully nullable-annotated, no `#nullable disable`
-- Prefer explicit over implicit; avoid magic strings
-- Follow existing naming conventions in the codebase
-- Comments only where logic is non-obvious; no boilerplate doc comments
-
-### Communication style
-- 繁體中文溝通
-- 先給結論，再給理由與可執行步驟
-- 重大變更前必須說明：影響範圍、風險、回滾方案
 
 ## Build & Test Commands
 
@@ -71,93 +42,27 @@ dotnet pack src/WalkingTec.Mvvm.TagHelpers.LayUI/WalkingTec.Mvvm.TagHelpers.LayU
 dotnet list WalkingTec.Mvvm.sln package --vulnerable --include-transitive
 ```
 
-Version is defined in `version.props` (`VersionPrefix`). All packages share `common.props`.
+## Architecture (quick ref)
 
-## Architecture Overview
-
-WTM is an ASP.NET Core 8 rapid-development framework with four core ViewModel types and a built-in code generator.
-
-### Source projects
+WTM is an ASP.NET Core 8 framework. Four VM types: `BaseCRUDVM<T>`, `BasePagedListVM<T,S>`, `BaseImportVM<T>`, `BaseBatchVM<T>` — all extend `BaseVM` with `WTMContext Wtm`.
 
 | Project | Role |
 |---------|------|
-| `src/WalkingTec.Mvvm.Core` | Core framework: VMs, DataContext, Models, Analysis engine |
-| `src/WalkingTec.Mvvm.Mvc` | Controllers, TagHelpers, startup extensions, JS assets |
-| `src/WalkingTec.Mvvm.TagHelpers.LayUI` | LayUI-specific TagHelpers (Grid, Form, Dialog, etc.) |
-
-### Four ViewModel types (all in Core)
-
-- **`BaseCRUDVM<T>`** — Add/Edit/Delete for a single entity
-- **`BasePagedListVM<TModel, TSearcher>`** — Paginated list with search, export, Analysis Mode
-- **`BaseImportVM<T>`** / `BaseTemplateVM<T>` — Excel import
-- **`BaseBatchVM<T>`** — Batch operations across multiple records
-
-All VMs extend `BaseVM`, which holds a `WTMContext Wtm` reference (the framework's DI-aware context wrapper).
-
-### Startup wiring
-
-`FrameworkServiceExtension.cs` in Mvc provides the extension methods apps call:
-- `services.AddWtmContext(config)` — registers `WTMContext`, `AnalysisVmRegistry`, RBAC, DB connections
-- `app.UseWtmContext()` — middleware that injects `WTMContext` into each request
-- `app.UseWtmStaticFiles()` — serves embedded resources under `/_js/` (includes `framework_analysis.js`, `framework_layui.js`)
-
-### Analysis Mode (`src/WalkingTec.Mvvm.Core/Analysis/`)
-
-Attribute-driven ad-hoc analytics added to any ListVM:
-
-1. **Attributes**: `[Dimension]`, `[Measure]`, `[EnableAnalysis]` on model properties / ListVM class
-2. **`AnalysisVmRegistry`** — built at startup by scanning all assemblies for `[EnableAnalysis]` ListVMs; provides the whitelist for `_AnalysisController`
-3. **`AnalysisFieldScanner`** — reflects a model type to produce `AnalysisFieldMeta` list
-4. **`AnalysisQueryEngine`** — validates fields against whitelist, applies `FilterCondition` Expression Trees, materialises `Take(50_000)`, groups in-process, truncates at 10,000 result rows
-5. **`_AnalysisController`** (`src/WalkingTec.Mvvm.Mvc/`) — three endpoints: `GET /_analysis/meta`, `POST /_analysis/query`, `POST /_analysis/export?format=xlsx|csv`
-6. **`framework_analysis.js`** — EmbeddedResource; frontend toggle/query/export UI with ECharts auto-chart selection
-
-Key reflection pitfall: `ExecuteDynamic` calls `Execute<TModel>` via `method.Invoke`, so inner exceptions arrive as `TargetInvocationException` and must be unwrapped before the controller's `catch(InvalidOperationException)` can convert them to 400.
-
-### Controllers
-
-All app controllers extend `BaseController` (MVC) or `BaseApiController` (API), both of which expose `WTMContext Wtm`. Framework controllers (`_FrameworkController`, `_AnalysisController`, `_CodeGenController`, etc.) are prefixed with `_` and live in `WalkingTec.Mvvm.Mvc`.
-
-### DataContext
-
-`DataContext` is WTM's EF Core wrapper supporting MSSQL, MySQL, PostgreSQL, SQLite, Oracle. Multi-tenancy is handled via EF global query filters on entities implementing `ITenant` — use `IgnoreQueryFilters()` where cross-tenant reads are intentional.
-
-### Security
-
-- Passwords: PBKDF2 (`PasswordHashHelper`), auto-migrates legacy MD5 on first login
-- JWT: access + refresh token rotation; `jti` claim prevents identical tokens in the same second
-- Analysis Mode field access: all dimension/measure/filter fields are whitelist-validated before entering Expression Trees
-
-## Test Projects
-
-| Project | Framework | What it covers |
-|---------|-----------|---------------|
-| `test/WalkingTec.Mvvm.Core.Test` | MSTest | Core VM behaviour, Analysis engine, Analysis controller |
-| `test/WalkingTec.Mvvm.Admin.Test` | MSTest | Admin-layer controllers |
-| `test/WalkingTec.Mvvm.Js.Tests` | Jest (Node) | `framework_analysis.js` pure functions + DOM behaviour |
-| `test/WalkingTec.Mvvm.Test.Mock` | (helper) | `MockWtmContext.CreateWtmContext()`, `MockController.CreateController<T>()` |
-
-### Testing patterns
-
-**Controller tests** — `_AnalysisController` has no parameterless constructor, so use direct instantiation:
-```csharp
-var controller = new _AnalysisController(registry);
-controller.Wtm = MockWtmContext.CreateWtmContext();
-```
-
-**Data injection without DB** — override `GetSearchQuery()` in a test ListVM to return a static in-memory collection; reset the static field in `[TestInitialize]`.
-
-**VM tests** — `MockWtmContext.CreateWtmContext(dataContext)` creates a full `WTMContext`. For tests requiring relational queries, use SQLite shared in-memory (`DataSource=name?mode=memory&cache=shared`) and keep a `SqliteConnection` open for the test lifetime.
-
-**JS tests** — each DOM test must use `makeEnv()` to create a fresh `vm.createContext`, because `_state` is module-level in the IIFE. Tests that share a context will have state leakage.
-
-## Nullable Strategy
-
-`WalkingTec.Mvvm.Core` has `<Nullable>enable</Nullable>`. Legacy files (168 of them) carry `#nullable disable` at the top. New files should be fully nullable-annotated; do not add `#nullable disable` to new code.
+| `src/WalkingTec.Mvvm.Core` | Core: VMs, DataContext, Models, Analysis engine |
+| `src/WalkingTec.Mvvm.Mvc` | Controllers, startup extensions, JS assets |
+| `src/WalkingTec.Mvvm.TagHelpers.LayUI` | LayUI TagHelpers |
 
 ## Docs
 
-- `docs/analysis-mode.md` — developer manual for Analysis Mode (attributes, API spec, security, limits)
-- `docs/lookup-cache.md` — developer manual for Lookup Cache (`[CacheLookup]`, API, stampede protection, multi-DB)
+- `docs/analysis-mode.md` — Analysis Mode manual
+- `docs/lookup-cache.md` — Lookup Cache manual
 - `CHANGELOG.md` — version history (update when releasing)
-- `version.props` — single source of version number; bump `VersionPrefix` here
+- `version.props` — single source of version number
+
+## Detailed Rules
+
+All detailed conventions, architecture, testing patterns, and dependency policies are in `.claude/rules/`:
+
+- `architecture.md` — full architecture, Analysis Mode, security, compatibility
+- `dotnet-conventions.md` — code style, nullable, EF Core, testing patterns, build & release
+- `dependency-management.md` — upgrade policy, .NET version strategy, package versioning
