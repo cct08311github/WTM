@@ -1,0 +1,22 @@
+@model WalkingTec.Mvvm.Etl.ViewModels.EtlJobDefinitionVM
+@inject IStringLocalizer<Program> Localizer;
+
+<wt:form vm="@Model">
+  <wt:quote>@Localizer["Sys.DeleteConfirm"]</wt:quote>
+  <wt:row items-per-row="ItemsPerRowEnum.Two">
+    <wt:display field="Entity.Name" />
+    <wt:display field="Entity.Description" />
+    <wt:display field="Entity.CronExpression" />
+    <wt:display field="Entity.Status" />
+    <wt:display field="Entity.SourceCsKey" />
+    <wt:display field="Entity.SourceDbType" />
+    <wt:display field="Entity.WatermarkType" />
+    <wt:display field="Entity.LastRunAt" />
+    <wt:display field="Entity.LastError" />
+  </wt:row>
+  <wt:hidden field="Entity.ID" />
+  <wt:row align="AlignEnum.Right">
+    <wt:submitbutton theme="ButtonThemeEnum.Warm" text="@Localizer["Sys.Delete"]" />
+    <wt:closebutton />
+  </wt:row>
+</wt:form>

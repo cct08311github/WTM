@@ -1,0 +1,23 @@
+@model WalkingTec.Mvvm.Etl.ViewModels.EtlJobDefinitionVM
+
+<wt:form vm="@Model">
+  <wt:row items-per-row="ItemsPerRowEnum.Two">
+    <wt:textbox field="Entity.Name" />
+    <wt:textbox field="Entity.Description" />
+    <wt:textbox field="Entity.CronExpression" />
+    <wt:textbox field="Entity.JobClassName" />
+    <wt:combobox field="Entity.Status" />
+    <wt:textbox field="Entity.SourceCsKey" />
+    <wt:combobox field="Entity.SourceDbType" />
+    <wt:combobox field="Entity.WatermarkType" />
+    <wt:textbox field="Entity.WatermarkColumn" />
+    <wt:textbox field="Entity.InitialWatermarkValue" />
+    <wt:textbox field="Entity.WatermarkTimeZone" />
+    <wt:textbox field="Entity.RetryCount" />
+    <wt:textbox field="Entity.TimeoutMinutes" />
+  </wt:row>
+  <wt:row align="AlignEnum.Right">
+    <wt:submitbutton />
+    <wt:closebutton />
+  </wt:row>
+</wt:form>

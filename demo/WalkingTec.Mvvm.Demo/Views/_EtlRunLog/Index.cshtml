@@ -1,0 +1,12 @@
+@model WalkingTec.Mvvm.Etl.ViewModels.EtlRunLogListVM
+@inject IStringLocalizer<Program> Localizer;
+
+<wt:searchpanel vm="@Model" reset-btn="true">
+  <wt:row items-per-row="ItemsPerRowEnum.Three">
+    <wt:combobox field="Searcher.Result" empty-text="@Localizer["Sys.All"]" />
+    <wt:combobox field="Searcher.Trigger" empty-text="@Localizer["Sys.All"]" />
+    <wt:datetime field="Searcher.StartedAtBegin" />
+    <wt:datetime field="Searcher.StartedAtEnd" />
+  </wt:row>
+</wt:searchpanel>
+<wt:grid vm="@Model" url="/_EtlRunLog/Search" />

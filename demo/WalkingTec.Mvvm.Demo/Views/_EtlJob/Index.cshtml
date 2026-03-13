@@ -1,0 +1,11 @@
+@model WalkingTec.Mvvm.Etl.ViewModels.EtlJobListVM
+@inject IStringLocalizer<Program> Localizer;
+
+<wt:searchpanel vm="@Model" reset-btn="true">
+  <wt:row items-per-row="ItemsPerRowEnum.Three">
+    <wt:textbox field="Searcher.Name" />
+    <wt:combobox field="Searcher.Status" empty-text="@Localizer["Sys.All"]" />
+    <wt:combobox field="Searcher.SourceDbType" empty-text="@Localizer["Sys.All"]" />
+  </wt:row>
+</wt:searchpanel>
+<wt:grid vm="@Model" url="/_EtlJob/Search" />
