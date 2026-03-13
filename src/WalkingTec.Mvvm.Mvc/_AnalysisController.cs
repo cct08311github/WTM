@@ -74,8 +74,9 @@ namespace WalkingTec.Mvvm.Mvc
         /// 執行動態 GroupBy 聚合查詢，回傳聚合結果。
         /// </summary>
         [HttpPost("query")]
-        public IActionResult Query([FromBody] AnalysisQueryRequest req)
+        public IActionResult Query([FromBody] AnalysisQueryRequest? req)
         {
+            if (req is null) return BadRequest("Invalid request body.");
             if (req.Dimensions.Count > 3) return BadRequest("最多選取 3 個維度。");
             if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
 
@@ -145,10 +146,11 @@ namespace WalkingTec.Mvvm.Mvc
         /// 匯出分析結果為 Excel 或 CSV。
         /// </summary>
         [HttpPost("export")]
-        public IActionResult Export([FromBody] AnalysisQueryRequest req,
+        public IActionResult Export([FromBody] AnalysisQueryRequest? req,
                                     [FromQuery] string format = "xlsx",
                                     [FromQuery] bool includeChart = false)
         {
+            if (req is null) return BadRequest("Invalid request body.");
             // 與 Query 端點一致的維度/度量上限驗證（I-5）
             if (req.Dimensions.Count > 3) return BadRequest("最多選取 3 個維度。");
             if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");

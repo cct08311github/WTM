@@ -524,5 +524,21 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             var result = CreateController().Query(req) as BadRequestObjectResult;
             Assert.IsNotNull(result, "無效日期格式應回傳 400");
         }
+
+        // ─── Null request guard (#268) ──────────────────────────────────────
+
+        [TestMethod]
+        public void Query_null_request_returns_400()
+        {
+            var result = CreateController().Query(null) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "null request 應回傳 400");
+        }
+
+        [TestMethod]
+        public void Export_null_request_returns_400()
+        {
+            var result = CreateController().Export(null) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "null request 應回傳 400");
+        }
     }
 }
