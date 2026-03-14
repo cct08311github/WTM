@@ -155,13 +155,12 @@ namespace WalkingTec.Mvvm.Core.Analysis
         {
             var innerParam = Expression.Parameter(typeof(TModel), "e");
             var meta = whitelist[measure.Field];
+            Expression propAccess = Expression.Property(innerParam, measure.Field);
+            var propType = meta.ClrType;
 
             if (measure.Func == AggregateFunc.Count)
             {
                 // g.Count(e => e.Field != null) → (double)
-                Expression propAccess = Expression.Property(innerParam, measure.Field);
-                var propType = meta.ClrType;
-                
                 Expression predicateBody;
                 if (Nullable.GetUnderlyingType(propType) != null || !propType.IsValueType)
                 {
@@ -185,8 +184,6 @@ namespace WalkingTec.Mvvm.Core.Analysis
             }
 
             // Build property selector: e => (double)e.Field
-            Expression propAccess = Expression.Property(innerParam, measure.Field);
-            var propType = meta.ClrType;
             var underlyingType = Nullable.GetUnderlyingType(propType);
 
             if (underlyingType != null)
