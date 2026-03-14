@@ -1,12 +1,14 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Analysis;
 
@@ -30,10 +32,16 @@ namespace WalkingTec.Mvvm.Mvc
         private readonly AnalysisVmRegistry _registry;
         private readonly IAnalysisCache? _cache;
         private readonly IAnalysisFieldPolicy? _fieldPolicy;
+        private readonly ILogger<_AnalysisController> _logger;
 
-        public _AnalysisController(AnalysisVmRegistry registry, IAnalysisCache? cache = null, IAnalysisFieldPolicy? fieldPolicy = null)
+        public _AnalysisController(
+            AnalysisVmRegistry registry,
+            ILogger<_AnalysisController> logger,
+            IAnalysisCache? cache = null,
+            IAnalysisFieldPolicy? fieldPolicy = null)
         {
             _registry = registry;
+            _logger = logger;
             _cache = cache;
             _fieldPolicy = fieldPolicy;
         }
@@ -100,14 +108,28 @@ namespace WalkingTec.Mvvm.Mvc
             var hierarchyError = ValidateDimensionHierarchies(req.DimensionHierarchies, fields);
             if (hierarchyError != null) return BadRequest(hierarchyError);
 
+<<<<<<< HEAD
+            var sw = Stopwatch.StartNew();
+            try
+            {
+                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields);
+                sw.Stop();
+                _logger.LogInformation("Analysis query completed ListVm={ListVmType} Dims={DimCount} Msrs={MsrCount} ElapsedMs={Elapsed} Truncated={Truncated}",
+                    req.ListVmType, req.Dimensions.Count, req.Measures.Count, sw.ElapsedMilliseconds, result.Truncated);
+=======
             string? identityKey = Wtm?.LoginUserInfo != null ? $"{Wtm.LoginUserInfo.CurrentTenant}_{Wtm.LoginUserInfo.UserId}" : null;
 
             try
             {
                 var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields, identityKey: identityKey);
+>>>>>>> origin/dotnet8
                 return new JsonResult(result, _camelCase);
             }
-            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+            catch (InvalidOperationException ex)
+            {
+                _logger.LogWarning(ex, "Analysis query failed ListVm={ListVmType}", req.ListVmType);
+                return BadRequest(ex.Message);
+            }
         }
 
         [HttpPost("pivot")]
@@ -137,14 +159,28 @@ namespace WalkingTec.Mvvm.Mvc
             var hierarchyError = ValidateDimensionHierarchies(req.DimensionHierarchies, fields);
             if (hierarchyError != null) return BadRequest(hierarchyError);
 
+<<<<<<< HEAD
+            var sw = Stopwatch.StartNew();
+            try
+            {
+                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields);
+                sw.Stop();
+                _logger.LogInformation("Analysis pivot completed ListVm={ListVmType} Dims={DimCount} Msrs={MsrCount} Pivot={PivotDim} ElapsedMs={Elapsed}",
+                    req.ListVmType, req.Dimensions.Count, req.Measures.Count, req.PivotDimension, sw.ElapsedMilliseconds);
+=======
             string? identityKey = Wtm?.LoginUserInfo != null ? $"{Wtm.LoginUserInfo.CurrentTenant}_{Wtm.LoginUserInfo.UserId}" : null;
 
             try
             {
                 var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields, identityKey: identityKey);
+>>>>>>> origin/dotnet8
                 return new JsonResult(result, _camelCase);
             }
-            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+            catch (InvalidOperationException ex)
+            {
+                _logger.LogWarning(ex, "Analysis pivot failed ListVm={ListVmType}", req.ListVmType);
+                return BadRequest(ex.Message);
+            }
         }
 
         /// <summary>
@@ -182,11 +218,28 @@ namespace WalkingTec.Mvvm.Mvc
             var hierarchyError = ValidateDimensionHierarchies(req.DimensionHierarchies, fields);
             if (hierarchyError != null) return BadRequest(hierarchyError);
 
+<<<<<<< HEAD
+            var sw = Stopwatch.StartNew();
+            AnalysisQueryResponse result;
+            try
+            {
+                result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields);
+                sw.Stop();
+                _logger.LogInformation("Analysis export completed ListVm={ListVmType} Format={Format} ElapsedMs={Elapsed}",
+                    req.ListVmType, format, sw.ElapsedMilliseconds);
+            }
+            catch (InvalidOperationException ex)
+            {
+                _logger.LogWarning(ex, "Analysis export failed ListVm={ListVmType}", req.ListVmType);
+                return BadRequest(ex.Message);
+            }
+=======
             string? identityKey = Wtm?.LoginUserInfo != null ? $"{Wtm.LoginUserInfo.CurrentTenant}_{Wtm.LoginUserInfo.UserId}" : null;
 
             AnalysisQueryResponse result;
             try { result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields, identityKey: identityKey); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+>>>>>>> origin/dotnet8
 
             if (result.Truncated)
                 Response.Headers["X-Analysis-Truncated"] = "true";
@@ -237,11 +290,28 @@ namespace WalkingTec.Mvvm.Mvc
             var hierarchyError = ValidateDimensionHierarchies(req.DimensionHierarchies, fields);
             if (hierarchyError != null) return BadRequest(hierarchyError);
 
+<<<<<<< HEAD
+            var sw = Stopwatch.StartNew();
+            AnalysisPivotResponse result;
+            try
+            {
+                result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields);
+                sw.Stop();
+                _logger.LogInformation("Analysis pivot export completed ListVm={ListVmType} Format={Format} ElapsedMs={Elapsed}",
+                    req.ListVmType, format, sw.ElapsedMilliseconds);
+            }
+            catch (InvalidOperationException ex)
+            {
+                _logger.LogWarning(ex, "Analysis pivot export failed ListVm={ListVmType}", req.ListVmType);
+                return BadRequest(ex.Message);
+            }
+=======
             string? identityKey = Wtm?.LoginUserInfo != null ? $"{Wtm.LoginUserInfo.CurrentTenant}_{Wtm.LoginUserInfo.UserId}" : null;
 
             AnalysisPivotResponse result;
             try { result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields, identityKey: identityKey); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+>>>>>>> origin/dotnet8
 
             // Adapt AnalysisPivotResponse to AnalysisQueryResponse format for CSV/Excel export
             var queryResult = new AnalysisQueryResponse
