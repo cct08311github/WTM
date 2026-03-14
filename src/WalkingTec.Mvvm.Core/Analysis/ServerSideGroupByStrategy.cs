@@ -26,6 +26,14 @@ namespace WalkingTec.Mvvm.Core.Analysis
             if (req.Dimensions.Count == 0)
                 return new List<Dictionary<string, object?>>();
 
+            // --- DateHierarchy fallback ---
+            // Current ServerSide implementation does not support SQL translation for Year/Month/etc.
+            // Throwing InvalidOperationException triggers fallback to InProcessGroupByStrategy in AnalysisQueryEngine.
+            if (req.DimensionHierarchies != null && req.Dimensions.Any(d => req.DimensionHierarchies.TryGetValue(d, out var h) && h != DateHierarchy.None))
+            {
+                throw new InvalidOperationException("ServerSideGroupByStrategy does not support DateHierarchy. Falling back to InProcess.");
+            }
+
             var param = Expression.Parameter(typeof(TModel), "x");
 
             // --- Step 1: Build GroupBy key selector ---
