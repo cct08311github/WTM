@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -57,6 +58,8 @@ namespace WalkingTec.Mvvm.Mvc
             try { vmType = _registry.Resolve(listVmType); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
 
+            if (!CheckAccess(vmType)) return Forbid();
+
             var vm = CreateAnalysisVm(vmType);
             var fields = InvokeGetAnalysisFields(vm, vmType);
             if (_fieldPolicy != null)
@@ -92,6 +95,8 @@ namespace WalkingTec.Mvvm.Mvc
             Type vmType;
             try { vmType = _registry.Resolve(req.ListVmType); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+
+            if (!CheckAccess(vmType)) return Forbid();
 
             BaseVM vm;
             try { vm = CreateAndBindVm(vmType, req.SearcherFormData); }
@@ -143,6 +148,8 @@ namespace WalkingTec.Mvvm.Mvc
             Type vmType;
             try { vmType = _registry.Resolve(req.ListVmType); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+
+            if (!CheckAccess(vmType)) return Forbid();
 
             BaseVM pivotVm;
             try { pivotVm = CreateAndBindVm(vmType, req.SearcherFormData); }
@@ -202,6 +209,8 @@ namespace WalkingTec.Mvvm.Mvc
             Type vmType;
             try { vmType = _registry.Resolve(req.ListVmType); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+
+            if (!CheckAccess(vmType)) return Forbid();
 
             BaseVM vm;
             try { vm = CreateAndBindVm(vmType, req.SearcherFormData); }
@@ -274,6 +283,8 @@ namespace WalkingTec.Mvvm.Mvc
             Type vmType;
             try { vmType = _registry.Resolve(req.ListVmType); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+
+            if (!CheckAccess(vmType)) return Forbid();
 
             BaseVM vm;
             try { vm = CreateAndBindVm(vmType, req.SearcherFormData); }
@@ -531,6 +542,18 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 writer.WriteStringValue(value.ToString("yyyy-MM-ddTHH:mm:ss"));
             }
+        }
+
+        private bool CheckAccess(Type vmType)
+        {
+            var attr = vmType.GetCustomAttribute<EnableAnalysisAttribute>();
+            if (attr == null || string.IsNullOrEmpty(attr.AllowedRoles)) return true;
+
+            var userRoles = Wtm?.LoginUserInfo?.Roles?.Select(r => r.RoleName) ?? Enumerable.Empty<string>();
+            if (userRoles.Any(r => string.Equals(r, "Admin", StringComparison.OrdinalIgnoreCase))) return true;
+
+            var allowed = attr.AllowedRoles.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(r => r.Trim());
+            return allowed.Intersect(userRoles, StringComparer.OrdinalIgnoreCase).Any();
         }
     }
 }
