@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 
 namespace WalkingTec.Mvvm.Core.Dashboard;
 
+[JsonNumberHandling(JsonNumberHandling.Strict)]
 public class DashboardDefinition
 {
     public int SchemaVersion { get; set; } = 1;
@@ -28,6 +30,7 @@ public class SharingDefinition
     public List<string>? Roles { get; set; }
 }
 
+[JsonNumberHandling(JsonNumberHandling.Strict)]
 public class LayoutItem
 {
     public string Id { get; set; } = "";
