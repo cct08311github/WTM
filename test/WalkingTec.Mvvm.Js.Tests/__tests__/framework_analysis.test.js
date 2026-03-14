@@ -2823,10 +2823,10 @@ describe('#298 Ad-hoc filter UI', () => {
 
         waReq.addFilterRow(gridId);
         const opSel = panel.querySelector('.analysis-filter-op');
-        expect(opSel.options.length).toBe(6);
+        expect(opSel.options.length).toBe(7);
 
         const opValues = Array.from(opSel.options).map(o => o.value);
-        expect(opValues).toEqual(['Eq', 'Gt', 'Gte', 'Lt', 'Lte', 'Contains']);
+        expect(opValues).toEqual(['Eq', 'Gt', 'Gte', 'Lt', 'Lte', 'Contains', 'In']);
         idSpy.mockRestore();
     });
 });
