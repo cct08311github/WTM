@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Threading;
 
 namespace WalkingTec.Mvvm.Core.Analysis
 {
@@ -49,7 +50,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
             IQueryable<TModel> baseQuery,
             AnalysisQueryRequest req,
             IEnumerable<AnalysisFieldMeta> whitelist,
-            DBTypeEnum dbType = DBTypeEnum.SQLite)
+            DBTypeEnum dbType = DBTypeEnum.SQLite,
+            CancellationToken cancellationToken = default)
         {
             var wl = whitelist.ToDictionary(f => f.FieldName);
             ValidateFields(req, wl);
@@ -67,12 +69,12 @@ namespace WalkingTec.Mvvm.Core.Analysis
             List<Dictionary<string, object?>> rows;
             try
             {
-                rows = strategy.Execute(filtered, req, wl);
+                rows = strategy.Execute(filtered, req, wl, cancellationToken);
             }
             catch (InvalidOperationException) when (strategy is ServerSideGroupByStrategy)
             {
                 // Server-side SQL 翻譯失敗 → fallback to in-process
-                rows = new InProcessGroupByStrategy().Execute(filtered, req, wl);
+                rows = new InProcessGroupByStrategy().Execute(filtered, req, wl, cancellationToken);
             }
 
             int totalCount = rows.Count;   // 截斷前的真實筆數（I-3）
@@ -104,7 +106,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
             IQueryable<TModel> baseQuery,
             AnalysisPivotRequest req,
             IEnumerable<AnalysisFieldMeta> whitelist,
-            DBTypeEnum dbType = DBTypeEnum.SQLite)
+            DBTypeEnum dbType = DBTypeEnum.SQLite,
+            CancellationToken cancellationToken = default)
         {
             if (!req.Dimensions.Contains(req.PivotDimension))
             {
@@ -112,7 +115,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             }
 
             // 1. Get raw grouped data
-            var groupRes = Execute(baseQuery, req, whitelist, dbType);
+            var groupRes = Execute(baseQuery, req, whitelist, dbType, cancellationToken);
             var rawRows = groupRes.Rows;
 
             // 2. Identify row dimensions and pivot dimension
@@ -190,7 +193,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
             IQueryable baseQuery,
             AnalysisQueryRequest req,
             IEnumerable<AnalysisFieldMeta> whitelist,
-            DBTypeEnum dbType = DBTypeEnum.SQLite)
+            DBTypeEnum dbType = DBTypeEnum.SQLite,
+            CancellationToken cancellationToken = default)
         {
             var elementType = baseQuery.ElementType;
             var method = typeof(AnalysisQueryEngine)
@@ -200,7 +204,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             method = method.MakeGenericMethod(elementType);
             try
             {
-                var result = method.Invoke(this, new object[] { baseQuery, req, whitelist, dbType }) as AnalysisQueryResponse;
+                var result = method.Invoke(this, new object[] { baseQuery, req, whitelist, dbType, cancellationToken }) as AnalysisQueryResponse;
                 if (result is null)
                     throw new InvalidOperationException("ExecuteDynamic did not return a valid AnalysisQueryResponse.");
                 return result;
@@ -218,7 +222,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
             IQueryable baseQuery,
             AnalysisPivotRequest req,
             IEnumerable<AnalysisFieldMeta> whitelist,
-            DBTypeEnum dbType = DBTypeEnum.SQLite)
+            DBTypeEnum dbType = DBTypeEnum.SQLite,
+            CancellationToken cancellationToken = default)
         {
             var elementType = baseQuery.ElementType;
             var method = typeof(AnalysisQueryEngine)
@@ -228,7 +233,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             method = method.MakeGenericMethod(elementType);
             try
             {
-                var result = method.Invoke(this, new object[] { baseQuery, req, whitelist, dbType }) as AnalysisPivotResponse;
+                var result = method.Invoke(this, new object[] { baseQuery, req, whitelist, dbType, cancellationToken }) as AnalysisPivotResponse;
                 if (result is null)
                     throw new InvalidOperationException("ExecutePivotDynamic did not return a valid AnalysisPivotResponse.");
                 return result;

@@ -102,7 +102,7 @@ namespace WalkingTec.Mvvm.Mvc
 
             try
             {
-                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields);
+                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields, cancellationToken: HttpContext?.RequestAborted ?? default);
                 return new JsonResult(result, _camelCase);
             }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
@@ -137,7 +137,7 @@ namespace WalkingTec.Mvvm.Mvc
 
             try
             {
-                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields);
+                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields, cancellationToken: HttpContext?.RequestAborted ?? default);
                 return new JsonResult(result, _camelCase);
             }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
@@ -179,7 +179,7 @@ namespace WalkingTec.Mvvm.Mvc
             if (hierarchyError != null) return BadRequest(hierarchyError);
 
             AnalysisQueryResponse result;
-            try { result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields); }
+            try { result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields, cancellationToken: HttpContext?.RequestAborted ?? default); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
 
             if (result.Truncated)
@@ -232,7 +232,7 @@ namespace WalkingTec.Mvvm.Mvc
             if (hierarchyError != null) return BadRequest(hierarchyError);
 
             AnalysisPivotResponse result;
-            try { result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields); }
+            try { result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields, cancellationToken: HttpContext?.RequestAborted ?? default); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
 
             // Adapt AnalysisPivotResponse to AnalysisQueryResponse format for CSV/Excel export

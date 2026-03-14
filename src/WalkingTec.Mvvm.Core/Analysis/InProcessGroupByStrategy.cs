@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 
 namespace WalkingTec.Mvvm.Core.Analysis
 {
@@ -21,11 +22,18 @@ namespace WalkingTec.Mvvm.Core.Analysis
         public List<Dictionary<string, object?>> Execute<TModel>(
             IQueryable<TModel> query,
             AnalysisQueryRequest req,
-            Dictionary<string, AnalysisFieldMeta> whitelist)
+            Dictionary<string, AnalysisFieldMeta> whitelist,
+            CancellationToken cancellationToken = default)
         {
             // Phase 1: materialise then group in-process (SQLite + InMemory safe)
             // 限制載入筆數防止 OOM（C-1）；超出上限時查詢結果可能不完整，由呼叫端決策
-            var items = query.Take(MaxMaterializeRows).ToList();
+            var queryToRun = query.Take(MaxMaterializeRows);
+            var items = new List<TModel>();
+            foreach (var item in queryToRun)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                items.Add(item);
+            }
 
             return items
                 .GroupBy(row => BuildGroupKey(row, req.Dimensions, req.DimensionHierarchies, whitelist))

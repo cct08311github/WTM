@@ -641,7 +641,8 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             public override List<Dictionary<string, object?>> Execute<TModel>(
                 IQueryable<TModel> query,
                 AnalysisQueryRequest req,
-                Dictionary<string, AnalysisFieldMeta> whitelist)
+                Dictionary<string, AnalysisFieldMeta> whitelist,
+                System.Threading.CancellationToken cancellationToken = default)
             {
                 throw new InvalidOperationException("Simulated SQL translation failure.");
             }

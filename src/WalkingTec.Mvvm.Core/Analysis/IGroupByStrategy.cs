@@ -1,6 +1,7 @@
 #nullable enable
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 
 namespace WalkingTec.Mvvm.Core.Analysis
 {
@@ -14,6 +15,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
         List<Dictionary<string, object?>> Execute<TModel>(
             IQueryable<TModel> query,
             AnalysisQueryRequest req,
-            Dictionary<string, AnalysisFieldMeta> whitelist);
+            Dictionary<string, AnalysisFieldMeta> whitelist,
+            CancellationToken cancellationToken = default);
     }
 }
