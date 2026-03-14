@@ -2340,6 +2340,135 @@ describe('renderChart — dual Y-axis (#281)', () => {
     });
 });
 
+
+// ─── #290: dual Y-axis tooltip scaled+raw value ──────────────────────────────
+describe('renderChart — dual Y-axis tooltip formatter (#290)', () => {
+    function makeChartEnv() {
+        const capturedOptions = [];
+        const { wa } = makeEnv({
+            echarts: {
+                init: jest.fn(() => ({
+                    setOption: jest.fn((opt) => { capturedOptions.push(opt); }),
+                    on: jest.fn(),
+                    dispose: jest.fn(),
+                })),
+            },
+        });
+        return { wa, capturedOptions };
+    }
+
+    function makeContainer() {
+        return { appendChild: jest.fn(), children: [], style: {}, id: '' };
+    }
+
+    // Helper: build a params entry as ECharts tooltip would provide
+    function makeParam(seriesIndex, dataIndex, value, axisValueLabel, marker) {
+        return { seriesIndex, dataIndex, value, axisValueLabel: axisValueLabel || 'North', marker: marker || '●' };
+    }
+
+    test('tooltip shows scaled + raw when unit is 萬', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const result = {
+            columns: ['Region', 'Amount_Sum', 'Qty_Count'],
+            rows: [
+                { Region: 'North', Amount_Sum: 50000, Qty_Count: 5 },   // 50000 → 5 萬
+                { Region: 'South', Amount_Sum: 120000, Qty_Count: 8 },
+            ],
+        };
+        const req = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }, { field: 'Qty', func: 'Count' }] };
+        wa.renderChart('g1', result, req, [{ fieldName: 'Region', isDate: false }], makeContainer());
+        const opt = capturedOptions[0];
+        expect(typeof opt.tooltip.formatter).toBe('function');
+
+        // Amount series (index 0): 50000 / 10000 = 5 萬
+        const params = [
+            makeParam(0, 0, 5),   // scaled value for Amount
+            makeParam(1, 0, 5),   // raw value for Qty (no unit)
+        ];
+        params[0].axisValueLabel = 'North';
+        params[1].axisValueLabel = 'North';
+        const output = opt.tooltip.formatter(params);
+        // Should contain "5 萬（50000）"
+        expect(output).toMatch(/5\s*萬/);
+        expect(output).toContain('50000');
+    });
+
+    test('tooltip shows 百萬 unit for large amounts', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const result = {
+            columns: ['Region', 'Amount_Sum', 'Qty_Count'],
+            rows: [
+                { Region: 'North', Amount_Sum: 3000000, Qty_Count: 10 },
+                { Region: 'South', Amount_Sum: 5000000, Qty_Count: 20 },
+            ],
+        };
+        const req = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }, { field: 'Qty', func: 'Count' }] };
+        wa.renderChart('g1', result, req, [{ fieldName: 'Region', isDate: false }], makeContainer());
+        const opt = capturedOptions[0];
+        const params = [makeParam(0, 0, 3), makeParam(1, 0, 10)];
+        params[0].axisValueLabel = 'North';
+        params[1].axisValueLabel = 'North';
+        const output = opt.tooltip.formatter(params);
+        expect(output).toMatch(/百萬/);
+        expect(output).toContain('3000000');
+    });
+
+    test('tooltip shows raw value only when no unit (small amount)', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const result = {
+            columns: ['Region', 'Amount_Sum', 'Qty_Count'],
+            rows: [
+                { Region: 'North', Amount_Sum: 100, Qty_Count: 5 },   // ratio = 20x → dual
+                { Region: 'South', Amount_Sum: 2000, Qty_Count: 8 },
+            ],
+        };
+        const req = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }, { field: 'Qty', func: 'Count' }] };
+        wa.renderChart('g1', result, req, [{ fieldName: 'Region', isDate: false }], makeContainer());
+        const opt = capturedOptions[0];
+        const params = [makeParam(0, 0, 100), makeParam(1, 0, 5)];
+        params[0].axisValueLabel = 'North';
+        params[1].axisValueLabel = 'North';
+        const output = opt.tooltip.formatter(params);
+        // No 萬/百萬/億 since amount < 10000
+        expect(output).not.toMatch(/萬|百萬|億/);
+        // But should still show raw value
+        expect(output).toContain('100');
+    });
+
+    test('tooltip shows dash for null values', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const result = {
+            columns: ['Region', 'Amount_Sum', 'Qty_Count'],
+            rows: [
+                { Region: 'North', Amount_Sum: null, Qty_Count: 5 },
+                { Region: 'South', Amount_Sum: 2000000, Qty_Count: 8 },
+            ],
+        };
+        const req = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }, { field: 'Qty', func: 'Count' }] };
+        wa.renderChart('g1', result, req, [{ fieldName: 'Region', isDate: false }], makeContainer());
+        const opt = capturedOptions[0];
+        const params = [makeParam(0, 0, null), makeParam(1, 0, 5)];
+        params[0].axisValueLabel = 'North';
+        params[1].axisValueLabel = 'North';
+        const output = opt.tooltip.formatter(params);
+        expect(output).toContain('-');
+    });
+
+    test('single-measure chart has no custom formatter', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const result = {
+            columns: ['Region', 'Amount_Sum'],
+            rows: [{ Region: 'North', Amount_Sum: 100 }, { Region: 'South', Amount_Sum: 200 }],
+        };
+        const req = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }] };
+        wa.renderChart('g1', result, req, [{ fieldName: 'Region', isDate: false }], makeContainer(), 'bar');
+        const opt = capturedOptions[0];
+        // single measure → no dual axis → no custom formatter
+        expect(opt.tooltip.formatter).toBeUndefined();
+    });
+});
+
+
 // ─── #293: renderTable 欄位標頭人性化 + 千分位格式化 ─────────────────────────
 describe('#293 renderTable — 欄位標頭人性化 + 數值千分位', () => {
     function makeSimpleContainer() {
