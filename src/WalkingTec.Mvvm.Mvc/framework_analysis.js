@@ -19,9 +19,10 @@
 
     function validateSelection(dims, msrs) {
         var errors = [];
+        if (dims.length === 0) errors.push('至少需要選取 1 個維度進行分組');
+        if (msrs.length === 0) errors.push('至少需要選取 1 個度量指標');
         if (dims.length > 3) errors.push('維度最多選 3 個');
         if (msrs.length > 3) errors.push('度量最多選 3 個');
-        if (dims.length === 0 && msrs.length === 0) errors.push('請至少選擇一個維度或度量');
         return errors;
     }
 
