@@ -78,6 +78,7 @@ namespace WalkingTec.Mvvm.Mvc
         {
             if (req is null) return BadRequest("Invalid request body.");
             if (req.Dimensions.Count > 3) return BadRequest("最多選取 3 個維度。");
+            if (req.Measures.Count == 0)  return BadRequest("至少需要選取 1 個度量指標。");
             if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
 
             Type vmType;
@@ -111,6 +112,7 @@ namespace WalkingTec.Mvvm.Mvc
         public IActionResult Pivot([FromBody] AnalysisPivotRequest req)
         {
             if (req.Dimensions.Count > 3) return BadRequest("最多選取 3 個維度。");
+            if (req.Measures.Count == 0)  return BadRequest("至少需要選取 1 個度量指標。");
             if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
             if (string.IsNullOrEmpty(req.PivotDimension)) return BadRequest("必須指定 PivotDimension。");
 
@@ -154,6 +156,7 @@ namespace WalkingTec.Mvvm.Mvc
             if (req is null) return BadRequest("Invalid request body.");
             // 與 Query 端點一致的維度/度量上限驗證（I-5）
             if (req.Dimensions.Count > 3) return BadRequest("最多選取 3 個維度。");
+            if (req.Measures.Count == 0)  return BadRequest("至少需要選取 1 個度量指標。");
             if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
 
             Type vmType;
@@ -202,6 +205,7 @@ namespace WalkingTec.Mvvm.Mvc
                                          [FromQuery] string? chartType = null)
         {
             if (req.Dimensions.Count > 3) return BadRequest("最多選取 3 個維度。");
+            if (req.Measures.Count == 0)  return BadRequest("至少需要選取 1 個度量指標。");
             if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
             if (string.IsNullOrEmpty(req.PivotDimension)) return BadRequest("必須指定 PivotDimension。");
 
