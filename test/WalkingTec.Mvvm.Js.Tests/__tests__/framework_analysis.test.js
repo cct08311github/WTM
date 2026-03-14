@@ -393,9 +393,10 @@ describe('wtmAnalysis.renderTable XSS safety via query', () => {
 
 // ─── validateSelection ────────────────────────────────────────────────────────
 describe('wtmAnalysis.validateSelection', () => {
-    test('空維度空度量 → 一個錯誤', () => {
-        expect(wa.validateSelection([], [])).toHaveLength(1);
-        expect(wa.validateSelection([], [])[0]).toMatch(/至少選擇/);
+    test('空維度空度量 → 兩個錯誤', () => {
+        expect(wa.validateSelection([], [])).toHaveLength(2);
+        expect(wa.validateSelection([], [])[0]).toMatch(/至少需要選取 1 個維度/);
+        expect(wa.validateSelection([], [])[1]).toMatch(/至少需要選取 1 個度量/);
     });
 
     test('4 個維度 → 錯誤訊息包含「維度最多選 3 個」', () => {
@@ -416,8 +417,9 @@ describe('wtmAnalysis.validateSelection', () => {
         expect(wa.validateSelection([1, 2, 3], [1, 2, 3])).toHaveLength(0);
     });
 
-    test('1 dim 0 msrs → valid (returns empty errors)', () => {
-        expect(wa.validateSelection(['Region'], [])).toHaveLength(0);
+    test('1 dim 0 msrs → invalid (missing measure)', () => {
+        expect(wa.validateSelection(['Region'], [])).toHaveLength(1);
+        expect(wa.validateSelection(['Region'], [])[0]).toMatch(/至少需要選取 1 個度量/);
     });
 });
 
@@ -761,7 +763,7 @@ describe('[cov] waReq pure functions — detectChartType / validateSelection / p
     });
 
     test('validateSelection: empty → error', () => {
-        expect(waReq.validateSelection([], [])).toHaveLength(1);
+        expect(waReq.validateSelection([], [])).toHaveLength(2);
     });
     test('validateSelection: too many dims → error', () => {
         expect(waReq.validateSelection([1,2,3,4], [1])).toContain('維度最多選 3 個');
