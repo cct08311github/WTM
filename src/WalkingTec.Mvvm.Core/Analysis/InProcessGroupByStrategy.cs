@@ -48,14 +48,14 @@ namespace WalkingTec.Mvvm.Core.Analysis
                             .Where(v => v != null)
                             .Select(v => Convert.ToDecimal(v))
                             .ToList();
-                        decimal aggValue;
+                        decimal? aggValue;
                         switch (m.Func)
                         {
                             case AggregateFunc.Sum:   aggValue = values.Count == 0 ? 0m : values.Sum(); break;
                             case AggregateFunc.Count: aggValue = g.Count(); break;
-                            case AggregateFunc.Avg:   aggValue = values.Count == 0 ? 0m : values.Average(); break;
-                            case AggregateFunc.Max:   aggValue = values.Count == 0 ? 0m : values.Max(); break;
-                            case AggregateFunc.Min:   aggValue = values.Count == 0 ? 0m : values.Min(); break;
+                            case AggregateFunc.Avg:   aggValue = values.Count == 0 ? (decimal?)null : values.Average(); break;
+                            case AggregateFunc.Max:   aggValue = values.Count == 0 ? (decimal?)null : values.Max(); break;
+                            case AggregateFunc.Min:   aggValue = values.Count == 0 ? (decimal?)null : values.Min(); break;
                             default: throw new NotSupportedException($"Unsupported func {m.Func}");
                         }
                         dict[$"{m.Field}_{m.Func}"] = aggValue;

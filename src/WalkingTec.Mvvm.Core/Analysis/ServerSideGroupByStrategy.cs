@@ -65,17 +65,17 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 }
                 else
                 {
-                    measureExprs[i] = Expression.Constant(0.0);
+                    measureExprs[i] = Expression.Constant(null, typeof(double?));
                 }
             }
 
-            var tupleType = typeof(Tuple<string, double, double, double>);
+            var tupleType = typeof(Tuple<string, double?, double?, double?>);
             var tupleCtor = tupleType.GetConstructor(
-                new[] { typeof(string), typeof(double), typeof(double), typeof(double) })!;
+                new[] { typeof(string), typeof(double?), typeof(double?), typeof(double?) })!;
             var tupleNew = Expression.New(tupleCtor, keyAccess,
                 measureExprs[0], measureExprs[1], measureExprs[2]);
             var selectLambda = Expression.Lambda<
-                Func<IGrouping<string, TModel>, Tuple<string, double, double, double>>>(
+                Func<IGrouping<string, TModel>, Tuple<string, double?, double?, double?>>>(
                 tupleNew, gParam);
 
             // --- Step 4: Execute query ---
@@ -97,15 +97,15 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 for (int i = 0; i < req.Measures.Count; i++)
                 {
                     var m = req.Measures[i];
-                    double raw = i switch
+                    double? raw = i switch
                     {
                         0 => row.Item2,
                         1 => row.Item3,
                         2 => row.Item4,
-                        _ => 0.0
+                        _ => null
                     };
                     // Convert double back to decimal for consistency with InProcess strategy
-                    dict[$"{m.Field}_{m.Func}"] = (decimal)raw;
+                    dict[$"{m.Field}_{m.Func}"] = (decimal?)raw;
                 }
 
                 results.Add(dict);
@@ -146,7 +146,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
         }
 
         /// <summary>
-        /// 為單一 Measure 建構聚合表達式，回傳型別一律為 double。
+        /// 為單一 Measure 建構聚合表達式，回傳型別一律為 double?。
         /// </summary>
         private static Expression BuildAggregateExpression<TModel>(
             ParameterExpression gParam,
@@ -158,33 +158,24 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
             if (measure.Func == AggregateFunc.Count)
             {
-                // g.Count() → (double)g.Count()
+                // g.Count() → (double?)g.Count()
                 var countMethod = typeof(Enumerable)
                     .GetMethods()
                     .First(m => m.Name == nameof(Enumerable.Count) && m.GetParameters().Length == 1)
                     .MakeGenericMethod(typeof(TModel));
                 return Expression.Convert(
                     Expression.Call(countMethod, gParam),
-                    typeof(double));
+                    typeof(double?));
             }
 
-            // Build property selector: e => (double)e.Field
+            // Build property selector: e => (double?)e.Field
             Expression propAccess = Expression.Property(innerParam, measure.Field);
             var propType = meta.ClrType;
-            var underlyingType = Nullable.GetUnderlyingType(propType);
+            
+            // Convert to double?
+            propAccess = Expression.Convert(propAccess, typeof(double?));
 
-            if (underlyingType != null)
-            {
-                propAccess = Expression.Coalesce(propAccess,
-                    Expression.Constant(Convert.ChangeType(0, underlyingType), underlyingType));
-                propAccess = Expression.Convert(propAccess, typeof(double));
-            }
-            else if (propType != typeof(double))
-            {
-                propAccess = Expression.Convert(propAccess, typeof(double));
-            }
-
-            var valueSelector = Expression.Lambda<Func<TModel, double>>(propAccess, innerParam);
+            var valueSelector = Expression.Lambda<Func<TModel, double?>>(propAccess, innerParam);
 
             string methodName = measure.Func switch
             {
@@ -195,7 +186,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 _ => throw new NotSupportedException($"Unsupported aggregate function: {measure.Func}")
             };
 
-            // Find Enumerable.Method<TSource>(IEnumerable<TSource>, Func<TSource, double>)
+            // Find Enumerable.Method<TSource>(IEnumerable<TSource>, Func<TSource, double?>)
             var aggMethod = typeof(Enumerable)
                 .GetMethods()
                 .Where(m => m.Name == methodName && m.GetParameters().Length == 2)
@@ -204,7 +195,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     if (!m.IsGenericMethod) return false;
                     var gm = m.MakeGenericMethod(typeof(TModel));
                     var selectorParam = gm.GetParameters()[1];
-                    return selectorParam.ParameterType == typeof(Func<TModel, double>);
+                    return selectorParam.ParameterType == typeof(Func<TModel, double? >);
                 })
                 .MakeGenericMethod(typeof(TModel));
 
