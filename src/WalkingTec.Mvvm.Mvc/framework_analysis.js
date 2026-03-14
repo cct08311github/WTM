@@ -44,6 +44,38 @@
         return s;
     }
 
+    function computeScale(maxVal) {
+        var abs = Math.abs(maxVal) || 0;
+        if (abs >= 100000000) return { divisor: 100000000, unit: '億' };
+        if (abs >= 1000000)   return { divisor: 1000000, unit: '百萬' };
+        if (abs >= 10000)     return { divisor: 10000, unit: '萬' };
+        return { divisor: 1, unit: '' };
+    }
+
+    function scaleSeriesData(data, divisor) {
+        if (!divisor || divisor === 1) return data;
+        return data.map(function (v) {
+            return v == null ? null : v / divisor;
+        });
+    }
+
+    function detectDualAxis(rows, measures) {
+        if (!measures || measures.length !== 2) return false;
+        if (!rows || rows.length === 0) return false;
+        var key0 = measures[0].field + '_' + measures[0].func;
+        var key1 = measures[1].field + '_' + measures[1].func;
+        var max0 = 0, max1 = 0;
+        for (var i = 0; i < rows.length; i++) {
+            var v0 = Math.abs(rows[i][key0] || 0);
+            var v1 = Math.abs(rows[i][key1] || 0);
+            if (v0 > max0) max0 = v0;
+            if (v1 > max1) max1 = v1;
+        }
+        if (max0 === 0 || max1 === 0) return false;
+        var ratio = max0 > max1 ? max0 / max1 : max1 / max0;
+        return ratio >= 10;
+    }
+
     function clearChildren(el) {
         while (el.firstChild) el.removeChild(el.firstChild);
     }
@@ -959,20 +991,63 @@
                 }]
             });
         } else {
-            var series = req.measures.map(function (m) {
+            var isDual = chartType !== 'bar-stacked' && detectDualAxis(result.rows, req.measures);
+            var scales = [];
+            if (isDual) {
+                req.measures.forEach(function (m) {
+                    var key = m.field + '_' + m.func;
+                    var maxVal = 0;
+                    result.rows.forEach(function (r) {
+                        var v = Math.abs(r[key] || 0);
+                        if (v > maxVal) maxVal = v;
+                    });
+                    scales.push(computeScale(maxVal));
+                });
+            }
+            var series = req.measures.map(function (m, idx) {
                 var key = m.field + '_' + m.func;
-                return {
+                var rawData = result.rows.map(function (r) { return r[key]; });
+                var s = {
                     name: key,
                     type: chartType === 'line' ? 'line' : 'bar',
                     stack: chartType === 'bar-stacked' ? 'total' : undefined,
-                    data: result.rows.map(function (r) { return r[key]; })
+                    data: isDual ? scaleSeriesData(rawData, scales[idx].divisor) : rawData
                 };
+                if (isDual) {
+                    s.yAxisIndex = idx;
+                    s.originalData = rawData;
+                }
+                return s;
             });
+
+            var yAxisOption;
+            if (isDual) {
+                yAxisOption = [
+                    { type: 'value', name: req.measures[0].field + (scales[0].unit ? '（' + scales[0].unit + '）' : ''), position: 'left' },
+                    { type: 'value', name: req.measures[1].field + (scales[1].unit ? '（' + scales[1].unit + '）' : ''), position: 'right' }
+                ];
+            } else {
+                yAxisOption = { type: 'value' };
+            }
+
+            var tooltipOption = { trigger: 'axis' };
+            if (isDual) {
+                tooltipOption.formatter = function (params) {
+                    var lines = [params[0].axisValueLabel];
+                    params.forEach(function (p) {
+                        var s = series[p.seriesIndex];
+                        var original = s.originalData ? s.originalData[p.dataIndex] : p.value;
+                        lines.push(p.marker + ' ' + p.seriesName + ': ' + (original == null ? '-' : original));
+                    });
+                    return lines.join('<br/>');
+                };
+            }
+
             chart.setOption({
-                tooltip: { trigger: 'axis' },
+                tooltip: tooltipOption,
                 legend: { data: req.measures.map(function (m) { return m.field + '_' + m.func; }) },
                 xAxis: { type: 'category', data: categories },
-                yAxis: { type: 'value' },
+                yAxis: yAxisOption,
                 series: series
             });
         }
@@ -1201,6 +1276,9 @@
         drillBack: drillBack,
         drillReset: drillReset,
         collectSearcherFormData: collectSearcherFormData,
+        computeScale: computeScale,
+        scaleSeriesData: scaleSeriesData,
+        detectDualAxis: detectDualAxis,
         _getState: function (gridId) { return _state[gridId]; }
     };
 
