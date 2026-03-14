@@ -2830,3 +2830,552 @@ describe('#298 Ad-hoc filter UI', () => {
         idSpy.mockRestore();
     });
 });
+
+// ─── #307: getFuncLabel ───────────────────────────────────────────────────────
+describe('getFuncLabel (via renderTable colLabelMap) #307', () => {
+    test('known func Sum → maps to 合計 in table header', () => {
+        const gridId = 'funcLbl307a';
+        const panel = document.createElement('div');
+        panel.id = 'analysis-panel-' + gridId;
+        const fetchOrig = global.fetch;
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: true,
+            json: jest.fn().mockResolvedValue([
+                { kind: 'Measure', fieldName: 'Sales', displayName: '銷售額', allowedFuncs: 2 },
+            ])
+        });
+        const idSpy = jest.spyOn(document, 'getElementById').mockImplementation(id =>
+            id === 'analysis-panel-' + gridId ? panel : null
+        );
+        waReq.toggle(gridId, 'VmFuncLbl');
+        return new Promise(r => setTimeout(r, 50)).then(() => {
+            const container = document.createElement('div');
+            waReq.renderTable(gridId, { columns: ['Sales_Sum'], rows: [{ Sales_Sum: 100 }] }, container, {});
+            const th = container.querySelector('th');
+            expect(th.textContent).toBe('銷售額 合計');
+            idSpy.mockRestore();
+            global.fetch = fetchOrig;
+        });
+    });
+
+    test('unknown func Percentile → getFuncLabel returns func as-is', () => {
+        const gridId = 'funcLbl307b';
+        const panel = document.createElement('div');
+        panel.id = 'analysis-panel-' + gridId;
+        const fetchOrig = global.fetch;
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: true,
+            json: jest.fn().mockResolvedValue([
+                { kind: 'Measure', fieldName: 'Score', displayName: '分數', allowedFuncs: 0 },
+            ])
+        });
+        const idSpy = jest.spyOn(document, 'getElementById').mockImplementation(id =>
+            id === 'analysis-panel-' + gridId ? panel : null
+        );
+        waReq.toggle(gridId, 'VmFuncLbl2');
+        return new Promise(r => setTimeout(r, 50)).then(() => {
+            const container = document.createElement('div');
+            waReq.renderTable(gridId, { columns: ['Score_Percentile'], rows: [{ Score_Percentile: 95 }] }, container, {});
+            const th = container.querySelector('th');
+            expect(th.textContent).toBe('分數 Percentile');
+            idSpy.mockRestore();
+            global.fetch = fetchOrig;
+        });
+    });
+});
+
+// ─── #307: formatNumeric edge cases ──────────────────────────────────────────
+describe('formatNumeric edge cases (via renderTable) #307', () => {
+    function setupFmtEnv(gridId, fetchFields) {
+        const panel = document.createElement('div');
+        panel.id = 'analysis-panel-' + gridId;
+        const fetchOrig = global.fetch;
+        global.fetch = jest.fn().mockResolvedValue({ ok: true, json: jest.fn().mockResolvedValue(fetchFields) });
+        const idSpy = jest.spyOn(document, 'getElementById').mockImplementation(id =>
+            id === 'analysis-panel-' + gridId ? panel : null
+        );
+        return { panel, fetchOrig, idSpy };
+    }
+
+    test('zero value → displays as "0"', () => {
+        const gridId = 'fmtNum307a';
+        const { fetchOrig, idSpy } = setupFmtEnv(gridId, [
+            { kind: 'Measure', fieldName: 'Amount', displayName: '金額', allowedFuncs: 2 },
+        ]);
+        waReq.toggle(gridId, 'VmFmtNum');
+        return new Promise(r => setTimeout(r, 50)).then(() => {
+            const container = document.createElement('div');
+            waReq.renderTable(gridId, { columns: ['Amount_Sum'], rows: [{ Amount_Sum: 0 }] }, container, {});
+            expect(container.querySelector('td').textContent).toBe('0');
+            idSpy.mockRestore();
+            global.fetch = fetchOrig;
+        });
+    });
+
+    test('negative number → displays with minus sign', () => {
+        const gridId = 'fmtNum307b';
+        const { fetchOrig, idSpy } = setupFmtEnv(gridId, [
+            { kind: 'Measure', fieldName: 'Profit', displayName: '利潤', allowedFuncs: 2 },
+        ]);
+        waReq.toggle(gridId, 'VmFmtNum2');
+        return new Promise(r => setTimeout(r, 50)).then(() => {
+            const container = document.createElement('div');
+            waReq.renderTable(gridId, { columns: ['Profit_Sum'], rows: [{ Profit_Sum: -12345 }] }, container, {});
+            const td = container.querySelector('td');
+            expect(td.textContent).toMatch(/-/);
+            expect(td.textContent).toMatch(/12[,.]?345/);
+            idSpy.mockRestore();
+            global.fetch = fetchOrig;
+        });
+    });
+
+    test('very large number (billion) → locale grouping applied', () => {
+        const gridId = 'fmtNum307c';
+        const { fetchOrig, idSpy } = setupFmtEnv(gridId, [
+            { kind: 'Measure', fieldName: 'Revenue', displayName: '營收', allowedFuncs: 2 },
+        ]);
+        waReq.toggle(gridId, 'VmFmtNum3');
+        return new Promise(r => setTimeout(r, 50)).then(() => {
+            const container = document.createElement('div');
+            waReq.renderTable(gridId, { columns: ['Revenue_Sum'], rows: [{ Revenue_Sum: 1234567890 }] }, container, {});
+            expect(container.querySelector('td').textContent).toMatch(/1[,.]?234[,.]?567[,.]?890/);
+            idSpy.mockRestore();
+            global.fetch = fetchOrig;
+        });
+    });
+
+    test('decimal value → displays up to 2 decimal places', () => {
+        const gridId = 'fmtNum307d';
+        const { fetchOrig, idSpy } = setupFmtEnv(gridId, [
+            { kind: 'Measure', fieldName: 'Rate', displayName: '比率', allowedFuncs: 4 },
+        ]);
+        waReq.toggle(gridId, 'VmFmtNum4');
+        return new Promise(r => setTimeout(r, 50)).then(() => {
+            const container = document.createElement('div');
+            waReq.renderTable(gridId, { columns: ['Rate_Avg'], rows: [{ Rate_Avg: 3.14159 }] }, container, {});
+            expect(container.querySelector('td').textContent).toMatch(/3[.,]14/);
+            idSpy.mockRestore();
+            global.fetch = fetchOrig;
+        });
+    });
+});
+
+// ─── #307: showMsg window.layer fallback ─────────────────────────────────────
+describe('showMsg — window.layer fallback (line 114-115) #307', () => {
+    test('window.layer.msg called when layui absent but window.layer present', () => {
+        const layerMsg = jest.fn();
+        const { wa, makePanel, mockFetch, mockDocument } = makeEnv({ layer: { msg: layerMsg } });
+        makePanel('analysis-panel-sMsg307');
+        mockDocument.querySelectorAll.mockReturnValue([]);
+        mockFetch.mockResolvedValue({ ok: false, text: jest.fn().mockResolvedValue('err') });
+        wa.toggle('sMsg307', 'VmMsg');
+        wa.query('sMsg307');
+        expect(layerMsg).toHaveBeenCalled();
+    });
+});
+
+// ─── #307: bar-stacked — detectDualAxis must NOT trigger ─────────────────────
+describe('renderChart bar-stacked: detectDualAxis bypassed (line 1208) #307', () => {
+    function makeChartEnv() {
+        const capturedOptions = [];
+        const { wa } = makeEnv({ echarts: { init: jest.fn(() => ({ setOption: jest.fn(o => capturedOptions.push(o)), on: jest.fn(), dispose: jest.fn() })) } });
+        return { wa, capturedOptions };
+    }
+
+    test('bar-stacked with huge ratio → single yAxis (dual axis suppressed)', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const result = {
+            columns: ['Region', 'Cat', 'Amount_Sum', 'Qty_Count'],
+            rows: [
+                { Region: 'N', Cat: 'A', Amount_Sum: 1000000, Qty_Count: 5 },
+                { Region: 'S', Cat: 'B', Amount_Sum: 2000000, Qty_Count: 8 },
+            ],
+        };
+        const req = { dimensions: ['Region', 'Cat'], measures: [{ field: 'Amount', func: 'Sum' }, { field: 'Qty', func: 'Count' }] };
+        const dims = [{ fieldName: 'Region', isDate: false }, { fieldName: 'Cat', isDate: false }];
+        const container = { appendChild: jest.fn(), children: [], style: {}, id: '' };
+        wa.renderChart('g307bs', result, req, dims, container, 'bar-stacked');
+        expect(Array.isArray(capturedOptions[0].yAxis)).toBe(false);
+        expect(capturedOptions[0].yAxis).toEqual({ type: 'value' });
+        capturedOptions[0].series.forEach(s => expect(s.stack).toBe('total'));
+    });
+});
+
+// ─── #307: single-data-point and empty rows boundary ─────────────────────────
+describe('renderChart — single data point and empty rows #307', () => {
+    function makeChartEnv() {
+        const capturedOptions = [];
+        const { wa } = makeEnv({ echarts: { init: jest.fn(() => ({ setOption: jest.fn(o => capturedOptions.push(o)), on: jest.fn(), dispose: jest.fn() })) } });
+        return { wa, capturedOptions };
+    }
+
+    test('single-row bar chart: categories and data both have length 1', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const result = { columns: ['Region', 'Amount_Sum'], rows: [{ Region: 'North', Amount_Sum: 42 }] };
+        const req = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }] };
+        const container = { appendChild: jest.fn(), children: [], style: {}, id: '' };
+        expect(() => wa.renderChart('g307sp1', result, req, [{ fieldName: 'Region', isDate: false }], container, 'bar')).not.toThrow();
+        expect(capturedOptions[0].xAxis.data).toEqual(['North']);
+        expect(capturedOptions[0].series[0].data).toEqual([42]);
+    });
+
+    test('single-row line chart with date dim: formatDateKey applied to category', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const result = { columns: ['OrderDate', 'Amount_Sum'], rows: [{ OrderDate: 20260101, Amount_Sum: 999 }] };
+        const req = { dimensions: ['OrderDate'], measures: [{ field: 'Amount', func: 'Sum' }] };
+        const container = { appendChild: jest.fn(), children: [], style: {}, id: '' };
+        expect(() => wa.renderChart('g307sp2', result, req, [{ fieldName: 'OrderDate', isDate: true }], container, 'line')).not.toThrow();
+        expect(capturedOptions[0].xAxis.data).toEqual(['2026-01-01']);
+    });
+
+    test('single-row pie chart: one data slice', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const result = { columns: ['Region', 'Amount_Sum'], rows: [{ Region: 'North', Amount_Sum: 100 }] };
+        const req = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }] };
+        const container = { appendChild: jest.fn(), children: [], style: {}, id: '' };
+        wa.renderChart('g307sp3', result, req, [{ fieldName: 'Region', isDate: false }], container, 'pie');
+        expect(capturedOptions[0].series[0].data).toHaveLength(1);
+        expect(capturedOptions[0].series[0].data[0]).toEqual({ name: 'North', value: 100 });
+    });
+
+    test('empty rows: bar chart renders without crash', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const result = { columns: ['Region', 'Amount_Sum'], rows: [] };
+        const req = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }] };
+        const container = { appendChild: jest.fn(), children: [], style: {}, id: '' };
+        expect(() => wa.renderChart('g307sp4', result, req, [{ fieldName: 'Region', isDate: false }], container, 'bar')).not.toThrow();
+        expect(capturedOptions[0].xAxis.data).toEqual([]);
+    });
+});
+
+// ─── #307: pie chart — null/zero measure values ──────────────────────────────
+describe('renderChart pie — null/zero measure values #307', () => {
+    function makeChartEnv() {
+        const capturedOptions = [];
+        const { wa } = makeEnv({ echarts: { init: jest.fn(() => ({ setOption: jest.fn(o => capturedOptions.push(o)), on: jest.fn(), dispose: jest.fn() })) } });
+        return { wa, capturedOptions };
+    }
+
+    test('pie with null measure value → no crash, data has null entry', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const result = { columns: ['Region', 'Amount_Sum'], rows: [{ Region: 'North', Amount_Sum: null }, { Region: 'South', Amount_Sum: 200 }] };
+        const req = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }] };
+        const container = { appendChild: jest.fn(), children: [], style: {}, id: '' };
+        expect(() => wa.renderChart('g307pie1', result, req, [{ fieldName: 'Region', isDate: false }], container, 'pie')).not.toThrow();
+        expect(capturedOptions[0].series[0].data[0]).toEqual({ name: 'North', value: null });
+        expect(capturedOptions[0].series[0].data[1]).toEqual({ name: 'South', value: 200 });
+    });
+
+    test('pie with zero measure value → data entry is 0', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const result = { columns: ['Region', 'Amount_Sum'], rows: [{ Region: 'East', Amount_Sum: 0 }] };
+        const req = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }] };
+        const container = { appendChild: jest.fn(), children: [], style: {}, id: '' };
+        wa.renderChart('g307pie2', result, req, [{ fieldName: 'Region', isDate: false }], container, 'pie');
+        expect(capturedOptions[0].series[0].data[0]).toEqual({ name: 'East', value: 0 });
+    });
+});
+
+// ─── #307: empty/null dimension value in chart ────────────────────────────────
+describe('renderChart — empty/null dimension value #307', () => {
+    function makeChartEnv() {
+        const capturedOptions = [];
+        const { wa } = makeEnv({ echarts: { init: jest.fn(() => ({ setOption: jest.fn(o => capturedOptions.push(o)), on: jest.fn(), dispose: jest.fn() })) } });
+        return { wa, capturedOptions };
+    }
+
+    test('empty string dim value → empty string category', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const result = { columns: ['Region', 'Amount_Sum'], rows: [{ Region: '', Amount_Sum: 100 }, { Region: 'North', Amount_Sum: 200 }] };
+        const req = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }] };
+        const container = { appendChild: jest.fn(), children: [], style: {}, id: '' };
+        expect(() => wa.renderChart('g307dim1', result, req, [{ fieldName: 'Region', isDate: false }], container, 'bar')).not.toThrow();
+        expect(capturedOptions[0].xAxis.data[0]).toBe('');
+        expect(capturedOptions[0].xAxis.data[1]).toBe('North');
+    });
+
+    test('null dim value → empty string category (String(null || "") = "")', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const result = { columns: ['Region', 'Amount_Sum'], rows: [{ Region: null, Amount_Sum: 50 }] };
+        const req = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }] };
+        const container = { appendChild: jest.fn(), children: [], style: {}, id: '' };
+        expect(() => wa.renderChart('g307dim2', result, req, [{ fieldName: 'Region', isDate: false }], container, 'bar')).not.toThrow();
+        expect(capturedOptions[0].xAxis.data[0]).toBe('');
+    });
+});
+
+// ─── #307: [cov] waReq renderChart dual axis (lines 1208-1285) ───────────────
+describe('[cov] waReq renderChart — dual axis lines 1208-1285 #307', () => {
+    let _echartsOrig;
+    beforeEach(() => { _echartsOrig = global.echarts; });
+    afterEach(() => { global.echarts = _echartsOrig; });
+
+    function makeContainer() { return document.createElement('div'); }
+
+    test('dual axis: originalData set, yAxisIndex assigned, formatter defined', () => {
+        const opts = [];
+        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(o => opts.push(o)), on: jest.fn(), dispose: jest.fn() })) };
+        const result = {
+            columns: ['Region', 'Amount_Sum', 'Qty_Count'],
+            rows: [{ Region: 'A', Amount_Sum: 1000000, Qty_Count: 5 }, { Region: 'B', Amount_Sum: 2000000, Qty_Count: 8 }],
+        };
+        const req = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }, { field: 'Qty', func: 'Count' }] };
+        waReq.renderChart('covDA307a', result, req, [{ fieldName: 'Region', isDate: false }], makeContainer(), 'bar');
+        expect(Array.isArray(opts[0].yAxis)).toBe(true);
+        expect(opts[0].series[0].originalData).toBeDefined();
+        expect(opts[0].series[0].yAxisIndex).toBe(0);
+        expect(opts[0].series[1].yAxisIndex).toBe(1);
+        expect(typeof opts[0].tooltip.formatter).toBe('function');
+    });
+
+    test('dual axis chart.on click handler triggers drillDown (line 1281)', () => {
+        const onHandlers = {};
+        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(), on: jest.fn((ev, fn) => { onHandlers[ev] = fn; }), dispose: jest.fn() })) };
+        const result = {
+            columns: ['Region', 'Amount_Sum', 'Qty_Count'],
+            rows: [{ Region: 'A', Amount_Sum: 1000000, Qty_Count: 5 }],
+        };
+        const req = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }, { field: 'Qty', func: 'Count' }] };
+        const panel = document.createElement('div');
+        panel.id = 'analysis-panel-covDA307b';
+        const idSpy = jest.spyOn(document, 'getElementById').mockImplementation(id =>
+            id === 'analysis-panel-covDA307b' ? panel : (panel.querySelector('#' + id) || null)
+        );
+        const fetchOrig = global.fetch;
+        global.fetch = jest.fn().mockResolvedValue({ ok: false, text: jest.fn().mockResolvedValue('e') });
+        waReq.toggle('covDA307b', 'VmDA2b');
+        waReq.renderChart('covDA307b', result, req, [{ fieldName: 'Region', isDate: false }], makeContainer(), 'bar');
+        expect(onHandlers['click']).toBeDefined();
+        const fetchMock = jest.fn().mockResolvedValue({ ok: false, text: jest.fn().mockResolvedValue('e') });
+        global.fetch = fetchMock;
+        const st = waReq._getState('covDA307b');
+        if (st) { st.lastReq = { dimensions: ['Region'], measures: req.measures }; st.drillFilters = []; }
+        onHandlers['click']({ dataIndex: 0, name: 'A' });
+        expect(fetchMock).toHaveBeenCalledWith('/_analysis/query', expect.any(Object));
+        idSpy.mockRestore();
+        global.fetch = fetchOrig;
+    });
+
+    test('dual axis tooltip formatter — 億 unit (line 1261)', () => {
+        const opts = [];
+        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(o => opts.push(o)), on: jest.fn(), dispose: jest.fn() })) };
+        const result = {
+            columns: ['Region', 'Amount_Sum', 'Qty_Count'],
+            rows: [{ Region: 'A', Amount_Sum: 200000000, Qty_Count: 3 }],
+        };
+        const req = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }, { field: 'Qty', func: 'Count' }] };
+        waReq.renderChart('covDA307c', result, req, [{ fieldName: 'Region', isDate: false }], makeContainer(), 'bar');
+        const formatter = opts[0].tooltip.formatter;
+        const params = [
+            { seriesIndex: 0, dataIndex: 0, value: 2, axisValueLabel: 'A', marker: '●', seriesName: 'Amount_Sum' },
+            { seriesIndex: 1, dataIndex: 0, value: 3, axisValueLabel: 'A', marker: '●', seriesName: 'Qty_Count' },
+        ];
+        const output = formatter(params);
+        expect(output).toMatch(/億/);
+        expect(output).toContain('200000000');
+    });
+
+    test('dual axis tooltip formatter — null value shows dash (line 1258)', () => {
+        const opts = [];
+        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(o => opts.push(o)), on: jest.fn(), dispose: jest.fn() })) };
+        const result = {
+            columns: ['Region', 'Amount_Sum', 'Qty_Count'],
+            rows: [{ Region: 'A', Amount_Sum: null, Qty_Count: 3 }, { Region: 'B', Amount_Sum: 5000000, Qty_Count: 8 }],
+        };
+        const req = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }, { field: 'Qty', func: 'Count' }] };
+        waReq.renderChart('covDA307d', result, req, [{ fieldName: 'Region', isDate: false }], makeContainer(), 'bar');
+        const formatter = opts[0].tooltip.formatter;
+        const params = [
+            { seriesIndex: 0, dataIndex: 0, value: null, axisValueLabel: 'A', marker: '●', seriesName: 'Amount_Sum' },
+            { seriesIndex: 1, dataIndex: 0, value: 3, axisValueLabel: 'A', marker: '●', seriesName: 'Qty_Count' },
+        ];
+        expect(formatter(params)).toContain('-');
+    });
+
+    test('dual axis tooltip formatter — no unit for small values (line 1263)', () => {
+        const opts = [];
+        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(o => opts.push(o)), on: jest.fn(), dispose: jest.fn() })) };
+        const result = {
+            columns: ['Region', 'Amount_Sum', 'Qty_Count'],
+            rows: [{ Region: 'A', Amount_Sum: 200, Qty_Count: 2 }, { Region: 'B', Amount_Sum: 2000, Qty_Count: 3 }],
+        };
+        const req = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }, { field: 'Qty', func: 'Count' }] };
+        waReq.renderChart('covDA307e', result, req, [{ fieldName: 'Region', isDate: false }], makeContainer(), 'bar');
+        const formatter = opts[0].tooltip.formatter;
+        const params = [
+            { seriesIndex: 0, dataIndex: 0, value: 200, axisValueLabel: 'A', marker: '●', seriesName: 'Amount_Sum' },
+            { seriesIndex: 1, dataIndex: 0, value: 2, axisValueLabel: 'A', marker: '●', seriesName: 'Qty_Count' },
+        ];
+        const output = formatter(params);
+        expect(output).not.toMatch(/萬|百萬|億/);
+        expect(output).toContain('200');
+    });
+});
+
+// ─── #307: [cov] waReq drillDown/drillBack/drillReset coverage ───────────────
+describe('[cov] waReq drillDown/drillBack/drillReset — lines 1291-1416 #307', () => {
+    let _fetchOrig;
+    beforeEach(() => { _fetchOrig = global.fetch; });
+    afterEach(() => { spyTeardown(); global.fetch = _fetchOrig; });
+
+    function setupDrillCovState(gridId) {
+        const panel = document.createElement('div');
+        panel.id = 'analysis-panel-' + gridId;
+        const drillBar = document.createElement('div');
+        drillBar.id = 'analysis-drill-bar-' + gridId;
+        const resultDiv = document.createElement('div');
+        resultDiv.id = 'analysis-result-' + gridId;
+        panel.appendChild(drillBar);
+        panel.appendChild(resultDiv);
+        spySetup(function(id) {
+            if (id === 'analysis-panel-' + gridId) return panel;
+            return panel.querySelector('#' + id);
+        });
+        global.fetch = jest.fn().mockResolvedValue({ ok: false, text: jest.fn().mockResolvedValue('e') });
+        waReq.toggle(gridId, 'VmDC');
+        var st = waReq._getState(gridId);
+        st.lastReq = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }], dimensionHierarchies: undefined };
+        st.lastDimFields = [{ fieldName: 'Region', isDate: false }];
+        st.drillFilters = [];
+        return { panel, drillBar, resultDiv, st };
+    }
+
+    test('drillDown: pushes to stack, shows drillBar, calls fetch', () => {
+        const { drillBar, st } = setupDrillCovState('covDC307a');
+        global.fetch = jest.fn().mockResolvedValue({ ok: false, text: jest.fn().mockResolvedValue('e') });
+        waReq.drillDown('covDC307a', 'Region', '華東', false);
+        expect(global.fetch).toHaveBeenCalledWith('/_analysis/query', expect.any(Object));
+        expect(drillBar.style.display).toBe('flex');
+        expect(st.drillStack.length).toBe(1);
+        expect(st.drillStack[0].label).toBe('華東');
+    });
+
+    test('drillDown with isDate=true: nextHierarchy applied (Year → Quarter)', () => {
+        const { st } = setupDrillCovState('covDC307b');
+        st.lastReq.dimensions = ['OrderDate'];
+        st.lastReq.dimensionHierarchies = { OrderDate: 'Year' };
+        st.lastDimFields = [{ fieldName: 'OrderDate', isDate: true }];
+        global.fetch = jest.fn().mockResolvedValue({ ok: false, text: jest.fn().mockResolvedValue('e') });
+        waReq.drillDown('covDC307b', 'OrderDate', 2026, true);
+        const body = JSON.parse(global.fetch.mock.calls[0][1].body);
+        expect(body.dimensionHierarchies.OrderDate).toBe('Quarter');
+        expect(st.drillStack[0].label).toBe('2026');
+    });
+
+    test('drillBack: pops stack and calls fetch', () => {
+        setupDrillCovState('covDC307c');
+        global.fetch = jest.fn().mockResolvedValue({ ok: false, text: jest.fn().mockResolvedValue('e') });
+        waReq.drillDown('covDC307c', 'Region', '華東', false);
+        global.fetch.mockClear();
+        waReq.drillBack('covDC307c');
+        expect(global.fetch).toHaveBeenCalledWith('/_analysis/query', expect.any(Object));
+    });
+
+    test('drillBack on empty stack: silent return, no fetch', () => {
+        setupDrillCovState('covDC307d');
+        global.fetch = jest.fn();
+        expect(() => waReq.drillBack('covDC307d')).not.toThrow();
+        expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    test('drillReset: clears stack, hides drillBar, calls fetch', () => {
+        const { drillBar, st } = setupDrillCovState('covDC307e');
+        global.fetch = jest.fn().mockResolvedValue({ ok: false, text: jest.fn().mockResolvedValue('e') });
+        waReq.drillDown('covDC307e', 'Region', '華東', false);
+        waReq.drillDown('covDC307e', 'Region', '上海', false);
+        expect(st.drillStack.length).toBe(2);
+        global.fetch.mockClear();
+        waReq.drillReset('covDC307e');
+        expect(st.drillStack.length).toBe(0);
+        expect(drillBar.style.display).toBe('none');
+        expect(global.fetch).toHaveBeenCalledWith('/_analysis/query', expect.any(Object));
+    });
+
+    test('drillReset on non-existent state: silent return', () => {
+        expect(() => waReq.drillReset('neverExists_covDC307f')).not.toThrow();
+    });
+
+    test('updateDrillBar: multi-level breadcrumb text correct', () => {
+        const { drillBar } = setupDrillCovState('covUDB307a');
+        global.fetch = jest.fn().mockResolvedValue({ ok: false, text: jest.fn().mockResolvedValue('e') });
+        waReq.drillDown('covUDB307a', 'Region', '華東', false);
+        waReq.drillDown('covUDB307a', 'Region', '上海', false);
+        const pathSpan = drillBar.querySelector('span');
+        expect(pathSpan).toBeTruthy();
+        expect(pathSpan.textContent).toBe('全部 > 華東 > 上海');
+        expect(drillBar.querySelectorAll('button').length).toBe(2);
+    });
+
+    test('updateDrillBar: hidden when stack becomes empty after drillBack', () => {
+        const { drillBar } = setupDrillCovState('covUDB307b');
+        global.fetch = jest.fn().mockResolvedValue({ ok: false, text: jest.fn().mockResolvedValue('e') });
+        waReq.drillDown('covUDB307b', 'Region', '華東', false);
+        expect(drillBar.style.display).toBe('flex');
+        waReq.drillBack('covUDB307b');
+        expect(drillBar.style.display).toBe('none');
+    });
+});
+
+// ─── #307: renderChart isDual — negative/non-numeric values ──────────────────
+describe('renderChart isDual — negative/non-numeric values #307', () => {
+    function makeChartEnv() {
+        const capturedOptions = [];
+        const { wa } = makeEnv({ echarts: { init: jest.fn(() => ({ setOption: jest.fn(o => capturedOptions.push(o)), on: jest.fn(), dispose: jest.fn() })) } });
+        return { wa, capturedOptions };
+    }
+
+    test('negative measures: dual axis triggered via Math.abs, originalData preserved', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const result = {
+            columns: ['Region', 'Amount_Sum', 'Qty_Count'],
+            rows: [{ Region: 'E', Amount_Sum: -30000, Qty_Count: 3 }, { Region: 'W', Amount_Sum: -20000, Qty_Count: 2 }],
+        };
+        const req = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }, { field: 'Qty', func: 'Count' }] };
+        const container = { appendChild: jest.fn(), children: [], style: {}, id: '' };
+        wa.renderChart('g307neg', result, req, [{ fieldName: 'Region', isDate: false }], container);
+        // abs(-30000)/3 = 10000 ≥ 10 → dual
+        expect(Array.isArray(capturedOptions[0].yAxis)).toBe(true);
+        const s0 = capturedOptions[0].series[0];
+        expect(s0.originalData[0]).toBe(-30000);
+        expect(s0.data[0]).toBeCloseTo(-3, 5);
+    });
+
+    test('all non-numeric Amount_Sum: detectDualAxis false → single yAxis', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const result = {
+            columns: ['Region', 'Amount_Sum', 'Qty_Count'],
+            rows: [{ Region: 'E', Amount_Sum: 'N/A', Qty_Count: 5 }, { Region: 'W', Amount_Sum: 'N/A', Qty_Count: 8 }],
+        };
+        const req = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }, { field: 'Qty', func: 'Count' }] };
+        const container = { appendChild: jest.fn(), children: [], style: {}, id: '' };
+        wa.renderChart('g307nan', result, req, [{ fieldName: 'Region', isDate: false }], container, 'bar');
+        expect(Array.isArray(capturedOptions[0].yAxis)).toBe(false);
+    });
+});
+
+// ─── #307: computeScale exact boundaries ─────────────────────────────────────
+describe('computeScale — exact boundary values #307', () => {
+    test('9999 → no unit', () => { expect(waReq.computeScale(9999)).toEqual({ divisor: 1, unit: '' }); });
+    test('10000 → 萬 (exact boundary)', () => { expect(waReq.computeScale(10000)).toEqual({ divisor: 10000, unit: '萬' }); });
+    test('999999 → 萬', () => { expect(waReq.computeScale(999999)).toEqual({ divisor: 10000, unit: '萬' }); });
+    test('1000000 → 百萬 (exact boundary)', () => { expect(waReq.computeScale(1000000)).toEqual({ divisor: 1000000, unit: '百萬' }); });
+    test('99999999 → 百萬', () => { expect(waReq.computeScale(99999999)).toEqual({ divisor: 1000000, unit: '百萬' }); });
+    test('100000000 → 億 (exact boundary)', () => { expect(waReq.computeScale(100000000)).toEqual({ divisor: 100000000, unit: '億' }); });
+    test('10 billion → 億', () => { expect(waReq.computeScale(10000000000)).toEqual({ divisor: 100000000, unit: '億' }); });
+});
+
+// ─── #307: scaleSeriesData extended edge cases ────────────────────────────────
+describe('scaleSeriesData — extended edge cases #307', () => {
+    test('negative values scaled correctly', () => {
+        expect(waReq.scaleSeriesData([-10000, -50000], 10000)).toEqual([-1, -5]);
+    });
+    test('mixed positive and negative values', () => {
+        expect(waReq.scaleSeriesData([-10000, 20000, -30000], 10000)).toEqual([-1, 2, -3]);
+    });
+    test('divisor=1 → data unchanged (early return branch)', () => {
+        expect(waReq.scaleSeriesData([1, 2, 3], 1)).toEqual([1, 2, 3]);
+    });
+    test('divisor < 1 (0.5) treated as ≤ 1 → data unchanged', () => {
+        expect(waReq.scaleSeriesData([100, 200], 0.5)).toEqual([100, 200]);
+    });
+});
