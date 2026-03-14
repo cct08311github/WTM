@@ -2340,6 +2340,7 @@ describe('renderChart — dual Y-axis (#281)', () => {
     });
 });
 
+
 // ─── #290: dual Y-axis tooltip scaled+raw value ──────────────────────────────
 describe('renderChart — dual Y-axis tooltip formatter (#290)', () => {
     function makeChartEnv() {
@@ -2467,6 +2468,7 @@ describe('renderChart — dual Y-axis tooltip formatter (#290)', () => {
     });
 });
 
+
 // ─── #293: renderTable 欄位標頭人性化 + 千分位格式化 ─────────────────────────
 describe('#293 renderTable — 欄位標頭人性化 + 數值千分位', () => {
     function makeSimpleContainer() {
@@ -2474,7 +2476,6 @@ describe('#293 renderTable — 欄位標頭人性化 + 數值千分位', () => {
     }
 
     test('度量欄位標頭顯示 displayName + func中文 (Sum→合計)', () => {
-        // 先透過 toggle+loadMeta 把 fields 注入 _state
         const gridId = 'tbl293a';
         const panel = document.createElement('div');
         panel.id = 'analysis-panel-' + gridId;
@@ -2512,8 +2513,8 @@ describe('#293 renderTable — 欄位標頭人性化 + 數值千分位', () => {
         global.fetch = jest.fn().mockResolvedValue({
             ok: true,
             json: jest.fn().mockResolvedValue([
-                { kind: 'Measure', fieldName: 'Cnt',  displayName: '計數欄', allowedFuncs: 1 },
-                { kind: 'Measure', fieldName: 'Price', displayName: '價格',  allowedFuncs: 28 },
+                { kind: 'Measure', fieldName: 'Cnt',   displayName: '計數欄', allowedFuncs: 1 },
+                { kind: 'Measure', fieldName: 'Price', displayName: '價格',   allowedFuncs: 28 },
             ])
         });
         const idSpy = jest.spyOn(document, 'getElementById').mockImplementation(id =>
@@ -2544,8 +2545,8 @@ describe('#293 renderTable — 欄位標頭人性化 + 數值千分位', () => {
         global.fetch = jest.fn().mockResolvedValue({
             ok: true,
             json: jest.fn().mockResolvedValue([
-                { kind: 'Dimension', fieldName: 'Region',  displayName: '地區', isDate: false, allowedFuncs: 0 },
-                { kind: 'Measure',   fieldName: 'Amount',  displayName: '金額', allowedFuncs: 2 },
+                { kind: 'Dimension', fieldName: 'Region', displayName: '地區', isDate: false, allowedFuncs: 0 },
+                { kind: 'Measure',   fieldName: 'Amount', displayName: '金額', allowedFuncs: 2 },
             ])
         });
         const idSpy = jest.spyOn(document, 'getElementById').mockImplementation(id =>
@@ -2559,7 +2560,6 @@ describe('#293 renderTable — 欄位標頭人性化 + 數值千分位', () => {
                 rows: [{ Region: '北部', Amount_Sum: 1234567.89 }]
             }, container, {});
             const tds = Array.from(container.querySelectorAll('td')).map(t => t.textContent);
-            // Amount_Sum is numeric → should be formatted with toLocaleString
             expect(tds[1]).toMatch(/1[,.]?234[,.]?567/);
             idSpy.mockRestore();
             global.fetch = fetchOrig;
@@ -2620,7 +2620,6 @@ describe('#297 detectChartType — 1維+1量預設長條圖', () => {
     });
 
     test('2 維度（含日期）→ line（日期維度優先）', () => {
-        // detectChartType checks isDate before dims.length >= 2
         expect(waReq.detectChartType(
             [{ fieldName: 'OrderDate', isDate: true }, { fieldName: 'Region', isDate: false }],
             [{ field: 'Amount', func: 'Sum' }]
@@ -2654,37 +2653,20 @@ describe('#294 日期層級 hierarchy select → disabled + tooltip', () => {
         waReq.toggle(gridId, 'VmHier294');
         await new Promise(r => setTimeout(r, 50));
 
-        // createDropZonePill 只有在 pill 被拖入 drop zone 時才呼叫，
-        // 這裡直接呼叫公開 API 來驗證 createPoolPill 的 isDate 屬性
-        // 並透過 renderPanel 建立的 pool pill 確認
         const poolPills = panel.querySelectorAll('.analysis-pill--available');
         expect(poolPills.length).toBe(1);
         expect(poolPills[0].dataset.isDate).toBe('true');
 
-        // Verify hierarchy select disabled by checking the select rendered inside a drop-zone pill
-        // We need to trigger createDropZonePill indirectly — check the exposed createPoolPill doesn't have select
-        // The select is only in drop-zone pills; verify via DOM inspection of any select in the panel
         const selects = panel.querySelectorAll('.analysis-hierarchy-select');
-        // pool pills don't have hierarchy select; only drop zone pills do (added via drag)
-        // so selects.length should be 0 at this point (no pills in drop zones yet)
         expect(selects.length).toBe(0);
 
         idSpy.mockRestore();
         global.fetch = fetchOrig;
     });
 
-    test('createDropZonePill 中日期 hierarchy select 的 disabled=true 且 title 正確', () => {
-        // Use makeEnv vm context to call renderPanel then inspect createDropZonePill
-        // by simulating a drop event result via the exposed API
-        // We verify by checking the source code behaviour through unit testing formatDateKey (no DOM needed)
-        // Direct unit test: create the pill in a fresh jsdom environment
-        const { wa } = makeEnv();
-        // We can test indirectly: if we call renderPanel via toggle+loadMeta, then manually
-        // invoke createDropZonePill by simulating a Sortable drop — but Sortable is null in tests.
-        // Instead verify via the fact that renderTable exposed function works (integration smoke)
+    test('renderTable fallback: no _state → header shows raw column key', () => {
         const container = document.createElement('div');
-        wa.renderTable('nonexistent', { columns: ['X_Sum'], rows: [{ X_Sum: 42 }] }, container, {});
-        // No crash = pass (no _state → no meta → colLabelMap falls back to raw key)
+        waReq.renderTable('nonexistent_294', { columns: ['X_Sum'], rows: [{ X_Sum: 42 }] }, container, {});
         const th = container.querySelector('th');
         expect(th.textContent).toBe('X_Sum');
     });
