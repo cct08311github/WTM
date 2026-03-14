@@ -181,7 +181,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 PivotValues = pivotValues,
                 MeasureNames = measureNames,
                 Rows = pivotRowsMap.Values.ToList(),
-                Columns = columns
+                Columns = columns,
+                Truncated = groupRes.Truncated
             };
         }
 

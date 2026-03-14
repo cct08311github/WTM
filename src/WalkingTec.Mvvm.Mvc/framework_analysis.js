@@ -1463,11 +1463,14 @@
         })
         .then(function (res) {
             if (!res.ok) return res.text().then(function (t) { throw new Error(t || 'HTTP ' + res.status); });
-            return res.blob();
+            var truncated = res.headers.get('X-Analysis-Truncated') === 'true';
+            return res.blob().then(function (blob) {
+                return { blob: blob, truncated: truncated };
+            });
         })
-        .then(function (blob) {
+        .then(function (data) {
             closeLoader();
-            var url = window.URL.createObjectURL(blob);
+            var url = window.URL.createObjectURL(data.blob);
             var a = document.createElement('a');
             a.href = url;
             a.download = 'analysis.' + format;
@@ -1475,6 +1478,9 @@
             a.click();
             document.body.removeChild(a);
             window.URL.revokeObjectURL(url);
+            if (data.truncated) {
+                showMsg('⚠️ 匯出資料已截斷，僅包含前 10,000 筆結果。完整資料請聯繫管理員。', 'warn');
+            }
         })
         .catch(function (err) {
             closeLoader();

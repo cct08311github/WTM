@@ -494,10 +494,10 @@ describe('exportData — layui loading state', () => {
         // Use a two-call fetch: first for loadMeta (toggle), second for exportData
         const fetchMock = jest.fn()
             .mockResolvedValueOnce({ ok: false, text: jest.fn().mockResolvedValue('err') }) // loadMeta
-            .mockImplementationOnce(() => { exportCallOrder.push('fetch'); return Promise.resolve({ ok: true, blob: () => Promise.resolve(new Blob()) }); }); // exportData
+            .mockImplementationOnce(() => { exportCallOrder.push('fetch'); return Promise.resolve({ ok: true, blob: () => Promise.resolve(new Blob()), headers: { get: () => null } }); }); // exportData
         const { wa } = makeEnv({
             fetch: fetchMock,
-            layui: { layer: { load: layerLoad, close: layerClose } },
+            layui: { layer: { load: layerLoad, close: layerClose, msg: jest.fn() } },
             URL: { createObjectURL: jest.fn(() => 'blob:url'), revokeObjectURL: jest.fn() },
             document: {
                 getElementById: jest.fn((id) => id === 'analysis-panel-gridX' ? { style: {}, appendChild: jest.fn(), removeChild: jest.fn(), firstChild: null, querySelector: jest.fn(() => null), querySelectorAll: jest.fn(() => []) } : null),
@@ -549,7 +549,7 @@ describe('exportData — layui loading state', () => {
         const { wa } = makeEnv({
             fetch: jest.fn()
                 .mockResolvedValueOnce({ ok: false, text: async () => 'meta error' })
-                .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(['data']) }),
+                .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(['data']), headers: { get: () => null } }),
             URL: { createObjectURL: jest.fn(() => 'blob:url'), revokeObjectURL: jest.fn() },
             document: {
                 getElementById: jest.fn((id) => id === 'analysis-panel-gridX' ? { style: {}, appendChild: jest.fn(), removeChild: jest.fn(), firstChild: null, querySelector: jest.fn(() => null), querySelectorAll: jest.fn(() => []) } : null),
@@ -1142,7 +1142,7 @@ describe('[cov] waReq.exportData — branches', () => {
         global.layui = undefined; // disable layui path to avoid setup.js layui.layer.load missing
         global.fetch = jest.fn()
             .mockResolvedValueOnce({ ok: false, text: jest.fn().mockResolvedValue('err') })
-            .mockResolvedValueOnce({ ok: true, blob: jest.fn().mockResolvedValue(new Blob(['x'])) });
+            .mockResolvedValueOnce({ ok: true, blob: jest.fn().mockResolvedValue(new Blob(['x'])), headers: { get: () => null } });
         global.URL = { createObjectURL: jest.fn().mockReturnValue('blob:e1'), revokeObjectURL: jest.fn() };
         spySetup(function(id) { return id === 'analysis-panel-scovE1' ? panel : null; });
         waReq.toggle('scovE1', 'VmE1');
@@ -1189,10 +1189,10 @@ describe('[cov] waReq.exportData — branches', () => {
         panel.id = 'analysis-panel-scovE4';
         const layerLoad = jest.fn().mockReturnValue(42);
         const layerClose = jest.fn();
-        global.layui = { layer: { load: layerLoad, close: layerClose } };
+        global.layui = { layer: { load: layerLoad, close: layerClose, msg: jest.fn() } };
         global.fetch = jest.fn()
             .mockResolvedValueOnce({ ok: false, text: jest.fn().mockResolvedValue('err') })
-            .mockResolvedValueOnce({ ok: true, blob: jest.fn().mockResolvedValue(new Blob(['y'])) });
+            .mockResolvedValueOnce({ ok: true, blob: jest.fn().mockResolvedValue(new Blob(['y'])), headers: { get: () => null } });
         global.URL = { createObjectURL: jest.fn().mockReturnValue('blob:e4'), revokeObjectURL: jest.fn() };
         spySetup(function(id) { return id === 'analysis-panel-scovE4' ? panel : null; });
         waReq.toggle('scovE4', 'VmE4');
