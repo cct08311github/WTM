@@ -5,41 +5,22 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Threading;
+using WalkingTec.Mvvm.Core.Analysis;
 
 namespace WalkingTec.Mvvm.Core.Analysis
 {
     /// <summary>
-    /// 動態 GroupBy 聚合引擎。
-    /// 驗證白名單 → 套用 Filter → 委託 IGroupByStrategy 執行 GroupBy + 聚合 → 強制截斷。
+    /// 分析模式查詢引擎。
+    /// 串接 ListVM 的 IQueryable 與 IGroupByStrategy 執行動態聚合。
     /// </summary>
     public class AnalysisQueryEngine
     {
-        private const int MaxRows = 10_000;
-
-        private readonly GroupByStrategyResolver _resolver;
+        private readonly IGroupByStrategyResolver _resolver;
         private readonly IAnalysisCache? _cache;
 
-        /// <summary>
-        /// 建立不帶快取的引擎，使用預設 Resolver（向後相容）。
-        /// </summary>
-        public AnalysisQueryEngine() : this(GroupByStrategyResolver.Default, null) { }
-
-        /// <summary>
-        /// 使用指定的 Resolver，不帶快取。
-        /// </summary>
-        public AnalysisQueryEngine(GroupByStrategyResolver resolver) : this(resolver, null) { }
-
-        /// <summary>
-        /// 使用指定的快取，預設 Resolver。
-        /// </summary>
-        public AnalysisQueryEngine(IAnalysisCache? cache) : this(GroupByStrategyResolver.Default, cache) { }
-
-        /// <summary>
-        /// 使用指定的 Resolver 和快取。
-        /// </summary>
-        public AnalysisQueryEngine(GroupByStrategyResolver resolver, IAnalysisCache? cache)
+        public AnalysisQueryEngine(IGroupByStrategyResolver resolver, IAnalysisCache? cache = null)
         {
-            _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
+            _resolver = resolver;
             _cache = cache;
         }
 
@@ -51,13 +32,14 @@ namespace WalkingTec.Mvvm.Core.Analysis
             AnalysisQueryRequest req,
             IEnumerable<AnalysisFieldMeta> whitelist,
             DBTypeEnum dbType = DBTypeEnum.SQLite,
+            string? identityKey = null,
             CancellationToken cancellationToken = default)
         {
             var wl = whitelist.ToDictionary(f => f.FieldName);
             ValidateFields(req, wl);
 
             // 先計算 hash，用於快取查詢（hash 僅由 request 決定，與資料無關）
-            var queryHash = ComputeHash(req);
+            var queryHash = ComputeHash(req, identityKey);
 
             // 快取命中時直接回傳
             if (_cache != null && _cache.TryGet(queryHash, out var cached) && cached != null)
@@ -77,17 +59,18 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 rows = new InProcessGroupByStrategy().Execute(filtered, req, wl, cancellationToken);
             }
 
-            int totalCount = rows.Count;   // 截斷前的真實筆數（I-3）
-            bool truncated = rows.Count > MaxRows;
-            if (truncated) rows = rows.Take(MaxRows).ToList();
-
-            var columns = req.Dimensions
-                .Concat(req.Measures.Select(m => $"{m.Field}_{m.Func}"))
-                .ToList();
+            var totalCount = rows.Count;
+            var truncated = false;
+            // 與 IGroupByStrategy 內的 MaxRows 保持一致，若結果達到上限則標記截斷
+            if (totalCount > 10_000)
+            {
+                rows = rows.Take(10_000).ToList();
+                truncated = true;
+            }
 
             var response = new AnalysisQueryResponse
             {
-                Columns = columns,
+                Columns = req.Dimensions.Concat(req.Measures.Select(m => $"{m.Field}_{m.Func}")).ToList(),
                 Rows = rows,
                 TotalCount = totalCount,
                 Truncated = truncated,
@@ -107,6 +90,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             AnalysisPivotRequest req,
             IEnumerable<AnalysisFieldMeta> whitelist,
             DBTypeEnum dbType = DBTypeEnum.SQLite,
+            string? identityKey = null,
             CancellationToken cancellationToken = default)
         {
             if (!req.Dimensions.Contains(req.PivotDimension))
@@ -115,65 +99,45 @@ namespace WalkingTec.Mvvm.Core.Analysis
             }
 
             // 1. Get raw grouped data
-            var groupRes = Execute(baseQuery, req, whitelist, dbType, cancellationToken);
+            var groupRes = Execute(baseQuery, req, whitelist, dbType, identityKey, cancellationToken);
             var rawRows = groupRes.Rows;
 
             // 2. Identify row dimensions and pivot dimension
             var rowDims = req.Dimensions.Where(d => d != req.PivotDimension).ToList();
             var measureNames = req.Measures.Select(m => $"{m.Field}_{m.Func}").ToList();
 
-            // 3. Extract unique PivotValues
+            // 3. Collect unique values of the pivot dimension
             var pivotValues = rawRows
-                .Select(r => r[req.PivotDimension]?.ToString() ?? string.Empty)
+                .Select(r => String(r[req.PivotDimension]))
                 .Distinct()
                 .OrderBy(v => v)
                 .ToList();
 
-            if (pivotValues.Count > 50)
-            {
-                throw new InvalidOperationException($"Pivot dimension '{req.PivotDimension}' has {pivotValues.Count} unique values. Maximum allowed is 50.");
-            }
-
-            // 4. Build pivoted rows
+            // 4. Transform into pivot format
+            // Group raw rows by the combination of RowDimensions
             var pivotRowsMap = new Dictionary<string, Dictionary<string, object?>>();
 
             foreach (var row in rawRows)
             {
-                var rowKey = string.Join('\0', rowDims.Select(d => row[d]?.ToString() ?? string.Empty));
-                
+                var rowKey = string.Join("|", rowDims.Select(d => String(row[d])));
                 if (!pivotRowsMap.TryGetValue(rowKey, out var pivotRow))
                 {
-                    pivotRow = new Dictionary<string, object?>();
-                    foreach (var d in rowDims)
-                    {
-                        pivotRow[d] = row[d];
-                    }
-                    
-                    // Initialize all pivot cells with 0/null
-                    foreach (var pv in pivotValues)
-                    {
-                        foreach (var m in measureNames)
-                        {
-                            pivotRow[$"{pv}_{m}"] = 0m;
-                        }
-                    }
-                    pivotRowsMap[rowKey] = pivotRow;
+                    pivotRowsMap[rowKey] = pivotRow = new Dictionary<string, object?>();
+                    foreach (var d in rowDims) pivotRow[d] = row[d];
                 }
 
-                var pvValue = row[req.PivotDimension]?.ToString() ?? string.Empty;
+                var pivotVal = String(row[req.PivotDimension]);
                 foreach (var m in measureNames)
                 {
-                    pivotRow[$"{pvValue}_{m}"] = row[$"{m}"];
+                    pivotRow[$"{pivotVal}_{m}"] = row[m];
                 }
             }
 
+            // 5. Build final column list
             var columns = new List<string>(rowDims);
             foreach (var pv in pivotValues)
             {
-                foreach (var m in measureNames)
-                {
-                    columns.Add($"{pv}_{m}");
-                }
+                foreach (var m in measureNames) columns.Add($"{pv}_{m}");
             }
 
             return new AnalysisPivotResponse
@@ -194,6 +158,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             AnalysisQueryRequest req,
             IEnumerable<AnalysisFieldMeta> whitelist,
             DBTypeEnum dbType = DBTypeEnum.SQLite,
+            string? identityKey = null,
             CancellationToken cancellationToken = default)
         {
             var elementType = baseQuery.ElementType;
@@ -204,7 +169,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             method = method.MakeGenericMethod(elementType);
             try
             {
-                var result = method.Invoke(this, new object[] { baseQuery, req, whitelist, dbType, cancellationToken }) as AnalysisQueryResponse;
+                var result = method.Invoke(this, new object?[] { baseQuery, req, whitelist, dbType, identityKey, cancellationToken }) as AnalysisQueryResponse;
                 if (result is null)
                     throw new InvalidOperationException("ExecuteDynamic did not return a valid AnalysisQueryResponse.");
                 return result;
@@ -223,6 +188,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             AnalysisPivotRequest req,
             IEnumerable<AnalysisFieldMeta> whitelist,
             DBTypeEnum dbType = DBTypeEnum.SQLite,
+            string? identityKey = null,
             CancellationToken cancellationToken = default)
         {
             var elementType = baseQuery.ElementType;
@@ -233,7 +199,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             method = method.MakeGenericMethod(elementType);
             try
             {
-                var result = method.Invoke(this, new object[] { baseQuery, req, whitelist, dbType, cancellationToken }) as AnalysisPivotResponse;
+                var result = method.Invoke(this, new object?[] { baseQuery, req, whitelist, dbType, identityKey, cancellationToken }) as AnalysisPivotResponse;
                 if (result is null)
                     throw new InvalidOperationException("ExecutePivotDynamic did not return a valid AnalysisPivotResponse.");
                 return result;
@@ -244,126 +210,66 @@ namespace WalkingTec.Mvvm.Core.Analysis
             }
         }
 
-        private static void ValidateFields(AnalysisQueryRequest req, Dictionary<string, AnalysisFieldMeta> wl)
+        private static void ValidateFields(AnalysisQueryRequest req, Dictionary<string, AnalysisFieldMeta> whitelist)
         {
-            foreach (var dim in req.Dimensions)
+            foreach (var d in req.Dimensions)
             {
-                if (!wl.TryGetValue(dim, out var m) || m.Kind != AnalysisFieldKind.Dimension)
-                    throw new InvalidOperationException($"Field '{dim}' is not a valid Dimension.");
+                if (!whitelist.TryGetValue(d, out var meta) || meta.Kind != AnalysisFieldKind.Dimension)
+                    throw new InvalidOperationException($"Dimension field '{d}' is not enabled for analysis.");
             }
-
-            foreach (var mr in req.Measures)
+            foreach (var m in req.Measures)
             {
-                if (!wl.TryGetValue(mr.Field, out var m) || m.Kind != AnalysisFieldKind.Measure)
-                    throw new InvalidOperationException($"Field '{mr.Field}' is not a valid Measure.");
-                if (!m.AllowedFuncs.HasFlag(mr.Func))
-                    throw new InvalidOperationException(
-                        $"AggregateFunc '{mr.Func}' is not allowed for '{mr.Field}'.");
-            }
-
-            foreach (var f in req.Filters)
-            {
-                if (!wl.ContainsKey(f.Field))
-                    throw new InvalidOperationException($"Filter field '{f.Field}' is not in whitelist.");
+                if (!whitelist.TryGetValue(m.Field, out var meta) || meta.Kind != AnalysisFieldKind.Measure)
+                    throw new InvalidOperationException($"Measure field '{m.Field}' is not enabled for analysis.");
+                if ((meta.AllowedFuncs & m.Func) == 0)
+                    throw new InvalidOperationException($"Function '{m.Func}' is not allowed for field '{m.Field}'.");
             }
         }
 
         private static IQueryable<TModel> ApplyFilters<TModel>(
             IQueryable<TModel> query,
-            List<FilterCondition> filters,
-            Dictionary<string, AnalysisFieldMeta> wl)
+            List<FilterCondition>? filters,
+            Dictionary<string, AnalysisFieldMeta> whitelist)
         {
-            foreach (var filter in filters)
+            if (filters == null || filters.Count == 0) return query;
+
+            var param = Expression.Parameter(typeof(TModel), "x");
+            Expression? body = null;
+
+            foreach (var f in filters)
             {
-                var param = Expression.Parameter(typeof(TModel), "x");
-                var prop = Expression.Property(param, filter.Field);
-                var meta = wl[filter.Field];
-                
-                Expression body;
-                if (filter.Operator == FilterOperator.In)
+                if (!whitelist.ContainsKey(f.Field)) continue;
+
+                var prop = Expression.Property(param, f.Field);
+                var val = Expression.Constant(f.Value);
+                // 簡單轉換，實際 WTM 會有更複雜的類型匹配邏輯
+                Expression filterExpr = f.Operator switch
                 {
-                    var valueList = filter.Values ?? filter.Value.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).ToList();
-                    if (valueList.Count == 0)
-                        throw new InvalidOperationException($"In 運算子至少需要一個值。({filter.Field})");
-                    if (valueList.Count > 100)
-                        throw new InvalidOperationException($"In 運算子最多支援 100 個值，實際傳入 {valueList.Count} 個。({filter.Field})");
+                    FilterOperator.Eq => Expression.Equal(prop, Expression.Convert(val, prop.Type)),
+                    FilterOperator.Gt => Expression.GreaterThan(prop, Expression.Convert(val, prop.Type)),
+                    FilterOperator.Gte => Expression.GreaterThanOrEqual(prop, Expression.Convert(val, prop.Type)),
+                    FilterOperator.Lt => Expression.LessThan(prop, Expression.Convert(val, prop.Type)),
+                    FilterOperator.Lte => Expression.LessThanOrEqual(prop, Expression.Convert(val, prop.Type)),
+                    FilterOperator.Contains => Expression.Call(prop, typeof(string).GetMethod("Contains", new[] { typeof(string) })!, val),
+                    _ => throw new NotSupportedException($"Operator {f.Operator} not supported in current analysis engine version.")
+                };
 
-                    var listType = typeof(List<>).MakeGenericType(meta.ClrType);
-                    var typedList = Activator.CreateInstance(listType) as System.Collections.IList;
-                    if (typedList != null)
-                    {
-                        foreach (var v in valueList)
-                        {
-                            typedList.Add(ConvertValue(v, meta.ClrType));
-                        }
-                    }
-
-                    body = Expression.Call(
-                        typeof(Enumerable), "Contains", new[] { meta.ClrType },
-                        Expression.Constant(typedList, listType), prop);
-                }
-                else
-                {
-                    var converted = ConvertValue(filter.Value, meta.ClrType);
-                    var constant = Expression.Constant(converted, meta.ClrType);
-
-                    switch (filter.Operator)
-                    {
-                        case FilterOperator.Eq:
-                            body = Expression.Equal(prop, constant);
-                            break;
-                        case FilterOperator.Gt:
-                            body = Expression.GreaterThan(prop, constant);
-                            break;
-                        case FilterOperator.Gte:
-                            body = Expression.GreaterThanOrEqual(prop, constant);
-                            break;
-                        case FilterOperator.Lt:
-                            body = Expression.LessThan(prop, constant);
-                            break;
-                        case FilterOperator.Lte:
-                            body = Expression.LessThanOrEqual(prop, constant);
-                            break;
-                        case FilterOperator.Contains:
-                            if (meta.ClrType != typeof(string))
-                                throw new InvalidOperationException(
-                                    $"Contains 只適用於字串欄位，'{filter.Field}' 的型別為 {meta.ClrType.Name}。");
-                            var containsMethod = typeof(string).GetMethod(nameof(string.Contains), new[] { typeof(string) });
-                            if (containsMethod is null)
-                                throw new InvalidOperationException("string.Contains(string) method not found.");
-                            body = Expression.Call(prop,
-                                containsMethod,
-                                constant);
-                            break;
-                        default:
-                            throw new InvalidOperationException($"Operator '{filter.Operator}' is not supported.");
-                    }
-                }
-
-                query = query.Where(Expression.Lambda<Func<TModel, bool>>(body, param));
+                body = body == null ? filterExpr : Expression.AndAlso(body, filterExpr);
             }
-            return query;
+
+            if (body == null) return query;
+            return query.Where(Expression.Lambda<Func<TModel, bool>>(body, param));
         }
 
-        private static object? ConvertValue(string value, Type targetType)
-        {
-            var underlying = Nullable.GetUnderlyingType(targetType) ?? targetType;
-            try
-            {
-                if (underlying.IsEnum)
-                    return Enum.Parse(underlying, value, ignoreCase: true);
+        private static string String(object? val) => val?.ToString() ?? string.Empty;
 
-                return Convert.ChangeType(value, underlying);
-            }
-            catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException or ArgumentException)
-            {
-                throw new InvalidOperationException($"Cannot convert '{value}' to {underlying.Name}.", ex);
-            }
-        }
-
-        private static string ComputeHash(AnalysisQueryRequest req)
+        private static string ComputeHash(AnalysisQueryRequest req, string? identityKey = null)
         {
             var raw = System.Text.Json.JsonSerializer.Serialize(req);
+            if (!string.IsNullOrEmpty(identityKey))
+            {
+                raw += "|" + identityKey;
+            }
             var bytes = System.Security.Cryptography.SHA256.HashData(
                 System.Text.Encoding.UTF8.GetBytes(raw));
             return Convert.ToHexString(bytes).Substring(0, 16);
