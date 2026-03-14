@@ -1,5 +1,11 @@
 # 更新日志
 
+## [Unreleased]
+
+### Added
+- **Analysis Mode — 雙 Y 軸（Dual Y-Axis）**：當 2 個度量最大值差距 ≥ 10 倍時自動啟用，ECharts 左右 Y 軸分離，NPOI Excel 產生 secondary value axis（#281）
+- **Analysis Mode — 金額縮放（Currency Scaling）**：依最大值自動選擇元/萬元/百萬元/億元顯示單位，Y 軸標題與 Excel header 附加單位，tooltip 仍顯示原始精確值（#281）
+
 ## [8.6.0] - 2026-03-12
 
 ### Added
