@@ -14,5 +14,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
         /// <summary>日期維度的時間層級（僅對 DateTime/DateTime? 屬性有效）</summary>
         public DateHierarchy Hierarchy { get; set; } = DateHierarchy.None;
+
+        /// <summary>允許存取此維度的角色列表（逗號分隔）</summary>
+        public string? AllowedRoles { get; set; }
     }
 }

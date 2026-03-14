@@ -40,7 +40,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         Kind = AnalysisFieldKind.Dimension,
                         ClrType = clrType,
                         IsDate = isDate,
-                        Hierarchy = isDate ? dim.Hierarchy : DateHierarchy.None
+                        Hierarchy = isDate ? dim.Hierarchy : DateHierarchy.None,
+                        AllowedRoles = dim.AllowedRoles
                     };
                     continue;
                 }
@@ -54,7 +55,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         DisplayName = msr.DisplayName ?? prop.Name,
                         Kind = AnalysisFieldKind.Measure,
                         AllowedFuncs = msr.AllowedFuncs,
-                        ClrType = prop.PropertyType
+                        ClrType = prop.PropertyType,
+                        AllowedRoles = msr.AllowedRoles
                     };
                 }
             }
