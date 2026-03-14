@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
@@ -539,6 +540,54 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         {
             var result = CreateController().Export(null) as BadRequestObjectResult;
             Assert.IsNotNull(result, "null request 應回傳 400");
+        }
+
+        // ─── Export truncated header (#291) ───────────────────────────────────
+
+        [TestMethod]
+        public void Export_xlsx_sets_truncated_header_when_over_10000_rows()
+        {
+            // Inject 10,001 rows with unique Region values so GROUP BY produces
+            // 10,001 distinct groups — exceeding MaxRows (10,000)
+            _testData = Enumerable.Range(1, 10_001)
+                .Select(i => new SaleRecord { Region = "R" + i, Amount = i })
+                .ToList();
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var httpCtx = new DefaultHttpContext();
+            var controller = new _AnalysisController(_registry, null, null);
+            controller.Wtm = MockWtmContext.CreateWtmContext();
+            controller.ControllerContext = new ControllerContext { HttpContext = httpCtx };
+
+            var result = controller.Export(req, "xlsx") as FileContentResult;
+            Assert.IsNotNull(result, "應回傳 xlsx 檔案");
+            Assert.AreEqual("true", httpCtx.Response.Headers["X-Analysis-Truncated"].ToString(),
+                "截斷時應設置 X-Analysis-Truncated: true header");
+        }
+
+        [TestMethod]
+        public void Export_xlsx_no_truncated_header_when_under_limit()
+        {
+            _testData = Enumerable.Range(1, 5)
+                .Select(i => new SaleRecord { Region = "R" + i, Amount = i * 100 })
+                .ToList();
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var httpCtx = new DefaultHttpContext();
+            var controller = new _AnalysisController(_registry, null, null);
+            controller.Wtm = MockWtmContext.CreateWtmContext();
+            controller.ControllerContext = new ControllerContext { HttpContext = httpCtx };
+
+            var result = controller.Export(req, "xlsx") as FileContentResult;
+            Assert.IsNotNull(result);
+            Assert.IsFalse(httpCtx.Response.Headers.ContainsKey("X-Analysis-Truncated"),
+                "未截斷時不應設置 X-Analysis-Truncated header");
         }
     }
 }
