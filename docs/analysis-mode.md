@@ -603,6 +603,8 @@ Analysis Mode 透過 `/_analysis` 路由提供三個 API，供前端 `framework_
 | **無圖表 drill-down** | Phase 2 功能 |
 | **無結果快取** | `QueryHash` 已生成，Phase 2 接 Redis/MemoryCache |
 | **無欄位級權限** | Phase 2 評估，目前只有登入驗證 |
+| **雙 Y 軸僅支援恰好 2 個度量** | `detectDualAxis` 在度量數 ≠ 2 時不觸發。選取 1 個或 3 個度量時使用單 Y 軸；`bar-stacked` 圖表類型也不啟用雙 Y 軸。觸發條件：2 個度量且最大值 ratio ≥ 10 倍。 |
+| **Excel 匯出最多 10,000 行** | 超過上限時回傳截斷結果，response 包含 `X-Analysis-Truncated: true` header。CSV 匯出維持 50,000 行上限。 |
 
 ### Phase 2 路線圖
 
