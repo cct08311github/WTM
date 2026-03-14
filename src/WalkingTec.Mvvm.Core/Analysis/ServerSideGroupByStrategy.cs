@@ -158,13 +158,29 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
             if (measure.Func == AggregateFunc.Count)
             {
-                // g.Count() → (double)g.Count()
+                // g.Count(e => e.Field != null) → (double)
+                Expression propAccess = Expression.Property(innerParam, measure.Field);
+                var propType = meta.ClrType;
+                
+                Expression predicateBody;
+                if (Nullable.GetUnderlyingType(propType) != null || !propType.IsValueType)
+                {
+                    predicateBody = Expression.NotEqual(propAccess, Expression.Constant(null, propType));
+                }
+                else
+                {
+                    predicateBody = Expression.Constant(true);
+                }
+                
+                var predicate = Expression.Lambda(predicateBody, innerParam);
+                
                 var countMethod = typeof(Enumerable)
                     .GetMethods()
-                    .First(m => m.Name == nameof(Enumerable.Count) && m.GetParameters().Length == 1)
+                    .First(m => m.Name == nameof(Enumerable.Count) && m.GetParameters().Length == 2)
                     .MakeGenericMethod(typeof(TModel));
+                
                 return Expression.Convert(
-                    Expression.Call(countMethod, gParam),
+                    Expression.Call(countMethod, gParam, predicate),
                     typeof(double));
             }
 
