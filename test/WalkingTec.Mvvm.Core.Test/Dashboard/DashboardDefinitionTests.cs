@@ -21,7 +21,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
                 Sharing = new SharingDefinition { Mode = "public" },
                 Layout = new List<LayoutItem>
                 {
-                    new LayoutItem { Id = "widget1", X = 0, Y = 0, W = 2, H = 2 }
+                    new LayoutItem { Id = "widget1", X = 0, Y = 0, W = 2, H = 2, LG = 3, MD = 4, SM = 6, XS = 12 }
                 },
                 Widgets = new Dictionary<string, WidgetDefinition>
                 {
@@ -48,6 +48,10 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             deserialized.Title.Should().Be("Test Dashboard");
             deserialized.Layout.Should().HaveCount(1);
             deserialized.Layout[0].Id.Should().Be("widget1");
+            deserialized.Layout[0].LG.Should().Be(3);
+            deserialized.Layout[0].MD.Should().Be(4);
+            deserialized.Layout[0].SM.Should().Be(6);
+            deserialized.Layout[0].XS.Should().Be(12);
             deserialized.Widgets.Should().ContainKey("widget1");
         }
 

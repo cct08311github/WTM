@@ -38,6 +38,12 @@ public class LayoutItem
     public int Y { get; set; }
     public int W { get; set; } = 3;
     public int H { get; set; } = 1;
+    
+    // Responsive breakpoints: lg (desktop), md (tablet), sm (small tablet), xs (mobile)
+    public int? LG { get; set; }  // Large desktop (>=1200px)
+    public int? MD { get; set; }  // Tablet landscape (>=992px)
+    public int? SM { get; set; }  // Tablet portrait (>=768px)
+    public int? XS { get; set; }  // Mobile (<768px)
 }
 
 public class DashboardFilter
