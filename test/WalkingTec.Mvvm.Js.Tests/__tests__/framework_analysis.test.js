@@ -1245,7 +1245,7 @@ describe('[cov] waReq.renderChart — all branches', () => {
 
     test('renderChart with echarts → calls init and setOption', () => {
         const setOption = jest.fn();
-        global.echarts = { init: jest.fn(function() { return { setOption, on: jest.fn(), dispose: jest.fn() }; }) };
+        global.echarts = { init: jest.fn(function() { return { setOption, on: jest.fn(), dispose: jest.fn() }; }), getInstanceByDom: jest.fn() };
         waReq.renderChart('scovR2', sampleResult, sampleReq, sampleDimFields, makeContainer(), 'bar');
         expect(global.echarts.init).toHaveBeenCalled();
         expect(setOption).toHaveBeenCalled();
@@ -1253,21 +1253,21 @@ describe('[cov] waReq.renderChart — all branches', () => {
 
     test('forceChartType=line → series[0].type=line', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }) };
+        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }), getInstanceByDom: jest.fn() };
         waReq.renderChart('scovR3', sampleResult, sampleReq, sampleDimFields, makeContainer(), 'line');
         expect(opts[0].series[0].type).toBe('line');
     });
 
     test('forceChartType=bar-stacked → stack=total', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }) };
+        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }), getInstanceByDom: jest.fn() };
         waReq.renderChart('scovR4', sampleResult, sampleReq, sampleDimFields, makeContainer(), 'bar-stacked');
         expect(opts[0].series[0].stack).toBe('total');
     });
 
     test('date dim (no force) → detectChartType → line', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }) };
+        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }), getInstanceByDom: jest.fn() };
         const dateDim = [{ fieldName: 'Date', isDate: true }];
         const dateReq = { dimensions: ['Date'], measures: [{ field: 'Amount', func: 'Sum' }] };
         waReq.renderChart('scovR5', sampleResult, dateReq, dateDim, makeContainer());
@@ -1276,7 +1276,7 @@ describe('[cov] waReq.renderChart — all branches', () => {
 
     test('2 dims (no force) → detectChartType → bar-stacked', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }) };
+        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }), getInstanceByDom: jest.fn() };
         const twoDimReq = { dimensions: ['R', 'C'], measures: [{ field: 'A', func: 'Sum' }] };
         const twoDimFields = [{ fieldName: 'R', isDate: false }, { fieldName: 'C', isDate: false }];
         waReq.renderChart('scovR6', { columns: ['R', 'C', 'A_Sum'], rows: [{ R: 'N', C: 'X', A_Sum: 10 }] }, twoDimReq, twoDimFields, makeContainer());
@@ -1285,7 +1285,7 @@ describe('[cov] waReq.renderChart — all branches', () => {
 
     test('no dims (card) → renders HTML cards, no echarts', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }) };
+        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }), getInstanceByDom: jest.fn() };
         const noDimReq = { dimensions: [], measures: [{ field: 'Amount', func: 'Sum' }] };
         const container = makeContainer();
         waReq.renderChart('scovR7', { columns: ['Amount_Sum'], rows: [{ Amount_Sum: 42 }] }, noDimReq, [], container);
@@ -1297,7 +1297,7 @@ describe('[cov] waReq.renderChart — all branches', () => {
 
     test('dim not in dimFields → isDate defaults false, single measure → bar type (#297)', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }) };
+        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }), getInstanceByDom: jest.fn() };
         const unknownReq = { dimensions: ['Unknown'], measures: [{ field: 'A', func: 'Sum' }] };
         waReq.renderChart('scovR8', { columns: ['Unknown', 'A_Sum'], rows: [{ Unknown: 'X', A_Sum: 1 }] }, unknownReq, [], makeContainer());
         expect(opts[0].series[0].type).toBe('bar');
@@ -1305,7 +1305,7 @@ describe('[cov] waReq.renderChart — all branches', () => {
 
     test('forceChartType=pie → pie series with name/value data', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }) };
+        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }), getInstanceByDom: jest.fn() };
         waReq.renderChart('scovR9', sampleResult, sampleReq, sampleDimFields, makeContainer(), 'pie');
         expect(opts[0].series[0].type).toBe('pie');
         expect(opts[0].series[0].data[0]).toEqual({ name: 'North', value: 100 });
@@ -1440,7 +1440,8 @@ describe('[cov] query with real meta — dimFields filter + chart toggle click',
         global.echarts = {
             init: jest.fn(function() {
                 return { setOption: jest.fn(function(o) { setOptionCalls.push(o); }), on: jest.fn(), dispose: jest.fn() };
-            })
+            }),
+            getInstanceByDom: jest.fn()
         };
         global.fetch = jest.fn()
             .mockResolvedValueOnce({
@@ -3116,7 +3117,7 @@ describe('[cov] waReq renderChart — dual axis lines 1208-1285 #307', () => {
 
     test('dual axis: originalData set, yAxisIndex assigned, formatter defined', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(o => opts.push(o)), on: jest.fn(), dispose: jest.fn() })) };
+        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(o => opts.push(o)), on: jest.fn(), dispose: jest.fn() })), getInstanceByDom: jest.fn() };
         const result = {
             columns: ['Region', 'Amount_Sum', 'Qty_Count'],
             rows: [{ Region: 'A', Amount_Sum: 1000000, Qty_Count: 5 }, { Region: 'B', Amount_Sum: 2000000, Qty_Count: 8 }],
@@ -3132,7 +3133,7 @@ describe('[cov] waReq renderChart — dual axis lines 1208-1285 #307', () => {
 
     test('dual axis chart.on click handler triggers drillDown (line 1281)', () => {
         const onHandlers = {};
-        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(), on: jest.fn((ev, fn) => { onHandlers[ev] = fn; }), dispose: jest.fn() })) };
+        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(), on: jest.fn((ev, fn) => { onHandlers[ev] = fn; }), dispose: jest.fn() })), getInstanceByDom: jest.fn() };
         const result = {
             columns: ['Region', 'Amount_Sum', 'Qty_Count'],
             rows: [{ Region: 'A', Amount_Sum: 1000000, Qty_Count: 5 }],
@@ -3160,7 +3161,7 @@ describe('[cov] waReq renderChart — dual axis lines 1208-1285 #307', () => {
 
     test('dual axis tooltip formatter — 億 unit (line 1261)', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(o => opts.push(o)), on: jest.fn(), dispose: jest.fn() })) };
+        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(o => opts.push(o)), on: jest.fn(), dispose: jest.fn() })), getInstanceByDom: jest.fn() };
         const result = {
             columns: ['Region', 'Amount_Sum', 'Qty_Count'],
             rows: [{ Region: 'A', Amount_Sum: 200000000, Qty_Count: 3 }],
@@ -3179,7 +3180,7 @@ describe('[cov] waReq renderChart — dual axis lines 1208-1285 #307', () => {
 
     test('dual axis tooltip formatter — null value shows dash (line 1258)', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(o => opts.push(o)), on: jest.fn(), dispose: jest.fn() })) };
+        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(o => opts.push(o)), on: jest.fn(), dispose: jest.fn() })), getInstanceByDom: jest.fn() };
         const result = {
             columns: ['Region', 'Amount_Sum', 'Qty_Count'],
             rows: [{ Region: 'A', Amount_Sum: null, Qty_Count: 3 }, { Region: 'B', Amount_Sum: 5000000, Qty_Count: 8 }],
@@ -3196,7 +3197,7 @@ describe('[cov] waReq renderChart — dual axis lines 1208-1285 #307', () => {
 
     test('dual axis tooltip formatter — no unit for small values (line 1263)', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(o => opts.push(o)), on: jest.fn(), dispose: jest.fn() })) };
+        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(o => opts.push(o)), on: jest.fn(), dispose: jest.fn() })), getInstanceByDom: jest.fn() };
         const result = {
             columns: ['Region', 'Amount_Sum', 'Qty_Count'],
             rows: [{ Region: 'A', Amount_Sum: 200, Qty_Count: 2 }, { Region: 'B', Amount_Sum: 2000, Qty_Count: 3 }],

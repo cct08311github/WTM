@@ -625,7 +625,13 @@
                 var rd = document.getElementById('analysis-result-' + gridId);
                 if (!rd) return;
                 var oldChart = document.getElementById('analysis-chart-' + gridId);
-                if (oldChart && oldChart.parentNode) oldChart.parentNode.removeChild(oldChart);
+                if (oldChart) {
+                    if (window.echarts) {
+                        var instance = window.echarts.getInstanceByDom(oldChart);
+                        if (instance) instance.dispose();
+                    }
+                    if (oldChart.parentNode) oldChart.parentNode.removeChild(oldChart);
+                }
                 var oldCards = rd.querySelector('.analysis-cards');
                 if (oldCards && oldCards.parentNode) oldCards.parentNode.removeChild(oldCards);
                 renderChart(gridId, st.lastResult, st.lastReq, st.lastDimFields, rd, ct);
