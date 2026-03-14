@@ -2,7 +2,7 @@ name: WTM Build and Test
 on:
   workflow_dispatch:
   push:
-    branches: [ dotnet8, "feature/**" ]
+    branches: [ dotnet8, "feature/**", "feat/**" ]
   pull_request:
     branches: [ dotnet8 ]
 jobs:
