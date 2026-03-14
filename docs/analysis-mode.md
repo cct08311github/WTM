@@ -648,7 +648,7 @@ ListVM 的 FullName 沒有在 `AnalysisVmRegistry` 中登記。確認：
 
 **Q：`FilterOperator.In` 支援嗎？**
 
-`In` 運算子已從 `FilterOperator` enum 移除（8.1.17）。若需多值過濾，目前可用多個 `Eq` + `Contains` 條件組合替代；Phase 2 評估重新加入完整的 `In` 支援。
+支援。可以使用 `In` 運算子進行多值過濾。
 
 ---
 

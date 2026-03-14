@@ -792,7 +792,8 @@
         { value: 'Gte',      label: '大於等於' },
         { value: 'Lt',       label: '小於' },
         { value: 'Lte',      label: '小於等於' },
-        { value: 'Contains', label: '包含' }
+        { value: 'Contains', label: '包含' },
+        { value: 'In',       label: 'In' }
     ];
 
     /**
