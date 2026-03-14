@@ -1102,7 +1102,17 @@
                     params.forEach(function (p) {
                         var s = series[p.seriesIndex];
                         var original = s.originalData ? s.originalData[p.dataIndex] : p.value;
-                        lines.push(p.marker + ' ' + p.seriesName + ': ' + (original == null ? '-' : original));
+                        var scale = scales[p.seriesIndex];
+                        var label;
+                        if (original == null) {
+                            label = '-';
+                        } else if (scale && scale.unit) {
+                            var scaled = (original / scale.divisor).toFixed(2).replace(/\.?0+$/, '');
+                            label = scaled + ' ' + scale.unit + '\uff08' + original + '\uff09';
+                        } else {
+                            label = original;
+                        }
+                        lines.push(p.marker + ' ' + p.seriesName + ': ' + label);
                     });
                     return lines.join('<br/>');
                 };
