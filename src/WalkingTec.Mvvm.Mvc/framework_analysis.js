@@ -97,6 +97,18 @@
             .map(function (f) { return f.name; });
     }
 
+    var _FUNC_LABEL_MAP = { Sum: '合計', Count: '計數', Avg: '平均', Max: '最大', Min: '最小' };
+
+    function getFuncLabel(func) {
+        return _FUNC_LABEL_MAP[func] || func;
+    }
+
+    function formatNumeric(val) {
+        var n = Number(val);
+        if (isNaN(n)) return String(val);
+        return n.toLocaleString('zh-TW', { maximumFractionDigits: 2 });
+    }
+
     // ─── 狀態 ─────────────────────────────────────────────────────────────────
     var _state = {};
 
@@ -146,6 +158,8 @@
             var hSel = document.createElement('select');
             hSel.className = 'analysis-hierarchy-select';
             hSel.dataset.field = field.fieldName;
+            hSel.disabled = true;
+            hSel.title = '日期層級分組即將推出';
             [
                 { value: 'Year', text: '年' },
                 { value: 'Quarter', text: '季' },
@@ -906,6 +920,33 @@
 
     function renderTable(gridId, result, container, dateDims) {
         dateDims = dateDims || {};
+        // Build column label map: col key → human-friendly header
+        // and measure set: col key → true (for numeric formatting)
+        var colLabelMap = {};
+        var msrColSet = {};
+        var st = _state[gridId];
+        var fields = (st && st.fields) ? st.fields : [];
+        var fieldByName = {};
+        fields.forEach(function (f) { fieldByName[f.fieldName] = f; });
+        result.columns.forEach(function (col) {
+            // Measure columns are encoded as "FieldName_Func" (e.g. "Amount_Sum")
+            var underIdx = col.lastIndexOf('_');
+            if (underIdx > 0) {
+                var fieldPart = col.substring(0, underIdx);
+                var funcPart = col.substring(underIdx + 1);
+                var meta = fieldByName[fieldPart];
+                if (meta && meta.kind === 'Measure') {
+                    var label = (meta.displayName || meta.title || fieldPart) + ' ' + getFuncLabel(funcPart);
+                    colLabelMap[col] = label;
+                    msrColSet[col] = true;
+                    return;
+                }
+            }
+            // Dimension column or unmatched: use displayName if available
+            var dimMeta = fieldByName[col];
+            colLabelMap[col] = (dimMeta && (dimMeta.displayName || dimMeta.title)) || col;
+        });
+
         var table = document.createElement('table');
         table.className = 'layui-table';
         table.style.marginTop = '10px';
@@ -913,7 +954,7 @@
         var headerRow = document.createElement('tr');
         result.columns.forEach(function (col) {
             var th = document.createElement('th');
-            th.textContent = col;
+            th.textContent = colLabelMap[col] || col;
             headerRow.appendChild(th);
         });
         thead.appendChild(headerRow);
@@ -924,8 +965,17 @@
             result.columns.forEach(function (col) {
                 var td = document.createElement('td');
                 var val = row[col];
-                td.textContent = (val !== null && val !== undefined)
-                    ? (dateDims[col] ? formatDateKey(val) : String(val)) : '';
+                if (val !== null && val !== undefined) {
+                    if (dateDims[col]) {
+                        td.textContent = formatDateKey(val);
+                    } else if (msrColSet[col] && typeof val === 'number') {
+                        td.textContent = formatNumeric(val);
+                    } else {
+                        td.textContent = String(val);
+                    }
+                } else {
+                    td.textContent = '';
+                }
                 tr.appendChild(td);
             });
             tbody.appendChild(tr);
@@ -1041,7 +1091,17 @@
                     params.forEach(function (p) {
                         var s = series[p.seriesIndex];
                         var original = s.originalData ? s.originalData[p.dataIndex] : p.value;
-                        lines.push(p.marker + ' ' + p.seriesName + ': ' + (original == null ? '-' : original));
+                        var scale = scales[p.seriesIndex];
+                        var label;
+                        if (original == null) {
+                            label = '-';
+                        } else if (scale && scale.unit) {
+                            var scaled = (original / scale.divisor).toFixed(2).replace(/\.?0+$/, '');
+                            label = scaled + ' ' + scale.unit + '\uff08' + original + '\uff09';
+                        } else {
+                            label = original;
+                        }
+                        lines.push(p.marker + ' ' + p.seriesName + ': ' + label);
                     });
                     return lines.join('<br/>');
                 };
