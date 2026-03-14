@@ -108,6 +108,7 @@ namespace WalkingTec.Mvvm.Mvc
             var hierarchyError = ValidateDimensionHierarchies(req.DimensionHierarchies, fields);
             if (hierarchyError != null) return BadRequest(hierarchyError);
 
+<<<<<<< HEAD
             var sw = Stopwatch.StartNew();
             try
             {
@@ -115,6 +116,13 @@ namespace WalkingTec.Mvvm.Mvc
                 sw.Stop();
                 _logger.LogInformation("Analysis query completed ListVm={ListVmType} Dims={DimCount} Msrs={MsrCount} ElapsedMs={Elapsed} Truncated={Truncated}",
                     req.ListVmType, req.Dimensions.Count, req.Measures.Count, sw.ElapsedMilliseconds, result.Truncated);
+=======
+            string? identityKey = Wtm?.LoginUserInfo != null ? $"{Wtm.LoginUserInfo.CurrentTenant}_{Wtm.LoginUserInfo.UserId}" : null;
+
+            try
+            {
+                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields, identityKey: identityKey);
+>>>>>>> origin/dotnet8
                 return new JsonResult(result, _camelCase);
             }
             catch (InvalidOperationException ex)
@@ -151,6 +159,7 @@ namespace WalkingTec.Mvvm.Mvc
             var hierarchyError = ValidateDimensionHierarchies(req.DimensionHierarchies, fields);
             if (hierarchyError != null) return BadRequest(hierarchyError);
 
+<<<<<<< HEAD
             var sw = Stopwatch.StartNew();
             try
             {
@@ -158,6 +167,13 @@ namespace WalkingTec.Mvvm.Mvc
                 sw.Stop();
                 _logger.LogInformation("Analysis pivot completed ListVm={ListVmType} Dims={DimCount} Msrs={MsrCount} Pivot={PivotDim} ElapsedMs={Elapsed}",
                     req.ListVmType, req.Dimensions.Count, req.Measures.Count, req.PivotDimension, sw.ElapsedMilliseconds);
+=======
+            string? identityKey = Wtm?.LoginUserInfo != null ? $"{Wtm.LoginUserInfo.CurrentTenant}_{Wtm.LoginUserInfo.UserId}" : null;
+
+            try
+            {
+                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields, identityKey: identityKey);
+>>>>>>> origin/dotnet8
                 return new JsonResult(result, _camelCase);
             }
             catch (InvalidOperationException ex)
@@ -202,6 +218,7 @@ namespace WalkingTec.Mvvm.Mvc
             var hierarchyError = ValidateDimensionHierarchies(req.DimensionHierarchies, fields);
             if (hierarchyError != null) return BadRequest(hierarchyError);
 
+<<<<<<< HEAD
             var sw = Stopwatch.StartNew();
             AnalysisQueryResponse result;
             try
@@ -216,6 +233,13 @@ namespace WalkingTec.Mvvm.Mvc
                 _logger.LogWarning(ex, "Analysis export failed ListVm={ListVmType}", req.ListVmType);
                 return BadRequest(ex.Message);
             }
+=======
+            string? identityKey = Wtm?.LoginUserInfo != null ? $"{Wtm.LoginUserInfo.CurrentTenant}_{Wtm.LoginUserInfo.UserId}" : null;
+
+            AnalysisQueryResponse result;
+            try { result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields, identityKey: identityKey); }
+            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+>>>>>>> origin/dotnet8
 
             if (result.Truncated)
                 Response.Headers["X-Analysis-Truncated"] = "true";
@@ -266,6 +290,7 @@ namespace WalkingTec.Mvvm.Mvc
             var hierarchyError = ValidateDimensionHierarchies(req.DimensionHierarchies, fields);
             if (hierarchyError != null) return BadRequest(hierarchyError);
 
+<<<<<<< HEAD
             var sw = Stopwatch.StartNew();
             AnalysisPivotResponse result;
             try
@@ -280,6 +305,13 @@ namespace WalkingTec.Mvvm.Mvc
                 _logger.LogWarning(ex, "Analysis pivot export failed ListVm={ListVmType}", req.ListVmType);
                 return BadRequest(ex.Message);
             }
+=======
+            string? identityKey = Wtm?.LoginUserInfo != null ? $"{Wtm.LoginUserInfo.CurrentTenant}_{Wtm.LoginUserInfo.UserId}" : null;
+
+            AnalysisPivotResponse result;
+            try { result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields, identityKey: identityKey); }
+            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+>>>>>>> origin/dotnet8
 
             // Adapt AnalysisPivotResponse to AnalysisQueryResponse format for CSV/Excel export
             var queryResult = new AnalysisQueryResponse
