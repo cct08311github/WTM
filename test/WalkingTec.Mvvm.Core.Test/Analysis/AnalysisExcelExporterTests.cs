@@ -289,5 +289,112 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.IsNotNull(drawing);
             Assert.IsTrue(drawing.GetCharts().Count >= 1);
         }
+
+        // ─── #281: ComputeScale ─────────────────────────────────────────────
+
+        [TestMethod]
+        public void ComputeScale_small_value_no_unit()
+        {
+            var (divisor, unit) = AnalysisExcelExporter.ComputeScale(9999);
+            Assert.AreEqual(1, divisor);
+            Assert.AreEqual("", unit);
+        }
+
+        [TestMethod]
+        public void ComputeScale_wan_threshold()
+        {
+            var (divisor, unit) = AnalysisExcelExporter.ComputeScale(50000);
+            Assert.AreEqual(10_000, divisor);
+            Assert.AreEqual("萬", unit);
+        }
+
+        [TestMethod]
+        public void ComputeScale_yi_threshold()
+        {
+            var (divisor, unit) = AnalysisExcelExporter.ComputeScale(200_000_000);
+            Assert.AreEqual(100_000_000, divisor);
+            Assert.AreEqual("億", unit);
+        }
+
+        // ─── #281: Column header scaling ────────────────────────────────────
+
+        [TestMethod]
+        public void Export_header_appends_unit_for_large_values()
+        {
+            var resp = MakeResponse(
+                new List<string> { "Region", "Amount_Sum" },
+                new List<Dictionary<string, object?>>
+                {
+                    new() { ["Region"] = "North", ["Amount_Sum"] = 5_000_000m },
+                });
+
+            var wb = OpenWorkbook(AnalysisExcelExporter.Export(resp));
+            var header = wb.GetSheetAt(0).GetRow(0);
+            Assert.AreEqual("Amount_Sum（百萬）", header.GetCell(1).StringCellValue);
+        }
+
+        [TestMethod]
+        public void Export_header_no_unit_for_small_values()
+        {
+            var resp = MakeResponse(
+                new List<string> { "Region", "Amount_Sum" },
+                new List<Dictionary<string, object?>>
+                {
+                    new() { ["Region"] = "North", ["Amount_Sum"] = 500m },
+                });
+
+            var wb = OpenWorkbook(AnalysisExcelExporter.Export(resp));
+            var header = wb.GetSheetAt(0).GetRow(0);
+            Assert.AreEqual("Amount_Sum", header.GetCell(1).StringCellValue);
+        }
+
+        // ─── #281: Dual axis charts ─────────────────────────────────────────
+
+        private static AnalysisQueryResponse MakeDualMeasureResponse()
+        {
+            return MakeResponse(
+                new List<string> { "Region", "Amount_Sum", "Qty_Count" },
+                new List<Dictionary<string, object?>>
+                {
+                    new() { ["Region"] = "North", ["Amount_Sum"] = 1_000_000m, ["Qty_Count"] = 5m },
+                    new() { ["Region"] = "South", ["Amount_Sum"] = 2_000_000m, ["Qty_Count"] = 8m },
+                });
+        }
+
+        [TestMethod]
+        public void Export_dual_axis_bar_chart_does_not_throw()
+        {
+            var resp = MakeDualMeasureResponse();
+            var bytes = AnalysisExcelExporter.Export(resp, includeChart: true, chartType: "bar");
+            var wb = OpenWorkbook(bytes);
+            var sheet = wb.GetSheetAt(0) as XSSFSheet;
+            Assert.IsNotNull(sheet);
+            var drawing = sheet.GetDrawingPatriarch() as XSSFDrawing;
+            Assert.IsNotNull(drawing);
+            Assert.IsTrue(drawing.GetCharts().Count >= 1);
+        }
+
+        [TestMethod]
+        public void Export_dual_axis_line_chart_does_not_throw()
+        {
+            var resp = MakeDualMeasureResponse();
+            var bytes = AnalysisExcelExporter.Export(resp, includeChart: true, chartType: "line");
+            var wb = OpenWorkbook(bytes);
+            var sheet = wb.GetSheetAt(0) as XSSFSheet;
+            Assert.IsNotNull(sheet);
+            var drawing = sheet.GetDrawingPatriarch() as XSSFDrawing;
+            Assert.IsNotNull(drawing);
+            Assert.IsTrue(drawing.GetCharts().Count >= 1);
+        }
+
+        [TestMethod]
+        public void Export_single_measure_backward_compat()
+        {
+            // Single measure should still work exactly as before
+            var resp = MakeTwoRowResponse();
+            var bytes = AnalysisExcelExporter.Export(resp, includeChart: true, chartType: "bar");
+            Assert.IsNotNull(bytes);
+            Assert.IsTrue(bytes.Length > 0);
+        }
     }
 }

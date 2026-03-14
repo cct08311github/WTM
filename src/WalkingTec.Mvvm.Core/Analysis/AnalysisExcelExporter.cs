@@ -1,4 +1,5 @@
 #nullable enable
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -25,10 +26,36 @@ namespace WalkingTec.Mvvm.Core.Analysis
             using var workbook = new XSSFWorkbook();
             var sheet = workbook.CreateSheet("Analysis");
 
-            // Header row
+            // Header row — append unit label for large-value measure columns
             var header = sheet.CreateRow(0);
             for (int i = 0; i < result.Columns.Count; i++)
-                header.CreateCell(i).SetCellValue(result.Columns[i]);
+            {
+                var colName = result.Columns[i];
+                var headerText = colName;
+
+                // Check if this column has numeric data and compute scale
+                if (result.Rows.Count > 0 && i >= 1)
+                {
+                    double maxAbs = 0;
+                    bool isNumeric = false;
+                    foreach (var row in result.Rows)
+                    {
+                        if (row.TryGetValue(colName, out var val) && val is decimal or double or float or int or long)
+                        {
+                            isNumeric = true;
+                            var abs = Math.Abs(Convert.ToDouble(val));
+                            if (abs > maxAbs) maxAbs = abs;
+                        }
+                    }
+                    if (isNumeric)
+                    {
+                        var (_, unit) = ComputeScale(maxAbs);
+                        if (!string.IsNullOrEmpty(unit))
+                            headerText = $"{colName}（{unit}）";
+                    }
+                }
+                header.CreateCell(i).SetCellValue(headerText);
+            }
 
             // Data rows
             for (int r = 0; r < result.Rows.Count; r++)
@@ -75,6 +102,42 @@ namespace WalkingTec.Mvvm.Core.Analysis
             return ms.ToArray();
         }
 
+        internal static (double Divisor, string Unit) ComputeScale(double maxAbsValue)
+        {
+            var abs = Math.Abs(maxAbsValue);
+            if (abs >= 100_000_000) return (100_000_000, "億");
+            if (abs >= 1_000_000) return (1_000_000, "百萬");
+            if (abs >= 10_000) return (10_000, "萬");
+            return (1, "");
+        }
+
+        internal static bool DetectDualAxis(AnalysisQueryResponse result, List<int> measureIndices)
+        {
+            if (measureIndices.Count != 2 || result.Rows.Count == 0) return false;
+
+            double max0 = 0, max1 = 0;
+            var col0 = result.Columns[measureIndices[0]];
+            var col1 = result.Columns[measureIndices[1]];
+
+            foreach (var row in result.Rows)
+            {
+                if (row.TryGetValue(col0, out var v0))
+                {
+                    var a0 = Math.Abs(Convert.ToDouble(v0));
+                    if (a0 > max0) max0 = a0;
+                }
+                if (row.TryGetValue(col1, out var v1))
+                {
+                    var a1 = Math.Abs(Convert.ToDouble(v1));
+                    if (a1 > max1) max1 = a1;
+                }
+            }
+
+            if (max0 == 0 || max1 == 0) return false;
+            var ratio = max0 > max1 ? max0 / max1 : max1 / max0;
+            return ratio >= 10;
+        }
+
         private static (IChart chart, List<int> measureIndices) CreateChartBase(ISheet sheet, AnalysisQueryResponse result)
         {
             var drawing = sheet.CreateDrawingPatriarch();
@@ -116,7 +179,17 @@ namespace WalkingTec.Mvvm.Core.Analysis
             var valAxis = chart.ChartAxisFactory.CreateValueAxis(AxisPosition.Left);
             valAxis.Crosses = AxisCrosses.AutoZero;
 
-            chart.Plot(data, catAxis, valAxis);
+            if (DetectDualAxis(result, measureIndices))
+            {
+                var valAxisRight = chart.ChartAxisFactory.CreateValueAxis(AxisPosition.Right);
+                valAxisRight.Crosses = AxisCrosses.AutoZero;
+                chart.Plot(data, catAxis, valAxis, valAxisRight);
+            }
+            else
+            {
+                chart.Plot(data, catAxis, valAxis);
+            }
+
             chart.GetOrCreateLegend().Position = LegendPosition.Bottom;
         }
 
@@ -140,7 +213,17 @@ namespace WalkingTec.Mvvm.Core.Analysis
             var valAxis = chart.ChartAxisFactory.CreateValueAxis(AxisPosition.Left);
             valAxis.Crosses = AxisCrosses.AutoZero;
 
-            chart.Plot(data, catAxis, valAxis);
+            if (DetectDualAxis(result, measureIndices))
+            {
+                var valAxisRight = chart.ChartAxisFactory.CreateValueAxis(AxisPosition.Right);
+                valAxisRight.Crosses = AxisCrosses.AutoZero;
+                chart.Plot(data, catAxis, valAxis, valAxisRight);
+            }
+            else
+            {
+                chart.Plot(data, catAxis, valAxis);
+            }
+
             chart.GetOrCreateLegend().Position = LegendPosition.Bottom;
         }
 

@@ -2121,3 +2121,186 @@ describe('Pivot mode in query()', () => {
         expect(mockAlert).toHaveBeenCalledWith('請選擇一個樞紐(Pivot)維度');
     });
 });
+
+// ─── #281: computeScale ──────────────────────────────────────────────────────
+describe('computeScale', () => {
+    test('0 → divisor 1, no unit', () => {
+        expect(waReq.computeScale(0)).toEqual({ divisor: 1, unit: '' });
+    });
+
+    test('9999 → divisor 1, no unit', () => {
+        expect(waReq.computeScale(9999)).toEqual({ divisor: 1, unit: '' });
+    });
+
+    test('10000 → divisor 10000, unit 萬', () => {
+        expect(waReq.computeScale(10000)).toEqual({ divisor: 10000, unit: '萬' });
+    });
+
+    test('999999 → divisor 10000, unit 萬', () => {
+        expect(waReq.computeScale(999999)).toEqual({ divisor: 10000, unit: '萬' });
+    });
+
+    test('1000000 → divisor 1000000, unit 百萬', () => {
+        expect(waReq.computeScale(1000000)).toEqual({ divisor: 1000000, unit: '百萬' });
+    });
+
+    test('100000000 → divisor 100000000, unit 億', () => {
+        expect(waReq.computeScale(100000000)).toEqual({ divisor: 100000000, unit: '億' });
+    });
+
+    test('negative value uses absolute value', () => {
+        expect(waReq.computeScale(-5000000)).toEqual({ divisor: 1000000, unit: '百萬' });
+    });
+});
+
+// ─── #281: scaleSeriesData ───────────────────────────────────────────────────
+describe('scaleSeriesData', () => {
+    test('divisor=1 returns data unchanged', () => {
+        var data = [100, 200, 300];
+        expect(waReq.scaleSeriesData(data, 1)).toEqual([100, 200, 300]);
+    });
+
+    test('divisor=10000 scales values', () => {
+        expect(waReq.scaleSeriesData([10000, 50000], 10000)).toEqual([1, 5]);
+    });
+
+    test('null values preserved as null', () => {
+        expect(waReq.scaleSeriesData([10000, null, 30000], 10000)).toEqual([1, null, 3]);
+    });
+
+    test('empty array returns empty', () => {
+        expect(waReq.scaleSeriesData([], 10000)).toEqual([]);
+    });
+});
+
+// ─── #281: detectDualAxis ────────────────────────────────────────────────────
+describe('detectDualAxis', () => {
+    const m2 = [{ field: 'Amount', func: 'Sum' }, { field: 'Qty', func: 'Count' }];
+
+    test('non-2 measures → false', () => {
+        expect(waReq.detectDualAxis(
+            [{ Amount_Sum: 1000000, Qty_Count: 10 }],
+            [{ field: 'Amount', func: 'Sum' }]
+        )).toBe(false);
+    });
+
+    test('empty rows → false', () => {
+        expect(waReq.detectDualAxis([], m2)).toBe(false);
+    });
+
+    test('ratio < 10x → false', () => {
+        expect(waReq.detectDualAxis(
+            [{ Amount_Sum: 100, Qty_Count: 20 }], m2
+        )).toBe(false);
+    });
+
+    test('ratio exactly 10x → true', () => {
+        expect(waReq.detectDualAxis(
+            [{ Amount_Sum: 100, Qty_Count: 10 }], m2
+        )).toBe(true);
+    });
+
+    test('ratio > 10x → true', () => {
+        expect(waReq.detectDualAxis(
+            [{ Amount_Sum: 1000000, Qty_Count: 5 }], m2
+        )).toBe(true);
+    });
+
+    test('reversed ratio > 10x → true', () => {
+        expect(waReq.detectDualAxis(
+            [{ Amount_Sum: 5, Qty_Count: 1000000 }], m2
+        )).toBe(true);
+    });
+
+    test('one max is 0 → false', () => {
+        expect(waReq.detectDualAxis(
+            [{ Amount_Sum: 0, Qty_Count: 100 }], m2
+        )).toBe(false);
+    });
+
+    test('multiple rows uses max across all', () => {
+        expect(waReq.detectDualAxis([
+            { Amount_Sum: 100, Qty_Count: 5 },
+            { Amount_Sum: 500000, Qty_Count: 8 },
+        ], m2)).toBe(true);
+    });
+});
+
+// ─── #281: renderChart dual axis ─────────────────────────────────────────────
+describe('renderChart — dual Y-axis (#281)', () => {
+    function makeChartEnv() {
+        const capturedOptions = [];
+        const { wa } = makeEnv({
+            echarts: {
+                init: jest.fn(() => ({
+                    setOption: jest.fn((opt) => { capturedOptions.push(opt); }),
+                    on: jest.fn(),
+                    dispose: jest.fn(),
+                })),
+            },
+        });
+        return { wa, capturedOptions };
+    }
+
+    function makeContainer() {
+        return {
+            appendChild: jest.fn(),
+            children: [],
+            style: {},
+            id: '',
+        };
+    }
+
+    test('dual axis produces yAxis array with 2 entries', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const result = {
+            columns: ['Region', 'Amount_Sum', 'Qty_Count'],
+            rows: [
+                { Region: 'North', Amount_Sum: 1000000, Qty_Count: 5 },
+                { Region: 'South', Amount_Sum: 2000000, Qty_Count: 8 },
+            ],
+        };
+        const req = {
+            dimensions: ['Region'],
+            measures: [{ field: 'Amount', func: 'Sum' }, { field: 'Qty', func: 'Count' }],
+        };
+        const dims = [{ fieldName: 'Region', isDate: false }];
+        wa.renderChart('g1', result, req, dims, makeContainer());
+        expect(capturedOptions.length).toBe(1);
+        expect(Array.isArray(capturedOptions[0].yAxis)).toBe(true);
+        expect(capturedOptions[0].yAxis.length).toBe(2);
+        expect(capturedOptions[0].yAxis[0].position).toBe('left');
+        expect(capturedOptions[0].yAxis[1].position).toBe('right');
+    });
+
+    test('dual axis series have yAxisIndex 0 and 1', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const result = {
+            columns: ['Region', 'Amount_Sum', 'Qty_Count'],
+            rows: [{ Region: 'North', Amount_Sum: 1000000, Qty_Count: 5 }],
+        };
+        const req = {
+            dimensions: ['Region'],
+            measures: [{ field: 'Amount', func: 'Sum' }, { field: 'Qty', func: 'Count' }],
+        };
+        wa.renderChart('g1', result, req, [{ fieldName: 'Region', isDate: false }], makeContainer());
+        expect(capturedOptions[0].series[0].yAxisIndex).toBe(0);
+        expect(capturedOptions[0].series[1].yAxisIndex).toBe(1);
+    });
+
+    test('single measure backward compat — yAxis is object not array', () => {
+        const { wa, capturedOptions } = makeChartEnv();
+        const result = {
+            columns: ['Region', 'Amount_Sum'],
+            rows: [{ Region: 'North', Amount_Sum: 100 }, { Region: 'South', Amount_Sum: 200 }],
+        };
+        const req = {
+            dimensions: ['Region'],
+            measures: [{ field: 'Amount', func: 'Sum' }],
+        };
+        // Force 'bar' to ensure it enters the else branch (1 dim + 1 measure defaults to 'pie')
+        wa.renderChart('g1', result, req, [{ fieldName: 'Region', isDate: false }], makeContainer(), 'bar');
+        expect(Array.isArray(capturedOptions[0].yAxis)).toBe(false);
+        expect(capturedOptions[0].yAxis).toEqual({ type: 'value' });
+    });
+});
