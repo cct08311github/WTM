@@ -13,6 +13,16 @@ public class EtlJobDefinitionVM : BaseCRUDVM<EtlJobDefinition>
 {
     public override void Validate()
     {
+        if (!string.IsNullOrEmpty(Entity.CronExpression))
+        {
+            var parts = Entity.CronExpression.Split(new[] { ' ' }, System.StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 5)
+            {
+                // Auto-convert Unix Cron (5 fields) to Quartz Cron (6 fields)
+                Entity.CronExpression = "0 " + Entity.CronExpression;
+            }
+        }
+
         base.Validate();
 
         if (!string.IsNullOrEmpty(Entity.CronExpression) &&
