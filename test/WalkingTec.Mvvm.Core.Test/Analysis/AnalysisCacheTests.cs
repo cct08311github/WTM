@@ -168,7 +168,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             ctx.SaveChanges();
 
             var whitelist = AnalysisFieldScanner.ScanModel(typeof(SaleRecord));
-            var engine = new AnalysisQueryEngine(); // 無快取
+            var engine = new AnalysisQueryEngine(GroupByStrategyResolver.Default); // 無快取
 
             var req = new AnalysisQueryRequest
             {

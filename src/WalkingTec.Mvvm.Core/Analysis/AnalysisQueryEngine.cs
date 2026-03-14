@@ -15,10 +15,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
     /// </summary>
     public class AnalysisQueryEngine
     {
-        private readonly IGroupByStrategyResolver _resolver;
+        private readonly GroupByStrategyResolver _resolver;
         private readonly IAnalysisCache? _cache;
 
-        public AnalysisQueryEngine(IGroupByStrategyResolver resolver, IAnalysisCache? cache = null)
+        public AnalysisQueryEngine(GroupByStrategyResolver resolver, IAnalysisCache? cache = null)
         {
             _resolver = resolver;
             _cache = cache;
@@ -222,7 +222,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 if (!whitelist.TryGetValue(m.Field, out var meta) || meta.Kind != AnalysisFieldKind.Measure)
                     throw new InvalidOperationException($"Measure field '{m.Field}' is not enabled for analysis.");
                 if ((meta.AllowedFuncs & m.Func) == 0)
-                    throw new InvalidOperationException($"Function '{m.Func}' is not allowed for field '{m.Field}'.");
+                    throw new NotSupportedException($"Function '{m.Func}' is not allowed for field '{m.Field}'.");
             }
         }
 
@@ -238,27 +238,111 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
             foreach (var f in filters)
             {
-                if (!whitelist.ContainsKey(f.Field)) continue;
+                if (!whitelist.TryGetValue(f.Field, out var meta))
+                    throw new InvalidOperationException($"Filter field '{f.Field}' is not enabled for analysis.");
 
                 var prop = Expression.Property(param, f.Field);
-                var val = Expression.Constant(f.Value);
-                // 簡單轉換，實際 WTM 會有更複雜的類型匹配邏輯
-                Expression filterExpr = f.Operator switch
+                var targetType = prop.Type;
+                var underlyingType = Nullable.GetUnderlyingType(targetType) ?? targetType;
+
+                Expression? filterExpr = null;
+                try
                 {
-                    FilterOperator.Eq => Expression.Equal(prop, Expression.Convert(val, prop.Type)),
-                    FilterOperator.Gt => Expression.GreaterThan(prop, Expression.Convert(val, prop.Type)),
-                    FilterOperator.Gte => Expression.GreaterThanOrEqual(prop, Expression.Convert(val, prop.Type)),
-                    FilterOperator.Lt => Expression.LessThan(prop, Expression.Convert(val, prop.Type)),
-                    FilterOperator.Lte => Expression.LessThanOrEqual(prop, Expression.Convert(val, prop.Type)),
-                    FilterOperator.Contains => Expression.Call(prop, typeof(string).GetMethod("Contains", new[] { typeof(string) })!, val),
-                    _ => throw new NotSupportedException($"Operator {f.Operator} not supported in current analysis engine version.")
-                };
+                    if (f.Operator == FilterOperator.In)
+                    {
+                        var values = f.Value as System.Collections.IEnumerable;
+                        if (values == null) throw new InvalidOperationException("Value for 'In' operator must be an IEnumerable.");
+                        
+                        var list = new System.Collections.ArrayList();
+                        foreach (var v in values)
+                        {
+                            list.Add(ChangeType(v, underlyingType));
+                        }
+                        if (list.Count == 0) throw new InvalidOperationException("'In' operator requires at least one value.");
+                        if (list.Count > 100) throw new InvalidOperationException("'In' operator supports up to 100 values.");
+
+                        var typedList = Array.CreateInstance(underlyingType, list.Count);
+                        list.CopyTo(typedList);
+                        var listConst = Expression.Constant(typedList);
+
+                        var containsMethod = typeof(Enumerable).GetMethods()
+                            .First(m => m.Name == "Contains" && m.GetParameters().Length == 2)
+                            .MakeGenericMethod(underlyingType);
+
+                        Expression propForIn = prop;
+                        if (Nullable.GetUnderlyingType(targetType) != null)
+                        {
+                            propForIn = Expression.Property(prop, "Value");
+                            filterExpr = Expression.AndAlso(
+                                Expression.NotEqual(prop, Expression.Constant(null, targetType)),
+                                Expression.Call(containsMethod, listConst, propForIn)
+                            );
+                        }
+                        else
+                        {
+                            filterExpr = Expression.Call(containsMethod, listConst, propForIn);
+                        }
+                    }
+                    else if (f.Operator == FilterOperator.Contains)
+                    {
+                        if (targetType != typeof(string))
+                            throw new InvalidOperationException($"'Contains' operator is only supported for string fields, not '{targetType.Name}'.");
+                        var val = Expression.Constant(f.Value?.ToString() ?? "");
+                        filterExpr = Expression.Call(prop, typeof(string).GetMethod("Contains", new[] { typeof(string) })!, val);
+                    }
+                    else
+                    {
+                        var val = Expression.Constant(ChangeType(f.Value, underlyingType), underlyingType);
+                        var propForCmp = prop;
+                        if (Nullable.GetUnderlyingType(targetType) != null)
+                        {
+                            propForCmp = Expression.Property(prop, "Value");
+                        }
+
+                        Expression cmp = f.Operator switch
+                        {
+                            FilterOperator.Eq => Expression.Equal(propForCmp, val),
+                            FilterOperator.Gt => Expression.GreaterThan(propForCmp, val),
+                            FilterOperator.Gte => Expression.GreaterThanOrEqual(propForCmp, val),
+                            FilterOperator.Lt => Expression.LessThan(propForCmp, val),
+                            FilterOperator.Lte => Expression.LessThanOrEqual(propForCmp, val),
+                            _ => throw new InvalidOperationException($"Operator {f.Operator} not supported in current analysis engine version.")
+                        };
+
+                        if (Nullable.GetUnderlyingType(targetType) != null)
+                        {
+                            filterExpr = Expression.AndAlso(
+                                Expression.NotEqual(prop, Expression.Constant(null, targetType)),
+                                cmp
+                            );
+                        }
+                        else
+                        {
+                            filterExpr = cmp;
+                        }
+                    }
+                }
+                catch (Exception ex) when (!(ex is InvalidOperationException))
+                {
+                    throw new InvalidOperationException($"Failed to apply filter for field '{f.Field}': {ex.Message}", ex);
+                }
 
                 body = body == null ? filterExpr : Expression.AndAlso(body, filterExpr);
             }
 
             if (body == null) return query;
             return query.Where(Expression.Lambda<Func<TModel, bool>>(body, param));
+        }
+
+        private static object? ChangeType(object? value, Type targetType)
+        {
+            if (value == null) return null;
+            if (targetType.IsEnum)
+            {
+                if (value is string s) return Enum.Parse(targetType, s, true);
+                return Enum.ToObject(targetType, value);
+            }
+            return Convert.ChangeType(value, targetType);
         }
 
         private static string String(object? val) => val?.ToString() ?? string.Empty;

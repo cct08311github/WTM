@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Analysis;
 
@@ -25,16 +26,24 @@ namespace WalkingTec.Mvvm.Mvc
     {
         private static readonly JsonSerializerOptions _camelCase = new()
         {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            PropertyNameCaseInsensitive = true,
+            Converters = { new DateTimeConverter() }
         };
 
         private readonly AnalysisVmRegistry _registry;
         private readonly IAnalysisCache? _cache;
         private readonly IAnalysisFieldPolicy? _fieldPolicy;
+        private readonly ILogger<_AnalysisController> _logger;
 
-        public _AnalysisController(AnalysisVmRegistry registry, IAnalysisCache? cache = null, IAnalysisFieldPolicy? fieldPolicy = null)
+        public _AnalysisController(
+            AnalysisVmRegistry registry,
+            ILogger<_AnalysisController> logger,
+            IAnalysisCache? cache = null,
+            IAnalysisFieldPolicy? fieldPolicy = null)
         {
             _registry = registry;
+            _logger = logger;
             _cache = cache;
             _fieldPolicy = fieldPolicy;
         }
@@ -64,7 +73,7 @@ namespace WalkingTec.Mvvm.Mvc
                 kind = f.Kind.ToString(),
                 allowedFuncs = f.Kind == AnalysisFieldKind.Measure
                     ? GetAllowedFuncNames(f.AllowedFuncs)
-                    : Array.Empty<string>(),
+                    : new List<string>(),
                 isDate = f.IsDate,
                 hierarchy = f.Hierarchy.ToString()
             }));
@@ -75,8 +84,9 @@ namespace WalkingTec.Mvvm.Mvc
         /// 執行分析查詢。
         /// </summary>
         [HttpPost("query")]
-        public IActionResult Query([FromBody] AnalysisQueryRequest req)
+        public IActionResult Query([FromBody] AnalysisQueryRequest? req)
         {
+            if (req == null) return BadRequest("Request body is required.");
             if (req.Dimensions.Count > 3) return BadRequest("最多選取 3 個維度。");
             if (req.Measures.Count == 0)  return BadRequest("至少需要選取 1 個度量指標。");
             if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
@@ -102,17 +112,26 @@ namespace WalkingTec.Mvvm.Mvc
 
             string? identityKey = Wtm?.LoginUserInfo != null ? $"{Wtm.LoginUserInfo.CurrentTenant}_{Wtm.LoginUserInfo.UserId}" : null;
 
+            var sw = Stopwatch.StartNew();
             try
             {
-                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields, identityKey: identityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
+                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields, identityKey: identityKey);
+                sw.Stop();
+                _logger.LogInformation("Analysis query completed ListVm={ListVmType} Dims={DimCount} Msrs={MsrCount} ElapsedMs={Elapsed} Truncated={Truncated}",
+                    req.ListVmType, req.Dimensions.Count, req.Measures.Count, sw.ElapsedMilliseconds, result.Truncated);
                 return new JsonResult(result, _camelCase);
             }
-            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+            catch (InvalidOperationException ex)
+            {
+                _logger.LogWarning(ex, "Analysis query failed ListVm={ListVmType}", req.ListVmType);
+                return BadRequest(ex.Message);
+            }
         }
 
         [HttpPost("pivot")]
-        public IActionResult Pivot([FromBody] AnalysisPivotRequest req)
+        public IActionResult Pivot([FromBody] AnalysisPivotRequest? req)
         {
+            if (req == null) return BadRequest("Request body is required.");
             if (req.Dimensions.Count > 3) return BadRequest("最多選取 3 個維度。");
             if (req.Measures.Count == 0)  return BadRequest("至少需要選取 1 個度量指標。");
             if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
@@ -139,12 +158,20 @@ namespace WalkingTec.Mvvm.Mvc
 
             string? identityKey = Wtm?.LoginUserInfo != null ? $"{Wtm.LoginUserInfo.CurrentTenant}_{Wtm.LoginUserInfo.UserId}" : null;
 
+            var sw = Stopwatch.StartNew();
             try
             {
-                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields, identityKey: identityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
+                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields, identityKey: identityKey);
+                sw.Stop();
+                _logger.LogInformation("Analysis pivot completed ListVm={ListVmType} Dims={DimCount} Msrs={MsrCount} Pivot={PivotDim} ElapsedMs={Elapsed}",
+                    req.ListVmType, req.Dimensions.Count, req.Measures.Count, req.PivotDimension, sw.ElapsedMilliseconds);
                 return new JsonResult(result, _camelCase);
             }
-            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+            catch (InvalidOperationException ex)
+            {
+                _logger.LogWarning(ex, "Analysis pivot failed ListVm={ListVmType}", req.ListVmType);
+                return BadRequest(ex.Message);
+            }
         }
 
         /// <summary>
@@ -180,9 +207,20 @@ namespace WalkingTec.Mvvm.Mvc
 
             string? identityKey = Wtm?.LoginUserInfo != null ? $"{Wtm.LoginUserInfo.CurrentTenant}_{Wtm.LoginUserInfo.UserId}" : null;
 
+            var sw = Stopwatch.StartNew();
             AnalysisQueryResponse result;
-            try { result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields, identityKey: identityKey, cancellationToken: HttpContext?.RequestAborted ?? default); }
-            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+            try
+            {
+                result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields, identityKey: identityKey);
+                sw.Stop();
+                _logger.LogInformation("Analysis export completed ListVm={ListVmType} Format={Format} ElapsedMs={Elapsed}",
+                    req.ListVmType, format, sw.ElapsedMilliseconds);
+            }
+            catch (InvalidOperationException ex)
+            {
+                _logger.LogWarning(ex, "Analysis export failed ListVm={ListVmType}", req.ListVmType);
+                return BadRequest(ex.Message);
+            }
 
             if (result.Truncated)
                 Response.Headers["X-Analysis-Truncated"] = "true";
@@ -204,11 +242,12 @@ namespace WalkingTec.Mvvm.Mvc
         /// 匯出 Pivot 分析結果為 Excel 或 CSV。
         /// </summary>
         [HttpPost("pivot/export")]
-        public IActionResult PivotExport([FromBody] AnalysisPivotRequest req,
+        public IActionResult PivotExport([FromBody] AnalysisPivotRequest? req,
             [FromQuery] string format = "xlsx",
             [FromQuery] bool includeChart = false,
             [FromQuery] string chartType = "bar")
         {
+            if (req == null) return BadRequest("Request body is required.");
             Type vmType;
             try { vmType = _registry.Resolve(req.ListVmType); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
@@ -230,9 +269,20 @@ namespace WalkingTec.Mvvm.Mvc
 
             string? identityKey = Wtm?.LoginUserInfo != null ? $"{Wtm.LoginUserInfo.CurrentTenant}_{Wtm.LoginUserInfo.UserId}" : null;
 
+            var sw = Stopwatch.StartNew();
             AnalysisPivotResponse result;
-            try { result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields, identityKey: identityKey, cancellationToken: HttpContext?.RequestAborted ?? default); }
-            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+            try
+            {
+                result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields, identityKey: identityKey);
+                sw.Stop();
+                _logger.LogInformation("Analysis pivot export completed ListVm={ListVmType} Format={Format} ElapsedMs={Elapsed}",
+                    req.ListVmType, format, sw.ElapsedMilliseconds);
+            }
+            catch (InvalidOperationException ex)
+            {
+                _logger.LogWarning(ex, "Analysis pivot export failed ListVm={ListVmType}", req.ListVmType);
+                return BadRequest(ex.Message);
+            }
 
             // Adapt AnalysisPivotResponse to AnalysisQueryResponse format for CSV/Excel export
             var queryResult = new AnalysisQueryResponse
@@ -295,10 +345,10 @@ namespace WalkingTec.Mvvm.Mvc
             var vm = CreateAnalysisVm(vmType);
             if (!string.IsNullOrEmpty(searcherJson))
             {
-                var searcherType = vmType.BaseType?.GetGenericArguments().FirstOrDefault();
+                var searcherType = vmType.BaseType?.GetGenericArguments().Skip(1).FirstOrDefault();
                 if (searcherType != null)
                 {
-                    var searcher = JsonSerializer.Deserialize(searcherJson, searcherType, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    var searcher = JsonSerializer.Deserialize(searcherJson, searcherType, _camelCase);
                     if (searcher != null)
                     {
                         var prop = vmType.GetProperty("Searcher");
@@ -331,6 +381,13 @@ namespace WalkingTec.Mvvm.Mvc
                 {
                     var v = row.ContainsKey(c) ? row[c] : null;
                     var s = v?.ToString() ?? "";
+                    
+                    // 防範 CSV Injection (Excel 公式注入)
+                    if (s.StartsWith("=") || s.StartsWith("+") || s.StartsWith("-") || s.StartsWith("@"))
+                    {
+                        s = "\t" + s;
+                    }
+
                     if (s.Contains(",") || s.Contains("\"")) s = "\"" + s.Replace("\"", "\"\"") + "\"";
                     return s;
                 });

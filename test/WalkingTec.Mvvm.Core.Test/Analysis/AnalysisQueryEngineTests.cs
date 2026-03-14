@@ -82,7 +82,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             _conn.Dispose();
         }
 
-        private static AnalysisQueryEngine Engine() => new AnalysisQueryEngine();
+        private static AnalysisQueryEngine Engine() => new AnalysisQueryEngine(GroupByStrategyResolver.Default);
 
         private IQueryable<SaleRecord> Q() => _ctx.SaleRecords.AsQueryable();
 
