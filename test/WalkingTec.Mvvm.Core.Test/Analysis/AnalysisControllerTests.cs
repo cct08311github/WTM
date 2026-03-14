@@ -628,5 +628,547 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.IsTrue(result.Value?.ToString()?.Contains("度量指標") == true,
                 "錯誤訊息應包含「度量指標」");
         }
+
+        // ─── GetMeta 欄位結構驗證（#306） ─────────────────────────────────────
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void GetMeta_returns_correct_field_count_and_kinds()
+        {
+            var result = CreateController().GetMeta(typeof(SaleRecordListVM).FullName) as OkObjectResult;
+            Assert.IsNotNull(result);
+
+            var json = System.Text.Json.JsonSerializer.Serialize(result.Value);
+            // SaleRecord 有 2 個 Dimension（Region, Category）+ 1 個 Measure（Amount）
+            // 驗證 kind 值正確
+            Assert.IsTrue(json.Contains("\"kind\":\"Dimension\""), "應有 Dimension 欄位");
+            Assert.IsTrue(json.Contains("\"kind\":\"Measure\""),   "應有 Measure 欄位");
+            // Measure 應有 allowedFuncs
+            Assert.IsTrue(json.Contains("\"allowedFuncs\""), "Measure 應包含 allowedFuncs");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void GetMeta_measure_field_has_non_empty_allowedFuncs()
+        {
+            var result = CreateController().GetMeta(typeof(SaleRecordListVM).FullName) as OkObjectResult;
+            Assert.IsNotNull(result);
+
+            var json = System.Text.Json.JsonSerializer.Serialize(result.Value);
+            // Amount 允許 Sum, Count, Avg, Max, Min → 至少要包含 "Sum"
+            Assert.IsTrue(json.Contains("\"Sum\""), "Amount 的 allowedFuncs 應包含 Sum");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void GetMeta_dimension_fields_have_empty_allowedFuncs()
+        {
+            var result = CreateController().GetMeta(typeof(SaleRecordListVM).FullName) as OkObjectResult;
+            Assert.IsNotNull(result);
+
+            var json = System.Text.Json.JsonSerializer.Serialize(result.Value);
+            // Dimension 的 allowedFuncs 應為空陣列 []
+            Assert.IsTrue(json.Contains("\"allowedFuncs\":[]"),
+                "Dimension 欄位的 allowedFuncs 應為空陣列");
+        }
+
+        // ─── Multi-dimension + multi-measure happy path（#306） ───────────────
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Query_happy_path_returns_200_with_aggregated_rows()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 100m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 200m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華南", Category = "B", Amount = 300m },
+            };
+
+            // 2 dimensions × 2 measures
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string> { "Region", "Category" },
+                Measures   = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum },
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Count }
+                }
+            };
+
+            var result = CreateController().Query(req) as JsonResult;
+            Assert.IsNotNull(result, "Query 2D×2M 應回傳 200");
+
+            var response = result.Value as AnalysisQueryResponse;
+            Assert.IsNotNull(response);
+            // 華東-A, 華南-B → 2 個分組
+            Assert.AreEqual(2, response.Rows.Count, "應有 2 個分組");
+
+            var huaDongA = response.Rows.Single(r =>
+                r["Region"].ToString() == "華東" && r["Category"].ToString() == "A");
+            Assert.AreEqual(300m, Convert.ToDecimal(huaDongA["Amount_Sum"]),
+                "華東-A Sum = 100+200 = 300");
+            Assert.AreEqual(2m, Convert.ToDecimal(huaDongA["Amount_Count"]),
+                "華東-A Count = 2");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Query_three_dimensions_three_measures_returns_200()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 100m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華南", Category = "B", Amount = 200m },
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string> { "Region", "Category", "Region" }, // 允許重複
+                Measures   = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum },
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Count },
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Avg }
+                }
+            };
+
+            var result = CreateController().Query(req);
+            // 3D×3M 不超限制，不應回傳 400 路由守衛錯誤
+            Assert.IsNotInstanceOfType(result, typeof(BadRequestObjectResult),
+                "3D×3M 不應回傳 400（路由守衛）");
+        }
+
+        // ─── Query 帶 filter 條件的 happy path（#306） ───────────────────────
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Query_with_eq_filter_returns_filtered_result()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 100m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華南", Category = "B", Amount = 200m },
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string> { "Region" },
+                Measures   = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+                Filters = new List<FilterCondition>
+                {
+                    new FilterCondition { Field = "Region", Operator = FilterOperator.Eq, Value = "華東" }
+                }
+            };
+
+            var result = CreateController().Query(req) as JsonResult;
+            Assert.IsNotNull(result, "帶 Eq filter 的查詢應回傳 200");
+
+            var response = result.Value as AnalysisQueryResponse;
+            Assert.IsNotNull(response);
+            Assert.AreEqual(1, response.Rows.Count, "Eq filter 後應只有 1 個地區");
+            Assert.AreEqual("華東", response.Rows[0]["Region"].ToString());
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Query_filter_with_non_whitelist_field_returns_400()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Amount = 100m }
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string> { "Region" },
+                Measures   = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+                Filters = new List<FilterCondition>
+                {
+                    new FilterCondition { Field = "NonExistentField", Operator = FilterOperator.Eq, Value = "X" }
+                }
+            };
+
+            var result = CreateController().Query(req) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "filter 帶非白名單欄位應回傳 400");
+        }
+
+        // ─── 空 dimensions array 行為（#306） ────────────────────────────────
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Query_empty_dimensions_returns_single_aggregate_row()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Amount = 100m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華南", Amount = 200m },
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string>(),   // 零維度 = 純聚合
+                Measures   = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                }
+            };
+
+            var result = CreateController().Query(req) as JsonResult;
+            Assert.IsNotNull(result, "零維度查詢應正常回傳 200，不報錯");
+
+            var response = result.Value as AnalysisQueryResponse;
+            Assert.IsNotNull(response);
+            Assert.AreEqual(1, response.Rows.Count, "零維度應折疊成 1 列");
+            Assert.AreEqual(300m, Convert.ToDecimal(response.Rows[0]["Amount_Sum"]),
+                "Sum 應為 100+200=300");
+        }
+
+        // ─── DimensionHierarchies key 不存在欄位（#306） ─────────────────────
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Query_DimensionHierarchies_with_nonexistent_field_returns_400()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Amount = 100m }
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string> { "Region" },
+                Measures   = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+                DimensionHierarchies = new Dictionary<string, DateHierarchy>
+                {
+                    ["NonExistentField"] = DateHierarchy.Month
+                }
+            };
+
+            var result = CreateController().Query(req) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "DimensionHierarchies 指向不存在欄位應回傳 400");
+            Assert.IsTrue(result.Value?.ToString()?.Contains("NonExistentField") == true,
+                "錯誤訊息應包含不存在的欄位名");
+        }
+
+        // ─── CSV formula injection 補充（@, - 字元）（#306） ─────────────────
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Export_csv_escapes_at_sign_formula()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "@SUM(A1)", Category = "A", Amount = 50m }
+            };
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var result = CreateController().Export(req, "csv") as FileContentResult;
+            Assert.IsNotNull(result);
+            var csv = Encoding.UTF8.GetString(result.FileContents);
+
+            Assert.IsFalse(csv.Contains(",@SUM"), "CSV 不應含未逸脫的 @SUM formula");
+            Assert.IsTrue(csv.Contains("\t@SUM"), "@ 開頭的危險值應以 tab 前置");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Export_csv_escapes_minus_sign_formula()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "-1+2", Category = "A", Amount = 50m }
+            };
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var result = CreateController().Export(req, "csv") as FileContentResult;
+            Assert.IsNotNull(result);
+            var csv = Encoding.UTF8.GetString(result.FileContents);
+
+            Assert.IsFalse(csv.Contains(",-1+2"), "CSV 不應含未逸脫的 - 開頭 formula");
+            Assert.IsTrue(csv.Contains("\t-1+2"), "- 開頭的危險值應以 tab 前置");
+        }
+
+        // ─── Export CSV 截斷 header（#291, #306） ─────────────────────────────
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Export_csv_sets_truncated_header_when_over_10000_rows()
+        {
+            _testData = Enumerable.Range(1, 10_001)
+                .Select(i => new SaleRecord { Region = "R" + i, Amount = i })
+                .ToList();
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var httpCtx = new DefaultHttpContext();
+            var controller = new _AnalysisController(_registry, null, null);
+            controller.Wtm = MockWtmContext.CreateWtmContext();
+            controller.ControllerContext = new ControllerContext { HttpContext = httpCtx };
+
+            var result = controller.Export(req, "csv") as FileContentResult;
+            Assert.IsNotNull(result, "應回傳 csv 檔案");
+            Assert.AreEqual("text/csv", result.ContentType);
+            Assert.AreEqual("true", httpCtx.Response.Headers["X-Analysis-Truncated"].ToString(),
+                "CSV 截斷時應設置 X-Analysis-Truncated: true header");
+        }
+
+        // ─── Unicode 特殊字元在 filter value（#306） ─────────────────────────
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Query_filter_with_unicode_value_works_correctly()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "東南亞🌏", Category = "A", Amount = 100m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "歐洲€", Category = "B", Amount = 200m },
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string> { "Region" },
+                Measures   = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+                Filters = new List<FilterCondition>
+                {
+                    new FilterCondition { Field = "Region", Operator = FilterOperator.Eq, Value = "東南亞🌏" }
+                }
+            };
+
+            var result = CreateController().Query(req) as JsonResult;
+            Assert.IsNotNull(result, "Unicode filter value 應正常查詢不拋例外");
+
+            var response = result.Value as AnalysisQueryResponse;
+            Assert.IsNotNull(response);
+            Assert.AreEqual(1, response.Rows.Count, "應只有 1 個匹配結果");
+            Assert.AreEqual("東南亞🌏", response.Rows[0]["Region"].ToString());
+        }
+
+        // ─── Pivot 端點 Controller 層測試（#306） ─────────────────────────────
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Pivot_returns_400_when_measures_is_empty()
+        {
+            var req = new AnalysisPivotRequest
+            {
+                ListVmType      = typeof(SaleRecordListVM).FullName,
+                Dimensions      = new List<string> { "Region", "Category" },
+                Measures        = new List<MeasureRequest>(),
+                PivotDimension  = "Category"
+            };
+
+            var result = CreateController().Pivot(req) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "Pivot 空 measures 應回傳 400");
+            Assert.IsTrue(result.Value?.ToString()?.Contains("度量指標") == true,
+                "Pivot 400 錯誤訊息應包含「度量指標」");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Pivot_returns_400_when_measures_exceed_3()
+        {
+            var req = new AnalysisPivotRequest
+            {
+                ListVmType     = typeof(SaleRecordListVM).FullName,
+                Dimensions     = new List<string> { "Region", "Category" },
+                Measures       = Enumerable.Range(0, 4)
+                    .Select(_ => new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum })
+                    .ToList(),
+                PivotDimension = "Category"
+            };
+
+            var result = CreateController().Pivot(req) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "Pivot 超過 3 個 measures 應回傳 400");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Pivot_returns_400_when_PivotDimension_is_empty()
+        {
+            var req = new AnalysisPivotRequest
+            {
+                ListVmType     = typeof(SaleRecordListVM).FullName,
+                Dimensions     = new List<string> { "Region", "Category" },
+                Measures       = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+                PivotDimension = ""  // 空字串
+            };
+
+            var result = CreateController().Pivot(req) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "Pivot 空 PivotDimension 應回傳 400");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Pivot_returns_400_for_unregistered_vm()
+        {
+            var req = new AnalysisPivotRequest
+            {
+                ListVmType     = "No.Such.Vm",
+                Dimensions     = new List<string> { "Region", "Category" },
+                Measures       = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+                PivotDimension = "Category"
+            };
+
+            var result = CreateController().Pivot(req) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "Pivot 未註冊 VM 應回傳 400");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Pivot_happy_path_returns_200_with_pivoted_rows()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 100m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "B", Amount = 200m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華南", Category = "A", Amount = 300m },
+            };
+
+            var req = new AnalysisPivotRequest
+            {
+                ListVmType     = typeof(SaleRecordListVM).FullName,
+                Dimensions     = new List<string> { "Region", "Category" },
+                Measures       = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+                PivotDimension = "Category"
+            };
+
+            var result = CreateController().Pivot(req) as JsonResult;
+            Assert.IsNotNull(result, "Pivot happy path 應回傳 200");
+
+            var response = result.Value as AnalysisPivotResponse;
+            Assert.IsNotNull(response, "Pivot 回傳值應為 AnalysisPivotResponse");
+            // Row dims: Region; pivot values: A, B（sorted）
+            Assert.AreEqual(2, response.Rows.Count, "應有 2 個地區列");
+            Assert.IsTrue(response.PivotValues.Contains("A"), "Pivot values 應包含 A");
+            Assert.IsTrue(response.PivotValues.Contains("B"), "Pivot values 應包含 B");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void PivotExport_xlsx_returns_correct_content_type()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 100m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華南", Category = "B", Amount = 200m },
+            };
+
+            var req = new AnalysisPivotRequest
+            {
+                ListVmType     = typeof(SaleRecordListVM).FullName,
+                Dimensions     = new List<string> { "Region", "Category" },
+                Measures       = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+                PivotDimension = "Category"
+            };
+
+            var result = CreateController().PivotExport(req, "xlsx") as FileContentResult;
+            Assert.IsNotNull(result, "PivotExport xlsx 應回傳檔案");
+            Assert.AreEqual(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                result.ContentType, "xlsx MIME type 不正確");
+            Assert.AreEqual("analysis_pivot.xlsx", result.FileDownloadName);
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void PivotExport_csv_returns_correct_content_type()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 100m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華南", Category = "B", Amount = 200m },
+            };
+
+            var req = new AnalysisPivotRequest
+            {
+                ListVmType     = typeof(SaleRecordListVM).FullName,
+                Dimensions     = new List<string> { "Region", "Category" },
+                Measures       = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+                PivotDimension = "Category"
+            };
+
+            var result = CreateController().PivotExport(req, "csv") as FileContentResult;
+            Assert.IsNotNull(result, "PivotExport csv 應回傳檔案");
+            Assert.AreEqual("text/csv", result.ContentType);
+            Assert.AreEqual("analysis_pivot.csv", result.FileDownloadName);
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void PivotExport_returns_400_for_unregistered_vm()
+        {
+            var req = new AnalysisPivotRequest
+            {
+                ListVmType     = "No.Such.Vm",
+                Dimensions     = new List<string> { "Region", "Category" },
+                Measures       = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+                PivotDimension = "Category"
+            };
+
+            var result = CreateController().PivotExport(req) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "PivotExport 未註冊 VM 應回傳 400");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void PivotExport_returns_400_when_zero_measures()
+        {
+            var req = new AnalysisPivotRequest
+            {
+                ListVmType     = typeof(SaleRecordListVM).FullName,
+                Dimensions     = new List<string> { "Region", "Category" },
+                Measures       = new List<MeasureRequest>(),
+                PivotDimension = "Category"
+            };
+
+            var result = CreateController().PivotExport(req) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "PivotExport 空 measures 應回傳 400");
+        }
     }
 }
