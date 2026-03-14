@@ -22,5 +22,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
         /// <summary>動態欄位名稱清單（RowDimensions + 交叉欄位名）。</summary>
         public List<string> Columns { get; set; } = new();
+
+        /// <summary>分組結果是否已達 10,000 列上限被截斷。</summary>
+        public bool Truncated { get; set; }
     }
 }

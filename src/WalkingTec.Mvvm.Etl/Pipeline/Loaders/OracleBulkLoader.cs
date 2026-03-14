@@ -137,4 +137,26 @@ public class OracleBulkLoader : IBulkLoader
             columns.Add(reader.GetString(0));
         return columns;
     }
+
+    public async Task<bool> IsUniqueColumnAsync(
+        string connectionString, string tableName, string columnName,
+        CancellationToken cancellationToken = default)
+    {
+        await using var conn = new OracleConnection(connectionString);
+        await conn.OpenAsync(cancellationToken);
+
+        await using var cmd = conn.CreateCommand();
+        // Check PK or Unique constraints in Oracle
+        cmd.CommandText = @"
+            SELECT COUNT(*)
+            FROM all_cons_columns a
+            JOIN all_constraints c ON a.constraint_name = c.constraint_name
+            WHERE a.table_name = :tableName AND a.column_name = :colName
+              AND c.constraint_type IN ('P', 'U')";
+        cmd.Parameters.Add(new OracleParameter("tableName", tableName.ToUpperInvariant()));
+        cmd.Parameters.Add(new OracleParameter("colName", columnName.ToUpperInvariant()));
+
+        var count = Convert.ToInt32(await cmd.ExecuteScalarAsync(cancellationToken));
+        return count > 0;
+    }
 }

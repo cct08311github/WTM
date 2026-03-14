@@ -1,12 +1,13 @@
 #nullable enable
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Security.Claims;
 
 namespace WalkingTec.Mvvm.Core.Analysis
 {
     /// <summary>
-    /// 預設的分析欄位可見性策略（全部允許）。
-    /// 作為 Phase 2 的基礎實作，後續可由使用者透過 DI 覆寫以結合 RBAC。
+    /// 預設的分析欄位可見性策略（根據 AllowedRoles 過濾）。
     /// </summary>
     public class DefaultAnalysisFieldPolicy : IAnalysisFieldPolicy
     {
@@ -14,8 +15,16 @@ namespace WalkingTec.Mvvm.Core.Analysis
             IEnumerable<AnalysisFieldMeta> fields,
             ClaimsPrincipal user)
         {
-            // 預設不阻擋任何欄位，維持 Phase 1 的行為
-            return fields;
+            return fields.Where(f =>
+            {
+                if (string.IsNullOrEmpty(f.AllowedRoles)) return true;
+                
+                // Admin has full access
+                if (user.IsInRole("Admin")) return true;
+
+                var allowed = f.AllowedRoles.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(r => r.Trim());
+                return allowed.Any(role => user.IsInRole(role));
+            });
         }
     }
 }

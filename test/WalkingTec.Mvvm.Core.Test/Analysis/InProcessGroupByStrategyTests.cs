@@ -367,7 +367,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             var directRows = _strategy.Execute(data.AsQueryable(), req, _whitelist);
 
             // Via engine
-            var engine = new AnalysisQueryEngine();
+            var engine = new AnalysisQueryEngine(GroupByStrategyResolver.Default);
             var engineResult = engine.Execute(data.AsQueryable(), req, _whitelist.Values);
 
             Assert.AreEqual(directRows.Count, engineResult.Rows.Count);

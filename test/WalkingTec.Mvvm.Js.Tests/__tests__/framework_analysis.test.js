@@ -393,9 +393,10 @@ describe('wtmAnalysis.renderTable XSS safety via query', () => {
 
 // ─── validateSelection ────────────────────────────────────────────────────────
 describe('wtmAnalysis.validateSelection', () => {
-    test('空維度空度量 → 一個錯誤', () => {
-        expect(wa.validateSelection([], [])).toHaveLength(1);
-        expect(wa.validateSelection([], [])[0]).toMatch(/至少選擇/);
+    test('空維度空度量 → 兩個錯誤', () => {
+        expect(wa.validateSelection([], [])).toHaveLength(2);
+        expect(wa.validateSelection([], [])[0]).toMatch(/至少需要選取 1 個維度/);
+        expect(wa.validateSelection([], [])[1]).toMatch(/至少需要選取 1 個度量/);
     });
 
     test('4 個維度 → 錯誤訊息包含「維度最多選 3 個」', () => {
@@ -416,8 +417,9 @@ describe('wtmAnalysis.validateSelection', () => {
         expect(wa.validateSelection([1, 2, 3], [1, 2, 3])).toHaveLength(0);
     });
 
-    test('1 dim 0 msrs → valid (returns empty errors)', () => {
-        expect(wa.validateSelection(['Region'], [])).toHaveLength(0);
+    test('1 dim 0 msrs → invalid (missing measure)', () => {
+        expect(wa.validateSelection(['Region'], [])).toHaveLength(1);
+        expect(wa.validateSelection(['Region'], [])[0]).toMatch(/至少需要選取 1 個度量/);
     });
 });
 
@@ -494,10 +496,10 @@ describe('exportData — layui loading state', () => {
         // Use a two-call fetch: first for loadMeta (toggle), second for exportData
         const fetchMock = jest.fn()
             .mockResolvedValueOnce({ ok: false, text: jest.fn().mockResolvedValue('err') }) // loadMeta
-            .mockImplementationOnce(() => { exportCallOrder.push('fetch'); return Promise.resolve({ ok: true, blob: () => Promise.resolve(new Blob()) }); }); // exportData
+            .mockImplementationOnce(() => { exportCallOrder.push('fetch'); return Promise.resolve({ ok: true, blob: () => Promise.resolve(new Blob()), headers: { get: () => null } }); }); // exportData
         const { wa } = makeEnv({
             fetch: fetchMock,
-            layui: { layer: { load: layerLoad, close: layerClose } },
+            layui: { layer: { load: layerLoad, close: layerClose, msg: jest.fn() } },
             URL: { createObjectURL: jest.fn(() => 'blob:url'), revokeObjectURL: jest.fn() },
             document: {
                 getElementById: jest.fn((id) => id === 'analysis-panel-gridX' ? { style: {}, appendChild: jest.fn(), removeChild: jest.fn(), firstChild: null, querySelector: jest.fn(() => null), querySelectorAll: jest.fn(() => []) } : null),
@@ -549,7 +551,7 @@ describe('exportData — layui loading state', () => {
         const { wa } = makeEnv({
             fetch: jest.fn()
                 .mockResolvedValueOnce({ ok: false, text: async () => 'meta error' })
-                .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(['data']) }),
+                .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(['data']), headers: { get: () => null } }),
             URL: { createObjectURL: jest.fn(() => 'blob:url'), revokeObjectURL: jest.fn() },
             document: {
                 getElementById: jest.fn((id) => id === 'analysis-panel-gridX' ? { style: {}, appendChild: jest.fn(), removeChild: jest.fn(), firstChild: null, querySelector: jest.fn(() => null), querySelectorAll: jest.fn(() => []) } : null),
@@ -761,7 +763,7 @@ describe('[cov] waReq pure functions — detectChartType / validateSelection / p
     });
 
     test('validateSelection: empty → error', () => {
-        expect(waReq.validateSelection([], [])).toHaveLength(1);
+        expect(waReq.validateSelection([], [])).toHaveLength(2);
     });
     test('validateSelection: too many dims → error', () => {
         expect(waReq.validateSelection([1,2,3,4], [1])).toContain('維度最多選 3 個');
@@ -1142,7 +1144,7 @@ describe('[cov] waReq.exportData — branches', () => {
         global.layui = undefined; // disable layui path to avoid setup.js layui.layer.load missing
         global.fetch = jest.fn()
             .mockResolvedValueOnce({ ok: false, text: jest.fn().mockResolvedValue('err') })
-            .mockResolvedValueOnce({ ok: true, blob: jest.fn().mockResolvedValue(new Blob(['x'])) });
+            .mockResolvedValueOnce({ ok: true, blob: jest.fn().mockResolvedValue(new Blob(['x'])), headers: { get: () => null } });
         global.URL = { createObjectURL: jest.fn().mockReturnValue('blob:e1'), revokeObjectURL: jest.fn() };
         spySetup(function(id) { return id === 'analysis-panel-scovE1' ? panel : null; });
         waReq.toggle('scovE1', 'VmE1');
@@ -1189,10 +1191,10 @@ describe('[cov] waReq.exportData — branches', () => {
         panel.id = 'analysis-panel-scovE4';
         const layerLoad = jest.fn().mockReturnValue(42);
         const layerClose = jest.fn();
-        global.layui = { layer: { load: layerLoad, close: layerClose } };
+        global.layui = { layer: { load: layerLoad, close: layerClose, msg: jest.fn() } };
         global.fetch = jest.fn()
             .mockResolvedValueOnce({ ok: false, text: jest.fn().mockResolvedValue('err') })
-            .mockResolvedValueOnce({ ok: true, blob: jest.fn().mockResolvedValue(new Blob(['y'])) });
+            .mockResolvedValueOnce({ ok: true, blob: jest.fn().mockResolvedValue(new Blob(['y'])), headers: { get: () => null } });
         global.URL = { createObjectURL: jest.fn().mockReturnValue('blob:e4'), revokeObjectURL: jest.fn() };
         spySetup(function(id) { return id === 'analysis-panel-scovE4' ? panel : null; });
         waReq.toggle('scovE4', 'VmE4');
@@ -1243,7 +1245,7 @@ describe('[cov] waReq.renderChart — all branches', () => {
 
     test('renderChart with echarts → calls init and setOption', () => {
         const setOption = jest.fn();
-        global.echarts = { init: jest.fn(function() { return { setOption, on: jest.fn(), dispose: jest.fn() }; }) };
+        global.echarts = { init: jest.fn(function() { return { setOption, on: jest.fn(), dispose: jest.fn() }; }), getInstanceByDom: jest.fn() };
         waReq.renderChart('scovR2', sampleResult, sampleReq, sampleDimFields, makeContainer(), 'bar');
         expect(global.echarts.init).toHaveBeenCalled();
         expect(setOption).toHaveBeenCalled();
@@ -1251,21 +1253,21 @@ describe('[cov] waReq.renderChart — all branches', () => {
 
     test('forceChartType=line → series[0].type=line', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }) };
+        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }), getInstanceByDom: jest.fn() };
         waReq.renderChart('scovR3', sampleResult, sampleReq, sampleDimFields, makeContainer(), 'line');
         expect(opts[0].series[0].type).toBe('line');
     });
 
     test('forceChartType=bar-stacked → stack=total', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }) };
+        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }), getInstanceByDom: jest.fn() };
         waReq.renderChart('scovR4', sampleResult, sampleReq, sampleDimFields, makeContainer(), 'bar-stacked');
         expect(opts[0].series[0].stack).toBe('total');
     });
 
     test('date dim (no force) → detectChartType → line', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }) };
+        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }), getInstanceByDom: jest.fn() };
         const dateDim = [{ fieldName: 'Date', isDate: true }];
         const dateReq = { dimensions: ['Date'], measures: [{ field: 'Amount', func: 'Sum' }] };
         waReq.renderChart('scovR5', sampleResult, dateReq, dateDim, makeContainer());
@@ -1274,7 +1276,7 @@ describe('[cov] waReq.renderChart — all branches', () => {
 
     test('2 dims (no force) → detectChartType → bar-stacked', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }) };
+        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }), getInstanceByDom: jest.fn() };
         const twoDimReq = { dimensions: ['R', 'C'], measures: [{ field: 'A', func: 'Sum' }] };
         const twoDimFields = [{ fieldName: 'R', isDate: false }, { fieldName: 'C', isDate: false }];
         waReq.renderChart('scovR6', { columns: ['R', 'C', 'A_Sum'], rows: [{ R: 'N', C: 'X', A_Sum: 10 }] }, twoDimReq, twoDimFields, makeContainer());
@@ -1283,7 +1285,7 @@ describe('[cov] waReq.renderChart — all branches', () => {
 
     test('no dims (card) → renders HTML cards, no echarts', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }) };
+        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }), getInstanceByDom: jest.fn() };
         const noDimReq = { dimensions: [], measures: [{ field: 'Amount', func: 'Sum' }] };
         const container = makeContainer();
         waReq.renderChart('scovR7', { columns: ['Amount_Sum'], rows: [{ Amount_Sum: 42 }] }, noDimReq, [], container);
@@ -1295,7 +1297,7 @@ describe('[cov] waReq.renderChart — all branches', () => {
 
     test('dim not in dimFields → isDate defaults false, single measure → bar type (#297)', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }) };
+        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }), getInstanceByDom: jest.fn() };
         const unknownReq = { dimensions: ['Unknown'], measures: [{ field: 'A', func: 'Sum' }] };
         waReq.renderChart('scovR8', { columns: ['Unknown', 'A_Sum'], rows: [{ Unknown: 'X', A_Sum: 1 }] }, unknownReq, [], makeContainer());
         expect(opts[0].series[0].type).toBe('bar');
@@ -1303,7 +1305,7 @@ describe('[cov] waReq.renderChart — all branches', () => {
 
     test('forceChartType=pie → pie series with name/value data', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }) };
+        global.echarts = { init: jest.fn(function() { return { setOption: jest.fn(function(o) { opts.push(o); }), on: jest.fn(), dispose: jest.fn() }; }), getInstanceByDom: jest.fn() };
         waReq.renderChart('scovR9', sampleResult, sampleReq, sampleDimFields, makeContainer(), 'pie');
         expect(opts[0].series[0].type).toBe('pie');
         expect(opts[0].series[0].data[0]).toEqual({ name: 'North', value: 100 });
@@ -1438,7 +1440,8 @@ describe('[cov] query with real meta — dimFields filter + chart toggle click',
         global.echarts = {
             init: jest.fn(function() {
                 return { setOption: jest.fn(function(o) { setOptionCalls.push(o); }), on: jest.fn(), dispose: jest.fn() };
-            })
+            }),
+            getInstanceByDom: jest.fn()
         };
         global.fetch = jest.fn()
             .mockResolvedValueOnce({
@@ -2823,10 +2826,10 @@ describe('#298 Ad-hoc filter UI', () => {
 
         waReq.addFilterRow(gridId);
         const opSel = panel.querySelector('.analysis-filter-op');
-        expect(opSel.options.length).toBe(6);
+        expect(opSel.options.length).toBe(7);
 
         const opValues = Array.from(opSel.options).map(o => o.value);
-        expect(opValues).toEqual(['Eq', 'Gt', 'Gte', 'Lt', 'Lte', 'Contains']);
+        expect(opValues).toEqual(['Eq', 'Gt', 'Gte', 'Lt', 'Lte', 'Contains', 'In']);
         idSpy.mockRestore();
     });
 });
@@ -3114,7 +3117,7 @@ describe('[cov] waReq renderChart — dual axis lines 1208-1285 #307', () => {
 
     test('dual axis: originalData set, yAxisIndex assigned, formatter defined', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(o => opts.push(o)), on: jest.fn(), dispose: jest.fn() })) };
+        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(o => opts.push(o)), on: jest.fn(), dispose: jest.fn() })), getInstanceByDom: jest.fn() };
         const result = {
             columns: ['Region', 'Amount_Sum', 'Qty_Count'],
             rows: [{ Region: 'A', Amount_Sum: 1000000, Qty_Count: 5 }, { Region: 'B', Amount_Sum: 2000000, Qty_Count: 8 }],
@@ -3130,7 +3133,7 @@ describe('[cov] waReq renderChart — dual axis lines 1208-1285 #307', () => {
 
     test('dual axis chart.on click handler triggers drillDown (line 1281)', () => {
         const onHandlers = {};
-        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(), on: jest.fn((ev, fn) => { onHandlers[ev] = fn; }), dispose: jest.fn() })) };
+        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(), on: jest.fn((ev, fn) => { onHandlers[ev] = fn; }), dispose: jest.fn() })), getInstanceByDom: jest.fn() };
         const result = {
             columns: ['Region', 'Amount_Sum', 'Qty_Count'],
             rows: [{ Region: 'A', Amount_Sum: 1000000, Qty_Count: 5 }],
@@ -3158,7 +3161,7 @@ describe('[cov] waReq renderChart — dual axis lines 1208-1285 #307', () => {
 
     test('dual axis tooltip formatter — 億 unit (line 1261)', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(o => opts.push(o)), on: jest.fn(), dispose: jest.fn() })) };
+        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(o => opts.push(o)), on: jest.fn(), dispose: jest.fn() })), getInstanceByDom: jest.fn() };
         const result = {
             columns: ['Region', 'Amount_Sum', 'Qty_Count'],
             rows: [{ Region: 'A', Amount_Sum: 200000000, Qty_Count: 3 }],
@@ -3177,7 +3180,7 @@ describe('[cov] waReq renderChart — dual axis lines 1208-1285 #307', () => {
 
     test('dual axis tooltip formatter — null value shows dash (line 1258)', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(o => opts.push(o)), on: jest.fn(), dispose: jest.fn() })) };
+        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(o => opts.push(o)), on: jest.fn(), dispose: jest.fn() })), getInstanceByDom: jest.fn() };
         const result = {
             columns: ['Region', 'Amount_Sum', 'Qty_Count'],
             rows: [{ Region: 'A', Amount_Sum: null, Qty_Count: 3 }, { Region: 'B', Amount_Sum: 5000000, Qty_Count: 8 }],
@@ -3194,7 +3197,7 @@ describe('[cov] waReq renderChart — dual axis lines 1208-1285 #307', () => {
 
     test('dual axis tooltip formatter — no unit for small values (line 1263)', () => {
         const opts = [];
-        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(o => opts.push(o)), on: jest.fn(), dispose: jest.fn() })) };
+        global.echarts = { init: jest.fn(() => ({ setOption: jest.fn(o => opts.push(o)), on: jest.fn(), dispose: jest.fn() })), getInstanceByDom: jest.fn() };
         const result = {
             columns: ['Region', 'Amount_Sum', 'Qty_Count'],
             rows: [{ Region: 'A', Amount_Sum: 200, Qty_Count: 2 }, { Region: 'B', Amount_Sum: 2000, Qty_Count: 3 }],

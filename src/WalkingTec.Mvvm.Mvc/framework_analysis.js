@@ -19,9 +19,10 @@
 
     function validateSelection(dims, msrs) {
         var errors = [];
+        if (dims.length === 0) errors.push('至少需要選取 1 個維度進行分組');
+        if (msrs.length === 0) errors.push('至少需要選取 1 個度量指標');
         if (dims.length > 3) errors.push('維度最多選 3 個');
         if (msrs.length > 3) errors.push('度量最多選 3 個');
-        if (dims.length === 0 && msrs.length === 0) errors.push('請至少選擇一個維度或度量');
         return errors;
     }
 
@@ -624,7 +625,13 @@
                 var rd = document.getElementById('analysis-result-' + gridId);
                 if (!rd) return;
                 var oldChart = document.getElementById('analysis-chart-' + gridId);
-                if (oldChart && oldChart.parentNode) oldChart.parentNode.removeChild(oldChart);
+                if (oldChart) {
+                    if (window.echarts) {
+                        var instance = window.echarts.getInstanceByDom(oldChart);
+                        if (instance) instance.dispose();
+                    }
+                    if (oldChart.parentNode) oldChart.parentNode.removeChild(oldChart);
+                }
                 var oldCards = rd.querySelector('.analysis-cards');
                 if (oldCards && oldCards.parentNode) oldCards.parentNode.removeChild(oldCards);
                 renderChart(gridId, st.lastResult, st.lastReq, st.lastDimFields, rd, ct);
@@ -792,7 +799,8 @@
         { value: 'Gte',      label: '大於等於' },
         { value: 'Lt',       label: '小於' },
         { value: 'Lte',      label: '小於等於' },
-        { value: 'Contains', label: '包含' }
+        { value: 'Contains', label: '包含' },
+        { value: 'In',       label: 'In' }
     ];
 
     /**
@@ -1463,11 +1471,14 @@
         })
         .then(function (res) {
             if (!res.ok) return res.text().then(function (t) { throw new Error(t || 'HTTP ' + res.status); });
-            return res.blob();
+            var truncated = res.headers.get('X-Analysis-Truncated') === 'true';
+            return res.blob().then(function (blob) {
+                return { blob: blob, truncated: truncated };
+            });
         })
-        .then(function (blob) {
+        .then(function (data) {
             closeLoader();
-            var url = window.URL.createObjectURL(blob);
+            var url = window.URL.createObjectURL(data.blob);
             var a = document.createElement('a');
             a.href = url;
             a.download = 'analysis.' + format;
@@ -1475,6 +1486,9 @@
             a.click();
             document.body.removeChild(a);
             window.URL.revokeObjectURL(url);
+            if (data.truncated) {
+                showMsg('⚠️ 匯出資料已截斷，僅包含前 10,000 筆結果。完整資料請聯繫管理員。', 'warn');
+            }
         })
         .catch(function (err) {
             closeLoader();
