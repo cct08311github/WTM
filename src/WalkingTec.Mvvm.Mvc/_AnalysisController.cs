@@ -241,8 +241,11 @@ namespace WalkingTec.Mvvm.Mvc
                 Columns = result.Columns,
                 Rows = result.Rows,
                 TotalCount = result.Rows.Count,
-                Truncated = false
+                Truncated = result.Truncated
             };
+
+            if (result.Truncated)
+                Response.Headers["X-Analysis-Truncated"] = "true";
 
             if (format.Equals("csv", StringComparison.OrdinalIgnoreCase))
             {
