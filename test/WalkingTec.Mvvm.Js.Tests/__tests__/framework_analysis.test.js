@@ -2671,3 +2671,162 @@ describe('#294 日期層級 hierarchy select → disabled + tooltip', () => {
         expect(th.textContent).toBe('X_Sum');
     });
 });
+
+// ─── #298: Ad-hoc 篩選條件 UI ────────────────────────────────────────────────
+describe('#298 Ad-hoc filter UI', () => {
+    const sampleFields = [
+        { kind: 'Dimension', fieldName: 'Region',      displayName: '地區',   isDate: false, allowedFuncs: 0 },
+        { kind: 'Measure',   fieldName: 'TotalAmount',  displayName: '總金額', isDate: false, allowedFuncs: 2 },
+    ];
+
+    function makePanelWithFilterBar(gridId) {
+        const panel = document.createElement('div');
+        panel.id = 'analysis-panel-' + gridId;
+        return panel;
+    }
+
+    async function renderPanelViaToggle(gridId, panel, fields) {
+        const fetchOrig = global.fetch;
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: true,
+            json: jest.fn().mockResolvedValue(fields),
+        });
+        const idSpy = jest.spyOn(document, 'getElementById').mockImplementation(id =>
+            id === 'analysis-panel-' + gridId ? panel : null
+        );
+        waReq.toggle(gridId, 'TestVm298');
+        await new Promise(r => setTimeout(r, 50));
+        idSpy.mockRestore();
+        global.fetch = fetchOrig;
+    }
+
+    test('addFilterRow() — 點擊新增後篩選列數量增加 1', async () => {
+        const gridId = 'filter298a';
+        const panel = makePanelWithFilterBar(gridId);
+        await renderPanelViaToggle(gridId, panel, sampleFields);
+
+        const idSpy = jest.spyOn(document, 'getElementById').mockImplementation(id =>
+            id === 'analysis-panel-' + gridId ? panel : null
+        );
+
+        const before = panel.querySelectorAll('.analysis-filter-row').length;
+        waReq.addFilterRow(gridId);
+        const after = panel.querySelectorAll('.analysis-filter-row').length;
+
+        expect(after).toBe(before + 1);
+        idSpy.mockRestore();
+    });
+
+    test('removeFilterRow() — 點擊 ✕ 後對應篩選列被移除', async () => {
+        const gridId = 'filter298b';
+        const panel = makePanelWithFilterBar(gridId);
+        await renderPanelViaToggle(gridId, panel, sampleFields);
+
+        const idSpy = jest.spyOn(document, 'getElementById').mockImplementation(id =>
+            id === 'analysis-panel-' + gridId ? panel : null
+        );
+
+        waReq.addFilterRow(gridId);
+        waReq.addFilterRow(gridId);
+        expect(panel.querySelectorAll('.analysis-filter-row').length).toBe(2);
+
+        const firstRow = panel.querySelector('.analysis-filter-row');
+        const removeBtn = firstRow.querySelector('.layui-btn-danger');
+        removeBtn.click();
+
+        expect(panel.querySelectorAll('.analysis-filter-row').length).toBe(1);
+        idSpy.mockRestore();
+    });
+
+    test('buildReqFilters_emptyRows — 空行不加入 filters', async () => {
+        const gridId = 'filter298c';
+        const panel = makePanelWithFilterBar(gridId);
+        await renderPanelViaToggle(gridId, panel, sampleFields);
+
+        const idSpy = jest.spyOn(document, 'getElementById').mockImplementation(id =>
+            id === 'analysis-panel-' + gridId ? panel : null
+        );
+
+        waReq.addFilterRow(gridId);
+        const filters = waReq.collectFilters(gridId);
+        expect(filters).toEqual([]);
+        idSpy.mockRestore();
+    });
+
+    test('buildReqFilters_validRow — 完整行正確序列化 {field, op, value}', async () => {
+        const gridId = 'filter298d';
+        const panel = makePanelWithFilterBar(gridId);
+        await renderPanelViaToggle(gridId, panel, sampleFields);
+
+        const idSpy = jest.spyOn(document, 'getElementById').mockImplementation(id =>
+            id === 'analysis-panel-' + gridId ? panel : null
+        );
+
+        waReq.addFilterRow(gridId);
+        const row = panel.querySelector('.analysis-filter-row');
+        row.querySelector('.analysis-filter-field').value = 'TotalAmount';
+        row.querySelector('.analysis-filter-op').value = 'Gt';
+        row.querySelector('.analysis-filter-value').value = '10000';
+
+        const filters = waReq.collectFilters(gridId);
+        expect(filters).toEqual([{ field: 'TotalAmount', op: 'Gt', value: '10000' }]);
+        idSpy.mockRestore();
+    });
+
+    test('buildReqFilters_partialRow — 欄位為空的行被跳過', async () => {
+        const gridId = 'filter298e';
+        const panel = makePanelWithFilterBar(gridId);
+        await renderPanelViaToggle(gridId, panel, sampleFields);
+
+        const idSpy = jest.spyOn(document, 'getElementById').mockImplementation(id =>
+            id === 'analysis-panel-' + gridId ? panel : null
+        );
+
+        waReq.addFilterRow(gridId);
+        const row = panel.querySelector('.analysis-filter-row');
+        row.querySelector('.analysis-filter-field').value = '';
+        row.querySelector('.analysis-filter-value').value = 'North';
+
+        const filters = waReq.collectFilters(gridId);
+        expect(filters).toEqual([]);
+        idSpy.mockRestore();
+    });
+
+    test('resetClearsFilters — 清除篩選按鈕後篩選列清空', async () => {
+        const gridId = 'filter298f';
+        const panel = makePanelWithFilterBar(gridId);
+        await renderPanelViaToggle(gridId, panel, sampleFields);
+
+        const idSpy = jest.spyOn(document, 'getElementById').mockImplementation(id =>
+            id === 'analysis-panel-' + gridId ? panel : null
+        );
+
+        waReq.addFilterRow(gridId);
+        waReq.addFilterRow(gridId);
+        expect(panel.querySelectorAll('.analysis-filter-row').length).toBe(2);
+
+        const clearBtn = panel.querySelector('.analysis-clear-filter-btn');
+        clearBtn.click();
+
+        expect(panel.querySelectorAll('.analysis-filter-row').length).toBe(0);
+        idSpy.mockRestore();
+    });
+
+    test('operatorOptions — operator 選單有 6 個選項', async () => {
+        const gridId = 'filter298g';
+        const panel = makePanelWithFilterBar(gridId);
+        await renderPanelViaToggle(gridId, panel, sampleFields);
+
+        const idSpy = jest.spyOn(document, 'getElementById').mockImplementation(id =>
+            id === 'analysis-panel-' + gridId ? panel : null
+        );
+
+        waReq.addFilterRow(gridId);
+        const opSel = panel.querySelector('.analysis-filter-op');
+        expect(opSel.options.length).toBe(6);
+
+        const opValues = Array.from(opSel.options).map(o => o.value);
+        expect(opValues).toEqual(['Eq', 'Gt', 'Gte', 'Lt', 'Lte', 'Contains']);
+        idSpy.mockRestore();
+    });
+});
