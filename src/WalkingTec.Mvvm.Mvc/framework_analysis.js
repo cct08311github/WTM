@@ -535,6 +535,41 @@
         btnRow.appendChild(pivotWrapper);
         selectorBody.appendChild(btnRow);
 
+        // ── FilterBar（Ad-hoc 篩選條件）──
+        var filterSection = document.createElement('div');
+        filterSection.className = 'analysis-filter-section';
+        filterSection.style.cssText = 'margin-top:8px;padding:8px 0 0 0;border-top:1px solid #e8e8e8;';
+
+        var filterBtnRow = document.createElement('div');
+        filterBtnRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:6px;';
+
+        var addFilterBtn = document.createElement('button');
+        addFilterBtn.type = 'button';
+        addFilterBtn.className = 'layui-btn layui-btn-xs layui-btn-warm analysis-add-filter-btn';
+        addFilterBtn.dataset.gridId = gridId;
+        addFilterBtn.textContent = '+ 新增篩選條件';
+        addFilterBtn.addEventListener('click', function () { addFilterRow(gridId); });
+        filterBtnRow.appendChild(addFilterBtn);
+
+        var clearFilterBtn = document.createElement('button');
+        clearFilterBtn.type = 'button';
+        clearFilterBtn.className = 'layui-btn layui-btn-xs layui-btn-primary analysis-clear-filter-btn';
+        clearFilterBtn.dataset.gridId = gridId;
+        clearFilterBtn.textContent = '清除篩選';
+        clearFilterBtn.addEventListener('click', function () {
+            var list = filterSection.querySelector('.analysis-filter-list');
+            if (list) clearChildren(list);
+        });
+        filterBtnRow.appendChild(clearFilterBtn);
+
+        filterSection.appendChild(filterBtnRow);
+
+        var filterList = document.createElement('div');
+        filterList.className = 'analysis-filter-list';
+        filterSection.appendChild(filterList);
+
+        selectorBody.appendChild(filterSection);
+
         selectorSection.appendChild(selectorBody);
 
         // Summary bar (visible when collapsed)
@@ -748,6 +783,127 @@
         return { dims: dims, msrs: msrs, dimensionHierarchies: dimensionHierarchies };
     }
 
+
+    // ─── Ad-hoc 篩選條件 ─────────────────────────────────────────────────────
+
+    var _FILTER_OPS = [
+        { value: 'Eq',       label: '等於' },
+        { value: 'Gt',       label: '大於' },
+        { value: 'Gte',      label: '大於等於' },
+        { value: 'Lt',       label: '小於' },
+        { value: 'Lte',      label: '小於等於' },
+        { value: 'Contains', label: '包含' }
+    ];
+
+    /**
+     * 從 filterBar 讀取所有有效篩選列，組裝成 [{field, op, value}]。
+     * 欄位或值任一為空的列被跳過。
+     */
+    function collectFilters(gridId) {
+        var panel = document.getElementById('analysis-panel-' + gridId);
+        if (!panel) return [];
+        var rows = panel.querySelectorAll('.analysis-filter-row');
+        var filters = [];
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            var fieldSel = row.querySelector('.analysis-filter-field');
+            var opSel    = row.querySelector('.analysis-filter-op');
+            var valInput = row.querySelector('.analysis-filter-value');
+            var field = fieldSel ? fieldSel.value : '';
+            var op    = opSel    ? opSel.value    : '';
+            var value = valInput ? valInput.value  : '';
+            if (!field || !value) continue;
+            filters.push({ field: field, op: op || 'Eq', value: value });
+        }
+        return filters;
+    }
+
+    /**
+     * 在 filterBar 新增一行篩選列。
+     */
+    function addFilterRow(gridId, fields) {
+        var panel = document.getElementById('analysis-panel-' + gridId);
+        if (!panel) return;
+        var filterList = panel.querySelector('.analysis-filter-list');
+        if (!filterList) return;
+
+        var st = _state[gridId];
+        var metaFields = fields || (st && st.fields) || [];
+
+        var row = document.createElement('div');
+        row.className = 'analysis-filter-row layui-inline';
+        row.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:6px;';
+
+        var fieldSel = document.createElement('select');
+        fieldSel.className = 'analysis-filter-field';
+        fieldSel.style.cssText = 'min-width:120px;';
+        var emptyOpt = document.createElement('option');
+        emptyOpt.value = '';
+        emptyOpt.textContent = '選擇欄位\u2026';
+        fieldSel.appendChild(emptyOpt);
+        metaFields.forEach(function (f) {
+            var opt = document.createElement('option');
+            opt.value = f.fieldName;
+            opt.textContent = f.displayName;
+            fieldSel.appendChild(opt);
+        });
+        row.appendChild(fieldSel);
+
+        var opSel = document.createElement('select');
+        opSel.className = 'analysis-filter-op';
+        opSel.style.cssText = 'min-width:100px;';
+        _FILTER_OPS.forEach(function (o) {
+            var opt = document.createElement('option');
+            opt.value = o.value;
+            opt.textContent = o.label;
+            opSel.appendChild(opt);
+        });
+        row.appendChild(opSel);
+
+        var valInput = document.createElement('input');
+        valInput.type = 'text';
+        valInput.className = 'analysis-filter-value layui-input';
+        valInput.style.cssText = 'width:140px;display:inline-block;';
+        valInput.placeholder = '篩選值\u2026';
+        row.appendChild(valInput);
+
+        var removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'layui-btn layui-btn-xs layui-btn-danger';
+        removeBtn.textContent = '\u2715';
+        removeBtn.addEventListener('click', function () {
+            if (filterList.contains(row)) filterList.removeChild(row);
+        });
+        row.appendChild(removeBtn);
+
+        filterList.appendChild(row);
+    }
+
+    /**
+     * 在 meta 載入後更新已存在篩選列的欄位選單。
+     */
+    function updateFilterFieldOptions(gridId, fields) {
+        var panel = document.getElementById('analysis-panel-' + gridId);
+        if (!panel) return;
+        var selects = panel.querySelectorAll('.analysis-filter-field');
+        for (var i = 0; i < selects.length; i++) {
+            var fieldSel = selects[i];
+            var currentVal = fieldSel.value;
+            while (fieldSel.firstChild) fieldSel.removeChild(fieldSel.firstChild);
+            var emptyOpt = document.createElement('option');
+            emptyOpt.value = '';
+            emptyOpt.textContent = '選擇欄位\u2026';
+            fieldSel.appendChild(emptyOpt);
+            fields.forEach(function (f) {
+                var opt = document.createElement('option');
+                opt.value = f.fieldName;
+                opt.textContent = f.displayName;
+                if (f.fieldName === currentVal) opt.selected = true;
+                fieldSel.appendChild(opt);
+            });
+        }
+    }
+
     // ─── 查詢 ────────────────────────────────────────────────────────────────
 
     function query(gridId) {
@@ -786,7 +942,7 @@
             listVmType: st.listVmType,
             dimensions: dims,
             measures: msrs,
-            filters: [],
+            filters: collectFilters(gridId),
             dimensionHierarchies: Object.keys(sel.dimensionHierarchies).length > 0
                 ? sel.dimensionHierarchies : undefined,
             searcherFormData: searcherJson
@@ -1290,7 +1446,7 @@
         var searcherJson = collectSearcherFormData(gridId);
         var req = {
             listVmType: st.listVmType, dimensions: dims, measures: msrs,
-            filters: [], dimensionHierarchies: exportHierarchies, searcherFormData: searcherJson
+            filters: collectFilters(gridId), dimensionHierarchies: exportHierarchies, searcherFormData: searcherJson
         };
         if (isPivot) req.pivotDimension = pivotDim;
         var chartCb = document.querySelector('.analysis-export-chart-cb[data-grid-id="' + gridId + '"]');
@@ -1354,6 +1510,9 @@
         computeScale: computeScale,
         scaleSeriesData: scaleSeriesData,
         detectDualAxis: detectDualAxis,
+        addFilterRow: addFilterRow,
+        collectFilters: collectFilters,
+        updateFilterFieldOptions: updateFilterFieldOptions,
         _getState: function (gridId) { return _state[gridId]; }
     };
 
