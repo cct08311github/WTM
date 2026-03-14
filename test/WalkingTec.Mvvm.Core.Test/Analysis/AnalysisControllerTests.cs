@@ -589,5 +589,44 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.IsFalse(httpCtx.Response.Headers.ContainsKey("X-Analysis-Truncated"),
                 "未截斷時不應設置 X-Analysis-Truncated header");
         }
+
+        // ─── 零個 measures 驗證（#296） ─────────────────────────────────────
+
+        [TestMethod]
+        public void Query_with_zero_measures_returns_400()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Amount = 100m }
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string> { "Region" },
+                Measures   = new List<MeasureRequest>()   // 空陣列
+            };
+
+            var result = CreateController().Query(req) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "空 measures 陣列應回傳 400");
+            Assert.IsTrue(result.Value?.ToString()?.Contains("度量指標") == true,
+                "錯誤訊息應包含「度量指標」");
+        }
+
+        [TestMethod]
+        public void Export_with_zero_measures_returns_400()
+        {
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string> { "Region" },
+                Measures   = new List<MeasureRequest>()
+            };
+
+            var result = CreateController().Export(req) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "Export 空 measures 陣列應回傳 400");
+            Assert.IsTrue(result.Value?.ToString()?.Contains("度量指標") == true,
+                "錯誤訊息應包含「度量指標」");
+        }
     }
 }
