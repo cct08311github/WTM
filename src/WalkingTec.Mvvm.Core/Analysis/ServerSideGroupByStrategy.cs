@@ -16,7 +16,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
     {
         private const int MaxRows = 10_000;
         // Separator for composite GroupBy key; must be SQL-safe and unlikely in real data
-        internal const string KeySeparator = "|||";
+        internal const string KeySeparator = "\x01\x02\x03";
 
         public virtual List<Dictionary<string, object?>> Execute<TModel>(
             IQueryable<TModel> query,
