@@ -10,7 +10,7 @@
 
     // ─── 純函式（無副作用）──────────────────────────────────────────────────
 
-    function detectChartType(dims, msrs) { // eslint-disable-line no-unused-vars
+    function detectChartType(dims, msrs) {
         if (dims.length === 0) return 'card';
         if (dims.some(function (d) { return d.isDate; })) return 'line';
         if (dims.length >= 2) return 'bar-stacked';
