@@ -53,7 +53,7 @@
     }
 
     function scaleSeriesData(data, divisor) {
-        if (!divisor || divisor === 1) return data;
+        if (divisor == null || !isFinite(divisor) || divisor <= 1) return data;
         return data.map(function (v) {
             return v == null ? null : v / divisor;
         });
@@ -66,8 +66,10 @@
         var key1 = measures[1].field + '_' + measures[1].func;
         var max0 = 0, max1 = 0;
         for (var i = 0; i < rows.length; i++) {
-            var v0 = Math.abs(rows[i][key0] || 0);
-            var v1 = Math.abs(rows[i][key1] || 0);
+            var raw0 = rows[i][key0];
+            var raw1 = rows[i][key1];
+            var v0 = (typeof raw0 === 'number' && isFinite(raw0)) ? Math.abs(raw0) : 0;
+            var v1 = (typeof raw1 === 'number' && isFinite(raw1)) ? Math.abs(raw1) : 0;
             if (v0 > max0) max0 = v0;
             if (v1 > max1) max1 = v1;
         }
@@ -1022,9 +1024,11 @@
 
             var yAxisOption;
             if (isDual) {
+                var name0 = req.measures[0].field + '_' + req.measures[0].func;
+                var name1 = req.measures[1].field + '_' + req.measures[1].func;
                 yAxisOption = [
-                    { type: 'value', name: req.measures[0].field + (scales[0].unit ? '（' + scales[0].unit + '）' : ''), position: 'left' },
-                    { type: 'value', name: req.measures[1].field + (scales[1].unit ? '（' + scales[1].unit + '）' : ''), position: 'right' }
+                    { type: 'value', name: name0 + (scales[0].unit ? '（' + scales[0].unit + '）' : ''), position: 'left' },
+                    { type: 'value', name: name1 + (scales[1].unit ? '（' + scales[1].unit + '）' : ''), position: 'right' }
                 ];
             } else {
                 yAxisOption = { type: 'value' };

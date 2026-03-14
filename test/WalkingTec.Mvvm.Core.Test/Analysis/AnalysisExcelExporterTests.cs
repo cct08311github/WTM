@@ -316,11 +316,12 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.AreEqual("億", unit);
         }
 
-        // ─── #281: Column header scaling ────────────────────────────────────
+        // ─── #288: Column header — always raw column name (no unit decoration) ──
 
         [TestMethod]
         public void Export_header_appends_unit_for_large_values()
         {
+            // #288: header must be the original column name regardless of value magnitude
             var resp = MakeResponse(
                 new List<string> { "Region", "Amount_Sum" },
                 new List<Dictionary<string, object?>>
@@ -330,22 +331,42 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
             var wb = OpenWorkbook(AnalysisExcelExporter.Export(resp));
             var header = wb.GetSheetAt(0).GetRow(0);
-            Assert.AreEqual("Amount_Sum（百萬）", header.GetCell(1).StringCellValue);
+            Assert.AreEqual("Amount_Sum", header.GetCell(1).StringCellValue);
+        }
+
+        // ─── #284: DetectDualAxis with non-numeric values ────────────────────
+
+        [TestMethod]
+        public void DetectDualAxis_non_numeric_string_does_not_throw()
+        {
+            // Rows containing non-numeric string values must not cause FormatException
+            var resp = MakeResponse(
+                new List<string> { "Region", "Amount_Sum", "Qty_Count" },
+                new List<Dictionary<string, object?>>
+                {
+                    new() { ["Region"] = "North", ["Amount_Sum"] = "N/A", ["Qty_Count"] = 5m },
+                    new() { ["Region"] = "South", ["Amount_Sum"] = 2_000_000m, ["Qty_Count"] = 8m },
+                });
+
+            // Should not throw; non-numeric value is treated as 0 (skipped)
+            var result = AnalysisExcelExporter.DetectDualAxis(resp, new List<int> { 1, 2 });
+            // max0 = 2_000_000, max1 = 8 → ratio = 250_000 → true
+            Assert.IsTrue(result);
         }
 
         [TestMethod]
-        public void Export_header_no_unit_for_small_values()
+        public void DetectDualAxis_all_non_numeric_returns_false()
         {
+            // If all values in a column are non-numeric, max stays 0 → returns false
             var resp = MakeResponse(
-                new List<string> { "Region", "Amount_Sum" },
+                new List<string> { "Region", "Amount_Sum", "Qty_Count" },
                 new List<Dictionary<string, object?>>
                 {
-                    new() { ["Region"] = "North", ["Amount_Sum"] = 500m },
+                    new() { ["Region"] = "North", ["Amount_Sum"] = "N/A", ["Qty_Count"] = "N/A" },
                 });
 
-            var wb = OpenWorkbook(AnalysisExcelExporter.Export(resp));
-            var header = wb.GetSheetAt(0).GetRow(0);
-            Assert.AreEqual("Amount_Sum", header.GetCell(1).StringCellValue);
+            var result = AnalysisExcelExporter.DetectDualAxis(resp, new List<int> { 1, 2 });
+            Assert.IsFalse(result);
         }
 
         // ─── #281: Dual axis charts ─────────────────────────────────────────
