@@ -60,7 +60,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         switch (m.Func)
                         {
                             case AggregateFunc.Sum:   aggValue = values.Count == 0 ? 0m : values.Sum(); break;
-                            case AggregateFunc.Count: aggValue = g.Count(); break;
+                            case AggregateFunc.Count: aggValue = values.Count; break;
                             case AggregateFunc.Avg:   aggValue = values.Count == 0 ? 0m : values.Average(); break;
                             case AggregateFunc.Max:   aggValue = values.Count == 0 ? 0m : values.Max(); break;
                             case AggregateFunc.Min:   aggValue = values.Count == 0 ? 0m : values.Min(); break;

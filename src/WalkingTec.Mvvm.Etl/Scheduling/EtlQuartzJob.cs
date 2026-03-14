@@ -87,7 +87,7 @@ public class EtlQuartzJob : WtmJob
 
             // 6. 建立 source + loader
             using var source = EtlSourceFactory.CreateSource(jobDef.SourceDbType);
-            var loader = EtlSourceFactory.CreateLoader(DBTypeEnum.SqlServer); // target 是 WTM 的 DB
+            var loader = EtlSourceFactory.CreateLoader(jobDef.TargetDbType);
 
             // 7. 建立 WatermarkStrategy
             var watermarkValue = jobDef.LastWatermarkValue ?? jobDef.InitialWatermarkValue;
@@ -98,18 +98,17 @@ public class EtlQuartzJob : WtmJob
                 jobDef.WatermarkTimeZone);
 
             // 8. 建立 Pipeline Config
-            // 注意：真實使用時 Job 子類需要 override 提供 QueryTemplate, StagingTable 等
-            // 這裡從 JobDataMap 取得（由註冊時設定）
-            var queryTemplate = context.MergedJobDataMap.GetString("QueryTemplate") ?? "";
-            var targetTable = context.MergedJobDataMap.GetString("TargetTableName") ?? "";
-            var mergeKey = context.MergedJobDataMap.GetString("MergeKeyColumn") ?? "";
-            var stagingTable = context.MergedJobDataMap.GetString("StagingTableName") ?? "";
+            var queryTemplate = jobDef.QueryTemplate;
+            var targetTable = jobDef.TargetTableName;
+            var mergeKey = jobDef.MergeKeyColumn;
+            var stagingTable = context.MergedJobDataMap.GetString("StagingTableName") ?? $"STG_{targetTable}";
             var batchSize = context.MergedJobDataMap.ContainsKey("BatchSize")
                 ? context.MergedJobDataMap.GetInt("BatchSize")
                 : 50_000;
 
-            // 取 target DB 連線字串（使用 WTM 預設連線）
-            var targetCs = Wtm.ConfigInfo.Connections?.FirstOrDefault()?.Value ?? "";
+            // 取 target DB 連線字串
+            var targetCs = Wtm.ConfigInfo.Connections?
+                .FirstOrDefault(c => c.Key == jobDef.TargetCsKey)?.Value ?? "";
 
             var config = new EtlPipelineConfig
             {

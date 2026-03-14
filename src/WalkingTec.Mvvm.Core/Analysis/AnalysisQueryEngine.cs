@@ -146,7 +146,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 PivotValues = pivotValues,
                 MeasureNames = measureNames,
                 Rows = pivotRowsMap.Values.ToList(),
-                Columns = columns
+                Columns = columns,
+                Truncated = groupRes.Truncated
             };
         }
 
@@ -250,8 +251,17 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 {
                     if (f.Operator == FilterOperator.In)
                     {
-                        var values = f.Value as System.Collections.IEnumerable;
-                        if (values == null) throw new InvalidOperationException("Value for 'In' operator must be an IEnumerable.");
+                        System.Collections.IEnumerable? values = null;
+                        if (f.Value is string s)
+                        {
+                            values = s.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim());
+                        }
+                        else
+                        {
+                            values = f.Value as System.Collections.IEnumerable;
+                        }
+
+                        if (values == null) throw new InvalidOperationException("Value for 'In' operator must be an array, list or comma-separated string.");
                         
                         var list = new System.Collections.ArrayList();
                         foreach (var v in values)

@@ -17,7 +17,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
     {
         private const int MaxRows = 10_000;
         // Separator for composite GroupBy key; must be SQL-safe and unlikely in real data
-        internal const string KeySeparator = "|||";
+        internal const string KeySeparator = "\x01\x02\x03";
 
         public virtual List<Dictionary<string, object?>> Execute<TModel>(
             IQueryable<TModel> query,
@@ -27,6 +27,14 @@ namespace WalkingTec.Mvvm.Core.Analysis
         {
             if (req.Dimensions.Count == 0)
                 return new List<Dictionary<string, object?>>();
+
+            // --- DateHierarchy fallback ---
+            // Current ServerSide implementation does not support SQL translation for Year/Month/etc.
+            // Throwing InvalidOperationException triggers fallback to InProcessGroupByStrategy in AnalysisQueryEngine.
+            if (req.DimensionHierarchies != null && req.Dimensions.Any(d => req.DimensionHierarchies.TryGetValue(d, out var h) && h != DateHierarchy.None))
+            {
+                throw new InvalidOperationException("ServerSideGroupByStrategy does not support DateHierarchy. Falling back to InProcess.");
+            }
 
             var param = Expression.Parameter(typeof(TModel), "x");
 
@@ -163,22 +171,35 @@ namespace WalkingTec.Mvvm.Core.Analysis
         {
             var innerParam = Expression.Parameter(typeof(TModel), "e");
             var meta = whitelist[measure.Field];
+            Expression propAccess = Expression.Property(innerParam, measure.Field);
+            var propType = meta.ClrType;
 
             if (measure.Func == AggregateFunc.Count)
             {
-                // g.Count() → (double)g.Count()
+                // g.Count(e => e.Field != null) → (double)
+                Expression predicateBody;
+                if (Nullable.GetUnderlyingType(propType) != null || !propType.IsValueType)
+                {
+                    predicateBody = Expression.NotEqual(propAccess, Expression.Constant(null, propType));
+                }
+                else
+                {
+                    predicateBody = Expression.Constant(true);
+                }
+                
+                var predicate = Expression.Lambda(predicateBody, innerParam);
+                
                 var countMethod = typeof(Enumerable)
                     .GetMethods()
-                    .First(m => m.Name == nameof(Enumerable.Count) && m.GetParameters().Length == 1)
+                    .First(m => m.Name == nameof(Enumerable.Count) && m.GetParameters().Length == 2)
                     .MakeGenericMethod(typeof(TModel));
+                
                 return Expression.Convert(
-                    Expression.Call(countMethod, gParam),
+                    Expression.Call(countMethod, gParam, predicate),
                     typeof(double));
             }
 
             // Build property selector: e => (double)e.Field
-            Expression propAccess = Expression.Property(innerParam, measure.Field);
-            var propType = meta.ClrType;
             var underlyingType = Nullable.GetUnderlyingType(propType);
 
             if (underlyingType != null)

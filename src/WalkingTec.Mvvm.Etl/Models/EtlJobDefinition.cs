@@ -43,6 +43,35 @@ public class EtlJobDefinition : BasePoco
     [Display(Name = "來源 DB 類型")]
     public DBTypeEnum SourceDbType { get; set; }
 
+    // ─── 目標設定 ───
+
+    /// <summary>引用 Configs.Connections 的 Key</summary>
+    [Display(Name = "目標連線 Key")]
+    [Required]
+    [StringLength(100)]
+    public string TargetCsKey { get; set; } = string.Empty;
+
+    /// <summary>目標資料庫類型</summary>
+    [Display(Name = "目標 DB 類型")]
+    public DBTypeEnum TargetDbType { get; set; }
+
+    /// <summary>目標資料表名稱</summary>
+    [Display(Name = "目標資料表")]
+    [Required]
+    [StringLength(100)]
+    public string TargetTableName { get; set; } = string.Empty;
+
+    /// <summary>合併主鍵欄位</summary>
+    [Display(Name = "合併主鍵 (Merge Key)")]
+    [Required]
+    [StringLength(100)]
+    public string MergeKeyColumn { get; set; } = string.Empty;
+
+    /// <summary>SQL 查詢模板</summary>
+    [Display(Name = "查詢模板 (SQL)")]
+    [Required]
+    public string QueryTemplate { get; set; } = string.Empty;
+
     // ─── Watermark 設定 ───
 
     [Display(Name = "Watermark 模式")]

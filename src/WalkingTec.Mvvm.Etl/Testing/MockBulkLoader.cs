@@ -61,4 +61,10 @@ public class MockBulkLoader : IBulkLoader
         EnsureStagingCalled = true;
         return Task.CompletedTask;
     }
+
+    public Task<bool> IsUniqueColumnAsync(string connectionString, string tableName, string columnName,
+        CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(true);
+    }
 }

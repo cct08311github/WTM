@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -59,6 +60,8 @@ namespace WalkingTec.Mvvm.Mvc
             try { vmType = _registry.Resolve(listVmType); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
 
+            if (!CheckAccess(vmType)) return Forbid();
+
             var vm = CreateAnalysisVm(vmType);
             var fields = InvokeGetAnalysisFields(vm, vmType);
             if (_fieldPolicy != null)
@@ -95,9 +98,14 @@ namespace WalkingTec.Mvvm.Mvc
             try { vmType = _registry.Resolve(req.ListVmType); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
 
+            if (!CheckAccess(vmType)) return Forbid();
+
             BaseVM vm;
             try { vm = CreateAndBindVm(vmType, req.SearcherFormData); }
-            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+            catch (Exception ex) when (ex is InvalidOperationException || ex is JsonException) 
+            { 
+                return BadRequest(ex.Message); 
+            }
 
             var fields = InvokeGetAnalysisFields(vm, vmType);
             if (_fieldPolicy != null)
@@ -115,17 +123,13 @@ namespace WalkingTec.Mvvm.Mvc
             var sw = Stopwatch.StartNew();
             try
             {
-                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields, identityKey: identityKey);
+                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields, identityKey: identityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
                 sw.Stop();
                 _logger.LogInformation("Analysis query completed ListVm={ListVmType} Dims={DimCount} Msrs={MsrCount} ElapsedMs={Elapsed} Truncated={Truncated}",
                     req.ListVmType, req.Dimensions.Count, req.Measures.Count, sw.ElapsedMilliseconds, result.Truncated);
                 return new JsonResult(result, _camelCase);
             }
-            catch (InvalidOperationException ex)
-            {
-                _logger.LogWarning(ex, "Analysis query failed ListVm={ListVmType}", req.ListVmType);
-                return BadRequest(ex.Message);
-            }
+            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
         }
 
         [HttpPost("pivot")]
@@ -141,9 +145,14 @@ namespace WalkingTec.Mvvm.Mvc
             try { vmType = _registry.Resolve(req.ListVmType); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
 
+            if (!CheckAccess(vmType)) return Forbid();
+
             BaseVM pivotVm;
             try { pivotVm = CreateAndBindVm(vmType, req.SearcherFormData); }
-            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+            catch (Exception ex) when (ex is InvalidOperationException || ex is JsonException) 
+            { 
+                return BadRequest(ex.Message); 
+            }
 
             var fields = InvokeGetAnalysisFields(pivotVm, vmType);
             if (_fieldPolicy != null)
@@ -161,17 +170,13 @@ namespace WalkingTec.Mvvm.Mvc
             var sw = Stopwatch.StartNew();
             try
             {
-                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields, identityKey: identityKey);
+                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields, identityKey: identityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
                 sw.Stop();
                 _logger.LogInformation("Analysis pivot completed ListVm={ListVmType} Dims={DimCount} Msrs={MsrCount} Pivot={PivotDim} ElapsedMs={Elapsed}",
                     req.ListVmType, req.Dimensions.Count, req.Measures.Count, req.PivotDimension, sw.ElapsedMilliseconds);
                 return new JsonResult(result, _camelCase);
             }
-            catch (InvalidOperationException ex)
-            {
-                _logger.LogWarning(ex, "Analysis pivot failed ListVm={ListVmType}", req.ListVmType);
-                return BadRequest(ex.Message);
-            }
+            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
         }
 
         /// <summary>
@@ -185,14 +190,21 @@ namespace WalkingTec.Mvvm.Mvc
             [FromQuery] string chartType = "bar")
         {
             if (req == null) return BadRequest("Request body is required.");
+            if (req.Measures.Count == 0)  return BadRequest("至少需要選取 1 個度量指標。");
+            if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
 
             Type vmType;
             try { vmType = _registry.Resolve(req.ListVmType); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
 
+            if (!CheckAccess(vmType)) return Forbid();
+
             BaseVM vm;
             try { vm = CreateAndBindVm(vmType, req.SearcherFormData); }
-            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+            catch (Exception ex) when (ex is InvalidOperationException || ex is JsonException) 
+            { 
+                return BadRequest(ex.Message); 
+            }
 
             var fields = InvokeGetAnalysisFields(vm, vmType);
             if (_fieldPolicy != null)
@@ -211,7 +223,7 @@ namespace WalkingTec.Mvvm.Mvc
             AnalysisQueryResponse result;
             try
             {
-                result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields, identityKey: identityKey);
+                result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields, identityKey: identityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
                 sw.Stop();
                 _logger.LogInformation("Analysis export completed ListVm={ListVmType} Format={Format} ElapsedMs={Elapsed}",
                     req.ListVmType, format, sw.ElapsedMilliseconds);
@@ -248,13 +260,21 @@ namespace WalkingTec.Mvvm.Mvc
             [FromQuery] string chartType = "bar")
         {
             if (req == null) return BadRequest("Request body is required.");
+            if (req.Measures.Count == 0)  return BadRequest("至少需要選取 1 個度量指標。");
+            if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
+
             Type vmType;
             try { vmType = _registry.Resolve(req.ListVmType); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
 
+            if (!CheckAccess(vmType)) return Forbid();
+
             BaseVM vm;
             try { vm = CreateAndBindVm(vmType, req.SearcherFormData); }
-            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+            catch (Exception ex) when (ex is InvalidOperationException || ex is JsonException) 
+            { 
+                return BadRequest(ex.Message); 
+            }
 
             var fields = InvokeGetAnalysisFields(vm, vmType);
             if (_fieldPolicy != null)
@@ -273,7 +293,7 @@ namespace WalkingTec.Mvvm.Mvc
             AnalysisPivotResponse result;
             try
             {
-                result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields, identityKey: identityKey);
+                result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields, identityKey: identityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
                 sw.Stop();
                 _logger.LogInformation("Analysis pivot export completed ListVm={ListVmType} Format={Format} ElapsedMs={Elapsed}",
                     req.ListVmType, format, sw.ElapsedMilliseconds);
@@ -290,8 +310,11 @@ namespace WalkingTec.Mvvm.Mvc
                 Columns = result.Columns,
                 Rows = result.Rows,
                 TotalCount = result.Rows.Count,
-                Truncated = false
+                Truncated = result.Truncated
             };
+
+            if (result.Truncated)
+                Response.Headers["X-Analysis-Truncated"] = "true";
 
             if (format.Equals("csv", StringComparison.OrdinalIgnoreCase))
             {
@@ -307,6 +330,18 @@ namespace WalkingTec.Mvvm.Mvc
 
         // ─── Helpers ───────────────────────────────────────────────────────
 
+        private bool CheckAccess(Type vmType)
+        {
+            var attr = vmType.GetCustomAttribute<EnableAnalysisAttribute>();
+            if (attr == null || string.IsNullOrEmpty(attr.AllowedRoles)) return true;
+
+            var userRoles = Wtm?.LoginUserInfo?.Roles?.Select(r => r.RoleName) ?? Enumerable.Empty<string>();
+            if (userRoles.Any(r => string.Equals(r, "Admin", StringComparison.OrdinalIgnoreCase))) return true;
+
+            var allowed = attr.AllowedRoles.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(r => r.Trim());
+            return allowed.Intersect(userRoles, StringComparer.OrdinalIgnoreCase).Any();
+        }
+
         private static string? ValidateDimensionHierarchies(
             Dictionary<string, DateHierarchy>? hierarchies,
             IEnumerable<AnalysisFieldMeta> fields)
@@ -317,7 +352,7 @@ namespace WalkingTec.Mvvm.Mvc
                 var f = fields.FirstOrDefault(x => x.FieldName == kvp.Key);
                 if (f == null) return $"維度 '{kvp.Key}' 不存在於可用欄位清單。";
                 if (!f.IsDate && kvp.Value != DateHierarchy.None)
-                    return $"欄位 '{kvp.Key}' 不是日期型別，不支援時間層級切換。";
+                    return $"欄位 '{kvp.Key}' 不是日期型別 (not a date dimension)，不支援時間層級切換。";
             }
             return null;
         }
@@ -345,6 +380,8 @@ namespace WalkingTec.Mvvm.Mvc
             var vm = CreateAnalysisVm(vmType);
             if (!string.IsNullOrEmpty(searcherJson))
             {
+                // WTM ListVM uses BasePagedListVM<TModel, TSearcher>
+                // We need the second generic argument for the Searcher
                 var searcherType = vmType.BaseType?.GetGenericArguments().Skip(1).FirstOrDefault();
                 if (searcherType != null)
                 {
@@ -380,16 +417,7 @@ namespace WalkingTec.Mvvm.Mvc
                 var values = result.Columns.Select(c =>
                 {
                     var v = row.ContainsKey(c) ? row[c] : null;
-                    var s = v?.ToString() ?? "";
-                    
-                    // 防範 CSV Injection (Excel 公式注入)
-                    if (s.StartsWith("=") || s.StartsWith("+") || s.StartsWith("-") || s.StartsWith("@"))
-                    {
-                        s = "\t" + s;
-                    }
-
-                    if (s.Contains(",") || s.Contains("\"")) s = "\"" + s.Replace("\"", "\"\"") + "\"";
-                    return s;
+                    return EscapeCsvCell(v?.ToString());
                 });
                 sb.AppendLine(string.Join(",", values));
             }
@@ -397,11 +425,33 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         /// <summary>
+        /// 提供相容各類 Excel/CSV 的欄位轉義（含公式注入防護）。
+        /// 供 CsvEscapeTest 回歸測試調用。
+        /// </summary>
+        private static string EscapeCsvCell(string? val)
+        {
+            if (val == null) return "";
+            var s = val;
+            bool needsPrefix = s.StartsWith("=") || s.StartsWith("+") || s.StartsWith("-") || s.StartsWith("@") || s.StartsWith("\t") || s.StartsWith("\r");
+
+            if (s.Contains(",") || s.Contains("\"") || s.Contains("\n") || s.Contains("\r"))
+            {
+                s = "\"" + s.Replace("\"", "\"\"") + "\"";
+            }
+            
+            if (needsPrefix)
+            {
+                s = "\t" + s;
+            }
+            return s;
+        }
+
+        /// <summary>
         /// 提供相容舊版前端的日期格式化轉換。
         /// </summary>
         private class DateTimeConverter : JsonConverter<DateTime>
         {
-            private static readonly string[] Formats = { "yyyy-MM-ddTHH:mm:ss", "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd" };
+            private static readonly string[] Formats = { "yyyy-MM-ddTHH:mm:ss", "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd", "yyyy/MM/dd", "yyyy/MM/dd HH:mm", "yyyy.MM.dd" };
 
             public override DateTime Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
             {

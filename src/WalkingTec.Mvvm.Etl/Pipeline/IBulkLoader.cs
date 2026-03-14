@@ -45,4 +45,13 @@ public interface IBulkLoader
         string stagingTableName,
         StagingTableSpec spec,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 檢查指定資料表的欄位是否具有唯一限制 (PK 或 Unique Index)
+    /// </summary>
+    Task<bool> IsUniqueColumnAsync(
+        string connectionString,
+        string tableName,
+        string columnName,
+        CancellationToken cancellationToken = default);
 }

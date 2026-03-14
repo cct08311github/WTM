@@ -14,5 +14,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
         /// <summary>前端顯示名稱（可為 null，預設使用屬性名）</summary>
         public string? DisplayName { get; set; }
+
+        /// <summary>允許存取此度量的角色列表（逗號分隔）</summary>
+        public string? AllowedRoles { get; set; }
     }
 }

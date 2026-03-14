@@ -35,5 +35,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
         /// <summary>日期維度的時間層級（僅 IsDate=true 時有意義）</summary>
         public DateHierarchy Hierarchy { get; set; } = DateHierarchy.None;
+
+        /// <summary>允許存取此欄位的角色列表（逗號分隔）。若為空則不限角色。</summary>
+        public string? AllowedRoles { get; set; }
     }
 }

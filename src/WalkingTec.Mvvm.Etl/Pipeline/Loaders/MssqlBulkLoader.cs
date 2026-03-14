@@ -128,4 +128,26 @@ public class MssqlBulkLoader : IBulkLoader
         }
         return columns;
     }
+
+    public async Task<bool> IsUniqueColumnAsync(
+        string connectionString, string tableName, string columnName,
+        CancellationToken cancellationToken = default)
+    {
+        await using var conn = new SqlConnection(connectionString);
+        await conn.OpenAsync(cancellationToken);
+
+        await using var cmd = conn.CreateCommand();
+        // Check PK or Unique constraints in MSSQL
+        cmd.CommandText = @"
+            SELECT COUNT(*) 
+            FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
+            JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS t ON k.CONSTRAINT_NAME = t.CONSTRAINT_NAME
+            WHERE k.TABLE_NAME = @tableName AND k.COLUMN_NAME = @colName
+              AND t.CONSTRAINT_TYPE IN ('PRIMARY KEY', 'UNIQUE')";
+        cmd.Parameters.AddWithValue("@tableName", tableName);
+        cmd.Parameters.AddWithValue("@colName", columnName);
+
+        var count = (int)(await cmd.ExecuteScalarAsync(cancellationToken))!;
+        return count > 0;
+    }
 }
