@@ -6,6 +6,7 @@ using Quartz;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Etl.Models;
 using WalkingTec.Mvvm.Etl.Scheduling;
+using WalkingTec.Mvvm.Etl.Pipeline;
 
 namespace WalkingTec.Mvvm.Etl.ViewModels;
 
@@ -29,6 +30,30 @@ public class EtlJobDefinitionVM : BaseCRUDVM<EtlJobDefinition>
             !CronExpression.IsValidExpression(Entity.CronExpression))
         {
             MSD.AddModelError("Entity.CronExpression", "無效的 Cron 表達式");
+        }
+
+        if (!string.IsNullOrEmpty(Entity.MergeKeyColumn) && !string.IsNullOrEmpty(Entity.TargetTableName) && !string.IsNullOrEmpty(Entity.TargetCsKey))
+        {
+            try
+            {
+                var targetCs = Wtm.ConfigInfo.Connections?.FirstOrDefault(c => c.Key == Entity.TargetCsKey)?.Value;
+                if (!string.IsNullOrEmpty(targetCs))
+                {
+                    var loader = EtlSourceFactory.CreateLoader(Entity.TargetDbType);
+                    if (loader != null)
+                    {
+                        bool isUnique = loader.IsUniqueColumnAsync(targetCs, Entity.TargetTableName, Entity.MergeKeyColumn).GetAwaiter().GetResult();
+                        if (!isUnique)
+                        {
+                            MSD.AddModelError("Entity.MergeKeyColumn", "選定的合併主鍵未具備唯一限制 (Primary Key 或 Unique)，可能導致資料異常。");
+                        }
+                    }
+                }
+            }
+            catch (System.Exception)
+            {
+                // Warn instead of error if connection fails during validation
+            }
         }
     }
 
