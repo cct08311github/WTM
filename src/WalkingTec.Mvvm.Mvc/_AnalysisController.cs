@@ -100,9 +100,11 @@ namespace WalkingTec.Mvvm.Mvc
             var hierarchyError = ValidateDimensionHierarchies(req.DimensionHierarchies, fields);
             if (hierarchyError != null) return BadRequest(hierarchyError);
 
+            string? identityKey = Wtm?.LoginUserInfo != null ? $"{Wtm.LoginUserInfo.CurrentTenant}_{Wtm.LoginUserInfo.UserId}" : null;
+
             try
             {
-                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields);
+                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields, identityKey: identityKey);
                 return new JsonResult(result, _camelCase);
             }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
@@ -135,9 +137,11 @@ namespace WalkingTec.Mvvm.Mvc
             var hierarchyError = ValidateDimensionHierarchies(req.DimensionHierarchies, fields);
             if (hierarchyError != null) return BadRequest(hierarchyError);
 
+            string? identityKey = Wtm?.LoginUserInfo != null ? $"{Wtm.LoginUserInfo.CurrentTenant}_{Wtm.LoginUserInfo.UserId}" : null;
+
             try
             {
-                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields);
+                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields, identityKey: identityKey);
                 return new JsonResult(result, _camelCase);
             }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
@@ -178,8 +182,10 @@ namespace WalkingTec.Mvvm.Mvc
             var hierarchyError = ValidateDimensionHierarchies(req.DimensionHierarchies, fields);
             if (hierarchyError != null) return BadRequest(hierarchyError);
 
+            string? identityKey = Wtm?.LoginUserInfo != null ? $"{Wtm.LoginUserInfo.CurrentTenant}_{Wtm.LoginUserInfo.UserId}" : null;
+
             AnalysisQueryResponse result;
-            try { result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields); }
+            try { result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields, identityKey: identityKey); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
 
             if (result.Truncated)
@@ -231,8 +237,10 @@ namespace WalkingTec.Mvvm.Mvc
             var hierarchyError = ValidateDimensionHierarchies(req.DimensionHierarchies, fields);
             if (hierarchyError != null) return BadRequest(hierarchyError);
 
+            string? identityKey = Wtm?.LoginUserInfo != null ? $"{Wtm.LoginUserInfo.CurrentTenant}_{Wtm.LoginUserInfo.UserId}" : null;
+
             AnalysisPivotResponse result;
-            try { result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields); }
+            try { result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecutePivotDynamic(baseQuery, req, fields, identityKey: identityKey); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
 
             // Adapt AnalysisPivotResponse to AnalysisQueryResponse format for CSV/Excel export

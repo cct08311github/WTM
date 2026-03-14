@@ -49,13 +49,14 @@ namespace WalkingTec.Mvvm.Core.Analysis
             IQueryable<TModel> baseQuery,
             AnalysisQueryRequest req,
             IEnumerable<AnalysisFieldMeta> whitelist,
-            DBTypeEnum dbType = DBTypeEnum.SQLite)
+            DBTypeEnum dbType = DBTypeEnum.SQLite,
+            string? identityKey = null)
         {
             var wl = whitelist.ToDictionary(f => f.FieldName);
             ValidateFields(req, wl);
 
             // 先計算 hash，用於快取查詢（hash 僅由 request 決定，與資料無關）
-            var queryHash = ComputeHash(req);
+            var queryHash = ComputeHash(req, identityKey);
 
             // 快取命中時直接回傳
             if (_cache != null && _cache.TryGet(queryHash, out var cached) && cached != null)
@@ -104,7 +105,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
             IQueryable<TModel> baseQuery,
             AnalysisPivotRequest req,
             IEnumerable<AnalysisFieldMeta> whitelist,
-            DBTypeEnum dbType = DBTypeEnum.SQLite)
+            DBTypeEnum dbType = DBTypeEnum.SQLite,
+            string? identityKey = null)
         {
             if (!req.Dimensions.Contains(req.PivotDimension))
             {
@@ -112,7 +114,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             }
 
             // 1. Get raw grouped data
-            var groupRes = Execute(baseQuery, req, whitelist, dbType);
+            var groupRes = Execute(baseQuery, req, whitelist, dbType, identityKey);
             var rawRows = groupRes.Rows;
 
             // 2. Identify row dimensions and pivot dimension
@@ -190,7 +192,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
             IQueryable baseQuery,
             AnalysisQueryRequest req,
             IEnumerable<AnalysisFieldMeta> whitelist,
-            DBTypeEnum dbType = DBTypeEnum.SQLite)
+            DBTypeEnum dbType = DBTypeEnum.SQLite,
+            string? identityKey = null)
         {
             var elementType = baseQuery.ElementType;
             var method = typeof(AnalysisQueryEngine)
@@ -200,7 +203,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             method = method.MakeGenericMethod(elementType);
             try
             {
-                var result = method.Invoke(this, new object[] { baseQuery, req, whitelist, dbType }) as AnalysisQueryResponse;
+                var result = method.Invoke(this, new object?[] { baseQuery, req, whitelist, dbType, identityKey }) as AnalysisQueryResponse;
                 if (result is null)
                     throw new InvalidOperationException("ExecuteDynamic did not return a valid AnalysisQueryResponse.");
                 return result;
@@ -218,7 +221,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
             IQueryable baseQuery,
             AnalysisPivotRequest req,
             IEnumerable<AnalysisFieldMeta> whitelist,
-            DBTypeEnum dbType = DBTypeEnum.SQLite)
+            DBTypeEnum dbType = DBTypeEnum.SQLite,
+            string? identityKey = null)
         {
             var elementType = baseQuery.ElementType;
             var method = typeof(AnalysisQueryEngine)
@@ -228,7 +232,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             method = method.MakeGenericMethod(elementType);
             try
             {
-                var result = method.Invoke(this, new object[] { baseQuery, req, whitelist, dbType }) as AnalysisPivotResponse;
+                var result = method.Invoke(this, new object?[] { baseQuery, req, whitelist, dbType, identityKey }) as AnalysisPivotResponse;
                 if (result is null)
                     throw new InvalidOperationException("ExecutePivotDynamic did not return a valid AnalysisPivotResponse.");
                 return result;
@@ -356,9 +360,13 @@ namespace WalkingTec.Mvvm.Core.Analysis
             }
         }
 
-        private static string ComputeHash(AnalysisQueryRequest req)
+        private static string ComputeHash(AnalysisQueryRequest req, string? identityKey = null)
         {
             var raw = System.Text.Json.JsonSerializer.Serialize(req);
+            if (!string.IsNullOrEmpty(identityKey))
+            {
+                raw += "|" + identityKey;
+            }
             var bytes = System.Security.Cryptography.SHA256.HashData(
                 System.Text.Encoding.UTF8.GetBytes(raw));
             return Convert.ToHexString(bytes).Substring(0, 16);

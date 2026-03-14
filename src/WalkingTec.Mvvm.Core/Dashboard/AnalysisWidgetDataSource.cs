@@ -76,7 +76,8 @@ public class AnalysisWidgetDataSource : IWidgetDataSource
         var analysisReq = BuildAnalysisRequest(request.Parameters);
 
         // 6. Execute via engine (handles TargetInvocationException unwrapping internally)
-        var response = _engine.ExecuteDynamic(baseQuery, analysisReq, fields);
+        string? identityKey = wtm?.LoginUserInfo != null ? $"{wtm.LoginUserInfo.CurrentTenant}_{wtm.LoginUserInfo.UserId}" : null;
+        var response = _engine.ExecuteDynamic(baseQuery, analysisReq, fields, identityKey: identityKey);
 
         // 7. Map to WidgetDataResult
         var result = new WidgetDataResult
