@@ -104,7 +104,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         private _AnalysisController CreateController(IAnalysisFieldPolicy policy = null)
         {
-            var controller = new _AnalysisController(_registry, null, policy);
+            var controller = new _AnalysisController(_registry, Microsoft.Extensions.Logging.Abstractions.NullLogger<_AnalysisController>.Instance, null, policy);
             controller.Wtm = MockWtmContext.CreateWtmContext();
             return controller;
         }
@@ -558,7 +558,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
             var httpCtx = new DefaultHttpContext();
-            var controller = new _AnalysisController(_registry, null, null);
+            var controller = new _AnalysisController(_registry, Microsoft.Extensions.Logging.Abstractions.NullLogger<_AnalysisController>.Instance, null, null);
             controller.Wtm = MockWtmContext.CreateWtmContext();
             controller.ControllerContext = new ControllerContext { HttpContext = httpCtx };
 
@@ -580,7 +580,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
             var httpCtx = new DefaultHttpContext();
-            var controller = new _AnalysisController(_registry, null, null);
+            var controller = new _AnalysisController(_registry, Microsoft.Extensions.Logging.Abstractions.NullLogger<_AnalysisController>.Instance, null, null);
             controller.Wtm = MockWtmContext.CreateWtmContext();
             controller.ControllerContext = new ControllerContext { HttpContext = httpCtx };
 
@@ -925,7 +925,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
             var httpCtx = new DefaultHttpContext();
-            var controller = new _AnalysisController(_registry, null, null);
+            var controller = new _AnalysisController(_registry, Microsoft.Extensions.Logging.Abstractions.NullLogger<_AnalysisController>.Instance, null, null);
             controller.Wtm = MockWtmContext.CreateWtmContext();
             controller.ControllerContext = new ControllerContext { HttpContext = httpCtx };
 

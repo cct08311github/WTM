@@ -53,7 +53,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             _registry = new AnalysisVmRegistry();
             _registry.Build(new[] { typeof(AnalysisWidgetDataSourceTests).Assembly });
 
-            _engine = new AnalysisQueryEngine();
+            _engine = new AnalysisQueryEngine(GroupByStrategyResolver.Default);
 
             var services = new ServiceCollection();
             _serviceProvider = services.BuildServiceProvider();

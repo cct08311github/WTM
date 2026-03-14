@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
+using System.Threading;
 
 namespace WalkingTec.Mvvm.Core.Analysis
 {
@@ -21,7 +22,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
         public virtual List<Dictionary<string, object?>> Execute<TModel>(
             IQueryable<TModel> query,
             AnalysisQueryRequest req,
-            Dictionary<string, AnalysisFieldMeta> whitelist)
+            Dictionary<string, AnalysisFieldMeta> whitelist,
+            CancellationToken cancellationToken = default)
         {
             if (req.Dimensions.Count == 0)
                 return new List<Dictionary<string, object?>>();
@@ -88,7 +90,13 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
             // --- Step 4: Execute query ---
             var projected = grouped.Select(selectLambda);
-            var materialized = projected.Take(MaxRows + 1).ToList();
+            var queryToRun = projected.Take(MaxRows + 1);
+            var materialized = new List<Tuple<string, double, double, double>>();
+            foreach (var item in queryToRun)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                materialized.Add(item);
+            }
 
             // --- Step 5: Map to dictionaries ---
             var results = new List<Dictionary<string, object?>>(materialized.Count);

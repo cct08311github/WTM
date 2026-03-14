@@ -18,6 +18,11 @@ namespace WalkingTec.Mvvm.Core.Dashboard
 
             services.AddSingleton<IDashboardService, JsonFileDashboardService>();
 
+            if (services.All(d => d.ServiceType != typeof(GroupByStrategyResolver)))
+            {
+                services.AddSingleton(GroupByStrategyResolver.Default);
+            }
+
             // Auto-register AnalysisWidgetDataSource when Analysis Mode dependencies are available
             var hasRegistry = services.Any(d => d.ServiceType == typeof(AnalysisVmRegistry));
             var hasEngine = services.Any(d => d.ServiceType == typeof(AnalysisQueryEngine));
