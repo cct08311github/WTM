@@ -10,11 +10,10 @@
 
     // ─── 純函式（無副作用）──────────────────────────────────────────────────
 
-    function detectChartType(dims, msrs) {
+    function detectChartType(dims, msrs) { // eslint-disable-line no-unused-vars
         if (dims.length === 0) return 'card';
         if (dims.some(function (d) { return d.isDate; })) return 'line';
         if (dims.length >= 2) return 'bar-stacked';
-        if (dims.length === 1 && msrs.length === 1) return 'pie';
         return 'bar';
     }
 
@@ -97,6 +96,28 @@
             .map(function (f) { return f.name; });
     }
 
+    var _FUNC_LABEL_MAP = { Sum: '合計', Count: '計數', Avg: '平均', Max: '最大', Min: '最小' };
+
+    function getFuncLabel(func) {
+        return _FUNC_LABEL_MAP[func] || func;
+    }
+
+    function formatNumeric(val) {
+        var n = Number(val);
+        if (isNaN(n)) return String(val);
+        return n.toLocaleString('zh-TW', { maximumFractionDigits: 2 });
+    }
+
+    function showMsg(msg) {
+        if (window.layui && window.layui.layer) {
+            window.layui.layer.msg(msg);
+        } else if (window.layer) {
+            window.layer.msg(msg);
+        } else {
+            console.warn('[wtmAnalysis]', msg);
+        }
+    }
+
     // ─── 狀態 ─────────────────────────────────────────────────────────────────
     var _state = {};
 
@@ -146,6 +167,8 @@
             var hSel = document.createElement('select');
             hSel.className = 'analysis-hierarchy-select';
             hSel.dataset.field = field.fieldName;
+            hSel.disabled = true;
+            hSel.title = '日期層級分組即將推出';
             [
                 { value: 'Year', text: '年' },
                 { value: 'Quarter', text: '季' },
@@ -550,6 +573,7 @@
         var resultBody = document.createElement('div');
         resultBody.className = 'analysis-result-body';
 
+        var _CHART_TITLE_MAP = { bar: '長條圖', line: '折線圖', pie: '圓餅圖', 'bar-stacked': '堆疊長條圖', card: '數字卡片', scatter: '散點圖' };
         var chartToggleRow = document.createElement('div');
         chartToggleRow.id = 'analysis-chart-toggle-' + gridId;
         chartToggleRow.className = 'analysis-chart-toggle-bar';
@@ -559,6 +583,7 @@
             btn.type = 'button';
             btn.className = 'layui-btn layui-btn-xs';
             btn.textContent = ct;
+            btn.title = _CHART_TITLE_MAP[ct] || ct;
             btn.addEventListener('click', function () {
                 if (!st || !st.lastResult) return;
                 var rd = document.getElementById('analysis-result-' + gridId);
@@ -735,7 +760,7 @@
 
         var errors = validateSelection(dims, msrs);
         if (errors.length > 0) {
-            window.alert(errors.join('\n'));
+            showMsg(errors.join('\n'));
             return;
         }
 
@@ -747,11 +772,11 @@
             var pivotRadio = document.querySelector('.analysis-pivot-dim-select[data-grid-id="' + gridId + '"]:checked');
             if (pivotRadio) pivotDim = pivotRadio.value;
             if (!pivotDim) {
-                window.alert('請選擇一個樞紐(Pivot)維度');
+                showMsg('請選擇一個樞紐(Pivot)維度');
                 return;
             }
             if (dims.indexOf(pivotDim) < 0) {
-                window.alert('樞紐(Pivot)維度必須是已勾選的維度之一');
+                showMsg('樞紐(Pivot)維度必須是已勾選的維度之一');
                 return;
             }
         }
@@ -906,6 +931,33 @@
 
     function renderTable(gridId, result, container, dateDims) {
         dateDims = dateDims || {};
+        // Build column label map: col key → human-friendly header
+        // and measure set: col key → true (for numeric formatting)
+        var colLabelMap = {};
+        var msrColSet = {};
+        var st = _state[gridId];
+        var fields = (st && st.fields) ? st.fields : [];
+        var fieldByName = {};
+        fields.forEach(function (f) { fieldByName[f.fieldName] = f; });
+        result.columns.forEach(function (col) {
+            // Measure columns are encoded as "FieldName_Func" (e.g. "Amount_Sum")
+            var underIdx = col.lastIndexOf('_');
+            if (underIdx > 0) {
+                var fieldPart = col.substring(0, underIdx);
+                var funcPart = col.substring(underIdx + 1);
+                var meta = fieldByName[fieldPart];
+                if (meta && meta.kind === 'Measure') {
+                    var label = (meta.displayName || meta.title || fieldPart) + ' ' + getFuncLabel(funcPart);
+                    colLabelMap[col] = label;
+                    msrColSet[col] = true;
+                    return;
+                }
+            }
+            // Dimension column or unmatched: use displayName if available
+            var dimMeta = fieldByName[col];
+            colLabelMap[col] = (dimMeta && (dimMeta.displayName || dimMeta.title)) || col;
+        });
+
         var table = document.createElement('table');
         table.className = 'layui-table';
         table.style.marginTop = '10px';
@@ -913,7 +965,7 @@
         var headerRow = document.createElement('tr');
         result.columns.forEach(function (col) {
             var th = document.createElement('th');
-            th.textContent = col;
+            th.textContent = colLabelMap[col] || col;
             headerRow.appendChild(th);
         });
         thead.appendChild(headerRow);
@@ -924,8 +976,17 @@
             result.columns.forEach(function (col) {
                 var td = document.createElement('td');
                 var val = row[col];
-                td.textContent = (val !== null && val !== undefined)
-                    ? (dateDims[col] ? formatDateKey(val) : String(val)) : '';
+                if (val !== null && val !== undefined) {
+                    if (dateDims[col]) {
+                        td.textContent = formatDateKey(val);
+                    } else if (msrColSet[col] && typeof val === 'number') {
+                        td.textContent = formatNumeric(val);
+                    } else {
+                        td.textContent = String(val);
+                    }
+                } else {
+                    td.textContent = '';
+                }
                 tr.appendChild(td);
             });
             tbody.appendChild(tr);
@@ -1041,7 +1102,17 @@
                     params.forEach(function (p) {
                         var s = series[p.seriesIndex];
                         var original = s.originalData ? s.originalData[p.dataIndex] : p.value;
-                        lines.push(p.marker + ' ' + p.seriesName + ': ' + (original == null ? '-' : original));
+                        var scale = scales[p.seriesIndex];
+                        var label;
+                        if (original == null) {
+                            label = '-';
+                        } else if (scale && scale.unit) {
+                            var scaled = (original / scale.divisor).toFixed(2).replace(/\.?0+$/, '');
+                            label = scaled + ' ' + scale.unit + '\uff08' + original + '\uff09';
+                        } else {
+                            label = original;
+                        }
+                        lines.push(p.marker + ' ' + p.seriesName + ': ' + label);
                     });
                     return lines.join('<br/>');
                 };
@@ -1251,7 +1322,7 @@
         })
         .catch(function (err) {
             closeLoader();
-            window.alert('匯出失敗：' + err.message);
+            showMsg('匯出失敗：' + err.message);
         });
     }
 
