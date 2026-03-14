@@ -179,6 +179,9 @@ namespace WalkingTec.Mvvm.Mvc
             try { result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache).ExecuteDynamic(baseQuery, req, fields); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
 
+            if (result.Truncated)
+                Response.Headers["X-Analysis-Truncated"] = "true";
+
             if (format.Equals("csv", StringComparison.OrdinalIgnoreCase))
             {
                 var csv = BuildCsv(result);
