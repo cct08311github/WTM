@@ -26,35 +26,11 @@ namespace WalkingTec.Mvvm.Core.Analysis
             using var workbook = new XSSFWorkbook();
             var sheet = workbook.CreateSheet("Analysis");
 
-            // Header row — append unit label for large-value measure columns
+            // Header row — write original column names without unit decoration
             var header = sheet.CreateRow(0);
             for (int i = 0; i < result.Columns.Count; i++)
             {
-                var colName = result.Columns[i];
-                var headerText = colName;
-
-                // Check if this column has numeric data and compute scale
-                if (result.Rows.Count > 0 && i >= 1)
-                {
-                    double maxAbs = 0;
-                    bool isNumeric = false;
-                    foreach (var row in result.Rows)
-                    {
-                        if (row.TryGetValue(colName, out var val) && val is decimal or double or float or int or long)
-                        {
-                            isNumeric = true;
-                            var abs = Math.Abs(Convert.ToDouble(val));
-                            if (abs > maxAbs) maxAbs = abs;
-                        }
-                    }
-                    if (isNumeric)
-                    {
-                        var (_, unit) = ComputeScale(maxAbs);
-                        if (!string.IsNullOrEmpty(unit))
-                            headerText = $"{colName}（{unit}）";
-                    }
-                }
-                header.CreateCell(i).SetCellValue(headerText);
+                header.CreateCell(i).SetCellValue(result.Columns[i]);
             }
 
             // Data rows
@@ -121,12 +97,12 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
             foreach (var row in result.Rows)
             {
-                if (row.TryGetValue(col0, out var v0))
+                if (row.TryGetValue(col0, out var v0) && v0 is decimal or double or float or int or long)
                 {
                     var a0 = Math.Abs(Convert.ToDouble(v0));
                     if (a0 > max0) max0 = a0;
                 }
-                if (row.TryGetValue(col1, out var v1))
+                if (row.TryGetValue(col1, out var v1) && v1 is decimal or double or float or int or long)
                 {
                     var a1 = Math.Abs(Convert.ToDouble(v1));
                     if (a1 > max1) max1 = a1;

@@ -2171,6 +2171,17 @@ describe('scaleSeriesData', () => {
     test('empty array returns empty', () => {
         expect(waReq.scaleSeriesData([], 10000)).toEqual([]);
     });
+
+    // #285: NaN / Infinity divisor must return data unchanged
+    test('divisor=NaN → returns data unchanged', () => {
+        var data = [100, 200, 300];
+        expect(waReq.scaleSeriesData(data, NaN)).toEqual([100, 200, 300]);
+    });
+
+    test('divisor=Infinity → returns data unchanged', () => {
+        var data = [100, 200, 300];
+        expect(waReq.scaleSeriesData(data, Infinity)).toEqual([100, 200, 300]);
+    });
 });
 
 // ─── #281: detectDualAxis ────────────────────────────────────────────────────
@@ -2224,6 +2235,23 @@ describe('detectDualAxis', () => {
             { Amount_Sum: 500000, Qty_Count: 8 },
         ], m2)).toBe(true);
     });
+
+    // #286: non-numeric strings must be treated as 0, not cause NaN
+    test('non-numeric string in rows → treated as 0, does not throw', () => {
+        // Amount_Sum has one non-numeric row; numeric row gives max0=2000000, max1=8 → ratio >= 10
+        expect(waReq.detectDualAxis([
+            { Amount_Sum: 'N/A', Qty_Count: 5 },
+            { Amount_Sum: 2000000, Qty_Count: 8 },
+        ], m2)).toBe(true);
+    });
+
+    test('mixed numeric and non-numeric rows → uses numeric max', () => {
+        // Only numeric values contribute to max; ratio = 1000000/8 >= 10 → true
+        expect(waReq.detectDualAxis([
+            { Amount_Sum: 'abc', Qty_Count: 8 },
+            { Amount_Sum: 1000000, Qty_Count: 'N/A' },
+        ], m2)).toBe(true);
+    });
 });
 
 // ─── #281: renderChart dual axis ─────────────────────────────────────────────
@@ -2271,6 +2299,9 @@ describe('renderChart — dual Y-axis (#281)', () => {
         expect(capturedOptions[0].yAxis.length).toBe(2);
         expect(capturedOptions[0].yAxis[0].position).toBe('left');
         expect(capturedOptions[0].yAxis[1].position).toBe('right');
+        // #287: name must use full key (field_func) to distinguish same-field different-func measures
+        expect(capturedOptions[0].yAxis[0].name).toMatch(/^Amount_Sum/);
+        expect(capturedOptions[0].yAxis[1].name).toMatch(/^Qty_Count/);
     });
 
     test('dual axis series have yAxisIndex 0 and 1', () => {
