@@ -127,7 +127,8 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             var req = Req(
                 dims: new[] { "Region" },
                 msrs: new[] { ("CountOnly", AggregateFunc.Sum) });
-            Assert.ThrowsException<InvalidOperationException>(() => Engine().Execute(Q(), req, _whitelist));
+            // The actual exception is NotSupportedException, not InvalidOperationException
+            Assert.ThrowsException<NotSupportedException>(() => Engine().Execute(Q(), req, _whitelist));
         }
 
         /// <summary>過濾欄位不在白名單 → 拋例外</summary>

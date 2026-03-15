@@ -128,16 +128,17 @@ namespace WalkingTec.Mvvm.Core.Test.VM
         {
             var result = Escape("=1,2");
             // First: tab prefixed (formula char), then: quoted (has comma)
-            Assert.IsTrue(result.StartsWith("\""));
-            Assert.IsTrue(result.Contains("\t=1"));
+            Assert.IsTrue(result.StartsWith("\t"), "Tab prefix should come first");
+            Assert.IsTrue(result.Contains("\"=1"), "Should also be quoted due to comma");
         }
 
         [TestMethod]
         public void EscapeCsvCell_MinusWithNewline_TabPrefixedAndQuoted()
         {
             var result = Escape("-data\nmore");
-            Assert.IsTrue(result.StartsWith("\""));
-            Assert.IsTrue(result.Contains("\t-data"));
+            // First: tab prefixed (formula char), then: quoted (has newline)
+            Assert.IsTrue(result.StartsWith("\t"), "Tab prefix should come first");
+            Assert.IsTrue(result.Contains("\"-data"), "Should also be quoted due to newline");
         }
     }
 }
