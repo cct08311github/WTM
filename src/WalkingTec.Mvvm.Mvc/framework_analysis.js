@@ -129,7 +129,18 @@
         if (!formEl) return undefined;
         var data = ff.GetSearchFormData(formId, 'Searcher');
         if (!data || Object.keys(data).length === 0) return undefined;
-        return JSON.stringify(data);
+        // Strip empty-string values — they cause DateTime? to deserialize
+        // as DateTime.MinValue instead of null, silently filtering out all rows.
+        var cleaned = {};
+        var hasValue = false;
+        Object.keys(data).forEach(function (k) {
+            var v = data[k];
+            if (v !== '' && v !== null && v !== undefined) {
+                cleaned[k] = v;
+                hasValue = true;
+            }
+        });
+        return hasValue ? JSON.stringify(cleaned) : undefined;
     }
 
     // ─── SortableJS 參照 ──────────────────────────────────────────────────────
@@ -168,8 +179,7 @@
             var hSel = document.createElement('select');
             hSel.className = 'analysis-hierarchy-select';
             hSel.dataset.field = field.fieldName;
-            hSel.disabled = true;
-            hSel.title = '日期層級分組即將推出';
+            hSel.title = '選擇日期分組層級';
             [
                 { value: 'Year', text: '年' },
                 { value: 'Quarter', text: '季' },
@@ -272,14 +282,21 @@
         var sel = collectSelection(gridId);
         clearChildren(bar);
 
+        var st = _state[gridId];
+        var fieldByName = {};
+        if (st && st.fields) {
+            st.fields.forEach(function (f) { fieldByName[f.fieldName] = f; });
+        }
+
         if (sel.dims.length > 0) {
             var dimLabel = document.createElement('span');
             dimLabel.className = 'summary-label';
             dimLabel.textContent = '維度：';
             bar.appendChild(dimLabel);
             sel.dims.forEach(function (d) {
+                var meta = fieldByName[d];
                 var tag = document.createElement('span');
-                tag.textContent = '[' + d + ']';
+                tag.textContent = '[' + ((meta && meta.displayName) || d) + ']';
                 bar.appendChild(tag);
             });
         }
@@ -289,8 +306,9 @@
             msrLabel.textContent = '度量：';
             bar.appendChild(msrLabel);
             sel.msrs.forEach(function (m) {
+                var meta = fieldByName[m.field];
                 var tag = document.createElement('span');
-                tag.textContent = '[' + m.field + ' ' + m.func + ']';
+                tag.textContent = '[' + ((meta && meta.displayName) || m.field) + ' ' + getFuncLabel(m.func) + ']';
                 bar.appendChild(tag);
             });
         }
@@ -670,7 +688,7 @@
             var item = evt.item;
             var fieldName = item.dataset.fieldName;
             var field = findFieldMeta(fieldName);
-            if (!field || field.kind !== 'Dimension' || dimZone.querySelectorAll('.analysis-pill--dim').length > 3) {
+            if (!field || field.kind !== 'Dimension' || dimZone.querySelectorAll('.analysis-pill--dim').length >= 3) {
                 if (item.parentNode) item.parentNode.removeChild(item);
                 return;
             }
@@ -689,7 +707,7 @@
             var item = evt.item;
             var fieldName = item.dataset.fieldName;
             var field = findFieldMeta(fieldName);
-            if (!field || field.kind !== 'Measure' || msrZone.querySelectorAll('.analysis-pill--msr').length > 3) {
+            if (!field || field.kind !== 'Measure' || msrZone.querySelectorAll('.analysis-pill--msr').length >= 3) {
                 if (item.parentNode) item.parentNode.removeChild(item);
                 return;
             }
@@ -821,7 +839,7 @@
             var op    = opSel    ? opSel.value    : '';
             var value = valInput ? valInput.value  : '';
             if (!field || !value) continue;
-            filters.push({ field: field, op: op || 'Eq', value: value });
+            filters.push({ field: field, operator: op || 'Eq', value: value });
         }
         return filters;
     }
@@ -1166,6 +1184,19 @@
         });
         var chartType = forceChartType || detectChartType(dimMeta, req.measures);
 
+        // Build measure key → display label map for human-friendly legends
+        var st = _state[gridId];
+        var fieldByName = {};
+        if (st && st.fields) {
+            st.fields.forEach(function (f) { fieldByName[f.fieldName] = f; });
+        }
+        var msrLabelMap = {};
+        req.measures.forEach(function (m) {
+            var key = m.field + '_' + m.func;
+            var meta = fieldByName[m.field];
+            msrLabelMap[key] = ((meta && meta.displayName) || m.field) + ' ' + getFuncLabel(m.func);
+        });
+
         if (chartType === 'card') {
             var cardContainer = document.createElement('div');
             cardContainer.className = 'analysis-cards';
@@ -1177,7 +1208,7 @@
                 card.className = 'analysis-card-item';
                 var label = document.createElement('div');
                 label.style.cssText = 'font-size:13px;color:#666;margin-bottom:8px;';
-                label.textContent = key;
+                label.textContent = msrLabelMap[key] || key;
                 var value = document.createElement('div');
                 value.style.cssText = 'font-size:28px;font-weight:bold;color:#333;';
                 value.textContent = val != null ? String(val) : '\u2014';
@@ -1210,7 +1241,7 @@
                 tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
                 legend: { orient: 'vertical', left: 'left', data: categories },
                 series: [{
-                    name: pieKey, type: 'pie', radius: '55%', center: ['50%', '55%'],
+                    name: msrLabelMap[pieKey] || pieKey, type: 'pie', radius: '55%', center: ['50%', '55%'],
                     data: categories.map(function (cat, i) {
                         return { name: cat, value: result.rows[i][pieKey] };
                     }),
@@ -1235,7 +1266,7 @@
                 var key = m.field + '_' + m.func;
                 var rawData = result.rows.map(function (r) { return r[key]; });
                 var s = {
-                    name: key,
+                    name: msrLabelMap[key] || key,
                     type: chartType === 'line' ? 'line' : 'bar',
                     stack: chartType === 'bar-stacked' ? 'total' : undefined,
                     data: isDual ? scaleSeriesData(rawData, scales[idx].divisor) : rawData
@@ -1249,8 +1280,10 @@
 
             var yAxisOption;
             if (isDual) {
-                var name0 = req.measures[0].field + '_' + req.measures[0].func;
-                var name1 = req.measures[1].field + '_' + req.measures[1].func;
+                var key0 = req.measures[0].field + '_' + req.measures[0].func;
+                var key1 = req.measures[1].field + '_' + req.measures[1].func;
+                var name0 = msrLabelMap[key0] || key0;
+                var name1 = msrLabelMap[key1] || key1;
                 yAxisOption = [
                     { type: 'value', name: name0 + (scales[0].unit ? '（' + scales[0].unit + '）' : ''), position: 'left' },
                     { type: 'value', name: name1 + (scales[1].unit ? '（' + scales[1].unit + '）' : ''), position: 'right' }
@@ -1284,7 +1317,7 @@
 
             chart.setOption({
                 tooltip: tooltipOption,
-                legend: { data: req.measures.map(function (m) { return m.field + '_' + m.func; }) },
+                legend: { data: req.measures.map(function (m) { var k = m.field + '_' + m.func; return msrLabelMap[k] || k; }) },
                 xAxis: { type: 'category', data: categories },
                 yAxis: yAxisOption,
                 series: series

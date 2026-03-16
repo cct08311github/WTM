@@ -219,8 +219,18 @@ public class EtlSchedulerService
 
         await _scheduler.ScheduleJob(job, trigger);
 
-        // 更新 NextFireAt
+        // 更新 NextFireAt 並持久化到 DB
         jobDef.NextFireAt = trigger.GetNextFireTimeUtc()?.UtcDateTime;
+
+        using var scope = _sp.CreateScope();
+        var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
+        var tracked = await wtm.DC.Set<EtlJobDefinition>().FindAsync(jobDef.ID);
+        if (tracked != null)
+        {
+            tracked.NextFireAt = jobDef.NextFireAt;
+            wtm.DC.Set<EtlJobDefinition>().Update(tracked);
+            await wtm.DC.SaveChangesAsync();
+        }
     }
 
     private async Task UpdateStatusAsync(Guid jobId, EtlJobStatus status)

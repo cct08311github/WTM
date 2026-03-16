@@ -808,32 +808,21 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Query_empty_dimensions_returns_single_aggregate_row()
+        public void Query_empty_dimensions_returns_400()
         {
-            _testData = new List<SaleRecord>
-            {
-                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Amount = 100m },
-                new SaleRecord { ID = Guid.NewGuid(), Region = "華南", Amount = 200m },
-            };
-
+            // #348: 後端與前端 validateSelection 一致，零維度應回傳 400
             var req = new AnalysisQueryRequest
             {
                 ListVmType = typeof(SaleRecordListVM).FullName,
-                Dimensions = new List<string>(),   // 零維度 = 純聚合
+                Dimensions = new List<string>(),   // 零維度
                 Measures   = new List<MeasureRequest>
                 {
                     new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
                 }
             };
 
-            var result = CreateController().Query(req) as JsonResult;
-            Assert.IsNotNull(result, "零維度查詢應正常回傳 200，不報錯");
-
-            var response = result.Value as AnalysisQueryResponse;
-            Assert.IsNotNull(response);
-            Assert.AreEqual(1, response.Rows.Count, "零維度應折疊成 1 列");
-            Assert.AreEqual(300m, Convert.ToDecimal(response.Rows[0]["Amount_Sum"]),
-                "Sum 應為 100+200=300");
+            var result = CreateController().Query(req) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "零維度查詢應回傳 400");
         }
 
         // ─── DimensionHierarchies key 不存在欄位（#306） ─────────────────────
@@ -1170,6 +1159,192 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
             var result = CreateController().PivotExport(req) as BadRequestObjectResult;
             Assert.IsNotNull(result, "PivotExport 空 measures 應回傳 400");
+        }
+
+        // ─── #348: 零維度驗證（Export / Pivot / PivotExport）──────────────────
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Export_empty_dimensions_returns_400()
+        {
+            // #348: Export 端點應與 Query 一致，零維度回傳 400
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string>(),
+                Measures   = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                }
+            };
+
+            var result = CreateController().Export(req) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "Export 零維度應回傳 400");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Pivot_empty_dimensions_returns_400()
+        {
+            // #348: Pivot 端點零維度應回傳 400
+            var req = new AnalysisPivotRequest
+            {
+                ListVmType     = typeof(SaleRecordListVM).FullName,
+                Dimensions     = new List<string>(),
+                Measures       = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+                PivotDimension = "Region"
+            };
+
+            var result = CreateController().Pivot(req) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "Pivot 零維度應回傳 400");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void PivotExport_empty_dimensions_returns_400()
+        {
+            // #348: PivotExport 端點零維度應回傳 400
+            var req = new AnalysisPivotRequest
+            {
+                ListVmType     = typeof(SaleRecordListVM).FullName,
+                Dimensions     = new List<string>(),
+                Measures       = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+                PivotDimension = "Region"
+            };
+
+            var result = CreateController().PivotExport(req) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "PivotExport 零維度應回傳 400");
+        }
+
+        // ─── Regression: duplicate dimensions (#345) ──────────────────────────
+
+        /// <summary>
+        /// Regression (#345): Query 端點收到重複維度 (["Region","Region"]) 時，
+        /// 不應回傳 500 或靜默錯誤資料。
+        /// 允許的行為：回傳 400（明確拒絕）或回傳 200 且結果一致（等同去重後的查詢）。
+        /// </summary>
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Query_with_duplicate_dimensions_does_not_return_500()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 100m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華南", Category = "B", Amount = 200m },
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string> { "Region", "Region" },
+                Measures   = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                }
+            };
+
+            var result = CreateController().Query(req);
+
+            // Must be either 200 (JsonResult) or 400 (BadRequest) — NOT 500
+            Assert.IsTrue(
+                result is JsonResult || result is BadRequestObjectResult,
+                $"重複維度查詢應回傳 200 或 400，實際型別：{result?.GetType().Name}");
+
+            // If 200: result must have at most 2 rows (no cartesian explosion)
+            if (result is JsonResult jsonResult)
+            {
+                var response = jsonResult.Value as AnalysisQueryResponse;
+                Assert.IsNotNull(response);
+                Assert.IsTrue(response.Rows.Count <= 2,
+                    $"重複維度不應造成笛卡兒乘積，實際 {response.Rows.Count} 列");
+            }
+        }
+
+        /// <summary>
+        /// Regression (#345): Export 端點收到重複維度時不應回傳 500。
+        /// </summary>
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Export_with_duplicate_dimensions_does_not_return_500()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 100m },
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string> { "Region", "Region" },
+                Measures   = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                }
+            };
+
+            var result = CreateController().Export(req, "csv");
+
+            Assert.IsTrue(
+                result is FileContentResult || result is BadRequestObjectResult,
+                $"重複維度 Export 應回傳 200 或 400，實際型別：{result?.GetType().Name}");
+        }
+
+        // ─── Regression: ValidateFields with duplicate dimensions (#345) ───────
+
+        /// <summary>
+        /// Regression (#345): ValidateFields 本身不拒絕重複維度（每個名稱都在白名單中）。
+        /// 驗證引擎不會因 GroupBy 時的 Dictionary key 衝突而崩潰。
+        /// </summary>
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Query_duplicate_valid_dimension_fields_returns_consistent_data()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 100m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "B", Amount = 200m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華南", Category = "A", Amount = 300m },
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string> { "Category", "Category" },   // duplicate
+                Measures   = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Count }
+                }
+            };
+
+            IActionResult result = null;
+            try
+            {
+                result = CreateController().Query(req);
+            }
+            catch (Exception ex)
+            {
+                Assert.Fail($"重複維度不應拋未攔截例外到 Controller 層：{ex.GetType().Name}: {ex.Message}");
+            }
+
+            Assert.IsNotNull(result, "Controller 應回傳非 null 結果");
+            Assert.IsTrue(
+                result is JsonResult || result is BadRequestObjectResult,
+                $"應回傳 JsonResult 或 BadRequestObjectResult，實際：{result.GetType().Name}");
+
+            if (result is JsonResult jr)
+            {
+                var resp = jr.Value as AnalysisQueryResponse;
+                Assert.IsNotNull(resp);
+                // Category 有 A、B 兩個分組，重複維度不應造成超過 2 個分組
+                Assert.IsTrue(resp.Rows.Count <= 2,
+                    $"重複 Category 維度不應超過 2 個分組，實際：{resp.Rows.Count}");
+            }
         }
     }
 }

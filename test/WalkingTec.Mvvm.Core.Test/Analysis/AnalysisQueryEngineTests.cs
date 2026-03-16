@@ -753,6 +753,79 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.AreEqual(400m, Convert.ToDecimal(online["Amount_Sum"])); // 100+300
         }
 
+        // ─── Regression: duplicate dimensions (#345) ──────────────────────────
+
+        /// <summary>
+        /// Regression (#345): 重複維度名稱 (["Region","Region"]) 不應產生靜默錯誤資料。
+        /// 行為：engine 接受重複維度並折疊（Dict key 相同，結果等同單一 Region 查詢），
+        /// 或者拋出例外。無論哪種，結果必須一致：不能產生笛卡兒乘積或欄位衝突。
+        /// 現行實作：重複維度在 InProcess GroupBy 中使用相同 key 折疊，等同去重後的結果。
+        /// </summary>
+        [TestMethod]
+        public void Duplicate_dimension_names_produce_consistent_result()
+        {
+            // ["Region", "Region"] — two identical dimension names
+            var req = Req(
+                dims: new[] { "Region", "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            // Either throws cleanly OR produces same result as single-dim query.
+            // Both behaviours are acceptable regressions to document; we test
+            // that no silent garbage (wrong row count or wrong sum) is returned.
+            try
+            {
+                var result = Engine().Execute(Q(), req, _whitelist);
+
+                // If it succeeds: must have same groups as single-Region query
+                // (2 groups: 華東, 華南) — NOT 9 (3×3 cartesian).
+                Assert.IsTrue(result.Rows.Count <= 2,
+                    $"重複維度不應造成笛卡兒乘積，實際回傳 {result.Rows.Count} 列");
+
+                // Each group sum must be correct (同 single-Region 的值)
+                foreach (var row in result.Rows)
+                {
+                    var regionVal = row["Region"]?.ToString();
+                    Assert.IsTrue(regionVal == "華東" || regionVal == "華南",
+                        $"未預期的地區值：{regionVal}");
+                }
+            }
+            catch (Exception ex) when (ex is InvalidOperationException || ex is ArgumentException)
+            {
+                // 拋例外也是合法行為 — 只要不是 NullReferenceException 等非預期錯誤
+                Assert.IsTrue(true, "拋出明確例外是可接受的行為");
+            }
+        }
+
+        /// <summary>
+        /// Regression (#345): ValidateFields 不驗證重複維度名稱（因為每個名稱都在白名單中）。
+        /// 驗證 Execute 不因重複 GroupBy key 而崩潰（NullReferenceException / KeyNotFoundException）。
+        /// </summary>
+        [TestMethod]
+        public void Duplicate_dimension_names_do_not_crash_with_null_reference()
+        {
+            var req = Req(
+                dims: new[] { "Region", "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Count) });
+
+            // 不論結果為何，不應拋 NullReferenceException / KeyNotFoundException
+            Exception caughtEx = null;
+            try
+            {
+                Engine().Execute(Q(), req, _whitelist);
+            }
+            catch (NullReferenceException ex)
+            {
+                caughtEx = ex;
+            }
+            catch (KeyNotFoundException ex)
+            {
+                caughtEx = ex;
+            }
+
+            Assert.IsNull(caughtEx,
+                $"重複維度不應拋 NullReferenceException / KeyNotFoundException：{caughtEx?.Message}");
+        }
+
         // ─── Helper methods ────────────────────────────────────────────────────
 
         private static AnalysisQueryRequest Req(

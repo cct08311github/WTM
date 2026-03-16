@@ -95,7 +95,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
         public void EscapeCsvCell_CarriageReturn_PrefixesTab()
         {
             var result = Escape("\rmalicious");
-            Assert.IsTrue(result.StartsWith("\t"));
+            Assert.IsTrue(result.StartsWith("\"") && result.Contains("\t\r"));
         }
 
         // ─── RFC 4180 Quoting ────────────────────────────────────────

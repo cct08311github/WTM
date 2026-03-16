@@ -13,6 +13,7 @@ public class EtlRunLogListVM : BasePagedListVM<EtlRunLog, EtlRunLogSearcher>
     {
         return new List<GridColumn<EtlRunLog>>
         {
+            this.MakeGridHeader(x => x.Job!.Name).SetHeader("Job 名稱").SetWidth(150),
             this.MakeGridHeader(x => x.StartedAt).SetHeader("執行時間"),
             this.MakeGridHeader(x => x.Trigger).SetHeader("觸發方式"),
             this.MakeGridHeader(x => x.Result),

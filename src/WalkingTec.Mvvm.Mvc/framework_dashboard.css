@@ -256,3 +256,128 @@
 .grid-stack > .grid-stack-item.ui-draggable-dragging > .grid-stack-item-content {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
+
+/* --- Responsive Breakpoints --- */
+
+/* sm: ≥ 768px — reduce padding, smaller font sizes */
+@media (max-width: 991px) {
+    .wtm-dashboard {
+        padding: 8px;
+    }
+    .wtm-toolbar {
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+    .wtm-widget-header {
+        font-size: 13px;
+        padding: 6px 10px;
+    }
+    .wtm-kpi-value {
+        font-size: 22px;
+    }
+}
+
+/* xs: < 768px — single-column mobile layout */
+@media (max-width: 767px) {
+    .wtm-dashboard {
+        padding: 6px;
+    }
+    .wtm-toolbar {
+        padding: 6px 8px;
+        gap: 4px;
+    }
+    .wtm-toolbar .wtm-toolbar-title {
+        font-size: 14px;
+        width: 100%;
+        margin-right: 0;
+    }
+    .wtm-widget-body {
+        padding: 8px;
+    }
+    .wtm-kpi-value {
+        font-size: 20px;
+    }
+    /* Force full-width stacking for grid items on mobile */
+    .wtm-dashboard .grid-stack > .grid-stack-item {
+        width: 100% !important;
+        left: 0 !important;
+        min-width: 0;
+    }
+}
+
+/* --- Viewport Preview (editor mode) --- */
+
+/* Toolbar viewport switcher buttons */
+.wtm-viewport-switcher {
+    display: none;
+    align-items: center;
+    gap: 4px;
+}
+
+.wtm-dashboard.edit-mode .wtm-viewport-switcher {
+    display: flex;
+}
+
+.wtm-viewport-btn {
+    padding: 3px 8px;
+    border: 1px solid #d9d9d9;
+    border-radius: 4px;
+    background: #fff;
+    color: #555;
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1.4;
+    transition: border-color 0.15s, color 0.15s;
+}
+
+.wtm-viewport-btn:hover {
+    border-color: #1890ff;
+    color: #1890ff;
+}
+
+.wtm-viewport-btn.active {
+    border-color: #1890ff;
+    background: #e6f4ff;
+    color: #1890ff;
+    font-weight: 600;
+}
+
+/* Preview frame — simulate viewport width inside the editor */
+.wtm-dashboard[data-viewport="md"] {
+    max-width: 991px;
+    margin-left: auto;
+    margin-right: auto;
+    box-shadow: 0 0 0 2px #1890ff40;
+    border-radius: 6px;
+}
+
+.wtm-dashboard[data-viewport="sm"] {
+    max-width: 767px;
+    margin-left: auto;
+    margin-right: auto;
+    box-shadow: 0 0 0 2px #52c41a40;
+    border-radius: 6px;
+}
+
+.wtm-dashboard[data-viewport="xs"] {
+    max-width: 375px;
+    margin-left: auto;
+    margin-right: auto;
+    box-shadow: 0 0 0 2px #ff4d4f40;
+    border-radius: 6px;
+    /* Apply mobile stacking rules inside the xs preview */
+}
+
+.wtm-dashboard[data-viewport="xs"] .grid-stack > .grid-stack-item {
+    width: 100% !important;
+    left: 0 !important;
+    min-width: 0;
+}
+
+.wtm-dashboard[data-viewport="xs"] .wtm-kpi-value {
+    font-size: 20px;
+}
+
+.wtm-dashboard[data-viewport="xs"] .wtm-widget-body {
+    padding: 8px;
+}

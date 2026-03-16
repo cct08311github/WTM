@@ -107,8 +107,11 @@ public class EtlQuartzJob : WtmJob
                 : 50_000;
 
             // 取 target DB 連線字串
-            var targetCs = Wtm.ConfigInfo.Connections?
-                .FirstOrDefault(c => c.Key == jobDef.TargetCsKey)?.Value ?? "";
+            var targetCsEntry = Wtm.ConfigInfo.Connections?
+                .FirstOrDefault(c => c.Key == jobDef.TargetCsKey);
+            if (targetCsEntry == null)
+                throw new InvalidOperationException($"Target connection key '{jobDef.TargetCsKey}' not found in Configs.Connections");
+            var targetCs = targetCsEntry.Value ?? "";
 
             var config = new EtlPipelineConfig
             {

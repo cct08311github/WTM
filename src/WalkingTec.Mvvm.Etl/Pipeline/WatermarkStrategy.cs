@@ -85,9 +85,17 @@ public class WatermarkStrategy
             }
             _pendingValue = JsonSerializer.Serialize(dt);
         }
-        else if (Type == EtlWatermarkType.Identity && maxValue is long id)
+        else if (Type == EtlWatermarkType.Identity)
         {
-            _pendingValue = JsonSerializer.Serialize(id);
+            // DB 的 INT 欄位從 DataReader 讀出為 int，BIGINT 為 long；統一轉換為 long
+            long? idValue = maxValue switch
+            {
+                long l => l,
+                int i => (long)i,
+                _ => null
+            };
+            if (idValue.HasValue)
+                _pendingValue = JsonSerializer.Serialize(idValue.Value);
         }
     }
 

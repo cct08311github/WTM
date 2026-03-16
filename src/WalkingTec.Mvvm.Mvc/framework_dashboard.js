@@ -61,9 +61,87 @@
         }
     };
 
+    // --- Responsive Breakpoints ---------------------------------------------
+    /**
+     * Breakpoint definitions (matches CSS media queries in framework_dashboard.css).
+     * Keys: 'lg' | 'md' | 'sm' | 'xs'
+     */
+    var BREAKPOINTS = {
+        lg: 1200,
+        md: 992,
+        sm: 768,
+        xs: 0
+    };
+
+    /**
+     * Detect the current viewport breakpoint key.
+     * @returns {'lg'|'md'|'sm'|'xs'}
+     */
+    function detectBreakpoint() {
+        var w = (global.innerWidth != null) ? global.innerWidth : 9999;
+        if (w >= BREAKPOINTS.lg) return 'lg';
+        if (w >= BREAKPOINTS.md) return 'md';
+        if (w >= BREAKPOINTS.sm) return 'sm';
+        return 'xs';
+    }
+
+    /**
+     * Given a LayoutItem array and a target breakpoint, return a transformed
+     * array where each item's x/y/w/h are resolved for that breakpoint.
+     * For 'xs', items without an explicit xs breakpoint default to w=12, x=0
+     * (single-column stacking).
+     * @param {Array} layout  Original LayoutItem array
+     * @param {string} bp     Target breakpoint key
+     * @returns {Array}
+     */
+    function applyBreakpointToLayout(layout, bp) {
+        if (!layout || !layout.length) return layout || [];
+        var result = [];
+        var yOffset = 0;  // accumulated y for xs auto-stacking
+        for (var idx = 0; idx < layout.length; idx++) {
+            var item = layout[idx];
+            var bpData = item.breakpoints && item.breakpoints[bp];
+            if (bpData) {
+                result.push({
+                    id: item.id,
+                    x: bpData.x,
+                    y: bpData.y,
+                    w: bpData.w,
+                    h: bpData.h
+                });
+                // For xs explicit breakpoints, don't advance yOffset (layout is fully user-controlled)
+                continue;
+            }
+            // xs without explicit override → single-column stacking
+            if (bp === 'xs') {
+                var h = item.h || 1;
+                result.push({
+                    id: item.id,
+                    x: 0,
+                    y: yOffset,   // accumulate y to avoid overlap
+                    w: 12,
+                    h: h
+                });
+                yOffset += h;
+                continue;
+            }
+            // other breakpoints without override → use base values
+            result.push({
+                id: item.id,
+                x: item.x,
+                y: item.y,
+                w: item.w,
+                h: item.h
+            });
+        }
+        return result;
+    }
+
     // --- GridManager --------------------------------------------------------
     var _grid = null;
     var _isEditMode = false;
+    /** Current viewport preview mode: null means "auto-detect from window" */
+    var _viewportPreview = null;
 
     var GridManager = {
         /**
@@ -104,6 +182,45 @@
         loadLayout: function (layout) {
             if (!_grid) return;
             _grid.load(layout);
+        },
+
+        /**
+         * 載入佈局並套用指定斷點覆蓋
+         * @param {Array} layout  原始 LayoutItem 陣列（含 breakpoints 欄位）
+         * @param {string} bp     目標斷點 ('lg'|'md'|'sm'|'xs'|null)
+         *                        null = 根據目前視窗寬度自動判斷
+         */
+        loadLayoutForBreakpoint: function (layout, bp) {
+            if (!_grid) return;
+            var targetBp = bp || detectBreakpoint();
+            var resolved = applyBreakpointToLayout(layout, targetBp);
+            _grid.load(resolved);
+        },
+
+        /**
+         * 取得目前生效的斷點（考慮預覽模式）
+         * @returns {'lg'|'md'|'sm'|'xs'}
+         */
+        getCurrentBreakpoint: function () {
+            return _viewportPreview || detectBreakpoint();
+        },
+
+        /**
+         * 設定視窗預覽模式（編輯器用）
+         * @param {string|null} mode 'lg'|'md'|'sm'|'xs'|null (null = 自動)
+         */
+        setViewportMode: function (mode) {
+            var valid = ['lg', 'md', 'sm', 'xs', null];
+            if (valid.indexOf(mode) === -1) return;
+            _viewportPreview = mode;
+        },
+
+        /**
+         * 取得目前的視窗預覽模式
+         * @returns {string|null}
+         */
+        getViewportMode: function () {
+            return _viewportPreview;
         },
 
         /**
@@ -507,11 +624,41 @@
             }
         },
 
+        /**
+         * 在編輯模式下預覽指定視窗尺寸的佈局。
+         * 會更新容器的 data-viewport 屬性（供 CSS 切換框線樣式），
+         * 並以斷點解析後的 layout 重新載入 GridStack。
+         * @param {string|null} mode 'lg'|'md'|'sm'|'xs'|null (null = 恢復自動)
+         */
+        previewViewport: function(mode) {
+            GridManager.setViewportMode(mode);
+            if (_containerId) {
+                var container = (global.document && global.document.getElementById)
+                    ? global.document.getElementById(_containerId)
+                    : null;
+                if (container) {
+                    if (mode) {
+                        container.setAttribute('data-viewport', mode);
+                    } else {
+                        container.removeAttribute('data-viewport');
+                    }
+                }
+            }
+            if (_currentDashboard && _currentDashboard.layout) {
+                GridManager.loadLayoutForBreakpoint(_currentDashboard.layout, mode);
+            }
+        },
+
         saveDashboard: function() {
             if (!_currentDashboard) return Promise.resolve();
             var layout = GridManager.saveLayout();
             var body = {
-                name: _currentDashboard.name,
+                id: _currentDashboard.id,
+                title: _currentDashboard.title,
+                refreshInterval: _currentDashboard.refreshInterval || 60,
+                sharing: _currentDashboard.sharing || { mode: 'private' },
+                filters: _currentDashboard.filters || [],
+                links: _currentDashboard.links || [],
                 layout: layout,
                 widgets: _currentDashboard.widgets || {}
             };
@@ -547,6 +694,11 @@
         removeWidget: function(widgetId) {
             if (!_currentDashboard || !_currentDashboard.widgets) return;
             delete _currentDashboard.widgets[widgetId];
+            if (_currentDashboard.layout) {
+                _currentDashboard.layout = _currentDashboard.layout.filter(function(item) {
+                    return item.id !== widgetId;
+                });
+            }
         }
     };
 
@@ -582,12 +734,22 @@
                         sel.appendChild(opt);
                     }
                     if (f.defaultValue) sel.value = f.defaultValue;
+                    (function(fieldName) {
+                        sel.addEventListener('change', function() {
+                            FilterBar.setValue(fieldName, sel.value);
+                        });
+                    })(f.field);
                     wrapper.appendChild(sel);
                 } else {
                     var input = document.createElement('input');
                     input.type = 'text';
                     input.name = f.field;
                     if (f.defaultValue) input.value = f.defaultValue;
+                    (function(fieldName) {
+                        input.addEventListener('input', function() {
+                            FilterBar.setValue(fieldName, input.value);
+                        });
+                    })(f.field);
                     wrapper.appendChild(input);
                 }
 
@@ -632,7 +794,13 @@
         WidgetRendererFactory: WidgetRendererFactory,
         DashboardManager: DashboardManager,
         DashboardEditor: DashboardEditor,
-        FilterBar: FilterBar
+        FilterBar: FilterBar,
+        // Responsive helpers (also exposed for testing)
+        _internal: {
+            detectBreakpoint: detectBreakpoint,
+            applyBreakpointToLayout: applyBreakpointToLayout,
+            BREAKPOINTS: BREAKPOINTS
+        }
     };
 
     if (typeof global.window !== "undefined") {

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Threading;
+using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Analysis;
 
 namespace WalkingTec.Mvvm.Core.Analysis
@@ -58,6 +59,9 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 // Server-side SQL 翻譯失敗 → fallback to in-process
                 rows = new InProcessGroupByStrategy().Execute(filtered, req, wl, cancellationToken);
             }
+
+            // Resolve enum dimension values to their [Display] names
+            ResolveEnumDisplayNames(rows, req.Dimensions, wl);
 
             var totalCount = rows.Count;
             var truncated = false;
@@ -356,6 +360,53 @@ namespace WalkingTec.Mvvm.Core.Analysis
         }
 
         private static string String(object? val) => val?.ToString() ?? string.Empty;
+
+        /// <summary>
+        /// Replace enum string values in dimension columns with their [Display(Name)] if available.
+        /// </summary>
+        private static void ResolveEnumDisplayNames(
+            List<Dictionary<string, object?>> rows,
+            IList<string> dimensions,
+            Dictionary<string, AnalysisFieldMeta> wl)
+        {
+            // Build a map of dimension columns whose CLR type is an enum
+            var enumDims = new Dictionary<string, Type>();
+            foreach (var dim in dimensions)
+            {
+                if (wl.TryGetValue(dim, out var meta))
+                {
+                    var clr = Nullable.GetUnderlyingType(meta.ClrType) ?? meta.ClrType;
+                    if (clr.IsEnum) enumDims[dim] = clr;
+                }
+            }
+            if (enumDims.Count == 0) return;
+
+            // Cache resolved names per enum type
+            var displayCache = new Dictionary<string, Dictionary<string, string>>();
+            foreach (var kvp in enumDims)
+            {
+                var cache = new Dictionary<string, string>();
+                foreach (var val in Enum.GetValues(kvp.Value))
+                {
+                    var name = val.ToString()!;
+                    var display = ((Enum)val).GetEnumDisplayName();
+                    if (!string.IsNullOrEmpty(display) && display != name)
+                        cache[name] = display;
+                }
+                if (cache.Count > 0) displayCache[kvp.Key] = cache;
+            }
+            if (displayCache.Count == 0) return;
+
+            // Replace values in rows
+            foreach (var row in rows)
+            {
+                foreach (var kvp in displayCache)
+                {
+                    if (row.TryGetValue(kvp.Key, out var val) && val is string s && kvp.Value.TryGetValue(s, out var display))
+                        row[kvp.Key] = display;
+                }
+            }
+        }
 
         private static string ComputeHash(AnalysisQueryRequest req, string? identityKey = null)
         {
