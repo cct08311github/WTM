@@ -90,6 +90,7 @@ namespace WalkingTec.Mvvm.Mvc
         public IActionResult Query([FromBody] AnalysisQueryRequest? req)
         {
             if (req == null) return BadRequest("Request body is required.");
+            if (req.Dimensions.Count == 0) return BadRequest("至少需要選取 1 個維度。");
             if (req.Dimensions.Count > 3) return BadRequest("最多選取 3 個維度。");
             if (req.Measures.Count == 0)  return BadRequest("至少需要選取 1 個度量指標。");
             if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
@@ -136,6 +137,7 @@ namespace WalkingTec.Mvvm.Mvc
         public IActionResult Pivot([FromBody] AnalysisPivotRequest? req)
         {
             if (req == null) return BadRequest("Request body is required.");
+            if (req.Dimensions.Count == 0) return BadRequest("至少需要選取 1 個維度。");
             if (req.Dimensions.Count > 3) return BadRequest("最多選取 3 個維度。");
             if (req.Measures.Count == 0)  return BadRequest("至少需要選取 1 個度量指標。");
             if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
@@ -190,6 +192,8 @@ namespace WalkingTec.Mvvm.Mvc
             [FromQuery] string chartType = "bar")
         {
             if (req == null) return BadRequest("Request body is required.");
+            if (req.Dimensions.Count == 0) return BadRequest("至少需要選取 1 個維度。");
+            if (req.Dimensions.Count > 3) return BadRequest("最多選取 3 個維度。");
             if (req.Measures.Count == 0)  return BadRequest("至少需要選取 1 個度量指標。");
             if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
 
@@ -260,6 +264,8 @@ namespace WalkingTec.Mvvm.Mvc
             [FromQuery] string chartType = "bar")
         {
             if (req == null) return BadRequest("Request body is required.");
+            if (req.Dimensions.Count == 0) return BadRequest("至少需要選取 1 個維度。");
+            if (req.Dimensions.Count > 3) return BadRequest("最多選取 3 個維度。");
             if (req.Measures.Count == 0)  return BadRequest("至少需要選取 1 個度量指標。");
             if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
 
@@ -434,15 +440,16 @@ namespace WalkingTec.Mvvm.Mvc
             var s = val;
             bool needsPrefix = s.StartsWith("=") || s.StartsWith("+") || s.StartsWith("-") || s.StartsWith("@") || s.StartsWith("\t") || s.StartsWith("\r");
 
+            if (needsPrefix)
+            {
+                s = "\t" + s;
+            }
+
             if (s.Contains(",") || s.Contains("\"") || s.Contains("\n") || s.Contains("\r"))
             {
                 s = "\"" + s.Replace("\"", "\"\"") + "\"";
             }
             
-            if (needsPrefix)
-            {
-                s = "\t" + s;
-            }
             return s;
         }
 

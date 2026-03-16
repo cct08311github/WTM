@@ -168,8 +168,7 @@
             var hSel = document.createElement('select');
             hSel.className = 'analysis-hierarchy-select';
             hSel.dataset.field = field.fieldName;
-            hSel.disabled = true;
-            hSel.title = '日期層級分組即將推出';
+            hSel.title = '選擇日期分組層級';
             [
                 { value: 'Year', text: '年' },
                 { value: 'Quarter', text: '季' },
@@ -670,7 +669,7 @@
             var item = evt.item;
             var fieldName = item.dataset.fieldName;
             var field = findFieldMeta(fieldName);
-            if (!field || field.kind !== 'Dimension' || dimZone.querySelectorAll('.analysis-pill--dim').length > 3) {
+            if (!field || field.kind !== 'Dimension' || dimZone.querySelectorAll('.analysis-pill--dim').length >= 3) {
                 if (item.parentNode) item.parentNode.removeChild(item);
                 return;
             }
@@ -689,7 +688,7 @@
             var item = evt.item;
             var fieldName = item.dataset.fieldName;
             var field = findFieldMeta(fieldName);
-            if (!field || field.kind !== 'Measure' || msrZone.querySelectorAll('.analysis-pill--msr').length > 3) {
+            if (!field || field.kind !== 'Measure' || msrZone.querySelectorAll('.analysis-pill--msr').length >= 3) {
                 if (item.parentNode) item.parentNode.removeChild(item);
                 return;
             }
@@ -821,7 +820,7 @@
             var op    = opSel    ? opSel.value    : '';
             var value = valInput ? valInput.value  : '';
             if (!field || !value) continue;
-            filters.push({ field: field, op: op || 'Eq', value: value });
+            filters.push({ field: field, operator: op || 'Eq', value: value });
         }
         return filters;
     }

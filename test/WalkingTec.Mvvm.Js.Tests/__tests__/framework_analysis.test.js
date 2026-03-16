@@ -2212,10 +2212,22 @@ describe('detectDualAxis', () => {
         )).toBe(false);
     });
 
+    test('ratio exactly 9.9x → false (#310)', () => {
+        expect(waReq.detectDualAxis(
+            [{ Amount_Sum: 99, Qty_Count: 10 }], m2
+        )).toBe(false);
+    });
+
     test('ratio exactly 10x → true', () => {
         expect(waReq.detectDualAxis(
             [{ Amount_Sum: 100, Qty_Count: 10 }], m2
         )).toBe(true);
+    });
+
+    test('all measures are 0 → false (#310)', () => {
+        expect(waReq.detectDualAxis(
+            [{ Amount_Sum: 0, Qty_Count: 0 }], m2
+        )).toBe(false);
     });
 
     test('ratio > 10x → true', () => {
@@ -2756,7 +2768,7 @@ describe('#298 Ad-hoc filter UI', () => {
         idSpy.mockRestore();
     });
 
-    test('buildReqFilters_validRow — 完整行正確序列化 {field, op, value}', async () => {
+    test('buildReqFilters_validRow — 完整行正確序列化 {field, operator, value}', async () => {
         const gridId = 'filter298d';
         const panel = makePanelWithFilterBar(gridId);
         await renderPanelViaToggle(gridId, panel, sampleFields);
@@ -2772,7 +2784,7 @@ describe('#298 Ad-hoc filter UI', () => {
         row.querySelector('.analysis-filter-value').value = '10000';
 
         const filters = waReq.collectFilters(gridId);
-        expect(filters).toEqual([{ field: 'TotalAmount', op: 'Gt', value: '10000' }]);
+        expect(filters).toEqual([{ field: 'TotalAmount', operator: 'Gt', value: '10000' }]);
         idSpy.mockRestore();
     });
 
@@ -2815,7 +2827,7 @@ describe('#298 Ad-hoc filter UI', () => {
         idSpy.mockRestore();
     });
 
-    test('operatorOptions — operator 選單有 6 個選項', async () => {
+    test('operatorOptions — operator 選單有 7 個選項', async () => {
         const gridId = 'filter298g';
         const panel = makePanelWithFilterBar(gridId);
         await renderPanelViaToggle(gridId, panel, sampleFields);

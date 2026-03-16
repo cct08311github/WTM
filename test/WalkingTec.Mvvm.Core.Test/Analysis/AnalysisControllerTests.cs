@@ -807,32 +807,21 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Query_empty_dimensions_returns_single_aggregate_row()
+        public void Query_empty_dimensions_returns_400()
         {
-            _testData = new List<SaleRecord>
-            {
-                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Amount = 100m },
-                new SaleRecord { ID = Guid.NewGuid(), Region = "華南", Amount = 200m },
-            };
-
+            // #348: 後端與前端 validateSelection 一致，零維度應回傳 400
             var req = new AnalysisQueryRequest
             {
                 ListVmType = typeof(SaleRecordListVM).FullName,
-                Dimensions = new List<string>(),   // 零維度 = 純聚合
+                Dimensions = new List<string>(),   // 零維度
                 Measures   = new List<MeasureRequest>
                 {
                     new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
                 }
             };
 
-            var result = CreateController().Query(req) as JsonResult;
-            Assert.IsNotNull(result, "零維度查詢應正常回傳 200，不報錯");
-
-            var response = result.Value as AnalysisQueryResponse;
-            Assert.IsNotNull(response);
-            Assert.AreEqual(1, response.Rows.Count, "零維度應折疊成 1 列");
-            Assert.AreEqual(300m, Convert.ToDecimal(response.Rows[0]["Amount_Sum"]),
-                "Sum 應為 100+200=300");
+            var result = CreateController().Query(req) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "零維度查詢應回傳 400");
         }
 
         // ─── DimensionHierarchies key 不存在欄位（#306） ─────────────────────
@@ -1169,6 +1158,67 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
             var result = CreateController().PivotExport(req) as BadRequestObjectResult;
             Assert.IsNotNull(result, "PivotExport 空 measures 應回傳 400");
+        }
+
+        // ─── #348: 零維度驗證（Export / Pivot / PivotExport）──────────────────
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Export_empty_dimensions_returns_400()
+        {
+            // #348: Export 端點應與 Query 一致，零維度回傳 400
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string>(),
+                Measures   = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                }
+            };
+
+            var result = CreateController().Export(req) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "Export 零維度應回傳 400");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Pivot_empty_dimensions_returns_400()
+        {
+            // #348: Pivot 端點零維度應回傳 400
+            var req = new AnalysisPivotRequest
+            {
+                ListVmType     = typeof(SaleRecordListVM).FullName,
+                Dimensions     = new List<string>(),
+                Measures       = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+                PivotDimension = "Region"
+            };
+
+            var result = CreateController().Pivot(req) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "Pivot 零維度應回傳 400");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void PivotExport_empty_dimensions_returns_400()
+        {
+            // #348: PivotExport 端點零維度應回傳 400
+            var req = new AnalysisPivotRequest
+            {
+                ListVmType     = typeof(SaleRecordListVM).FullName,
+                Dimensions     = new List<string>(),
+                Measures       = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+                PivotDimension = "Region"
+            };
+
+            var result = CreateController().PivotExport(req) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "PivotExport 零維度應回傳 400");
         }
     }
 }
