@@ -116,4 +116,42 @@ public class WatermarkTests
         wm.UpdateFromBatchMax(new DateTime(2026, 3, 11, 0, 0, 0));
         wm.CommitPendingValue().Should().BeNull();
     }
+
+    [TestMethod]
+    public void Identity_int_column_updates_watermark()
+    {
+        // SQL Server INT 欄位從 DataReader 讀出為 int（非 long），必須正確處理
+        var wm = new WatermarkStrategy(EtlWatermarkType.Identity, "OrderId", null);
+
+        wm.UpdateFromBatchMax((int)99999);
+        var committed = wm.CommitPendingValue();
+
+        committed.Should().NotBeNullOrEmpty();
+        var stored = JsonSerializer.Deserialize<long>(committed!);
+        stored.Should().Be(99999L);
+    }
+
+    [TestMethod]
+    public void Identity_long_column_updates_watermark()
+    {
+        // BIGINT 欄位回傳 long，需照常運作
+        var wm = new WatermarkStrategy(EtlWatermarkType.Identity, "OrderId", null);
+
+        wm.UpdateFromBatchMax(185600L);
+        var committed = wm.CommitPendingValue();
+
+        committed.Should().NotBeNullOrEmpty();
+        var stored = JsonSerializer.Deserialize<long>(committed!);
+        stored.Should().Be(185600L);
+    }
+
+    [TestMethod]
+    public void Identity_unsupported_type_does_not_crash()
+    {
+        // 傳入不支援型別（例如 string）不應拋出，只是靜默忽略
+        var wm = new WatermarkStrategy(EtlWatermarkType.Identity, "OrderId", null);
+
+        wm.UpdateFromBatchMax("not-a-number");
+        wm.CommitPendingValue().Should().BeNull();
+    }
 }

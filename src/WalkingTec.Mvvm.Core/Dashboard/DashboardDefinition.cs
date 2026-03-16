@@ -38,6 +38,45 @@ public class LayoutItem
     public int Y { get; set; }
     public int W { get; set; } = 3;
     public int H { get; set; } = 1;
+
+    /// <summary>
+    /// Optional per-breakpoint overrides for X/Y/W/H.
+    /// When null the base X/Y/W/H values are used for all breakpoints.
+    /// xs (mobile) falls back to single-column stacking if not specified.
+    /// </summary>
+    public LayoutBreakpoints? Breakpoints { get; set; }
+}
+
+/// <summary>
+/// Responsive breakpoint overrides for a single LayoutItem.
+/// Each breakpoint is optional; missing ones inherit the item's base values.
+/// Breakpoint widths (approximate): lg ≥ 1200px, md ≥ 992px, sm ≥ 768px, xs &lt; 768px.
+/// </summary>
+public class LayoutBreakpoints
+{
+    /// <summary>Large screens (≥ 1200 px). Null = use base LayoutItem values.</summary>
+    public LayoutBreakpointItem? Lg { get; set; }
+
+    /// <summary>Medium screens (≥ 992 px). Null = use base LayoutItem values.</summary>
+    public LayoutBreakpointItem? Md { get; set; }
+
+    /// <summary>Small screens (≥ 768 px). Null = use base LayoutItem values.</summary>
+    public LayoutBreakpointItem? Sm { get; set; }
+
+    /// <summary>
+    /// Extra-small / mobile screens (&lt; 768 px).
+    /// Null = auto single-column stacking (w=12, x=0).
+    /// </summary>
+    public LayoutBreakpointItem? Xs { get; set; }
+}
+
+[JsonNumberHandling(JsonNumberHandling.Strict)]
+public class LayoutBreakpointItem
+{
+    public int X { get; set; }
+    public int Y { get; set; }
+    public int W { get; set; } = 12;
+    public int H { get; set; } = 1;
 }
 
 public class DashboardFilter

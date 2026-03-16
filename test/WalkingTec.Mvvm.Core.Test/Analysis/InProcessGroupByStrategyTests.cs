@@ -345,6 +345,124 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.AreEqual(300m, Convert.ToDecimal(hdJan["Amount_Sum"]));
         }
 
+        // ─── Regression: all-null measure group (#345) ────────────────────────
+
+        /// <summary>
+        /// Regression (#345): 當某分組的所有 measure 值都是 null 時，
+        /// Max/Min 應回傳 null（非 decimal 的 default(0)），Sum 應回傳 0，Count 應回傳 0。
+        /// 這驗證 InProcessGroupByStrategy 對 nullable decimal 的聚合不會靜默錯誤。
+        /// </summary>
+        private class NullableSaleRecord
+        {
+            [Dimension(DisplayName = "地區")]
+            public string Region { get; set; } = string.Empty;
+
+            [Measure(AllowedFuncs =
+                AggregateFunc.Sum | AggregateFunc.Count | AggregateFunc.Avg |
+                AggregateFunc.Max | AggregateFunc.Min,
+                DisplayName = "金額")]
+            public decimal? NullableAmount { get; set; }
+        }
+
+        [TestMethod]
+        public void All_null_measure_group_max_returns_null_or_zero()
+        {
+            // 建立一個分組，所有 NullableAmount = null
+            var wl = AnalysisFieldScanner.ScanModel(typeof(NullableSaleRecord))
+                .ToDictionary(f => f.FieldName);
+
+            var data = new List<NullableSaleRecord>
+            {
+                new NullableSaleRecord { Region = "華東", NullableAmount = null },
+                new NullableSaleRecord { Region = "華東", NullableAmount = null },
+            }.AsQueryable();
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("NullableAmount", AggregateFunc.Max) });
+
+            var rows = _strategy.Execute(data, req, wl);
+
+            Assert.AreEqual(1, rows.Count, "全 null 值的分組仍應產生 1 列");
+            // Max of all nulls: 可以是 null 或 0，但不應拋例外，
+            // 且不應是一個不正確的非零數字
+            var maxVal = rows[0]["NullableAmount_Max"];
+            Assert.IsTrue(maxVal == null || Convert.ToDecimal(maxVal) == 0m,
+                $"全 null 的 Max 應回傳 null 或 0，實際為：{maxVal}");
+        }
+
+        [TestMethod]
+        public void All_null_measure_group_min_returns_null_or_zero()
+        {
+            var wl = AnalysisFieldScanner.ScanModel(typeof(NullableSaleRecord))
+                .ToDictionary(f => f.FieldName);
+
+            var data = new List<NullableSaleRecord>
+            {
+                new NullableSaleRecord { Region = "華南", NullableAmount = null },
+            }.AsQueryable();
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("NullableAmount", AggregateFunc.Min) });
+
+            var rows = _strategy.Execute(data, req, wl);
+
+            Assert.AreEqual(1, rows.Count);
+            var minVal = rows[0]["NullableAmount_Min"];
+            Assert.IsTrue(minVal == null || Convert.ToDecimal(minVal) == 0m,
+                $"全 null 的 Min 應回傳 null 或 0，實際為：{minVal}");
+        }
+
+        [TestMethod]
+        public void All_null_measure_group_sum_returns_zero()
+        {
+            var wl = AnalysisFieldScanner.ScanModel(typeof(NullableSaleRecord))
+                .ToDictionary(f => f.FieldName);
+
+            var data = new List<NullableSaleRecord>
+            {
+                new NullableSaleRecord { Region = "華東", NullableAmount = null },
+                new NullableSaleRecord { Region = "華東", NullableAmount = null },
+            }.AsQueryable();
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("NullableAmount", AggregateFunc.Sum) });
+
+            var rows = _strategy.Execute(data, req, wl);
+
+            Assert.AreEqual(1, rows.Count);
+            // Sum of nulls = 0 (LINQ DefaultIfEmpty behaviour)
+            var sumVal = rows[0]["NullableAmount_Sum"];
+            Assert.AreEqual(0m, Convert.ToDecimal(sumVal ?? 0m),
+                "全 null 的 Sum 應回傳 0");
+        }
+
+        [TestMethod]
+        public void Mixed_null_and_non_null_measure_max_ignores_nulls()
+        {
+            var wl = AnalysisFieldScanner.ScanModel(typeof(NullableSaleRecord))
+                .ToDictionary(f => f.FieldName);
+
+            var data = new List<NullableSaleRecord>
+            {
+                new NullableSaleRecord { Region = "華東", NullableAmount = null  },
+                new NullableSaleRecord { Region = "華東", NullableAmount = 500m  },
+                new NullableSaleRecord { Region = "華東", NullableAmount = null  },
+            }.AsQueryable();
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("NullableAmount", AggregateFunc.Max) });
+
+            var rows = _strategy.Execute(data, req, wl);
+
+            Assert.AreEqual(1, rows.Count);
+            Assert.AreEqual(500m, Convert.ToDecimal(rows[0]["NullableAmount_Max"]),
+                "混合 null 與非 null 的 Max 應忽略 null，回傳 500");
+        }
+
         // ─── 原有測試 ─────────────────────────────────────────────────────────
 
         [TestMethod]

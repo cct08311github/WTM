@@ -50,6 +50,12 @@ public class EtlPipelineExecutor
 
         try
         {
+            // 0. 快速失敗驗證
+            if (config.BatchSize <= 0)
+                throw new ArgumentException($"BatchSize must be greater than 0, got {config.BatchSize}.", nameof(config));
+            if (string.IsNullOrWhiteSpace(config.MergeKeyColumn))
+                throw new ArgumentException("MergeKeyColumn must not be null or empty.", nameof(config));
+
             // 1. 確認 staging table
             await _loader.EnsureStagingTableAsync(
                 config.TargetConnectionString, config.StagingTable.TableName,
