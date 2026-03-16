@@ -16,7 +16,6 @@ namespace WalkingTec.Mvvm.Core.Analysis
     public class ServerSideGroupByStrategy : IGroupByStrategy
     {
         private const int MaxRows = 10_000;
-        // Separator for composite GroupBy key; must be SQL-safe and unlikely in real data
         internal const string KeySeparator = "\x01\x02\x03";
 
         public virtual List<Dictionary<string, object?>> Execute<TModel>(
@@ -28,9 +27,6 @@ namespace WalkingTec.Mvvm.Core.Analysis
             if (req.Dimensions.Count == 0)
                 return new List<Dictionary<string, object?>>();
 
-            // --- DateHierarchy fallback ---
-            // Current ServerSide implementation does not support SQL translation for Year/Month/etc.
-            // Throwing InvalidOperationException triggers fallback to InProcessGroupByStrategy in AnalysisQueryEngine.
             if (req.DimensionHierarchies != null && req.Dimensions.Any(d => req.DimensionHierarchies.TryGetValue(d, out var h) && h != DateHierarchy.None))
             {
                 throw new InvalidOperationException("ServerSideGroupByStrategy does not support DateHierarchy. Falling back to InProcess.");
@@ -38,13 +34,9 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
             var param = Expression.Parameter(typeof(TModel), "x");
 
-            // --- Step 1: Build GroupBy key selector ---
-            // String-based composite key: x => x.Dim1 + "|||" + x.Dim2 + ...
-            // EF Core translates string.Concat to || (SQLite) / CONCAT (MSSQL/Oracle)
             Expression keyExpr = BuildDimensionToString(param, req.Dimensions[0], whitelist);
             for (int i = 1; i < req.Dimensions.Count; i++)
             {
-                // Use a separator unlikely to appear in real data; \0 is invalid in SQL strings
                 var separator = Expression.Constant(KeySeparator);
                 var nextDim = BuildDimensionToString(param, req.Dimensions[i], whitelist);
                 keyExpr = Expression.Call(
@@ -54,15 +46,9 @@ namespace WalkingTec.Mvvm.Core.Analysis
             }
             var keySelector = Expression.Lambda<Func<TModel, string>>(keyExpr, param);
 
-            // --- Step 2: Call .GroupBy(keySelector) ---
             var grouped = query.GroupBy(keySelector);
 
-            // --- Step 3: Build Select projection ---
-            // Use Tuple<string, double, double, double> (max 3 measures).
-            // double is used because SQLite cannot aggregate decimal.
-            // Convert back to decimal after materialization.
             var gParam = Expression.Parameter(typeof(IGrouping<string, TModel>), "g");
-
             var keyAccess = Expression.Property(gParam, nameof(IGrouping<string, TModel>.Key));
 
             var measureExprs = new Expression[3];
@@ -75,30 +61,28 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 }
                 else
                 {
-                    measureExprs[i] = Expression.Constant(0.0);
+                    measureExprs[i] = Expression.Constant(null, typeof(double?));
                 }
             }
 
-            var tupleType = typeof(Tuple<string, double, double, double>);
+            var tupleType = typeof(Tuple<string, double?, double?, double?>);
             var tupleCtor = tupleType.GetConstructor(
-                new[] { typeof(string), typeof(double), typeof(double), typeof(double) })!;
+                new[] { typeof(string), typeof(double?), typeof(double?), typeof(double?) })!;
             var tupleNew = Expression.New(tupleCtor, keyAccess,
                 measureExprs[0], measureExprs[1], measureExprs[2]);
             var selectLambda = Expression.Lambda<
-                Func<IGrouping<string, TModel>, Tuple<string, double, double, double>>>(
+                Func<IGrouping<string, TModel>, Tuple<string, double?, double?, double?>>>(
                 tupleNew, gParam);
 
-            // --- Step 4: Execute query ---
             var projected = grouped.Select(selectLambda);
             var queryToRun = projected.Take(MaxRows + 1);
-            var materialized = new List<Tuple<string, double, double, double>>();
+            var materialized = new List<Tuple<string, double?, double?, double?>>();
             foreach (var item in queryToRun)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 materialized.Add(item);
             }
 
-            // --- Step 5: Map to dictionaries ---
             var results = new List<Dictionary<string, object?>>(materialized.Count);
             foreach (var row in materialized)
             {
@@ -113,15 +97,14 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 for (int i = 0; i < req.Measures.Count; i++)
                 {
                     var m = req.Measures[i];
-                    double raw = i switch
+                    double? raw = i switch
                     {
                         0 => row.Item2,
                         1 => row.Item3,
                         2 => row.Item4,
-                        _ => 0.0
+                        _ => null
                     };
-                    // Convert double back to decimal for consistency with InProcess strategy
-                    dict[$"{m.Field}_{m.Func}"] = (decimal)raw;
+                    dict[$"{m.Field}_{m.Func}"] = (decimal?)raw;
                 }
 
                 results.Add(dict);
@@ -130,10 +113,6 @@ namespace WalkingTec.Mvvm.Core.Analysis
             return results;
         }
 
-        /// <summary>
-        /// 將維度屬性轉為 string 表達式。
-        /// 字串型別直接使用 ?? ""；非字串型別呼叫 ToString()。
-        /// </summary>
         private static Expression BuildDimensionToString(
             ParameterExpression param, string dimName,
             Dictionary<string, AnalysisFieldMeta> whitelist)
@@ -161,9 +140,6 @@ namespace WalkingTec.Mvvm.Core.Analysis
             return Expression.Call(boxed, typeof(object).GetMethod(nameof(object.ToString))!);
         }
 
-        /// <summary>
-        /// 為單一 Measure 建構聚合表達式，回傳型別一律為 double。
-        /// </summary>
         private static Expression BuildAggregateExpression<TModel>(
             ParameterExpression gParam,
             MeasureRequest measure,
@@ -171,12 +147,11 @@ namespace WalkingTec.Mvvm.Core.Analysis
         {
             var innerParam = Expression.Parameter(typeof(TModel), "e");
             var meta = whitelist[measure.Field];
-            Expression propAccess = Expression.Property(innerParam, measure.Field);
             var propType = meta.ClrType;
 
             if (measure.Func == AggregateFunc.Count)
             {
-                // g.Count(e => e.Field != null) → (double)
+                Expression propAccess = Expression.Property(innerParam, measure.Field);
                 Expression predicateBody;
                 if (Nullable.GetUnderlyingType(propType) != null || !propType.IsValueType)
                 {
@@ -196,24 +171,13 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 
                 return Expression.Convert(
                     Expression.Call(countMethod, gParam, predicate),
-                    typeof(double));
+                    typeof(double?));
             }
 
-            // Build property selector: e => (double)e.Field
-            var underlyingType = Nullable.GetUnderlyingType(propType);
+            Expression pAccess = Expression.Property(innerParam, measure.Field);
+            pAccess = Expression.Convert(pAccess, typeof(double?));
 
-            if (underlyingType != null)
-            {
-                propAccess = Expression.Coalesce(propAccess,
-                    Expression.Constant(Convert.ChangeType(0, underlyingType), underlyingType));
-                propAccess = Expression.Convert(propAccess, typeof(double));
-            }
-            else if (propType != typeof(double))
-            {
-                propAccess = Expression.Convert(propAccess, typeof(double));
-            }
-
-            var valueSelector = Expression.Lambda<Func<TModel, double>>(propAccess, innerParam);
+            var valueSelector = Expression.Lambda<Func<TModel, double?>>(pAccess, innerParam);
 
             string methodName = measure.Func switch
             {
@@ -224,7 +188,6 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 _ => throw new NotSupportedException($"Unsupported aggregate function: {measure.Func}")
             };
 
-            // Find Enumerable.Method<TSource>(IEnumerable<TSource>, Func<TSource, double>)
             var aggMethod = typeof(Enumerable)
                 .GetMethods()
                 .Where(m => m.Name == methodName && m.GetParameters().Length == 2)
@@ -233,7 +196,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     if (!m.IsGenericMethod) return false;
                     var gm = m.MakeGenericMethod(typeof(TModel));
                     var selectorParam = gm.GetParameters()[1];
-                    return selectorParam.ParameterType == typeof(Func<TModel, double>);
+                    return selectorParam.ParameterType == typeof(Func<TModel, double?>);
                 })
                 .MakeGenericMethod(typeof(TModel));
 

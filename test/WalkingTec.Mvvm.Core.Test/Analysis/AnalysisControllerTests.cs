@@ -370,8 +370,9 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             // 公式字元開頭的值必須以 tab 前置，絕不能直接出現 ,=HYPERLINK
             Assert.IsFalse(csv.Contains(",=HYPERLINK"),
                 "CSV 不應含未逸脫的 formula 值（,=HYPERLINK）");
-            Assert.IsTrue(csv.Contains("\t=HYPERLINK"),
-                "危險值應以 tab 前置（\\t=HYPERLINK）");
+            // Value is quoted then tab-prefixed: \t"=HYPERLINK(...)
+            Assert.IsTrue(csv.Contains("\t\"=HYPERLINK") || csv.Contains("\t=HYPERLINK"),
+                "危險值應以 tab 前置（\\t=HYPERLINK 或 \\t\"=HYPERLINK）");
         }
 
         [TestMethod]

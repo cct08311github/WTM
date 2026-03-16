@@ -1167,7 +1167,7 @@
                         td.textContent = String(val);
                     }
                 } else {
-                    td.textContent = '';
+                    td.textContent = '-';
                 }
                 tr.appendChild(td);
             });
