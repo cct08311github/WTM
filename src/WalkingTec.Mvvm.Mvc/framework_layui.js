@@ -1362,6 +1362,134 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
     }
 };
 
+// ─── Header Column Filter ─────────────────────────────────────────────────────
+var wtmHeaderFilter = (function () {
+    'use strict';
+    var _filters = {};   // { gridId: { field: value } }
+    var _debounce = {};  // debounce timers per gridId
+
+    function _ensureStyles() {
+        if (document.getElementById('wtm-hf-styles')) return;
+        var css = [
+            '.wtm-hf-row td { background: #f5f5f5; }',
+            '.wtm-hf-cell { padding: 2px 4px !important; vertical-align: middle !important; }',
+            '.wtm-hf-input {',
+            '  display: block; width: 100%; height: 24px;',
+            '  border: 1px solid #d2d2d2; border-radius: 3px;',
+            '  padding: 0 5px; font-size: 12px; outline: none;',
+            '  box-sizing: border-box; background: #fff; color: #333;',
+            '}',
+            '.wtm-hf-input:focus { border-color: #1e9fff; box-shadow: 0 0 0 2px rgba(30,159,255,.12); }',
+            '.wtm-hf-input::placeholder { color: #bbb; font-size: 11px; }'
+        ].join('\n');
+        var el = document.createElement('style');
+        el.id = 'wtm-hf-styles';
+        el.textContent = css;
+        document.head.appendChild(el);
+    }
+
+    // Called before table.render() — initialise state only
+    function init(gridId) {
+        if (!_filters[gridId]) _filters[gridId] = {};
+        _ensureStyles();
+    }
+
+    // Called in done callback — inject/re-inject filter row and restore state
+    function refresh(gridId) {
+        var $view = $('#' + gridId + ' + .layui-table-view');
+        if (!$view.length) return;
+        _injectRow(gridId, $view);
+        _bindEvents(gridId, $view);
+        // Restore any previously entered filter values
+        var filters = _filters[gridId] || {};
+        Object.keys(filters).forEach(function (field) {
+            if (filters[field]) {
+                $view.find('.wtm-hf-input[data-field="' + field + '"]').val(filters[field]);
+            }
+        });
+        _applyFilters(gridId, $view);
+    }
+
+    function _injectRow(gridId, $view) {
+        $view.find('.wtm-hf-row').remove();
+        var $headerTr = $view.find('.layui-table-header thead tr:last-child');
+        if (!$headerTr.length) return;
+
+        var cells = [];
+        $headerTr.find('th').each(function () {
+            var field = $(this).data('field');
+            if (field) {
+                cells.push(
+                    '<td class="wtm-hf-cell">' +
+                    '<div class="layui-table-cell" style="padding:0 2px;">' +
+                    '<input class="wtm-hf-input" data-field="' + field + '" placeholder="\uD83D\uDD0D" />' +
+                    '</div></td>'
+                );
+            } else {
+                cells.push('<td class="wtm-hf-cell"><div class="layui-table-cell"></div></td>');
+            }
+        });
+
+        if (cells.length) {
+            $view.find('.layui-table-header thead').append(
+                $('<tr class="wtm-hf-row">' + cells.join('') + '</tr>')
+            );
+        }
+    }
+
+    function _bindEvents(gridId, $view) {
+        $view.off('input.wtmhf').on('input.wtmhf', '.wtm-hf-input', function () {
+            var field = $(this).attr('data-field');
+            var val = $(this).val();
+            if (!_filters[gridId]) _filters[gridId] = {};
+            _filters[gridId][field] = val;
+            clearTimeout(_debounce[gridId]);
+            _debounce[gridId] = setTimeout(function () {
+                _applyFilters(gridId, $view);
+            }, 150);
+        });
+    }
+
+    function _applyFilters(gridId, $view) {
+        var filters = _filters[gridId] || {};
+        // Build active filter map (non-empty values only)
+        var active = {};
+        Object.keys(filters).forEach(function (k) {
+            var v = (filters[k] || '').trim();
+            if (v) active[k] = v.toLowerCase();
+        });
+
+        var $mainTbody = $view.find('.layui-table-main tbody');
+        var visibility = [];
+
+        $mainTbody.find('tr').each(function (i) {
+            var $row = $(this);
+            var show = true;
+            if (Object.keys(active).length > 0) {
+                var keys = Object.keys(active);
+                for (var ki = 0; ki < keys.length; ki++) {
+                    var field = keys[ki];
+                    var $cell = $row.find('td[data-field="' + field + '"]');
+                    var text = $cell.find('.layui-table-cell').text().toLowerCase();
+                    if (text.indexOf(active[field]) < 0) { show = false; break; }
+                }
+            }
+            visibility.push(show);
+            $row.toggle(show);
+        });
+
+        // Sync fixed-left and fixed-right column rows by index
+        $view.find('.layui-table-fixed .layui-table-body tbody tr').each(function (i) {
+            $(this).toggle(visibility[i] !== false);
+        });
+        $view.find('.layui-table-fixed-r .layui-table-body tbody tr').each(function (i) {
+            $(this).toggle(visibility[i] !== false);
+        });
+    }
+
+    return { init: init, refresh: refresh };
+}());
+
 $.ajax({
     url: '/_framework/GetScriptLanguage',
     type: 'GET',

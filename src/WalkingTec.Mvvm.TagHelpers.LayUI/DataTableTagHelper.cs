@@ -242,6 +242,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         public int? Limit { get; set; }
 
         /// <summary>
+        /// 是否启用表头列筛选（client-side），默认 false
+        /// </summary>
+        public bool EnableHeaderFilter { get; set; }
+
+        /// <summary>
         /// 是否显示加载条 默认 true
         /// <para>如果设置 false，则在切换分页时，不会出现加载条。该参数只适用于“异步数据请求”的方式（即设置了url的情况下）</para>
         /// </summary>
@@ -401,7 +406,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             }
             if (Limits == null)
             {
-                Limits = new int[] { 10, 20, 50, 80, 100, 150, 200 };
+                Limits = new int[] { 10, 20, 50, 80, 100, 150, 200, 500, 1000 };
                 if (!Limits.Contains(Limit.Value))
                 {
                     var list = Limits.ToList();
@@ -614,12 +619,14 @@ layui.use(['table'], function(){{
        tab.find('div [lay-event=\'LAYTABLE_COLS\']').attr('title','{THProgram._localizer["Sys.ColumnFilter"]}');
        tab.find('div [lay-event=\'LAYTABLE_PRINT\']').attr('title','{THProgram._localizer["Sys.Print"]}');
       {(string.IsNullOrEmpty(DoneFunc) ? string.Empty : $"{DoneFunc}(res,curr,count)")}
+      {(EnableHeaderFilter ? $"wtmHeaderFilter.refresh('{Id}');" : "")}
     }}
     }}
 {Id}defaultfilter = {{}};
 {Id}filterback = {{}};
 {Id}url = '{Url}';
 $.extend(true,{Id}defaultfilter ,{Id}option);
+    {(EnableHeaderFilter ? $"wtmHeaderFilter.init('{Id}');" : "")}
     {TableJSVar} = table.render({Id}option);
     {(UseLocalData ? $@"ff.LoadLocalData(""{Id}"",{Id}option,{ListVM.GetDataJson().Replace("<script>", "$$script$$").Replace("</script>", "$$#script$$")},{string.IsNullOrEmpty(ListVM.DetailGridPrix).ToString().ToLower()}); " : $@"
     {(page ? $"if (document.body.clientWidth< 500) {{ {Id}option.page.layout = ['count', 'prev', 'page', 'next']; {Id}option.page.groups= 1;}} " : "")}
