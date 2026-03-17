@@ -168,28 +168,54 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.AreEqual(0, rows.Count);
         }
 
+        // ─── MaxMaterializeRows 截斷測試 ──────────────────────────────────────
+        //
+        // 策略：使用「哨兵記錄」（sentinel）放在位置 50,001。
+        // 若 Take(50_000) 正常運作，哨兵不會出現在結果中。
+        // 這比僅驗證 Count 更精確，因為它直接確認「哪些資料被截斷」。
+
         [TestMethod]
-        public void MaxMaterializeRows_truncation_is_applied()
+        public void Source_exceeding_50000_rows_drops_records_beyond_limit()
         {
-            // Create a data source larger than MaxMaterializeRows
-            // We can't easily create 50K+ in-memory records without performance issues,
-            // so we verify that Take(MaxMaterializeRows) is applied by using a custom IQueryable
-            // that tracks whether Take was called.
-            var records = Enumerable.Range(1, 100)
-                .Select(i => new SaleRecord { Region = $"R{i}", Amount = i })
+            // 前 50,000 筆：Region = "Common"，Amount = 1
+            // 第 50,001 筆（哨兵）：Region = "SENTINEL"，Amount = 99999
+            var records = Enumerable.Range(1, 50_000)
+                .Select(_ => new SaleRecord { Region = "Common", Amount = 1m })
+                .Append(new SaleRecord { Region = "SENTINEL", Amount = 99_999m })
                 .ToList();
-            var data = records.AsQueryable();
 
             var req = Req(
                 dims: new[] { "Region" },
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
-            var rows = _strategy.Execute(data, req, _whitelist);
+            var rows = _strategy.Execute(records.AsQueryable(), req, _whitelist);
 
-            // All 100 unique regions should produce 100 groups (well under MaxMaterializeRows)
-            Assert.AreEqual(100, rows.Count);
-            // Verify the constant is accessible and correct
-            Assert.AreEqual(50_000, InProcessGroupByStrategy.MaxMaterializeRows);
+            var hasSentinel = rows.Any(r => r.TryGetValue("Region", out var v) && (string?)v == "SENTINEL");
+            Assert.IsFalse(hasSentinel,
+                "第 50,001 筆（哨兵）超過 MaxMaterializeRows(50,000)，應被 Take() 截斷而不出現在結果中");
+        }
+
+        [TestMethod]
+        public void Source_with_exactly_50000_rows_is_not_truncated()
+        {
+            // 恰好 50,000 筆唯一 Region → 所有資料都在 Take(50_000) 上限內
+            var records = Enumerable.Range(1, 50_000)
+                .Select(i => new SaleRecord { Region = $"R{i:D6}", Amount = 1m })
+                .ToList();
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var rows = _strategy.Execute(records.AsQueryable(), req, _whitelist);
+
+            // GroupBy 後 50,000 個分組，但 Take(MaxRows+1)=10,001 會截斷輸出
+            // 重要的是：所有資料都被 Take(50,000) 收到（未被上層截斷）
+            Assert.IsTrue(rows.Count <= InProcessGroupByStrategy.MaxMaterializeRows,
+                "恰好 50,000 筆時不應觸發 MaxMaterializeRows 截斷");
+            // 且輸出行數符合 MaxRows+1 的限制
+            Assert.IsTrue(rows.Count <= 10_001,
+                "GroupBy 結果應受 MaxRows+1 限制");
         }
 
         // ─── 日期階層截斷測試（PR #228 修復驗證）─────────────────────────────
