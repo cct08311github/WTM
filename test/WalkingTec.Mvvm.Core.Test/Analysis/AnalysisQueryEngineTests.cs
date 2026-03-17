@@ -425,6 +425,43 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.IsFalse(result.Truncated);
         }
 
+        /// <summary>多條件 AND：Region=華東 AND Amount&gt;150 → 只剩華東 B=200</summary>
+        [TestMethod]
+        public void Filter_multiple_conditions_AND_logic_narrows_result()
+        {
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) },
+                filters: new[] {
+                    ("Region", FilterOperator.Eq, "華東"),   // 排除華南 A=300
+                    ("Amount", FilterOperator.Gt, "150")    // 排除華東 A=100
+                });
+
+            var result = Engine().Execute(Q(), req, _whitelist);
+
+            Assert.AreEqual(1, result.Rows.Count, "AND: 只有華東 Amount>150 的一列應通過");
+            Assert.AreEqual(200m, Convert.ToDecimal(result.Rows[0]["Amount_Sum"]));
+        }
+
+        /// <summary>三條件 AND：Region=華東 AND Amount&gt;=100 AND Amount&lt;200 → 只剩華東 A=100</summary>
+        [TestMethod]
+        public void Filter_three_conditions_AND_logic_all_must_match()
+        {
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) },
+                filters: new[] {
+                    ("Region", FilterOperator.Eq,  "華東"),
+                    ("Amount", FilterOperator.Gte, "100"),
+                    ("Amount", FilterOperator.Lt,  "200")
+                });
+
+            var result = Engine().Execute(Q(), req, _whitelist);
+
+            Assert.AreEqual(1, result.Rows.Count, "AND: Region=華東 AND 100≤Amount<200 → 只有華東 A=100");
+            Assert.AreEqual(100m, Convert.ToDecimal(result.Rows[0]["Amount_Sum"]));
+        }
+
         // ─── AggregateFunc 分支 ────────────────────────────────────────────────
 
         /// <summary>Count 聚合：華東有 2 筆 → Count=2</summary>
