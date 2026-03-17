@@ -75,19 +75,20 @@ public class EtlPipelineExecutor
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
+                // Count source rows before transform (for audit trail)
+                int extractedBatchRows = batch.Rows.Count;
+                totalExtracted += extractedBatchRows;
+
                 // Transform hook
                 var transformed = config.TransformFunc != null
                     ? config.TransformFunc(batch)
                     : batch;
 
-                int batchRows = transformed.Rows.Count;
-                totalExtracted += batchRows;
-
                 await _loader.BulkLoadAsync(
                     config.TargetConnectionString, config.StagingTable.TableName,
                     transformed, cancellationToken);
 
-                totalLoaded += batchRows;
+                totalLoaded += transformed.Rows.Count;
 
                 // 更新 watermark 暫存
                 if (watermark.Type != EtlWatermarkType.FullLoad && !string.IsNullOrEmpty(watermark.Column))
