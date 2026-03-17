@@ -700,6 +700,45 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
         }
 
         [TestMethod]
+        [Description("多幣別精確度：USD 交易 AmountTwd 加總必須精確等於各筆 Amount × ExchangeRate 之和 (#445)")]
+        public async Task CFO_MultiCurrency_AmountTwd_ExactValue_MatchesAmountTimesRate()
+        {
+            // USD 交易 1: Amount=200_000, ExchangeRate=32.1500 → AmountTwd=6_430_000
+            // USD 交易 2: Amount=150_000, ExchangeRate=32.1750 → AmountTwd=4_826_250
+            // 期望 AmountTwd_Sum = 11_256_250（精確到分）
+            const decimal expectedUsdAmountTwdSum = 200_000m * 32.1500m + 150_000m * 32.1750m;
+
+            var source = CreateAnalysisDataSource();
+            var request = new WidgetDataRequest
+            {
+                Parameters = new Dictionary<string, string>
+                {
+                    ["listVmType"] = FinancialTxVmType,
+                    ["dimensions"] = JsonSerializer.Serialize(new[] { "Currency" }),
+                    ["measures"]   = JsonSerializer.Serialize(new[]
+                    {
+                        new { Field = "AmountTwd", Func = AggregateFunc.Sum }
+                    }),
+                    ["filters"] = JsonSerializer.Serialize(new[]
+                    {
+                        new { Field = "Currency", Operator = FilterOperator.Eq, Value = "USD" }
+                    })
+                }
+            };
+
+            var result = await source.GetDataAsync(request);
+
+            result.Should().NotBeNull();
+            result.Rows.Should().NotBeNull();
+            var usdRow = result.Rows!.FirstOrDefault(r => r["Currency"]?.ToString() == "USD");
+            usdRow.Should().NotBeNull("USD 過濾後應有一列結果");
+
+            var actualSum = Convert.ToDecimal(usdRow!["AmountTwd_Sum"]);
+            actualSum.Should().Be(expectedUsdAmountTwdSum,
+                because: "USD 交易的 AmountTwd 加總必須精確等於各筆 Amount × ExchangeRate 之和，不允許有分毫誤差");
+        }
+
+        [TestMethod]
         [Description("季結切分：DateHierarchy.Quarter 正確將 1-3 月歸為 Q1、4-6 月歸為 Q2")]
         public void CFO_QuarterlyReport_DateHierarchy_CorrectlyGroupsByQuarter()
         {
