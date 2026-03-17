@@ -305,7 +305,7 @@
         
         var valueDiv = document.createElement('div');
         valueDiv.className = 'wtm-kpi-value';
-        var val = data ? data.value : 0;
+        var val = (data && data.value != null) ? data.value : 0;
         valueDiv.textContent = Utils.formatValue(val, config.format, config.prefix);
 
         // ── Threshold / alert coloring ─────────────────────────────────────

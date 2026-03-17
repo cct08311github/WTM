@@ -124,6 +124,37 @@ describe('WtmDashboard.WidgetRendererFactory', () => {
         expect(container.children.some(c => c.textContent.indexOf('23.45%') >= 0)).toBe(true);
     });
 
+    test('renderKpi with data={} (missing value field) shows 0 not "undefined" (#435)', () => {
+        const { wd, mockDocument } = makeEnv();
+        const container = mockDocument.createElement('div');
+        wd.WidgetRendererFactory.getRenderer('kpi')(container, {}, { title: 'X' });
+        const valueDiv = container.children.find(c => c.className === 'wtm-kpi-value');
+        expect(valueDiv).toBeDefined();
+        expect(valueDiv.textContent).not.toBe('undefined');
+        expect(valueDiv.textContent).not.toContain('undefined');
+        expect(valueDiv.textContent).toBe('0');
+    });
+
+    test('renderKpi with data=null shows 0 not "undefined" (#435)', () => {
+        const { wd, mockDocument } = makeEnv();
+        const container = mockDocument.createElement('div');
+        wd.WidgetRendererFactory.getRenderer('kpi')(container, null, { title: 'X' });
+        const valueDiv = container.children.find(c => c.className === 'wtm-kpi-value');
+        expect(valueDiv).toBeDefined();
+        expect(valueDiv.textContent).not.toBe('undefined');
+        expect(valueDiv.textContent).toBe('0');
+    });
+
+    test('renderKpi with data.value=null shows 0 not "undefined" (#435)', () => {
+        const { wd, mockDocument } = makeEnv();
+        const container = mockDocument.createElement('div');
+        wd.WidgetRendererFactory.getRenderer('kpi')(container, { value: null }, { title: 'X' });
+        const valueDiv = container.children.find(c => c.className === 'wtm-kpi-value');
+        expect(valueDiv).toBeDefined();
+        expect(valueDiv.textContent).not.toBe('undefined');
+        expect(valueDiv.textContent).toBe('0');
+    });
+
     test('renderChart calls echarts.init', () => {
         const { wd, mockDocument, mockEcharts, capturedOptions } = makeEnv();
         const container = mockDocument.createElement('div');
