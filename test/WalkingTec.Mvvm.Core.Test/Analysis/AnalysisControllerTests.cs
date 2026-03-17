@@ -13,7 +13,6 @@ using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Analysis;
 using WalkingTec.Mvvm.Mvc;
 using WalkingTec.Mvvm.Test.Mock;
-using WalkingTec.Mvvm.Core.Support.Json;
 
 namespace WalkingTec.Mvvm.Core.Test.Analysis
 {
@@ -1629,40 +1628,145 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.IsNotNull(drawing, "PivotExport includeChart=true 應在 xlsx 中嵌入 Drawing");
             Assert.IsTrue(drawing.GetCharts().Count >= 1);
         }
-        // ─── CheckAccess RBAC 測試 ──────────────────────────────────────────────
-        //
-        // 驗證五個端點（GetMeta / Query / Pivot / Export / PivotExport）的 Forbid 路徑：
-        //   - 缺少必要角色 → ForbidResult
-        //   - Admin 繞過 AllowedRoles → 200
-        //   - 持有正確角色 → 200
 
-        /// <summary>角色限制 VM：只有 "Analyst" 可存取。</summary>
-        [EnableAnalysis(AllowedRoles = "Analyst")]
-        private class RestrictedSaleListVM : BasePagedListVM<SaleRecord, BaseSearcher>
+        // ─── #377: SQL injection / XSS / 邊界安全測試 ───────────────────────────────
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Query_filter_value_with_sql_injection_pattern_does_not_throw()
         {
-            public override IOrderedQueryable<SaleRecord> GetSearchQuery()
-                => _testData.AsQueryable().OrderByDescending(x => x.ID);
-        }
-
-        private _AnalysisController CreateControllerWithRoles(params string[] roles)
-        {
-            var controller = CreateController();
-            controller.Wtm.LoginUserInfo.Roles = roles
-                .Select(r => new SimpleRole { RoleName = r })
-                .ToList();
-            return controller;
-        }
-
-        private static AnalysisQueryRequest RestrictedReq(
-            string[] dims,
-            (string field, AggregateFunc func)[] msrs = null)
-            => new AnalysisQueryRequest
+            // Expression Tree approach treats filter values as parameters, never raw SQL.
+            // This test locks in that guarantee: a SQL injection string must not throw or 500.
+            _testData = new List<SaleRecord>
             {
-                ListVmType = typeof(RestrictedSaleListVM).FullName,
-                Dimensions = dims?.ToList() ?? new List<string>(),
-                Measures   = msrs?.Select(m => new MeasureRequest { Field = m.field, Func = m.func }).ToList()
-                             ?? new List<MeasureRequest>()
+                new SaleRecord { ID = Guid.NewGuid(), Region = "North", Category = "A", Amount = 100m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "'; DROP TABLE OrderItems --", Category = "B", Amount = 200m },
             };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string> { "Region" },
+                Measures   = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+                Filters = new List<FilterCondition>
+                {
+                    new FilterCondition { Field = "Region", Operator = FilterOperator.Eq, Value = "'; DROP TABLE OrderItems --" }
+                },
+            };
+
+            // Must not throw; must return 200 with exactly 1 matching row
+            var result = CreateController().Query(req) as JsonResult;
+            Assert.IsNotNull(result, "SQL injection in filter value must not throw — should return 200");
+            var response = result.Value as AnalysisQueryResponse;
+            Assert.IsNotNull(response);
+            Assert.AreEqual(1, response.Rows.Count, "Exactly 1 row matches the injection string as a literal value");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Query_filter_value_with_xss_payload_does_not_throw()
+        {
+            // XSS payload as a filter value must be treated as a plain string.
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "<script>alert(1)</script>", Category = "A", Amount = 50m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "Safe", Category = "B", Amount = 150m },
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string> { "Region" },
+                Measures   = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+                Filters = new List<FilterCondition>
+                {
+                    new FilterCondition { Field = "Region", Operator = FilterOperator.Eq, Value = "<script>alert(1)</script>" }
+                },
+            };
+
+            var result = CreateController().Query(req) as JsonResult;
+            Assert.IsNotNull(result, "XSS payload in filter value must return 200");
+            var response = result.Value as AnalysisQueryResponse;
+            Assert.IsNotNull(response);
+            Assert.AreEqual(1, response.Rows.Count);
+            Assert.AreEqual("<script>alert(1)</script>", response.Rows[0]["Region"]?.ToString());
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Export_csv_with_xss_payload_in_dimension_value_stores_verbatim()
+        {
+            // XSS payload in dimension value must appear verbatim in CSV (no HTML-encoding).
+            // CSV is plain text — the browser/Excel parses it, not an HTML parser.
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "<script>alert(1)</script>", Category = "A", Amount = 100m },
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string> { "Region" },
+                Measures   = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+            };
+
+            var result = CreateController().Export(req, "csv") as FileContentResult;
+            Assert.IsNotNull(result, "Export CSV should return FileContentResult");
+
+            var raw = result.FileContents;
+            int bom = (raw.Length >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF) ? 3 : 0;
+            var text = System.Text.Encoding.UTF8.GetString(raw, bom, raw.Length - bom);
+
+            // The raw XSS string should appear in the CSV output — no HTML encoding
+            Assert.IsTrue(text.Contains("<script>alert(1)</script>"),
+                $"CSV should contain verbatim XSS string. Actual CSV:\n{text}");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Export_xlsx_with_xss_payload_in_dimension_value_stored_as_plain_string()
+        {
+            // XSS payload in xlsx must be stored as a string cell with the literal value,
+            // not HTML-encoded or interpreted as executable content.
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "<script>alert(1)</script>", Category = "A", Amount = 100m },
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string> { "Region" },
+                Measures   = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+            };
+
+            var result = CreateController().Export(req, "xlsx") as FileContentResult;
+            Assert.IsNotNull(result, "Export xlsx should return FileContentResult");
+
+            using var ms = new MemoryStream(result.FileContents);
+            var wb = new XSSFWorkbook(ms);
+            var sheet = wb.GetSheetAt(0);
+            // Row 1 (index 1) is the first data row; column 0 is the Region dimension
+            var cell = sheet.GetRow(1)?.GetCell(0);
+            Assert.IsNotNull(cell, "Data row should exist");
+            Assert.AreEqual(CellType.String, cell.CellType);
+            Assert.AreEqual("<script>alert(1)</script>", cell.StringCellValue,
+                "xlsx cell should store verbatim XSS string, not HTML-encoded");
+        }
+
+
 
         [TestMethod]
         public void GetMeta_returns_403_when_user_lacks_required_role()
