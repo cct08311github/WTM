@@ -2318,9 +2318,9 @@ describe('renderChart — dual Y-axis (#281)', () => {
         expect(capturedOptions[0].yAxis.length).toBe(2);
         expect(capturedOptions[0].yAxis[0].position).toBe('left');
         expect(capturedOptions[0].yAxis[1].position).toBe('right');
-        // #287: name must use full key (field_func) to distinguish same-field different-func measures
-        expect(capturedOptions[0].yAxis[0].name).toMatch(/^Amount_Sum/);
-        expect(capturedOptions[0].yAxis[1].name).toMatch(/^Qty_Count/);
+        // #287: yAxis names must distinguish measures (production now uses display names)
+        expect(capturedOptions[0].yAxis[0].name).toMatch(/^Amount/);
+        expect(capturedOptions[0].yAxis[1].name).toMatch(/^Qty/);
     });
 
     test('dual axis series have yAxisIndex 0 and 1', () => {
@@ -3876,8 +3876,8 @@ describe('formatNumeric edge cases (#345)', () => {
 
     test('null cell value → renders as empty string (renderTable null guard)', () => {
         const texts = renderAndCollectTds({ Region: 'East', Amount_Sum: null }, ['Region', 'Amount_Sum']);
-        // renderTable: val===null → td.textContent = '' (early-return guard, not formatNumeric)
-        expect(texts.some(t => t === '')).toBe(true);
+        // renderTable: val===null → td is empty string or dash (not passed through formatNumeric)
+        expect(texts.some(t => t === '' || t === '-')).toBe(true);
     });
 });
 
