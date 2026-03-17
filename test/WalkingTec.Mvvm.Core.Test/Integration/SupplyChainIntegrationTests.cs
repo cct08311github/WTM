@@ -1015,14 +1015,8 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
             var whitelist = AnalysisFieldScanner.ScanModel(typeof(InventoryMovement));
 
             // 應正常回傳（Analysis 不計算周轉率，只聚合原始欄位）
-            AnalysisQueryResponse result = null!;
-            Assert.IsTrue(
-                (() =>
-                {
-                    result = _engine.Execute(zeroInventoryData.AsQueryable(), req, whitelist);
-                    return true;
-                })(),
-                "庫存量為 0 的 Analysis 查詢不應拋出例外");
+            var result = _engine.Execute(zeroInventoryData.AsQueryable(), req, whitelist);
+            Assert.IsNotNull(result, "庫存量為 0 的 Analysis 查詢不應拋出例外");
 
             Assert.AreEqual(1, result.Rows.Count, "應有 1 個分組");
             Assert.AreEqual(0m, Convert.ToDecimal(result.Rows[0]["InventoryValue_Avg"]),
