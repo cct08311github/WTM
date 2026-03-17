@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 
 namespace WalkingTec.Mvvm.Core.Analysis
@@ -32,6 +33,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     var clrType = prop.PropertyType;
                     var underlying = Nullable.GetUnderlyingType(clrType) ?? clrType;
                     var isDate = underlying == typeof(DateTime);
+                    var allowedValues = BuildAllowedValues(underlying);
 
                     yield return new AnalysisFieldMeta
                     {
@@ -41,7 +43,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         ClrType = clrType,
                         IsDate = isDate,
                         Hierarchy = isDate ? dim.Hierarchy : DateHierarchy.None,
-                        AllowedRoles = dim.AllowedRoles
+                        AllowedRoles = dim.AllowedRoles,
+                        AllowedValues = allowedValues
                     };
                     continue;
                 }
@@ -60,6 +63,19 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     };
                 }
             }
+        }
+
+        /// <summary>
+        /// 若 type 為枚舉，回傳所有成員的顯示名稱清單；否則回傳 null。
+        /// </summary>
+        private static IReadOnlyList<string>? BuildAllowedValues(Type type)
+        {
+            if (!type.IsEnum) return null;
+            return Enum.GetValues(type)
+                .Cast<Enum>()
+                .Select(e => e.GetEnumDisplayName() ?? e.ToString())
+                .ToList()
+                .AsReadOnly();
         }
     }
 }

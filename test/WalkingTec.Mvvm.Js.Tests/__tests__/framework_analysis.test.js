@@ -4335,3 +4335,114 @@ describe('formatNumeric edge cases (#345)', () => {
     });
 });
 
+// ─── #501 createValueInput — smart filter controls ───────────────────────────
+describe('#501 createValueInput — smart filter controls', () => {
+    test('enum field (allowedValues non-empty) → renders <select> with correct options', () => {
+        const enumMeta = {
+            fieldName: 'Status',
+            displayName: '狀態',
+            isDate: false,
+            allowedValues: ['Active', 'Inactive', 'Pending'],
+        };
+        const el = waReq.createValueInput(enumMeta);
+        expect(el.tagName.toLowerCase()).toBe('select');
+        // options: empty placeholder + 3 enum values = 4 total
+        expect(el.options.length).toBe(4);
+        expect(el.options[0].value).toBe('');
+        expect(el.options[1].value).toBe('Active');
+        expect(el.options[2].value).toBe('Inactive');
+        expect(el.options[3].value).toBe('Pending');
+    });
+
+    test('enum field options use textContent not innerHTML (XSS safe)', () => {
+        const enumMeta = {
+            fieldName: 'Tag',
+            displayName: '標籤',
+            isDate: false,
+            allowedValues: ['<script>xss</script>', 'Normal'],
+        };
+        const el = waReq.createValueInput(enumMeta);
+        expect(el.tagName.toLowerCase()).toBe('select');
+        // values are set via .value and .textContent, not innerHTML
+        const xssOpt = el.options[1];
+        expect(xssOpt.value).toBe('<script>xss</script>');
+        expect(typeof xssOpt.textContent).toBe('string');
+    });
+
+    test('date field (isDate=true, no allowedValues) → renders <input> with yyyy-MM-dd placeholder', () => {
+        const dateMeta = {
+            fieldName: 'OrderDate',
+            displayName: '訂單日期',
+            isDate: true,
+            allowedValues: null,
+        };
+        const el = waReq.createValueInput(dateMeta);
+        expect(el.tagName.toLowerCase()).toBe('input');
+        expect(el.placeholder).toBe('yyyy-MM-dd');
+    });
+
+    test('plain text field (no allowedValues, not date) → renders <input> with generic placeholder', () => {
+        const textMeta = {
+            fieldName: 'Region',
+            displayName: '地區',
+            isDate: false,
+            allowedValues: null,
+        };
+        const el = waReq.createValueInput(textMeta);
+        expect(el.tagName.toLowerCase()).toBe('input');
+        expect(el.placeholder).not.toBe('yyyy-MM-dd');
+    });
+
+    test('null fieldMeta → renders default <input>', () => {
+        const el = waReq.createValueInput(null);
+        expect(el.tagName.toLowerCase()).toBe('input');
+    });
+
+    test('empty allowedValues array → falls through to <input> (not select)', () => {
+        const meta = {
+            fieldName: 'Score',
+            displayName: '分數',
+            isDate: false,
+            allowedValues: [],
+        };
+        const el = waReq.createValueInput(meta);
+        expect(el.tagName.toLowerCase()).toBe('input');
+    });
+
+    test('addFilterRow with enum field — collectFilters reads select.value correctly', async () => {
+        const gridId = 'filter501a';
+        const fields = [
+            { fieldName: 'Status', displayName: '狀態', isDate: false, allowedValues: ['Active', 'Inactive'] },
+        ];
+        const panel = document.createElement('div');
+        panel.id = 'analysis-panel-' + gridId;
+
+        const fetchOrig = global.fetch;
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: true,
+            json: jest.fn().mockResolvedValue(fields),
+        });
+        const idSpy = jest.spyOn(document, 'getElementById').mockImplementation(id =>
+            id === 'analysis-panel-' + gridId ? panel : null
+        );
+        waReq.toggle(gridId, 'TestVm501');
+        await new Promise(r => setTimeout(r, 50));
+
+        waReq.addFilterRow(gridId);
+        const row = panel.querySelector('.analysis-filter-row');
+        row.querySelector('.analysis-filter-field').value = 'Status';
+        // Simulate field change to swap in select
+        row.querySelector('.analysis-filter-field').dispatchEvent(new Event('change'));
+        // After change, the value control should reflect the new field.
+        // In jsdom, the new select is swapped in; set its value directly.
+        const valEl = row.querySelector('.analysis-filter-value');
+        valEl.value = 'Active';
+
+        const filters = waReq.collectFilters(gridId);
+        expect(filters).toEqual([{ field: 'Status', operator: 'Eq', value: 'Active' }]);
+
+        idSpy.mockRestore();
+        global.fetch = fetchOrig;
+    });
+});
+
