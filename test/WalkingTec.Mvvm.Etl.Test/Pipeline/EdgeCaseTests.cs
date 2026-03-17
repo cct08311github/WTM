@@ -101,9 +101,12 @@ public class EdgeCaseTests
         var result = await executor.ExecuteAsync(config, watermark);
 
         result.Success.Should().BeTrue();
+        // ExtractedRows must reflect source rows BEFORE transform (fix for #426)
+        result.ExtractedRows.Should().Be(1_000, "source had 1000 rows regardless of transform filtering");
         // Amount = 100 + (i % 1000), so values > 500 are i%1000 > 400 → 599 out of 1000
         result.LoadedRows.Should().BeLessThan(1_000);
         result.LoadedRows.Should().BeGreaterThan(0);
+        result.LoadedRows.Should().NotBe(result.ExtractedRows, "transform filtered some rows so counts should diverge");
         _loader.MergeCalled.Should().BeTrue();
     }
 
@@ -129,6 +132,8 @@ public class EdgeCaseTests
         var result = await executor.ExecuteAsync(config, watermark);
 
         result.Success.Should().BeTrue();
+        // ExtractedRows must reflect source rows BEFORE transform (fix for #426)
+        result.ExtractedRows.Should().Be(100, "source had 100 rows regardless of transform filtering all out");
         result.LoadedRows.Should().Be(0);
     }
 
