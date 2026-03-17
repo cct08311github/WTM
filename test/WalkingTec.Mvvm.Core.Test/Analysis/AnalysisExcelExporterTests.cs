@@ -482,6 +482,28 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
+        public void Export_numeric_columns_use_comma_separated_two_decimal_format()
+        {
+            // #437: verify exact format string is "#,##0.00" (thousands separator + 2 decimals)
+            var resp = MakeResponse(
+                new List<string> { "Region", "Amount_Sum" },
+                new List<Dictionary<string, object?>>
+                {
+                    new() { ["Region"] = "North", ["Amount_Sum"] = 1_234_567.89m }
+                });
+
+            var wb = OpenWorkbook(AnalysisExcelExporter.Export(resp));
+            var sheet = wb.GetSheetAt(0);
+            var numericCell = sheet.GetRow(1).GetCell(1); // Amount_Sum
+
+            Assert.IsNotNull(numericCell.CellStyle);
+            var xssfStyle = (NPOI.XSSF.UserModel.XSSFCellStyle)numericCell.CellStyle;
+            var formatStr = xssfStyle.GetDataFormatString();
+            Assert.AreEqual("#,##0.00", formatStr,
+                "Numeric measure columns must use '#,##0.00' format (thousands separator + 2 decimals)");
+        }
+
+        [TestMethod]
         public void Export_string_columns_do_not_have_numeric_format()
         {
             var resp = MakeResponse(
