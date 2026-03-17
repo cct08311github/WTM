@@ -157,6 +157,40 @@ public abstract class IntegrationTestBase
         return dt;
     }
 
+    /// <summary>
+    /// 探測 MSSQL 是否可連線。無法連線時測試應呼叫 Assert.Inconclusive()。
+    /// </summary>
+    protected static bool IsMssqlAvailable()
+    {
+        try
+        {
+            using var conn = new SqlConnection(MssqlConnectionString);
+            conn.Open();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 探測 Oracle 是否可連線。無法連線時測試應呼叫 Assert.Inconclusive()。
+    /// </summary>
+    protected static bool IsOracleAvailable()
+    {
+        try
+        {
+            using var conn = new Oracle.ManagedDataAccess.Client.OracleConnection(OracleConnectionString);
+            conn.Open();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static async Task ExecuteMssqlAsync(SqlConnection conn, string sql)
     {
         await using var cmd = conn.CreateCommand();

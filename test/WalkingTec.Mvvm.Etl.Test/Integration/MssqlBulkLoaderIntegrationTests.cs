@@ -30,6 +30,8 @@ public class MssqlBulkLoaderIntegrationTests : IntegrationTestBase
     [ClassInitialize]
     public static async Task ClassInit(TestContext _)
     {
+        if (!IsMssqlAvailable())
+            Assert.Inconclusive("MSSQL not available — skipping integration tests. Run: docker compose -f test/docker-compose.etl-test.yml up -d");
         await EnsureMssqlDatabaseAsync();
     }
 

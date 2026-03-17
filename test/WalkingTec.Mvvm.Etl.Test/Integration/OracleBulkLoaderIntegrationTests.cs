@@ -29,6 +29,13 @@ public class OracleBulkLoaderIntegrationTests : IntegrationTestBase
         new StagingColumn("UPDATEDAT", "TIMESTAMP")
     );
 
+    [ClassInitialize]
+    public static void ClassInit(TestContext _)
+    {
+        if (!IsOracleAvailable())
+            Assert.Inconclusive("Oracle not available — skipping integration tests. Run: docker compose -f test/docker-compose.etl-test.yml up -d");
+    }
+
     [TestInitialize]
     public async Task Setup()
     {
