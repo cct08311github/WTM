@@ -148,8 +148,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     metaRow.CreateCell(1).SetCellValue(rows[i].Item2);
                 }
             }
-            using var ms = new MemoryStream();
-            workbook.Write(ms, leaveOpen: true);
+            var ms = new MemoryStream();
+            workbook.Write(ms);
             return ms.ToArray();
         }
 
