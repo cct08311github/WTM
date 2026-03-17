@@ -1,9 +1,12 @@
 #nullable disable
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 using Microsoft.AspNetCore.Http;
+using NPOI.SS.UserModel;
+using NPOI.XSSF.UserModel;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
@@ -1480,6 +1483,93 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.AreEqual(0xEF, result.FileContents[0], "第 1 byte 應為 BOM EF");
             Assert.AreEqual(0xBB, result.FileContents[1], "第 2 byte 應為 BOM BB");
             Assert.AreEqual(0xBF, result.FileContents[2], "第 3 byte 應為 BOM BF");
+        }
+
+        // ─── includeChart / chartType Controller 層參數傳遞 (#360) ──────────────
+
+        /// <summary>
+        /// Export?format=xlsx&includeChart=true — 驗證 includeChart 確實傳遞至 AnalysisExcelExporter。
+        /// </summary>
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Export_xlsx_with_includeChart_true_contains_chart()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { Region = "North", Amount = 100m },
+                new SaleRecord { Region = "South", Amount = 200m },
+            };
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var result = CreateController().Export(req, "xlsx", includeChart: true, chartType: "bar") as FileContentResult;
+
+            Assert.IsNotNull(result, "應回傳 xlsx FileContentResult");
+            using var ms = new MemoryStream(result.FileContents);
+            var wb = new XSSFWorkbook(ms);
+            var sheet = wb.GetSheetAt(0) as XSSFSheet;
+            Assert.IsNotNull(sheet);
+            var drawing = sheet.GetDrawingPatriarch() as XSSFDrawing;
+            Assert.IsNotNull(drawing, "includeChart=true 應在 xlsx 中嵌入 Drawing");
+            Assert.IsTrue(drawing.GetCharts().Count >= 1, "Drawing 中應有至少 1 個 chart");
+        }
+
+        /// <summary>
+        /// Export?format=xlsx&includeChart=true&chartType=pie — 驗證 chartType 確實傳遞至 AnalysisExcelExporter。
+        /// </summary>
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Export_xlsx_with_chartType_pie_contains_chart()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { Region = "North", Amount = 100m },
+                new SaleRecord { Region = "South", Amount = 200m },
+            };
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var result = CreateController().Export(req, "xlsx", includeChart: true, chartType: "pie") as FileContentResult;
+
+            Assert.IsNotNull(result, "應回傳 xlsx FileContentResult");
+            using var ms = new MemoryStream(result.FileContents);
+            var wb = new XSSFWorkbook(ms);
+            var sheet = wb.GetSheetAt(0) as XSSFSheet;
+            Assert.IsNotNull(sheet);
+            var drawing = sheet.GetDrawingPatriarch() as XSSFDrawing;
+            Assert.IsNotNull(drawing, "chartType=pie + includeChart=true 應在 xlsx 中嵌入 Drawing");
+            Assert.IsTrue(drawing.GetCharts().Count >= 1);
+        }
+
+        /// <summary>
+        /// PivotExport?format=xlsx&includeChart=true — 驗證 PivotExport 的 includeChart 確實傳遞。
+        /// </summary>
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void PivotExport_xlsx_with_includeChart_true_contains_chart()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { Region = "North", Category = "A", Amount = 100m },
+                new SaleRecord { Region = "South", Category = "B", Amount = 200m },
+            };
+            var req = PivotReq(
+                dims:     new[] { "Region", "Category" },
+                pivotDim: "Category",
+                msrs:     new[] { ("Amount", AggregateFunc.Sum) });
+
+            var result = CreateController().PivotExport(req, "xlsx", includeChart: true, chartType: "bar") as FileContentResult;
+
+            Assert.IsNotNull(result, "PivotExport 應回傳 xlsx FileContentResult");
+            using var ms = new MemoryStream(result.FileContents);
+            var wb = new XSSFWorkbook(ms);
+            var sheet = wb.GetSheetAt(0) as XSSFSheet;
+            Assert.IsNotNull(sheet);
+            var drawing = sheet.GetDrawingPatriarch() as XSSFDrawing;
+            Assert.IsNotNull(drawing, "PivotExport includeChart=true 應在 xlsx 中嵌入 Drawing");
+            Assert.IsTrue(drawing.GetCharts().Count >= 1);
         }
     }
 }
