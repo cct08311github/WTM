@@ -103,36 +103,13 @@ namespace WalkingTec.Mvvm.Mvc
             if (req.Measures.Count == 0)  return BadRequest("至少需要選取 1 個度量指標。");
             if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
 
-            Type vmType;
-            try { vmType = _registry.Resolve(req.ListVmType); }
-            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
-
-            if (!CheckAccess(vmType)) return Forbid();
-
-            BaseVM vm;
-            try { vm = CreateAndBindVm(vmType, req.SearcherFormData); }
-            catch (Exception ex) when (ex is InvalidOperationException || ex is JsonException) 
-            { 
-                return BadRequest(ex.Message); 
-            }
-
-            var fields = InvokeGetAnalysisFields(vm, vmType);
-            if (_fieldPolicy != null)
-            {
-                fields = _fieldPolicy.Filter(fields, HttpContext?.User ?? new System.Security.Claims.ClaimsPrincipal()).ToList();
-            }
-            var baseQuery = InvokeGetSearchQuery(vm, vmType);
-            if (baseQuery == null) return BadRequest("無法取得查詢來源。");
-
-            var hierarchyError = ValidateDimensionHierarchies(req.DimensionHierarchies, fields);
-            if (hierarchyError != null) return BadRequest(hierarchyError);
-
-            string? identityKey = Wtm?.LoginUserInfo != null ? $"{Wtm.LoginUserInfo.CurrentTenant}_{Wtm.LoginUserInfo.UserId}" : null;
+            var errorResult = TryPrepareContext(req, out var ctx);
+            if (errorResult != null) return errorResult;
 
             var sw = Stopwatch.StartNew();
             try
             {
-                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache, _cacheTtl).ExecuteDynamic(baseQuery, req, fields, identityKey: identityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
+                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache, _cacheTtl).ExecuteDynamic(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
                 sw.Stop();
                 _logger.LogInformation("Analysis query completed ListVm={ListVmType} Dims={DimCount} Msrs={MsrCount} ElapsedMs={Elapsed} Truncated={Truncated}",
                     req.ListVmType, req.Dimensions.Count, req.Measures.Count, sw.ElapsedMilliseconds, result.Truncated);
@@ -151,36 +128,13 @@ namespace WalkingTec.Mvvm.Mvc
             if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
             if (string.IsNullOrEmpty(req.PivotDimension)) return BadRequest("必須指定 PivotDimension。");
 
-            Type vmType;
-            try { vmType = _registry.Resolve(req.ListVmType); }
-            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
-
-            if (!CheckAccess(vmType)) return Forbid();
-
-            BaseVM pivotVm;
-            try { pivotVm = CreateAndBindVm(vmType, req.SearcherFormData); }
-            catch (Exception ex) when (ex is InvalidOperationException || ex is JsonException) 
-            { 
-                return BadRequest(ex.Message); 
-            }
-
-            var fields = InvokeGetAnalysisFields(pivotVm, vmType);
-            if (_fieldPolicy != null)
-            {
-                fields = _fieldPolicy.Filter(fields, HttpContext?.User ?? new System.Security.Claims.ClaimsPrincipal()).ToList();
-            }
-            var baseQuery = InvokeGetSearchQuery(pivotVm, vmType);
-            if (baseQuery == null) return BadRequest("無法取得查詢來源。");
-
-            var hierarchyError = ValidateDimensionHierarchies(req.DimensionHierarchies, fields);
-            if (hierarchyError != null) return BadRequest(hierarchyError);
-
-            string? identityKey = Wtm?.LoginUserInfo != null ? $"{Wtm.LoginUserInfo.CurrentTenant}_{Wtm.LoginUserInfo.UserId}" : null;
+            var errorResult = TryPrepareContext(req, out var ctx);
+            if (errorResult != null) return errorResult;
 
             var sw = Stopwatch.StartNew();
             try
             {
-                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache, _cacheTtl).ExecutePivotDynamic(baseQuery, req, fields, identityKey: identityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
+                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache, _cacheTtl).ExecutePivotDynamic(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
                 sw.Stop();
                 _logger.LogInformation("Analysis pivot completed ListVm={ListVmType} Dims={DimCount} Msrs={MsrCount} Pivot={PivotDim} ElapsedMs={Elapsed}",
                     req.ListVmType, req.Dimensions.Count, req.Measures.Count, req.PivotDimension, sw.ElapsedMilliseconds);
@@ -206,37 +160,14 @@ namespace WalkingTec.Mvvm.Mvc
             if (req.Measures.Count == 0)  return BadRequest("至少需要選取 1 個度量指標。");
             if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
 
-            Type vmType;
-            try { vmType = _registry.Resolve(req.ListVmType); }
-            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
-
-            if (!CheckAccess(vmType)) return Forbid();
-
-            BaseVM vm;
-            try { vm = CreateAndBindVm(vmType, req.SearcherFormData); }
-            catch (Exception ex) when (ex is InvalidOperationException || ex is JsonException) 
-            { 
-                return BadRequest(ex.Message); 
-            }
-
-            var fields = InvokeGetAnalysisFields(vm, vmType);
-            if (_fieldPolicy != null)
-            {
-                fields = _fieldPolicy.Filter(fields, HttpContext?.User ?? new System.Security.Claims.ClaimsPrincipal()).ToList();
-            }
-            var baseQuery = InvokeGetSearchQuery(vm, vmType);
-            if (baseQuery == null) return BadRequest("無法取得查詢來源。");
-
-            var hierarchyError = ValidateDimensionHierarchies(req.DimensionHierarchies, fields);
-            if (hierarchyError != null) return BadRequest(hierarchyError);
-
-            string? identityKey = Wtm?.LoginUserInfo != null ? $"{Wtm.LoginUserInfo.CurrentTenant}_{Wtm.LoginUserInfo.UserId}" : null;
+            var errorResult = TryPrepareContext(req, out var ctx);
+            if (errorResult != null) return errorResult;
 
             var sw = Stopwatch.StartNew();
             AnalysisQueryResponse result;
             try
             {
-                result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache, _cacheTtl).ExecuteDynamic(baseQuery, req, fields, identityKey: identityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
+                result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache, _cacheTtl).ExecuteDynamic(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
                 sw.Stop();
                 _logger.LogInformation("Analysis export completed ListVm={ListVmType} Format={Format} ElapsedMs={Elapsed}",
                     req.ListVmType, format, sw.ElapsedMilliseconds);
@@ -281,37 +212,14 @@ namespace WalkingTec.Mvvm.Mvc
             if (req.Measures.Count == 0)  return BadRequest("至少需要選取 1 個度量指標。");
             if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
 
-            Type vmType;
-            try { vmType = _registry.Resolve(req.ListVmType); }
-            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
-
-            if (!CheckAccess(vmType)) return Forbid();
-
-            BaseVM vm;
-            try { vm = CreateAndBindVm(vmType, req.SearcherFormData); }
-            catch (Exception ex) when (ex is InvalidOperationException || ex is JsonException) 
-            { 
-                return BadRequest(ex.Message); 
-            }
-
-            var fields = InvokeGetAnalysisFields(vm, vmType);
-            if (_fieldPolicy != null)
-            {
-                fields = _fieldPolicy.Filter(fields, HttpContext?.User ?? new System.Security.Claims.ClaimsPrincipal()).ToList();
-            }
-            var baseQuery = InvokeGetSearchQuery(vm, vmType);
-            if (baseQuery == null) return BadRequest("無法取得查詢來源。");
-
-            var hierarchyError = ValidateDimensionHierarchies(req.DimensionHierarchies, fields);
-            if (hierarchyError != null) return BadRequest(hierarchyError);
-
-            string? identityKey = Wtm?.LoginUserInfo != null ? $"{Wtm.LoginUserInfo.CurrentTenant}_{Wtm.LoginUserInfo.UserId}" : null;
+            var errorResult = TryPrepareContext(req, out var ctx);
+            if (errorResult != null) return errorResult;
 
             var sw = Stopwatch.StartNew();
             AnalysisPivotResponse result;
             try
             {
-                result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache, _cacheTtl).ExecutePivotDynamic(baseQuery, req, fields, identityKey: identityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
+                result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache, _cacheTtl).ExecutePivotDynamic(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
                 sw.Stop();
                 _logger.LogInformation("Analysis pivot export completed ListVm={ListVmType} Format={Format} ElapsedMs={Elapsed}",
                     req.ListVmType, format, sw.ElapsedMilliseconds);
@@ -349,6 +257,55 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         // ─── Helpers ───────────────────────────────────────────────────────
+
+        /// <summary>
+        /// 封裝四個 action 共用的準備結果：VM 解析、存取驗證、欄位掃描、基底查詢、identityKey。
+        /// </summary>
+        private sealed record PreparedAnalysisContext(
+            IQueryable BaseQuery,
+            List<AnalysisFieldMeta> Fields,
+            string? IdentityKey);
+
+        /// <summary>
+        /// 共用準備流程：Resolve → CheckAccess → CreateAndBindVm → GetAnalysisFields →
+        /// policy filter → GetSearchQuery → ValidateDimensionHierarchies。
+        /// 若任一步驟失敗，設定 <paramref name="ctx"/> 為 null 並回傳對應的錯誤 IActionResult；
+        /// 否則回傳 null，ctx 為已填妥的準備結果。
+        /// </summary>
+        private IActionResult? TryPrepareContext(AnalysisQueryRequest req, out PreparedAnalysisContext? ctx)
+        {
+            ctx = null;
+
+            Type vmType;
+            try { vmType = _registry.Resolve(req.ListVmType); }
+            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+
+            if (!CheckAccess(vmType)) return Forbid();
+
+            BaseVM vm;
+            try { vm = CreateAndBindVm(vmType, req.SearcherFormData); }
+            catch (Exception ex) when (ex is InvalidOperationException || ex is JsonException)
+            {
+                return BadRequest(ex.Message);
+            }
+
+            var fields = InvokeGetAnalysisFields(vm, vmType);
+            if (_fieldPolicy != null)
+            {
+                fields = _fieldPolicy.Filter(fields, HttpContext?.User ?? new System.Security.Claims.ClaimsPrincipal()).ToList();
+            }
+
+            var baseQuery = InvokeGetSearchQuery(vm, vmType);
+            if (baseQuery == null) return BadRequest("無法取得查詢來源。");
+
+            var hierarchyError = ValidateDimensionHierarchies(req.DimensionHierarchies, fields);
+            if (hierarchyError != null) return BadRequest(hierarchyError);
+
+            string? identityKey = Wtm?.LoginUserInfo != null ? $"{Wtm.LoginUserInfo.CurrentTenant}_{Wtm.LoginUserInfo.UserId}" : null;
+
+            ctx = new PreparedAnalysisContext(baseQuery, fields.ToList(), identityKey);
+            return null;
+        }
 
         private bool CheckAccess(Type vmType)
         {
