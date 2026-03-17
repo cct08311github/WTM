@@ -380,7 +380,7 @@
                 pivotEnabled: false, pivotDim: null,
                 dims: [], msrs: [], dimHierarchies: {},
                 sortableInstances: {},
-                lastResult: null, lastReq: null, lastDimFields: null
+                lastResult: null, lastReq: null, lastDimFields: null, lastChartType: null
             };
         }
 
@@ -1209,9 +1209,11 @@
             return { fieldName: d, isDate: f ? f.isDate === true : false };
         });
         var chartType = forceChartType || detectChartType(dimMeta, req.measures);
+        // Persist effective chart type so exportData honours the user's manual selection (#479)
+        var st = _state[gridId];
+        if (st) st.lastChartType = chartType;
 
         // Build measure key → display label map for human-friendly legends
-        var st = _state[gridId];
         var fieldByName = {};
         if (st && st.fields) {
             st.fields.forEach(function (f) { fieldByName[f.fieldName] = f; });
@@ -1521,7 +1523,7 @@
         var dimMeta = dims.map(function (d) {
             return (st.fields || []).find(function (f) { return f.fieldName === d; }) || { isDate: false };
         });
-        var currentChartType = detectChartType(dimMeta, msrs);
+        var currentChartType = (st && st.lastChartType) || detectChartType(dimMeta, msrs);
         var endpoint = isPivot ? '/_analysis/pivot/export' : '/_analysis/export';
         return fetch(endpoint + '?format=' + encodeURIComponent(format) + '&includeChart=' + includeChart + '&chartType=' + encodeURIComponent(currentChartType), {
             method: 'POST',

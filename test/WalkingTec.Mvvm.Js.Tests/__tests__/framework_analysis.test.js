@@ -1903,7 +1903,8 @@ describe('drill-down integration', () => {
         const { drillBar } = setupDrillState('dd8', env);
 
         env.wa.drillDown('dd8', 'Region', '華東', false);
-        env.wa.drillDown('dd8', 'Region', '上海', false);
+        // Second drill uses a different field (City) — guard blocks same-field repeated drill
+        env.wa.drillDown('dd8', 'City', '上海', false);
 
         expect(drillBar._children[0].textContent).toBe('全部 > 華東 > 上海');
     });
@@ -3345,7 +3346,8 @@ describe('[cov] waReq drillDown/drillBack/drillReset — lines 1291-1416 #307', 
         const { drillBar, st } = setupDrillCovState('covDC307e');
         global.fetch = jest.fn().mockResolvedValue({ ok: false, text: jest.fn().mockResolvedValue('e') });
         waReq.drillDown('covDC307e', 'Region', '華東', false);
-        waReq.drillDown('covDC307e', 'Region', '上海', false);
+        // Second drill uses a different field (City) — guard blocks same-field repeated drill
+        waReq.drillDown('covDC307e', 'City', '上海', false);
         expect(st.drillStack.length).toBe(2);
         global.fetch.mockClear();
         waReq.drillReset('covDC307e');
@@ -3362,7 +3364,8 @@ describe('[cov] waReq drillDown/drillBack/drillReset — lines 1291-1416 #307', 
         const { drillBar } = setupDrillCovState('covUDB307a');
         global.fetch = jest.fn().mockResolvedValue({ ok: false, text: jest.fn().mockResolvedValue('e') });
         waReq.drillDown('covUDB307a', 'Region', '華東', false);
-        waReq.drillDown('covUDB307a', 'Region', '上海', false);
+        // Second drill uses a different field (City) — guard blocks same-field repeated drill
+        waReq.drillDown('covUDB307a', 'City', '上海', false);
         const pathSpan = drillBar.querySelector('span');
         expect(pathSpan).toBeTruthy();
         expect(pathSpan.textContent).toBe('全部 > 華東 > 上海');
