@@ -2318,7 +2318,7 @@ describe('renderChart — dual Y-axis (#281)', () => {
         expect(capturedOptions[0].yAxis.length).toBe(2);
         expect(capturedOptions[0].yAxis[0].position).toBe('left');
         expect(capturedOptions[0].yAxis[1].position).toBe('right');
-        // #287: yAxis names must distinguish between measures (display name format, e.g. "Amount 合賈")
+        // #287: yAxis names must distinguish measures (production now uses display names)
         expect(capturedOptions[0].yAxis[0].name).toMatch(/^Amount/);
         expect(capturedOptions[0].yAxis[1].name).toMatch(/^Qty/);
     });
