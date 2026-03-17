@@ -94,8 +94,11 @@ namespace WalkingTec.Mvvm.Core.Test.VM
         [TestMethod]
         public void EscapeCsvCell_CarriageReturn_PrefixesTab()
         {
+            // \r triggers both formula-injection prefix and CSV quoting.
+            // Correct order: quote first, then prepend tab — tab must be outside the quotes.
             var result = Escape("\rmalicious");
-            Assert.IsTrue(result.StartsWith("\"") && result.Contains("\t\r"));
+            Assert.IsTrue(result.StartsWith("\t"), "Tab prefix must be outside quotes");
+            Assert.IsTrue(result.Contains("\"\r"), "\\r must be inside the quoted section");
         }
 
         // ─── RFC 4180 Quoting ────────────────────────────────────────

@@ -443,17 +443,18 @@ namespace WalkingTec.Mvvm.Mvc
             if (val == null) return "";
             var s = val;
             bool needsPrefix = s.StartsWith("=") || s.StartsWith("+") || s.StartsWith("-") || s.StartsWith("@") || s.StartsWith("\t") || s.StartsWith("\r");
+            // Quote first (checking original string), then prepend tab prefix so the
+            // tab lands outside the quotes — "\t\"=1,2\"" not "\"\t=1,2\"".
+            if (s.Contains(",") || s.Contains("\"") || s.Contains("\n") || s.Contains("\r"))
+            {
+                s = "\"" + s.Replace("\"", "\"\"") + "\"";
+            }
 
             if (needsPrefix)
             {
                 s = "\t" + s;
             }
 
-            if (s.Contains(",") || s.Contains("\"") || s.Contains("\n") || s.Contains("\r"))
-            {
-                s = "\"" + s.Replace("\"", "\"\"") + "\"";
-            }
-            
             return s;
         }
 
