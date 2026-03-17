@@ -580,6 +580,147 @@ docker compose -f test/docker-compose.etl-test.yml down -v
 
 ---
 
+## 多來源合併最佳實踐
+
+`EtlPipelineExecutor` 設計為**單一來源**（one `IEtlSource`），不提供內建的多來源合併 API。需要合併來自多個資料庫的資料（例如多幣別損益：ERP + 外匯系統 + 銀行系統），應使用**多個獨立 ETL Job 寫入同一目標表**的方式。
+
+### 架構模式：多 Job → 同一目標表
+
+```
+ETL Job A (MSSQL ERP)  ─┐
+ETL Job B (Oracle FX)  ──► Target.FinancialTx (upsert by BusinessKey)
+ETL Job C (MSSQL Bank) ─┘
+```
+
+每個 Job 有獨立的 `EtlJobDefinition`，各自管理 Watermark，透過 `MergeKeyColumn` upsert 到同一目標表。
+
+### 設定範例（多幣別損益）
+
+```json
+[
+  {
+    "JobCode": "erp_fx_jpy",
+    "SourceCsKey": "ErpDb",
+    "SourceDbType": "SqlServer",
+    "TargetCsKey": "DataWarehouse",
+    "TargetTable": "FinancialTx",
+    "ExtractSql": "SELECT TxId, Amount, Currency='JPY', UpdatedAt FROM erp.JpyTx WHERE UpdatedAt > @watermark",
+    "WatermarkType": "Timestamp",
+    "WatermarkColumn": "UpdatedAt",
+    "MergeKeyColumn": "TxId",
+    "BatchSize": 50000
+  },
+  {
+    "JobCode": "fx_rates",
+    "SourceCsKey": "FxDb",
+    "SourceDbType": "SqlServer",
+    "TargetCsKey": "DataWarehouse",
+    "TargetTable": "FxRate",
+    "ExtractSql": "SELECT RateId, FromCcy, ToCcy, Rate, RateDate FROM fx.DailyRates WHERE RateDate > @watermark",
+    "WatermarkType": "Timestamp",
+    "WatermarkColumn": "RateDate",
+    "MergeKeyColumn": "RateId",
+    "BatchSize": 10000
+  },
+  {
+    "JobCode": "bank_statements",
+    "SourceCsKey": "BankDb",
+    "SourceDbType": "Oracle",
+    "TargetCsKey": "DataWarehouse",
+    "TargetTable": "FinancialTx",
+    "ExtractSql": "SELECT StmtId AS TxId, Amount, Currency, UpdatedAt FROM BANK.STATEMENTS WHERE UpdatedAt > :watermark",
+    "WatermarkType": "Timestamp",
+    "WatermarkColumn": "UpdatedAt",
+    "MergeKeyColumn": "TxId",
+    "BatchSize": 10000
+  }
+]
+```
+
+### 關鍵設計原則
+
+#### 1. Watermark 隔離
+
+每個 Job 有獨立的 `EtlJobDefinition.LastWatermark`，互不干擾。ERP Job 的 watermark 不影響 FX Job，確保增量同步正確。
+
+#### 2. MergeKeyColumn 必須為業務 Key
+
+寫入同一目標表時，`MergeKeyColumn` 必須是**全域唯一的業務主鍵**（例如 `TxId`），而非 DB 自增 ID（各來源 DB 的自增 ID 必然衝突）。
+
+```sql
+-- 建議在目標表的 MergeKeyColumn 上建索引以加速 MERGE
+CREATE UNIQUE INDEX IX_FinancialTx_TxId ON FinancialTx (TxId);
+```
+
+#### 3. 執行順序與依賴
+
+若下游報表需要所有來源資料一致，建議：
+- 使用 Quartz Job 的 `[DisallowConcurrentExecution]` 避免同一 Job 重疊執行
+- 透過 Quartz 的 `JobChainingJobListener` 或排程時間錯開，確保 FX 匯率表在損益計算前已完成
+
+```csharp
+// 透過排程錯開（簡單方案）
+// erp_fx_jpy: 每天 02:00
+// fx_rates:   每天 01:00（先跑匯率）
+// bank_statements: 每天 03:00
+```
+
+#### 4. 跨 DB 型別（MSSQL + Oracle）
+
+各 Job 獨立指定 `SourceDbType`，框架會自動選擇 `MssqlSource` 或 `OracleSource`。目標表統一寫入 `DataWarehouse`（通常是 MSSQL 或 PostgreSQL）。
+
+```
+MSSQL ERP → MssqlSource → SqlBulkLoader → DataWarehouse
+Oracle Bank → OracleSource → SqlBulkLoader → DataWarehouse
+```
+
+### 多 Job 寫入同一目標表的 Watermark 驗證
+
+ETL 框架的 `WatermarkStrategy` 基於 `EtlJobDefinition.LastWatermark`，各 Job 記錄各自的最新 watermark：
+
+```csharp
+// Job A 完成後，只更新 Job A 的 LastWatermark
+// Job B 完成後，只更新 Job B 的 LastWatermark
+// 兩者不互相影響
+```
+
+若需要驗證多 Job 寫入後目標表的完整性，可在 Analysis Mode 的 ListVM 中設定對 `FinancialTx` 的查詢，一次顯示所有來源的合併結果。
+
+### 何時考慮自訂 `IEtlSource`
+
+若多來源需要**即時 JOIN**（非 append/upsert），可實作 `IEtlSource` 自訂合併邏輯：
+
+```csharp
+public class MultiCurrencyPnlSource : IEtlSource
+{
+    private readonly string _erpCs;
+    private readonly string _fxCs;
+
+    public MultiCurrencyPnlSource(string erpCs, string fxCs)
+    {
+        _erpCs = erpCs;
+        _fxCs = fxCs;
+    }
+
+    public async Task<DataTable> FetchAsync(EtlPipelineConfig config, WatermarkStrategy watermark, CancellationToken ct)
+    {
+        // 1. 從 ERP 取交易
+        var txTable = await FetchFromErpAsync(config, watermark, ct);
+        // 2. 從 FX 取今日匯率
+        var fxTable = await FetchFromFxAsync(ct);
+        // 3. 在記憶體中 JOIN / 換算
+        return MergeAndConvert(txTable, fxTable);
+    }
+
+    // ... 實作細節
+}
+```
+
+**注意**：自訂 Source 的 `FetchAsync` 在記憶體中 JOIN，適合資料量小（< 10 萬列）的場景。大量資料建議用多 Job 方式。
+
+
+---
+
 ## 故障排除
 
 ### 常見錯誤
