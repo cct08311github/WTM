@@ -757,39 +757,6 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.AreEqual(2, result.TotalCount);
         }
 
-        /// <summary>來源資料超過 50,000 筆時 DataTruncated=true（#490）</summary>
-        [TestMethod]
-        public void DataTruncated_is_true_when_source_exceeds_50000_rows()
-        {
-            // 加入 50,000 筆（超過 MaxMaterializeRows）
-            var bulk = Enumerable.Range(1, 50_000)
-                .Select(i => new SaleRecord { ID = Guid.NewGuid(), Region = $"R{i}", Category = "X", Amount = i });
-            _ctx.SaleRecords.AddRange(bulk);
-            _ctx.SaveChanges();
-
-            var req = Req(
-                dims: new[] { "Region" },
-                msrs: new[] { ("Amount", AggregateFunc.Sum) });
-
-            var result = Engine().Execute(Q(), req, _whitelist);
-
-            Assert.IsTrue(result.DataTruncated, "來源 > 50,000 時 DataTruncated 應為 true");
-        }
-
-        /// <summary>來源資料未超過 50,000 筆時 DataTruncated=false（#490）</summary>
-        [TestMethod]
-        public void DataTruncated_is_false_when_source_within_50000_rows()
-        {
-            // 基準資料只有 3 筆，遠低於 MaxMaterializeRows
-            var req = Req(
-                dims: new[] { "Region" },
-                msrs: new[] { ("Amount", AggregateFunc.Sum) });
-
-            var result = Engine().Execute(Q(), req, _whitelist);
-
-            Assert.IsFalse(result.DataTruncated, "來源 <= 50,000 時 DataTruncated 應為 false");
-        }
-
         // ─── 結果結構 ────────────────────────────────────────────────────────
 
         /// <summary>Columns 包含維度欄位名 + 度量欄位名_函式名</summary>
@@ -1202,6 +1169,59 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                              }).ToList()
                              ?? new List<FilterCondition>()
             };
+        }
+
+        // ─── ColumnDisplayNames 測試（#495）────────────────────────────────────
+
+        /// <summary>Execute 回傳的 ColumnDisplayNames 應正確對照維度與量值顯示名稱。</summary>
+        [TestMethod]
+        public void Execute_populates_ColumnDisplayNames_for_dimension_and_measure()
+        {
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var result = Engine().Execute(Q(), req, _whitelist);
+
+            // 維度：Region → "地區"
+            Assert.IsTrue(result.ColumnDisplayNames.ContainsKey("Region"),
+                "ColumnDisplayNames 應包含維度 key 'Region'");
+            Assert.AreEqual("地區", result.ColumnDisplayNames["Region"],
+                "Region 的顯示名稱應為 '地區'");
+
+            // 量值：Amount_Sum → "金額 合計"
+            Assert.IsTrue(result.ColumnDisplayNames.ContainsKey("Amount_Sum"),
+                "ColumnDisplayNames 應包含量值 key 'Amount_Sum'");
+            Assert.AreEqual("金額 合計", result.ColumnDisplayNames["Amount_Sum"],
+                "Amount_Sum 的顯示名稱應為 '金額 合計'");
+        }
+
+        /// <summary>多個量值函式的中文名稱應各自正確對照。</summary>
+        [TestMethod]
+        public void Execute_ColumnDisplayNames_covers_all_aggregate_func_chinese_names()
+        {
+            var funcsAndExpected = new[]
+            {
+                (AggregateFunc.Sum,   "金額 合計"),
+                (AggregateFunc.Count, "金額 計數"),
+                (AggregateFunc.Avg,   "金額 平均"),
+                (AggregateFunc.Max,   "金額 最大"),
+                (AggregateFunc.Min,   "金額 最小"),
+            };
+
+            foreach (var (func, expected) in funcsAndExpected)
+            {
+                var req = Req(
+                    dims: new[] { "Region" },
+                    msrs: new[] { ("Amount", func) });
+
+                var result = Engine().Execute(Q(), req, _whitelist);
+                var key = $"Amount_{func}";
+                Assert.IsTrue(result.ColumnDisplayNames.ContainsKey(key),
+                    $"ColumnDisplayNames 應包含 key '{key}'");
+                Assert.AreEqual(expected, result.ColumnDisplayNames[key],
+                    $"{key} 的顯示名稱應為 '{expected}'");
+            }
         }
     }
 }

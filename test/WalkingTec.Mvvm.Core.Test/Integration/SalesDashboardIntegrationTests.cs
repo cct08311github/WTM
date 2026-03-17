@@ -411,12 +411,14 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
             var sheet = wb.GetSheetAt(0);
             var headerRow = sheet.GetRow(0);
 
-            // Excel header row must match result.Columns in exact order
+            // Excel header row must use display names when available (#495)
             for (int i = 0; i < result.Columns.Count; i++)
             {
+                var colKey = result.Columns[i];
+                var expectedHeader = result.ColumnDisplayNames.TryGetValue(colKey, out var dn) ? dn : colKey;
                 var cellVal = headerRow.GetCell(i)?.StringCellValue ?? string.Empty;
-                Assert.AreEqual(result.Columns[i], cellVal,
-                    $"Excel header column {i} should be '{result.Columns[i]}' but was '{cellVal}'");
+                Assert.AreEqual(expectedHeader, cellVal,
+                    $"Excel header column {i} should be '{expectedHeader}' but was '{cellVal}'");
             }
 
             Assert.AreEqual(result.Columns.Count, headerRow.LastCellNum,

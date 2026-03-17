@@ -44,12 +44,14 @@ namespace WalkingTec.Mvvm.Core.Analysis
             var numericFormat = workbook.CreateDataFormat();
             numericStyle.DataFormat = numericFormat.GetFormat("#,##0.00");
 
-            // ── Header row — write original column names without unit decoration ──
+            // ── Header row — use display names when available ─────────────────────
             var header = sheet.CreateRow(0);
             for (int i = 0; i < result.Columns.Count; i++)
             {
+                var col = result.Columns[i];
+                var headerText = result.ColumnDisplayNames.TryGetValue(col, out var dn) ? dn : col;
                 var cell = header.CreateCell(i);
-                cell.SetCellValue(result.Columns[i]);
+                cell.SetCellValue(headerText);
                 cell.CellStyle = headerStyle;
             }
 
@@ -102,7 +104,9 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 }
                 catch
                 {
-                    int headerLen = result.Columns[i].Length;
+                    var colKey = result.Columns[i];
+                    var headerLabel = result.ColumnDisplayNames.TryGetValue(colKey, out var dn2) ? dn2 : colKey;
+                    int headerLen = headerLabel.Length;
                     sheet.SetColumnWidth(i, Math.Min(Math.Max(headerLen * 512, 3000), MaxColumnWidth));
                 }
                 if (sheet.GetColumnWidth(i) > MaxColumnWidth)

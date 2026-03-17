@@ -82,6 +82,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 truncated = true;
             }
 
+            var displayNames = BuildColumnDisplayNames(req, wl);
+
             var response = new AnalysisQueryResponse
             {
                 Columns = req.Dimensions.Concat(req.Measures.Select(m => $"{m.Field}_{m.Func}")).ToList(),
@@ -89,7 +91,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 TotalCount = totalCount,
                 Truncated = truncated,
                 DataTruncated = dataTruncated,
-                QueryHash = queryHash
+                QueryHash = queryHash,
+                ColumnDisplayNames = displayNames
             };
 
             _cache?.Set(queryHash, response, _defaultTtl);
@@ -445,6 +448,50 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         row[kvp.Key] = display;
                 }
             }
+        }
+
+        /// <summary>
+        /// 聚合函式名稱的中文對照（用於匯出標頭）。
+        /// </summary>
+        private static readonly Dictionary<AggregateFunc, string> _funcDisplayNames = new()
+        {
+            { AggregateFunc.Sum,   "合計" },
+            { AggregateFunc.Count, "計數" },
+            { AggregateFunc.Avg,   "平均" },
+            { AggregateFunc.Max,   "最大" },
+            { AggregateFunc.Min,   "最小" },
+        };
+
+        /// <summary>
+        /// 建立欄位 key → 使用者友善顯示名稱的對照表。
+        /// </summary>
+        private static Dictionary<string, string> BuildColumnDisplayNames(
+            AnalysisQueryRequest req,
+            Dictionary<string, AnalysisFieldMeta> wl)
+        {
+            var map = new Dictionary<string, string>();
+
+            // 維度欄位
+            foreach (var dim in req.Dimensions)
+            {
+                var displayName = wl.TryGetValue(dim, out var meta) && !string.IsNullOrEmpty(meta.DisplayName)
+                    ? meta.DisplayName
+                    : dim;
+                map[dim] = displayName;
+            }
+
+            // 量值欄位
+            foreach (var m in req.Measures)
+            {
+                var key = $"{m.Field}_{m.Func}";
+                var fieldDisplay = wl.TryGetValue(m.Field, out var meta) && !string.IsNullOrEmpty(meta.DisplayName)
+                    ? meta.DisplayName
+                    : m.Field;
+                var funcDisplay = _funcDisplayNames.TryGetValue(m.Func, out var fd) ? fd : m.Func.ToString();
+                map[key] = $"{fieldDisplay} {funcDisplay}";
+            }
+
+            return map;
         }
 
         private static string ComputeHash(AnalysisQueryRequest req, string? identityKey = null)

@@ -648,5 +648,56 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.IsNotNull(sheet, "Analysis 工作表應仍存在");
             Assert.AreEqual("Region", sheet.GetRow(0).GetCell(0).StringCellValue);
         }
+
+        // ─── ColumnDisplayNames 標頭測試（#495）───────────────────────────────
+
+        /// <summary>有 ColumnDisplayNames 時，Excel 標頭應使用顯示名稱而非原始 key。</summary>
+        [TestMethod]
+        public void Export_uses_display_names_in_header_when_ColumnDisplayNames_populated()
+        {
+            var resp = new AnalysisQueryResponse
+            {
+                Columns = new List<string> { "Region", "Amount_Sum" },
+                Rows = new List<Dictionary<string, object?>>
+                {
+                    new Dictionary<string, object?> { ["Region"] = "華東", ["Amount_Sum"] = 100m }
+                },
+                TotalCount = 1,
+                Truncated = false,
+                QueryHash = "0000000000000000",
+                ColumnDisplayNames = new Dictionary<string, string>
+                {
+                    ["Region"] = "地區",
+                    ["Amount_Sum"] = "金額 合計"
+                }
+            };
+
+            var wb = OpenWorkbook(AnalysisExcelExporter.Export(resp));
+            var sheet = wb.GetSheet("Analysis");
+            var headerRow = sheet.GetRow(0);
+
+            Assert.AreEqual("地區",      headerRow.GetCell(0).StringCellValue, "第一欄標頭應為 '地區'");
+            Assert.AreEqual("金額 合計", headerRow.GetCell(1).StringCellValue, "第二欄標頭應為 '金額 合計'");
+        }
+
+        /// <summary>ColumnDisplayNames 為空時，Excel 標頭應 fallback 回原始 key（向後相容）。</summary>
+        [TestMethod]
+        public void Export_falls_back_to_column_key_when_ColumnDisplayNames_empty()
+        {
+            var resp = MakeResponse(
+                new List<string> { "Region", "Amount_Sum" },
+                new List<Dictionary<string, object?>>
+                {
+                    new Dictionary<string, object?> { ["Region"] = "華東", ["Amount_Sum"] = 100m }
+                });
+            // ColumnDisplayNames 預設為空 Dictionary
+
+            var wb = OpenWorkbook(AnalysisExcelExporter.Export(resp));
+            var sheet = wb.GetSheet("Analysis");
+            var headerRow = sheet.GetRow(0);
+
+            Assert.AreEqual("Region",     headerRow.GetCell(0).StringCellValue, "無 displayName 時應保留原始 key");
+            Assert.AreEqual("Amount_Sum", headerRow.GetCell(1).StringCellValue, "無 displayName 時應保留原始 key");
+        }
     }
 }

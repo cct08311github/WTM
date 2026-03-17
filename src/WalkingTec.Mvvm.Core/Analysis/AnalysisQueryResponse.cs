@@ -28,5 +28,13 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
         /// <summary>Phase 2 快取識別用，目前留空。</summary>
         public string QueryHash { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 欄位 key（Columns 中的值）到使用者友善顯示名稱的對照表。
+        /// 維度：key = 欄位名稱，value = DisplayName（如 "地區"）。
+        /// 量值：key = "Field_Func"（如 "Amount_Sum"），value = "DisplayName 合計"（如 "金額 合計"）。
+        /// 匯出標頭應優先使用此表；key 不存在時 fallback 回 column key 本身。
+        /// </summary>
+        public Dictionary<string, string> ColumnDisplayNames { get; set; } = new Dictionary<string, string>();
     }
 }

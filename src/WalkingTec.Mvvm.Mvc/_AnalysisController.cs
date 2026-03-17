@@ -390,7 +390,8 @@ namespace WalkingTec.Mvvm.Mvc
                 sb.AppendLine($"已截斷,{(result.Truncated ? "是" : "否")}");
                 sb.AppendLine();
             }
-            sb.AppendLine(string.Join(",", result.Columns));
+            sb.AppendLine(string.Join(",", result.Columns.Select(c =>
+                result.ColumnDisplayNames.TryGetValue(c, out var dn) ? dn : c)));
             foreach (var row in result.Rows)
             {
                 var values = result.Columns.Select(c =>

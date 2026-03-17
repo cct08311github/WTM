@@ -357,10 +357,10 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.IsNotNull(result);
 
             var csv = Encoding.UTF8.GetString(result.FileContents);
-            // 第一行為 header
+            // 第一行為 header，應使用 display names（#495）
             var header = csv.Split('\n')[0].TrimEnd('\r');
-            Assert.IsTrue(header.Contains("Region"), "header 應包含 Region");
-            Assert.IsTrue(header.Contains("Amount_Sum"), "header 應包含 Amount_Sum");
+            Assert.IsTrue(header.Contains("地區"), "header 應包含維度顯示名稱 '地區'");
+            Assert.IsTrue(header.Contains("金額 合計"), "header 應包含量值顯示名稱 '金額 合計'");
         }
 
         // ─── CSV 公式注入防護 ──────────────────────────────────────────────────
@@ -2102,8 +2102,8 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.IsTrue(lines[2].StartsWith("資料筆數,"), $"Line 2 應為資料筆數，實際：{lines[2]}");
             Assert.IsTrue(lines[3].StartsWith("已截斷,"), $"Line 3 應為已截斷，實際：{lines[3]}");
             Assert.AreEqual("", lines[4].Trim(), $"Line 4 應為空行，實際：{lines[4]}");
-            // Line 5 is column header
-            Assert.IsTrue(lines[5].Contains("Region"), $"Line 5 應包含欄位標頭，實際：{lines[5]}");
+            // Line 5 is column header — uses display names (#495)
+            Assert.IsTrue(lines[5].Contains("地區"), $"Line 5 應包含維度顯示名稱 '地區'，實際：{lines[5]}");
         }
 
         [TestMethod]
@@ -2133,8 +2133,8 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             var text = System.Text.Encoding.UTF8.GetString(raw, bom, raw.Length - bom);
             var lines = text.Split('\n');
 
-            // Default — first line is the column header
-            Assert.IsTrue(lines[0].Contains("Region"), $"預設 CSV 第 0 行應為欄位標頭，實際：{lines[0]}");
+            // Default — first line is the column header, uses display names (#495)
+            Assert.IsTrue(lines[0].Contains("地區"), $"預設 CSV 第 0 行應為欄位顯示名稱標頭，實際：{lines[0]}");
         }
 
         [TestMethod]
