@@ -2588,10 +2588,11 @@ describe('#293 renderTable — 欄位標頭人性化 + 數值千分位', () => {
                 rows: [{ Cnt_Count: 5, Price_Avg: 100.5, Price_Max: 200, Price_Min: 50 }]
             }, container, {});
             const ths = Array.from(container.querySelectorAll('th')).map(t => t.textContent);
+            // Each measure column is followed by a % column (#487), so indices are every 2
             expect(ths[0]).toBe('計數欄 計數');
-            expect(ths[1]).toBe('價格 平均');
-            expect(ths[2]).toBe('價格 最大');
-            expect(ths[3]).toBe('價格 最小');
+            expect(ths[2]).toBe('價格 平均');
+            expect(ths[4]).toBe('價格 最大');
+            expect(ths[6]).toBe('價格 最小');
             idSpy.mockRestore();
             global.fetch = fetchOrig;
         });
@@ -2888,6 +2889,152 @@ describe('#298 Ad-hoc filter UI', () => {
         const opValues = Array.from(opSel.options).map(o => o.value);
         expect(opValues).toEqual(['Eq', 'NotEq', 'Gt', 'Gte', 'Lt', 'Lte', 'Contains', 'NotContains', 'In', 'NotIn']);
         idSpy.mockRestore();
+    });
+});
+
+// ─── #487: renderTable % share column ────────────────────────────────────────
+describe('#487 renderTable — % 佔比欄位', () => {
+    function setupGridWithFields(gridId, vmName, fields) {
+        const panel = document.createElement('div');
+        panel.id = 'analysis-panel-' + gridId;
+        const fetchOrig = global.fetch;
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: true,
+            json: jest.fn().mockResolvedValue(fields)
+        });
+        const idSpy = jest.spyOn(document, 'getElementById').mockImplementation(id =>
+            id === 'analysis-panel-' + gridId ? panel : null
+        );
+        waReq.toggle(gridId, vmName);
+        return new Promise(r => setTimeout(r, 50)).then(() => {
+            idSpy.mockRestore();
+            global.fetch = fetchOrig;
+        });
+    }
+
+    test('每個度量欄位後插入 % 標頭', () => {
+        const gridId = 'pct487a';
+        return setupGridWithFields(gridId, 'VmPct487a', [
+            { kind: 'Dimension', fieldName: 'Region', displayName: '地區', isDate: false, allowedFuncs: 0 },
+            { kind: 'Measure',   fieldName: 'Amount', displayName: '金額', allowedFuncs: 2 }
+        ]).then(() => {
+            const container = document.createElement('div');
+            waReq.renderTable(gridId, {
+                columns: ['Region', 'Amount_Sum'],
+                rows: [
+                    { Region: '華東', Amount_Sum: 500 },
+                    { Region: '華南', Amount_Sum: 300 },
+                    { Region: '華北', Amount_Sum: 200 }
+                ]
+            }, container, {});
+            const ths = Array.from(container.querySelectorAll('th')).map(t => t.textContent);
+            // 地區, 金額 合計, 金額 合計 %
+            expect(ths).toHaveLength(3);
+            expect(ths[0]).toBe('地區');
+            expect(ths[1]).toBe('金額 合計');
+            expect(ths[2]).toContain('%');
+        });
+    });
+
+    test('佔比數值計算正確（1位小數）', () => {
+        const gridId = 'pct487b';
+        return setupGridWithFields(gridId, 'VmPct487b', [
+            { kind: 'Dimension', fieldName: 'Region', displayName: '地區', isDate: false, allowedFuncs: 0 },
+            { kind: 'Measure',   fieldName: 'Amount', displayName: '金額', allowedFuncs: 2 }
+        ]).then(() => {
+            const container = document.createElement('div');
+            waReq.renderTable(gridId, {
+                columns: ['Region', 'Amount_Sum'],
+                rows: [
+                    { Region: '華東', Amount_Sum: 500 },
+                    { Region: '華南', Amount_Sum: 300 },
+                    { Region: '華北', Amount_Sum: 200 }
+                ]
+            }, container, {});
+            const pctCells = Array.from(container.querySelectorAll('.analysis-pct-cell'));
+            expect(pctCells[0].textContent).toBe('50.0%');
+            expect(pctCells[1].textContent).toBe('30.0%');
+            expect(pctCells[2].textContent).toBe('20.0%');
+        });
+    });
+
+    test('多個度量欄位各自獨立計算佔比', () => {
+        const gridId = 'pct487c';
+        return setupGridWithFields(gridId, 'VmPct487c', [
+            { kind: 'Dimension', fieldName: 'Region', displayName: '地區', isDate: false, allowedFuncs: 0 },
+            { kind: 'Measure',   fieldName: 'Amount', displayName: '金額', allowedFuncs: 2 },
+            { kind: 'Measure',   fieldName: 'Count',  displayName: '筆數', allowedFuncs: 1 }
+        ]).then(() => {
+            const container = document.createElement('div');
+            waReq.renderTable(gridId, {
+                columns: ['Region', 'Amount_Sum', 'Count_Count'],
+                rows: [
+                    { Region: '華東', Amount_Sum: 600, Count_Count: 3 },
+                    { Region: '華南', Amount_Sum: 400, Count_Count: 1 }
+                ]
+            }, container, {});
+            const pctCells = Array.from(container.querySelectorAll('.analysis-pct-cell'));
+            // Amount: 600/(600+400)=60%, 400/(600+400)=40%
+            // Count:  3/(3+1)=75%,       1/(3+1)=25%
+            expect(pctCells[0].textContent).toBe('60.0%');
+            expect(pctCells[1].textContent).toBe('75.0%');
+            expect(pctCells[2].textContent).toBe('40.0%');
+            expect(pctCells[3].textContent).toBe('25.0%');
+        });
+    });
+
+    test('維度欄位不插入 % 欄位', () => {
+        const gridId = 'pct487d';
+        return setupGridWithFields(gridId, 'VmPct487d', [
+            { kind: 'Dimension', fieldName: 'Region', displayName: '地區', isDate: false, allowedFuncs: 0 },
+            { kind: 'Measure',   fieldName: 'Amount', displayName: '金額', allowedFuncs: 2 }
+        ]).then(() => {
+            const container = document.createElement('div');
+            waReq.renderTable(gridId, {
+                columns: ['Region', 'Amount_Sum'],
+                rows: [{ Region: '華東', Amount_Sum: 100 }]
+            }, container, {});
+            const ths = Array.from(container.querySelectorAll('th')).map(t => t.textContent);
+            // 地區欄位後不應有 % 標頭
+            expect(ths[0]).toBe('地區');
+            expect(ths[0]).not.toContain('%');
+        });
+    });
+
+    test('總和為 0 時顯示 -', () => {
+        const gridId = 'pct487e';
+        return setupGridWithFields(gridId, 'VmPct487e', [
+            { kind: 'Dimension', fieldName: 'Region', displayName: '地區', isDate: false, allowedFuncs: 0 },
+            { kind: 'Measure',   fieldName: 'Amount', displayName: '金額', allowedFuncs: 2 }
+        ]).then(() => {
+            const container = document.createElement('div');
+            waReq.renderTable(gridId, {
+                columns: ['Region', 'Amount_Sum'],
+                rows: [{ Region: '華東', Amount_Sum: 0 }]
+            }, container, {});
+            const pctCells = Array.from(container.querySelectorAll('.analysis-pct-cell'));
+            expect(pctCells[0].textContent).toBe('-');
+        });
+    });
+
+    test('null 值的佔比欄位顯示 -', () => {
+        const gridId = 'pct487f';
+        return setupGridWithFields(gridId, 'VmPct487f', [
+            { kind: 'Dimension', fieldName: 'Region', displayName: '地區', isDate: false, allowedFuncs: 0 },
+            { kind: 'Measure',   fieldName: 'Amount', displayName: '金額', allowedFuncs: 2 }
+        ]).then(() => {
+            const container = document.createElement('div');
+            waReq.renderTable(gridId, {
+                columns: ['Region', 'Amount_Sum'],
+                rows: [
+                    { Region: '華東', Amount_Sum: 500 },
+                    { Region: '華南', Amount_Sum: null }
+                ]
+            }, container, {});
+            const pctCells = Array.from(container.querySelectorAll('.analysis-pct-cell'));
+            // null row → '-'
+            expect(pctCells[1].textContent).toBe('-');
+        });
     });
 });
 

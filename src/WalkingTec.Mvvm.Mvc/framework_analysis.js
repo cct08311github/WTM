@@ -1159,6 +1159,18 @@
             colLabelMap[col] = (dimMeta && (dimMeta.displayName || dimMeta.title)) || col;
         });
 
+        // ── Compute column totals for % share (measure columns only) ──────────
+        var colTotals = {};
+        result.columns.forEach(function (col) {
+            if (!msrColSet[col]) return;
+            var total = 0;
+            result.rows.forEach(function (row) {
+                var v = row[col];
+                if (typeof v === 'number' && isFinite(v)) total += v;
+            });
+            colTotals[col] = total;
+        });
+
         var table = document.createElement('table');
         table.className = 'layui-table';
         table.style.marginTop = '10px';
@@ -1168,6 +1180,13 @@
             var th = document.createElement('th');
             th.textContent = colLabelMap[col] || col;
             headerRow.appendChild(th);
+            if (msrColSet[col]) {
+                var thPct = document.createElement('th');
+                thPct.textContent = (colLabelMap[col] || col) + ' %';
+                thPct.className = 'analysis-pct-header';
+                thPct.style.cssText = 'color:#999;font-weight:normal;font-size:12px;';
+                headerRow.appendChild(thPct);
+            }
         });
         thead.appendChild(headerRow);
         table.appendChild(thead);
@@ -1189,6 +1208,18 @@
                     td.textContent = '-';
                 }
                 tr.appendChild(td);
+                if (msrColSet[col]) {
+                    var tdPct = document.createElement('td');
+                    var total = colTotals[col];
+                    if (total !== 0 && typeof val === 'number' && isFinite(val)) {
+                        tdPct.textContent = (val / total * 100).toFixed(1) + '%';
+                    } else {
+                        tdPct.textContent = '-';
+                    }
+                    tdPct.className = 'analysis-pct-cell';
+                    tdPct.style.cssText = 'color:#aaa;font-size:12px;';
+                    tr.appendChild(tdPct);
+                }
             });
             tbody.appendChild(tr);
         });
