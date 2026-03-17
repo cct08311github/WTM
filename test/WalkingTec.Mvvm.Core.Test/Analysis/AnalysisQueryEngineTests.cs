@@ -54,6 +54,20 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             public DbSet<SaleRecord> SaleRecords { get; set; }
         }
 
+        // ─── NullableChannel 測試模型（#481 NotIn null-row exclusion）────────────
+
+        private class NullableChannelRecord : TopBasePoco
+        {
+            [Dimension(DisplayName = "通路")] public SaleChannel? Channel { get; set; }
+            [Measure(AllowedFuncs = AggregateFunc.Count, DisplayName = "筆數")] public decimal Count { get; set; }
+        }
+
+        private class NullableChannelContext : DbContext
+        {
+            public NullableChannelContext(DbContextOptions opts) : base(opts) { }
+            public DbSet<NullableChannelRecord> Records { get; set; }
+        }
+
         // ─── CustomerTier 測試模型（#473 enum display-name filter）───────────────
 
         private class CustomerRecord : TopBasePoco
@@ -367,6 +381,44 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 filters: new[] { ("Amount", FilterOperator.NotContains, "100") });
 
             Assert.ThrowsException<InvalidOperationException>(() => Engine().Execute(Q(), req, _whitelist));
+        }
+
+        // ─── NotIn / Nullable<T> null-row exclusion (#481) ───────────────────────
+
+        [TestMethod]
+        public void Filter_NotIn_nullable_enum_excludes_null_rows()
+        {
+            // Regression: NOT (NOT_NULL AND CONTAINS) let null rows pass (#481).
+            // Expected: null rows are excluded, consistent with In / NotEq / SQL semantics.
+            var conn = new SqliteConnection("DataSource=:memory:");
+            conn.Open();
+            var ctx = new NullableChannelContext(
+                new DbContextOptionsBuilder<NullableChannelContext>().UseSqlite(conn).Options);
+            ctx.Database.EnsureCreated();
+            ctx.Records.AddRange(
+                new NullableChannelRecord { ID = Guid.NewGuid(), Channel = SaleChannel.Online,  Count = 1 },
+                new NullableChannelRecord { ID = Guid.NewGuid(), Channel = SaleChannel.Offline, Count = 1 },
+                new NullableChannelRecord { ID = Guid.NewGuid(), Channel = null,                Count = 1 }
+            );
+            ctx.SaveChanges();
+
+            var wl = AnalysisFieldScanner.ScanModel(typeof(NullableChannelRecord));
+            var req = Req(
+                dims: new[] { "Channel" },
+                msrs: new[] { ("Count", AggregateFunc.Count) },
+                filters: new[] { ("Channel", FilterOperator.NotIn, "Online") });
+
+            var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default)
+                .Execute(ctx.Records.AsQueryable(), req, wl);
+
+            // Offline row: included (not in list) ✓
+            Assert.IsTrue(result.Rows.Any(r => r["Channel"]?.ToString() == "Offline"),
+                "Offline 應包含在 NotIn Online 結果中");
+            // null row: must be excluded (#481)
+            Assert.IsFalse(result.Rows.Any(r => r["Channel"] == null || r["Channel"]?.ToString() == ""),
+                "null Channel 不應出現在 NotIn 結果中");
+
+            conn.Close();
         }
 
         // ─── SQL Injection 回歸保護 ────────────────────────────────────────────
@@ -912,7 +964,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.AreEqual(400m, Convert.ToDecimal(result.Rows[0]["Amount_Sum"]));
         }
 
-        /// <summary>Filter by invalid enum value → 400</summary>
+        /// <summary>Filter by invalid enum value → 400 with user-friendly message (#482)</summary>
         [TestMethod]
         public void Filter_Eq_enum_invalid_value_throws()
         {
@@ -922,6 +974,25 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 filters: new[] { ("Channel", FilterOperator.Eq, "InvalidChannel") });
 
             Assert.ThrowsException<InvalidOperationException>(() => Engine().Execute(Q(), req, _whitelist));
+        }
+
+        /// <summary>Invalid enum filter message is user-friendly and lists valid values (#482)</summary>
+        [TestMethod]
+        public void Filter_Eq_enum_invalid_value_message_contains_valid_values()
+        {
+            var req = Req(
+                dims: new[] { "Channel" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) },
+                filters: new[] { ("Channel", FilterOperator.Eq, "XXX") });
+
+            var ex = Assert.ThrowsException<InvalidOperationException>(() => Engine().Execute(Q(), req, _whitelist));
+            // Message should mention the field name
+            StringAssert.Contains(ex.Message, "Channel");
+            // Message should mention the invalid value
+            StringAssert.Contains(ex.Message, "XXX");
+            // Message should include at least one valid enum value ("Online" or "Offline")
+            Assert.IsTrue(ex.Message.Contains("Online") || ex.Message.Contains("Offline"),
+                "Error message should list valid enum values");
         }
 
         /// <summary>Enum dimension grouping works correctly</summary>

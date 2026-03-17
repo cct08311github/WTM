@@ -284,20 +284,27 @@ namespace WalkingTec.Mvvm.Core.Analysis
                             .MakeGenericMethod(underlyingType);
 
                         Expression propForIn = prop;
-                        Expression inExpr;
                         if (Nullable.GetUnderlyingType(targetType) != null)
                         {
                             propForIn = Expression.Property(prop, "Value");
-                            inExpr = Expression.AndAlso(
-                                Expression.NotEqual(prop, Expression.Constant(null, targetType)),
-                                Expression.Call(containsMethod, listConst, propForIn)
-                            );
+                            var nullGuard = Expression.NotEqual(prop, Expression.Constant(null, targetType));
+                            var containsExpr = Expression.Call(containsMethod, listConst, propForIn);
+                            if (f.Operator == FilterOperator.NotIn)
+                            {
+                                // NOT_NULL AND NOT_CONTAINS — keeps null rows excluded, consistent with
+                                // In / NotEq / Gt etc. and SQL semantics (NULL NOT IN … → excluded). (#481)
+                                filterExpr = Expression.AndAlso(nullGuard, Expression.Not(containsExpr));
+                            }
+                            else
+                            {
+                                filterExpr = Expression.AndAlso(nullGuard, containsExpr);
+                            }
                         }
                         else
                         {
-                            inExpr = Expression.Call(containsMethod, listConst, propForIn);
+                            var inExpr = Expression.Call(containsMethod, listConst, propForIn);
+                            filterExpr = f.Operator == FilterOperator.NotIn ? Expression.Not(inExpr) : inExpr;
                         }
-                        filterExpr = f.Operator == FilterOperator.NotIn ? Expression.Not(inExpr) : inExpr;
                     }
                     else if (f.Operator == FilterOperator.Contains || f.Operator == FilterOperator.NotContains)
                     {
@@ -342,7 +349,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 }
                 catch (Exception ex) when (!(ex is InvalidOperationException))
                 {
-                    throw new InvalidOperationException($"Failed to apply filter for field '{f.Field}': {ex.Message}", ex);
+                    throw new InvalidOperationException($"欄位 '{f.Field}' 的篩選條件無效：{ex.Message}", ex);
                 }
 
                 body = body == null ? filterExpr : Expression.AndAlso(body, filterExpr);
@@ -369,7 +376,11 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         if (((Enum)member).GetEnumDisplayName() == s)
                             return member;
                     }
-                    throw new ArgumentException($"Requested value '{s}' was not found.");
+                    var validNames = Enum.GetValues(targetType)
+                        .Cast<Enum>()
+                        .Select(m => m.GetEnumDisplayName() ?? m.ToString())
+                        .Distinct();
+                    throw new ArgumentException($"'{s}' 不是有效的列舉值。有效值：{string.Join("、", validNames)}");
                 }
                 return Enum.ToObject(targetType, value);
             }
