@@ -498,5 +498,129 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                     Convert.ToDecimal(engineRow["Amount_Sum"]));
             }
         }
+
+        // ─── Null-byte separator regression tests (#372) ──────────────────────
+
+        [TestMethod]
+        public void EncodeKeyPart_plain_string_returns_same_instance()
+        {
+            var s = "NorthEast";
+            Assert.AreSame(s, InProcessGroupByStrategy.EncodeKeyPart(s),
+                "無特殊字元時應回傳原始字串實例（無額外分配）");
+        }
+
+        [TestMethod]
+        public void EncodeKeyPart_escapes_null_byte()
+        {
+            Assert.AreEqual("A%00B", InProcessGroupByStrategy.EncodeKeyPart("A\0B"));
+        }
+
+        [TestMethod]
+        public void EncodeKeyPart_escapes_percent_sign()
+        {
+            Assert.AreEqual("100%25", InProcessGroupByStrategy.EncodeKeyPart("100%"));
+        }
+
+        [TestMethod]
+        public void EncodeKeyPart_escapes_both_percent_and_null_byte()
+        {
+            // "A%\0B" → escape % first → "A%25\0B" → escape \0 → "A%25%00B"
+            Assert.AreEqual("A%25%00B", InProcessGroupByStrategy.EncodeKeyPart("A%\0B"));
+        }
+
+        [TestMethod]
+        public void DecodeKeyPart_plain_string_returns_same_instance()
+        {
+            var s = "NorthEast";
+            Assert.AreSame(s, InProcessGroupByStrategy.DecodeKeyPart(s));
+        }
+
+        [TestMethod]
+        public void DecodeKeyPart_restores_null_byte()
+        {
+            Assert.AreEqual("A\0B", InProcessGroupByStrategy.DecodeKeyPart("A%00B"));
+        }
+
+        [TestMethod]
+        public void DecodeKeyPart_restores_percent_sign()
+        {
+            Assert.AreEqual("100%", InProcessGroupByStrategy.DecodeKeyPart("100%25"));
+        }
+
+        [TestMethod]
+        public void EncodeDecodeKeyPart_roundtrip_with_literal_percent00_string()
+        {
+            // 原始值字面上含 "%00"（不是 null byte），不應被錯誤解讀
+            var original = "CODE%00XY";
+            var encoded = InProcessGroupByStrategy.EncodeKeyPart(original);
+            var decoded = InProcessGroupByStrategy.DecodeKeyPart(encoded);
+            Assert.AreEqual(original, decoded, "含 %00 字面字串應正確往返編解碼");
+        }
+
+        [TestMethod]
+        public void Multi_dimension_with_null_byte_in_first_dimension_does_not_corrupt()
+        {
+            // 金融情境：商品代碼含 ETL 載入殘留的 \0（Oracle CHAR 填充等）
+            var data = new List<SaleRecord>
+            {
+                new SaleRecord { Region = "A\0B", Category = "North", Amount = 100m },
+                new SaleRecord { Region = "CD",   Category = "South", Amount = 200m }
+            };
+
+            var req = Req(
+                dims: new[] { "Region", "Category" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var rows = _strategy.Execute(data.AsQueryable(), req, _whitelist);
+
+            Assert.AreEqual(2, rows.Count, "應有 2 個分組");
+            var nullByteRow = rows.Single(r => r["Region"]?.ToString() == "A\0B");
+            Assert.AreEqual("North", nullByteRow["Category"]?.ToString(),
+                "含 \\0 的維度值不應導致 Category 欄位錯位");
+            Assert.AreEqual(100m, Convert.ToDecimal(nullByteRow["Amount_Sum"]));
+        }
+
+        [TestMethod]
+        public void Multi_dimension_with_null_byte_in_second_dimension_does_not_corrupt()
+        {
+            var data = new List<SaleRecord>
+            {
+                new SaleRecord { Region = "East", Category = "Cat\0A", Amount = 50m },
+                new SaleRecord { Region = "West", Category = "CatB",   Amount = 75m }
+            };
+
+            var req = Req(
+                dims: new[] { "Region", "Category" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var rows = _strategy.Execute(data.AsQueryable(), req, _whitelist);
+
+            Assert.AreEqual(2, rows.Count);
+            var nullByteRow = rows.Single(r => r["Category"]?.ToString() == "Cat\0A");
+            Assert.AreEqual("East", nullByteRow["Region"]?.ToString(),
+                "第二維度含 \\0 不應導致 Region 欄位錯位");
+        }
+
+        [TestMethod]
+        public void Single_dimension_with_null_byte_groups_correctly()
+        {
+            var data = new List<SaleRecord>
+            {
+                new SaleRecord { Region = "A\0B", Amount = 100m },
+                new SaleRecord { Region = "A\0B", Amount = 200m },
+                new SaleRecord { Region = "CD",   Amount = 300m }
+            };
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var rows = _strategy.Execute(data.AsQueryable(), req, _whitelist);
+
+            Assert.AreEqual(2, rows.Count, "A\\0B 應歸為同一分組");
+            var nullByteRow = rows.Single(r => r["Region"]?.ToString() == "A\0B");
+            Assert.AreEqual(300m, Convert.ToDecimal(nullByteRow["Amount_Sum"]),
+                "含 \\0 的單維度應正確聚合 100+200=300");
+        }
     }
 }
