@@ -29,7 +29,11 @@ namespace WalkingTec.Mvvm.Mvc
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
             PropertyNameCaseInsensitive = true,
-            Converters = { new DateTimeConverter() }
+            // NullableEnumStringConverterFactory: HTML form values are always strings.
+            // When a Nullable<TEnum> Searcher field is populated, the form sends "1" (numeric
+            // string) or "Card" (enum name). STJ cannot convert these without a custom converter.
+            // Fixes #471.
+            Converters = { new NullableEnumStringConverterFactory(), new DateTimeConverter() }
         };
 
         private readonly AnalysisVmRegistry _registry;
@@ -467,6 +471,61 @@ namespace WalkingTec.Mvvm.Mvc
             }
             
             return s;
+        }
+
+        /// <summary>
+        /// 處理 Nullable&lt;TEnum&gt; 反序列化：HTML form 一律送字串，
+        /// 接受 "1"（數字字串）、"Card"（enum 名稱）、數字 literal、null 或空字串。
+        /// </summary>
+        private class NullableEnumStringConverterFactory : JsonConverterFactory
+        {
+            public override bool CanConvert(Type typeToConvert)
+            {
+                var underlying = Nullable.GetUnderlyingType(typeToConvert);
+                return underlying?.IsEnum == true;
+            }
+
+            public override JsonConverter? CreateConverter(Type typeToConvert, JsonSerializerOptions options)
+            {
+                var underlying = Nullable.GetUnderlyingType(typeToConvert)!;
+                var converterType = typeof(NullableEnumStringConverter<>).MakeGenericType(underlying);
+                return (JsonConverter?)Activator.CreateInstance(converterType);
+            }
+        }
+
+        private class NullableEnumStringConverter<T> : JsonConverter<T?> where T : struct, Enum
+        {
+            public override T? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            {
+                if (reader.TokenType == JsonTokenType.Null) return null;
+
+                if (reader.TokenType == JsonTokenType.Number)
+                {
+                    if (reader.TryGetInt32(out int num)) return (T)(object)num;
+                }
+
+                if (reader.TokenType == JsonTokenType.String)
+                {
+                    var str = reader.GetString();
+                    if (string.IsNullOrEmpty(str)) return null;
+
+                    // Form sends integer string first ("1", "2") — most common case
+                    if (int.TryParse(str, out int n)) return (T)(object)n;
+
+                    // Fall back to enum name ("Card", "card")
+                    if (Enum.TryParse<T>(str, ignoreCase: true, out var val)) return val;
+
+                    throw new JsonException($"Cannot convert '{str}' to {typeof(T).Name}.");
+                }
+
+                throw new JsonException($"Unexpected token {reader.TokenType} for {typeof(T).Name}.");
+            }
+
+            public override void Write(Utf8JsonWriter writer, T? value, JsonSerializerOptions options)
+            {
+                if (value == null) writer.WriteNullValue();
+                else writer.WriteNumberValue(Convert.ToInt32(value));
+            }
         }
 
         /// <summary>
