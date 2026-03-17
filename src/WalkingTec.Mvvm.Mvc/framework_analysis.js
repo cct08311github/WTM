@@ -380,7 +380,8 @@
                 pivotEnabled: false, pivotDim: null,
                 dims: [], msrs: [], dimHierarchies: {},
                 sortableInstances: {},
-                lastResult: null, lastReq: null, lastDimFields: null, lastChartType: null
+                lastResult: null, lastReq: null, lastDimFields: null, lastChartType: null,
+                abortController: null
             };
         }
 
@@ -997,19 +998,37 @@
         if (resultSection) resultSection.style.display = '';
 
         var resultDiv = document.getElementById('analysis-result-' + gridId);
-        if (resultDiv) resultDiv.textContent = '查詢中...';
+
+        // 若有進行中的查詢，先取消
+        if (st.abortController) {
+            st.abortController.abort();
+            st.abortController = null;
+        }
+        var ac = new AbortController();
+        st.abortController = ac;
+
+        // 顯示計時 loading 狀態
+        if (resultDiv) resultDiv.textContent = '查詢中... 0s';
+        var elapsed = 0;
+        var timer = setInterval(function () {
+            elapsed++;
+            if (resultDiv) resultDiv.textContent = '查詢中... ' + elapsed + 's';
+        }, 1000);
 
         var endpoint = isPivot ? '/_analysis/pivot' : '/_analysis/query';
         fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(req)
+            body: JSON.stringify(req),
+            signal: ac.signal
         })
         .then(function (res) {
             if (!res.ok) return res.text().then(function (t) { throw new Error(t); });
             return res.json();
         })
         .then(function (result) {
+            clearInterval(timer);
+            st.abortController = null;
             if (!resultDiv) return;
             clearChildren(resultDiv);
 
@@ -1056,6 +1075,12 @@
 
         })
         .catch(function (err) {
+            clearInterval(timer);
+            st.abortController = null;
+            if (err.name === 'AbortError') {
+                if (resultDiv) resultDiv.textContent = '查詢已取消';
+                return;
+            }
             if (resultDiv) resultDiv.textContent = '查詢失敗：' + parseFriendlyError(err);
         });
     }
@@ -1492,17 +1517,36 @@
             searcherFormData: searcherJson
         };
         var resultDiv = document.getElementById('analysis-result-' + gridId);
-        if (resultDiv) resultDiv.textContent = '查詢中...';
+
+        // 若有進行中的查詢，先取消
+        if (st.abortController) {
+            st.abortController.abort();
+            st.abortController = null;
+        }
+        var ac = new AbortController();
+        st.abortController = ac;
+
+        // 顯示計時 loading 狀態
+        if (resultDiv) resultDiv.textContent = '查詢中... 0s';
+        var elapsed = 0;
+        var timer = setInterval(function () {
+            elapsed++;
+            if (resultDiv) resultDiv.textContent = '查詢中... ' + elapsed + 's';
+        }, 1000);
+
         fetch('/_analysis/query', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(req)
+            body: JSON.stringify(req),
+            signal: ac.signal
         })
         .then(function (res) {
             if (!res.ok) return res.text().then(function (t) { throw new Error(t); });
             return res.json();
         })
         .then(function (result) {
+            clearInterval(timer);
+            st.abortController = null;
             if (!resultDiv) return;
             clearChildren(resultDiv);
             if (result.dataTruncated) {
@@ -1533,6 +1577,12 @@
             renderChart(gridId, result, st.lastReq, dimFields, resultDiv);
         })
         .catch(function (err) {
+            clearInterval(timer);
+            st.abortController = null;
+            if (err.name === 'AbortError') {
+                if (resultDiv) resultDiv.textContent = '查詢已取消';
+                return;
+            }
             if (resultDiv) resultDiv.textContent = '查詢失敗：' + parseFriendlyError(err);
         });
     }
