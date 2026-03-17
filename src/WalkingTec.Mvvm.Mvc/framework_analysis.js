@@ -1209,13 +1209,15 @@
             return { fieldName: d, isDate: f ? f.isDate === true : false };
         });
         var chartType = forceChartType || detectChartType(dimMeta, req.measures);
+        // Persist effective chart type so exportData honours the user's manual selection (#479)
+        var st = _state[gridId];
+        if (st) st.lastChartType = chartType;
 
         // Persist the effective chart type so exportData can honour the user's selection (#479)
         var st = _state[gridId];
         if (st) st.lastChartType = chartType;
 
         // Build measure key → display label map for human-friendly legends
-        var st = _state[gridId];
         var fieldByName = {};
         if (st && st.fields) {
             st.fields.forEach(function (f) { fieldByName[f.fieldName] = f; });
