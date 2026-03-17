@@ -108,6 +108,23 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 => _testData.AsQueryable().OrderByDescending(x => x.ID);
         }
 
+        // ─── enum Dimension 模型（#516 allowedValues regression）─────────────────
+
+        private class EnumDimRecord : TopBasePoco
+        {
+            [Dimension(DisplayName = "付款方式")] public PaymentKind Channel { get; set; }
+            [Measure(AllowedFuncs = AggregateFunc.Count, DisplayName = "筆數")] public decimal Count { get; set; }
+        }
+
+        private static IList<EnumDimRecord> _enumDimData = new List<EnumDimRecord>();
+
+        [EnableAnalysis]
+        private class EnumDimListVM : BasePagedListVM<EnumDimRecord, BaseSearcher>
+        {
+            public override IOrderedQueryable<EnumDimRecord> GetSearchQuery()
+                => _enumDimData.AsQueryable().OrderByDescending(x => x.ID);
+        }
+
         // ─── 基礎設施 ──────────────────────────────────────────────────────────
 
         private AnalysisVmRegistry _registry;
@@ -875,6 +892,28 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             // Dimension 的 allowedFuncs 應為空陣列 []
             Assert.IsTrue(json.Contains("\"allowedFuncs\":[]"),
                 "Dimension 欄位的 allowedFuncs 應為空陣列");
+        }
+
+        /// <summary>
+        /// Regression #516: /meta endpoint must include allowedValues for enum Dimension fields.
+        /// Before fix, allowedValues was omitted from the anonymous object → always undefined in JS
+        /// → createValueInput() never rendered &lt;select&gt; for enum filter rows.
+        /// </summary>
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void GetMeta_enum_dimension_returns_non_empty_allowedValues()
+        {
+            var result = CreateController().GetMeta(typeof(EnumDimListVM).FullName) as OkObjectResult;
+            Assert.IsNotNull(result, "GetMeta 應回傳 200 OK");
+
+            var json = System.Text.Json.JsonSerializer.Serialize(result.Value);
+            // allowedValues 必須出現在回應中
+            Assert.IsTrue(json.Contains("allowedValues"),
+                "enum Dimension 欄位應包含 allowedValues key（#516）");
+            // PaymentKind 成員名稱應出現
+            Assert.IsTrue(json.Contains("Cash"),    "allowedValues 應包含 Cash");
+            Assert.IsTrue(json.Contains("Card"),    "allowedValues 應包含 Card");
+            Assert.IsTrue(json.Contains("Transfer"),"allowedValues 應包含 Transfer");
         }
 
         // ─── Multi-dimension + multi-measure happy path（#306） ───────────────
