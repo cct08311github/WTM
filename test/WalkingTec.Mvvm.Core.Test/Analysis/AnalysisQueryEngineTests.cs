@@ -757,6 +757,39 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.AreEqual(2, result.TotalCount);
         }
 
+        /// <summary>來源資料超過 50,000 筆時 DataTruncated=true（#490）</summary>
+        [TestMethod]
+        public void DataTruncated_is_true_when_source_exceeds_50000_rows()
+        {
+            // 加入 50,000 筆（超過 MaxMaterializeRows）
+            var bulk = Enumerable.Range(1, 50_000)
+                .Select(i => new SaleRecord { ID = Guid.NewGuid(), Region = $"R{i}", Category = "X", Amount = i });
+            _ctx.SaleRecords.AddRange(bulk);
+            _ctx.SaveChanges();
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var result = Engine().Execute(Q(), req, _whitelist);
+
+            Assert.IsTrue(result.DataTruncated, "來源 > 50,000 時 DataTruncated 應為 true");
+        }
+
+        /// <summary>來源資料未超過 50,000 筆時 DataTruncated=false（#490）</summary>
+        [TestMethod]
+        public void DataTruncated_is_false_when_source_within_50000_rows()
+        {
+            // 基準資料只有 3 筆，遠低於 MaxMaterializeRows
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var result = Engine().Execute(Q(), req, _whitelist);
+
+            Assert.IsFalse(result.DataTruncated, "來源 <= 50,000 時 DataTruncated 應為 false");
+        }
+
         // ─── 結果結構 ────────────────────────────────────────────────────────
 
         /// <summary>Columns 包含維度欄位名 + 度量欄位名_函式名</summary>
