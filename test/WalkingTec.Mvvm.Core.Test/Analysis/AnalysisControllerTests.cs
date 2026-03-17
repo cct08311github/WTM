@@ -1346,5 +1346,88 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                     $"重複 Category 維度不應超過 2 個分組，實際：{resp.Rows.Count}");
             }
         }
+
+        // ─── Pivot / PivotExport 守衛測試 ──────────────────────────────────────────
+        //
+        // Query 和 Export 已有 null → 400 及欄位白名單測試，但 Pivot/PivotExport 缺失同等覆蓋。
+
+        private static AnalysisPivotRequest PivotReq(
+            string[] dims,
+            string pivotDim,
+            (string field, AggregateFunc func)[] msrs = null)
+            => new AnalysisPivotRequest
+            {
+                ListVmType     = typeof(SaleRecordListVM).FullName,
+                Dimensions     = dims?.ToList() ?? new List<string>(),
+                PivotDimension = pivotDim,
+                Measures       = msrs?.Select(m => new MeasureRequest { Field = m.field, Func = m.func }).ToList()
+                                 ?? new List<MeasureRequest>()
+            };
+
+        [TestMethod]
+        public void Pivot_null_request_returns_400()
+        {
+            var result = CreateController().Pivot(null);
+            Assert.IsInstanceOfType(result, typeof(BadRequestObjectResult),
+                "Pivot null body 應回傳 400");
+        }
+
+        [TestMethod]
+        public void PivotExport_null_request_returns_400()
+        {
+            var result = CreateController().PivotExport(null);
+            Assert.IsInstanceOfType(result, typeof(BadRequestObjectResult),
+                "PivotExport null body 應回傳 400");
+        }
+
+        [TestMethod]
+        public void Pivot_returns_400_when_PivotDimension_not_in_dimensions_list()
+        {
+            // Region 在白名單，但 PivotDimension = "Category" 不在所選 Dimensions 中
+            var req = PivotReq(
+                dims:     new[] { "Region" },
+                pivotDim: "Category",
+                msrs:     new[] { ("Amount", AggregateFunc.Sum) });
+            var result = CreateController().Pivot(req);
+            Assert.IsInstanceOfType(result, typeof(BadRequestObjectResult),
+                "PivotDimension 不在 Dimensions 清單中應回傳 400");
+        }
+
+        [TestMethod]
+        public void Pivot_returns_400_for_invalid_pivot_dimension_field()
+        {
+            // "InvalidField" 不在模型白名單
+            var req = PivotReq(
+                dims:     new[] { "InvalidField" },
+                pivotDim: "InvalidField",
+                msrs:     new[] { ("Amount", AggregateFunc.Sum) });
+            var result = CreateController().Pivot(req);
+            Assert.IsInstanceOfType(result, typeof(BadRequestObjectResult),
+                "不在白名單中的維度欄位應回傳 400");
+        }
+
+        [TestMethod]
+        public void PivotExport_returns_400_when_PivotDimension_not_in_dimensions_list()
+        {
+            var req = PivotReq(
+                dims:     new[] { "Region" },
+                pivotDim: "Category",
+                msrs:     new[] { ("Amount", AggregateFunc.Sum) });
+            var result = CreateController().PivotExport(req);
+            Assert.IsInstanceOfType(result, typeof(BadRequestObjectResult),
+                "PivotExport：PivotDimension 不在 Dimensions 清單中應回傳 400");
+        }
+
+        [TestMethod]
+        public void PivotExport_returns_400_for_invalid_dimension_field()
+        {
+            var req = PivotReq(
+                dims:     new[] { "InvalidField" },
+                pivotDim: "InvalidField",
+                msrs:     new[] { ("Amount", AggregateFunc.Sum) });
+            var result = CreateController().PivotExport(req);
+            Assert.IsInstanceOfType(result, typeof(BadRequestObjectResult),
+                "PivotExport：不在白名單中的維度欄位應回傳 400");
+        }
     }
 }
