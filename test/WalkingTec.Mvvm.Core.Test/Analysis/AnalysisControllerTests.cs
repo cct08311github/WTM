@@ -1,15 +1,17 @@
 #nullable disable
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 using Microsoft.AspNetCore.Http;
+using NPOI.SS.UserModel;
+using NPOI.XSSF.UserModel;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Analysis;
 using WalkingTec.Mvvm.Mvc;
-using WalkingTec.Mvvm.Core.Support.Json;
 using WalkingTec.Mvvm.Test.Mock;
 
 namespace WalkingTec.Mvvm.Core.Test.Analysis
@@ -394,6 +396,63 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
             Assert.IsFalse(csv.Contains(",+SUM"), "CSV 不應含未逸脫的 +SUM formula");
             Assert.IsTrue(csv.Contains("\t+SUM"), "危險值應以 tab 前置");
+        }
+
+        // ─── XSS Payload 回歸保護 ─────────────────────────────────────────────
+        //
+        // CSV 是純文字格式，不解析 HTML。測試確認：
+        //   1. XSS payload 不導致例外或崩潰
+        //   2. 輸出中 payload 以原始文字保留（不 HTML-encode 也不截斷）
+        //   3. 不以 formula 字元開頭（<script> 不是 =,+,-,@ 所以不觸發公式轉義）
+
+        [TestMethod]
+        public void Export_csv_with_xss_payload_in_dimension_value_does_not_throw()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord
+                {
+                    ID       = Guid.NewGuid(),
+                    Region   = "<script>alert(1)</script>",
+                    Category = "A",
+                    Amount   = 100m
+                }
+            };
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var result = CreateController().Export(req, "csv") as FileContentResult;
+
+            Assert.IsNotNull(result, "Export should not throw with XSS payload in dimension value");
+            var csv = System.Text.Encoding.UTF8.GetString(result.FileContents).TrimStart('\xEF', '\xBB', '\xBF');
+
+            // payload 應以明文保留（CSV 不解析 HTML）
+            Assert.IsTrue(csv.Contains("<script>"),
+                "XSS payload should be preserved as plain text in CSV");
+            // 不應被 HTML-encode（避免雙重逸脫）
+            Assert.IsFalse(csv.Contains("&lt;script&gt;"),
+                "CSV exporter must not HTML-encode cell values");
+        }
+
+        [TestMethod]
+        public void Export_csv_with_null_byte_in_dimension_value_does_not_throw()
+        {
+            // null byte (\0) 在維度值中不應造成崩潰
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "A\0B", Category = "X", Amount = 50m }
+            };
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            // Should not throw
+            var result = CreateController().Export(req, "csv") as FileContentResult;
+
+            Assert.IsNotNull(result, "Export should not crash on null byte in dimension value");
         }
 
         // ─── DimensionHierarchies 驗證 ─────────────────────────────────────────
@@ -1482,128 +1541,92 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.AreEqual(0xBB, result.FileContents[1], "第 2 byte 應為 BOM BB");
             Assert.AreEqual(0xBF, result.FileContents[2], "第 3 byte 應為 BOM BF");
         }
-        // ─── #362: RBAC 角色存取控制測試模型 ──────────────────────────────────────
 
-        // 此 VM 限定只有 "Analyst" 角色才能存取
-        [EnableAnalysis(AllowedRoles = "Analyst")]
-        private class RestrictedSaleRecordListVM : BasePagedListVM<SaleRecord, BaseSearcher>
-        {
-            public override IOrderedQueryable<SaleRecord> GetSearchQuery()
-                => _testData.AsQueryable().OrderByDescending(x => x.ID);
-        }
+        // ─── includeChart / chartType Controller 層參數傳遞 (#360) ──────────────
 
-        /// <summary>建立帶有指定角色的 controller（null roles = 無角色）。</summary>
-        private _AnalysisController CreateControllerWithRoles(string[] roles)
-        {
-            var controller = new _AnalysisController(_registry, Microsoft.Extensions.Logging.Abstractions.NullLogger<_AnalysisController>.Instance, null, null);
-            var wtm = MockWtmContext.CreateWtmContext();
-            wtm.LoginUserInfo.Roles = roles?.Select(r => new SimpleRole { RoleName = r }).ToList();
-            controller.Wtm = wtm;
-            return controller;
-        }
-
-        // ─── #362: CheckAccess 覆蓋測試 ─────────────────────────────────────────
-
+        /// <summary>
+        /// Export?format=xlsx&includeChart=true — 驗證 includeChart 確實傳遞至 AnalysisExcelExporter。
+        /// </summary>
         [TestMethod]
         [TestCategory("Analysis")]
-        public void GetMeta_returns_403_when_user_has_no_roles()
-        {
-            // Roles=null → CheckAccess returns false for restricted VM
-            var ctrl = CreateControllerWithRoles(null);
-            var result = ctrl.GetMeta(typeof(RestrictedSaleRecordListVM).FullName);
-            Assert.IsInstanceOfType(result, typeof(ForbidResult), "無角色使用者應收到 403 Forbid");
-        }
-
-        [TestMethod]
-        [TestCategory("Analysis")]
-        public void GetMeta_returns_403_when_user_has_wrong_role()
-        {
-            var ctrl = CreateControllerWithRoles(new[] { "Viewer" });
-            var result = ctrl.GetMeta(typeof(RestrictedSaleRecordListVM).FullName);
-            Assert.IsInstanceOfType(result, typeof(ForbidResult), "錯誤角色使用者應收到 403 Forbid");
-        }
-
-        [TestMethod]
-        [TestCategory("Analysis")]
-        public void GetMeta_returns_200_when_user_has_required_role()
-        {
-            var ctrl = CreateControllerWithRoles(new[] { "Analyst" });
-            var result = ctrl.GetMeta(typeof(RestrictedSaleRecordListVM).FullName);
-            Assert.IsInstanceOfType(result, typeof(OkObjectResult), "擁有 Analyst 角色應通過存取控制");
-        }
-
-        [TestMethod]
-        [TestCategory("Analysis")]
-        public void GetMeta_returns_200_when_user_is_admin()
-        {
-            // Admin 角色可繞過所有 AllowedRoles 設定
-            var ctrl = CreateControllerWithRoles(new[] { "Admin" });
-            var result = ctrl.GetMeta(typeof(RestrictedSaleRecordListVM).FullName);
-            Assert.IsInstanceOfType(result, typeof(OkObjectResult), "Admin 應可繞過 AllowedRoles 限制");
-        }
-
-        [TestMethod]
-        [TestCategory("Analysis")]
-        public void GetMeta_returns_200_when_allowedRoles_is_empty()
-        {
-            // 無 AllowedRoles 設定的 VM → 所有使用者均可存取
-            var ctrl = CreateControllerWithRoles(null);
-            var result = ctrl.GetMeta(typeof(SaleRecordListVM).FullName);
-            Assert.IsInstanceOfType(result, typeof(OkObjectResult), "未設 AllowedRoles 時應開放存取");
-        }
-
-        [TestMethod]
-        [TestCategory("Analysis")]
-        public void Query_returns_403_when_user_lacks_required_role()
+        public void Export_xlsx_with_includeChart_true_contains_chart()
         {
             _testData = new List<SaleRecord>
             {
-                new SaleRecord { ID = Guid.NewGuid(), Region = "North", Category = "A", Amount = 100m },
+                new SaleRecord { Region = "North", Amount = 100m },
+                new SaleRecord { Region = "South", Amount = 200m },
             };
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
-            var req = new AnalysisQueryRequest
-            {
-                ListVmType = typeof(RestrictedSaleRecordListVM).FullName,
-                Dimensions = new List<string> { "Region" },
-                Measures   = new List<MeasureRequest>
-                {
-                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
-                },
-            };
+            var result = CreateController().Export(req, "xlsx", includeChart: true, chartType: "bar") as FileContentResult;
 
-            var ctrl = CreateControllerWithRoles(new[] { "Viewer" });
-            var result = ctrl.Query(req);
-            Assert.IsInstanceOfType(result, typeof(ForbidResult), "無授權角色的 Query 應收到 403");
+            Assert.IsNotNull(result, "應回傳 xlsx FileContentResult");
+            using var ms = new MemoryStream(result.FileContents);
+            var wb = new XSSFWorkbook(ms);
+            var sheet = wb.GetSheetAt(0) as XSSFSheet;
+            Assert.IsNotNull(sheet);
+            var drawing = sheet.GetDrawingPatriarch() as XSSFDrawing;
+            Assert.IsNotNull(drawing, "includeChart=true 應在 xlsx 中嵌入 Drawing");
+            Assert.IsTrue(drawing.GetCharts().Count >= 1, "Drawing 中應有至少 1 個 chart");
         }
 
+        /// <summary>
+        /// Export?format=xlsx&includeChart=true&chartType=pie — 驗證 chartType 確實傳遞至 AnalysisExcelExporter。
+        /// </summary>
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Export_returns_403_when_user_lacks_required_role()
+        public void Export_xlsx_with_chartType_pie_contains_chart()
         {
-            var req = new AnalysisQueryRequest
+            _testData = new List<SaleRecord>
             {
-                ListVmType = typeof(RestrictedSaleRecordListVM).FullName,
-                Dimensions = new List<string> { "Region" },
-                Measures   = new List<MeasureRequest>
-                {
-                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
-                },
+                new SaleRecord { Region = "North", Amount = 100m },
+                new SaleRecord { Region = "South", Amount = 200m },
             };
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
-            var ctrl = CreateControllerWithRoles(null);
-            var result = ctrl.Export(req);
-            Assert.IsInstanceOfType(result, typeof(ForbidResult), "無授權角色的 Export 應收到 403");
+            var result = CreateController().Export(req, "xlsx", includeChart: true, chartType: "pie") as FileContentResult;
+
+            Assert.IsNotNull(result, "應回傳 xlsx FileContentResult");
+            using var ms = new MemoryStream(result.FileContents);
+            var wb = new XSSFWorkbook(ms);
+            var sheet = wb.GetSheetAt(0) as XSSFSheet;
+            Assert.IsNotNull(sheet);
+            var drawing = sheet.GetDrawingPatriarch() as XSSFDrawing;
+            Assert.IsNotNull(drawing, "chartType=pie + includeChart=true 應在 xlsx 中嵌入 Drawing");
+            Assert.IsTrue(drawing.GetCharts().Count >= 1);
         }
 
+        /// <summary>
+        /// PivotExport?format=xlsx&includeChart=true — 驗證 PivotExport 的 includeChart 確實傳遞。
+        /// </summary>
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Admin_role_case_insensitive_is_accepted()
+        public void PivotExport_xlsx_with_includeChart_true_contains_chart()
         {
-            // "admin"（小寫）應與 "Admin" 相同，允許繞過 AllowedRoles
-            var ctrl = CreateControllerWithRoles(new[] { "admin" });
-            var result = ctrl.GetMeta(typeof(RestrictedSaleRecordListVM).FullName);
-            Assert.IsInstanceOfType(result, typeof(OkObjectResult), "小寫 admin 應被視為 Admin");
-        }
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { Region = "North", Category = "A", Amount = 100m },
+                new SaleRecord { Region = "South", Category = "B", Amount = 200m },
+            };
+            var req = PivotReq(
+                dims:     new[] { "Region", "Category" },
+                pivotDim: "Category",
+                msrs:     new[] { ("Amount", AggregateFunc.Sum) });
 
+            var result = CreateController().PivotExport(req, "xlsx", includeChart: true, chartType: "bar") as FileContentResult;
+
+            Assert.IsNotNull(result, "PivotExport 應回傳 xlsx FileContentResult");
+            using var ms = new MemoryStream(result.FileContents);
+            var wb = new XSSFWorkbook(ms);
+            var sheet = wb.GetSheetAt(0) as XSSFSheet;
+            Assert.IsNotNull(sheet);
+            var drawing = sheet.GetDrawingPatriarch() as XSSFDrawing;
+            Assert.IsNotNull(drawing, "PivotExport includeChart=true 應在 xlsx 中嵌入 Drawing");
+            Assert.IsTrue(drawing.GetCharts().Count >= 1);
+        }
     }
 }

@@ -94,7 +94,17 @@ namespace WalkingTec.Mvvm.Core.Analysis
             // ── Auto-size all columns, cap at MaxColumnWidth ──────────────────────
             for (int i = 0; i < result.Columns.Count; i++)
             {
-                sheet.AutoSizeColumn(i);
+                // AutoSizeColumn requires system fonts (SixLabors.Fonts). On CI Linux runners
+                // without fonts installed, it throws. Fall back to a header-length heuristic.
+                try
+                {
+                    sheet.AutoSizeColumn(i);
+                }
+                catch
+                {
+                    int headerLen = result.Columns[i].Length;
+                    sheet.SetColumnWidth(i, Math.Min(Math.Max(headerLen * 512, 3000), MaxColumnWidth));
+                }
                 if (sheet.GetColumnWidth(i) > MaxColumnWidth)
                     sheet.SetColumnWidth(i, MaxColumnWidth);
             }

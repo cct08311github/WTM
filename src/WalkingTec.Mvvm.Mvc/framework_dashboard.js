@@ -307,6 +307,39 @@
         valueDiv.className = 'wtm-kpi-value';
         var val = data ? data.value : 0;
         valueDiv.textContent = Utils.formatValue(val, config.format, config.prefix);
+
+        // ── Threshold / alert coloring ─────────────────────────────────────
+        // config.thresholds: [{ value: Number, color: String, label?: String }]
+        // Supports ascending (warn/danger) and descending (below-safe) modes.
+        // config.thresholdDirection: 'above' (default) | 'below'
+        var thresholds = Array.isArray(config.thresholds) ? config.thresholds : [];
+        if (thresholds.length > 0) {
+            var direction = config.thresholdDirection === 'below' ? 'below' : 'above';
+            // Sort descending by value so we match the highest triggered level first
+            var sorted = thresholds.slice().sort(function (a, b) {
+                return direction === 'above' ? b.value - a.value : a.value - b.value;
+            });
+            var matched = null;
+            for (var t = 0; t < sorted.length; t++) {
+                var th = sorted[t];
+                if ((direction === 'above' && val >= th.value) ||
+                    (direction === 'below' && val <= th.value)) {
+                    matched = th;
+                    break;
+                }
+            }
+            if (matched) {
+                valueDiv.style.color = matched.color;
+                if (matched.label) {
+                    var alertSpan = document.createElement('span');
+                    alertSpan.className = 'wtm-kpi-alert-label';
+                    alertSpan.textContent = ' ' + matched.label;
+                    alertSpan.style.color = matched.color;
+                    alertSpan.style.fontSize = '0.7em';
+                    valueDiv.appendChild(alertSpan);
+                }
+            }
+        }
         
         container.appendChild(titleDiv);
         container.appendChild(valueDiv);

@@ -347,5 +347,259 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             json.Should().Contain("City");
             json.Should().Contain("Revenue");
         }
+
+        // ─── 正向路徑測試 (#365, #366) ────────────────────────────────────────
+
+        [TestMethod]
+        public async Task Get_returns_200_with_dashboard_when_access_granted()
+        {
+            SetUser("bob");
+            var def = new DashboardDefinition { Id = "id1", Owner = "bob" };
+            _service.Setup(x => x.GetAsync("id1", It.IsAny<string?>())).ReturnsAsync(def);
+            _service.Setup(x => x.CanAccess(def, "bob", It.IsAny<string[]>())).Returns(true);
+
+            var result = await _controller.Get("id1") as OkObjectResult;
+
+            result.Should().NotBeNull();
+            result!.Value.Should().Be(def);
+        }
+
+        [TestMethod]
+        public async Task List_returns_200_with_dashboard_summaries_when_data_exists()
+        {
+            SetUser("bob");
+            var summaries = new List<DashboardSummary>
+            {
+                new DashboardSummary { Id = "id1", Title = "My Dashboard" },
+                new DashboardSummary { Id = "id2", Title = "Team Dashboard" }
+            };
+            _service.Setup(x => x.ListAsync("bob", It.IsAny<string[]>(), It.IsAny<string?>()))
+                .ReturnsAsync(summaries);
+
+            var result = await _controller.List() as OkObjectResult;
+
+            result.Should().NotBeNull();
+            ((List<DashboardSummary>)result!.Value!).Should().HaveCount(2);
+        }
+
+        [TestMethod]
+        public async Task Update_returns_404_for_unknown_dashboard()
+        {
+            SetUser("bob");
+            _service.Setup(x => x.GetAsync("unknown", It.IsAny<string?>()))
+                .ReturnsAsync((DashboardDefinition?)null);
+
+            var update = new DashboardDefinition { Id = "unknown" };
+            var result = await _controller.Update("unknown", update) as NotFoundResult;
+
+            result.Should().NotBeNull();
+        }
+
+        [TestMethod]
+        public async Task Update_returns_200_and_preserves_owner()
+        {
+            // 安全行為回歸保護：server 強制保留原始 owner，防止 client 偽造
+            SetUser("bob");
+            var existing = new DashboardDefinition { Id = "id1", Owner = "bob" };
+            _service.Setup(x => x.GetAsync("id1", It.IsAny<string?>())).ReturnsAsync(existing);
+            _service.Setup(x => x.CanEdit(existing, "bob", It.IsAny<string[]>())).Returns(true);
+            _service.Setup(x => x.UpdateAsync(It.IsAny<DashboardDefinition>())).Returns(Task.CompletedTask);
+
+            // Client 試圖偽造 owner
+            var update = new DashboardDefinition { Id = "id1", Owner = "evil-attacker" };
+            var result = await _controller.Update("id1", update);
+
+            result.Should().BeOfType<OkResult>();
+            // owner 必須被 server 覆蓋回 existing.Owner
+            _service.Verify(x => x.UpdateAsync(It.Is<DashboardDefinition>(d => d.Owner == "bob")), Times.Once);
+        }
+
+        [TestMethod]
+        public async Task Create_sets_owner_from_session_not_from_client_body()
+        {
+            // 安全行為回歸保護：owner 由 session user 決定，client 傳入的 owner 應被忽略
+            SetUser("alice");
+            _service.Setup(x => x.CreateAsync(It.IsAny<DashboardDefinition>()))
+                .ReturnsAsync("new-id");
+
+            // Client 試圖偽造 owner
+            var dashboard = new DashboardDefinition { Owner = "evil-attacker" };
+            await _controller.Create(dashboard);
+
+            _service.Verify(x => x.CreateAsync(It.Is<DashboardDefinition>(d => d.Owner == "alice")), Times.Once);
+        }
+
+        [TestMethod]
+        public async Task Delete_returns_200_when_owner_deletes()
+        {
+            SetUser("bob");
+            var existing = new DashboardDefinition { Id = "id1", Owner = "bob" };
+            _service.Setup(x => x.GetAsync("id1", It.IsAny<string?>())).ReturnsAsync(existing);
+            _service.Setup(x => x.CanEdit(existing, "bob", It.IsAny<string[]>())).Returns(true);
+            _service.Setup(x => x.DeleteAsync("id1")).Returns(Task.CompletedTask);
+
+            var result = await _controller.Delete("id1");
+
+            result.Should().BeOfType<OkResult>();
+            _service.Verify(x => x.DeleteAsync("id1"), Times.Once);
+        }
+
+        [TestMethod]
+        public async Task GetWidgetData_returns_200_with_widget_result()
+        {
+            SetUser("bob");
+            var def = new DashboardDefinition
+            {
+                Id = "id1", Owner = "bob",
+                Widgets = new Dictionary<string, WidgetDefinition> { { "w1", new WidgetDefinition { Type = "chart" } } }
+            };
+            var widgetResult = new WidgetDataResult { Value = 42 };
+            _service.Setup(x => x.GetAsync("id1", It.IsAny<string?>())).ReturnsAsync(def);
+            _service.Setup(x => x.CanAccess(def, "bob", It.IsAny<string[]>())).Returns(true);
+            _service.Setup(x => x.GetWidgetDataAsync("id1", "w1", It.IsAny<Dictionary<string, string>>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(widgetResult);
+
+            var result = await _controller.GetWidgetData("id1", "w1", CancellationToken.None) as OkObjectResult;
+
+            result.Should().NotBeNull();
+            result!.Value.Should().Be(widgetResult);
+        }
+
+        [TestMethod]
+        public async Task GetWidgetData_returns_404_when_service_throws_KeyNotFoundException()
+        {
+            SetUser("bob");
+            var def = new DashboardDefinition
+            {
+                Id = "id1", Owner = "bob",
+                Widgets = new Dictionary<string, WidgetDefinition> { { "w1", new WidgetDefinition { Type = "chart" } } }
+            };
+            _service.Setup(x => x.GetAsync("id1", It.IsAny<string?>())).ReturnsAsync(def);
+            _service.Setup(x => x.CanAccess(def, "bob", It.IsAny<string[]>())).Returns(true);
+            _service.Setup(x => x.GetWidgetDataAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Dictionary<string, string>>(), It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new KeyNotFoundException("data source not found"));
+
+            var result = await _controller.GetWidgetData("id1", "w1", CancellationToken.None) as NotFoundResult;
+
+            result.Should().NotBeNull();
+        }
+
+        // ─── PostWidgetData 端點測試 (#364, #366) ─────────────────────────────
+
+        [TestMethod]
+        public async Task PostWidgetData_returns_404_for_unknown_dashboard()
+        {
+            _service.Setup(x => x.GetAsync("unknown", It.IsAny<string?>()))
+                .ReturnsAsync((DashboardDefinition?)null);
+
+            var result = await _controller.PostWidgetData(
+                "unknown", "w1",
+                new Dictionary<string, string>(),
+                CancellationToken.None) as NotFoundResult;
+
+            result.Should().NotBeNull();
+        }
+
+        [TestMethod]
+        public async Task PostWidgetData_returns_403_when_access_denied()
+        {
+            SetUser("alice");
+            var def = new DashboardDefinition { Id = "id1", Owner = "bob" };
+            _service.Setup(x => x.GetAsync("id1", It.IsAny<string?>())).ReturnsAsync(def);
+            _service.Setup(x => x.CanAccess(def, "alice", It.IsAny<string[]>())).Returns(false);
+
+            var result = await _controller.PostWidgetData(
+                "id1", "w1",
+                new Dictionary<string, string>(),
+                CancellationToken.None) as ForbidResult;
+
+            result.Should().NotBeNull();
+        }
+
+        [TestMethod]
+        public async Task PostWidgetData_returns_404_for_unknown_widget()
+        {
+            SetUser("bob");
+            // dashboard exists but has no widgets
+            var def = new DashboardDefinition { Id = "id1", Owner = "bob" };
+            _service.Setup(x => x.GetAsync("id1", It.IsAny<string?>())).ReturnsAsync(def);
+            _service.Setup(x => x.CanAccess(def, "bob", It.IsAny<string[]>())).Returns(true);
+
+            var result = await _controller.PostWidgetData(
+                "id1", "w1",
+                new Dictionary<string, string>(),
+                CancellationToken.None) as NotFoundResult;
+
+            result.Should().NotBeNull();
+        }
+
+        [TestMethod]
+        public async Task PostWidgetData_returns_200_with_widget_data()
+        {
+            SetUser("bob");
+            var def = new DashboardDefinition
+            {
+                Id = "id1", Owner = "bob",
+                Widgets = new Dictionary<string, WidgetDefinition> { { "w1", new WidgetDefinition { Type = "chart" } } }
+            };
+            var widgetResult = new WidgetDataResult { Value = 42 };
+            var filters = new Dictionary<string, string> { { "year", "2026" } };
+            _service.Setup(x => x.GetAsync("id1", It.IsAny<string?>())).ReturnsAsync(def);
+            _service.Setup(x => x.CanAccess(def, "bob", It.IsAny<string[]>())).Returns(true);
+            _service.Setup(x => x.GetWidgetDataAsync("id1", "w1", filters, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(widgetResult);
+
+            var result = await _controller.PostWidgetData("id1", "w1", filters, CancellationToken.None) as OkObjectResult;
+
+            result.Should().NotBeNull();
+            result!.Value.Should().Be(widgetResult);
+        }
+
+        [TestMethod]
+        public async Task PostWidgetData_returns_404_when_service_throws_KeyNotFoundException()
+        {
+            SetUser("bob");
+            var def = new DashboardDefinition
+            {
+                Id = "id1", Owner = "bob",
+                Widgets = new Dictionary<string, WidgetDefinition> { { "w1", new WidgetDefinition { Type = "chart" } } }
+            };
+            _service.Setup(x => x.GetAsync("id1", It.IsAny<string?>())).ReturnsAsync(def);
+            _service.Setup(x => x.CanAccess(def, "bob", It.IsAny<string[]>())).Returns(true);
+            _service.Setup(x => x.GetWidgetDataAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Dictionary<string, string>>(), It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new KeyNotFoundException("widget config error"));
+
+            var result = await _controller.PostWidgetData("id1", "w1", new Dictionary<string, string>(), CancellationToken.None) as NotFoundResult;
+
+            result.Should().NotBeNull();
+        }
+
+        // ─── null body / ID 不符守衛測試 (#371, #369) ─────────────────────────
+
+        [TestMethod]
+        public async Task Create_returns_400_when_body_is_null()
+        {
+            var result = await _controller.Create(null!) as BadRequestResult;
+
+            result.Should().NotBeNull("null body 應被 Create 拒絕並回傳 400");
+        }
+
+        [TestMethod]
+        public async Task Update_returns_400_when_body_is_null()
+        {
+            var result = await _controller.Update("id1", null!) as BadRequestResult;
+
+            result.Should().NotBeNull("null body 應被 Update 拒絕並回傳 400");
+        }
+
+        [TestMethod]
+        public async Task Update_returns_400_when_body_id_mismatches_route_id()
+        {
+            // 防 confused deputy 攻擊：route id 與 body id 不一致 → 400
+            var mismatch = new DashboardDefinition { Id = "id-B" };
+            var result = await _controller.Update("id-A", mismatch) as BadRequestResult;
+
+            result.Should().NotBeNull("route id 與 body id 不符應被拒絕並回傳 400");
+        }
     }
 }

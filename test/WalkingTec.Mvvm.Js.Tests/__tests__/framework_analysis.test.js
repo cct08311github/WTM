@@ -3053,13 +3053,17 @@ describe('renderChart — single data point and empty rows #307', () => {
         expect(capturedOptions[0].series[0].data[0]).toEqual({ name: 'North', value: 100 });
     });
 
-    test('empty rows: bar chart renders without crash', () => {
+    test('empty rows: bar chart shows empty-state element instead of chart', () => {
         const { wa, capturedOptions } = makeChartEnv();
         const result = { columns: ['Region', 'Amount_Sum'], rows: [] };
         const req = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }] };
         const container = { appendChild: jest.fn(), children: [], style: {}, id: '' };
         expect(() => wa.renderChart('g307sp4', result, req, [{ fieldName: 'Region', isDate: false }], container, 'bar')).not.toThrow();
-        expect(capturedOptions[0].xAxis.data).toEqual([]);
+        // With empty rows, renderChart shows empty-state UI and does NOT call setOption
+        expect(capturedOptions).toHaveLength(0);
+        expect(container.appendChild).toHaveBeenCalledTimes(1);
+        const emptyEl = container.appendChild.mock.calls[0][0];
+        expect(emptyEl.className).toBe('analysis-empty-state');
     });
 });
 
