@@ -840,6 +840,42 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
+        public void Query_with_multiple_filter_conditions_AND_logic_returns_narrowed_result()
+        {
+            // Arrange — 3 records; only 華東+Amount>150 (i.e. 華東 B=200) should survive AND
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 100m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "B", Amount = 200m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華南", Category = "A", Amount = 300m },
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string> { "Region" },
+                Measures   = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+                Filters = new List<FilterCondition>
+                {
+                    new FilterCondition { Field = "Region", Operator = FilterOperator.Eq, Value = "華東" },
+                    new FilterCondition { Field = "Amount", Operator = FilterOperator.Gt, Value = "150" }
+                }
+            };
+
+            var result = CreateController().Query(req) as JsonResult;
+            Assert.IsNotNull(result, "多條件 AND filter 應回傳 200");
+
+            var response = result.Value as AnalysisQueryResponse;
+            Assert.IsNotNull(response);
+            Assert.AreEqual(1, response.Rows.Count, "AND: Region=華東 AND Amount>150 → 只剩 1 列");
+            Assert.AreEqual(200m, Convert.ToDecimal(response.Rows[0]["Amount_Sum"]));
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
         public void Query_filter_with_non_whitelist_field_returns_400()
         {
             _testData = new List<SaleRecord>
