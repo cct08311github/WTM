@@ -1888,5 +1888,104 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 "PivotExport：缺少必要角色應回傳 ForbidResult");
         }
 
+
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Export_csv_with_includeMetadata_true_prepends_metadata_rows()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 100m },
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string> { "Region" },
+                Measures   = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+            };
+
+            var result = CreateController().Export(req, "csv", includeMetadata: true) as FileContentResult;
+            Assert.IsNotNull(result, "應回傳 FileContentResult");
+
+            // Strip BOM
+            var raw = result.FileContents;
+            int bom = (raw.Length >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF) ? 3 : 0;
+            var text = System.Text.Encoding.UTF8.GetString(raw, bom, raw.Length - bom);
+            var lines = text.Split('\n');
+
+            Assert.IsTrue(lines[0].StartsWith("匯出時間,"), $"Line 0 應為匯出時間，實際：{lines[0]}");
+            Assert.IsTrue(lines[1].StartsWith("QueryHash,"), $"Line 1 應為 QueryHash，實際：{lines[1]}");
+            Assert.IsTrue(lines[2].StartsWith("資料筆數,"), $"Line 2 應為資料筆數，實際：{lines[2]}");
+            Assert.IsTrue(lines[3].StartsWith("已截斷,"), $"Line 3 應為已截斷，實際：{lines[3]}");
+            Assert.AreEqual("", lines[4].Trim(), $"Line 4 應為空行，實際：{lines[4]}");
+            // Line 5 is column header
+            Assert.IsTrue(lines[5].Contains("Region"), $"Line 5 應包含欄位標頭，實際：{lines[5]}");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Export_csv_default_no_metadata_header_at_row0()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 100m },
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string> { "Region" },
+                Measures   = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+            };
+
+            var result = CreateController().Export(req, "csv") as FileContentResult;
+            Assert.IsNotNull(result, "應回傳 FileContentResult");
+
+            var raw = result.FileContents;
+            int bom = (raw.Length >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF) ? 3 : 0;
+            var text = System.Text.Encoding.UTF8.GetString(raw, bom, raw.Length - bom);
+            var lines = text.Split('\n');
+
+            // Default — first line is the column header
+            Assert.IsTrue(lines[0].Contains("Region"), $"預設 CSV 第 0 行應為欄位標頭，實際：{lines[0]}");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Export_xlsx_with_includeMetadata_true_has_metadata_sheet()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 100m },
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string> { "Region" },
+                Measures   = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+            };
+
+            var result = CreateController().Export(req, "xlsx", includeMetadata: true) as FileContentResult;
+            Assert.IsNotNull(result, "應回傳 FileContentResult");
+
+            using var ms = new MemoryStream(result.FileContents);
+            var wb = new XSSFWorkbook(ms);
+            Assert.AreEqual(2, wb.NumberOfSheets, "includeMetadata=true 應有 2 個工作表");
+            var meta = wb.GetSheet("Metadata");
+            Assert.IsNotNull(meta, "應有 Metadata 工作表");
+            Assert.AreEqual("匯出時間", meta.GetRow(0).GetCell(0).StringCellValue);
+        }
     }
 }
