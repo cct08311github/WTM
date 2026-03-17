@@ -605,6 +605,5 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.IsNotNull(sheet, "Analysis 工作表應仍存在");
             Assert.AreEqual("Region", sheet.GetRow(0).GetCell(0).StringCellValue);
         }
-
     }
 }

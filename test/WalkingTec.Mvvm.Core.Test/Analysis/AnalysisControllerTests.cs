@@ -1629,6 +1629,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.IsTrue(drawing.GetCharts().Count >= 1);
         }
 
+
         [TestMethod]
         [TestCategory("Analysis")]
         public void Export_csv_with_includeMetadata_true_prepends_metadata_rows()

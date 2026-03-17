@@ -129,6 +129,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
 
 
+
+
             if (includeMetadata)
             {
                 var meta = workbook.CreateSheet("Metadata");

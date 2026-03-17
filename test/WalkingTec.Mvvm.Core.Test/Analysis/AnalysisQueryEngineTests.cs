@@ -285,6 +285,71 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.ThrowsException<InvalidOperationException>(() => Engine().Execute(Q(), req, _whitelist));
         }
 
+        // ─── SQL Injection 回歸保護 ────────────────────────────────────────────
+        //
+        // Expression Tree 在結構上防止 SQL injection：filter value 轉為
+        // Expression.Constant(value) → EF Core parameterized query（@p0），
+        // 從不拼接成 raw SQL。以下測試確保此防護持續有效。
+
+        [TestMethod]
+        public void Filter_Eq_sql_injection_pattern_in_value_does_not_throw_and_matches_nothing()
+        {
+            // Arrange: 典型的 SQL injection pattern 作為 filter value
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) },
+                filters: new[] { ("Region", FilterOperator.Eq, "'; DROP TABLE SaleRecords --") });
+
+            // Act: Expression Tree → parameterized SQL → 不應拋出例外
+            var result = Engine().Execute(Q(), req, _whitelist);
+
+            // Assert: injection pattern 不是合法的 Region 值 → 0 列
+            Assert.AreEqual(0, result.Rows.Count,
+                "SQL injection pattern in filter value should return 0 rows, not throw");
+            // 確認 table 仍存在（未被 DROP）
+            Assert.AreEqual(3, _ctx.SaleRecords.Count(),
+                "SaleRecords table must still contain all 3 rows — no injection occurred");
+        }
+
+        [TestMethod]
+        public void Filter_Contains_sql_injection_pattern_in_value_does_not_throw()
+        {
+            // Arrange: Contains 運算子 + SQL injection value
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) },
+                filters: new[] { ("Region", FilterOperator.Contains, "'; DROP TABLE--") });
+
+            // Act: String.Contains translates to SQL LIKE @p0 — safe
+            var result = Engine().Execute(Q(), req, _whitelist);
+
+            Assert.AreEqual(0, result.Rows.Count,
+                "SQL injection pattern should match no rows");
+            Assert.AreEqual(3, _ctx.SaleRecords.Count(),
+                "Table must still have 3 rows after Contains with injection-patterned value");
+        }
+
+        [TestMethod]
+        public void Filter_Eq_unicode_value_matches_correctly()
+        {
+            // Unicode filter values（中文、emoji）應正常運作
+            _ctx.SaleRecords.Add(new SaleRecord
+            {
+                ID = Guid.NewGuid(), Region = "東南亞🌏", Category = "A", Amount = 500m
+            });
+            _ctx.SaveChanges();
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) },
+                filters: new[] { ("Region", FilterOperator.Eq, "東南亞🌏") });
+
+            var result = Engine().Execute(Q(), req, _whitelist);
+
+            Assert.AreEqual(1, result.Rows.Count, "Unicode filter value should match exactly 1 row");
+            Assert.AreEqual("東南亞🌏", result.Rows[0]["Region"].ToString());
+        }
+
         /// <summary>Contains 運算子用於非字串欄位 → 拋 InvalidOperationException</summary>
         [TestMethod]
         public void Filter_Contains_on_non_string_field_throws()
