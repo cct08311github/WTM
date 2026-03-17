@@ -1412,13 +1412,18 @@ var wtmHeaderFilter = (function () {
 
     function _injectRow(gridId, $view) {
         $view.find('.wtm-hf-row').remove();
-        var $headerTr = $view.find('.layui-table-header thead tr:last-child');
+        // Only target the main header (direct child of layui-table-box).
+        // Fixed-column headers (.layui-table-fixed) are position:absolute with
+        // z-index:101 — injecting a wrong-width row there covers the data area.
+        var $mainHeader = $view.find('.layui-table-box > .layui-table-header');
+        if (!$mainHeader.length) return;
+        var $headerTr = $mainHeader.find('thead tr:last-child');
         if (!$headerTr.length) return;
 
         var cells = [];
         $headerTr.find('th').each(function () {
             var field = $(this).data('field');
-            if (field) {
+            if (field && typeof field === 'string') {
                 cells.push(
                     '<td class="wtm-hf-cell">' +
                     '<div class="layui-table-cell" style="padding:0 2px;">' +
@@ -1431,7 +1436,7 @@ var wtmHeaderFilter = (function () {
         });
 
         if (cells.length) {
-            $view.find('.layui-table-header thead').append(
+            $mainHeader.find('thead').append(
                 $('<tr class="wtm-hf-row">' + cells.join('') + '</tr>')
             );
         }
@@ -1458,6 +1463,9 @@ var wtmHeaderFilter = (function () {
             var v = (filters[k] || '').trim();
             if (v) active[k] = v.toLowerCase();
         });
+
+        // No active filters — rows are already visible from LayUI render; skip DOM work
+        if (Object.keys(active).length === 0) return;
 
         var $mainTbody = $view.find('.layui-table-main tbody');
         var visibility = [];
