@@ -59,7 +59,8 @@ public class EtlSchedulerService
             using var scope = _sp.CreateScope();
             var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
             var jobDef = await wtm.DC.Set<EtlJobDefinition>().FindAsync(jobId);
-            if (jobDef == null) return;
+            if (jobDef == null)
+                throw new InvalidOperationException($"Job {jobId} not found.");
             await ScheduleJobAsync(jobDef);
         }
 

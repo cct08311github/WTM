@@ -107,6 +107,10 @@ public class _EtlJobController : BaseController
             await _scheduler.TriggerNowAsync(id);
             return Ok(new { success = true, message = "已觸發執行" });
         }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("not found"))
+        {
+            return NotFound(new { error = ex.Message });
+        }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new { error = ex.Message });
