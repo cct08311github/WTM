@@ -137,5 +137,69 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.IsTrue(field.IsDate);
             Assert.AreEqual(DateHierarchy.Year, field.Hierarchy);
         }
+
+        // --- #501 AllowedValues for enum fields ---
+
+        private enum OrderStatus { Pending, Active, Completed, Cancelled }
+
+        private class EnumModel
+        {
+            [Dimension(DisplayName = "狀態")]
+            public OrderStatus Status { get; set; }
+
+            [Dimension(DisplayName = "狀態（可空）")]
+            public OrderStatus? NullableStatus { get; set; }
+
+            [Dimension(DisplayName = "地區")]
+            public string Region { get; set; } = string.Empty;
+
+            [Measure(AllowedFuncs = AggregateFunc.Sum, DisplayName = "金額")]
+            public decimal Amount { get; set; }
+        }
+
+        [TestMethod]
+        public void Enum_dimension_has_AllowedValues_populated()
+        {
+            var field = AnalysisFieldScanner.ScanModel(typeof(EnumModel))
+                            .Single(f => f.FieldName == "Status");
+            Assert.IsNotNull(field.AllowedValues, "枚舉維度欄位的 AllowedValues 不應為 null");
+            Assert.AreEqual(4, field.AllowedValues!.Count);
+        }
+
+        [TestMethod]
+        public void Enum_dimension_AllowedValues_match_display_names()
+        {
+            var field = AnalysisFieldScanner.ScanModel(typeof(EnumModel))
+                            .Single(f => f.FieldName == "Status");
+            // GetEnumDisplayName 回傳 Display attribute 或 ToString() — 此枚舉沒有 Display attribute
+            CollectionAssert.AreEquivalent(
+                new[] { "Pending", "Active", "Completed", "Cancelled" },
+                field.AllowedValues!.ToList());
+        }
+
+        [TestMethod]
+        public void Nullable_enum_dimension_has_AllowedValues_populated()
+        {
+            var field = AnalysisFieldScanner.ScanModel(typeof(EnumModel))
+                            .Single(f => f.FieldName == "NullableStatus");
+            Assert.IsNotNull(field.AllowedValues, "Nullable 枚舉維度欄位的 AllowedValues 不應為 null");
+            Assert.AreEqual(4, field.AllowedValues!.Count);
+        }
+
+        [TestMethod]
+        public void String_dimension_has_null_AllowedValues()
+        {
+            var field = AnalysisFieldScanner.ScanModel(typeof(EnumModel))
+                            .Single(f => f.FieldName == "Region");
+            Assert.IsNull(field.AllowedValues, "非枚舉維度欄位的 AllowedValues 應為 null");
+        }
+
+        [TestMethod]
+        public void Measure_field_has_null_AllowedValues()
+        {
+            var field = AnalysisFieldScanner.ScanModel(typeof(EnumModel))
+                            .Single(f => f.FieldName == "Amount");
+            Assert.IsNull(field.AllowedValues, "Measure 欄位的 AllowedValues 應為 null");
+        }
     }
 }

@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Generic;
 
 namespace WalkingTec.Mvvm.Core.Analysis
 {
@@ -38,5 +39,11 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
         /// <summary>允許存取此欄位的角色列表（逗號分隔）。若為空則不限角色。</summary>
         public string? AllowedRoles { get; set; }
+
+        /// <summary>
+        /// 枚舉欄位的所有允許值（顯示名稱）。非枚舉欄位為 null。
+        /// 前端用於渲染 &lt;select&gt; 控件，避免使用者猜測枚舉值。
+        /// </summary>
+        public IReadOnlyList<string>? AllowedValues { get; init; }
     }
 }

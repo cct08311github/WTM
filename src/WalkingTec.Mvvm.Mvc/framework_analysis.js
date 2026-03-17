@@ -861,7 +861,47 @@
     }
 
     /**
+     * 根據欄位 metadata 建立合適的值輸入控件：
+     *   - 枚舉（allowedValues 非空）→ <select>
+     *   - 日期（isDate === true）     → <input type="text"> + placeholder
+     *   - 其他                        → <input type="text">
+     */
+    function createValueInput(fieldMeta) {
+        var el;
+        if (fieldMeta && fieldMeta.allowedValues && fieldMeta.allowedValues.length > 0) {
+            el = document.createElement('select');
+            el.className = 'analysis-filter-value layui-input';
+            el.style.cssText = 'width:140px;display:inline-block;';
+            var emptyOpt = document.createElement('option');
+            emptyOpt.value = '';
+            emptyOpt.textContent = '-- 請選擇 --';
+            el.appendChild(emptyOpt);
+            fieldMeta.allowedValues.forEach(function (v) {
+                var opt = document.createElement('option');
+                opt.value = v;
+                opt.textContent = v;
+                el.appendChild(opt);
+            });
+        } else {
+            el = document.createElement('input');
+            el.type = 'text';
+            el.className = 'analysis-filter-value layui-input';
+            el.style.cssText = 'width:140px;display:inline-block;';
+            if (fieldMeta && fieldMeta.isDate) {
+                el.placeholder = 'yyyy-MM-dd';
+                if (typeof laydate !== 'undefined') {
+                    laydate.render({ elem: el });
+                }
+            } else {
+                el.placeholder = '篩選值\u2026';
+            }
+        }
+        return el;
+    }
+
+    /**
      * 在 filterBar 新增一行篩選列。
+     * 初始建立時使用預設 text input；欄位選取後動態替換為合適的控件。
      */
     function addFilterRow(gridId, fields) {
         var panel = document.getElementById('analysis-panel-' + gridId);
@@ -871,6 +911,10 @@
 
         var st = _state[gridId];
         var metaFields = fields || (st && st.fields) || [];
+
+        // 建立 fieldName → meta 的查找表
+        var metaByName = {};
+        metaFields.forEach(function (f) { metaByName[f.fieldName] = f; });
 
         var row = document.createElement('div');
         row.className = 'analysis-filter-row layui-inline';
@@ -902,12 +946,17 @@
         });
         row.appendChild(opSel);
 
-        var valInput = document.createElement('input');
-        valInput.type = 'text';
-        valInput.className = 'analysis-filter-value layui-input';
-        valInput.style.cssText = 'width:140px;display:inline-block;';
-        valInput.placeholder = '篩選值\u2026';
-        row.appendChild(valInput);
+        // 初始值控件：無欄位選取時使用預設 text input
+        var valEl = createValueInput(null);
+        row.appendChild(valEl);
+
+        // 欄位選取後，根據新欄位的 meta 替換值控件
+        fieldSel.addEventListener('change', function () {
+            var selectedMeta = metaByName[fieldSel.value] || null;
+            var newValEl = createValueInput(selectedMeta);
+            row.replaceChild(newValEl, valEl);
+            valEl = newValEl;
+        });
 
         var removeBtn = document.createElement('button');
         removeBtn.type = 'button';
@@ -1621,6 +1670,7 @@
         computeScale: computeScale,
         scaleSeriesData: scaleSeriesData,
         detectDualAxis: detectDualAxis,
+        createValueInput: createValueInput,
         addFilterRow: addFilterRow,
         collectFilters: collectFilters,
         updateFilterFieldOptions: updateFilterFieldOptions,
