@@ -825,13 +825,16 @@
     // ─── Ad-hoc 篩選條件 ─────────────────────────────────────────────────────
 
     var _FILTER_OPS = [
-        { value: 'Eq',       label: '等於' },
-        { value: 'Gt',       label: '大於' },
-        { value: 'Gte',      label: '大於等於' },
-        { value: 'Lt',       label: '小於' },
-        { value: 'Lte',      label: '小於等於' },
-        { value: 'Contains', label: '包含' },
-        { value: 'In',       label: 'In' }
+        { value: 'Eq',          label: '等於' },
+        { value: 'NotEq',       label: '不等於' },
+        { value: 'Gt',          label: '大於' },
+        { value: 'Gte',         label: '大於等於' },
+        { value: 'Lt',          label: '小於' },
+        { value: 'Lte',         label: '小於等於' },
+        { value: 'Contains',    label: '包含' },
+        { value: 'NotContains', label: '不包含' },
+        { value: 'In',          label: 'In' },
+        { value: 'NotIn',       label: 'Not In' }
     ];
 
     /**
