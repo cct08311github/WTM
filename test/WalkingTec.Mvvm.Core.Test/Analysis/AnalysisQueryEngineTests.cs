@@ -22,6 +22,14 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         private enum SaleChannel { Online, Offline, Hybrid }
 
+        // Enum with [Display(Name)] — used to test display-name reverse-lookup in ChangeType (#473)
+        private enum CustomerTier
+        {
+            [System.ComponentModel.DataAnnotations.Display(Name = "一般")] Regular = 0,
+            [System.ComponentModel.DataAnnotations.Display(Name = "銀卡")] Silver  = 1,
+            [System.ComponentModel.DataAnnotations.Display(Name = "金卡")] Gold    = 2,
+        }
+
         private class SaleRecord : TopBasePoco
         {
             [Dimension(DisplayName = "地區")]  public string Region   { get; set; }
@@ -44,6 +52,20 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         {
             public SaleTestContext(DbContextOptions opts) : base(opts) { }
             public DbSet<SaleRecord> SaleRecords { get; set; }
+        }
+
+        // ─── CustomerTier 測試模型（#473 enum display-name filter）───────────────
+
+        private class CustomerRecord : TopBasePoco
+        {
+            [Dimension(DisplayName = "等級")] public CustomerTier Tier { get; set; }
+            [Measure(AllowedFuncs = AggregateFunc.Count, DisplayName = "筆數")] public decimal Count { get; set; }
+        }
+
+        private class CustomerTestContext : DbContext
+        {
+            public CustomerTestContext(DbContextOptions opts) : base(opts) { }
+            public DbSet<CustomerRecord> Customers { get; set; }
         }
 
         // ─── 基礎設施 ──────────────────────────────────────────────────────────
@@ -988,6 +1010,74 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
             Assert.IsNull(caughtEx,
                 $"重複維度不應拋 NullReferenceException / KeyNotFoundException：{caughtEx?.Message}");
+        }
+
+        // ─── Enum display-name filter（Fixes #473）──────────────────────────────
+
+        private (SqliteConnection conn, CustomerTestContext ctx, IQueryable<CustomerRecord> query) SetupCustomerDb(params CustomerRecord[] records)
+        {
+            var conn = new SqliteConnection("DataSource=:memory:");
+            conn.Open();
+            var opts = new DbContextOptionsBuilder<CustomerTestContext>()
+                .UseSqlite(conn).Options;
+            var ctx = new CustomerTestContext(opts);
+            ctx.Database.EnsureCreated();
+            ctx.Customers.AddRange(records);
+            ctx.SaveChanges();
+            return (conn, ctx, ctx.Customers.AsQueryable());
+        }
+
+        [TestMethod]
+        public void ApplyFilters_enum_display_name_matches_row()
+        {
+            // Chart click sends the display name "一般" (from ResolveEnumDisplayNames).
+            // ChangeType must reverse-lookup to CustomerTier.Regular.
+            var id = Guid.NewGuid();
+            var (conn, ctx, query) = SetupCustomerDb(
+                new CustomerRecord { ID = id,           Tier = CustomerTier.Regular, Count = 1 },
+                new CustomerRecord { ID = Guid.NewGuid(), Tier = CustomerTier.Gold,    Count = 1 });
+
+            var wl = AnalysisFieldScanner.ScanModel(typeof(CustomerRecord))
+                .ToDictionary(f => f.FieldName);
+            var req = new AnalysisQueryRequest
+            {
+                Dimensions = new List<string> { "Tier" },
+                Measures   = new List<MeasureRequest> { new MeasureRequest { Field = "Count", Func = AggregateFunc.Count } },
+                Filters    = new List<FilterCondition> { new FilterCondition { Field = "Tier", Operator = FilterOperator.Eq, Value = "一般" } }
+            };
+
+            var engine = new AnalysisQueryEngine(GroupByStrategyResolver.Default);
+            var result = engine.Execute(query, req, wl.Values.ToList());
+
+            Assert.AreEqual(1, result.Rows.Count, "應只回傳 Regular(一般) 的那一筆");
+            conn.Dispose();
+        }
+
+        [DataTestMethod]
+        [DataRow("Regular", "enum member name")]
+        [DataRow("一般",     "Display(Name)")]
+        [DataRow("0",       "integer string")]
+        public void ApplyFilters_enum_accepts_member_name_displayname_and_integer(string filterVal, string label)
+        {
+            var id = Guid.NewGuid();
+            var (conn, ctx, query) = SetupCustomerDb(
+                new CustomerRecord { ID = id,           Tier = CustomerTier.Regular, Count = 1 },
+                new CustomerRecord { ID = Guid.NewGuid(), Tier = CustomerTier.Gold,    Count = 1 });
+
+            var wl = AnalysisFieldScanner.ScanModel(typeof(CustomerRecord))
+                .ToDictionary(f => f.FieldName);
+            var req = new AnalysisQueryRequest
+            {
+                Dimensions = new List<string> { "Tier" },
+                Measures   = new List<MeasureRequest> { new MeasureRequest { Field = "Count", Func = AggregateFunc.Count } },
+                Filters    = new List<FilterCondition> { new FilterCondition { Field = "Tier", Operator = FilterOperator.Eq, Value = filterVal } }
+            };
+
+            var engine = new AnalysisQueryEngine(GroupByStrategyResolver.Default);
+            var result = engine.Execute(query, req, wl.Values.ToList());
+
+            Assert.AreEqual(1, result.Rows.Count, $"格式 '{label}' 應篩出 1 筆");
+            conn.Dispose();
         }
 
         // ─── Helper methods ────────────────────────────────────────────────────
