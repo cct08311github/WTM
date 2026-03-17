@@ -187,6 +187,9 @@ function makeEnv(overrides) {
         alert: mockAlert,
         console,
         URL: { createObjectURL: jest.fn(() => 'blob://test'), revokeObjectURL: jest.fn() },
+        setInterval: global.setInterval.bind(global),
+        clearInterval: global.clearInterval.bind(global),
+        AbortController: global.AbortController,
         ...overrides,
     });
     // wire window = freshCtx.window for wtmAnalysis registration
@@ -349,6 +352,125 @@ describe('wtmAnalysis.query', () => {
         const emptyNode = appended.find(c => c.className && c.className.includes('analysis-empty-state'));
         expect(emptyNode).toBeDefined();
         expect(emptyNode.textContent).toMatch(/查無符合條件/);
+    });
+});
+
+// ─── query loading timer & AbortController (#493) ────────────────────────────
+describe('wtmAnalysis.query loading timer and AbortController (#493)', () => {
+    test('query 期間 resultDiv 顯示計時文字（含秒數）', async () => {
+        jest.useFakeTimers();
+        try {
+            const { wa, makePanel, mockFetch, mockDocument } = makeEnv();
+            const panel = makePanel('analysis-panel-qlt1');
+            const resultDiv = {
+                id: 'analysis-result-qlt1', textContent: '', children: [],
+                appendChild: jest.fn(), firstChild: null, removeChild: jest.fn(),
+            };
+            mockDocument.getElementById.mockImplementation((id) => {
+                if (id === 'analysis-panel-qlt1') return panel;
+                if (id === 'analysis-result-qlt1') return resultDiv;
+                return null;
+            });
+            mockDocument.querySelectorAll.mockReturnValue(fakeCheckedCbs('qlt1'));
+
+            // fetch never resolves during this test
+            mockFetch
+                .mockResolvedValueOnce({ ok: false, text: jest.fn().mockResolvedValue('err') }) // loadMeta
+                .mockImplementationOnce(() => new Promise(() => {}));                            // query hangs
+
+            wa.toggle('qlt1', 'MyVm');
+            wa.query('qlt1');
+
+            // Immediately: should show 0s
+            expect(resultDiv.textContent).toBe('查詢中... 0s');
+
+            // After 1 second
+            jest.advanceTimersByTime(1000);
+            expect(resultDiv.textContent).toBe('查詢中... 1s');
+
+            // After 3 seconds total
+            jest.advanceTimersByTime(2000);
+            expect(resultDiv.textContent).toBe('查詢中... 3s');
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    test('重複呼叫 query() 時舊的 AbortController 被 abort()', async () => {
+        jest.useFakeTimers();
+        try {
+            const { wa, makePanel, mockFetch, mockDocument } = makeEnv();
+            const panel = makePanel('analysis-panel-qlt2');
+            const resultDiv = {
+                id: 'analysis-result-qlt2', textContent: '', children: [],
+                appendChild: jest.fn(), firstChild: null, removeChild: jest.fn(),
+            };
+            mockDocument.getElementById.mockImplementation((id) => {
+                if (id === 'analysis-panel-qlt2') return panel;
+                if (id === 'analysis-result-qlt2') return resultDiv;
+                return null;
+            });
+            mockDocument.querySelectorAll.mockReturnValue(fakeCheckedCbs('qlt2'));
+
+            const abortSpy = jest.fn();
+            let capturedSignal1 = null;
+            let callCount = 0;
+            mockFetch
+                .mockResolvedValueOnce({ ok: false, text: jest.fn().mockResolvedValue('err') }) // loadMeta
+                .mockImplementation((url, opts) => {
+                    callCount++;
+                    if (callCount === 1) {
+                        capturedSignal1 = opts && opts.signal;
+                        if (capturedSignal1) {
+                            capturedSignal1.addEventListener('abort', abortSpy);
+                        }
+                        // First query hangs
+                        return new Promise(() => {});
+                    }
+                    // Second query resolves immediately
+                    return Promise.resolve({
+                        ok: true,
+                        json: jest.fn().mockResolvedValue({ truncated: false, totalCount: 0, columns: [], rows: [] })
+                    });
+                });
+
+            wa.toggle('qlt2', 'MyVm');
+            wa.query('qlt2');  // first query — hangs
+            wa.query('qlt2');  // second query — should abort first
+
+            // First AbortController should have been aborted
+            expect(abortSpy).toHaveBeenCalled();
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    test('AbortError 被捕獲後顯示「查詢已取消」而非錯誤訊息', async () => {
+        const { wa, makePanel, mockFetch, mockDocument } = makeEnv();
+        const panel = makePanel('analysis-panel-qlt3');
+        const resultDiv = {
+            id: 'analysis-result-qlt3', textContent: '', children: [],
+            appendChild: jest.fn(), firstChild: null, removeChild: jest.fn(),
+        };
+        mockDocument.getElementById.mockImplementation((id) => {
+            if (id === 'analysis-panel-qlt3') return panel;
+            if (id === 'analysis-result-qlt3') return resultDiv;
+            return null;
+        });
+        mockDocument.querySelectorAll.mockReturnValue(fakeCheckedCbs('qlt3'));
+
+        const abortErr = new Error('The user aborted a request.');
+        abortErr.name = 'AbortError';
+        mockFetch
+            .mockResolvedValueOnce({ ok: false, text: jest.fn().mockResolvedValue('err') }) // loadMeta
+            .mockRejectedValueOnce(abortErr);                                                // query aborted
+
+        wa.toggle('qlt3', 'MyVm');
+        wa.query('qlt3');
+
+        await new Promise(r => setTimeout(r, 50));
+
+        expect(resultDiv.textContent).toBe('查詢已取消');
     });
 });
 
