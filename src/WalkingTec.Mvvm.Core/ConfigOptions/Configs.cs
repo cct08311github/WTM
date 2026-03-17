@@ -517,5 +517,21 @@ namespace WalkingTec.Mvvm.Core
 
         #endregion
 
+        #region Analysis Cache TTL
+
+        private TimeSpan? _analysisCacheTtl;
+
+        /// <summary>
+        /// Analysis query cache TTL.  Defaults to 5 minutes.
+        /// Set to TimeSpan.Zero to disable caching at the engine level.
+        /// </summary>
+        public TimeSpan AnalysisCacheTtl
+        {
+            get => _analysisCacheTtl ?? TimeSpan.FromMinutes(5);
+            set => _analysisCacheTtl = value;
+        }
+
+        #endregion
+
     }
 }

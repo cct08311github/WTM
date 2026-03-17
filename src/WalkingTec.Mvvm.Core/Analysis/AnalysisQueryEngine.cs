@@ -18,11 +18,16 @@ namespace WalkingTec.Mvvm.Core.Analysis
     {
         private readonly GroupByStrategyResolver _resolver;
         private readonly IAnalysisCache? _cache;
+        private readonly TimeSpan _defaultTtl;
 
-        public AnalysisQueryEngine(GroupByStrategyResolver resolver, IAnalysisCache? cache = null)
+        public AnalysisQueryEngine(
+            GroupByStrategyResolver resolver,
+            IAnalysisCache? cache = null,
+            TimeSpan? defaultTtl = null)
         {
             _resolver = resolver;
             _cache = cache;
+            _defaultTtl = defaultTtl ?? TimeSpan.FromMinutes(5);
         }
 
         /// <summary>
@@ -81,7 +86,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 QueryHash = queryHash
             };
 
-            _cache?.Set(queryHash, response);
+            _cache?.Set(queryHash, response, _defaultTtl);
 
             return response;
         }
