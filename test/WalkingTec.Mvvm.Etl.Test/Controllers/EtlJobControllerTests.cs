@@ -358,6 +358,37 @@ public class EtlJobControllerTests
         Assert.IsFalse(dc.EtlJobDefinitions.Any(j => j.ID == job.ID));
     }
 
+    [TestMethod]
+    public void Delete_post_running_job_returns_partial_view_with_error()
+    {
+        // Arrange — seed a Running job (cannot use SeedJob helper which always Disabled)
+        var seed = Guid.NewGuid().ToString();
+        var seedDc = new EtlTestDataContext(seed, DBTypeEnum.Memory);
+        var job = new EtlJobDefinition
+        {
+            Name = "RunningJob",
+            CronExpression = "0 0 * * * ?",
+            Status = EtlJobStatus.Running
+        };
+        seedDc.EtlJobDefinitions.Add(job);
+        seedDc.SaveChanges();
+
+        var ctrl = CreateControllerWithDb(seed);
+        var noUse = new FormCollection(new Dictionary<string, StringValues>());
+
+        // Act
+        var result = ctrl.Delete(job.ID, noUse);
+
+        // Assert — DoDelete guard → model error → PartialView, not FFResult
+        Assert.IsInstanceOfType(result, typeof(PartialViewResult),
+            "Running job Delete POST should return PartialView (model error), not FFResult");
+
+        // Job must still exist in DB
+        var checkDc = new EtlTestDataContext(seed, DBTypeEnum.Memory);
+        Assert.IsTrue(checkDc.EtlJobDefinitions.Any(j => j.ID == job.ID),
+            "Running job should not be deleted");
+    }
+
     // ─── InvalidOperationException → 400 tests ─────────────────────────────
     // Abort 已有此覆蓋；TriggerNow/Pause/Resume/SkipNext 之前缺失。
 
