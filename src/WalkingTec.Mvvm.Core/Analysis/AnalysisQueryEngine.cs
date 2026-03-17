@@ -53,21 +53,29 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
             var filtered = ApplyFilters(baseQuery, req.Filters, wl);
 
-            // 探測原始資料是否會超過 MaxMaterializeRows (50,000)。
-            // Take(N+1) 讓 DB/記憶體只掃到第 N+1 筆即停止，代價遠小於 COUNT(*)。
-            var probeCount = filtered.Take(InProcessGroupByStrategy.MaxMaterializeRows + 1).Count();
-            var dataTruncated = probeCount > InProcessGroupByStrategy.MaxMaterializeRows;
-
             var strategy = _resolver.Resolve(dbType, req);
+            bool dataTruncated = false;
             List<Dictionary<string, object?>> rows;
             try
             {
                 rows = strategy.Execute(filtered, req, wl, cancellationToken);
+                // ServerSideGroupByStrategy issues a SQL GROUP BY — all rows are aggregated
+                // at DB level, so source data is never truncated (#514).
             }
             catch (InvalidOperationException) when (strategy is ServerSideGroupByStrategy)
             {
-                // Server-side SQL 翻譯失敗 → fallback to in-process
+                // SQL 翻譯失敗 → fallback to in-process; probe is now needed.
+                // Take(N+1) 讓 DB/記憶體只掃到第 N+1 筆即停止，代價遠小於 COUNT(*)。
+                var fbProbe = filtered.Take(InProcessGroupByStrategy.MaxMaterializeRows + 1).Count();
+                dataTruncated = fbProbe > InProcessGroupByStrategy.MaxMaterializeRows;
                 rows = new InProcessGroupByStrategy().Execute(filtered, req, wl, cancellationToken);
+            }
+
+            // In-process path: probe whether source exceeds MaxMaterializeRows.
+            if (strategy is InProcessGroupByStrategy)
+            {
+                var probeCount = filtered.Take(InProcessGroupByStrategy.MaxMaterializeRows + 1).Count();
+                dataTruncated = probeCount > InProcessGroupByStrategy.MaxMaterializeRows;
             }
 
             // Resolve enum dimension values to their [Display] names
