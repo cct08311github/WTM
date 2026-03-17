@@ -1213,10 +1213,6 @@
         var st = _state[gridId];
         if (st) st.lastChartType = chartType;
 
-        // Persist the effective chart type so exportData can honour the user's selection (#479)
-        var st = _state[gridId];
-        if (st) st.lastChartType = chartType;
-
         // Build measure key → display label map for human-friendly legends
         var fieldByName = {};
         if (st && st.fields) {
