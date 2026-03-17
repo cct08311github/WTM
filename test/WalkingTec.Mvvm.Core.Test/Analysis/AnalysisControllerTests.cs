@@ -395,6 +395,63 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.IsTrue(csv.Contains("\t+SUM"), "危險值應以 tab 前置");
         }
 
+        // ─── XSS Payload 回歸保護 ─────────────────────────────────────────────
+        //
+        // CSV 是純文字格式，不解析 HTML。測試確認：
+        //   1. XSS payload 不導致例外或崩潰
+        //   2. 輸出中 payload 以原始文字保留（不 HTML-encode 也不截斷）
+        //   3. 不以 formula 字元開頭（<script> 不是 =,+,-,@ 所以不觸發公式轉義）
+
+        [TestMethod]
+        public void Export_csv_with_xss_payload_in_dimension_value_does_not_throw()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord
+                {
+                    ID       = Guid.NewGuid(),
+                    Region   = "<script>alert(1)</script>",
+                    Category = "A",
+                    Amount   = 100m
+                }
+            };
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var result = CreateController().Export(req, "csv") as FileContentResult;
+
+            Assert.IsNotNull(result, "Export should not throw with XSS payload in dimension value");
+            var csv = System.Text.Encoding.UTF8.GetString(result.FileContents).TrimStart('\xEF', '\xBB', '\xBF');
+
+            // payload 應以明文保留（CSV 不解析 HTML）
+            Assert.IsTrue(csv.Contains("<script>"),
+                "XSS payload should be preserved as plain text in CSV");
+            // 不應被 HTML-encode（避免雙重逸脫）
+            Assert.IsFalse(csv.Contains("&lt;script&gt;"),
+                "CSV exporter must not HTML-encode cell values");
+        }
+
+        [TestMethod]
+        public void Export_csv_with_null_byte_in_dimension_value_does_not_throw()
+        {
+            // null byte (\0) 在維度值中不應造成崩潰
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "A\0B", Category = "X", Amount = 50m }
+            };
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            // Should not throw
+            var result = CreateController().Export(req, "csv") as FileContentResult;
+
+            Assert.IsNotNull(result, "Export should not crash on null byte in dimension value");
+        }
+
         // ─── DimensionHierarchies 驗證 ─────────────────────────────────────────
 
         [TestMethod]
