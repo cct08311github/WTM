@@ -1,7 +1,9 @@
 #nullable enable
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Threading;
 
 namespace WalkingTec.Mvvm.Core.Analysis
@@ -15,12 +17,30 @@ namespace WalkingTec.Mvvm.Core.Analysis
         internal const int MaxMaterializeRows = 50_000;
         private const int MaxRows = 10_000;
 
+        /// <summary>
+        /// 跨請求快取：(modelType, propertyName) → 已編譯的 accessor delegate。
+        /// 避免每次請求重新呼叫 Expression.Lambda(...).Compile()。
+        /// </summary>
+        private static readonly ConcurrentDictionary<(Type, string), Func<object, object?>> _accessorCache
+            = new ConcurrentDictionary<(Type, string), Func<object, object?>>();
+
         public List<Dictionary<string, object?>> Execute<TModel>(
             IQueryable<TModel> query,
             AnalysisQueryRequest req,
             Dictionary<string, AnalysisFieldMeta> whitelist,
             CancellationToken cancellationToken = default)
         {
+            // 一次性建立所有需要的 accessor — 迴圈內不再做任何反射
+            var allFields = req.Dimensions
+                .Concat(req.Measures.Select(m => m.Field))
+                .Distinct();
+
+            var accessors = new Dictionary<string, Func<TModel, object?>>();
+            foreach (var field in allFields)
+            {
+                accessors[field] = GetOrCreateAccessor<TModel>(field);
+            }
+
             var queryToRun = query.Take(MaxMaterializeRows);
             var items = new List<TModel>();
             foreach (var item in queryToRun)
@@ -30,7 +50,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             }
 
             return items
-                .GroupBy(row => BuildGroupKey(row, req.Dimensions, req.DimensionHierarchies, whitelist))
+                .GroupBy(row => BuildGroupKey(row, req.Dimensions, req.DimensionHierarchies, accessors))
                 .Take(MaxRows + 1)
                 .Select(g =>
                 {
@@ -44,11 +64,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
                     foreach (var m in req.Measures)
                     {
-                        var propInfo = typeof(TModel).GetProperty(m.Field);
-                        if (propInfo is null)
-                            throw new InvalidOperationException($"Property '{m.Field}' not found on {typeof(TModel).Name}.");
-
-                        var rawValues = g.Select(row => propInfo.GetValue(row)).ToList();
+                        var accessor = accessors[m.Field];
+                        var rawValues = g.Select(row => accessor(row)).ToList();
                         var numericValues = rawValues
                             .Where(v => v != null)
                             .Select(v => Convert.ToDecimal(v))
@@ -71,17 +88,37 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 .ToList();
         }
 
+        /// <summary>
+        /// 從跨請求快取取得（或建立）強型別 accessor，
+        /// 再包裝成 Func&lt;TModel, object?&gt; 供本次請求使用。
+        /// </summary>
+        private static Func<TModel, object?> GetOrCreateAccessor<TModel>(string fieldName)
+        {
+            // 快取的是 Func<object, object?> 以支援非泛型索引
+            var boxed = _accessorCache.GetOrAdd((typeof(TModel), fieldName), key =>
+            {
+                var (type, name) = key;
+                var prop = type.GetProperty(name)
+                    ?? throw new InvalidOperationException($"Property '{name}' not found on {type.Name}.");
+                var param = Expression.Parameter(typeof(object), "x");
+                var cast = Expression.Convert(param, type);
+                var propAccess = Expression.Property(cast, prop);
+                var body = Expression.Convert(propAccess, typeof(object));
+                return Expression.Lambda<Func<object, object?>>(body, param).Compile();
+            });
+
+            // 將 Func<object, object?> 包裝為 Func<TModel, object?> — 無額外反射
+            return row => boxed(row!);
+        }
+
         private static string BuildGroupKey<TModel>(
             TModel row,
             List<string> dimensions,
             Dictionary<string, DateHierarchy>? hierarchies,
-            Dictionary<string, AnalysisFieldMeta> whitelist)
+            Dictionary<string, Func<TModel, object?>> accessors)
             => string.Join('\0', dimensions.Select(d =>
                {
-                   var propInfo = typeof(TModel).GetProperty(d);
-                   if (propInfo is null)
-                       throw new InvalidOperationException($"Property '{d}' not found on {typeof(TModel).Name}.");
-                   var val = propInfo.GetValue(row);
+                   var val = accessors[d](row);
                    if (val == null) return string.Empty;
 
                    if (hierarchies != null
