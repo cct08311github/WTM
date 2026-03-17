@@ -547,7 +547,10 @@ namespace WalkingTec.Mvvm.Mvc
             analysisRegistry.Build(AppDomain.CurrentDomain.GetAssemblies());
             services.AddSingleton(analysisRegistry);
             services.AddMemoryCache();
-            services.AddSingleton<WalkingTec.Mvvm.Core.Analysis.IAnalysisCache, WalkingTec.Mvvm.Core.Analysis.MemoryAnalysisCache>();
+            services.AddSingleton<WalkingTec.Mvvm.Core.Analysis.IAnalysisCache>(sp =>
+                new WalkingTec.Mvvm.Core.Analysis.MemoryAnalysisCache(
+                    sp.GetRequiredService<Microsoft.Extensions.Caching.Memory.IMemoryCache>(),
+                    conf.AnalysisCacheTtl));
             services.AddSingleton<WalkingTec.Mvvm.Core.Analysis.IAnalysisFieldPolicy, WalkingTec.Mvvm.Core.Analysis.DefaultAnalysisFieldPolicy>();
 
             // Dashboard module (opt-in via AddWtmDashboard in app startup)

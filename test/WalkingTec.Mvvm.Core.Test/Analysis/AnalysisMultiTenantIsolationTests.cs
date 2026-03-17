@@ -5,6 +5,7 @@ using System.Linq;
 using System.Linq.Expressions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Analysis;
@@ -215,6 +216,104 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             using var ctx = new WriteContext(opts);
             Assert.AreEqual(3, ctx.TenantSales.Count(),
                 "資料庫應包含所有 3 筆播種資料（2×TenantA + 1×TenantB），確認 filter 是隔離原因而非資料缺失");
+        }
+
+        // ─── 快取 Hash 隔離測試 ──────────────────────────────────────────────────
+
+        /// <summary>
+        /// 驗證相同查詢請求在不同 identityKey（租戶代碼）下產生不同的 QueryHash，
+        /// 確保快取不會發生跨租戶命中。
+        ///
+        /// AnalysisQueryEngine.ComputeHash 將 identityKey 附加至 JSON 序列化字串後再計算 SHA-256，
+        /// 因此不同 identityKey 必然產生不同 hash。
+        /// </summary>
+        [TestMethod]
+        [TestCategory("Integration")]
+        public void Cache_hash_differs_for_different_tenants()
+        {
+            var engine = Engine();
+            var req = Req();
+
+            using var ctxA = CreateReadCtx("A");
+            using var ctxB = CreateReadCtx("B");
+
+            // 分別傳入 identityKey = 租戶代碼，模擬生產環境中 Controller 傳入 LoginUserInfo.TenantCode
+            var resultA = engine.Execute(ctxA.TenantSales.AsQueryable(), req, _whitelist,
+                identityKey: "tenant:A");
+            var resultB = engine.Execute(ctxB.TenantSales.AsQueryable(), req, _whitelist,
+                identityKey: "tenant:B");
+
+            Assert.IsFalse(string.IsNullOrEmpty(resultA.QueryHash),
+                "TenantA 的 QueryHash 不應為空");
+            Assert.IsFalse(string.IsNullOrEmpty(resultB.QueryHash),
+                "TenantB 的 QueryHash 不應為空");
+            Assert.AreNotEqual(resultA.QueryHash, resultB.QueryHash,
+                "不同租戶 identityKey 必須產生不同的 QueryHash，否則快取會發生跨租戶命中");
+        }
+
+        /// <summary>
+        /// 驗證共用快取在有 identityKey 隔離下不發生跨租戶命中。
+        ///
+        /// 步驟：
+        ///   1. 以 TenantA identityKey 執行查詢 → 結果放入快取（hash_A）
+        ///   2. 以 TenantB identityKey 執行相同請求 → hash 不同，不應命中 TenantA 的快取
+        ///   3. 確認 TenantB 只看到自己的 1 筆資料（快取未污染）
+        /// </summary>
+        [TestMethod]
+        [TestCategory("Integration")]
+        public void Cache_does_not_serve_tenantA_result_to_tenantB_when_identity_key_differs()
+        {
+            var mc = new MemoryCache(new MemoryCacheOptions());
+            var cache = new MemoryAnalysisCache(mc);
+            var engine = new AnalysisQueryEngine(GroupByStrategyResolver.Default, cache);
+            var req = Req();
+
+            using var ctxA = CreateReadCtx("A");
+            using var ctxB = CreateReadCtx("B");
+
+            // 第一次：TenantA 查詢，結果寫入快取
+            var resultA = engine.Execute(ctxA.TenantSales.AsQueryable(), req, _whitelist,
+                identityKey: "tenant:A");
+            Assert.AreEqual(2, resultA.Rows.Count, "TenantA 應得到 2 筆資料");
+
+            // 第二次：TenantB 使用不同 identityKey，不應命中 TenantA 的快取項目
+            var resultB = engine.Execute(ctxB.TenantSales.AsQueryable(), req, _whitelist,
+                identityKey: "tenant:B");
+            Assert.AreEqual(1, resultB.Rows.Count,
+                "TenantB 不應命中 TenantA 的快取，必須只看到自己的 1 筆資料");
+
+            var regionsB = resultB.Rows.Select(r => r["Region"]?.ToString()).ToList();
+            CollectionAssert.DoesNotContain(regionsB, "華東",
+                "TenantA 的華東資料不應洩露至 TenantB 的快取命中結果中");
+        }
+
+        /// <summary>
+        /// 驗證未傳入 identityKey 時相同請求共享同一 hash（正常快取行為，
+        /// 提醒框架整合方必須傳入 identityKey 以達成隔離）。
+        ///
+        /// 此測試記錄一個重要限制：若呼叫方未傳入 identityKey，
+        /// AnalysisQueryEngine 本身無法防止跨租戶快取命中，
+        /// 隔離責任在於呼叫端（通常是 _AnalysisController）。
+        /// </summary>
+        [TestMethod]
+        [TestCategory("Integration")]
+        public void Cache_hash_is_same_without_identity_key_documenting_caller_responsibility()
+        {
+            var req = Req();
+            var engine = Engine();
+
+            using var ctxA = CreateReadCtx("A");
+            using var ctxB = CreateReadCtx("B");
+
+            // 不傳 identityKey：相同請求 → 相同 hash（快取可能命中）
+            var resultA = engine.Execute(ctxA.TenantSales.AsQueryable(), req, _whitelist,
+                identityKey: null);
+            var resultB = engine.Execute(ctxB.TenantSales.AsQueryable(), req, _whitelist,
+                identityKey: null);
+
+            // hash 相同是預期行為：呼叫方有責任傳入 identityKey 以啟用快取隔離
+            Assert.AreEqual(resultA.QueryHash, resultB.QueryHash,
+                "未傳 identityKey 時，相同請求結構應產生相同 hash（快取隔離由呼叫方負責）");
         }
     }
 }
