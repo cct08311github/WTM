@@ -13,6 +13,7 @@ using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Analysis;
 using WalkingTec.Mvvm.Mvc;
 using WalkingTec.Mvvm.Test.Mock;
+using WalkingTec.Mvvm.Core.Support.Json;
 
 namespace WalkingTec.Mvvm.Core.Test.Analysis
 {
@@ -1628,5 +1629,125 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.IsNotNull(drawing, "PivotExport includeChart=true 應在 xlsx 中嵌入 Drawing");
             Assert.IsTrue(drawing.GetCharts().Count >= 1);
         }
+        // ─── CheckAccess RBAC 測試 ──────────────────────────────────────────────
+        //
+        // 驗證五個端點（GetMeta / Query / Pivot / Export / PivotExport）的 Forbid 路徑：
+        //   - 缺少必要角色 → ForbidResult
+        //   - Admin 繞過 AllowedRoles → 200
+        //   - 持有正確角色 → 200
+
+        /// <summary>角色限制 VM：只有 "Analyst" 可存取。</summary>
+        [EnableAnalysis(AllowedRoles = "Analyst")]
+        private class RestrictedSaleListVM : BasePagedListVM<SaleRecord, BaseSearcher>
+        {
+            public override IOrderedQueryable<SaleRecord> GetSearchQuery()
+                => _testData.AsQueryable().OrderByDescending(x => x.ID);
+        }
+
+        private _AnalysisController CreateControllerWithRoles(params string[] roles)
+        {
+            var controller = CreateController();
+            controller.Wtm.LoginUserInfo.Roles = roles
+                .Select(r => new SimpleRole { RoleName = r })
+                .ToList();
+            return controller;
+        }
+
+        private static AnalysisQueryRequest RestrictedReq(
+            string[] dims,
+            (string field, AggregateFunc func)[] msrs = null)
+            => new AnalysisQueryRequest
+            {
+                ListVmType = typeof(RestrictedSaleListVM).FullName,
+                Dimensions = dims?.ToList() ?? new List<string>(),
+                Measures   = msrs?.Select(m => new MeasureRequest { Field = m.field, Func = m.func }).ToList()
+                             ?? new List<MeasureRequest>()
+            };
+
+        [TestMethod]
+        public void GetMeta_returns_403_when_user_lacks_required_role()
+        {
+            var controller = CreateControllerWithRoles("Viewer");
+            var result = controller.GetMeta(typeof(RestrictedSaleListVM).FullName);
+            Assert.IsInstanceOfType(result, typeof(ForbidResult),
+                "缺少 Analyst 角色應回傳 ForbidResult");
+        }
+
+        [TestMethod]
+        public void GetMeta_returns_200_when_admin_bypasses_AllowedRoles()
+        {
+            var controller = CreateControllerWithRoles("Admin");
+            var result = controller.GetMeta(typeof(RestrictedSaleListVM).FullName);
+            Assert.IsInstanceOfType(result, typeof(OkObjectResult),
+                "Admin 應繞過 AllowedRoles 限制");
+        }
+
+        [TestMethod]
+        public void GetMeta_returns_200_when_user_has_required_role()
+        {
+            var controller = CreateControllerWithRoles("Analyst");
+            var result = controller.GetMeta(typeof(RestrictedSaleListVM).FullName);
+            Assert.IsInstanceOfType(result, typeof(OkObjectResult),
+                "持有 Analyst 角色應成功存取");
+        }
+
+        [TestMethod]
+        public void Query_returns_403_when_user_lacks_required_role()
+        {
+            var controller = CreateControllerWithRoles("Viewer");
+            var req = RestrictedReq(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+            var result = controller.Query(req);
+            Assert.IsInstanceOfType(result, typeof(ForbidResult),
+                "Query：缺少必要角色應回傳 ForbidResult");
+        }
+
+        [TestMethod]
+        public void Pivot_returns_403_when_user_lacks_required_role()
+        {
+            var controller = CreateControllerWithRoles("Viewer");
+            var req = new AnalysisPivotRequest
+            {
+                ListVmType     = typeof(RestrictedSaleListVM).FullName,
+                Dimensions     = new List<string> { "Region", "Category" },
+                Measures       = new List<MeasureRequest>
+                                 { new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum } },
+                PivotDimension = "Category"
+            };
+            var result = controller.Pivot(req);
+            Assert.IsInstanceOfType(result, typeof(ForbidResult),
+                "Pivot：缺少必要角色應回傳 ForbidResult");
+        }
+
+        [TestMethod]
+        public void Export_returns_403_when_user_lacks_required_role()
+        {
+            var controller = CreateControllerWithRoles("Viewer");
+            var req = RestrictedReq(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+            var result = controller.Export(req);
+            Assert.IsInstanceOfType(result, typeof(ForbidResult),
+                "Export：缺少必要角色應回傳 ForbidResult");
+        }
+
+        [TestMethod]
+        public void PivotExport_returns_403_when_user_lacks_required_role()
+        {
+            var controller = CreateControllerWithRoles("Viewer");
+            var req = new AnalysisPivotRequest
+            {
+                ListVmType     = typeof(RestrictedSaleListVM).FullName,
+                Dimensions     = new List<string> { "Region", "Category" },
+                Measures       = new List<MeasureRequest>
+                                 { new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum } },
+                PivotDimension = "Category"
+            };
+            var result = controller.PivotExport(req);
+            Assert.IsInstanceOfType(result, typeof(ForbidResult),
+                "PivotExport：缺少必要角色應回傳 ForbidResult");
+        }
+
     }
 }
