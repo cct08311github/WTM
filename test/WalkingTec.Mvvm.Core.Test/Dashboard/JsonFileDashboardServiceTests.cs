@@ -178,18 +178,18 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         }
 
         [TestMethod]
-        public void Path_traversal_in_id_throws()
+        public async Task Path_traversal_in_id_throws()
         {
             Func<Task> act = async () => await _service.CreateAsync(
                 new DashboardDefinition { Id = "../../../etc/evil", Title = "hack" });
-            act.Should().ThrowAsync<ArgumentException>();
+            await act.Should().ThrowAsync<ArgumentException>();
         }
 
         [TestMethod]
-        public void Path_traversal_in_tenantId_throws()
+        public async Task Path_traversal_in_tenantId_throws()
         {
             Func<Task> act = async () => await _service.GetAsync("valid-id", "../other_tenant");
-            act.Should().ThrowAsync<ArgumentException>();
+            await act.Should().ThrowAsync<ArgumentException>();
         }
 
         // ─── Widget data parameter bridging tests ─────────────────────────
