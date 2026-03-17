@@ -66,7 +66,7 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
 
         /// <summary>採購金額（TWD）</summary>
         [Measure(
-            AllowedFuncs = AggregateFunc.Sum | AggregateFunc.Avg | AggregateFunc.Max | AggregateFunc.Min,
+            AllowedFuncs = AggregateFunc.Sum | AggregateFunc.Avg | AggregateFunc.Max | AggregateFunc.Min | AggregateFunc.Count,
             DisplayName = "採購金額")]
         public decimal PurchaseAmount { get; set; }
 
@@ -1202,21 +1202,13 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
 
             // 兩個月份的金額應各自獨立
             var months = result.Rows.Select(r => r["DeliveryDate"]?.ToString() ?? "").ToList();
-            Assert.IsTrue(months.Any(m => m.Contains("2026") && m.Contains("01")),
+            Assert.IsTrue(months.Contains("2026-01"),
                 "應有 2026-01 月份分組");
-            Assert.IsTrue(months.Any(m => m.Contains("2026") && m.Contains("02")),
+            Assert.IsTrue(months.Contains("2026-02"),
                 "應有 2026-02 月份分組");
 
-            var jan = result.Rows.Single(r =>
-            {
-                var v = r["DeliveryDate"]?.ToString() ?? "";
-                return v.Contains("2026") && v.Contains("01");
-            });
-            var feb = result.Rows.Single(r =>
-            {
-                var v = r["DeliveryDate"]?.ToString() ?? "";
-                return v.Contains("2026") && v.Contains("02");
-            });
+            var jan = result.Rows.Single(r => r["DeliveryDate"]?.ToString() == "2026-01");
+            var feb = result.Rows.Single(r => r["DeliveryDate"]?.ToString() == "2026-02");
 
             Assert.AreEqual(10_000m, Convert.ToDecimal(jan["PurchaseAmount_Sum"]),
                 "1 月採購金額應為 10,000（1/31 的資料）");

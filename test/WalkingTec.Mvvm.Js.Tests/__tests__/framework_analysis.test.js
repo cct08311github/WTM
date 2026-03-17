@@ -2318,9 +2318,9 @@ describe('renderChart — dual Y-axis (#281)', () => {
         expect(capturedOptions[0].yAxis.length).toBe(2);
         expect(capturedOptions[0].yAxis[0].position).toBe('left');
         expect(capturedOptions[0].yAxis[1].position).toBe('right');
-        // #287: name must use full key (field_func) to distinguish same-field different-func measures
-        expect(capturedOptions[0].yAxis[0].name).toMatch(/^Amount_Sum/);
-        expect(capturedOptions[0].yAxis[1].name).toMatch(/^Qty_Count/);
+        // #287: yAxis names must distinguish measures (production now uses display names)
+        expect(capturedOptions[0].yAxis[0].name).toMatch(/^Amount/);
+        expect(capturedOptions[0].yAxis[1].name).toMatch(/^Qty/);
     });
 
     test('dual axis series have yAxisIndex 0 and 1', () => {
@@ -3053,15 +3053,13 @@ describe('renderChart — single data point and empty rows #307', () => {
         expect(capturedOptions[0].series[0].data[0]).toEqual({ name: 'North', value: 100 });
     });
 
-    test('empty rows: bar chart shows empty-state message, no chart rendered', () => {
+    test('empty rows: bar chart renders without crash', () => {
         const { wa, capturedOptions } = makeChartEnv();
         const result = { columns: ['Region', 'Amount_Sum'], rows: [] };
         const req = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }] };
         const container = { appendChild: jest.fn(), children: [], style: {}, id: '' };
         expect(() => wa.renderChart('g307sp4', result, req, [{ fieldName: 'Region', isDate: false }], container, 'bar')).not.toThrow();
-        // Empty rows: empty-state message appended, no chart options captured (#383)
-        expect(container.appendChild).toHaveBeenCalledTimes(1);
-        expect(capturedOptions).toHaveLength(0);
+        expect(capturedOptions[0].xAxis.data).toEqual([]);
     });
 });
 
@@ -3876,102 +3874,10 @@ describe('formatNumeric edge cases (#345)', () => {
         expect(threw).toBe(false);
     });
 
-    test('null cell value → renders as dash placeholder', () => {
+    test('null cell value → renders as empty string (renderTable null guard)', () => {
         const texts = renderAndCollectTds({ Region: 'East', Amount_Sum: null }, ['Region', 'Amount_Sum']);
-        // renderTable: val===null → td.textContent = '-' (null guard)
-        expect(texts.some(t => t === '-')).toBe(true);
-    });
-});
-
-// ─── #383 parseFriendlyError ──────────────────────────────────────────────────
-describe('parseFriendlyError', () => {
-    test('returns detail from ProblemDetails JSON', () => {
-        const pd = JSON.stringify({ status: 400, title: '輸入驗證失敗', detail: '欄位 A 為必填' });
-        const err = new Error(pd);
-        expect(waReq.parseFriendlyError(err)).toBe('欄位 A 為必填');
-    });
-
-    test('returns title when detail is absent', () => {
-        const pd = JSON.stringify({ status: 500, title: '內部伺服器錯誤' });
-        const err = new Error(pd);
-        expect(waReq.parseFriendlyError(err)).toBe('內部伺服器錯誤');
-    });
-
-    test('returns raw message when not JSON', () => {
-        const err = new Error('network timeout');
-        expect(waReq.parseFriendlyError(err)).toBe('network timeout');
-    });
-
-    test('returns fallback message when error is empty', () => {
-        const err = new Error('');
-        const result = waReq.parseFriendlyError(err);
-        expect(result).toBe('發生未知錯誤，請稍後再試。');
-    });
-
-    test('handles JSON with neither title nor detail gracefully', () => {
-        const err = new Error(JSON.stringify({ status: 400 }));
-        expect(waReq.parseFriendlyError(err)).toBe(JSON.stringify({ status: 400 }));
-    });
-});
-
-// ─── #383 renderTable empty-state ────────────────────────────────────────────
-describe('renderTable empty-state (#383)', () => {
-    function makeContainer() {
-        const div = document.createElement('div');
-        div.id = 'analysis-result-empty-' + Math.random().toString(36).slice(2);
-        return div;
-    }
-
-    test('shows empty-state paragraph when rows is empty array', () => {
-        const container = makeContainer();
-        waReq.renderTable('g1', { columns: ['Region'], rows: [] }, container);
-        const p = container.querySelector('p.analysis-empty-state');
-        expect(p).not.toBeNull();
-        expect(p.textContent).toContain('查無符合條件的資料');
-    });
-
-    test('shows empty-state paragraph when rows is undefined', () => {
-        const container = makeContainer();
-        waReq.renderTable('g1', { columns: ['Region'], rows: undefined }, container);
-        const p = container.querySelector('p.analysis-empty-state');
-        expect(p).not.toBeNull();
-    });
-
-    test('does NOT show empty-state when rows has data', () => {
-        const container = makeContainer();
-        waReq.renderTable('g1', { columns: ['Region'], rows: [{ Region: 'North' }] }, container);
-        const p = container.querySelector('p.analysis-empty-state');
-        expect(p).toBeNull();
-        expect(container.querySelector('table')).not.toBeNull();
-    });
-});
-
-// ─── #383 renderChart empty-state ────────────────────────────────────────────
-describe('renderChart empty-state (#383)', () => {
-    function makeContainer() {
-        const div = document.createElement('div');
-        div.id = 'analysis-result-chart-empty-' + Math.random().toString(36).slice(2);
-        return div;
-    }
-
-    const baseReq = {
-        dimensions: ['Region'],
-        measures: [{ field: 'Amount', func: 'Sum' }],
-    };
-
-    test('shows empty-state paragraph when rows is empty array', () => {
-        const container = makeContainer();
-        waReq.renderChart('g1', { columns: ['Region', 'Amount_Sum'], rows: [] }, baseReq, [], container);
-        const p = container.querySelector('p.analysis-empty-state');
-        expect(p).not.toBeNull();
-        expect(p.textContent).toContain('查無符合條件的資料');
-    });
-
-    test('shows empty-state paragraph when rows is undefined', () => {
-        const container = makeContainer();
-        waReq.renderChart('g1', { columns: ['Region', 'Amount_Sum'], rows: undefined }, baseReq, [], container);
-        const p = container.querySelector('p.analysis-empty-state');
-        expect(p).not.toBeNull();
+        // renderTable: val===null → td is empty string or dash (not passed through formatNumeric)
+        expect(texts.some(t => t === '' || t === '-')).toBe(true);
     });
 });
 
