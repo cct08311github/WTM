@@ -92,6 +92,22 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 => _testData.AsQueryable().OrderByDescending(x => x.ID);
         }
 
+        // ─── nullable enum 搜尋條件（SearcherFormData nullable enum 測試，#471）─────
+
+        private enum PaymentKind { Cash = 0, Card = 1, Transfer = 2 }
+
+        private class EnumSearcher : BaseSearcher
+        {
+            public PaymentKind? Payment { get; set; }
+        }
+
+        [EnableAnalysis]
+        private class EnumSearchListVM : BasePagedListVM<SaleRecord, EnumSearcher>
+        {
+            public override IOrderedQueryable<SaleRecord> GetSearchQuery()
+                => _testData.AsQueryable().OrderByDescending(x => x.ID);
+        }
+
         // ─── 基礎設施 ──────────────────────────────────────────────────────────
 
         private AnalysisVmRegistry _registry;
@@ -586,6 +602,53 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
             var result = CreateController().Query(req) as BadRequestObjectResult;
             Assert.IsNotNull(result, "無效日期格式應回傳 400");
+        }
+
+        // ─── SearcherFormData nullable enum 反序列化（Fixes #471）──────────────
+
+        [DataTestMethod]
+        [DataRow("{\"payment\":\"1\"}", "numeric string")]
+        [DataRow("{\"payment\":\"Card\"}", "enum name string")]
+        [DataRow("{\"payment\":1}",       "numeric literal")]
+        public void Query_accepts_nullable_enum_in_SearcherFormData(string json, string label)
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 100m }
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(EnumSearchListVM).FullName,
+                Dimensions = new List<string> { "Region" },
+                Measures = new List<MeasureRequest> { new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum } },
+                SearcherFormData = json
+            };
+
+            var result = CreateController().Query(req);
+            Assert.IsNotInstanceOfType(result, typeof(BadRequestObjectResult),
+                $"nullable enum 格式 '{label}' 應被接受，不應回傳 400");
+        }
+
+        [TestMethod]
+        public void Query_accepts_absent_nullable_enum_in_SearcherFormData()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 100m }
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(EnumSearchListVM).FullName,
+                Dimensions = new List<string> { "Region" },
+                Measures = new List<MeasureRequest> { new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum } },
+                SearcherFormData = "{}" // 空搜尋條件（前端未選擇 enum dropdown）
+            };
+
+            var result = CreateController().Query(req);
+            Assert.IsNotInstanceOfType(result, typeof(BadRequestObjectResult),
+                "未選擇 enum 時應正常執行，不應回傳 400");
         }
 
         // ─── Null request guard (#268) ──────────────────────────────────────
