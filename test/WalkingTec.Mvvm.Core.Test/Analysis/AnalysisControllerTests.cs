@@ -1766,5 +1766,92 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 "xlsx cell should store verbatim XSS string, not HTML-encoded");
         }
 
+
+
+        [TestMethod]
+        public void GetMeta_returns_403_when_user_lacks_required_role()
+        {
+            var controller = CreateControllerWithRoles("Viewer");
+            var result = controller.GetMeta(typeof(RestrictedSaleListVM).FullName);
+            Assert.IsInstanceOfType(result, typeof(ForbidResult),
+                "缺少 Analyst 角色應回傳 ForbidResult");
+        }
+
+        [TestMethod]
+        public void GetMeta_returns_200_when_admin_bypasses_AllowedRoles()
+        {
+            var controller = CreateControllerWithRoles("Admin");
+            var result = controller.GetMeta(typeof(RestrictedSaleListVM).FullName);
+            Assert.IsInstanceOfType(result, typeof(OkObjectResult),
+                "Admin 應繞過 AllowedRoles 限制");
+        }
+
+        [TestMethod]
+        public void GetMeta_returns_200_when_user_has_required_role()
+        {
+            var controller = CreateControllerWithRoles("Analyst");
+            var result = controller.GetMeta(typeof(RestrictedSaleListVM).FullName);
+            Assert.IsInstanceOfType(result, typeof(OkObjectResult),
+                "持有 Analyst 角色應成功存取");
+        }
+
+        [TestMethod]
+        public void Query_returns_403_when_user_lacks_required_role()
+        {
+            var controller = CreateControllerWithRoles("Viewer");
+            var req = RestrictedReq(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+            var result = controller.Query(req);
+            Assert.IsInstanceOfType(result, typeof(ForbidResult),
+                "Query：缺少必要角色應回傳 ForbidResult");
+        }
+
+        [TestMethod]
+        public void Pivot_returns_403_when_user_lacks_required_role()
+        {
+            var controller = CreateControllerWithRoles("Viewer");
+            var req = new AnalysisPivotRequest
+            {
+                ListVmType     = typeof(RestrictedSaleListVM).FullName,
+                Dimensions     = new List<string> { "Region", "Category" },
+                Measures       = new List<MeasureRequest>
+                                 { new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum } },
+                PivotDimension = "Category"
+            };
+            var result = controller.Pivot(req);
+            Assert.IsInstanceOfType(result, typeof(ForbidResult),
+                "Pivot：缺少必要角色應回傳 ForbidResult");
+        }
+
+        [TestMethod]
+        public void Export_returns_403_when_user_lacks_required_role()
+        {
+            var controller = CreateControllerWithRoles("Viewer");
+            var req = RestrictedReq(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+            var result = controller.Export(req);
+            Assert.IsInstanceOfType(result, typeof(ForbidResult),
+                "Export：缺少必要角色應回傳 ForbidResult");
+        }
+
+        [TestMethod]
+        public void PivotExport_returns_403_when_user_lacks_required_role()
+        {
+            var controller = CreateControllerWithRoles("Viewer");
+            var req = new AnalysisPivotRequest
+            {
+                ListVmType     = typeof(RestrictedSaleListVM).FullName,
+                Dimensions     = new List<string> { "Region", "Category" },
+                Measures       = new List<MeasureRequest>
+                                 { new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum } },
+                PivotDimension = "Category"
+            };
+            var result = controller.PivotExport(req);
+            Assert.IsInstanceOfType(result, typeof(ForbidResult),
+                "PivotExport：缺少必要角色應回傳 ForbidResult");
+        }
+
     }
 }
