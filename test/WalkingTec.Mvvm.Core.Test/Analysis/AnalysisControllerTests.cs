@@ -9,6 +9,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Analysis;
 using WalkingTec.Mvvm.Mvc;
+using WalkingTec.Mvvm.Core.Support.Json;
 using WalkingTec.Mvvm.Test.Mock;
 
 namespace WalkingTec.Mvvm.Core.Test.Analysis
@@ -1481,5 +1482,128 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.AreEqual(0xBB, result.FileContents[1], "第 2 byte 應為 BOM BB");
             Assert.AreEqual(0xBF, result.FileContents[2], "第 3 byte 應為 BOM BF");
         }
+        // ─── #362: RBAC 角色存取控制測試模型 ──────────────────────────────────────
+
+        // 此 VM 限定只有 "Analyst" 角色才能存取
+        [EnableAnalysis(AllowedRoles = "Analyst")]
+        private class RestrictedSaleRecordListVM : BasePagedListVM<SaleRecord, BaseSearcher>
+        {
+            public override IOrderedQueryable<SaleRecord> GetSearchQuery()
+                => _testData.AsQueryable().OrderByDescending(x => x.ID);
+        }
+
+        /// <summary>建立帶有指定角色的 controller（null roles = 無角色）。</summary>
+        private _AnalysisController CreateControllerWithRoles(string[] roles)
+        {
+            var controller = new _AnalysisController(_registry, Microsoft.Extensions.Logging.Abstractions.NullLogger<_AnalysisController>.Instance, null, null);
+            var wtm = MockWtmContext.CreateWtmContext();
+            wtm.LoginUserInfo.Roles = roles?.Select(r => new SimpleRole { RoleName = r }).ToList();
+            controller.Wtm = wtm;
+            return controller;
+        }
+
+        // ─── #362: CheckAccess 覆蓋測試 ─────────────────────────────────────────
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void GetMeta_returns_403_when_user_has_no_roles()
+        {
+            // Roles=null → CheckAccess returns false for restricted VM
+            var ctrl = CreateControllerWithRoles(null);
+            var result = ctrl.GetMeta(typeof(RestrictedSaleRecordListVM).FullName);
+            Assert.IsInstanceOfType(result, typeof(ForbidResult), "無角色使用者應收到 403 Forbid");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void GetMeta_returns_403_when_user_has_wrong_role()
+        {
+            var ctrl = CreateControllerWithRoles(new[] { "Viewer" });
+            var result = ctrl.GetMeta(typeof(RestrictedSaleRecordListVM).FullName);
+            Assert.IsInstanceOfType(result, typeof(ForbidResult), "錯誤角色使用者應收到 403 Forbid");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void GetMeta_returns_200_when_user_has_required_role()
+        {
+            var ctrl = CreateControllerWithRoles(new[] { "Analyst" });
+            var result = ctrl.GetMeta(typeof(RestrictedSaleRecordListVM).FullName);
+            Assert.IsInstanceOfType(result, typeof(OkObjectResult), "擁有 Analyst 角色應通過存取控制");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void GetMeta_returns_200_when_user_is_admin()
+        {
+            // Admin 角色可繞過所有 AllowedRoles 設定
+            var ctrl = CreateControllerWithRoles(new[] { "Admin" });
+            var result = ctrl.GetMeta(typeof(RestrictedSaleRecordListVM).FullName);
+            Assert.IsInstanceOfType(result, typeof(OkObjectResult), "Admin 應可繞過 AllowedRoles 限制");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void GetMeta_returns_200_when_allowedRoles_is_empty()
+        {
+            // 無 AllowedRoles 設定的 VM → 所有使用者均可存取
+            var ctrl = CreateControllerWithRoles(null);
+            var result = ctrl.GetMeta(typeof(SaleRecordListVM).FullName);
+            Assert.IsInstanceOfType(result, typeof(OkObjectResult), "未設 AllowedRoles 時應開放存取");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Query_returns_403_when_user_lacks_required_role()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "North", Category = "A", Amount = 100m },
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(RestrictedSaleRecordListVM).FullName,
+                Dimensions = new List<string> { "Region" },
+                Measures   = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+            };
+
+            var ctrl = CreateControllerWithRoles(new[] { "Viewer" });
+            var result = ctrl.Query(req);
+            Assert.IsInstanceOfType(result, typeof(ForbidResult), "無授權角色的 Query 應收到 403");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Export_returns_403_when_user_lacks_required_role()
+        {
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(RestrictedSaleRecordListVM).FullName,
+                Dimensions = new List<string> { "Region" },
+                Measures   = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+            };
+
+            var ctrl = CreateControllerWithRoles(null);
+            var result = ctrl.Export(req);
+            Assert.IsInstanceOfType(result, typeof(ForbidResult), "無授權角色的 Export 應收到 403");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Admin_role_case_insensitive_is_accepted()
+        {
+            // "admin"（小寫）應與 "Admin" 相同，允許繞過 AllowedRoles
+            var ctrl = CreateControllerWithRoles(new[] { "admin" });
+            var result = ctrl.GetMeta(typeof(RestrictedSaleRecordListVM).FullName);
+            Assert.IsInstanceOfType(result, typeof(OkObjectResult), "小寫 admin 應被視為 Admin");
+        }
+
     }
 }
