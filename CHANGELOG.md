@@ -2,9 +2,40 @@
 
 ## [Unreleased]
 
+## [8.6.1] - 2026-03-17
+
 ### Added
-- **Analysis Mode — 雙 Y 軸（Dual Y-Axis）**：當 2 個度量最大值差距 ≥ 10 倍時自動啟用，ECharts 左右 Y 軸分離，NPOI Excel 產生 secondary value axis（#281）
-- **Analysis Mode — 金額縮放（Currency Scaling）**：依最大值自動選擇元/萬元/百萬元/億元顯示單位，Y 軸標題與 Excel header 附加單位，tooltip 仍顯示原始精確值（#281）
+- **ETL — `CompositeEtlSource`**：多來源 Union 模式，支援跨資料庫合併載入（#425）
+- **Dashboard — `inferChartType`**：依維度/度量組合自動選擇最佳圖表類型（Bar/Line/Stacked/Card）（#431）
+- **Dashboard — KPI 告警閾值著色**：超過風控閾值時 Card Widget 自動標色，支援即時風控場景（#386）
+- **Dashboard — 響應式斷點**：Widget 格局依視窗寬度自動調整欄數（#344）
+- **Analysis — Excel 匯出格式化**：Bold header、自動欄寬、`#,##0.00` 數字格式（#378）
+- **Analysis — 合規匯出 Metadata**：`includeMetadata=true` 參數新增 Metadata 工作表，含查詢條件、欄位清單、QueryHash（#385）
+- **Analysis — VM 層級 RBAC**：`[AllowedRoles]` attribute 限制整個 ListVM 的可見度（#339）
+- **Analysis — 欄位層級 RBAC**：`[AllowedRoles]` 可套用於個別 Dimension/Measure 欄位（#341）
+- **Analysis — 結構化 Logging**：`AnalysisController` 所有端點加入 structured log（#340）
+- **Analysis — CancellationToken**：Query/Export 路徑支援請求取消，避免 DB 長跑查詢浪費資源（#326）
+- **Analysis — Ad-hoc Filter UI**：BA 可在前端動態新增篩選條件列（欄位 + 運算子 + 值）（#313）
+- **Analysis — 雙 Y 軸 + 金額縮放**：2 個度量最大值差距 ≥ 10 倍時自動啟用雙 Y 軸；依最大值自動選擇元/萬元/百萬元/億元縮放單位（#281）
+- **ETL — MergeKeyColumn 唯一性驗證**：Job 建立時驗證 MergeKey 欄在目標表為唯一索引（#342）
+- **ETL — 5 欄位 Unix Cron 自動轉換**：輸入標準 5 欄位 Cron 運算式自動轉 Quartz 6 欄位格式（#343）
+- **Analysis — 快取 Hash 含租戶/使用者 ID**：防止跨租戶快取穿透（#314）
+
+### Fixed
+- **ETL**：`EtlJobDefinitionVM.Validate()` catch 範圍縮小，DB 連線錯誤現在正確回報至 UI（#353）
+- **ETL**：`Rerun` / `TriggerNow` / `Pause` / `Resume` / `SkipNext` 端點加入 `InvalidOperationException` 處理，回傳 400 而非 500（#359 #367）
+- **Analysis**：CSV 匯出加入 UTF-8 BOM，Windows Excel 開啟不再出現亂碼（#379）
+- **Analysis**：空資料時 Query 回傳 `{ rows: [], truncated: false }` 並附帶友善提示訊息，不再回傳空 body（#383）
+- **Analysis**：GroupBy 維度 key 中的 null bytes（`\0`）改為空字串，防止 ECharts 標籤顯示異常（#372）
+- **Analysis**：`collectFilters` 欄位名稱 `op` → `operator`，並新增最少一個維度的前端驗證（#347 #348 #349）
+- **Analysis**：`Avg` / `Max` / `Min` 在分組無資料時回傳 `null`，不再誤回傳 `0`（#336）
+- **Analysis**：`FilterOperator.In` 過濾運算子補回（#331）
+- **Analysis**：GroupBy 分隔符改為 Unicode 私用區字元，防止維度值含逗號時分組錯誤（#332）
+- **Analysis**：切換圖表類型時正確 dispose 舊 ECharts 實例，避免記憶體洩漏（#333）
+- **Analysis**：`Count` 聚合改為計算非 null 值數量（#337）
+- **Analysis**：`DateHierarchy` 模式下自動降級為 InProcess 策略（#338）
+- **Analysis**：`AutoSizeColumn` 加 try-catch，修復 CI Linux 無字型環境下的例外（#378）
+- **Dashboard**：`Create` / `Update` 端點驗證 `WidgetType` 不得為空字串或空白（#382）
 
 ## [8.6.0] - 2026-03-12
 
