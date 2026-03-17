@@ -1,12 +1,18 @@
 #nullable enable
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Primitives;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Etl.Models;
 using WalkingTec.Mvvm.Etl.Scheduling;
+using WalkingTec.Mvvm.Etl.Test.ViewModels;
+using WalkingTec.Mvvm.Etl.ViewModels;
 using WalkingTec.Mvvm.Mvc;
 using WalkingTec.Mvvm.Test.Mock;
 
@@ -156,6 +162,200 @@ public class EtlJobControllerTests
         Assert.IsNotNull(result);
         Assert.AreEqual(200, result!.StatusCode);
         _mockScheduler.Verify(x => x.RescheduleAsync(id, validCron), Times.Once);
+    }
+
+    // ─── CRUD tests (#357) ─────────────────────────────────────────────────
+
+    // Helper: create a controller wired to an EtlTestDataContext with the given seed
+    private _EtlJobController CreateControllerWithDb(string seed)
+    {
+        var dc = new EtlTestDataContext(seed, DBTypeEnum.Memory);
+        var mockSp = new Mock<IServiceProvider>();
+        var scheduler = new Mock<EtlSchedulerService>(mockSp.Object);
+
+        var ctrl = new _EtlJobController(scheduler.Object);
+        ctrl.Wtm = MockWtmContext.CreateWtmContext(dc);
+
+        var mockHttp = new Mock<HttpContext>();
+        var session = new MockHttpSession();
+        mockHttp.Setup(s => s.Session).Returns(session);
+        mockHttp.Setup(x => x.Request).Returns(new DefaultHttpContext().Request);
+        ctrl.ControllerContext.HttpContext = mockHttp.Object;
+        ctrl.Wtm.MSD = new ModelStateServiceProvider(ctrl.ModelState);
+        return ctrl;
+    }
+
+    // Helper: seed one disabled job into the named in-memory DB
+    private static EtlJobDefinition SeedJob(string seed)
+    {
+        var dc = new EtlTestDataContext(seed, DBTypeEnum.Memory);
+        var job = new EtlJobDefinition
+        {
+            Name = "SeedJob",
+            CronExpression = "0 0 * * * ?",
+            JobClassName = "TestClass",
+            SourceCsKey = "src",
+            TargetCsKey = "tgt",
+            TargetTableName = "Orders",
+            MergeKeyColumn = "Id",
+            QueryTemplate = "SELECT * FROM Orders",
+            Status = EtlJobStatus.Disabled
+        };
+        dc.EtlJobDefinitions.Add(job);
+        dc.SaveChanges();
+        return job;
+    }
+
+    [TestMethod]
+    public void Index_returns_partial_view()
+    {
+        var result = _controller.Index() as PartialViewResult;
+
+        Assert.IsNotNull(result);
+    }
+
+    [TestMethod]
+    public void Search_returns_content_json()
+    {
+        var seed = Guid.NewGuid().ToString();
+        SeedJob(seed);
+        var ctrl = CreateControllerWithDb(seed);
+
+        var result = ctrl.Search(new EtlJobSearcher()) as ContentResult;
+
+        Assert.IsNotNull(result);
+        Assert.IsNotNull(result!.Content);
+    }
+
+    [TestMethod]
+    public void Create_get_returns_partial_view_with_new_vm()
+    {
+        var result = _controller.Create() as PartialViewResult;
+
+        Assert.IsNotNull(result);
+        Assert.IsInstanceOfType(result!.Model, typeof(EtlJobDefinitionVM));
+    }
+
+    [TestMethod]
+    public void Create_post_invalid_modelstate_returns_partial_view()
+    {
+        _controller.ModelState.AddModelError("Entity.Name", "Required");
+        var vm = _controller.Wtm.CreateVM<EtlJobDefinitionVM>();
+
+        var result = _controller.Create(vm) as PartialViewResult;
+
+        Assert.IsNotNull(result);
+    }
+
+    [TestMethod]
+    public void Create_post_valid_vm_adds_job_and_returns_fresult()
+    {
+        var seed = Guid.NewGuid().ToString();
+        var ctrl = CreateControllerWithDb(seed);
+
+        // Get VM from Create GET (so Wtm/DC/MSD are properly wired)
+        var rv = ctrl.Create() as PartialViewResult;
+        Assert.IsNotNull(rv);
+        var vm = rv!.Model as EtlJobDefinitionVM;
+        Assert.IsNotNull(vm);
+
+        vm!.Entity.Name = "NewJob";
+        vm.Entity.CronExpression = "0 0 * * * ?";
+        vm.Entity.JobClassName = "TestClass";
+        vm.Entity.SourceCsKey = "src";
+        vm.Entity.TargetCsKey = "tgt";
+        vm.Entity.TargetTableName = "Orders";
+        vm.Entity.MergeKeyColumn = "Id";
+        vm.Entity.QueryTemplate = "SELECT * FROM Orders";
+        vm.Entity.Status = EtlJobStatus.Disabled;
+
+        var result = ctrl.Create(vm) as ContentResult;
+
+        Assert.IsNotNull(result, "Valid Create POST should return ContentResult (FFResult)");
+
+        // Verify persisted
+        var dc = new EtlTestDataContext(seed, DBTypeEnum.Memory);
+        Assert.IsTrue(dc.EtlJobDefinitions.Any(j => j.Name == "NewJob"));
+    }
+
+    [TestMethod]
+    public void Edit_get_returns_partial_view_with_loaded_entity()
+    {
+        var seed = Guid.NewGuid().ToString();
+        var job = SeedJob(seed);
+        var ctrl = CreateControllerWithDb(seed);
+
+        var result = ctrl.Edit(job.ID) as PartialViewResult;
+
+        Assert.IsNotNull(result);
+        var vm = result!.Model as EtlJobDefinitionVM;
+        Assert.IsNotNull(vm);
+        Assert.AreEqual(job.ID, vm!.Entity.ID);
+    }
+
+    [TestMethod]
+    public void Edit_post_invalid_modelstate_returns_partial_view()
+    {
+        _controller.ModelState.AddModelError("Entity.Name", "Required");
+        var vm = _controller.Wtm.CreateVM<EtlJobDefinitionVM>();
+
+        var result = _controller.Edit(vm) as PartialViewResult;
+
+        Assert.IsNotNull(result);
+    }
+
+    [TestMethod]
+    public void Edit_post_valid_vm_updates_job_and_returns_fresult()
+    {
+        var seed = Guid.NewGuid().ToString();
+        var job = SeedJob(seed);
+        var ctrl = CreateControllerWithDb(seed);
+
+        // Get VM from Edit GET so DC is wired
+        var rv = ctrl.Edit(job.ID) as PartialViewResult;
+        var vm = rv!.Model as EtlJobDefinitionVM;
+        Assert.IsNotNull(vm);
+
+        vm!.Entity.Name = "UpdatedJob";
+        vm.FC = new Dictionary<string, object> { ["Entity.Name"] = "" };
+
+        var result = ctrl.Edit(vm) as ContentResult;
+
+        Assert.IsNotNull(result, "Valid Edit POST should return ContentResult (FFResult)");
+
+        var dc = new EtlTestDataContext(seed, DBTypeEnum.Memory);
+        Assert.AreEqual("UpdatedJob", dc.EtlJobDefinitions.First(j => j.ID == job.ID).Name);
+    }
+
+    [TestMethod]
+    public void Delete_get_returns_partial_view_with_loaded_entity()
+    {
+        var seed = Guid.NewGuid().ToString();
+        var job = SeedJob(seed);
+        var ctrl = CreateControllerWithDb(seed);
+
+        var result = ctrl.Delete(job.ID) as PartialViewResult;
+
+        Assert.IsNotNull(result);
+        var vm = result!.Model as EtlJobDefinitionVM;
+        Assert.IsNotNull(vm);
+        Assert.AreEqual(job.ID, vm!.Entity.ID);
+    }
+
+    [TestMethod]
+    public void Delete_post_valid_removes_job_and_returns_fresult()
+    {
+        var seed = Guid.NewGuid().ToString();
+        var job = SeedJob(seed);
+        var ctrl = CreateControllerWithDb(seed);
+        var noUse = new FormCollection(new Dictionary<string, StringValues>());
+
+        var result = ctrl.Delete(job.ID, noUse) as ContentResult;
+
+        Assert.IsNotNull(result, "Valid Delete POST should return ContentResult (FFResult)");
+
+        var dc = new EtlTestDataContext(seed, DBTypeEnum.Memory);
+        Assert.IsFalse(dc.EtlJobDefinitions.Any(j => j.ID == job.ID));
     }
 
     // ─── InvalidOperationException → 400 tests ─────────────────────────────

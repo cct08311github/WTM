@@ -417,5 +417,135 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.IsNotNull(bytes);
             Assert.IsTrue(bytes.Length > 0);
         }
+
+        // ─── #378: Header formatting (bold + gray background) ─────────────────
+
+        [TestMethod]
+        public void Export_header_cells_are_bold()
+        {
+            var resp = MakeResponse(
+                new List<string> { "Region", "Amount_Sum" },
+                new List<Dictionary<string, object?>>
+                {
+                    new() { ["Region"] = "North", ["Amount_Sum"] = 100m }
+                });
+
+            var wb = OpenWorkbook(AnalysisExcelExporter.Export(resp));
+            var sheet = wb.GetSheetAt(0);
+            var headerCell = sheet.GetRow(0).GetCell(0);
+
+            Assert.IsNotNull(headerCell.CellStyle, "Header cell should have a style");
+            Assert.IsTrue(wb.GetFontAt(headerCell.CellStyle.FontIndex).IsBold,
+                "Header font should be bold");
+        }
+
+        [TestMethod]
+        public void Export_header_cells_have_gray_background()
+        {
+            var resp = MakeResponse(
+                new List<string> { "Region", "Amount_Sum" },
+                new List<Dictionary<string, object?>>
+                {
+                    new() { ["Region"] = "North", ["Amount_Sum"] = 100m }
+                });
+
+            var wb = OpenWorkbook(AnalysisExcelExporter.Export(resp));
+            var sheet = wb.GetSheetAt(0);
+            var headerCell = sheet.GetRow(0).GetCell(0);
+
+            Assert.AreEqual(FillPattern.SolidForeground, headerCell.CellStyle.FillPattern,
+                "Header cell should use SolidForeground fill pattern");
+            Assert.AreNotEqual(0, headerCell.CellStyle.FillForegroundColor,
+                "Header cell should have a non-default fill colour");
+        }
+
+        // ─── #378: Numeric format for measure columns ─────────────────────────
+
+        [TestMethod]
+        public void Export_numeric_columns_have_number_format_applied()
+        {
+            var resp = MakeResponse(
+                new List<string> { "Region", "Amount_Sum" },
+                new List<Dictionary<string, object?>>
+                {
+                    new() { ["Region"] = "North", ["Amount_Sum"] = 1_234_567.89m }
+                });
+
+            var wb = OpenWorkbook(AnalysisExcelExporter.Export(resp));
+            var sheet = wb.GetSheetAt(0);
+            var numericCell = sheet.GetRow(1).GetCell(1); // Amount_Sum
+
+            Assert.IsNotNull(numericCell.CellStyle);
+            // DataFormat index 0 = "General" (no formatting); any custom format > 0
+            Assert.AreNotEqual(0, numericCell.CellStyle.DataFormat,
+                "Numeric measure cell should have a custom number format (not General)");
+        }
+
+        [TestMethod]
+        public void Export_string_columns_do_not_have_numeric_format()
+        {
+            var resp = MakeResponse(
+                new List<string> { "Region", "Amount_Sum" },
+                new List<Dictionary<string, object?>>
+                {
+                    new() { ["Region"] = "North", ["Amount_Sum"] = 100m }
+                });
+
+            var wb = OpenWorkbook(AnalysisExcelExporter.Export(resp));
+            var sheet = wb.GetSheetAt(0);
+            var stringCell = sheet.GetRow(1).GetCell(0); // Region (string)
+
+            // String cell should either have no style or the General (0) format
+            var fmt = stringCell.CellStyle?.DataFormat ?? 0;
+            Assert.AreEqual(0, fmt, "String dimension cell should use General format (no custom numeric format)");
+        }
+
+        // ─── #378: Column auto-sizing ─────────────────────────────────────────
+
+        [TestMethod]
+        public void Export_columns_are_wider_than_single_char_default()
+        {
+            var resp = MakeResponse(
+                new List<string> { "Region", "Amount_Sum" },
+                new List<Dictionary<string, object?>>
+                {
+                    new() { ["Region"] = "North", ["Amount_Sum"] = 100m }
+                });
+
+            var wb = OpenWorkbook(AnalysisExcelExporter.Export(resp));
+            var sheet = wb.GetSheetAt(0);
+
+            // Default NPOI column width is 2048 units (8 chars * 256); after AutoSizeColumn
+            // it should be wider than 1 character (256 units).
+            for (int c = 0; c < 2; c++)
+            {
+                Assert.IsTrue(sheet.GetColumnWidth(c) > 256,
+                    $"Column {c} width should exceed 1 character after AutoSizeColumn");
+            }
+        }
+
+        [TestMethod]
+        public void Export_very_long_column_content_is_capped_at_max_width()
+        {
+            var longValue = new string('A', 200); // 200-char string > 50-char cap
+            var resp = MakeResponse(
+                new List<string> { "LongCol" },
+                new List<Dictionary<string, object?>>
+                {
+                    new() { ["LongCol"] = longValue }
+                });
+
+            var wb = OpenWorkbook(AnalysisExcelExporter.Export(resp));
+            var sheet = wb.GetSheetAt(0);
+
+            Assert.IsTrue(sheet.GetColumnWidth(0) <= AnalysisExcelExporter.MaxColumnWidth,
+                "Column width should be capped at MaxColumnWidth");
+        }
+
+        [TestMethod]
+        public void MaxColumnWidth_is_fifty_chars()
+        {
+            Assert.AreEqual(50 * 256, AnalysisExcelExporter.MaxColumnWidth);
+        }
     }
 }

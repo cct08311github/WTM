@@ -39,6 +39,19 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         /// <summary>
+        /// 帶有可空字串維度的測試模型，用於驗證 null 字串分組行為。
+        /// </summary>
+        private class NullableStringRecord
+        {
+            [Dimension(DisplayName = "地區")]
+            public string? Region { get; set; }
+
+            [Measure(AllowedFuncs = AggregateFunc.Sum | AggregateFunc.Count,
+                DisplayName = "金額")]
+            public decimal Amount { get; set; }
+        }
+
+        /// <summary>
         /// 帶有 DateTime 維度的測試模型，用於驗證日期階層截斷。
         /// </summary>
         private class DateSaleRecord
@@ -63,6 +76,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         private InProcessGroupByStrategy _strategy = null!;
         private Dictionary<string, AnalysisFieldMeta> _whitelist = null!;
         private Dictionary<string, AnalysisFieldMeta> _dateWhitelist = null!;
+        private Dictionary<string, AnalysisFieldMeta> _nullableStringWhitelist = null!;
 
         [TestInitialize]
         public void Setup()
@@ -71,6 +85,8 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             _whitelist = AnalysisFieldScanner.ScanModel(typeof(SaleRecord))
                 .ToDictionary(f => f.FieldName);
             _dateWhitelist = AnalysisFieldScanner.ScanModel(typeof(DateSaleRecord))
+                .ToDictionary(f => f.FieldName);
+            _nullableStringWhitelist = AnalysisFieldScanner.ScanModel(typeof(NullableStringRecord))
                 .ToDictionary(f => f.FieldName);
         }
 
@@ -647,6 +663,74 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             var nullByteRow = rows.Single(r => r["Region"]?.ToString() == "A\0B");
             Assert.AreEqual(300m, Convert.ToDecimal(nullByteRow["Amount_Sum"]),
                 "含 \\0 的單維度應正確聚合 100+200=300");
+        }
+
+        // ─── nullable string 維度分組 (#376) ──────────────────────────────────
+
+        [TestMethod]
+        public void Null_string_dimension_grouped_as_empty_string()
+        {
+            // null 維度值應以空字串作為 group key，落入 "" 分組
+            var data = new List<NullableStringRecord>
+            {
+                new NullableStringRecord { Region = null,    Amount = 100m },
+                new NullableStringRecord { Region = null,    Amount = 200m },
+                new NullableStringRecord { Region = "North", Amount = 300m },
+            };
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var rows = _strategy.Execute(data.AsQueryable(), req, _nullableStringWhitelist);
+
+            Assert.AreEqual(2, rows.Count, "null 和非 null 應分成 2 個分組");
+            var nullGroup = rows.Single(r => r["Region"]?.ToString() == "");
+            Assert.AreEqual(300m, Convert.ToDecimal(nullGroup["Amount_Sum"]),
+                "null Region 的兩筆 100+200 應聚合為 300");
+        }
+
+        [TestMethod]
+        public void Empty_string_dimension_grouped_as_empty_string()
+        {
+            // 空字串與 null 都映射到相同 group key（空字串）
+            var data = new List<NullableStringRecord>
+            {
+                new NullableStringRecord { Region = "",      Amount = 50m },
+                new NullableStringRecord { Region = "",      Amount = 75m },
+                new NullableStringRecord { Region = "South", Amount = 200m },
+            };
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var rows = _strategy.Execute(data.AsQueryable(), req, _nullableStringWhitelist);
+
+            Assert.AreEqual(2, rows.Count, "空字串和非空字串應分成 2 個分組");
+            var emptyGroup = rows.Single(r => r["Region"]?.ToString() == "");
+            Assert.AreEqual(125m, Convert.ToDecimal(emptyGroup["Amount_Sum"]),
+                "空字串 Region 的兩筆 50+75 應聚合為 125");
+        }
+
+        [TestMethod]
+        public void Null_and_empty_string_dimension_merged_into_same_group()
+        {
+            // null 和 "" 的 group key 相同，應合併到同一分組
+            var data = new List<NullableStringRecord>
+            {
+                new NullableStringRecord { Region = null, Amount = 100m },
+                new NullableStringRecord { Region = "",   Amount = 200m },
+                new NullableStringRecord { Region = "X",  Amount = 999m },
+            };
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var rows = _strategy.Execute(data.AsQueryable(), req, _nullableStringWhitelist);
+
+            Assert.AreEqual(2, rows.Count, "null 與 \"\" 應合併為同一分組，共 2 個分組");
+            var mergedGroup = rows.Single(r => r["Region"]?.ToString() == "");
+            Assert.AreEqual(300m, Convert.ToDecimal(mergedGroup["Amount_Sum"]),
+                "null(100) + \"\"(200) 應合併聚合為 300");
         }
     }
 }
