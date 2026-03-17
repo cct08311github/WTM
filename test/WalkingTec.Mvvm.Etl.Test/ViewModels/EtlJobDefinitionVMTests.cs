@@ -133,4 +133,70 @@ public class EtlJobDefinitionVMTests
         Assert.IsTrue(HasError(vm.MSD, "Entity.CronExpression"),
             "無效的 Cron 表達式應加入 ModelError");
     }
+
+    // ─── DoDelete 保護邏輯 (#429) ─────────────────────────────────────────────
+
+    [TestMethod]
+    public void DoDelete_running_job_adds_model_error_and_does_not_delete()
+    {
+        // Arrange — seed a Running job into the in-memory DB
+        var seed = Guid.NewGuid().ToString();
+        var dc = new EtlTestDataContext(seed, DBTypeEnum.Memory);
+        var job = new EtlJobDefinition
+        {
+            Name = "RunningJob",
+            CronExpression = "0 0 * * * ?",
+            Status = EtlJobStatus.Running
+        };
+        dc.EtlJobDefinitions.Add(job);
+        dc.SaveChanges();
+
+        var wtm = MockWtmContext.CreateWtmContext(new EtlTestDataContext(seed, DBTypeEnum.Memory));
+        var vm = wtm.CreateVM<EtlJobDefinitionVM>();
+        vm.Entity = job;
+
+        // Act
+        vm.DoDelete();
+
+        // Assert — ModelError added
+        Assert.IsTrue(HasError(vm.MSD, ""),
+            "Running 狀態的 Job 呼叫 DoDelete 應加入 ModelError");
+
+        // Assert — entity still in DB
+        var checkDc = new EtlTestDataContext(seed, DBTypeEnum.Memory);
+        Assert.IsTrue(checkDc.EtlJobDefinitions.Any(j => j.ID == job.ID),
+            "Running 狀態的 Job 不應被刪除");
+    }
+
+    [TestMethod]
+    public void DoDelete_disabled_job_deletes_successfully()
+    {
+        // Arrange — seed a Disabled job
+        var seed = Guid.NewGuid().ToString();
+        var dc = new EtlTestDataContext(seed, DBTypeEnum.Memory);
+        var job = new EtlJobDefinition
+        {
+            Name = "DisabledJob",
+            CronExpression = "0 0 * * * ?",
+            Status = EtlJobStatus.Disabled
+        };
+        dc.EtlJobDefinitions.Add(job);
+        dc.SaveChanges();
+
+        var wtm = MockWtmContext.CreateWtmContext(new EtlTestDataContext(seed, DBTypeEnum.Memory));
+        var vm = wtm.CreateVM<EtlJobDefinitionVM>();
+        vm.Entity = job;
+
+        // Act
+        vm.DoDelete();
+
+        // Assert — no ModelError
+        Assert.IsFalse(HasError(vm.MSD, ""),
+            "Disabled Job 刪除不應產生 ModelError");
+
+        // Assert — entity removed from DB
+        var checkDc = new EtlTestDataContext(seed, DBTypeEnum.Memory);
+        Assert.IsFalse(checkDc.EtlJobDefinitions.Any(j => j.ID == job.ID),
+            "Disabled Job 應成功從 DB 刪除");
+    }
 }
