@@ -307,6 +307,76 @@ describe('wtmAnalysis.query', () => {
         expect(warningNode.textContent).toMatch(/截斷/);
     });
 
+    test('result.dataTruncated=true → 顯示來源截斷橘色警告 (#490)', async () => {
+        const { wa, makePanel, mockFetch, mockDocument } = makeEnv();
+        const panel = makePanel('analysis-panel-grid4dt');
+        const appended = [];
+        const resultDiv = {
+            id: 'analysis-result-grid4dt', textContent: '', children: [],
+            appendChild: jest.fn((c) => appended.push(c)),
+            firstChild: null, removeChild: jest.fn(),
+        };
+        mockDocument.getElementById.mockImplementation((id) => {
+            if (id === 'analysis-panel-grid4dt') return panel;
+            if (id === 'analysis-result-grid4dt') return resultDiv;
+            return null;
+        });
+        mockDocument.querySelectorAll.mockReturnValue(fakeCheckedCbs('grid4dt'));
+        mockFetch
+            .mockResolvedValueOnce({ ok: false, text: jest.fn().mockResolvedValue('err') }) // loadMeta
+            .mockResolvedValueOnce({
+                ok: true,
+                json: jest.fn().mockResolvedValue({
+                    dataTruncated: true, truncated: false, totalCount: 500,
+                    columns: ['Region'], rows: [{ Region: '華東' }]
+                })
+            });
+
+        wa.toggle('grid4dt', 'MyVm');
+        wa.query('grid4dt');
+
+        await new Promise(r => setTimeout(r, 50));
+
+        const dataWarnNode = appended.find(c => c.className && c.className.includes('alert-orange'));
+        expect(dataWarnNode).toBeDefined();
+        expect(dataWarnNode.textContent).toMatch(/50,000/);
+        expect(dataWarnNode.textContent).toMatch(/不準確/);
+    });
+
+    test('result.dataTruncated=false → 不顯示來源截斷警告 (#490)', async () => {
+        const { wa, makePanel, mockFetch, mockDocument } = makeEnv();
+        const panel = makePanel('analysis-panel-grid4dtf');
+        const appended = [];
+        const resultDiv = {
+            id: 'analysis-result-grid4dtf', textContent: '', children: [],
+            appendChild: jest.fn((c) => appended.push(c)),
+            firstChild: null, removeChild: jest.fn(),
+        };
+        mockDocument.getElementById.mockImplementation((id) => {
+            if (id === 'analysis-panel-grid4dtf') return panel;
+            if (id === 'analysis-result-grid4dtf') return resultDiv;
+            return null;
+        });
+        mockDocument.querySelectorAll.mockReturnValue(fakeCheckedCbs('grid4dtf'));
+        mockFetch
+            .mockResolvedValueOnce({ ok: false, text: jest.fn().mockResolvedValue('err') }) // loadMeta
+            .mockResolvedValueOnce({
+                ok: true,
+                json: jest.fn().mockResolvedValue({
+                    dataTruncated: false, truncated: false, totalCount: 3,
+                    columns: ['Region'], rows: [{ Region: '華東' }]
+                })
+            });
+
+        wa.toggle('grid4dtf', 'MyVm');
+        wa.query('grid4dtf');
+
+        await new Promise(r => setTimeout(r, 50));
+
+        const dataWarnNode = appended.find(c => c.className && c.className.includes('alert-orange'));
+        expect(dataWarnNode).toBeUndefined();
+    });
+
     test('rows=[] → clearChildren 清除舊資料後顯示 analysis-empty-state (#441)', async () => {
         const { wa, makePanel, mockFetch, mockDocument } = makeEnv();
         const panel = makePanel('analysis-panel-grid4e');
@@ -1065,6 +1135,70 @@ describe('[cov] waReq.query — branches', () => {
         waReq.query('scovQ3');
         await new Promise(r => setTimeout(r, 40));
         expect(resultDiv.innerHTML).toMatch(/截斷/);
+    });
+
+    test('query dataTruncated=true → shows orange data-truncation banner (#490)', async () => {
+        const panel = document.createElement('div');
+        panel.id = 'analysis-panel-scovDT1';
+        const resultDiv = document.createElement('div');
+        resultDiv.id = 'analysis-result-scovDT1';
+        global.fetch = jest.fn()
+            .mockResolvedValueOnce({ ok: false, text: jest.fn().mockResolvedValue('err') })
+            .mockResolvedValueOnce({
+                ok: true,
+                json: jest.fn().mockResolvedValue({
+                    dataTruncated: true, truncated: false, totalCount: 200,
+                    columns: ['R'], rows: [{ R: 'x' }]
+                })
+            });
+        const dimCb = { dataset: { kind: 'Dimension', fieldName: 'R', gridId: 'scovDT1' }, nextElementSibling: null };
+        const msrCb = { dataset: { kind: 'Measure', fieldName: 'A', gridId: 'scovDT1', defaultFunc: 'Sum' }, nextElementSibling: null };
+        spySetup(
+            function(id) {
+                if (id === 'analysis-panel-scovDT1') return panel;
+                if (id === 'analysis-result-scovDT1') return resultDiv;
+                return null;
+            },
+            function() { return [dimCb, msrCb]; }
+        );
+        waReq.toggle('scovDT1', 'VmDT1');
+        await new Promise(r => setTimeout(r, 20));
+        waReq.query('scovDT1');
+        await new Promise(r => setTimeout(r, 40));
+        expect(resultDiv.innerHTML).toMatch(/alert-orange/);
+        expect(resultDiv.innerHTML).toMatch(/50,000/);
+        expect(resultDiv.innerHTML).toMatch(/不準確/);
+    });
+
+    test('query dataTruncated=false → no orange banner (#490)', async () => {
+        const panel = document.createElement('div');
+        panel.id = 'analysis-panel-scovDT2';
+        const resultDiv = document.createElement('div');
+        resultDiv.id = 'analysis-result-scovDT2';
+        global.fetch = jest.fn()
+            .mockResolvedValueOnce({ ok: false, text: jest.fn().mockResolvedValue('err') })
+            .mockResolvedValueOnce({
+                ok: true,
+                json: jest.fn().mockResolvedValue({
+                    dataTruncated: false, truncated: false, totalCount: 5,
+                    columns: ['R'], rows: [{ R: 'x' }]
+                })
+            });
+        const dimCb = { dataset: { kind: 'Dimension', fieldName: 'R', gridId: 'scovDT2' }, nextElementSibling: null };
+        const msrCb = { dataset: { kind: 'Measure', fieldName: 'A', gridId: 'scovDT2', defaultFunc: 'Sum' }, nextElementSibling: null };
+        spySetup(
+            function(id) {
+                if (id === 'analysis-panel-scovDT2') return panel;
+                if (id === 'analysis-result-scovDT2') return resultDiv;
+                return null;
+            },
+            function() { return [dimCb, msrCb]; }
+        );
+        waReq.toggle('scovDT2', 'VmDT2');
+        await new Promise(r => setTimeout(r, 20));
+        waReq.query('scovDT2');
+        await new Promise(r => setTimeout(r, 40));
+        expect(resultDiv.innerHTML).not.toMatch(/alert-orange/);
     });
 
     test('query toggleRow → sets display=block after success', async () => {

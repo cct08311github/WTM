@@ -48,6 +48,11 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
             var filtered = ApplyFilters(baseQuery, req.Filters, wl);
 
+            // 探測原始資料是否會超過 MaxMaterializeRows (50,000)。
+            // Take(N+1) 讓 DB/記憶體只掃到第 N+1 筆即停止，代價遠小於 COUNT(*)。
+            var probeCount = filtered.Take(InProcessGroupByStrategy.MaxMaterializeRows + 1).Count();
+            var dataTruncated = probeCount > InProcessGroupByStrategy.MaxMaterializeRows;
+
             var strategy = _resolver.Resolve(dbType, req);
             List<Dictionary<string, object?>> rows;
             try
@@ -78,6 +83,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 Rows = rows,
                 TotalCount = totalCount,
                 Truncated = truncated,
+                DataTruncated = dataTruncated,
                 QueryHash = queryHash
             };
 

@@ -20,6 +20,12 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// <summary>是否因超過 10,000 筆而截斷。</summary>
         public bool Truncated { get; set; }
 
+        /// <summary>
+        /// 原始資料列數是否超過 50,000 而被截斷。
+        /// 當為 true 時，Sum/Avg 等聚合結果僅基於部分資料，可能不準確。
+        /// </summary>
+        public bool DataTruncated { get; set; }
+
         /// <summary>Phase 2 快取識別用，目前留空。</summary>
         public string QueryHash { get; set; } = string.Empty;
     }
