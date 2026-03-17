@@ -357,7 +357,20 @@ namespace WalkingTec.Mvvm.Core.Analysis
             if (value == null) return null;
             if (targetType.IsEnum)
             {
-                if (value is string s) return Enum.Parse(targetType, s, true);
+                if (value is string s)
+                {
+                    // Fast path: member name ("Regular") or numeric string ("1")
+                    if (Enum.TryParse(targetType, s, ignoreCase: true, out var parsed)) return parsed;
+
+                    // Slow path: chart clicks send [Display(Name)] values (e.g. "一般") after
+                    // ResolveEnumDisplayNames has translated them. Reverse-lookup. (#473)
+                    foreach (var member in Enum.GetValues(targetType))
+                    {
+                        if (((Enum)member).GetEnumDisplayName() == s)
+                            return member;
+                    }
+                    throw new ArgumentException($"Requested value '{s}' was not found.");
+                }
                 return Enum.ToObject(targetType, value);
             }
             return Convert.ChangeType(value, targetType);
