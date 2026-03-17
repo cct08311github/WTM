@@ -111,6 +111,7 @@ namespace WalkingTec.Mvvm.Mvc
             try
             {
                 var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache, _cacheTtl).ExecuteDynamic(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
+                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache, _cacheTtl).ExecuteDynamic(baseQuery, req, fields, identityKey: identityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
                 sw.Stop();
                 _logger.LogInformation("Analysis query completed ListVm={ListVmType} Dims={DimCount} Msrs={MsrCount} ElapsedMs={Elapsed} Truncated={Truncated}",
                     req.ListVmType, req.Dimensions.Count, req.Measures.Count, sw.ElapsedMilliseconds, result.Truncated);
@@ -136,6 +137,7 @@ namespace WalkingTec.Mvvm.Mvc
             try
             {
                 var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache, _cacheTtl).ExecutePivotDynamic(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
+                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache, _cacheTtl).ExecutePivotDynamic(baseQuery, req, fields, identityKey: identityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
                 sw.Stop();
                 _logger.LogInformation("Analysis pivot completed ListVm={ListVmType} Dims={DimCount} Msrs={MsrCount} Pivot={PivotDim} ElapsedMs={Elapsed}",
                     req.ListVmType, req.Dimensions.Count, req.Measures.Count, req.PivotDimension, sw.ElapsedMilliseconds);
@@ -169,6 +171,7 @@ namespace WalkingTec.Mvvm.Mvc
             try
             {
                 result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache, _cacheTtl).ExecuteDynamic(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
+                result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache, _cacheTtl).ExecuteDynamic(baseQuery, req, fields, identityKey: identityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
                 sw.Stop();
                 _logger.LogInformation("Analysis export completed ListVm={ListVmType} Format={Format} ElapsedMs={Elapsed}",
                     req.ListVmType, format, sw.ElapsedMilliseconds);
@@ -221,6 +224,7 @@ namespace WalkingTec.Mvvm.Mvc
             try
             {
                 result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache, _cacheTtl).ExecutePivotDynamic(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
+                result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache, _cacheTtl).ExecutePivotDynamic(baseQuery, req, fields, identityKey: identityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
                 sw.Stop();
                 _logger.LogInformation("Analysis pivot export completed ListVm={ListVmType} Format={Format} ElapsedMs={Elapsed}",
                     req.ListVmType, format, sw.ElapsedMilliseconds);
