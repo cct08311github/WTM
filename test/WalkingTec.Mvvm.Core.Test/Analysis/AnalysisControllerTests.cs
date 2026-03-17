@@ -1429,5 +1429,57 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.IsInstanceOfType(result, typeof(BadRequestObjectResult),
                 "PivotExport：不在白名單中的維度欄位應回傳 400");
         }
+
+        // ─── CSV UTF-8 BOM 迴歸測試 ───────────────────────────────────────────
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Export_csv_starts_with_utf8_bom()
+        {
+            // Windows Excel 需要 UTF-8 BOM（EF BB BF）才能正確識別 UTF-8 編碼，
+            // 否則中文欄位會顯示亂碼。此測試確保 BOM 不被意外移除。
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var result = CreateController().Export(req, "csv") as FileContentResult;
+            Assert.IsNotNull(result);
+
+            // UTF-8 BOM = EF BB BF
+            Assert.IsTrue(result.FileContents.Length >= 3, "CSV 內容不應為空");
+            Assert.AreEqual(0xEF, result.FileContents[0], "第 1 byte 應為 BOM EF");
+            Assert.AreEqual(0xBB, result.FileContents[1], "第 2 byte 應為 BOM BB");
+            Assert.AreEqual(0xBF, result.FileContents[2], "第 3 byte 應為 BOM BF");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public void Export_pivot_csv_starts_with_utf8_bom()
+        {
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 100m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華南", Category = "B", Amount = 200m },
+            };
+
+            var req = new AnalysisPivotRequest
+            {
+                ListVmType     = typeof(SaleRecordListVM).FullName,
+                Dimensions     = new List<string> { "Region", "Category" },
+                Measures       = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+                PivotDimension = "Category"
+            };
+
+            var result = CreateController().PivotExport(req, "csv") as FileContentResult;
+            Assert.IsNotNull(result, "PivotExport CSV 應回傳 FileContentResult");
+
+            Assert.IsTrue(result.FileContents.Length >= 3, "Pivot CSV 內容不應為空");
+            Assert.AreEqual(0xEF, result.FileContents[0], "第 1 byte 應為 BOM EF");
+            Assert.AreEqual(0xBB, result.FileContents[1], "第 2 byte 應為 BOM BB");
+            Assert.AreEqual(0xBF, result.FileContents[2], "第 3 byte 應為 BOM BF");
+        }
     }
 }
