@@ -244,7 +244,9 @@ namespace WalkingTec.Mvvm.Mvc
             if (format.Equals("csv", StringComparison.OrdinalIgnoreCase))
             {
                 var csv = BuildCsv(result);
-                return File(Encoding.UTF8.GetBytes(csv), "text/csv", "analysis.csv");
+                var csvEnc = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
+                var csvBytes = csvEnc.GetPreamble().Concat(csvEnc.GetBytes(csv)).ToArray();
+                return File(csvBytes, "text/csv", "analysis.csv");
             }
 
             var xlsx = AnalysisExcelExporter.Export(result, includeChart, chartType);
@@ -325,7 +327,9 @@ namespace WalkingTec.Mvvm.Mvc
             if (format.Equals("csv", StringComparison.OrdinalIgnoreCase))
             {
                 var csv = BuildCsv(queryResult);
-                return File(Encoding.UTF8.GetBytes(csv), "text/csv", "analysis_pivot.csv");
+                var pivotCsvEnc = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
+                var pivotCsvBytes = pivotCsvEnc.GetPreamble().Concat(pivotCsvEnc.GetBytes(csv)).ToArray();
+                return File(pivotCsvBytes, "text/csv", "analysis_pivot.csv");
             }
 
             var xlsx = AnalysisExcelExporter.Export(queryResult, includeChart, chartType);
