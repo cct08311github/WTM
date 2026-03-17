@@ -417,16 +417,10 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         private static IQueryable InvokeGetSearchQuery(BaseVM vm, Type vmType)
-        {
-            var method = vmType.GetMethod("GetSearchQuery");
-            return (method?.Invoke(vm, null) as IQueryable)!;
-        }
+            => AnalysisVmInvoker.GetSearchQuery(vm, vmType);
 
-        private static IEnumerable<AnalysisFieldMeta> InvokeGetAnalysisFields(BaseVM vm, Type vmType)
-        {
-            var method = vmType.GetMethod("GetAnalysisFields");
-            return (method?.Invoke(vm, null) as IEnumerable<AnalysisFieldMeta>)!;
-        }
+        private static IList<AnalysisFieldMeta> InvokeGetAnalysisFields(BaseVM vm, Type vmType)
+            => AnalysisVmInvoker.GetAnalysisFields(vm, vmType);
 
         private static string BuildCsv(AnalysisQueryResponse result, bool includeMetadata = false)
         {

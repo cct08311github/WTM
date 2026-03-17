@@ -1,8 +1,6 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Reflection;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -65,18 +63,15 @@ public class AnalysisWidgetDataSource : IWidgetDataSource
         if (wtm != null) vm.Wtm = wtm;
 
         // 3. Get base query via reflection
-        var baseQuery = InvokeGetSearchQuery(vm, vmType)
-            ?? throw new InvalidOperationException(
-                $"VM type '{vmType.FullName}' GetSearchQuery() returned null.");
+        var baseQuery = AnalysisVmInvoker.GetSearchQuery(vm, vmType);
 
         // 4. Get analysis field whitelist
-        var fields = InvokeGetAnalysisFields(vm, vmType);
+        var fields = AnalysisVmInvoker.GetAnalysisFields(vm, vmType);
 
         // 5. Build AnalysisQueryRequest from widget parameters
         var analysisReq = BuildAnalysisRequest(request.Parameters);
 
-        // 6. Execute via engine (handles TargetInvocationException unwrapping internally)
-        // 6. Execute via engine (handles TargetInvocationException unwrapping internally)
+        // 6. Execute via engine
         string? identityKey = wtm?.LoginUserInfo != null ? $"{wtm.LoginUserInfo.CurrentTenant}_{wtm.LoginUserInfo.UserId}" : null;
         var response = _engine.ExecuteDynamic(baseQuery, analysisReq, fields, identityKey: identityKey, cancellationToken: ct);
 
@@ -112,54 +107,5 @@ public class AnalysisWidgetDataSource : IWidgetDataSource
             req.Filters = JsonSerializer.Deserialize<List<FilterCondition>>(filters) ?? new List<FilterCondition>();
 
         return req;
-    }
-
-    private static IQueryable InvokeGetSearchQuery(BaseVM vm, Type vmType)
-    {
-        var method = vmType.GetMethod(
-            "GetSearchQuery",
-            BindingFlags.Instance | BindingFlags.Public,
-            null,
-            Type.EmptyTypes,
-            null);
-        if (method == null)
-            throw new InvalidOperationException(
-                $"VM type '{vmType.FullName}' does not have a GetSearchQuery() method.");
-        try
-        {
-            var result = method.Invoke(vm, null);
-            if (result is IQueryable q) return q;
-            throw new InvalidOperationException(
-                $"VM type '{vmType.FullName}' GetSearchQuery() did not return IQueryable.");
-        }
-        catch (TargetInvocationException ex)
-        {
-            throw ex.InnerException ?? ex;
-        }
-    }
-
-    private static IEnumerable<AnalysisFieldMeta> InvokeGetAnalysisFields(BaseVM vm, Type vmType)
-    {
-        var method = vmType.GetMethod(
-            "GetAnalysisFields",
-            BindingFlags.Instance | BindingFlags.Public,
-            null,
-            Type.EmptyTypes,
-            null);
-        if (method == null)
-            throw new InvalidOperationException(
-                $"VM type '{vmType.FullName}' does not have a GetAnalysisFields() method.");
-        try
-        {
-            var result = method.Invoke(vm, null) as IEnumerable<AnalysisFieldMeta>;
-            if (result is null)
-                throw new InvalidOperationException(
-                    $"VM type '{vmType.FullName}' GetAnalysisFields() returned null.");
-            return result;
-        }
-        catch (TargetInvocationException ex)
-        {
-            throw ex.InnerException ?? ex;
-        }
     }
 }
