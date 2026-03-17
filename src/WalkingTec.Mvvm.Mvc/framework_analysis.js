@@ -380,7 +380,7 @@
                 pivotEnabled: false, pivotDim: null,
                 dims: [], msrs: [], dimHierarchies: {},
                 sortableInstances: {},
-                lastResult: null, lastReq: null, lastDimFields: null
+                lastResult: null, lastReq: null, lastDimFields: null, lastChartType: null
             };
         }
 
@@ -1210,6 +1210,10 @@
         });
         var chartType = forceChartType || detectChartType(dimMeta, req.measures);
 
+        // Persist the effective chart type so exportData can honour the user's selection (#479)
+        var st = _state[gridId];
+        if (st) st.lastChartType = chartType;
+
         // Build measure key → display label map for human-friendly legends
         var st = _state[gridId];
         var fieldByName = {};
@@ -1403,6 +1407,11 @@
                 currentHierarchies[k] = st.lastReq.dimensionHierarchies[k];
             });
         }
+        // Guard: date dim already at deepest hierarchy level (Day) — cannot drill further
+        if (isDate && currentHierarchies[dimField] && !nextHierarchy(currentHierarchies[dimField])) return;
+        // Guard: non-date dim already has a filter for this field — cannot drill further
+        if (!isDate && currentFilters.some(function (f) { return f.field === dimField; })) return;
+
         var label = isDate ? formatDateKey(value) : String(value);
         st.drillStack.push({ filters: currentFilters, dimensionHierarchies: currentHierarchies, label: label });
         var newFilters = currentFilters.concat([buildDrillFilter(dimField, value)]);
@@ -1521,7 +1530,7 @@
         var dimMeta = dims.map(function (d) {
             return (st.fields || []).find(function (f) { return f.fieldName === d; }) || { isDate: false };
         });
-        var currentChartType = detectChartType(dimMeta, msrs);
+        var currentChartType = (st && st.lastChartType) || detectChartType(dimMeta, msrs);
         var endpoint = isPivot ? '/_analysis/pivot/export' : '/_analysis/export';
         return fetch(endpoint + '?format=' + encodeURIComponent(format) + '&includeChart=' + includeChart + '&chartType=' + encodeURIComponent(currentChartType), {
             method: 'POST',
