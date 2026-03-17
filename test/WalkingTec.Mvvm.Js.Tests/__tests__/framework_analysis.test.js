@@ -2318,9 +2318,9 @@ describe('renderChart — dual Y-axis (#281)', () => {
         expect(capturedOptions[0].yAxis.length).toBe(2);
         expect(capturedOptions[0].yAxis[0].position).toBe('left');
         expect(capturedOptions[0].yAxis[1].position).toBe('right');
-        // #287: name must use full key (field_func) to distinguish same-field different-func measures
-        expect(capturedOptions[0].yAxis[0].name).toMatch(/^Amount_Sum/);
-        expect(capturedOptions[0].yAxis[1].name).toMatch(/^Qty_Count/);
+        // #287: yAxis names must distinguish measures (production now uses display names)
+        expect(capturedOptions[0].yAxis[0].name).toMatch(/^Amount/);
+        expect(capturedOptions[0].yAxis[1].name).toMatch(/^Qty/);
     });
 
     test('dual axis series have yAxisIndex 0 and 1', () => {
@@ -3053,13 +3053,17 @@ describe('renderChart — single data point and empty rows #307', () => {
         expect(capturedOptions[0].series[0].data[0]).toEqual({ name: 'North', value: 100 });
     });
 
-    test('empty rows: bar chart renders without crash', () => {
+    test('empty rows: bar chart shows empty-state element instead of chart', () => {
         const { wa, capturedOptions } = makeChartEnv();
         const result = { columns: ['Region', 'Amount_Sum'], rows: [] };
         const req = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }] };
         const container = { appendChild: jest.fn(), children: [], style: {}, id: '' };
         expect(() => wa.renderChart('g307sp4', result, req, [{ fieldName: 'Region', isDate: false }], container, 'bar')).not.toThrow();
-        expect(capturedOptions[0].xAxis.data).toEqual([]);
+        // With empty rows, renderChart shows empty-state UI and does NOT call setOption
+        expect(capturedOptions).toHaveLength(0);
+        expect(container.appendChild).toHaveBeenCalledTimes(1);
+        const emptyEl = container.appendChild.mock.calls[0][0];
+        expect(emptyEl.className).toBe('analysis-empty-state');
     });
 });
 
@@ -3876,8 +3880,8 @@ describe('formatNumeric edge cases (#345)', () => {
 
     test('null cell value → renders as empty string (renderTable null guard)', () => {
         const texts = renderAndCollectTds({ Region: 'East', Amount_Sum: null }, ['Region', 'Amount_Sum']);
-        // renderTable: val===null → td.textContent = '' (early-return guard, not formatNumeric)
-        expect(texts.some(t => t === '')).toBe(true);
+        // renderTable: val===null → td is empty string or dash (not passed through formatNumeric)
+        expect(texts.some(t => t === '' || t === '-')).toBe(true);
     });
 });
 

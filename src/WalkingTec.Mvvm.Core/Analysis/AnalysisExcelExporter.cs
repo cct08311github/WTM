@@ -15,25 +15,57 @@ namespace WalkingTec.Mvvm.Core.Analysis
     /// </summary>
     public static class AnalysisExcelExporter
     {
+        // Maximum column width in NPOI units (1/256 of a character). Caps at 50 characters.
+        internal const int MaxColumnWidth = 50 * 256;
+
         /// <summary>
         /// 匯出分析結果為 Excel（xlsx），回傳位元組陣列。
         /// </summary>
         /// <param name="result">查詢結果</param>
         /// <param name="includeChart">是否嵌入圖表（預設 false）</param>
         /// <param name="chartType">圖表類型：bar, pie, line, bar-stacked（預設 bar）</param>
+
         public static byte[] Export(AnalysisQueryResponse result, bool includeChart = false, string? chartType = null)
         {
             using var workbook = new XSSFWorkbook();
             var sheet = workbook.CreateSheet("Analysis");
 
-            // Header row — write original column names without unit decoration
+            // ── Styles ────────────────────────────────────────────────────────────
+            // Header: bold font + light-gray background
+            var headerFont = workbook.CreateFont();
+            headerFont.IsBold = true;
+            var headerStyle = workbook.CreateCellStyle();
+            headerStyle.SetFont(headerFont);
+            headerStyle.FillForegroundColor = IndexedColors.Grey25Percent.Index;
+            headerStyle.FillPattern = FillPattern.SolidForeground;
+
+            // Numeric data: thousand-separator format (e.g. 1,234,567.89)
+            var numericStyle = workbook.CreateCellStyle();
+            var numericFormat = workbook.CreateDataFormat();
+            numericStyle.DataFormat = numericFormat.GetFormat("#,##0.00");
+
+            // ── Header row — write original column names without unit decoration ──
             var header = sheet.CreateRow(0);
             for (int i = 0; i < result.Columns.Count; i++)
             {
-                header.CreateCell(i).SetCellValue(result.Columns[i]);
+                var cell = header.CreateCell(i);
+                cell.SetCellValue(result.Columns[i]);
+                cell.CellStyle = headerStyle;
             }
 
-            // Data rows
+            // ── Detect numeric (measure) columns from first data row ──────────────
+            var numericColIndices = new HashSet<int>();
+            if (result.Rows.Count > 0)
+            {
+                for (int c = 0; c < result.Columns.Count; c++)
+                {
+                    result.Rows[0].TryGetValue(result.Columns[c], out var firstVal);
+                    if (firstVal is decimal or double or float or int or long)
+                        numericColIndices.Add(c);
+                }
+            }
+
+            // ── Data rows ─────────────────────────────────────────────────────────
             for (int r = 0; r < result.Rows.Count; r++)
             {
                 var row = sheet.CreateRow(r + 1);
@@ -45,15 +77,36 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         cell.SetCellValue((double)d);
                     else if (val is double db)
                         cell.SetCellValue(db);
-                    else if (val is float f)
-                        cell.SetCellValue(f);
-                    else if (val is int i)
-                        cell.SetCellValue(i);
-                    else if (val is long l)
-                        cell.SetCellValue(l);
+                    else if (val is float fv)
+                        cell.SetCellValue(fv);
+                    else if (val is int iv)
+                        cell.SetCellValue(iv);
+                    else if (val is long lv)
+                        cell.SetCellValue(lv);
                     else
                         cell.SetCellValue(val?.ToString() ?? "");
+
+                    if (numericColIndices.Contains(c))
+                        cell.CellStyle = numericStyle;
                 }
+            }
+
+            // ── Auto-size all columns, cap at MaxColumnWidth ──────────────────────
+            for (int i = 0; i < result.Columns.Count; i++)
+            {
+                // AutoSizeColumn requires system fonts (SixLabors.Fonts). On CI Linux runners
+                // without fonts installed, it throws. Fall back to a header-length heuristic.
+                try
+                {
+                    sheet.AutoSizeColumn(i);
+                }
+                catch
+                {
+                    int headerLen = result.Columns[i].Length;
+                    sheet.SetColumnWidth(i, Math.Min(Math.Max(headerLen * 512, 3000), MaxColumnWidth));
+                }
+                if (sheet.GetColumnWidth(i) > MaxColumnWidth)
+                    sheet.SetColumnWidth(i, MaxColumnWidth);
             }
 
             if (includeChart && result.Rows.Count > 0 && result.Columns.Count >= 2)
