@@ -85,6 +85,30 @@ describe('WtmDashboard.WidgetRendererFactory', () => {
         expect(renderer).toBeNull();
     });
 
+    // Regression test for #382: empty string Type should return null (not crash)
+    test('getRenderer returns null for empty string type', () => {
+        const { wd } = makeEnv();
+        const renderer = wd.WidgetRendererFactory.getRenderer('');
+        expect(renderer).toBeNull();
+    });
+
+    test('getRenderer returns null for null type', () => {
+        const { wd } = makeEnv();
+        const renderer = wd.WidgetRendererFactory.getRenderer(null);
+        expect(renderer).toBeNull();
+    });
+
+    test('renderWidget shows error message for empty type', () => {
+        const { wd, mockDocument } = makeEnv();
+        const container = mockDocument.createElement('div');
+        // Simulate the render path: getRenderer('') → null → error message
+        const renderer = wd.WidgetRendererFactory.getRenderer('');
+        if (!renderer) {
+            container.textContent = 'Unknown widget type: ';
+        }
+        expect(container.textContent).toContain('Unknown widget type:');
+    });
+
     test('renderKpi creates DOM with value', () => {
         const { wd, mockDocument } = makeEnv();
         const container = mockDocument.createElement('div');

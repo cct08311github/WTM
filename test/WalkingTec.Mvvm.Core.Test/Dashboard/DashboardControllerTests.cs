@@ -226,6 +226,100 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
                 => new List<DashCtrlTestRecord>().AsQueryable().OrderBy(x => x.ID);
         }
 
+        // ─── Widget Type validation (#382) ────────────────────────────────────
+
+        [TestMethod]
+        public async Task Create_returns_400_when_widget_type_is_empty_string()
+        {
+            SetUser("bob");
+            var dashboard = new DashboardDefinition
+            {
+                Widgets = new Dictionary<string, WidgetDefinition>
+                {
+                    { "w1", new WidgetDefinition { Type = "" } }
+                }
+            };
+
+            var result = await _controller.Create(dashboard) as BadRequestObjectResult;
+
+            result.Should().NotBeNull("空字串 Widget Type 應被拒絕");
+            result!.Value.Should().BeOfType<string>()
+                .Which.Should().Contain("w1");
+        }
+
+        [TestMethod]
+        public async Task Create_returns_400_when_widget_type_is_whitespace()
+        {
+            SetUser("bob");
+            var dashboard = new DashboardDefinition
+            {
+                Widgets = new Dictionary<string, WidgetDefinition>
+                {
+                    { "w1", new WidgetDefinition { Type = "   " } }
+                }
+            };
+
+            var result = await _controller.Create(dashboard) as BadRequestObjectResult;
+
+            result.Should().NotBeNull("空白字串 Widget Type 應被拒絕");
+        }
+
+        [TestMethod]
+        public async Task Create_accepts_valid_widget_type()
+        {
+            SetUser("bob");
+            _service.Setup(x => x.CreateAsync(It.IsAny<DashboardDefinition>()))
+                .ReturnsAsync("new-id");
+
+            var dashboard = new DashboardDefinition
+            {
+                Widgets = new Dictionary<string, WidgetDefinition>
+                {
+                    { "w1", new WidgetDefinition { Type = "chart" } },
+                    { "w2", new WidgetDefinition { Type = "kpi" } }
+                }
+            };
+
+            var result = await _controller.Create(dashboard) as OkObjectResult;
+
+            result.Should().NotBeNull("有效 Widget Type 應通過驗證");
+        }
+
+        [TestMethod]
+        public async Task Update_returns_400_when_widget_type_is_empty_string()
+        {
+            SetUser("bob");
+            var existing = new DashboardDefinition { Id = "d1", Owner = "bob" };
+            _service.Setup(x => x.GetAsync("d1", It.IsAny<string?>())).ReturnsAsync(existing);
+            _service.Setup(x => x.CanEdit(existing, "bob", It.IsAny<string[]>())).Returns(true);
+
+            var dashboard = new DashboardDefinition
+            {
+                Id = "d1",
+                Widgets = new Dictionary<string, WidgetDefinition>
+                {
+                    { "w1", new WidgetDefinition { Type = "" } }
+                }
+            };
+
+            var result = await _controller.Update("d1", dashboard) as BadRequestObjectResult;
+
+            result.Should().NotBeNull("Update 時空字串 Widget Type 應被拒絕");
+        }
+
+        [TestMethod]
+        public async Task Create_with_no_widgets_does_not_validate_widget_types()
+        {
+            // 沒有 widget 的 dashboard 應正常建立（新增空 dashboard 是合法操作）
+            SetUser("bob");
+            _service.Setup(x => x.CreateAsync(It.IsAny<DashboardDefinition>()))
+                .ReturnsAsync("new-id");
+
+            var result = await _controller.Create(new DashboardDefinition()) as OkObjectResult;
+
+            result.Should().NotBeNull("無 widget 的 dashboard 應通過驗證");
+        }
+
         [TestMethod]
         public void GetDataSources_includes_analysis_vms()
         {

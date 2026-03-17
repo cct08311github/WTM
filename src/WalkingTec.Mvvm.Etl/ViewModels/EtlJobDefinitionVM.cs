@@ -50,9 +50,18 @@ public class EtlJobDefinitionVM : BaseCRUDVM<EtlJobDefinition>
                     }
                 }
             }
+            catch (System.NotSupportedException ex)
+            {
+                MSD.AddModelError("Entity.TargetDbType", ex.Message);
+            }
+            catch (System.ArgumentException ex)
+            {
+                MSD.AddModelError("Entity.MergeKeyColumn", ex.Message);
+            }
             catch (System.Exception)
             {
-                // Warn instead of error if connection fails during validation
+                // Connectivity failures (SqlException, TimeoutException, etc.) are
+                // silently skipped — a DB connection may not be available during save.
             }
         }
     }

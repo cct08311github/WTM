@@ -412,18 +412,10 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
 
             result.Rows.Should().HaveCount(2, "應有 1 月和 2 月兩個月份");
 
-            var jan = result.Rows.Single(r =>
-            {
-                var v = r["CreatedAt"]?.ToString() ?? "";
-                return v.Contains("2026") && v.Contains("01");
-            });
+            var jan = result.Rows.Single(r => r["CreatedAt"]?.ToString() == "2026-01");
             Convert.ToDecimal(jan["SatisfactionScore_Avg"]).Should().Be(4m, "(5+4+3)/3 = 4 分");
 
-            var feb = result.Rows.Single(r =>
-            {
-                var v = r["CreatedAt"]?.ToString() ?? "";
-                return v.Contains("2026") && v.Contains("02");
-            });
+            var feb = result.Rows.Single(r => r["CreatedAt"]?.ToString() == "2026-02");
             Convert.ToDecimal(feb["SatisfactionScore_Avg"]).Should().Be(5m, "(5+5)/2 = 5 分");
         }
 
