@@ -75,6 +75,9 @@ namespace WalkingTec.Mvvm.Mvc
         {
             if (dashboard == null) return BadRequest();
 
+            var widgetTypeError = ValidateWidgetTypes(dashboard);
+            if (widgetTypeError != null) return BadRequest(widgetTypeError);
+
             var (userId, _) = GetUserInfo();
             dashboard.Owner = userId;
             dashboard.TenantId = GetTenantId();
@@ -87,6 +90,9 @@ namespace WalkingTec.Mvvm.Mvc
         public async Task<IActionResult> Update(string id, [FromBody] DashboardDefinition dashboard)
         {
             if (dashboard == null || dashboard.Id != id) return BadRequest();
+
+            var widgetTypeError = ValidateWidgetTypes(dashboard);
+            if (widgetTypeError != null) return BadRequest(widgetTypeError);
 
             var tenantId = GetTenantId();
             var existing = await _dashboardService.GetAsync(id, tenantId);
@@ -218,6 +224,17 @@ namespace WalkingTec.Mvvm.Mvc
             }
 
             return Ok(result);
+        }
+
+        private static string? ValidateWidgetTypes(DashboardDefinition dashboard)
+        {
+            if (dashboard.Widgets == null) return null;
+            foreach (var (wid, def) in dashboard.Widgets)
+            {
+                if (string.IsNullOrWhiteSpace(def.Type))
+                    return $"Widget '{wid}' 缺少必填的 Type 屬性。";
+            }
+            return null;
         }
 
         private static Type GetModelType(Type vmType)
