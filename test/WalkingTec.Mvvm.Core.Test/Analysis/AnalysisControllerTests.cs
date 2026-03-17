@@ -597,6 +597,86 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.IsNotNull(result, "null request 應回傳 400");
         }
 
+        // ─── Export filter 正向測試 (#427) ──────────────────────────────────────
+
+        [TestMethod]
+        public void Export_csv_with_filter_returns_only_matching_rows()
+        {
+            // Arrange — 3 regions, only 華東 matches filter
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Amount = 100m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華北", Amount = 200m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華南", Amount = 300m },
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string> { "Region" },
+                Measures   = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+                Filters = new List<FilterCondition>
+                {
+                    new FilterCondition { Field = "Region", Operator = FilterOperator.Eq, Value = "華東" }
+                }
+            };
+
+            var result = CreateController().Export(req, "csv") as FileContentResult;
+            Assert.IsNotNull(result, "帶 filter 的匯出應回傳 csv 檔案");
+
+            var csv = Encoding.UTF8.GetString(result.FileContents);
+            var dataLines = csv.Split('\n')
+                .Skip(1)             // skip header
+                .Where(l => !string.IsNullOrWhiteSpace(l))
+                .ToList();
+
+            Assert.AreEqual(1, dataLines.Count,
+                "filter Region=華東 應只匯出 1 個資料列（非全量 3 列）");
+            Assert.IsTrue(dataLines[0].Contains("華東"),
+                "匯出的資料列應包含 '華東'");
+        }
+
+        [TestMethod]
+        public void Export_xlsx_with_filter_returns_only_matching_rows()
+        {
+            // Arrange — 2 categories, only A matches filter
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 150m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華北", Category = "B", Amount = 200m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華南", Category = "B", Amount = 250m },
+            };
+
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string> { "Category" },
+                Measures   = new List<MeasureRequest>
+                {
+                    new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum }
+                },
+                Filters = new List<FilterCondition>
+                {
+                    new FilterCondition { Field = "Category", Operator = FilterOperator.Eq, Value = "A" }
+                }
+            };
+
+            var result = CreateController().Export(req, "xlsx") as FileContentResult;
+            Assert.IsNotNull(result, "帶 filter 的 xlsx 匯出應回傳檔案");
+
+            using var ms = new MemoryStream(result.FileContents);
+            var wb = new XSSFWorkbook(ms);
+            var sheet = wb.GetSheetAt(0);
+            // Row 0 = header; filter → only 1 data row
+            Assert.AreEqual(1, sheet.LastRowNum,
+                "filter Category=A 應只匯出 1 個資料列（LastRowNum=1，即 header + 1 data）");
+            Assert.AreEqual("A", sheet.GetRow(1).GetCell(0).StringCellValue,
+                "第一個資料儲存格應為 Category='A'");
+        }
+
         [TestMethod]
         public void Export_null_request_returns_400()
         {
