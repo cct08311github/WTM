@@ -42,7 +42,14 @@ public class _EtlRunLogController : BaseController
     [HttpPost]
     public async Task<IActionResult> Rerun(Guid runLogId)
     {
-        await _scheduler.RerunFromSnapshotAsync(runLogId);
-        return Ok(new { success = true, message = "已從該點重跑" });
+        try
+        {
+            await _scheduler.RerunFromSnapshotAsync(runLogId);
+            return Ok(new { success = true, message = "已從該點重跑" });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 }
