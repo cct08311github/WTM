@@ -417,5 +417,63 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.IsNotNull(bytes);
             Assert.IsTrue(bytes.Length > 0);
         }
+        // ─── #385: includeMetadata ────────────────────────────────────────────────
+
+        [TestMethod]
+        public void Export_default_no_metadata_sheet()
+        {
+            var resp = MakeTwoRowResponse();
+            var wb = OpenWorkbook(AnalysisExcelExporter.Export(resp));
+            Assert.AreEqual(1, wb.NumberOfSheets, "預設應只有 1 個工作表");
+        }
+
+        [TestMethod]
+        public void Export_includeMetadata_true_adds_metadata_sheet()
+        {
+            var resp = MakeTwoRowResponse();
+            var wb = OpenWorkbook(AnalysisExcelExporter.Export(resp, includeMetadata: true));
+            Assert.AreEqual(2, wb.NumberOfSheets, "includeMetadata=true 應有 2 個工作表");
+            Assert.IsNotNull(wb.GetSheet("Metadata"), "第二張工作表應命名為 Metadata");
+        }
+
+        [TestMethod]
+        public void Export_metadata_sheet_contains_timestamp_and_queryhash()
+        {
+            var resp = MakeTwoRowResponse();
+            var wb = OpenWorkbook(AnalysisExcelExporter.Export(resp, includeMetadata: true));
+            var meta = wb.GetSheet("Metadata");
+            Assert.IsNotNull(meta);
+            Assert.AreEqual("匯出時間", meta.GetRow(0).GetCell(0).StringCellValue);
+            Assert.AreEqual("QueryHash",  meta.GetRow(1).GetCell(0).StringCellValue);
+            Assert.AreEqual("資料筆數",   meta.GetRow(2).GetCell(0).StringCellValue);
+            Assert.AreEqual("已截斷",     meta.GetRow(3).GetCell(0).StringCellValue);
+        }
+
+        [TestMethod]
+        public void Export_metadata_truncated_shows_yes_when_truncated()
+        {
+            var resp = MakeResponse(
+                new List<string> { "Region", "Amount_Sum" },
+                new List<Dictionary<string, object?>>
+                {
+                    new() { ["Region"] = "North", ["Amount_Sum"] = 1m },
+                });
+            resp.Truncated = true;
+
+            var wb = OpenWorkbook(AnalysisExcelExporter.Export(resp, includeMetadata: true));
+            var meta = wb.GetSheet("Metadata");
+            Assert.AreEqual("是", meta.GetRow(3).GetCell(1).StringCellValue);
+        }
+
+        [TestMethod]
+        public void Export_analysis_sheet_unaffected_by_includeMetadata()
+        {
+            var resp = MakeTwoRowResponse();
+            var wb = OpenWorkbook(AnalysisExcelExporter.Export(resp, includeMetadata: true));
+            var sheet = wb.GetSheet("Analysis");
+            Assert.IsNotNull(sheet, "Analysis 工作表應仍存在");
+            Assert.AreEqual("Region", sheet.GetRow(0).GetCell(0).StringCellValue);
+        }
+
     }
 }

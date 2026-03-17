@@ -21,7 +21,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// <param name="result">查詢結果</param>
         /// <param name="includeChart">是否嵌入圖表（預設 false）</param>
         /// <param name="chartType">圖表類型：bar, pie, line, bar-stacked（預設 bar）</param>
-        public static byte[] Export(AnalysisQueryResponse result, bool includeChart = false, string? chartType = null)
+        /// <param name="includeMetadata">是否輸出 Metadata 工作表（預設 false）</param>
+        public static byte[] Export(AnalysisQueryResponse result, bool includeChart = false, string? chartType = null, bool includeMetadata = false)
         {
             using var workbook = new XSSFWorkbook();
             var sheet = workbook.CreateSheet("Analysis");
@@ -70,6 +71,25 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     default: // bar, bar-stacked, and any unknown type
                         EmbedBarChart(sheet, result);
                         break;
+                }
+            }
+
+
+            if (includeMetadata)
+            {
+                var meta = workbook.CreateSheet("Metadata");
+                var rows = new[]
+                {
+                    ("匯出時間", DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss") + " UTC"),
+                    ("QueryHash",  result.QueryHash  ?? ""),
+                    ("資料筆數",   result.TotalCount.ToString()),
+                    ("已截斷",     result.Truncated ? "是" : "否"),
+                };
+                for (int i = 0; i < rows.Length; i++)
+                {
+                    var metaRow = meta.CreateRow(i);
+                    metaRow.CreateCell(0).SetCellValue(rows[i].Item1);
+                    metaRow.CreateCell(1).SetCellValue(rows[i].Item2);
                 }
             }
 

@@ -189,7 +189,8 @@ namespace WalkingTec.Mvvm.Mvc
         public IActionResult Export([FromBody] AnalysisQueryRequest? req,
             [FromQuery] string format = "xlsx",
             [FromQuery] bool includeChart = false,
-            [FromQuery] string chartType = "bar")
+            [FromQuery] string chartType = "bar",
+            [FromQuery] bool includeMetadata = false)
         {
             if (req == null) return BadRequest("Request body is required.");
             if (req.Dimensions.Count == 0) return BadRequest("至少需要選取 1 個維度。");
@@ -243,13 +244,13 @@ namespace WalkingTec.Mvvm.Mvc
 
             if (format.Equals("csv", StringComparison.OrdinalIgnoreCase))
             {
-                var csv = BuildCsv(result);
+                var csv = BuildCsv(result, includeMetadata);
                 var csvEnc = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
                 var csvBytes = csvEnc.GetPreamble().Concat(csvEnc.GetBytes(csv)).ToArray();
                 return File(csvBytes, "text/csv", "analysis.csv");
             }
 
-            var xlsx = AnalysisExcelExporter.Export(result, includeChart, chartType);
+            var xlsx = AnalysisExcelExporter.Export(result, includeChart, chartType, includeMetadata);
             return File(xlsx,
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 "analysis.xlsx");
@@ -263,7 +264,8 @@ namespace WalkingTec.Mvvm.Mvc
         public IActionResult PivotExport([FromBody] AnalysisPivotRequest? req,
             [FromQuery] string format = "xlsx",
             [FromQuery] bool includeChart = false,
-            [FromQuery] string chartType = "bar")
+            [FromQuery] string chartType = "bar",
+            [FromQuery] bool includeMetadata = false)
         {
             if (req == null) return BadRequest("Request body is required.");
             if (req.Dimensions.Count == 0) return BadRequest("至少需要選取 1 個維度。");
@@ -326,13 +328,13 @@ namespace WalkingTec.Mvvm.Mvc
 
             if (format.Equals("csv", StringComparison.OrdinalIgnoreCase))
             {
-                var csv = BuildCsv(queryResult);
+                var csv = BuildCsv(queryResult, includeMetadata);
                 var pivotCsvEnc = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
                 var pivotCsvBytes = pivotCsvEnc.GetPreamble().Concat(pivotCsvEnc.GetBytes(csv)).ToArray();
                 return File(pivotCsvBytes, "text/csv", "analysis_pivot.csv");
             }
 
-            var xlsx = AnalysisExcelExporter.Export(queryResult, includeChart, chartType);
+            var xlsx = AnalysisExcelExporter.Export(queryResult, includeChart, chartType, includeMetadata);
             return File(xlsx,
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 "analysis_pivot.xlsx");
@@ -418,9 +420,17 @@ namespace WalkingTec.Mvvm.Mvc
             return (method?.Invoke(vm, null) as IEnumerable<AnalysisFieldMeta>)!;
         }
 
-        private static string BuildCsv(AnalysisQueryResponse result)
+        private static string BuildCsv(AnalysisQueryResponse result, bool includeMetadata = false)
         {
             var sb = new StringBuilder();
+            if (includeMetadata)
+            {
+                sb.AppendLine($"匯出時間,{EscapeCsvCell(DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss") + " UTC")}");
+                sb.AppendLine($"QueryHash,{EscapeCsvCell(result.QueryHash ?? "")}");
+                sb.AppendLine($"資料筆數,{result.TotalCount}");
+                sb.AppendLine($"已截斷,{(result.Truncated ? "是" : "否")}");
+                sb.AppendLine();
+            }
             sb.AppendLine(string.Join(",", result.Columns));
             foreach (var row in result.Rows)
             {
