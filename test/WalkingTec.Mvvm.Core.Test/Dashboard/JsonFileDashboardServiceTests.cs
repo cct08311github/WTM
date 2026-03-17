@@ -58,6 +58,23 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         }
 
         [TestMethod]
+        public async Task Create_new_dashboard_has_empty_widgets_and_layout()
+        {
+            // #439: new dashboard must start as a clean empty canvas
+            var def = new DashboardDefinition { Title = "Empty Canvas" };
+            var id = await _service.CreateAsync(def);
+
+            var retrieved = await _service.GetAsync(id);
+            retrieved.Should().NotBeNull();
+
+            retrieved!.Widgets.Should().NotBeNull("Widgets should be an empty dict, not null");
+            retrieved.Widgets.Should().BeEmpty("New dashboard should have no widgets");
+            retrieved.Layout.Should().NotBeNull("Layout should be an empty list, not null");
+            retrieved.Layout.Should().BeEmpty("New dashboard should have no layout items");
+            retrieved.RefreshInterval.Should().Be(60, "Default refresh interval should be 60 seconds");
+        }
+
+        [TestMethod]
         public async Task Get_returns_null_for_unknown_id()
         {
             var retrieved = await _service.GetAsync("unknown_id");
