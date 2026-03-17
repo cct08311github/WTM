@@ -119,6 +119,19 @@
         }
     }
 
+    // Parse a server error into a human-friendly message.
+    // Handles ProblemDetails JSON ({"title":"...","detail":"..."}) as well as plain strings.
+    function parseFriendlyError(err) {
+        var raw = (err && err.message != null) ? err.message : String(err);
+        try {
+            var pd = JSON.parse(raw);
+            if (pd && (pd.detail || pd.title)) {
+                return pd.detail || pd.title;
+            }
+        } catch (_) { /* not JSON — fall through */ }
+        return raw || '發生未知錯誤，請稍後再試。';
+    }
+
     // ─── 狀態 ─────────────────────────────────────────────────────────────────
     var _state = {};
 
@@ -400,7 +413,7 @@
         .catch(function (err) {
             var msg = document.createElement('div');
             msg.className = 'layui-alert layui-alert-danger';
-            msg.textContent = '載入欄位失敗：' + err.message;
+            msg.textContent = '載入欄位失敗：' + parseFriendlyError(err);
             panelEl.appendChild(msg);
         });
     }
@@ -1038,7 +1051,7 @@
             }
         })
         .catch(function (err) {
-            if (resultDiv) resultDiv.textContent = '查詢失敗：' + err.message;
+            if (resultDiv) resultDiv.textContent = '查詢失敗：' + parseFriendlyError(err);
         });
     }
 
@@ -1113,6 +1126,13 @@
 
     function renderTable(gridId, result, container, dateDims) {
         dateDims = dateDims || {};
+        if (!result.rows || result.rows.length === 0) {
+            var emptyP = document.createElement('p');
+            emptyP.className = 'analysis-empty-state';
+            emptyP.textContent = '查無符合條件的資料，請調整篩選條件後重試。';
+            container.appendChild(emptyP);
+            return;
+        }
         // Build column label map: col key → human-friendly header
         // and measure set: col key → true (for numeric formatting)
         var colLabelMap = {};
@@ -1178,6 +1198,13 @@
     }
 
     function renderChart(gridId, result, req, dimFields, container, forceChartType) {
+        if (!result.rows || result.rows.length === 0) {
+            var emptyP = document.createElement('p');
+            emptyP.className = 'analysis-empty-state';
+            emptyP.textContent = '查無符合條件的資料，請調整篩選條件後重試。';
+            container.appendChild(emptyP);
+            return;
+        }
         var dimMeta = req.dimensions.map(function (d) {
             var f = (dimFields || []).filter(function (fd) { return fd.fieldName === d; })[0];
             return { fieldName: d, isDate: f ? f.isDate === true : false };
@@ -1457,7 +1484,7 @@
             renderChart(gridId, result, st.lastReq, dimFields, resultDiv);
         })
         .catch(function (err) {
-            if (resultDiv) resultDiv.textContent = '查詢失敗：' + err.message;
+            if (resultDiv) resultDiv.textContent = '查詢失敗：' + parseFriendlyError(err);
         });
     }
 
@@ -1525,7 +1552,7 @@
         })
         .catch(function (err) {
             closeLoader();
-            showMsg('匯出失敗：' + err.message);
+            showMsg('匯出失敗：' + parseFriendlyError(err));
         });
     }
 
@@ -1560,6 +1587,7 @@
         addFilterRow: addFilterRow,
         collectFilters: collectFilters,
         updateFilterFieldOptions: updateFilterFieldOptions,
+        parseFriendlyError: parseFriendlyError,
         _getState: function (gridId) { return _state[gridId]; }
     };
 
