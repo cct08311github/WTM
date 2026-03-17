@@ -339,5 +339,101 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             result.Value.Should().Be(99);
             kindDs.Verify(x => x.GetDataAsync(It.IsAny<WidgetDataRequest>(), It.IsAny<CancellationToken>()), Times.Once);
         }
+
+        // ─── CanAccess 權限邏輯（#430） ───────────────────────────────────────
+
+        [TestMethod]
+        public void CanAccess_Admin_bypasses_all_checks()
+        {
+            var def = new DashboardDefinition { Owner = "other" };
+            _service.CanAccess(def, "any_user", new[] { "Admin" }).Should().BeTrue();
+        }
+
+        [TestMethod]
+        public void CanAccess_Admin_check_is_case_insensitive()
+        {
+            var def = new DashboardDefinition { Owner = "other" };
+            _service.CanAccess(def, "any_user", new[] { "admin" }).Should().BeTrue();
+            _service.CanAccess(def, "any_user", new[] { "ADMIN" }).Should().BeTrue();
+        }
+
+        [TestMethod]
+        public void CanAccess_Owner_can_access_own_dashboard()
+        {
+            var def = new DashboardDefinition { Owner = "user1" };
+            _service.CanAccess(def, "user1", Array.Empty<string>()).Should().BeTrue();
+        }
+
+        [TestMethod]
+        public void CanAccess_NonOwner_NonAdmin_without_sharing_is_denied()
+        {
+            var def = new DashboardDefinition { Owner = "user1" };
+            _service.CanAccess(def, "user2", Array.Empty<string>()).Should().BeFalse();
+        }
+
+        [TestMethod]
+        public void CanAccess_public_dashboard_accessible_to_anyone()
+        {
+            var def = new DashboardDefinition
+            {
+                Owner = "user1",
+                Sharing = new SharingDefinition { Mode = "public" }
+            };
+            _service.CanAccess(def, "user2", Array.Empty<string>()).Should().BeTrue();
+        }
+
+        [TestMethod]
+        public void CanAccess_role_sharing_allows_matching_user()
+        {
+            var def = new DashboardDefinition
+            {
+                Owner = "user1",
+                Sharing = new SharingDefinition
+                {
+                    Mode = "role",
+                    Roles = new List<string> { "Manager", "Analyst" }
+                }
+            };
+            _service.CanAccess(def, "user2", new[] { "Analyst" }).Should().BeTrue();
+        }
+
+        [TestMethod]
+        public void CanAccess_role_sharing_denies_non_matching_user()
+        {
+            var def = new DashboardDefinition
+            {
+                Owner = "user1",
+                Sharing = new SharingDefinition
+                {
+                    Mode = "role",
+                    Roles = new List<string> { "Manager" }
+                }
+            };
+            _service.CanAccess(def, "user2", new[] { "Analyst" }).Should().BeFalse();
+        }
+
+        [TestMethod]
+        public void CanAccess_null_roles_does_not_throw_and_returns_false()
+        {
+            var def = new DashboardDefinition { Owner = "user1" };
+            var act = () => _service.CanAccess(def, "user2", null!);
+            act.Should().NotThrow();
+            _service.CanAccess(def, "user2", null!).Should().BeFalse();
+        }
+
+        [TestMethod]
+        public void CanAccess_empty_sharing_roles_list_returns_false()
+        {
+            var def = new DashboardDefinition
+            {
+                Owner = "user1",
+                Sharing = new SharingDefinition
+                {
+                    Mode = "role",
+                    Roles = new List<string>()
+                }
+            };
+            _service.CanAccess(def, "user2", new[] { "Analyst" }).Should().BeFalse();
+        }
     }
 }
