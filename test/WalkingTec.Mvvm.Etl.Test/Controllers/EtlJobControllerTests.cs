@@ -546,6 +546,21 @@ public class EtlJobControllerTests
     }
 
     [TestMethod]
+    public async Task TriggerNow_returns_404_when_job_not_found_in_db()
+    {
+        // Regression test for #432: TriggerNowAsync throws InvalidOperationException("Job X not found.")
+        // when the jobId does not exist in the database. Controller must surface 404, not 200.
+        var id = Guid.NewGuid();
+        _mockScheduler.Setup(x => x.TriggerNowAsync(id))
+            .ThrowsAsync(new InvalidOperationException($"Job {id} not found."));
+
+        var result = await _controller.TriggerNow(id) as NotFoundObjectResult;
+
+        Assert.IsNotNull(result, "Expected 404 NotFound when job does not exist");
+        Assert.AreEqual(404, result!.StatusCode);
+    }
+
+    [TestMethod]
     public async Task Pause_returns_400_when_scheduler_throws_InvalidOperationException()
     {
         var id = Guid.NewGuid();
