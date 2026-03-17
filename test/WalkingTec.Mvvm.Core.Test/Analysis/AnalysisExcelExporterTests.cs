@@ -482,6 +482,28 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
+        public void Export_numeric_columns_use_comma_separated_two_decimal_format()
+        {
+            // #437: verify exact format string is "#,##0.00" (thousands separator + 2 decimals)
+            var resp = MakeResponse(
+                new List<string> { "Region", "Amount_Sum" },
+                new List<Dictionary<string, object?>>
+                {
+                    new() { ["Region"] = "North", ["Amount_Sum"] = 1_234_567.89m }
+                });
+
+            var wb = OpenWorkbook(AnalysisExcelExporter.Export(resp));
+            var sheet = wb.GetSheetAt(0);
+            var numericCell = sheet.GetRow(1).GetCell(1); // Amount_Sum
+
+            Assert.IsNotNull(numericCell.CellStyle);
+            var xssfStyle = (NPOI.XSSF.UserModel.XSSFCellStyle)numericCell.CellStyle;
+            var formatStr = xssfStyle.GetDataFormatString();
+            Assert.AreEqual("#,##0.00", formatStr,
+                "Numeric measure columns must use '#,##0.00' format (thousands separator + 2 decimals)");
+        }
+
+        [TestMethod]
         public void Export_string_columns_do_not_have_numeric_format()
         {
             var resp = MakeResponse(
@@ -578,6 +600,27 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.AreEqual("QueryHash",  meta.GetRow(1).GetCell(0).StringCellValue);
             Assert.AreEqual("資料筆數",   meta.GetRow(2).GetCell(0).StringCellValue);
             Assert.AreEqual("已截斷",     meta.GetRow(3).GetCell(0).StringCellValue);
+        }
+
+        [TestMethod]
+        public void Export_metadata_queryhash_value_matches_response_queryhash()
+        {
+            // #443: value cell must equal resp.QueryHash, not a fixed string
+            var resp = MakeResponse(
+                new List<string> { "Region", "Amount_Sum" },
+                new List<Dictionary<string, object?>>
+                {
+                    new() { ["Region"] = "North", ["Amount_Sum"] = 1m }
+                });
+            resp.QueryHash = "ABCD1234ABCD1234";
+
+            var wb = OpenWorkbook(AnalysisExcelExporter.Export(resp, includeMetadata: true));
+            var meta = wb.GetSheet("Metadata");
+
+            Assert.AreEqual("QueryHash", meta.GetRow(1).GetCell(0).StringCellValue,
+                "Key cell should be 'QueryHash'");
+            Assert.AreEqual("ABCD1234ABCD1234", meta.GetRow(1).GetCell(1).StringCellValue,
+                "Value cell must equal resp.QueryHash for audit chain of custody");
         }
 
         [TestMethod]

@@ -354,23 +354,56 @@
         }
     }
 
+    /**
+     * Infers the most appropriate ECharts series type when config.chartType is absent.
+     *
+     * Rules (applied in order):
+     *  1. Time dimension (column name contains year/month/quarter/week/day/date keywords
+     *     or follows yyyy-MM / yyyyMM / yyyyQn patterns) → 'line'
+     *  2. Single dimension + single measure + ≤ 8 distinct category values → 'pie'
+     *  3. Everything else → 'bar'
+     */
+    function inferChartType(config, data) {
+        if (config && config.chartType) return config.chartType;
+        if (!data || !data.columns || !data.rows) return 'bar';
+
+        var dimField = data.columns[0];
+        var rowCount = data.rows.length;
+
+        // Rule 1: time-like dimension name
+        var timeKeywords = /year|month|quarter|week|day|date|年|月|季|週|日/i;
+        var timePattern = /^\d{4}[-/]?\d{0,2}$|^Q[1-4]$/i;
+        if (dimField && timeKeywords.test(dimField)) return 'line';
+        if (rowCount > 0) {
+            var sample = String(data.rows[0][dimField] || '');
+            if (timePattern.test(sample.trim())) return 'line';
+        }
+
+        // Rule 2: few categories → pie
+        if (data.columns.length === 2 && rowCount > 0 && rowCount <= 8) return 'pie';
+
+        return 'bar';
+    }
+
     function renderChart(container, data, config) {
         if (!global.echarts) return;
         var chart = global.echarts.init(container);
-        
+
         // Simple fallback
         if (!data || !data.columns || !data.rows) return;
-        
+
         var xAxisData = [];
         var seriesData = [];
         var dimField = data.columns[0];
         var msrField = data.columns[1];
-        
+
         for (var i = 0; i < data.rows.length; i++) {
             xAxisData.push(data.rows[i][dimField]);
             seriesData.push(data.rows[i][msrField]);
         }
-        
+
+        var resolvedType = inferChartType(config, data);
+
         var option = {
             xAxis: {
                 type: 'category',
@@ -381,10 +414,10 @@
             },
             series: [{
                 data: seriesData,
-                type: config.chartType || 'bar'
+                type: resolvedType
             }]
         };
-        
+
         chart.setOption(option);
     }
 
@@ -832,7 +865,8 @@
         _internal: {
             detectBreakpoint: detectBreakpoint,
             applyBreakpointToLayout: applyBreakpointToLayout,
-            BREAKPOINTS: BREAKPOINTS
+            BREAKPOINTS: BREAKPOINTS,
+            inferChartType: inferChartType
         }
     };
 

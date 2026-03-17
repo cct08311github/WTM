@@ -306,6 +306,50 @@ describe('wtmAnalysis.query', () => {
         expect(warningNode).toBeDefined();
         expect(warningNode.textContent).toMatch(/截斷/);
     });
+
+    test('rows=[] → clearChildren 清除舊資料後顯示 analysis-empty-state (#441)', async () => {
+        const { wa, makePanel, mockFetch, mockDocument } = makeEnv();
+        const panel = makePanel('analysis-panel-grid4e');
+        const appended = [];
+        // Simulate a resultDiv with stale content (firstChild is non-null)
+        const staleChild = { tag: 'table' };
+        const resultDiv = {
+            id: 'analysis-result-grid4e',
+            style: {},
+            children: [],
+            firstChild: staleChild,
+            removeChild: jest.fn(function() { this.firstChild = null; }),
+            appendChild: jest.fn(function(c) { appended.push(c); this.children.push(c); }),
+        };
+        mockDocument.getElementById.mockImplementation((id) => {
+            if (id === 'analysis-panel-grid4e') return panel;
+            if (id === 'analysis-result-grid4e') return resultDiv;
+            return null;
+        });
+        mockDocument.querySelectorAll.mockReturnValue(fakeCheckedCbs('grid4e'));
+        mockFetch
+            .mockResolvedValueOnce({ ok: false, text: jest.fn().mockResolvedValue('err') }) // loadMeta
+            .mockResolvedValueOnce({
+                ok: true,
+                json: jest.fn().mockResolvedValue({
+                    truncated: false, totalCount: 0,
+                    columns: ['Region', 'Amount_Sum'],
+                    rows: []
+                })
+            });
+
+        wa.toggle('grid4e', 'MyVm');
+        wa.query('grid4e');
+
+        await new Promise(r => setTimeout(r, 50));
+
+        // Stale content should have been cleared
+        expect(resultDiv.removeChild).toHaveBeenCalledWith(staleChild);
+        // Empty-state element should be appended
+        const emptyNode = appended.find(c => c.className && c.className.includes('analysis-empty-state'));
+        expect(emptyNode).toBeDefined();
+        expect(emptyNode.textContent).toMatch(/查無符合條件/);
+    });
 });
 
 // ─── exportData ────────────────────────────────────────────────────────────────

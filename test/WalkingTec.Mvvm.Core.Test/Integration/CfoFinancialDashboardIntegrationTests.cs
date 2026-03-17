@@ -700,6 +700,45 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
         }
 
         [TestMethod]
+        [Description("多幣別精確度：USD 交易 AmountTwd 加總必須精確等於各筆 Amount × ExchangeRate 之和 (#445)")]
+        public async Task CFO_MultiCurrency_AmountTwd_ExactValue_MatchesAmountTimesRate()
+        {
+            // USD 交易 1: Amount=200_000, ExchangeRate=32.1500 → AmountTwd=6_430_000
+            // USD 交易 2: Amount=150_000, ExchangeRate=32.1750 → AmountTwd=4_826_250
+            // 期望 AmountTwd_Sum = 11_256_250（精確到分）
+            const decimal expectedUsdAmountTwdSum = 200_000m * 32.1500m + 150_000m * 32.1750m;
+
+            var source = CreateAnalysisDataSource();
+            var request = new WidgetDataRequest
+            {
+                Parameters = new Dictionary<string, string>
+                {
+                    ["listVmType"] = FinancialTxVmType,
+                    ["dimensions"] = JsonSerializer.Serialize(new[] { "Currency" }),
+                    ["measures"]   = JsonSerializer.Serialize(new[]
+                    {
+                        new { Field = "AmountTwd", Func = AggregateFunc.Sum }
+                    }),
+                    ["filters"] = JsonSerializer.Serialize(new[]
+                    {
+                        new { Field = "Currency", Operator = FilterOperator.Eq, Value = "USD" }
+                    })
+                }
+            };
+
+            var result = await source.GetDataAsync(request);
+
+            result.Should().NotBeNull();
+            result.Rows.Should().NotBeNull();
+            var usdRow = result.Rows!.FirstOrDefault(r => r["Currency"]?.ToString() == "USD");
+            usdRow.Should().NotBeNull("USD 過濾後應有一列結果");
+
+            var actualSum = Convert.ToDecimal(usdRow!["AmountTwd_Sum"]);
+            actualSum.Should().Be(expectedUsdAmountTwdSum,
+                because: "USD 交易的 AmountTwd 加總必須精確等於各筆 Amount × ExchangeRate 之和，不允許有分毫誤差");
+        }
+
+        [TestMethod]
         [Description("季結切分：DateHierarchy.Quarter 正確將 1-3 月歸為 Q1、4-6 月歸為 Q2")]
         public void CFO_QuarterlyReport_DateHierarchy_CorrectlyGroupsByQuarter()
         {
@@ -1118,6 +1157,71 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
             var formattedMonths = monthKeys.Select(k => DateTruncator.FormatKey(k, DateHierarchy.Month)).ToList();
             formattedMonths.Should().BeInAscendingOrder(
                 because: "月份 key 格式 YYYY-MM 字串排序應與時間順序一致");
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 跨期比較 (#442)
+        // ═══════════════════════════════════════════════════════════════════
+
+        [TestMethod]
+        [Description("月結報表：2026-01 vs 2025-01 同部門收入比較，MoM% 正確計算 (#442)")]
+        public async Task CFO_MonthlyReport_PriorPeriodComparison_MomPercentCorrect()
+        {
+            var request = new WidgetDataRequest
+            {
+                Parameters = new Dictionary<string, string>
+                {
+                    ["listVmType"] = FinancialTxVmType,
+                    ["dimensions"] = JsonSerializer.Serialize(new[] { "Department" }),
+                    ["measures"] = JsonSerializer.Serialize(new[]
+                    {
+                        new { Field = "Amount", Func = AggregateFunc.Sum }
+                    })
+                }
+            };
+
+            // 2025-01 期：業務部 80_000，財務部 10_000
+            FinancialTransactionListVM.TestData = new List<FinancialTransaction>
+            {
+                new() { ID = Guid.NewGuid(), Department = "業務部", Amount = 80_000m,
+                        TransactionDate = new DateTime(2025, 1, 15), Currency = "TWD",
+                        ExchangeRate = 1m, AmountTwd = 80_000m, NetProfit = 8_000m },
+                new() { ID = Guid.NewGuid(), Department = "財務部", Amount = 10_000m,
+                        TransactionDate = new DateTime(2025, 1, 10), Currency = "TWD",
+                        ExchangeRate = 1m, AmountTwd = 10_000m, NetProfit = 1_000m },
+            };
+            var jan2025 = await CreateAnalysisDataSource().GetDataAsync(request);
+
+            // 2026-01 期：業務部 +25% → 100_000，財務部 不變 10_000
+            FinancialTransactionListVM.TestData = new List<FinancialTransaction>
+            {
+                new() { ID = Guid.NewGuid(), Department = "業務部", Amount = 100_000m,
+                        TransactionDate = new DateTime(2026, 1, 15), Currency = "TWD",
+                        ExchangeRate = 1m, AmountTwd = 100_000m, NetProfit = 10_000m },
+                new() { ID = Guid.NewGuid(), Department = "財務部", Amount = 10_000m,
+                        TransactionDate = new DateTime(2026, 1, 10), Currency = "TWD",
+                        ExchangeRate = 1m, AmountTwd = 10_000m, NetProfit = 1_000m },
+            };
+            var jan2026 = await CreateAnalysisDataSource().GetDataAsync(request);
+
+            // Assert — 結構一致（相同 Columns）
+            jan2025.Columns.Should().BeEquivalentTo(jan2026.Columns,
+                because: "跨期查詢應回傳相同的欄位結構，否則比較邏輯會 crash");
+
+            // Assert — MoM% 計算正確
+            var prev = Convert.ToDecimal(jan2025.Rows!.First(r => r["Department"]?.ToString() == "業務部")["Amount_Sum"]);
+            var curr = Convert.ToDecimal(jan2026.Rows!.First(r => r["Department"]?.ToString() == "業務部")["Amount_Sum"]);
+            var momPct = (curr - prev) / prev * 100;
+
+            prev.Should().Be(80_000m);
+            curr.Should().Be(100_000m);
+            momPct.Should().BeApproximately(25m, 0.01m,
+                because: "業務部 2026-01 vs 2025-01 應成長 25%");
+
+            // Assert — 財務部 MoM% = 0（金額未變）
+            var prevFin = Convert.ToDecimal(jan2025.Rows!.First(r => r["Department"]?.ToString() == "財務部")["Amount_Sum"]);
+            var currFin = Convert.ToDecimal(jan2026.Rows!.First(r => r["Department"]?.ToString() == "財務部")["Amount_Sum"]);
+            prevFin.Should().Be(currFin, because: "財務部金額未變動，MoM% 應為 0");
         }
 
         // ═══════════════════════════════════════════════════════════════════

@@ -358,6 +358,177 @@ public class EtlJobControllerTests
         Assert.IsFalse(dc.EtlJobDefinitions.Any(j => j.ID == job.ID));
     }
 
+    // ─── Scheduler side-effect tests (#424) ────────────────────────────────
+
+    /// <summary>
+    /// Creates a controller wired to the given seed DB, also injecting the mock scheduler
+    /// into Wtm.ServiceProvider so that DoAdd/DoEdit VM calls can verify scheduler interactions.
+    /// </summary>
+    private (_EtlJobController ctrl, Mock<EtlSchedulerService> schedulerMock)
+        CreateControllerWithScheduler(string seed)
+    {
+        var dc = new EtlTestDataContext(seed, DBTypeEnum.Memory);
+        var mockSchedulerSp = new Mock<IServiceProvider>();
+        var scheduler = new Mock<EtlSchedulerService>(mockSchedulerSp.Object);
+        scheduler.Setup(x => x.EnableAsync(It.IsAny<Guid>())).Returns(Task.CompletedTask);
+        scheduler.Setup(x => x.DisableAsync(It.IsAny<Guid>())).Returns(Task.CompletedTask);
+        scheduler.Setup(x => x.RescheduleAsync(It.IsAny<Guid>(), It.IsAny<string>())).Returns(Task.CompletedTask);
+
+        var ctrl = new _EtlJobController(scheduler.Object);
+        ctrl.Wtm = MockWtmContext.CreateWtmContext(dc);
+
+        // Wire scheduler into VM-level ServiceProvider so DoAdd/DoEdit can find it
+        var vmSp = new Mock<IServiceProvider>();
+        vmSp.Setup(x => x.GetService(typeof(EtlSchedulerService))).Returns(scheduler.Object);
+        ctrl.Wtm.SetServiceProvider(vmSp.Object);
+
+        var mockHttp = new Mock<HttpContext>();
+        var session = new MockHttpSession();
+        mockHttp.Setup(s => s.Session).Returns(session);
+        mockHttp.Setup(x => x.Request).Returns(new DefaultHttpContext().Request);
+        ctrl.ControllerContext.HttpContext = mockHttp.Object;
+        ctrl.Wtm.MSD = new ModelStateServiceProvider(ctrl.ModelState);
+        return (ctrl, scheduler);
+    }
+
+    // Helper: seed a job with the given status
+    private static EtlJobDefinition SeedJobWithStatus(string seed, EtlJobStatus status)
+    {
+        var dc = new EtlTestDataContext(seed, DBTypeEnum.Memory);
+        var job = new EtlJobDefinition
+        {
+            Name = "SeedJob",
+            CronExpression = "0 0 * * * ?",
+            JobClassName = "TestClass",
+            SourceCsKey = "src",
+            TargetCsKey = "tgt",
+            TargetTableName = "Orders",
+            MergeKeyColumn = "Id",
+            QueryTemplate = "SELECT * FROM Orders",
+            Status = status
+        };
+        dc.EtlJobDefinitions.Add(job);
+        dc.SaveChanges();
+        return job;
+    }
+
+    [TestMethod]
+    public void Create_post_enabled_status_calls_EnableAsync()
+    {
+        var seed = Guid.NewGuid().ToString();
+        var (ctrl, schedulerMock) = CreateControllerWithScheduler(seed);
+
+        var rv = ctrl.Create() as PartialViewResult;
+        var vm = rv!.Model as EtlJobDefinitionVM;
+
+        vm!.Entity.Name = "EnabledJob";
+        vm.Entity.CronExpression = "0 0 * * * ?";
+        vm.Entity.JobClassName = "TestClass";
+        vm.Entity.SourceCsKey = "src";
+        vm.Entity.TargetCsKey = "tgt";
+        vm.Entity.TargetTableName = "Orders";
+        vm.Entity.MergeKeyColumn = "Id";
+        vm.Entity.QueryTemplate = "SELECT * FROM Orders";
+        vm.Entity.Status = EtlJobStatus.Enabled;
+
+        ctrl.Create(vm);
+
+        schedulerMock.Verify(x => x.EnableAsync(It.IsAny<Guid>()), Times.Once,
+            "Creating a job with Enabled status should call EnableAsync once");
+    }
+
+    [TestMethod]
+    public void Edit_post_status_disabled_to_enabled_calls_EnableAsync()
+    {
+        var seed = Guid.NewGuid().ToString();
+        var job = SeedJobWithStatus(seed, EtlJobStatus.Disabled);
+        var (ctrl, schedulerMock) = CreateControllerWithScheduler(seed);
+
+        var rv = ctrl.Edit(job.ID) as PartialViewResult;
+        var vm = rv!.Model as EtlJobDefinitionVM;
+        Assert.IsNotNull(vm);
+
+        vm!.Entity.Status = EtlJobStatus.Enabled;
+        vm.FC = new Dictionary<string, object> { ["Entity.Status"] = "" };
+
+        ctrl.Edit(vm);
+
+        schedulerMock.Verify(x => x.EnableAsync(job.ID), Times.Once,
+            "Changing status Disabled→Enabled should call EnableAsync");
+    }
+
+    [TestMethod]
+    public void Edit_post_status_enabled_to_disabled_calls_DisableAsync()
+    {
+        var seed = Guid.NewGuid().ToString();
+        var job = SeedJobWithStatus(seed, EtlJobStatus.Enabled);
+        var (ctrl, schedulerMock) = CreateControllerWithScheduler(seed);
+
+        var rv = ctrl.Edit(job.ID) as PartialViewResult;
+        var vm = rv!.Model as EtlJobDefinitionVM;
+        Assert.IsNotNull(vm);
+
+        vm!.Entity.Status = EtlJobStatus.Disabled;
+        vm.FC = new Dictionary<string, object> { ["Entity.Status"] = "" };
+
+        ctrl.Edit(vm);
+
+        schedulerMock.Verify(x => x.DisableAsync(job.ID), Times.Once,
+            "Changing status Enabled→Disabled should call DisableAsync");
+    }
+
+    [TestMethod]
+    public void Edit_post_cron_change_on_enabled_job_calls_RescheduleAsync()
+    {
+        var seed = Guid.NewGuid().ToString();
+        var job = SeedJobWithStatus(seed, EtlJobStatus.Enabled);
+        var (ctrl, schedulerMock) = CreateControllerWithScheduler(seed);
+
+        var rv = ctrl.Edit(job.ID) as PartialViewResult;
+        var vm = rv!.Model as EtlJobDefinitionVM;
+        Assert.IsNotNull(vm);
+
+        const string newCron = "0 30 9 * * ?";
+        vm!.Entity.CronExpression = newCron;
+        vm.FC = new Dictionary<string, object> { ["Entity.CronExpression"] = "" };
+
+        ctrl.Edit(vm);
+
+        schedulerMock.Verify(x => x.RescheduleAsync(job.ID, newCron), Times.Once,
+            "Changing CronExpression on an Enabled job should call RescheduleAsync");
+    }
+
+    [TestMethod]
+    public void Delete_post_running_job_returns_partial_view_with_error()
+    {
+        // Arrange — seed a Running job (cannot use SeedJob helper which always Disabled)
+        var seed = Guid.NewGuid().ToString();
+        var seedDc = new EtlTestDataContext(seed, DBTypeEnum.Memory);
+        var job = new EtlJobDefinition
+        {
+            Name = "RunningJob",
+            CronExpression = "0 0 * * * ?",
+            Status = EtlJobStatus.Running
+        };
+        seedDc.EtlJobDefinitions.Add(job);
+        seedDc.SaveChanges();
+
+        var ctrl = CreateControllerWithDb(seed);
+        var noUse = new FormCollection(new Dictionary<string, StringValues>());
+
+        // Act
+        var result = ctrl.Delete(job.ID, noUse);
+
+        // Assert — DoDelete guard → model error → PartialView, not FFResult
+        Assert.IsInstanceOfType(result, typeof(PartialViewResult),
+            "Running job Delete POST should return PartialView (model error), not FFResult");
+
+        // Job must still exist in DB
+        var checkDc = new EtlTestDataContext(seed, DBTypeEnum.Memory);
+        Assert.IsTrue(checkDc.EtlJobDefinitions.Any(j => j.ID == job.ID),
+            "Running job should not be deleted");
+    }
+
     // ─── InvalidOperationException → 400 tests ─────────────────────────────
     // Abort 已有此覆蓋；TriggerNow/Pause/Resume/SkipNext 之前缺失。
 

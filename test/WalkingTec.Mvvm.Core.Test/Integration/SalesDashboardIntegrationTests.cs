@@ -17,10 +17,12 @@ using System.Collections.Generic;
 using System.Data;
 using System.Linq;
 using System.Text.Json;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using NPOI.XSSF.UserModel;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Analysis;
 using WalkingTec.Mvvm.Core.Dashboard;
@@ -382,6 +384,43 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
             foreach (var col in expectedCols)
                 Assert.IsTrue(result.Columns.Contains(col),
                     $"Analysis 結果應含欄位 '{col}'");
+        }
+
+        /// <summary>
+        /// 匯出 Excel 欄位順序 — 與 Analysis 回傳 Columns 順序一致 (#438)
+        /// </summary>
+        [TestMethod]
+        public void SalesManager_ExportsExcel_ColumnOrderMatchesAnalysisResultColumns()
+        {
+            var req = new AnalysisQueryRequest
+            {
+                Dimensions = new List<string> { "Region", "Category" },
+                Measures = new List<MeasureRequest>
+                {
+                    new() { Field = "Revenue",    Func = AggregateFunc.Sum },
+                    new() { Field = "OrderCount", Func = AggregateFunc.Sum }
+                }
+            };
+
+            var whitelist = AnalysisFieldScanner.ScanModel(typeof(SalesOrder));
+            var result = _engine.Execute(_salesData.AsQueryable(), req, whitelist);
+            var excelBytes = AnalysisExcelExporter.Export(result, includeChart: false);
+
+            using var ms = new MemoryStream(excelBytes);
+            var wb = new XSSFWorkbook(ms);
+            var sheet = wb.GetSheetAt(0);
+            var headerRow = sheet.GetRow(0);
+
+            // Excel header row must match result.Columns in exact order
+            for (int i = 0; i < result.Columns.Count; i++)
+            {
+                var cellVal = headerRow.GetCell(i)?.StringCellValue ?? string.Empty;
+                Assert.AreEqual(result.Columns[i], cellVal,
+                    $"Excel header column {i} should be '{result.Columns[i]}' but was '{cellVal}'");
+            }
+
+            Assert.AreEqual(result.Columns.Count, headerRow.LastCellNum,
+                "Excel should have exactly as many columns as result.Columns");
         }
 
         /// <summary>
