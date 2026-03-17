@@ -375,3 +375,57 @@ describe('renderKpi threshold coloring #386', () => {
         expect(valueDiv.style.color || '').toBe('');
     });
 });
+
+// ─── inferChartType auto-selection (#431) ─────────────────────────────────
+describe('inferChartType auto chart type selection (#431)', () => {
+    function infer(config, data) {
+        const { wd } = makeEnv();
+        return wd._internal.inferChartType(config, data);
+    }
+
+    const twoColData = (dimField, dimValues) => ({
+        columns: [dimField, 'Amount_Sum'],
+        rows: dimValues.map(v => ({ [dimField]: v, Amount_Sum: 100 }))
+    });
+
+    test('explicit chartType is always honoured', () => {
+        expect(infer({ chartType: 'scatter' }, twoColData('Region', ['A']))).toBe('scatter');
+    });
+
+    test('time keyword in dim name → line', () => {
+        expect(infer({}, twoColData('month', ['2024-01']))).toBe('line');
+        expect(infer({}, twoColData('Year', ['2024']))).toBe('line');
+        expect(infer({}, twoColData('date', ['2024-01-01']))).toBe('line');
+        expect(infer({}, twoColData('月份', ['2024-01']))).toBe('line');
+    });
+
+    test('time-pattern value in first row → line', () => {
+        expect(infer({}, twoColData('Period', ['2024-01']))).toBe('line');
+        expect(infer({}, twoColData('Period', ['202401']))).toBe('line');
+    });
+
+    test('≤8 categories, 2 columns → pie', () => {
+        const vals = ['A', 'B', 'C', 'D', 'E'];
+        expect(infer({}, twoColData('Category', vals))).toBe('pie');
+    });
+
+    test('exactly 8 categories → pie', () => {
+        const vals = ['A','B','C','D','E','F','G','H'];
+        expect(infer({}, twoColData('Category', vals))).toBe('pie');
+    });
+
+    test('>8 categories → bar', () => {
+        const vals = Array.from({ length: 9 }, (_, i) => 'C' + i);
+        expect(infer({}, twoColData('Category', vals))).toBe('bar');
+    });
+
+    test('missing data → bar', () => {
+        expect(infer({}, null)).toBe('bar');
+        expect(infer({}, { columns: [], rows: [] })).toBe('bar');
+    });
+
+    test('no config and no chartType → bar for many categories', () => {
+        const vals = Array.from({ length: 15 }, (_, i) => 'R' + i);
+        expect(infer(null, twoColData('Region', vals))).toBe('bar');
+    });
+});
