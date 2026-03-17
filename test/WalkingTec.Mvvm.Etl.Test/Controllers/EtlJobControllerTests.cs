@@ -157,4 +157,59 @@ public class EtlJobControllerTests
         Assert.AreEqual(200, result!.StatusCode);
         _mockScheduler.Verify(x => x.RescheduleAsync(id, validCron), Times.Once);
     }
+
+    // ─── InvalidOperationException → 400 tests ─────────────────────────────
+    // Abort 已有此覆蓋；TriggerNow/Pause/Resume/SkipNext 之前缺失。
+
+    [TestMethod]
+    public async Task TriggerNow_returns_400_when_scheduler_throws_InvalidOperationException()
+    {
+        var id = Guid.NewGuid();
+        _mockScheduler.Setup(x => x.TriggerNowAsync(id))
+            .ThrowsAsync(new InvalidOperationException($"Job {id} is already running."));
+
+        var result = await _controller.TriggerNow(id) as BadRequestObjectResult;
+
+        Assert.IsNotNull(result);
+        Assert.AreEqual(400, result!.StatusCode);
+    }
+
+    [TestMethod]
+    public async Task Pause_returns_400_when_scheduler_throws_InvalidOperationException()
+    {
+        var id = Guid.NewGuid();
+        _mockScheduler.Setup(x => x.PauseAsync(id))
+            .ThrowsAsync(new InvalidOperationException($"Job {id} is already paused."));
+
+        var result = await _controller.Pause(id) as BadRequestObjectResult;
+
+        Assert.IsNotNull(result);
+        Assert.AreEqual(400, result!.StatusCode);
+    }
+
+    [TestMethod]
+    public async Task Resume_returns_400_when_scheduler_throws_InvalidOperationException()
+    {
+        var id = Guid.NewGuid();
+        _mockScheduler.Setup(x => x.ResumeAsync(id))
+            .ThrowsAsync(new InvalidOperationException($"Job {id} is not paused."));
+
+        var result = await _controller.Resume(id) as BadRequestObjectResult;
+
+        Assert.IsNotNull(result);
+        Assert.AreEqual(400, result!.StatusCode);
+    }
+
+    [TestMethod]
+    public async Task SkipNext_returns_400_when_scheduler_throws_InvalidOperationException()
+    {
+        var id = Guid.NewGuid();
+        _mockScheduler.Setup(x => x.SkipNextAsync(id))
+            .ThrowsAsync(new InvalidOperationException($"Job {id} not found."));
+
+        var result = await _controller.SkipNext(id) as BadRequestObjectResult;
+
+        Assert.IsNotNull(result);
+        Assert.AreEqual(400, result!.StatusCode);
+    }
 }

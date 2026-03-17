@@ -102,24 +102,45 @@ public class _EtlJobController : BaseController
     [HttpPost]
     public async Task<IActionResult> TriggerNow(Guid id)
     {
-        await _scheduler.TriggerNowAsync(id);
-        return Ok(new { success = true, message = "已觸發執行" });
+        try
+        {
+            await _scheduler.TriggerNowAsync(id);
+            return Ok(new { success = true, message = "已觸發執行" });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     [ActionDescription("暫停 Job")]
     [HttpPost]
     public async Task<IActionResult> Pause(Guid id)
     {
-        await _scheduler.PauseAsync(id);
-        return Ok(new { success = true, message = "已暫停" });
+        try
+        {
+            await _scheduler.PauseAsync(id);
+            return Ok(new { success = true, message = "已暫停" });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     [ActionDescription("恢復 Job")]
     [HttpPost]
     public async Task<IActionResult> Resume(Guid id)
     {
-        await _scheduler.ResumeAsync(id);
-        return Ok(new { success = true, message = "已恢復" });
+        try
+        {
+            await _scheduler.ResumeAsync(id);
+            return Ok(new { success = true, message = "已恢復" });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     [ActionDescription("中止執行")]
@@ -141,8 +162,15 @@ public class _EtlJobController : BaseController
     [HttpPost]
     public async Task<IActionResult> SkipNext(Guid id)
     {
-        await _scheduler.SkipNextAsync(id);
-        return Ok(new { success = true, message = "已設定跳過下次執行" });
+        try
+        {
+            await _scheduler.SkipNextAsync(id);
+            return Ok(new { success = true, message = "已設定跳過下次執行" });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     [ActionDescription("修改排程")]
