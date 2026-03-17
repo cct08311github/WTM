@@ -239,6 +239,30 @@ describe('WtmDashboard.WidgetRendererFactory', () => {
         expect(hasIframe).toBeFalsy();
         expect(container.textContent).toMatch(/blocked|invalid/i);
     });
+
+    test('renderEmbed rejects data: URLs (#434)', () => {
+        const { wd, mockDocument } = makeEnv();
+        const container = mockDocument.createElement('div');
+        const config = { url: 'data:text/html,<script>alert(1)</script>' };
+
+        wd.WidgetRendererFactory.getRenderer('embed')(container, {}, config);
+
+        const hasIframe = container.children && container.children.some(c => c.tag === 'iframe');
+        expect(hasIframe).toBeFalsy();
+        expect(container.textContent).toMatch(/blocked|invalid/i);
+    });
+
+    test('renderEmbed rejects vbscript: URLs (#434)', () => {
+        const { wd, mockDocument } = makeEnv();
+        const container = mockDocument.createElement('div');
+        const config = { url: 'vbscript:msgbox(1)' };
+
+        wd.WidgetRendererFactory.getRenderer('embed')(container, {}, config);
+
+        const hasIframe = container.children && container.children.some(c => c.tag === 'iframe');
+        expect(hasIframe).toBeFalsy();
+        expect(container.textContent).toMatch(/blocked|invalid/i);
+    });
 });
 
 // ─── KPI threshold / alert coloring #386 ───────────────────────────────────
