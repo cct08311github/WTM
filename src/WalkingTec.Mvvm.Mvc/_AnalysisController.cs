@@ -443,8 +443,9 @@ namespace WalkingTec.Mvvm.Mvc
             if (val == null) return "";
             var s = val;
             bool needsPrefix = s.StartsWith("=") || s.StartsWith("+") || s.StartsWith("-") || s.StartsWith("@") || s.StartsWith("\t") || s.StartsWith("\r");
-            // Quote first (checking original string), then prepend tab prefix so the
-            // tab lands outside the quotes — "\t\"=1,2\"" not "\"\t=1,2\"".
+
+            // RFC 4180: quote the original value first, then prepend tab prefix outside the quotes.
+            // Order matters: if tab is added first, it ends up trapped inside the quotes.
             if (s.Contains(",") || s.Contains("\"") || s.Contains("\n") || s.Contains("\r"))
             {
                 s = "\"" + s.Replace("\"", "\"\"") + "\"";
@@ -454,7 +455,7 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 s = "\t" + s;
             }
-
+            
             return s;
         }
 

@@ -1202,8 +1202,10 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
 
             // 兩個月份的金額應各自獨立
             var months = result.Rows.Select(r => r["DeliveryDate"]?.ToString() ?? "").ToList();
-            Assert.IsTrue(months.Contains("2026-01"), "應有 2026-01 月份分組");
-            Assert.IsTrue(months.Contains("2026-02"), "應有 2026-02 月份分組");
+            Assert.IsTrue(months.Contains("2026-01"),
+                "應有 2026-01 月份分組");
+            Assert.IsTrue(months.Contains("2026-02"),
+                "應有 2026-02 月份分組");
 
             var jan = result.Rows.Single(r => r["DeliveryDate"]?.ToString() == "2026-01");
             var feb = result.Rows.Single(r => r["DeliveryDate"]?.ToString() == "2026-02");
