@@ -581,6 +581,27 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
+        public void Export_metadata_queryhash_value_matches_response_queryhash()
+        {
+            // #443: value cell must equal resp.QueryHash, not a fixed string
+            var resp = MakeResponse(
+                new List<string> { "Region", "Amount_Sum" },
+                new List<Dictionary<string, object?>>
+                {
+                    new() { ["Region"] = "North", ["Amount_Sum"] = 1m }
+                });
+            resp.QueryHash = "ABCD1234ABCD1234";
+
+            var wb = OpenWorkbook(AnalysisExcelExporter.Export(resp, includeMetadata: true));
+            var meta = wb.GetSheet("Metadata");
+
+            Assert.AreEqual("QueryHash", meta.GetRow(1).GetCell(0).StringCellValue,
+                "Key cell should be 'QueryHash'");
+            Assert.AreEqual("ABCD1234ABCD1234", meta.GetRow(1).GetCell(1).StringCellValue,
+                "Value cell must equal resp.QueryHash for audit chain of custody");
+        }
+
+        [TestMethod]
         public void Export_metadata_truncated_shows_yes_when_truncated()
         {
             var resp = MakeResponse(
