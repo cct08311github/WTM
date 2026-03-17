@@ -240,3 +240,114 @@ describe('WtmDashboard.WidgetRendererFactory', () => {
         expect(container.textContent).toMatch(/blocked|invalid/i);
     });
 });
+
+// ─── KPI threshold / alert coloring #386 ───────────────────────────────────
+describe('renderKpi threshold coloring #386', () => {
+    function makeKpiEnv() {
+        const { wd, mockDocument } = makeEnv();
+        const container = mockDocument.createElement('div');
+        container.children = [];
+        return { wd, mockDocument, container };
+    }
+
+    function kpiRender(wd, container, val, thresholds, direction) {
+        const config = { title: 'Risk', thresholds: thresholds };
+        if (direction) config.thresholdDirection = direction;
+        wd.WidgetRendererFactory.getRenderer('kpi')(container, { value: val }, config);
+    }
+
+    test('no thresholds — valueDiv has no color', () => {
+        const { wd, container } = makeKpiEnv();
+        kpiRender(wd, container, 5000, []);
+        const valueDiv = container.children.find(c => c.className === 'wtm-kpi-value');
+        expect(valueDiv).toBeDefined();
+        expect(valueDiv.style.color || '').toBe('');
+    });
+
+    test('value below all thresholds — no color applied', () => {
+        const { wd, container } = makeKpiEnv();
+        const thresholds = [
+            { value: 10000, color: '#faad14', label: '警告' },
+            { value: 50000, color: '#ff4d4f', label: '危險' }
+        ];
+        kpiRender(wd, container, 5000, thresholds);
+        const valueDiv = container.children.find(c => c.className === 'wtm-kpi-value');
+        expect(valueDiv.style.color || '').toBe('');
+    });
+
+    test('value exceeds warning threshold — yellow applied', () => {
+        const { wd, container } = makeKpiEnv();
+        const thresholds = [
+            { value: 10000, color: '#faad14', label: '警告' },
+            { value: 50000, color: '#ff4d4f', label: '危險' }
+        ];
+        kpiRender(wd, container, 20000, thresholds);
+        const valueDiv = container.children.find(c => c.className === 'wtm-kpi-value');
+        expect(valueDiv.style.color).toBe('#faad14');
+    });
+
+    test('value exceeds danger threshold — red applied (highest level wins)', () => {
+        const { wd, container } = makeKpiEnv();
+        const thresholds = [
+            { value: 10000, color: '#faad14', label: '警告' },
+            { value: 50000, color: '#ff4d4f', label: '危險' }
+        ];
+        kpiRender(wd, container, 60000, thresholds);
+        const valueDiv = container.children.find(c => c.className === 'wtm-kpi-value');
+        expect(valueDiv.style.color).toBe('#ff4d4f');
+    });
+
+    test('matched threshold with label — alert span appended', () => {
+        const { wd, container } = makeKpiEnv();
+        const thresholds = [{ value: 10000, color: '#faad14', label: '警告' }];
+        kpiRender(wd, container, 15000, thresholds);
+        const valueDiv = container.children.find(c => c.className === 'wtm-kpi-value');
+        const alertSpan = valueDiv.children && valueDiv.children.find(c => c.className === 'wtm-kpi-alert-label');
+        expect(alertSpan).toBeDefined();
+        expect(alertSpan.textContent).toContain('警告');
+        expect(alertSpan.style.color).toBe('#faad14');
+    });
+
+    test('threshold without label — no alert span', () => {
+        const { wd, container } = makeKpiEnv();
+        const thresholds = [{ value: 10000, color: '#faad14' }];
+        kpiRender(wd, container, 15000, thresholds);
+        const valueDiv = container.children.find(c => c.className === 'wtm-kpi-value');
+        const alertSpan = valueDiv.children && valueDiv.children.find(c => c.className === 'wtm-kpi-alert-label');
+        expect(alertSpan).toBeUndefined();
+    });
+
+    test('direction=below — color applied when value is at or below threshold', () => {
+        const { wd, container } = makeKpiEnv();
+        const thresholds = [
+            { value: 5000, color: '#faad14', label: '低水位警告' },
+            { value: 1000, color: '#ff4d4f', label: '危急' }
+        ];
+        kpiRender(wd, container, 3000, thresholds, 'below');
+        const valueDiv = container.children.find(c => c.className === 'wtm-kpi-value');
+        expect(valueDiv.style.color).toBe('#faad14');
+    });
+
+    test('direction=below — critical level when value drops further', () => {
+        const { wd, container } = makeKpiEnv();
+        const thresholds = [
+            { value: 5000, color: '#faad14', label: '低水位警告' },
+            { value: 1000, color: '#ff4d4f', label: '危急' }
+        ];
+        kpiRender(wd, container, 500, thresholds, 'below');
+        const valueDiv = container.children.find(c => c.className === 'wtm-kpi-value');
+        expect(valueDiv.style.color).toBe('#ff4d4f');
+    });
+
+    test('non-array thresholds config — gracefully ignored', () => {
+        const { wd, container } = makeKpiEnv();
+        expect(() => {
+            wd.WidgetRendererFactory.getRenderer('kpi')(container, { value: 99999 }, {
+                title: 'X',
+                thresholds: 'invalid'
+            });
+        }).not.toThrow();
+        const valueDiv = container.children.find(c => c.className === 'wtm-kpi-value');
+        expect(valueDiv.style.color || '').toBe('');
+    });
+});
