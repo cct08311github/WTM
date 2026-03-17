@@ -37,7 +37,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     var dict = new Dictionary<string, object?>();
                     var keyParts = g.Key.Split('\0');
                     for (int i = 0; i < req.Dimensions.Count; i++)
-                        dict[req.Dimensions[i]] = i < keyParts.Length ? keyParts[i] : string.Empty;
+                    {
+                        var raw = i < keyParts.Length ? keyParts[i] : string.Empty;
+                        dict[req.Dimensions[i]] = DecodeKeyPart(raw);
+                    }
 
                     foreach (var m in req.Measures)
                     {
@@ -97,7 +100,28 @@ namespace WalkingTec.Mvvm.Core.Analysis
                        return DateTruncator.FormatKey(key, h);
                    }
 
-                   return val.ToString() ?? string.Empty;
+                   return EncodeKeyPart(val.ToString() ?? string.Empty);
                }));
+
+        /// <summary>
+        /// Escapes <c>%</c> and <c>\0</c> in a dimension value so it can be safely
+        /// joined with the <c>\0</c> separator without ambiguity.
+        /// Encode order: % → %25 first, then \0 → %00.
+        /// </summary>
+        internal static string EncodeKeyPart(string s)
+        {
+            if (s.IndexOf('%') < 0 && s.IndexOf('\0') < 0) return s;
+            return s.Replace("%", "%25").Replace("\0", "%00");
+        }
+
+        /// <summary>
+        /// Reverses <see cref="EncodeKeyPart"/>.
+        /// Decode order: %00 → \0 first, then %25 → % (order is critical).
+        /// </summary>
+        internal static string DecodeKeyPart(string s)
+        {
+            if (s.IndexOf('%') < 0) return s;
+            return s.Replace("%00", "\0").Replace("%25", "%");
+        }
     }
 }
