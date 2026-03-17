@@ -16,6 +16,9 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     [HtmlTargetElement("wt:grid", Attributes = REQUIRED_ATTR_NAME, TagStructure = TagStructure.WithoutEndTag)]
     public class DataTableTagHelper : TagHelper
     {
+        private static readonly string _jsVersion =
+            typeof(DataTableTagHelper).Assembly.GetName().Version?.ToString() ?? "0";
+
         #region const
         protected const string REQUIRED_ATTR_NAME = "vm";
 
@@ -689,11 +692,11 @@ setTimeout(function(){{
                 {
                     context.Items["analysis_js_loaded"] = true;
                     output.PostElement.AppendHtml(
-                        @"<link rel=""stylesheet"" href=""/_js/framework_analysis.css"" />");
+                        $@"<link rel=""stylesheet"" href=""/_js/framework_analysis.css?v={_jsVersion}"" />");
                     output.PostElement.AppendHtml(
-                        @"<script src=""/_js/lib/sortablejs/sortable.min.js""></script>");
+                        $@"<script src=""/_js/lib/sortablejs/sortable.min.js?v={_jsVersion}""></script>");
                     output.PostElement.AppendHtml(
-                        @"<script src=""/_js/framework_analysis.js""></script>");
+                        $@"<script src=""/_js/framework_analysis.js?v={_jsVersion}""></script>");
                 }
             }
 
