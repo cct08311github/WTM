@@ -1048,10 +1048,6 @@
                 if (toggleRow) toggleRow.style.display = 'flex';
             }
 
-            // Auto-collapse field selector after query
-            if (!st.collapsed) {
-                toggleCollapse(gridId, 'analysis-panel-body', 'collapsed');
-            }
         })
         .catch(function (err) {
             if (resultDiv) resultDiv.textContent = '查詢失敗：' + parseFriendlyError(err);
