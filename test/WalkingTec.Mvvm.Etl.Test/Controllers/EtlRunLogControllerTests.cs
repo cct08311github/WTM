@@ -5,7 +5,11 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
+using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Etl.Models;
 using WalkingTec.Mvvm.Etl.Scheduling;
+using WalkingTec.Mvvm.Etl.Test.ViewModels;
+using WalkingTec.Mvvm.Etl.ViewModels;
 using WalkingTec.Mvvm.Mvc;
 using WalkingTec.Mvvm.Test.Mock;
 
@@ -59,5 +63,56 @@ public class EtlRunLogControllerTests
         Assert.IsNotNull(result);
         Assert.AreEqual(400, result!.StatusCode);
         _mockScheduler.Verify(x => x.RerunFromSnapshotAsync(runLogId), Times.Once);
+    }
+
+    // ─── Index (#356) ──────────────────────────────────────────────────────────
+
+    [TestMethod]
+    public void Index_no_jobId_returns_partial_view()
+    {
+        var result = _controller.Index() as PartialViewResult;
+
+        Assert.IsNotNull(result);
+    }
+
+    [TestMethod]
+    public void Index_with_jobId_sets_searcher_JobId()
+    {
+        var jobId = Guid.NewGuid();
+
+        var result = _controller.Index(jobId) as PartialViewResult;
+
+        Assert.IsNotNull(result);
+        var vm = result!.Model as EtlRunLogListVM;
+        Assert.IsNotNull(vm);
+        Assert.AreEqual(jobId, vm!.Searcher.JobId);
+    }
+
+    // ─── Search (#356) ─────────────────────────────────────────────────────────
+
+    [TestMethod]
+    public void Search_returns_content_json()
+    {
+        var dc = new EtlTestDataContext(Guid.NewGuid().ToString(), DBTypeEnum.Memory);
+
+        // Seed a job and a run log so the query has data to work with
+        var job = new EtlJobDefinition { ID = Guid.NewGuid(), Name = "TestJob" };
+        dc.EtlJobDefinitions.Add(job);
+        dc.EtlRunLogs.Add(new EtlRunLog
+        {
+            ID = Guid.NewGuid(),
+            JobId = job.ID,
+            Trigger = EtlRunTrigger.Manual,
+            Result = EtlRunResult.Success
+        });
+        dc.SaveChanges();
+
+        _controller.Wtm = MockWtmContext.CreateWtmContext(dc);
+        _controller.Wtm.MSD = new ModelStateServiceProvider(_controller.ModelState);
+
+        var result = _controller.Search(new EtlRunLogSearcher()) as ContentResult;
+
+        Assert.IsNotNull(result);
+        Assert.IsNotNull(result!.Content);
     }
 }
