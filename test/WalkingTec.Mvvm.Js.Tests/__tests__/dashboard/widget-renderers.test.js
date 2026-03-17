@@ -351,3 +351,72 @@ describe('renderKpi threshold coloring #386', () => {
         expect(valueDiv.style.color || '').toBe('');
     });
 });
+
+// ─── XSS safety: widget renderers must use textContent (#436) ────────────────
+describe('XSS safety: widget renderers use textContent not innerHTML (#436)', () => {
+    const XSS = '<script>alert(1)</script>';
+
+    test('renderKpi title stored as literal text, not evaluated as HTML', () => {
+        const { wd, mockDocument } = makeEnv();
+        const container = mockDocument.createElement('div');
+        container.children = [];
+
+        wd.WidgetRendererFactory.getRenderer('kpi')(container, { value: 100 }, { title: XSS });
+
+        // textContent preserves literal angle brackets — not evaluated as HTML
+        expect(container.children.some(c => c.textContent === XSS)).toBe(true);
+    });
+
+    test('renderProgress title with XSS payload rendered as literal text', () => {
+        const { wd, mockDocument } = makeEnv();
+        const container = mockDocument.createElement('div');
+        container.children = [];
+
+        wd.WidgetRendererFactory.getRenderer('progress')(
+            container, { value: 0.5 }, { title: XSS }
+        );
+
+        expect(container.children.some(c => c.textContent === XSS)).toBe(true);
+    });
+
+    test('renderList item label with XSS payload rendered as literal text', () => {
+        const { wd, mockDocument } = makeEnv();
+        const container = mockDocument.createElement('div');
+        container.children = [];
+
+        wd.WidgetRendererFactory.getRenderer('list')(
+            container,
+            { items: [{ label: XSS, description: 'safe' }] },
+            { title: 'Normal' }
+        );
+
+        const ul = container.children.find(c => c.tag === 'ul');
+        expect(ul).toBeDefined();
+        // item text is set via textContent — literal XSS string preserved, not executed
+        expect(ul.children[0].textContent).toContain(XSS);
+    });
+
+    test('renderTable cell value with XSS payload rendered as literal text', () => {
+        const { wd, mockDocument } = makeEnv();
+        const container = mockDocument.createElement('div');
+        container.children = [];
+
+        wd.WidgetRendererFactory.getRenderer('table')(
+            container,
+            { columns: ['Name'], rows: [{ Name: XSS }] },
+            { title: 'T' }
+        );
+
+        // Find the table element and locate the cell
+        function findDeep(el, pred) {
+            if (pred(el)) return el;
+            for (const c of (el.children || [])) {
+                const found = findDeep(c, pred);
+                if (found) return found;
+            }
+            return null;
+        }
+        const xssCell = findDeep(container, c => c.textContent === XSS);
+        expect(xssCell).toBeDefined();
+    });
+});
