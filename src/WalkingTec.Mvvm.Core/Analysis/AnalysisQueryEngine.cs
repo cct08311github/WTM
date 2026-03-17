@@ -253,7 +253,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 Expression? filterExpr = null;
                 try
                 {
-                    if (f.Operator == FilterOperator.In)
+                    if (f.Operator == FilterOperator.In || f.Operator == FilterOperator.NotIn)
                     {
                         System.Collections.IEnumerable? values = null;
                         if (f.Value is string s)
@@ -265,15 +265,15 @@ namespace WalkingTec.Mvvm.Core.Analysis
                             values = f.Value as System.Collections.IEnumerable;
                         }
 
-                        if (values == null) throw new InvalidOperationException("Value for 'In' operator must be an array, list or comma-separated string.");
-                        
+                        if (values == null) throw new InvalidOperationException("Value for 'In'/'NotIn' operator must be an array, list or comma-separated string.");
+
                         var list = new System.Collections.ArrayList();
                         foreach (var v in values)
                         {
                             list.Add(ChangeType(v, underlyingType));
                         }
-                        if (list.Count == 0) throw new InvalidOperationException("'In' operator requires at least one value.");
-                        if (list.Count > 100) throw new InvalidOperationException("'In' operator supports up to 100 values.");
+                        if (list.Count == 0) throw new InvalidOperationException("'In'/'NotIn' operator requires at least one value.");
+                        if (list.Count > 100) throw new InvalidOperationException("'In'/'NotIn' operator supports up to 100 values.");
 
                         var typedList = Array.CreateInstance(underlyingType, list.Count);
                         list.CopyTo(typedList);
@@ -284,25 +284,28 @@ namespace WalkingTec.Mvvm.Core.Analysis
                             .MakeGenericMethod(underlyingType);
 
                         Expression propForIn = prop;
+                        Expression inExpr;
                         if (Nullable.GetUnderlyingType(targetType) != null)
                         {
                             propForIn = Expression.Property(prop, "Value");
-                            filterExpr = Expression.AndAlso(
+                            inExpr = Expression.AndAlso(
                                 Expression.NotEqual(prop, Expression.Constant(null, targetType)),
                                 Expression.Call(containsMethod, listConst, propForIn)
                             );
                         }
                         else
                         {
-                            filterExpr = Expression.Call(containsMethod, listConst, propForIn);
+                            inExpr = Expression.Call(containsMethod, listConst, propForIn);
                         }
+                        filterExpr = f.Operator == FilterOperator.NotIn ? Expression.Not(inExpr) : inExpr;
                     }
-                    else if (f.Operator == FilterOperator.Contains)
+                    else if (f.Operator == FilterOperator.Contains || f.Operator == FilterOperator.NotContains)
                     {
                         if (targetType != typeof(string))
-                            throw new InvalidOperationException($"'Contains' operator is only supported for string fields, not '{targetType.Name}'.");
+                            throw new InvalidOperationException($"'Contains'/'NotContains' operator is only supported for string fields, not '{targetType.Name}'.");
                         var val = Expression.Constant(f.Value?.ToString() ?? "");
-                        filterExpr = Expression.Call(prop, typeof(string).GetMethod("Contains", new[] { typeof(string) })!, val);
+                        Expression containsExpr = Expression.Call(prop, typeof(string).GetMethod("Contains", new[] { typeof(string) })!, val);
+                        filterExpr = f.Operator == FilterOperator.NotContains ? Expression.Not(containsExpr) : containsExpr;
                     }
                     else
                     {
@@ -316,6 +319,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         Expression cmp = f.Operator switch
                         {
                             FilterOperator.Eq => Expression.Equal(propForCmp, val),
+                            FilterOperator.NotEq => Expression.NotEqual(propForCmp, val),
                             FilterOperator.Gt => Expression.GreaterThan(propForCmp, val),
                             FilterOperator.Gte => Expression.GreaterThanOrEqual(propForCmp, val),
                             FilterOperator.Lt => Expression.LessThan(propForCmp, val),

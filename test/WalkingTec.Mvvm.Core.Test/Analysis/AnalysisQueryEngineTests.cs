@@ -285,6 +285,68 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.ThrowsException<InvalidOperationException>(() => Engine().Execute(Q(), req, _whitelist));
         }
 
+        // ─── NotEq / NotContains / NotIn (#428) ──────────────────────────────
+
+        [TestMethod]
+        public void Filter_NotEq_excludes_matching_rows()
+        {
+            // Baseline data: 華東(100), 華東(200), 華南(300)
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) },
+                filters: new[] { ("Region", FilterOperator.NotEq, "華東") });
+
+            var result = Engine().Execute(Q(), req, _whitelist);
+
+            Assert.IsFalse(result.Rows.Any(r => r["Region"]?.ToString() == "華東"),
+                "NotEq 應排除 '華東'");
+            Assert.IsTrue(result.Rows.Any(r => r["Region"]?.ToString() == "華南"),
+                "NotEq 應保留 '華南'");
+        }
+
+        [TestMethod]
+        public void Filter_NotContains_excludes_matching_rows()
+        {
+            // "華東" contains "東" → excluded; "華南" does not → retained
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) },
+                filters: new[] { ("Region", FilterOperator.NotContains, "東") });
+
+            var result = Engine().Execute(Q(), req, _whitelist);
+
+            Assert.IsFalse(result.Rows.Any(r => r["Region"]?.ToString()?.Contains("東") == true),
+                "NotContains '東' 應排除所有含 '東' 的地區");
+            Assert.IsTrue(result.Rows.Any(r => r["Region"]?.ToString() == "華南"),
+                "NotContains 應保留不含 '東' 的地區（華南）");
+        }
+
+        [TestMethod]
+        public void Filter_NotIn_excludes_listed_values()
+        {
+            // NotIn 華東,華南 → all rows excluded
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) },
+                filters: new[] { ("Region", FilterOperator.NotIn, "華東,華南") });
+
+            var result = Engine().Execute(Q(), req, _whitelist);
+
+            Assert.AreEqual(0, result.Rows.Count,
+                "NotIn 華東,華南 應排除全部資料列");
+        }
+
+        [TestMethod]
+        public void Filter_NotContains_on_non_string_field_throws()
+        {
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) },
+                filters: new[] { ("Amount", FilterOperator.NotContains, "100") });
+
+            Assert.ThrowsException<InvalidOperationException>(() => Engine().Execute(Q(), req, _whitelist));
+        }
+
         // ─── SQL Injection 回歸保護 ────────────────────────────────────────────
         //
         // Expression Tree 在結構上防止 SQL injection：filter value 轉為

@@ -2882,10 +2882,10 @@ describe('#298 Ad-hoc filter UI', () => {
 
         waReq.addFilterRow(gridId);
         const opSel = panel.querySelector('.analysis-filter-op');
-        expect(opSel.options.length).toBe(7);
+        expect(opSel.options.length).toBe(10);
 
         const opValues = Array.from(opSel.options).map(o => o.value);
-        expect(opValues).toEqual(['Eq', 'Gt', 'Gte', 'Lt', 'Lte', 'Contains', 'In']);
+        expect(opValues).toEqual(['Eq', 'NotEq', 'Gt', 'Gte', 'Lt', 'Lte', 'Contains', 'NotContains', 'In', 'NotIn']);
         idSpy.mockRestore();
     });
 });
