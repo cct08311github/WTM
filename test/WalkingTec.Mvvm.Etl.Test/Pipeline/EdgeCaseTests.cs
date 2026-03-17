@@ -194,4 +194,104 @@ public class EdgeCaseTests
         var firstRow = capturedBatch.Rows[0];
         ((decimal)firstRow["DoubleAmount"]).Should().Be((decimal)firstRow["Amount"] * 2);
     }
+    // ─── #377: Unicode / special characters ───────────────────────────────────
+
+    [TestMethod]
+    public async Task Execute_with_unicode_field_values_loads_correctly()
+    {
+        // Verify pipeline correctly passes through Unicode strings (CJK, emoji, Arabic)
+        // without truncation or corruption — regression test for #377.
+        var dt = new DataTable();
+        dt.Columns.Add("OrderNo", typeof(string));
+        dt.Columns.Add("Amount", typeof(decimal));
+        dt.Columns.Add("UpdatedAt", typeof(DateTime));
+
+        var unicodeValues = new[]
+        {
+            "訂單-中文測試-001",          // CJK
+            "注文-日本語テスト-002",       // Japanese
+            "ORD-Emoji-🎉🚀💡-003",       // Emoji
+            "طلب-عربي-004",               // Arabic (RTL)
+        };
+
+        foreach (var val in unicodeValues)
+        {
+            var row = dt.NewRow();
+            row["OrderNo"] = val;
+            row["Amount"] = 100m;
+            row["UpdatedAt"] = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            dt.Rows.Add(row);
+        }
+
+        _source.SetData(dt);
+        var config = TestHelpers.CreateTestConfig();
+        var watermark = new WatermarkStrategy(EtlWatermarkType.FullLoad, null, null);
+        var executor = new EtlPipelineExecutor(_source, _loader);
+
+        var result = await executor.ExecuteAsync(config, watermark);
+
+        result.Success.Should().BeTrue("pipeline should succeed with Unicode values");
+        _loader.TotalRows.Should().Be(4, "all 4 Unicode rows should be loaded");
+
+        // Verify each Unicode value is preserved verbatim in the loaded batch
+        var loadedOrders = _loader.LoadedBatches
+            .SelectMany(b => b.Rows.Cast<DataRow>())
+            .Select(r => r["OrderNo"].ToString())
+            .ToList();
+
+        foreach (var expected in unicodeValues)
+        {
+            loadedOrders.Should().Contain(expected, $"Unicode value '{expected}' should be preserved verbatim");
+        }
+    }
+
+    [TestMethod]
+    public async Task Execute_with_special_chars_in_string_field_handles_correctly()
+    {
+        // Verify pipeline handles embedded special characters (newline, tab, null-byte removal)
+        // without throwing or corrupting data — regression test for #377.
+        var dt = new DataTable();
+        dt.Columns.Add("OrderNo", typeof(string));
+        dt.Columns.Add("Amount", typeof(decimal));
+        dt.Columns.Add("UpdatedAt", typeof(DateTime));
+
+        // Newline and tab are valid in NVARCHAR; null byte would fail DB insert but we test pipeline handling
+        var specialValues = new[]
+        {
+            "Line1\nLine2",        // embedded newline
+            "Col1\tCol2",          // embedded tab
+            "Quote\"Inside",       // embedded double-quote
+            @"Back\Slash",         // backslash
+        };
+
+        foreach (var val in specialValues)
+        {
+            var row = dt.NewRow();
+            row["OrderNo"] = val;
+            row["Amount"] = 50m;
+            row["UpdatedAt"] = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            dt.Rows.Add(row);
+        }
+
+        _source.SetData(dt);
+        var config = TestHelpers.CreateTestConfig();
+        var watermark = new WatermarkStrategy(EtlWatermarkType.FullLoad, null, null);
+        var executor = new EtlPipelineExecutor(_source, _loader);
+
+        var result = await executor.ExecuteAsync(config, watermark);
+
+        result.Success.Should().BeTrue("pipeline should succeed with special chars");
+        _loader.TotalRows.Should().Be(4, "all 4 rows with special chars should be loaded");
+
+        var loadedOrders = _loader.LoadedBatches
+            .SelectMany(b => b.Rows.Cast<DataRow>())
+            .Select(r => r["OrderNo"].ToString())
+            .ToList();
+
+        foreach (var expected in specialValues)
+        {
+            loadedOrders.Should().Contain(expected, $"Special char value '{expected}' should be preserved");
+        }
+    }
+
 }
