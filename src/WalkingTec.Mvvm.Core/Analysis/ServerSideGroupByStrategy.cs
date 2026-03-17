@@ -151,27 +151,42 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
             if (measure.Func == AggregateFunc.Count)
             {
-                Expression propAccess = Expression.Property(innerParam, measure.Field);
-                Expression predicateBody;
-                if (Nullable.GetUnderlyingType(propType) != null || !propType.IsValueType)
+                // Use Enumerable.Count<TSource>(IEnumerable<TSource>) for non-nullable value types,
+                // or Enumerable.Count<TSource>(IEnumerable<TSource>, Func<TSource,bool>) for nullable.
+                // The predicate overload requires a strongly-typed Func<TModel,bool> lambda so that
+                // EF Core's GroupBy translator can match and emit "COUNT(*)" or "COUNT(col)".
+                bool isNullable = Nullable.GetUnderlyingType(propType) != null || !propType.IsValueType;
+
+                if (isNullable)
                 {
-                    predicateBody = Expression.NotEqual(propAccess, Expression.Constant(null, propType));
+                    Expression propAccess = Expression.Property(innerParam, measure.Field);
+                    var predicateBody = Expression.NotEqual(propAccess, Expression.Constant(null, propType));
+                    var predicate = Expression.Lambda<Func<TModel, bool>>(predicateBody, innerParam);
+
+                    var countWithPredicateMethod = typeof(Enumerable)
+                        .GetMethods()
+                        .First(m => m.Name == nameof(Enumerable.Count)
+                                    && m.IsGenericMethod
+                                    && m.GetParameters().Length == 2)
+                        .MakeGenericMethod(typeof(TModel));
+
+                    return Expression.Convert(
+                        Expression.Call(countWithPredicateMethod, gParam, predicate),
+                        typeof(double?));
                 }
                 else
                 {
-                    predicateBody = Expression.Constant(true);
+                    var countMethod = typeof(Enumerable)
+                        .GetMethods()
+                        .First(m => m.Name == nameof(Enumerable.Count)
+                                    && m.IsGenericMethod
+                                    && m.GetParameters().Length == 1)
+                        .MakeGenericMethod(typeof(TModel));
+
+                    return Expression.Convert(
+                        Expression.Call(countMethod, gParam),
+                        typeof(double?));
                 }
-                
-                var predicate = Expression.Lambda(predicateBody, innerParam);
-                
-                var countMethod = typeof(Enumerable)
-                    .GetMethods()
-                    .First(m => m.Name == nameof(Enumerable.Count) && m.GetParameters().Length == 2)
-                    .MakeGenericMethod(typeof(TModel));
-                
-                return Expression.Convert(
-                    Expression.Call(countMethod, gParam, predicate),
-                    typeof(double?));
             }
 
             Expression pAccess = Expression.Property(innerParam, measure.Field);
@@ -179,6 +194,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
             var valueSelector = Expression.Lambda<Func<TModel, double?>>(pAccess, innerParam);
 
+            // Enumerable.Sum/Average/Max/Min are used here (not Queryable) because the grouping
+            // element type is IGrouping<K,TModel> which implements IEnumerable<TModel>.
+            // EF Core 8 GroupBy translator recognises Enumerable aggregate calls within a
+            // GroupBy.Select() expression tree and emits the corresponding SQL aggregate function.
             string methodName = measure.Func switch
             {
                 AggregateFunc.Sum => nameof(Enumerable.Sum),

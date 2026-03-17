@@ -2,8 +2,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Analysis;
@@ -295,6 +297,92 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.AreEqual(300m, Convert.ToDecimal(huaDong["Amount_Sum"]));
             Assert.AreEqual(15m, Convert.ToDecimal(huaDong["Quantity_Avg"]));
             Assert.AreEqual(10m, Convert.ToDecimal(huaDong["Discount_Max"]));
+        }
+
+        /// <summary>
+        /// Verifies that the generated SQL actually contains "GROUP BY".
+        /// Uses EF Core SQL logging to capture the emitted query and asserts
+        /// the database-side aggregation is not silently falling back to in-process.
+        /// </summary>
+        [TestMethod]
+        public void Execute_emits_SQL_with_GROUP_BY()
+        {
+            // Arrange: rebuild context with SQL logging enabled
+            var sqlLog = new StringBuilder();
+            var loggingOpts = new DbContextOptionsBuilder<SaleTestContext>()
+                .UseSqlite(_conn)
+                .LogTo(
+                    msg => { sqlLog.AppendLine(msg); },
+                    new[] { DbLoggerCategory.Database.Command.Name },
+                    LogLevel.Information)
+                .EnableSensitiveDataLogging()
+                .Options;
+
+            using var loggingCtx = new SaleTestContext(loggingOpts);
+            loggingCtx.Database.EnsureCreated();
+            loggingCtx.SaleRecords.AddRange(
+                new SaleRecord { ID = Guid.NewGuid(), Region = "北區", Category = "X", Year = "2025", Amount = 50m, Quantity = 5m, Discount = 2m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "北區", Category = "X", Year = "2025", Amount = 150m, Quantity = 15m, Discount = 8m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "南區", Category = "Y", Year = "2025", Amount = 200m, Quantity = 20m, Discount = 10m }
+            );
+            loggingCtx.SaveChanges();
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            // Act
+            sqlLog.Clear();
+            _strategy.Execute(loggingCtx.SaleRecords.AsQueryable(), req, _whitelist);
+            var capturedSql = sqlLog.ToString();
+
+            // Assert: the emitted SQL must contain GROUP BY, proving server-side aggregation
+            StringAssert.Contains(
+                capturedSql.ToUpperInvariant(),
+                "GROUP BY",
+                $"Expected SQL to contain GROUP BY but got:\n{capturedSql}");
+        }
+
+        [TestMethod]
+        public void Count_on_nullable_field_emits_SQL_with_GROUP_BY()
+        {
+            // Arrange: rebuild context with SQL logging enabled
+            var sqlLog = new StringBuilder();
+            var loggingOpts = new DbContextOptionsBuilder<SaleTestContext>()
+                .UseSqlite(_conn)
+                .LogTo(
+                    msg => { sqlLog.AppendLine(msg); },
+                    new[] { DbLoggerCategory.Database.Command.Name },
+                    LogLevel.Information)
+                .EnableSensitiveDataLogging()
+                .Options;
+
+            using var loggingCtx = new SaleTestContext(loggingOpts);
+            loggingCtx.Database.EnsureCreated();
+            loggingCtx.SaleRecords.AddRange(
+                new SaleRecord { ID = Guid.NewGuid(), Region = "東區", Category = "Z", Year = "2025", Amount = 10m, Quantity = 1m, Discount = 1m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "東區", Category = "Z", Year = "2025", Amount = 20m, Quantity = 2m, Discount = 2m }
+            );
+            loggingCtx.SaveChanges();
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Count) });
+
+            // Act
+            sqlLog.Clear();
+            var rows = _strategy.Execute(loggingCtx.SaleRecords.AsQueryable(), req, _whitelist);
+            var capturedSql = sqlLog.ToString();
+
+            // Assert: GROUP BY is present in generated SQL
+            StringAssert.Contains(
+                capturedSql.ToUpperInvariant(),
+                "GROUP BY",
+                $"Expected SQL to contain GROUP BY for Count but got:\n{capturedSql}");
+
+            // Assert: result is correct
+            Assert.AreEqual(1, rows.Count);
+            Assert.AreEqual(2m, Convert.ToDecimal(rows[0]["Amount_Count"]));
         }
     }
 }

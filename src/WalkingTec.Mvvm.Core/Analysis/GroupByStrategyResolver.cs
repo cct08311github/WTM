@@ -4,8 +4,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
 {
     /// <summary>
     /// 根據資料庫類型和查詢特徵選擇 GroupBy 策略。
-    /// SqlServer/Oracle 使用 ServerSideGroupByStrategy（SQL 推送 GroupBy）；
-    /// 其餘（SQLite、MySQL、PgSql、Memory、DaMeng）使用 InProcessGroupByStrategy。
+    /// SqlServer、Oracle、MySql、PgSql 使用 ServerSideGroupByStrategy（SQL 推送 GroupBy）；
+    /// 其餘（SQLite、Memory、DaMeng）使用 InProcessGroupByStrategy。
     /// </summary>
     public class GroupByStrategyResolver
     {
@@ -17,14 +17,18 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
         /// <summary>
         /// 根據 DB 類型和查詢請求解析 GroupBy 策略。
+        /// SqlServer、Oracle、MySql、PgSql 均支援標準 SQL GROUP BY，使用 ServerSideGroupByStrategy；
+        /// SQLite 的 GroupBy Expression Tree 翻譯有限制，使用 InProcessGroupByStrategy。
         /// </summary>
         public virtual IGroupByStrategy Resolve(DBTypeEnum dbType, AnalysisQueryRequest req)
         {
             return dbType switch
             {
                 DBTypeEnum.SqlServer => ServerSide,
-                DBTypeEnum.Oracle => ServerSide,
-                _ => InProcess
+                DBTypeEnum.Oracle    => ServerSide,
+                DBTypeEnum.MySql     => ServerSide,
+                DBTypeEnum.PgSql     => ServerSide,
+                _                    => InProcess
             };
         }
     }
