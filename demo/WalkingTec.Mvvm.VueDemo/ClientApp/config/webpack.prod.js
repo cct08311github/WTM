@@ -1,9 +1,9 @@
-const merge = require("webpack-merge");
+const { merge } = require("webpack-merge");
 const baseConfig = require("./webpack.base");
 const MiniCssExtractPlugin = require("mini-css-extract-plugin"); //提取js中的css
 const { CleanWebpackPlugin } = require("clean-webpack-plugin");
 const { utils } = require("./webpack-util");
-const OptimizeCssAssetsPlugin = require("optimize-css-assets-webpack-plugin");
+const CssMinimizerPlugin = require("css-minimizer-webpack-plugin");
 const TerserPlugin = require("terser-webpack-plugin");
 module.exports = merge(baseConfig, {
   mode: "production",
@@ -13,10 +13,10 @@ module.exports = merge(baseConfig, {
     chunkFilename: "static/js/[name]-[chunkhash:5].bundle.js"
   },
   optimization: {
-    moduleIds: "hashed", // keep module.id stable when vender modules does not change
+    moduleIds: "deterministic", // keep module.id stable when vender modules does not change
     minimizer: [
       new TerserPlugin({ parallel: true }), //压缩js
-      new OptimizeCssAssetsPlugin({}) //压缩css
+      new CssMinimizerPlugin() //压缩css
     ],
     runtimeChunk: "single", //webpack runtime codes
     splitChunks: {

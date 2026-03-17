@@ -2,6 +2,10 @@
   "name": "wtm-react",
   "version": "0.0.1",
   "private": true,
+  "overrides": {
+    "immutable": "^3.8.3",
+    "node-fetch": "^2.7.0"
+  },
   "dependencies": {
     "@ant-design/pro-layout": "^7.22.7",
     "ag-grid-community": "^35.1.0",
@@ -28,8 +32,7 @@
     "react-router-config": "^5.1.1",
     "react-router-dom": "~5.1.2",
     "rxjs": "^6.6.3",
-    "viewerjs": "^1.9.0",
-    "viser-react": "^2.4.8"
+    "viewerjs": "^1.9.0"
   },
   "resolutions": {
     "intl-messageformat-parser": "~5.4.2"

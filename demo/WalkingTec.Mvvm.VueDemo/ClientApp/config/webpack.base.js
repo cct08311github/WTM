@@ -107,7 +107,7 @@ module.exports = {
   },
 
   optimization: {
-    moduleIds: "hashed", // keep module.id stable when vender modules does not change
+    moduleIds: "deterministic", // keep module.id stable when vender modules does not change
     splitChunks: {
       cacheGroups: {
         // 注意: priority属性
@@ -159,13 +159,14 @@ module.exports = {
     }),
     // VueLoaderPlugin在vue-loaderv15的版本中,这个插件是必须启用的.
     new VueLoaderPlugin(),
-    new CopyWebpackPlugin([
-      {
-        from: utils.resolve("static/img"),
-        to: utils.resolve("dist/static/img"),
-        toType: "dir"
-      }
-    ]),
+    new CopyWebpackPlugin({
+      patterns: [
+        {
+          from: utils.resolve("static/img"),
+          to: utils.resolve("dist/static/img")
+        }
+      ]
+    }),
     new webpack.ProvidePlugin({
       _: "lodash"
     })

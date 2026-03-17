@@ -1,5 +1,4 @@
-const webpack = require("webpack");
-const merge = require("webpack-merge");
+const { merge } = require("webpack-merge");
 const baseConfig = require("./webpack.base");
 const { utils } = require("./webpack-util");
 const HOST = "localhost";
@@ -12,24 +11,19 @@ module.exports = merge(baseConfig, {
     path: utils.resolve("dist"),
     publicPath: "/",
     filename: "[name].js",
-    library: "[name]_[hash]",
     chunkFilename: "[name].bundle.js"
   },
   devServer: {
     host: HOST,
     port: PORT,
-    open: true,
-    openPage: "index.html",
-    proxy: {
-      "/api": {
-            target: "http://localhost:7598/",
-        changeOrigin: true
-      },
-      "/_framework": {
-          target: "http://localhost:7598/",
+    open: { target: ["index.html"] },
+    proxy: [
+      {
+        context: ["/api", "/_framework"],
+        target: "http://localhost:7598/",
         changeOrigin: true
       }
-    }
+    ]
   },
 
   module: {
@@ -46,19 +40,6 @@ module.exports = merge(baseConfig, {
         test: /\.less$/,
         use: ["style-loader", "css-loader", "less-loader"] // 编译顺序从右往左
       }
-      // {
-      //     test: /\.s[ac]ss$/i,
-      //     use: [
-      //         // Creates `style` nodes from JS strings
-      //         "style-loader",
-      //         // Translates CSS into CommonJS
-      //         "css-loader",
-      //         // Compiles Sass to CSS
-      //         "sass-loader"
-      //     ]
-      // }
     ]
-  },
-
-  plugins: [new webpack.HotModuleReplacementPlugin()]
+  }
 });
