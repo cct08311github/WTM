@@ -13,6 +13,7 @@ using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Analysis;
 using WalkingTec.Mvvm.Mvc;
 using WalkingTec.Mvvm.Test.Mock;
+using WalkingTec.Mvvm.Core.Support.Json;
 
 namespace WalkingTec.Mvvm.Core.Test.Analysis
 {
@@ -1767,6 +1768,40 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
 
+        // ─── CheckAccess RBAC 測試 ──────────────────────────────────────────────
+        //
+        // 驗證五個端點（GetMeta / Query / Pivot / Export / PivotExport）的 Forbid 路徑：
+        //   - 缺少必要角色 → ForbidResult
+        //   - Admin 繞過 AllowedRoles → 200
+        //   - 持有正確角色 → 200
+
+        /// <summary>角色限制 VM：只有 "Analyst" 可存取。</summary>
+        [EnableAnalysis(AllowedRoles = "Analyst")]
+        private class RestrictedSaleListVM : BasePagedListVM<SaleRecord, BaseSearcher>
+        {
+            public override IOrderedQueryable<SaleRecord> GetSearchQuery()
+                => _testData.AsQueryable().OrderByDescending(x => x.ID);
+        }
+
+        private _AnalysisController CreateControllerWithRoles(params string[] roles)
+        {
+            var controller = CreateController();
+            controller.Wtm.LoginUserInfo.Roles = roles
+                .Select(r => new SimpleRole { RoleName = r })
+                .ToList();
+            return controller;
+        }
+
+        private static AnalysisQueryRequest RestrictedReq(
+            string[] dims,
+            (string field, AggregateFunc func)[] msrs = null)
+            => new AnalysisQueryRequest
+            {
+                ListVmType = typeof(RestrictedSaleListVM).FullName,
+                Dimensions = dims?.ToList() ?? new List<string>(),
+                Measures   = msrs?.Select(m => new MeasureRequest { Field = m.field, Func = m.func }).ToList()
+                             ?? new List<MeasureRequest>()
+            };
 
         [TestMethod]
         public void GetMeta_returns_403_when_user_lacks_required_role()
