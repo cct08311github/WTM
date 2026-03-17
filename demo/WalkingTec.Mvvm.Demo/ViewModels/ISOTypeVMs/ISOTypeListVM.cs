@@ -64,7 +64,7 @@ namespace WalkingTec.Mvvm.Demo.ViewModels.ISOTypeVMs
                     ISOVerSion = x.ISOVerSion,
                     Description = x.Description,
                     ISOFileID = x.ISOFileID,
-                    IsoName_view = x.iSOTypes.Select(y=>y.softFacInfo.IsoName).ToSepratedString(null,","), 
+                    IsoName_view = string.Join(",", x.iSOTypes.Select(y => y.softFacInfo.IsoName)),
                 })
                 .OrderBy(x => x.ID);
             return query;
