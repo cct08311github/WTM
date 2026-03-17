@@ -444,14 +444,16 @@ namespace WalkingTec.Mvvm.Mvc
             var s = val;
             bool needsPrefix = s.StartsWith("=") || s.StartsWith("+") || s.StartsWith("-") || s.StartsWith("@") || s.StartsWith("\t") || s.StartsWith("\r");
 
-            if (needsPrefix)
-            {
-                s = "\t" + s;
-            }
-
+            // RFC 4180: quote the original value first, then prepend tab prefix outside the quotes.
+            // Order matters: if tab is added first, it ends up trapped inside the quotes.
             if (s.Contains(",") || s.Contains("\"") || s.Contains("\n") || s.Contains("\r"))
             {
                 s = "\"" + s.Replace("\"", "\"\"") + "\"";
+            }
+
+            if (needsPrefix)
+            {
+                s = "\t" + s;
             }
             
             return s;
