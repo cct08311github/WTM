@@ -30,12 +30,13 @@ public class EtlHostedService : IHostedService
 
         await _scheduler.Start(cancellationToken);
 
-        // 從 DB 載入所有 Enabled 的 ETL Job
+        // 重置幽靈 Running Job（上次程序崩潰遺留），再載入 Enabled/Failed Job
         // DB 可能尚未完成 DataInit（SyncDb seeding），延遲重試避免 race condition
         for (var attempt = 1; attempt <= 3; attempt++)
         {
             try
             {
+                await _schedulerService.ResetGhostRunningJobsAsync();
                 await _schedulerService.LoadJobsFromDbAsync();
                 return;
             }
