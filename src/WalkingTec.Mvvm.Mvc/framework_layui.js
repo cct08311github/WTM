@@ -1464,8 +1464,13 @@ var wtmHeaderFilter = (function () {
             if (v) active[k] = v.toLowerCase();
         });
 
-        // No active filters — rows are already visible from LayUI render; skip DOM work
-        if (Object.keys(active).length === 0) return;
+        // No active filters — restore all rows that may have been hidden by a previous filter (#511)
+        if (Object.keys(active).length === 0) {
+            $view.find('.layui-table-main tbody tr').show();
+            $view.find('.layui-table-fixed .layui-table-body tbody tr').show();
+            $view.find('.layui-table-fixed-r .layui-table-body tbody tr').show();
+            return;
+        }
 
         var $mainTbody = $view.find('.layui-table-main tbody');
         var visibility = [];
@@ -1497,6 +1502,7 @@ var wtmHeaderFilter = (function () {
 
     return { init: init, refresh: refresh };
 }());
+window.wtmHeaderFilter = wtmHeaderFilter;
 
 $.ajax({
     url: '/_framework/GetScriptLanguage',
