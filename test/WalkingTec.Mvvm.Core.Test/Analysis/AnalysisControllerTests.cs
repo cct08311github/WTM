@@ -2005,7 +2005,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         {
             var controller = CreateController();
             controller.Wtm.LoginUserInfo.Roles = roles
-                .Select(r => new SimpleRole { RoleName = r })
+                .Select(r => new SimpleRole { RoleCode = r })
                 .ToList();
             return controller;
         }
@@ -2107,6 +2107,36 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
 
+
+        [TestMethod]
+        public void GetMeta_uses_RoleCode_not_RoleName_for_access_check()
+        {
+            // 驗證 CheckAccess 使用 RoleCode 而非 RoleName 做比對
+            // 當 RoleCode = "Analyst" 但 RoleName = "分析師" 時，
+            // AllowedRoles = "Analyst" 應該通過（因為比對 RoleCode）
+            var controller = CreateController();
+            controller.Wtm.LoginUserInfo.Roles = new List<SimpleRole>
+            {
+                new SimpleRole { RoleCode = "Analyst", RoleName = "分析師" }
+            };
+            var result = controller.GetMeta(typeof(RestrictedSaleListVM).FullName);
+            Assert.IsInstanceOfType(result, typeof(OkObjectResult),
+                "RoleCode 符合 AllowedRoles 應允許存取（即使 RoleName 不同）");
+        }
+
+        [TestMethod]
+        public void GetMeta_returns_403_when_RoleCode_mismatches_AllowedRoles()
+        {
+            // 即使 RoleName = "Analyst"，若 RoleCode = "viewer"，應被拒絕
+            var controller = CreateController();
+            controller.Wtm.LoginUserInfo.Roles = new List<SimpleRole>
+            {
+                new SimpleRole { RoleCode = "viewer", RoleName = "Analyst" }
+            };
+            var result = controller.GetMeta(typeof(RestrictedSaleListVM).FullName);
+            Assert.IsInstanceOfType(result, typeof(ForbidResult),
+                "RoleName 符合但 RoleCode 不符 AllowedRoles，應回傳 ForbidResult");
+        }
 
         [TestMethod]
         [TestCategory("Analysis")]

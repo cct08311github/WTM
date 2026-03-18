@@ -313,7 +313,7 @@ namespace WalkingTec.Mvvm.Mvc
             var attr = vmType.GetCustomAttribute<EnableAnalysisAttribute>();
             if (attr == null || string.IsNullOrEmpty(attr.AllowedRoles)) return true;
 
-            var userRoles = Wtm?.LoginUserInfo?.Roles?.Select(r => r.RoleName) ?? Enumerable.Empty<string>();
+            var userRoles = Wtm?.LoginUserInfo?.Roles?.Select(r => r.RoleCode) ?? Enumerable.Empty<string>();
             if (userRoles.Any(r => string.Equals(r, "Admin", StringComparison.OrdinalIgnoreCase))) return true;
 
             var allowed = attr.AllowedRoles.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(r => r.Trim());
