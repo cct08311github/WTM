@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Http;
 using NPOI.SS.UserModel;
 using NPOI.XSSF.UserModel;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Analysis;
@@ -2234,6 +2235,133 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             var meta = wb.GetSheet("Metadata");
             Assert.IsNotNull(meta, "應有 Metadata 工作表");
             Assert.AreEqual("匯出時間", meta.GetRow(0).GetCell(0).StringCellValue);
+        }
+
+        // ─── ActionLog 稽核測試（#561）────────────────────────────────────────
+
+        /// <summary>
+        /// 簡單的捕捉型 ILogger 實作，記錄所有 Log 呼叫供測試斷言。
+        /// </summary>
+        private class CapturingLogger<T> : ILogger<T>
+        {
+            public readonly List<string> Messages = new();
+
+            public IDisposable BeginScope<TState>(TState state) => NullScope.Instance;
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+                Exception exception, Func<TState, Exception, string> formatter)
+            {
+                Messages.Add(formatter(state, exception));
+            }
+
+            private class NullScope : IDisposable
+            {
+                public static readonly NullScope Instance = new();
+                public void Dispose() { }
+            }
+        }
+
+        private _AnalysisController CreateControllerWithActionLogger(
+            CapturingLogger<ActionLog> actionLogger,
+            IAnalysisFieldPolicy policy = null)
+        {
+            var controller = new _AnalysisController(
+                _registry,
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<_AnalysisController>.Instance,
+                cache: null,
+                fieldPolicy: policy,
+                configs: null,
+                actionLogger: actionLogger);
+            controller.Wtm = MockWtmContext.CreateWtmContext();
+            return controller;
+        }
+
+        [TestMethod]
+        public void Query_happy_path_writes_ActionLog()
+        {
+            // Arrange
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 100m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 200m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華南", Category = "B", Amount = 300m },
+            };
+
+            var actionLogger = new CapturingLogger<ActionLog>();
+            var controller = CreateControllerWithActionLogger(actionLogger);
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            // Act
+            var result = controller.Query(req);
+
+            // Assert: 200 OK
+            Assert.IsInstanceOfType(result, typeof(JsonResult));
+
+            // Assert: ActionLog was written exactly once
+            Assert.AreEqual(1, actionLogger.Messages.Count,
+                "Query 成功後應寫入恰好 1 筆 ActionLog");
+
+            var logMsg = actionLogger.Messages[0];
+            StringAssert.Contains(logMsg, "Analysis",      "ActionLog 應記錄 ModuleName=Analysis");
+            StringAssert.Contains(logMsg, "Query",         "ActionLog 應記錄 ActionName=Query");
+            StringAssert.Contains(logMsg, "Region",        "ActionLog Remark 應包含維度名稱");
+            StringAssert.Contains(logMsg, "Amount_Sum",    "ActionLog Remark 應包含度量指標");
+        }
+
+        [TestMethod]
+        public void Export_happy_path_writes_ActionLog()
+        {
+            // Arrange
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Category = "A", Amount = 150m },
+            };
+
+            var actionLogger = new CapturingLogger<ActionLog>();
+            var controller = CreateControllerWithActionLogger(actionLogger);
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            // Act
+            var result = controller.Export(req, "csv");
+
+            // Assert: file returned
+            Assert.IsInstanceOfType(result, typeof(FileContentResult));
+
+            // Assert: ActionLog was written exactly once
+            Assert.AreEqual(1, actionLogger.Messages.Count,
+                "Export 成功後應寫入恰好 1 筆 ActionLog");
+
+            var logMsg = actionLogger.Messages[0];
+            StringAssert.Contains(logMsg, "Analysis",         "ActionLog 應記錄 ModuleName=Analysis");
+            StringAssert.Contains(logMsg, "Export",           "ActionLog 應記錄 ActionName 包含 Export");
+        }
+
+        [TestMethod]
+        public void Query_validation_failure_does_not_write_ActionLog()
+        {
+            // Arrange: request with no dimensions triggers 400 before engine runs
+            var actionLogger = new CapturingLogger<ActionLog>();
+            var controller = CreateControllerWithActionLogger(actionLogger);
+            var req = new AnalysisQueryRequest
+            {
+                ListVmType = typeof(SaleRecordListVM).FullName,
+                Dimensions = new List<string>(),   // invalid
+                Measures   = new List<MeasureRequest> { new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum } },
+                Filters    = new List<FilterCondition>()
+            };
+
+            // Act
+            var result = controller.Query(req);
+
+            // Assert: 400 returned, no ActionLog written
+            Assert.IsInstanceOfType(result, typeof(BadRequestObjectResult));
+            Assert.AreEqual(0, actionLogger.Messages.Count,
+                "驗證失敗時不應寫入 ActionLog");
         }
     }
 }
