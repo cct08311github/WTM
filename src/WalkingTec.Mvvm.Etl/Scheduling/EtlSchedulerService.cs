@@ -30,6 +30,39 @@ public class EtlSchedulerService
         _scheduler = scheduler;
     }
 
+    /// <summary>啟動時重置幽靈 Running Job（上次程序崩潰遺留）為 Failed 狀態</summary>
+    public async Task ResetGhostRunningJobsAsync()
+    {
+        using var scope = _sp.CreateScope();
+        var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
+
+        var ghostJobs = await wtm.DC.Set<EtlJobDefinition>()
+            .Where(j => j.Status == EtlJobStatus.Running)
+            .ToListAsync();
+
+        if (ghostJobs.Count == 0) return;
+
+        var now = DateTime.UtcNow;
+        foreach (var job in ghostJobs)
+        {
+            job.Status = EtlJobStatus.Failed;
+            job.LastError = "Process restarted while job was running — previous execution incomplete.";
+            wtm.DC.Set<EtlJobDefinition>().Update(job);
+
+            wtm.DC.Set<EtlRunLog>().Add(new EtlRunLog
+            {
+                JobId      = job.ID,
+                Trigger    = EtlRunTrigger.Scheduled,
+                Result     = EtlRunResult.Failed,
+                ErrorMessage = "Process restarted while job was running — previous execution incomplete.",
+                StartedAt  = now,
+                FinishedAt = now,
+            });
+        }
+
+        await wtm.DC.SaveChangesAsync();
+    }
+
     /// <summary>啟動時從 DB 載入所有 Enabled 的 ETL Job 排程</summary>
     public async Task LoadJobsFromDbAsync()
     {
