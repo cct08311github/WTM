@@ -994,8 +994,7 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
         success: function (blob, status, xhr) {
             layer.close(loadIndex);
             var disposition = xhr.getResponseHeader("Content-Disposition") || "";
-            var filenameMatch = disposition.match(/filename\*?=['"\]?(?:UTF-8'')?([^;
-'"\]+)/i);
+            var filenameMatch = disposition.match(/filename\*?=['"]?(?:UTF-8'')?([^;'"\s]+)/i);
             var filename = filenameMatch ? decodeURIComponent(filenameMatch[1]) : "export";
             var objUrl = URL.createObjectURL(blob);
             var a = document.createElement("a");
