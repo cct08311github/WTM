@@ -5,6 +5,7 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Threading;
+using System.Threading.Tasks;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Analysis;
 
@@ -114,6 +115,78 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// <summary>
         /// 執行 Pivot 樞紐分析。
         /// </summary>
+
+        /// <summary>
+        /// 非同步執行分析查詢，回傳聚合結果。
+        /// </summary>
+        public async Task<AnalysisQueryResponse> ExecuteAsync<TModel>(
+            IQueryable<TModel> baseQuery,
+            AnalysisQueryRequest req,
+            IEnumerable<AnalysisFieldMeta> whitelist,
+            DBTypeEnum dbType = DBTypeEnum.SQLite,
+            string? identityKey = null,
+            CancellationToken cancellationToken = default)
+        {
+            var wl = whitelist.ToDictionary(f => f.FieldName);
+            ValidateFields(req, wl);
+
+            var queryHash = ComputeHash(req, identityKey);
+
+            if (_cache != null && _cache.TryGet(queryHash, out var cached) && cached != null)
+                return cached;
+
+            var filtered = ApplyFilters(baseQuery, req.Filters, wl);
+
+            var strategy = _resolver.Resolve(dbType, req);
+            bool dataTruncated = false;
+            List<Dictionary<string, object?>> rows;
+            try
+            {
+                rows = await strategy.ExecuteAsync(filtered, req, wl, cancellationToken);
+            }
+            catch (InvalidOperationException) when (strategy is ServerSideGroupByStrategy)
+            {
+                var fbProbe = await AsyncQueryHelper.SafeCountAsync(
+                    filtered.Take(InProcessGroupByStrategy.MaxMaterializeRows + 1), cancellationToken);
+                dataTruncated = fbProbe > InProcessGroupByStrategy.MaxMaterializeRows;
+                rows = await new InProcessGroupByStrategy().ExecuteAsync(filtered, req, wl, cancellationToken);
+            }
+
+            if (strategy is InProcessGroupByStrategy)
+            {
+                var probeCount = await AsyncQueryHelper.SafeCountAsync(
+                    filtered.Take(InProcessGroupByStrategy.MaxMaterializeRows + 1), cancellationToken);
+                dataTruncated = probeCount > InProcessGroupByStrategy.MaxMaterializeRows;
+            }
+
+            ResolveEnumDisplayNames(rows, req.Dimensions, wl);
+
+            var totalCount = rows.Count;
+            var truncated = false;
+            if (totalCount > 10_000)
+            {
+                rows = rows.Take(10_000).ToList();
+                truncated = true;
+            }
+
+            var displayNames = BuildColumnDisplayNames(req, wl);
+
+            var response = new AnalysisQueryResponse
+            {
+                Columns = req.Dimensions.Concat(req.Measures.Select(m => $"{m.Field}_{m.Func}")).ToList(),
+                Rows = rows,
+                TotalCount = totalCount,
+                Truncated = truncated,
+                DataTruncated = dataTruncated,
+                QueryHash = queryHash,
+                ColumnDisplayNames = displayNames
+            };
+
+            _cache?.Set(queryHash, response, _defaultTtl);
+
+            return response;
+        }
+
         public AnalysisPivotResponse ExecutePivot<TModel>(
             IQueryable<TModel> baseQuery,
             AnalysisPivotRequest req,
@@ -181,6 +254,69 @@ namespace WalkingTec.Mvvm.Core.Analysis
         }
 
         /// <summary>
+        /// 非同步執行 Pivot 樞紐分析。
+        /// </summary>
+        public async Task<AnalysisPivotResponse> ExecutePivotAsync<TModel>(
+            IQueryable<TModel> baseQuery,
+            AnalysisPivotRequest req,
+            IEnumerable<AnalysisFieldMeta> whitelist,
+            DBTypeEnum dbType = DBTypeEnum.SQLite,
+            string? identityKey = null,
+            CancellationToken cancellationToken = default)
+        {
+            if (!req.Dimensions.Contains(req.PivotDimension))
+            {
+                throw new InvalidOperationException($"PivotDimension '{req.PivotDimension}' must be in Dimensions list.");
+            }
+
+            var groupRes = await ExecuteAsync(baseQuery, req, whitelist, dbType, identityKey, cancellationToken);
+            var rawRows = groupRes.Rows;
+
+            var rowDims = req.Dimensions.Where(d => d != req.PivotDimension).ToList();
+            var measureNames = req.Measures.Select(m => $"{m.Field}_{m.Func}").ToList();
+
+            var pivotValues = rawRows
+                .Select(r => String(r[req.PivotDimension]))
+                .Distinct()
+                .OrderBy(v => v)
+                .ToList();
+
+            var pivotRowsMap = new Dictionary<string, Dictionary<string, object?>>();
+
+            foreach (var row in rawRows)
+            {
+                var rowKey = string.Join("|", rowDims.Select(d => String(row[d])));
+                if (!pivotRowsMap.TryGetValue(rowKey, out var pivotRow))
+                {
+                    pivotRowsMap[rowKey] = pivotRow = new Dictionary<string, object?>();
+                    foreach (var d in rowDims) pivotRow[d] = row[d];
+                }
+
+                var pivotVal = String(row[req.PivotDimension]);
+                foreach (var m in measureNames)
+                {
+                    pivotRow[$"{pivotVal}_{m}"] = row[m];
+                }
+            }
+
+            var columns = new List<string>(rowDims);
+            foreach (var pv in pivotValues)
+            {
+                foreach (var m in measureNames) columns.Add($"{pv}_{m}");
+            }
+
+            return new AnalysisPivotResponse
+            {
+                RowDimensions = rowDims,
+                PivotValues = pivotValues,
+                MeasureNames = measureNames,
+                Rows = pivotRowsMap.Values.ToList(),
+                Columns = columns,
+                Truncated = groupRes.Truncated
+            };
+        }
+
+        /// <summary>
         /// 非泛型入口，供 Controller 使用（IQueryable 無型別參數時）。
         /// </summary>
         public AnalysisQueryResponse ExecuteDynamic(
@@ -211,6 +347,36 @@ namespace WalkingTec.Mvvm.Core.Analysis
         }
 
         /// <summary>
+        /// 非泛型非同步入口，供 Controller 使用。
+        /// </summary>
+        public async Task<AnalysisQueryResponse> ExecuteDynamicAsync(
+            IQueryable baseQuery,
+            AnalysisQueryRequest req,
+            IEnumerable<AnalysisFieldMeta> whitelist,
+            DBTypeEnum dbType = DBTypeEnum.SQLite,
+            string? identityKey = null,
+            CancellationToken cancellationToken = default)
+        {
+            var elementType = baseQuery.ElementType;
+            var method = typeof(AnalysisQueryEngine)
+                .GetMethod(nameof(ExecuteAsync));
+            if (method is null)
+                throw new InvalidOperationException("ExecuteAsync method not found.");
+            method = method.MakeGenericMethod(elementType);
+            try
+            {
+                var task = method.Invoke(this, new object?[] { baseQuery, req, whitelist, dbType, identityKey, cancellationToken }) as Task<AnalysisQueryResponse>;
+                if (task is null)
+                    throw new InvalidOperationException("ExecuteDynamicAsync did not return a valid Task<AnalysisQueryResponse>.");
+                return await task;
+            }
+            catch (System.Reflection.TargetInvocationException ex)
+            {
+                throw ex.InnerException ?? ex;
+            }
+        }
+
+        /// <summary>
         /// 非泛型 Pivot 入口，供 Controller 使用。
         /// </summary>
         public AnalysisPivotResponse ExecutePivotDynamic(
@@ -233,6 +399,36 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 if (result is null)
                     throw new InvalidOperationException("ExecutePivotDynamic did not return a valid AnalysisPivotResponse.");
                 return result;
+            }
+            catch (System.Reflection.TargetInvocationException ex)
+            {
+                throw ex.InnerException ?? ex;
+            }
+        }
+
+        /// <summary>
+        /// 非泛型非同步 Pivot 入口，供 Controller 使用。
+        /// </summary>
+        public async Task<AnalysisPivotResponse> ExecutePivotDynamicAsync(
+            IQueryable baseQuery,
+            AnalysisPivotRequest req,
+            IEnumerable<AnalysisFieldMeta> whitelist,
+            DBTypeEnum dbType = DBTypeEnum.SQLite,
+            string? identityKey = null,
+            CancellationToken cancellationToken = default)
+        {
+            var elementType = baseQuery.ElementType;
+            var method = typeof(AnalysisQueryEngine)
+                .GetMethod(nameof(ExecutePivotAsync));
+            if (method is null)
+                throw new InvalidOperationException("ExecutePivotAsync method not found.");
+            method = method.MakeGenericMethod(elementType);
+            try
+            {
+                var task = method.Invoke(this, new object?[] { baseQuery, req, whitelist, dbType, identityKey, cancellationToken }) as Task<AnalysisPivotResponse>;
+                if (task is null)
+                    throw new InvalidOperationException("ExecutePivotDynamicAsync did not return a valid Task<AnalysisPivotResponse>.");
+                return await task;
             }
             catch (System.Reflection.TargetInvocationException ex)
             {
