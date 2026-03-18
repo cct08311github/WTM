@@ -294,3 +294,59 @@
 .pivot-enabled .analysis-pivot-radio {
     display: inline-block;
 }
+
+/* ─── Table wrap (scroll + sticky header) ─────────────────────────── */
+.analysis-table-wrap {
+    max-height: 420px;
+    overflow-y: auto;
+    margin-top: 10px;
+}
+
+.analysis-table-wrap table {
+    margin-top: 0;
+}
+
+.analysis-table-wrap th[data-sort-col] {
+    position: sticky;
+    top: 0;
+    background: #f2f2f2;
+    z-index: 1;
+    cursor: pointer;
+    user-select: none;
+}
+
+.analysis-table-wrap th[data-sort-col]:hover {
+    background: #e8e8e8;
+}
+
+.analysis-table-wrap th[data-sort-col]::after {
+    content: ' \21C5';
+    color: #ccc;
+    font-size: 11px;
+}
+
+.analysis-table-wrap th[data-sort-col][data-sort-dir="asc"]::after {
+    content: ' \25B2';
+    color: #5b6ee1;
+}
+
+.analysis-table-wrap th[data-sort-col][data-sort-dir="desc"]::after {
+    content: ' \25BC';
+    color: #5b6ee1;
+}
+
+/* ─── Table pagination controls ────────────────────────────────────── */
+.analysis-table-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 6px 0;
+    font-size: 13px;
+    color: #666;
+}
+
+.analysis-page-info {
+    color: #999;
+    font-size: 12px;
+}

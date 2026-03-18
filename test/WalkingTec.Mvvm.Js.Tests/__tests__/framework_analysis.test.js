@@ -5123,3 +5123,208 @@ describe('[#617] hashPush — history API integration', () => {
         global.window.history = origHistory;
     });
 });
+
+// ─── #539: renderTable — sort, pagination, sticky wrapper ────────────────────
+describe('#539 renderTable — sort, pagination, sticky wrapper', () => {
+
+    // ── Wrapper structure ────────────────────────────────────────────────
+    test('table is wrapped in .analysis-table-wrap div', () => {
+        const container = document.createElement('div');
+        waReq.renderTable('wrap539a', { columns: ['A'], rows: [{ A: 'x' }] }, container, {});
+        const wrap = container.querySelector('.analysis-table-wrap');
+        expect(wrap).not.toBeNull();
+        expect(wrap.querySelector('table')).not.toBeNull();
+    });
+
+    test('table is not a direct child of container (lives inside wrapper)', () => {
+        const container = document.createElement('div');
+        waReq.renderTable('wrap539b', { columns: ['A'], rows: [{ A: 'x' }] }, container, {});
+        const directTables = Array.from(container.children).filter(c => c.tagName === 'TABLE');
+        expect(directTables).toHaveLength(0);
+    });
+
+    // ── Sort — th dataset attributes ─────────────────────────────────────
+    test('sortable th has dataset.sortCol and empty dataset.sortDir', () => {
+        const container = document.createElement('div');
+        waReq.renderTable('sort539a', { columns: ['Region'], rows: [{ Region: 'X' }] }, container, {});
+        const th = container.querySelector('th');
+        expect(th.dataset.sortCol).toBe('Region');
+        expect(th.dataset.sortDir).toBe('');
+    });
+
+    test('% header th does not have dataset.sortCol', () => {
+        // Set up a gridId with Measure field so % column is rendered
+        const panel = document.createElement('div');
+        panel.id = 'analysis-panel-sort539aa';
+        const idSpy = jest.spyOn(document, 'getElementById').mockImplementation(id =>
+            id === 'analysis-panel-sort539aa' ? panel : null
+        );
+        const fetchOrig = global.fetch;
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: true,
+            json: jest.fn().mockResolvedValue([
+                { kind: 'Measure', fieldName: 'Amt', displayName: '金額', allowedFuncs: 2 }
+            ])
+        });
+        waReq.toggle('sort539aa', 'Vm539');
+        return new Promise(r => setTimeout(r, 50)).then(() => {
+            idSpy.mockRestore();
+            global.fetch = fetchOrig;
+            const container = document.createElement('div');
+            waReq.renderTable('sort539aa', {
+                columns: ['Amt_Sum'],
+                rows: [{ Amt_Sum: 100 }]
+            }, container, {});
+            const ths = container.querySelectorAll('th');
+            expect(ths[0].dataset.sortCol).toBe('Amt_Sum'); // measure th — sortable
+            expect(ths[1].dataset.sortCol).toBeUndefined(); // % th — not sortable
+        });
+    });
+
+    test('click th once → dataset.sortDir is asc, rows sorted ascending (numbers)', () => {
+        const container = document.createElement('div');
+        waReq.renderTable('sort539b', {
+            columns: ['Val'],
+            rows: [{ Val: 30 }, { Val: 10 }, { Val: 20 }]
+        }, container, {});
+        container.querySelector('th[data-sort-col]').click();
+        const tds = Array.from(container.querySelectorAll('tbody td'));
+        expect(container.querySelector('th[data-sort-col]').dataset.sortDir).toBe('asc');
+        expect(tds[0].textContent).toBe('10');
+        expect(tds[1].textContent).toBe('20');
+        expect(tds[2].textContent).toBe('30');
+    });
+
+    test('click th twice → dataset.sortDir is desc, rows sorted descending', () => {
+        const container = document.createElement('div');
+        waReq.renderTable('sort539c', {
+            columns: ['Val'],
+            rows: [{ Val: 30 }, { Val: 10 }, { Val: 20 }]
+        }, container, {});
+        const th = container.querySelector('th[data-sort-col]');
+        th.click(); th.click();
+        const tds = Array.from(container.querySelectorAll('tbody td'));
+        expect(th.dataset.sortDir).toBe('desc');
+        expect(tds[0].textContent).toBe('30');
+        expect(tds[1].textContent).toBe('20');
+        expect(tds[2].textContent).toBe('10');
+    });
+
+    test('click th three times → sortDir resets, original order restored', () => {
+        const container = document.createElement('div');
+        waReq.renderTable('sort539d', {
+            columns: ['Val'],
+            rows: [{ Val: 30 }, { Val: 10 }, { Val: 20 }]
+        }, container, {});
+        const th = container.querySelector('th[data-sort-col]');
+        th.click(); th.click(); th.click();
+        const tds = Array.from(container.querySelectorAll('tbody td'));
+        expect(th.dataset.sortDir).toBe('');
+        expect(tds[0].textContent).toBe('30');
+        expect(tds[1].textContent).toBe('10');
+        expect(tds[2].textContent).toBe('20');
+    });
+
+    test('clicking a second column resets the first column sortDir to empty', () => {
+        const container = document.createElement('div');
+        waReq.renderTable('sort539e', {
+            columns: ['A', 'B'],
+            rows: [{ A: 'x', B: 2 }, { A: 'z', B: 1 }]
+        }, container, {});
+        const sortThs = container.querySelectorAll('th[data-sort-col]');
+        const thA = sortThs[0], thB = sortThs[1];
+        thA.click();
+        expect(thA.dataset.sortDir).toBe('asc');
+        thB.click();
+        expect(thA.dataset.sortDir).toBe('');
+        expect(thB.dataset.sortDir).toBe('asc');
+    });
+
+    test('sort ascending by string column', () => {
+        const container = document.createElement('div');
+        waReq.renderTable('sort539f', {
+            columns: ['Name'],
+            rows: [{ Name: 'Charlie' }, { Name: 'Alice' }, { Name: 'Bob' }]
+        }, container, {});
+        container.querySelector('th[data-sort-col]').click();
+        const tds = Array.from(container.querySelectorAll('tbody td'));
+        expect(tds[0].textContent).toBe('Alice');
+        expect(tds[1].textContent).toBe('Bob');
+        expect(tds[2].textContent).toBe('Charlie');
+    });
+
+    test('sort does not mutate the original rows array', () => {
+        const rows = [{ Val: 30 }, { Val: 10 }, { Val: 20 }];
+        const container = document.createElement('div');
+        waReq.renderTable('sort539g', { columns: ['Val'], rows }, container, {});
+        container.querySelector('th[data-sort-col]').click();
+        expect(rows[0].Val).toBe(30);
+        expect(rows[1].Val).toBe(10);
+        expect(rows[2].Val).toBe(20);
+    });
+
+    // ── Pagination ────────────────────────────────────────────────────────
+    test('no pagination div when rows ≤ 50', () => {
+        const container = document.createElement('div');
+        const rows = Array.from({ length: 50 }, (_, i) => ({ N: i }));
+        waReq.renderTable('pg539a', { columns: ['N'], rows }, container, {});
+        expect(container.querySelector('.analysis-table-pagination')).toBeNull();
+    });
+
+    test('pagination div created when rows > 50', () => {
+        const container = document.createElement('div');
+        const rows = Array.from({ length: 51 }, (_, i) => ({ N: i }));
+        waReq.renderTable('pg539b', { columns: ['N'], rows }, container, {});
+        expect(container.querySelector('.analysis-table-pagination')).not.toBeNull();
+    });
+
+    test('first page shows rows 1–50 and tbody has 50 rows', () => {
+        const container = document.createElement('div');
+        const rows = Array.from({ length: 51 }, (_, i) => ({ N: i }));
+        waReq.renderTable('pg539c', { columns: ['N'], rows }, container, {});
+        expect(container.querySelectorAll('tbody tr')).toHaveLength(50);
+        const info = container.querySelector('.analysis-page-info');
+        expect(info.textContent).toContain('1');
+        expect(info.textContent).toContain('50');
+        expect(info.textContent).toContain('51');
+    });
+
+    test('next page button shows remaining rows on page 2', () => {
+        const container = document.createElement('div');
+        const rows = Array.from({ length: 60 }, (_, i) => ({ N: i }));
+        waReq.renderTable('pg539d', { columns: ['N'], rows }, container, {});
+        const nextBtn = Array.from(
+            container.querySelectorAll('.analysis-table-pagination button')
+        ).find(b => !b.disabled);
+        nextBtn.click();
+        expect(container.querySelectorAll('tbody tr')).toHaveLength(10);
+        const info = container.querySelector('.analysis-page-info');
+        expect(info.textContent).toContain('51');
+        expect(info.textContent).toContain('60');
+    });
+
+    test('prev button is disabled on first page', () => {
+        const container = document.createElement('div');
+        const rows = Array.from({ length: 55 }, (_, i) => ({ N: i }));
+        waReq.renderTable('pg539e', { columns: ['N'], rows }, container, {});
+        const buttons = container.querySelectorAll('.analysis-table-pagination button');
+        expect(buttons[0].disabled).toBe(true);
+    });
+
+    test('sort with > 50 rows resets to page 1', () => {
+        const container = document.createElement('div');
+        // 55 rows in reverse order (54, 53, ..., 0)
+        const rows = Array.from({ length: 55 }, (_, i) => ({ N: 54 - i }));
+        waReq.renderTable('pg539f', { columns: ['N'], rows }, container, {});
+        // Advance to page 2
+        const nextBtn = Array.from(
+            container.querySelectorAll('.analysis-table-pagination button')
+        ).find(b => !b.disabled);
+        nextBtn.click();
+        expect(container.querySelectorAll('tbody tr')).toHaveLength(5);
+        // Sort asc — should reset to page 1
+        container.querySelector('th[data-sort-col]').click();
+        expect(container.querySelectorAll('tbody tr')).toHaveLength(50);
+        expect(container.querySelector('tbody td').textContent).toBe('0');
+    });
+});
