@@ -565,7 +565,7 @@ namespace WalkingTec.Mvvm.Core
 
         public virtual async Task DoEditAsync(bool updateAllFields = false)
         {
-            var _auditSnapshot = LoadEntitySnapshot();
+            var _auditSnapshot = await LoadEntitySnapshotAsync();
             DoEditPrepare(updateAllFields);
             AppendChangeLog("Edit", SerializeScalarProps(_auditSnapshot), SerializeScalarProps(Entity));
 
@@ -964,7 +964,7 @@ namespace WalkingTec.Mvvm.Core
             //如果是PersistPoco，则把IsValid设为false，并不进行物理删除
             if (typeof(IPersistPoco).IsAssignableFrom(typeof(TModel)))
             {
-                var _auditSnapshot = LoadEntitySnapshot();
+                var _auditSnapshot = await LoadEntitySnapshotAsync();
                 FC.Add("Entity.IsValid", 0);
                 (Entity as IPersistPoco)!.IsValid = false;
                 var pros = typeof(TModel).GetAllProperties();
@@ -1162,6 +1162,20 @@ namespace WalkingTec.Mvvm.Core
             try
             {
                 return DC!.Set<TModel>().AsNoTracking().CheckID(id).FirstOrDefault();
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private async Task<TModel?> LoadEntitySnapshotAsync()
+        {
+            var id = Entity?.GetID();
+            if (id == null) return null;
+            try
+            {
+                return await DC!.Set<TModel>().AsNoTracking().CheckID(id).FirstOrDefaultAsync();
             }
             catch
             {
