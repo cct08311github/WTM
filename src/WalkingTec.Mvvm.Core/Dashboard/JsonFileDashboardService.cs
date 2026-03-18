@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace WalkingTec.Mvvm.Core.Dashboard;
@@ -21,13 +22,21 @@ public class JsonFileDashboardService : IDashboardService
     private bool _initialized;
     private readonly SemaphoreSlim _initLock = new(1, 1);
 
-    public JsonFileDashboardService(IOptions<DashboardOptions> options, IEnumerable<IWidgetDataSource> dataSources)
+    public JsonFileDashboardService(
+        IOptions<DashboardOptions> options,
+        IEnumerable<IWidgetDataSource> dataSources,
+        ILogger<JsonFileDashboardService> logger)
     {
         _options = options.Value;
         _dataSources = dataSources;
         // Spec: scan _baseDir
         // Path resolution: Use base directory
         _baseDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, _options.DashboardDirectory);
+
+        logger.LogWarning(
+            "[WTM Dashboard] Using JsonFile storage backend. " +
+            "This is NOT suitable for multi-node (load-balanced) deployments. " +
+            "Configure a database backend for production use.");
     }
 
     private async Task EnsureInitializedAsync()

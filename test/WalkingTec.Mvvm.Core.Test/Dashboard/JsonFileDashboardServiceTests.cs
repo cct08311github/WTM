@@ -30,7 +30,8 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             // or we need to ensure it uses an absolute path if provided.
             // Oh, Path.Combine(AppDomain.CurrentDomain.BaseDirectory, tempPath) if tempPath is absolute will return tempPath in Windows but not always what we expect. Let's fix DashboardDirectory to be an absolute path here, and see if Path.Combine handles it correctly. Path.Combine(baseDir, absPath) returns absPath in .NET Core.
             
-            _service = new JsonFileDashboardService(options, Array.Empty<IWidgetDataSource>());
+            _service = new JsonFileDashboardService(options, Array.Empty<IWidgetDataSource>(),
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<JsonFileDashboardService>.Instance);
         }
 
         [TestCleanup]
@@ -230,7 +231,8 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         private JsonFileDashboardService CreateServiceWithDataSource(IWidgetDataSource ds)
         {
             var options = Options.Create(new DashboardOptions { DashboardDirectory = _tempDir });
-            return new JsonFileDashboardService(options, new[] { ds });
+            return new JsonFileDashboardService(options, new[] { ds },
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<JsonFileDashboardService>.Instance);
         }
 
         [TestMethod]
@@ -330,7 +332,8 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
                 .ReturnsAsync(new WidgetDataResult { Value = 99 });
 
             var options = Options.Create(new DashboardOptions { DashboardDirectory = _tempDir });
-            var svc = new JsonFileDashboardService(options, new IWidgetDataSource[] { kindDs.Object });
+            var svc = new JsonFileDashboardService(options, new IWidgetDataSource[] { kindDs.Object },
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<JsonFileDashboardService>.Instance);
 
             var def = new DashboardDefinition
             {

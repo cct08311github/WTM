@@ -1023,7 +1023,8 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
                 {
                     DashboardDirectory = $"test_dashboards_{Guid.NewGuid():N}"
                 }),
-                Enumerable.Empty<IWidgetDataSource>());
+                Enumerable.Empty<IWidgetDataSource>(),
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<JsonFileDashboardService>.Instance);
 
             // IT 角色不應能存取 CFO 儀表板
             service.CanAccess(cfoDashboard, "it_user", new[] { "IT" })
