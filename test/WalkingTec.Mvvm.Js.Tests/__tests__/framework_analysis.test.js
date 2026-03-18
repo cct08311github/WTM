@@ -4609,3 +4609,104 @@ describe('#501 createValueInput — smart filter controls', () => {
     });
 });
 
+
+// ─── i18n #535 ────────────────────────────────────────────────────────────────
+describe('i18n #535', () => {
+    let waI18n;
+
+    beforeEach(() => {
+        waI18n = makeEnv().wa;
+    });
+
+    afterEach(() => {
+        // Restore default locale
+        waI18n.setLocale('zh-TW');
+    });
+
+    describe('default locale zh-TW', () => {
+        test('getLocale() returns zh-TW by default', () => {
+            expect(waI18n.getLocale()).toBe('zh-TW');
+        });
+
+        test('validateSelection errors are in zh-TW', () => {
+            const errors = waI18n.validateSelection([], []);
+            expect(errors[0]).toMatch(/至少需要選取 1 個維度/);
+            expect(errors[1]).toMatch(/至少需要選取 1 個度量/);
+        });
+
+        test('computeScale yi unit is 億', () => {
+            expect(waI18n.computeScale(200000000).unit).toBe('億');
+        });
+
+        test('computeScale baiwan unit is 百萬', () => {
+            expect(waI18n.computeScale(2000000).unit).toBe('百萬');
+        });
+
+        test('computeScale wan unit is 萬', () => {
+            expect(waI18n.computeScale(20000).unit).toBe('萬');
+        });
+    });
+
+    describe('en-US locale switching', () => {
+        beforeEach(() => {
+            waI18n.setLocale('en-US');
+        });
+
+        test('getLocale() returns en-US after setLocale', () => {
+            expect(waI18n.getLocale()).toBe('en-US');
+        });
+
+        test('validateSelection errors are in en-US', () => {
+            const errors = waI18n.validateSelection([], []);
+            expect(errors[0]).toMatch(/At least 1 dimension/);
+            expect(errors[1]).toMatch(/At least 1 measure/);
+        });
+
+        test('validateSelection dim max error is in en-US', () => {
+            const errors = waI18n.validateSelection([1, 2, 3, 4], [1]);
+            expect(errors).toContain('Maximum 3 dimensions allowed');
+        });
+
+        test('validateSelection msr max error is in en-US', () => {
+            const errors = waI18n.validateSelection([1], [1, 2, 3, 4]);
+            expect(errors).toContain('Maximum 3 measures allowed');
+        });
+
+        test('computeScale yi unit is 100M in en-US', () => {
+            expect(waI18n.computeScale(200000000).unit).toBe('100M');
+        });
+
+        test('computeScale baiwan unit is M in en-US', () => {
+            expect(waI18n.computeScale(2000000).unit).toBe('M');
+        });
+
+        test('computeScale wan unit is 10K in en-US', () => {
+            expect(waI18n.computeScale(20000).unit).toBe('10K');
+        });
+    });
+
+    describe('addLocale — custom locale registration', () => {
+        test('custom locale keys override correctly', () => {
+            waI18n.addLocale('fr-FR', { 'btn.query': 'Rechercher', 'err.dimRequired': 'Au moins 1 dimension' });
+            waI18n.setLocale('fr-FR');
+            const errors = waI18n.validateSelection([], [1]);
+            expect(errors[0]).toBe('Au moins 1 dimension');
+        });
+
+        test('custom locale falls back to zh-TW for missing keys', () => {
+            waI18n.addLocale('partial', { 'btn.query': 'Find' });
+            waI18n.setLocale('partial');
+            // err.dimRequired is missing in 'partial' locale, falls back to zh-TW
+            const errors = waI18n.validateSelection([], [1]);
+            expect(errors[0]).toMatch(/至少需要選取 1 個維度/);
+        });
+
+        test('switching back to zh-TW after custom locale works', () => {
+            waI18n.addLocale('xx', { 'err.dimRequired': 'X dim' });
+            waI18n.setLocale('xx');
+            waI18n.setLocale('zh-TW');
+            const errors = waI18n.validateSelection([], [1]);
+            expect(errors[0]).toMatch(/至少需要選取 1 個維度/);
+        });
+    });
+});

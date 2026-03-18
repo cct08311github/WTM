@@ -8,6 +8,161 @@
 (function (window) {
     'use strict';
 
+    // ─── i18n ─────────────────────────────────────────────────────────────────
+    var _LOCALES = {
+        'zh-TW': {
+            'err.dimRequired':   '至少需要選取 1 個維度進行分組',
+            'err.msrRequired':   '至少需要選取 1 個度量指標',
+            'err.dimMax':        '維度最多選 3 個',
+            'err.msrMax':        '度量最多選 3 個',
+            'scale.yi':          '億',
+            'scale.baiwan':      '百萬',
+            'scale.wan':         '萬',
+            'func.sum':          '合計',
+            'func.count':        '計數',
+            'func.avg':          '平均',
+            'func.max':          '最大',
+            'func.min':          '最小',
+            'err.unknown':       '發生未知錯誤，請稍後再試。',
+            'date.selectLevel':  '選擇日期分組層級',
+            'date.year':         '年',
+            'date.quarter':      '季',
+            'date.month':        '月',
+            'date.day':          '日',
+            'panel.dimLabel':    '維度：',
+            'panel.msrLabel':    '度量：',
+            'panel.loadError':   '載入欄位失敗：',
+            'panel.title':       '\u{1F4CA} 分析欄位選擇器',
+            'panel.dimZone':     '維度（最多 3 個）',
+            'panel.dimPh':       '拖入維度欄位...',
+            'panel.msrZone':     '度量（最多 3 個）',
+            'panel.msrPh':       '拖入度量欄位...',
+            'panel.poolLabel':   '可用欄位（拖拉至上方區域）',
+            'btn.query':         '查詢',
+            'btn.exportXlsx':    '匯出 Excel',
+            'btn.exportCsv':     '匯出 CSV',
+            'btn.chartExport':   '含圖表',
+            'btn.pivot':         '樞紐模式',
+            'btn.addFilter':     '+ 新增篩選條件',
+            'btn.clearFilter':   '清除篩選',
+            'btn.reQuery':       '重新查詢',
+            'btn.reset':         '重置',
+            'panel.resultTitle': '分析結果',
+            'chart.bar':         '長條圖',
+            'chart.line':        '折線圖',
+            'chart.pie':         '圓餅圖',
+            'chart.barStacked':  '堆疊長條圖',
+            'chart.card':        '數字卡片',
+            'chart.scatter':     '散點圖',
+            'op.eq':             '等於',
+            'op.neq':            '不等於',
+            'op.gt':             '大於',
+            'op.gte':            '大於等於',
+            'op.lt':             '小於',
+            'op.lte':            '小於等於',
+            'op.contains':       '包含',
+            'op.notContains':    '不包含',
+            'filter.selectEmpty':'-- 請選擇 --',
+            'filter.valuePh':    '篩選值\u2026',
+            'filter.fieldPh':    '選擇欄位\u2026',
+            'pivot.selectDim':   '請選擇一個樞紐(Pivot)維度',
+            'pivot.notSelected': '樞紐(Pivot)維度必須是已勾選的維度之一',
+            'query.progress':    '查詢中... {t}s',
+            'query.cancelled':   '查詢已取消',
+            'query.failed':      '查詢失敗：',
+            'warn.dataExceeds':  '\u26a0 來源資料超過 50,000 筆，已截斷。聚合結果（合計、平均等）可能不準確。',
+            'warn.truncated':    '結果已截斷，僅顯示前 10,000 列。',
+            'result.empty':      '查無符合條件的資料，請調整篩選條件後重試。',
+            'result.total':      '總計',
+            'drill.all':         '全部',
+            'drill.up':          '返回上層',
+            'export.truncated':  '\u26a0\ufe0f 匯出資料已截斷，僅包含前 10,000 筆結果。完整資料請聯繫管理員。',
+            'export.failed':     '匯出失敗：'
+        },
+        'en-US': {
+            'err.dimRequired':   'At least 1 dimension required for grouping',
+            'err.msrRequired':   'At least 1 measure required',
+            'err.dimMax':        'Maximum 3 dimensions allowed',
+            'err.msrMax':        'Maximum 3 measures allowed',
+            'scale.yi':          '100M',
+            'scale.baiwan':      'M',
+            'scale.wan':         '10K',
+            'func.sum':          'Sum',
+            'func.count':        'Count',
+            'func.avg':          'Avg',
+            'func.max':          'Max',
+            'func.min':          'Min',
+            'err.unknown':       'An unknown error occurred, please try again.',
+            'date.selectLevel':  'Select date grouping level',
+            'date.year':         'Year',
+            'date.quarter':      'Quarter',
+            'date.month':        'Month',
+            'date.day':          'Day',
+            'panel.dimLabel':    'Dimensions:',
+            'panel.msrLabel':    'Measures:',
+            'panel.loadError':   'Failed to load fields: ',
+            'panel.title':       '\u{1F4CA} Analysis Field Selector',
+            'panel.dimZone':     'Dimensions (max 3)',
+            'panel.dimPh':       'Drag dimension fields here...',
+            'panel.msrZone':     'Measures (max 3)',
+            'panel.msrPh':       'Drag measure fields here...',
+            'panel.poolLabel':   'Available Fields (drag to zones above)',
+            'btn.query':         'Query',
+            'btn.exportXlsx':    'Export Excel',
+            'btn.exportCsv':     'Export CSV',
+            'btn.chartExport':   'Include Chart',
+            'btn.pivot':         'Pivot Mode',
+            'btn.addFilter':     '+ Add Filter',
+            'btn.clearFilter':   'Clear Filters',
+            'btn.reQuery':       'Re-Query',
+            'btn.reset':         'Reset',
+            'panel.resultTitle': 'Analysis Results',
+            'chart.bar':         'Bar Chart',
+            'chart.line':        'Line Chart',
+            'chart.pie':         'Pie Chart',
+            'chart.barStacked':  'Stacked Bar',
+            'chart.card':        'Card',
+            'chart.scatter':     'Scatter',
+            'op.eq':             'Equals',
+            'op.neq':            'Not Equals',
+            'op.gt':             'Greater than',
+            'op.gte':            'Greater or equal',
+            'op.lt':             'Less than',
+            'op.lte':            'Less or equal',
+            'op.contains':       'Contains',
+            'op.notContains':    'Not Contains',
+            'filter.selectEmpty':'-- Select --',
+            'filter.valuePh':    'Filter value\u2026',
+            'filter.fieldPh':    'Select field\u2026',
+            'pivot.selectDim':   'Please select a Pivot dimension',
+            'pivot.notSelected': 'Pivot dimension must be one of the selected dimensions',
+            'query.progress':    'Querying... {t}s',
+            'query.cancelled':   'Query cancelled',
+            'query.failed':      'Query failed: ',
+            'warn.dataExceeds':  '\u26a0 Source data exceeds 50,000 rows and was truncated. Aggregates (sum, avg, etc.) may be inaccurate.',
+            'warn.truncated':    'Results truncated, showing first 10,000 rows.',
+            'result.empty':      'No data found. Please adjust your filters and try again.',
+            'result.total':      'Total',
+            'drill.all':         'All',
+            'drill.up':          'Go Up',
+            'export.truncated':  '\u26a0\ufe0f Export truncated to first 10,000 rows. Contact admin for full data.',
+            'export.failed':     'Export failed: '
+        }
+    };
+    (function () {
+        var ext = (typeof window !== 'undefined' && window.WTM_ANALYSIS_I18N) || {};
+        Object.keys(ext).forEach(function (loc) {
+            if (!_LOCALES[loc]) _LOCALES[loc] = {};
+            Object.assign(_LOCALES[loc], ext[loc]);
+        });
+    }());
+    var _locale = (typeof window !== 'undefined' && window.WTM_ANALYSIS_LOCALE) || 'zh-TW';
+    function _i18n(key) {
+        var tbl = _LOCALES[_locale] || _LOCALES['zh-TW'];
+        return tbl[key] !== undefined ? tbl[key] : (_LOCALES['zh-TW'][key] !== undefined ? _LOCALES['zh-TW'][key] : key);
+    }
+
+
     // ─── 純函式（無副作用）──────────────────────────────────────────────────
 
     function detectChartType(dims, msrs) {
@@ -19,10 +174,10 @@
 
     function validateSelection(dims, msrs) {
         var errors = [];
-        if (dims.length === 0) errors.push('至少需要選取 1 個維度進行分組');
-        if (msrs.length === 0) errors.push('至少需要選取 1 個度量指標');
-        if (dims.length > 3) errors.push('維度最多選 3 個');
-        if (msrs.length > 3) errors.push('度量最多選 3 個');
+        if (dims.length === 0) errors.push(_i18n('err.dimRequired'));
+        if (msrs.length === 0) errors.push(_i18n('err.msrRequired'));
+        if (dims.length > 3) errors.push(_i18n('err.dimMax'));
+        if (msrs.length > 3) errors.push(_i18n('err.msrMax'));
         return errors;
     }
 
@@ -46,9 +201,9 @@
 
     function computeScale(maxVal) {
         var abs = Math.abs(maxVal) || 0;
-        if (abs >= 100000000) return { divisor: 100000000, unit: '億' };
-        if (abs >= 1000000)   return { divisor: 1000000, unit: '百萬' };
-        if (abs >= 10000)     return { divisor: 10000, unit: '萬' };
+        if (abs >= 100000000) return { divisor: 100000000, unit: _i18n('scale.yi') };
+        if (abs >= 1000000)   return { divisor: 1000000, unit: _i18n('scale.baiwan') };
+        if (abs >= 10000)     return { divisor: 10000, unit: _i18n('scale.wan') };
         return { divisor: 1, unit: '' };
     }
 
@@ -97,16 +252,16 @@
             .map(function (f) { return f.name; });
     }
 
-    var _FUNC_LABEL_MAP = { Sum: '合計', Count: '計數', Avg: '平均', Max: '最大', Min: '最小' };
+    function _FUNC_LABEL_MAP_fn(f) { var m = { Sum: _i18n('func.sum'), Count: _i18n('func.count'), Avg: _i18n('func.avg'), Max: _i18n('func.max'), Min: _i18n('func.min') }; return m[f] || f; }
 
     function getFuncLabel(func) {
-        return _FUNC_LABEL_MAP[func] || func;
+        return _FUNC_LABEL_MAP_fn(func);
     }
 
     function formatNumeric(val) {
         var n = Number(val);
         if (isNaN(n)) return String(val);
-        return n.toLocaleString('zh-TW', { maximumFractionDigits: 2 });
+        return n.toLocaleString(_locale, { maximumFractionDigits: 2 });
     }
 
     function showMsg(msg) {
@@ -129,7 +284,7 @@
                 return pd.detail || pd.title;
             }
         } catch (_) { /* not JSON — fall through */ }
-        return raw || '發生未知錯誤，請稍後再試。';
+        return raw || _i18n('err.unknown');
     }
 
     // ─── 狀態 ─────────────────────────────────────────────────────────────────
@@ -237,12 +392,12 @@
             var hSel = document.createElement('select');
             hSel.className = 'analysis-hierarchy-select';
             hSel.dataset.field = field.fieldName;
-            hSel.title = '選擇日期分組層級';
+            hSel.title = _i18n('date.selectLevel');
             [
-                { value: 'Year', text: '年' },
-                { value: 'Quarter', text: '季' },
-                { value: 'Month', text: '月' },
-                { value: 'Day', text: '日' }
+                { value: 'Year', text: _i18n('date.year') },
+                { value: 'Quarter', text: _i18n('date.quarter') },
+                { value: 'Month', text: _i18n('date.month') },
+                { value: 'Day', text: _i18n('date.day') }
             ].forEach(function (h) {
                 var opt = document.createElement('option');
                 opt.value = h.value;
@@ -349,7 +504,7 @@
         if (sel.dims.length > 0) {
             var dimLabel = document.createElement('span');
             dimLabel.className = 'summary-label';
-            dimLabel.textContent = '維度：';
+            dimLabel.textContent = _i18n('panel.dimLabel');
             bar.appendChild(dimLabel);
             sel.dims.forEach(function (d) {
                 var meta = fieldByName[d];
@@ -361,7 +516,7 @@
         if (sel.msrs.length > 0) {
             var msrLabel = document.createElement('span');
             msrLabel.className = 'summary-label';
-            msrLabel.textContent = '度量：';
+            msrLabel.textContent = _i18n('panel.msrLabel');
             bar.appendChild(msrLabel);
             sel.msrs.forEach(function (m) {
                 var meta = fieldByName[m.field];
@@ -460,7 +615,7 @@
         .catch(function (err) {
             var msg = document.createElement('div');
             msg.className = 'layui-alert layui-alert-danger';
-            msg.textContent = '載入欄位失敗：' + parseFriendlyError(err);
+            msg.textContent = _i18n('panel.loadError') + parseFriendlyError(err);
             panelEl.appendChild(msg);
         });
     }
@@ -481,7 +636,7 @@
 
         var selectorTitle = document.createElement('span');
         selectorTitle.className = 'analysis-panel-title';
-        selectorTitle.textContent = '\u{1F4CA} 分析欄位選擇器';
+        selectorTitle.textContent = _i18n('panel.title');
 
         var selectorToggle = document.createElement('span');
         selectorToggle.className = 'analysis-panel-toggle';
@@ -502,13 +657,13 @@
         dimGroup.className = 'analysis-dropzone-group';
         var dimLabel = document.createElement('div');
         dimLabel.className = 'analysis-dropzone-label analysis-dropzone-label--dim';
-        dimLabel.textContent = '維度（最多 3 個）';
+        dimLabel.textContent = _i18n('panel.dimZone');
         var dimZone = document.createElement('div');
         dimZone.className = 'analysis-dropzone analysis-dropzone--dim';
         dimZone.dataset.kind = 'Dimension';
         var dimPh = document.createElement('span');
         dimPh.className = 'analysis-dropzone-placeholder';
-        dimPh.textContent = '拖入維度欄位...';
+        dimPh.textContent = _i18n('panel.dimPh');
         dimZone.appendChild(dimPh);
         dimGroup.appendChild(dimLabel);
         dimGroup.appendChild(dimZone);
@@ -517,13 +672,13 @@
         msrGroup.className = 'analysis-dropzone-group';
         var msrLabel = document.createElement('div');
         msrLabel.className = 'analysis-dropzone-label analysis-dropzone-label--msr';
-        msrLabel.textContent = '度量（最多 3 個）';
+        msrLabel.textContent = _i18n('panel.msrZone');
         var msrZone = document.createElement('div');
         msrZone.className = 'analysis-dropzone analysis-dropzone--msr';
         msrZone.dataset.kind = 'Measure';
         var msrPh = document.createElement('span');
         msrPh.className = 'analysis-dropzone-placeholder';
-        msrPh.textContent = '拖入度量欄位...';
+        msrPh.textContent = _i18n('panel.msrPh');
         msrZone.appendChild(msrPh);
         msrGroup.appendChild(msrLabel);
         msrGroup.appendChild(msrZone);
@@ -535,7 +690,7 @@
         // Field pool
         var poolLabel = document.createElement('div');
         poolLabel.style.cssText = 'font-size:12px;color:#999;margin-bottom:4px;';
-        poolLabel.textContent = '可用欄位（拖拉至上方區域）';
+        poolLabel.textContent = _i18n('panel.poolLabel');
         selectorBody.appendChild(poolLabel);
 
         var fieldPool = document.createElement('div');
@@ -552,19 +707,19 @@
         var queryBtn = document.createElement('button');
         queryBtn.type = 'button';
         queryBtn.className = 'layui-btn layui-btn-sm layui-btn-normal';
-        queryBtn.textContent = '查詢';
+        queryBtn.textContent = _i18n('btn.query');
         queryBtn.addEventListener('click', function () { query(gridId); });
 
         var exportXlsxBtn = document.createElement('button');
         exportXlsxBtn.type = 'button';
         exportXlsxBtn.className = 'layui-btn layui-btn-sm';
-        exportXlsxBtn.textContent = '匯出 Excel';
+        exportXlsxBtn.textContent = _i18n('btn.exportXlsx');
         exportXlsxBtn.addEventListener('click', function () { exportData(gridId, 'xlsx'); });
 
         var exportCsvBtn = document.createElement('button');
         exportCsvBtn.type = 'button';
         exportCsvBtn.className = 'layui-btn layui-btn-sm layui-btn-warm';
-        exportCsvBtn.textContent = '匯出 CSV';
+        exportCsvBtn.textContent = _i18n('btn.exportCsv');
         exportCsvBtn.addEventListener('click', function () { exportData(gridId, 'csv'); });
 
         var chartExportWrapper = document.createElement('label');
@@ -575,7 +730,7 @@
         chartExportCb.dataset.gridId = gridId;
         chartExportCb.style.marginRight = '4px';
         var chartExportLabel = document.createElement('span');
-        chartExportLabel.textContent = '含圖表';
+        chartExportLabel.textContent = _i18n('btn.chartExport');
         chartExportWrapper.appendChild(chartExportCb);
         chartExportWrapper.appendChild(chartExportLabel);
 
@@ -602,7 +757,7 @@
             }
         });
         var pivotText = document.createElement('span');
-        pivotText.textContent = '樞紐模式';
+        pivotText.textContent = _i18n('btn.pivot');
         pivotText.style.fontWeight = 'bold';
         pivotWrapper.appendChild(pivotToggleCb);
         pivotWrapper.appendChild(pivotText);
@@ -626,7 +781,7 @@
         addFilterBtn.type = 'button';
         addFilterBtn.className = 'layui-btn layui-btn-xs layui-btn-warm analysis-add-filter-btn';
         addFilterBtn.dataset.gridId = gridId;
-        addFilterBtn.textContent = '+ 新增篩選條件';
+        addFilterBtn.textContent = _i18n('btn.addFilter');
         addFilterBtn.addEventListener('click', function () { addFilterRow(gridId); });
         filterBtnRow.appendChild(addFilterBtn);
 
@@ -634,7 +789,7 @@
         clearFilterBtn.type = 'button';
         clearFilterBtn.className = 'layui-btn layui-btn-xs layui-btn-primary analysis-clear-filter-btn';
         clearFilterBtn.dataset.gridId = gridId;
-        clearFilterBtn.textContent = '清除篩選';
+        clearFilterBtn.textContent = _i18n('btn.clearFilter');
         clearFilterBtn.addEventListener('click', function () {
             var list = filterSection.querySelector('.analysis-filter-list');
             if (list) clearChildren(list);
@@ -657,7 +812,7 @@
         var reQueryBtn = document.createElement('button');
         reQueryBtn.type = 'button';
         reQueryBtn.className = 'layui-btn layui-btn-xs layui-btn-normal';
-        reQueryBtn.textContent = '重新查詢';
+        reQueryBtn.textContent = _i18n('btn.reQuery');
         reQueryBtn.addEventListener('click', function () { query(gridId); });
         summaryBar.appendChild(reQueryBtn);
         selectorSection.appendChild(summaryBar);
@@ -676,7 +831,7 @@
         });
         var resultTitle = document.createElement('span');
         resultTitle.className = 'analysis-panel-title';
-        resultTitle.textContent = '分析結果';
+        resultTitle.textContent = _i18n('panel.resultTitle');
         var resultToggle = document.createElement('span');
         resultToggle.className = 'analysis-panel-toggle';
         resultToggle.textContent = '\u25BC';
@@ -687,7 +842,7 @@
         var resultBody = document.createElement('div');
         resultBody.className = 'analysis-result-body';
 
-        var _CHART_TITLE_MAP = { bar: '長條圖', line: '折線圖', pie: '圓餅圖', 'bar-stacked': '堆疊長條圖', card: '數字卡片', scatter: '散點圖' };
+        var _CHART_TITLE_MAP = { bar: _i18n('chart.bar'), line: _i18n('chart.line'), pie: _i18n('chart.pie'), 'bar-stacked': _i18n('chart.barStacked'), card: _i18n('chart.card'), scatter: _i18n('chart.scatter') };
         var chartToggleRow = document.createElement('div');
         chartToggleRow.id = 'analysis-chart-toggle-' + gridId;
         chartToggleRow.className = 'analysis-chart-toggle-bar';
@@ -872,14 +1027,14 @@
     // ─── Ad-hoc 篩選條件 ─────────────────────────────────────────────────────
 
     var _FILTER_OPS = [
-        { value: 'Eq',          label: '等於' },
-        { value: 'NotEq',       label: '不等於' },
-        { value: 'Gt',          label: '大於' },
-        { value: 'Gte',         label: '大於等於' },
-        { value: 'Lt',          label: '小於' },
-        { value: 'Lte',         label: '小於等於' },
-        { value: 'Contains',    label: '包含' },
-        { value: 'NotContains', label: '不包含' },
+        { value: 'Eq',          label: _i18n('op.eq') },
+        { value: 'NotEq',       label: _i18n('op.neq') },
+        { value: 'Gt',          label: _i18n('op.gt') },
+        { value: 'Gte',         label: _i18n('op.gte') },
+        { value: 'Lt',          label: _i18n('op.lt') },
+        { value: 'Lte',         label: _i18n('op.lte') },
+        { value: 'Contains',    label: _i18n('op.contains') },
+        { value: 'NotContains', label: _i18n('op.notContains') },
         { value: 'In',          label: 'In' },
         { value: 'NotIn',       label: 'Not In' }
     ];
@@ -921,7 +1076,7 @@
             el.style.cssText = 'width:140px;display:inline-block;';
             var emptyOpt = document.createElement('option');
             emptyOpt.value = '';
-            emptyOpt.textContent = '-- 請選擇 --';
+            emptyOpt.textContent = _i18n('filter.selectEmpty');
             el.appendChild(emptyOpt);
             fieldMeta.allowedValues.forEach(function (v) {
                 var opt = document.createElement('option');
@@ -940,7 +1095,7 @@
                     laydate.render({ elem: el });
                 }
             } else {
-                el.placeholder = '篩選值\u2026';
+                el.placeholder = _i18n('filter.valuePh');
             }
         }
         return el;
@@ -972,7 +1127,7 @@
         fieldSel.style.cssText = 'min-width:120px;';
         var emptyOpt = document.createElement('option');
         emptyOpt.value = '';
-        emptyOpt.textContent = '選擇欄位\u2026';
+        emptyOpt.textContent = _i18n('filter.fieldPh');
         fieldSel.appendChild(emptyOpt);
         metaFields.forEach(function (f) {
             var opt = document.createElement('option');
@@ -1030,7 +1185,7 @@
             while (fieldSel.firstChild) fieldSel.removeChild(fieldSel.firstChild);
             var emptyOpt = document.createElement('option');
             emptyOpt.value = '';
-            emptyOpt.textContent = '選擇欄位\u2026';
+            emptyOpt.textContent = _i18n('filter.fieldPh');
             fieldSel.appendChild(emptyOpt);
             fields.forEach(function (f) {
                 var opt = document.createElement('option');
@@ -1066,11 +1221,11 @@
             var pivotRadio = document.querySelector('.analysis-pivot-dim-select[data-grid-id="' + gridId + '"]:checked');
             if (pivotRadio) pivotDim = pivotRadio.value;
             if (!pivotDim) {
-                showMsg('請選擇一個樞紐(Pivot)維度');
+                showMsg(_i18n('pivot.selectDim'));
                 return;
             }
             if (dims.indexOf(pivotDim) < 0) {
-                showMsg('樞紐(Pivot)維度必須是已勾選的維度之一');
+                showMsg(_i18n('pivot.notSelected'));
                 return;
             }
         }
@@ -1103,11 +1258,11 @@
         st.abortController = ac;
 
         // 顯示計時 loading 狀態
-        if (resultDiv) resultDiv.textContent = '查詢中... 0s';
+        if (resultDiv) resultDiv.textContent = _i18n('query.progress').replace('{t}', '0');
         var elapsed = 0;
         var timer = setInterval(function () {
             elapsed++;
-            if (resultDiv) resultDiv.textContent = '查詢中... ' + elapsed + 's';
+            if (resultDiv) resultDiv.textContent = _i18n('query.progress').replace('{t}', elapsed);
         }, 1000);
 
         var endpoint = isPivot ? '/_analysis/pivot' : '/_analysis/query';
@@ -1176,10 +1331,10 @@
             clearInterval(timer);
             st.abortController = null;
             if (err.name === 'AbortError') {
-                if (resultDiv) resultDiv.textContent = '查詢已取消';
+                if (resultDiv) resultDiv.textContent = _i18n('query.cancelled');
                 return;
             }
-            if (resultDiv) resultDiv.textContent = '查詢失敗：' + parseFriendlyError(err);
+            if (resultDiv) resultDiv.textContent = _i18n('query.failed') + parseFriendlyError(err);
         });
     }
 
@@ -1229,7 +1384,7 @@
         var chart = window.echarts.init(chartDiv);
         var firstRowDim = result.rowDimensions.length > 0 ? result.rowDimensions[0] : '';
         var categories = result.rows.map(function (r) {
-            return firstRowDim ? String(r[firstRowDim] || '') : '總計';
+            return firstRowDim ? String(r[firstRowDim] || '') : _i18n('result.total');
         });
         var series = [];
         var legendData = [];
@@ -1257,7 +1412,7 @@
         if (!result.rows || result.rows.length === 0) {
             var emptyP = document.createElement('p');
             emptyP.className = 'analysis-empty-state';
-            emptyP.textContent = '查無符合條件的資料，請調整篩選條件後重試。';
+            emptyP.textContent = _i18n('result.empty');
             container.appendChild(emptyP);
             return;
         }
@@ -1360,7 +1515,7 @@
         if (!result.rows || result.rows.length === 0) {
             var emptyP = document.createElement('p');
             emptyP.className = 'analysis-empty-state';
-            emptyP.textContent = '查無符合條件的資料，請調整篩選條件後重試。';
+            emptyP.textContent = _i18n('result.empty');
             container.appendChild(emptyP);
             return;
         }
@@ -1534,7 +1689,7 @@
         drillBar.style.display = 'flex';
         clearChildren(drillBar);
         var pathSpan = document.createElement('span');
-        pathSpan.textContent = '全部';
+        pathSpan.textContent = _i18n('drill.all');
         st.drillStack.forEach(function (frame) {
             pathSpan.textContent += ' > ' + String(frame.label);
         });
@@ -1543,14 +1698,14 @@
         backBtn.type = 'button';
         backBtn.className = 'layui-btn layui-btn-xs layui-btn-primary';
         backBtn.style.marginLeft = '8px';
-        backBtn.textContent = '返回上層';
+        backBtn.textContent = _i18n('drill.up');
         backBtn.addEventListener('click', function () { drillBack(gridId); });
         drillBar.appendChild(backBtn);
         var resetBtn = document.createElement('button');
         resetBtn.type = 'button';
         resetBtn.className = 'layui-btn layui-btn-xs layui-btn-danger';
         resetBtn.style.marginLeft = '4px';
-        resetBtn.textContent = '重置';
+        resetBtn.textContent = _i18n('btn.reset');
         resetBtn.addEventListener('click', function () { drillReset(gridId); });
         drillBar.appendChild(resetBtn);
     }
@@ -1625,11 +1780,11 @@
         st.abortController = ac;
 
         // 顯示計時 loading 狀態
-        if (resultDiv) resultDiv.textContent = '查詢中... 0s';
+        if (resultDiv) resultDiv.textContent = _i18n('query.progress').replace('{t}', '0');
         var elapsed = 0;
         var timer = setInterval(function () {
             elapsed++;
-            if (resultDiv) resultDiv.textContent = '查詢中... ' + elapsed + 's';
+            if (resultDiv) resultDiv.textContent = _i18n('query.progress').replace('{t}', elapsed);
         }, 1000);
 
         fetch('/_analysis/query', {
@@ -1681,10 +1836,10 @@
             clearInterval(timer);
             st.abortController = null;
             if (err.name === 'AbortError') {
-                if (resultDiv) resultDiv.textContent = '查詢已取消';
+                if (resultDiv) resultDiv.textContent = _i18n('query.cancelled');
                 return;
             }
-            if (resultDiv) resultDiv.textContent = '查詢失敗：' + parseFriendlyError(err);
+            if (resultDiv) resultDiv.textContent = _i18n('query.failed') + parseFriendlyError(err);
         });
     }
 
@@ -1747,12 +1902,12 @@
             document.body.removeChild(a);
             window.URL.revokeObjectURL(url);
             if (data.truncated) {
-                showMsg('⚠️ 匯出資料已截斷，僅包含前 10,000 筆結果。完整資料請聯繫管理員。', 'warn');
+                showMsg(_i18n('export.truncated'), 'warn');
             }
         })
         .catch(function (err) {
             closeLoader();
-            showMsg('匯出失敗：' + parseFriendlyError(err));
+            showMsg(_i18n('export.failed') + parseFriendlyError(err));
         });
     }
 
