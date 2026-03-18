@@ -4710,3 +4710,118 @@ describe('i18n #535', () => {
         });
     });
 });
+
+// ─── filterPoolPills #609 ─────────────────────────────────────────────────────
+describe('filterPoolPills #609', () => {
+    function makePanelWithPool(gridId, fieldNames) {
+        const panel = document.createElement('div');
+        panel.id = 'analysis-panel-' + gridId;
+        const pool = document.createElement('div');
+        pool.className = 'analysis-field-pool';
+        fieldNames.forEach(function (name) {
+            const pill = document.createElement('span');
+            pill.className = 'analysis-pill analysis-pill--available';
+            pill.dataset.displayName = name;
+            pool.appendChild(pill);
+        });
+        const noMatch = document.createElement('span');
+        noMatch.className = 'analysis-pool-no-match';
+        noMatch.style.display = 'none';
+        pool.appendChild(noMatch);
+        panel.appendChild(pool);
+        return panel;
+    }
+
+    function getVisiblePills(panel) {
+        return Array.from(panel.querySelectorAll('.analysis-pill')).filter(p => p.style.display !== 'none');
+    }
+
+    function getHiddenPills(panel) {
+        return Array.from(panel.querySelectorAll('.analysis-pill')).filter(p => p.style.display === 'none');
+    }
+
+    test('empty search term — all pills visible', () => {
+        const gridId = 'fp609a';
+        const panel = makePanelWithPool(gridId, ['Region', 'Category', 'Amount']);
+        const spy = jest.spyOn(document, 'getElementById').mockImplementation(id => id === 'analysis-panel-' + gridId ? panel : null);
+        const count = waReq.filterPoolPills(gridId, '');
+        expect(count).toBe(3);
+        expect(getHiddenPills(panel)).toHaveLength(0);
+        spy.mockRestore();
+    });
+
+    test('matching term (case-insensitive) shows matching pills only', () => {
+        const gridId = 'fp609b';
+        const panel = makePanelWithPool(gridId, ['Region', 'Category', 'Amount', 'CategoryName']);
+        const spy = jest.spyOn(document, 'getElementById').mockImplementation(id => id === 'analysis-panel-' + gridId ? panel : null);
+        const count = waReq.filterPoolPills(gridId, 'cat');
+        expect(count).toBe(2);
+        const visible = getVisiblePills(panel).map(p => p.dataset.displayName);
+        expect(visible).toContain('Category');
+        expect(visible).toContain('CategoryName');
+        expect(visible).not.toContain('Region');
+        spy.mockRestore();
+    });
+
+    test('case-insensitive match: uppercase input matches lowercase display', () => {
+        const gridId = 'fp609c';
+        const panel = makePanelWithPool(gridId, ['region', 'Category']);
+        const spy = jest.spyOn(document, 'getElementById').mockImplementation(id => id === 'analysis-panel-' + gridId ? panel : null);
+        const count = waReq.filterPoolPills(gridId, 'REGION');
+        expect(count).toBe(1);
+        spy.mockRestore();
+    });
+
+    test('no match — returns 0 and shows noMatch element', () => {
+        const gridId = 'fp609d';
+        const panel = makePanelWithPool(gridId, ['Region', 'Amount']);
+        const spy = jest.spyOn(document, 'getElementById').mockImplementation(id => id === 'analysis-panel-' + gridId ? panel : null);
+        const count = waReq.filterPoolPills(gridId, 'xyz');
+        expect(count).toBe(0);
+        const noMatch = panel.querySelector('.analysis-pool-no-match');
+        expect(noMatch.style.display).toBe('');
+        spy.mockRestore();
+    });
+
+    test('clearing search (empty string) restores all pills and hides noMatch', () => {
+        const gridId = 'fp609e';
+        const panel = makePanelWithPool(gridId, ['Region', 'Amount', 'Category']);
+        const spy = jest.spyOn(document, 'getElementById').mockImplementation(id => id === 'analysis-panel-' + gridId ? panel : null);
+        // First filter with no match
+        waReq.filterPoolPills(gridId, 'xyz');
+        // Then clear
+        const count = waReq.filterPoolPills(gridId, '');
+        expect(count).toBe(3);
+        expect(getHiddenPills(panel)).toHaveLength(0);
+        const noMatch = panel.querySelector('.analysis-pool-no-match');
+        expect(noMatch.style.display).toBe('none');
+        spy.mockRestore();
+    });
+
+    test('panel not found — returns 0 without throwing', () => {
+        const spy = jest.spyOn(document, 'getElementById').mockReturnValue(null);
+        expect(() => waReq.filterPoolPills('missing609', 'test')).not.toThrow();
+        expect(waReq.filterPoolPills('missing609', 'test')).toBe(0);
+        spy.mockRestore();
+    });
+
+    test('single match — only that pill visible', () => {
+        const gridId = 'fp609f';
+        const panel = makePanelWithPool(gridId, ['OrderDate', 'ShipDate', 'Amount']);
+        const spy = jest.spyOn(document, 'getElementById').mockImplementation(id => id === 'analysis-panel-' + gridId ? panel : null);
+        const count = waReq.filterPoolPills(gridId, 'Order');
+        expect(count).toBe(1);
+        expect(getVisiblePills(panel)[0].dataset.displayName).toBe('OrderDate');
+        spy.mockRestore();
+    });
+
+    test('noMatch is hidden when there are matches', () => {
+        const gridId = 'fp609g';
+        const panel = makePanelWithPool(gridId, ['Region', 'Amount']);
+        const spy = jest.spyOn(document, 'getElementById').mockImplementation(id => id === 'analysis-panel-' + gridId ? panel : null);
+        waReq.filterPoolPills(gridId, 'Region');
+        const noMatch = panel.querySelector('.analysis-pool-no-match');
+        expect(noMatch.style.display).toBe('none');
+        spy.mockRestore();
+    });
+});

@@ -77,7 +77,9 @@
             'drill.all':         '全部',
             'drill.up':          '返回上層',
             'export.truncated':  '\u26a0\ufe0f 匯出資料已截斷，僅包含前 10,000 筆結果。完整資料請聯繫管理員。',
-            'export.failed':     '匯出失敗：'
+            'export.failed':     '匯出失敗：',
+            'pool.searchPh':     '搜尋欄位...',
+            'pool.noMatch':      '無符合欄位'
         },
         'en-US': {
             'err.dimRequired':   'At least 1 dimension required for grouping',
@@ -146,7 +148,9 @@
             'drill.all':         'All',
             'drill.up':          'Go Up',
             'export.truncated':  '\u26a0\ufe0f Export truncated to first 10,000 rows. Contact admin for full data.',
-            'export.failed':     'Export failed: '
+            'export.failed':     'Export failed: ',
+            'pool.searchPh':     'Search fields...',
+            'pool.noMatch':      'No matching fields'
         }
     };
     (function () {
@@ -474,6 +478,29 @@
         }
     }
 
+    // Filter field pool pills by a search term (case-insensitive substring on displayName).
+    // Pills that don't match are hidden; all are shown when term is empty.
+    // Returns the count of visible pills.
+    function filterPoolPills(gridId, term) {
+        var panel = document.getElementById('analysis-panel-' + gridId);
+        if (!panel) return 0;
+        var pool = panel.querySelector('.analysis-field-pool');
+        if (!pool) return 0;
+        var pills = pool.querySelectorAll('.analysis-pill');
+        var lower = term ? term.toLowerCase() : '';
+        var visible = 0;
+        for (var i = 0; i < pills.length; i++) {
+            var name = (pills[i].dataset.displayName || '').toLowerCase();
+            var match = !lower || name.indexOf(lower) !== -1;
+            pills[i].style.display = match ? '' : 'none';
+            if (match) visible++;
+        }
+        // Show/hide the "no match" empty state element
+        var noMatch = pool.querySelector('.analysis-pool-no-match');
+        if (noMatch) noMatch.style.display = (visible === 0 && lower) ? '' : 'none';
+        return visible;
+    }
+
     function updatePlaceholders(gridId) {
         var panel = document.getElementById('analysis-panel-' + gridId);
         if (!panel) return;
@@ -693,11 +720,31 @@
         poolLabel.textContent = _i18n('panel.poolLabel');
         selectorBody.appendChild(poolLabel);
 
+        // Search input for field pool
+        var poolSearch = document.createElement('input');
+        poolSearch.type = 'text';
+        poolSearch.className = 'analysis-pool-search';
+        poolSearch.placeholder = _i18n('pool.searchPh');
+        if (poolSearch.setAttribute) poolSearch.setAttribute('aria-label', _i18n('pool.searchPh'));
+        selectorBody.appendChild(poolSearch);
+
         var fieldPool = document.createElement('div');
         fieldPool.className = 'analysis-field-pool';
         fields.forEach(function (f) {
             fieldPool.appendChild(createPoolPill(gridId, f));
         });
+
+        // Empty state message shown when search has no matches
+        var noMatchEl = document.createElement('span');
+        noMatchEl.className = 'analysis-pool-no-match';
+        noMatchEl.style.display = 'none';
+        noMatchEl.textContent = _i18n('pool.noMatch');
+        fieldPool.appendChild(noMatchEl);
+
+        poolSearch.addEventListener('input', function () {
+            filterPoolPills(gridId, poolSearch.value);
+        });
+
         selectorBody.appendChild(fieldPool);
 
         // Button row
@@ -1945,6 +1992,13 @@
         updateFilterFieldOptions: updateFilterFieldOptions,
         parseFriendlyError: parseFriendlyError,
         checkDependencies: checkDependencies,
+        filterPoolPills: filterPoolPills,
+        setLocale: function (loc) { _locale = loc; },
+        getLocale: function () { return _locale; },
+        addLocale: function (loc, strings) {
+            if (!_LOCALES[loc]) _LOCALES[loc] = {};
+            Object.assign(_LOCALES[loc], strings);
+        },
         _getState: function (gridId) { return _state[gridId]; }
     };
 
