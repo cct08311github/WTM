@@ -1530,6 +1530,125 @@ var wtmHeaderFilter = (function () {
 window.wtmHeaderFilter = wtmHeaderFilter;
 
 /**
+ * wtmColVis — persists LayUI grid column visibility to localStorage (issue #639).
+ *
+ * Storage key per table: 'wtm_col_vis_{tableId}'  (array of hidden field names).
+ *
+ * Called from the table's done callback:
+ *   wtmColVis.init('myGridId');
+ *
+ * When the user opens the "筛选列" panel and toggles a column, the new state
+ * is written to localStorage automatically.
+ */
+var wtmColVis = (function () {
+    var _indexToId  = {};   // { layuiTableIndex (string) : tableId }
+    var _restored   = {};   // { tableId: true }  — guard so restore runs once per load
+    var _registered = false;
+
+    function _storageKey(tableId) {
+        return 'wtm_col_vis_' + tableId;
+    }
+
+    /**
+     * Collect field names whose hide flag is currently true.
+     * Pure function — no side-effects, safe to unit-test.
+     * @param {Array<Array>} cols  option.cols from a LayUI table options object
+     * @returns {string[]}
+     */
+    function _collectHidden(cols) {
+        var hidden = [];
+        if (!cols) return hidden;
+        for (var i1 = 0; i1 < cols.length; i1++) {
+            var row = cols[i1];
+            for (var i2 = 0; i2 < row.length; i2++) {
+                var col = row[i2];
+                if (col && col.field && col.hide) {
+                    hidden.push(col.field);
+                }
+            }
+        }
+        return hidden;
+    }
+
+    function _save(tableId) {
+        var option = window[tableId + 'option'];
+        if (!option || !option.cols) return;
+        var hidden = _collectHidden(option.cols);
+        try {
+            localStorage.setItem(_storageKey(tableId), JSON.stringify(hidden));
+        } catch (e) { /* storage quota exceeded — ignore */ }
+    }
+
+    // Register a single document-level handler for the column-filter checkboxes.
+    // Runs lazily on the first init() call so layui is guaranteed to be loaded.
+    function _registerOnce() {
+        if (_registered) return;
+        _registered = true;
+        layui.use(['form'], function () {
+            layui.form.on('checkbox(LAY_TABLE_TOOL_COLS)', function (data) {
+                // data-key format: "{tableIndex}-{row}-{col}"
+                var key = $(data.elem).attr('data-key') || '';
+                var idx = key.split('-')[0];
+                var tid = _indexToId[idx];
+                if (!tid) return;
+                // Run after LayUI's own handler updates col.hide
+                setTimeout(function () { _save(tid); }, 0);
+            });
+        });
+    }
+
+    /**
+     * Register a rendered table and restore its saved column visibility.
+     * Safe to call on every table done() — restores only once per page load.
+     * @param {string} tableId
+     */
+    function init(tableId) {
+        _registerOnce();
+
+        // Map LayUI's internal table index to our tableId.
+        // option.index is set by LayUI during table.render().
+        var option = window[tableId + 'option'];
+        if (option && option.index !== undefined) {
+            _indexToId[String(option.index)] = tableId;
+        }
+
+        // Restore only once per page load (done() fires on every reload)
+        if (_restored[tableId]) return;
+        _restored[tableId] = true;
+
+        var saved;
+        try {
+            var raw = localStorage.getItem(_storageKey(tableId));
+            saved = raw ? JSON.parse(raw) : null;
+        } catch (e) { saved = null; }
+        if (!saved || !saved.length) return;
+        if (!option || !option.cols) return;
+
+        // Apply saved hidden columns: update col.hide flags + DOM classes
+        for (var i1 = 0; i1 < option.cols.length; i1++) {
+            var row = option.cols[i1];
+            for (var i2 = 0; i2 < row.length; i2++) {
+                var col = row[i2];
+                if (col && col.field && saved.indexOf(col.field) !== -1) {
+                    col.hide = true;
+                    $('#' + tableId + ' + .layui-table-view')
+                        .find('[data-key="' + option.index + '-' + i1 + '-' + i2 + '"]')
+                        .addClass('layui-hide');
+                }
+            }
+        }
+        try { layui.table.resize(tableId); } catch (e) { /* older LayUI versions */ }
+    }
+
+    return {
+        init          : init,
+        _collectHidden: _collectHidden,   // exposed for unit tests
+        _storageKey   : _storageKey,      // exposed for unit tests
+    };
+}());
+window.wtmColVis = wtmColVis;
+
+/**
  * wtmPermFilter — client-side search filter for the role-permission tree table.
  *
  * The permission tree is rendered as a flat LayUI table where each row's
