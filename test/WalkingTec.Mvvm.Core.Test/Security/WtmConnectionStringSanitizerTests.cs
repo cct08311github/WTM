@@ -95,6 +95,21 @@ public class WtmConnectionStringSanitizerTests
 
     // ─── Exception-message scenario ──────────────────────────────────────
 
+    // ─── Regression: greedy-regex false positive (#580) ─────────────────
+
+    [TestMethod]
+    public void Sanitize_error_message_with_user_word_not_garbled()
+    {
+        // Regression for #580 — second char class previously allowed whitespace,
+        // causing "user=john was not found" to consume the entire tail.
+        var input = "Error: user=john was not found in directory";
+        var result = WtmConnectionStringSanitizer.Sanitize(input);
+
+        StringAssert.Contains(result, "user=[redacted]");
+        StringAssert.Contains(result, "was not found in directory",
+            "Text after the value boundary must not be consumed by the greedy match");
+    }
+
     [TestMethod]
     public void Sanitize_scrubs_connection_string_embedded_in_exception_message()
     {
