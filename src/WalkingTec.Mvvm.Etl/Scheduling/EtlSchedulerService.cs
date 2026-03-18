@@ -226,6 +226,12 @@ public class EtlSchedulerService
         return true;
     }
 
+    /// <summary>判斷本次失敗是否應觸發自動重試</summary>
+    /// <param name="job">Job 定義（讀取 RetryCount）</param>
+    /// <param name="currentAttempt">本次為第幾次嘗試（0-based）</param>
+    public static bool ShouldRetry(EtlJobDefinition job, int currentAttempt)
+        => job.RetryCount > 0 && currentAttempt < job.RetryCount;
+
     // ─── 內部輔助 ───
 
     private async Task ScheduleJobAsync(EtlJobDefinition jobDef)
