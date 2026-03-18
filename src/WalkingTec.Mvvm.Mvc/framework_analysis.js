@@ -79,7 +79,11 @@
             'export.truncated':  '\u26a0\ufe0f 匯出資料已截斷，僅包含前 10,000 筆結果。完整資料請聯繫管理員。',
             'export.failed':     '匯出失敗：',
             'pool.searchPh':     '搜尋欄位...',
-            'pool.noMatch':      '無符合欄位'
+            'pool.noMatch':      '無符合欄位',
+            'dep.missingTitle':  'Analysis 模組缺少必要前端依賴，部分功能將無法使用：',
+            'dep.echarts':       'ECharts — 請在 _Layout.cshtml 中加入：',
+            'dep.sortable':      'SortableJS — 請在 _Layout.cshtml 中加入：',
+            'warn.truncatedFmt': '結果已截斷，僅顯示前 10,000 列（共 {n} 組）。'
         },
         'en-US': {
             'err.dimRequired':   'At least 1 dimension required for grouping',
@@ -150,7 +154,11 @@
             'export.truncated':  '\u26a0\ufe0f Export truncated to first 10,000 rows. Contact admin for full data.',
             'export.failed':     'Export failed: ',
             'pool.searchPh':     'Search fields...',
-            'pool.noMatch':      'No matching fields'
+            'pool.noMatch':      'No matching fields',
+            'dep.missingTitle':  'Analysis module is missing required frontend dependencies, some features will not work:',
+            'dep.echarts':       'ECharts — add to _Layout.cshtml:',
+            'dep.sortable':      'SortableJS — add to _Layout.cshtml:',
+            'warn.truncatedFmt': 'Results truncated, showing first 10,000 rows ({n} groups total).'
         }
     };
     (function () {
@@ -328,11 +336,11 @@
     function checkDependencies(panel) {
         var missing = [];
         if (typeof window.echarts === 'undefined') {
-            missing.push('ECharts — 請在 _Layout.cshtml 中加入：' +
+            missing.push(_i18n('dep.echarts') +
                 '<script src="https://cdn.jsdelivr.net/npm/echarts@5"></script>');
         }
         if (!Sortable) {
-            missing.push('SortableJS — 請在 _Layout.cshtml 中加入：' +
+            missing.push(_i18n('dep.sortable') +
                 '<script src="https://cdn.jsdelivr.net/npm/sortablejs@1"></script>');
         }
         if (missing.length === 0) return;
@@ -347,7 +355,7 @@
             'margin-bottom:8px;border-radius:4px;font-size:13px;line-height:1.5;';
 
         var title = document.createElement('strong');
-        title.textContent = 'Analysis 模組缺少必要前端依賴，部分功能將無法使用：';
+        title.textContent = _i18n('dep.missingTitle');
         warn.appendChild(title);
 
         missing.forEach(function (dep) {
@@ -1332,7 +1340,7 @@
             if (result.dataTruncated) {
                 var dataWarn = document.createElement('div');
                 dataWarn.className = 'layui-alert layui-alert-orange';
-                dataWarn.textContent = '⚠ ' + (result.dataTruncatedMessage || '來源資料超過 50,000 筆，已截斷。聚合結果（合計、平均等）可能不準確。');
+                dataWarn.textContent = result.dataTruncatedMessage || _i18n('warn.dataExceeds');
                 resultDiv.appendChild(dataWarn);
             }
             if (result.truncated) {
@@ -1340,8 +1348,8 @@
                 warn.className = 'layui-alert layui-alert-warm';
                 var totalStr = result.totalCount ? result.totalCount.toLocaleString() : '';
                 warn.textContent = totalStr
-                    ? '結果已截斷，僅顯示前 10,000 列（共 ' + totalStr + ' 組）。'
-                    : '結果已截斷，僅顯示前 10,000 列。';
+                    ? _i18n('warn.truncatedFmt').replace('{n}', totalStr)
+                    : _i18n('warn.truncated');
                 resultDiv.appendChild(warn);
             }
 
@@ -1852,7 +1860,7 @@
             if (result.dataTruncated) {
                 var dataWarn = document.createElement('div');
                 dataWarn.className = 'layui-alert layui-alert-orange';
-                dataWarn.textContent = '⚠ ' + (result.dataTruncatedMessage || '來源資料超過 50,000 筆，已截斷。聚合結果（合計、平均等）可能不準確。');
+                dataWarn.textContent = result.dataTruncatedMessage || _i18n('warn.dataExceeds');
                 resultDiv.appendChild(dataWarn);
             }
             if (result.truncated) {
@@ -1860,8 +1868,8 @@
                 warn.className = 'layui-alert layui-alert-warm';
                 var totalStr = result.totalCount ? result.totalCount.toLocaleString() : '';
                 warn.textContent = totalStr
-                    ? '結果已截斷，僅顯示前 10,000 列（共 ' + totalStr + ' 組）。'
-                    : '結果已截斷，僅顯示前 10,000 列。';
+                    ? _i18n('warn.truncatedFmt').replace('{n}', totalStr)
+                    : _i18n('warn.truncated');
                 resultDiv.appendChild(warn);
             }
             var dimFields = (st.fields || []).filter(function (f) {
