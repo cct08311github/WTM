@@ -208,7 +208,7 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                             {
                                 Content = MvcProgram._localizer["_Admin.TenantNotAllowed"],
                                 ContentType = "text/html",
-                                StatusCode = 200
+                                StatusCode = 403
                             };
                             context.Result = cr;
                         }
@@ -252,7 +252,7 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                                     {
                                         Content = MvcProgram._localizer["Sys.NoPrivilege"],
                                         ContentType = "text/html",
-                                        StatusCode = 200
+                                        StatusCode = 403
                                     };
                                     context.Result = cr;
 
