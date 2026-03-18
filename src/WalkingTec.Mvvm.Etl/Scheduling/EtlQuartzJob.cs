@@ -162,8 +162,26 @@ public class EtlQuartzJob : WtmJob
                 ErrorMessage = sanitized,
                 ElapsedMs = (long)(DateTime.UtcNow - startedAt).TotalMilliseconds
             };
-            jobDef.LastError = sanitized;
-            jobDef.Status = EtlJobStatus.Failed;
+            var currentAttempt = context.MergedJobDataMap.ContainsKey("_retryAttempt")
+                ? context.MergedJobDataMap.GetInt("_retryAttempt")
+                : 0;
+
+            if (EtlSchedulerService.ShouldRetry(jobDef, currentAttempt))
+            {
+                var retryData = new JobDataMap();
+                retryData["_retryAttempt"] = currentAttempt + 1;
+                await context.Scheduler.TriggerJob(context.JobDetail.Key, retryData);
+
+                jobDef.LastError = $"[自動重試 {currentAttempt + 1}/{jobDef.RetryCount}] {sanitized}";
+                jobDef.Status = EtlJobStatus.Enabled;
+                trigger = EtlRunTrigger.Retry;
+            }
+            else
+            {
+                trigger = EtlRunTrigger.Retry;
+                jobDef.LastError = sanitized;
+                jobDef.Status = EtlJobStatus.Failed;
+            }
         }
         finally
         {

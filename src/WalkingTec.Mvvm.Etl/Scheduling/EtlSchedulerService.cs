@@ -214,6 +214,10 @@ public class EtlSchedulerService
         await TriggerNowAsync(runLog.JobId);
     }
 
+    /// <summary>判斷 Job 是否應自動重試（currentAttempt 從 0 起算）</summary>
+    public static bool ShouldRetry(EtlJobDefinition job, int currentAttempt)
+        => job.RetryCount > 0 && currentAttempt < job.RetryCount;
+
     /// <summary>判斷 Job 是否應該執行</summary>
     public static bool ShouldExecute(EtlJobDefinition job)
     {
