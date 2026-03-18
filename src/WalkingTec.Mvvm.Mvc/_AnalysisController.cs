@@ -9,6 +9,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core;
@@ -41,6 +42,7 @@ namespace WalkingTec.Mvvm.Mvc
         private readonly IAnalysisCache? _cache;
         private readonly IAnalysisFieldPolicy? _fieldPolicy;
         private readonly ILogger<_AnalysisController> _logger;
+        private readonly ILogger<ActionLog>? _actionLogger;
         private readonly TimeSpan? _cacheTtl;
 
         public _AnalysisController(
@@ -48,13 +50,15 @@ namespace WalkingTec.Mvvm.Mvc
             ILogger<_AnalysisController> logger,
             IAnalysisCache? cache = null,
             IAnalysisFieldPolicy? fieldPolicy = null,
-            IOptions<Configs>? configs = null)
+            IOptions<Configs>? configs = null,
+            ILogger<ActionLog>? actionLogger = null)
         {
             _registry = registry;
             _logger = logger;
             _cache = cache;
             _fieldPolicy = fieldPolicy;
             _cacheTtl = configs?.Value.AnalysisCacheTtl;
+            _actionLogger = actionLogger;
         }
 
         /// <summary>
@@ -114,6 +118,7 @@ namespace WalkingTec.Mvvm.Mvc
                 sw.Stop();
                 _logger.LogInformation("Analysis query completed ListVm={ListVmType} Dims={DimCount} Msrs={MsrCount} ElapsedMs={Elapsed} Truncated={Truncated}",
                     req.ListVmType, req.Dimensions.Count, req.Measures.Count, sw.ElapsedMilliseconds, result.Truncated);
+                WriteAnalysisActionLog("Query", req.ListVmType, req.Dimensions, req.Measures, result.TotalCount, sw.ElapsedMilliseconds / 1000.0, result.Truncated);
                 return new JsonResult(result, _camelCase);
             }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
@@ -139,6 +144,7 @@ namespace WalkingTec.Mvvm.Mvc
                 sw.Stop();
                 _logger.LogInformation("Analysis pivot completed ListVm={ListVmType} Dims={DimCount} Msrs={MsrCount} Pivot={PivotDim} ElapsedMs={Elapsed}",
                     req.ListVmType, req.Dimensions.Count, req.Measures.Count, req.PivotDimension, sw.ElapsedMilliseconds);
+                WriteAnalysisActionLog("Pivot", req.ListVmType, req.Dimensions, req.Measures, result.Rows.Count, sw.ElapsedMilliseconds / 1000.0, result.Truncated);
                 return new JsonResult(result, _camelCase);
             }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
@@ -172,6 +178,7 @@ namespace WalkingTec.Mvvm.Mvc
                 sw.Stop();
                 _logger.LogInformation("Analysis export completed ListVm={ListVmType} Format={Format} ElapsedMs={Elapsed}",
                     req.ListVmType, format, sw.ElapsedMilliseconds);
+                WriteAnalysisActionLog($"Export({format})", req.ListVmType, req.Dimensions, req.Measures, result.TotalCount, sw.ElapsedMilliseconds / 1000.0, result.Truncated);
             }
             catch (InvalidOperationException ex)
             {
@@ -224,6 +231,7 @@ namespace WalkingTec.Mvvm.Mvc
                 sw.Stop();
                 _logger.LogInformation("Analysis pivot export completed ListVm={ListVmType} Format={Format} ElapsedMs={Elapsed}",
                     req.ListVmType, format, sw.ElapsedMilliseconds);
+                WriteAnalysisActionLog($"PivotExport({format})", req.ListVmType, req.Dimensions, req.Measures, result.Rows.Count, sw.ElapsedMilliseconds / 1000.0, result.Truncated);
             }
             catch (InvalidOperationException ex)
             {
@@ -258,6 +266,43 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         // ─── Helpers ───────────────────────────────────────────────────────
+
+        /// <summary>
+        /// 寫入 ActionLog，記錄 Analysis 查詢/匯出的稽核軌跡（#561）。
+        /// 若 _actionLogger 未注入且 HttpContext 不可用（如單元測試），則靜默略過。
+        /// </summary>
+        private void WriteAnalysisActionLog(
+            string actionName,
+            string listVmType,
+            List<string> dimensions,
+            List<MeasureRequest> measures,
+            int rowCount,
+            double durationSec,
+            bool truncated)
+        {
+            var logger = _actionLogger
+                ?? HttpContext?.RequestServices?.GetService<ILogger<ActionLog>>();
+            if (logger == null) return;
+
+            var dims = string.Join(",", dimensions);
+            var msrs = string.Join(",", measures.Select(m => $"{m.Field}_{m.Func}"));
+            var log = new ActionLog
+            {
+                LogType    = ActionLogTypesEnum.Normal,
+                ActionTime = DateTime.Now,
+                ITCode     = Wtm?.LoginUserInfo?.ITCode ?? string.Empty,
+                ModuleName = "Analysis",
+                ActionName = actionName,
+                ActionUrl  = HttpContext?.Request?.Path.Value,
+                Duration   = durationSec,
+                Remark     = $"ListVm={listVmType} Dims=[{dims}] Msrs=[{msrs}] Rows={rowCount} Truncated={truncated}",
+                IP         = HttpContext?.Connection?.RemoteIpAddress?.ToString(),
+                TenantCode = Wtm?.LoginUserInfo?.CurrentTenant
+            };
+
+            logger.Log<ActionLog>(LogLevel.Information, new EventId(), log, null,
+                (a, _) => a.GetLogString());
+        }
 
         /// <summary>
         /// 封裝四個 action 共用的準備結果：VM 解析、存取驗證、欄位掃描、基底查詢、identityKey。
