@@ -129,7 +129,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         public void Throws_when_dimension_not_in_whitelist()
         {
             var req = Req(dims: new[] { "Nonexistent" });
-            Assert.ThrowsException<InvalidOperationException>(() => Engine().Execute(Q(), req, _whitelist));
+            Assert.ThrowsException<AnalysisFieldNotFoundException>(() => Engine().Execute(Q(), req, _whitelist));
         }
 
         /// <summary>嘗試將 Measure 欄位用作 Dimension（Kind 不符）→ 拋例外</summary>
@@ -137,7 +137,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         public void Throws_when_measure_field_used_as_dimension()
         {
             var req = Req(dims: new[] { "Amount" }); // Amount is Measure, not Dimension
-            Assert.ThrowsException<InvalidOperationException>(() => Engine().Execute(Q(), req, _whitelist));
+            Assert.ThrowsException<AnalysisFieldNotFoundException>(() => Engine().Execute(Q(), req, _whitelist));
         }
 
         /// <summary>度量欄位不在白名單中 → 拋例外</summary>
@@ -145,7 +145,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         public void Throws_when_measure_field_not_in_whitelist()
         {
             var req = Req(msrs: new[] { ("Nonexistent", AggregateFunc.Sum) });
-            Assert.ThrowsException<InvalidOperationException>(() => Engine().Execute(Q(), req, _whitelist));
+            Assert.ThrowsException<AnalysisFieldNotFoundException>(() => Engine().Execute(Q(), req, _whitelist));
         }
 
         /// <summary>嘗試將 Dimension 欄位用作 Measure（Kind 不符）→ 拋例外</summary>
@@ -153,7 +153,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         public void Throws_when_dimension_field_used_as_measure()
         {
             var req = Req(msrs: new[] { ("Region", AggregateFunc.Sum) }); // Region is Dimension
-            Assert.ThrowsException<InvalidOperationException>(() => Engine().Execute(Q(), req, _whitelist));
+            Assert.ThrowsException<AnalysisFieldNotFoundException>(() => Engine().Execute(Q(), req, _whitelist));
         }
 
         /// <summary>不允許的聚合函式（CountOnly 欄位不支援 Sum）→ 拋例外</summary>
@@ -175,7 +175,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 dims: new[] { "Region" },
                 msrs: new[] { ("Amount", AggregateFunc.Sum) },
                 filters: new[] { ("Nonexistent", FilterOperator.Eq, "X") });
-            Assert.ThrowsException<InvalidOperationException>(() => Engine().Execute(Q(), req, _whitelist));
+            Assert.ThrowsException<AnalysisFieldNotFoundException>(() => Engine().Execute(Q(), req, _whitelist));
         }
 
         // ─── ApplyFilters 運算子分支 ────────────────────────────────────────────

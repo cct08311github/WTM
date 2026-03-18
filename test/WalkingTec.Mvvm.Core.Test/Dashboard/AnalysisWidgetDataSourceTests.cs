@@ -110,7 +110,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
                 }
             };
 
-            await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+            await Assert.ThrowsExceptionAsync<AnalysisVmNotFoundException>(
                 () => source.GetDataAsync(request));
         }
 

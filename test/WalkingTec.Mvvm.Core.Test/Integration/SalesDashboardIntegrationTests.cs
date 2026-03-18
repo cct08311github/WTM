@@ -602,9 +602,9 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
                 }
             };
 
-            await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+            await Assert.ThrowsExceptionAsync<AnalysisVmNotFoundException>(
                 () => source.GetDataAsync(request),
-                "未授權的 ListVM 應拋出 InvalidOperationException");
+                "未授權的 ListVM 應拋出 AnalysisVmNotFoundException");
         }
 
         /// <summary>
