@@ -1395,7 +1395,38 @@
 
     // ─── 渲染函式（保留 v1 邏輯）──────────────────────────────────────────────
 
+    // Build a human-friendly label for a pivot column key.
+    // Pivot columns are encoded as "{pivotValue}_{fieldName}_{func}".
+    // Row-dimension columns are plain fieldName strings.
+    function buildPivotColLabel(col, pivotValues, measureNames, fieldByName) {
+        for (var i = 0; i < pivotValues.length; i++) {
+            var pv = pivotValues[i];
+            var prefix = pv + '_';
+            if (col.length > prefix.length && col.indexOf(prefix) === 0) {
+                var msr = col.substring(prefix.length);
+                if (measureNames.indexOf(msr) >= 0) {
+                    var underIdx = msr.lastIndexOf('_');
+                    if (underIdx > 0) {
+                        var fieldPart = msr.substring(0, underIdx);
+                        var funcPart  = msr.substring(underIdx + 1);
+                        var meta = fieldByName[fieldPart];
+                        var dispName = (meta && (meta.displayName || meta.title)) || fieldPart;
+                        return pv + ' (' + dispName + ' ' + getFuncLabel(funcPart) + ')';
+                    }
+                    return pv + ' (' + msr + ')';
+                }
+            }
+        }
+        var dimMeta = fieldByName[col];
+        return (dimMeta && (dimMeta.displayName || dimMeta.title)) || col;
+    }
+
     function renderPivotTable(gridId, result, container, dateDims) {
+        var st = _state[gridId];
+        var fields = (st && st.fields) ? st.fields : [];
+        var fieldByName = {};
+        fields.forEach(function (f) { fieldByName[f.fieldName] = f; });
+
         var wrapper = document.createElement('div');
         wrapper.style.overflowX = 'auto';
         var table = document.createElement('table');
@@ -1406,7 +1437,7 @@
         var headerRow = document.createElement('tr');
         result.columns.forEach(function (col) {
             var th = document.createElement('th');
-            th.textContent = col;
+            th.textContent = buildPivotColLabel(col, result.pivotValues, result.measureNames, fieldByName);
             headerRow.appendChild(th);
         });
         thead.appendChild(headerRow);
@@ -1441,14 +1472,19 @@
         var categories = result.rows.map(function (r) {
             return firstRowDim ? String(r[firstRowDim] || '') : _i18n('result.total');
         });
+        var st = _state[gridId];
+        var fields = (st && st.fields) ? st.fields : [];
+        var fieldByName = {};
+        fields.forEach(function (f) { fieldByName[f.fieldName] = f; });
         var series = [];
         var legendData = [];
         result.pivotValues.forEach(function (pv) {
             result.measureNames.forEach(function (m) {
                 var key = pv + '_' + m;
-                legendData.push(key);
+                var label = buildPivotColLabel(key, result.pivotValues, result.measureNames, fieldByName);
+                legendData.push(label);
                 series.push({
-                    name: key, type: 'bar', stack: m,
+                    name: label, type: 'bar', stack: m,
                     data: result.rows.map(function (r) { return r[key] || 0; })
                 });
             });
@@ -1983,6 +2019,7 @@
         renderChart: renderChart,
         renderPivotTable: renderPivotTable,
         renderPivotChart: renderPivotChart,
+        buildPivotColLabel: buildPivotColLabel,
         renderTable: renderTableExposed,
         formatDateKey: formatDateKey,
         buildDrillFilter: buildDrillFilter,

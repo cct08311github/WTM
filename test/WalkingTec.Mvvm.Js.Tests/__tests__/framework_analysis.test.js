@@ -2370,8 +2370,9 @@ describe('wtmAnalysis.renderPivotTable', () => {
         var ths = createdElements.filter(function(e) { return e.tag === 'th'; });
         expect(ths.length).toBe(3);
         expect(ths[0].textContent).toBe('Region');
-        expect(ths[1].textContent).toBe('2026-Q1_Amount_Sum');
-        expect(ths[2].textContent).toBe('2026-Q2_Amount_Sum');
+        // buildPivotColLabel formats pivot columns as "{pivotValue} ({fieldPart} {funcLabel})"
+        expect(ths[1].textContent).toBe('2026-Q1 (Amount 合計)');
+        expect(ths[2].textContent).toBe('2026-Q2 (Amount 合計)');
     });
 
     test('缺值（null）顯示 "-"', () => {
@@ -2480,11 +2481,12 @@ describe('wtmAnalysis.renderPivotChart', () => {
         var opt = capturedOptions[0];
         expect(opt.xAxis.data).toEqual(['華東', '華南']);
         expect(opt.series.length).toBe(2);
-        expect(opt.series[0].name).toBe('Q1_Amount_Sum');
+        // buildPivotColLabel formats pivot chart series names as "{pivotValue} ({fieldPart} {funcLabel})"
+        expect(opt.series[0].name).toBe('Q1 (Amount 合計)');
         expect(opt.series[0].type).toBe('bar');
         expect(opt.series[0].stack).toBe('Amount_Sum');
         expect(opt.series[0].data).toEqual([100, 50]);
-        expect(opt.series[1].name).toBe('Q2_Amount_Sum');
+        expect(opt.series[1].name).toBe('Q2 (Amount 合計)');
         expect(opt.series[1].data).toEqual([200, 150]);
     });
 
