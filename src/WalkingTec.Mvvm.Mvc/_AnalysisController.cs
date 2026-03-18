@@ -8,6 +8,7 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -62,6 +63,10 @@ namespace WalkingTec.Mvvm.Mvc
         /// 回傳指定 ListVM 上標記 [Dimension]/[Measure] 的欄位清單。
         /// </summary>
         [HttpGet("meta")]
+        [ProducesResponseType(typeof(IEnumerable<object>), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(string), StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
         public IActionResult GetMeta([FromQuery] string listVmType)
         {
             Type vmType;
@@ -96,6 +101,10 @@ namespace WalkingTec.Mvvm.Mvc
         /// 執行分析查詢。
         /// </summary>
         [HttpPost("query")]
+        [ProducesResponseType(typeof(AnalysisQueryResponse), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(string), StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
         public IActionResult Query([FromBody] AnalysisQueryRequest? req)
         {
             if (req == null) return BadRequest("Request body is required.");
@@ -120,6 +129,10 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         [HttpPost("pivot")]
+        [ProducesResponseType(typeof(AnalysisPivotResponse), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(string), StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
         public IActionResult Pivot([FromBody] AnalysisPivotRequest? req)
         {
             if (req == null) return BadRequest("Request body is required.");
@@ -149,6 +162,10 @@ namespace WalkingTec.Mvvm.Mvc
         /// 匯出分析結果為 Excel 或 CSV。
         /// </summary>
         [HttpPost("export")]
+        [ProducesResponseType(typeof(FileContentResult), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(string), StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
         public IActionResult Export([FromBody] AnalysisQueryRequest? req,
             [FromQuery] string format = "xlsx",
             [FromQuery] bool includeChart = false,
@@ -201,6 +218,10 @@ namespace WalkingTec.Mvvm.Mvc
         /// 匯出 Pivot 分析結果為 Excel 或 CSV。
         /// </summary>
         [HttpPost("pivot/export")]
+        [ProducesResponseType(typeof(FileContentResult), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(string), StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
         public IActionResult PivotExport([FromBody] AnalysisPivotRequest? req,
             [FromQuery] string format = "xlsx",
             [FromQuery] bool includeChart = false,
