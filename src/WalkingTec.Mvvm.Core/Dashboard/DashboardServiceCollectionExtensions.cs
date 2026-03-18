@@ -23,12 +23,24 @@ namespace WalkingTec.Mvvm.Core.Dashboard
                 services.AddSingleton(GroupByStrategyResolver.Default);
             }
 
-            // Auto-register AnalysisWidgetDataSource when Analysis Mode dependencies are available
+            // Auto-register AnalysisWidgetDataSource when Analysis Mode dependencies are available.
+            // IMPORTANT: AddWtmContext() must be called BEFORE AddWtmDashboard() for this check to
+            // succeed. If called in the wrong order, AnalysisWidgetDataSource is silently skipped and
+            // widget data requests for the "analysis" source will fail with "Data source not found".
             var hasRegistry = services.Any(d => d.ServiceType == typeof(AnalysisVmRegistry));
             var hasEngine = services.Any(d => d.ServiceType == typeof(AnalysisQueryEngine));
             if (hasRegistry && hasEngine)
             {
                 services.AddTransient<IWidgetDataSource, AnalysisWidgetDataSource>();
+            }
+            else if (hasRegistry || hasEngine)
+            {
+                // Partial registration — one dep present without the other is unexpected.
+                // Surface this at startup rather than silently producing a misconfigured container.
+                throw new InvalidOperationException(
+                    "Partial Analysis Mode registration detected. " +
+                    "Both AnalysisVmRegistry and AnalysisQueryEngine must be registered. " +
+                    "Ensure services.AddWtmContext() is called before services.AddWtmDashboard().");
             }
 
             return services;
