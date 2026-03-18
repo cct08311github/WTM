@@ -126,7 +126,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
                 Parameters = new Dictionary<string, string>()
             };
 
-            await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+            await Assert.ThrowsExceptionAsync<AnalysisFieldNotFoundException>(
                 () => source.GetDataAsync(request));
         }
 
@@ -290,8 +290,8 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             };
 
             // The engine rejects the request because "Amount" was stripped from the whitelist
-            // by the field policy before reaching the engine — it raises InvalidOperationException.
-            await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+            // by the field policy before reaching the engine — it raises AnalysisFieldNotFoundException.
+            await Assert.ThrowsExceptionAsync<AnalysisFieldNotFoundException>(
                 () => source.GetDataAsync(request));
         }
 
