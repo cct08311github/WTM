@@ -303,6 +303,28 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         /// 未設定時沿用 SearchPanelTagHelper 的 expanded 屬性或全域設定。
         /// </summary>
         public bool? SearcherExpanded { get; set; }
+
+        /// <summary>
+        /// 逗號分隔的欄位名稱，指定後這些欄位會固定在左側（等同於在 VM 呼叫 .SetFixed(Left)）。
+        /// 範例：fixed-left-fields="Name,Code"
+        /// </summary>
+        public string FixedLeftFields { get; set; }
+
+        /// <summary>
+        /// 逗號分隔的欄位名稱，指定後這些欄位會固定在右側（等同於在 VM 呼叫 .SetFixed(Right)）。
+        /// 範例：fixed-right-fields="Status"
+        /// </summary>
+        public string FixedRightFields { get; set; }
+
+        /// <summary>
+        /// 設為 true 可全域停用一般欄位的拖曳調整寬度（checkbox / 序號列不受影響）。
+        /// 預設 false。
+        /// </summary>
+        public bool DisableColumnResize { get; set; }
+
+        // Pre-computed sets, populated at the start of Process() for O(1) lookup per column.
+        private HashSet<string> _fixedLeftFieldSet;
+        private HashSet<string> _fixedRightFieldSet;
         /// <summary>
         /// 排除的搜索条件
         /// </summary>
@@ -357,6 +379,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             {
                 Loading = true;
             }
+
+            // Pre-compute fixed-field sets for O(1) lookup in generateColHeaderCore.
+            _fixedLeftFieldSet = ParseFieldSet(FixedLeftFields);
+            _fixedRightFieldSet = ParseFieldSet(FixedRightFields);
+
             var vmQualifiedName = Vm.Model.GetType().AssemblyQualifiedName;
             vmQualifiedName = vmQualifiedName.Substring(0, vmQualifiedName.LastIndexOf(", Version=", StringComparison.CurrentCulture));
 
@@ -760,19 +787,30 @@ layui.use(['element'], function() {{
 
             foreach (var item in rawCols)
             {
+                // Resolve fixed position: TagHelper attribute takes precedence over VM definition.
+                var resolvedFixed = item.Fixed;
+                if (item.Field != null && _fixedLeftFieldSet?.Contains(item.Field) == true)
+                    resolvedFixed = GridColumnFixedEnum.Left;
+                else if (item.Field != null && _fixedRightFieldSet?.Contains(item.Field) == true)
+                    resolvedFixed = GridColumnFixedEnum.Right;
+
                 var tempCol = new LayuiColumn()
                 {
                     Title = item.Title,
                     Field = item.Field,
                     Width = item.Width,
                     Sort = item.Sort,
-                    Fixed = item.Fixed,
+                    Fixed = resolvedFixed,
                     Align = item.Align,
                     Event = item.Event,
                     UnResize = item.UnResize,
                     Hide = item.Hide,
                     ShowTotal = item.ShowTotal
                 };
+
+                // Apply global disable-resize for regular data columns (checkbox/numbers kept unresize).
+                if (DisableColumnResize && tempCol.Type == null && tempCol.UnResize != false)
+                    tempCol.UnResize = true;
 
                 if (LineHeight != null && item.Fixed.HasValue)
                 {
@@ -1073,6 +1111,23 @@ var isPost = false;
         private string getTemplate(string field,string random)
         {
             return $@"function(d){{var sty = '';var bg = '';var did = '{field}{random}_'+d.LAY_INDEX;if(d.{field}__bgcolor != undefined) bg = ""<script>$('#""+did+""').closest('td').css('background-color','""+d.{field}__bgcolor+""');</s""+""cript>""; if(d.{field}__forecolor != undefined) sty = 'color:'+d.{field}__forecolor+';'; return '<div style=""'+sty+'"" id=""'+did+'"">'+d.{field}.replace(/\""/g,""'"")+bg+'</div>';}}";
+        }
+
+        /// <summary>
+        /// Parses a comma-separated field-name string into a case-insensitive HashSet.
+        /// Returns null (not an empty set) when the input is blank, so callers can skip the
+        /// lookup with a single null-check rather than an unnecessary HashSet allocation.
+        /// </summary>
+        public static HashSet<string> ParseFieldSet(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                return null;
+
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var part in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                set.Add(part);
+
+            return set.Count > 0 ? set : null;
         }
     }
 }
