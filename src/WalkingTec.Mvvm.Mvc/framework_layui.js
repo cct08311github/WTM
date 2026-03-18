@@ -301,7 +301,11 @@ window.ff = {
             async: true,
             error: function (request) {
                 layer.close(index);
-                alert(ff.DONOTUSE_Text_SubmitFailed);
+                if (request.responseText !== undefined && request.responseText !== '') {
+                    layer.alert(request.responseText);
+                } else {
+                    layer.alert(ff.DONOTUSE_Text_SubmitFailed);
+                }
             },
             success: function (data, textStatus, request) {
                 if (request.getResponseHeader('IsScript') === 'true') {
