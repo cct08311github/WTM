@@ -970,40 +970,65 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
     var tempwhere = {};
     for (let item in defaultcondition) {
         if (formData["Searcher." + item]) {
-
-        }
-        else {
-            tempwhere[item] = defaultcondition[item]
+        } else {
+            tempwhere[item] = defaultcondition[item];
         }
     }
     $.extend(tempwhere, formData);
-   for (let item in tempwhere) {
+    for (let item in tempwhere) {
         if (item.startsWith("Searcher.") == false) {
             tempwhere["Searcher." + item] = tempwhere[item];
         }
     }
-
-    var form = $('<form method="POST" action="' + url + '">');
-    for (var attr in tempwhere) {
-        if (tempwhere[attr] != null) {
-            if (Array.isArray(tempwhere[attr])) {
-                for (var i = 0; i < tempwhere[attr].length; i++) {
-                    form.append($('<input type="hidden" name="' + attr + '[' + i + ']" value="' + tempwhere[attr][i] + '">'));
-                }
-            }
-            else {
-                form.append($('<input type="hidden" name="' + attr + '" value="' + tempwhere[attr] + '">'));
-            }
-        }
-    }
     if (ids !== undefined && ids !== null) {
-        for (var i = 0; i < ids.length; i++) {
-            form.append($('<input type="hidden" name="Ids" value="' + ids[i] + '">'));
-        }
+        tempwhere["Ids"] = ids;
     }
-    $('body').append(form);
-    form.submit();
-    form.remove();
+    var postData = $.param(tempwhere, true);
+    var layer = layui.layer;
+    var loadIndex = layer.load(2);
+    $.ajax({
+        url: url,
+        type: "POST",
+        data: postData,
+        xhrFields: { responseType: "blob" },
+        success: function (blob, status, xhr) {
+            layer.close(loadIndex);
+            var disposition = xhr.getResponseHeader("Content-Disposition") || "";
+            var filenameMatch = disposition.match(/filename\*?=['"\]?(?:UTF-8'')?([^;
+'"\]+)/i);
+            var filename = filenameMatch ? decodeURIComponent(filenameMatch[1]) : "export";
+            var objUrl = URL.createObjectURL(blob);
+            var a = document.createElement("a");
+            a.href = objUrl;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(objUrl);
+            var exp = new Date(new Date().getTime() + 30000).toUTCString();
+            document.cookie = "DONOTUSEDOWNLOADING=0; path=/; expires=" + exp;
+        },
+        error: function (xhr) {
+            layer.close(loadIndex);
+            if (xhr.status === 422) {
+                var reader = new FileReader();
+                reader.onload = function () {
+                    try {
+                        var err = JSON.parse(reader.result);
+                        layer.alert(err.message || ff.DONOTUSE_Text_ExportNoData,
+                            { icon: 0, title: false, btn: ["OK"] });
+                    } catch (e) {
+                        layer.alert(ff.DONOTUSE_Text_ExportNoData,
+                            { icon: 0, title: false, btn: ["OK"] });
+                    }
+                };
+                reader.readAsText(xhr.response);
+            } else {
+                layer.alert(ff.DONOTUSE_Text_LoadFailed,
+                    { icon: 2, title: false, btn: ["OK"] });
+            }
+        }
+    });
 },
 
     Download: function (url, ids) {

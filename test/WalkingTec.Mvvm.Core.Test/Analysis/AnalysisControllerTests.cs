@@ -251,8 +251,8 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 Dimensions = new List<string> { "Region" },
                 Measures   = new List<MeasureRequest> { new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum } }
             };
-            var result = (await CreateController().Query(req)) as BadRequestObjectResult;
-            Assert.IsNotNull(result);
+            var result = (await CreateController().Query(req)) as NotFoundObjectResult;
+            Assert.IsNotNull(result, "未註冊 VM 應回傳 404 NotFound");
         }
 
         [TestMethod]
@@ -333,8 +333,8 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 Dimensions = new List<string> { "Region" },
                 Measures   = new List<MeasureRequest> { new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum } }
             };
-            var result = (await CreateController().Export(req)) as BadRequestObjectResult;
-            Assert.IsNotNull(result);
+            var result = (await CreateController().Export(req)) as NotFoundObjectResult;
+            Assert.IsNotNull(result, "未註冊 VM 應回傳 404 NotFound");
         }
 
         // ─── Export xlsx / csv ────────────────────────────────────────────────
@@ -1317,8 +1317,8 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 PivotDimension = "Category"
             };
 
-            var result = (await CreateController().Pivot(req)) as BadRequestObjectResult;
-            Assert.IsNotNull(result, "Pivot 未註冊 VM 應回傳 400");
+            var result = (await CreateController().Pivot(req)) as NotFoundObjectResult;
+            Assert.IsNotNull(result, "Pivot 未註冊 VM 應回傳 404 NotFound");
         }
 
         [TestMethod]
@@ -1425,8 +1425,8 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 PivotDimension = "Category"
             };
 
-            var result = (await CreateController().PivotExport(req)) as BadRequestObjectResult;
-            Assert.IsNotNull(result, "PivotExport 未註冊 VM 應回傳 400");
+            var result = (await CreateController().PivotExport(req)) as NotFoundObjectResult;
+            Assert.IsNotNull(result, "PivotExport 未註冊 VM 應回傳 404 NotFound");
         }
 
         [TestMethod]
@@ -2325,7 +2325,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
-        public void Query_happy_path_writes_ActionLog()
+        public async Task Query_happy_path_writes_ActionLog()
         {
             // Arrange
             _testData = new List<SaleRecord>
@@ -2342,7 +2342,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
             // Act
-            var result = controller.Query(req);
+            var result = await controller.Query(req);
 
             // Assert: 200 OK
             Assert.IsInstanceOfType(result, typeof(JsonResult));
@@ -2359,7 +2359,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
-        public void Export_happy_path_writes_ActionLog()
+        public async Task Export_happy_path_writes_ActionLog()
         {
             // Arrange
             _testData = new List<SaleRecord>
@@ -2374,7 +2374,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
             // Act
-            var result = controller.Export(req, "csv");
+            var result = await controller.Export(req, "csv");
 
             // Assert: file returned
             Assert.IsInstanceOfType(result, typeof(FileContentResult));
@@ -2389,7 +2389,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
-        public void Query_validation_failure_does_not_write_ActionLog()
+        public async Task Query_validation_failure_does_not_write_ActionLog()
         {
             // Arrange: request with no dimensions triggers 400 before engine runs
             var actionLogger = new CapturingLogger<ActionLog>();
@@ -2403,7 +2403,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             };
 
             // Act
-            var result = controller.Query(req);
+            var result = await controller.Query(req);
 
             // Assert: 400 returned, no ActionLog written
             Assert.IsInstanceOfType(result, typeof(BadRequestObjectResult));
