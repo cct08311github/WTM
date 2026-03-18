@@ -466,7 +466,8 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
                 DashboardDirectory = dir,
                 AdminRoles = adminRoles
             });
-            return new JsonFileDashboardService(options, Array.Empty<IWidgetDataSource>());
+            return new JsonFileDashboardService(options, Array.Empty<IWidgetDataSource>(),
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<JsonFileDashboardService>.Instance);
         }
 
         [TestMethod]
@@ -521,7 +522,8 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
                     DashboardDirectory = dir,
                     AdminRoles = ["SuperAdmin"]
                 });
-                var svc = new JsonFileDashboardService(options, Array.Empty<IWidgetDataSource>());
+                var svc = new JsonFileDashboardService(options, Array.Empty<IWidgetDataSource>(),
+                    Microsoft.Extensions.Logging.Abstractions.NullLogger<JsonFileDashboardService>.Instance);
 
                 await svc.CreateAsync(new DashboardDefinition { Owner = "alice", Title = "Private" });
                 await svc.CreateAsync(new DashboardDefinition { Owner = "bob", Title = "Also Private" });
@@ -537,6 +539,70 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             {
                 if (Directory.Exists(dir)) Directory.Delete(dir, true);
             }
+        }
+
+        // ─── Concurrent write safety (atomic tmp-then-replace) ────────────
+
+        [TestMethod]
+        public async Task Concurrent_updates_produce_valid_json()
+        {
+            // Create an initial dashboard.
+            var def = new DashboardDefinition { Owner = "user1", Title = "initial" };
+            var id = await _service.CreateAsync(def);
+
+            // Fire N concurrent updates; each sets a distinct title.
+            const int concurrency = 20;
+            var tasks = Enumerable.Range(0, concurrency).Select(i => Task.Run(async () =>
+            {
+                var d = new DashboardDefinition { Id = id, Owner = "user1", Title = $"v{i}" };
+                await _service.UpdateAsync(d);
+            }));
+
+            await Task.WhenAll(tasks);
+
+            // After all updates, the stored file must be parseable valid JSON.
+            var retrieved = await _service.GetAsync(id);
+            retrieved.Should().NotBeNull("file must be valid JSON after concurrent updates");
+            retrieved!.Id.Should().Be(id);
+        }
+
+        [TestMethod]
+        public async Task Concurrent_creates_different_ids_all_succeed()
+        {
+            const int count = 10;
+            var ids = new System.Collections.Concurrent.ConcurrentBag<string>();
+
+            var tasks = Enumerable.Range(0, count).Select(i => Task.Run(async () =>
+            {
+                var id = await _service.CreateAsync(new DashboardDefinition { Owner = "user1", Title = $"D{i}" });
+                ids.Add(id);
+            }));
+
+            await Task.WhenAll(tasks);
+
+            ids.Should().HaveCount(count);
+            ids.Distinct().Should().HaveCount(count, "each create must produce a unique ID");
+
+            // Every created dashboard must be readable.
+            foreach (var id in ids)
+            {
+                var retrieved = await _service.GetAsync(id);
+                retrieved.Should().NotBeNull($"dashboard {id} must exist after create");
+            }
+        }
+
+        [TestMethod]
+        public async Task No_tmp_file_left_after_successful_update()
+        {
+            var def = new DashboardDefinition { Owner = "user1", Title = "clean" };
+            var id = await _service.CreateAsync(def);
+
+            def.Title = "updated";
+            await _service.UpdateAsync(def);
+
+            // No .tmp file should remain in the directory after a successful write.
+            var tmpFiles = Directory.GetFiles(_tempDir, "*.tmp", SearchOption.AllDirectories);
+            tmpFiles.Should().BeEmpty("tmp files must be cleaned up after successful atomic write");
         }
     }
 }
