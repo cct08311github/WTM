@@ -18,7 +18,7 @@ public class JsonFileDashboardService : IDashboardService
     private readonly ConcurrentDictionary<string, DashboardSummary> _index = new();
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new();
     private readonly string _baseDir;
-    private bool _initialized;
+    private volatile bool _initialized;
     private readonly SemaphoreSlim _initLock = new(1, 1);
 
     public JsonFileDashboardService(IOptions<DashboardOptions> options, IEnumerable<IWidgetDataSource> dataSources)
