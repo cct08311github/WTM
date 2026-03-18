@@ -159,6 +159,7 @@ namespace WalkingTec.Mvvm.Core
 
             var query = SearcherMode== ListVMSearchModeEnum.CheckExport? GetCheckedExportQuery() : GetExportQuery();
             int listcount = query.Count();
+            ExportRowCount = listcount;
 
             //获取分成Excel的个数
             ExportMaxCount = ExportMaxCount == 0 ? 1000000 : (ExportMaxCount > 1000000 ? 1000000 : ExportMaxCount);
@@ -455,6 +456,12 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         [JsonIgnore]
         public int ExportExcelCount { get; set; }
+
+        /// <summary>
+        /// 最後一次呼叫 GenerateExcel() 實際匯出的資料列數（不含表頭）。
+        /// </summary>
+        [JsonIgnore]
+        public int ExportRowCount { get; private set; }
 
         /// <summary>
         /// 导出文件第一行背景颜色，使用HSSFColor，例如：HSSFColor.Red.Index
