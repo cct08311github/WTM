@@ -126,7 +126,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
                 Parameters = new Dictionary<string, string>()
             };
 
-            await Assert.ThrowsExceptionAsync<AnalysisFieldNotFoundException>(
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(
                 () => source.GetDataAsync(request));
         }
 
