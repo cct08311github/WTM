@@ -145,7 +145,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         private _AnalysisController CreateController(IAnalysisFieldPolicy policy = null)
         {
-            var controller = new _AnalysisController(_registry, CreateEngine(), Microsoft.Extensions.Logging.Abstractions.NullLogger<_AnalysisController>.Instance, policy);
+            var controller = new _AnalysisController(_registry, CreateEngine(), Microsoft.Extensions.Logging.Abstractions.NullLogger<_AnalysisController>.Instance, null, policy);
             controller.Wtm = MockWtmContext.CreateWtmContext();
             return controller;
         }
@@ -2271,6 +2271,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         {
             var controller = new _AnalysisController(
                 _registry,
+                CreateEngine(),
                 Microsoft.Extensions.Logging.Abstractions.NullLogger<_AnalysisController>.Instance,
                 cache: null,
                 fieldPolicy: policy,
