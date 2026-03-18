@@ -11,11 +11,12 @@ public static class WtmConnectionStringSanitizer
 {
     /// <summary>
     /// 匹配常見連線字串敏感鍵：Password、Pwd、User Id、UID、User。
-    /// 格式：key=value，value 以 ; " ' 或字串結尾作為終止符。
+    /// 格式：key=value，value 以 ; " ' 空白 或字串結尾作為終止符。
+    /// 兩段 char class 均排除空白，避免貪婪 match 至散文句子末尾（#580）。
     /// </summary>
     private static readonly Regex _sensitiveKeyPattern = new(
-        @"(?i)(password|pwd|user\s+id|uid|user)\s*=\s*[^;""'\s][^;""']*",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        @"(?i)(password|pwd|user\s+id|uid|user)\s*=\s*[^;""'\s]+",
+        RegexOptions.Compiled);
 
     /// <summary>
     /// 若輸入字串符合連線字串模式（含 '=' 且含敏感關鍵字），則以 [redacted] 遮蔽敏感值並回傳；

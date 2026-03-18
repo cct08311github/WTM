@@ -93,6 +93,33 @@ public class WtmConnectionStringSanitizerTests
         Assert.AreEqual("   ", WtmConnectionStringSanitizer.Sanitize("   "));
     }
 
+    // ─── Regression: greedy value match (#580) ───────────────────────────
+
+    [TestMethod]
+    public void Sanitize_does_not_mangle_log_message_containing_user_equals()
+    {
+        // Regression #580: value pattern must stop at whitespace so natural-language
+        // log messages containing "user=xxx" are not silently truncated.
+        var input = "Error: user=john was not found in the database";
+        var result = WtmConnectionStringSanitizer.Sanitize(input);
+
+        // Only the credential value "john" should be redacted; the rest of the sentence must survive.
+        StringAssert.Contains(result, "was not found in the database",
+            "Text after the value must not be swallowed (#580)");
+        Assert.IsFalse(result.Contains("john"), "Credential value must still be redacted");
+    }
+
+    [TestMethod]
+    public void Sanitize_password_with_semicolon_terminator_still_redacted()
+    {
+        // Confirm standard semicolon-terminated value still works after the fix.
+        var input = "Server=x;Password=s3cr3t;Database=db";
+        var result = WtmConnectionStringSanitizer.Sanitize(input);
+
+        Assert.IsFalse(result.Contains("s3cr3t"), "Password value must be redacted");
+        StringAssert.Contains(result, "Database=db", "Non-sensitive tail must be preserved");
+    }
+
     // ─── Exception-message scenario ──────────────────────────────────────
 
     [TestMethod]
