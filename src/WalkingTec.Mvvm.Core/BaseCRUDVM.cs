@@ -1046,6 +1046,7 @@ namespace WalkingTec.Mvvm.Core
                         }
                     }
                 }
+                AppendChangeLog("Delete", SerializeScalarProps(Entity), null);
                 DC!.DeleteEntity(Entity);
                 DC!.SaveChanges();
                 // [Elsa removed] workflow instance cleanup was here
@@ -1106,6 +1107,7 @@ namespace WalkingTec.Mvvm.Core
                         }
                     }
                 }
+                AppendChangeLog("Delete", SerializeScalarProps(Entity), null);
                 DC!.DeleteEntity(Entity);
                 await DC!.SaveChangesAsync();
                 // [Elsa removed] workflow instance cleanup was here
