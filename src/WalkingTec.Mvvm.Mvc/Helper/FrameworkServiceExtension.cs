@@ -691,6 +691,15 @@ namespace WalkingTec.Mvvm.Mvc
 
             var jwtOptions = conf.JwtOptions;
 
+            if (jwtOptions.IsDefaultOrWeakKey())
+            {
+                throw new InvalidOperationException(
+                    "[WTM Security] JWT SecurityKey is still the well-known default value shipped in source code. " +
+                    "Anyone who can read the WTM repository can forge tokens for any user. " +
+                    "Set a strong random key (≥32 chars) in your configuration (e.g. JwtOptions:SecurityKey). " +
+                    "Generate one with: openssl rand -base64 32");
+            }
+
             var cookieOptions = conf.CookieOptions;
 
             JwtSecurityTokenHandler.DefaultInboundClaimTypeMap.Clear();
