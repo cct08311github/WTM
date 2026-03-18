@@ -626,6 +626,7 @@ layui.use(['table'], function(){{
        tab.find('div [lay-event=\'LAYTABLE_PRINT\']').attr('title','{THProgram._localizer["Sys.Print"]}');
       {(string.IsNullOrEmpty(DoneFunc) ? string.Empty : $"{DoneFunc}(res,curr,count)")}
       {(EnableHeaderFilter ? $"wtmHeaderFilter.refresh('{Id}');" : "")}
+      if(typeof wtmColVis !== 'undefined'){{ wtmColVis.init('{Id}'); }}
     }}
     }}
 {Id}defaultfilter = {{}};
