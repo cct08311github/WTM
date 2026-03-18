@@ -198,8 +198,21 @@ public class JsonFileDashboardService : IDashboardService
                 throw new InvalidOperationException($"Dashboard {dashboard.Id} already exists.");
             }
 
-            using var fs = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-            await JsonSerializer.SerializeAsync(fs, dashboard);
+            // Write via tmp then rename to avoid leaving a partial file on crash.
+            var tmpPath = path + ".tmp";
+            try
+            {
+                await using (var fs = new FileStream(tmpPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                {
+                    await JsonSerializer.SerializeAsync(fs, dashboard);
+                }
+                File.Move(tmpPath, path);
+            }
+            catch
+            {
+                if (File.Exists(tmpPath)) File.Delete(tmpPath);
+                throw;
+            }
 
             _index[dashboard.Id] = new DashboardSummary
             {
@@ -241,8 +254,25 @@ public class JsonFileDashboardService : IDashboardService
                 throw new KeyNotFoundException($"Dashboard {dashboard.Id} not found.");
             }
 
-            using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
-            await JsonSerializer.SerializeAsync(fs, dashboard);
+            // Atomic write: serialize to a sibling .tmp file, then atomically replace the target.
+            // This prevents readers from ever observing a truncated/partial JSON file if a crash
+            // occurs mid-write (File.Replace is backed by a rename(2) on POSIX; on Windows it is
+            // an atomic swap at the filesystem level when the source and destination are on the
+            // same volume).
+            var tmpPath = path + ".tmp";
+            try
+            {
+                await using (var fs = new FileStream(tmpPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                {
+                    await JsonSerializer.SerializeAsync(fs, dashboard);
+                }
+                File.Replace(tmpPath, path, null);
+            }
+            catch
+            {
+                if (File.Exists(tmpPath)) File.Delete(tmpPath);
+                throw;
+            }
 
             _index[dashboard.Id] = new DashboardSummary
             {
