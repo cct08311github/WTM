@@ -52,7 +52,10 @@ namespace WalkingTec.Mvvm.Mvc
                 .MinimumLevel.Is(levelMap)
                 .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
                 .MinimumLevel.Override("Microsoft.AspNetCore", LogEventLevel.Warning)
-                .Enrich.FromLogContext();
+                .Enrich.FromLogContext()
+                // Redact connection string secrets from structured string properties (#559).
+                // Covers destructured values logged via {@obj} or explicit string properties.
+                .Destructure.ByTransforming<string>(WtmConnectionStringSanitizer.Sanitize);
 
             if (options.EnableConsole)
             {
