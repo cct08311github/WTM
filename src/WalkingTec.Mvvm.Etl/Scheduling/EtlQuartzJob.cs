@@ -143,6 +143,7 @@ public class EtlQuartzJob : WtmJob
                 jobDef.LastRunAt = DateTime.UtcNow;
                 jobDef.LastError = null;
                 jobDef.Status = EtlJobStatus.Enabled;
+                jobDef.ConsecutiveFailureCount = 0;  // reset on success
             }
             else
             {
@@ -150,6 +151,8 @@ public class EtlQuartzJob : WtmJob
                     ? result.ErrorMessage[..2000]
                     : result.ErrorMessage;
                 jobDef.Status = result.Aborted ? EtlJobStatus.Enabled : EtlJobStatus.Failed;
+                if (!result.Aborted)
+                    jobDef.ConsecutiveFailureCount++;
             }
         }
         catch (Exception ex)
