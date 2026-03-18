@@ -140,9 +140,12 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             _registry.Build(new[] { typeof(AnalysisControllerTests).Assembly });
         }
 
+        private static AnalysisQueryEngine CreateEngine()
+            => new AnalysisQueryEngine(GroupByStrategyResolver.Default);
+
         private _AnalysisController CreateController(IAnalysisFieldPolicy policy = null)
         {
-            var controller = new _AnalysisController(_registry, Microsoft.Extensions.Logging.Abstractions.NullLogger<_AnalysisController>.Instance, null, policy);
+            var controller = new _AnalysisController(_registry, CreateEngine(), Microsoft.Extensions.Logging.Abstractions.NullLogger<_AnalysisController>.Instance, null, policy);
             controller.Wtm = MockWtmContext.CreateWtmContext();
             return controller;
         }
@@ -781,7 +784,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
             var httpCtx = new DefaultHttpContext();
-            var controller = new _AnalysisController(_registry, Microsoft.Extensions.Logging.Abstractions.NullLogger<_AnalysisController>.Instance, null, null);
+            var controller = new _AnalysisController(_registry, CreateEngine(), Microsoft.Extensions.Logging.Abstractions.NullLogger<_AnalysisController>.Instance);
             controller.Wtm = MockWtmContext.CreateWtmContext();
             controller.ControllerContext = new ControllerContext { HttpContext = httpCtx };
 
@@ -803,7 +806,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
             var httpCtx = new DefaultHttpContext();
-            var controller = new _AnalysisController(_registry, Microsoft.Extensions.Logging.Abstractions.NullLogger<_AnalysisController>.Instance, null, null);
+            var controller = new _AnalysisController(_registry, CreateEngine(), Microsoft.Extensions.Logging.Abstractions.NullLogger<_AnalysisController>.Instance);
             controller.Wtm = MockWtmContext.CreateWtmContext();
             controller.ControllerContext = new ControllerContext { HttpContext = httpCtx };
 
@@ -1195,7 +1198,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
             var httpCtx = new DefaultHttpContext();
-            var controller = new _AnalysisController(_registry, Microsoft.Extensions.Logging.Abstractions.NullLogger<_AnalysisController>.Instance, null, null);
+            var controller = new _AnalysisController(_registry, CreateEngine(), Microsoft.Extensions.Logging.Abstractions.NullLogger<_AnalysisController>.Instance);
             controller.Wtm = MockWtmContext.CreateWtmContext();
             controller.ControllerContext = new ControllerContext { HttpContext = httpCtx };
 
@@ -2268,6 +2271,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         {
             var controller = new _AnalysisController(
                 _registry,
+                CreateEngine(),
                 Microsoft.Extensions.Logging.Abstractions.NullLogger<_AnalysisController>.Instance,
                 cache: null,
                 fieldPolicy: policy,

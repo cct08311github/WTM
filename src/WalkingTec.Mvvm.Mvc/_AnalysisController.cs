@@ -41,7 +41,7 @@ namespace WalkingTec.Mvvm.Mvc
         };
 
         private readonly AnalysisVmRegistry _registry;
-        private readonly IAnalysisCache? _cache;
+        private readonly AnalysisQueryEngine _engine;
         private readonly IAnalysisFieldPolicy? _fieldPolicy;
         private readonly ILogger<_AnalysisController> _logger;
         private readonly ILogger<ActionLog>? _actionLogger;
@@ -49,6 +49,7 @@ namespace WalkingTec.Mvvm.Mvc
 
         public _AnalysisController(
             AnalysisVmRegistry registry,
+            AnalysisQueryEngine engine,
             ILogger<_AnalysisController> logger,
             IAnalysisCache? cache = null,
             IAnalysisFieldPolicy? fieldPolicy = null,
@@ -56,8 +57,8 @@ namespace WalkingTec.Mvvm.Mvc
             ILogger<ActionLog>? actionLogger = null)
         {
             _registry = registry;
+            _engine = engine;
             _logger = logger;
-            _cache = cache;
             _fieldPolicy = fieldPolicy;
             _cacheTtl = configs?.Value.AnalysisCacheTtl;
             _actionLogger = actionLogger;
@@ -125,7 +126,7 @@ namespace WalkingTec.Mvvm.Mvc
             var sw = Stopwatch.StartNew();
             try
             {
-                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache, _cacheTtl).ExecuteDynamic(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
+                var result = _engine.ExecuteDynamic(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
                 sw.Stop();
                 _logger.LogInformation("Analysis query completed ListVm={ListVmType} Dims={DimCount} Msrs={MsrCount} ElapsedMs={Elapsed} Truncated={Truncated}",
                     req.ListVmType, req.Dimensions.Count, req.Measures.Count, sw.ElapsedMilliseconds, result.Truncated);
@@ -155,7 +156,7 @@ namespace WalkingTec.Mvvm.Mvc
             var sw = Stopwatch.StartNew();
             try
             {
-                var result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache, _cacheTtl).ExecutePivotDynamic(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
+                var result = _engine.ExecutePivotDynamic(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
                 sw.Stop();
                 _logger.LogInformation("Analysis pivot completed ListVm={ListVmType} Dims={DimCount} Msrs={MsrCount} Pivot={PivotDim} ElapsedMs={Elapsed}",
                     req.ListVmType, req.Dimensions.Count, req.Measures.Count, req.PivotDimension, sw.ElapsedMilliseconds);
@@ -193,7 +194,7 @@ namespace WalkingTec.Mvvm.Mvc
             AnalysisQueryResponse result;
             try
             {
-                result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache, _cacheTtl).ExecuteDynamic(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
+                result = _engine.ExecuteDynamic(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
                 sw.Stop();
                 _logger.LogInformation("Analysis export completed ListVm={ListVmType} Format={Format} ElapsedMs={Elapsed}",
                     req.ListVmType, format, sw.ElapsedMilliseconds);
@@ -250,7 +251,7 @@ namespace WalkingTec.Mvvm.Mvc
             AnalysisPivotResponse result;
             try
             {
-                result = new AnalysisQueryEngine(GroupByStrategyResolver.Default, _cache, _cacheTtl).ExecutePivotDynamic(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
+                result = _engine.ExecutePivotDynamic(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
                 sw.Stop();
                 _logger.LogInformation("Analysis pivot export completed ListVm={ListVmType} Format={Format} ElapsedMs={Elapsed}",
                     req.ListVmType, format, sw.ElapsedMilliseconds);

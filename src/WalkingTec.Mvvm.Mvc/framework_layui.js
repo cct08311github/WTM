@@ -26,6 +26,7 @@ window.ff = {
     DONOTUSE_Text_SubmitFailed: "",
     DONOTUSE_Text_PleaseSelect: "",
     DONOTUSE_Text_FailedLoadData: "",
+    DONOTUSE_Text_ExportNoData: "",
 
     SetCookie: function (name, value, allwindow) {
         try {

@@ -100,6 +100,11 @@ namespace WalkingTec.Mvvm.Core
         int ExportExcelCount { get; set; }
 
         /// <summary>
+        /// 最後一次呼叫 GenerateExcel() 實際匯出的資料列數（不含表頭）。
+        /// </summary>
+        int ExportRowCount { get; }
+
+        /// <summary>
         /// 移除操作列
         /// </summary>
         void RemoveActionColumn(object? root = null);

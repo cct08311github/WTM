@@ -542,6 +542,15 @@ namespace WalkingTec.Mvvm.Mvc
                     sp.GetRequiredService<Microsoft.Extensions.Caching.Memory.IMemoryCache>(),
                     conf.AnalysisCacheTtl));
             services.AddSingleton<WalkingTec.Mvvm.Core.Analysis.IAnalysisFieldPolicy, WalkingTec.Mvvm.Core.Analysis.DefaultAnalysisFieldPolicy>();
+            services.AddSingleton<WalkingTec.Mvvm.Core.Analysis.AnalysisQueryEngine>(sp =>
+            {
+                var cache = sp.GetService<WalkingTec.Mvvm.Core.Analysis.IAnalysisCache>();
+                var configs = sp.GetService<Microsoft.Extensions.Options.IOptions<Configs>>();
+                return new WalkingTec.Mvvm.Core.Analysis.AnalysisQueryEngine(
+                    WalkingTec.Mvvm.Core.Analysis.GroupByStrategyResolver.Default,
+                    cache,
+                    configs?.Value.AnalysisCacheTtl);
+            });
 
             // Dashboard module (opt-in via AddWtmDashboard in app startup)
             // No auto-registration — apps call services.AddWtmDashboard() explicitly

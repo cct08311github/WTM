@@ -247,6 +247,12 @@ namespace WalkingTec.Mvvm.Mvc
                 listVM.SearcherMode = listVM.Ids != null && listVM.Ids.Count > 0 ? ListVMSearchModeEnum.CheckExport : ListVMSearchModeEnum.Export;
 
                 var data = listVM.GenerateExcel();
+
+                if (listVM.ExportRowCount == 0)
+                {
+                    return StatusCode(422, new { message = MvcProgram._localizer?["Sys.NoData"] ?? "No data" });
+                }
+
                 HttpContext.Response.Cookies.Append("DONOTUSEDOWNLOADING", "0", new Microsoft.AspNetCore.Http.CookieOptions() { Path = "/", Expires = DateTime.Now.AddDays(2) });
 
                 return File(data, "application/vnd.ms-excel", $"Export_{instanceType.Name}_{DateTime.Now.ToString("yyyy-MM-dd")}.xls");
@@ -628,6 +634,7 @@ namespace WalkingTec.Mvvm.Mvc
             rv.Add("DONOTUSE_Text_SubmitFailed", MvcProgram._localizer["Sys.SubmitFailed"]);
             rv.Add("DONOTUSE_Text_PleaseSelect", MvcProgram._localizer["Sys.PleaseSelect"]);
             rv.Add("DONOTUSE_Text_FailedLoadData", MvcProgram._localizer["Sys.FailedLoadData"]);
+            rv.Add("DONOTUSE_Text_ExportNoData", MvcProgram._localizer?["Sys.NoData"] ?? "No data");
             return rv;
         }
 
