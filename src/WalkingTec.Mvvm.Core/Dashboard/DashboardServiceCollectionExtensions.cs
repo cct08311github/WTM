@@ -10,6 +10,7 @@ namespace WalkingTec.Mvvm.Core.Dashboard
     {
         public static IServiceCollection AddWtmDashboard(this IServiceCollection services, Action<DashboardOptions>? setupAction = null)
         {
+            services.AddLogging();
             services.AddOptions<DashboardOptions>();
             if (setupAction != null)
             {
