@@ -412,7 +412,7 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
         }
 
         [TestMethod]
-        [Description("Analysis 引擎拋出欄位驗證失敗（非白名單維度）→ AnalysisWidgetDataSource 應傳播 InvalidOperationException，不吞例外")]
+        [Description("Analysis 引擎拋出欄位驗證失敗（非白名單維度）→ AnalysisWidgetDataSource 應傳播 AnalysisFieldNotFoundException，不吞例外")]
         public async Task CFO_WidgetRequestsNonWhitelistedField_AnalysisEnginePropagatesError()
         {
             var source = CreateAnalysisDataSource();
@@ -430,7 +430,7 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
                 }
             };
 
-            var ex = await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+            var ex = await Assert.ThrowsExceptionAsync<AnalysisFieldNotFoundException>(
                 () => source.GetDataAsync(request));
 
             ex.Message.Should().Contain("ID",
