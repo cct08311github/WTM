@@ -146,7 +146,7 @@ public class EtlPipelineExecutor
                 ExtractedRows = totalExtracted,
                 LoadedRows = totalLoaded,
                 ElapsedMs = sw.ElapsedMilliseconds,
-                ErrorMessage = ex.ToString()
+                ErrorMessage = EtlErrorSanitizer.Sanitize(ex)
             };
         }
     }
