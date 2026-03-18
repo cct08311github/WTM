@@ -66,6 +66,7 @@ namespace WalkingTec.Mvvm.Mvc
         {
             Type vmType;
             try { vmType = _registry.Resolve(listVmType); }
+            catch (AnalysisVmNotFoundException ex) { return NotFound(ex.Message); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
 
             if (!CheckAccess(vmType)) return Forbid();
@@ -279,6 +280,7 @@ namespace WalkingTec.Mvvm.Mvc
 
             Type vmType;
             try { vmType = _registry.Resolve(req.ListVmType); }
+            catch (AnalysisVmNotFoundException ex) { return NotFound(ex.Message); }
             catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
 
             if (!CheckAccess(vmType)) return Forbid();

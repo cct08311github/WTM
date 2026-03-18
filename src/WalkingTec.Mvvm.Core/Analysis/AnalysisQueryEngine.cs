@@ -242,12 +242,12 @@ namespace WalkingTec.Mvvm.Core.Analysis
             foreach (var d in req.Dimensions)
             {
                 if (!whitelist.TryGetValue(d, out var meta) || meta.Kind != AnalysisFieldKind.Dimension)
-                    throw new InvalidOperationException($"Dimension field '{d}' is not enabled for analysis.");
+                    throw new AnalysisFieldNotFoundException(d, "Dimension");
             }
             foreach (var m in req.Measures)
             {
                 if (!whitelist.TryGetValue(m.Field, out var meta) || meta.Kind != AnalysisFieldKind.Measure)
-                    throw new InvalidOperationException($"Measure field '{m.Field}' is not enabled for analysis.");
+                    throw new AnalysisFieldNotFoundException(m.Field, "Measure");
                 if ((meta.AllowedFuncs & m.Func) == 0)
                     throw new NotSupportedException($"Function '{m.Func}' is not allowed for field '{m.Field}'.");
             }
@@ -266,7 +266,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             foreach (var f in filters)
             {
                 if (!whitelist.TryGetValue(f.Field, out var meta))
-                    throw new InvalidOperationException($"Filter field '{f.Field}' is not enabled for analysis.");
+                    throw new AnalysisFieldNotFoundException(f.Field, "Filter");
 
                 var prop = Expression.Property(param, f.Field);
                 var targetType = prop.Type;

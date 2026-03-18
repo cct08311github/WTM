@@ -42,32 +42,33 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         /// <summary>
-        /// Resolve with the FullName of an unannotated VM throws InvalidOperationException.
+        /// Resolve with the FullName of an unannotated VM throws AnalysisVmNotFoundException.
         /// </summary>
         [TestMethod]
         public void Throws_for_unannotated_vm()
         {
             var registry = BuildRegistry();
-            Assert.ThrowsException<InvalidOperationException>(
+            Assert.ThrowsException<AnalysisVmNotFoundException>(
                 () => registry.Resolve(typeof(NotAnnotatedListVM).FullName));
         }
 
         /// <summary>
-        /// Resolve with an unknown type name throws InvalidOperationException.
+        /// Resolve with an unknown type name throws AnalysisVmNotFoundException.
         /// </summary>
         [TestMethod]
         public void Throws_for_unknown_type()
         {
             var registry = BuildRegistry();
-            Assert.ThrowsException<InvalidOperationException>(
+            var ex = Assert.ThrowsException<AnalysisVmNotFoundException>(
                 () => registry.Resolve("Some.Unknown.Type"));
+            Assert.AreEqual("Some.Unknown.Type", ex.VmTypeName);
         }
 
         [TestMethod]
         public void Throws_for_empty_type_name()
         {
             var registry = BuildRegistry();
-            Assert.ThrowsException<InvalidOperationException>(
+            Assert.ThrowsException<AnalysisVmNotFoundException>(
                 () => registry.Resolve(string.Empty));
         }
     }
