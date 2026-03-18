@@ -68,6 +68,16 @@ namespace WalkingTec.Mvvm.Core
         public bool ValidityTemplateType { get; set; }
 
         /// <summary>
+        /// When <c>true</c>, runs all validation and business-rule checks but skips
+        /// persisting data. <see cref="ErrorListVM"/> is populated as usual; the caller
+        /// can inspect <see cref="EntityList"/> to see which rows would be imported.
+        /// The uploaded file is NOT deleted so the user can re-submit for the real import.
+        /// Default: <c>false</c>.
+        /// </summary>
+        [JsonIgnore]
+        public bool ValidateOnly { get; set; }
+
+        /// <summary>
         /// 下载模版页面的参数
         /// </summary>
         [JsonIgnore]
@@ -1041,7 +1051,7 @@ namespace WalkingTec.Mvvm.Core
             }
 
             //如果没有错误，更新数据库
-            if (EntityList.Count > 0)
+            if (EntityList.Count > 0 && !ValidateOnly)
             {
                 try
                 {
@@ -1059,7 +1069,7 @@ namespace WalkingTec.Mvvm.Core
                     return false;
                 }
             }
-            if (string.IsNullOrEmpty(UploadFileId) == false && Wtm!.ServiceProvider != null)
+            if (!ValidateOnly && string.IsNullOrEmpty(UploadFileId) == false && Wtm!.ServiceProvider != null)
             {
                 var fp = Wtm!.ServiceProvider.GetRequiredService<WtmFileProvider>();
                 fp.DeleteFile(UploadFileId, Wtm!.CreateDC(false, "default"));
