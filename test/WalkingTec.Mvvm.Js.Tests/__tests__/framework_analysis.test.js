@@ -4609,3 +4609,219 @@ describe('#501 createValueInput — smart filter controls', () => {
     });
 });
 
+
+// ─── i18n #535 ────────────────────────────────────────────────────────────────
+describe('i18n #535', () => {
+    let waI18n;
+
+    beforeEach(() => {
+        waI18n = makeEnv().wa;
+    });
+
+    afterEach(() => {
+        // Restore default locale
+        waI18n.setLocale('zh-TW');
+    });
+
+    describe('default locale zh-TW', () => {
+        test('getLocale() returns zh-TW by default', () => {
+            expect(waI18n.getLocale()).toBe('zh-TW');
+        });
+
+        test('validateSelection errors are in zh-TW', () => {
+            const errors = waI18n.validateSelection([], []);
+            expect(errors[0]).toMatch(/至少需要選取 1 個維度/);
+            expect(errors[1]).toMatch(/至少需要選取 1 個度量/);
+        });
+
+        test('computeScale yi unit is 億', () => {
+            expect(waI18n.computeScale(200000000).unit).toBe('億');
+        });
+
+        test('computeScale baiwan unit is 百萬', () => {
+            expect(waI18n.computeScale(2000000).unit).toBe('百萬');
+        });
+
+        test('computeScale wan unit is 萬', () => {
+            expect(waI18n.computeScale(20000).unit).toBe('萬');
+        });
+    });
+
+    describe('en-US locale switching', () => {
+        beforeEach(() => {
+            waI18n.setLocale('en-US');
+        });
+
+        test('getLocale() returns en-US after setLocale', () => {
+            expect(waI18n.getLocale()).toBe('en-US');
+        });
+
+        test('validateSelection errors are in en-US', () => {
+            const errors = waI18n.validateSelection([], []);
+            expect(errors[0]).toMatch(/At least 1 dimension/);
+            expect(errors[1]).toMatch(/At least 1 measure/);
+        });
+
+        test('validateSelection dim max error is in en-US', () => {
+            const errors = waI18n.validateSelection([1, 2, 3, 4], [1]);
+            expect(errors).toContain('Maximum 3 dimensions allowed');
+        });
+
+        test('validateSelection msr max error is in en-US', () => {
+            const errors = waI18n.validateSelection([1], [1, 2, 3, 4]);
+            expect(errors).toContain('Maximum 3 measures allowed');
+        });
+
+        test('computeScale yi unit is 100M in en-US', () => {
+            expect(waI18n.computeScale(200000000).unit).toBe('100M');
+        });
+
+        test('computeScale baiwan unit is M in en-US', () => {
+            expect(waI18n.computeScale(2000000).unit).toBe('M');
+        });
+
+        test('computeScale wan unit is 10K in en-US', () => {
+            expect(waI18n.computeScale(20000).unit).toBe('10K');
+        });
+    });
+
+    describe('addLocale — custom locale registration', () => {
+        test('custom locale keys override correctly', () => {
+            waI18n.addLocale('fr-FR', { 'btn.query': 'Rechercher', 'err.dimRequired': 'Au moins 1 dimension' });
+            waI18n.setLocale('fr-FR');
+            const errors = waI18n.validateSelection([], [1]);
+            expect(errors[0]).toBe('Au moins 1 dimension');
+        });
+
+        test('custom locale falls back to zh-TW for missing keys', () => {
+            waI18n.addLocale('partial', { 'btn.query': 'Find' });
+            waI18n.setLocale('partial');
+            // err.dimRequired is missing in 'partial' locale, falls back to zh-TW
+            const errors = waI18n.validateSelection([], [1]);
+            expect(errors[0]).toMatch(/至少需要選取 1 個維度/);
+        });
+
+        test('switching back to zh-TW after custom locale works', () => {
+            waI18n.addLocale('xx', { 'err.dimRequired': 'X dim' });
+            waI18n.setLocale('xx');
+            waI18n.setLocale('zh-TW');
+            const errors = waI18n.validateSelection([], [1]);
+            expect(errors[0]).toMatch(/至少需要選取 1 個維度/);
+        });
+    });
+});
+
+// ─── filterPoolPills #609 ─────────────────────────────────────────────────────
+describe('filterPoolPills #609', () => {
+    function makePanelWithPool(gridId, fieldNames) {
+        const panel = document.createElement('div');
+        panel.id = 'analysis-panel-' + gridId;
+        const pool = document.createElement('div');
+        pool.className = 'analysis-field-pool';
+        fieldNames.forEach(function (name) {
+            const pill = document.createElement('span');
+            pill.className = 'analysis-pill analysis-pill--available';
+            pill.dataset.displayName = name;
+            pool.appendChild(pill);
+        });
+        const noMatch = document.createElement('span');
+        noMatch.className = 'analysis-pool-no-match';
+        noMatch.style.display = 'none';
+        pool.appendChild(noMatch);
+        panel.appendChild(pool);
+        return panel;
+    }
+
+    function getVisiblePills(panel) {
+        return Array.from(panel.querySelectorAll('.analysis-pill')).filter(p => p.style.display !== 'none');
+    }
+
+    function getHiddenPills(panel) {
+        return Array.from(panel.querySelectorAll('.analysis-pill')).filter(p => p.style.display === 'none');
+    }
+
+    test('empty search term — all pills visible', () => {
+        const gridId = 'fp609a';
+        const panel = makePanelWithPool(gridId, ['Region', 'Category', 'Amount']);
+        const spy = jest.spyOn(document, 'getElementById').mockImplementation(id => id === 'analysis-panel-' + gridId ? panel : null);
+        const count = waReq.filterPoolPills(gridId, '');
+        expect(count).toBe(3);
+        expect(getHiddenPills(panel)).toHaveLength(0);
+        spy.mockRestore();
+    });
+
+    test('matching term (case-insensitive) shows matching pills only', () => {
+        const gridId = 'fp609b';
+        const panel = makePanelWithPool(gridId, ['Region', 'Category', 'Amount', 'CategoryName']);
+        const spy = jest.spyOn(document, 'getElementById').mockImplementation(id => id === 'analysis-panel-' + gridId ? panel : null);
+        const count = waReq.filterPoolPills(gridId, 'cat');
+        expect(count).toBe(2);
+        const visible = getVisiblePills(panel).map(p => p.dataset.displayName);
+        expect(visible).toContain('Category');
+        expect(visible).toContain('CategoryName');
+        expect(visible).not.toContain('Region');
+        spy.mockRestore();
+    });
+
+    test('case-insensitive match: uppercase input matches lowercase display', () => {
+        const gridId = 'fp609c';
+        const panel = makePanelWithPool(gridId, ['region', 'Category']);
+        const spy = jest.spyOn(document, 'getElementById').mockImplementation(id => id === 'analysis-panel-' + gridId ? panel : null);
+        const count = waReq.filterPoolPills(gridId, 'REGION');
+        expect(count).toBe(1);
+        spy.mockRestore();
+    });
+
+    test('no match — returns 0 and shows noMatch element', () => {
+        const gridId = 'fp609d';
+        const panel = makePanelWithPool(gridId, ['Region', 'Amount']);
+        const spy = jest.spyOn(document, 'getElementById').mockImplementation(id => id === 'analysis-panel-' + gridId ? panel : null);
+        const count = waReq.filterPoolPills(gridId, 'xyz');
+        expect(count).toBe(0);
+        const noMatch = panel.querySelector('.analysis-pool-no-match');
+        expect(noMatch.style.display).toBe('');
+        spy.mockRestore();
+    });
+
+    test('clearing search (empty string) restores all pills and hides noMatch', () => {
+        const gridId = 'fp609e';
+        const panel = makePanelWithPool(gridId, ['Region', 'Amount', 'Category']);
+        const spy = jest.spyOn(document, 'getElementById').mockImplementation(id => id === 'analysis-panel-' + gridId ? panel : null);
+        // First filter with no match
+        waReq.filterPoolPills(gridId, 'xyz');
+        // Then clear
+        const count = waReq.filterPoolPills(gridId, '');
+        expect(count).toBe(3);
+        expect(getHiddenPills(panel)).toHaveLength(0);
+        const noMatch = panel.querySelector('.analysis-pool-no-match');
+        expect(noMatch.style.display).toBe('none');
+        spy.mockRestore();
+    });
+
+    test('panel not found — returns 0 without throwing', () => {
+        const spy = jest.spyOn(document, 'getElementById').mockReturnValue(null);
+        expect(() => waReq.filterPoolPills('missing609', 'test')).not.toThrow();
+        expect(waReq.filterPoolPills('missing609', 'test')).toBe(0);
+        spy.mockRestore();
+    });
+
+    test('single match — only that pill visible', () => {
+        const gridId = 'fp609f';
+        const panel = makePanelWithPool(gridId, ['OrderDate', 'ShipDate', 'Amount']);
+        const spy = jest.spyOn(document, 'getElementById').mockImplementation(id => id === 'analysis-panel-' + gridId ? panel : null);
+        const count = waReq.filterPoolPills(gridId, 'Order');
+        expect(count).toBe(1);
+        expect(getVisiblePills(panel)[0].dataset.displayName).toBe('OrderDate');
+        spy.mockRestore();
+    });
+
+    test('noMatch is hidden when there are matches', () => {
+        const gridId = 'fp609g';
+        const panel = makePanelWithPool(gridId, ['Region', 'Amount']);
+        const spy = jest.spyOn(document, 'getElementById').mockImplementation(id => id === 'analysis-panel-' + gridId ? panel : null);
+        waReq.filterPoolPills(gridId, 'Region');
+        const noMatch = panel.querySelector('.analysis-pool-no-match');
+        expect(noMatch.style.display).toBe('none');
+        spy.mockRestore();
+    });
+});
