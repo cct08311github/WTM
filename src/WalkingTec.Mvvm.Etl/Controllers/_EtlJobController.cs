@@ -12,6 +12,7 @@ using WalkingTec.Mvvm.Mvc;
 
 namespace WalkingTec.Mvvm.Mvc;
 
+[ApiController]
 [ActionDescription("ETL Job 管理")]
 public class _EtlJobController : BaseController
 {

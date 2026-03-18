@@ -464,6 +464,17 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// <summary>
         /// 聚合函式名稱的中文對照（用於匯出標頭）。
         /// </summary>
+        /// <summary>
+        /// 固定序列化選項：確保 ComputeHash() 在所有環境、STJ 版本下產生相同的 JSON 字串。
+        /// </summary>
+        private static readonly System.Text.Json.JsonSerializerOptions _hashSerializerOptions =
+            new System.Text.Json.JsonSerializerOptions
+            {
+                PropertyNamingPolicy = null,
+                WriteIndented = false,
+                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.Never,
+            };
+
         private static readonly Dictionary<AggregateFunc, string> _funcDisplayNames = new()
         {
             { AggregateFunc.Sum,   "合計" },
@@ -507,7 +518,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
         private static string ComputeHash(AnalysisQueryRequest req, string? identityKey = null)
         {
-            var raw = System.Text.Json.JsonSerializer.Serialize(req);
+            var raw = System.Text.Json.JsonSerializer.Serialize(req, _hashSerializerOptions);
             if (!string.IsNullOrEmpty(identityKey))
             {
                 raw += "|" + identityKey;
