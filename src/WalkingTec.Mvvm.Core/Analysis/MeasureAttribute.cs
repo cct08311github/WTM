@@ -17,5 +17,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
         /// <summary>允許存取此度量的角色列表（逗號分隔）</summary>
         public string? AllowedRoles { get; set; }
+
+        /// <summary>Excel 匯出時的數字格式（預設 Auto）</summary>
+        public MeasureFormat Format { get; set; } = MeasureFormat.Auto;
     }
 }

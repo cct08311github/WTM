@@ -45,5 +45,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// 前端用於渲染 &lt;select&gt; 控件，避免使用者猜測枚舉值。
         /// </summary>
         public IReadOnlyList<string>? AllowedValues { get; init; }
+
+        /// <summary>Excel 匯出格式（來自 [Measure] attribute）</summary>
+        public MeasureFormat Format { get; set; } = MeasureFormat.Auto;
     }
 }

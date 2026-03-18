@@ -59,7 +59,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         Kind = AnalysisFieldKind.Measure,
                         AllowedFuncs = msr.AllowedFuncs,
                         ClrType = prop.PropertyType,
-                        AllowedRoles = msr.AllowedRoles
+                        AllowedRoles = msr.AllowedRoles,
+                        Format = msr.Format
                     };
                 }
             }
