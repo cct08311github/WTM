@@ -4708,6 +4708,58 @@ describe('i18n #535', () => {
             const errors = waI18n.validateSelection([], [1]);
             expect(errors[0]).toMatch(/至少需要選取 1 個維度/);
         });
+
+    describe('new keys from #535 — dep.* and warn.truncatedFmt', () => {
+        function makeI18nDepPanel() {
+            const panel = {
+                children: [],
+                querySelector: jest.fn(() => null),
+                insertBefore: jest.fn(function(c) { this.children.unshift(c); }),
+                appendChild: jest.fn(function(c) { this.children.push(c); }),
+            };
+            return panel;
+        }
+
+        test('checkDependencies title uses dep.missingTitle key (zh-TW default)', () => {
+            const panel = makeI18nDepPanel();
+            waI18n.checkDependencies(panel);
+            const warn = panel.children[0];
+            expect(warn).toBeDefined();
+            const title = warn.children[0];
+            expect(title.textContent).toContain('Analysis \u6a21\u7d44\u7f3a\u5c11\u5fc5\u8981\u524d\u7aef\u4f9d\u8cf4');
+        });
+
+        test('checkDependencies title uses dep.missingTitle key (en-US)', () => {
+            waI18n.setLocale('en-US');
+            const panel = makeI18nDepPanel();
+            waI18n.checkDependencies(panel);
+            const warn = panel.children[0];
+            expect(warn).toBeDefined();
+            const title = warn.children[0];
+            expect(title.textContent).toContain('missing required frontend dependencies');
+        });
+
+        test('checkDependencies echarts and sortable messages use dep.* keys (en-US)', () => {
+            waI18n.setLocale('en-US');
+            const panel = makeI18nDepPanel();
+            waI18n.checkDependencies(panel);
+            const warn = panel.children[0];
+            const texts = warn.children.map(c => c.textContent || '').join(' ');
+            expect(texts).toContain('ECharts — add to _Layout.cshtml:');
+            expect(texts).toContain('SortableJS — add to _Layout.cshtml:');
+            expect(texts).not.toContain('\u8acb\u5728 _Layout.cshtml \u4e2d\u52a0\u5165');
+        });
+
+        test('warn.truncatedFmt has {n} placeholder — overrideable via addLocale', () => {
+            waI18n.addLocale('fmt-test', { 'warn.truncatedFmt': 'Truncated: {n} rows' });
+            waI18n.setLocale('fmt-test');
+            expect(waI18n.getLocale()).toBe('fmt-test');
+            waI18n.setLocale('zh-TW');
+            const errors = waI18n.validateSelection([], [1]);
+            expect(errors[0]).toMatch(/\u81f3\u5c11\u9700\u8981\u9078\u53d6/);
+        });
+    });
+
     });
 });
 
