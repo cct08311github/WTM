@@ -1127,6 +1127,56 @@ namespace WalkingTec.Mvvm.Mvc
             return app;
         }
 
+        /// <summary>
+        /// Registers WTM health check services. Call this in <c>ConfigureServices</c> / <c>builder.Services</c>.
+        /// <para>
+        /// A built-in "self" liveness check is registered automatically.
+        /// Use the <paramref name="configure"/> callback to add database, cache, or custom checks:
+        /// </para>
+        /// <code>
+        /// services.AddWtmHealthChecks(checks =>
+        ///     checks.AddDbContextCheck&lt;MyDataContext&gt;("database", tags: new[] { "ready" }));
+        /// </code>
+        /// </summary>
+        public static IServiceCollection AddWtmHealthChecks(
+            this IServiceCollection services,
+            Action<IHealthChecksBuilder>? configure = null)
+        {
+            var builder = services
+                .AddHealthChecks()
+                .AddCheck("self",
+                    () => Microsoft.Extensions.Diagnostics.HealthChecks.HealthCheckResult.Healthy(),
+                    tags: new[] { "live" });
+
+            configure?.Invoke(builder);
+            return services;
+        }
+
+        /// <summary>
+        /// Maps WTM health check endpoints. Call this in <c>Configure</c> / after <c>app.UseRouting()</c>.
+        /// <list type="bullet">
+        ///   <item><term><paramref name="livePath"/></term><description>Liveness probe — returns 200 if the process is alive (default: <c>/healthz</c>).</description></item>
+        ///   <item><term><paramref name="readyPath"/></term><description>Readiness probe — runs all registered checks (default: <c>/healthz/ready</c>).</description></item>
+        /// </list>
+        /// </summary>
+        public static IApplicationBuilder UseWtmHealthChecks(
+            this IApplicationBuilder app,
+            string livePath = "/healthz",
+            string readyPath = "/healthz/ready")
+        {
+            app.UseHealthChecks(livePath, new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+            {
+                Predicate = r => r.Tags.Contains("live")
+            });
+
+            app.UseHealthChecks(readyPath, new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+            {
+                Predicate = _ => true
+            });
+
+            return app;
+        }
+
     }
 
 
