@@ -263,9 +263,26 @@ Set via `DashboardDefinition.Sharing`:
 // Public — visible to all authenticated users
 { "Mode": "public" }
 
-// Role-based — visible to specific roles
-{ "Mode": "private", "Roles": ["Manager", "Finance"] }
+// Role-based — visible to specific roles (values must be RoleCode, not RoleName)
+{ "Mode": "roles", "Roles": ["analyst", "finance_mgr"] }
 ```
+
+> **Important — RoleCode vs RoleName**: The `Roles` array must contain `RoleCode` values (the stable machine identifier stored in `FrameworkRole.RoleCode`), **not** `RoleName` (the human-readable display name that can be changed in the admin UI). Using `RoleName` would break access control whenever an admin renames a role.
+>
+> Example: if the role is displayed as "財務主管" in the admin UI but has `RoleCode = "finance_mgr"`, the JSON must use `"finance_mgr"`.
+
+#### Admin roles
+
+Admin role codes are configured via `DashboardOptions.AdminRoles` (defaults to `["Admin"]`):
+
+```csharp
+builder.Services.Configure<DashboardOptions>(opt =>
+{
+    opt.AdminRoles = new[] { "Admin", "super_admin" }; // add additional admin RoleCodes
+});
+```
+
+Admin role users bypass all sharing restrictions and can view, edit, and delete any dashboard.
 
 ### Multi-tenant isolation
 

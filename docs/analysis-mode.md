@@ -564,7 +564,55 @@ Analysis Mode 透過 `/_analysis` 路由提供三個 API，供前端 `framework_
 | **CSV Formula Injection** | CSV 匯出時，值以 `=` / `+` / `-` / `@` 開頭者自動前置 tab，防止惡意公式在 Excel 中執行 |
 | **大量資料 DoS** | GroupBy 結果強制 `Take(10,001)` 截斷並標記 `Truncated: true`；載入上限 50,000 筆防 OOM |
 | **多租戶隔離** | 複用同一 `DC` 實例，EF Core global query filter 自動生效，租戶資料隔離無需額外處理 |
-| **未授權存取** | `_AnalysisController` 標注 `[AllRights]`（需登入），Phase 2 評估欄位級權限 |
+| **未授權存取** | `_AnalysisController` 標注 `[AllRights]`（需登入）；VM 層 `[EnableAnalysis(AllowedRoles)]` 限制哪些角色可存取特定 VM；欄位層 `IAnalysisFieldPolicy` 過濾欄位可見性 |
+
+### 角色型存取控制（RBAC）
+
+Analysis Mode 提供兩層角色控制，角色識別符統一使用 **`RoleCode`**（非 `RoleName`）。
+
+#### VM 層限制
+
+```csharp
+// 只有 RoleCode 為 "analyst" 或 "finance_mgr" 的使用者才能查詢此 VM
+[EnableAnalysis(AllowedRoles = "analyst,finance_mgr")]
+public class SalesListVM : BasePagedListVM<Sales, SalesSearcher> { }
+```
+
+`AllowedRoles` 為空 = 不限角色（所有已登入使用者都可存取）。
+
+#### 欄位層限制
+
+```csharp
+[Measure(AllowedFuncs = AggregateFunc.Sum, AllowedRoles = "finance_mgr")]
+public decimal GrossProfit { get; set; }   // 僅 finance_mgr 可見
+
+[Dimension]   // 無 AllowedRoles = 所有已授權使用者均可見
+public string Region { get; set; }
+```
+
+#### 自訂欄位策略
+
+實作 `IAnalysisFieldPolicy` 可取代預設的 `AllowedRoles` 比對，實作更複雜的欄位過見邏輯（如依租戶動態決定）：
+
+```csharp
+public class MyFieldPolicy : IAnalysisFieldPolicy
+{
+    public IEnumerable<AnalysisFieldMeta> Filter(
+        IEnumerable<AnalysisFieldMeta> fields, ClaimsPrincipal user)
+    {
+        // ClaimsPrincipal 的 role claims 是以 RoleCode 建構
+        var isAdmin = user.IsInRole("Admin");
+        return fields.Where(f =>
+            string.IsNullOrEmpty(f.AllowedRoles) || isAdmin ||
+            f.AllowedRoles.Split(',').Any(r => user.IsInRole(r.Trim())));
+    }
+}
+
+// Program.cs
+builder.Services.AddSingleton<IAnalysisFieldPolicy, MyFieldPolicy>();
+```
+
+> **重要**：`RoleCode = "Admin"` 的使用者永遠繞過欄位限制。`AllowedRoles` 填寫的值必須是 `FrameworkRole.RoleCode`，**不是** `RoleName`（顯示名稱）。
 
 ---
 
