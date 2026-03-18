@@ -284,6 +284,24 @@ namespace WalkingTec.Mvvm.Core.Extensions
         /// <param name="wtmcontext">Wtm context</param>
         /// <param name="dps">数据权限列表</param>
         /// <returns>拼接好where条件的query</returns>
+        private static readonly MethodInfo _appendSelfDPWhereMethod =
+            typeof(DCExtension).GetMethod("AppendSelfDPWhere", BindingFlags.Static | BindingFlags.NonPublic)!;
+
+        /// <summary>
+        /// Analysis Mode 防禦性 DataPrivilege 過濾（#554）。
+        /// 對非泛型 IQueryable 套用 AppendSelfDPWhere，確保 Analysis 查詢受同一行級權限保護。
+        /// </summary>
+        public static IQueryable ApplyDataPrivilegeForAnalysis(IQueryable baseQuery, WTMContext? wtmcontext)
+        {
+            if (wtmcontext?.DataPrivilegeSettings == null) return baseQuery;
+            if (wtmcontext.LoginUserInfo == null) return baseQuery;
+            var elementType = baseQuery.ElementType;
+            if (!typeof(TopBasePoco).IsAssignableFrom(elementType)) return baseQuery;
+            var method = _appendSelfDPWhereMethod.MakeGenericMethod(elementType);
+            var dps = wtmcontext.LoginUserInfo.DataPrivileges;
+            return (IQueryable)method.Invoke(null, new object?[] { baseQuery, wtmcontext, dps })!;
+        }
+
         private static IQueryable<T> AppendSelfDPWhere<T>(IQueryable<T> query, WTMContext? wtmcontext, List<SimpleDataPri>? dps) where T : TopBasePoco
         {
             var dpsSetting = wtmcontext?.DataPrivilegeSettings;

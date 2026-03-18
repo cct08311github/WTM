@@ -310,4 +310,169 @@ namespace WalkingTec.Mvvm.Core.Test.Extensions
 
         #endregion
     }
+
+    // ─── ApplyDataPrivilegeForAnalysis tests (#554) ───────────────────────────
+
+    [TestClass]
+    public class ApplyDataPrivilegeForAnalysisTests
+    {
+        private static WTMContext CreateWtmWithDP(string tableName, List<string?> relateIds)
+        {
+            var dpSettings = new List<IDataPrivilege>
+            {
+                new DPTestPrivilegeInfo
+                {
+                    ModelName = tableName,
+                    PrivillegeName = tableName,
+                    ModelType = typeof(TopBasePoco)
+                }
+            };
+            var wtm = new WTMContext(null, new GlobalData(), null, null, dpSettings);
+            wtm.MSD = new BasicMSD();
+            wtm.DC = new EmptyContext(Guid.NewGuid().ToString(), DBTypeEnum.Memory);
+            wtm.LoginUserInfo = new LoginUserInfo
+            {
+                ITCode = "testuser",
+                DataPrivileges = relateIds.Select(id => new SimpleDataPri
+                {
+                    ID = Guid.NewGuid(),
+                    TableName = tableName,
+                    RelateId = id,
+                    UserCode = "testuser"
+                }).ToList()
+            };
+            return wtm;
+        }
+
+        [TestMethod]
+        public void ApplyDataPrivilege_FiltersRowsByAllowedIds()
+        {
+            var id1 = Guid.NewGuid();
+            var id2 = Guid.NewGuid();
+            var id3 = Guid.NewGuid();
+
+            IQueryable baseQuery = new List<DPTestMajor>
+            {
+                new() { ID = id1, MajorName = "Math" },
+                new() { ID = id2, MajorName = "English" },
+                new() { ID = id3, MajorName = "Physics" }
+            }.AsQueryable();
+
+            var wtm = CreateWtmWithDP(nameof(DPTestMajor), new List<string?> { id1.ToString(), id3.ToString() });
+
+            var result = DCExtension.ApplyDataPrivilegeForAnalysis(baseQuery, wtm)
+                .Cast<DPTestMajor>().ToList();
+
+            Assert.AreEqual(2, result.Count);
+            Assert.IsTrue(result.Any(x => x.ID == id1));
+            Assert.IsTrue(result.Any(x => x.ID == id3));
+        }
+
+        [TestMethod]
+        public void ApplyDataPrivilege_DeniesAll_WhenNoPrivilegesConfigured()
+        {
+            IQueryable baseQuery = new List<DPTestMajor>
+            {
+                new() { ID = Guid.NewGuid(), MajorName = "Math" },
+                new() { ID = Guid.NewGuid(), MajorName = "English" }
+            }.AsQueryable();
+
+            // DP setting for DPTestMajor exists, but user has no relateIds → deny all
+            var wtm = CreateWtmWithDP(nameof(DPTestMajor), new List<string?>());
+
+            var result = DCExtension.ApplyDataPrivilegeForAnalysis(baseQuery, wtm)
+                .Cast<DPTestMajor>().ToList();
+
+            Assert.AreEqual(0, result.Count);
+        }
+
+        [TestMethod]
+        public void ApplyDataPrivilege_AllowsAll_WhenNullRelateIdPresent()
+        {
+            IQueryable baseQuery = new List<DPTestMajor>
+            {
+                new() { ID = Guid.NewGuid(), MajorName = "Math" },
+                new() { ID = Guid.NewGuid(), MajorName = "English" }
+            }.AsQueryable();
+
+            // null in relateIds list = unrestricted access
+            var wtm = CreateWtmWithDP(nameof(DPTestMajor), new List<string?> { null });
+
+            var result = DCExtension.ApplyDataPrivilegeForAnalysis(baseQuery, wtm)
+                .Cast<DPTestMajor>().ToList();
+
+            Assert.AreEqual(2, result.Count);
+        }
+
+        [TestMethod]
+        public void ApplyDataPrivilege_NoOp_WhenModelNotInDPSettings()
+        {
+            var id1 = Guid.NewGuid();
+            var id2 = Guid.NewGuid();
+
+            IQueryable baseQuery = new List<DPTestMajor>
+            {
+                new() { ID = id1, MajorName = "Math" },
+                new() { ID = id2, MajorName = "English" }
+            }.AsQueryable();
+
+            // DP settings only cover "SomeOtherTable" — DPTestMajor is not restricted
+            var wtm = CreateWtmWithDP("SomeOtherTable", new List<string?> { Guid.NewGuid().ToString() });
+
+            var result = DCExtension.ApplyDataPrivilegeForAnalysis(baseQuery, wtm)
+                .Cast<DPTestMajor>().ToList();
+
+            Assert.AreEqual(2, result.Count);
+        }
+
+        [TestMethod]
+        public void ApplyDataPrivilege_NoOp_WhenElementTypeNotTopBasePoco()
+        {
+            // Non-TopBasePoco type should pass through unchanged
+            IQueryable baseQuery = new List<string> { "a", "b", "c" }.AsQueryable();
+            var wtm = CreateWtmWithDP("String", new List<string?>());
+
+            var result = DCExtension.ApplyDataPrivilegeForAnalysis(baseQuery, wtm)
+                .Cast<string>().ToList();
+
+            Assert.AreEqual(3, result.Count);
+        }
+
+        [TestMethod]
+        public void ApplyDataPrivilege_NoOp_WhenWtmIsNull()
+        {
+            IQueryable baseQuery = new List<DPTestMajor>
+            {
+                new() { ID = Guid.NewGuid(), MajorName = "Math" }
+            }.AsQueryable();
+
+            var result = DCExtension.ApplyDataPrivilegeForAnalysis(baseQuery, null)
+                .Cast<DPTestMajor>().ToList();
+
+            Assert.AreEqual(1, result.Count);
+        }
+
+        [TestMethod]
+        public void ApplyDataPrivilege_NoOp_WhenLoginUserInfoIsNull()
+        {
+            var dpSettings = new List<IDataPrivilege>
+            {
+                new DPTestPrivilegeInfo { ModelName = nameof(DPTestMajor) }
+            };
+            var wtm = new WTMContext(null, new GlobalData(), null, null, dpSettings);
+            wtm.MSD = new BasicMSD();
+            wtm.DC = new EmptyContext(Guid.NewGuid().ToString(), DBTypeEnum.Memory);
+            // LoginUserInfo intentionally left null
+
+            IQueryable baseQuery = new List<DPTestMajor>
+            {
+                new() { ID = Guid.NewGuid(), MajorName = "Math" }
+            }.AsQueryable();
+
+            var result = DCExtension.ApplyDataPrivilegeForAnalysis(baseQuery, wtm)
+                .Cast<DPTestMajor>().ToList();
+
+            Assert.AreEqual(1, result.Count);
+        }
+    }
 }
