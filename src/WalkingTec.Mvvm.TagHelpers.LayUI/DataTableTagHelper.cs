@@ -297,6 +297,12 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         /// 啟用分析模式（在 toolbar 加入「分析模式」切換按鈕）
         /// </summary>
         public bool EnableAnalysis { get; set; }
+
+        /// <summary>
+        /// 搜尋面板初始展開狀態（true = 展開，false = 收起）。
+        /// 未設定時沿用 SearchPanelTagHelper 的 expanded 屬性或全域設定。
+        /// </summary>
+        public bool? SearcherExpanded { get; set; }
         /// <summary>
         /// 排除的搜索条件
         /// </summary>
@@ -705,6 +711,20 @@ setTimeout(function(){{
                     output.PostElement.AppendHtml(
                         $@"<script src=""/_js/framework_analysis.js?v={_jsVersion}""></script>");
                 }
+            }
+
+            if (SearcherExpanded.HasValue)
+            {
+                // fold=true means collapsed; fold=false means expanded
+                var foldBool = SearcherExpanded.Value ? "false" : "true";
+                output.PostElement.AppendHtml($@"<script>
+layui.use(['element'], function() {{
+  setTimeout(function() {{
+    var filter = $('#{SearchPanelId} .layui-collapse').attr('lay-filter');
+    if (filter) {{ layui.element.fold(filter, {foldBool}); }}
+  }}, 0);
+}});
+</script>");
             }
 
             base.Process(context, output);
