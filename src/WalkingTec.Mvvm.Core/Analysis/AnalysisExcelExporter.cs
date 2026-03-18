@@ -142,8 +142,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 {
                     ("匯出時間", DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss") + " UTC"),
                     ("QueryHash",  result.QueryHash  ?? ""),
-                    ("資料筆數",   result.TotalCount.ToString()),
-                    ("已截斷",     result.Truncated ? "是" : "否"),
+                    ("資料筆數",       result.TotalCount.ToString()),
+                    ("已截斷",         result.Truncated ? "是" : "否"),
+                    ("來源資料截斷",   result.DataTruncated ? "是" : "否"),
+                    ("來源截斷說明",   result.DataTruncatedMessage ?? ""),
                 };
                 for (int i = 0; i < rows.Length; i++)
                 {

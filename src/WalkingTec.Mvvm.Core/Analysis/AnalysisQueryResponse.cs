@@ -26,6 +26,12 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// </summary>
         public bool DataTruncated { get; set; }
 
+        /// <summary>
+        /// 當 DataTruncated 為 true 時，提供給終端使用者的說明訊息（含建議操作）。
+        /// DataTruncated 為 false 時為 null。
+        /// </summary>
+        public string? DataTruncatedMessage { get; set; }
+
         /// <summary>Phase 2 快取識別用，目前留空。</summary>
         public string QueryHash { get; set; } = string.Empty;
 

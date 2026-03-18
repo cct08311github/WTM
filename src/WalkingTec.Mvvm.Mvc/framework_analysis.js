@@ -1084,7 +1084,7 @@
             if (result.dataTruncated) {
                 var dataWarn = document.createElement('div');
                 dataWarn.className = 'layui-alert layui-alert-orange';
-                dataWarn.textContent = '⚠ 來源資料超過 50,000 筆，已截斷。聚合結果（合計、平均等）可能不準確。';
+                dataWarn.textContent = '⚠ ' + (result.dataTruncatedMessage || '來源資料超過 50,000 筆，已截斷。聚合結果（合計、平均等）可能不準確。');
                 resultDiv.appendChild(dataWarn);
             }
             if (result.truncated) {
@@ -1601,7 +1601,7 @@
             if (result.dataTruncated) {
                 var dataWarn = document.createElement('div');
                 dataWarn.className = 'layui-alert layui-alert-orange';
-                dataWarn.textContent = '⚠ 來源資料超過 50,000 筆，已截斷。聚合結果（合計、平均等）可能不準確。';
+                dataWarn.textContent = '⚠ ' + (result.dataTruncatedMessage || '來源資料超過 50,000 筆，已截斷。聚合結果（合計、平均等）可能不準確。');
                 resultDiv.appendChild(dataWarn);
             }
             if (result.truncated) {

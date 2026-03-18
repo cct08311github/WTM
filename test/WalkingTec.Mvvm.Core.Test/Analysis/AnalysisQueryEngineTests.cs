@@ -1295,6 +1295,56 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 "InProcessGroupByStrategy 路徑下，超過 MaxMaterializeRows 時 DataTruncated 應為 true");
         }
 
+        // ─── DataTruncatedMessage（#524）─────────────────────────────────────
+
+        /// <summary>
+        /// DataTruncated = true 時，DataTruncatedMessage 應包含有意義的說明文字。
+        /// </summary>
+        [TestMethod]
+        public void DataTruncatedMessage_is_populated_when_DataTruncated_is_true()
+        {
+            var bigData = Enumerable.Range(0, InProcessGroupByStrategy.MaxMaterializeRows + 1)
+                .Select(i => new SaleRecord
+                {
+                    ID       = Guid.NewGuid(),
+                    Region   = i % 2 == 0 ? "華東" : "華南",
+                    Category = "A",
+                    Channel  = SaleChannel.Online,
+                    Amount   = 1m
+                })
+                .AsQueryable();
+
+            var whitelist = AnalysisFieldScanner.ScanModel(typeof(SaleRecord));
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var result = Engine().Execute(bigData, req, whitelist, DBTypeEnum.SQLite);
+
+            Assert.IsTrue(result.DataTruncated);
+            Assert.IsNotNull(result.DataTruncatedMessage,
+                "DataTruncated=true 時，DataTruncatedMessage 不應為 null（#524）");
+            StringAssert.Contains(result.DataTruncatedMessage, "50,000",
+                "說明訊息應提及 50,000 筆上限");
+        }
+
+        /// <summary>
+        /// DataTruncated = false 時，DataTruncatedMessage 應為 null（不發出無謂雜訊）。
+        /// </summary>
+        [TestMethod]
+        public void DataTruncatedMessage_is_null_when_DataTruncated_is_false()
+        {
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var result = Engine().Execute(Q(), req, _whitelist);
+
+            Assert.IsFalse(result.DataTruncated);
+            Assert.IsNull(result.DataTruncatedMessage,
+                "DataTruncated=false 時，DataTruncatedMessage 應為 null（#524）");
+        }
+
         /// <summary>FakeServerSideStrategy：繼承 ServerSideGroupByStrategy，委派給 InProcessGroupByStrategy</summary>
         private class FakeServerSideStrategy : ServerSideGroupByStrategy
         {
