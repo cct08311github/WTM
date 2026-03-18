@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Deprecated
+- **Workflow API**：內建 Elsa workflow 整合（`IWorkflow`、`FrameworkWorkflow`、`ApproveTimeLine`、`ApproveInfo`、`FlowInfoTagHelper`、`IBaseCRUDVM` 工作流程方法、`DataContext.FrameworkWorkflows`）標記為 `[Obsolete]`，將於下一個主版本移除（#586）。
+  - **遷移指引**：若仍需工作流程功能，請直接引用 Elsa 或改用其他工作流程引擎；移除 `IWorkflow` 介面實作及相關 TagHelper。
+
 ## [8.6.1] - 2026-03-17
 
 ### Added

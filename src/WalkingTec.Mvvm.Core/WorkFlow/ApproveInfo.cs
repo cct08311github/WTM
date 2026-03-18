@@ -5,6 +5,7 @@ using WalkingTec.Mvvm.Core.Support.Json;
 
 namespace WalkingTec.Mvvm.Core.WorkFlow
 {
+    [Obsolete("WTM's built-in Elsa workflow integration has been removed. This member will be deleted in the next major version. See CHANGELOG.md for migration guidance.")]
     public class ApproveInfo
     {
         public string? FlowName{get;set;}
