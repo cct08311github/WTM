@@ -68,7 +68,22 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         var rawValues = g.Select(row => accessor(row)).ToList();
                         var numericValues = rawValues
                             .Where(v => v != null)
-                            .Select(v => Convert.ToDecimal(v))
+                            .Select(v =>
+                            {
+                                try
+                                {
+                                    return Convert.ToDecimal(v);
+                                }
+                                catch (Exception ex) when (ex is FormatException
+                                                         || ex is InvalidCastException
+                                                         || ex is OverflowException)
+                                {
+                                    throw new InvalidOperationException(
+                                        $"欄位 '{m.Field}' 包含無法轉換為數值的值" +
+                                        $"（型別 {v!.GetType().Name}，值 '{v}'）。" +
+                                        "請確認 [Measure] 僅標記數值型別屬性。", ex);
+                                }
+                            })
                             .ToList();
 
                         decimal? aggValue;

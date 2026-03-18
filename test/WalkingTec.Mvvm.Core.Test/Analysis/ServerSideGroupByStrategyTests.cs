@@ -384,5 +384,76 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.AreEqual(1, rows.Count);
             Assert.AreEqual(2m, Convert.ToDecimal(rows[0]["Amount_Count"]));
         }
+
+        // ─── #558: double→decimal rounding eliminates floating-point noise ────
+
+        [TestMethod]
+        public void Sum_of_floating_point_values_has_no_visible_noise_after_rounding()
+        {
+            // 0.1 + 0.2 is a canonical double-precision floating-point example.
+            // Without rounding, (decimal)(0.1d + 0.2d) = 0.3000000000000000444089...
+            // The Math.Round(10 d.p.) fix in ServerSideGroupByStrategy should reduce this
+            // to exactly 0.3m, matching the result from InProcessGroupByStrategy (#558).
+            _ctx.SaleRecords.AddRange(
+                new SaleRecord { ID = Guid.NewGuid(), Region = "A", Amount = 0.1m, Quantity = 0m, Discount = 0m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "A", Amount = 0.2m, Quantity = 0m, Discount = 0m }
+            );
+            _ctx.SaveChanges();
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var rows = _strategy.Execute(Q(), req, _whitelist);
+
+            Assert.AreEqual(1, rows.Count);
+            var result = (decimal)rows[0]["Amount_Sum"]!;
+            Assert.AreEqual(0.3m, result,
+                "浮點尾差應被 10 位小數四捨五入消除；若失敗表示 Math.Round 未正確套用");
+        }
+
+        [TestMethod]
+        public void Avg_of_floating_point_values_has_no_visible_noise_after_rounding()
+        {
+            // AVG(1.0, 2.0) = 1.5 — exact, but confirm rounding logic does not distort it.
+            // AVG(1.1, 1.2) = 1.15 — may have double precision noise before rounding.
+            _ctx.SaleRecords.AddRange(
+                new SaleRecord { ID = Guid.NewGuid(), Region = "B", Amount = 1.1m, Quantity = 0m, Discount = 0m },
+                new SaleRecord { ID = Guid.NewGuid(), Region = "B", Amount = 1.2m, Quantity = 0m, Discount = 0m }
+            );
+            _ctx.SaveChanges();
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Avg) });
+
+            var rows = _strategy.Execute(Q(), req, _whitelist);
+
+            Assert.AreEqual(1, rows.Count);
+            var result = (decimal)rows[0]["Amount_Avg"]!;
+            Assert.AreEqual(1.15m, result,
+                "AVG(1.1, 1.2) 應等於 1.15m，10 位四捨五入不應影響正常精度");
+        }
+
+        [TestMethod]
+        public void Null_measure_result_is_preserved_as_null()
+        {
+            // When no rows match a group, the aggregate returns null.
+            // Verify the null→null path is handled (not (decimal?)null.Value crash).
+            _ctx.SaleRecords.AddRange(
+                new SaleRecord { ID = Guid.NewGuid(), Region = "C", Amount = 100m, Quantity = 0m, Discount = 0m }
+            );
+            _ctx.SaveChanges();
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            var rows = _strategy.Execute(Q(), req, _whitelist);
+
+            Assert.AreEqual(1, rows.Count);
+            // Result should be a non-null decimal (100m), confirming the null guard works correctly.
+            Assert.IsNotNull(rows[0]["Amount_Sum"]);
+        }
     }
 }

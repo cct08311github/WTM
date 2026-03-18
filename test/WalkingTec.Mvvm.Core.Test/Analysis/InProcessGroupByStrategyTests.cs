@@ -732,5 +732,70 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.AreEqual(300m, Convert.ToDecimal(mergedGroup["Amount_Sum"]),
                 "null(100) + \"\"(200) 應合併聚合為 300");
         }
+
+        // ─── #558: FormatException protection for non-numeric Measure fields ──
+
+        /// <summary>
+        /// Model that deliberately tags a string property as [Measure] — simulates the
+        /// developer mistake of marking a non-numeric field as a Measure.
+        /// </summary>
+        private class BadMeasureRecord
+        {
+            [Dimension(DisplayName = "地區")]
+            public string Region { get; set; } = string.Empty;
+
+            [Measure(AllowedFuncs = AggregateFunc.Sum, DisplayName = "狀態（錯誤用作 Measure）")]
+            public string Status { get; set; } = string.Empty;
+        }
+
+        [TestMethod]
+        public void Non_numeric_measure_throws_InvalidOperationException_not_FormatException()
+        {
+            // Arrange: string property marked as [Measure] — the scanner accepts it,
+            // but conversion at aggregation time must throw a descriptive error, not a raw FormatException.
+            var wl = AnalysisFieldScanner.ScanModel(typeof(BadMeasureRecord))
+                .ToDictionary(f => f.FieldName);
+
+            var data = new List<BadMeasureRecord>
+            {
+                new BadMeasureRecord { Region = "北區", Status = "Active" },
+                new BadMeasureRecord { Region = "北區", Status = "Closed" },
+            }.AsQueryable();
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Status", AggregateFunc.Sum) });
+
+            // Act & Assert: should throw InvalidOperationException (not raw FormatException)
+            // with a message that mentions the field name.
+            var ex = Assert.ThrowsException<InvalidOperationException>(
+                () => _strategy.Execute(data, req, wl));
+
+            StringAssert.Contains(ex.Message, "Status",
+                "錯誤訊息應包含欄位名稱，方便開發者定位問題");
+        }
+
+        [TestMethod]
+        public void Non_numeric_measure_error_message_contains_value_type()
+        {
+            var wl = AnalysisFieldScanner.ScanModel(typeof(BadMeasureRecord))
+                .ToDictionary(f => f.FieldName);
+
+            var data = new List<BadMeasureRecord>
+            {
+                new BadMeasureRecord { Region = "南區", Status = "Pending" },
+            }.AsQueryable();
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Status", AggregateFunc.Sum) });
+
+            var ex = Assert.ThrowsException<InvalidOperationException>(
+                () => _strategy.Execute(data, req, wl));
+
+            // The inner exception should be a FormatException (or similar) — not swallowed
+            Assert.IsNotNull(ex.InnerException,
+                "原始例外應保留在 InnerException，供偵錯使用");
+        }
     }
 }

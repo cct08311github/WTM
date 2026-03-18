@@ -104,7 +104,11 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         2 => row.Item4,
                         _ => null
                     };
-                    dict[$"{m.Field}_{m.Func}"] = (decimal?)raw;
+                    // Round to 10 decimal places when converting double→decimal to eliminate
+                    // floating-point noise inherent in SQL aggregation results (#558).
+                    dict[$"{m.Field}_{m.Func}"] = raw.HasValue
+                        ? (decimal?)Math.Round((decimal)raw.Value, 10, MidpointRounding.AwayFromZero)
+                        : null;
                 }
 
                 results.Add(dict);
