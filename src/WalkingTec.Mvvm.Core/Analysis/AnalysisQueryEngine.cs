@@ -99,6 +99,9 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 TotalCount = totalCount,
                 Truncated = truncated,
                 DataTruncated = dataTruncated,
+                DataTruncatedMessage = dataTruncated
+                    ? "聚合結果僅基於前 50,000 筆原始資料，可能不代表完整數據。建議縮小篩選條件或聯繫管理員啟用 ServerSide 策略。"
+                    : null,
                 QueryHash = queryHash,
                 ColumnDisplayNames = displayNames
             };
