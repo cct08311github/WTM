@@ -156,13 +156,14 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             return new AnalysisWidgetDataSource(_registry, sp, _engine, policy);
         }
 
-        private static WTMContext CreateWtmWithRoles(params string[] roleNames)
+        /// <summary>Creates a WTMContext with the given role codes set on LoginUserInfo.</summary>
+        private static WTMContext CreateWtmWithRoles(params string[] roleCodes)
         {
             var wtm = MockWtmContext.CreateWtmContext();
             wtm.LoginUserInfo = new LoginUserInfo
             {
                 ITCode = "testuser",
-                Roles = roleNames.Select(r => new SimpleRole { RoleName = r }).ToList()
+                Roles = roleCodes.Select(c => new SimpleRole { RoleCode = c, RoleName = $"Display_{c}" }).ToList()
             };
             return wtm;
         }
@@ -292,6 +293,67 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             // by the field policy before reaching the engine — it raises InvalidOperationException.
             await Assert.ThrowsExceptionAsync<InvalidOperationException>(
                 () => source.GetDataAsync(request));
+        }
+
+        [TestMethod]
+        public async Task CheckAccess_uses_RoleCode_not_RoleName()
+        {
+            // RoleCode = "Analyst" (matches AllowedRoles), RoleName = "分析師" (different)
+            // → should be ALLOWED (comparing on RoleCode)
+            var wtm = MockWtmContext.CreateWtmContext();
+            wtm.LoginUserInfo = new LoginUserInfo
+            {
+                ITCode = "testuser",
+                Roles = new List<SimpleRole>
+                {
+                    new SimpleRole { RoleCode = "Analyst", RoleName = "分析師" }
+                }
+            };
+            var source = CreateSourceWithWtm(wtm);
+
+            var request = new WidgetDataRequest
+            {
+                Parameters = new Dictionary<string, string>
+                {
+                    ["listVmType"] = typeof(RestrictedSaleListVM).FullName!,
+                    ["dimensions"] = JsonSerializer.Serialize(new[] { "Region" }),
+                    ["measures"] = JsonSerializer.Serialize(new[] { new { Field = "Amount", Func = AggregateFunc.Sum } })
+                }
+            };
+
+            var result = await source.GetDataAsync(request);
+            Assert.IsNotNull(result, "RoleCode matches AllowedRoles → access should be granted");
+        }
+
+        [TestMethod]
+        public async Task CheckAccess_denied_when_only_RoleName_matches_not_RoleCode()
+        {
+            // RoleCode = "viewer", RoleName = "Analyst" — only RoleName matches AllowedRoles
+            // → should be DENIED (we compare RoleCode, not RoleName)
+            var wtm = MockWtmContext.CreateWtmContext();
+            wtm.LoginUserInfo = new LoginUserInfo
+            {
+                ITCode = "testuser",
+                Roles = new List<SimpleRole>
+                {
+                    new SimpleRole { RoleCode = "viewer", RoleName = "Analyst" }
+                }
+            };
+            var source = CreateSourceWithWtm(wtm);
+
+            var request = new WidgetDataRequest
+            {
+                Parameters = new Dictionary<string, string>
+                {
+                    ["listVmType"] = typeof(RestrictedSaleListVM).FullName!,
+                    ["dimensions"] = JsonSerializer.Serialize(new[] { "Region" }),
+                    ["measures"] = JsonSerializer.Serialize(new[] { new { Field = "Amount", Func = AggregateFunc.Sum } })
+                }
+            };
+
+            await Assert.ThrowsExceptionAsync<UnauthorizedAccessException>(
+                () => source.GetDataAsync(request),
+                "RoleName matches but RoleCode does not → access must be denied");
         }
 
         private class BlockAmountFieldPolicy : IAnalysisFieldPolicy

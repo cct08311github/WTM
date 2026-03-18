@@ -128,7 +128,9 @@ public class AnalysisWidgetDataSource : IWidgetDataSource
         var attr = vmType.GetCustomAttribute<EnableAnalysisAttribute>();
         if (attr == null || string.IsNullOrEmpty(attr.AllowedRoles)) return true;
 
-        var userRoles = wtm?.LoginUserInfo?.Roles?.Select(r => r.RoleName) ?? Enumerable.Empty<string?>();
+        // Use RoleCode (machine identifier) to match AllowedRoles — consistent with
+        // _AnalysisController.CheckAccess() and _DashboardController.GetUserInfo().
+        var userRoles = wtm?.LoginUserInfo?.Roles?.Select(r => r.RoleCode) ?? Enumerable.Empty<string?>();
         if (userRoles.Any(r => string.Equals(r, "Admin", StringComparison.OrdinalIgnoreCase))) return true;
 
         var allowed = attr.AllowedRoles.Split(',', StringSplitOptions.RemoveEmptyEntries)
@@ -149,8 +151,8 @@ public class AnalysisWidgetDataSource : IWidgetDataSource
             claims.Add(new Claim(ClaimTypes.Name, userInfo.ITCode));
         if (userInfo.Roles != null)
             foreach (var role in userInfo.Roles)
-                if (!string.IsNullOrEmpty(role.RoleName))
-                    claims.Add(new Claim(ClaimTypes.Role, role.RoleName));
+                if (!string.IsNullOrEmpty(role.RoleCode))
+                    claims.Add(new Claim(ClaimTypes.Role, role.RoleCode));
 
         return new ClaimsPrincipal(new ClaimsIdentity(claims, "WTM"));
     }
