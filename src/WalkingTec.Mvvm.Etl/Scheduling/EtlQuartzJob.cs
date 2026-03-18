@@ -5,9 +5,11 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Quartz;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Support.Quartz;
+using WalkingTec.Mvvm.Etl.Alerting;
 using WalkingTec.Mvvm.Etl.Models;
 using WalkingTec.Mvvm.Etl.Pipeline;
 
@@ -134,13 +136,14 @@ public class EtlQuartzJob : WtmJob
             var executor = new EtlPipelineExecutor(source, loader, progress);
             result = await executor.ExecuteAsync(config, watermark, timeoutCts.Token);
 
-            // 10. 成功 → 更新 watermark
+            // 10. 成功 → 更新 watermark、重置連續失敗計數
             if (result.Success)
             {
                 jobDef.LastWatermarkValue = result.NewWatermarkValue;
                 jobDef.LastRunAt = DateTime.UtcNow;
                 jobDef.LastError = null;
                 jobDef.Status = EtlJobStatus.Enabled;
+                jobDef.ConsecutiveFailureCount = 0;
             }
             else
             {
@@ -148,6 +151,9 @@ public class EtlQuartzJob : WtmJob
                     ? result.ErrorMessage[..2000]
                     : result.ErrorMessage;
                 jobDef.Status = result.Aborted ? EtlJobStatus.Enabled : EtlJobStatus.Failed;
+                // 未中止的失敗才累計連續失敗次數
+                if (!result.Aborted)
+                    jobDef.ConsecutiveFailureCount++;
             }
         }
         catch (Exception ex)
@@ -160,11 +166,14 @@ public class EtlQuartzJob : WtmJob
             };
             jobDef.LastError = ex.Message.Length > 2000 ? ex.Message[..2000] : ex.Message;
             jobDef.Status = EtlJobStatus.Failed;
+            jobDef.ConsecutiveFailureCount++;
         }
         finally
         {
-            // 寫 RunLog
-            dc.Set<EtlRunLog>().Add(new EtlRunLog
+            bool isFailed = result?.Success != true && result?.Aborted != true;
+
+            // 寫 RunLog（先建立物件，稍後用於告警）
+            var runLog = new EtlRunLog
             {
                 JobId = jobDefId,
                 Trigger = trigger,
@@ -179,10 +188,32 @@ public class EtlQuartzJob : WtmJob
                 StartedAt = startedAt,
                 FinishedAt = DateTime.UtcNow,
                 WatermarkSnapshot = jobDef.LastWatermarkValue
-            });
+            };
+            dc.Set<EtlRunLog>().Add(runLog);
 
             dc.Set<EtlJobDefinition>().Update(jobDef);
             await dc.SaveChangesAsync();
+
+            // 告警（在 SaveChanges 後發送，不影響 DB 事務）
+            if (isFailed
+                && jobDef.AlertAfterConsecutiveFailures > 0
+                && jobDef.ConsecutiveFailureCount >= jobDef.AlertAfterConsecutiveFailures)
+            {
+                var alertService = Sp.GetService<IEtlAlertService>();
+                if (alertService != null)
+                {
+                    try
+                    {
+                        await alertService.SendAlertAsync(jobDef, runLog).ConfigureAwait(false);
+                    }
+                    catch (Exception alertEx)
+                    {
+                        // 告警失敗不影響 job 狀態，僅記錄日誌
+                        Sp.GetService<ILogger<EtlQuartzJob>>()
+                            ?.LogError(alertEx, "ETL alert failed for job '{JobName}'", jobDef.Name);
+                    }
+                }
+            }
 
             // 清除進度
             tracker?.Remove(jobDefId);

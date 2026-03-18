@@ -109,4 +109,23 @@ public class EtlJobDefinition : BasePoco
 
     [StringLength(2000)]
     public string? LastError { get; set; }
+
+    // ─── 告警設定 ───
+
+    /// <summary>失敗時寄送告警的 Email（多個地址以逗號分隔）</summary>
+    [Display(Name = "告警 Email")]
+    [StringLength(500)]
+    public string? AlertEmail { get; set; }
+
+    /// <summary>失敗時 POST 的 Webhook URL（JSON 格式，相容 Slack/Teams/Feishu incoming webhook）</summary>
+    [Display(Name = "告警 Webhook URL")]
+    [StringLength(2000)]
+    public string? AlertWebhookUrl { get; set; }
+
+    /// <summary>連續失敗幾次後才觸發告警（預設 1 = 每次失敗都告警）</summary>
+    [Display(Name = "連續失敗告警門檻")]
+    public int AlertAfterConsecutiveFailures { get; set; } = 1;
+
+    /// <summary>目前連續失敗次數（成功後歸零）。由 EtlQuartzJob 自動維護，請勿手動修改。</summary>
+    public int ConsecutiveFailureCount { get; set; }
 }
