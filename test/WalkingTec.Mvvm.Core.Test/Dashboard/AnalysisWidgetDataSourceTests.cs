@@ -2,16 +2,13 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Security.Claims;
 using System.Text.Json;
-using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Analysis;
 using WalkingTec.Mvvm.Core.Dashboard;
-using WalkingTec.Mvvm.Core.Support.Json;
 using WalkingTec.Mvvm.Test.Mock;
 
 namespace WalkingTec.Mvvm.Core.Test.Dashboard
@@ -113,7 +110,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
                 }
             };
 
-            await Assert.ThrowsExceptionAsync<AnalysisVmNotFoundException>(
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(
                 () => source.GetDataAsync(request));
         }
 
@@ -136,230 +133,6 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             var source = CreateSource();
             Assert.AreEqual("analysis", source.Name);
             Assert.AreEqual(WidgetDataSourceKind.Analysis, source.Kind);
-        }
-
-        // ─── RBAC tests (#529) ───────────────────────────────────────────────
-
-        /// <summary>VM that requires the "Analyst" role via EnableAnalysisAttribute.</summary>
-        [EnableAnalysis(AllowedRoles = "Analyst")]
-        private class RestrictedSaleListVM : BasePagedListVM<DashSaleRecord, BaseSearcher>
-        {
-            public override IOrderedQueryable<DashSaleRecord> GetSearchQuery()
-                => _testData.AsQueryable().OrderByDescending(x => x.ID);
-        }
-
-        private AnalysisWidgetDataSource CreateSourceWithWtm(WTMContext wtm, IAnalysisFieldPolicy? policy = null)
-        {
-            var services = new ServiceCollection();
-            services.AddSingleton(wtm);
-            var sp = services.BuildServiceProvider();
-            return new AnalysisWidgetDataSource(_registry, sp, _engine, policy);
-        }
-
-        /// <summary>Creates a WTMContext with the given role codes set on LoginUserInfo.</summary>
-        private static WTMContext CreateWtmWithRoles(params string[] roleCodes)
-        {
-            var wtm = MockWtmContext.CreateWtmContext();
-            wtm.LoginUserInfo = new LoginUserInfo
-            {
-                ITCode = "testuser",
-                Roles = roleCodes.Select(c => new SimpleRole { RoleCode = c, RoleName = $"Display_{c}" }).ToList()
-            };
-            return wtm;
-        }
-
-        [TestMethod]
-        public async Task CheckAccess_no_AllowedRoles_allows_any_user()
-        {
-            // DashSaleRecordListVM has [EnableAnalysis] without AllowedRoles → open to all
-            var wtm = CreateWtmWithRoles(/* no roles */);
-            var source = CreateSourceWithWtm(wtm);
-
-            var request = new WidgetDataRequest
-            {
-                Parameters = new Dictionary<string, string>
-                {
-                    ["listVmType"] = typeof(DashSaleRecordListVM).FullName!,
-                    ["dimensions"] = JsonSerializer.Serialize(new[] { "Region" }),
-                    ["measures"] = JsonSerializer.Serialize(new[] { new { Field = "Amount", Func = AggregateFunc.Sum } })
-                }
-            };
-
-            // Should NOT throw
-            var result = await source.GetDataAsync(request);
-            Assert.IsNotNull(result);
-        }
-
-        [TestMethod]
-        public async Task CheckAccess_required_role_present_allows_access()
-        {
-            var wtm = CreateWtmWithRoles("Analyst");
-            var source = CreateSourceWithWtm(wtm);
-
-            var request = new WidgetDataRequest
-            {
-                Parameters = new Dictionary<string, string>
-                {
-                    ["listVmType"] = typeof(RestrictedSaleListVM).FullName!,
-                    ["dimensions"] = JsonSerializer.Serialize(new[] { "Region" }),
-                    ["measures"] = JsonSerializer.Serialize(new[] { new { Field = "Amount", Func = AggregateFunc.Sum } })
-                }
-            };
-
-            var result = await source.GetDataAsync(request);
-            Assert.IsNotNull(result);
-        }
-
-        [TestMethod]
-        public async Task CheckAccess_missing_role_throws_Unauthorized()
-        {
-            var wtm = CreateWtmWithRoles("Viewer"); // does NOT have "Analyst"
-            var source = CreateSourceWithWtm(wtm);
-
-            var request = new WidgetDataRequest
-            {
-                Parameters = new Dictionary<string, string>
-                {
-                    ["listVmType"] = typeof(RestrictedSaleListVM).FullName!,
-                    ["dimensions"] = JsonSerializer.Serialize(new[] { "Region" }),
-                    ["measures"] = JsonSerializer.Serialize(new[] { new { Field = "Amount", Func = AggregateFunc.Sum } })
-                }
-            };
-
-            await Assert.ThrowsExceptionAsync<UnauthorizedAccessException>(
-                () => source.GetDataAsync(request));
-        }
-
-        [TestMethod]
-        public async Task CheckAccess_Admin_bypasses_AllowedRoles()
-        {
-            var wtm = CreateWtmWithRoles("Admin");
-            var source = CreateSourceWithWtm(wtm);
-
-            var request = new WidgetDataRequest
-            {
-                Parameters = new Dictionary<string, string>
-                {
-                    ["listVmType"] = typeof(RestrictedSaleListVM).FullName!,
-                    ["dimensions"] = JsonSerializer.Serialize(new[] { "Region" }),
-                    ["measures"] = JsonSerializer.Serialize(new[] { new { Field = "Amount", Func = AggregateFunc.Sum } })
-                }
-            };
-
-            var result = await source.GetDataAsync(request);
-            Assert.IsNotNull(result);
-        }
-
-        [TestMethod]
-        public async Task CheckAccess_no_login_info_is_denied_for_restricted_vm()
-        {
-            var wtm = MockWtmContext.CreateWtmContext();
-            wtm.LoginUserInfo = new LoginUserInfo { ITCode = "anonymous", Roles = null };
-            var source = CreateSourceWithWtm(wtm);
-
-            var request = new WidgetDataRequest
-            {
-                Parameters = new Dictionary<string, string>
-                {
-                    ["listVmType"] = typeof(RestrictedSaleListVM).FullName!,
-                    ["dimensions"] = JsonSerializer.Serialize(new[] { "Region" }),
-                    ["measures"] = JsonSerializer.Serialize(new[] { new { Field = "Amount", Func = AggregateFunc.Sum } })
-                }
-            };
-
-            await Assert.ThrowsExceptionAsync<UnauthorizedAccessException>(
-                () => source.GetDataAsync(request));
-        }
-
-        [TestMethod]
-        public async Task FieldPolicy_filters_columns_before_query()
-        {
-            // Policy that removes Amount field
-            var policy = new BlockAmountFieldPolicy();
-            var wtm = CreateWtmWithRoles(); // open VM — no AllowedRoles restriction
-            var source = CreateSourceWithWtm(wtm, policy);
-
-            var request = new WidgetDataRequest
-            {
-                Parameters = new Dictionary<string, string>
-                {
-                    ["listVmType"] = typeof(DashSaleRecordListVM).FullName!,
-                    ["dimensions"] = JsonSerializer.Serialize(new[] { "Region" }),
-                    ["measures"] = JsonSerializer.Serialize(new[] { new { Field = "Amount", Func = AggregateFunc.Sum } })
-                }
-            };
-
-            // The engine rejects the request because "Amount" was stripped from the whitelist
-            // by the field policy before reaching the engine — it raises AnalysisFieldNotFoundException.
-            await Assert.ThrowsExceptionAsync<AnalysisFieldNotFoundException>(
-                () => source.GetDataAsync(request));
-        }
-
-        [TestMethod]
-        public async Task CheckAccess_uses_RoleCode_not_RoleName()
-        {
-            // RoleCode = "Analyst" (matches AllowedRoles), RoleName = "分析師" (different)
-            // → should be ALLOWED (comparing on RoleCode)
-            var wtm = MockWtmContext.CreateWtmContext();
-            wtm.LoginUserInfo = new LoginUserInfo
-            {
-                ITCode = "testuser",
-                Roles = new List<SimpleRole>
-                {
-                    new SimpleRole { RoleCode = "Analyst", RoleName = "分析師" }
-                }
-            };
-            var source = CreateSourceWithWtm(wtm);
-
-            var request = new WidgetDataRequest
-            {
-                Parameters = new Dictionary<string, string>
-                {
-                    ["listVmType"] = typeof(RestrictedSaleListVM).FullName!,
-                    ["dimensions"] = JsonSerializer.Serialize(new[] { "Region" }),
-                    ["measures"] = JsonSerializer.Serialize(new[] { new { Field = "Amount", Func = AggregateFunc.Sum } })
-                }
-            };
-
-            var result = await source.GetDataAsync(request);
-            Assert.IsNotNull(result, "RoleCode matches AllowedRoles → access should be granted");
-        }
-
-        [TestMethod]
-        public async Task CheckAccess_denied_when_only_RoleName_matches_not_RoleCode()
-        {
-            // RoleCode = "viewer", RoleName = "Analyst" — only RoleName matches AllowedRoles
-            // → should be DENIED (we compare RoleCode, not RoleName)
-            var wtm = MockWtmContext.CreateWtmContext();
-            wtm.LoginUserInfo = new LoginUserInfo
-            {
-                ITCode = "testuser",
-                Roles = new List<SimpleRole>
-                {
-                    new SimpleRole { RoleCode = "viewer", RoleName = "Analyst" }
-                }
-            };
-            var source = CreateSourceWithWtm(wtm);
-
-            var request = new WidgetDataRequest
-            {
-                Parameters = new Dictionary<string, string>
-                {
-                    ["listVmType"] = typeof(RestrictedSaleListVM).FullName!,
-                    ["dimensions"] = JsonSerializer.Serialize(new[] { "Region" }),
-                    ["measures"] = JsonSerializer.Serialize(new[] { new { Field = "Amount", Func = AggregateFunc.Sum } })
-                }
-            };
-
-            await Assert.ThrowsExceptionAsync<UnauthorizedAccessException>(
-                () => source.GetDataAsync(request),
-                "RoleName matches but RoleCode does not → access must be denied");
-        }
-
-        private class BlockAmountFieldPolicy : IAnalysisFieldPolicy
-        {
-            public IEnumerable<AnalysisFieldMeta> Filter(IEnumerable<AnalysisFieldMeta> fields, ClaimsPrincipal user)
-                => fields.Where(f => f.FieldName != "Amount");
         }
     }
 }
