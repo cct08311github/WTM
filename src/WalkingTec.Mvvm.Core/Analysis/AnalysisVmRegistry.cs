@@ -54,7 +54,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
         public Type Resolve(string fullName)
         {
             if (string.IsNullOrWhiteSpace(fullName))
-                throw new AnalysisVmNotFoundException(fullName ?? "");
+                throw new InvalidOperationException("VM type name is required.");
             if (_whitelist.TryGetValue(fullName, out var t))
                 return t;
             throw new AnalysisVmNotFoundException(fullName);

@@ -213,6 +213,28 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.IsNotNull(result, "未註冊 VM 應回傳 404");
         }
 
+        // Regression tests for #596 — null/empty VM name must be 400, not 404
+        [TestMethod]
+        public void GetMeta_returns_400_for_null_vm_type()
+        {
+            var result = CreateController().GetMeta(null) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "null VM type 應回傳 400 BadRequest，而非 404");
+        }
+
+        [TestMethod]
+        public void GetMeta_returns_400_for_empty_vm_type()
+        {
+            var result = CreateController().GetMeta("") as BadRequestObjectResult;
+            Assert.IsNotNull(result, "空字串 VM type 應回傳 400 BadRequest，而非 404");
+        }
+
+        [TestMethod]
+        public void GetMeta_returns_400_for_whitespace_vm_type()
+        {
+            var result = CreateController().GetMeta("   ") as BadRequestObjectResult;
+            Assert.IsNotNull(result, "空白 VM type 應回傳 400 BadRequest，而非 404");
+        }
+
         // ─── Query 路由守衛 ───────────────────────────────────────────────────
 
         [TestMethod]
