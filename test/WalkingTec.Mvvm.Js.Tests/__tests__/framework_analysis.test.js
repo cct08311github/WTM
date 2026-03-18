@@ -4877,3 +4877,120 @@ describe('filterPoolPills #609', () => {
         spy.mockRestore();
     });
 });
+
+// ─── [#618] syncChartToggleActive ────────────────────────────────────────────
+describe('[#618] waReq.syncChartToggleActive', () => {
+    function makeToggleRow(gridId, types) {
+        const row = document.createElement('div');
+        row.id = 'analysis-chart-toggle-' + gridId;
+        types.forEach(function (ct) {
+            const btn = document.createElement('button');
+            btn.className = 'layui-btn layui-btn-xs';
+            btn.dataset.chartType = ct;
+            row.appendChild(btn);
+        });
+        return row;
+    }
+
+    test('sets layui-btn-primary on matching button', () => {
+        const gridId = 'sync618a';
+        const row = makeToggleRow(gridId, ['bar', 'line', 'pie']);
+        const spy = jest.spyOn(document, 'getElementById').mockImplementation(id =>
+            id === 'analysis-chart-toggle-' + gridId ? row : null
+        );
+        waReq.syncChartToggleActive(gridId, 'bar');
+        const barBtn = row.querySelector('[data-chart-type="bar"]');
+        expect(barBtn.className).toContain('layui-btn-primary');
+        spy.mockRestore();
+    });
+
+    test('removes layui-btn-primary from non-matching buttons', () => {
+        const gridId = 'sync618b';
+        const row = makeToggleRow(gridId, ['bar', 'line', 'pie']);
+        // Pre-mark all as active
+        row.querySelectorAll('button').forEach(b => { b.className += ' layui-btn-primary'; });
+        const spy = jest.spyOn(document, 'getElementById').mockImplementation(id =>
+            id === 'analysis-chart-toggle-' + gridId ? row : null
+        );
+        waReq.syncChartToggleActive(gridId, 'line');
+        const barBtn = row.querySelector('[data-chart-type="bar"]');
+        const lineBtn = row.querySelector('[data-chart-type="line"]');
+        const pieBtn = row.querySelector('[data-chart-type="pie"]');
+        expect(barBtn.className).not.toContain('layui-btn-primary');
+        expect(lineBtn.className).toContain('layui-btn-primary');
+        expect(pieBtn.className).not.toContain('layui-btn-primary');
+        spy.mockRestore();
+    });
+
+    test('handles scatter type correctly', () => {
+        const gridId = 'sync618c';
+        const row = makeToggleRow(gridId, ['bar', 'line', 'scatter', 'pie', 'card']);
+        const spy = jest.spyOn(document, 'getElementById').mockImplementation(id =>
+            id === 'analysis-chart-toggle-' + gridId ? row : null
+        );
+        waReq.syncChartToggleActive(gridId, 'scatter');
+        const scatterBtn = row.querySelector('[data-chart-type="scatter"]');
+        const barBtn = row.querySelector('[data-chart-type="bar"]');
+        expect(scatterBtn.className).toContain('layui-btn-primary');
+        expect(barBtn.className).not.toContain('layui-btn-primary');
+        spy.mockRestore();
+    });
+
+    test('no matching type — no button gets layui-btn-primary', () => {
+        const gridId = 'sync618d';
+        const row = makeToggleRow(gridId, ['bar', 'line']);
+        const spy = jest.spyOn(document, 'getElementById').mockImplementation(id =>
+            id === 'analysis-chart-toggle-' + gridId ? row : null
+        );
+        waReq.syncChartToggleActive(gridId, 'pie');
+        row.querySelectorAll('button').forEach(b => {
+            expect(b.className).not.toContain('layui-btn-primary');
+        });
+        spy.mockRestore();
+    });
+
+    test('missing toggle row — does not throw', () => {
+        const spy = jest.spyOn(document, 'getElementById').mockReturnValue(null);
+        expect(() => waReq.syncChartToggleActive('missing618', 'bar')).not.toThrow();
+        spy.mockRestore();
+    });
+
+    test('duplicate call — layui-btn-primary not duplicated in className', () => {
+        const gridId = 'sync618e';
+        const row = makeToggleRow(gridId, ['bar', 'line']);
+        const spy = jest.spyOn(document, 'getElementById').mockImplementation(id =>
+            id === 'analysis-chart-toggle-' + gridId ? row : null
+        );
+        waReq.syncChartToggleActive(gridId, 'bar');
+        waReq.syncChartToggleActive(gridId, 'bar');
+        const barBtn = row.querySelector('[data-chart-type="bar"]');
+        const classes = barBtn.className.split(/\s+/);
+        const count = classes.filter(c => c === 'layui-btn-primary').length;
+        expect(count).toBe(1);
+        spy.mockRestore();
+    });
+
+    test('renderChart persists chartType in state and calls syncChartToggleActive', () => {
+        const gridId = 'sync618f';
+        const row = makeToggleRow(gridId, ['bar', 'line', 'pie', 'scatter', 'card']);
+        const container = document.createElement('div');
+        const mockEcharts = {
+            init: jest.fn(() => ({ setOption: jest.fn(), resize: jest.fn(), on: jest.fn() })),
+            getInstanceByDom: jest.fn(() => null),
+        };
+        const spy = jest.spyOn(document, 'getElementById').mockImplementation(id =>
+            id === 'analysis-chart-toggle-' + gridId ? row : null
+        );
+        const origEcharts = global.window.echarts;
+        global.window.echarts = mockEcharts;
+        // Single dim (non-date) + single measure → detectChartType returns 'bar'
+        const result = { rows: [{ Region: 'East', Amount_Sum: 100 }] };
+        const req = { dimensions: ['Region'], measures: [{ field: 'Amount', func: 'Sum' }] };
+        const dimFields = [{ fieldName: 'Region', isDate: false }];
+        waReq.renderChart(gridId, result, req, dimFields, container);
+        const barBtn = row.querySelector('[data-chart-type="bar"]');
+        expect(barBtn.className).toContain('layui-btn-primary');
+        global.window.echarts = origEcharts;
+        spy.mockRestore();
+    });
+});
