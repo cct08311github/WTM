@@ -2200,13 +2200,99 @@ Analysis Mode 有多層安全防護：
 |------|------|------|
 | VM 白名單 | `AnalysisVmRegistry` | 只有標記 `[EnableAnalysis]` 的 ListVM 才能被查詢 |
 | 欄位白名單 | `AnalysisFieldScanner` | 只有標記 `[Dimension]`/`[Measure]` 的欄位才能作為維度/度量 |
-| 欄位存取控制 | `IAnalysisFieldPolicy` | 可依角色過濾可用欄位（例如非管理員看不到薪資） |
+| VM 層角色控制 | `[EnableAnalysis(AllowedRoles = "...")]` | 限制可存取此 VM 的角色（值為 **RoleCode**，逗號分隔） |
+| 欄位層角色控制 | `[Dimension/Measure(AllowedRoles = "...")]` | 限制可見特定欄位的角色（值同為 **RoleCode**） |
+| 欄位存取策略 | `IAnalysisFieldPolicy` | 框架呼叫 `Filter(fields, ClaimsPrincipal)` 過濾可用欄位；`ClaimsPrincipal` 以 `RoleCode` 建構 role claims |
 | 資料權限 | `DPWhere` | `GetSearchQuery()` 中的資料權限在 Analysis 中同樣生效 |
 | Expression 防注入 | 白名單比對 | 欄位名稱必須完全匹配白名單，無法注入任意表達式 |
 | 結果截斷 | `Take(50_000)` + 10,000 行 | 防止大量資料洩露 |
 | CSV 防公式注入 | 前置 tab | `=+@-\t\r` 開頭的儲存格加 tab |
 
-### 10.5 審計日誌（ActionLog）
+**角色識別符規則**：`AllowedRoles` 填入的值必須是 `RoleCode`（資料庫 `FrameworkRole.RoleCode` 欄位），**不是** `RoleName`。`RoleCode` 是穩定的機器識別符；`RoleName` 可能在 UI 中被修改。
+
+```csharp
+// ✅ 正確：使用 RoleCode
+[EnableAnalysis(AllowedRoles = "analyst,finance_mgr")]
+public class SalesListVM : BasePagedListVM<Sales, SalesSearcher>
+
+[Measure(AllowedRoles = "finance_mgr")]
+public decimal Salary { get; set; }
+
+// ❌ 錯誤：不要使用 RoleName（顯示名稱）
+[EnableAnalysis(AllowedRoles = "財務主管")]  // RoleName 可變，不應依賴
+```
+
+`RoleCode = "Admin"` 的使用者永遠繞過欄位層限制（完整存取）。
+
+### 10.5 跨模組 RBAC 統一規範
+
+WTM 三個進階模組（Analysis、Dashboard、ETL）使用相同的角色識別符（`RoleCode`），但各自有不同的設定層次：
+
+| 模組 | RBAC 設定位置 | 角色識別符 | Admin 快速路徑 |
+|------|--------------|-----------|--------------|
+| **Analysis** | `[EnableAnalysis(AllowedRoles)]`（VM 層） + `[Dimension/Measure(AllowedRoles)]`（欄位層） | `RoleCode` | `RoleCode = "Admin"` 繞過所有限制 |
+| **Dashboard** | `DashboardDefinition.Sharing.Roles`（分享設定，陣列） | `RoleCode` | `DashboardOptions.AdminRoles`（預設 `["Admin"]`）可存取全部 Dashboard |
+| **ETL** | WTM 標準 `[ActionDescription]` + Admin 後台功能權限授予 | `FunctionPrivilege`（URL 為鍵） | 同一般 Controller 機制 |
+
+#### Analysis RBAC 設定範例
+
+```csharp
+// VM 層：限制哪些角色可以查詢這個 VM
+[EnableAnalysis(AllowedRoles = "analyst,bi_viewer")]
+[ActionDescription("銷售分析")]
+public class SalesListVM : BasePagedListVM<Sales, SalesSearcher>
+{
+    // 欄位層：限制哪些角色可見此欄位
+    [Measure(AllowedFuncs = AggregateFunc.Sum, AllowedRoles = "finance_mgr")]
+    public decimal GrossProfit { get; set; }
+
+    [Dimension]            // 無 AllowedRoles = 所有已授權使用者都能看到
+    public string Region { get; set; }
+}
+```
+
+#### Dashboard RBAC 設定範例
+
+```json
+{
+  "id": "sales-overview",
+  "title": "Sales Overview",
+  "owner": "alice",
+  "sharing": {
+    "mode": "roles",
+    "roles": ["analyst", "sales_mgr"]
+  }
+}
+```
+
+- `mode: "private"` — 僅 owner 可見
+- `mode: "public"` — 所有已登入使用者可見
+- `mode: "roles"` — `roles` 陣列中列出的 `RoleCode` 可見（加上 owner 和 Admin）
+
+`roles` 陣列的值必須是 `RoleCode`，與 Analysis 的 `AllowedRoles` 規則一致。
+
+#### ETL RBAC
+
+ETL Controller 使用標準 WTM `[AllRights]`（已登入即可）和 `[ActionDescription]`（每個 action 一條 URL 功能權限）。透過 Admin 後台的「角色管理 → 功能授權」頁面為角色授予或撤銷各個 ETL 操作的存取權限，不需要修改程式碼。
+
+```
+_EtlController.Index  →  URL: /_etl/index  →  在 Admin 後台為角色 "etl_operator" 授權
+_EtlController.Trigger →  URL: /_etl/trigger/{id}
+_EtlController.Pause   →  URL: /_etl/pause/{id}
+```
+
+#### 不得混用 RoleCode 與 RoleName
+
+所有三個模組的角色設定都必須使用 `RoleCode`，禁止使用 `RoleName`：
+
+| ❌ 錯誤 | ✅ 正確 |
+|--------|--------|
+| `AllowedRoles = "財務主管"` | `AllowedRoles = "finance_mgr"` |
+| `roles: ["業務分析師"]` | `roles: ["analyst"]` |
+
+`RoleName` 是 UI 顯示名稱，由管理員可以在後台修改；`RoleCode` 是不可變的機器識別符，是安全邊界的正確依據。
+
+### 10.6 審計日誌（ActionLog）
 
 所有 Controller Action（除標記 `[NoLog]` 者）自動寫入 `ActionLog` 表：
 
