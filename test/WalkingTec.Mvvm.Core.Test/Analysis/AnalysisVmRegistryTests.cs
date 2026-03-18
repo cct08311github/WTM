@@ -64,12 +64,40 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.AreEqual("Some.Unknown.Type", ex.VmTypeName);
         }
 
+        /// <summary>
+        /// Resolve with empty string throws InvalidOperationException (bad request, not not-found).
+        /// </summary>
         [TestMethod]
-        public void Throws_for_empty_type_name()
+        public void Throws_InvalidOperation_for_empty_type_name()
         {
             var registry = BuildRegistry();
-            Assert.ThrowsException<AnalysisVmNotFoundException>(
+            var ex = Assert.ThrowsException<InvalidOperationException>(
                 () => registry.Resolve(string.Empty));
+            Assert.AreEqual("VM type name is required.", ex.Message);
+        }
+
+        /// <summary>
+        /// Resolve with null throws InvalidOperationException (bad request, not not-found).
+        /// </summary>
+        [TestMethod]
+        public void Throws_InvalidOperation_for_null_type_name()
+        {
+            var registry = BuildRegistry();
+            var ex = Assert.ThrowsException<InvalidOperationException>(
+                () => registry.Resolve(null));
+            Assert.AreEqual("VM type name is required.", ex.Message);
+        }
+
+        /// <summary>
+        /// Resolve with whitespace throws InvalidOperationException (bad request, not not-found).
+        /// </summary>
+        [TestMethod]
+        public void Throws_InvalidOperation_for_whitespace_type_name()
+        {
+            var registry = BuildRegistry();
+            var ex = Assert.ThrowsException<InvalidOperationException>(
+                () => registry.Resolve("   "));
+            Assert.AreEqual("VM type name is required.", ex.Message);
         }
     }
 }
