@@ -29,6 +29,13 @@ public class _EtlJobController : BaseController
 
     public override void OnActionExecuting(ActionExecutingContext context)
     {
+        // IsQuickDebug bypasses all RBAC (framework-wide convention).
+        if (Wtm?.ConfigInfo?.IsQuickDebug == true)
+        {
+            base.OnActionExecuting(context);
+            return;
+        }
+
         var roles = Wtm?.LoginUserInfo?.Roles?.Select(r => r.RoleCode).ToArray() ?? Array.Empty<string>();
         var isAdmin = roles.Any(r =>
             string.Equals(r, "Admin", StringComparison.OrdinalIgnoreCase) ||
