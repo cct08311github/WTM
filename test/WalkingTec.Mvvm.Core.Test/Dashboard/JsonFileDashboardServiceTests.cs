@@ -466,7 +466,8 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
                 DashboardDirectory = dir,
                 AdminRoles = adminRoles
             });
-            return new JsonFileDashboardService(options, Array.Empty<IWidgetDataSource>());
+            return new JsonFileDashboardService(options, Array.Empty<IWidgetDataSource>(),
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<JsonFileDashboardService>.Instance);
         }
 
         [TestMethod]
@@ -521,7 +522,8 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
                     DashboardDirectory = dir,
                     AdminRoles = ["SuperAdmin"]
                 });
-                var svc = new JsonFileDashboardService(options, Array.Empty<IWidgetDataSource>());
+                var svc = new JsonFileDashboardService(options, Array.Empty<IWidgetDataSource>(),
+                    Microsoft.Extensions.Logging.Abstractions.NullLogger<JsonFileDashboardService>.Instance);
 
                 await svc.CreateAsync(new DashboardDefinition { Owner = "alice", Title = "Private" });
                 await svc.CreateAsync(new DashboardDefinition { Owner = "bob", Title = "Also Private" });
