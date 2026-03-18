@@ -1,6 +1,20 @@
 
 /*eslint eqeqeq: ["error", "smart"]*/
 DONOTUSE_TABLAYID = undefined;
+
+// ── Mobile responsive: allow horizontal scroll on narrow viewports ──────────
+// LayUI sets overflow-x:hidden on .layui-table-box which silently truncates
+// columns below 768px.  Inject a scoped override so grids are scrollable on
+// mobile without affecting desktop layout.
+if (typeof document !== 'undefined' && document.head) {
+    var _wtmMobileStyle = document.createElement('style');
+    _wtmMobileStyle.id = 'wtm-mobile-table-fix';
+    _wtmMobileStyle.textContent =
+        '@media (max-width:768px){' +
+        '.layui-table-box{overflow-x:auto!important;-webkit-overflow-scrolling:touch}' +
+        '}';
+    document.head.appendChild(_wtmMobileStyle);
+}
 if (typeof String.prototype.startsWith != 'function') {
     String.prototype.startsWith = function (prefix) {
         return this.slice(0, prefix.length) === prefix;
