@@ -138,7 +138,7 @@ public class JsonFileDashboardService : IDashboardService
         await EnsureInitializedAsync();
 
         var result = new List<DashboardSummary>();
-        var isAdmin = userRoles != null && userRoles.Contains("Admin", StringComparer.OrdinalIgnoreCase);
+        var isAdmin = userRoles != null && _options.AdminRoles.Any(r => userRoles.Contains(r, StringComparer.OrdinalIgnoreCase));
 
         foreach (var summary in _index.Values)
         {
@@ -328,7 +328,7 @@ public class JsonFileDashboardService : IDashboardService
 
     public bool CanAccess(DashboardDefinition dashboard, string userId, string[] userRoles)
     {
-        if (userRoles != null && userRoles.Contains("Admin", StringComparer.OrdinalIgnoreCase)) return true;
+        if (userRoles != null && _options.AdminRoles.Any(r => userRoles.Contains(r, StringComparer.OrdinalIgnoreCase))) return true;
         if (string.Equals(dashboard.Owner, userId, StringComparison.OrdinalIgnoreCase)) return true;
         if (string.Equals(dashboard.Sharing?.Mode, "public", StringComparison.OrdinalIgnoreCase)) return true;
         
@@ -345,7 +345,7 @@ public class JsonFileDashboardService : IDashboardService
 
     public bool CanEdit(DashboardDefinition dashboard, string userId, string[] userRoles)
     {
-        if (userRoles != null && userRoles.Contains("Admin", StringComparer.OrdinalIgnoreCase)) return true;
+        if (userRoles != null && _options.AdminRoles.Any(r => userRoles.Contains(r, StringComparer.OrdinalIgnoreCase))) return true;
         if (string.Equals(dashboard.Owner, userId, StringComparison.OrdinalIgnoreCase)) return true;
         return false;
     }

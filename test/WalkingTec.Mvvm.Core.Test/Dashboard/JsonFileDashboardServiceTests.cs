@@ -452,5 +452,88 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             };
             _service.CanAccess(def, "user2", new[] { "Analyst" }).Should().BeFalse();
         }
+
+        // ─── AdminRoles 配置化測試（#555） ─────────────────────────────────────
+
+        private JsonFileDashboardService CreateServiceWithAdminRoles(params string[] adminRoles)
+        {
+            var dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            var options = Options.Create(new DashboardOptions
+            {
+                DashboardDirectory = dir,
+                AdminRoles = adminRoles
+            });
+            return new JsonFileDashboardService(options, Array.Empty<IWidgetDataSource>());
+        }
+
+        [TestMethod]
+        public void CanAccess_custom_admin_role_grants_access()
+        {
+            var svc = CreateServiceWithAdminRoles("SystemAdmin");
+            var def = new DashboardDefinition { Owner = "user1" };
+
+            svc.CanAccess(def, "user2", new[] { "SystemAdmin" }).Should().BeTrue();
+        }
+
+        [TestMethod]
+        public void CanAccess_default_Admin_role_no_longer_grants_when_not_in_AdminRoles()
+        {
+            var svc = CreateServiceWithAdminRoles("SystemAdmin");
+            var def = new DashboardDefinition { Owner = "user1" };
+
+            // "Admin" is not in AdminRoles anymore — should be denied
+            svc.CanAccess(def, "user2", new[] { "Admin" }).Should().BeFalse();
+        }
+
+        [TestMethod]
+        public void CanEdit_custom_admin_role_grants_edit()
+        {
+            var svc = CreateServiceWithAdminRoles("SuperAdmin");
+            var def = new DashboardDefinition { Owner = "user1" };
+
+            svc.CanEdit(def, "user2", new[] { "SuperAdmin" }).Should().BeTrue();
+            svc.CanEdit(def, "user2", new[] { "Admin" }).Should().BeFalse();
+        }
+
+        [TestMethod]
+        public void CanAccess_multiple_admin_roles_all_grant_access()
+        {
+            var svc = CreateServiceWithAdminRoles("Admin", "SystemAdmin", "超級管理員");
+            var def = new DashboardDefinition { Owner = "user1" };
+
+            svc.CanAccess(def, "user2", new[] { "Admin" }).Should().BeTrue();
+            svc.CanAccess(def, "user2", new[] { "SystemAdmin" }).Should().BeTrue();
+            svc.CanAccess(def, "user2", new[] { "超級管理員" }).Should().BeTrue();
+            svc.CanAccess(def, "user2", new[] { "Viewer" }).Should().BeFalse();
+        }
+
+        [TestMethod]
+        public async Task ListAsync_custom_admin_role_sees_all_dashboards()
+        {
+            var dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            try
+            {
+                var options = Options.Create(new DashboardOptions
+                {
+                    DashboardDirectory = dir,
+                    AdminRoles = ["SuperAdmin"]
+                });
+                var svc = new JsonFileDashboardService(options, Array.Empty<IWidgetDataSource>());
+
+                await svc.CreateAsync(new DashboardDefinition { Owner = "alice", Title = "Private" });
+                await svc.CreateAsync(new DashboardDefinition { Owner = "bob", Title = "Also Private" });
+
+                var list = await svc.ListAsync("carol", new[] { "SuperAdmin" });
+                list.Should().HaveCount(2);
+
+                // "Admin" role should NOT see all dashboards when not in AdminRoles
+                var listAdmin = await svc.ListAsync("carol", new[] { "Admin" });
+                listAdmin.Should().BeEmpty();
+            }
+            finally
+            {
+                if (Directory.Exists(dir)) Directory.Delete(dir, true);
+            }
+        }
     }
 }
