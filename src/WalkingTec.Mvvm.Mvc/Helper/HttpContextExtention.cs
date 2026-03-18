@@ -20,7 +20,7 @@ namespace WalkingTec.Mvvm.Mvc
             }
             else
             {
-                return self.Connection.RemoteIpAddress.ToString();
+                return self.Connection.RemoteIpAddress?.ToString() ?? "unknown";
             }
         }
     }
