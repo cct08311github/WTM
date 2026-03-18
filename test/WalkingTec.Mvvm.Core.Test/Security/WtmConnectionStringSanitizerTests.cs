@@ -107,4 +107,29 @@ public class WtmConnectionStringSanitizerTests
         Assert.IsFalse(result.Contains("User Id=sa"), "User Id must be redacted");
         StringAssert.Contains(result, "myserver"); // non-sensitive parts preserved
     }
+
+    // ─── Regression: false-positive on log messages containing user=… (#580) ────
+
+    [TestMethod]
+    public void Sanitize_does_not_garble_exception_message_with_user_text()
+    {
+        // Regression for #580: [^;"'\s]* was greedy and consumed whitespace,
+        // causing "user=john was not found" to be mangled.
+        var input = "Error: user=john was not found";
+        var result = WtmConnectionStringSanitizer.Sanitize(input);
+
+        StringAssert.Contains(result, "user=[redacted]");
+        StringAssert.Contains(result, "was not found", "Text after the value must be preserved");
+    }
+
+    [TestMethod]
+    public void Sanitize_password_stops_at_whitespace()
+    {
+        // Regression for #580: value must stop at first whitespace
+        var input = "password=secret more text";
+        var result = WtmConnectionStringSanitizer.Sanitize(input);
+
+        Assert.IsFalse(result.Contains("secret"), "Password value must be redacted");
+        StringAssert.Contains(result, "more text", "Text after value must be preserved");
+    }
 }
