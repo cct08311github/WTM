@@ -65,11 +65,27 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
-        public void Throws_for_empty_type_name()
+        public void Throws_InvalidOperationException_for_empty_type_name()
         {
             var registry = BuildRegistry();
-            Assert.ThrowsException<AnalysisVmNotFoundException>(
+            Assert.ThrowsException<InvalidOperationException>(
                 () => registry.Resolve(string.Empty));
+        }
+
+        [TestMethod]
+        public void Throws_InvalidOperationException_for_null_type_name()
+        {
+            var registry = BuildRegistry();
+            Assert.ThrowsException<InvalidOperationException>(
+                () => registry.Resolve(null));
+        }
+
+        [TestMethod]
+        public void Throws_InvalidOperationException_for_whitespace_type_name()
+        {
+            var registry = BuildRegistry();
+            Assert.ThrowsException<InvalidOperationException>(
+                () => registry.Resolve("   "));
         }
     }
 }
