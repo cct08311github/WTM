@@ -48,19 +48,9 @@ using Microsoft.Extensions.FileProviders;
 using WalkingTec.Mvvm.Core.Support.Quartz;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
-// using Elsa.Persistence.EntityFramework.Core.Extensions;
-using WalkingTec.Mvvm.Core.WorkFlow;
-// using Elsa;
-// using Elsa.Providers.WorkflowContexts;
-// using Elsa.Options;
-// using Elsa.Persistence.EntityFramework.PostgreSql;
-// using Elsa.Server.Api.Mapping;
-// using Elsa.Server.Api.Services;
 using Microsoft.AspNetCore.Mvc.ApiExplorer;
 using System.Threading.Tasks;
 using DUWENINK.Captcha.DI;
-// using Elsa.Activities.Http;
-// using Elsa.Activities.Http.Services;
 using Microsoft.IdentityModel.JsonWebTokens;
 
 namespace WalkingTec.Mvvm.Mvc
@@ -611,29 +601,10 @@ namespace WalkingTec.Mvvm.Mvc
             }
 
 
-            //        services
-            //.AddSingleton<ConnectionConverter>()
-            //.AddSingleton<ActivityBlueprintConverter>()
-            //.AddScoped<IWorkflowBlueprintMapper, WorkflowBlueprintMapper>()
-            //.AddSingleton<IEndpointContentSerializerSettingsProvider, EndpointContentSerializerSettingsProvider>()
-            //.AddAutoMapperProfile<AutoMapperProfile>()
-            //.AddSignalR();
             services.AddMvc(options =>
             {
                 options.Conventions.Add(new MyNewtonsoftJsonConvention(null));
             });
-
-            // var allTypes = Utils.GetAllModels();
-
-            // foreach (var item in allTypes)
-            // {
-            //     if (typeof(IWorkflow).IsAssignableFrom(item))
-            //     {
-            //         var type = typeof(WorkflowRefresher<>).MakeGenericType(item);
-            //         services.AddTransient(typeof(IWorkflowContextProvider), type);
-            //     }
-            // }
-            // services.AddBookmarkProvider<WtmApproveBookmarkProvider>();
 
             return services;
         }
