@@ -252,4 +252,38 @@ public class EtlRbacTests
             "無角色使用者應回傳 ForbidResult");
     }
 
+    // ─── 7. IsQuickDebug bypass — 對應 Issue #638 ───────────────────────────────
+
+    [TestMethod]
+    public void OnActionExecuting_IsQuickDebug_true_bypasses_role_check()
+    {
+        // Arrange: non-Admin user (would normally be forbidden)
+        var controller = CreateEtlControllerWithRoles("001");   // default demo admin code
+        controller.Wtm!.ConfigInfo!.IsQuickDebug = true;
+        var context = MakeActionContext(controller);
+
+        // Act
+        controller.OnActionExecuting(context);
+
+        // Assert: IsQuickDebug must bypass the custom role gate, matching WTM convention
+        Assert.IsNull(context.Result,
+            "IsQuickDebug=true 時應繞過 ETL 角色守衛，context.Result 應為 null");
+    }
+
+    [TestMethod]
+    public void OnActionExecuting_IsQuickDebug_false_still_enforces_role_check()
+    {
+        // Arrange: non-Admin user with IsQuickDebug explicitly false
+        var controller = CreateEtlControllerWithRoles("001");
+        controller.Wtm!.ConfigInfo!.IsQuickDebug = false;
+        var context = MakeActionContext(controller);
+
+        // Act
+        controller.OnActionExecuting(context);
+
+        // Assert: role check still runs, non-Admin is forbidden
+        Assert.IsInstanceOfType(context.Result, typeof(ForbidResult),
+            "IsQuickDebug=false 時仍應執行角色檢查");
+    }
+
 }
