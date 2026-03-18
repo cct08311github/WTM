@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Security.Policy;
+using System.Text.Encodings.Web;
 using System.Text.RegularExpressions;
 using System.Web;
 using Microsoft.AspNetCore.Authentication;
@@ -167,10 +168,13 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                                 {
                                     lp = ctrl.Url.Content(lp);
                                 }
+                                var jsRedirect = JavaScriptEncoder.Default.Encode(
+                                    u?.ToLower().StartsWith("/login/logout") == true ? "" : (u ?? ""));
+                                var jsLp = JavaScriptEncoder.Default.Encode(lp);
                                 ContentResult cr = new ContentResult()
                                 {
-                                    Content = $"<script>var redirect='{(u?.ToLower().StartsWith("/login/logout")==true?"":u)}'+ window.location.hash; if(redirect=='/'){{window.location.href='{lp}'; }}  else{{window.location.href='{lp}?ReturnUrl='+encodeURIComponent(redirect);}}</script>",
-                                    ContentType = "text/html",                                    
+                                    Content = $"<script>var redirect='{jsRedirect}'+ window.location.hash; if(redirect=='/'){{window.location.href='{jsLp}'; }}  else{{window.location.href='{jsLp}?ReturnUrl='+encodeURIComponent(redirect);}}</script>",
+                                    ContentType = "text/html",
                                     StatusCode = 200
                                 };
                                 //context.HttpContext.Response.Headers.Add("IsScript", "true");
