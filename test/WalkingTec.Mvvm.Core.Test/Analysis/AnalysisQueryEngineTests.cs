@@ -1223,5 +1223,97 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                     $"{key} 的顯示名稱應為 '{expected}'");
             }
         }
+
+        // ─── DataTruncated 探針位置修正（#514）────────────────────────────────
+
+        /// <summary>
+        /// ServerSideGroupByStrategy 成功執行時，即使來源資料超過 MaxMaterializeRows，
+        /// DataTruncated 應為 false — SQL GROUP BY 在 DB 端聚合，不截斷來源資料。
+        /// </summary>
+        [TestMethod]
+        public void DataTruncated_is_false_when_ServerSide_strategy_succeeds_with_large_dataset()
+        {
+            // 50,001 筆記錄：超過 MaxMaterializeRows(50,000)
+            // 使用 List.AsQueryable() 避免 DB 依賴，同時 Take().Count() 在 in-memory 正確運作
+            var bigData = Enumerable.Range(0, InProcessGroupByStrategy.MaxMaterializeRows + 1)
+                .Select(i => new SaleRecord
+                {
+                    ID       = Guid.NewGuid(),
+                    Region   = i % 2 == 0 ? "華東" : "華南",
+                    Category = "A",
+                    Channel  = SaleChannel.Online,
+                    Amount   = 1m
+                })
+                .AsQueryable();
+
+            var whitelist = AnalysisFieldScanner.ScanModel(typeof(SaleRecord));
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            // FakeServerSideStrategy: 繼承 ServerSideGroupByStrategy（使 type check 成立），
+            // 實際委派給 InProcessGroupByStrategy 以便在 in-memory 資料上執行。
+            var resolver = new FakeServerSideResolver();
+            var engine   = new AnalysisQueryEngine(resolver);
+
+            // dbType=SqlServer → FakeServerSideStrategy（is ServerSideGroupByStrategy = true）
+            // 修復前：probe 在策略選擇前執行 → dataTruncated = true（誤報）
+            // 修復後：probe 只在 InProcessGroupByStrategy 路徑執行 → dataTruncated = false
+            var result = engine.Execute(bigData, req, whitelist, DBTypeEnum.SqlServer);
+
+            Assert.IsFalse(result.DataTruncated,
+                "ServerSideGroupByStrategy 成功時，DataTruncated 應為 false（#514）");
+        }
+
+        /// <summary>
+        /// InProcessGroupByStrategy 路徑下，超過 MaxMaterializeRows 時 DataTruncated 應為 true。
+        /// 確保修復 #514 後 in-process 路徑的探針仍正確運作。
+        /// </summary>
+        [TestMethod]
+        public void DataTruncated_is_true_when_InProcess_strategy_has_large_dataset()
+        {
+            var bigData = Enumerable.Range(0, InProcessGroupByStrategy.MaxMaterializeRows + 1)
+                .Select(i => new SaleRecord
+                {
+                    ID       = Guid.NewGuid(),
+                    Region   = i % 2 == 0 ? "華東" : "華南",
+                    Category = "A",
+                    Channel  = SaleChannel.Online,
+                    Amount   = 1m
+                })
+                .AsQueryable();
+
+            var whitelist = AnalysisFieldScanner.ScanModel(typeof(SaleRecord));
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+
+            // 預設 resolver + SQLite → InProcessGroupByStrategy
+            var result = Engine().Execute(bigData, req, whitelist, DBTypeEnum.SQLite);
+
+            Assert.IsTrue(result.DataTruncated,
+                "InProcessGroupByStrategy 路徑下，超過 MaxMaterializeRows 時 DataTruncated 應為 true");
+        }
+
+        /// <summary>FakeServerSideStrategy：繼承 ServerSideGroupByStrategy，委派給 InProcessGroupByStrategy</summary>
+        private class FakeServerSideStrategy : ServerSideGroupByStrategy
+        {
+            private static readonly InProcessGroupByStrategy _inner = new();
+
+            public override List<Dictionary<string, object?>> Execute<TModel>(
+                IQueryable<TModel> query,
+                AnalysisQueryRequest req,
+                Dictionary<string, AnalysisFieldMeta> whitelist,
+                System.Threading.CancellationToken cancellationToken = default)
+                => _inner.Execute(query, req, whitelist, cancellationToken);
+        }
+
+        private class FakeServerSideResolver : GroupByStrategyResolver
+        {
+            private static readonly FakeServerSideStrategy Fake = new();
+
+            public override IGroupByStrategy Resolve(DBTypeEnum dbType, AnalysisQueryRequest req)
+                => dbType == DBTypeEnum.SqlServer ? Fake : base.Resolve(dbType, req);
+        }
     }
 }
