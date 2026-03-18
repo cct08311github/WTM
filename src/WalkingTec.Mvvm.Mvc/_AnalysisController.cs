@@ -86,7 +86,8 @@ namespace WalkingTec.Mvvm.Mvc
                     ? GetAllowedFuncNames(f.AllowedFuncs)
                     : new List<string>(),
                 isDate = f.IsDate,
-                hierarchy = f.Hierarchy.ToString()
+                hierarchy = f.Hierarchy.ToString(),
+                allowedValues = f.AllowedValues
             }));
         }
 
