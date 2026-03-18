@@ -1345,6 +1345,131 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 "DataTruncated=false 時，DataTruncatedMessage 應為 null（#524）");
         }
 
+        // ─── ResolveRelativeDates 測試（#566 相對日期 token）─────────────────────
+
+        /// <summary>無 token 的條件直接返回原 list 物件（不建立新 list）。</summary>
+        [TestMethod]
+        public void ResolveRelativeDates_no_tokens_returns_same_list()
+        {
+            var filters = new List<FilterCondition>
+            {
+                new() { Field = "Region", Operator = FilterOperator.Eq, Value = "North" }
+            };
+            var result = AnalysisQueryEngine.ResolveRelativeDates(filters);
+            Assert.AreSame(filters, result);
+        }
+
+        /// <summary>@today 展開為一對 Gte/Lte，日期均為今天。</summary>
+        [TestMethod]
+        public void ResolveRelativeDates_today_expands_to_gte_lte_pair()
+        {
+            var today = DateTime.Today;
+            var filters = new List<FilterCondition>
+            {
+                new() { Field = "OrderDate", Operator = FilterOperator.Eq, Value = "@today" }
+            };
+            var result = AnalysisQueryEngine.ResolveRelativeDates(filters);
+
+            Assert.AreEqual(2, result.Count);
+            Assert.AreEqual(FilterOperator.Gte, result[0].Operator);
+            Assert.AreEqual(today.ToString("yyyy-MM-dd"), result[0].Value);
+            Assert.AreEqual(FilterOperator.Lte, result[1].Operator);
+            StringAssert.StartsWith(result[1].Value, today.ToString("yyyy-MM-dd"));
+        }
+
+        /// <summary>@last30Days — start 為今天往前 30 天，end 包含今天。</summary>
+        [TestMethod]
+        public void ResolveRelativeDates_last30Days_start_is_30_days_before_today()
+        {
+            var today = DateTime.Today;
+            var expected = today.AddDays(-30).ToString("yyyy-MM-dd");
+            var filters = new List<FilterCondition>
+            {
+                new() { Field = "CreatedAt", Operator = FilterOperator.Eq, Value = "@last30Days" }
+            };
+            var result = AnalysisQueryEngine.ResolveRelativeDates(filters);
+
+            Assert.AreEqual(2, result.Count);
+            Assert.AreEqual(expected, result[0].Value);
+            StringAssert.StartsWith(result[1].Value, today.ToString("yyyy-MM-dd"));
+        }
+
+        /// <summary>@ytd — start 為今年元旦。</summary>
+        [TestMethod]
+        public void ResolveRelativeDates_ytd_start_is_jan1_of_current_year()
+        {
+            var jan1 = new DateTime(DateTime.Today.Year, 1, 1).ToString("yyyy-MM-dd");
+            var filters = new List<FilterCondition>
+            {
+                new() { Field = "CreatedAt", Operator = FilterOperator.Eq, Value = "@ytd" }
+            };
+            var result = AnalysisQueryEngine.ResolveRelativeDates(filters);
+
+            Assert.AreEqual(2, result.Count);
+            Assert.AreEqual(jan1, result[0].Value);
+        }
+
+        /// <summary>混合條件：非 token 保留原序，token 就地展開為兩條件。</summary>
+        [TestMethod]
+        public void ResolveRelativeDates_mixes_plain_and_token_conditions()
+        {
+            var filters = new List<FilterCondition>
+            {
+                new() { Field = "Region",    Operator = FilterOperator.Eq,  Value = "North" },
+                new() { Field = "CreatedAt", Operator = FilterOperator.Eq,  Value = "@thisMonth" },
+            };
+            var result = AnalysisQueryEngine.ResolveRelativeDates(filters);
+
+            Assert.AreEqual(3, result.Count,   "1 plain + 2 expanded should give 3 conditions");
+            Assert.AreEqual("North",            result[0].Value);
+            Assert.AreEqual(FilterOperator.Gte, result[1].Operator);
+            Assert.AreEqual(FilterOperator.Lte, result[2].Operator);
+        }
+
+        /// <summary>未知 token 拋出 InvalidOperationException。</summary>
+        [TestMethod]
+        public void ResolveRelativeDates_unknown_token_throws()
+        {
+            var filters = new List<FilterCondition>
+            {
+                new() { Field = "CreatedAt", Operator = FilterOperator.Eq, Value = "@unknown" }
+            };
+            Assert.ThrowsException<InvalidOperationException>(() =>
+                AnalysisQueryEngine.ResolveRelativeDates(filters));
+        }
+
+        /// <summary>@thisWeek Gte 值為當週週一。</summary>
+        [TestMethod]
+        public void ResolveRelativeDates_thisWeek_gte_is_monday()
+        {
+            var today = DateTime.Today;
+            var monday = today.AddDays(-(((int)today.DayOfWeek + 6) % 7));
+            var filters = new List<FilterCondition>
+            {
+                new() { Field = "CreatedAt", Operator = FilterOperator.Eq, Value = "@thisWeek" }
+            };
+            var result = AnalysisQueryEngine.ResolveRelativeDates(filters);
+
+            Assert.AreEqual(monday.ToString("yyyy-MM-dd"), result[0].Value);
+        }
+
+        /// <summary>@thisMonth Gte 為本月第一天，Lte 為本月最後一天。</summary>
+        [TestMethod]
+        public void ResolveRelativeDates_thisMonth_bounds()
+        {
+            var today = DateTime.Today;
+            var first = new DateTime(today.Year, today.Month, 1);
+            var last  = first.AddMonths(1).AddDays(-1);
+            var filters = new List<FilterCondition>
+            {
+                new() { Field = "CreatedAt", Operator = FilterOperator.Eq, Value = "@thisMonth" }
+            };
+            var result = AnalysisQueryEngine.ResolveRelativeDates(filters);
+
+            Assert.AreEqual(first.ToString("yyyy-MM-dd"), result[0].Value);
+            StringAssert.StartsWith(result[1].Value, last.ToString("yyyy-MM-dd"));
+        }
+
         /// <summary>FakeServerSideStrategy：繼承 ServerSideGroupByStrategy，委派給 InProcessGroupByStrategy</summary>
         private class FakeServerSideStrategy : ServerSideGroupByStrategy
         {

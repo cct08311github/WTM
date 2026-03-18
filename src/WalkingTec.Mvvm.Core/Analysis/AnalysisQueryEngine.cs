@@ -459,12 +459,80 @@ namespace WalkingTec.Mvvm.Core.Analysis
             }
         }
 
+        /// <summary>
+        /// 將篩選條件中的相對日期 token（@today、@thisWeek 等）展開為 Gte/Lte 對。
+        /// 不含 token 的條件直接原樣返回，不建立新物件。
+        /// </summary>
+        internal static List<FilterCondition> ResolveRelativeDates(List<FilterCondition> filters)
+        {
+            bool hasTokens = false;
+            foreach (var f in filters)
+                if (f.Value.StartsWith("@", StringComparison.Ordinal)) { hasTokens = true; break; }
+            if (!hasTokens) return filters;
+
+            var result = new List<FilterCondition>(filters.Count + 4);
+            var today = DateTime.Today;
+            var mondayOffset = ((int)today.DayOfWeek + 6) % 7;
+
+            foreach (var f in filters)
+            {
+                if (!f.Value.StartsWith("@", StringComparison.Ordinal))
+                {
+                    result.Add(f);
+                    continue;
+                }
+
+                DateTime start, end;
+                switch (f.Value.ToLowerInvariant())
+                {
+                    case "@today":
+                        start = today; end = today;
+                        break;
+                    case "@thisweek":
+                        start = today.AddDays(-mondayOffset);
+                        end = start.AddDays(6);
+                        break;
+                    case "@lastweek":
+                        start = today.AddDays(-mondayOffset - 7);
+                        end = start.AddDays(6);
+                        break;
+                    case "@thismonth":
+                        start = new DateTime(today.Year, today.Month, 1);
+                        end = start.AddMonths(1).AddDays(-1);
+                        break;
+                    case "@lastmonth":
+                        start = new DateTime(today.Year, today.Month, 1).AddMonths(-1);
+                        end = new DateTime(today.Year, today.Month, 1).AddDays(-1);
+                        break;
+                    case "@last30days":
+                        start = today.AddDays(-30);
+                        end = today;
+                        break;
+                    case "@thisquarter":
+                        start = new DateTime(today.Year, ((today.Month - 1) / 3) * 3 + 1, 1);
+                        end = today;
+                        break;
+                    case "@ytd":
+                        start = new DateTime(today.Year, 1, 1);
+                        end = today;
+                        break;
+                    default:
+                        throw new InvalidOperationException($"Unknown relative date token '{f.Value}'.");
+                }
+
+                result.Add(new FilterCondition { Field = f.Field, Operator = FilterOperator.Gte, Value = start.ToString("yyyy-MM-dd") });
+                result.Add(new FilterCondition { Field = f.Field, Operator = FilterOperator.Lte, Value = end.ToString("yyyy-MM-dd 23:59:59") });
+            }
+            return result;
+        }
+
         private static IQueryable<TModel> ApplyFilters<TModel>(
             IQueryable<TModel> query,
             List<FilterCondition>? filters,
             Dictionary<string, AnalysisFieldMeta> whitelist)
         {
             if (filters == null || filters.Count == 0) return query;
+            filters = ResolveRelativeDates(filters);
 
             var param = Expression.Parameter(typeof(TModel), "x");
             Expression? body = null;

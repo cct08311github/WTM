@@ -83,7 +83,16 @@
             'dep.missingTitle':  'Analysis 模組缺少必要前端依賴，部分功能將無法使用：',
             'dep.echarts':       'ECharts — 請在 _Layout.cshtml 中加入：',
             'dep.sortable':      'SortableJS — 請在 _Layout.cshtml 中加入：',
-            'warn.truncatedFmt': '結果已截斷，僅顯示前 10,000 列（共 {n} 組）。'
+            'warn.truncatedFmt': '結果已截斷，僅顯示前 10,000 列（共 {n} 組）。',
+            'reldate.custom':      '自訂日期',
+            'reldate.today':       '今天',
+            'reldate.thisWeek':    '本週',
+            'reldate.lastWeek':    '上週',
+            'reldate.thisMonth':   '本月',
+            'reldate.lastMonth':   '上月',
+            'reldate.last30Days':  '近30天',
+            'reldate.thisQuarter': '本季',
+            'reldate.ytd':         '本年至今'
         },
         'en-US': {
             'err.dimRequired':   'At least 1 dimension required for grouping',
@@ -158,7 +167,16 @@
             'dep.missingTitle':  'Analysis module is missing required frontend dependencies, some features will not work:',
             'dep.echarts':       'ECharts — add to _Layout.cshtml:',
             'dep.sortable':      'SortableJS — add to _Layout.cshtml:',
-            'warn.truncatedFmt': 'Results truncated, showing first 10,000 rows ({n} groups total).'
+            'warn.truncatedFmt': 'Results truncated, showing first 10,000 rows ({n} groups total).',
+            'reldate.custom':      'Custom date',
+            'reldate.today':       'Today',
+            'reldate.thisWeek':    'This week',
+            'reldate.lastWeek':    'Last week',
+            'reldate.thisMonth':   'This month',
+            'reldate.lastMonth':   'Last month',
+            'reldate.last30Days':  'Last 30 days',
+            'reldate.thisQuarter': 'This quarter',
+            'reldate.ytd':         'Year to date'
         }
     };
     (function () {
@@ -1098,6 +1116,17 @@
         { value: 'NotIn',       label: 'Not In' }
     ];
 
+    var _RELATIVE_DATE_OPTIONS = [
+        { value: '@today',       label: _i18n('reldate.today') },
+        { value: '@thisWeek',    label: _i18n('reldate.thisWeek') },
+        { value: '@lastWeek',    label: _i18n('reldate.lastWeek') },
+        { value: '@thisMonth',   label: _i18n('reldate.thisMonth') },
+        { value: '@lastMonth',   label: _i18n('reldate.lastMonth') },
+        { value: '@last30Days',  label: _i18n('reldate.last30Days') },
+        { value: '@thisQuarter', label: _i18n('reldate.thisQuarter') },
+        { value: '@ytd',         label: _i18n('reldate.ytd') }
+    ];
+
     /**
      * 從 filterBar 讀取所有有效篩選列，組裝成 [{field, op, value}]。
      * 欄位或值任一為空的列被跳過。
@@ -1143,19 +1172,55 @@
                 opt.textContent = v;
                 el.appendChild(opt);
             });
+        } else if (fieldMeta && fieldMeta.isDate) {
+            // Date field: mode selector (relative shortcuts) + custom text input
+            var wrap = document.createElement('span');
+            wrap.style.cssText = 'display:inline-flex;align-items:center;gap:4px;';
+
+            var modeSel = document.createElement('select');
+            modeSel.className = 'analysis-filter-date-mode';
+            modeSel.style.cssText = 'width:110px;';
+            var customOpt = document.createElement('option');
+            customOpt.value = '';
+            customOpt.textContent = _i18n('reldate.custom');
+            modeSel.appendChild(customOpt);
+            _RELATIVE_DATE_OPTIONS.forEach(function (o) {
+                var opt = document.createElement('option');
+                opt.value = o.value;
+                opt.textContent = o.label;
+                modeSel.appendChild(opt);
+            });
+            wrap.appendChild(modeSel);
+
+            var input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'analysis-filter-value layui-input';
+            input.placeholder = 'yyyy-MM-dd';
+            input.style.cssText = 'width:120px;display:inline-block;';
+            if (typeof laydate !== 'undefined') {
+                laydate.render({ elem: input });
+            }
+            wrap.appendChild(input);
+
+            // When a relative token is chosen, store it in the hidden input
+            // and hide the text box. collectFilters() reads .analysis-filter-value.
+            modeSel.addEventListener('change', function () {
+                if (modeSel.value) {
+                    input.value = modeSel.value;
+                    input.style.display = 'none';
+                } else {
+                    input.value = '';
+                    input.style.display = 'inline-block';
+                }
+            });
+
+            el = wrap;
         } else {
             el = document.createElement('input');
             el.type = 'text';
             el.className = 'analysis-filter-value layui-input';
             el.style.cssText = 'width:140px;display:inline-block;';
-            if (fieldMeta && fieldMeta.isDate) {
-                el.placeholder = 'yyyy-MM-dd';
-                if (typeof laydate !== 'undefined') {
-                    laydate.render({ elem: el });
-                }
-            } else {
-                el.placeholder = _i18n('filter.valuePh');
-            }
+            el.placeholder = _i18n('filter.valuePh');
         }
         return el;
     }

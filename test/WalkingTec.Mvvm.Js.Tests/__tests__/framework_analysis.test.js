@@ -4534,7 +4534,7 @@ describe('#501 createValueInput — smart filter controls', () => {
         expect(typeof xssOpt.textContent).toBe('string');
     });
 
-    test('date field (isDate=true, no allowedValues) → renders <input> with yyyy-MM-dd placeholder', () => {
+    test('date field (isDate=true, no allowedValues) → renders span wrapper with date-mode select and yyyy-MM-dd input', () => {
         const dateMeta = {
             fieldName: 'OrderDate',
             displayName: '訂單日期',
@@ -4542,8 +4542,11 @@ describe('#501 createValueInput — smart filter controls', () => {
             allowedValues: null,
         };
         const el = waReq.createValueInput(dateMeta);
-        expect(el.tagName.toLowerCase()).toBe('input');
-        expect(el.placeholder).toBe('yyyy-MM-dd');
+        // #566: date fields now return a span wrapper containing a mode select + value input
+        expect(el.tagName.toLowerCase()).toBe('span');
+        const input = el.querySelector('.analysis-filter-value');
+        expect(input).not.toBeNull();
+        expect(input.placeholder).toBe('yyyy-MM-dd');
     });
 
     test('plain text field (no allowedValues, not date) → renders <input> with generic placeholder', () => {
@@ -5326,5 +5329,126 @@ describe('#539 renderTable — sort, pagination, sticky wrapper', () => {
         container.querySelector('th[data-sort-col]').click();
         expect(container.querySelectorAll('tbody tr')).toHaveLength(50);
         expect(container.querySelector('tbody td').textContent).toBe('0');
+    });
+});
+
+// ─── #566 createValueInput — date field relative date mode ───────────────────
+describe('#566 createValueInput — date field relative date mode', () => {
+    const dateMeta = {
+        isDate: true, fieldName: 'OrderDate', displayName: '訂單日期',
+        allowedValues: null, kind: 'Dimension', allowedFuncs: 0
+    };
+
+    test('date field returns span wrapper element', () => {
+        const wrap = waReq.createValueInput(dateMeta);
+        expect(wrap.tagName).toBe('SPAN');
+    });
+
+    test('date wrapper contains .analysis-filter-date-mode select', () => {
+        const wrap = waReq.createValueInput(dateMeta);
+        const modeSel = wrap.querySelector('.analysis-filter-date-mode');
+        expect(modeSel).not.toBeNull();
+        expect(modeSel.tagName).toBe('SELECT');
+    });
+
+    test('date wrapper contains .analysis-filter-value input', () => {
+        const wrap = waReq.createValueInput(dateMeta);
+        const input = wrap.querySelector('.analysis-filter-value');
+        expect(input).not.toBeNull();
+        expect(input.tagName).toBe('INPUT');
+    });
+
+    test('mode select has 9 options — 1 custom + 8 relative tokens', () => {
+        const wrap = waReq.createValueInput(dateMeta);
+        const modeSel = wrap.querySelector('.analysis-filter-date-mode');
+        expect(modeSel.options.length).toBe(9);
+        expect(modeSel.options[0].value).toBe('');  // custom / 自訂日期
+    });
+
+    test('mode select options include all 8 relative tokens', () => {
+        const wrap = waReq.createValueInput(dateMeta);
+        const modeSel = wrap.querySelector('.analysis-filter-date-mode');
+        const values = Array.from(modeSel.options).map(o => o.value);
+        ['@today', '@thisWeek', '@lastWeek', '@thisMonth', '@lastMonth',
+         '@last30Days', '@thisQuarter', '@ytd']
+            .forEach(token => expect(values).toContain(token));
+    });
+
+    test('selecting @today — input.value set to token and input hidden', () => {
+        const wrap = waReq.createValueInput(dateMeta);
+        const modeSel = wrap.querySelector('.analysis-filter-date-mode');
+        const input = wrap.querySelector('.analysis-filter-value');
+        modeSel.value = '@today';
+        modeSel.dispatchEvent(new Event('change'));
+        expect(input.value).toBe('@today');
+        expect(input.style.display).toBe('none');
+    });
+
+    test('switching back to custom — input shown and value cleared', () => {
+        const wrap = waReq.createValueInput(dateMeta);
+        const modeSel = wrap.querySelector('.analysis-filter-date-mode');
+        const input = wrap.querySelector('.analysis-filter-value');
+        modeSel.value = '@today';
+        modeSel.dispatchEvent(new Event('change'));
+        modeSel.value = '';
+        modeSel.dispatchEvent(new Event('change'));
+        expect(input.value).toBe('');
+        expect(input.style.display).toBe('inline-block');
+    });
+
+    test('non-date field without allowedValues still returns plain text input', () => {
+        const textMeta = {
+            isDate: false, fieldName: 'Region', displayName: '地區',
+            allowedValues: null, kind: 'Dimension', allowedFuncs: 0
+        };
+        const el = waReq.createValueInput(textMeta);
+        expect(el.tagName).toBe('INPUT');
+        expect(el.className).toContain('analysis-filter-value');
+    });
+
+    test('collectFilters reads @thisMonth token via .analysis-filter-value inside date wrapper', async () => {
+        const gridId = 'filter566a';
+        const dateFields = [
+            { kind: 'Dimension', fieldName: 'OrderDate', displayName: '訂單日期',
+              isDate: true, allowedValues: null, allowedFuncs: 0 },
+        ];
+        const panel = document.createElement('div');
+        panel.id = 'analysis-panel-' + gridId;
+
+        const fetchOrig = global.fetch;
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: true,
+            json: jest.fn().mockResolvedValue(dateFields),
+        });
+        const idSpy = jest.spyOn(document, 'getElementById').mockImplementation(id =>
+            id === 'analysis-panel-' + gridId ? panel : null
+        );
+        waReq.toggle(gridId, 'TestVm566a');
+        await new Promise(r => setTimeout(r, 50));
+        idSpy.mockRestore();
+        global.fetch = fetchOrig;
+
+        const idSpy2 = jest.spyOn(document, 'getElementById').mockImplementation(id =>
+            id === 'analysis-panel-' + gridId ? panel : null
+        );
+        waReq.addFilterRow(gridId);  // uses state fields (OrderDate with isDate:true)
+
+        const row = panel.querySelector('.analysis-filter-row');
+        // Trigger field selection → createValueInput(dateMeta) → span wrapper inserted
+        const fieldSel = row.querySelector('.analysis-filter-field');
+        fieldSel.value = 'OrderDate';
+        fieldSel.dispatchEvent(new Event('change'));
+
+        // Select relative date token
+        const modeSel = row.querySelector('.analysis-filter-date-mode');
+        expect(modeSel).not.toBeNull();
+        modeSel.value = '@thisMonth';
+        modeSel.dispatchEvent(new Event('change'));
+
+        const filters = waReq.collectFilters(gridId);
+        expect(filters.length).toBe(1);
+        expect(filters[0].field).toBe('OrderDate');
+        expect(filters[0].value).toBe('@thisMonth');
+        idSpy2.mockRestore();
     });
 });
