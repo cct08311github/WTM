@@ -2005,10 +2005,10 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 => _testData.AsQueryable().OrderByDescending(x => x.ID);
         }
 
-        private _AnalysisController CreateControllerWithRoles(params string[] roles)
+        private _AnalysisController CreateControllerWithRoles(params string[] roleCodes)
         {
             var controller = CreateController();
-            controller.Wtm.LoginUserInfo.Roles = roles
+            controller.Wtm.LoginUserInfo.Roles = roleCodes
                 .Select(r => new SimpleRole { RoleCode = r })
                 .ToList();
             return controller;
@@ -2110,6 +2110,48 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 "PivotExport：缺少必要角色應回傳 ForbidResult");
         }
 
+        /// <summary>
+        /// 迴歸測試：CheckAccess 必須使用 RoleCode，不得使用 RoleName。
+        /// 若使用者只有匹配的 RoleName（而無匹配的 RoleCode），應回傳 403。
+        /// </summary>
+        [TestMethod]
+        public void GetMeta_returns_403_when_user_has_matching_RoleName_but_not_RoleCode()
+        {
+            // Arrange: 設定 RoleName = "Analyst"，但 RoleCode 為不同值
+            var controller = CreateController();
+            controller.Wtm.LoginUserInfo.Roles = new List<SimpleRole>
+            {
+                new SimpleRole { RoleCode = "DIFFERENT_CODE", RoleName = "Analyst" }
+            };
+
+            // Act
+            var result = controller.GetMeta(typeof(RestrictedSaleListVM).FullName);
+
+            // Assert: RoleName 匹配但 RoleCode 不匹配 → 應 Forbid
+            Assert.IsInstanceOfType(result, typeof(ForbidResult),
+                "CheckAccess 應使用 RoleCode 而非 RoleName；RoleName 匹配但 RoleCode 不匹配時應回傳 403");
+        }
+
+        /// <summary>
+        /// 迴歸測試：CheckAccess 以 RoleCode 比對 AllowedRoles，RoleCode 匹配即放行。
+        /// </summary>
+        [TestMethod]
+        public void GetMeta_returns_200_when_user_has_matching_RoleCode_different_RoleName()
+        {
+            // Arrange: RoleCode = "Analyst"（匹配），RoleName 為不同值
+            var controller = CreateController();
+            controller.Wtm.LoginUserInfo.Roles = new List<SimpleRole>
+            {
+                new SimpleRole { RoleCode = "Analyst", RoleName = "分析師" }
+            };
+
+            // Act
+            var result = controller.GetMeta(typeof(RestrictedSaleListVM).FullName);
+
+            // Assert: RoleCode 匹配 → 應成功
+            Assert.IsInstanceOfType(result, typeof(OkObjectResult),
+                "CheckAccess 以 RoleCode 比對；RoleCode = 'Analyst' 應通過 AllowedRoles = 'Analyst' 限制");
+        }
 
 
         [TestMethod]
