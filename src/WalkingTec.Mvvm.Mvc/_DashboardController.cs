@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core;
@@ -46,6 +47,8 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         [HttpGet("list")]
+        [ProducesResponseType(typeof(IReadOnlyList<DashboardSummary>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         public async Task<IActionResult> List()
         {
             var (userId, roles) = GetUserInfo();
@@ -55,6 +58,10 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         [HttpGet("{id}")]
+        [ProducesResponseType(typeof(DashboardDefinition), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
         public async Task<IActionResult> Get(string id)
         {
             var tenantId = GetTenantId();
@@ -71,6 +78,9 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         [HttpPost("")]
+        [ProducesResponseType(typeof(string), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(string), StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         public async Task<IActionResult> Create([FromBody] DashboardDefinition dashboard)
         {
             if (dashboard == null) return BadRequest();
@@ -87,6 +97,11 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         [HttpPut("{id}")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(string), StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
         public async Task<IActionResult> Update(string id, [FromBody] DashboardDefinition dashboard)
         {
             if (dashboard == null || dashboard.Id != id) return BadRequest();
@@ -112,6 +127,10 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         [HttpDelete("{id}")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
         public async Task<IActionResult> Delete(string id)
         {
             var tenantId = GetTenantId();
@@ -129,6 +148,10 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         [HttpGet("{id}/widget/{wid}/data")]
+        [ProducesResponseType(typeof(object), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
         public async Task<IActionResult> GetWidgetData(string id, string wid, CancellationToken ct)
         {
             var tenantId = GetTenantId();
@@ -160,6 +183,10 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         [HttpPost("{id}/widget/{wid}/data")]
+        [ProducesResponseType(typeof(object), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
         public async Task<IActionResult> PostWidgetData(string id, string wid, [FromBody] Dictionary<string, string> filters, CancellationToken ct)
         {
             var tenantId = GetTenantId();
@@ -189,6 +216,8 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         [HttpGet("datasources")]
+        [ProducesResponseType(typeof(IEnumerable<object>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         public IActionResult GetDataSources()
         {
             var result = new List<object>();
