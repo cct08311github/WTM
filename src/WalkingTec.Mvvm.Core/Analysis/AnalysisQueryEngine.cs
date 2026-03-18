@@ -92,6 +92,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             }
 
             var displayNames = BuildColumnDisplayNames(req, wl);
+            var columnFormats = BuildColumnFormats(req, wl);
 
             var response = new AnalysisQueryResponse
             {
@@ -104,7 +105,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     ? "聚合結果僅基於前 50,000 筆原始資料，可能不代表完整數據。建議縮小篩選條件或聯繫管理員啟用 ServerSide 策略。"
                     : null,
                 QueryHash = queryHash,
-                ColumnDisplayNames = displayNames
+                ColumnDisplayNames = displayNames,
+                ColumnFormats = columnFormats
             };
 
             _cache?.Set(queryHash, response, _defaultTtl);
@@ -170,6 +172,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             }
 
             var displayNames = BuildColumnDisplayNames(req, wl);
+            var columnFormats = BuildColumnFormats(req, wl);
 
             var response = new AnalysisQueryResponse
             {
@@ -182,7 +185,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     ? "聚合結果僅基於前 50,000 筆原始資料，可能不代表完整數據。建議縮小篩選條件或聯繫管理員啟用 ServerSide 策略。"
                     : null,
                 QueryHash = queryHash,
-                ColumnDisplayNames = displayNames
+                ColumnDisplayNames = displayNames,
+                ColumnFormats = columnFormats
             };
 
             _cache?.Set(queryHash, response, _defaultTtl);
@@ -686,6 +690,19 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// <summary>
         /// 建立欄位 key → 使用者友善顯示名稱的對照表。
         /// </summary>
+        private static Dictionary<string, MeasureFormat> BuildColumnFormats(
+            AnalysisQueryRequest req,
+            Dictionary<string, AnalysisFieldMeta> wl)
+        {
+            var map = new Dictionary<string, MeasureFormat>();
+            foreach (var m in req.Measures)
+            {
+                var key = $"{m.Field}_{m.Func}";
+                map[key] = wl.TryGetValue(m.Field, out var meta) ? meta.Format : MeasureFormat.Auto;
+            }
+            return map;
+        }
+
         private static Dictionary<string, string> BuildColumnDisplayNames(
             AnalysisQueryRequest req,
             Dictionary<string, AnalysisFieldMeta> wl)

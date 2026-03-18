@@ -36,6 +36,12 @@ namespace WalkingTec.Mvvm.Core.Analysis
         public string QueryHash { get; set; } = string.Empty;
 
         /// <summary>
+        /// 量值欄位 key（如 "Amount_Sum"）→ MeasureFormat 的對照表。
+        /// 匯出時依此套用數字格式；不在此表中的欄位以 Auto 處理。
+        /// </summary>
+        public Dictionary<string, MeasureFormat> ColumnFormats { get; set; } = new Dictionary<string, MeasureFormat>();
+
+        /// <summary>
         /// 欄位 key（Columns 中的值）到使用者友善顯示名稱的對照表。
         /// 維度：key = 欄位名稱，value = DisplayName（如 "地區"）。
         /// 量值：key = "Field_Func"（如 "Amount_Sum"），value = "DisplayName 合計"（如 "金額 合計"）。

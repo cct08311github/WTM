@@ -39,10 +39,21 @@ namespace WalkingTec.Mvvm.Core.Analysis
             headerStyle.FillForegroundColor = IndexedColors.Grey25Percent.Index;
             headerStyle.FillPattern = FillPattern.SolidForeground;
 
-            // Numeric data: thousand-separator format (e.g. 1,234,567.89)
-            var numericStyle = workbook.CreateCellStyle();
+            // Numeric data: one ICellStyle per MeasureFormat value
             var numericFormat = workbook.CreateDataFormat();
-            numericStyle.DataFormat = numericFormat.GetFormat("#,##0.00");
+            ICellStyle MakeNumericStyle(string fmt)
+            {
+                var s = workbook.CreateCellStyle();
+                s.DataFormat = numericFormat.GetFormat(fmt);
+                return s;
+            }
+            var formatStyles = new System.Collections.Generic.Dictionary<MeasureFormat, ICellStyle>
+            {
+                [MeasureFormat.Auto]     = MakeNumericStyle("#,##0.00"),
+                [MeasureFormat.Integer]  = MakeNumericStyle("#,##0"),
+                [MeasureFormat.Currency] = MakeNumericStyle("¥#,##0.00"),
+                [MeasureFormat.Percent]  = MakeNumericStyle("0.00%"),
+            };
 
             // ── Header row — use display names when available ─────────────────────
             var header = sheet.CreateRow(0);
@@ -55,15 +66,24 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 cell.CellStyle = headerStyle;
             }
 
-            // ── Detect numeric (measure) columns from first data row ──────────────
-            var numericColIndices = new HashSet<int>();
-            if (result.Rows.Count > 0)
+            // ── Resolve per-column ICellStyle ────────────────────────────────────
+            // ColumnFormats carries explicit format from [Measure(Format=...)] attribute.
+            // Fall back to numeric auto-detection (Auto style) for legacy responses.
+            var colStyles = new ICellStyle?[result.Columns.Count];
+            for (int i = 0; i < result.Columns.Count; i++)
             {
+                var colKey = result.Columns[i];
+                if (result.ColumnFormats.TryGetValue(colKey, out var fmt))
+                    colStyles[i] = formatStyles[fmt];
+            }
+            if (result.ColumnFormats.Count == 0 && result.Rows.Count > 0)
+            {
+                // Legacy path: no format metadata — detect numeric columns by CLR type.
                 for (int c = 0; c < result.Columns.Count; c++)
                 {
                     result.Rows[0].TryGetValue(result.Columns[c], out var firstVal);
                     if (firstVal is decimal or double or float or int or long)
-                        numericColIndices.Add(c);
+                        colStyles[c] = formatStyles[MeasureFormat.Auto];
                 }
             }
 
@@ -88,8 +108,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     else
                         cell.SetCellValue(val?.ToString() ?? "");
 
-                    if (numericColIndices.Contains(c))
-                        cell.CellStyle = numericStyle;
+                    if (colStyles[c] != null)
+                        cell.CellStyle = colStyles[c];
                 }
             }
 
