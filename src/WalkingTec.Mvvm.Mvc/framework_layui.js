@@ -1529,6 +1529,78 @@ var wtmHeaderFilter = (function () {
 }());
 window.wtmHeaderFilter = wtmHeaderFilter;
 
+/**
+ * wtmPermFilter — client-side search filter for the role-permission tree table.
+ *
+ * The permission tree is rendered as a flat LayUI table where each row's
+ * PageName cell carries leading &nbsp; entities to indicate depth
+ * (4 &nbsp; per level).  filterTree() is a pure function so it can be
+ * unit-tested without a DOM; apply() wires it to a rendered LayUI table.
+ */
+var wtmPermFilter = (function () {
+
+    /**
+     * Compute row visibility for a permission-tree table.
+     *
+     * @param {Array<{text: string, depth: number}>} rows
+     *   Parallel to the rendered table rows.  text is the stripped page name
+     *   (no &nbsp;, no HTML tags, trimmed).  depth is the tree level (0 = root).
+     * @param {string} query  Case-insensitive substring to match.
+     * @returns {boolean[]}  Parallel to rows — true means the row should show.
+     */
+    function filterTree(rows, query) {
+        if (!query) {
+            return rows.map(function () { return true; });
+        }
+        var q = query.toLowerCase();
+
+        // Step 1: mark rows whose own text matches the query.
+        var vis = rows.map(function (r) {
+            return r.text.toLowerCase().indexOf(q) !== -1;
+        });
+
+        // Step 2: for every matching row, walk backwards and show each ancestor
+        // (a row with strictly smaller depth that appears before it in the list).
+        for (var i = 0; i < rows.length; i++) {
+            if (!vis[i]) { continue; }
+            var depth = rows[i].depth;
+            for (var j = i - 1; j >= 0 && depth > 0; j--) {
+                if (rows[j].depth < depth) {
+                    vis[j] = true;
+                    depth = rows[j].depth;
+                }
+            }
+        }
+
+        return vis;
+    }
+
+    /**
+     * Apply a search filter to a rendered LayUI permission-tree table.
+     *
+     * @param {jQuery} $container  The .layui-table-view element wrapping the grid.
+     * @param {string} query       Search string (empty string clears the filter).
+     */
+    function apply($container, query) {
+        var $rows = $container.find('.layui-table-main tbody tr');
+        var rowData = [];
+        $rows.each(function () {
+            var html = $(this).find('td').first().find('.layui-table-cell').html() || '';
+            // &nbsp; entities in innerHTML — 4 per depth level.
+            var nbspCount = (html.match(/&nbsp;/g) || []).length;
+            var depth = Math.floor(nbspCount / 4);
+            var text = html.replace(/&nbsp;/g, ' ').replace(/<[^>]*>/g, '').trim();
+            rowData.push({ text: text, depth: depth });
+        });
+
+        var visible = filterTree(rowData, (query || '').trim());
+        $rows.each(function (i) { $(this).toggle(visible[i]); });
+    }
+
+    return { filterTree: filterTree, apply: apply };
+}());
+window.wtmPermFilter = wtmPermFilter;
+
 $.ajax({
     url: '/_framework/GetScriptLanguage',
     type: 'GET',
