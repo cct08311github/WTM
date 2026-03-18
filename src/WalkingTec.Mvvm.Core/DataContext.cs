@@ -44,6 +44,7 @@ namespace WalkingTec.Mvvm.Core
         [Obsolete("WTM's built-in Elsa workflow integration has been removed. This member will be deleted in the next major version. See CHANGELOG.md for migration guidance.")]
         public DbSet<FrameworkWorkflow> FrameworkWorkflows { get; set; } = null!;
         public DbSet<ActionLog> BaseActionLogs { get; set; } = null!;
+        public DbSet<ChangeLog> BaseChangeLogs { get; set; } = null!;
         public DbSet<FrameworkTenant> FrameworkTenants { get; set; } = null!;
         // [Elsa removed] DbSet properties
         // public DbSet<Elsa_Bookmark> Elsa_Bookmarks { get; set; }
