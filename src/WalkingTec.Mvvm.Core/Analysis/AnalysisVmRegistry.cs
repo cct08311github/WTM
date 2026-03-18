@@ -49,15 +49,15 @@ namespace WalkingTec.Mvvm.Core.Analysis
         }
 
         /// <summary>
-        /// 依 FullName 查詢白名單，找不到時拋出 InvalidOperationException。
+        /// 依 FullName 查詢白名單，找不到時拋出 <see cref="AnalysisVmNotFoundException"/>。
         /// </summary>
         public Type Resolve(string fullName)
         {
             if (string.IsNullOrWhiteSpace(fullName))
-                throw new InvalidOperationException("VM type name is required.");
+                throw new AnalysisVmNotFoundException(fullName ?? "");
             if (_whitelist.TryGetValue(fullName, out var t))
                 return t;
-            throw new InvalidOperationException($"VM type not registered for analysis: {fullName}");
+            throw new AnalysisVmNotFoundException(fullName);
         }
 
         /// <summary>

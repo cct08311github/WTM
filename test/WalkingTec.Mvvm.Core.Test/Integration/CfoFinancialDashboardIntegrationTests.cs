@@ -403,7 +403,7 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
             };
 
             // Act & Assert
-            var ex = await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+            var ex = await Assert.ThrowsExceptionAsync<AnalysisVmNotFoundException>(
                 () => source.GetDataAsync(request));
 
             // 錯誤訊息應清楚說明 VM 未在白名單中，而非模糊的 NullReferenceException
@@ -412,7 +412,7 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
         }
 
         [TestMethod]
-        [Description("Analysis 引擎拋出欄位驗證失敗（非白名單維度）→ AnalysisWidgetDataSource 應傳播 InvalidOperationException，不吞例外")]
+        [Description("Analysis 引擎拋出欄位驗證失敗（非白名單維度）→ AnalysisWidgetDataSource 應傳播 AnalysisFieldNotFoundException，不吞例外")]
         public async Task CFO_WidgetRequestsNonWhitelistedField_AnalysisEnginePropagatesError()
         {
             var source = CreateAnalysisDataSource();
@@ -430,7 +430,7 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
                 }
             };
 
-            var ex = await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+            var ex = await Assert.ThrowsExceptionAsync<AnalysisFieldNotFoundException>(
                 () => source.GetDataAsync(request));
 
             ex.Message.Should().Contain("ID",
@@ -907,7 +907,7 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
                 because: "未標記 [EnableAnalysis] 的 ListVM 不應在白名單中，防止未授權存取財務資料");
 
             // 嘗試 Resolve 應拋出
-            var ex = Assert.ThrowsException<InvalidOperationException>(
+            var ex = Assert.ThrowsException<AnalysisVmNotFoundException>(
                 () => _registry.Resolve(DeletedVmType));
 
             ex.Message.Should().Contain("not registered for analysis");

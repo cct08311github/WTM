@@ -203,10 +203,10 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
-        public void GetMeta_returns_400_for_unregistered_vm()
+        public void GetMeta_returns_404_for_unregistered_vm()
         {
-            var result = CreateController().GetMeta("No.Such.Vm") as BadRequestObjectResult;
-            Assert.IsNotNull(result, "未註冊 VM 應回傳 400");
+            var result = CreateController().GetMeta("No.Such.Vm") as NotFoundObjectResult;
+            Assert.IsNotNull(result, "未註冊 VM 應回傳 404");
         }
 
         // ─── Query 路由守衛 ───────────────────────────────────────────────────
@@ -239,7 +239,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
-        public void Query_returns_400_for_unregistered_vm()
+        public void Query_returns_404_for_unregistered_vm()
         {
             var req = new AnalysisQueryRequest
             {
@@ -247,8 +247,8 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 Dimensions = new List<string> { "Region" },
                 Measures   = new List<MeasureRequest> { new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum } }
             };
-            var result = CreateController().Query(req) as BadRequestObjectResult;
-            Assert.IsNotNull(result);
+            var result = CreateController().Query(req) as NotFoundObjectResult;
+            Assert.IsNotNull(result, "未註冊 VM 應回傳 404");
         }
 
         [TestMethod]
@@ -321,7 +321,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
-        public void Export_returns_400_for_unregistered_vm()
+        public void Export_returns_404_for_unregistered_vm()
         {
             var req = new AnalysisQueryRequest
             {
@@ -329,8 +329,8 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 Dimensions = new List<string> { "Region" },
                 Measures   = new List<MeasureRequest> { new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum } }
             };
-            var result = CreateController().Export(req) as BadRequestObjectResult;
-            Assert.IsNotNull(result);
+            var result = CreateController().Export(req) as NotFoundObjectResult;
+            Assert.IsNotNull(result, "未註冊 VM 應回傳 404");
         }
 
         // ─── Export xlsx / csv ────────────────────────────────────────────────
@@ -1300,7 +1300,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Pivot_returns_400_for_unregistered_vm()
+        public void Pivot_returns_404_for_unregistered_vm()
         {
             var req = new AnalysisPivotRequest
             {
@@ -1313,8 +1313,8 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 PivotDimension = "Category"
             };
 
-            var result = CreateController().Pivot(req) as BadRequestObjectResult;
-            Assert.IsNotNull(result, "Pivot 未註冊 VM 應回傳 400");
+            var result = CreateController().Pivot(req) as NotFoundObjectResult;
+            Assert.IsNotNull(result, "Pivot 未註冊 VM 應回傳 404");
         }
 
         [TestMethod]
@@ -1408,7 +1408,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void PivotExport_returns_400_for_unregistered_vm()
+        public void PivotExport_returns_404_for_unregistered_vm()
         {
             var req = new AnalysisPivotRequest
             {
@@ -1421,8 +1421,8 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 PivotDimension = "Category"
             };
 
-            var result = CreateController().PivotExport(req) as BadRequestObjectResult;
-            Assert.IsNotNull(result, "PivotExport 未註冊 VM 應回傳 400");
+            var result = CreateController().PivotExport(req) as NotFoundObjectResult;
+            Assert.IsNotNull(result, "PivotExport 未註冊 VM 應回傳 404");
         }
 
         [TestMethod]

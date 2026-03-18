@@ -833,10 +833,10 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
             var whitelist = AnalysisFieldScanner.ScanModel(typeof(SupplierDelivery));
 
             // 白名單驗證應阻擋不存在的欄位名稱
-            Assert.ThrowsException<InvalidOperationException>(
+            Assert.ThrowsException<AnalysisFieldNotFoundException>(
                 () => _engine.Execute(
                     SupplierDeliveryListVM.TestData.AsQueryable(), maliciousReq, whitelist),
-                "惡意欄位名稱應被白名單阻擋，拋出 InvalidOperationException");
+                "惡意欄位名稱應被白名單阻擋，拋出 AnalysisFieldNotFoundException");
         }
 
         /// <summary>
@@ -859,9 +859,9 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
                 }
             };
 
-            await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+            await Assert.ThrowsExceptionAsync<AnalysisVmNotFoundException>(
                 () => dataSource.GetDataAsync(request),
-                "未在 registry 中的 ListVM 應拋出 InvalidOperationException");
+                "未在 registry 中的 ListVM 應拋出 AnalysisVmNotFoundException");
         }
 
         /// <summary>
