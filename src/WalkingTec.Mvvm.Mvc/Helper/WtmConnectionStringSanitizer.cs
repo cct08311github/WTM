@@ -14,7 +14,7 @@ public static class WtmConnectionStringSanitizer
     /// 格式：key=value，value 以 ; " ' 或字串結尾作為終止符。
     /// </summary>
     private static readonly Regex _sensitiveKeyPattern = new(
-        @"(?i)(password|pwd|user\s+id|uid|user)\s*=\s*[^;""'\s][^;""']*",
+        @"(?i)(password|pwd|user\s+id|uid|user)\s*=\s*[^;""'\s][^;""'\s]*",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     /// <summary>
