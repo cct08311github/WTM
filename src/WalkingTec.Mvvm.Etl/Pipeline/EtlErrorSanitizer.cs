@@ -9,7 +9,7 @@ namespace WalkingTec.Mvvm.Etl.Pipeline;
 /// Prevents connection strings and stack traces from leaking into the database.
 /// Full stack traces should be written to structured logging (ILogger) instead.
 /// </summary>
-internal static class EtlErrorSanitizer
+public static class EtlErrorSanitizer
 {
     // Patterns covering common ADO.NET / EF Core connection string fragments
     private static readonly Regex[] _sensitivePatterns =
