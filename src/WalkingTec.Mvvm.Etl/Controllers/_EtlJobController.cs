@@ -1,8 +1,10 @@
 #nullable enable
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Filters;
 using Quartz;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Extensions;
@@ -20,6 +22,24 @@ public class _EtlJobController : BaseController
     public _EtlJobController(EtlSchedulerService scheduler)
     {
         _scheduler = scheduler;
+    }
+
+    // ─── Authorization gate ───────────────────────────────────────────────────
+
+    public override void OnActionExecuting(ActionExecutingContext context)
+    {
+        var roles = Wtm?.LoginUserInfo?.Roles?.Select(r => r.RoleCode).ToArray() ?? Array.Empty<string>();
+        var isAdmin = roles.Any(r =>
+            string.Equals(r, "Admin", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(r, "ETLAdmin", StringComparison.OrdinalIgnoreCase));
+
+        if (!isAdmin)
+        {
+            context.Result = Forbid();
+            return;
+        }
+
+        base.OnActionExecuting(context);
     }
 
     // ─── CRUD ───
