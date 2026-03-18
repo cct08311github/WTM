@@ -445,3 +445,170 @@ WtmDashboard.EventBus.off('widget:click', 'w1');
 WtmDashboard.FilterBar.init(container, filters);
 var values = WtmDashboard.FilterBar.getValues();
 ```
+
+---
+
+## 部署注意事項
+
+### JsonFileDashboardService 的限制
+
+預設的 `JsonFileDashboardService` 將儀表板定義存為本機 JSON 檔案（路徑由 `DashboardDirectory` 決定，預設為 `App_Data/dashboards`）。此方式簡單易用，但有以下限制：
+
+#### 多節點 / 負載均衡
+
+**不支援多節點部署**。各節點的 JSON 檔案相互獨立，透過一個節點建立或修改的儀表板，其他節點無法即時看到，最終導致資料不一致。
+
+> 若應用部署在兩台以上的伺服器或使用 Kubernetes 水平擴展，**必須改用資料庫後端**（見下方「遷移至多節點儲存」）。
+
+#### 容器化部署（Docker / Kubernetes）
+
+容器重啟後容器本地檔案系統會被清除。若未掛載 volume，儀表板定義在每次重啟後都會消失。
+
+**必須掛載持久化 volume**，例如：
+
+```yaml
+# docker-compose.yml
+volumes:
+  - ./data/dashboards:/app/App_Data/dashboards
+```
+
+```yaml
+# Kubernetes Deployment
+volumeMounts:
+  - name: dashboard-data
+    mountPath: /app/App_Data/dashboards
+volumes:
+  - name: dashboard-data
+    persistentVolumeClaim:
+      claimName: dashboard-pvc
+```
+
+同時確認 `DashboardDirectory` 設定為容器內的絕對路徑或相對於 `ContentRoot` 的路徑：
+
+```csharp
+builder.Services.AddWtmDashboard(opts =>
+{
+    // 容器環境建議使用絕對路徑或 ContentRoot-relative
+    opts.DashboardDirectory = Path.Combine(
+        builder.Environment.ContentRootPath,
+        "App_Data", "dashboards");
+});
+```
+
+---
+
+### 遷移至多節點儲存
+
+當需要支援多節點或高可用部署時，實作自訂的 `IDashboardService` 將儀表板定義存入關聯式資料庫。
+
+#### 步驟 1：新增 EF Core 實體
+
+```csharp
+public class DashboardEntity
+{
+    public string Id { get; set; }
+    public string Owner { get; set; }
+    public string? TenantId { get; set; }
+    public string DefinitionJson { get; set; }  // 序列化的 DashboardDefinition
+    public DateTime UpdatedAt { get; set; }
+}
+```
+
+#### 步驟 2：實作 IDashboardService
+
+```csharp
+public class EfDashboardService : IDashboardService
+{
+    private readonly DataContext _db;
+    private static readonly JsonSerializerOptions _opts = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
+    public EfDashboardService(DataContext db) => _db = db;
+
+    public async Task<DashboardDefinition?> GetAsync(string id, string? tenantId = null)
+    {
+        var entity = await _db.Set<DashboardEntity>()
+            .FirstOrDefaultAsync(e => e.Id == id &&
+                (tenantId == null || e.TenantId == tenantId));
+        return entity == null
+            ? null
+            : JsonSerializer.Deserialize<DashboardDefinition>(entity.DefinitionJson, _opts);
+    }
+
+    public async Task<IReadOnlyList<DashboardSummary>> ListAsync(
+        string userId, string[] userRoles, string? tenantId = null)
+    {
+        // 回傳使用者可存取的儀表板摘要列表
+        var entities = await _db.Set<DashboardEntity>()
+            .Where(e => tenantId == null || e.TenantId == tenantId)
+            .ToListAsync();
+        return entities
+            .Select(e => JsonSerializer.Deserialize<DashboardDefinition>(e.DefinitionJson, _opts)!)
+            .Where(d => CanAccess(d, userId, userRoles))
+            .Select(d => new DashboardSummary { Id = d.Id, Title = d.Title, Owner = d.Owner })
+            .ToList();
+    }
+
+    public async Task<string> CreateAsync(DashboardDefinition dashboard)
+    {
+        dashboard.Id ??= Guid.NewGuid().ToString("N");
+        _db.Set<DashboardEntity>().Add(new DashboardEntity
+        {
+            Id = dashboard.Id,
+            Owner = dashboard.Owner,
+            TenantId = dashboard.TenantId,
+            DefinitionJson = JsonSerializer.Serialize(dashboard, _opts),
+            UpdatedAt = DateTime.UtcNow
+        });
+        await _db.SaveChangesAsync();
+        return dashboard.Id;
+    }
+
+    public async Task UpdateAsync(DashboardDefinition dashboard)
+    {
+        var entity = await _db.Set<DashboardEntity>().FindAsync(dashboard.Id)
+            ?? throw new KeyNotFoundException(dashboard.Id);
+        entity.DefinitionJson = JsonSerializer.Serialize(dashboard, _opts);
+        entity.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+    }
+
+    public async Task DeleteAsync(string id)
+    {
+        var entity = await _db.Set<DashboardEntity>().FindAsync(id);
+        if (entity != null)
+        {
+            _db.Set<DashboardEntity>().Remove(entity);
+            await _db.SaveChangesAsync();
+        }
+    }
+
+    public bool CanAccess(DashboardDefinition d, string userId, string[] roles) =>
+        d.Owner == userId || d.SharedWith?.Any(s => roles.Contains(s)) == true ||
+        d.Visibility == DashboardVisibility.Public;
+
+    public bool CanEdit(DashboardDefinition d, string userId, string[] roles) =>
+        d.Owner == userId || roles.Any(r => d.AdminRoles?.Contains(r) == true);
+}
+```
+
+#### 步驟 3：替換服務註冊
+
+```csharp
+// Program.cs — 以自訂實作取代 JsonFileDashboardService
+builder.Services.AddWtmDashboard(); // 先呼叫以取得 DashboardOptions
+builder.Services.AddScoped<IDashboardService, EfDashboardService>();
+```
+
+---
+
+### 儲存方案對比
+
+| 情境 | 建議方案 | 說明 |
+|------|----------|------|
+| 單節點、開發環境 | `JsonFileDashboardService`（預設） | 零配置，立即可用 |
+| 單節點、生產容器 | `JsonFileDashboardService` + volume 掛載 | 掛載持久化 volume 即可 |
+| 多節點 / 高可用 | 自訂 `EfDashboardService`（見上方） | 資料存於共用資料庫 |
+| 企業級 / 大流量 | 自訂 `IDashboardService` + Redis 快取 | 依需求自行實作 |
