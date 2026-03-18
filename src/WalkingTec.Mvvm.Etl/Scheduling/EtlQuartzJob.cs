@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Quartz;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Support.Quartz;
@@ -152,13 +153,16 @@ public class EtlQuartzJob : WtmJob
         }
         catch (Exception ex)
         {
+            Sp.GetService<ILogger<EtlQuartzJob>>()
+                ?.LogError(ex, "ETL job {JobId} failed with unhandled exception", jobDefId);
+            var sanitized = EtlErrorSanitizer.Sanitize(ex);
             result = new EtlExecutionResult
             {
                 Success = false,
-                ErrorMessage = ex.ToString(),
+                ErrorMessage = sanitized,
                 ElapsedMs = (long)(DateTime.UtcNow - startedAt).TotalMilliseconds
             };
-            jobDef.LastError = ex.Message.Length > 2000 ? ex.Message[..2000] : ex.Message;
+            jobDef.LastError = sanitized;
             jobDef.Status = EtlJobStatus.Failed;
         }
         finally
