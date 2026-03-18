@@ -362,6 +362,7 @@ namespace WalkingTec.Mvvm.Core
         public virtual void DoAdd()
         {
             DoAddPrepare();
+            AppendChangeLog("Add", null, SerializeScalarProps(Entity));
             //删除不需要的附件
             if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm?.ServiceProvider != null)
             {
@@ -378,6 +379,7 @@ namespace WalkingTec.Mvvm.Core
         public virtual async Task DoAddAsync()
         {
             DoAddPrepare();
+            AppendChangeLog("Add", null, SerializeScalarProps(Entity));
             //删除不需要的附件
             if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm?.ServiceProvider != null)
             {
@@ -536,7 +538,9 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="updateAllFields">为true时，框架会更新当前Entity的全部值，为false时，框架会检查Request.Form里的key，只更新表单提交的字段</param>
         public virtual void DoEdit(bool updateAllFields = false)
         {
+            var _auditSnapshot = LoadEntitySnapshot();
             DoEditPrepare(updateAllFields);
+            AppendChangeLog("Edit", SerializeScalarProps(_auditSnapshot), SerializeScalarProps(Entity));
 
             try
             {
@@ -561,7 +565,9 @@ namespace WalkingTec.Mvvm.Core
 
         public virtual async Task DoEditAsync(bool updateAllFields = false)
         {
+            var _auditSnapshot = LoadEntitySnapshot();
             DoEditPrepare(updateAllFields);
+            AppendChangeLog("Edit", SerializeScalarProps(_auditSnapshot), SerializeScalarProps(Entity));
 
             await DC!.SaveChangesAsync();
             //删除不需要的附件
@@ -930,6 +936,7 @@ namespace WalkingTec.Mvvm.Core
             //如果是PersistPoco，则把IsValid设为false，并不进行物理删除
             if (typeof(IPersistPoco).IsAssignableFrom(typeof(TModel)))
             {
+                var _auditSnapshot = LoadEntitySnapshot();
                 FC.Add("Entity.IsValid", 0);
                 (Entity as IPersistPoco)!.IsValid = false;
 
@@ -942,6 +949,7 @@ namespace WalkingTec.Mvvm.Core
                 }
 
                 DoEditPrepare(false);
+                AppendChangeLog("Delete", SerializeScalarProps(_auditSnapshot), null);
                 DC!.SaveChanges();
             }
             //如果是普通的TopBasePoco，则进行物理删除
@@ -956,6 +964,7 @@ namespace WalkingTec.Mvvm.Core
             //如果是PersistPoco，则把IsValid设为false，并不进行物理删除
             if (typeof(IPersistPoco).IsAssignableFrom(typeof(TModel)))
             {
+                var _auditSnapshot = LoadEntitySnapshot();
                 FC.Add("Entity.IsValid", 0);
                 (Entity as IPersistPoco)!.IsValid = false;
                 var pros = typeof(TModel).GetAllProperties();
@@ -971,6 +980,7 @@ namespace WalkingTec.Mvvm.Core
                     f.SetValue(Entity, null);
                 }
                 DoEditPrepare(false);
+                AppendChangeLog("Delete", SerializeScalarProps(_auditSnapshot), null);
                 try
                 {
                     await DC!.SaveChangesAsync();
@@ -1113,6 +1123,75 @@ namespace WalkingTec.Mvvm.Core
                 MSD?.AddModelError("", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DeleteFailed"] ?? "" : "");
             }
         }
+
+        #region AuditChanges helpers
+
+        private static readonly System.Text.Json.JsonSerializerOptions _changeLogJsonOptions =
+            new System.Text.Json.JsonSerializerOptions
+            {
+                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+            };
+
+        /// <summary>
+        /// 若 TModel 標注了 <see cref="AuditChangesAttribute"/>，將一筆 ChangeLog 加入 DC（由呼叫方的 SaveChanges 一起提交）。
+        /// </summary>
+        private void AppendChangeLog(string action, string? oldJson, string? newJson)
+        {
+            if (!typeof(TModel).IsDefined(typeof(AuditChangesAttribute), inherit: true)) return;
+            DC!.Set<ChangeLog>().Add(new ChangeLog
+            {
+                Action     = action,
+                EntityType = typeof(TModel).FullName ?? typeof(TModel).Name,
+                EntityId   = Entity?.GetID()?.ToString(),
+                ChangedBy  = LoginUserInfo?.ITCode,
+                ChangedAt  = DateTime.UtcNow,
+                OldValues  = oldJson,
+                NewValues  = newJson,
+            });
+        }
+
+        /// <summary>
+        /// 從資料庫以 AsNoTracking 讀取 Entity 快照，用於記錄 OldValues。找不到時回傳 null。
+        /// </summary>
+        private TModel? LoadEntitySnapshot()
+        {
+            var id = Entity?.GetID();
+            if (id == null) return null;
+            try
+            {
+                return DC!.Set<TModel>().AsNoTracking().CheckID(id).FirstOrDefault();
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 將實體的純量屬性（排除導覽屬性與集合）序列化為 JSON 字串。
+        /// </summary>
+        private static string? SerializeScalarProps(TModel? entity)
+        {
+            if (entity == null) return null;
+            var dict = new Dictionary<string, object?>();
+            foreach (var p in typeof(TModel).GetAllProperties())
+            {
+                if (p.PropertyType.IsSubclassOf(typeof(TopBasePoco))) continue;
+                if (p.PropertyType != typeof(string)
+                    && typeof(System.Collections.IEnumerable).IsAssignableFrom(p.PropertyType)) continue;
+                try { dict[p.Name] = p.GetValue(entity); } catch { }
+            }
+            try
+            {
+                return System.Text.Json.JsonSerializer.Serialize(dict, _changeLogJsonOptions);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        #endregion
 
         /// <summary>
         /// 创建重复数据信息
