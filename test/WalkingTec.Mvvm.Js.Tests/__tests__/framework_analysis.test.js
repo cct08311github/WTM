@@ -240,6 +240,97 @@ describe('wtmAnalysis.toggle', () => {
     });
 });
 
+// ─── checkDependencies ───────────────────────────────────────────────────────
+describe('wtmAnalysis.checkDependencies', () => {
+    function makeDepEnv(overrides) {
+        // Build a fresh env with optional echarts/Sortable overrides
+        const envOverrides = {};
+        if (overrides && overrides.echarts) envOverrides.window = { echarts: overrides.echarts };
+        if (overrides && overrides.Sortable) envOverrides.Sortable = overrides.Sortable;
+        return makeEnv(envOverrides);
+    }
+
+    function makeDepPanel() {
+        let warningInserted = null;
+        const panel = {
+            style: { display: 'none' },
+            children: [],
+            firstChild: null,
+            querySelector: jest.fn(() => null),
+            querySelectorAll: jest.fn(() => []),
+            appendChild: jest.fn(function (c) { this.children.push(c); }),
+            insertBefore: jest.fn(function (newChild) {
+                warningInserted = newChild;
+                this.children.unshift(newChild);
+            }),
+            getWarning: () => warningInserted,
+        };
+        return panel;
+    }
+
+    test('echarts と Sortable 両方なし → 警告 div が panel に挿入される', () => {
+        const { wa } = makeEnv(); // default: no echarts, no Sortable
+        const panel = makeDepPanel();
+        wa.checkDependencies(panel);
+        expect(panel.insertBefore).toHaveBeenCalled();
+        const warn = panel.getWarning();
+        expect(warn).not.toBeNull();
+        expect(warn.className).toBe('wtm-analysis-dep-warn');
+    });
+
+    test('echarts なし → 警告に ECharts が含まれる', () => {
+        const { wa } = makeEnv(); // no echarts
+        const panel = makeDepPanel();
+        wa.checkDependencies(panel);
+        const warn = panel.getWarning();
+        // title + 2 paragraphs (echarts + sortable) or just echarts if Sortable is present
+        const texts = warn.children.map(c => c.textContent || '').join(' ');
+        expect(texts).toContain('ECharts');
+    });
+
+    test('Sortable なし → 警告に SortableJS が含まれる', () => {
+        const { wa } = makeEnv(); // no Sortable
+        const panel = makeDepPanel();
+        wa.checkDependencies(panel);
+        const warn = panel.getWarning();
+        const texts = warn.children.map(c => c.textContent || '').join(' ');
+        expect(texts).toContain('SortableJS');
+    });
+
+    test('echarts と Sortable 両方あり → 警告なし', () => {
+        const { wa } = makeEnv({
+            echarts: { init: jest.fn(), getInstanceByDom: jest.fn() },
+            Sortable: function () {},
+        });
+        const panel = makeDepPanel();
+        wa.checkDependencies(panel);
+        expect(panel.insertBefore).not.toHaveBeenCalled();
+        expect(panel.appendChild).not.toHaveBeenCalled();
+    });
+
+    test('同じ panel に二回呼び出しても警告は一度だけ', () => {
+        const { wa } = makeEnv(); // no deps
+        const panel = makeDepPanel();
+        // Second call: querySelector returns existing warning
+        let callCount = 0;
+        panel.querySelector = jest.fn(() => {
+            callCount++;
+            return callCount > 1 ? { className: 'wtm-analysis-dep-warn' } : null;
+        });
+        wa.checkDependencies(panel);
+        wa.checkDependencies(panel);
+        expect(panel.insertBefore).toHaveBeenCalledTimes(1);
+    });
+
+    test('insertBefore 未定義の場合 appendChild にフォールバック', () => {
+        const { wa } = makeEnv(); // no deps
+        const panel = makeDepPanel();
+        delete panel.insertBefore;
+        wa.checkDependencies(panel);
+        expect(panel.appendChild).toHaveBeenCalled();
+    });
+});
+
 // 產生假的已勾選 checkbox mock（供 query/exportData 使用）
 function fakeCheckedCbs(gridId) {
     return [

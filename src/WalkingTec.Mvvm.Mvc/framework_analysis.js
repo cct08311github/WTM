@@ -160,6 +160,51 @@
     var Sortable = (typeof window !== 'undefined' && window.Sortable) ||
                    (typeof global !== 'undefined' && global.Sortable) || null;
 
+    // ─── 依賴檢查 ─────────────────────────────────────────────────────────────
+    /**
+     * 檢查 ECharts 和 SortableJS 是否已載入。
+     * 若缺少任一依賴，在 panel 頂端插入可見的警告 div（每個 panel 只插入一次）。
+     * @param {Element} panel  Analysis 面板根元素
+     */
+    function checkDependencies(panel) {
+        var missing = [];
+        if (typeof window.echarts === 'undefined') {
+            missing.push('ECharts — 請在 _Layout.cshtml 中加入：' +
+                '<script src="https://cdn.jsdelivr.net/npm/echarts@5"></script>');
+        }
+        if (!Sortable) {
+            missing.push('SortableJS — 請在 _Layout.cshtml 中加入：' +
+                '<script src="https://cdn.jsdelivr.net/npm/sortablejs@1"></script>');
+        }
+        if (missing.length === 0) return;
+
+        // 每個 panel 只顯示一次
+        if (panel.querySelector && panel.querySelector('.wtm-analysis-dep-warn')) return;
+
+        var warn = document.createElement('div');
+        warn.className = 'wtm-analysis-dep-warn';
+        warn.style.cssText =
+            'background:#fff3cd;border:1px solid #ffc107;padding:8px 12px;' +
+            'margin-bottom:8px;border-radius:4px;font-size:13px;line-height:1.5;';
+
+        var title = document.createElement('strong');
+        title.textContent = 'Analysis 模組缺少必要前端依賴，部分功能將無法使用：';
+        warn.appendChild(title);
+
+        missing.forEach(function (dep) {
+            var p = document.createElement('p');
+            p.style.cssText = 'margin:4px 0 0 8px;';
+            p.textContent = '• ' + dep;
+            warn.appendChild(p);
+        });
+
+        if (typeof panel.insertBefore === 'function') {
+            panel.insertBefore(warn, panel.firstChild);
+        } else {
+            panel.appendChild(warn);
+        }
+    }
+
     // ─── Pill 建立 ────────────────────────────────────────────────────────────
 
     function createPoolPill(gridId, field) {
@@ -389,6 +434,7 @@
         if (!st.visible) {
             panel.style.display = 'block';
             st.visible = true;
+            checkDependencies(panel);
             if (!st.fields) {
                 loadMeta(gridId, listVmType, panel);
             }
@@ -1737,6 +1783,7 @@
         collectFilters: collectFilters,
         updateFilterFieldOptions: updateFilterFieldOptions,
         parseFriendlyError: parseFriendlyError,
+        checkDependencies: checkDependencies,
         _getState: function (gridId) { return _state[gridId]; }
     };
 
