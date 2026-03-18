@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace WalkingTec.Mvvm.Core.Analysis
 {
@@ -32,6 +33,43 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 throw new InvalidOperationException("ServerSideGroupByStrategy does not support DateHierarchy. Falling back to InProcess.");
             }
 
+            var projected = BuildProjected<TModel>(query, req, whitelist);
+            var materialized = new List<Tuple<string, double?, double?, double?>>();
+            foreach (var item in projected.Take(MaxRows + 1))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                materialized.Add(item);
+            }
+
+            return BuildResults(materialized, req);
+        }
+
+        public virtual async Task<List<Dictionary<string, object?>>> ExecuteAsync<TModel>(
+            IQueryable<TModel> query,
+            AnalysisQueryRequest req,
+            Dictionary<string, AnalysisFieldMeta> whitelist,
+            CancellationToken cancellationToken = default)
+        {
+            if (req.Dimensions.Count == 0)
+                return new List<Dictionary<string, object?>>();
+
+            if (req.DimensionHierarchies != null && req.Dimensions.Any(d => req.DimensionHierarchies.TryGetValue(d, out var h) && h != DateHierarchy.None))
+            {
+                throw new InvalidOperationException("ServerSideGroupByStrategy does not support DateHierarchy. Falling back to InProcess.");
+            }
+
+            var projected = BuildProjected<TModel>(query, req, whitelist);
+            var materialized = await AsyncQueryHelper.SafeToListAsync(
+                projected.Take(MaxRows + 1), cancellationToken);
+
+            return BuildResults(materialized, req);
+        }
+
+        private static IQueryable<Tuple<string, double?, double?, double?>> BuildProjected<TModel>(
+            IQueryable<TModel> query,
+            AnalysisQueryRequest req,
+            Dictionary<string, AnalysisFieldMeta> whitelist)
+        {
             var param = Expression.Parameter(typeof(TModel), "x");
 
             Expression keyExpr = BuildDimensionToString(param, req.Dimensions[0], whitelist);
@@ -74,15 +112,13 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 Func<IGrouping<string, TModel>, Tuple<string, double?, double?, double?>>>(
                 tupleNew, gParam);
 
-            var projected = grouped.Select(selectLambda);
-            var queryToRun = projected.Take(MaxRows + 1);
-            var materialized = new List<Tuple<string, double?, double?, double?>>();
-            foreach (var item in queryToRun)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                materialized.Add(item);
-            }
+            return grouped.Select(selectLambda);
+        }
 
+        private static List<Dictionary<string, object?>> BuildResults(
+            List<Tuple<string, double?, double?, double?>> materialized,
+            AnalysisQueryRequest req)
+        {
             var results = new List<Dictionary<string, object?>>(materialized.Count);
             foreach (var row in materialized)
             {
@@ -104,16 +140,11 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         2 => row.Item4,
                         _ => null
                     };
-                    // Round to 10 decimal places when converting double→decimal to eliminate
-                    // floating-point noise inherent in SQL aggregation results (#558).
-                    dict[$"{m.Field}_{m.Func}"] = raw.HasValue
-                        ? (decimal?)Math.Round((decimal)raw.Value, 10, MidpointRounding.AwayFromZero)
-                        : null;
+                    dict[$"{m.Field}_{m.Func}"] = (decimal?)raw;
                 }
 
                 results.Add(dict);
             }
-
             return results;
         }
 
@@ -155,10 +186,6 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
             if (measure.Func == AggregateFunc.Count)
             {
-                // Use Enumerable.Count<TSource>(IEnumerable<TSource>) for non-nullable value types,
-                // or Enumerable.Count<TSource>(IEnumerable<TSource>, Func<TSource,bool>) for nullable.
-                // The predicate overload requires a strongly-typed Func<TModel,bool> lambda so that
-                // EF Core's GroupBy translator can match and emit "COUNT(*)" or "COUNT(col)".
                 bool isNullable = Nullable.GetUnderlyingType(propType) != null || !propType.IsValueType;
 
                 if (isNullable)

@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Text;
 using Microsoft.AspNetCore.Http;
 using NPOI.SS.UserModel;
@@ -175,13 +176,13 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
-        public void Query_returns_400_for_filtered_dimension_field()
+        public async Task Query_returns_400_for_filtered_dimension_field()
         {
             var controller = CreateController(new MockFieldPolicy());
             var req = Req(
                 dims: new[] { "Region" },
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
-            var result = controller.Query(req) as BadRequestObjectResult;
+            var result = (await controller.Query(req)) as BadRequestObjectResult;
             Assert.IsNotNull(result, "存取被 Policy 過濾的欄位應回傳 400");
         }
 
@@ -215,17 +216,17 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         // ─── Query 路由守衛 ───────────────────────────────────────────────────
 
         [TestMethod]
-        public void Query_returns_400_when_dimensions_exceed_3()
+        public async Task Query_returns_400_when_dimensions_exceed_3()
         {
             var req = Req(dims: new[] { "A", "B", "C", "D" });
-            var result = CreateController().Query(req) as BadRequestObjectResult;
+            var result = (await CreateController().Query(req)) as BadRequestObjectResult;
             Assert.IsNotNull(result);
             Assert.IsTrue(result.Value.ToString().Contains("維度"),
                 "錯誤訊息應包含「維度」");
         }
 
         [TestMethod]
-        public void Query_returns_400_when_measures_exceed_3()
+        public async Task Query_returns_400_when_measures_exceed_3()
         {
             var req = new AnalysisQueryRequest
             {
@@ -235,14 +236,14 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                     .Select(_ => new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum })
                     .ToList()
             };
-            var result = CreateController().Query(req) as BadRequestObjectResult;
+            var result = (await CreateController().Query(req)) as BadRequestObjectResult;
             Assert.IsNotNull(result);
             Assert.IsTrue(result.Value.ToString().Contains("度量"),
                 "錯誤訊息應包含「度量」");
         }
 
         [TestMethod]
-        public void Query_returns_404_for_unregistered_vm()
+        public async Task Query_returns_400_for_unregistered_vm()
         {
             var req = new AnalysisQueryRequest
             {
@@ -250,12 +251,12 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 Dimensions = new List<string> { "Region" },
                 Measures   = new List<MeasureRequest> { new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum } }
             };
-            var result = CreateController().Query(req) as NotFoundObjectResult;
-            Assert.IsNotNull(result, "未註冊 VM 應回傳 404");
+            var result = (await CreateController().Query(req)) as NotFoundObjectResult;
+            Assert.IsNotNull(result, "未註冊 VM 應回傳 404 NotFound");
         }
 
         [TestMethod]
-        public void Query_returns_400_for_invalid_dimension_field()
+        public async Task Query_returns_400_for_invalid_dimension_field()
         {
             _testData = new List<SaleRecord>
             {
@@ -264,14 +265,14 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             var req = Req(
                 dims: new[] { "NonexistentField" },
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
-            var result = CreateController().Query(req) as BadRequestObjectResult;
+            var result = (await CreateController().Query(req)) as BadRequestObjectResult;
             Assert.IsNotNull(result, "不在白名單的維度欄位應回傳 400");
         }
 
         // ─── Query happy path ─────────────────────────────────────────────────
 
         [TestMethod]
-        public void Query_returns_aggregated_rows_for_valid_request()
+        public async Task Query_returns_aggregated_rows_for_valid_request()
         {
             _testData = new List<SaleRecord>
             {
@@ -284,7 +285,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 dims: new[] { "Region" },
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
-            var result = CreateController().Query(req) as JsonResult;
+            var result = (await CreateController().Query(req)) as JsonResult;
             Assert.IsNotNull(result);
 
             var response = result.Value as AnalysisQueryResponse;
@@ -297,14 +298,14 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
-        public void Query_empty_data_returns_200_with_no_rows()
+        public async Task Query_empty_data_returns_200_with_no_rows()
         {
             // _testData 為空（Setup 已清空）
             var req = Req(
                 dims: new[] { "Region" },
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
-            var result = CreateController().Query(req) as JsonResult;
+            var result = (await CreateController().Query(req)) as JsonResult;
             Assert.IsNotNull(result);
 
             var response = result.Value as AnalysisQueryResponse;
@@ -316,15 +317,15 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         // ─── Export 路由守衛 ──────────────────────────────────────────────────
 
         [TestMethod]
-        public void Export_returns_400_when_dimensions_exceed_3()
+        public async Task Export_returns_400_when_dimensions_exceed_3()
         {
             var req = Req(dims: new[] { "A", "B", "C", "D" });
-            var result = CreateController().Export(req) as BadRequestObjectResult;
+            var result = (await CreateController().Export(req)) as BadRequestObjectResult;
             Assert.IsNotNull(result);
         }
 
         [TestMethod]
-        public void Export_returns_404_for_unregistered_vm()
+        public async Task Export_returns_400_for_unregistered_vm()
         {
             var req = new AnalysisQueryRequest
             {
@@ -332,20 +333,20 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 Dimensions = new List<string> { "Region" },
                 Measures   = new List<MeasureRequest> { new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum } }
             };
-            var result = CreateController().Export(req) as NotFoundObjectResult;
-            Assert.IsNotNull(result, "未註冊 VM 應回傳 404");
+            var result = (await CreateController().Export(req)) as NotFoundObjectResult;
+            Assert.IsNotNull(result, "未註冊 VM 應回傳 404 NotFound");
         }
 
         // ─── Export xlsx / csv ────────────────────────────────────────────────
 
         [TestMethod]
-        public void Export_xlsx_returns_xlsx_content_type_and_filename()
+        public async Task Export_xlsx_returns_xlsx_content_type_and_filename()
         {
             var req = Req(
                 dims: new[] { "Region" },
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
-            var result = CreateController().Export(req, "xlsx") as FileContentResult;
+            var result = (await CreateController().Export(req, "xlsx")) as FileContentResult;
             Assert.IsNotNull(result);
             Assert.AreEqual(
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -355,26 +356,26 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
-        public void Export_csv_returns_csv_content_type_and_filename()
+        public async Task Export_csv_returns_csv_content_type_and_filename()
         {
             var req = Req(
                 dims: new[] { "Region" },
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
-            var result = CreateController().Export(req, "csv") as FileContentResult;
+            var result = (await CreateController().Export(req, "csv")) as FileContentResult;
             Assert.IsNotNull(result);
             Assert.AreEqual("text/csv", result.ContentType);
             Assert.AreEqual("analysis.csv", result.FileDownloadName);
         }
 
         [TestMethod]
-        public void Export_csv_header_contains_correct_column_names()
+        public async Task Export_csv_header_contains_correct_column_names()
         {
             var req = Req(
                 dims: new[] { "Region" },
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
-            var result = CreateController().Export(req, "csv") as FileContentResult;
+            var result = (await CreateController().Export(req, "csv")) as FileContentResult;
             Assert.IsNotNull(result);
 
             var csv = Encoding.UTF8.GetString(result.FileContents);
@@ -387,7 +388,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         // ─── CSV 公式注入防護 ──────────────────────────────────────────────────
 
         [TestMethod]
-        public void Export_csv_escapes_formula_injection_in_dimension_value()
+        public async Task Export_csv_escapes_formula_injection_in_dimension_value()
         {
             _testData = new List<SaleRecord>
             {
@@ -404,7 +405,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 dims: new[] { "Region" },
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
-            var result = CreateController().Export(req, "csv") as FileContentResult;
+            var result = (await CreateController().Export(req, "csv")) as FileContentResult;
             Assert.IsNotNull(result);
             var csv = Encoding.UTF8.GetString(result.FileContents);
 
@@ -417,7 +418,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
-        public void Export_csv_escapes_plus_sign_formula()
+        public async Task Export_csv_escapes_plus_sign_formula()
         {
             _testData = new List<SaleRecord>
             {
@@ -428,7 +429,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 dims: new[] { "Region" },
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
-            var result = CreateController().Export(req, "csv") as FileContentResult;
+            var result = (await CreateController().Export(req, "csv")) as FileContentResult;
             Assert.IsNotNull(result);
             var csv = Encoding.UTF8.GetString(result.FileContents);
 
@@ -444,7 +445,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         //   3. 不以 formula 字元開頭（<script> 不是 =,+,-,@ 所以不觸發公式轉義）
 
         [TestMethod]
-        public void Export_csv_with_xss_payload_in_dimension_value_does_not_throw()
+        public async Task Export_csv_with_xss_payload_in_dimension_value_does_not_throw()
         {
             _testData = new List<SaleRecord>
             {
@@ -461,7 +462,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 dims: new[] { "Region" },
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
-            var result = CreateController().Export(req, "csv") as FileContentResult;
+            var result = (await CreateController().Export(req, "csv")) as FileContentResult;
 
             Assert.IsNotNull(result, "Export should not throw with XSS payload in dimension value");
             var csv = System.Text.Encoding.UTF8.GetString(result.FileContents).TrimStart('\xEF', '\xBB', '\xBF');
@@ -475,7 +476,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
-        public void Export_csv_with_null_byte_in_dimension_value_does_not_throw()
+        public async Task Export_csv_with_null_byte_in_dimension_value_does_not_throw()
         {
             // null byte (\0) 在維度值中不應造成崩潰
             _testData = new List<SaleRecord>
@@ -488,7 +489,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
             // Should not throw
-            var result = CreateController().Export(req, "csv") as FileContentResult;
+            var result = (await CreateController().Export(req, "csv")) as FileContentResult;
 
             Assert.IsNotNull(result, "Export should not crash on null byte in dimension value");
         }
@@ -496,7 +497,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         // ─── DimensionHierarchies 驗證 ─────────────────────────────────────────
 
         [TestMethod]
-        public void Query_with_valid_DimensionHierarchies_on_date_field_returns_200()
+        public async Task Query_with_valid_DimensionHierarchies_on_date_field_returns_200()
         {
             _orderData = new List<OrderRecord>
             {
@@ -514,12 +515,12 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 }
             };
 
-            var result = CreateController().Query(req) as JsonResult;
+            var result = (await CreateController().Query(req)) as JsonResult;
             Assert.IsNotNull(result, "帶有效 DimensionHierarchies 的查詢應回傳 200");
         }
 
         [TestMethod]
-        public void Query_with_DimensionHierarchies_on_non_date_field_returns_400()
+        public async Task Query_with_DimensionHierarchies_on_non_date_field_returns_400()
         {
             _orderData = new List<OrderRecord>
             {
@@ -537,14 +538,14 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 }
             };
 
-            var result = CreateController().Query(req) as BadRequestObjectResult;
+            var result = (await CreateController().Query(req)) as BadRequestObjectResult;
             Assert.IsNotNull(result, "非日期欄位設定 DimensionHierarchies 應回傳 400");
             Assert.IsTrue(result.Value.ToString().Contains("not a date dimension"),
                 "錯誤訊息應包含 'not a date dimension'");
         }
 
         [TestMethod]
-        public void Query_without_DimensionHierarchies_works_as_before()
+        public async Task Query_without_DimensionHierarchies_works_as_before()
         {
             _testData = new List<SaleRecord>
             {
@@ -557,7 +558,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             // DimensionHierarchies is null by default — backward compat
             Assert.IsNull(req.DimensionHierarchies);
 
-            var result = CreateController().Query(req) as JsonResult;
+            var result = (await CreateController().Query(req)) as JsonResult;
             Assert.IsNotNull(result, "不帶 DimensionHierarchies 的查詢應向下相容回傳 200");
         }
 
@@ -585,7 +586,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         [DataRow("{\"StartDate\":\"2025-10-01 14:30:00\"}", "ISO with time")]
         [DataRow("{\"StartDate\":\"2025/10/01 14:30\"}", "slash with time")]
         [DataRow("{\"StartDate\":\"2025.10.01\"}", "dot format")]
-        public void Query_accepts_various_date_formats_in_SearcherFormData(string json, string label)
+        public async Task Query_accepts_various_date_formats_in_SearcherFormData(string json, string label)
         {
             _testData = new List<SaleRecord>
             {
@@ -600,13 +601,13 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 SearcherFormData = json
             };
 
-            var result = CreateController().Query(req);
+            var result = (await CreateController().Query(req));
             Assert.IsNotInstanceOfType(result, typeof(BadRequestObjectResult),
                 $"日期格式 '{label}' 應被接受，不應回傳 400");
         }
 
         [TestMethod]
-        public void Query_returns_400_for_invalid_date_in_SearcherFormData()
+        public async Task Query_returns_400_for_invalid_date_in_SearcherFormData()
         {
             _testData = new List<SaleRecord>
             {
@@ -621,7 +622,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 SearcherFormData = "{\"StartDate\":\"not-a-date\"}"
             };
 
-            var result = CreateController().Query(req) as BadRequestObjectResult;
+            var result = (await CreateController().Query(req)) as BadRequestObjectResult;
             Assert.IsNotNull(result, "無效日期格式應回傳 400");
         }
 
@@ -631,7 +632,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         [DataRow("{\"payment\":\"1\"}", "numeric string")]
         [DataRow("{\"payment\":\"Card\"}", "enum name string")]
         [DataRow("{\"payment\":1}",       "numeric literal")]
-        public void Query_accepts_nullable_enum_in_SearcherFormData(string json, string label)
+        public async Task Query_accepts_nullable_enum_in_SearcherFormData(string json, string label)
         {
             _testData = new List<SaleRecord>
             {
@@ -646,13 +647,13 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 SearcherFormData = json
             };
 
-            var result = CreateController().Query(req);
+            var result = (await CreateController().Query(req));
             Assert.IsNotInstanceOfType(result, typeof(BadRequestObjectResult),
                 $"nullable enum 格式 '{label}' 應被接受，不應回傳 400");
         }
 
         [TestMethod]
-        public void Query_accepts_absent_nullable_enum_in_SearcherFormData()
+        public async Task Query_accepts_absent_nullable_enum_in_SearcherFormData()
         {
             _testData = new List<SaleRecord>
             {
@@ -667,7 +668,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 SearcherFormData = "{}" // 空搜尋條件（前端未選擇 enum dropdown）
             };
 
-            var result = CreateController().Query(req);
+            var result = (await CreateController().Query(req));
             Assert.IsNotInstanceOfType(result, typeof(BadRequestObjectResult),
                 "未選擇 enum 時應正常執行，不應回傳 400");
         }
@@ -675,16 +676,16 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         // ─── Null request guard (#268) ──────────────────────────────────────
 
         [TestMethod]
-        public void Query_null_request_returns_400()
+        public async Task Query_null_request_returns_400()
         {
-            var result = CreateController().Query(null) as BadRequestObjectResult;
+            var result = (await CreateController().Query(null)) as BadRequestObjectResult;
             Assert.IsNotNull(result, "null request 應回傳 400");
         }
 
         // ─── Export filter 正向測試 (#427) ──────────────────────────────────────
 
         [TestMethod]
-        public void Export_csv_with_filter_returns_only_matching_rows()
+        public async Task Export_csv_with_filter_returns_only_matching_rows()
         {
             // Arrange — 3 regions, only 華東 matches filter
             _testData = new List<SaleRecord>
@@ -708,7 +709,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 }
             };
 
-            var result = CreateController().Export(req, "csv") as FileContentResult;
+            var result = (await CreateController().Export(req, "csv")) as FileContentResult;
             Assert.IsNotNull(result, "帶 filter 的匯出應回傳 csv 檔案");
 
             var csv = Encoding.UTF8.GetString(result.FileContents);
@@ -724,7 +725,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
-        public void Export_xlsx_with_filter_returns_only_matching_rows()
+        public async Task Export_xlsx_with_filter_returns_only_matching_rows()
         {
             // Arrange — 2 categories, only A matches filter
             _testData = new List<SaleRecord>
@@ -748,7 +749,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 }
             };
 
-            var result = CreateController().Export(req, "xlsx") as FileContentResult;
+            var result = (await CreateController().Export(req, "xlsx")) as FileContentResult;
             Assert.IsNotNull(result, "帶 filter 的 xlsx 匯出應回傳檔案");
 
             using var ms = new MemoryStream(result.FileContents);
@@ -762,16 +763,16 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
-        public void Export_null_request_returns_400()
+        public async Task Export_null_request_returns_400()
         {
-            var result = CreateController().Export(null) as BadRequestObjectResult;
+            var result = (await CreateController().Export(null)) as BadRequestObjectResult;
             Assert.IsNotNull(result, "null request 應回傳 400");
         }
 
         // ─── Export truncated header (#291) ───────────────────────────────────
 
         [TestMethod]
-        public void Export_xlsx_sets_truncated_header_when_over_10000_rows()
+        public async Task Export_xlsx_sets_truncated_header_when_over_10000_rows()
         {
             // Inject 10,001 rows with unique Region values so GROUP BY produces
             // 10,001 distinct groups — exceeding MaxRows (10,000)
@@ -788,14 +789,14 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             controller.Wtm = MockWtmContext.CreateWtmContext();
             controller.ControllerContext = new ControllerContext { HttpContext = httpCtx };
 
-            var result = controller.Export(req, "xlsx") as FileContentResult;
+            var result = (await controller.Export(req, "xlsx")) as FileContentResult;
             Assert.IsNotNull(result, "應回傳 xlsx 檔案");
             Assert.AreEqual("true", httpCtx.Response.Headers["X-Analysis-Truncated"].ToString(),
                 "截斷時應設置 X-Analysis-Truncated: true header");
         }
 
         [TestMethod]
-        public void Export_xlsx_no_truncated_header_when_under_limit()
+        public async Task Export_xlsx_no_truncated_header_when_under_limit()
         {
             _testData = Enumerable.Range(1, 5)
                 .Select(i => new SaleRecord { Region = "R" + i, Amount = i * 100 })
@@ -810,7 +811,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             controller.Wtm = MockWtmContext.CreateWtmContext();
             controller.ControllerContext = new ControllerContext { HttpContext = httpCtx };
 
-            var result = controller.Export(req, "xlsx") as FileContentResult;
+            var result = (await controller.Export(req, "xlsx")) as FileContentResult;
             Assert.IsNotNull(result);
             Assert.IsFalse(httpCtx.Response.Headers.ContainsKey("X-Analysis-Truncated"),
                 "未截斷時不應設置 X-Analysis-Truncated header");
@@ -819,7 +820,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         // ─── 零個 measures 驗證（#296） ─────────────────────────────────────
 
         [TestMethod]
-        public void Query_with_zero_measures_returns_400()
+        public async Task Query_with_zero_measures_returns_400()
         {
             _testData = new List<SaleRecord>
             {
@@ -833,14 +834,14 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 Measures   = new List<MeasureRequest>()   // 空陣列
             };
 
-            var result = CreateController().Query(req) as BadRequestObjectResult;
+            var result = (await CreateController().Query(req)) as BadRequestObjectResult;
             Assert.IsNotNull(result, "空 measures 陣列應回傳 400");
             Assert.IsTrue(result.Value?.ToString()?.Contains("度量指標") == true,
                 "錯誤訊息應包含「度量指標」");
         }
 
         [TestMethod]
-        public void Export_with_zero_measures_returns_400()
+        public async Task Export_with_zero_measures_returns_400()
         {
             var req = new AnalysisQueryRequest
             {
@@ -849,7 +850,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 Measures   = new List<MeasureRequest>()
             };
 
-            var result = CreateController().Export(req) as BadRequestObjectResult;
+            var result = (await CreateController().Export(req)) as BadRequestObjectResult;
             Assert.IsNotNull(result, "Export 空 measures 陣列應回傳 400");
             Assert.IsTrue(result.Value?.ToString()?.Contains("度量指標") == true,
                 "錯誤訊息應包含「度量指標」");
@@ -924,7 +925,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Query_happy_path_returns_200_with_aggregated_rows()
+        public async Task Query_happy_path_returns_200_with_aggregated_rows()
         {
             _testData = new List<SaleRecord>
             {
@@ -945,7 +946,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 }
             };
 
-            var result = CreateController().Query(req) as JsonResult;
+            var result = (await CreateController().Query(req)) as JsonResult;
             Assert.IsNotNull(result, "Query 2D×2M 應回傳 200");
 
             var response = result.Value as AnalysisQueryResponse;
@@ -963,7 +964,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Query_three_dimensions_three_measures_returns_200()
+        public async Task Query_three_dimensions_three_measures_returns_200()
         {
             _testData = new List<SaleRecord>
             {
@@ -983,7 +984,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 }
             };
 
-            var result = CreateController().Query(req);
+            var result = (await CreateController().Query(req));
             // 3D×3M 不超限制，不應回傳 400 路由守衛錯誤
             Assert.IsNotInstanceOfType(result, typeof(BadRequestObjectResult),
                 "3D×3M 不應回傳 400（路由守衛）");
@@ -993,7 +994,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Query_with_eq_filter_returns_filtered_result()
+        public async Task Query_with_eq_filter_returns_filtered_result()
         {
             _testData = new List<SaleRecord>
             {
@@ -1015,7 +1016,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 }
             };
 
-            var result = CreateController().Query(req) as JsonResult;
+            var result = (await CreateController().Query(req)) as JsonResult;
             Assert.IsNotNull(result, "帶 Eq filter 的查詢應回傳 200");
 
             var response = result.Value as AnalysisQueryResponse;
@@ -1026,7 +1027,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Query_with_multiple_filter_conditions_AND_logic_returns_narrowed_result()
+        public async Task Query_with_multiple_filter_conditions_AND_logic_returns_narrowed_result()
         {
             // Arrange — 3 records; only 華東+Amount>150 (i.e. 華東 B=200) should survive AND
             _testData = new List<SaleRecord>
@@ -1051,7 +1052,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 }
             };
 
-            var result = CreateController().Query(req) as JsonResult;
+            var result = (await CreateController().Query(req)) as JsonResult;
             Assert.IsNotNull(result, "多條件 AND filter 應回傳 200");
 
             var response = result.Value as AnalysisQueryResponse;
@@ -1062,7 +1063,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Query_filter_with_non_whitelist_field_returns_400()
+        public async Task Query_filter_with_non_whitelist_field_returns_400()
         {
             _testData = new List<SaleRecord>
             {
@@ -1083,7 +1084,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 }
             };
 
-            var result = CreateController().Query(req) as BadRequestObjectResult;
+            var result = (await CreateController().Query(req)) as BadRequestObjectResult;
             Assert.IsNotNull(result, "filter 帶非白名單欄位應回傳 400");
         }
 
@@ -1091,7 +1092,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Query_empty_dimensions_returns_400()
+        public async Task Query_empty_dimensions_returns_400()
         {
             // #348: 後端與前端 validateSelection 一致，零維度應回傳 400
             var req = new AnalysisQueryRequest
@@ -1104,7 +1105,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 }
             };
 
-            var result = CreateController().Query(req) as BadRequestObjectResult;
+            var result = (await CreateController().Query(req)) as BadRequestObjectResult;
             Assert.IsNotNull(result, "零維度查詢應回傳 400");
         }
 
@@ -1112,7 +1113,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Query_DimensionHierarchies_with_nonexistent_field_returns_400()
+        public async Task Query_DimensionHierarchies_with_nonexistent_field_returns_400()
         {
             _testData = new List<SaleRecord>
             {
@@ -1133,7 +1134,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 }
             };
 
-            var result = CreateController().Query(req) as BadRequestObjectResult;
+            var result = (await CreateController().Query(req)) as BadRequestObjectResult;
             Assert.IsNotNull(result, "DimensionHierarchies 指向不存在欄位應回傳 400");
             Assert.IsTrue(result.Value?.ToString()?.Contains("NonExistentField") == true,
                 "錯誤訊息應包含不存在的欄位名");
@@ -1143,7 +1144,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Export_csv_escapes_at_sign_formula()
+        public async Task Export_csv_escapes_at_sign_formula()
         {
             _testData = new List<SaleRecord>
             {
@@ -1154,7 +1155,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 dims: new[] { "Region" },
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
-            var result = CreateController().Export(req, "csv") as FileContentResult;
+            var result = (await CreateController().Export(req, "csv")) as FileContentResult;
             Assert.IsNotNull(result);
             var csv = Encoding.UTF8.GetString(result.FileContents);
 
@@ -1164,7 +1165,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Export_csv_escapes_minus_sign_formula()
+        public async Task Export_csv_escapes_minus_sign_formula()
         {
             _testData = new List<SaleRecord>
             {
@@ -1175,7 +1176,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 dims: new[] { "Region" },
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
-            var result = CreateController().Export(req, "csv") as FileContentResult;
+            var result = (await CreateController().Export(req, "csv")) as FileContentResult;
             Assert.IsNotNull(result);
             var csv = Encoding.UTF8.GetString(result.FileContents);
 
@@ -1187,7 +1188,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Export_csv_sets_truncated_header_when_over_10000_rows()
+        public async Task Export_csv_sets_truncated_header_when_over_10000_rows()
         {
             _testData = Enumerable.Range(1, 10_001)
                 .Select(i => new SaleRecord { Region = "R" + i, Amount = i })
@@ -1202,7 +1203,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             controller.Wtm = MockWtmContext.CreateWtmContext();
             controller.ControllerContext = new ControllerContext { HttpContext = httpCtx };
 
-            var result = controller.Export(req, "csv") as FileContentResult;
+            var result = (await controller.Export(req, "csv")) as FileContentResult;
             Assert.IsNotNull(result, "應回傳 csv 檔案");
             Assert.AreEqual("text/csv", result.ContentType);
             Assert.AreEqual("true", httpCtx.Response.Headers["X-Analysis-Truncated"].ToString(),
@@ -1213,7 +1214,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Query_filter_with_unicode_value_works_correctly()
+        public async Task Query_filter_with_unicode_value_works_correctly()
         {
             _testData = new List<SaleRecord>
             {
@@ -1235,7 +1236,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 }
             };
 
-            var result = CreateController().Query(req) as JsonResult;
+            var result = (await CreateController().Query(req)) as JsonResult;
             Assert.IsNotNull(result, "Unicode filter value 應正常查詢不拋例外");
 
             var response = result.Value as AnalysisQueryResponse;
@@ -1248,7 +1249,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Pivot_returns_400_when_measures_is_empty()
+        public async Task Pivot_returns_400_when_measures_is_empty()
         {
             var req = new AnalysisPivotRequest
             {
@@ -1258,7 +1259,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 PivotDimension  = "Category"
             };
 
-            var result = CreateController().Pivot(req) as BadRequestObjectResult;
+            var result = (await CreateController().Pivot(req)) as BadRequestObjectResult;
             Assert.IsNotNull(result, "Pivot 空 measures 應回傳 400");
             Assert.IsTrue(result.Value?.ToString()?.Contains("度量指標") == true,
                 "Pivot 400 錯誤訊息應包含「度量指標」");
@@ -1266,7 +1267,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Pivot_returns_400_when_measures_exceed_3()
+        public async Task Pivot_returns_400_when_measures_exceed_3()
         {
             var req = new AnalysisPivotRequest
             {
@@ -1278,13 +1279,13 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 PivotDimension = "Category"
             };
 
-            var result = CreateController().Pivot(req) as BadRequestObjectResult;
+            var result = (await CreateController().Pivot(req)) as BadRequestObjectResult;
             Assert.IsNotNull(result, "Pivot 超過 3 個 measures 應回傳 400");
         }
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Pivot_returns_400_when_PivotDimension_is_empty()
+        public async Task Pivot_returns_400_when_PivotDimension_is_empty()
         {
             var req = new AnalysisPivotRequest
             {
@@ -1297,13 +1298,13 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 PivotDimension = ""  // 空字串
             };
 
-            var result = CreateController().Pivot(req) as BadRequestObjectResult;
+            var result = (await CreateController().Pivot(req)) as BadRequestObjectResult;
             Assert.IsNotNull(result, "Pivot 空 PivotDimension 應回傳 400");
         }
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Pivot_returns_404_for_unregistered_vm()
+        public async Task Pivot_returns_400_for_unregistered_vm()
         {
             var req = new AnalysisPivotRequest
             {
@@ -1316,13 +1317,13 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 PivotDimension = "Category"
             };
 
-            var result = CreateController().Pivot(req) as NotFoundObjectResult;
-            Assert.IsNotNull(result, "Pivot 未註冊 VM 應回傳 404");
+            var result = (await CreateController().Pivot(req)) as NotFoundObjectResult;
+            Assert.IsNotNull(result, "Pivot 未註冊 VM 應回傳 404 NotFound");
         }
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Pivot_happy_path_returns_200_with_pivoted_rows()
+        public async Task Pivot_happy_path_returns_200_with_pivoted_rows()
         {
             _testData = new List<SaleRecord>
             {
@@ -1342,7 +1343,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 PivotDimension = "Category"
             };
 
-            var result = CreateController().Pivot(req) as JsonResult;
+            var result = (await CreateController().Pivot(req)) as JsonResult;
             Assert.IsNotNull(result, "Pivot happy path 應回傳 200");
 
             var response = result.Value as AnalysisPivotResponse;
@@ -1355,7 +1356,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void PivotExport_xlsx_returns_correct_content_type()
+        public async Task PivotExport_xlsx_returns_correct_content_type()
         {
             _testData = new List<SaleRecord>
             {
@@ -1374,7 +1375,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 PivotDimension = "Category"
             };
 
-            var result = CreateController().PivotExport(req, "xlsx") as FileContentResult;
+            var result = (await CreateController().PivotExport(req, "xlsx")) as FileContentResult;
             Assert.IsNotNull(result, "PivotExport xlsx 應回傳檔案");
             Assert.AreEqual(
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1384,7 +1385,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void PivotExport_csv_returns_correct_content_type()
+        public async Task PivotExport_csv_returns_correct_content_type()
         {
             _testData = new List<SaleRecord>
             {
@@ -1403,7 +1404,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 PivotDimension = "Category"
             };
 
-            var result = CreateController().PivotExport(req, "csv") as FileContentResult;
+            var result = (await CreateController().PivotExport(req, "csv")) as FileContentResult;
             Assert.IsNotNull(result, "PivotExport csv 應回傳檔案");
             Assert.AreEqual("text/csv", result.ContentType);
             Assert.AreEqual("analysis_pivot.csv", result.FileDownloadName);
@@ -1411,7 +1412,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void PivotExport_returns_404_for_unregistered_vm()
+        public async Task PivotExport_returns_400_for_unregistered_vm()
         {
             var req = new AnalysisPivotRequest
             {
@@ -1424,13 +1425,13 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 PivotDimension = "Category"
             };
 
-            var result = CreateController().PivotExport(req) as NotFoundObjectResult;
-            Assert.IsNotNull(result, "PivotExport 未註冊 VM 應回傳 404");
+            var result = (await CreateController().PivotExport(req)) as NotFoundObjectResult;
+            Assert.IsNotNull(result, "PivotExport 未註冊 VM 應回傳 404 NotFound");
         }
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void PivotExport_returns_400_when_zero_measures()
+        public async Task PivotExport_returns_400_when_zero_measures()
         {
             var req = new AnalysisPivotRequest
             {
@@ -1440,7 +1441,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 PivotDimension = "Category"
             };
 
-            var result = CreateController().PivotExport(req) as BadRequestObjectResult;
+            var result = (await CreateController().PivotExport(req)) as BadRequestObjectResult;
             Assert.IsNotNull(result, "PivotExport 空 measures 應回傳 400");
         }
 
@@ -1448,7 +1449,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Export_empty_dimensions_returns_400()
+        public async Task Export_empty_dimensions_returns_400()
         {
             // #348: Export 端點應與 Query 一致，零維度回傳 400
             var req = new AnalysisQueryRequest
@@ -1461,13 +1462,13 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 }
             };
 
-            var result = CreateController().Export(req) as BadRequestObjectResult;
+            var result = (await CreateController().Export(req)) as BadRequestObjectResult;
             Assert.IsNotNull(result, "Export 零維度應回傳 400");
         }
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Pivot_empty_dimensions_returns_400()
+        public async Task Pivot_empty_dimensions_returns_400()
         {
             // #348: Pivot 端點零維度應回傳 400
             var req = new AnalysisPivotRequest
@@ -1481,13 +1482,13 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 PivotDimension = "Region"
             };
 
-            var result = CreateController().Pivot(req) as BadRequestObjectResult;
+            var result = (await CreateController().Pivot(req)) as BadRequestObjectResult;
             Assert.IsNotNull(result, "Pivot 零維度應回傳 400");
         }
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void PivotExport_empty_dimensions_returns_400()
+        public async Task PivotExport_empty_dimensions_returns_400()
         {
             // #348: PivotExport 端點零維度應回傳 400
             var req = new AnalysisPivotRequest
@@ -1501,7 +1502,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 PivotDimension = "Region"
             };
 
-            var result = CreateController().PivotExport(req) as BadRequestObjectResult;
+            var result = (await CreateController().PivotExport(req)) as BadRequestObjectResult;
             Assert.IsNotNull(result, "PivotExport 零維度應回傳 400");
         }
 
@@ -1514,7 +1515,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         /// </summary>
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Query_with_duplicate_dimensions_does_not_return_500()
+        public async Task Query_with_duplicate_dimensions_does_not_return_500()
         {
             _testData = new List<SaleRecord>
             {
@@ -1532,7 +1533,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 }
             };
 
-            var result = CreateController().Query(req);
+            var result = (await CreateController().Query(req));
 
             // Must be either 200 (JsonResult) or 400 (BadRequest) — NOT 500
             Assert.IsTrue(
@@ -1554,7 +1555,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         /// </summary>
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Export_with_duplicate_dimensions_does_not_return_500()
+        public async Task Export_with_duplicate_dimensions_does_not_return_500()
         {
             _testData = new List<SaleRecord>
             {
@@ -1571,7 +1572,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 }
             };
 
-            var result = CreateController().Export(req, "csv");
+            var result = (await CreateController().Export(req, "csv"));
 
             Assert.IsTrue(
                 result is FileContentResult || result is BadRequestObjectResult,
@@ -1586,7 +1587,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         /// </summary>
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Query_duplicate_valid_dimension_fields_returns_consistent_data()
+        public async Task Query_duplicate_valid_dimension_fields_returns_consistent_data()
         {
             _testData = new List<SaleRecord>
             {
@@ -1608,7 +1609,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             IActionResult result = null;
             try
             {
-                result = CreateController().Query(req);
+                result = (await CreateController().Query(req));
             }
             catch (Exception ex)
             {
@@ -1648,67 +1649,67 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             };
 
         [TestMethod]
-        public void Pivot_null_request_returns_400()
+        public async Task Pivot_null_request_returns_400()
         {
-            var result = CreateController().Pivot(null);
+            var result = (await CreateController().Pivot(null));
             Assert.IsInstanceOfType(result, typeof(BadRequestObjectResult),
                 "Pivot null body 應回傳 400");
         }
 
         [TestMethod]
-        public void PivotExport_null_request_returns_400()
+        public async Task PivotExport_null_request_returns_400()
         {
-            var result = CreateController().PivotExport(null);
+            var result = (await CreateController().PivotExport(null));
             Assert.IsInstanceOfType(result, typeof(BadRequestObjectResult),
                 "PivotExport null body 應回傳 400");
         }
 
         [TestMethod]
-        public void Pivot_returns_400_when_PivotDimension_not_in_dimensions_list()
+        public async Task Pivot_returns_400_when_PivotDimension_not_in_dimensions_list()
         {
             // Region 在白名單，但 PivotDimension = "Category" 不在所選 Dimensions 中
             var req = PivotReq(
                 dims:     new[] { "Region" },
                 pivotDim: "Category",
                 msrs:     new[] { ("Amount", AggregateFunc.Sum) });
-            var result = CreateController().Pivot(req);
+            var result = (await CreateController().Pivot(req));
             Assert.IsInstanceOfType(result, typeof(BadRequestObjectResult),
                 "PivotDimension 不在 Dimensions 清單中應回傳 400");
         }
 
         [TestMethod]
-        public void Pivot_returns_400_for_invalid_pivot_dimension_field()
+        public async Task Pivot_returns_400_for_invalid_pivot_dimension_field()
         {
             // "InvalidField" 不在模型白名單
             var req = PivotReq(
                 dims:     new[] { "InvalidField" },
                 pivotDim: "InvalidField",
                 msrs:     new[] { ("Amount", AggregateFunc.Sum) });
-            var result = CreateController().Pivot(req);
+            var result = (await CreateController().Pivot(req));
             Assert.IsInstanceOfType(result, typeof(BadRequestObjectResult),
                 "不在白名單中的維度欄位應回傳 400");
         }
 
         [TestMethod]
-        public void PivotExport_returns_400_when_PivotDimension_not_in_dimensions_list()
+        public async Task PivotExport_returns_400_when_PivotDimension_not_in_dimensions_list()
         {
             var req = PivotReq(
                 dims:     new[] { "Region" },
                 pivotDim: "Category",
                 msrs:     new[] { ("Amount", AggregateFunc.Sum) });
-            var result = CreateController().PivotExport(req);
+            var result = (await CreateController().PivotExport(req));
             Assert.IsInstanceOfType(result, typeof(BadRequestObjectResult),
                 "PivotExport：PivotDimension 不在 Dimensions 清單中應回傳 400");
         }
 
         [TestMethod]
-        public void PivotExport_returns_400_for_invalid_dimension_field()
+        public async Task PivotExport_returns_400_for_invalid_dimension_field()
         {
             var req = PivotReq(
                 dims:     new[] { "InvalidField" },
                 pivotDim: "InvalidField",
                 msrs:     new[] { ("Amount", AggregateFunc.Sum) });
-            var result = CreateController().PivotExport(req);
+            var result = (await CreateController().PivotExport(req));
             Assert.IsInstanceOfType(result, typeof(BadRequestObjectResult),
                 "PivotExport：不在白名單中的維度欄位應回傳 400");
         }
@@ -1717,7 +1718,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Export_csv_starts_with_utf8_bom()
+        public async Task Export_csv_starts_with_utf8_bom()
         {
             // Windows Excel 需要 UTF-8 BOM（EF BB BF）才能正確識別 UTF-8 編碼，
             // 否則中文欄位會顯示亂碼。此測試確保 BOM 不被意外移除。
@@ -1725,7 +1726,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 dims: new[] { "Region" },
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
-            var result = CreateController().Export(req, "csv") as FileContentResult;
+            var result = (await CreateController().Export(req, "csv")) as FileContentResult;
             Assert.IsNotNull(result);
 
             // UTF-8 BOM = EF BB BF
@@ -1737,7 +1738,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Export_pivot_csv_starts_with_utf8_bom()
+        public async Task Export_pivot_csv_starts_with_utf8_bom()
         {
             _testData = new List<SaleRecord>
             {
@@ -1756,7 +1757,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 PivotDimension = "Category"
             };
 
-            var result = CreateController().PivotExport(req, "csv") as FileContentResult;
+            var result = (await CreateController().PivotExport(req, "csv")) as FileContentResult;
             Assert.IsNotNull(result, "PivotExport CSV 應回傳 FileContentResult");
 
             Assert.IsTrue(result.FileContents.Length >= 3, "Pivot CSV 內容不應為空");
@@ -1772,7 +1773,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         /// </summary>
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Export_xlsx_with_includeChart_true_contains_chart()
+        public async Task Export_xlsx_with_includeChart_true_contains_chart()
         {
             _testData = new List<SaleRecord>
             {
@@ -1783,7 +1784,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 dims: new[] { "Region" },
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
-            var result = CreateController().Export(req, "xlsx", includeChart: true, chartType: "bar") as FileContentResult;
+            var result = (await CreateController().Export(req, "xlsx", includeChart: true, chartType: "bar")) as FileContentResult;
 
             Assert.IsNotNull(result, "應回傳 xlsx FileContentResult");
             using var ms = new MemoryStream(result.FileContents);
@@ -1800,7 +1801,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         /// </summary>
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Export_xlsx_with_chartType_pie_contains_chart()
+        public async Task Export_xlsx_with_chartType_pie_contains_chart()
         {
             _testData = new List<SaleRecord>
             {
@@ -1811,7 +1812,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 dims: new[] { "Region" },
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
-            var result = CreateController().Export(req, "xlsx", includeChart: true, chartType: "pie") as FileContentResult;
+            var result = (await CreateController().Export(req, "xlsx", includeChart: true, chartType: "pie")) as FileContentResult;
 
             Assert.IsNotNull(result, "應回傳 xlsx FileContentResult");
             using var ms = new MemoryStream(result.FileContents);
@@ -1828,7 +1829,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         /// </summary>
         [TestMethod]
         [TestCategory("Analysis")]
-        public void PivotExport_xlsx_with_includeChart_true_contains_chart()
+        public async Task PivotExport_xlsx_with_includeChart_true_contains_chart()
         {
             _testData = new List<SaleRecord>
             {
@@ -1840,7 +1841,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 pivotDim: "Category",
                 msrs:     new[] { ("Amount", AggregateFunc.Sum) });
 
-            var result = CreateController().PivotExport(req, "xlsx", includeChart: true, chartType: "bar") as FileContentResult;
+            var result = (await CreateController().PivotExport(req, "xlsx", includeChart: true, chartType: "bar")) as FileContentResult;
 
             Assert.IsNotNull(result, "PivotExport 應回傳 xlsx FileContentResult");
             using var ms = new MemoryStream(result.FileContents);
@@ -1856,7 +1857,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Query_filter_value_with_sql_injection_pattern_does_not_throw()
+        public async Task Query_filter_value_with_sql_injection_pattern_does_not_throw()
         {
             // Expression Tree approach treats filter values as parameters, never raw SQL.
             // This test locks in that guarantee: a SQL injection string must not throw or 500.
@@ -1881,7 +1882,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             };
 
             // Must not throw; must return 200 with exactly 1 matching row
-            var result = CreateController().Query(req) as JsonResult;
+            var result = (await CreateController().Query(req)) as JsonResult;
             Assert.IsNotNull(result, "SQL injection in filter value must not throw — should return 200");
             var response = result.Value as AnalysisQueryResponse;
             Assert.IsNotNull(response);
@@ -1890,7 +1891,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Query_filter_value_with_xss_payload_does_not_throw()
+        public async Task Query_filter_value_with_xss_payload_does_not_throw()
         {
             // XSS payload as a filter value must be treated as a plain string.
             _testData = new List<SaleRecord>
@@ -1913,7 +1914,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 },
             };
 
-            var result = CreateController().Query(req) as JsonResult;
+            var result = (await CreateController().Query(req)) as JsonResult;
             Assert.IsNotNull(result, "XSS payload in filter value must return 200");
             var response = result.Value as AnalysisQueryResponse;
             Assert.IsNotNull(response);
@@ -1923,7 +1924,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Export_csv_with_xss_payload_in_dimension_value_stores_verbatim()
+        public async Task Export_csv_with_xss_payload_in_dimension_value_stores_verbatim()
         {
             // XSS payload in dimension value must appear verbatim in CSV (no HTML-encoding).
             // CSV is plain text — the browser/Excel parses it, not an HTML parser.
@@ -1942,7 +1943,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 },
             };
 
-            var result = CreateController().Export(req, "csv") as FileContentResult;
+            var result = (await CreateController().Export(req, "csv")) as FileContentResult;
             Assert.IsNotNull(result, "Export CSV should return FileContentResult");
 
             var raw = result.FileContents;
@@ -1956,7 +1957,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Export_xlsx_with_xss_payload_in_dimension_value_stored_as_plain_string()
+        public async Task Export_xlsx_with_xss_payload_in_dimension_value_stored_as_plain_string()
         {
             // XSS payload in xlsx must be stored as a string cell with the literal value,
             // not HTML-encoded or interpreted as executable content.
@@ -1975,7 +1976,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 },
             };
 
-            var result = CreateController().Export(req, "xlsx") as FileContentResult;
+            var result = (await CreateController().Export(req, "xlsx")) as FileContentResult;
             Assert.IsNotNull(result, "Export xlsx should return FileContentResult");
 
             using var ms = new MemoryStream(result.FileContents);
@@ -2053,19 +2054,19 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
-        public void Query_returns_403_when_user_lacks_required_role()
+        public async Task Query_returns_403_when_user_lacks_required_role()
         {
             var controller = CreateControllerWithRoles("Viewer");
             var req = RestrictedReq(
                 dims: new[] { "Region" },
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
-            var result = controller.Query(req);
+            var result = (await controller.Query(req));
             Assert.IsInstanceOfType(result, typeof(ForbidResult),
                 "Query：缺少必要角色應回傳 ForbidResult");
         }
 
         [TestMethod]
-        public void Pivot_returns_403_when_user_lacks_required_role()
+        public async Task Pivot_returns_403_when_user_lacks_required_role()
         {
             var controller = CreateControllerWithRoles("Viewer");
             var req = new AnalysisPivotRequest
@@ -2076,25 +2077,25 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                                  { new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum } },
                 PivotDimension = "Category"
             };
-            var result = controller.Pivot(req);
+            var result = (await controller.Pivot(req));
             Assert.IsInstanceOfType(result, typeof(ForbidResult),
                 "Pivot：缺少必要角色應回傳 ForbidResult");
         }
 
         [TestMethod]
-        public void Export_returns_403_when_user_lacks_required_role()
+        public async Task Export_returns_403_when_user_lacks_required_role()
         {
             var controller = CreateControllerWithRoles("Viewer");
             var req = RestrictedReq(
                 dims: new[] { "Region" },
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
-            var result = controller.Export(req);
+            var result = (await controller.Export(req));
             Assert.IsInstanceOfType(result, typeof(ForbidResult),
                 "Export：缺少必要角色應回傳 ForbidResult");
         }
 
         [TestMethod]
-        public void PivotExport_returns_403_when_user_lacks_required_role()
+        public async Task PivotExport_returns_403_when_user_lacks_required_role()
         {
             var controller = CreateControllerWithRoles("Viewer");
             var req = new AnalysisPivotRequest
@@ -2105,7 +2106,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                                  { new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum } },
                 PivotDimension = "Category"
             };
-            var result = controller.PivotExport(req);
+            var result = (await controller.PivotExport(req));
             Assert.IsInstanceOfType(result, typeof(ForbidResult),
                 "PivotExport：缺少必要角色應回傳 ForbidResult");
         }
@@ -2186,7 +2187,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Export_csv_with_includeMetadata_true_prepends_metadata_rows()
+        public async Task Export_csv_with_includeMetadata_true_prepends_metadata_rows()
         {
             _testData = new List<SaleRecord>
             {
@@ -2203,7 +2204,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 },
             };
 
-            var result = CreateController().Export(req, "csv", includeMetadata: true) as FileContentResult;
+            var result = (await CreateController().Export(req, "csv", includeMetadata: true)) as FileContentResult;
             Assert.IsNotNull(result, "應回傳 FileContentResult");
 
             // Strip BOM
@@ -2223,7 +2224,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Export_csv_default_no_metadata_header_at_row0()
+        public async Task Export_csv_default_no_metadata_header_at_row0()
         {
             _testData = new List<SaleRecord>
             {
@@ -2240,7 +2241,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 },
             };
 
-            var result = CreateController().Export(req, "csv") as FileContentResult;
+            var result = (await CreateController().Export(req, "csv")) as FileContentResult;
             Assert.IsNotNull(result, "應回傳 FileContentResult");
 
             var raw = result.FileContents;
@@ -2254,7 +2255,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
         [TestMethod]
         [TestCategory("Analysis")]
-        public void Export_xlsx_with_includeMetadata_true_has_metadata_sheet()
+        public async Task Export_xlsx_with_includeMetadata_true_has_metadata_sheet()
         {
             _testData = new List<SaleRecord>
             {
@@ -2271,7 +2272,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 },
             };
 
-            var result = CreateController().Export(req, "xlsx", includeMetadata: true) as FileContentResult;
+            var result = (await CreateController().Export(req, "xlsx", includeMetadata: true)) as FileContentResult;
             Assert.IsNotNull(result, "應回傳 FileContentResult");
 
             using var ms = new MemoryStream(result.FileContents);
@@ -2324,7 +2325,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
-        public void Query_happy_path_writes_ActionLog()
+        public async Task Query_happy_path_writes_ActionLog()
         {
             // Arrange
             _testData = new List<SaleRecord>
@@ -2341,7 +2342,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
             // Act
-            var result = controller.Query(req);
+            var result = await controller.Query(req);
 
             // Assert: 200 OK
             Assert.IsInstanceOfType(result, typeof(JsonResult));
@@ -2358,7 +2359,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
-        public void Export_happy_path_writes_ActionLog()
+        public async Task Export_happy_path_writes_ActionLog()
         {
             // Arrange
             _testData = new List<SaleRecord>
@@ -2373,7 +2374,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
             // Act
-            var result = controller.Export(req, "csv");
+            var result = await controller.Export(req, "csv");
 
             // Assert: file returned
             Assert.IsInstanceOfType(result, typeof(FileContentResult));
@@ -2388,7 +2389,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
-        public void Query_validation_failure_does_not_write_ActionLog()
+        public async Task Query_validation_failure_does_not_write_ActionLog()
         {
             // Arrange: request with no dimensions triggers 400 before engine runs
             var actionLogger = new CapturingLogger<ActionLog>();
@@ -2402,7 +2403,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             };
 
             // Act
-            var result = controller.Query(req);
+            var result = await controller.Query(req);
 
             // Assert: 400 returned, no ActionLog written
             Assert.IsInstanceOfType(result, typeof(BadRequestObjectResult));

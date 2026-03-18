@@ -9,6 +9,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Http;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -112,7 +113,7 @@ namespace WalkingTec.Mvvm.Mvc
         [ProducesResponseType(typeof(string), StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
-        public IActionResult Query([FromBody] AnalysisQueryRequest? req)
+        public async Task<IActionResult> Query([FromBody] AnalysisQueryRequest? req)
         {
             if (req == null) return BadRequest("Request body is required.");
             if (req.Dimensions.Count == 0) return BadRequest("至少需要選取 1 個維度。");
@@ -126,7 +127,7 @@ namespace WalkingTec.Mvvm.Mvc
             var sw = Stopwatch.StartNew();
             try
             {
-                var result = _engine.ExecuteDynamic(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
+var result = await _engine.ExecuteDynamicAsync(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
                 sw.Stop();
                 _logger.LogInformation("Analysis query completed ListVm={ListVmType} Dims={DimCount} Msrs={MsrCount} ElapsedMs={Elapsed} Truncated={Truncated}",
                     req.ListVmType, req.Dimensions.Count, req.Measures.Count, sw.ElapsedMilliseconds, result.Truncated);
@@ -141,7 +142,7 @@ namespace WalkingTec.Mvvm.Mvc
         [ProducesResponseType(typeof(string), StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
-        public IActionResult Pivot([FromBody] AnalysisPivotRequest? req)
+        public async Task<IActionResult> Pivot([FromBody] AnalysisPivotRequest? req)
         {
             if (req == null) return BadRequest("Request body is required.");
             if (req.Dimensions.Count == 0) return BadRequest("至少需要選取 1 個維度。");
@@ -156,7 +157,7 @@ namespace WalkingTec.Mvvm.Mvc
             var sw = Stopwatch.StartNew();
             try
             {
-                var result = _engine.ExecutePivotDynamic(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
+var result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
                 sw.Stop();
                 _logger.LogInformation("Analysis pivot completed ListVm={ListVmType} Dims={DimCount} Msrs={MsrCount} Pivot={PivotDim} ElapsedMs={Elapsed}",
                     req.ListVmType, req.Dimensions.Count, req.Measures.Count, req.PivotDimension, sw.ElapsedMilliseconds);
@@ -175,7 +176,7 @@ namespace WalkingTec.Mvvm.Mvc
         [ProducesResponseType(typeof(string), StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
-        public IActionResult Export([FromBody] AnalysisQueryRequest? req,
+        public async Task<IActionResult> Export([FromBody] AnalysisQueryRequest? req,
             [FromQuery] string format = "xlsx",
             [FromQuery] bool includeChart = false,
             [FromQuery] string chartType = "bar",
@@ -194,7 +195,7 @@ namespace WalkingTec.Mvvm.Mvc
             AnalysisQueryResponse result;
             try
             {
-                result = _engine.ExecuteDynamic(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
+result = await _engine.ExecuteDynamicAsync(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
                 sw.Stop();
                 _logger.LogInformation("Analysis export completed ListVm={ListVmType} Format={Format} ElapsedMs={Elapsed}",
                     req.ListVmType, format, sw.ElapsedMilliseconds);
@@ -232,7 +233,7 @@ namespace WalkingTec.Mvvm.Mvc
         [ProducesResponseType(typeof(string), StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
-        public IActionResult PivotExport([FromBody] AnalysisPivotRequest? req,
+        public async Task<IActionResult> PivotExport([FromBody] AnalysisPivotRequest? req,
             [FromQuery] string format = "xlsx",
             [FromQuery] bool includeChart = false,
             [FromQuery] string chartType = "bar",
@@ -251,7 +252,7 @@ namespace WalkingTec.Mvvm.Mvc
             AnalysisPivotResponse result;
             try
             {
-                result = _engine.ExecutePivotDynamic(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
+result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
                 sw.Stop();
                 _logger.LogInformation("Analysis pivot export completed ListVm={ListVmType} Format={Format} ElapsedMs={Elapsed}",
                     req.ListVmType, format, sw.ElapsedMilliseconds);
