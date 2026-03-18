@@ -1,6 +1,8 @@
 #nullable enable
+using System;
 namespace WalkingTec.Mvvm.Core.WorkFlow
 {
+    [Obsolete("WTM's built-in Elsa workflow integration has been removed. This member will be deleted in the next major version. See CHANGELOG.md for migration guidance.")]
     public class ApproveTimeLine
     {
         public string? Id { get; set; }
