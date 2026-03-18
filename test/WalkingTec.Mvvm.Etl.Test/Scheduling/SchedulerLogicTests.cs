@@ -79,6 +79,68 @@ public class SchedulerLogicTests
         Assert.IsTrue(EtlSchedulerService.ShouldExecute(job));
     }
 
+    // ─── ShouldRetry tests ───
+
+    private static EtlJobDefinition CreateJobWithRetry(int retryCount) => new()
+    {
+        Name = "retry-test",
+        CronExpression = "0 0 * * *",
+        SourceCsKey = "test",
+        SourceDbType = Core.DBTypeEnum.SqlServer,
+        WatermarkType = EtlWatermarkType.FullLoad,
+        Status = EtlJobStatus.Enabled,
+        RetryCount = retryCount
+    };
+
+    [TestMethod]
+    public void ShouldRetry_first_attempt_within_limit_returns_true()
+    {
+        var job = CreateJobWithRetry(retryCount: 3);
+        Assert.IsTrue(EtlSchedulerService.ShouldRetry(job, currentAttempt: 0));
+    }
+
+    [TestMethod]
+    public void ShouldRetry_second_attempt_within_limit_returns_true()
+    {
+        var job = CreateJobWithRetry(retryCount: 3);
+        Assert.IsTrue(EtlSchedulerService.ShouldRetry(job, currentAttempt: 2));
+    }
+
+    [TestMethod]
+    public void ShouldRetry_attempt_equals_limit_returns_false()
+    {
+        var job = CreateJobWithRetry(retryCount: 3);
+        Assert.IsFalse(EtlSchedulerService.ShouldRetry(job, currentAttempt: 3));
+    }
+
+    [TestMethod]
+    public void ShouldRetry_attempt_exceeds_limit_returns_false()
+    {
+        var job = CreateJobWithRetry(retryCount: 3);
+        Assert.IsFalse(EtlSchedulerService.ShouldRetry(job, currentAttempt: 5));
+    }
+
+    [TestMethod]
+    public void ShouldRetry_RetryCount_zero_always_returns_false()
+    {
+        var job = CreateJobWithRetry(retryCount: 0);
+        Assert.IsFalse(EtlSchedulerService.ShouldRetry(job, currentAttempt: 0));
+    }
+
+    [TestMethod]
+    public void ShouldRetry_single_retry_first_attempt_returns_true()
+    {
+        var job = CreateJobWithRetry(retryCount: 1);
+        Assert.IsTrue(EtlSchedulerService.ShouldRetry(job, currentAttempt: 0));
+    }
+
+    [TestMethod]
+    public void ShouldRetry_single_retry_second_attempt_returns_false()
+    {
+        var job = CreateJobWithRetry(retryCount: 1);
+        Assert.IsFalse(EtlSchedulerService.ShouldRetry(job, currentAttempt: 1));
+    }
+
     // ─── EtlSourceFactory tests ───
 
     [TestMethod]

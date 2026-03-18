@@ -143,7 +143,6 @@ public class EtlQuartzJob : WtmJob
                 jobDef.LastRunAt = DateTime.UtcNow;
                 jobDef.LastError = null;
                 jobDef.Status = EtlJobStatus.Enabled;
-                jobDef.ConsecutiveFailureCount = 0;
             }
             else
             {
@@ -151,9 +150,6 @@ public class EtlQuartzJob : WtmJob
                     ? result.ErrorMessage[..2000]
                     : result.ErrorMessage;
                 jobDef.Status = result.Aborted ? EtlJobStatus.Enabled : EtlJobStatus.Failed;
-                // 未中止的失敗才累計連續失敗次數
-                if (!result.Aborted)
-                    jobDef.ConsecutiveFailureCount++;
             }
         }
         catch (Exception ex)
@@ -167,9 +163,28 @@ public class EtlQuartzJob : WtmJob
                 ErrorMessage = sanitized,
                 ElapsedMs = (long)(DateTime.UtcNow - startedAt).TotalMilliseconds
             };
-            jobDef.LastError = sanitized;
-            jobDef.Status = EtlJobStatus.Failed;
-            jobDef.ConsecutiveFailureCount++;
+
+            var currentAttempt = context.MergedJobDataMap.ContainsKey("_retryAttempt")
+                ? context.MergedJobDataMap.GetInt("_retryAttempt")
+                : 0;
+
+            if (EtlSchedulerService.ShouldRetry(jobDef, currentAttempt))
+            {
+                var retryData = new JobDataMap();
+                retryData["_retryAttempt"] = currentAttempt + 1;
+                await context.Scheduler.TriggerJob(context.JobDetail.Key, retryData);
+
+                jobDef.LastError = $"[自動重試 {currentAttempt + 1}/{jobDef.RetryCount}] {sanitized}";
+                jobDef.Status = EtlJobStatus.Enabled;
+                trigger = EtlRunTrigger.Retry;
+            }
+            else
+            {
+                trigger = EtlRunTrigger.Retry;
+                jobDef.LastError = sanitized;
+                jobDef.Status = EtlJobStatus.Failed;
+                jobDef.ConsecutiveFailureCount++;
+            }
         }
         finally
         {
