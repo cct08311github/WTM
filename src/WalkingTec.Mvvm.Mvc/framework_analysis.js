@@ -902,10 +902,11 @@
         chartToggleRow.id = 'analysis-chart-toggle-' + gridId;
         chartToggleRow.className = 'analysis-chart-toggle-bar';
         chartToggleRow.style.display = 'none';
-        ['bar', 'line', 'bar-stacked', 'pie', 'card'].forEach(function (ct) {
+        ['bar', 'line', 'bar-stacked', 'pie', 'scatter', 'card'].forEach(function (ct) {
             var btn = document.createElement('button');
             btn.type = 'button';
             btn.className = 'layui-btn layui-btn-xs';
+            btn.dataset.chartType = ct;
             btn.textContent = ct;
             btn.title = _CHART_TITLE_MAP[ct] || ct;
             btn.addEventListener('click', function () {
@@ -1602,6 +1603,24 @@
         container.appendChild(table);
     }
 
+    // Highlights the active chart-type button in the toggle bar (#618).
+    // Called from renderChart so both auto-detect and manual selection stay in sync.
+    function syncChartToggleActive(gridId, chartType) {
+        var row = document.getElementById('analysis-chart-toggle-' + gridId);
+        if (!row) return;
+        var buttons = row.querySelectorAll('button[data-chart-type]');
+        for (var i = 0; i < buttons.length; i++) {
+            var btn = buttons[i];
+            if (btn.dataset.chartType === chartType) {
+                if (btn.className.indexOf('layui-btn-primary') < 0) {
+                    btn.className += ' layui-btn-primary';
+                }
+            } else {
+                btn.className = btn.className.replace(/\s*layui-btn-primary\b/g, '').trim();
+            }
+        }
+    }
+
     function renderChart(gridId, result, req, dimFields, container, forceChartType) {
         if (!result.rows || result.rows.length === 0) {
             var emptyP = document.createElement('p');
@@ -1618,6 +1637,7 @@
         // Persist effective chart type so exportData honours the user's manual selection (#479)
         var st = _state[gridId];
         if (st) st.lastChartType = chartType;
+        syncChartToggleActive(gridId, chartType);
 
         // Build measure key → display label map for human-friendly legends
         var fieldByName = {};
@@ -2017,6 +2037,7 @@
         collectSelection: collectSelection,
         parseFuncs: parseFuncs,
         renderChart: renderChart,
+        syncChartToggleActive: syncChartToggleActive,
         renderPivotTable: renderPivotTable,
         renderPivotChart: renderPivotChart,
         buildPivotColLabel: buildPivotColLabel,
