@@ -4996,3 +4996,130 @@ describe('[#618] waReq.syncChartToggleActive', () => {
         spy.mockRestore();
     });
 });
+
+// ─── [#617] URL hash state sync ──────────────────────────────────────────────
+describe('[#617] hashDeserialize', () => {
+    test('returns null for empty string', () => {
+        expect(waReq.hashDeserialize('')).toBeNull();
+    });
+
+    test('returns null when gid missing', () => {
+        expect(waReq.hashDeserialize('#vm=OrderListVM&dims=Region')).toBeNull();
+    });
+
+    test('returns null when vm missing', () => {
+        expect(waReq.hashDeserialize('#gid=g1&dims=Region')).toBeNull();
+    });
+
+    test('parses gid and vm', () => {
+        const r = waReq.hashDeserialize('#gid=grid1&vm=SalesListVM');
+        expect(r.gridId).toBe('grid1');
+        expect(r.vmType).toBe('SalesListVM');
+    });
+
+    test('parses dims as array of strings', () => {
+        const hash = '#gid=g1&vm=V&dims=Region%2CMonth&msrs=Amount%3ASum';
+        const r = waReq.hashDeserialize(hash);
+        expect(r).not.toBeNull();
+        expect(r.dims).toEqual(['Region', 'Month']);
+    });
+
+    test('parses msrs into field/func objects', () => {
+        const hash = '#gid=g1&vm=V&dims=Region&msrs=Amount%3ASum%2CCount%3ACount';
+        const r = waReq.hashDeserialize(hash);
+        expect(r).not.toBeNull();
+        expect(r.msrs).toEqual([
+            { field: 'Amount', func: 'Sum' },
+            { field: 'Count', func: 'Count' },
+        ]);
+    });
+
+    test('parses indexed filter params in order', () => {
+        const hash = '#gid=g1&vm=V&dims=Region&msrs=Amount%3ASum' +
+            '&f0=Region%7CEq%7CNorth&f1=Amount%7CGte%7C100';
+        const r = waReq.hashDeserialize(hash);
+        expect(r).not.toBeNull();
+        expect(r.filters).toHaveLength(2);
+        expect(r.filters[0]).toEqual({ field: 'Region', op: 'Eq', value: 'North' });
+        expect(r.filters[1]).toEqual({ field: 'Amount', op: 'Gte', value: '100' });
+    });
+
+    test('parses pivot dim', () => {
+        const hash = '#gid=g1&vm=V&dims=Region&msrs=Amount%3ASum&pivot=Region';
+        const r = waReq.hashDeserialize(hash);
+        expect(r.pivotDim).toBe('Region');
+    });
+
+    test('parses chartType', () => {
+        const hash = '#gid=g1&vm=V&dims=Region&msrs=Amount%3ASum&ct=line';
+        const r = waReq.hashDeserialize(hash);
+        expect(r.chartType).toBe('line');
+    });
+
+    test('malformed percent-encoded segment does not throw', () => {
+        expect(() => waReq.hashDeserialize('#gid=g1&vm=V&bad=%ZZ')).not.toThrow();
+    });
+
+    test('filter value containing pipe is preserved (value is 3rd-part onward)', () => {
+        const hash = '#gid=g1&vm=V&dims=X&msrs=A%3ASum&f0=Tag%7CContains%7Ca%7Cb';
+        const r = waReq.hashDeserialize(hash);
+        expect(r.filters[0].value).toBe('a|b');
+    });
+
+    test('dims and msrs absent → empty arrays (not null)', () => {
+        const r = waReq.hashDeserialize('#gid=g1&vm=V');
+        expect(r.dims).toEqual([]);
+        expect(r.msrs).toEqual([]);
+        expect(r.filters).toEqual([]);
+    });
+});
+
+describe('[#617] hashDeserialize round-trip consistency', () => {
+    test('known hash produces expected structure', () => {
+        const hash = '#gid=g1&vm=SalesListVM&dims=Region%2CMonth&msrs=Amount%3ASum%2CCount%3ACount';
+        const r = waReq.hashDeserialize(hash);
+        expect(r.gridId).toBe('g1');
+        expect(r.vmType).toBe('SalesListVM');
+        expect(r.dims).toEqual(['Region', 'Month']);
+        expect(r.msrs).toEqual([
+            { field: 'Amount', func: 'Sum' },
+            { field: 'Count', func: 'Count' },
+        ]);
+        expect(r.filters).toEqual([]);
+        expect(r.pivotDim).toBeNull();
+        expect(r.chartType).toBeNull();
+    });
+
+    test('full hash with filters, pivot, chartType round-trips correctly', () => {
+        const hash = '#gid=myGrid&vm=OrderVM&dims=Region&msrs=Total%3ASum' +
+            '&f0=Region%7CEq%7CNorth&pivot=Region&ct=bar';
+        const r = waReq.hashDeserialize(hash);
+        expect(r.gridId).toBe('myGrid');
+        expect(r.filters).toEqual([{ field: 'Region', op: 'Eq', value: 'North' }]);
+        expect(r.pivotDim).toBe('Region');
+        expect(r.chartType).toBe('bar');
+    });
+});
+
+describe('[#617] hashPush — history API integration', () => {
+    test('does not throw when window.history is undefined', () => {
+        const orig = global.window.history;
+        global.window.history = undefined;
+        expect(() => waReq.hashPush('nonexistent617')).not.toThrow();
+        global.window.history = orig;
+    });
+
+    test('calls history.replaceState when gridId has no state (empty hash)', () => {
+        const mockPush = jest.fn();
+        const mockReplace = jest.fn();
+        const origHistory = global.window.history;
+        global.window.history = { pushState: mockPush, replaceState: mockReplace };
+
+        // 'nonexistent617' has no _state entry → hashSerialize returns '' → replaceState
+        waReq.hashPush('nonexistent617');
+        // No state → returns early before any history call
+        expect(mockPush).not.toHaveBeenCalled();
+
+        global.window.history = origHistory;
+    });
+});

@@ -944,6 +944,9 @@
 
         // ── 初始化 SortableJS ──
         initSortable(gridId, fieldPool, dimZone, msrZone);
+
+        // ── 從 URL hash 還原查詢條件 (#617) ──
+        hashApplyFromLocation(gridId);
     }
 
     function initSortable(gridId, fieldPool, dimZone, msrZone) {
@@ -1255,6 +1258,172 @@
 
     // ─── 查詢 ────────────────────────────────────────────────────────────────
 
+    // ─── URL Hash state sync (#617) ──────────────────────────────────────────────
+    // Hash format (params prefixed with no namespace to keep URLs readable):
+    //   #gid=orderGrid&vm=OrderListVM&dims=Region,Month&msrs=Amount:Sum,Count:Count
+    //   &f0=Region|Eq|North&f1=Amount|Gte|100&pivot=Region&ct=bar
+
+    function hashSerialize(gridId) {
+        var st = _state[gridId];
+        if (!st) return '';
+        var sel = collectSelection(gridId);
+        if (sel.dims.length === 0 && sel.msrs.length === 0) return '';
+        var filters = collectFilters(gridId);
+        var p = [];
+        function ap(k, v) { p.push(encodeURIComponent(k) + '=' + encodeURIComponent(v)); }
+        ap('gid', gridId);
+        ap('vm', st.listVmType || '');
+        ap('dims', sel.dims.join(','));
+        ap('msrs', sel.msrs.map(function (m) { return m.field + ':' + m.func; }).join(','));
+        filters.forEach(function (f, i) { ap('f' + i, f.field + '|' + f.op + '|' + f.value); });
+        var pivotToggle = document.querySelector('.analysis-pivot-toggle[data-grid-id="' + gridId + '"]');
+        if (pivotToggle && pivotToggle.checked) {
+            var pr = document.querySelector('.analysis-pivot-dim-select[data-grid-id="' + gridId + '"]:checked');
+            if (pr && pr.value) ap('pivot', pr.value);
+        }
+        if (st.lastChartType) ap('ct', st.lastChartType);
+        return p.join('&');
+    }
+
+    function hashDeserialize(hashStr) {
+        if (!hashStr) return null;
+        var raw = hashStr.replace(/^#/, '');
+        if (raw.indexOf('gid=') < 0) return null;
+        var params = {};
+        raw.split('&').forEach(function (seg) {
+            var idx = seg.indexOf('=');
+            if (idx < 0) return;
+            try {
+                params[decodeURIComponent(seg.slice(0, idx))] = decodeURIComponent(seg.slice(idx + 1));
+            } catch (e) { /* skip malformed segments */ }
+        });
+        var gid = params['gid'];
+        var vm = params['vm'];
+        if (!gid || !vm) return null;
+        var dims = params['dims'] ? params['dims'].split(',').filter(Boolean) : [];
+        var msrs = params['msrs'] ? params['msrs'].split(',').map(function (s) {
+            var c = s.indexOf(':');
+            return c >= 0 ? { field: s.slice(0, c), func: s.slice(c + 1) } : null;
+        }).filter(Boolean) : [];
+        var filterArr = [];
+        Object.keys(params).forEach(function (k) {
+            var m = k.match(/^f(\d+)$/);
+            if (!m) return;
+            var parts = params[k].split('|');
+            if (parts.length >= 3) {
+                filterArr.push({ idx: parseInt(m[1], 10), f: { field: parts[0], op: parts[1], value: parts.slice(2).join('|') } });
+            }
+        });
+        filterArr.sort(function (a, b) { return a.idx - b.idx; });
+        return {
+            gridId: gid, vmType: vm, dims: dims, msrs: msrs,
+            filters: filterArr.map(function (x) { return x.f; }),
+            pivotDim: params['pivot'] || null,
+            chartType: params['ct'] || null
+        };
+    }
+
+    function hashApply(gridId, parsed) {
+        if (!parsed || parsed.gridId !== gridId) return;
+        var st = _state[gridId];
+        if (!st || !st.fields) return;
+        var panel = document.getElementById('analysis-panel-' + gridId);
+        if (!panel) return;
+
+        var fieldByName = {};
+        st.fields.forEach(function (f) { fieldByName[f.fieldName] = f; });
+        var dimZone = panel.querySelector('.analysis-dropzone--dim');
+        var msrZone = panel.querySelector('.analysis-dropzone--msr');
+
+        parsed.dims.forEach(function (fn) {
+            var field = fieldByName[fn];
+            if (!field || field.kind !== 'Dimension') return;
+            if (!dimZone || dimZone.querySelectorAll('.analysis-pill--dim').length >= 3) return;
+            var pill = createDropZonePill(gridId, field, 'Dimension');
+            dimZone.appendChild(pill);
+            markPoolPill(gridId, fn, true);
+        });
+
+        parsed.msrs.forEach(function (m) {
+            var field = fieldByName[m.field];
+            if (!field || field.kind !== 'Measure') return;
+            if (!msrZone || msrZone.querySelectorAll('.analysis-pill--msr').length >= 3) return;
+            var pill = createDropZonePill(gridId, field, 'Measure');
+            var funcSel = pill.querySelector('.analysis-func-select');
+            if (funcSel) funcSel.value = m.func;
+            else pill.dataset.defaultFunc = m.func;
+            msrZone.appendChild(pill);
+            markPoolPill(gridId, m.field, true);
+        });
+
+        updatePlaceholders(gridId);
+        updateSummaryBar(gridId);
+
+        parsed.filters.forEach(function (f) {
+            addFilterRow(gridId);
+            var rows = panel.querySelectorAll('.analysis-filter-row');
+            var row = rows[rows.length - 1];
+            if (!row) return;
+            var fieldSel = row.querySelector('.analysis-filter-field');
+            var opSel = row.querySelector('.analysis-filter-op');
+            if (fieldSel) {
+                fieldSel.value = f.field;
+                // Fire change so the value input type updates to match field metadata
+                var evt = typeof Event !== 'undefined' ? new Event('change') : null;
+                if (evt) fieldSel.dispatchEvent(evt);
+            }
+            if (opSel) opSel.value = f.op;
+            var valEl = row.querySelector('.analysis-filter-value');
+            if (valEl) valEl.value = f.value;
+        });
+
+        if (parsed.chartType) st.lastChartType = parsed.chartType;
+
+        if (parsed.pivotDim) {
+            var pivotToggle = panel.querySelector('.analysis-pivot-toggle');
+            if (pivotToggle) {
+                pivotToggle.checked = true;
+                var ce = typeof Event !== 'undefined' ? new Event('change') : null;
+                if (ce) pivotToggle.dispatchEvent(ce);
+            }
+        }
+
+        query(gridId);
+    }
+
+    function hashApplyFromLocation(gridId) {
+        var loc = typeof window !== 'undefined' && window.location;
+        if (!loc || !loc.hash) return;
+        var parsed = hashDeserialize(loc.hash);
+        if (parsed && parsed.gridId === gridId) hashApply(gridId, parsed);
+    }
+
+    function hashPush(gridId) {
+        var h = hashSerialize(gridId);
+        if (typeof window === 'undefined' || !window.history) return;
+        if (h) {
+            window.history.pushState({ wtmaGridId: gridId }, '', '#' + h);
+        } else {
+            window.history.replaceState(null, '', window.location.pathname + (window.location.search || ''));
+        }
+    }
+
+    // Register popstate listener once per module load so back/forward restores query
+    if (typeof window !== 'undefined' && window.addEventListener) {
+        window.addEventListener('popstate', function (evt) {
+            var loc = window.location;
+            if (!loc.hash) return;
+            var parsed = hashDeserialize(loc.hash);
+            if (!parsed) return;
+            var st = _state[parsed.gridId];
+            if (st && st.fields) {
+                // Panel already open — just restore
+                hashApply(parsed.gridId, parsed);
+            }
+            // If panel not yet open: hashApplyFromLocation will fire when toggle() opens it
+        });
+    }
+
     function query(gridId) {
         var st = _state[gridId];
         if (!st) return;
@@ -1381,6 +1550,9 @@
                 var toggleRow = document.getElementById('analysis-chart-toggle-' + gridId);
                 if (toggleRow) toggleRow.style.display = 'flex';
             }
+
+            // Push query state to URL hash for deep-link / back-button support (#617)
+            hashPush(gridId);
 
         })
         .catch(function (err) {
@@ -2038,6 +2210,10 @@
         parseFuncs: parseFuncs,
         renderChart: renderChart,
         syncChartToggleActive: syncChartToggleActive,
+        hashSerialize: hashSerialize,
+        hashDeserialize: hashDeserialize,
+        hashApply: hashApply,
+        hashPush: hashPush,
         renderPivotTable: renderPivotTable,
         renderPivotChart: renderPivotChart,
         buildPivotColLabel: buildPivotColLabel,
