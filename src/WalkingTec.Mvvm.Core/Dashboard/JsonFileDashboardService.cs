@@ -16,6 +16,7 @@ public class JsonFileDashboardService : IDashboardService
 {
     private readonly DashboardOptions _options;
     private readonly IEnumerable<IWidgetDataSource> _dataSources;
+    private readonly ILogger<JsonFileDashboardService> _logger;
     private readonly ConcurrentDictionary<string, DashboardSummary> _index = new();
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new();
     private readonly string _baseDir;
@@ -29,8 +30,7 @@ public class JsonFileDashboardService : IDashboardService
     {
         _options = options.Value;
         _dataSources = dataSources;
-        // Spec: scan _baseDir
-        // Path resolution: Use base directory
+        _logger = logger;
         _baseDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, _options.DashboardDirectory);
 
         logger.LogWarning(
@@ -74,9 +74,11 @@ public class JsonFileDashboardService : IDashboardService
                         };
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // Ignore malformed files during init
+                    _logger.LogWarning(ex,
+                        "[Dashboard] Skipping malformed dashboard file during init. Path={FilePath}",
+                        file);
                 }
             }
 
@@ -132,8 +134,11 @@ public class JsonFileDashboardService : IDashboardService
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
             return await JsonSerializer.DeserializeAsync<DashboardDefinition>(fs);
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogError(ex,
+                "[Dashboard] Failed to read dashboard file. DashboardId={DashboardId} Path={FilePath}",
+                dashboardId, path);
             return null;
         }
         finally
