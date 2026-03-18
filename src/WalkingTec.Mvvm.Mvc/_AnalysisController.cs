@@ -13,6 +13,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Analysis;
+using WalkingTec.Mvvm.Core.Extensions;
 
 namespace WalkingTec.Mvvm.Mvc
 {
@@ -298,6 +299,9 @@ namespace WalkingTec.Mvvm.Mvc
 
             var baseQuery = InvokeGetSearchQuery(vm, vmType);
             if (baseQuery == null) return BadRequest("無法取得查詢來源。");
+
+            // Defense-in-depth: apply row-level DataPrivilege filtering (#554)
+            baseQuery = DCExtension.ApplyDataPrivilegeForAnalysis(baseQuery, Wtm);
 
             var hierarchyError = ValidateDimensionHierarchies(req.DimensionHierarchies, fields);
             if (hierarchyError != null) return BadRequest(hierarchyError);
