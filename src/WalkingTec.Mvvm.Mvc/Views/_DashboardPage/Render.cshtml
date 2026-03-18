@@ -1,0 +1,229 @@
+@{
+    Layout = null;
+    var dashboardId = ViewBag.DashboardId as string ?? "";
+}
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <title>Dashboard</title>
+    <link rel="stylesheet" href="/layui/css/layui.css">
+    <link rel="stylesheet" href="/sitecss/wtm.css">
+    <link rel="stylesheet" href="/_js/lib/gridstack/gridstack.min.css">
+    <link rel="stylesheet" href="/_js/framework_dashboard.css">
+    <style>
+        body { background: #f2f2f2; margin: 0; }
+        #wtm-db-toolbar {
+            display: flex; align-items: center; gap: 8px;
+            padding: 8px 16px; background: #fff;
+            border-bottom: 1px solid #e6e6e6;
+        }
+        #wtm-db-toolbar .toolbar-title {
+            font-size: 16px; font-weight: 600; margin-right: auto; color: #333;
+        }
+        #wtm-db-content { padding: 16px; }
+        #wtm-dashboard-grid { min-height: 200px; }
+        #wtm-db-loading { padding: 40px; text-align: center; color: #aaa; }
+    </style>
+</head>
+<body>
+    <div id="wtm-db-toolbar">
+        <span class="toolbar-title" id="db-title">載入中…</span>
+        <button class="layui-btn layui-btn-sm layui-btn-primary" id="btn-back">← 返回列表</button>
+        <button class="layui-btn layui-btn-sm layui-btn-normal" id="btn-edit" style="display:none;">編輯佈局</button>
+        <button class="layui-btn layui-btn-sm" id="btn-add-widget" style="display:none;">+ 新增元件</button>
+        <button class="layui-btn layui-btn-sm" id="btn-save" style="display:none;">儲存</button>
+        <button class="layui-btn layui-btn-sm layui-btn-primary" id="btn-cancel-edit" style="display:none;">取消</button>
+        <button class="layui-btn layui-btn-sm layui-btn-danger" id="btn-delete" style="display:none;">刪除 Dashboard</button>
+    </div>
+
+    <div id="wtm-db-content">
+        <div id="wtm-db-loading">載入中…</div>
+        <div id="wtm-dashboard-grid" style="display:none;"></div>
+    </div>
+
+    <!-- Add widget dialog template (hidden) -->
+    <div id="add-widget-tpl" style="display:none;">
+        <form style="padding:16px 24px;">
+            <div class="layui-form-item">
+                <label class="layui-form-label">元件標題</label>
+                <div class="layui-input-block">
+                    <input type="text" id="new-widget-title" placeholder="請輸入元件標題" class="layui-input">
+                </div>
+            </div>
+            <div class="layui-form-item">
+                <label class="layui-form-label">元件類型</label>
+                <div class="layui-input-block">
+                    <select id="new-widget-type">
+                        <option value="kpi">KPI 指標</option>
+                        <option value="chart">圖表</option>
+                        <option value="table">表格</option>
+                        <option value="progress">進度條</option>
+                        <option value="list">清單</option>
+                    </select>
+                </div>
+            </div>
+            <div class="layui-form-item">
+                <label class="layui-form-label">資料來源</label>
+                <div class="layui-input-block">
+                    <select id="new-widget-source">
+                        <option value="">（選填）</option>
+                    </select>
+                </div>
+            </div>
+            <div class="layui-form-item" style="text-align:right;">
+                <button type="button" class="layui-btn" id="btn-widget-confirm">新增</button>
+                <button type="button" class="layui-btn layui-btn-primary" id="btn-widget-cancel">取消</button>
+            </div>
+        </form>
+    </div>
+
+    <script src="/jquery.min.js"></script>
+    <script src="/layui/layui.js"></script>
+    <script src="/_js/lib/gridstack/gridstack-all.min.js"></script>
+    <script src="/_js/framework_dashboard.js"></script>
+    <script>
+    (function () {
+        "use strict";
+
+        var DASHBOARD_ID = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(dashboardId));
+        var _editMode = false;
+        var _addWidgetLayerId = null;
+
+        // Auto-enter edit mode if ?edit=1
+        var _autoEdit = (window.location.search || '').indexOf('edit=1') >= 0;
+
+        function getEl(id) { return document.getElementById(id); }
+
+        // ── Init dashboard ─────────────────────────────────────────────────
+        WtmDashboard.DashboardManager.init('wtm-dashboard-grid', DASHBOARD_ID)
+            .then(function (def) {
+                if (!def) { showError('Dashboard 不存在或無法存取。'); return; }
+                getEl('db-title').textContent = def.title || '(無標題)';
+                getEl('wtm-db-loading').style.display = 'none';
+                getEl('wtm-dashboard-grid').style.display = '';
+                getEl('btn-edit').style.display = '';
+                getEl('btn-delete').style.display = '';
+                if (_autoEdit) enterEditMode();
+            })
+            .catch(function () { showError('載入 Dashboard 失敗，請確認您有存取權限。'); });
+
+        function showError(msg) {
+            getEl('wtm-db-loading').textContent = msg;
+        }
+
+        // ── Back ───────────────────────────────────────────────────────────
+        getEl('btn-back').addEventListener('click', function () {
+            window.location.href = '/_DashboardPage/Index';
+        });
+
+        // ── Edit mode ──────────────────────────────────────────────────────
+        getEl('btn-edit').addEventListener('click', enterEditMode);
+
+        function enterEditMode() {
+            _editMode = true;
+            WtmDashboard.DashboardEditor.toggleEditMode();
+            getEl('btn-edit').style.display = 'none';
+            getEl('btn-add-widget').style.display = '';
+            getEl('btn-save').style.display = '';
+            getEl('btn-cancel-edit').style.display = '';
+        }
+
+        getEl('btn-cancel-edit').addEventListener('click', function () {
+            _editMode = false;
+            WtmDashboard.DashboardEditor.toggleEditMode();
+            getEl('btn-edit').style.display = '';
+            getEl('btn-add-widget').style.display = 'none';
+            getEl('btn-save').style.display = 'none';
+            getEl('btn-cancel-edit').style.display = 'none';
+            // Reload to discard unsaved changes
+            window.location.reload();
+        });
+
+        // ── Save ───────────────────────────────────────────────────────────
+        getEl('btn-save').addEventListener('click', function () {
+            WtmDashboard.DashboardEditor.saveDashboard()
+                .then(function () {
+                    layui.layer.msg('已儲存');
+                    _editMode = false;
+                    getEl('btn-edit').style.display = '';
+                    getEl('btn-add-widget').style.display = 'none';
+                    getEl('btn-save').style.display = 'none';
+                    getEl('btn-cancel-edit').style.display = 'none';
+                })
+                .catch(function () { layui.layer.msg('儲存失敗，請稍後再試'); });
+        });
+
+        // ── Delete ─────────────────────────────────────────────────────────
+        getEl('btn-delete').addEventListener('click', function () {
+            var title = getEl('db-title').textContent;
+            layui.layer.confirm('確定刪除「' + title + '」？此操作不可復原。',
+                { btn: ['刪除', '取消'] },
+                function () {
+                    layui.layer.closeAll();
+                    WtmDashboard.DashboardEditor.deleteDashboard()
+                        .then(function () {
+                            layui.layer.msg('已刪除', { time: 1200 });
+                            setTimeout(function () {
+                                window.location.href = '/_DashboardPage/Index';
+                            }, 1200);
+                        })
+                        .catch(function () { layui.layer.msg('刪除失敗'); });
+                });
+        });
+
+        // ── Add widget ─────────────────────────────────────────────────────
+        getEl('btn-add-widget').addEventListener('click', function () {
+            // Load data sources
+            fetch('/_dashboard/datasources')
+                .then(function (r) { return r.ok ? r.json() : []; })
+                .then(function (sources) {
+                    var sel = getEl('new-widget-source');
+                    // Clear and repopulate
+                    while (sel.options.length > 1) sel.remove(1);
+                    (sources || []).forEach(function (s) {
+                        var opt = document.createElement('option');
+                        opt.value = s.name;
+                        opt.textContent = s.name + ' (' + (s.kind || '') + ')';
+                        sel.appendChild(opt);
+                    });
+                    layui.form.render('select');
+                })
+                .catch(function () { /* non-critical, proceed without sources */ });
+
+            _addWidgetLayerId = layui.layer.open({
+                type: 1,
+                title: '新增 Dashboard 元件',
+                area: ['420px', 'auto'],
+                content: getEl('add-widget-tpl'),
+                end: function () { getEl('add-widget-tpl').style.display = 'none'; }
+            });
+            getEl('add-widget-tpl').style.display = '';
+            layui.form.render();
+        });
+
+        getEl('btn-widget-cancel').addEventListener('click', function () {
+            if (_addWidgetLayerId) layui.layer.close(_addWidgetLayerId);
+        });
+
+        getEl('btn-widget-confirm').addEventListener('click', function () {
+            var title  = getEl('new-widget-title').value.trim() || '新元件';
+            var type   = getEl('new-widget-type').value || 'kpi';
+            var source = getEl('new-widget-source').value;
+
+            var widgetId = 'w_' + Date.now();
+            var widgetDef = { type: type, title: title };
+            if (source) widgetDef.dataSource = source;
+
+            WtmDashboard.DashboardEditor.addWidget(widgetId, widgetDef, {
+                id: widgetId, w: 4, h: 3
+            });
+
+            if (_addWidgetLayerId) layui.layer.close(_addWidgetLayerId);
+        });
+
+    }());
+    </script>
+</body>
+</html>

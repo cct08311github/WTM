@@ -1,0 +1,222 @@
+@{
+    Layout = null;
+}
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <title>Dashboard 管理</title>
+    <link rel="stylesheet" href="/layui/css/layui.css">
+    <link rel="stylesheet" href="/sitecss/wtm.css">
+    <link rel="stylesheet" href="/_js/framework_dashboard.css">
+    <style>
+        body { background: #f2f2f2; padding: 16px; }
+        .wtm-db-cards { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 16px; }
+        .wtm-db-card {
+            background: #fff; border-radius: 4px; border: 1px solid #e6e6e6;
+            padding: 16px; width: 280px; box-shadow: 0 1px 4px rgba(0,0,0,.06);
+        }
+        .wtm-db-card-title { font-size: 16px; font-weight: 600; margin-bottom: 8px; color: #333; }
+        .wtm-db-card-meta { font-size: 12px; color: #999; margin-bottom: 12px; }
+        .wtm-db-card-actions { display: flex; gap: 8px; }
+        .wtm-db-empty { color: #aaa; padding: 40px; text-align: center; }
+    </style>
+</head>
+<body>
+    <div class="layui-layout-body">
+        <div class="layui-card">
+            <div class="layui-card-header" style="display:flex;align-items:center;justify-content:space-between;">
+                <span style="font-size:16px;font-weight:600;">Dashboard 管理</span>
+                <button class="layui-btn layui-btn-sm" id="btn-create">
+                    <i class="layui-icon layui-icon-add-1"></i> 新增 Dashboard
+                </button>
+            </div>
+            <div class="layui-card-body">
+                <div id="dashboard-list-container">
+                    <div class="wtm-db-empty">載入中…</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create form (hidden template) -->
+    <div id="create-form-tpl" style="display:none;">
+        <form class="layui-form" id="create-form" style="padding:16px 24px;">
+            <div class="layui-form-item">
+                <label class="layui-form-label">標題</label>
+                <div class="layui-input-block">
+                    <input type="text" id="new-title" name="title" required lay-verify="required"
+                           placeholder="請輸入 Dashboard 標題" class="layui-input">
+                </div>
+            </div>
+            <div class="layui-form-item">
+                <label class="layui-form-label">自動刷新（秒）</label>
+                <div class="layui-input-block">
+                    <input type="number" id="new-refresh" name="refreshInterval" value="60" min="0" class="layui-input">
+                </div>
+            </div>
+            <div class="layui-form-item">
+                <label class="layui-form-label">分享模式</label>
+                <div class="layui-input-block">
+                    <select id="new-sharing" name="sharingMode">
+                        <option value="private">私人</option>
+                        <option value="public">公開</option>
+                        <option value="roles">角色限定</option>
+                    </select>
+                </div>
+            </div>
+            <div class="layui-form-item" style="text-align:right;">
+                <button type="button" class="layui-btn" id="btn-create-submit">建立</button>
+                <button type="button" class="layui-btn layui-btn-primary" id="btn-create-cancel">取消</button>
+            </div>
+        </form>
+    </div>
+
+    <script src="/jquery.min.js"></script>
+    <script src="/layui/layui.js"></script>
+    <script src="/_js/framework_dashboard.js"></script>
+    <script>
+    (function () {
+        "use strict";
+
+        // ── DOM helpers ────────────────────────────────────────────────────
+        function el(tag, cls, text) {
+            var node = document.createElement(tag);
+            if (cls) node.className = cls;
+            if (text != null) node.textContent = text;
+            return node;
+        }
+
+        function btn(label, cls, clickFn) {
+            var b = el('button', 'layui-btn layui-btn-sm ' + (cls || ''), label);
+            b.addEventListener('click', clickFn);
+            return b;
+        }
+
+        // ── Load & render list ─────────────────────────────────────────────
+        function loadList() {
+            var container = document.getElementById('dashboard-list-container');
+            container.textContent = '載入中…';
+
+            fetch('/_dashboard/list')
+                .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+                .then(function (items) { renderList(container, items); })
+                .catch(function () {
+                    container.textContent = '載入失敗，請重新整理頁面。';
+                });
+        }
+
+        function renderList(container, items) {
+            container.textContent = '';
+
+            if (!items || items.length === 0) {
+                var empty = el('div', 'wtm-db-empty', '尚無 Dashboard，請點擊「新增 Dashboard」建立第一個。');
+                container.appendChild(empty);
+                return;
+            }
+
+            var cards = el('div', 'wtm-db-cards');
+            items.forEach(function (item) {
+                var sharingLabel = item.sharing && item.sharing.mode === 'public' ? '公開'
+                    : item.sharing && item.sharing.mode === 'roles' ? '角色限定'
+                    : '私人';
+
+                var card   = el('div', 'wtm-db-card');
+                var title  = el('div', 'wtm-db-card-title', item.title || '(無標題)');
+                var meta   = el('div', 'wtm-db-card-meta');
+                meta.textContent = '擁有者：' + (item.owner || '') + '　分享：' + sharingLabel;
+
+                var actions = el('div', 'wtm-db-card-actions');
+                actions.appendChild(btn('預覽', '', function () {
+                    window.location.href = '/_DashboardPage/Render?id=' + encodeURIComponent(item.id);
+                }));
+                actions.appendChild(btn('編輯', 'layui-btn-normal', function () {
+                    window.location.href = '/_DashboardPage/Render?id=' + encodeURIComponent(item.id) + '&edit=1';
+                }));
+                actions.appendChild(btn('刪除', 'layui-btn-danger', function () {
+                    confirmDelete(item.id, item.title || '');
+                }));
+
+                card.appendChild(title);
+                card.appendChild(meta);
+                card.appendChild(actions);
+                cards.appendChild(card);
+            });
+
+            container.appendChild(cards);
+        }
+
+        // ── Delete ─────────────────────────────────────────────────────────
+        function confirmDelete(id, title) {
+            layui.layer.confirm('確定刪除「' + title + '」？此操作不可復原。',
+                { btn: ['刪除', '取消'] },
+                function () {
+                    layui.layer.closeAll();
+                    fetch('/_dashboard/' + encodeURIComponent(id), { method: 'DELETE' })
+                        .then(function (r) {
+                            if (!r.ok) throw new Error(r.status);
+                            layui.layer.msg('已刪除');
+                            loadList();
+                        })
+                        .catch(function () { layui.layer.msg('刪除失敗'); });
+                });
+        }
+
+        // ── Create dialog ──────────────────────────────────────────────────
+        var _createLayerId = null;
+
+        document.getElementById('btn-create').addEventListener('click', function () {
+            _createLayerId = layui.layer.open({
+                type: 1,
+                title: '新增 Dashboard',
+                area: ['480px', 'auto'],
+                content: document.getElementById('create-form-tpl'),
+                end: function () { document.getElementById('create-form-tpl').style.display = 'none'; }
+            });
+            document.getElementById('create-form-tpl').style.display = '';
+            layui.form.render();
+        });
+
+        document.getElementById('btn-create-cancel').addEventListener('click', function () {
+            if (_createLayerId) layui.layer.close(_createLayerId);
+        });
+
+        document.getElementById('btn-create-submit').addEventListener('click', function () {
+            var title    = document.getElementById('new-title').value.trim();
+            var refresh  = parseInt(document.getElementById('new-refresh').value, 10);
+            var sharing  = document.getElementById('new-sharing').value;
+
+            if (!title) { layui.layer.msg('請輸入標題'); return; }
+
+            var body = {
+                id: '',
+                title: title,
+                refreshInterval: isNaN(refresh) ? 60 : refresh,
+                sharing: { mode: sharing },
+                layout: [],
+                widgets: {}
+            };
+
+            fetch('/_dashboard/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            }).then(function (r) {
+                return r.ok ? r.json() : r.text().then(function (t) { throw new Error(t); });
+            }).then(function (newId) {
+                if (_createLayerId) layui.layer.close(_createLayerId);
+                layui.layer.msg('建立成功，即將前往編輯頁', { time: 1500 });
+                setTimeout(function () {
+                    window.location.href = '/_DashboardPage/Render?id=' + encodeURIComponent(newId) + '&edit=1';
+                }, 1500);
+            }).catch(function (e) {
+                layui.layer.msg('建立失敗：' + e.message);
+            });
+        });
+
+        loadList();
+    }());
+    </script>
+</body>
+</html>
