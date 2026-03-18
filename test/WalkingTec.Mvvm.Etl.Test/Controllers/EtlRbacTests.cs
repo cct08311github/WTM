@@ -1,10 +1,17 @@
 #nullable enable
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Abstractions;
+using Microsoft.AspNetCore.Mvc.Filters;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Core.Support.Json;
 using WalkingTec.Mvvm.Etl.Scheduling;
 using WalkingTec.Mvvm.Mvc;
 using WalkingTec.Mvvm.Test.Mock;
@@ -174,4 +181,75 @@ public class EtlRbacTests
         Assert.IsFalse(wtm.ConfigInfo?.IsQuickDebug ?? false,
             "測試環境 IsQuickDebug 預設應為 false，否則 RBAC 全部繞過");
     }
+
+    // ─── 6. OnActionExecuting — 控制器層 Admin/ETLAdmin 角色守衛（#523）────────
+
+    private static _EtlJobController CreateEtlControllerWithRoles(params string[] roleCodes)
+    {
+        var controller = new _EtlJobController(null!);
+        controller.Wtm = MockWtmContext.CreateWtmContext();
+        controller.Wtm.LoginUserInfo!.Roles = roleCodes
+            .Select(r => new SimpleRole { RoleCode = r })
+            .ToList();
+        return controller;
+    }
+
+    private static ActionExecutingContext MakeActionContext(_EtlJobController controller)
+    {
+        var httpContext = new DefaultHttpContext();
+        var actionContext = new ActionContext(httpContext, new RouteData(), new ActionDescriptor());
+        return new ActionExecutingContext(
+            actionContext,
+            new List<IFilterMetadata>(),
+            new Dictionary<string, object?>(),
+            controller);
+    }
+
+    [TestMethod]
+    public void OnActionExecuting_Admin_role_is_allowed()
+    {
+        var controller = CreateEtlControllerWithRoles("Admin");
+        var context = MakeActionContext(controller);
+        controller.OnActionExecuting(context);
+        Assert.IsNull(context.Result, "Admin 角色應允許通過，context.Result 應為 null");
+    }
+
+    [TestMethod]
+    public void OnActionExecuting_ETLAdmin_role_is_allowed()
+    {
+        var controller = CreateEtlControllerWithRoles("ETLAdmin");
+        var context = MakeActionContext(controller);
+        controller.OnActionExecuting(context);
+        Assert.IsNull(context.Result, "ETLAdmin 角色應允許通過，context.Result 應為 null");
+    }
+
+    [TestMethod]
+    public void OnActionExecuting_Admin_check_is_case_insensitive()
+    {
+        var controller = CreateEtlControllerWithRoles("admin");
+        var context = MakeActionContext(controller);
+        controller.OnActionExecuting(context);
+        Assert.IsNull(context.Result, "admin（小寫）應視同 Admin，允許通過");
+    }
+
+    [TestMethod]
+    public void OnActionExecuting_non_admin_role_is_forbidden()
+    {
+        var controller = CreateEtlControllerWithRoles("Manager");
+        var context = MakeActionContext(controller);
+        controller.OnActionExecuting(context);
+        Assert.IsInstanceOfType(context.Result, typeof(ForbidResult),
+            "非 Admin/ETLAdmin 角色應回傳 ForbidResult");
+    }
+
+    [TestMethod]
+    public void OnActionExecuting_no_roles_is_forbidden()
+    {
+        var controller = CreateEtlControllerWithRoles();
+        var context = MakeActionContext(controller);
+        controller.OnActionExecuting(context);
+        Assert.IsInstanceOfType(context.Result, typeof(ForbidResult),
+            "無角色使用者應回傳 ForbidResult");
+    }
+
 }
