@@ -1090,7 +1090,10 @@
             if (result.truncated) {
                 var warn = document.createElement('div');
                 warn.className = 'layui-alert layui-alert-warm';
-                warn.textContent = '結果已截斷，僅顯示前 10,000 列。';
+                var totalStr = result.totalCount ? result.totalCount.toLocaleString() : '';
+                warn.textContent = totalStr
+                    ? '結果已截斷，僅顯示前 10,000 列（共 ' + totalStr + ' 組）。'
+                    : '結果已截斷，僅顯示前 10,000 列。';
                 resultDiv.appendChild(warn);
             }
 
@@ -1607,7 +1610,10 @@
             if (result.truncated) {
                 var warn = document.createElement('div');
                 warn.className = 'layui-alert layui-alert-warm';
-                warn.textContent = '結果已截斷，僅顯示前 10,000 列。';
+                var totalStr = result.totalCount ? result.totalCount.toLocaleString() : '';
+                warn.textContent = totalStr
+                    ? '結果已截斷，僅顯示前 10,000 列（共 ' + totalStr + ' 組）。'
+                    : '結果已截斷，僅顯示前 10,000 列。';
                 resultDiv.appendChild(warn);
             }
             var dimFields = (st.fields || []).filter(function (f) {

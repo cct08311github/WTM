@@ -308,6 +308,44 @@ describe('wtmAnalysis.query', () => {
         const warningNode = appended.find(c => c.className && c.className.includes('alert-warm'));
         expect(warningNode).toBeDefined();
         expect(warningNode.textContent).toMatch(/截斷/);
+        expect(warningNode.textContent).toMatch(/15,000/);
+        expect(warningNode.textContent).toMatch(/組/);
+    });
+
+    test('result.truncated=true + totalCount=0 → 截斷警告不顯示組數', async () => {
+        const { wa, makePanel, mockFetch, mockDocument } = makeEnv();
+        const panel = makePanel('analysis-panel-grid4tc0');
+        const appended = [];
+        const resultDiv = {
+            id: 'analysis-result-grid4tc0', textContent: '', children: [],
+            appendChild: jest.fn((c) => appended.push(c)),
+            firstChild: null, removeChild: jest.fn(),
+        };
+        mockDocument.getElementById.mockImplementation((id) => {
+            if (id === 'analysis-panel-grid4tc0') return panel;
+            if (id === 'analysis-result-grid4tc0') return resultDiv;
+            return null;
+        });
+        mockDocument.querySelectorAll.mockReturnValue(fakeCheckedCbs('grid4tc0'));
+        mockFetch
+            .mockResolvedValueOnce({ ok: false, text: jest.fn().mockResolvedValue('err') })
+            .mockResolvedValueOnce({
+                ok: true,
+                json: jest.fn().mockResolvedValue({
+                    truncated: true, totalCount: 0,
+                    columns: ['Region'], rows: [{ Region: '華東' }]
+                })
+            });
+
+        wa.toggle('grid4tc0', 'MyVm');
+        wa.query('grid4tc0');
+
+        await new Promise(r => setTimeout(r, 50));
+
+        const warningNode = appended.find(c => c.className && c.className.includes('alert-warm'));
+        expect(warningNode).toBeDefined();
+        expect(warningNode.textContent).toMatch(/截斷/);
+        expect(warningNode.textContent).not.toMatch(/組/);
     });
 
     test('result.dataTruncated=true → 顯示來源截斷橘色警告 (#490)', async () => {
@@ -1257,6 +1295,40 @@ describe('[cov] waReq.query — branches', () => {
         waReq.query('scovQ3');
         await new Promise(r => setTimeout(r, 40));
         expect(resultDiv.innerHTML).toMatch(/截斷/);
+        expect(resultDiv.innerHTML).toMatch(/20,000/);
+        expect(resultDiv.innerHTML).toMatch(/組/);
+    });
+
+    test('query truncated=true + totalCount=0 → fallback message without group count', async () => {
+        const panel = document.createElement('div');
+        panel.id = 'analysis-panel-scovQ3b';
+        const resultDiv = document.createElement('div');
+        resultDiv.id = 'analysis-result-scovQ3b';
+        global.fetch = jest.fn()
+            .mockResolvedValueOnce({ ok: false, text: jest.fn().mockResolvedValue('err') })
+            .mockResolvedValueOnce({
+                ok: true,
+                json: jest.fn().mockResolvedValue({
+                    truncated: true, totalCount: 0,
+                    columns: ['R'], rows: [{ R: 'x' }]
+                })
+            });
+        const dimCb = { dataset: { kind: 'Dimension', fieldName: 'R', gridId: 'scovQ3b' }, nextElementSibling: null };
+        const msrCb = { dataset: { kind: 'Measure', fieldName: 'A', gridId: 'scovQ3b', defaultFunc: 'Sum' }, nextElementSibling: null };
+        spySetup(
+            function(id) {
+                if (id === 'analysis-panel-scovQ3b') return panel;
+                if (id === 'analysis-result-scovQ3b') return resultDiv;
+                return null;
+            },
+            function() { return [dimCb, msrCb]; }
+        );
+        waReq.toggle('scovQ3b', 'VmQ3b');
+        await new Promise(r => setTimeout(r, 20));
+        waReq.query('scovQ3b');
+        await new Promise(r => setTimeout(r, 40));
+        expect(resultDiv.innerHTML).toMatch(/截斷/);
+        expect(resultDiv.innerHTML).not.toMatch(/組/);
     });
 
     test('query dataTruncated=true → shows orange data-truncation banner (#490)', async () => {
