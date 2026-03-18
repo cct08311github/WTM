@@ -14,6 +14,7 @@ namespace WalkingTec.Mvvm.Demo.ViewModels.CityVMs
     {
         [Display(Name = "名称")]
         public String Name { get; set; }
+        [Display(Name = "父级城市")]
         public Guid selectedparent { get; set; }
         public List<TreeSelectListItem> Items { get; set; }
         protected override void InitVM()
