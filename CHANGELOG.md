@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+- **BaseCRUDVM — 批量刪除預覽**：新增 `GetDeletePreviewString()` 虛擬方法，回傳實體的人類可讀標籤（依序搜尋 Name/Title/Code/ITCode 等屬性，否則回退至主鍵）；同時新增 `IBaseCRUDVM<T>.GetDeletePreviewString()` 介面成員（#619）。
+- **`_FrameworkController` — 批量刪除預覽端點**：POST `/_Framework/GetDeletePreview` — 接受 vmType 名稱與最多 10 個 ID，回傳 `[{id, label}]` 陣列供前端確認對話框使用（#619）。
+- **`_FrameworkController` — 批量指派角色端點**：POST `/_Framework/BatchAssignRoles` — 將一個角色指派給多位使用者（upsert `FrameworkUserRole`），完成後清除受影響的快取（#619）。
+- **ComboBox 遠端搜尋**：`wt:combobox` 新增 `remote-url` 屬性；設定後啟用 xmSelect `remoteSearch + remoteMethod`，每次輸入觸發 `GET {remote-url}?q=<keyword>` 並即時更新選項（#565）。
+- **TreeSelect 懶加載**：`wt:tree` 新增 `lazy-url` 屬性；設定後啟用 xmSelect `lazy + load`，展開節點時觸發 `GET {lazy-url}?id=<nodeValue>` 並動態載入子節點（#565）。
+- **ETL 管理 UI 改進**：`EtlJobListVM` 覆寫 `InitGridAction()` 增加 Create/Edit/Delete 標準動作，以及每行操作按鈕：立即執行（確認 POST）、暫停、恢復、中止、執行記錄（開啟篩選後的 RunLog 對話框）；新增 ConsecutiveFailureCount 欄位（#540）。
+- **ETL Create/Edit 表單補全**：Demo 的 Create.cshtml 與 Edit.cshtml 補入 QueryTemplate（textarea）、AlertEmail、AlertWebhookUrl、AlertAfterConsecutiveFailures 欄位（#540）。
+- **BaseCRUDVM — 樂觀並行衝突處理**：`DoEdit` / `DoEditAsync` 捕獲 `DbUpdateConcurrencyException`，設定 `IsConcurrencyConflict = true` 並新增模型錯誤，而非直接拋出例外；新增介面屬性 `IBaseCRUDVM<T>.IsConcurrencyConflict`（#620）。
+- **BaseImportVM — 匯入進度回報**：`BatchSaveData(IProgress<ImportProgress>? progress = null)` 在驗證與儲存階段回報 `ImportProgress { Processed, Total, Phase }`（#607）。
+- **BaseImportVM — 行內錯誤清單**：新增 `InlineErrors` 屬性（最多 `InlineErrorLimit` 筆，預設 50）供 API 端點直接回傳驗證錯誤（#615）。
+- **BaseTemplateVM — 欄位說明列**：`ShowDescriptionRow = true`（預設）時，於模板第二行插入淺綠色斜體說明列，標示 Required/Optional、資料類型、min/max 限制；匯入時自動識別並跳過說明列（v2 標記）（#615）。
+
 ### Deprecated
 - **Workflow API**：內建 Elsa workflow 整合（`IWorkflow`、`FrameworkWorkflow`、`ApproveTimeLine`、`ApproveInfo`、`FlowInfoTagHelper`、`IBaseCRUDVM` 工作流程方法、`DataContext.FrameworkWorkflows`）標記為 `[Obsolete]`，將於下一個主版本移除（#586）。
   - **遷移指引**：若仍需工作流程功能，請直接引用 Elsa 或改用其他工作流程引擎；移除 `IWorkflow` 介面實作及相關 TagHelper。

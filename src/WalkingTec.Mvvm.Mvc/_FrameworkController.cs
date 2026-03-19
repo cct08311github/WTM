@@ -744,6 +744,59 @@ namespace WalkingTec.Mvvm.Mvc
             return Content($"<script>window.location.href='{HttpUtility.UrlDecode(redirect)}'</script>", "text/html");
         }
 
+        /// <summary>
+        /// Returns a preview list (max 10) of entity labels for bulk-delete confirmation (#619).
+        /// </summary>
+        [AllRights]
+        [HttpPost]
+        public IActionResult GetDeletePreview(string _DONOT_USE_VMNAME, string[] ids)
+        {
+            if (ids == null || ids.Length == 0)
+                return JsonMore(Array.Empty<object>());
+
+            var results = new List<object>();
+            foreach (var idStr in ids.Take(10))
+            {
+                if (!Guid.TryParse(idStr, out var guid)) continue;
+                var vm = Wtm.CreateVM(_DONOT_USE_VMNAME, guid, null, true) as IBaseCRUDVM<TopBasePoco>;
+                if (vm == null) continue;
+                results.Add(new { id = idStr, label = vm.GetDeletePreviewString() });
+            }
+            return JsonMore(results);
+        }
+
+        /// <summary>
+        /// Assigns a role to multiple users (#619).
+        /// </summary>
+        [AllRights]
+        [HttpPost]
+        public async Task<IActionResult> BatchAssignRoles(string roleCode, string[] userCodes)
+        {
+            if (string.IsNullOrWhiteSpace(roleCode) || userCodes == null || userCodes.Length == 0)
+                return BadRequest();
+
+            var existing = DC.Set<FrameworkUserRole>()
+                .Where(x => x.RoleCode == roleCode && userCodes.Contains(x.UserCode))
+                .Select(x => x.UserCode)
+                .ToHashSet();
+
+            foreach (var code in userCodes)
+            {
+                if (!existing.Contains(code))
+                {
+                    DC.Set<FrameworkUserRole>().Add(new FrameworkUserRole
+                    {
+                        UserCode = code,
+                        RoleCode = roleCode,
+                        TenantCode = Wtm.LoginUserInfo?.CurrentTenant
+                    });
+                }
+            }
+            DC.SaveChanges();
+            await Wtm.RemoveUserCache(userCodes);
+            return Ok();
+        }
+
         [AllRights]
         [HttpPost]
         public async Task<ActionResult> RemoveUserCacheByAccount(string[] itcode)

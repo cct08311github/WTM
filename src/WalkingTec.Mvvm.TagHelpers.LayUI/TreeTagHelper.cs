@@ -40,6 +40,12 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         public string LinkId { get; set; }
         public string TriggerUrl { get; set; }
 
+        /// <summary>
+        /// 启用懒加载：填入URL后，展开树节点时会向该URL发送 ?id=&lt;nodeValue&gt; 请求，返回值格式与 ItemUrl 相同。
+        /// 注意：LazyUrl 与 Items 互斥，启用时应不传 Items，让树从根节点开始懒加载。(#565)
+        /// </summary>
+        public string LazyUrl { get; set; }
+
         public TreeTagHelper(IOptionsMonitor<Configs> configs)
         {
             if (EmptyText == null)
@@ -185,6 +191,14 @@ var {Id} = xmSelect.render({{
 			}},
 		}}
 	}},")}
+    {(string.IsNullOrEmpty(LazyUrl) ? "" : $@"
+    lazy: true,
+    load: function(node, cb) {{
+        $.get('{LazyUrl}', {{ id: node.value }}, function(data) {{
+            cb(ff.getTreeItems(data.Data, []));
+        }});
+    }},
+    ")}
     tree: {{
         strict: false,
 		show: true,

@@ -90,6 +90,14 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         bool ByPassBaseValidation { get; set; }
 
+        /// <summary>
+        /// True if the last DoEdit / DoEditAsync call failed due to an optimistic concurrency conflict.
+        /// </summary>
+        bool IsConcurrencyConflict { get; }
+
+        /// <summary>Returns a one-line human-readable label for the entity; used by bulk-delete preview (#619).</summary>
+        string GetDeletePreviewString();
+
         void Validate();
         IModelStateService? MSD { get; }
     }
@@ -113,6 +121,12 @@ namespace WalkingTec.Mvvm.Core
         public TModel Entity { get; set; }
         [JsonIgnore]
         public bool ByPassBaseValidation { get; set; }
+
+        /// <summary>
+        /// Set to true by DoEdit / DoEditAsync when EF throws DbUpdateConcurrencyException.
+        /// </summary>
+        [JsonIgnore]
+        public bool IsConcurrencyConflict { get; private set; }
 
         //保存读取时Include的内容
         private List<Expression<Func<TModel, object>>>? _toInclude { get; set; }
@@ -139,6 +153,28 @@ namespace WalkingTec.Mvvm.Core
         {
             return DC!.Set<TModel>();
         }
+
+        /// <summary>
+        /// Returns a one-line human-readable summary of <see cref="Entity"/> used by the
+        /// bulk-delete preview dialog (#619).  Override to provide a richer label.
+        /// The default implementation looks for Name / Title / Code / ITCode properties
+        /// in that order; falls back to the primary key value.
+        /// </summary>
+        public virtual string GetDeletePreviewString()
+        {
+            var searchNames = new[] { "Name", "Title", "Code", "ITCode", "SchoolName", "RoleName" };
+            foreach (var n in searchNames)
+            {
+                var prop = typeof(TModel).GetProperty(n);
+                if (prop != null)
+                {
+                    var v = prop.GetValue(Entity)?.ToString();
+                    if (!string.IsNullOrWhiteSpace(v)) return v;
+                }
+            }
+            return Entity.GetID()?.ToString() ?? string.Empty;
+        }
+
         /// <summary>
         /// 设定添加和修改时对于重复数据的判断，子类进行相关操作时应重载这个函数
         /// </summary>
@@ -546,6 +582,11 @@ namespace WalkingTec.Mvvm.Core
             {
                 DC!.SaveChanges();
             }
+            catch (DbUpdateConcurrencyException)
+            {
+                IsConcurrencyConflict = true;
+                MSD?.AddModelError(" ", Localizer?["Sys.ConcurrencyConflict"] ?? "The record was modified by another user. Please reload and try again.");
+            }
             catch
             {
                 MSD?.AddModelError(" ", Localizer?["Sys.EditFailed"] ?? "Edit failed");
@@ -569,7 +610,19 @@ namespace WalkingTec.Mvvm.Core
             DoEditPrepare(updateAllFields);
             AppendChangeLog("Edit", SerializeScalarProps(_auditSnapshot), SerializeScalarProps(Entity));
 
-            await DC!.SaveChangesAsync();
+            try
+            {
+                await DC!.SaveChangesAsync();
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                IsConcurrencyConflict = true;
+                MSD?.AddModelError(" ", Localizer?["Sys.ConcurrencyConflict"] ?? "The record was modified by another user. Please reload and try again.");
+            }
+            catch
+            {
+                MSD?.AddModelError(" ", Localizer?["Sys.EditFailed"] ?? "Edit failed");
+            }
             //删除不需要的附件
             if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm?.ServiceProvider != null)
             {

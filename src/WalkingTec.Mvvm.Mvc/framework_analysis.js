@@ -83,7 +83,16 @@
             'dep.missingTitle':  'Analysis 模組缺少必要前端依賴，部分功能將無法使用：',
             'dep.echarts':       'ECharts — 請在 _Layout.cshtml 中加入：',
             'dep.sortable':      'SortableJS — 請在 _Layout.cshtml 中加入：',
-            'warn.truncatedFmt': '結果已截斷，僅顯示前 10,000 列（共 {n} 組）。'
+            'warn.truncatedFmt': '結果已截斷，僅顯示前 10,000 列（共 {n} 組）。',
+            'reldate.custom':      '自訂日期',
+            'reldate.today':       '今天',
+            'reldate.thisWeek':    '本週',
+            'reldate.lastWeek':    '上週',
+            'reldate.thisMonth':   '本月',
+            'reldate.lastMonth':   '上月',
+            'reldate.last30Days':  '近30天',
+            'reldate.thisQuarter': '本季',
+            'reldate.ytd':         '本年至今'
         },
         'en-US': {
             'err.dimRequired':   'At least 1 dimension required for grouping',
@@ -158,7 +167,16 @@
             'dep.missingTitle':  'Analysis module is missing required frontend dependencies, some features will not work:',
             'dep.echarts':       'ECharts — add to _Layout.cshtml:',
             'dep.sortable':      'SortableJS — add to _Layout.cshtml:',
-            'warn.truncatedFmt': 'Results truncated, showing first 10,000 rows ({n} groups total).'
+            'warn.truncatedFmt': 'Results truncated, showing first 10,000 rows ({n} groups total).',
+            'reldate.custom':      'Custom date',
+            'reldate.today':       'Today',
+            'reldate.thisWeek':    'This week',
+            'reldate.lastWeek':    'Last week',
+            'reldate.thisMonth':   'This month',
+            'reldate.lastMonth':   'Last month',
+            'reldate.last30Days':  'Last 30 days',
+            'reldate.thisQuarter': 'This quarter',
+            'reldate.ytd':         'Year to date'
         }
     };
     (function () {
@@ -1098,6 +1116,17 @@
         { value: 'NotIn',       label: 'Not In' }
     ];
 
+    var _RELATIVE_DATE_OPTIONS = [
+        { value: '@today',       label: _i18n('reldate.today') },
+        { value: '@thisWeek',    label: _i18n('reldate.thisWeek') },
+        { value: '@lastWeek',    label: _i18n('reldate.lastWeek') },
+        { value: '@thisMonth',   label: _i18n('reldate.thisMonth') },
+        { value: '@lastMonth',   label: _i18n('reldate.lastMonth') },
+        { value: '@last30Days',  label: _i18n('reldate.last30Days') },
+        { value: '@thisQuarter', label: _i18n('reldate.thisQuarter') },
+        { value: '@ytd',         label: _i18n('reldate.ytd') }
+    ];
+
     /**
      * 從 filterBar 讀取所有有效篩選列，組裝成 [{field, op, value}]。
      * 欄位或值任一為空的列被跳過。
@@ -1143,19 +1172,55 @@
                 opt.textContent = v;
                 el.appendChild(opt);
             });
+        } else if (fieldMeta && fieldMeta.isDate) {
+            // Date field: mode selector (relative shortcuts) + custom text input
+            var wrap = document.createElement('span');
+            wrap.style.cssText = 'display:inline-flex;align-items:center;gap:4px;';
+
+            var modeSel = document.createElement('select');
+            modeSel.className = 'analysis-filter-date-mode';
+            modeSel.style.cssText = 'width:110px;';
+            var customOpt = document.createElement('option');
+            customOpt.value = '';
+            customOpt.textContent = _i18n('reldate.custom');
+            modeSel.appendChild(customOpt);
+            _RELATIVE_DATE_OPTIONS.forEach(function (o) {
+                var opt = document.createElement('option');
+                opt.value = o.value;
+                opt.textContent = o.label;
+                modeSel.appendChild(opt);
+            });
+            wrap.appendChild(modeSel);
+
+            var input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'analysis-filter-value layui-input';
+            input.placeholder = 'yyyy-MM-dd';
+            input.style.cssText = 'width:120px;display:inline-block;';
+            if (typeof laydate !== 'undefined') {
+                laydate.render({ elem: input });
+            }
+            wrap.appendChild(input);
+
+            // When a relative token is chosen, store it in the hidden input
+            // and hide the text box. collectFilters() reads .analysis-filter-value.
+            modeSel.addEventListener('change', function () {
+                if (modeSel.value) {
+                    input.value = modeSel.value;
+                    input.style.display = 'none';
+                } else {
+                    input.value = '';
+                    input.style.display = 'inline-block';
+                }
+            });
+
+            el = wrap;
         } else {
             el = document.createElement('input');
             el.type = 'text';
             el.className = 'analysis-filter-value layui-input';
             el.style.cssText = 'width:140px;display:inline-block;';
-            if (fieldMeta && fieldMeta.isDate) {
-                el.placeholder = 'yyyy-MM-dd';
-                if (typeof laydate !== 'undefined') {
-                    laydate.render({ elem: el });
-                }
-            } else {
-                el.placeholder = _i18n('filter.valuePh');
-            }
+            el.placeholder = _i18n('filter.valuePh');
         }
         return el;
     }
@@ -1719,14 +1784,57 @@
             colTotals[col] = total;
         });
 
+        // ── Sort & pagination state ───────────────────────────────────────────
+        var PAGE_SIZE = 50;
+        var currentPage = 0;
+        var originalRows = result.rows.slice();
+        var currentRows = originalRows.slice();
+
+        // ── Scroll wrapper (enables sticky header via CSS) ───────────────────
+        var wrapper = document.createElement('div');
+        wrapper.className = 'analysis-table-wrap';
+
         var table = document.createElement('table');
         table.className = 'layui-table';
-        table.style.marginTop = '10px';
+
         var thead = document.createElement('thead');
         var headerRow = document.createElement('tr');
         result.columns.forEach(function (col) {
             var th = document.createElement('th');
             th.textContent = colLabelMap[col] || col;
+            // Mark sortable columns — CSS ::after provides the visual indicator
+            // so that th.textContent remains unchanged (critical for tests)
+            th.dataset.sortCol = col;
+            th.dataset.sortDir = '';
+            th.addEventListener('click', function () {
+                var dir = th.dataset.sortDir;
+                var newDir = dir === '' ? 'asc' : dir === 'asc' ? 'desc' : '';
+                // Reset all sortable headers
+                var allThs = headerRow.getElementsByTagName('th');
+                for (var i = 0; i < allThs.length; i++) {
+                    if (allThs[i].dataset && 'sortCol' in allThs[i].dataset) {
+                        allThs[i].dataset.sortDir = '';
+                    }
+                }
+                th.dataset.sortDir = newDir;
+                if (newDir === '') {
+                    currentRows = originalRows.slice();
+                } else {
+                    currentRows = originalRows.slice().sort(function (a, b) {
+                        var av = a[col], bv = b[col];
+                        if (av === null || av === undefined) av = '';
+                        if (bv === null || bv === undefined) bv = '';
+                        if (typeof av === 'number' && typeof bv === 'number') {
+                            return newDir === 'asc' ? av - bv : bv - av;
+                        }
+                        var as = String(av), bs = String(bv);
+                        if (newDir === 'asc') return as < bs ? -1 : as > bs ? 1 : 0;
+                        return as > bs ? -1 : as < bs ? 1 : 0;
+                    });
+                }
+                currentPage = 0;
+                renderPage();
+            });
             headerRow.appendChild(th);
             if (msrColSet[col]) {
                 var thPct = document.createElement('th');
@@ -1738,41 +1846,89 @@
         });
         thead.appendChild(headerRow);
         table.appendChild(thead);
+
         var tbody = document.createElement('tbody');
-        result.rows.forEach(function (row) {
-            var tr = document.createElement('tr');
-            result.columns.forEach(function (col) {
-                var td = document.createElement('td');
-                var val = row[col];
-                if (val !== null && val !== undefined) {
-                    if (dateDims[col]) {
-                        td.textContent = formatDateKey(val);
-                    } else if (msrColSet[col] && typeof val === 'number') {
-                        td.textContent = formatNumeric(val);
-                    } else {
-                        td.textContent = String(val);
-                    }
-                } else {
-                    td.textContent = '-';
-                }
-                tr.appendChild(td);
-                if (msrColSet[col]) {
-                    var tdPct = document.createElement('td');
-                    var total = colTotals[col];
-                    if (total !== 0 && typeof val === 'number' && isFinite(val)) {
-                        tdPct.textContent = (val / total * 100).toFixed(1) + '%';
-                    } else {
-                        tdPct.textContent = '-';
-                    }
-                    tdPct.className = 'analysis-pct-cell';
-                    tdPct.style.cssText = 'color:#aaa;font-size:12px;';
-                    tr.appendChild(tdPct);
-                }
-            });
-            tbody.appendChild(tr);
-        });
         table.appendChild(tbody);
-        container.appendChild(table);
+        wrapper.appendChild(table);
+        container.appendChild(wrapper);
+
+        // ── Pagination controls (rendered only when rows exceed PAGE_SIZE) ────
+        var paginationDiv = null;
+        if (currentRows.length > PAGE_SIZE) {
+            paginationDiv = document.createElement('div');
+            paginationDiv.className = 'analysis-table-pagination';
+            container.appendChild(paginationDiv);
+        }
+
+        function renderPage() {
+            while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+            var totalPages = Math.ceil(currentRows.length / PAGE_SIZE);
+            var start = currentPage * PAGE_SIZE;
+            var end = Math.min(start + PAGE_SIZE, currentRows.length);
+            var pageRows = currentRows.slice(start, end);
+            pageRows.forEach(function (row) {
+                var tr = document.createElement('tr');
+                result.columns.forEach(function (col) {
+                    var td = document.createElement('td');
+                    var val = row[col];
+                    if (val !== null && val !== undefined) {
+                        if (dateDims[col]) {
+                            td.textContent = formatDateKey(val);
+                        } else if (msrColSet[col] && typeof val === 'number') {
+                            td.textContent = formatNumeric(val);
+                        } else {
+                            td.textContent = String(val);
+                        }
+                    } else {
+                        td.textContent = '-';
+                    }
+                    tr.appendChild(td);
+                    if (msrColSet[col]) {
+                        var tdPct = document.createElement('td');
+                        var total = colTotals[col];
+                        if (total !== 0 && typeof val === 'number' && isFinite(val)) {
+                            tdPct.textContent = (val / total * 100).toFixed(1) + '%';
+                        } else {
+                            tdPct.textContent = '-';
+                        }
+                        tdPct.className = 'analysis-pct-cell';
+                        tdPct.style.cssText = 'color:#aaa;font-size:12px;';
+                        tr.appendChild(tdPct);
+                    }
+                });
+                tbody.appendChild(tr);
+            });
+            // Rebuild pagination controls
+            if (paginationDiv) {
+                while (paginationDiv.firstChild) paginationDiv.removeChild(paginationDiv.firstChild);
+                var info = document.createElement('span');
+                info.className = 'analysis-page-info';
+                info.textContent = (start + 1) + '\u2013' + end + ' / ' + currentRows.length;
+                paginationDiv.appendChild(info);
+                var prevBtn = document.createElement('button');
+                prevBtn.className = 'layui-btn layui-btn-xs layui-btn-primary';
+                prevBtn.textContent = '\u2039 \u4e0a\u9801';
+                prevBtn.disabled = currentPage === 0;
+                (function (page) {
+                    prevBtn.addEventListener('click', function () {
+                        if (currentPage > 0) { currentPage--; renderPage(); }
+                    });
+                }(currentPage));
+                paginationDiv.appendChild(prevBtn);
+                var nextBtn = document.createElement('button');
+                nextBtn.className = 'layui-btn layui-btn-xs layui-btn-primary';
+                nextBtn.textContent = '\u4e0b\u9801 \u203a';
+                nextBtn.disabled = currentPage >= totalPages - 1;
+                (function (page) {
+                    nextBtn.addEventListener('click', function () {
+                        if (currentPage < totalPages - 1) { currentPage++; renderPage(); }
+                    });
+                }(currentPage));
+                paginationDiv.appendChild(nextBtn);
+            }
+        }
+
+        renderPage();
     }
 
     // Highlights the active chart-type button in the toggle bar (#618).
