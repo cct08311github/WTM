@@ -23,7 +23,28 @@ public class EtlRunLogListVM : BasePagedListVM<EtlRunLog, EtlRunLogSearcher>
             this.MakeGridHeader(x => x.ElapsedMs).SetHeader("耗時(ms)"),
             this.MakeGridHeader(x => x.ErrorMessage!).SetHeader("錯誤訊息").SetWidth(200),
             this.MakeGridHeader(x => x.WatermarkSnapshot!).SetHeader("Watermark"),
-            this.MakeGridHeaderAction(width: 120)
+            this.MakeGridHeaderAction(width: 100)
+        };
+    }
+
+    protected override List<GridAction> InitGridAction()
+    {
+        return new List<GridAction>
+        {
+            // Rerun from this log's watermark snapshot (#540)
+            new GridAction
+            {
+                Name = "重跑",
+                IconCls = "layui-icon layui-icon-refresh",
+                ControllerName = "_EtlRunLog",
+                ActionName = "Rerun",
+                ParameterType = GridActionParameterTypesEnum.SingleId,
+                ShowInRow = true,
+                HideOnToolBar = true,
+                ShowDialog = false,
+                ForcePost = true,
+                PromptMessage = "確定從此記錄的 Watermark 快照重跑？"
+            }
         };
     }
 
