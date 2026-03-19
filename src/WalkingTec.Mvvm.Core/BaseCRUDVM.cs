@@ -95,6 +95,9 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         bool IsConcurrencyConflict { get; }
 
+        /// <summary>Returns a one-line human-readable label for the entity; used by bulk-delete preview (#619).</summary>
+        string GetDeletePreviewString();
+
         void Validate();
         IModelStateService? MSD { get; }
     }
@@ -150,6 +153,28 @@ namespace WalkingTec.Mvvm.Core
         {
             return DC!.Set<TModel>();
         }
+
+        /// <summary>
+        /// Returns a one-line human-readable summary of <see cref="Entity"/> used by the
+        /// bulk-delete preview dialog (#619).  Override to provide a richer label.
+        /// The default implementation looks for Name / Title / Code / ITCode properties
+        /// in that order; falls back to the primary key value.
+        /// </summary>
+        public virtual string GetDeletePreviewString()
+        {
+            var searchNames = new[] { "Name", "Title", "Code", "ITCode", "SchoolName", "RoleName" };
+            foreach (var n in searchNames)
+            {
+                var prop = typeof(TModel).GetProperty(n);
+                if (prop != null)
+                {
+                    var v = prop.GetValue(Entity)?.ToString();
+                    if (!string.IsNullOrWhiteSpace(v)) return v;
+                }
+            }
+            return Entity.GetID()?.ToString() ?? string.Empty;
+        }
+
         /// <summary>
         /// 设定添加和修改时对于重复数据的判断，子类进行相关操作时应重载这个函数
         /// </summary>
