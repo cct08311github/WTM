@@ -23,7 +23,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.ViewModels.FrameworkUserVms
 
     public class FrameworkUserImportVM : BaseImportVM<FrameworkUserTemplateVM, FrameworkUser>
     {
-        public override bool BatchSaveData()
+        public override bool BatchSaveData(System.IProgress<WalkingTec.Mvvm.Core.ImportProgress>? progress = null)
         {
             SetEntityList();
             foreach (var item in EntityList)
