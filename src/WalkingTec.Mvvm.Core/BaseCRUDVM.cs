@@ -90,6 +90,11 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         bool ByPassBaseValidation { get; set; }
 
+        /// <summary>
+        /// True if the last DoEdit / DoEditAsync call failed due to an optimistic concurrency conflict.
+        /// </summary>
+        bool IsConcurrencyConflict { get; }
+
         void Validate();
         IModelStateService? MSD { get; }
     }
@@ -113,6 +118,12 @@ namespace WalkingTec.Mvvm.Core
         public TModel Entity { get; set; }
         [JsonIgnore]
         public bool ByPassBaseValidation { get; set; }
+
+        /// <summary>
+        /// Set to true by DoEdit / DoEditAsync when EF throws DbUpdateConcurrencyException.
+        /// </summary>
+        [JsonIgnore]
+        public bool IsConcurrencyConflict { get; private set; }
 
         //保存读取时Include的内容
         private List<Expression<Func<TModel, object>>>? _toInclude { get; set; }
@@ -546,6 +557,11 @@ namespace WalkingTec.Mvvm.Core
             {
                 DC!.SaveChanges();
             }
+            catch (DbUpdateConcurrencyException)
+            {
+                IsConcurrencyConflict = true;
+                MSD?.AddModelError(" ", Localizer?["Sys.ConcurrencyConflict"] ?? "The record was modified by another user. Please reload and try again.");
+            }
             catch
             {
                 MSD?.AddModelError(" ", Localizer?["Sys.EditFailed"] ?? "Edit failed");
@@ -569,7 +585,19 @@ namespace WalkingTec.Mvvm.Core
             DoEditPrepare(updateAllFields);
             AppendChangeLog("Edit", SerializeScalarProps(_auditSnapshot), SerializeScalarProps(Entity));
 
-            await DC!.SaveChangesAsync();
+            try
+            {
+                await DC!.SaveChangesAsync();
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                IsConcurrencyConflict = true;
+                MSD?.AddModelError(" ", Localizer?["Sys.ConcurrencyConflict"] ?? "The record was modified by another user. Please reload and try again.");
+            }
+            catch
+            {
+                MSD?.AddModelError(" ", Localizer?["Sys.EditFailed"] ?? "Edit failed");
+            }
             //删除不需要的附件
             if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm?.ServiceProvider != null)
             {

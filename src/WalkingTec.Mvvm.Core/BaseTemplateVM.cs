@@ -26,6 +26,15 @@ namespace WalkingTec.Mvvm.Core
         public bool ValidityTemplateType { get; set; }
 
         /// <summary>
+        /// When <c>true</c> (default), <see cref="GenerateTemplate"/> writes a
+        /// human-readable description row (row 2) below the column-header row so
+        /// users can see Required/Optional, data type, and length constraints (#615).
+        /// Set to <c>false</c> to produce a single-header template compatible with
+        /// older WTM versions.
+        /// </summary>
+        public bool ShowDescriptionRow { get; set; } = true;
+
+        /// <summary>
         /// 需要导出的数据
         /// </summary>
         public DataTable? TemplateDataTable { get; set; }
@@ -125,6 +134,8 @@ namespace WalkingTec.Mvvm.Core
             enumSheetRow1.CreateCell(0).SetCellValue(CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.Yes"] : "Yes");
             enumSheetRow1.CreateCell(1).SetCellValue(CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.No"] : "No");
             enumSheetRow1.CreateCell(2).SetCellValue(this.GetType().Name); //为模板添加标记,必要时可添加版本号
+            // Cell[3] flags that a description row is present so the importer skips it (#615)
+            enumSheetRow1.CreateCell(3).SetCellValue(ShowDescriptionRow ? "v2" : string.Empty);
 
             ISheet dataSheet = workbook.CreateSheet();
 
@@ -233,13 +244,44 @@ namespace WalkingTec.Mvvm.Core
             }
             #endregion
 
+            #region 添加说明行 (#615)
+            int dataStartRow = 1; // row index where sample/template data begins
+            if (ShowDescriptionRow)
+            {
+                IRow descRow = sheet.CreateRow(1);
+                descRow.HeightInPoints = 18;
+                var descStyle = GetDescriptionStyle(workbook);
+                int descColIdx = 0;
+                for (int porpetyIndex = 0; porpetyIndex < propetys.Count(); porpetyIndex++)
+                {
+                    ExcelPropety ep = (ExcelPropety)propetys[porpetyIndex].GetValue(this)!;
+                    if (ep.DataType == ColumnDataType.Dynamic)
+                    {
+                        foreach (var dc in ep.DynamicColumns)
+                        {
+                            var cell = descRow.CreateCell(descColIdx++);
+                            cell.SetCellValue(GetColumnDescription(dc));
+                            cell.CellStyle = descStyle;
+                        }
+                    }
+                    else
+                    {
+                        var cell = descRow.CreateCell(descColIdx++);
+                        cell.SetCellValue(GetColumnDescription(ep));
+                        cell.CellStyle = descStyle;
+                    }
+                }
+                dataStartRow = 2;
+            }
+            #endregion
+
             #region 添加模版数据
             if (TemplateDataTable?.Rows.Count > 0)
             {
                 for (int i = 0; i < TemplateDataTable.Rows.Count; i++)
                 {
                     DataRow tableRow = TemplateDataTable.Rows[i];
-                    IRow dataRow = sheet.CreateRow(1 + i);
+                    IRow dataRow = sheet.CreateRow(dataStartRow + i);
                     for (int porpetyIndex = 0; porpetyIndex < propetys.Count(); porpetyIndex++)
                     {
                         string colName2 = propetys[porpetyIndex].Name;
@@ -250,8 +292,8 @@ namespace WalkingTec.Mvvm.Core
             }
             #endregion
 
-            //冻结行
-            sheet.CreateFreezePane(0, 1, 0, 1);
+            //冻结行 (freeze header + optional description row)
+            sheet.CreateFreezePane(0, dataStartRow, 0, dataStartRow);
 
             //锁定excel
             if (IsProtect)
@@ -305,6 +347,71 @@ namespace WalkingTec.Mvvm.Core
             headerStyle.FillBackgroundColor = headerbg;
             headerStyle.Alignment = HorizontalAlignment.Center;
             return headerStyle;
+        }
+        #endregion
+
+        #region Description row helper (#615)
+        /// <summary>
+        /// Returns a human-readable hint for an Excel column.  Override to customise
+        /// the text for individual columns.
+        /// </summary>
+        protected virtual string GetColumnDescription(ExcelPropety prop)
+        {
+            var parts = new System.Text.StringBuilder();
+
+            parts.Append(prop.IsNullAble ? "Optional" : "Required");
+
+            switch (prop.DataType)
+            {
+                case ColumnDataType.Number:
+                    parts.Append(", Integer");
+                    break;
+                case ColumnDataType.Float:
+                    parts.Append(", Decimal");
+                    break;
+                case ColumnDataType.Date:
+                    parts.Append(", Date (yyyy-MM-dd)");
+                    break;
+                case ColumnDataType.DateTime:
+                    parts.Append(", DateTime");
+                    break;
+                case ColumnDataType.Bool:
+                    parts.Append(", True/False");
+                    break;
+                case ColumnDataType.Enum:
+                case ColumnDataType.ComboBox:
+                    var items = prop.ListItems.Select(x => x.Text).Take(5).ToList();
+                    if (items.Count > 0)
+                        parts.Append(", ").Append(string.Join("/", items));
+                    break;
+            }
+
+            if (!string.IsNullOrEmpty(prop.MaxValuseOrLength))
+                parts.Append(", max:").Append(prop.MaxValuseOrLength);
+            else if (prop.CharCount > 0 && prop.DataType == ColumnDataType.Text)
+                parts.Append(", max:").Append(prop.CharCount);
+
+            if (!string.IsNullOrEmpty(prop.MinValueOrLength))
+                parts.Append(", min:").Append(prop.MinValueOrLength);
+
+            return parts.ToString();
+        }
+
+        private static ICellStyle GetDescriptionStyle(IWorkbook workbook)
+        {
+            var style = workbook.CreateCellStyle();
+            style.BorderBottom = BorderStyle.Thin;
+            style.BorderLeft = BorderStyle.Thin;
+            style.BorderRight = BorderStyle.Thin;
+            style.BorderTop = BorderStyle.Thin;
+            style.FillForegroundColor = HSSFColor.LightGreen.Index;
+            style.FillPattern = FillPattern.SolidForeground;
+            style.FillBackgroundColor = HSSFColor.LightGreen.Index;
+            style.Alignment = HorizontalAlignment.Left;
+            var font = workbook.CreateFont();
+            font.IsItalic = true;
+            style.SetFont(font);
+            return style;
         }
         #endregion
 

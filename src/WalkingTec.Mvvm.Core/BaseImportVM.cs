@@ -21,6 +21,20 @@ using WalkingTec.Mvvm.Core.Support.FileHandlers;
 namespace WalkingTec.Mvvm.Core
 {
     /// <summary>
+    /// Progress snapshot reported by <see cref="BaseImportVM{T,P}.BatchSaveData"/> via
+    /// <see cref="IProgress{T}"/> when importing large Excel files (#607).
+    /// </summary>
+    public readonly struct ImportProgress
+    {
+        /// <summary>Number of rows that have been processed so far.</summary>
+        public int Processed { get; init; }
+        /// <summary>Total number of rows to process.</summary>
+        public int Total { get; init; }
+        /// <summary>Human-readable description of the current phase (e.g. "Validating", "Saving").</summary>
+        public string Phase { get; init; }
+    }
+
+    /// <summary>
     /// 导入接口
     /// </summary>
     /// <typeparam name="T">导入模版类</typeparam>
@@ -59,6 +73,25 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         [JsonIgnore]
         public TemplateErrorListVM ErrorListVM { get; set; }
+
+        /// <summary>
+        /// Maximum number of errors surfaced via <see cref="InlineErrors"/> (#615).
+        /// Defaults to 50. Set to 0 to disable inline errors.
+        /// </summary>
+        [JsonIgnore]
+        public int InlineErrorLimit { get; set; } = 50;
+
+        /// <summary>
+        /// Returns up to <see cref="InlineErrorLimit"/> validation errors so the UI can
+        /// display them inline (without requiring the user to download an error file).
+        /// Returns an empty list when there are no errors or <see cref="InlineErrorLimit"/>
+        /// is 0 (#615).
+        /// </summary>
+        [JsonIgnore]
+        public IReadOnlyList<ErrorMessage> InlineErrors =>
+            InlineErrorLimit <= 0
+                ? Array.Empty<ErrorMessage>()
+                : ErrorListVM.EntityList.Take(InlineErrorLimit).ToList();
 
         /// <summary>
         /// 是否验证模板类型（当其他系统模板导入到某模块时可设置为False）
@@ -312,9 +345,17 @@ namespace WalkingTec.Mvvm.Core
                     }
                 }
 
+                // If the template was generated with a description row (v2), skip it (#615).
+                bool hasDescriptionRow = xssfworkbook.GetSheetAt(1)?.GetRow(0)?.GetCell(3)?.ToString() == "v2";
+
                 //向TemplateData中赋值
                 int rowIndex = 2;
-                rows.MoveNext();
+                rows.MoveNext(); // skip header row
+                if (hasDescriptionRow)
+                {
+                    rows.MoveNext(); // skip description row
+                    rowIndex = 3;
+                }
                 while (rows.MoveNext())
                 {
                     XSSFRow row = (XSSFRow)rows.Current;
@@ -910,8 +951,12 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 保存指定表中的数据
         /// </summary>
+        /// <param name="progress">
+        /// Optional progress sink. Reports <see cref="ImportProgress"/> after every processed
+        /// row during the validation and save phases so callers can display a progress bar.
+        /// </param>
         /// <returns>成功返回True，失败返回False</returns>
-        public virtual bool BatchSaveData()
+        public virtual bool BatchSaveData(IProgress<ImportProgress>? progress = null)
         {
             //删除不必要的附件
             if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm!.ServiceProvider != null)
@@ -926,6 +971,8 @@ namespace WalkingTec.Mvvm.Core
 
             //进行赋值
             SetEntityList();
+            int total = EntityList.Count;
+            int processed = 0;
             foreach (var entity in EntityList)
             {
                 var context = new ValidationContext(entity);
@@ -935,6 +982,7 @@ namespace WalkingTec.Mvvm.Core
                 {
                     ErrorListVM.EntityList.Add(new ErrorMessage { Message = validationResults.FirstOrDefault()?.ErrorMessage ?? "Error", ExcelIndex = entity.ExcelIndex, Index = entity.ExcelIndex });
                 }
+                progress?.Report(new ImportProgress { Processed = ++processed, Total = total, Phase = "Validating" });
             }
             if (ErrorListVM.EntityList.Count > 0)
             {
@@ -952,6 +1000,7 @@ namespace WalkingTec.Mvvm.Core
             var ModelType = typeof(P);
             //循环数据列表
             List<P> ListAdd = new List<P>();
+            processed = 0;
             foreach (var item in EntityList)
             {
                 //根据唯一性的设定查找数据库中是否有同样的数据
@@ -1041,6 +1090,7 @@ namespace WalkingTec.Mvvm.Core
                 {
                     DC!.Set<P>().Add(item);
                 }
+                progress?.Report(new ImportProgress { Processed = ++processed, Total = total, Phase = "Saving" });
             }
 
             if (ErrorListVM.EntityList.Count > 0)
