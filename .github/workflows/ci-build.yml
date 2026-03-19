@@ -22,7 +22,7 @@ jobs:
       with:
         dotnet-version: '8.0.x'
     - name: Install Blazor WASM workload
-      run: dotnet workload install wasm-tools
+      run: sudo dotnet workload install wasm-tools
     - run: dotnet restore WalkingTec.Mvvm.sln
     - run: dotnet build WalkingTec.Mvvm.sln --no-restore -c Release
 
