@@ -22,6 +22,7 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using WalkingTec.Mvvm.Core.Analysis;
 using WalkingTec.Mvvm.Core.Extensions;
 using WalkingTec.Mvvm.Core.Models;
 using WalkingTec.Mvvm.Core.Support.Json;
@@ -53,6 +54,7 @@ namespace WalkingTec.Mvvm.Core
         // public DbSet<Elsa_WorkflowExecutionLogRecord> Elsa_WorkflowExecutionLogRecords { get; set; }
         // public DbSet<Elsa_WorkflowInstance> Elsa_WorkflowInstances { get; set; }
         public DbSet<RefreshTokenEntity> FrameworkRefreshTokens { get; set; } = null!;
+        public DbSet<AnalysisSavedQuery> AnalysisSavedQueries { get; set; } = null!;
 
         /// <summary>
         /// FrameworkContext
@@ -448,6 +450,7 @@ namespace WalkingTec.Mvvm.Core
 
         public string? Version { get; set; }
         public CS ConnectionString { get; set; } = null!;
+        public DbSet<AnalysisSavedQuery> AnalysisSavedQueries { get; set; } = null!;
 
 
         /// <summary>

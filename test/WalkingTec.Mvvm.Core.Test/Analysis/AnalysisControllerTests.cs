@@ -2410,6 +2410,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             StringAssert.Contains(logMsg, "Export",           "ActionLog 應記錄 ActionName 包含 Export");
         }
 
+
         [TestMethod]
         public async Task Query_validation_failure_does_not_write_ActionLog()
         {
@@ -2431,6 +2432,150 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.IsInstanceOfType(result, typeof(BadRequestObjectResult));
             Assert.AreEqual(0, actionLogger.Messages.Count,
                 "驗證失敗時不應寫入 ActionLog");
+        }
+
+        // ─── Saved Queries CRUD & 權限測試 ───────────────────────────────────────
+
+        [TestMethod]
+        public void SaveQuery_creates_new_record()
+        {
+            var controller = CreateController();
+            controller.Wtm.LoginUserInfo.ITCode = "testuser";
+
+            var req = new SaveQueryRequest
+            {
+                Name = "My Sales Query",
+                IsPublic = true,
+                Config = new AnalysisQueryRequest
+                {
+                    ListVmType = typeof(SaleRecordListVM).FullName,
+                    Dimensions = new List<string> { "Region" },
+                    Measures = new List<MeasureRequest> { new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum } }
+                }
+            };
+
+            var result = controller.SaveQuery(req) as CreatedAtActionResult;
+            Assert.IsNotNull(result);
+
+            // Verify DB
+            var query = controller.Wtm.DC.Set<AnalysisSavedQuery>().FirstOrDefault();
+            Assert.IsNotNull(query);
+            Assert.AreEqual("My Sales Query", query.Name);
+            Assert.AreEqual(typeof(SaleRecordListVM).FullName, query.ListVmType);
+            Assert.AreEqual("testuser", query.OwnerCode);
+            Assert.IsTrue(query.IsPublic);
+        }
+
+        [TestMethod]
+        public void ListSavedQueries_returns_public_and_owned_queries()
+        {
+            var controller = CreateController();
+            controller.Wtm.LoginUserInfo.ITCode = "userA";
+            
+            var vmType = typeof(SaleRecordListVM).FullName;
+            var configJson = "{}";
+
+            controller.Wtm.DC.Set<AnalysisSavedQuery>().AddRange(
+                new AnalysisSavedQuery { Name = "A_Private", ListVmType = vmType, OwnerCode = "userA", IsPublic = false, ConfigJson = configJson },
+                new AnalysisSavedQuery { Name = "A_Public", ListVmType = vmType, OwnerCode = "userA", IsPublic = true, ConfigJson = configJson },
+                new AnalysisSavedQuery { Name = "B_Private", ListVmType = vmType, OwnerCode = "userB", IsPublic = false, ConfigJson = configJson },
+                new AnalysisSavedQuery { Name = "B_Public", ListVmType = vmType, OwnerCode = "userB", IsPublic = true, ConfigJson = configJson }
+            );
+            controller.Wtm.DC.SaveChanges();
+
+            var result = controller.ListSavedQueries(vmType) as OkObjectResult;
+            Assert.IsNotNull(result);
+
+            var list = result.Value as IEnumerable<SavedQuerySummaryDto>;
+            Assert.IsNotNull(list);
+            
+            var names = list.Select(x => x.Name).ToList();
+            Assert.IsTrue(names.Contains("A_Private"), "UserA 應能看到自己的 Private 查詢");
+            Assert.IsTrue(names.Contains("A_Public"));
+            Assert.IsFalse(names.Contains("B_Private"), "UserA 不應看到 UserB 的 Private 查詢");
+            Assert.IsTrue(names.Contains("B_Public"), "UserA 應能看到 UserB 的 Public 查詢");
+        }
+
+        [TestMethod]
+        public void GetSavedQuery_returns_config_for_authorized_user()
+        {
+            var controller = CreateController();
+            controller.Wtm.LoginUserInfo.ITCode = "userA";
+            var vmType = typeof(SaleRecordListVM).FullName;
+
+            var id = Guid.NewGuid();
+            controller.Wtm.DC.Set<AnalysisSavedQuery>().Add(
+                new AnalysisSavedQuery 
+                { 
+                    ID = id, 
+                    Name = "Test", 
+                    ListVmType = vmType, 
+                    OwnerCode = "userB", 
+                    IsPublic = true, 
+                    ConfigJson = "{\"listVmType\":\"" + vmType + "\"}" 
+                }
+            );
+            controller.Wtm.DC.SaveChanges();
+
+            var result = controller.GetSavedQuery(id) as JsonResult;
+            Assert.IsNotNull(result, "存取公開查詢應回傳 200");
+            var config = result.Value as AnalysisQueryRequest;
+            Assert.IsNotNull(config);
+            Assert.AreEqual(vmType, config.ListVmType);
+        }
+
+        [TestMethod]
+        public void GetSavedQuery_returns_403_for_unauthorized_user()
+        {
+            var controller = CreateController();
+            controller.Wtm.LoginUserInfo.ITCode = "userA";
+            
+            var id = Guid.NewGuid();
+            controller.Wtm.DC.Set<AnalysisSavedQuery>().Add(
+                new AnalysisSavedQuery { ID = id, Name = "Test", ListVmType = "VM", OwnerCode = "userB", IsPublic = false, ConfigJson = "{}" }
+            );
+            controller.Wtm.DC.SaveChanges();
+
+            var result = controller.GetSavedQuery(id) as ForbidResult;
+            Assert.IsNotNull(result, "存取他人的私有查詢應回傳 403 Forbid");
+        }
+
+        [TestMethod]
+        public void DeleteSavedQuery_removes_record_if_owner()
+        {
+            var controller = CreateController();
+            controller.Wtm.LoginUserInfo.ITCode = "userA";
+            
+            var id = Guid.NewGuid();
+            controller.Wtm.DC.Set<AnalysisSavedQuery>().Add(
+                new AnalysisSavedQuery { ID = id, Name = "Test", ListVmType = "VM", OwnerCode = "userA", ConfigJson = "{}" }
+            );
+            controller.Wtm.DC.SaveChanges();
+
+            var result = controller.DeleteSavedQuery(id) as NoContentResult;
+            Assert.IsNotNull(result);
+
+            var query = controller.Wtm.DC.Set<AnalysisSavedQuery>().FirstOrDefault(q => q.ID == id);
+            Assert.IsNull(query, "查詢應被刪除");
+        }
+
+        [TestMethod]
+        public void DeleteSavedQuery_returns_403_if_not_owner()
+        {
+            var controller = CreateController();
+            controller.Wtm.LoginUserInfo.ITCode = "userA";
+            
+            var id = Guid.NewGuid();
+            controller.Wtm.DC.Set<AnalysisSavedQuery>().Add(
+                new AnalysisSavedQuery { ID = id, Name = "Test", ListVmType = "VM", OwnerCode = "userB", ConfigJson = "{}" }
+            );
+            controller.Wtm.DC.SaveChanges();
+
+            var result = controller.DeleteSavedQuery(id) as ForbidResult;
+            Assert.IsNotNull(result, "刪除他人查詢應回傳 403 Forbid");
+
+            var query = controller.Wtm.DC.Set<AnalysisSavedQuery>().FirstOrDefault(q => q.ID == id);
+            Assert.IsNotNull(query, "查詢不應被刪除");
         }
     }
 }
