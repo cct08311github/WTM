@@ -58,6 +58,12 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         /// </summary>
         public string ChangeFunc { get; set; }
 
+        /// <summary>
+        /// 启用远程搜索：填入URL后，用户输入时会向该URL发送 ?q=&lt;keyword&gt; 请求，返回值格式与 ItemUrl 相同。
+        /// 注意：RemoteUrl 与本地 Items 互斥，启用时本地 Items 数据将被忽略。(#565)
+        /// </summary>
+        public string RemoteUrl { get; set; }
+
         private WTMContext _wtm;
         public ComboBoxTagHelper(IOptionsMonitor<Configs> configs, WTMContext wtm)
         {
@@ -247,7 +253,15 @@ var {Id} = xmSelect.render({{
     disabled: {Disabled.ToString().ToLower()},
     {(THProgram._localizer["Sys.LayuiDateLan"] =="CN"? "language:'zn'," : "language:'en',")}
 	autoRow: {AutoRow.ToString().ToLower()},
-	filterable: {EnableSearch.ToString().ToLower()},
+	filterable: {(string.IsNullOrEmpty(RemoteUrl) ? EnableSearch.ToString().ToLower() : "true")},
+    {(string.IsNullOrEmpty(RemoteUrl) ? "" : $@"
+    remoteSearch: true,
+    remoteMethod: function(val, cb) {{
+        $.get('{RemoteUrl}', {{ q: val }}, function(data) {{
+            cb(ff.getComboItems(data.Data, []));
+        }});
+    }},
+    ")}
     template({{ item, sels, name, value }}){{
         if(item.icon !== undefined && item.icon != """"&& item.icon != null){{
 			return '<i class=""'+item.icon+'""></i>' + item.name;
