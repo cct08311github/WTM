@@ -5331,7 +5331,6 @@ describe('#539 renderTable — sort, pagination, sticky wrapper', () => {
         expect(container.querySelector('tbody td').textContent).toBe('0');
     });
 });
-
 // ─── #566 createValueInput — date field relative date mode ───────────────────
 describe('#566 createValueInput — date field relative date mode', () => {
     const dateMeta = {
