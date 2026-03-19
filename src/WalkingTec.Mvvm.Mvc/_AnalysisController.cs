@@ -290,6 +290,127 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
                 "analysis_pivot.xlsx");
         }
 
+        // ─── Saved Queries ─────────────────────────────────────────────────
+
+        /// <summary>
+        /// GET /_analysis/savedqueries?listVmType=Foo.BarListVM
+        /// 回傳目前使用者的私有查詢 + 所有公開查詢（依建立時間降序）。
+        /// </summary>
+        [HttpGet("savedqueries")]
+        [ProducesResponseType(typeof(IEnumerable<SavedQuerySummaryDto>), StatusCodes.Status200OK)]
+        public IActionResult ListSavedQueries([FromQuery] string listVmType)
+        {
+            if (string.IsNullOrWhiteSpace(listVmType))
+                return BadRequest("listVmType is required.");
+
+            var userCode = Wtm?.LoginUserInfo?.ITCode ?? string.Empty;
+
+            var rows = Wtm!.DC.Set<AnalysisSavedQuery>()
+                .Where(q => q.ListVmType == listVmType && (q.OwnerCode == userCode || q.IsPublic))
+                .OrderByDescending(q => q.CreateTime)
+                .Select(q => new SavedQuerySummaryDto
+                {
+                    Id         = q.ID,
+                    Name       = q.Name,
+                    ListVmType = q.ListVmType,
+                    OwnerCode  = q.OwnerCode ?? string.Empty,
+                    IsPublic   = q.IsPublic,
+                    IsOwner    = q.OwnerCode == userCode,
+                    CreatedAt  = q.CreateTime
+                })
+                .ToList();
+
+            return Ok(rows);
+        }
+
+        /// <summary>
+        /// POST /_analysis/savedqueries
+        /// 儲存一個查詢設定，回傳新建立的記錄 ID。
+        /// </summary>
+        [HttpPost("savedqueries")]
+        [ProducesResponseType(typeof(object), StatusCodes.Status201Created)]
+        [ProducesResponseType(typeof(string), StatusCodes.Status400BadRequest)]
+        public IActionResult SaveQuery([FromBody] SaveQueryRequest? req)
+        {
+            if (req == null) return BadRequest("Request body is required.");
+            if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest("查詢名稱不可為空。");
+            if (string.IsNullOrWhiteSpace(req.Config?.ListVmType)) return BadRequest("Config.ListVmType is required.");
+
+            try { _registry.Resolve(req.Config.ListVmType); }
+            catch (AnalysisVmNotFoundException ex) { return NotFound(ex.Message); }
+
+            var userCode = Wtm?.LoginUserInfo?.ITCode ?? string.Empty;
+            var configJson = JsonSerializer.Serialize(req.Config, _camelCase);
+
+            var entity = new AnalysisSavedQuery
+            {
+                Name       = req.Name.Trim(),
+                ListVmType = req.Config.ListVmType,
+                ConfigJson = configJson,
+                OwnerCode  = userCode,
+                IsPublic   = req.IsPublic,
+                CreateTime = DateTime.Now,
+                CreateBy   = userCode
+            };
+
+            Wtm!.DC.Set<AnalysisSavedQuery>().Add(entity);
+            Wtm.DC.SaveChanges();
+
+            _logger.LogInformation("Analysis saved query created Id={Id} Name={Name} ListVm={ListVm} Owner={Owner} IsPublic={IsPublic}",
+                entity.ID, entity.Name, entity.ListVmType, entity.OwnerCode, entity.IsPublic);
+
+            return CreatedAtAction(nameof(GetSavedQuery), new { id = entity.ID },
+                new { id = entity.ID, name = entity.Name });
+        }
+
+        /// <summary>
+        /// GET /_analysis/savedqueries/{id}
+        /// 載入指定 ID 的查詢設定（回傳 AnalysisQueryRequest）。
+        /// </summary>
+        [HttpGet("savedqueries/{id:guid}")]
+        [ProducesResponseType(typeof(AnalysisQueryRequest), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public IActionResult GetSavedQuery(Guid id)
+        {
+            var entity = Wtm!.DC.Set<AnalysisSavedQuery>().FirstOrDefault(q => q.ID == id);
+            if (entity == null) return NotFound();
+
+            var userCode = Wtm.LoginUserInfo?.ITCode ?? string.Empty;
+            if (!entity.IsPublic && entity.OwnerCode != userCode) return Forbid();
+
+            AnalysisQueryRequest? config;
+            try { config = JsonSerializer.Deserialize<AnalysisQueryRequest>(entity.ConfigJson, _camelCase); }
+            catch (JsonException) { return BadRequest("儲存的查詢格式無效。"); }
+
+            if (config == null) return BadRequest("儲存的查詢格式無效。");
+
+            return new JsonResult(config, _camelCase);
+        }
+
+        /// <summary>
+        /// DELETE /_analysis/savedqueries/{id}
+        /// 刪除儲存的查詢（只有擁有者可刪除）。
+        /// </summary>
+        [HttpDelete("savedqueries/{id:guid}")]
+        [ProducesResponseType(StatusCodes.Status204NoContent)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public IActionResult DeleteSavedQuery(Guid id)
+        {
+            var entity = Wtm!.DC.Set<AnalysisSavedQuery>().FirstOrDefault(q => q.ID == id);
+            if (entity == null) return NotFound();
+
+            var userCode = Wtm.LoginUserInfo?.ITCode ?? string.Empty;
+            if (entity.OwnerCode != userCode) return Forbid();
+
+            Wtm.DC.Set<AnalysisSavedQuery>().Remove(entity);
+            Wtm.DC.SaveChanges();
+
+            _logger.LogInformation("Analysis saved query deleted Id={Id} Owner={Owner}", id, userCode);
+            return NoContent();
+        }
+
         // ─── Helpers ───────────────────────────────────────────────────────
 
         /// <summary>
