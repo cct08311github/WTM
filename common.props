@@ -36,4 +36,28 @@
     <None Include="$(MSBuildThisFileDirectory)demo/WalkingTec.Mvvm.BlazorDemo/WalkingTec.Mvvm.BlazorDemo/wwwroot/logo.png" Pack="true" PackagePath="icon.png" Visible="false" />
   </ItemGroup>
 
+  <!--
+    Centralized package versions for src projects.
+    Microsoft packages follow the .NET 10 release cadence (all 10.0.4).
+    Third-party packages pinned to latest stable.
+    DB providers (Npgsql, Oracle, MySql) are NOT centralized here —
+    they follow independent release cadences.
+  -->
+  <PropertyGroup>
+    <!-- Microsoft .NET 10 packages -->
+    <MicrosoftExtensionsVersion>10.0.4</MicrosoftExtensionsVersion>
+    <EntityFrameworkCoreVersion>10.0.4</EntityFrameworkCoreVersion>
+    <AspNetCoreVersion>10.0.4</AspNetCoreVersion>
+    <SystemTextJsonVersion>10.0.4</SystemTextJsonVersion>
+    <!-- Third-party packages -->
+    <SwashbuckleVersion>10.1.5</SwashbuckleVersion>
+    <OpenTelemetryVersion>1.15.0</OpenTelemetryVersion>
+    <SerilogAspNetCoreVersion>10.0.0</SerilogAspNetCoreVersion>
+    <QuartzVersion>3.16.0</QuartzVersion>
+    <NPOIVersion>2.7.6</NPOIVersion>
+    <ImageSharpVersion>3.1.12</ImageSharpVersion>
+    <ImageSharpDrawingVersion>2.1.7</ImageSharpDrawingVersion>
+    <AspVersioningVersion>8.1.1</AspVersioningVersion>
+  </PropertyGroup>
+
 </Project>
