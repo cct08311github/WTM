@@ -766,7 +766,7 @@ namespace WalkingTec.Mvvm.Core
             {
                 Searcher.Page = 1;
             }
-            if (DC!.Database.IsMySql())
+            if (DC!.DBType == DBTypeEnum.MySql)
             {
                 List<MySqlParameter> parms = new List<MySqlParameter>();
                 foreach (MySqlParameter item in cmd.Parameters)

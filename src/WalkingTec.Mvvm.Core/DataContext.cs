@@ -661,7 +661,7 @@ namespace WalkingTec.Mvvm.Core
         {
             if (DBType == DBTypeEnum.Oracle)
             {
-                modelBuilder.HasMaxIdentifierLength(30);
+                ((IConventionModelBuilder)modelBuilder).HasMaxIdentifierLength(30);
                 // [Elsa removed] table mappings
                 // modelBuilder.Entity<Elsa_Bookmark>().ToTable("Bookmarks");
                 // modelBuilder.Entity<Elsa_Trigger>().ToTable("Triggers");
