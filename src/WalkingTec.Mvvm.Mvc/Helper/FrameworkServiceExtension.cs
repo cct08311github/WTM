@@ -524,6 +524,7 @@ namespace WalkingTec.Mvvm.Mvc
             WtmFileProvider._subDirFunc = op.FileSubDirSelector;
             WTMContext.ReloadUserFunc = op.ReloadUserFunc;
             services.TryAddScoped<IDataContext, NullContext>();
+            services.TryAddSingleton(TimeProvider.System);
             services.AddScoped<WTMContext>();
             services.AddScoped<WtmFileProvider>();
             services.Configure<FormOptions>(y =>

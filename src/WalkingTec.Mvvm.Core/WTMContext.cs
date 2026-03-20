@@ -47,6 +47,13 @@ namespace WalkingTec.Mvvm.Core
         private IUIService? _uiservice;
         public IUIService? UIService { get => _uiservice; }
 
+        private readonly TimeProvider _timeProvider;
+        /// <summary>
+        /// 提供可測試的時間來源，取代直接使用 DateTime.Now/UtcNow。
+        /// 預設為 TimeProvider.System；測試可注入 FakeTimeProvider。
+        /// </summary>
+        public TimeProvider TimeProvider => _timeProvider;
+
         private IDistributedCache? _cache;
         public IDistributedCache? Cache { get { return _cache; } }
 
@@ -494,8 +501,9 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
-        public WTMContext(IOptionsMonitor<Configs>? _config, GlobalData? _gd = null, IHttpContextAccessor? _http = null, IUIService? _ui = null, List<IDataPrivilege>? _dp = null, IDataContext? dc = null, IStringLocalizerFactory? stringLocalizer = null, ILoggerFactory? loggerFactory = null, WtmLocalizationOption? lop = null, IDistributedCache? cache = null, IServiceProvider? sp=null)
+        public WTMContext(IOptionsMonitor<Configs>? _config, GlobalData? _gd = null, IHttpContextAccessor? _http = null, IUIService? _ui = null, List<IDataPrivilege>? _dp = null, IDataContext? dc = null, IStringLocalizerFactory? stringLocalizer = null, ILoggerFactory? loggerFactory = null, WtmLocalizationOption? lop = null, IDistributedCache? cache = null, IServiceProvider? sp=null, TimeProvider? timeProvider = null)
         {
+            _timeProvider = timeProvider ?? TimeProvider.System;
             _configInfo = _config?.CurrentValue ?? new Configs();
             _globaInfo = _gd ?? new GlobalData();
             _httpContext = _http?.HttpContext;
@@ -1063,7 +1071,7 @@ params string[] groupcode)
                 log = new ActionLog();
             }
             log.LogType = logtype;
-            log.ActionTime = DateTime.Now;
+            log.ActionTime = _timeProvider.GetLocalNow().DateTime;
             log.Remark = msg;
             log.ActionUrl = url;
             log.Duration = duration;
