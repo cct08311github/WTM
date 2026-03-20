@@ -78,11 +78,9 @@ namespace WalkingTec.Mvvm.Core
         internal static string ComputeMD5(string? input)
         {
             if (string.IsNullOrEmpty(input)) return string.Empty;
-            byte[] buffer = Encoding.UTF8.GetBytes(input);
-            byte[] hash = MD5.HashData(buffer);
-            var sb = new StringBuilder(32);
-            foreach (byte b in hash) sb.Append(b.ToString("X2"));
-            return sb.ToString();
+            Span<byte> hash = stackalloc byte[16]; // MD5 = 16 bytes
+            MD5.HashData(Encoding.UTF8.GetBytes(input), hash);
+            return Convert.ToHexString(hash);
         }
     }
 

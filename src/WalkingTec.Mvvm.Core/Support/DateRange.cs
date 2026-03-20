@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Frozen;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 
@@ -169,14 +170,14 @@ namespace WalkingTec.Mvvm.Core
             return string.Empty;
         }
 
-        public static readonly Dictionary<DateTimeTypeEnum, string> DateTimeFormatDic = new Dictionary<DateTimeTypeEnum, string>()
+        public static readonly FrozenDictionary<DateTimeTypeEnum, string> DateTimeFormatDic = new Dictionary<DateTimeTypeEnum, string>()
         {
             { DateTimeTypeEnum.Date,"yyyy-MM-dd"},
             { DateTimeTypeEnum.DateTime,"yyyy-MM-dd HH:mm:ss"},
             { DateTimeTypeEnum.Year,"yyyy"},
             { DateTimeTypeEnum.Month,"yyyy-MM"},
             { DateTimeTypeEnum.Time,"HH:mm:ss"},
-        };
+        }.ToFrozenDictionary();
 
         private DateTime SwitchTime(DateTime time)
         {
@@ -331,14 +332,14 @@ namespace WalkingTec.Mvvm.Core
         }
 
 
-        private static readonly Dictionary<DateTimeTypeEnum, string> DateTimeRegexDic = new Dictionary<DateTimeTypeEnum, string>()
+        private static readonly FrozenDictionary<DateTimeTypeEnum, string> DateTimeRegexDic = new Dictionary<DateTimeTypeEnum, string>()
         {
             { DateTimeTypeEnum.DateTime,@"((\d{4}|\d{3}|\d{2}|\d{1})[-](1[0-2]|0?[1-9])[-](3[01]|[12][0-9]|0?[1-9])\s+(20|21|22|23|[0-1]\d):[0-5]\d:[0-5]\d)"},
             { DateTimeTypeEnum.Date,@"(\d{4}|\d{3}|\d{2}|\d{1})[-](1[0-2]|0?[1-9])[-](3[01]|[12][0-9]|0?[1-9])"},
             { DateTimeTypeEnum.Month,@"(\d{4}|\d{3}|\d{2}|\d{1})[-](1[0-2]|0?[1-9])"},
             { DateTimeTypeEnum.Time,@"(20|21|22|23|[0-1]\d):[0-5]\d:[0-5]\d"},
             { DateTimeTypeEnum.Year,@"(\d{4}|\d{3}|\d{2}|\d{1})"},
-        };
+        }.ToFrozenDictionary();
 
         public static bool TryParse(string input, out DateRange? result)
         {

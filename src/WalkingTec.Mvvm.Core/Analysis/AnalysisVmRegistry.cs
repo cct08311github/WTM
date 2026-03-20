@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Frozen;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -12,14 +13,14 @@ namespace WalkingTec.Mvvm.Core.Analysis
     /// </summary>
     public class AnalysisVmRegistry
     {
-        private readonly Dictionary<string, Type> _whitelist = new Dictionary<string, Type>();
+        private FrozenDictionary<string, Type> _whitelist = FrozenDictionary<string, Type>.Empty;
 
         /// <summary>
         /// 掃描指定 Assembly 集合，將所有標記 [EnableAnalysis] 的 BasePagedListVM 子類別加入白名單。
         /// </summary>
         public void Build(IEnumerable<Assembly> assemblies)
         {
-            _whitelist.Clear();
+            var dict = new Dictionary<string, Type>();
             foreach (var asm in assemblies)
             {
                 Type[] types;
@@ -41,11 +42,12 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     {
                         if (!string.IsNullOrEmpty(type.FullName))
                         {
-                            _whitelist[type.FullName] = type;
+                            dict[type.FullName] = type;
                         }
                     }
                 }
             }
+            _whitelist = dict.ToFrozenDictionary();
         }
 
         /// <summary>
