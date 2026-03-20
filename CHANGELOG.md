@@ -50,6 +50,12 @@
 - **BaseImportVM — 行內錯誤清單**：新增 `InlineErrors` 屬性（最多 `InlineErrorLimit` 筆，預設 50）供 API 端點直接回傳驗證錯誤（#615）。
 - **BaseTemplateVM — 欄位說明列**：`ShowDescriptionRow = true`（預設）時，於模板第二行插入淺綠色斜體說明列，標示 Required/Optional、資料類型、min/max 限制；匯入時自動識別並跳過說明列（v2 標記）（#615）。
 
+### Fixed
+- **Test suite — EF Core 10 API**：`DataContext` 中 `modelBuilder.Model.SetMaxIdentifierLength(30)` 改為 `modelBuilder.HasMaxIdentifierLength(30)`，修正 EF Core 10 將內部 API 設為不可存取的問題（#676）。
+- **Test suite — MSTest / Test.Sdk 版本**：`MSTest.TestAdapter` / `MSTest.TestFramework` 從 3.2.2 升至 3.6.4；`Microsoft.NET.Test.Sdk` 從 17.9.0 升至 17.12.0，確保與 .NET 10 測試主機相容（#676）。
+- **Test suite — coverlet / xunit runner**：`coverlet.collector` 從 6.0.2 升至 6.0.4；`xunit.runner.visualstudio` 從 2.8.2 升至 2.8.3，修正與 Test.Sdk 17.12.0 的相容性（#676）。
+- **Test suite — Serilog Sinks**：`Serilog.Sinks.InMemory` 從 0.11.0 升至 1.0.0，解決與 `Serilog.AspNetCore 10.0.0`（使用 Serilog 4.x）的型別衝突（#676）。
+
 ### Deprecated
 - **Workflow API**：內建 Elsa workflow 整合（`IWorkflow`、`FrameworkWorkflow`、`ApproveTimeLine`、`ApproveInfo`、`FlowInfoTagHelper`、`IBaseCRUDVM` 工作流程方法、`DataContext.FrameworkWorkflows`）標記為 `[Obsolete]`，將於下一個主版本移除（#586）。
   - **遷移指引**：若仍需工作流程功能，請直接引用 Elsa 或改用其他工作流程引擎；移除 `IWorkflow` 介面實作及相關 TagHelper。
