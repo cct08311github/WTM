@@ -2,9 +2,9 @@ name: WTM Build and Test
 on:
   workflow_dispatch:
   push:
-    branches: [ dotnet8, "feature/**", "feat/**" ]
+    branches: [ dotnet8, dotnet10, "feature/**", "feat/**" ]
   pull_request:
-    branches: [ dotnet8 ]
+    branches: [ dotnet8, dotnet10 ]
 jobs:
   release-tooling-test:
     runs-on: ubuntu-latest
