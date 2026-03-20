@@ -5,7 +5,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Serilog;
-using Serilog.Sinks.InMemory;
 using WalkingTec.Mvvm.Mvc;
 
 namespace WalkingTec.Mvvm.Core.Test
@@ -82,7 +81,7 @@ namespace WalkingTec.Mvvm.Core.Test
         [TestMethod]
         public void AddWtmSerilog_custom_config_writes_to_inmemory_sink()
         {
-            InMemorySink.Instance.Dispose(); // clear previous
+            TestInMemorySink.Instance.Dispose(); // clear previous
             var services = new ServiceCollection();
             services.AddLogging();
             services.AddWtmSerilog(BuildEmptyConfig(), opt =>
@@ -96,7 +95,7 @@ namespace WalkingTec.Mvvm.Core.Test
             var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("Test");
             logger.LogInformation("Hello from Serilog test");
 
-            Assert.IsTrue(InMemorySink.Instance.LogEvents.Any(),
+            Assert.IsTrue(TestInMemorySink.Instance.LogEvents.Any(),
                 "InMemory sink should have captured the log event");
         }
 
