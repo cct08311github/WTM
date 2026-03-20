@@ -458,7 +458,7 @@ namespace WalkingTec.Mvvm.Core
                 IBasePoco ent = (Entity as IBasePoco)!;
                 if (ent.CreateTime == null)
                 {
-                    ent.CreateTime = DateTime.Now;
+                    ent.CreateTime = Wtm!.TimeProvider.GetLocalNow().DateTime;
                 }
                 if (string.IsNullOrEmpty(ent.CreateBy))
                 {
@@ -543,7 +543,7 @@ namespace WalkingTec.Mvvm.Core
                                     IBasePoco ent = (newitem as IBasePoco)!;
                                     if (ent.CreateTime == null)
                                     {
-                                        ent.CreateTime = DateTime.Now;
+                                        ent.CreateTime = Wtm!.TimeProvider.GetLocalNow().DateTime;
                                     }
                                     if (string.IsNullOrEmpty(ent.CreateBy))
                                     {
@@ -642,7 +642,7 @@ namespace WalkingTec.Mvvm.Core
                 IBasePoco ent = (Entity as IBasePoco)!;
                 //if (ent.UpdateTime == null)
                 //{
-                ent.UpdateTime = DateTime.Now;
+                ent.UpdateTime = Wtm!.TimeProvider.GetLocalNow().DateTime;
                 //}
                 //if (string.IsNullOrEmpty(ent.UpdateBy))
                 //{
@@ -705,7 +705,7 @@ namespace WalkingTec.Mvvm.Core
                                     IBasePoco ent = (newitem as IBasePoco)!;
                                     if (ent.UpdateTime == null)
                                     {
-                                        ent.UpdateTime = DateTime.Now;
+                                        ent.UpdateTime = Wtm!.TimeProvider.GetLocalNow().DateTime;
                                     }
                                     if (string.IsNullOrEmpty(ent.UpdateBy))
                                     {
@@ -811,7 +811,7 @@ namespace WalkingTec.Mvvm.Core
                                     (item as IPersistPoco)!.IsValid = false;
                                     if (typeof(IBasePoco).IsAssignableFrom(ftype))
                                     {
-                                        (item as IBasePoco)!.UpdateTime = DateTime.Now;
+                                        (item as IBasePoco)!.UpdateTime = Wtm!.TimeProvider.GetLocalNow().DateTime;
                                         (item as IBasePoco)!.UpdateBy = LoginUserInfo?.ITCode;
                                     }
                                     dynamic i = item;
@@ -838,7 +838,7 @@ namespace WalkingTec.Mvvm.Core
                                     IBasePoco ent = (item as IBasePoco)!;
                                     if (ent.CreateTime == null)
                                     {
-                                        ent.CreateTime = DateTime.Now;
+                                        ent.CreateTime = Wtm!.TimeProvider.GetLocalNow().DateTime;
                                     }
                                     if (string.IsNullOrEmpty(ent.CreateBy))
                                     {
@@ -884,7 +884,7 @@ namespace WalkingTec.Mvvm.Core
                                     (item as IPersistPoco)!.IsValid = false;
                                     if (typeof(IBasePoco).IsAssignableFrom(ftype))
                                     {
-                                        (item as IBasePoco)!.UpdateTime = DateTime.Now;
+                                        (item as IBasePoco)!.UpdateTime = Wtm!.TimeProvider.GetLocalNow().DateTime;
                                         (item as IBasePoco)!.UpdateBy = LoginUserInfo?.ITCode;
                                     }
                                     dynamic i = item;
@@ -1199,7 +1199,7 @@ namespace WalkingTec.Mvvm.Core
                 EntityType = typeof(TModel).FullName ?? typeof(TModel).Name,
                 EntityId   = Entity?.GetID()?.ToString(),
                 ChangedBy  = LoginUserInfo?.ITCode,
-                ChangedAt  = DateTime.UtcNow,
+                ChangedAt  = Wtm!.TimeProvider.GetUtcNow().DateTime,
                 OldValues  = oldJson,
                 NewValues  = newJson,
             });
