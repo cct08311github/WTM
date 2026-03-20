@@ -8,8 +8,8 @@
 
 ## .NET Version Strategy
 
-- Current target: **.NET 8** (LTS)
-- Upgrade to next LTS (.NET 10) only after it reaches GA and ecosystem stabilizes
+- Current target: **.NET 10** (LTS)
+- Upgrade to next LTS only after it reaches GA and ecosystem stabilizes
 - Multi-target only if there is a concrete user need
 
 ## Package Versioning

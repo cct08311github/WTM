@@ -19,6 +19,7 @@ using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Localization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Asp.Versioning;
 using Microsoft.AspNetCore.SpaServices.ReactDevelopmentServer;
 using Microsoft.AspNetCore.SpaServices.StaticFiles;
 using Microsoft.EntityFrameworkCore;
@@ -573,18 +574,17 @@ namespace WalkingTec.Mvvm.Mvc
                     Console.Error.WriteLine($"[WTM] Warning: could not initialize database connection '{item.Key}' ({item.DbType}): {ex.Message}");
                 }
             }
-            services.AddVersionedApiExplorer(o=>
+            services.AddApiVersioning(options =>
+             {
+                 options.ReportApiVersions = true;
+                 options.DefaultApiVersion = new ApiVersion(1, 0);
+                 options.AssumeDefaultVersionWhenUnspecified = true;
+             })
+            .AddApiExplorer(o =>
             {
                 o.GroupNameFormat = "'v'VVV";
                 o.SubstituteApiVersionInUrl = true;
             });
-            services.AddApiVersioning(
-             options =>
-             {
-                 options.ReportApiVersions = true;
-                 options.DefaultApiVersion = ApiVersion.Default;
-                 options.AssumeDefaultVersionWhenUnspecified = true;
-             });
 
             return services;
         }
