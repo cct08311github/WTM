@@ -2,13 +2,6 @@
 
 ## [Unreleased]
 
-### Changed
-- chore(deps): 集中化 NuGet 套件版本至 `common.props` MSBuild 變數，統一管理 Microsoft、EF Core、ASP.NET Core 及主要第三方套件版本
-- chore(deps): Microsoft.AspNetCore.* 套件 10.0.3 → 10.0.4
-- chore(deps): Swashbuckle.AspNetCore.SwaggerUI 10.1.4 → 10.1.5（對齊其他 Swashbuckle 套件）
-- chore(deps): System.Text.Json 10.0.0 → 10.0.4
-- chore(deps): Quartz 3.16.0 → 3.16.1 (patch)
-
 ## [10.0.0] - 2026-03-20
 
 ### Changed
@@ -22,8 +15,8 @@
 - **BREAKING: API Versioning 套件替換** — `Microsoft.AspNetCore.Mvc.Versioning` → `Asp.Versioning.Mvc` 8.1.1
   - `AddVersionedApiExplorer()` → `AddApiVersioning().AddApiExplorer()`
   - 新增 `using Asp.Versioning;` namespace
-- **EF Core 10** — 全部 EF Core 套件升至 10.0.3
-- **ASP.NET Core 10** — 全部 ASP.NET Core 套件升至 10.0.3
+- **EF Core 10** — 全部 EF Core 套件升至 10.0.4
+- **ASP.NET Core 10** — 全部 ASP.NET Core 套件升至 10.0.4
 - **Swashbuckle 10** — 從 6.6.2 升至 10.1.5（依賴 OpenAPI.NET v2）
 - **Serilog 10** — `Serilog.AspNetCore` 從 8.0.3 升至 10.0.0
 - **Npgsql 10** — `Npgsql.EntityFrameworkCore.PostgreSQL` 從 8.0.11 升至 10.0.1
@@ -31,6 +24,9 @@
 - **SDK** — `global.json` 升至 .NET SDK 10.0.0
 - **Dockerfile** — 基底映像從 .NET 3.1 更新至 .NET 10
 - **CI** — GitHub Actions 的 `dotnet-version` 從 `8.0.x` 更新至 `10.0.x`
+- **套件版本集中管理** — `common.props` 新增 12 個 MSBuild 版本變數，統一管理 Microsoft、EF Core、ASP.NET Core 及主要第三方套件版本
+- **System.Text.Json** 10.0.0 → 10.0.4
+- **Quartz** 3.16.0 → 3.16.1
 - 修正遺留 demo 測試專案：`net5.0`/`net6.0` → `net10.0`
 
 ### Migration Guide
