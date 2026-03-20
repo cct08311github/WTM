@@ -79,7 +79,6 @@ namespace WalkingTec.Mvvm.Core
                 "Npgsql.",
                 "NPOI.",
                 "netstandard",
-                "MySqlConnector",
                 "VueCliMiddleware"
                 };
 

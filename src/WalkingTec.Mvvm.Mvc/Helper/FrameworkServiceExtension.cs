@@ -34,7 +34,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Localization;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
-using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Auth;
 using WalkingTec.Mvvm.Core.Extensions;
@@ -785,16 +785,12 @@ namespace WalkingTec.Mvvm.Mvc
 
                 };
                 c.AddSecurityDefinition("Bearer", bearer);
-                var sr = new OpenApiSecurityRequirement();
-                sr.Add(new OpenApiSecurityScheme
+                c.AddSecurityRequirement(_ =>
                 {
-                    Reference = new OpenApiReference
-                    {
-                        Type = ReferenceType.SecurityScheme,
-                        Id = "Bearer"
-                    }
-                }, new string[] { });
-                c.AddSecurityRequirement(sr);
+                    var sr = new OpenApiSecurityRequirement();
+                    sr.Add(new OpenApiSecuritySchemeReference("Bearer"), new List<string>());
+                    return sr;
+                });
                 c.SchemaFilter<SwaggerFilter>();
                 if (useFullName == true)
                 {
