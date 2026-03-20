@@ -99,7 +99,6 @@
     <PackageReference Include="Asp.Versioning.Mvc" Version="$(AspVersioningVersion)" />
     <PackageReference Include="Asp.Versioning.Mvc.ApiExplorer" Version="$(AspVersioningVersion)" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="$(AspNetCoreVersion)" />
-    <PackageReference Include="Microsoft.AspNetCore.DataProtection" Version="$(AspNetCoreVersion)" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Razor.RuntimeCompilation" Version="$(AspNetCoreVersion)" />
     <PackageReference Include="Microsoft.AspNetCore.SpaServices.Extensions" Version="$(AspNetCoreVersion)" />
     <PackageReference Include="Swashbuckle.AspNetCore.Swagger" Version="$(SwashbuckleVersion)" />
