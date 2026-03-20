@@ -1,6 +1,9 @@
 # wtm custom
 .worktrees/
 .claude/worktrees/
+.playwright-mcp/
+demo/**/*.db
+tc*.png
 
 demo/WalkingTec.Mvvm.Demo/wwwroot/layuiadminsrc
 .Publish/
