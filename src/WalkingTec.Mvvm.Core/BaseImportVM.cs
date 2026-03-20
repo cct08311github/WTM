@@ -1522,12 +1522,10 @@ namespace WalkingTec.Mvvm.Core
             };
         }
 
-#nullable disable
         public override IOrderedQueryable<ErrorMessage> GetSearchQuery()
         {
-            return EntityList.AsQueryable().OrderBy(x => x.Index);
+            return EntityList!.AsQueryable().OrderBy(x => x.Index);
         }
-#nullable enable
     }
 
     #endregion
