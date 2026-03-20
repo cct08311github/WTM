@@ -26,7 +26,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             CancellationToken cancellationToken = default)
         {
             if (req.Dimensions.Count == 0)
-                return new List<Dictionary<string, object?>>();
+                return [];
 
             if (req.DimensionHierarchies != null && req.Dimensions.Any(d => req.DimensionHierarchies.TryGetValue(d, out var h) && h != DateHierarchy.None))
             {
@@ -51,7 +51,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             CancellationToken cancellationToken = default)
         {
             if (req.Dimensions.Count == 0)
-                return new List<Dictionary<string, object?>>();
+                return [];
 
             if (req.DimensionHierarchies != null && req.Dimensions.Any(d => req.DimensionHierarchies.TryGetValue(d, out var h) && h != DateHierarchy.None))
             {

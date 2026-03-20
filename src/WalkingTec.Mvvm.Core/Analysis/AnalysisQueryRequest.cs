@@ -15,13 +15,13 @@ namespace WalkingTec.Mvvm.Core.Analysis
         public string? SearcherFormData { get; set; }
 
         /// <summary>選取的維度欄位名稱（最多 3 個）。</summary>
-        public List<string> Dimensions { get; set; } = new List<string>();
+        public List<string> Dimensions { get; set; } = [];
 
         /// <summary>選取的度量及聚合函式。</summary>
-        public List<MeasureRequest> Measures { get; set; } = new List<MeasureRequest>();
+        public List<MeasureRequest> Measures { get; set; } = [];
 
         /// <summary>額外過濾條件（白名單驗證後進 Expression Tree）。</summary>
-        public List<FilterCondition> Filters { get; set; } = new List<FilterCondition>();
+        public List<FilterCondition> Filters { get; set; } = [];
 
         /// <summary>維度對應的日期階層（僅日期維度需要，key=fieldName, value=hierarchy）</summary>
         public Dictionary<string, DateHierarchy>? DimensionHierarchies { get; set; }
