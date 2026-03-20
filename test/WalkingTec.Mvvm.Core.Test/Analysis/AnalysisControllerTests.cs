@@ -2541,18 +2541,18 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
-        public void DeleteSavedQuery_removes_record_if_owner()
+        public async Task DeleteSavedQuery_removes_record_if_owner()
         {
             var controller = CreateController();
             controller.Wtm.LoginUserInfo.ITCode = "userA";
-            
+
             var id = Guid.NewGuid();
             controller.Wtm.DC.Set<AnalysisSavedQuery>().Add(
                 new AnalysisSavedQuery { ID = id, Name = "Test", ListVmType = "VM", OwnerCode = "userA", ConfigJson = "{}" }
             );
             controller.Wtm.DC.SaveChanges();
 
-            var result = controller.DeleteSavedQuery(id) as NoContentResult;
+            var result = await controller.DeleteSavedQuery(id) as NoContentResult;
             Assert.IsNotNull(result);
 
             var query = controller.Wtm.DC.Set<AnalysisSavedQuery>().FirstOrDefault(q => q.ID == id);
@@ -2560,18 +2560,18 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
-        public void DeleteSavedQuery_returns_403_if_not_owner()
+        public async Task DeleteSavedQuery_returns_403_if_not_owner()
         {
             var controller = CreateController();
             controller.Wtm.LoginUserInfo.ITCode = "userA";
-            
+
             var id = Guid.NewGuid();
             controller.Wtm.DC.Set<AnalysisSavedQuery>().Add(
                 new AnalysisSavedQuery { ID = id, Name = "Test", ListVmType = "VM", OwnerCode = "userB", ConfigJson = "{}" }
             );
             controller.Wtm.DC.SaveChanges();
 
-            var result = controller.DeleteSavedQuery(id) as ForbidResult;
+            var result = await controller.DeleteSavedQuery(id) as ForbidResult;
             Assert.IsNotNull(result, "刪除他人查詢應回傳 403 Forbid");
 
             var query = controller.Wtm.DC.Set<AnalysisSavedQuery>().FirstOrDefault(q => q.ID == id);

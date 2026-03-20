@@ -9,6 +9,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Http;
+using Microsoft.EntityFrameworkCore;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
@@ -396,19 +397,25 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
         [ProducesResponseType(StatusCodes.Status204NoContent)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
-        public IActionResult DeleteSavedQuery(Guid id)
+        public async Task<IActionResult> DeleteSavedQuery(Guid id)
         {
-            var entity = Wtm!.DC.Set<AnalysisSavedQuery>().FirstOrDefault(q => q.ID == id);
-            if (entity == null) return NotFound();
+            var userCode = Wtm!.LoginUserInfo?.ITCode ?? string.Empty;
 
-            var userCode = Wtm.LoginUserInfo?.ITCode ?? string.Empty;
-            if (entity.OwnerCode != userCode) return Forbid();
+            // Single SQL DELETE WHERE — eliminates Load + Remove + SaveChanges round-trip
+            var deleted = await Wtm.DC.Set<AnalysisSavedQuery>()
+                .Where(q => q.ID == id && q.OwnerCode == userCode)
+                .ExecuteDeleteAsync();
 
-            Wtm.DC.Set<AnalysisSavedQuery>().Remove(entity);
-            Wtm.DC.SaveChanges();
+            if (deleted > 0)
+            {
+                _logger.LogInformation("Analysis saved query deleted Id={Id} Owner={Owner}", id, userCode);
+                return NoContent();
+            }
 
-            _logger.LogInformation("Analysis saved query deleted Id={Id} Owner={Owner}", id, userCode);
-            return NoContent();
+            // Distinguish 404 (not found) vs 403 (not owner)
+            var exists = await Wtm.DC.Set<AnalysisSavedQuery>()
+                .AnyAsync(q => q.ID == id);
+            return exists ? Forbid() : NotFound();
         }
 
         // ─── Helpers ───────────────────────────────────────────────────────
