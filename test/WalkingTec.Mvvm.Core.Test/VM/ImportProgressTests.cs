@@ -9,6 +9,12 @@ using WalkingTec.Mvvm.Test.Mock;
 
 namespace WalkingTec.Mvvm.Core.Test.VM;
 
+/// <summary>Synchronous IProgress&lt;T&gt; — avoids thread-pool ordering issues in tests.</summary>
+file sealed class SyncProgress<T>(List<T> target) : IProgress<T>
+{
+    public void Report(T value) => target.Add(value);
+}
+
 /// <summary>
 /// Guards issue #607 — IProgress&lt;ImportProgress&gt; reporting in BatchSaveData,
 /// and issue #615 — InlineErrors / InlineErrorLimit on BaseImportVM.
@@ -43,7 +49,7 @@ public class ImportProgressTests
         };
         var vm = MakeVm(entities);
         var reports = new List<ImportProgress>();
-        var progress = new Progress<ImportProgress>(p => reports.Add(p));
+        var progress = new SyncProgress<ImportProgress>(reports);
 
         vm.BatchSaveData(progress);
 
@@ -60,7 +66,7 @@ public class ImportProgressTests
         var vm = MakeVm(entities);
         var reports = new List<ImportProgress>();
 
-        vm.BatchSaveData(new Progress<ImportProgress>(p => reports.Add(p)));
+        vm.BatchSaveData(new SyncProgress<ImportProgress>(reports));
 
         Assert.IsTrue(reports.All(p => p.Total == 5),
             "All progress reports should carry Total = entity count");
@@ -75,7 +81,7 @@ public class ImportProgressTests
         var vm = MakeVm(entities);
         var reports = new List<ImportProgress>();
 
-        vm.BatchSaveData(new Progress<ImportProgress>(p => reports.Add(p)));
+        vm.BatchSaveData(new SyncProgress<ImportProgress>(reports));
 
         // Filter to a single phase to check monotonicity
         var saveReports = reports.Where(p => p.Phase == "Saving").ToList();
@@ -107,7 +113,7 @@ public class ImportProgressTests
         var vm = MakeVm(entities);
         var reports = new List<ImportProgress>();
 
-        vm.BatchSaveData(new Progress<ImportProgress>(p => reports.Add(p)));
+        vm.BatchSaveData(new SyncProgress<ImportProgress>(reports));
 
         Assert.IsTrue(reports.All(p => !string.IsNullOrEmpty(p.Phase)),
             "All progress reports must have a non-empty Phase");
