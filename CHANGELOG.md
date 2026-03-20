@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Changed
+- chore(deps): 集中化 NuGet 套件版本至 `common.props` MSBuild 變數，統一管理 Microsoft、EF Core、ASP.NET Core 及主要第三方套件版本
+- chore(deps): Microsoft.AspNetCore.* 套件 10.0.3 → 10.0.4
+- chore(deps): Swashbuckle.AspNetCore.SwaggerUI 10.1.4 → 10.1.5（對齊其他 Swashbuckle 套件）
+- chore(deps): System.Text.Json 10.0.0 → 10.0.4
+- chore(deps): Quartz 3.16.0 → 3.16.1 (patch)
+
 ## [10.0.0] - 2026-03-20
 
 ### Changed
