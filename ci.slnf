@@ -1,0 +1,21 @@
+{
+  "solution": {
+    "path": "WalkingTec.Mvvm.sln",
+    "projects": [
+      "src/WalkingTec.Mvvm.Core/WalkingTec.Mvvm.Core.csproj",
+      "src/WalkingTec.Mvvm.Mvc/WalkingTec.Mvvm.Mvc.csproj",
+      "src/WalkingTec.Mvvm.TagHelpers.LayUI/WalkingTec.Mvvm.TagHelpers.LayUI.csproj",
+      "src/WalkingTec.Mvvm.Etl/WalkingTec.Mvvm.Etl.csproj",
+      "src/WalkingTec.Mvvm.Mvc.Tests/WalkingTec.Mvvm.Mvc.Tests.csproj",
+      "test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj",
+      "test/WalkingTec.Mvvm.Admin.Test/WalkingTec.Mvvm.Admin.Test.csproj",
+      "test/WalkingTec.Mvvm.Test.Mock/WalkingTec.Mvvm.Test.Mock.csproj",
+      "test/WalkingTec.Mvvm.Etl.Test/WalkingTec.Mvvm.Etl.Test.csproj",
+      "demo/WalkingTec.Mvvm.Demo/WalkingTec.Mvvm.Demo.csproj",
+      "demo/WalkingTec.Mvvm.ReactDemo/WalkingTec.Mvvm.ReactDemo.csproj",
+      "demo/WalkingTec.Mvvm.VueDemo/WalkingTec.Mvvm.VueDemo.csproj",
+      "demo/WalkingTec.Mvvm.Vue3Demo/WalkingTec.Mvvm.Vue3Demo.csproj",
+      "demo/WalkingTec.Mvvm.ConsoleDemo/WalkingTec.Mvvm.ConsoleDemo.csproj"
+    ]
+  }
+}

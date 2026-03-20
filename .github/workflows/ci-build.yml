@@ -21,14 +21,12 @@ jobs:
     - uses: actions/setup-dotnet@v4
       with:
         dotnet-version: '8.0.x'
-    - name: Install Blazor WASM workload
-      run: sudo dotnet workload install wasm-tools
-    - run: dotnet restore WalkingTec.Mvvm.sln
-    - run: dotnet build WalkingTec.Mvvm.sln --no-restore -c Release
+    - run: dotnet restore ci.slnf
+    - run: dotnet build ci.slnf --no-restore -c Release
 
     - name: Test with coverage
       run: |
-        dotnet test WalkingTec.Mvvm.sln \
+        dotnet test ci.slnf \
           --no-build -c Release \
           --verbosity normal \
           --filter "TestCategory!=Integration" \
@@ -104,4 +102,5 @@ jobs:
     - uses: actions/setup-dotnet@v4
       with:
         dotnet-version: '8.0.x'
+    - run: dotnet restore WalkingTec.Mvvm.sln
     - run: dotnet list WalkingTec.Mvvm.sln package --vulnerable --include-transitive
