@@ -423,7 +423,7 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         ///记录批量操作时列表中选择的Id
         /// </summary>
-        public List<string> Ids { get; set; } = new List<string>();
+        public List<string> Ids { get; set; } = [];
         public string? SelectorValueField { get; set; }
         /// <summary>
         /// 是否已经搜索过

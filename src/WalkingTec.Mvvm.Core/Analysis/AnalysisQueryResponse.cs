@@ -9,10 +9,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
     public class AnalysisQueryResponse
     {
         /// <summary>欄位名稱清單（有序，對應 Rows 中的 key）。</summary>
-        public List<string> Columns { get; set; } = new List<string>();
+        public List<string> Columns { get; set; } = [];
 
         /// <summary>資料列（每列為 欄位名→值 的字典）。</summary>
-        public List<Dictionary<string, object?>> Rows { get; set; } = new List<Dictionary<string, object?>>();
+        public List<Dictionary<string, object?>> Rows { get; set; } = [];
 
         /// <summary>GroupBy 後總筆數。</summary>
         public int TotalCount { get; set; }
