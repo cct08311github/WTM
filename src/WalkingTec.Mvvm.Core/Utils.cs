@@ -512,7 +512,7 @@ namespace WalkingTec.Mvvm.Core
             //string r9 = "class&nbsp;(.+)&nbsp;";//匹配类
             //string r10 = "&lt;(.+)&gt;";//匹配泛型类
 
-            string rs = string.Format("{0}|{1}|{2}|{3}|{4}|{5}|{6}|{7}", r1, r2, r3, r4, r5, r6, r7, r8);
+            string rs = $"{r1}|{r2}|{r3}|{r4}|{r5}|{r6}|{r7}|{r8}";
             //string rs = string.Format("{0}|{1}|{2}|{3}|{4}|{5}|{6}|{7}|{8}|{9}", r1, r2, r3, r4, r5, r6, r7, r8, r9,r10);
 
             //<font color=#44C796>$9$10</font>

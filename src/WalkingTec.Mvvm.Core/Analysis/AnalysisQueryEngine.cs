@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Frozen;
 using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
@@ -746,14 +747,14 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.Never,
             };
 
-        private static readonly Dictionary<AggregateFunc, string> _funcDisplayNames = new()
+        private static readonly FrozenDictionary<AggregateFunc, string> _funcDisplayNames = new Dictionary<AggregateFunc, string>
         {
             { AggregateFunc.Sum,   "合計" },
             { AggregateFunc.Count, "計數" },
             { AggregateFunc.Avg,   "平均" },
             { AggregateFunc.Max,   "最大" },
             { AggregateFunc.Min,   "最小" },
-        };
+        }.ToFrozenDictionary();
 
         /// <summary>
         /// 建立欄位 key → 使用者友善顯示名稱的對照表。
@@ -807,9 +808,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
             {
                 raw += "|" + identityKey;
             }
-            var bytes = System.Security.Cryptography.SHA256.HashData(
-                System.Text.Encoding.UTF8.GetBytes(raw));
-            return Convert.ToHexString(bytes).Substring(0, 16);
+            Span<byte> hash = stackalloc byte[32]; // SHA256 = 32 bytes
+            System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(raw), hash);
+            return Convert.ToHexString(hash)[..16];
         }
     }
 }

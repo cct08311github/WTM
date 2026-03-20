@@ -15,7 +15,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
         private readonly IMemoryCache _cache;
         private readonly TimeSpan _defaultTtl;
         private CancellationTokenSource _cts;
-        private readonly object _lock = new();
+        private readonly Lock _lock = new();
 
         public MemoryAnalysisCache(IMemoryCache cache, TimeSpan? defaultTtl = null)
         {

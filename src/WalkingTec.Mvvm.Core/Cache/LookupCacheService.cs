@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Frozen;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -27,14 +28,14 @@ namespace WalkingTec.Mvvm.Core.Cache
 
         // per-type CTS，用於 InvalidateType（IMemoryCache 無 Clear 方法）
         private readonly Dictionary<Type, CancellationTokenSource> _ctsByType = new();
-        private readonly object _ctsLock = new();
+        private readonly Lock _ctsLock = new();
 
         // per-key SemaphoreSlim，防 stampede
         private readonly ConcurrentDictionary<string, SemaphoreSlim> _keyLocks = new();
         private static readonly TimeSpan StampedeTimeout = TimeSpan.FromSeconds(10);
 
-        // 啟動時掃描結果
-        private readonly Dictionary<Type, CacheLookupAttribute> _registry;
+        // 啟動時掃描結果（Build 後不再修改，FrozenDictionary 優化讀取路徑）
+        private readonly FrozenDictionary<Type, CacheLookupAttribute> _registry;
 
         public LookupCacheService(IMemoryCache cache, IEnumerable<Assembly> assemblies, LookupCacheOptions? options = null)
         {
@@ -197,7 +198,7 @@ namespace WalkingTec.Mvvm.Core.Cache
             where T : TopBasePoco =>
             dc.Set<T>().AsNoTracking().ToListAsync(ct);
 
-        private static Dictionary<Type, CacheLookupAttribute> ScanAssemblies(IEnumerable<Assembly> assemblies)
+        private static FrozenDictionary<Type, CacheLookupAttribute> ScanAssemblies(IEnumerable<Assembly> assemblies)
         {
             var result = new Dictionary<Type, CacheLookupAttribute>();
             foreach (var asm in assemblies)
@@ -223,7 +224,7 @@ namespace WalkingTec.Mvvm.Core.Cache
                     }
                 }
             }
-            return result;
+            return result.ToFrozenDictionary();
         }
     }
 }
