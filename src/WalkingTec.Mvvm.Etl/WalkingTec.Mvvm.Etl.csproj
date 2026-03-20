@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <AssemblyName>WalkingTec.Mvvm.Etl</AssemblyName>
     <Title>$(AssemblyName)</Title>
     <Description>WTM ETL Module - Batch data import pipeline</Description>

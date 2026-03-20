@@ -19,6 +19,7 @@ using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Localization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Asp.Versioning;
 using Microsoft.AspNetCore.SpaServices.ReactDevelopmentServer;
 using Microsoft.AspNetCore.SpaServices.StaticFiles;
 using Microsoft.EntityFrameworkCore;
@@ -33,7 +34,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Localization;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
-using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Auth;
 using WalkingTec.Mvvm.Core.Extensions;
@@ -573,18 +574,17 @@ namespace WalkingTec.Mvvm.Mvc
                     Console.Error.WriteLine($"[WTM] Warning: could not initialize database connection '{item.Key}' ({item.DbType}): {ex.Message}");
                 }
             }
-            services.AddVersionedApiExplorer(o=>
+            services.AddApiVersioning(options =>
+             {
+                 options.ReportApiVersions = true;
+                 options.DefaultApiVersion = new ApiVersion(1, 0);
+                 options.AssumeDefaultVersionWhenUnspecified = true;
+             })
+            .AddApiExplorer(o =>
             {
                 o.GroupNameFormat = "'v'VVV";
                 o.SubstituteApiVersionInUrl = true;
             });
-            services.AddApiVersioning(
-             options =>
-             {
-                 options.ReportApiVersions = true;
-                 options.DefaultApiVersion = ApiVersion.Default;
-                 options.AssumeDefaultVersionWhenUnspecified = true;
-             });
 
             return services;
         }
@@ -785,16 +785,12 @@ namespace WalkingTec.Mvvm.Mvc
 
                 };
                 c.AddSecurityDefinition("Bearer", bearer);
-                var sr = new OpenApiSecurityRequirement();
-                sr.Add(new OpenApiSecurityScheme
+                c.AddSecurityRequirement(_ =>
                 {
-                    Reference = new OpenApiReference
-                    {
-                        Type = ReferenceType.SecurityScheme,
-                        Id = "Bearer"
-                    }
-                }, new string[] { });
-                c.AddSecurityRequirement(sr);
+                    var sr = new OpenApiSecurityRequirement();
+                    sr.Add(new OpenApiSecuritySchemeReference("Bearer"), new List<string>());
+                    return sr;
+                });
                 c.SchemaFilter<SwaggerFilter>();
                 if (useFullName == true)
                 {

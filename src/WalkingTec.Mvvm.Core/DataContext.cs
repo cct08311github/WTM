@@ -10,9 +10,9 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Logging.Debug;
 using Microsoft.Extensions.Options;
-using MySqlConnector;
+using MySql.Data.MySqlClient;
 using Npgsql;
-using Pomelo.EntityFrameworkCore.MySql.Infrastructure;
+using MySql.EntityFrameworkCore.Extensions;
 using System;
 using System.Collections.Generic;
 using System.Data;
@@ -661,7 +661,7 @@ namespace WalkingTec.Mvvm.Core
         {
             if (DBType == DBTypeEnum.Oracle)
             {
-                modelBuilder.Model.SetMaxIdentifierLength(30);
+                modelBuilder.HasMaxIdentifierLength(30);
                 // [Elsa removed] table mappings
                 // modelBuilder.Entity<Elsa_Bookmark>().ToTable("Bookmarks");
                 // modelBuilder.Entity<Elsa_Trigger>().ToTable("Triggers");
@@ -688,17 +688,7 @@ namespace WalkingTec.Mvvm.Core
                     optionsBuilder.UseSqlServer(CSName,o => o.UseCompatibilityLevel(ver));
                     break;
                 case DBTypeEnum.MySql:
-                    ServerVersion? sv = null;
-                    if (string.IsNullOrEmpty(Version) == false)
-                    {
-                        ServerVersion.TryParse(Version, out sv);
-                    }
-                    if (sv == null)
-                    {
-                        sv = ServerVersion.AutoDetect(CSName);
-                    }
-                    optionsBuilder.UseMySql(CSName, sv, b => b.SchemaBehavior(MySqlSchemaBehavior.Translate,
-    (schema, entity) => $"{entity}"));
+                    optionsBuilder.UseMySQL(CSName);
                     break;
                 case DBTypeEnum.PgSql:
                     optionsBuilder.UseNpgsql(CSName);

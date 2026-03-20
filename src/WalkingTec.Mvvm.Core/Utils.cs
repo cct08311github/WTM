@@ -66,7 +66,7 @@ namespace WalkingTec.Mvvm.Core
                 "ICSharpCode",
                 "Newtonsoft.",
                 "Oracle.",
-                "Pomelo.",
+                "MySql.",
                 "SQLitePCLRaw.",
                 "Aliyun.OSS",
                 "BouncyCastle.",
@@ -79,7 +79,6 @@ namespace WalkingTec.Mvvm.Core
                 "Npgsql.",
                 "NPOI.",
                 "netstandard",
-                "MySqlConnector",
                 "VueCliMiddleware"
                 };
 

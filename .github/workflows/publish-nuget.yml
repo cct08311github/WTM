@@ -24,10 +24,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup .NET 8
+      - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
 
       - name: Determine package version
         id: version
@@ -104,7 +104,7 @@ jobs:
           set -euo pipefail
           mkdir smoke
           cd smoke
-          dotnet new console --framework net8.0
+          dotnet new console --framework net10.0
           dotnet add package WalkingTec.Mvvm.Core --version "$PKG_VERSION" --source "${{ env.PACKAGE_SOURCE }}"
           dotnet add package WalkingTec.Mvvm.Mvc --version "$PKG_VERSION" --source "${{ env.PACKAGE_SOURCE }}"
           dotnet add package WalkingTec.Mvvm.TagHelpers.LayUI --version "$PKG_VERSION" --source "${{ env.PACKAGE_SOURCE }}"

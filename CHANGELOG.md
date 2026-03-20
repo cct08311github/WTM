@@ -2,6 +2,41 @@
 
 ## [Unreleased]
 
+## [10.0.0] - 2026-03-20
+
+### Changed
+- **BREAKING: .NET 10 升級** — 所有專案目標框架從 `net8.0` 升級至 `net10.0`（.NET 10 LTS）
+- **BREAKING: 版本號跟隨 .NET 版本** — `VersionPrefix` 從 `8.6.1` 升至 `10.0.0`
+- **BREAKING: MySQL Provider 替換** — 從 `Pomelo.EntityFrameworkCore.MySql` 改為官方 `MySql.EntityFrameworkCore` 10.0.1
+  - `UseMySql()` → `UseMySQL()`（大寫 SQL）
+  - 不再需要 `ServerVersion` 參數
+  - `MySqlSchemaBehavior` 不再可用
+  - `MySqlConnector` namespace → `MySql.Data.MySqlClient`
+- **BREAKING: API Versioning 套件替換** — `Microsoft.AspNetCore.Mvc.Versioning` → `Asp.Versioning.Mvc` 8.1.1
+  - `AddVersionedApiExplorer()` → `AddApiVersioning().AddApiExplorer()`
+  - 新增 `using Asp.Versioning;` namespace
+- **EF Core 10** — 全部 EF Core 套件升至 10.0.3
+- **ASP.NET Core 10** — 全部 ASP.NET Core 套件升至 10.0.3
+- **Swashbuckle 10** — 從 6.6.2 升至 10.1.5（依賴 OpenAPI.NET v2）
+- **Serilog 10** — `Serilog.AspNetCore` 從 8.0.3 升至 10.0.0
+- **Npgsql 10** — `Npgsql.EntityFrameworkCore.PostgreSQL` 從 8.0.11 升至 10.0.1
+- **Oracle EF Core 10** — `Oracle.EntityFrameworkCore` 從 8.23.70 升至 10.23.60
+- **SDK** — `global.json` 升至 .NET SDK 10.0.0
+- **Dockerfile** — 基底映像從 .NET 3.1 更新至 .NET 10
+- **CI** — GitHub Actions 的 `dotnet-version` 從 `8.0.x` 更新至 `10.0.x`
+- 修正遺留 demo 測試專案：`net5.0`/`net6.0` → `net10.0`
+
+### Migration Guide
+1. 將您的專案 `TargetFramework` 從 `net8.0` 改為 `net10.0`
+2. 安裝 .NET 10 SDK
+3. 若使用 MySQL：將 `Pomelo.EntityFrameworkCore.MySql` 替換為 `MySql.EntityFrameworkCore`
+   - `using MySqlConnector;` → `using MySql.Data.MySqlClient;`
+   - `optionsBuilder.UseMySql(cs, serverVersion, ...)` → `optionsBuilder.UseMySQL(cs)`
+4. 若使用 API Versioning：更新套件引用及 namespace
+   - `Microsoft.AspNetCore.Mvc.Versioning` → `Asp.Versioning.Mvc`
+5. 更新所有 Microsoft.EntityFrameworkCore.* 套件至 10.0.x
+6. 更新所有 Microsoft.AspNetCore.* 套件至 10.0.x
+
 ### Added
 - **BaseCRUDVM — 批量刪除預覽**：新增 `GetDeletePreviewString()` 虛擬方法，回傳實體的人類可讀標籤（依序搜尋 Name/Title/Code/ITCode 等屬性，否則回退至主鍵）；同時新增 `IBaseCRUDVM<T>.GetDeletePreviewString()` 介面成員（#619）。
 - **`_FrameworkController` — 批量刪除預覽端點**：POST `/_Framework/GetDeletePreview` — 接受 vmType 名稱與最多 10 個 ID，回傳 `[{id, label}]` 陣列供前端確認對話框使用（#619）。
@@ -14,6 +49,12 @@
 - **BaseImportVM — 匯入進度回報**：`BatchSaveData(IProgress<ImportProgress>? progress = null)` 在驗證與儲存階段回報 `ImportProgress { Processed, Total, Phase }`（#607）。
 - **BaseImportVM — 行內錯誤清單**：新增 `InlineErrors` 屬性（最多 `InlineErrorLimit` 筆，預設 50）供 API 端點直接回傳驗證錯誤（#615）。
 - **BaseTemplateVM — 欄位說明列**：`ShowDescriptionRow = true`（預設）時，於模板第二行插入淺綠色斜體說明列，標示 Required/Optional、資料類型、min/max 限制；匯入時自動識別並跳過說明列（v2 標記）（#615）。
+
+### Fixed
+- **Test suite — EF Core 10 API**：`DataContext` 中 `modelBuilder.Model.SetMaxIdentifierLength(30)` 改為 `modelBuilder.HasMaxIdentifierLength(30)`，修正 EF Core 10 將內部 API 設為不可存取的問題（#676）。
+- **Test suite — MSTest / Test.Sdk 版本**：`MSTest.TestAdapter` / `MSTest.TestFramework` 從 3.2.2 升至 3.6.4；`Microsoft.NET.Test.Sdk` 從 17.9.0 升至 17.12.0，確保與 .NET 10 測試主機相容（#676）。
+- **Test suite — coverlet / xunit runner**：`coverlet.collector` 從 6.0.2 升至 6.0.4；`xunit.runner.visualstudio` 從 2.8.2 升至 2.8.3，修正與 Test.Sdk 17.12.0 的相容性（#676）。
+- **Test suite — Serilog Sinks**：`Serilog.Sinks.InMemory` 從 0.11.0 升至 1.0.0，解決與 `Serilog.AspNetCore 10.0.0`（使用 Serilog 4.x）的型別衝突（#676）。
 
 ### Deprecated
 - **Workflow API**：內建 Elsa workflow 整合（`IWorkflow`、`FrameworkWorkflow`、`ApproveTimeLine`、`ApproveInfo`、`FlowInfoTagHelper`、`IBaseCRUDVM` 工作流程方法、`DataContext.FrameworkWorkflows`）標記為 `[Obsolete]`，將於下一個主版本移除（#586）。

@@ -5,12 +5,12 @@
     referenced with Include in individual .csproj files.
 
     Shared versions:
-      Microsoft.NET.Test.Sdk  17.9.0
-      MSTest.TestAdapter       3.2.2
-      MSTest.TestFramework     3.2.2
+      Microsoft.NET.Test.Sdk  17.12.0
+      MSTest.TestAdapter       3.6.4
+      MSTest.TestFramework     3.6.4
       Moq                      4.20.72
       FluentAssertions         6.12.2
-      coverlet.collector       6.0.2
+      coverlet.collector       6.0.4
 
     To add a new shared package, add an Update line here and
     Include (without Version) in each consuming .csproj.
@@ -18,8 +18,8 @@
   <PropertyGroup>
     <MoqVersion>4.20.72</MoqVersion>
     <FluentAssertionsVersion>6.12.2</FluentAssertionsVersion>
-    <MSTestVersion>3.2.2</MSTestVersion>
-    <TestSdkVersion>17.9.0</TestSdkVersion>
-    <CoverletVersion>6.0.2</CoverletVersion>
+    <MSTestVersion>3.6.4</MSTestVersion>
+    <TestSdkVersion>17.12.0</TestSdkVersion>
+    <CoverletVersion>6.0.4</CoverletVersion>
   </PropertyGroup>
 </Project>

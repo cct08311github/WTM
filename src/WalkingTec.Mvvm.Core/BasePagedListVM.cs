@@ -15,7 +15,7 @@ using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Internal;
-using MySqlConnector;
+using MySql.Data.MySqlClient;
 using Npgsql;
 using NpgsqlTypes;
 using NPOI.HSSF.Util;

@@ -44,7 +44,7 @@ dotnet list WalkingTec.Mvvm.sln package --vulnerable --include-transitive
 
 ## Architecture (quick ref)
 
-WTM is an ASP.NET Core 8 framework. Four VM types: `BaseCRUDVM<T>`, `BasePagedListVM<T,S>`, `BaseImportVM<T>`, `BaseBatchVM<T>` — all extend `BaseVM` with `WTMContext Wtm`.
+WTM is an ASP.NET Core 10 framework. Four VM types: `BaseCRUDVM<T>`, `BasePagedListVM<T,S>`, `BaseImportVM<T>`, `BaseBatchVM<T>` — all extend `BaseVM` with `WTMContext Wtm`.
 
 | Project | Role |
 |---------|------|
