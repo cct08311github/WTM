@@ -1,5 +1,6 @@
 # wtm custom
 .worktrees/
+.claude/worktrees/
 
 demo/WalkingTec.Mvvm.Demo/wwwroot/layuiadminsrc
 .Publish/
