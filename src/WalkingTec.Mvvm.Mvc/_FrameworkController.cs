@@ -253,9 +253,10 @@ namespace WalkingTec.Mvvm.Mvc
                     return StatusCode(422, new { message = MvcProgram._localizer?["Sys.NoData"] ?? "No data" });
                 }
 
-                HttpContext.Response.Cookies.Append("DONOTUSEDOWNLOADING", "0", new Microsoft.AspNetCore.Http.CookieOptions() { Path = "/", Expires = DateTime.Now.AddDays(2) });
+                var now = Wtm.TimeProvider.GetLocalNow().DateTime;
+                HttpContext.Response.Cookies.Append("DONOTUSEDOWNLOADING", "0", new Microsoft.AspNetCore.Http.CookieOptions() { Path = "/", Expires = now.AddDays(2) });
 
-                return File(data, "application/vnd.ms-excel", $"Export_{instanceType.Name}_{DateTime.Now.ToString("yyyy-MM-dd")}.xls");
+                return File(data, "application/vnd.ms-excel", $"Export_{instanceType.Name}_{now.ToString("yyyy-MM-dd")}.xls");
             }
             else
             {
@@ -280,7 +281,7 @@ namespace WalkingTec.Mvvm.Mvc
             }
             importVM.SetParms(qs);
             var data = importVM.GenerateTemplate(out string fileName);
-            HttpContext.Response.Cookies.Append("DONOTUSEDOWNLOADING", "0", new Microsoft.AspNetCore.Http.CookieOptions() { Domain = "/", Expires = DateTime.Now.AddDays(2) });
+            HttpContext.Response.Cookies.Append("DONOTUSEDOWNLOADING", "0", new Microsoft.AspNetCore.Http.CookieOptions() { Domain = "/", Expires = Wtm.TimeProvider.GetLocalNow().DateTime.AddDays(2) });
             return File(data, "application/vnd.ms-excel", fileName);
         }
 
@@ -293,7 +294,7 @@ namespace WalkingTec.Mvvm.Mvc
             var ex = HttpContext.Features.Get<IExceptionHandlerPathFeature>();
             ActionLog log = new ActionLog();
             log.LogType = ActionLogTypesEnum.Exception;
-            log.ActionTime = DateTime.Now;
+            log.ActionTime = Wtm.TimeProvider.GetLocalNow().DateTime;
             log.ITCode = Wtm.LoginUserInfo?.ITCode ?? string.Empty;
 
             var controllerDes = ex.Error.TargetSite.DeclaringType.GetCustomAttributes(typeof(ActionDescriptionAttribute), false).Cast<ActionDescriptionAttribute>().FirstOrDefault();
@@ -316,7 +317,7 @@ namespace WalkingTec.Mvvm.Mvc
             DateTime? starttime = HttpContext.Items["actionstarttime"] as DateTime?;
             if (starttime != null)
             {
-                log.Duration = DateTime.Now.Subtract(starttime.Value).TotalSeconds;
+                log.Duration = Wtm.TimeProvider.GetLocalNow().DateTime.Subtract(starttime.Value).TotalSeconds;
             }
             var logger = HttpContext.RequestServices.GetRequiredService<ILogger<ActionLog>>();
             if (logger != null)
@@ -655,7 +656,7 @@ namespace WalkingTec.Mvvm.Mvc
                 //通过Base64方式上传附件
                 var FileData = Convert.FromBase64String(Request.Form["FileID"]);
                 MemoryStream MS = new MemoryStream(FileData);
-                file = fp.Upload("SCRAWL_" + DateTime.Now.ToString("yyyyMMddHHmmssttt") + ".jpg", FileData.Length, MS, groupName, subdir, dc: Wtm.CreateDC(cskey: _DONOT_USE_CS));
+                file = fp.Upload("SCRAWL_" + Wtm.TimeProvider.GetLocalNow().DateTime.ToString("yyyyMMddHHmmssttt") + ".jpg", FileData.Length, MS, groupName, subdir, dc: Wtm.CreateDC(cskey: _DONOT_USE_CS));
                 MS.Dispose();
             }
 

@@ -568,7 +568,7 @@ namespace WalkingTec.Mvvm.Core
 
                                     if (typeof(IBasePoco).IsAssignableFrom(SubTypeEntity.GetType()))
                                     {
-                                        (SubTypeEntity as IBasePoco)!.CreateTime = DateTime.Now;
+                                        (SubTypeEntity as IBasePoco)!.CreateTime = Wtm!.TimeProvider.GetLocalNow().DateTime;
                                         (SubTypeEntity as IBasePoco)!.CreateBy = LoginUserInfo?.ITCode;
                                     }
                                     if (typeof(ITenant).IsAssignableFrom(SubTypeEntity.GetType()))
@@ -1032,7 +1032,7 @@ namespace WalkingTec.Mvvm.Core
                         {
                             if (typeof(IBasePoco).IsAssignableFrom(exist.GetType()))
                             {
-                                (exist as IBasePoco)!.UpdateTime = DateTime.Now;
+                                (exist as IBasePoco)!.UpdateTime = Wtm!.TimeProvider.GetLocalNow().DateTime;
                                 DC!.UpdateProperty(exist, "UpdateTime");
                             }
                         }
@@ -1071,7 +1071,7 @@ namespace WalkingTec.Mvvm.Core
                 //进行添加操作
                 if (typeof(IBasePoco).IsAssignableFrom(item.GetType()))
                 {
-                    (item as IBasePoco)!.CreateTime = DateTime.Now;
+                    (item as IBasePoco)!.CreateTime = Wtm!.TimeProvider.GetLocalNow().DateTime;
                     (item as IBasePoco)!.CreateBy = LoginUserInfo?.ITCode;
                 }
                 if (typeof(ITenant).IsAssignableFrom(ModelType))

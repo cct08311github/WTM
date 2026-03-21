@@ -107,7 +107,8 @@ namespace WalkingTec.Mvvm.Core
         {
             //设置导出的文件名称
             string SheetName = !string.IsNullOrEmpty(FileDisplayName) ? FileDisplayName : this.GetType().Name;
-            displayName = SheetName + "_" + DateTime.Now.ToString("yyyy-MM-dd") + "_" + DateTime.Now.ToString("hh^mm^ss") + ".xlsx";
+            var now = (Wtm?.TimeProvider ?? TimeProvider.System).GetLocalNow().DateTime;
+            displayName = SheetName + "_" + now.ToString("yyyy-MM-dd") + "_" + now.ToString("hh^mm^ss") + ".xlsx";
 
             //1.声明Excel文档
             IWorkbook workbook = new XSSFWorkbook();

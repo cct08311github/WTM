@@ -35,7 +35,7 @@ namespace WalkingTec.Mvvm.Mvc.Filters
             context.SetWtmContext();
             if (context.HttpContext.Items.ContainsKey("actionstarttime") == false)
             {
-                context.HttpContext.Items.Add("actionstarttime", DateTime.Now);
+                context.HttpContext.Items.Add("actionstarttime", ctrl.Wtm.TimeProvider.GetLocalNow().DateTime);
             }
             var ctrlActDesc = context.ActionDescriptor as ControllerActionDescriptor;
             var log = new SimpleLog();// 初始化log备用
@@ -377,7 +377,7 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                 var postDes = ctrlActDesc.MethodInfo.GetCustomAttributes(typeof(HttpPostAttribute), false).Cast<HttpPostAttribute>().FirstOrDefault();
 
                 log.LogType = context.Exception == null ? ActionLogTypesEnum.Normal : ActionLogTypesEnum.Exception;
-                log.ActionTime = DateTime.Now;
+                log.ActionTime = ctrl.Wtm?.TimeProvider.GetLocalNow().DateTime ?? DateTime.Now;
                 log.ITCode = ctrl.Wtm?.LoginUserInfo?.ITCode ?? string.Empty;
                 // 给日志的多语言属性赋值
                 log.ModuleName = ctrlDes?.GetDescription(ctrl) ?? ctrlActDesc.ControllerName;
@@ -392,7 +392,7 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                 var starttime = context.HttpContext.Items["actionstarttime"] as DateTime?;
                 if (starttime != null)
                 {
-                    log.Duration = DateTime.Now.Subtract(starttime.Value).TotalSeconds;
+                    log.Duration = (ctrl.Wtm?.TimeProvider.GetLocalNow().DateTime ?? DateTime.Now).Subtract(starttime.Value).TotalSeconds;
                 }
                 try
                 {

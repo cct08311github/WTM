@@ -151,7 +151,7 @@ namespace WalkingTec.Mvvm.Core
                         DC!.UpdateProperty(Entity, "IsValid");
                         if (isBasePoco)
                         {
-                            (Entity as IBasePoco)!.UpdateTime = DateTime.Now;
+                            (Entity as IBasePoco)!.UpdateTime = Wtm!.TimeProvider.GetLocalNow().DateTime;
                             (Entity as IBasePoco)!.UpdateBy = LoginUserInfo?.ITCode;
                             DC!.UpdateProperty(Entity, "UpdateTime");
                             DC!.UpdateProperty(Entity, "UpdateBy");
@@ -350,7 +350,7 @@ namespace WalkingTec.Mvvm.Core
                         IBasePoco ent = (entity as IBasePoco)!;
                         if (ent.UpdateTime == null)
                         {
-                            ent.UpdateTime = DateTime.Now;
+                            ent.UpdateTime = Wtm!.TimeProvider.GetLocalNow().DateTime;
                             DC!.UpdateProperty(entity, nameof(ent.UpdateTime));
                         }
                         if (string.IsNullOrEmpty(ent.UpdateBy))
