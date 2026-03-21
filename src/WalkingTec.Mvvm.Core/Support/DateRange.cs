@@ -276,59 +276,52 @@ namespace WalkingTec.Mvvm.Core
 
         public static DateRange UtcDefault => UtcToday;
 
-        public static DateRange UtcNinetyDays
+        /// <summary>UTC 過去 90 天。</summary>
+        public static DateRange UtcNinetyDays => CreateUtcNinetyDays();
+        public static DateRange CreateUtcNinetyDays(TimeProvider? timeProvider = null)
         {
-            get
-            {
-                var result = new DateRange(DateTime.UtcNow.Date.AddDays(-90), DateTime.UtcNow.Date);
-                return result;
-            }
+            var today = (timeProvider ?? TimeProvider.System).GetUtcNow().UtcDateTime.Date;
+            return new DateRange(today.AddDays(-90), today);
         }
 
-        public static DateRange UtcThirtyDays
+        /// <summary>UTC 過去 30 天。</summary>
+        public static DateRange UtcThirtyDays => CreateUtcThirtyDays();
+        public static DateRange CreateUtcThirtyDays(TimeProvider? timeProvider = null)
         {
-            get
-            {
-                var result = new DateRange(DateTime.UtcNow.Date.AddDays(-30), DateTime.UtcNow.Date, DefaultType, UtCDefaultEpoch);
-                return result;
-            }
+            var today = (timeProvider ?? TimeProvider.System).GetUtcNow().UtcDateTime.Date;
+            return new DateRange(today.AddDays(-30), today, DefaultType, UtCDefaultEpoch);
         }
 
-        public static DateRange UtcTwoWeek
+        /// <summary>UTC 過去 14 天。</summary>
+        public static DateRange UtcTwoWeek => CreateUtcTwoWeek();
+        public static DateRange CreateUtcTwoWeek(TimeProvider? timeProvider = null)
         {
-            get
-            {
-                var result = new DateRange(DateTime.UtcNow.Date.AddDays(-14), DateTime.UtcNow.Date, DefaultType, UtCDefaultEpoch);
-                return result;
-            }
+            var today = (timeProvider ?? TimeProvider.System).GetUtcNow().UtcDateTime.Date;
+            return new DateRange(today.AddDays(-14), today, DefaultType, UtCDefaultEpoch);
         }
 
-        public static DateRange UtcWeek
+        /// <summary>UTC 過去 7 天。</summary>
+        public static DateRange UtcWeek => CreateUtcWeek();
+        public static DateRange CreateUtcWeek(TimeProvider? timeProvider = null)
         {
-            get
-            {
-                var result = new DateRange(DateTime.UtcNow.Date.AddDays(-7), DateTime.UtcNow.Date, DefaultType, UtCDefaultEpoch);
-                return result;
-            }
-
+            var today = (timeProvider ?? TimeProvider.System).GetUtcNow().UtcDateTime.Date;
+            return new DateRange(today.AddDays(-7), today, DefaultType, UtCDefaultEpoch);
         }
 
-        public static DateRange UtcToday
+        /// <summary>UTC 昨天到今天。</summary>
+        public static DateRange UtcToday => CreateUtcToday();
+        public static DateRange CreateUtcToday(TimeProvider? timeProvider = null)
         {
-            get
-            {
-                var result = new DateRange(DateTime.UtcNow.Date.AddDays(-1), DateTime.UtcNow.Date, DefaultType, UtCDefaultEpoch);
-                return result;
-            }
+            var today = (timeProvider ?? TimeProvider.System).GetUtcNow().UtcDateTime.Date;
+            return new DateRange(today.AddDays(-1), today, DefaultType, UtCDefaultEpoch);
         }
 
-        public static DateRange UtcYesterday
+        /// <summary>UTC 昨天。</summary>
+        public static DateRange UtcYesterday => CreateUtcYesterday();
+        public static DateRange CreateUtcYesterday(TimeProvider? timeProvider = null)
         {
-            get
-            {
-                var result = new DateRange(DateTime.UtcNow.Date.AddDays(-1), DateTime.UtcNow.Date, DefaultType, UtCDefaultEpoch);
-                return result;
-            }
+            var today = (timeProvider ?? TimeProvider.System).GetUtcNow().UtcDateTime.Date;
+            return new DateRange(today.AddDays(-1), today, DefaultType, UtCDefaultEpoch);
         }
 
 

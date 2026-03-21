@@ -113,7 +113,7 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
                     FileAttachment file = new FileAttachment();
                     file.FileName = fileName;
                     file.Length = fileLength;
-                    file.UploadTime = DateTime.Now;
+                    file.UploadTime = _wtm.TimeProvider.GetLocalNow().DateTime;
                     file.SaveMode = string.IsNullOrEmpty(saveMode) == true ? _wtm.ConfigInfo.FileUploadOptions.SaveFileMode! : saveMode;
                     file.ExtraInfo = extra;
                     var ext = string.Empty;

@@ -54,8 +54,8 @@ public class EtlQuartzJob : WtmJob
                 JobId = jobDefId,
                 Trigger = trigger,
                 Result = EtlRunResult.Skipped,
-                StartedAt = DateTime.UtcNow,
-                FinishedAt = DateTime.UtcNow
+                StartedAt = Wtm.TimeProvider.GetUtcNow().UtcDateTime,
+                FinishedAt = Wtm.TimeProvider.GetUtcNow().UtcDateTime
             });
 
             await dc.SaveChangesAsync();
@@ -71,7 +71,7 @@ public class EtlQuartzJob : WtmJob
         dc.Set<EtlJobDefinition>().Update(jobDef);
         await dc.SaveChangesAsync();
 
-        var startedAt = DateTime.UtcNow;
+        var startedAt = Wtm.TimeProvider.GetUtcNow().UtcDateTime;
 
         // 建立超時 CancellationToken（連結 Quartz 的 CancellationToken 以支援中止）
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(context.CancellationToken);
@@ -140,7 +140,7 @@ public class EtlQuartzJob : WtmJob
             if (result.Success)
             {
                 jobDef.LastWatermarkValue = result.NewWatermarkValue;
-                jobDef.LastRunAt = DateTime.UtcNow;
+                jobDef.LastRunAt = Wtm.TimeProvider.GetUtcNow().UtcDateTime;
                 jobDef.LastError = null;
                 jobDef.Status = EtlJobStatus.Enabled;
                 jobDef.ConsecutiveFailureCount = 0;  // reset on success
@@ -164,7 +164,7 @@ public class EtlQuartzJob : WtmJob
             {
                 Success = false,
                 ErrorMessage = sanitized,
-                ElapsedMs = (long)(DateTime.UtcNow - startedAt).TotalMilliseconds
+                ElapsedMs = (long)(Wtm.TimeProvider.GetUtcNow().UtcDateTime - startedAt).TotalMilliseconds
             };
 
             var currentAttempt = context.MergedJobDataMap.ContainsKey("_retryAttempt")
@@ -207,7 +207,7 @@ public class EtlQuartzJob : WtmJob
                 ElapsedMs = result?.ElapsedMs ?? 0,
                 ErrorMessage = result?.ErrorMessage,
                 StartedAt = startedAt,
-                FinishedAt = DateTime.UtcNow,
+                FinishedAt = Wtm.TimeProvider.GetUtcNow().UtcDateTime,
                 WatermarkSnapshot = jobDef.LastWatermarkValue
             };
             dc.Set<EtlRunLog>().Add(runLog);

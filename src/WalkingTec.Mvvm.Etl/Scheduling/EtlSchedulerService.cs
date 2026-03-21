@@ -42,7 +42,7 @@ public class EtlSchedulerService
 
         if (ghostJobs.Count == 0) return;
 
-        var now = DateTime.UtcNow;
+        var now = (_sp.GetService<TimeProvider>() ?? TimeProvider.System).GetUtcNow().UtcDateTime;
         foreach (var job in ghostJobs)
         {
             job.Status = EtlJobStatus.Failed;
