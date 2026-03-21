@@ -304,6 +304,12 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
             if (string.IsNullOrWhiteSpace(listVmType))
                 return BadRequest("listVmType is required.");
 
+            Type vmType;
+            try { vmType = _registry.Resolve(listVmType); }
+            catch (AnalysisVmNotFoundException ex) { return NotFound(ex.Message); }
+            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+            if (!CheckAccess(vmType)) return Forbid();
+
             var userCode = Wtm?.LoginUserInfo?.ITCode ?? string.Empty;
 
             var rows = Wtm!.DC.Set<AnalysisSavedQuery>()
@@ -337,8 +343,11 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
             if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest("查詢名稱不可為空。");
             if (string.IsNullOrWhiteSpace(req.Config?.ListVmType)) return BadRequest("Config.ListVmType is required.");
 
-            try { _registry.Resolve(req.Config.ListVmType); }
+            Type vmType;
+            try { vmType = _registry.Resolve(req.Config.ListVmType); }
             catch (AnalysisVmNotFoundException ex) { return NotFound(ex.Message); }
+            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+            if (!CheckAccess(vmType)) return Forbid();
 
             var userCode = Wtm?.LoginUserInfo?.ITCode ?? string.Empty;
             var configJson = JsonSerializer.Serialize(req.Config, _camelCase);
@@ -385,6 +394,11 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
             catch (JsonException) { return BadRequest("儲存的查詢格式無效。"); }
 
             if (config == null) return BadRequest("儲存的查詢格式無效。");
+            Type vmType;
+            try { vmType = _registry.Resolve(config.ListVmType); }
+            catch (AnalysisVmNotFoundException ex) { return NotFound(ex.Message); }
+            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+            if (!CheckAccess(vmType)) return Forbid();
 
             return new JsonResult(config, _camelCase);
         }
