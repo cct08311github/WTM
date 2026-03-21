@@ -350,7 +350,7 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
                 ConfigJson = configJson,
                 OwnerCode  = userCode,
                 IsPublic   = req.IsPublic,
-                CreateTime = DateTime.Now,
+                CreateTime = Wtm!.TimeProvider.GetLocalNow().DateTime,
                 CreateBy   = userCode
             };
 
@@ -442,7 +442,7 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
             var log = new ActionLog
             {
                 LogType    = ActionLogTypesEnum.Normal,
-                ActionTime = DateTime.Now,
+                ActionTime = Wtm!.TimeProvider.GetLocalNow().DateTime,
                 ITCode     = Wtm?.LoginUserInfo?.ITCode ?? string.Empty,
                 ModuleName = "Analysis",
                 ActionName = actionName,

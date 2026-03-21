@@ -174,7 +174,7 @@ namespace WalkingTec.Mvvm.Core
             else
             {
                 Guid g = Guid.NewGuid();
-                var FileName = typeof(TModel).Name + "_" + DateTime.Now.ToString("yyyyMMddHHmmssffff");
+                var FileName = typeof(TModel).Name + "_" + Wtm!.TimeProvider.GetLocalNow().DateTime.ToString("yyyyMMddHHmmssffff");
                 //文件根目录
                 string RootPath = $"{Wtm!.ConfigInfo.HostRoot}\\export{g}";
 
@@ -1133,7 +1133,7 @@ namespace WalkingTec.Mvvm.Core
                         IBasePoco ent = (IBasePoco)newitem;
                         if (ent.UpdateTime == null)
                         {
-                            ent.UpdateTime = DateTime.Now;
+                            ent.UpdateTime = Wtm!.TimeProvider.GetLocalNow().DateTime;
                         }
                         if (string.IsNullOrEmpty(ent.UpdateBy))
                         {
@@ -1211,7 +1211,7 @@ namespace WalkingTec.Mvvm.Core
                         (item as IPersistPoco)!.IsValid = false;
                         if (typeof(IBasePoco).IsAssignableFrom(ftype))
                         {
-                            (item as IBasePoco)!.UpdateTime = DateTime.Now;
+                            (item as IBasePoco)!.UpdateTime = Wtm!.TimeProvider.GetLocalNow().DateTime;
                             (item as IBasePoco)!.UpdateBy = LoginUserInfo?.ITCode;
                         }
                         dynamic i = item;
@@ -1238,7 +1238,7 @@ namespace WalkingTec.Mvvm.Core
                         IBasePoco ent = (IBasePoco)item;
                         if (ent.CreateTime == null)
                         {
-                            ent.CreateTime = DateTime.Now;
+                            ent.CreateTime = Wtm!.TimeProvider.GetLocalNow().DateTime;
                         }
                         if (string.IsNullOrEmpty(ent.CreateBy))
                         {

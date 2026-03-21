@@ -22,7 +22,8 @@ namespace WalkingTec.Mvvm.Mvc
             var data = self.GenerateExcel();
             string ContentType = self.ExportExcelCount > 1 ? "application/x-zip-compresse" : "application/vnd.ms-excel";
             ExportName = string.IsNullOrEmpty(ExportName) ? typeof(T).Name : ExportName;
-            ExportName = self.ExportExcelCount > 1 ? $"Export_{ExportName}_{DateTime.Now.ToString("yyyyMMddHHmmssffff")}.zip" : $"Export_{ExportName}_{DateTime.Now.ToString("yyyyMMddHHmmssffff")}.xlsx";
+            var now = self.Wtm!.TimeProvider.GetLocalNow().DateTime;
+            ExportName = self.ExportExcelCount > 1 ? $"Export_{ExportName}_{now.ToString("yyyyMMddHHmmssffff")}.zip" : $"Export_{ExportName}_{now.ToString("yyyyMMddHHmmssffff")}.xlsx";
             FileContentResult Result = new FileContentResult(data, ContentType);
             Result.FileDownloadName = ExportName;
             return Result;

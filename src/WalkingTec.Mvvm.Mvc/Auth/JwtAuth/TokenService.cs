@@ -20,12 +20,14 @@ namespace WalkingTec.Mvvm.Mvc.Auth
     {
         private readonly JwtOption _jwtOptions;
         private readonly IServiceProvider _sp;
+        private readonly TimeProvider _timeProvider;
         private const int RefreshTokenExpiryDays = 7;
 
-        public TokenService(IOptionsMonitor<Configs> configs, IServiceProvider sp)
+        public TokenService(IOptionsMonitor<Configs> configs, IServiceProvider sp, TimeProvider? timeProvider = null)
         {
             _jwtOptions = configs.CurrentValue.JwtOptions;
             _sp = sp;
+            _timeProvider = timeProvider ?? TimeProvider.System;
         }
 
         public async Task<Token> IssueTokenAsync(
@@ -61,13 +63,13 @@ namespace WalkingTec.Mvvm.Mvc.Auth
                 if (existing is { IsRevoked: true, ReplacedByToken: not null })
                 {
                     await RevokeDescendantsAsync(dbSet, existing, ipAddress,
-                        "Attempted reuse of revoked token");
+                        "Attempted reuse of revoked token", _timeProvider);
                     await dc.SaveChangesAsync();
                 }
                 return null;
             }
             var newTokenString = GenerateRefreshTokenString();
-            existing.RevokedUtc = DateTime.UtcNow;
+            existing.RevokedUtc = _timeProvider.GetUtcNow().UtcDateTime;
             existing.RevokedByIp = ipAddress;
             existing.ReplacedByToken = newTokenString;
             existing.RevokeReason = "Rotated";
@@ -76,7 +78,7 @@ namespace WalkingTec.Mvvm.Mvc.Auth
                 Token = newTokenString,
                 ITCode = existing.ITCode,
                 TenantCode = existing.TenantCode,
-                ExpiresUtc = DateTime.UtcNow.AddDays(RefreshTokenExpiryDays),
+                ExpiresUtc = _timeProvider.GetUtcNow().UtcDateTime.AddDays(RefreshTokenExpiryDays),
                 CreatedByIp = ipAddress
             };
             await dbSet.AddAsync(newEntity);
@@ -102,7 +104,7 @@ namespace WalkingTec.Mvvm.Mvc.Auth
             var existing = await dc.Set<RefreshTokenEntity>()
                 .FirstOrDefaultAsync(x => x.Token == refreshToken);
             if (existing == null || !existing.IsActive) return;
-            existing.RevokedUtc = DateTime.UtcNow;
+            existing.RevokedUtc = _timeProvider.GetUtcNow().UtcDateTime;
             existing.RevokedByIp = ipAddress;
             existing.RevokeReason = reason ?? "Explicit revocation";
             await dc.SaveChangesAsync();
@@ -128,7 +130,7 @@ namespace WalkingTec.Mvvm.Mvc.Auth
                 issuer: _jwtOptions.Issuer,
                 audience: _jwtOptions.Audience,
                 claims: claims,
-                expires: DateTime.UtcNow.AddSeconds(_jwtOptions.Expires),
+                expires: _timeProvider.GetUtcNow().UtcDateTime.AddSeconds(_jwtOptions.Expires),
                 signingCredentials: creds);
             return new JwtSecurityTokenHandler().WriteToken(jwt);
         }
@@ -142,7 +144,7 @@ namespace WalkingTec.Mvvm.Mvc.Auth
             {
                 Token = GenerateRefreshTokenString(),
                 ITCode = itCode, TenantCode = tenantCode,
-                ExpiresUtc = DateTime.UtcNow.AddDays(RefreshTokenExpiryDays),
+                ExpiresUtc = _timeProvider.GetUtcNow().UtcDateTime.AddDays(RefreshTokenExpiryDays),
                 CreatedByIp = ipAddress
             };
             if (dc != null)
@@ -161,7 +163,7 @@ namespace WalkingTec.Mvvm.Mvc.Auth
 
         private static async Task RevokeDescendantsAsync(
             DbSet<RefreshTokenEntity> dbSet, RefreshTokenEntity token,
-            string ipAddress, string reason)
+            string ipAddress, string reason, TimeProvider timeProvider)
         {
             if (string.IsNullOrEmpty(token.ReplacedByToken)) return;
             var child = await dbSet.FirstOrDefaultAsync(
@@ -169,13 +171,13 @@ namespace WalkingTec.Mvvm.Mvc.Auth
             if (child == null) return;
             if (child.IsActive)
             {
-                child.RevokedUtc = DateTime.UtcNow;
+                child.RevokedUtc = timeProvider.GetUtcNow().UtcDateTime;
                 child.RevokedByIp = ipAddress;
                 child.RevokeReason = reason;
             }
             else
             {
-                await RevokeDescendantsAsync(dbSet, child, ipAddress, reason);
+                await RevokeDescendantsAsync(dbSet, child, ipAddress, reason, timeProvider);
             }
         }
     }
