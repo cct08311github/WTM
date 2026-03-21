@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+## [10.0.1] - 2026-03-21
+
+### Changed
+- **TimeProvider 全面遷移** — 將 `DateTime.Now`/`UtcNow` 替換為 `TimeProvider`，覆蓋 Core VMs、Mvc Controllers/Filters、TokenService、DataContext、WTMLogger、FileHandlers、Dashboard、ETL 等 27 個檔案。測試可透過 `FakeTimeProvider` 控制時間（#697, #706, #708, #711, #712）
+  - `WTMContext.TimeProvider`（Phase 1）
+  - Core VMs: BaseCRUDVM, BaseBatchVM, BaseImportVM, BasePagedListVM, BaseTemplateVM（Phase 2）
+  - Mvc: _FrameworkController, FrameworkFilter, _AnalysisController, FileExtension（Phase 2）
+  - Auth: TokenService — 建構子注入 `TimeProvider`（Phase 2）
+  - Core: DataContext（新增 `EmptyContext.TimeProvider` 屬性）、WTMLogger、FileHandlers（Phase 3）
+  - Dashboard: JsonFileDashboardService — 建構子注入 `TimeProvider`（Phase 3）
+  - ETL: EtlQuartzJob, EtlSchedulerService（Phase 3）
+  - DateRange: 6 個 `CreateUtc*()` factory methods 支援 `TimeProvider?` 可選參數，原 static properties 保持向後相容（Phase 3）
+- **Collection expressions 現代化** — Analysis DTOs 和 BasePagedListVM 使用 C# 12 collection expressions（#707）
+- **.NET 10 效能優化 Phase 1a** — FrozenDictionary、Lock、Span/stackalloc、string interpolation（#702）
+
+### Fixed
+- **Analysis Saved Query 存取控制** — 強化 VM 存取檢查，防止未授權存取（#710）
+- **BaseImportVM nullable 修正** — 移除 Core 專案最後一個 `#nullable disable`（#703）
+- **Build 健康度** — 解決 NU1603、NU1510 警告，移除未使用的 import（#693）
+
+### Performance
+- **ExecuteDeleteAsync** — Analysis Saved Query 刪除改用 `ExecuteDeleteAsync` 提升效能（#704）
+
+### Notes
+- `DateTimeOffset.UtcDateTime`（而非 `.DateTime`）用於所有 UTC 語境，避免 `DateTimeKind.Unspecified` 導致時區誤判
+- Property initializers（RefreshTokenEntity, ChangeLog 等）、static display timestamps、codegen templates 刻意保留 `DateTime`
+
 ## [10.0.0] - 2026-03-20
 
 ### Changed
