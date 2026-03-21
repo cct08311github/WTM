@@ -2497,6 +2497,36 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
+        public void ListSavedQueries_returns_403_when_user_lacks_required_role()
+        {
+            var controller = CreateControllerWithRoles("Viewer");
+            var vmType = typeof(RestrictedSaleListVM).FullName;
+
+            var result = controller.ListSavedQueries(vmType);
+            Assert.IsInstanceOfType(result, typeof(ForbidResult));
+        }
+
+        [TestMethod]
+        public void SaveQuery_returns_403_when_user_lacks_required_role()
+        {
+            var controller = CreateControllerWithRoles("Viewer");
+            var req = new SaveQueryRequest
+            {
+                Name = "Restricted",
+                IsPublic = false,
+                Config = new AnalysisQueryRequest
+                {
+                    ListVmType = typeof(RestrictedSaleListVM).FullName,
+                    Dimensions = new List<string> { "Region" },
+                    Measures = new List<MeasureRequest> { new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum } }
+                }
+            };
+
+            var result = controller.SaveQuery(req);
+            Assert.IsInstanceOfType(result, typeof(ForbidResult));
+        }
+
+        [TestMethod]
         public void GetSavedQuery_returns_config_for_authorized_user()
         {
             var controller = CreateController();
@@ -2538,6 +2568,30 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
             var result = controller.GetSavedQuery(id) as ForbidResult;
             Assert.IsNotNull(result, "存取他人的私有查詢應回傳 403 Forbid");
+        }
+
+        [TestMethod]
+        public void GetSavedQuery_returns_403_when_public_query_vm_is_role_restricted()
+        {
+            var controller = CreateControllerWithRoles("Viewer");
+            controller.Wtm.LoginUserInfo.ITCode = "userA";
+            var id = Guid.NewGuid();
+            var vmType = typeof(RestrictedSaleListVM).FullName;
+            controller.Wtm.DC.Set<AnalysisSavedQuery>().Add(
+                new AnalysisSavedQuery
+                {
+                    ID = id,
+                    Name = "RestrictedPublic",
+                    ListVmType = vmType,
+                    OwnerCode = "userB",
+                    IsPublic = true,
+                    ConfigJson = "{\"listVmType\":\"" + vmType + "\"}"
+                }
+            );
+            controller.Wtm.DC.SaveChanges();
+
+            var result = controller.GetSavedQuery(id);
+            Assert.IsInstanceOfType(result, typeof(ForbidResult));
         }
 
         [TestMethod]
