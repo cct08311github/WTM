@@ -448,6 +448,11 @@ namespace WalkingTec.Mvvm.Core
 
         public DBTypeEnum DBType { get; set; }
 
+        /// <summary>
+        /// 可測試的時間來源。預設 TimeProvider.System。
+        /// </summary>
+        public TimeProvider TimeProvider { get; set; } = TimeProvider.System;
+
         public string? Version { get; set; }
         public CS ConnectionString { get; set; } = null!;
         public DbSet<AnalysisSavedQuery> AnalysisSavedQueries { get; set; } = null!;
@@ -879,14 +884,14 @@ namespace WalkingTec.Mvvm.Core
                     {
                         case EntityState.Added:
                             if (entity.CreateTime == null)
-                                entity.CreateTime = DateTime.Now;
+                                entity.CreateTime = TimeProvider.GetLocalNow().DateTime;
                             if (string.IsNullOrEmpty(entity.CreateBy))
                                 entity.CreateBy = CurrentUserCode;
                             break;
 
                         case EntityState.Modified:
                             if (entity.UpdateTime == null)
-                                entity.UpdateTime = DateTime.Now;
+                                entity.UpdateTime = TimeProvider.GetLocalNow().DateTime;
                             if (string.IsNullOrEmpty(entity.UpdateBy))
                                 entity.UpdateBy = CurrentUserCode;
                             break;

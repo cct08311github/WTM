@@ -100,11 +100,12 @@ namespace WalkingTec.Mvvm.Core
                         ll = ActionLogTypesEnum.Exception;
                     }
 
+                    var now = (sp.GetService<TimeProvider>() ?? TimeProvider.System).GetLocalNow().DateTime;
                     log = new ActionLog
                     {
                         Remark = formatter?.Invoke(state, exception),
-                        CreateTime = DateTime.Now,
-                        ActionTime = DateTime.Now,
+                        CreateTime = now,
+                        ActionTime = now,
                         ActionName = "WtmLog",
                         ModuleName = "WtmLog",
                         LogType = ll

@@ -17,6 +17,7 @@ public class JsonFileDashboardService : IDashboardService
     private readonly DashboardOptions _options;
     private readonly IEnumerable<IWidgetDataSource> _dataSources;
     private readonly ILogger<JsonFileDashboardService> _logger;
+    private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, DashboardSummary> _index = new();
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new();
     private readonly string _baseDir;
@@ -26,11 +27,13 @@ public class JsonFileDashboardService : IDashboardService
     public JsonFileDashboardService(
         IOptions<DashboardOptions> options,
         IEnumerable<IWidgetDataSource> dataSources,
-        ILogger<JsonFileDashboardService> logger)
+        ILogger<JsonFileDashboardService> logger,
+        TimeProvider? timeProvider = null)
     {
         _options = options.Value;
         _dataSources = dataSources;
         _logger = logger;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _baseDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, _options.DashboardDirectory);
 
         logger.LogWarning(
@@ -184,7 +187,7 @@ public class JsonFileDashboardService : IDashboardService
             dashboard.Id = Guid.NewGuid().ToString("N");
         }
 
-        dashboard.CreatedAt = DateTime.UtcNow;
+        dashboard.CreatedAt = _timeProvider.GetUtcNow().UtcDateTime;
         dashboard.UpdatedAt = dashboard.CreatedAt;
 
         var path = GetFilePath(dashboard.Id, dashboard.TenantId);
@@ -241,7 +244,7 @@ public class JsonFileDashboardService : IDashboardService
             throw new ArgumentException("Dashboard ID cannot be null or empty.", nameof(dashboard));
         }
 
-        dashboard.UpdatedAt = DateTime.UtcNow;
+        dashboard.UpdatedAt = _timeProvider.GetUtcNow().UtcDateTime;
 
         var path = GetFilePath(dashboard.Id, dashboard.TenantId);
         var lockObj = GetLock(dashboard.Id);

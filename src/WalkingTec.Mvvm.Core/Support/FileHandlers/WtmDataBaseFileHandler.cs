@@ -35,7 +35,7 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
             FileAttachment file = new FileAttachment();
             file.FileName = fileName;
             file.Length = fileLength;
-            file.UploadTime = DateTime.Now;
+            file.UploadTime = wtm.TimeProvider.GetLocalNow().DateTime;
             file.SaveMode = _modeName;
             file.ExtraInfo = extra;
             file.TenantCode = wtm.LoginUserInfo?.CurrentTenant;

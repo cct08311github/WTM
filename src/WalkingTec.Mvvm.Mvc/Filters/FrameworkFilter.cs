@@ -377,7 +377,7 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                 var postDes = ctrlActDesc.MethodInfo.GetCustomAttributes(typeof(HttpPostAttribute), false).Cast<HttpPostAttribute>().FirstOrDefault();
 
                 log.LogType = context.Exception == null ? ActionLogTypesEnum.Normal : ActionLogTypesEnum.Exception;
-                log.ActionTime = ctrl.Wtm?.TimeProvider.GetLocalNow().DateTime ?? DateTime.Now;
+                log.ActionTime = (ctrl.Wtm?.TimeProvider ?? TimeProvider.System).GetLocalNow().DateTime;
                 log.ITCode = ctrl.Wtm?.LoginUserInfo?.ITCode ?? string.Empty;
                 // 给日志的多语言属性赋值
                 log.ModuleName = ctrlDes?.GetDescription(ctrl) ?? ctrlActDesc.ControllerName;
@@ -392,7 +392,7 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                 var starttime = context.HttpContext.Items["actionstarttime"] as DateTime?;
                 if (starttime != null)
                 {
-                    log.Duration = (ctrl.Wtm?.TimeProvider.GetLocalNow().DateTime ?? DateTime.Now).Subtract(starttime.Value).TotalSeconds;
+                    log.Duration = (ctrl.Wtm?.TimeProvider ?? TimeProvider.System).GetLocalNow().DateTime.Subtract(starttime.Value).TotalSeconds;
                 }
                 try
                 {
