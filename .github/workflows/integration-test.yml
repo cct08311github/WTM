@@ -1,0 +1,65 @@
+name: Integration Tests (MSSQL)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dotnet10]
+    paths:
+      - 'src/**'
+      - 'test/WalkingTec.Mvvm.Integration.Test/**'
+
+jobs:
+  integration-test:
+    runs-on: ubuntu-latest
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-CU16-ubuntu-22.04
+        env:
+          ACCEPT_EULA: Y
+          MSSQL_SA_PASSWORD: YourStr0ng!Pass
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "cat /dev/null > /dev/tcp/localhost/1433 || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Wait for MSSQL ready
+        run: |
+          echo "Waiting for MSSQL to accept connections..."
+          for i in $(seq 1 30); do
+            if (echo > /dev/tcp/localhost/1433) 2>/dev/null; then
+              echo "MSSQL is ready (attempt $i)"
+              exit 0
+            fi
+            echo "  attempt $i/30..."
+            sleep 2
+          done
+          echo "MSSQL did not become ready" >&2
+          exit 1
+
+      - name: Run integration tests
+        run: >-
+          dotnet test
+          test/WalkingTec.Mvvm.Integration.Test/WalkingTec.Mvvm.Integration.Test.csproj
+          -c Release
+          --filter "TestCategory=Integration"
+          --verbosity normal
+          --logger "trx;LogFileName=integration-results.trx"
+        env:
+          # CI-only ephemeral container password — not connected to any persistent resource
+          WTM_TEST_MSSQL: "Server=localhost,1433;Database=WtmIntegrationTest;User Id=sa;Password=YourStr0ng!Pass;TrustServerCertificate=True"
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-test-results
+          path: "**/*.trx"
