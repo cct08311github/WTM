@@ -89,6 +89,10 @@ namespace WalkingTec.Mvvm.Core
                     tenantdc.SetLoggerFactory(wtm.LoggerFactory);
                 }
                 tenantdc.SetTenantCode(this.TCode);
+                if (tenantdc is EmptyContext ec)
+                {
+                    ec.TimeProvider = wtm.TimeProvider;
+                }
                 return tenantdc;
             }
         }
