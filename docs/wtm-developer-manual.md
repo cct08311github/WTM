@@ -1,6 +1,6 @@
 # WTM 開發與使用手冊
 
-> **版本**：10.0.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-03-20
+> **版本**：10.0.1 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-03-22
 
 WalkingTec MVVM Framework (WTM) 是一套 ASP.NET Core 快速開發框架，以四種 ViewModel 類型為核心，搭配內建代碼生成器、LayUI TagHelper、Analysis Mode、ETL 模組與 Dashboard，提供完整的企業級 CRUD 開發體驗。
 
@@ -21,9 +21,11 @@ WalkingTec MVVM Framework (WTM) 是一套 ASP.NET Core 快速開發框架，以�
 11. [多租戶](#11-多租戶)
 12. [Lookup Cache](#12-lookup-cache)
 13. [測試指南](#13-測試指南)
-14. [代碼生成器](#14-代碼生成器)
-15. [配置參考](#15-配置參考)
-16. [常見問題](#16-常見問題)
+14. [TimeProvider 時間抽象](#14-timeprovider-時間抽象)
+15. [Integration Tests 整合測試](#15-integration-tests-整合測試)
+16. [代碼生成器](#16-代碼生成器)
+17. [配置參考](#17-配置參考)
+18. [常見問題](#18-常見問題)
 
 ---
 
@@ -2707,11 +2709,98 @@ test('detectChartType returns bar for single dim + single measure', () => {
 
 ---
 
-## 14. 代碼生成器
+## 14. TimeProvider 時間抽象
+
+自 10.0.1 起，WTM 全面採用 .NET 8+ 的 `TimeProvider` 抽象取代直接呼叫 `DateTime.Now` / `DateTime.UtcNow`。這使得所有時間相關邏輯皆可在測試中精確控制。
+
+### 14.1 取得當前時間
+
+在 ViewModel 或 Service 中，透過 `WTMContext.TimeProvider` 取得：
+
+```csharp
+// 取代 DateTime.Now
+var now = Wtm.TimeProvider.GetLocalNow();
+
+// 取代 DateTime.UtcNow
+var utcNow = Wtm.TimeProvider.GetUtcNow();
+```
+
+### 14.2 受影響範圍
+
+以下區域的 `DateTime.Now` / `DateTime.UtcNow` 已全部遷移至 `TimeProvider`：
+
+- **WTMContext** — `TimeProvider` 屬性，透過 DI 注入
+- **TokenService** — JWT access/refresh token 過期計算
+- **DataContext** — `CreateTime`、`UpdateTime` 自動填充
+- **Dashboard 模組** — 日期範圍計算
+- **ETL 模組** — 排程與執行時間
+- **DateRange** — `Today()`、`ThisMonth()` 等 factory methods 接受 `TimeProvider` 參數
+
+### 14.3 測試中使用 FakeTimeProvider
+
+```csharp
+using Microsoft.Extensions.Time.Testing;
+
+var fakeTime = new FakeTimeProvider(
+    new DateTimeOffset(2026, 1, 15, 10, 0, 0, TimeSpan.FromHours(8)));
+
+// 注入到 WTMContext
+var wtm = MockWtmContext.CreateWtmContext(timeProvider: fakeTime);
+
+// 推進時間
+fakeTime.Advance(TimeSpan.FromHours(2));
+```
+
+`FakeTimeProvider` 來自 `Microsoft.Extensions.TimeProvider.Testing` 套件，測試專案已包含此依賴。
+
+---
+
+## 15. Integration Tests 整合測試
+
+WTM 支援對真實資料庫執行整合測試，以驗證 EF Core 查詢、Migration 和 DB-specific 行為。
+
+### 15.1 執行整合測試
+
+整合測試透過 `TestCategory` 標記區分，需設定環境變數指定連線字串：
+
+```bash
+# SQL Server 整合測試
+export WTM_TEST_MSSQL="Server=localhost;Database=WtmTest;User Id=sa;Password=YourPassword;TrustServerCertificate=True"
+dotnet test --filter "TestCategory=Integration" -c Release
+```
+
+### 15.2 撰寫整合測試
+
+```csharp
+[TestClass]
+[TestCategory("Integration")]
+public class StudentIntegrationTests
+{
+    [TestMethod]
+    public void Create_and_query_student()
+    {
+        var connStr = Environment.GetEnvironmentVariable("WTM_TEST_MSSQL");
+        if (string.IsNullOrEmpty(connStr))
+        {
+            Assert.Inconclusive("WTM_TEST_MSSQL not set — skipping integration test");
+        }
+
+        // 使用真實 DB 執行測試...
+    }
+}
+```
+
+### 15.3 CI 整合
+
+GitHub Actions 中，整合測試需在 `services` 區塊啟動資料庫容器，並將連線字串透過 `env` 傳入。預設 CI 只執行單元測試（不含 `TestCategory=Integration`）。
+
+---
+
+## 16. 代碼生成器
 
 代碼生成器是 WTM 的核心生產力工具 — 選擇 Model，點幾下按鈕，就能生成完整的 CRUD 功能（Controller + ViewModel + View），省去 80% 的重複編碼工作。
 
-### 14.1 存取方式
+### 16.1 存取方式
 
 ```
 瀏覽器開啟：http://localhost:5000/_CodeGen/Index
@@ -2720,7 +2809,7 @@ test('detectChartType returns bar for single dim + single measure', () => {
 - 僅在 `Debug` 模式可用（標記 `[DebugOnly]`）
 - 生產環境自動隱藏，無安全風險
 
-### 14.2 使用步驟
+### 16.2 使用步驟
 
 **步驟 1：準備 Model**
 
@@ -2795,7 +2884,7 @@ Areas/
             └── BatchEdit.cshtml        ← 批量編輯頁面
 ```
 
-### 14.3 生成後的自訂
+### 16.3 生成後的自訂
 
 生成的程式碼是完整可運行的，但通常需要自訂以下部分：
 
@@ -2822,13 +2911,13 @@ public class ProductVM : BaseCRUDVM<Product>
 }
 ```
 
-### 14.4 Analysis Mode 整合
+### 16.4 Analysis Mode 整合
 
 如果 Model 上有 `[Dimension]` 和 `[Measure]` Attribute，生成器會自動：
 - 在 ListVM 加上 `[EnableAnalysis]`
 - 在 View 的 Grid 加上 `enable-analysis="true"`
 
-### 14.5 使用限制
+### 16.5 使用限制
 
 | 限制 | 說明 |
 |------|------|
@@ -2841,9 +2930,9 @@ public class ProductVM : BaseCRUDVM<Product>
 
 ---
 
-## 15. 配置參考
+## 17. 配置參考
 
-### 15.1 appsettings.json 完整結構
+### 17.1 appsettings.json 完整結構
 
 ```json
 {
@@ -2885,7 +2974,7 @@ public class ProductVM : BaseCRUDVM<Product>
 }
 ```
 
-### 15.2 連線字串格式
+### 17.2 連線字串格式
 
 | DbType | 連線字串範例 |
 |--------|------------|
@@ -2896,7 +2985,7 @@ public class ProductVM : BaseCRUDVM<Product>
 | `Oracle` | `Data Source=//localhost:1521/ORCL;User Id=HR;Password=xxx;` |
 | `Memory` | （任意字串作為 DB 名）`"testdb"` |
 
-### 15.3 關鍵配置說明
+### 17.3 關鍵配置說明
 
 | 配置項 | 預設值 | 說明 |
 |--------|--------|------|
@@ -2910,7 +2999,7 @@ public class ProductVM : BaseCRUDVM<Product>
 | `JwtOptions.RefreshExpires` | `604800` | Refresh Token 有效期（秒，預設 7 天） |
 | `JwtOptions.SecurityKey` | — | JWT 簽名金鑰（至少 32 字元，**必須修改**） |
 
-### 15.4 version.props
+### 17.4 version.props
 
 ```xml
 <Project>
@@ -2922,7 +3011,7 @@ public class ProductVM : BaseCRUDVM<Product>
 
 所有 NuGet 套件共用此版本號。修改此檔案後，所有 `dotnet pack` 產出的套件自動使用新版本。
 
-### 15.5 多環境配置
+### 17.5 多環境配置
 
 ```
 appsettings.json              ← 基礎配置（所有環境共用）
@@ -2941,7 +3030,7 @@ appsettings.Production.json   ← 生產環境覆蓋（連線字串、JWT Key）
 
 ---
 
-## 16. 常見問題
+## 18. 常見問題
 
 ### Q1: FrameworkContext 測試時出現 SQLite Error 1（重複欄名）
 **原因：** `base.OnModelCreating()` 會掃描所有載入的 assembly，造成 `MajorId` 等欄位衝突。
