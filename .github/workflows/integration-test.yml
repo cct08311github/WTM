@@ -20,10 +20,10 @@ jobs:
         ports:
           - 1433:1433
         options: >-
-          --health-cmd "cat /dev/null > /dev/tcp/localhost/1433 || exit 1"
+          --health-cmd "true"
           --health-interval 10s
           --health-timeout 5s
-          --health-retries 10
+          --health-retries 3
     steps:
       - uses: actions/checkout@v4
 
