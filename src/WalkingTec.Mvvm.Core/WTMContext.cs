@@ -150,6 +150,7 @@ namespace WalkingTec.Mvvm.Core
             set
             {
                 _dc = value;
+                TrySetDataContextTimeProvider(_dc);
             }
         }
 
@@ -529,8 +530,17 @@ namespace WalkingTec.Mvvm.Core
             else
             {
                 _dc = dc;
+                TrySetDataContextTimeProvider(_dc);
             }
             _serviceProvider = sp;
+        }
+
+        private void TrySetDataContextTimeProvider(IDataContext? dc)
+        {
+            if (dc is EmptyContext ctx)
+            {
+                ctx.TimeProvider = _timeProvider;
+            }
         }
 
         public void SetServiceProvider(IServiceProvider? sp)
@@ -939,6 +949,7 @@ params string[] groupcode)
                 {
                     rv?.SetLoggerFactory(_loggerFactory);
                 }
+                TrySetDataContextTimeProvider(rv);
                 return rv;
             }
             finally
