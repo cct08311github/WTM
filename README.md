@@ -2,16 +2,16 @@ English | [简体中文](./README.zh-CN.md)
 
 # WalkingTec.Mvvm for asp.net core
 
-WalkingTec.Mvvm framework (WTM) is a rapid development framework based on .NET 8. It supports LayUI, React, Vue 2/3, and Blazor. WTM has a built-in code generator to maximize development efficiency. It is a powerful tool for efficient web development.
+WalkingTec.Mvvm framework (WTM) is a rapid development framework based on .NET 10. It supports LayUI, React, Vue 2/3, and Blazor. WTM has a built-in code generator to maximize development efficiency. It is a powerful tool for efficient web development.
 
-[![Build Status](https://github.com/cct08311github/WTM/actions/workflows/build.yml/badge.svg?branch=dotnet8)](https://github.com/cct08311github/WTM/actions/workflows/build.yml)
+[![Build Status](https://github.com/cct08311github/WTM/actions/workflows/build.yml/badge.svg?branch=dotnet10)](https://github.com/cct08311github/WTM/actions/workflows/build.yml)
 [![GitHub license](https://img.shields.io/github/license/dotnetcore/WTM.svg)](https://github.com/dotnetcore/WTM/blob/master/LICENSE)
 
 ## CI Build Status
 
 | Platform | Build Server | SDK | Branch | Status |
 | -------- | ------------ | ---- |--------|--------|
-| GitHub Actions | Ubuntu | .NET 8 | dotnet8 | [![Build Status](https://github.com/cct08311github/WTM/actions/workflows/build.yml/badge.svg?branch=dotnet8)](https://github.com/cct08311github/WTM/actions/workflows/build.yml) |
+| GitHub Actions | Ubuntu | .NET 10 | dotnet10 | [![Build Status](https://github.com/cct08311github/WTM/actions/workflows/build.yml/badge.svg?branch=dotnet10)](https://github.com/cct08311github/WTM/actions/workflows/build.yml) |
 ## Nuget Packages
 
 Package name                              | Version                     | Downloads
@@ -20,6 +20,47 @@ Package name                              | Version                     | Downlo
 `WalkingTec.Mvvm.Mvc` | [![NuGet](https://img.shields.io/nuget/v/WalkingTec.Mvvm.Mvc.svg?style=flat-square&label=nuget)](https://www.nuget.org/packages/WalkingTec.Mvvm.Mvc/) | ![downloads](https://img.shields.io/nuget/dt/WalkingTec.Mvvm.Mvc.svg)
 `WalkingTec.Mvvm.Mvc.Admin` | [![NuGet](https://img.shields.io/nuget/v/WalkingTec.Mvvm.Mvc.Admin.svg?style=flat-square&label=nuget)](https://www.nuget.org/packages/WalkingTec.Mvvm.Mvc.Admin/) | ![downloads](https://img.shields.io/nuget/dt/WalkingTec.Mvvm.Mvc.Admin.svg)
 `WalkingTec.Mvvm.TagHelpers.LayUI` | [![NuGet](https://img.shields.io/nuget/v/WalkingTec.Mvvm.TagHelpers.LayUI.svg?style=flat-square&label=nuget)](https://www.nuget.org/packages/WalkingTec.Mvvm.TagHelpers.LayUI/) | ![downloads](https://img.shields.io/nuget/dt/WalkingTec.Mvvm.TagHelpers.LayUI.svg)
+
+## Quick Start
+
+> 完整安裝指南與 DB 配置請見 [Getting Started](docs/getting-started.md)
+
+**1. 配置 GitHub Packages NuGet source**
+
+```bash
+dotnet nuget add source "https://nuget.pkg.github.com/cct08311github/index.json" \
+  --name github-wtm --username YOUR_GITHUB_USERNAME --password YOUR_GITHUB_TOKEN
+```
+
+**2. 安裝套件**
+
+```bash
+dotnet add package WalkingTec.Mvvm.Core --version 10.0.1 --source github-wtm
+dotnet add package WalkingTec.Mvvm.Mvc --version 10.0.1 --source github-wtm
+dotnet add package WalkingTec.Mvvm.TagHelpers.LayUI --version 10.0.1 --source github-wtm
+```
+
+**3. 最小 Program.cs**
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddDistributedMemoryCache();
+builder.Services.AddWtmSession(3600, builder.Configuration);
+builder.Services.AddWtmAuthentication(builder.Configuration);
+builder.Services.AddMvc();
+builder.Services.AddWtmContext(builder.Configuration);
+
+var app = builder.Build();
+app.UseStaticFiles();
+app.UseWtmStaticFiles();
+app.UseRouting();
+app.UseAuthentication();
+app.UseAuthorization();
+app.UseSession();
+app.UseWtm();
+app.MapControllerRoute("default", "{controller=Home}/{action=Index}/{id?}");
+app.Run();
+```
 
 ## WTM Features
 
@@ -62,6 +103,7 @@ Frame QQ communication group: 694148336(full), 892848149 (group2)
 
 ## Local Docs
 
+- [Getting Started 快速入門](./docs/getting-started.md)
 - [WTM System Architecture Guide](./docs/system-architecture.md)
 - [WTM Analysis Mode Guide](./docs/analysis-mode.md)
 - [GitHub Packages Guide](./docs/github-packages.md)
