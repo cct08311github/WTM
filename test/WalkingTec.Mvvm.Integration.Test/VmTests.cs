@@ -26,7 +26,7 @@ public class VmTests : IntegrationTestBase
         Assert.AreEqual("VM School", vm.Entity.SchoolName);
 
         vm.Entity.SchoolName = "Updated School";
-        vm.DoEdit();
+        vm.DoEdit(updateAllFields: true);
 
         vm = Wtm.CreateVM<TenantSchoolCrudVM>(id);
         Assert.AreEqual("Updated School", vm.Entity.SchoolName);
