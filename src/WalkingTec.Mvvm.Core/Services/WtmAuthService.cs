@@ -91,7 +91,8 @@ namespace WalkingTec.Mvvm.Core.Services
                 {
                     var r = await apiClient.CallAPI<Token>(
                         "mainhost", "/api/_account/RefreshToken",
-                        HttpMethodEnum.POST, (object?)new { });
+                        HttpMethodEnum.POST, (object?)new { },
+                        authToken: loginUser.RemoteToken);
                     rt = r?.Data?.AccessToken;
                 }
             }
