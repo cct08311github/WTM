@@ -67,7 +67,7 @@ namespace WalkingTec.Mvvm.Core.Test.Services
         [TestMethod]
         public async Task CallAPI_GET_Convenience_ReturnsData()
         {
-            SetupResponse(HttpStatusCode.OK, "\"ok\"");
+            SetupResponse(HttpStatusCode.OK, "ok");
 
             var result = await _client.CallAPI<string>(null, "http://test/api");
 
@@ -81,7 +81,7 @@ namespace WalkingTec.Mvvm.Core.Test.Services
         [TestMethod]
         public async Task CallAPI_POST_WithObject_SerializesAsJson()
         {
-            SetupResponse(HttpStatusCode.OK, "\"created\"");
+            SetupResponse(HttpStatusCode.OK, "created");
 
             var result = await _client.CallAPI<string>(null, "http://test/api",
                 HttpMethodEnum.POST, new { foo = "bar" });
@@ -97,7 +97,7 @@ namespace WalkingTec.Mvvm.Core.Test.Services
         [TestMethod]
         public async Task CallAPI_POST_WithFormData_SendsFormEncoded()
         {
-            SetupResponse(HttpStatusCode.OK, "\"form_ok\"");
+            SetupResponse(HttpStatusCode.OK, "form_ok");
 
             var formData = new Dictionary<string, string> { { "key1", "val1" } };
             var result = await _client.CallAPI<string>(null, "http://test/api",
@@ -109,7 +109,7 @@ namespace WalkingTec.Mvvm.Core.Test.Services
         [TestMethod]
         public async Task CallAPI_POST_WithEmptyFormData_SendsWithoutContent()
         {
-            SetupResponse(HttpStatusCode.OK, "\"empty\"");
+            SetupResponse(HttpStatusCode.OK, "empty");
 
             var formData = new Dictionary<string, string>();
             var result = await _client.CallAPI<string>(null, "http://test/api",
@@ -350,7 +350,7 @@ namespace WalkingTec.Mvvm.Core.Test.Services
             factoryMock.Setup(f => f.CreateClient("myDomain")).Returns(namedClient);
 
             var client = new WtmApiClient(factoryMock.Object);
-            SetupResponse(HttpStatusCode.OK, "\"named\"");
+            SetupResponse(HttpStatusCode.OK, "named");
 
             var result = await client.CallAPI<string>("myDomain", "/api/test");
 
