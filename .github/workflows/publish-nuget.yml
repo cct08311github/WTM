@@ -69,14 +69,15 @@ jobs:
       - name: Smoke test package install
         env:
           PKG_VERSION: ${{ steps.version.outputs.version }}
+          NUPKG_DIR: ${{ github.workspace }}/nupkgs
         run: |
           set -euo pipefail
           mkdir smoke && cd smoke
           dotnet new console --framework net10.0
-          dotnet nuget add source "${{ github.workspace }}/nupkgs" --name local-nupkgs
-          dotnet add package WalkingTec.Mvvm.Core --version "$PKG_VERSION" --source local-nupkgs
-          dotnet add package WalkingTec.Mvvm.Mvc --version "$PKG_VERSION" --source local-nupkgs
-          dotnet add package WalkingTec.Mvvm.TagHelpers.LayUI --version "$PKG_VERSION" --source local-nupkgs
+          dotnet nuget add source "$NUPKG_DIR" --name local-nupkgs
+          dotnet add package WalkingTec.Mvvm.Core --version "$PKG_VERSION" --source "$NUPKG_DIR"
+          dotnet add package WalkingTec.Mvvm.Mvc --version "$PKG_VERSION" --source "$NUPKG_DIR"
+          dotnet add package WalkingTec.Mvvm.TagHelpers.LayUI --version "$PKG_VERSION" --source "$NUPKG_DIR"
           dotnet restore
           dotnet build -c Release --no-restore
 
