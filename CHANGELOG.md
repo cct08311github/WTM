@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+## [10.1.0] - 2026-03-28
+
+### Added
+- **Clean Architecture: 8 extracted services** — Decompose WTMContext God Object (1670 lines) into 8 focused, single-responsibility services using the Strangler Fig pattern (#727):
+  - `IWtmApiClient` / `WtmApiClient` — HTTP API calls (CallAPI)
+  - `IWtmLogService` / `WtmLogService` — structured action logging (DoLog)
+  - `IWtmAuthorizationService` / `WtmAuthorizationService` — URL access control (IsAccessable, IsUrlPublic)
+  - `IWtmDataContextFactory` / `WtmDataContextFactory` — DataContext creation with tenant/CS resolution
+  - `IWtmAuthService` / `WtmAuthService` — password verification, remote auth, token refresh
+  - `IWtmUserCacheService` / `WtmUserCacheService` — user info cache invalidation
+  - `IWtmTenantService` / `WtmTenantService` — tenant groups/roles with caching
+  - `IWtmVmFactory` / `WtmVmFactory` — ViewModel creation and initialization
+- **WTMContext facade delegation** — WTMContext methods now delegate to extracted services when available via DI, with inline fallback for environments without DI (#730)
+- **WtmUIOptions** — Centralized, configurable UI styling system with overridable CSS class names, sizing defaults, and required field markers. Defaults match LayUI for zero-config backwards compatibility (#730)
+- All 8 services registered in DI for both web (`AddWtmContext`) and console (`AddWtmContextForConsole`) apps
+
+### Improved
+- **WtmAuthorizationService** — Compiled regex cache (`ConcurrentDictionary` + `RegexOptions.Compiled`) eliminates per-request allocation in singleton service
+- **WtmTenantService** — Cache stampede protection via per-key `SemaphoreSlim` with double-check locking
+- **Structured logging** — Replace empty `catch {}` blocks with `ILogger.LogWarning` in WtmAuthorizationService and WtmTenantService
+- **Nullable safety** — Fix pre-existing nullable warnings in WTMContext.cs (WindowIds, ReloadUser, BaseUserQuery, DoLoginAsync)
+
+### Fixed
+- **WtmAuthService.RefreshTokenAsync** — Pass user's RemoteToken as authToken when calling remote refresh endpoint (QA review finding)
+- **9 pre-existing test failures** — Fix FrameworkTenant_CreateDC (missing constructor), DoLoginAsync tests (missing IWtmTenantService mock), SearchTest (missing mock in MockWtmContext) (#730)
+
+### Notes
+- WTMContext's original method bodies are preserved as fallback — zero breaking changes for existing consumers
+- New code can optionally inject services directly via DI instead of going through WTMContext
+- Minor version bump (10.0.1 → 10.1.0) per compatibility policy: new public API surface (8 service interfaces)
+
 ## [10.0.1] - 2026-03-21
 
 ### Changed
