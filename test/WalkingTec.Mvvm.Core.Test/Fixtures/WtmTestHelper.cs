@@ -11,6 +11,7 @@ using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Auth;
 using WalkingTec.Mvvm.Core.Implement;
 using WalkingTec.Mvvm.Core.Support.Json;
+using WalkingTec.Mvvm.Core.Services;
 using WalkingTec.Mvvm.Core.Support.FileHandlers;
 using WalkingTec.Mvvm.Test.Mock;
 
@@ -120,8 +121,14 @@ namespace WalkingTec.Mvvm.Core.Test.Fixtures
                 new Microsoft.Extensions.Logging.LoggerFactory());
 
             var mockService = new Mock<IServiceProvider>();
+            var mockTenantService = new Mock<IWtmTenantService>();
+            mockTenantService.Setup(x => x.GetTenantGroups(It.IsAny<string>())).Returns(new List<SimpleGroup>());
+            mockTenantService.Setup(x => x.GetTenantRoles(It.IsAny<string>())).Returns(new List<SimpleRole>());
+            mockTenantService.Setup(x => x.RemoveGroupCacheAsync(It.IsAny<string>())).Returns(Task.CompletedTask);
+            mockTenantService.Setup(x => x.RemoveRoleCacheAsync(It.IsAny<string>())).Returns(Task.CompletedTask);
             mockService.Setup(x => x.GetService(typeof(IDistributedCache))).Returns(cache);
             mockService.Setup(x => x.GetService(typeof(ITokenService))).Returns(mockTs);
+            mockService.Setup(x => x.GetService(typeof(IWtmTenantService))).Returns(mockTenantService.Object);
 
             var mockHttpRequest = new Mock<HttpRequest>();
             mockHttpRequest.Setup(x => x.Cookies).Returns(new MockCookie());

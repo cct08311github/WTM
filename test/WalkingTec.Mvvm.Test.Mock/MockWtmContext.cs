@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
@@ -10,7 +11,9 @@ using Microsoft.Extensions.Options;
 using Moq;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Implement;
+using WalkingTec.Mvvm.Core.Services;
 using WalkingTec.Mvvm.Core.Support.FileHandlers;
+using WalkingTec.Mvvm.Core.Support.Json;
 using WalkingTec.Mvvm.Mvc;
 
 namespace WalkingTec.Mvvm.Test.Mock
@@ -31,7 +34,13 @@ namespace WalkingTec.Mvvm.Test.Mock
             mockHttpRequest.Setup(x => x.Cookies).Returns(new MockCookie());
             var cache = new MemoryDistributedCache(Options.Create<MemoryDistributedCacheOptions>(new MemoryDistributedCacheOptions()));
             var res = new ResourceManagerStringLocalizerFactory(Options.Create<LocalizationOptions>(new LocalizationOptions { ResourcesPath = "Resources" }), new Microsoft.Extensions.Logging.LoggerFactory());
+            var mockTenantService = new Mock<IWtmTenantService>();
+            mockTenantService.Setup(x => x.GetTenantGroups(It.IsAny<string>())).Returns(new List<SimpleGroup>());
+            mockTenantService.Setup(x => x.GetTenantRoles(It.IsAny<string>())).Returns(new List<SimpleRole>());
+            mockTenantService.Setup(x => x.RemoveGroupCacheAsync(It.IsAny<string>())).Returns(Task.CompletedTask);
+            mockTenantService.Setup(x => x.RemoveRoleCacheAsync(It.IsAny<string>())).Returns(Task.CompletedTask);
             mockService.Setup(x => x.GetService(typeof(IDistributedCache))).Returns(cache);
+            mockService.Setup(x => x.GetService(typeof(IWtmTenantService))).Returns(mockTenantService.Object);
             mockHttpContext.Setup(x => x.Request).Returns(mockHttpRequest.Object);
             mockHttpContext.Setup(x => x.RequestServices).Returns(mockService.Object);
             var httpa = new HttpContextAccessor();
