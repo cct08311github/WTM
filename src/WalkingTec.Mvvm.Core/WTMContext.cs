@@ -22,6 +22,7 @@ using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core.Auth;
 using WalkingTec.Mvvm.Core.Extensions;
 using WalkingTec.Mvvm.Core.Json;
+using WalkingTec.Mvvm.Core.Services;
 using WalkingTec.Mvvm.Core.Support.Json;
 
 namespace WalkingTec.Mvvm.Core
@@ -34,6 +35,31 @@ namespace WalkingTec.Mvvm.Core
         private IServiceProvider? _serviceProvider;
         public IServiceProvider? ServiceProvider { get => _serviceProvider ?? _httpContext?.RequestServices; }
 
+
+        #region Extracted Service Accessors (Phase 1-3)
+        // These properties provide lazy access to extracted services via DI.
+        // They are internal so that WTMContext methods can delegate to them in a future step.
+        // If ServiceProvider is not configured (e.g. in tests), they return null
+        // and the original inline logic continues to run.
+
+        internal IWtmApiClient? ApiClientService =>
+            ServiceProvider?.GetService(typeof(IWtmApiClient)) as IWtmApiClient;
+        internal IWtmLogService? LogService =>
+            ServiceProvider?.GetService(typeof(IWtmLogService)) as IWtmLogService;
+        internal IWtmAuthorizationService? AuthorizationService =>
+            ServiceProvider?.GetService(typeof(IWtmAuthorizationService)) as IWtmAuthorizationService;
+        internal IWtmDataContextFactory? DataContextFactory =>
+            ServiceProvider?.GetService(typeof(IWtmDataContextFactory)) as IWtmDataContextFactory;
+        internal IWtmAuthService? AuthService =>
+            ServiceProvider?.GetService(typeof(IWtmAuthService)) as IWtmAuthService;
+        internal IWtmUserCacheService? UserCacheService =>
+            ServiceProvider?.GetService(typeof(IWtmUserCacheService)) as IWtmUserCacheService;
+        internal IWtmTenantService? TenantService =>
+            ServiceProvider?.GetService(typeof(IWtmTenantService)) as IWtmTenantService;
+        internal IWtmVmFactory? VmFactory =>
+            ServiceProvider?.GetService(typeof(IWtmVmFactory)) as IWtmVmFactory;
+
+        #endregion
 
         private List<IDataPrivilege>? _dps;
         public List<IDataPrivilege>? DataPrivilegeSettings { get => _dps; }

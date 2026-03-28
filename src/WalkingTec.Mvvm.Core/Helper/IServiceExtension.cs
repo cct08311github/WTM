@@ -70,6 +70,16 @@ namespace WalkingTec.Mvvm.Core
                 sp.GetService<Microsoft.Extensions.Logging.ILoggerFactory>(),
                 sp.GetService<TimeProvider>()));
 
+            // Phase 2-3: Auth, UserCache, Tenant, VmFactory services
+            services.AddSingleton<IWtmAuthService, WtmAuthService>();
+            services.AddScoped<IWtmUserCacheService>(sp => new WtmUserCacheService(
+                sp.GetRequiredService<Microsoft.Extensions.Caching.Distributed.IDistributedCache>()));
+            services.AddScoped<IWtmTenantService>(sp => new WtmTenantService(
+                sp.GetRequiredService<Microsoft.Extensions.Caching.Distributed.IDistributedCache>(),
+                sp.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<Configs>>(),
+                sp.GetRequiredService<GlobalData>()));
+            services.AddSingleton<IWtmVmFactory, WtmVmFactory>();
+
             return services;
         }
 
