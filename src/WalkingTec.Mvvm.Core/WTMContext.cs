@@ -553,16 +553,16 @@ namespace WalkingTec.Mvvm.Core
         {
             if(string.IsNullOrEmpty(tenant))
             {
-                tenant = DC?.TenantCode;
+                tenant = DC!.TenantCode;
             }
-            if (tenant == null && HttpContext?.User?.Identity?.IsAuthenticated == true)
+            if (tenant == null && HttpContext!.User!.Identity!.IsAuthenticated)
             {
                 tenant = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.TenantCode).Select(x => x.Value).FirstOrDefault() ?? tenant;
             }
             if (ConfigInfo?.HasMainHost == true && string.IsNullOrEmpty(tenant) == true)
             {
-                var remoteToken = _loginUserInfo?.RemoteToken ?? HttpContext?.Request?.Query?.Where(x => x.Key == "_remotetoken").Select(x => x.Value.First()).FirstOrDefault();
-                if (HttpContext?.User?.Identity?.IsAuthenticated == true)
+                var remoteToken = _loginUserInfo?.RemoteToken ?? HttpContext?.Request.Query?.Where(x => x.Key == "_remotetoken").Select(x => x.Value.First()).FirstOrDefault();
+                if (HttpContext!.User!.Identity!.IsAuthenticated)
                 {
                     remoteToken = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.RToken).Select(x => x.Value).FirstOrDefault();
                 }
@@ -603,8 +603,8 @@ namespace WalkingTec.Mvvm.Core
             else
             {
                 bool exist = false;
-                username = HttpContext?.User?.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject).Select(x => x.Value).FirstOrDefault() ?? username;
-                var ct = GlobaInfo?.AllTenant?.Where(x => x.TCode == tenant).FirstOrDefault();
+                username = HttpContext!.User!.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject).Select(x => x.Value).FirstOrDefault() ?? username;
+                var ct = GlobaInfo?.AllTenant.Where(x => x.TCode == tenant).FirstOrDefault();
                 if(ct == null && string.IsNullOrEmpty(tenant) == false)
                 {
                     return null!;
@@ -613,13 +613,13 @@ namespace WalkingTec.Mvvm.Core
                 {
                     _dc = ct.CreateDC(this);
                 }
-                if (HttpContext?.User?.Identity?.IsAuthenticated == true)
+                if (HttpContext!.User!.Identity!.IsAuthenticated)
                 {
-                    exist = BaseUserQuery?.IgnoreQueryFilters().Any(x => x.ITCode == username && x.TenantCode == tenant && x.IsValid==true) ?? false;
+                    exist = BaseUserQuery!.IgnoreQueryFilters().Any(x => x.ITCode == username && x.TenantCode == tenant && x.IsValid==true);
                 }
                 else
                 {
-                    var userRecord = BaseUserQuery?.IgnoreQueryFilters()
+                    var userRecord = BaseUserQuery!.IgnoreQueryFilters()
                         .Where(x => x.ITCode == username &&
                                     x.TenantCode == tenant &&
                                     x.IsValid == true)
@@ -662,9 +662,9 @@ namespace WalkingTec.Mvvm.Core
                 };
                 await user.LoadBasicInfoAsync(this);
                 user.RemoteToken = null;
-                var authService = HttpContext?.RequestServices?.GetService(typeof(ITokenService)) as ITokenService;
-                var token = authService != null ? await authService.IssueTokenAsync(user) : null;
-                user.RemoteToken = token?.AccessToken;
+                var authService = HttpContext?.RequestServices.GetService(typeof(ITokenService)) as ITokenService;
+                var token = await authService!.IssueTokenAsync(user);
+                user.RemoteToken = token.AccessToken;
                 return user;
             }
         }

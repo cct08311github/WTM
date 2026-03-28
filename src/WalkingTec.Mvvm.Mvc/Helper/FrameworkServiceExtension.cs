@@ -516,6 +516,10 @@ namespace WalkingTec.Mvvm.Mvc
             WtmContextOption op = new WtmContextOption();
             options?.Invoke(op);
             services.Configure<Configs>(config);
+            services.Configure<WalkingTec.Mvvm.Core.ConfigOptions.WtmUIOptions>(config.GetSection("UIOptions"));
+            var uiOptions = config.GetSection("UIOptions").Get<WalkingTec.Mvvm.Core.ConfigOptions.WtmUIOptions>()
+                ?? new WalkingTec.Mvvm.Core.ConfigOptions.WtmUIOptions();
+            WalkingTec.Mvvm.TagHelpers.LayUI.BaseFieldTag.SetUIOptions(uiOptions);
             var gd = GetGlobalData();
             services.AddHttpContextAccessor();
             services.AddSingleton(gd);
