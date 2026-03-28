@@ -57,11 +57,10 @@ namespace WalkingTec.Mvvm.Core.Test.Services
         public void IsAccessable_PublicUrl_ReturnsTrue()
         {
             var menuId = Guid.NewGuid();
-            var gd = MakeGlobalData();
-            gd.AllMenus = new List<SimpleMenu>
+            var gd = MakeGlobalData(new List<SimpleMenu>
             {
                 new SimpleMenu { ID = menuId, Url = "/public/page", IsPublic = true }
-            };
+            });
 
             var config = new Configs { IsQuickDebug = false };
 
@@ -115,11 +114,10 @@ namespace WalkingTec.Mvvm.Core.Test.Services
         public void IsAccessable_MatchingMenuPrivilege_ReturnsTrue()
         {
             var menuId = Guid.NewGuid();
-            var gd = MakeGlobalData();
-            gd.AllMenus = new List<SimpleMenu>
+            var gd = MakeGlobalData(new List<SimpleMenu>
             {
                 new SimpleMenu { ID = menuId, Url = "/admin/users" }
-            };
+            });
             var config = new Configs { IsQuickDebug = false };
             var user = new LoginUserInfo
             {
@@ -137,11 +135,10 @@ namespace WalkingTec.Mvvm.Core.Test.Services
         public void IsAccessable_MenuExistsButNoPrivilege_ReturnsFalse()
         {
             var menuId = Guid.NewGuid();
-            var gd = MakeGlobalData();
-            gd.AllMenus = new List<SimpleMenu>
+            var gd = MakeGlobalData(new List<SimpleMenu>
             {
                 new SimpleMenu { ID = menuId, Url = "/admin/users" }
-            };
+            });
             var config = new Configs { IsQuickDebug = false };
             var user = new LoginUserInfo
             {
@@ -159,8 +156,7 @@ namespace WalkingTec.Mvvm.Core.Test.Services
         [TestMethod]
         public void IsAccessable_NoMenuFound_ReturnsFalse()
         {
-            var gd = MakeGlobalData();
-            gd.AllMenus = new List<SimpleMenu>(); // empty
+            var gd = MakeGlobalData(new List<SimpleMenu>()); // empty
             var config = new Configs { IsQuickDebug = false };
             var user = new LoginUserInfo
             {
@@ -215,10 +211,10 @@ namespace WalkingTec.Mvvm.Core.Test.Services
             var menuId = Guid.NewGuid();
             var gd = MakeGlobalData();
             gd.AllMainTenantOnlyUrls = new List<string> { "/admin/hostonly" };
-            gd.AllMenus = new List<SimpleMenu>
+            gd.SetMenuGetFunc(() => new List<SimpleMenu>
             {
                 new SimpleMenu { ID = menuId, Url = "/admin/hostonly" }
-            };
+            });
             var config = new Configs { IsQuickDebug = false, EnableTenant = true };
             var user = new LoginUserInfo
             {
@@ -241,11 +237,10 @@ namespace WalkingTec.Mvvm.Core.Test.Services
         public void IsAccessable_TenantMenuNotAllowed_ReturnsFalse()
         {
             var menuId = Guid.NewGuid();
-            var gd = MakeGlobalData();
-            gd.AllMenus = new List<SimpleMenu>
+            var gd = MakeGlobalData(new List<SimpleMenu>
             {
                 new SimpleMenu { ID = menuId, Url = "/admin/config", TenantAllowed = false }
-            };
+            });
             var config = new Configs { IsQuickDebug = false };
             var user = new LoginUserInfo
             {
@@ -267,11 +262,10 @@ namespace WalkingTec.Mvvm.Core.Test.Services
         [TestMethod]
         public void IsUrlPublic_PublicMenu_ReturnsTrue()
         {
-            var gd = MakeGlobalData();
-            gd.AllMenus = new List<SimpleMenu>
+            var gd = MakeGlobalData(new List<SimpleMenu>
             {
                 new SimpleMenu { ID = Guid.NewGuid(), Url = "/home/index", IsPublic = true }
-            };
+            });
 
             _service.IsUrlPublic("/home/index", gd).Should().BeTrue();
         }
@@ -279,11 +273,10 @@ namespace WalkingTec.Mvvm.Core.Test.Services
         [TestMethod]
         public void IsUrlPublic_NonPublicMenu_ReturnsFalse()
         {
-            var gd = MakeGlobalData();
-            gd.AllMenus = new List<SimpleMenu>
+            var gd = MakeGlobalData(new List<SimpleMenu>
             {
                 new SimpleMenu { ID = Guid.NewGuid(), Url = "/admin/panel", IsPublic = false }
-            };
+            });
 
             _service.IsUrlPublic("/admin/panel", gd).Should().BeFalse();
         }
@@ -292,7 +285,6 @@ namespace WalkingTec.Mvvm.Core.Test.Services
         public void IsUrlPublic_NoMenuFound_ReturnsFalse()
         {
             var gd = MakeGlobalData();
-            gd.AllMenus = new List<SimpleMenu>();
 
             _service.IsUrlPublic("/unknown", gd).Should().BeFalse();
         }
@@ -301,7 +293,6 @@ namespace WalkingTec.Mvvm.Core.Test.Services
         public void IsUrlPublic_HashUrl_ReturnsTrue()
         {
             var gd = MakeGlobalData();
-            gd.AllMenus = new List<SimpleMenu>();
 
             _service.IsUrlPublic("#something", gd).Should().BeTrue();
         }
@@ -318,16 +309,17 @@ namespace WalkingTec.Mvvm.Core.Test.Services
 
         #region Helpers
 
-        private static GlobalData MakeGlobalData()
+        private static GlobalData MakeGlobalData(List<SimpleMenu>? menus = null)
         {
-            return new GlobalData
+            var gd = new GlobalData
             {
                 AllAccessUrls = new List<string>(),
                 AllMainTenantOnlyUrls = new List<string>(),
-                AllMenus = new List<SimpleMenu>(),
                 AllModule = new List<SimpleModule>(),
                 AllAssembly = new List<System.Reflection.Assembly>()
             };
+            gd.SetMenuGetFunc(() => menus ?? new List<SimpleMenu>());
+            return gd;
         }
 
         #endregion
