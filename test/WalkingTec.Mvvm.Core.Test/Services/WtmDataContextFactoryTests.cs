@@ -152,12 +152,12 @@ namespace WalkingTec.Mvvm.Core.Test.Services
                 $"Data Source=file:memdb_{Guid.NewGuid():N}?mode=memory&cache=shared");
             var gd = new GlobalData
             {
-                AllTenant = new List<FrameworkTenant>
-                {
-                    new FrameworkTenant { TCode = "T001", TDomain = "t001.example.com" }
-                },
                 AllAssembly = new List<System.Reflection.Assembly>()
             };
+            gd.SetTenantGetFunc(() => new List<FrameworkTenant>
+            {
+                new FrameworkTenant { TCode = "T001", TDomain = "t001.example.com" }
+            });
             var factory = CreateFactory(configs: configs, globalData: gd);
 
             // Tenant doesn't have its own DB (IsUsingDB == false),
@@ -175,12 +175,12 @@ namespace WalkingTec.Mvvm.Core.Test.Services
                 $"Data Source=file:memdb_{Guid.NewGuid():N}?mode=memory&cache=shared");
             var gd = new GlobalData
             {
-                AllTenant = new List<FrameworkTenant>
-                {
-                    new FrameworkTenant { TCode = "DOMTENANT", TDomain = "tenant.example.com" }
-                },
                 AllAssembly = new List<System.Reflection.Assembly>()
             };
+            gd.SetTenantGetFunc(() => new List<FrameworkTenant>
+            {
+                new FrameworkTenant { TCode = "DOMTENANT", TDomain = "tenant.example.com" }
+            });
             var factory = CreateFactory(configs: configs, globalData: gd);
 
             var dc = factory.CreateDC(refererDomain: "tenant.example.com");
