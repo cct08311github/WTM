@@ -47,6 +47,7 @@ using WalkingTec.Mvvm.TagHelpers.LayUI;
 using Microsoft.AspNetCore.SpaServices.Extensions;
 using Microsoft.Extensions.FileProviders;
 using WalkingTec.Mvvm.Core.Support.Quartz;
+using WalkingTec.Mvvm.Core.Services;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Microsoft.AspNetCore.Mvc.ApiExplorer;
@@ -586,6 +587,18 @@ namespace WalkingTec.Mvvm.Mvc
                 o.GroupNameFormat = "'v'VVV";
                 o.SubstituteApiVersionInUrl = true;
             });
+
+            // Phase 1: Extracted services (parallel to WTMContext, no breaking changes)
+            services.AddScoped<IWtmApiClient, WtmApiClient>();
+            services.AddScoped<IWtmLogService>(sp => new WtmLogService(
+                sp.GetRequiredService<TimeProvider>(),
+                sp.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()));
+            services.AddSingleton<IWtmAuthorizationService, WtmAuthorizationService>();
+            services.AddScoped<IWtmDataContextFactory>(sp => new WtmDataContextFactory(
+                sp.GetRequiredService<IOptionsMonitor<Configs>>(),
+                sp.GetRequiredService<GlobalData>(),
+                sp.GetService<Microsoft.Extensions.Logging.ILoggerFactory>(),
+                sp.GetService<TimeProvider>()));
 
             return services;
         }

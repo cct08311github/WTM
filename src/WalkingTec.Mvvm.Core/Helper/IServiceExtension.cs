@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Core.Extensions;
+using WalkingTec.Mvvm.Core.Services;
 using WalkingTec.Mvvm.Core.Support.FileHandlers;
 using WalkingTec.Mvvm.Core.Support.Quartz;
 
@@ -56,6 +57,19 @@ namespace WalkingTec.Mvvm.Core
             }
             WtmFileProvider.Init(WtmConfigs, gd);
             services.TryAddSingleton<QuartzHostService>();
+
+            // Phase 1: Extracted services (parallel to WTMContext, no breaking changes)
+            services.AddScoped<IWtmApiClient, WtmApiClient>();
+            services.AddScoped<IWtmLogService>(sp => new WtmLogService(
+                sp.GetService<TimeProvider>() ?? TimeProvider.System,
+                sp.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()));
+            services.AddSingleton<IWtmAuthorizationService, WtmAuthorizationService>();
+            services.AddScoped<IWtmDataContextFactory>(sp => new WtmDataContextFactory(
+                sp.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<Configs>>(),
+                sp.GetRequiredService<GlobalData>(),
+                sp.GetService<Microsoft.Extensions.Logging.ILoggerFactory>(),
+                sp.GetService<TimeProvider>()));
+
             return services;
         }
 
