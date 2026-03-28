@@ -18,9 +18,9 @@ namespace WalkingTec.Mvvm.Core.Services
         List<SimpleRole>? GetTenantRoles(string? tenant);
 
         /// <summary>Remove the cached groups for a tenant.</summary>
-        Task RemoveGroupCacheAsync(string tenant);
+        Task RemoveGroupCacheAsync(string? tenant);
 
         /// <summary>Remove the cached roles for a tenant.</summary>
-        Task RemoveRoleCacheAsync(string tenant);
+        Task RemoveRoleCacheAsync(string? tenant);
     }
 }

@@ -1,18 +1,30 @@
 #nullable enable
+using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Core.Support.Json;
 
 namespace WalkingTec.Mvvm.Core.Services
 {
     /// <summary>
     /// Default implementation of <see cref="IWtmAuthorizationService"/>.
-    /// Logic is an exact copy of WTMContext.IsAccessable / IsUrlPublic
-    /// (WTMContext.cs lines 971-1075) to guarantee identical behaviour.
+    /// Singleton service — uses compiled regex cache for performance.
     /// </summary>
     public class WtmAuthorizationService : IWtmAuthorizationService
     {
+        private static readonly ConcurrentDictionary<string, Regex> _regexCache = new();
+        private static readonly Regex _batchRewrite = new("/do(batch.*)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        private readonly ILogger<WtmAuthorizationService>? _logger;
+
+        public WtmAuthorizationService(ILogger<WtmAuthorizationService>? logger = null)
+        {
+            _logger = logger;
+        }
+
         public bool IsAccessable(string? url, LoginUserInfo? loginUser, Configs? config, GlobalData? globalData)
         {
             if (config?.IsQuickDebug == true || string.IsNullOrEmpty(url) || IsUrlPublic(url, globalData))
@@ -28,7 +40,7 @@ namespace WalkingTec.Mvvm.Core.Services
                     var hostonly = globalData?.AllMainTenantOnlyUrls ?? new List<string>();
                     foreach (var au in hostonly)
                     {
-                        if (new Regex("^" + au + "[/\\?]?", RegexOptions.IgnoreCase).IsMatch(url))
+                        if (MatchUrl(au, url))
                         {
                             return false;
                         }
@@ -40,7 +52,7 @@ namespace WalkingTec.Mvvm.Core.Services
             var publicActions = globalData?.AllAccessUrls ?? new List<string>();
             foreach (var au in publicActions)
             {
-                if (au != "/" && new Regex("^" + au + "[/\\?]?", RegexOptions.IgnoreCase).IsMatch(url))
+                if (au != "/" && MatchUrl(au, url))
                 {
                     return true;
                 }
@@ -52,7 +64,7 @@ namespace WalkingTec.Mvvm.Core.Services
                 return false;
             }
 
-            url = Regex.Replace(url ?? "", "/do(batch.*)", "/$1", RegexOptions.IgnoreCase);
+            url = _batchRewrite.Replace(url, "/$1");
             url = url.Trim();
 
             if (url.StartsWith("#"))
@@ -68,45 +80,51 @@ namespace WalkingTec.Mvvm.Core.Services
             }
             else
             {
-                return IsAccessable(menu, menus, loginUser);
+                return IsMenuAccessable(menu, menus, loginUser);
             }
         }
 
         public bool IsUrlPublic(string? url, GlobalData? globalData)
         {
-            var isPublic = false;
             try
             {
-                url = Regex.Replace(url ?? "", "/do(batch.*)", "/$1", RegexOptions.IgnoreCase);
+                url = _batchRewrite.Replace(url ?? "", "/$1");
                 url = url.Trim();
 
                 if (url.StartsWith("#"))
                 {
-                    isPublic = true;
+                    return true;
                 }
                 var menus = globalData?.AllMenus;
                 var menu = Utils.FindMenu(url, menus);
                 if (menu != null && menu.IsPublic == true)
                 {
-                    isPublic = true;
+                    return true;
                 }
             }
-            catch { }
-            return isPublic;
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Error checking if URL '{Url}' is public", url);
+            }
+            return false;
         }
 
-        private static bool IsAccessable(SimpleMenu? menu, List<SimpleMenu>? menus, LoginUserInfo? loginUser)
+        /// <summary>Match a URL against a pattern using cached compiled regex.</summary>
+        private static bool MatchUrl(string pattern, string url)
+        {
+            var regex = _regexCache.GetOrAdd(pattern, p =>
+                new Regex("^" + p + "[/\\?]?", RegexOptions.IgnoreCase | RegexOptions.Compiled));
+            return regex.IsMatch(url);
+        }
+
+        private static bool IsMenuAccessable(SimpleMenu? menu, List<SimpleMenu>? menus, LoginUserInfo? loginUser)
         {
             if (loginUser?.CurrentTenant != null && menu?.TenantAllowed == false)
             {
                 return false;
             }
             var find = loginUser?.FunctionPrivileges?.Where(x => x.MenuItemId == menu?.ID && x.Allowed == true).FirstOrDefault();
-            if (find != null)
-            {
-                return true;
-            }
-            return false;
+            return find != null;
         }
     }
 }

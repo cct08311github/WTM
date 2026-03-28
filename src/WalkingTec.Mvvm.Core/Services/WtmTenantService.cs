@@ -1,10 +1,13 @@
 #nullable enable
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core.Extensions;
 using WalkingTec.Mvvm.Core.Support.Json;
@@ -21,15 +24,19 @@ namespace WalkingTec.Mvvm.Core.Services
         private readonly IDistributedCache _cache;
         private readonly IOptionsMonitor<Configs> _configs;
         private readonly GlobalData _globalData;
+        private readonly ILogger<WtmTenantService>? _logger;
+        private readonly ConcurrentDictionary<string, SemaphoreSlim> _keyLocks = new();
 
         public WtmTenantService(
             IDistributedCache cache,
             IOptionsMonitor<Configs> configs,
-            GlobalData globalData)
+            GlobalData globalData,
+            ILogger<WtmTenantService>? logger = null)
         {
             _cache = cache ?? throw new ArgumentNullException(nameof(cache));
             _configs = configs ?? throw new ArgumentNullException(nameof(configs));
             _globalData = globalData ?? throw new ArgumentNullException(nameof(globalData));
+            _logger = logger;
         }
 
         public List<SimpleGroup>? GetTenantGroups(string? tenant)
@@ -56,8 +63,9 @@ namespace WalkingTec.Mvvm.Core.Services
                             Tenant = x.TenantCode
                         }).ToList();
                 }
-                catch
+                catch (Exception ex)
                 {
+                    _logger?.LogWarning(ex, "Failed to load tenant groups for '{Tenant}'", tenant);
                     groups = new List<SimpleGroup>();
                 }
                 return groups;
@@ -86,21 +94,22 @@ namespace WalkingTec.Mvvm.Core.Services
                             Tenant = x.TenantCode
                         }).ToList();
                 }
-                catch
+                catch (Exception ex)
                 {
+                    _logger?.LogWarning(ex, "Failed to load tenant roles for '{Tenant}'", tenant);
                     roles = new List<SimpleRole>();
                 }
                 return roles;
             }, 360000);
         }
 
-        public async Task RemoveGroupCacheAsync(string tenant)
+        public async Task RemoveGroupCacheAsync(string? tenant)
         {
             var key = $"{GlobalConstants.CacheKey.TenantGroups}:{tenant}";
             await _cache.DeleteAsync(key);
         }
 
-        public async Task RemoveRoleCacheAsync(string tenant)
+        public async Task RemoveRoleCacheAsync(string? tenant)
         {
             var key = $"{GlobalConstants.CacheKey.TenantRoles}:{tenant}";
             await _cache.DeleteAsync(key);
@@ -132,19 +141,35 @@ namespace WalkingTec.Mvvm.Core.Services
         }
 
         /// <summary>
-        /// Cache-aside helper replicating WTMContext.ReadFromCache behaviour.
+        /// Cache-aside helper with stampede protection via per-key SemaphoreSlim.
         /// </summary>
         private T? ReadFromCache<T>(string key, Func<T?> setFunc, int timeoutSeconds)
         {
-            if (_cache.TryGetValue(key, out T? rv) == false || rv == null)
+            if (_cache.TryGetValue(key, out T? rv) && rv != null)
             {
+                return rv;
+            }
+
+            var keyLock = _keyLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+            keyLock.Wait();
+            try
+            {
+                // Double-check after acquiring lock
+                if (_cache.TryGetValue(key, out rv) && rv != null)
+                {
+                    return rv;
+                }
                 rv = setFunc();
                 _cache.Add(key, rv, new DistributedCacheEntryOptions
                 {
                     AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(timeoutSeconds)
                 });
+                return rv;
             }
-            return rv;
+            finally
+            {
+                keyLock.Release();
+            }
         }
     }
 }

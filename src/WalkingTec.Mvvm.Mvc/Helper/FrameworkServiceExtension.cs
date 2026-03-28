@@ -597,7 +597,8 @@ namespace WalkingTec.Mvvm.Mvc
             services.AddScoped<IWtmLogService>(sp => new WtmLogService(
                 sp.GetRequiredService<TimeProvider>(),
                 sp.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()));
-            services.AddSingleton<IWtmAuthorizationService, WtmAuthorizationService>();
+            services.AddSingleton<IWtmAuthorizationService>(sp => new WtmAuthorizationService(
+                sp.GetService<Microsoft.Extensions.Logging.ILoggerFactory>() is { } lf1 ? Microsoft.Extensions.Logging.LoggerFactoryExtensions.CreateLogger<WtmAuthorizationService>(lf1) : null));
             services.AddScoped<IWtmDataContextFactory>(sp => new WtmDataContextFactory(
                 sp.GetRequiredService<IOptionsMonitor<Configs>>(),
                 sp.GetRequiredService<GlobalData>(),
@@ -611,7 +612,8 @@ namespace WalkingTec.Mvvm.Mvc
             services.AddScoped<IWtmTenantService>(sp => new WtmTenantService(
                 sp.GetRequiredService<IDistributedCache>(),
                 sp.GetRequiredService<IOptionsMonitor<Configs>>(),
-                sp.GetRequiredService<GlobalData>()));
+                sp.GetRequiredService<GlobalData>(),
+                sp.GetService<Microsoft.Extensions.Logging.ILoggerFactory>() is { } lf2 ? Microsoft.Extensions.Logging.LoggerFactoryExtensions.CreateLogger<WtmTenantService>(lf2) : null));
             services.AddSingleton<IWtmVmFactory, WtmVmFactory>();
 
             return services;
