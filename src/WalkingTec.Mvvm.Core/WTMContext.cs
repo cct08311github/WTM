@@ -22,6 +22,7 @@ using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core.Auth;
 using WalkingTec.Mvvm.Core.Extensions;
 using WalkingTec.Mvvm.Core.Json;
+using WalkingTec.Mvvm.Core.Services;
 using WalkingTec.Mvvm.Core.Support.Json;
 
 namespace WalkingTec.Mvvm.Core
@@ -107,10 +108,10 @@ namespace WalkingTec.Mvvm.Core
                 string rv = string.Empty;
                 try
                 {
-                    if (HttpContext?.Request.Cookies.TryGetValue($"{ConfigInfo?.CookiePre}windowguid", out string windowguid) == true)
+                    if (HttpContext?.Request.Cookies.TryGetValue($"{ConfigInfo?.CookiePre}windowguid", out string? windowguid) == true)
                     {
 
-                        if (HttpContext?.Request.Cookies.TryGetValue($"{ConfigInfo?.CookiePre}{windowguid}windowids", out string windowid) == true)
+                        if (HttpContext?.Request.Cookies.TryGetValue($"{ConfigInfo?.CookiePre}{windowguid}windowids", out string? windowid) == true)
                         {
                             rv = windowid;
                         }
@@ -284,7 +285,7 @@ namespace WalkingTec.Mvvm.Core
         {
             if (ReloadUserFunc != null)
             {
-                var reload = ReloadUserFunc?.Invoke(this, itcode);
+                var reload = ReloadUserFunc?.Invoke(this, itcode ?? string.Empty);
                 if (reload != null)
                 {
                     return reload;
@@ -495,8 +496,8 @@ namespace WalkingTec.Mvvm.Core
             {
                 if (_baseUserQuery == null && this.GlobaInfo?.CustomUserType != null && DC != null)
                 {
-                    var set = DC?.GetType()?.GetMethod("Set", Type.EmptyTypes).MakeGenericMethod(GlobaInfo?.CustomUserType);
-                    _baseUserQuery = set!.Invoke(DC, null) as IQueryable<FrameworkUserBase>;
+                    var set = DC?.GetType()?.GetMethod("Set", Type.EmptyTypes)?.MakeGenericMethod(GlobaInfo!.CustomUserType!);
+                    _baseUserQuery = set?.Invoke(DC, null) as IQueryable<FrameworkUserBase>;
                 }
                 return _baseUserQuery;
             }
@@ -552,16 +553,16 @@ namespace WalkingTec.Mvvm.Core
         {
             if(string.IsNullOrEmpty(tenant))
             {
-                tenant = DC.TenantCode;
+                tenant = DC!.TenantCode;
             }
-            if (tenant == null && HttpContext.User.Identity.IsAuthenticated)
+            if (tenant == null && HttpContext!.User!.Identity!.IsAuthenticated)
             {
                 tenant = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.TenantCode).Select(x => x.Value).FirstOrDefault() ?? tenant;
             }
             if (ConfigInfo?.HasMainHost == true && string.IsNullOrEmpty(tenant) == true)
             {
                 var remoteToken = _loginUserInfo?.RemoteToken ?? HttpContext?.Request.Query?.Where(x => x.Key == "_remotetoken").Select(x => x.Value.First()).FirstOrDefault();
-                if (HttpContext.User.Identity.IsAuthenticated)
+                if (HttpContext!.User!.Identity!.IsAuthenticated)
                 {
                     remoteToken = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.RToken).Select(x => x.Value).FirstOrDefault();
                 }
@@ -602,7 +603,7 @@ namespace WalkingTec.Mvvm.Core
             else
             {
                 bool exist = false;
-                username = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject).Select(x => x.Value).FirstOrDefault() ?? username;
+                username = HttpContext!.User!.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject).Select(x => x.Value).FirstOrDefault() ?? username;
                 var ct = GlobaInfo?.AllTenant.Where(x => x.TCode == tenant).FirstOrDefault();
                 if(ct == null && string.IsNullOrEmpty(tenant) == false)
                 {
@@ -612,13 +613,13 @@ namespace WalkingTec.Mvvm.Core
                 {
                     _dc = ct.CreateDC(this);
                 }
-                if (HttpContext.User.Identity.IsAuthenticated)
+                if (HttpContext!.User!.Identity!.IsAuthenticated)
                 {
-                    exist = BaseUserQuery.IgnoreQueryFilters().Any(x => x.ITCode == username && x.TenantCode == tenant && x.IsValid==true);
+                    exist = BaseUserQuery!.IgnoreQueryFilters().Any(x => x.ITCode == username && x.TenantCode == tenant && x.IsValid==true);
                 }
                 else
                 {
-                    var userRecord = BaseUserQuery.IgnoreQueryFilters()
+                    var userRecord = BaseUserQuery!.IgnoreQueryFilters()
                         .Where(x => x.ITCode == username &&
                                     x.TenantCode == tenant &&
                                     x.IsValid == true)
@@ -662,7 +663,7 @@ namespace WalkingTec.Mvvm.Core
                 await user.LoadBasicInfoAsync(this);
                 user.RemoteToken = null;
                 var authService = HttpContext?.RequestServices.GetService(typeof(ITokenService)) as ITokenService;
-                var token = await authService.IssueTokenAsync(user);
+                var token = await authService!.IssueTokenAsync(user);
                 user.RemoteToken = token.AccessToken;
                 return user;
             }
@@ -733,6 +734,8 @@ namespace WalkingTec.Mvvm.Core
         public async Task RemoveUserCache(
             params string[] userIds)
         {
+            var svc = ServiceProvider?.GetService(typeof(IWtmUserCacheService)) as IWtmUserCacheService;
+            if (svc != null) { await svc.RemoveUserCacheAsync(LoginUserInfo?.CurrentTenant, userIds); return; }
             foreach (var userId in userIds)
             {
                 var key = $"{GlobalConstants.CacheKey.UserInfo}:{userId + "$`$" + LoginUserInfo?.CurrentTenant}";
@@ -743,6 +746,9 @@ namespace WalkingTec.Mvvm.Core
         public async Task RemoveUserCacheByRole(
     params string[] rolecode)
         {
+            var svc = ServiceProvider?.GetService(typeof(IWtmUserCacheService)) as IWtmUserCacheService;
+            var apiClient = ServiceProvider?.GetService(typeof(IWtmApiClient)) as IWtmApiClient;
+            if (svc != null) { await svc.RemoveUserCacheByRoleAsync(LoginUserInfo?.CurrentTenant, ConfigInfo?.HasMainHost == true, DC, apiClient, rolecode); return; }
             List<string> userids = new List<string>();
             if (ConfigInfo?.HasMainHost == true && string.IsNullOrEmpty(LoginUserInfo?.CurrentTenant) == true)
             {
@@ -769,6 +775,9 @@ namespace WalkingTec.Mvvm.Core
         public async Task RemoveUserCacheByGroup(
 params string[] groupcode)
         {
+            var svc = ServiceProvider?.GetService(typeof(IWtmUserCacheService)) as IWtmUserCacheService;
+            var apiClient = ServiceProvider?.GetService(typeof(IWtmApiClient)) as IWtmApiClient;
+            if (svc != null) { await svc.RemoveUserCacheByGroupAsync(LoginUserInfo?.CurrentTenant, ConfigInfo?.HasMainHost == true, DC, apiClient, groupcode); return; }
             List<string> userids = new List<string>();
             if (ConfigInfo?.HasMainHost == true && string.IsNullOrEmpty(LoginUserInfo?.CurrentTenant) == true)
             {
@@ -794,30 +803,34 @@ params string[] groupcode)
 
         public async Task RemoveGroupCache(string tenant)
         {
-
-                var key = $"{GlobalConstants.CacheKey.TenantGroups}:{tenant}";
-                await Cache?.DeleteAsync(key);
+            var svc = ServiceProvider?.GetService(typeof(IWtmTenantService)) as IWtmTenantService;
+            if (svc != null) { await svc.RemoveGroupCacheAsync(tenant); return; }
+            var key = $"{GlobalConstants.CacheKey.TenantGroups}:{tenant}";
+            await Cache?.DeleteAsync(key);
         }
 
         public async Task RemoveRoleCache(string tenant)
         {
-
-                var key = $"{GlobalConstants.CacheKey.TenantRoles}:{tenant}";
-                await Cache?.DeleteAsync(key);
-            
+            var svc = ServiceProvider?.GetService(typeof(IWtmTenantService)) as IWtmTenantService;
+            if (svc != null) { await svc.RemoveRoleCacheAsync(tenant); return; }
+            var key = $"{GlobalConstants.CacheKey.TenantRoles}:{tenant}";
+            await Cache?.DeleteAsync(key);
         }
 
         public List<SimpleGroup>? GetTenantGroups(string? tenant)
         {
+            var svc = ServiceProvider?.GetService(typeof(IWtmTenantService)) as IWtmTenantService;
+            if (svc != null) return svc.GetTenantGroups(tenant);
+
+            // Fallback: inline logic for environments without DI
             var key = $"{GlobalConstants.CacheKey.TenantGroups}:{tenant}";
             var rv = ReadFromCache<List<SimpleGroup>>(key, () =>
             {
-                
                 List<SimpleGroup>? groups = null;
                 try
                 {
-                    var dbtenant = GlobaInfo?.AllTenant.Where(x => x.TCode == tenant && x.IsUsingDB == true).FirstOrDefault();
-                    using (var dc = dbtenant == null ? ConfigInfo?.Connections.Where(x => x.Key.ToLower() == "default").FirstOrDefault().CreateDC() : dbtenant.CreateDC(this))
+                    var dbtenant = GlobaInfo?.AllTenant?.Where(x => x.TCode == tenant && x.IsUsingDB == true).FirstOrDefault();
+                    using (var dc = dbtenant == null ? ConfigInfo?.Connections?.Where(x => x.Key.ToLower() == "default").FirstOrDefault()?.CreateDC() : dbtenant.CreateDC(this))
                     {
                         groups = dc?.Set<FrameworkGroup>().IgnoreQueryFilters().Where(x => x.TenantCode == tenant).Select(x => new SimpleGroup
                         {
@@ -841,14 +854,18 @@ params string[] groupcode)
 
         public List<SimpleRole>? GetTenantRoles(string? tenant)
         {
+            var svc = ServiceProvider?.GetService(typeof(IWtmTenantService)) as IWtmTenantService;
+            if (svc != null) return svc.GetTenantRoles(tenant);
+
+            // Fallback: inline logic for environments without DI
             var key = $"{GlobalConstants.CacheKey.TenantRoles}:{tenant}";
             var rv = ReadFromCache<List<SimpleRole>>(key, () =>
             {
                 List<SimpleRole>? roles = null;
                 try
                 {
-                    var dbtenant = GlobaInfo?.AllTenant.Where(x => x.TCode == tenant && x.IsUsingDB == true).FirstOrDefault();
-                    using (var dc = dbtenant == null ? ConfigInfo?.Connections.Where(x => x.Key.ToLower() == "default").FirstOrDefault().CreateDC() : dbtenant.CreateDC(this))
+                    var dbtenant = GlobaInfo?.AllTenant?.Where(x => x.TCode == tenant && x.IsUsingDB == true).FirstOrDefault();
+                    using (var dc = dbtenant == null ? ConfigInfo?.Connections?.Where(x => x.Key.ToLower() == "default").FirstOrDefault()?.CreateDC() : dbtenant.CreateDC(this))
                     {
                         roles = dc?.Set<FrameworkRole>().IgnoreQueryFilters().Where(x => x.TenantCode == tenant).Select(x => new SimpleRole
                         {
@@ -970,7 +987,10 @@ params string[] groupcode)
         /// <returns>true代表可以访问，false代表不能访问</returns>
         public bool IsAccessable(string? url)
         {
-            // 如果是调试 或者 url 为 null or 空字符串
+            var svc = ServiceProvider?.GetService(typeof(IWtmAuthorizationService)) as IWtmAuthorizationService;
+            if (svc != null) return svc.IsAccessable(url, LoginUserInfo, _configInfo, _globaInfo);
+
+            // Fallback: inline logic for environments without DI
             if (_configInfo?.IsQuickDebug == true || string.IsNullOrEmpty(url) || IsUrlPublic(url))
             {
                 return true;
@@ -1053,6 +1073,9 @@ params string[] groupcode)
 
         public bool IsUrlPublic(string? url)
         {
+            var svc = ServiceProvider?.GetService(typeof(IWtmAuthorizationService)) as IWtmAuthorizationService;
+            if (svc != null) return svc.IsUrlPublic(url, _globaInfo);
+
             var isPublic = false;
             try
             {
@@ -1076,6 +1099,16 @@ params string[] groupcode)
 
         public void DoLog(string? msg, ActionLogTypesEnum logtype = ActionLogTypesEnum.Normal, string? moduleName = "", string? actionName = "", string? ip = "", string? url = "", double duration = 0)
         {
+            var svc = ServiceProvider?.GetService(typeof(IWtmLogService)) as IWtmLogService;
+            if (svc != null)
+            {
+                var effectiveUrl = string.IsNullOrEmpty(url) ? this.HttpContext?.Request?.Path.ToString() : url;
+                svc.DoLog(msg, logtype, moduleName, actionName, ip, effectiveUrl, duration,
+                    LoginUserInfo?.ITCode, this.Log);
+                return;
+            }
+
+            // Fallback: inline logic
             var log = this.Log?.GetActionLog();
             if (log == null)
             {

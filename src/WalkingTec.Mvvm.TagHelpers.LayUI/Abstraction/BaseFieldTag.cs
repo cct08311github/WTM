@@ -1,13 +1,27 @@
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.Razor.TagHelpers;
+using Microsoft.Extensions.Options;
 using System.Linq;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Core.ConfigOptions;
 using WalkingTec.Mvvm.Core.Extensions;
 
 namespace WalkingTec.Mvvm.TagHelpers.LayUI
 {
     public abstract class BaseFieldTag : BaseElementTag
     {
+        /// <summary>
+        /// Static UI options, initialized at startup via <see cref="SetUIOptions"/>.
+        /// Defaults to LayUI-compatible values for zero-config backwards compatibility.
+        /// </summary>
+        private static WtmUIOptions _uiOptions = new WtmUIOptions();
+
+        /// <summary>Set the global UI options. Called once during app startup.</summary>
+        public static void SetUIOptions(WtmUIOptions options) => _uiOptions = options;
+
+        /// <summary>Resolved UI options (always non-null).</summary>
+        protected WtmUIOptions UIConfig => _uiOptions;
+
         protected const string REQUIRED_ATTR_NAME = "field";
         /// <summary>
         /// 绑定的字段 必填
@@ -81,7 +95,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     output.Attributes.SetAttribute("readonly", string.Empty);
                 }
                     output.Attributes.TryGetAttribute("class", out TagHelperAttribute oldclass);
-                    output.Attributes.SetAttribute("class", "layui-disabled " + (oldclass?.Value ?? string.Empty));
+                    output.Attributes.SetAttribute("class", UIConfig.DisabledClass + " " + (oldclass?.Value ?? string.Empty));
                 }
             if (output.Attributes.ContainsName("lay-filter") == false && output.Attributes.ContainsName("id") == true)
             {
@@ -95,7 +109,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
             if (!(this is DisplayTagHelper) && ((Field.Metadata.IsRequired && Field.Name.Contains("[-1]")==false) || Required == true))
             {
-                requiredDot = "<span aria-hidden=\"true\" style=\"color:red\">*</span>";
+                requiredDot = UIConfig.RequiredMarkerHtml;
                 output.Attributes.SetAttribute("aria-required", "true");
                 if (!(this is UploadTagHelper || this is RadioTagHelper || this is CheckBoxTagHelper || this is MultiUploadTagHelper || this is ColorPickerTagHelper  || this is SliderTagHelper || this is TransferTagHelper)) // 上传组件自定义验证
                 {
@@ -153,7 +167,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 if(LabelText != "") {
                     lb = $"{requiredDot}{LabelText}:";
                 }
-                string instyle = $"style=\"{(LabelWidth == null || string.IsNullOrEmpty(PaddingText) == false ? "" : "margin-left:" + (LabelWidth + 30) + "px;")}";
+                string instyle = $"style=\"{(LabelWidth == null || string.IsNullOrEmpty(PaddingText) == false ? "" : "margin-left:" + (LabelWidth + UIConfig.LabelMarginOffset) + "px;")}";
                 if(this is DisplayTagHelper)
                 {
                     instyle += "width:unset;";
