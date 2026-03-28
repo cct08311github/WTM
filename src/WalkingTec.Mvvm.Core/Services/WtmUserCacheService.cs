@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Caching.Distributed;
+using WalkingTec.Mvvm.Core.Extensions;
 
 namespace WalkingTec.Mvvm.Core.Services
 {
@@ -25,7 +26,7 @@ namespace WalkingTec.Mvvm.Core.Services
             foreach (var userId in userIds)
             {
                 var key = $"{GlobalConstants.CacheKey.UserInfo}:{userId + "$`$" + currentTenant}";
-                await _cache.RemoveAsync(key);
+                await _cache.DeleteAsync(key);
             }
         }
 
@@ -60,7 +61,7 @@ namespace WalkingTec.Mvvm.Core.Services
             foreach (var userId in userids)
             {
                 var key = $"{GlobalConstants.CacheKey.UserInfo}:{userId + "$`$" + currentTenant}";
-                await _cache.RemoveAsync(key);
+                await _cache.DeleteAsync(key);
             }
         }
 
@@ -95,7 +96,7 @@ namespace WalkingTec.Mvvm.Core.Services
             foreach (var userId in userids)
             {
                 var key = $"{GlobalConstants.CacheKey.UserInfo}:{userId + "$`$" + currentTenant}";
-                await _cache.RemoveAsync(key);
+                await _cache.DeleteAsync(key);
             }
         }
     }

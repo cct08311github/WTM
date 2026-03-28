@@ -24,6 +24,8 @@ namespace WalkingTec.Mvvm.Core.Test.Services
         [TestInitialize]
         public void Setup()
         {
+            CoreProgram.DefaultJsonOption ??= new System.Text.Json.JsonSerializerOptions();
+            CoreProgram.DefaultPostJsonOption ??= new System.Text.Json.JsonSerializerOptions();
             _handler = new Mock<HttpMessageHandler>();
             var httpClient = new HttpClient(_handler.Object);
 
@@ -51,7 +53,7 @@ namespace WalkingTec.Mvvm.Core.Test.Services
         public async Task CallAPI_GET_Success_ReturnsDeserializedData()
         {
             var payload = new TestPayload { Name = "hello", Value = 42 };
-            SetupResponse(HttpStatusCode.OK, JsonSerializer.Serialize(payload, CoreProgram.DefaultJsonOption));
+            SetupResponse(HttpStatusCode.OK, JsonSerializer.Serialize(payload));
 
             var result = await _client.CallAPI<TestPayload>(null, "http://test/api", HttpMethodEnum.GET,
                 (HttpContent?)null);
@@ -175,7 +177,7 @@ namespace WalkingTec.Mvvm.Core.Test.Services
         public async Task CallAPI_BadRequest_DeserializesErrorObj()
         {
             var errorObj = new ErrorObj { Message = new List<string> { "field is required" } };
-            SetupResponse(HttpStatusCode.BadRequest, JsonSerializer.Serialize(errorObj, CoreProgram.DefaultJsonOption));
+            SetupResponse(HttpStatusCode.BadRequest, JsonSerializer.Serialize(errorObj));
 
             var result = await _client.CallAPI<string>(null, "http://test/api");
 

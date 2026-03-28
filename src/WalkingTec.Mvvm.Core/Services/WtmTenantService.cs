@@ -97,13 +97,13 @@ namespace WalkingTec.Mvvm.Core.Services
         public async Task RemoveGroupCacheAsync(string tenant)
         {
             var key = $"{GlobalConstants.CacheKey.TenantGroups}:{tenant}";
-            await _cache.RemoveAsync(key);
+            await _cache.DeleteAsync(key);
         }
 
         public async Task RemoveRoleCacheAsync(string tenant)
         {
             var key = $"{GlobalConstants.CacheKey.TenantRoles}:{tenant}";
-            await _cache.RemoveAsync(key);
+            await _cache.DeleteAsync(key);
         }
 
         /// <summary>
