@@ -284,6 +284,8 @@ __pycache__/
 /nuget.exe
 /demo/WalkingTec.Mvvm.VueDemo/ClientApp/yarn.lock
 *.lock
+*.db-shm
+*.db-wal
 /demo/WalkingTec.Mvvm.Vue3Demo/ClientApp/dist
 .superpowers/
 docs/superpowers/
