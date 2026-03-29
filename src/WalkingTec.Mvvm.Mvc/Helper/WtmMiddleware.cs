@@ -28,7 +28,7 @@ namespace WalkingTec.Mvvm.Mvc
         public async Task InvokeAsync(HttpContext context, WTMContext wtm)
         {
             var max = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
-            if (max.IsReadOnly == false)
+            if (max != null && !max.IsReadOnly)
             {
                 max.MaxRequestBodySize = wtm.ConfigInfo.FileUploadOptions.UploadLimit;
             }

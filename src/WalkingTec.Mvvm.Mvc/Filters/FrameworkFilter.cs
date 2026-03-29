@@ -48,7 +48,7 @@ namespace WalkingTec.Mvvm.Mvc.Filters
             log.ModuleName = ctrlDes?.GetDescription(ctrl) ?? ctrlActDesc.ControllerName;
             log.ActionName = actDes?.GetDescription(ctrl) ?? ctrlActDesc.ActionName + (postDes == null ? string.Empty : "[P]");
             log.ActionUrl = ctrl.BaseUrl;
-            log.IP = context.HttpContext.Connection.RemoteIpAddress.ToString();
+            log.IP = context.HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 
             ctrl.Wtm.Log = log;
             foreach (var item in context.ActionArguments)
