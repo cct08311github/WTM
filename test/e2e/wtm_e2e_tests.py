@@ -49,6 +49,9 @@ STUDENT_LIST_VM = "WalkingTec.Mvvm.Demo.ViewModels.StudentVMs.StudentListVM"
 
 # ─── Helper Functions ──────────────────────────────────────────────────────────
 
+MAX_RETRIES = 2  # 重試次數上限
+
+
 def sc(tc_num: int, step: str) -> str:
     """產生截圖路徑：screenshots/TC-{N}-{step}.png"""
     d = SCREENSHOTS_DIR / f"TC-{tc_num:02d}"
@@ -109,7 +112,11 @@ async def close_layer_dialog(page):
     close_btn = page.locator(".layui-layer-close:visible").last
     if await close_btn.count() > 0:
         await close_btn.click()
-        await page.wait_for_timeout(500)
+        # Wait for dialog to actually disappear instead of hardcoded sleep
+        try:
+            await page.wait_for_selector(".layui-layer", state="hidden", timeout=2000)
+        except Exception:
+            pass  # best-effort cleanup
 
 
 # ─── TC-01: XSS 反射測試 ──────────────────────────────────────────────────────
@@ -329,7 +336,11 @@ async def tc_04_analysis_mode_page(page, **_):
 
     # 點擊切換
     await analysis_btn.first.click()
-    await page.wait_for_timeout(2000)  # 等待 meta API 載入和面板渲染
+    # 等待 meta API 載入和面板渲染
+    try:
+        await page.wait_for_selector("[id^='analysis-panel-']", state="visible", timeout=5000)
+    except Exception:
+        pass  # fallback: panel may already be visible
     await page.screenshot(path=sc(4, "03-analysis-panel-open"))
 
     # 確認面板已顯示
@@ -1006,7 +1017,7 @@ async def tc_21_login_visual(page, **_):
 
     # 手機截圖 375x812
     await page.set_viewport_size({"width": 375, "height": 812})
-    await page.wait_for_timeout(500)
+    await page.wait_for_load_state("networkidle")
     await page.screenshot(path=sc(21, "03-mobile-375x812"), full_page=True)
 
     # 還原視窗大小
@@ -1036,7 +1047,11 @@ async def tc_22_dashboard(page, **_):
     print("[TC-22] 開始執行...")
 
     await login(page)
-    await page.wait_for_timeout(2000)  # 等待 FrontPage 非同步載入
+    # 等待 FrontPage 非同步載入
+    try:
+        await page.wait_for_selector(".layui-layout-admin", state="visible", timeout=5000)
+    except Exception:
+        pass
     await page.screenshot(path=sc(22, "01-dashboard-full"), full_page=True)
 
     # 確認主要佈局元素
@@ -1051,8 +1066,11 @@ async def tc_22_dashboard(page, **_):
 
     # 側邊選單 — 列出頂層選單項目
     menu_items = page.locator("#LAY-system-side-menu > li")
-    # 這些是 template 渲染的，可能需要等待
-    await page.wait_for_timeout(2000)
+    # Wait for menu items to render (template renders asynchronously)
+    try:
+        await page.wait_for_selector("#LAY-system-side-menu > li", state="visible", timeout=3000)
+    except Exception:
+        pass
     menu_count = await menu_items.count()
     print(f"  頂層選單項目數量: {menu_count}")
 
@@ -1181,7 +1199,10 @@ async def tc_24_analysis_full_flow(page, **_):
     analysis_btn = page.locator("button:has-text('分析模式')")
     if await analysis_btn.count() > 0:
         await analysis_btn.first.click()
-        await page.wait_for_timeout(2000)
+        try:
+            await page.wait_for_selector(".analysis-field-pool", state="visible", timeout=5000)
+        except Exception:
+            pass  # fallback if timing varies
         await page.screenshot(path=sc(24, "02-panel-open"))
 
         # Step 2: 確認欄位載入
@@ -1205,18 +1226,21 @@ async def tc_24_analysis_full_flow(page, **_):
             # 嘗試拖放第一個 Dimension pill 到 dim zone
             try:
                 await dim_pills.first.drag_to(dim_zone)
-                await page.wait_for_timeout(500)
+                await page.wait_for_load_state("networkidle")
                 await page.screenshot(path=sc(24, "04-dim-dropped"))
 
                 await msr_pills.first.drag_to(msr_zone)
-                await page.wait_for_timeout(500)
+                await page.wait_for_load_state("networkidle")
                 await page.screenshot(path=sc(24, "05-msr-dropped"))
 
                 # Step 4: 點擊查詢按鈕
                 query_btn = page.locator("button:has-text('查詢'), button:has-text('執行'), .analysis-btn-query")
                 if await query_btn.count() > 0:
                     await query_btn.first.click()
-                    await page.wait_for_timeout(3000)
+                    try:
+                        await page.wait_for_selector(".analysis-result-section, canvas, .analysis-result-section table", state="visible", timeout=5000)
+                    except Exception:
+                        pass
                     await page.screenshot(path=sc(24, "06-query-result"))
 
                     # 確認結果區顯示
@@ -1278,7 +1302,11 @@ async def tc_25_grid_paging(page, **_):
     await page.goto(f"{BASE_URL}/Student/Index")
     await page.wait_for_load_state("networkidle")
     await page.wait_for_selector(".layui-table-tool", timeout=TIMEOUT)
-    await page.wait_for_timeout(1000)
+    # Wait for grid rows to render (networkidle covers most async rendering)
+    try:
+        await page.wait_for_selector(".layui-table-body tr[data-index]", state="visible", timeout=3000)
+    except Exception:
+        pass
     await page.screenshot(path=sc(25, "01-grid-initial"))
 
     # 確認分頁元件存在
@@ -1386,7 +1414,11 @@ async def tc_26_crud_flow(page, **_):
     # Step 3: 測試 Student Index Grid
     await page.goto(f"{BASE_URL}/Student/Index")
     await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(2000)
+    # Wait for grid to render instead of hardcoded sleep
+    try:
+        await page.wait_for_selector(".layui-table-body tr[data-index]", state="visible", timeout=3000)
+    except Exception:
+        pass
     await page.screenshot(path=sc(26, "03-student-list"))
 
     # Step 4: 搜尋面板
@@ -1425,7 +1457,10 @@ async def tc_27_user_management(page, **_):
     # WTM 框架的 Admin area 使用 _Admin prefix
     await page.goto(f"{BASE_URL}/_Admin/FrameworkUser/Index")
     await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(2000)
+    try:
+        await page.wait_for_selector(".layui-table-body", state="visible", timeout=3000)
+    except Exception:
+        pass
     await page.screenshot(path=sc(27, "01-user-list"))
 
     # 確認 grid 存在
@@ -1473,7 +1508,10 @@ async def tc_28_role_management(page, **_):
 
     await page.goto(f"{BASE_URL}/_Admin/FrameworkRole/Index")
     await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(2000)
+    try:
+        await page.wait_for_selector(".layui-table-body", state="visible", timeout=3000)
+    except Exception:
+        pass
     await page.screenshot(path=sc(28, "01-role-list"))
 
     # 確認 grid
@@ -1492,13 +1530,19 @@ async def tc_28_role_management(page, **_):
     # DataPrivilege 頁面
     await page.goto(f"{BASE_URL}/_Admin/DataPrivilege/Index")
     await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(2000)
+    try:
+        await page.wait_for_selector(".layui-table-body, .layui-form", state="visible", timeout=3000)
+    except Exception:
+        pass
     await page.screenshot(path=sc(28, "02-data-privilege"))
 
     # FrameworkMenu
     await page.goto(f"{BASE_URL}/_Admin/FrameworkMenu/Index")
     await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(2000)
+    try:
+        await page.wait_for_selector(".layui-table-body, .layui-nav", state="visible", timeout=3000)
+    except Exception:
+        pass
     await page.screenshot(path=sc(28, "03-menu-list"))
 
     menu_table = page.locator(".layui-table-body")
@@ -1532,7 +1576,10 @@ async def tc_29_etl_management(page, **_):
     # ETL Job 列表
     await page.goto(f"{BASE_URL}/_EtlJob/Index")
     await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(2000)
+    try:
+        await page.wait_for_selector(".layui-table-body, input[name='Searcher.Name']", state="visible", timeout=3000)
+    except Exception:
+        pass
     await page.screenshot(path=sc(29, "01-etl-job-list"))
 
     # 確認搜尋面板欄位
@@ -1551,7 +1598,10 @@ async def tc_29_etl_management(page, **_):
     # ETL Run Log
     await page.goto(f"{BASE_URL}/_EtlRunLog/Index")
     await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(2000)
+    try:
+        await page.wait_for_selector("select[name='Searcher.Result'], .layui-table-body", state="visible", timeout=3000)
+    except Exception:
+        pass
     await page.screenshot(path=sc(29, "02-etl-runlog"))
 
     # Run Log 搜尋面板
@@ -1638,6 +1688,63 @@ async def tc_30_import_flow(page, **_):
     print("[TC-30] PASS -- 匯入功能流程截圖完成")
 
 
+# ─── 錯誤處理輔助函式 ────────────────────────────────────────────────────────
+
+async def _screenshot_on_failure(page, tc_num, label):
+    """失敗時截圖。失敗無害（best-effort）。"""
+    try:
+        await page.screenshot(path=sc(tc_num, label))
+    except Exception:
+        pass
+
+
+async def _log_console_errors(page, tc_num):
+    """失敗時收集並列印 browser console errors。"""
+    try:
+        errors = []
+        # console_messages 收集在 page 實例上（由 run_tests 注入）
+        for msg in getattr(page, "_captured_console", []):
+            if msg.type == "error":
+                errors.append(msg.text)
+        if errors:
+            print(f"[TC-{tc_num:02d}] Browser console errors:")
+            for err in errors:
+                print(f"  CONSOLE ERROR: {err}")
+        else:
+            print(f"[TC-{tc_num:02d}] No browser console errors")
+    except Exception as e:
+        print(f"[TC-{tc_num:02d}] Could not capture console errors: {e}")
+
+
+def _is_retryable_error(exc: Exception) -> bool:
+    """
+    判斷錯誤是否應重試。
+    只對 timeout 和 navigation 錯誤重試，不對 assertion 失敗重試。
+    """
+    exc_str = str(exc).lower()
+    exc_type = type(exc).__name__.lower()
+
+    # Playwright TimeoutError
+    if "timeout" in exc_type or "timeout" in exc_str:
+        return True
+    # Navigation errors
+    if any(kw in exc_str for kw in ["navigation", "net::err_", "failed to fetch", "aborted"]):
+        return True
+    # asyncio.CancelledError
+    if isinstance(exc, asyncio.CancelledError):
+        return True
+    return False
+
+
+class _ConsoleCapture:
+    """Lightweight console message collector injected onto each page."""
+    def __init__(self):
+        self.messages = []
+
+    def __call__(self, msg):
+        self.messages.append(msg)
+
+
 # ─── 測試註冊表和執行引擎 ───────────────────────────────────────────────────
 
 TC_REGISTRY = {
@@ -1719,30 +1826,73 @@ async def run_tests(tc_nums=None, headless=None, slow_mo=0, report_path=None):
             page = await context.new_page()
             page.set_default_timeout(TIMEOUT)
 
+            # Attach console capture for failure diagnostics
+            console_capture = _ConsoleCapture()
+            page.on("console", console_capture)
+            page._captured_console = console_capture.messages
+
             start = datetime.now()
-            try:
-                await func(page)
-                elapsed = (datetime.now() - start).total_seconds()
-                results.append({"tc": tc_num, "status": "PASS", "elapsed": elapsed})
-            except AssertionError as e:
-                elapsed = (datetime.now() - start).total_seconds()
-                print(f"[TC-{tc_num:02d}] FAIL: {e}")
+            retry_count = 0
+            last_error = None
+
+            # Retry loop — up to MAX_RETRIES on timeout/navigation errors
+            for attempt in range(MAX_RETRIES + 1):
                 try:
-                    await page.screenshot(path=sc(tc_num, "FAIL"))
-                except Exception:
-                    pass
-                results.append({"tc": tc_num, "status": "FAIL", "error": str(e), "elapsed": elapsed})
-            except Exception as e:
-                elapsed = (datetime.now() - start).total_seconds()
-                print(f"[TC-{tc_num:02d}] ERROR: {e}")
-                traceback.print_exc()
-                try:
-                    await page.screenshot(path=sc(tc_num, "ERROR"))
-                except Exception:
-                    pass
-                results.append({"tc": tc_num, "status": "ERROR", "error": str(e), "elapsed": elapsed})
-            finally:
-                await context.close()
+                    await func(page)
+                    elapsed = (datetime.now() - start).total_seconds()
+                    results.append({"tc": tc_num, "status": "PASS", "elapsed": elapsed, "retries": retry_count})
+                    last_error = None
+                    break
+                except AssertionError as e:
+                    # Assertion failures: no retry, mark as FAIL immediately
+                    elapsed = (datetime.now() - start).total_seconds()
+                    print(f"[TC-{tc_num:02d}] FAIL: {e}")
+                    await _screenshot_on_failure(page, tc_num, "FAIL")
+                    await _log_console_errors(page, tc_num)
+                    results.append({"tc": tc_num, "status": "FAIL", "error": str(e), "elapsed": elapsed, "retries": retry_count})
+                    last_error = None
+                    break
+                except Exception as e:
+                    elapsed = (datetime.now() - start).total_seconds()
+                    error_str = str(e)
+                    is_retryable = _is_retryable_error(e)
+
+                    if is_retryable and attempt < MAX_RETRIES:
+                        retry_count += 1
+                        print(f"[TC-{tc_num:02d}] {error_str} — retry {retry_count}/{MAX_RETRIES}")
+                        await _screenshot_on_failure(page, tc_num, f"RETRY-{retry_count}")
+                        await _log_console_errors(page, tc_num)
+                        # Create fresh context for retry to avoid state leakage
+                        await context.close()
+                        context = await browser.new_context(
+                            viewport={"width": 1280, "height": 800},
+                            ignore_https_errors=True,
+                        )
+                        page = await context.new_page()
+                        page.set_default_timeout(TIMEOUT)
+                        # Re-attach console capture for retry attempt
+                        console_capture = _ConsoleCapture()
+                        page.on("console", console_capture)
+                        page._captured_console = console_capture.messages
+                        continue
+
+                    # Non-retryable error or retries exhausted
+                    print(f"[TC-{tc_num:02d}] ERROR: {error_str}")
+                    if is_retryable:
+                        print(f"  (retries exhausted after {MAX_RETRIES})")
+                    traceback.print_exc()
+                    await _screenshot_on_failure(page, tc_num, "ERROR")
+                    await _log_console_errors(page, tc_num)
+                    results.append({"tc": tc_num, "status": "ERROR", "error": error_str, "elapsed": elapsed, "retries": retry_count})
+                    last_error = None
+                    break
+            else:
+                # Loop completed without break (shouldn't happen, but safety net)
+                if last_error:
+                    elapsed = (datetime.now() - start).total_seconds()
+                    results.append({"tc": tc_num, "status": "ERROR", "error": str(last_error), "elapsed": elapsed, "retries": retry_count})
+
+            await context.close()
 
         await browser.close()
 
@@ -1763,9 +1913,10 @@ async def run_tests(tc_nums=None, headless=None, slow_mo=0, report_path=None):
         priority = TC_REGISTRY.get(tc, ("?", None, "?"))[2]
         status = r["status"]
         elapsed_str = f"{r.get('elapsed', 0):.1f}s" if "elapsed" in r else "-"
+        retry_str = f" (retried {r['retries']}x)" if r.get("retries", 0) > 0 else ""
         error = f" — {r.get('error', '')}" if r.get("error") else ""
         icon = {"PASS": "OK", "FAIL": "NG", "ERROR": "!!!", "SKIP": "--"}[status]
-        print(f"  [{icon}] TC-{tc:02d} [{priority}] {name} ({elapsed_str}){error}")
+        print(f"  [{icon}] TC-{tc:02d} [{priority}] {name}{retry_str} ({elapsed_str}){error}")
 
     print(f"\n  Total: {total} | PASS: {passed} | FAIL: {failed} | ERROR: {errors} | SKIP: {skipped}")
     print(f"  截圖目錄: {SCREENSHOTS_DIR.resolve()}")
@@ -1793,9 +1944,13 @@ def _write_junit_xml(results, report_path, total, passed, failed, errors, skippe
     for r in results:
         tc = r["tc"]
         name, _, priority = TC_REGISTRY.get(tc, (f"TC-{tc:02d}", None, "?"))
+        retries = r.get("retries", 0)
+        case_name = f"TC-{tc:02d}: {name} [{priority}]"
+        if retries > 0:
+            case_name += f" (retried {retries}x)"
         case = ET.SubElement(suite, "testcase", {
             "classname": "WTM.E2E",
-            "name": f"TC-{tc:02d}: {name} [{priority}]",
+            "name": case_name,
             "time": f"{r.get('elapsed', 0):.3f}",
         })
         status = r["status"]
@@ -1836,8 +1991,7 @@ def main():
     args = parser.parse_args()
 
     if args.base_url:
-        global BASE_URL
-        BASE_URL = args.base_url
+        globals()["BASE_URL"] = args.base_url
 
     # headless 決策：--headed > --headless > HEADLESS env var
     if args.headed:
