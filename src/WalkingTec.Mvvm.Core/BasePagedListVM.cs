@@ -771,7 +771,7 @@ namespace WalkingTec.Mvvm.Core
                 List<MySqlParameter> parms = new List<MySqlParameter>();
                 foreach (MySqlParameter item in cmd.Parameters)
                 {
-                    parms.Add(new MySqlParameter(string.Format("@{0}", item.ParameterName), item.Value));
+                    parms.Add(new MySqlParameter($"@{item.ParameterName}", item.Value));
                 }
                 if (cmd.CommandType == CommandType.StoredProcedure)
                 {
@@ -807,7 +807,7 @@ namespace WalkingTec.Mvvm.Core
                 List<NpgsqlParameter> parms = new List<NpgsqlParameter>();
                 foreach (NpgsqlParameter item in cmd.Parameters)
                 {
-                    parms.Add(new NpgsqlParameter(string.Format("@{0}", item.ParameterName), item.Value));
+                    parms.Add(new NpgsqlParameter($"@{item.ParameterName}", item.Value));
                 }
 
                 if (cmd.CommandType == CommandType.StoredProcedure)
@@ -844,7 +844,7 @@ namespace WalkingTec.Mvvm.Core
                 List<SqlParameter> parms = new List<SqlParameter>();
                 foreach (SqlParameter item in cmd.Parameters)
                 {
-                    parms.Add(new SqlParameter(string.Format("@{0}", item.ParameterName), item.Value));
+                    parms.Add(new SqlParameter($"@{item.ParameterName}", item.Value));
                 }
                 if (cmd.CommandType == CommandType.StoredProcedure)
                 {
