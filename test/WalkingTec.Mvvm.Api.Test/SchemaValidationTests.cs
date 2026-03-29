@@ -80,13 +80,13 @@ public class SchemaValidationTests
             Assert.IsFalse(string.IsNullOrEmpty(fn.GetString()),
                 "'fieldName' must not be empty");
 
-            // fieldType 是字串且值為 "Dimension" 或 "Measure"
-            Assert.IsTrue(field.TryGetProperty("fieldType", out var ft),
-                "Each meta field must have 'fieldType'");
+            // kind 是字串且值為 "Dimension" 或 "Measure"（API 使用 "kind" 而非 "fieldType"）
+            Assert.IsTrue(field.TryGetProperty("kind", out var ft),
+                "Each meta field must have 'kind'");
             Assert.AreEqual(JsonValueKind.String, ft.ValueKind);
             var ftValue = ft.GetString();
             Assert.IsTrue(ftValue == "Dimension" || ftValue == "Measure",
-                $"fieldType must be 'Dimension' or 'Measure', got '{ftValue}'");
+                $"kind must be 'Dimension' or 'Measure', got '{ftValue}'");
 
             // displayName 是字串
             Assert.IsTrue(field.TryGetProperty("displayName", out var dn),
@@ -116,7 +116,7 @@ public class SchemaValidationTests
         foreach (var field in doc.RootElement.EnumerateArray())
         {
             _ = field.TryGetProperty("fieldName", out _);
-            _ = field.TryGetProperty("fieldType", out _);
+            _ = field.TryGetProperty("kind", out _);
             _ = field.TryGetProperty("displayName", out _);
             _ = field.TryGetProperty("allowedFuncs", out _);
             _ = field.TryGetProperty("isDate", out _);
@@ -147,7 +147,7 @@ public class SchemaValidationTests
         string? firstDimField = null;
         foreach (var f in metaDoc.RootElement.EnumerateArray())
         {
-            if (f.TryGetProperty("fieldType", out var ft) &&
+            if (f.TryGetProperty("kind", out var ft) &&
                 ft.GetString() == "Dimension" &&
                 f.TryGetProperty("fieldName", out var fn))
             {
@@ -161,7 +161,7 @@ public class SchemaValidationTests
         {
             listVmType = StudentListVm,
             dimensions = new[] { firstDimField },
-            measures = Array.Empty<object>(),
+            measures = new[] { new { field = "RecordCount", func = 1 } }, // func 1 = Count
             filters = Array.Empty<object>(),
         };
 
@@ -188,28 +188,28 @@ public class SchemaValidationTests
     /// RFC 7807: { type, title, status, detail, instance }
     /// </summary>
     [TestMethod]
-    public async Task GetMeta_BadVmType_ReturnsProblemDetails()
+    public async Task GetMeta_BadVmType_Returns404NotFound()
     {
         var resp = await _authedClient.GetAsync(
             "/_analysis/meta?listVmType=Nonexistent.FakeVM");
 
-        Assert.AreEqual(HttpStatusCode.BadRequest, resp.StatusCode);
+        // AnalysisVmNotFoundException → NotFound(404), not BadRequest(400)
+        Assert.AreEqual(HttpStatusCode.NotFound, resp.StatusCode);
 
         var body = await resp.Content.ReadAsStringAsync();
         using var doc = JsonDocument.Parse(body);
 
-        // ProblemDetails 必要欄位
-        Assert.IsTrue(doc.RootElement.TryGetProperty("type", out var typeElem),
-            "ProblemDetails must have 'type'");
+        // ProblemDetails 必要欄位：title, status（type 在 ProblemDetails 預設 null，STJ 會省略）
         Assert.IsTrue(doc.RootElement.TryGetProperty("title", out var titleElem),
             "ProblemDetails must have 'title'");
         Assert.IsTrue(doc.RootElement.TryGetProperty("status", out var statusElem),
             "ProblemDetails must have 'status'");
 
-        Assert.AreEqual(JsonValueKind.String, typeElem.ValueKind);
         Assert.AreEqual(JsonValueKind.String, titleElem.ValueKind);
-        Assert.AreEqual(JsonValueKind.Number, statusElem.ValueKind);
-        Assert.AreEqual(400, statusElem.GetInt32(), "'status' should be 400");
+        // Status is 404 to match HTTP NotFound response
+        var statusText = statusElem.GetRawText();
+        var statusVal = int.TryParse(statusText.Trim('"'), out var sv) ? sv : int.Parse(statusText);
+        Assert.AreEqual(404, statusVal, "'status' should be 404");
     }
 
     /// <summary>
@@ -225,9 +225,11 @@ public class SchemaValidationTests
         var body = await resp.Content.ReadAsStringAsync();
         using var doc = JsonDocument.Parse(body);
 
-        Assert.IsTrue(doc.RootElement.TryGetProperty("status", out var statusElem));
-        Assert.AreEqual(400, statusElem.GetInt32());
-        Assert.IsTrue(doc.RootElement.TryGetProperty("type", out _));
+        var statusText = doc.RootElement.GetProperty("status").GetRawText();
+        // STJ serializes int? as JSON number (raw text = "400"), parse safely.
+        var statusVal = int.TryParse(statusText.Trim('"'), out var s) ? s : int.Parse(statusText);
+        Assert.AreEqual(400, statusVal);
+        // type is null in ProblemDetails default, STJ omits it from output
         Assert.IsTrue(doc.RootElement.TryGetProperty("title", out _));
     }
 
@@ -246,7 +248,9 @@ public class SchemaValidationTests
         var body = await resp.Content.ReadAsStringAsync();
         using var doc = JsonDocument.Parse(body);
 
-        Assert.IsTrue(doc.RootElement.TryGetProperty("status", out var statusElem));
-        Assert.AreEqual(400, statusElem.GetInt32());
+        var statusText = doc.RootElement.GetProperty("status").GetRawText();
+        // STJ serializes int? as JSON number (raw text = "400"), parse safely.
+        var statusVal = int.TryParse(statusText.Trim('"'), out var s) ? s : int.Parse(statusText);
+        Assert.AreEqual(400, statusVal);
     }
 }

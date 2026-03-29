@@ -243,7 +243,9 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             var req = Req(dims: new[] { "A", "B", "C", "D" });
             var result = (await CreateController().Query(req)) as BadRequestObjectResult;
             Assert.IsNotNull(result);
-            Assert.IsTrue(result.Value.ToString().Contains("維度"),
+            Assert.IsInstanceOfType(result.Value, typeof(ProblemDetails));
+            var pd = (ProblemDetails)result.Value;
+            Assert.IsTrue(pd.Title.Contains("維度"),
                 "錯誤訊息應包含「維度」");
         }
 
@@ -260,7 +262,9 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             };
             var result = (await CreateController().Query(req)) as BadRequestObjectResult;
             Assert.IsNotNull(result);
-            Assert.IsTrue(result.Value.ToString().Contains("度量"),
+            Assert.IsInstanceOfType(result.Value, typeof(ProblemDetails));
+            var pd = (ProblemDetails)result.Value;
+            Assert.IsTrue(pd.Title.Contains("度量"),
                 "錯誤訊息應包含「度量」");
         }
 
@@ -858,7 +862,9 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
             var result = (await CreateController().Query(req)) as BadRequestObjectResult;
             Assert.IsNotNull(result, "空 measures 陣列應回傳 400");
-            Assert.IsTrue(result.Value?.ToString()?.Contains("度量指標") == true,
+            Assert.IsInstanceOfType(result.Value, typeof(ProblemDetails));
+            var pd = (ProblemDetails)result.Value;
+            Assert.IsTrue(pd.Title.Contains("度量指標"),
                 "錯誤訊息應包含「度量指標」");
         }
 
@@ -874,7 +880,9 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
             var result = (await CreateController().Export(req)) as BadRequestObjectResult;
             Assert.IsNotNull(result, "Export 空 measures 陣列應回傳 400");
-            Assert.IsTrue(result.Value?.ToString()?.Contains("度量指標") == true,
+            Assert.IsInstanceOfType(result.Value, typeof(ProblemDetails));
+            var pd = (ProblemDetails)result.Value;
+            Assert.IsTrue(pd.Title.Contains("度量指標"),
                 "錯誤訊息應包含「度量指標」");
         }
 
@@ -1283,7 +1291,9 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
             var result = (await CreateController().Pivot(req)) as BadRequestObjectResult;
             Assert.IsNotNull(result, "Pivot 空 measures 應回傳 400");
-            Assert.IsTrue(result.Value?.ToString()?.Contains("度量指標") == true,
+            Assert.IsInstanceOfType(result.Value, typeof(ProblemDetails));
+            var pd = (ProblemDetails)result.Value;
+            Assert.IsTrue(pd.Title.Contains("度量指標"),
                 "Pivot 400 錯誤訊息應包含「度量指標」");
         }
 

@@ -79,8 +79,8 @@ namespace WalkingTec.Mvvm.Mvc
         {
             Type vmType;
             try { vmType = _registry.Resolve(listVmType); }
-            catch (AnalysisVmNotFoundException ex) { return NotFound(ex.Message); }
-            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+            catch (AnalysisVmNotFoundException ex) { return NotFound(new ProblemDetails { Title = ex.Message, Status = 404 }); }
+            catch (InvalidOperationException ex) { return BadRequest(new ProblemDetails { Title = ex.Message, Status = 400 }); }
 
             if (!CheckAccess(vmType)) return Forbid();
 
@@ -116,11 +116,11 @@ namespace WalkingTec.Mvvm.Mvc
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
         public async Task<IActionResult> Query([FromBody] AnalysisQueryRequest? req)
         {
-            if (req == null) return BadRequest("Request body is required.");
-            if (req.Dimensions.Count == 0) return BadRequest("至少需要選取 1 個維度。");
-            if (req.Dimensions.Count > 3) return BadRequest("最多選取 3 個維度。");
-            if (req.Measures.Count == 0)  return BadRequest("至少需要選取 1 個度量指標。");
-            if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
+            if (req == null) return BadRequest(new ProblemDetails { Title = "Request body is required.", Status = 400 });
+            if (req.Dimensions.Count == 0) return BadRequest(new ProblemDetails { Title = "至少需要選取 1 個維度。", Status = 400 });
+            if (req.Dimensions.Count > 3) return BadRequest(new ProblemDetails { Title = "最多選取 3 個維度。", Status = 400 });
+            if (req.Measures.Count == 0)  return BadRequest(new ProblemDetails { Title = "至少需要選取 1 個度量指標。", Status = 400 });
+            if (req.Measures.Count > 3)   return BadRequest(new ProblemDetails { Title = "最多選取 3 個度量。", Status = 400 });
 
             var errorResult = TryPrepareContext(req, out var ctx);
             if (errorResult != null) return errorResult;
@@ -135,7 +135,7 @@ var result = await _engine.ExecuteDynamicAsync(ctx!.BaseQuery, req, ctx.Fields, 
                 WriteAnalysisActionLog("Query", req.ListVmType, req.Dimensions, req.Measures, result.TotalCount, sw.ElapsedMilliseconds / 1000.0, result.Truncated);
                 return new JsonResult(result, _camelCase);
             }
-            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+            catch (InvalidOperationException ex) { return BadRequest(new ProblemDetails { Title = ex.Message, Status = 400 }); }
         }
 
         [HttpPost("pivot")]
@@ -145,11 +145,11 @@ var result = await _engine.ExecuteDynamicAsync(ctx!.BaseQuery, req, ctx.Fields, 
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
         public async Task<IActionResult> Pivot([FromBody] AnalysisPivotRequest? req)
         {
-            if (req == null) return BadRequest("Request body is required.");
-            if (req.Dimensions.Count == 0) return BadRequest("至少需要選取 1 個維度。");
-            if (req.Dimensions.Count > 3) return BadRequest("最多選取 3 個維度。");
-            if (req.Measures.Count == 0)  return BadRequest("至少需要選取 1 個度量指標。");
-            if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
+            if (req == null) return BadRequest(new ProblemDetails { Title = "Request body is required.", Status = 400 });
+            if (req.Dimensions.Count == 0) return BadRequest(new ProblemDetails { Title = "至少需要選取 1 個維度。", Status = 400 });
+            if (req.Dimensions.Count > 3) return BadRequest(new ProblemDetails { Title = "最多選取 3 個維度。", Status = 400 });
+            if (req.Measures.Count == 0)  return BadRequest(new ProblemDetails { Title = "至少需要選取 1 個度量指標。", Status = 400 });
+            if (req.Measures.Count > 3)   return BadRequest(new ProblemDetails { Title = "最多選取 3 個度量。", Status = 400 });
             if (string.IsNullOrEmpty(req.PivotDimension)) return BadRequest("必須指定 PivotDimension。");
 
             var errorResult = TryPrepareContext(req, out var ctx);
@@ -165,7 +165,7 @@ var result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fie
                 WriteAnalysisActionLog("Pivot", req.ListVmType, req.Dimensions, req.Measures, result.Rows.Count, sw.ElapsedMilliseconds / 1000.0, result.Truncated);
                 return new JsonResult(result, _camelCase);
             }
-            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+            catch (InvalidOperationException ex) { return BadRequest(new ProblemDetails { Title = ex.Message, Status = 400 }); }
         }
 
         /// <summary>
@@ -183,11 +183,11 @@ var result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fie
             [FromQuery] string chartType = "bar",
             [FromQuery] bool includeMetadata = false)
         {
-            if (req == null) return BadRequest("Request body is required.");
-            if (req.Dimensions.Count == 0) return BadRequest("至少需要選取 1 個維度。");
-            if (req.Dimensions.Count > 3) return BadRequest("最多選取 3 個維度。");
-            if (req.Measures.Count == 0)  return BadRequest("至少需要選取 1 個度量指標。");
-            if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
+            if (req == null) return BadRequest(new ProblemDetails { Title = "Request body is required.", Status = 400 });
+            if (req.Dimensions.Count == 0) return BadRequest(new ProblemDetails { Title = "至少需要選取 1 個維度。", Status = 400 });
+            if (req.Dimensions.Count > 3) return BadRequest(new ProblemDetails { Title = "最多選取 3 個維度。", Status = 400 });
+            if (req.Measures.Count == 0)  return BadRequest(new ProblemDetails { Title = "至少需要選取 1 個度量指標。", Status = 400 });
+            if (req.Measures.Count > 3)   return BadRequest(new ProblemDetails { Title = "最多選取 3 個度量。", Status = 400 });
 
             var errorResult = TryPrepareContext(req, out var ctx);
             if (errorResult != null) return errorResult;
@@ -205,7 +205,7 @@ result = await _engine.ExecuteDynamicAsync(ctx!.BaseQuery, req, ctx.Fields, iden
             catch (InvalidOperationException ex)
             {
                 _logger.LogWarning(ex, "Analysis export failed ListVm={ListVmType}", req.ListVmType);
-                return BadRequest(ex.Message);
+                return BadRequest(new ProblemDetails { Title = ex.Message, Status = 400 });
             }
 
             if (result.Truncated)
@@ -240,11 +240,11 @@ result = await _engine.ExecuteDynamicAsync(ctx!.BaseQuery, req, ctx.Fields, iden
             [FromQuery] string chartType = "bar",
             [FromQuery] bool includeMetadata = false)
         {
-            if (req == null) return BadRequest("Request body is required.");
-            if (req.Dimensions.Count == 0) return BadRequest("至少需要選取 1 個維度。");
-            if (req.Dimensions.Count > 3) return BadRequest("最多選取 3 個維度。");
-            if (req.Measures.Count == 0)  return BadRequest("至少需要選取 1 個度量指標。");
-            if (req.Measures.Count > 3)   return BadRequest("最多選取 3 個度量。");
+            if (req == null) return BadRequest(new ProblemDetails { Title = "Request body is required.", Status = 400 });
+            if (req.Dimensions.Count == 0) return BadRequest(new ProblemDetails { Title = "至少需要選取 1 個維度。", Status = 400 });
+            if (req.Dimensions.Count > 3) return BadRequest(new ProblemDetails { Title = "最多選取 3 個維度。", Status = 400 });
+            if (req.Measures.Count == 0)  return BadRequest(new ProblemDetails { Title = "至少需要選取 1 個度量指標。", Status = 400 });
+            if (req.Measures.Count > 3)   return BadRequest(new ProblemDetails { Title = "最多選取 3 個度量。", Status = 400 });
 
             var errorResult = TryPrepareContext(req, out var ctx);
             if (errorResult != null) return errorResult;
@@ -262,7 +262,7 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
             catch (InvalidOperationException ex)
             {
                 _logger.LogWarning(ex, "Analysis pivot export failed ListVm={ListVmType}", req.ListVmType);
-                return BadRequest(ex.Message);
+                return BadRequest(new ProblemDetails { Title = ex.Message, Status = 400 });
             }
 
             // Adapt AnalysisPivotResponse to AnalysisQueryResponse format for CSV/Excel export
@@ -306,8 +306,8 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
 
             Type vmType;
             try { vmType = _registry.Resolve(listVmType); }
-            catch (AnalysisVmNotFoundException ex) { return NotFound(ex.Message); }
-            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+            catch (AnalysisVmNotFoundException ex) { return NotFound(new ProblemDetails { Title = ex.Message, Status = 404 }); }
+            catch (InvalidOperationException ex) { return BadRequest(new ProblemDetails { Title = ex.Message, Status = 400 }); }
             if (!CheckAccess(vmType)) return Forbid();
 
             var userCode = Wtm?.LoginUserInfo?.ITCode ?? string.Empty;
@@ -345,8 +345,8 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
 
             Type vmType;
             try { vmType = _registry.Resolve(req.Config.ListVmType); }
-            catch (AnalysisVmNotFoundException ex) { return NotFound(ex.Message); }
-            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+            catch (AnalysisVmNotFoundException ex) { return NotFound(new ProblemDetails { Title = ex.Message, Status = 404 }); }
+            catch (InvalidOperationException ex) { return BadRequest(new ProblemDetails { Title = ex.Message, Status = 400 }); }
             if (!CheckAccess(vmType)) return Forbid();
 
             var userCode = Wtm?.LoginUserInfo?.ITCode ?? string.Empty;
@@ -396,8 +396,8 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
             if (config == null) return BadRequest("儲存的查詢格式無效。");
             Type vmType;
             try { vmType = _registry.Resolve(config.ListVmType); }
-            catch (AnalysisVmNotFoundException ex) { return NotFound(ex.Message); }
-            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+            catch (AnalysisVmNotFoundException ex) { return NotFound(new ProblemDetails { Title = ex.Message, Status = 404 }); }
+            catch (InvalidOperationException ex) { return BadRequest(new ProblemDetails { Title = ex.Message, Status = 400 }); }
             if (!CheckAccess(vmType)) return Forbid();
 
             return new JsonResult(config, _camelCase);
@@ -491,8 +491,8 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
 
             Type vmType;
             try { vmType = _registry.Resolve(req.ListVmType); }
-            catch (AnalysisVmNotFoundException ex) { return NotFound(ex.Message); }
-            catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+            catch (AnalysisVmNotFoundException ex) { return NotFound(new ProblemDetails { Title = ex.Message, Status = 404 }); }
+            catch (InvalidOperationException ex) { return BadRequest(new ProblemDetails { Title = ex.Message, Status = 400 }); }
 
             if (!CheckAccess(vmType)) return Forbid();
 
@@ -500,7 +500,7 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
             try { vm = CreateAndBindVm(vmType, req.SearcherFormData); }
             catch (Exception ex) when (ex is InvalidOperationException || ex is JsonException)
             {
-                return BadRequest(ex.Message);
+                return BadRequest(new ProblemDetails { Title = ex.Message, Status = 400 });
             }
 
             var fields = InvokeGetAnalysisFields(vm, vmType);
