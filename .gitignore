@@ -286,6 +286,8 @@ __pycache__/
 *.lock
 /demo/WalkingTec.Mvvm.Vue3Demo/ClientApp/dist
 .superpowers/
+docs/superpowers/
+refactor-claude-md-report.md
 
 # Environment files (no real secrets but should not be tracked)
 **/.env
