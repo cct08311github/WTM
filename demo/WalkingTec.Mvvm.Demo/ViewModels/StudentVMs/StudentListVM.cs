@@ -92,7 +92,12 @@ namespace WalkingTec.Mvvm.Demo.ViewModels.StudentVMs
         [Display(Name = "专业名称")]
         public String MajorName_view { get; set; }
 
-        [Display(Name = "學生數")]
+        [Dimension(DisplayName = "姓名")]
+        public string Name { get; set; } = "";
+
+        [Dimension(DisplayName = "性別")]
+        public GenderEnum? Sex { get; set; }
+
         [Measure(DisplayName = "學生數", AllowedFuncs = AggregateFunc.Count | AggregateFunc.Sum)]
         public int RecordCount { get; set; }
     }

@@ -51,6 +51,11 @@ namespace WalkingTec.Mvvm.Mvc.Filters
             log.IP = context.HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 
             ctrl.Wtm.Log = log;
+
+            // SetWtmContext was called by DataContextFilter/PrivilegeFilter before this filter,
+            // but we still need to propagate Wtm to VMs for both BaseController and BaseApiController.
+            // FrameworkFilter's inner block only ran for BaseController (on in 10.1.0 refactor),
+            // causing BaseApiController VMs to have null Wtm → NullReferenceException in GetSearchQuery.
             foreach (var item in context.ActionArguments)
             {
                 if (item.Value is BaseVM)
