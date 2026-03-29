@@ -4,14 +4,24 @@ WTM Demo E2E Test Suite — TC-01 ~ TC-30
 基於 WTM/LayUI 實際 DOM 結構撰寫的 Playwright 自動化測試。
 
 前置條件：
-  1. WTM Demo 運行於 http://localhost:5000
+  1. WTM Demo 運行於 http://localhost:52837（或以 WTM_E2E_BASE_URL 覆寫）
   2. IsQuickDebug = true（驗證碼自動跳過，帳密預填）
   3. pip install playwright && playwright install chromium
 
+環境變數：
+  WTM_E2E_BASE_URL    覆寫 base URL（預設 http://localhost:52837）
+  WTM_E2E_ADMIN_USER  管理員帳號（預設 admin）
+  WTM_E2E_ADMIN_PASS  管理員密碼（預設 000000）
+  WTM_E2E_TIMEOUT     操作逾時毫秒數（預設 15000）
+  WTM_E2E_HEADLESS    是否 headless，false/0/no 表示顯示視窗（預設 true）
+
 執行：
-  python wtm_e2e_tests.py              # 全部執行
-  python wtm_e2e_tests.py --tc 1       # 只跑 TC-01
-  python wtm_e2e_tests.py --tc 1,4,23  # 跑指定 TC
+  python wtm_e2e_tests.py                       # 全部執行
+  python wtm_e2e_tests.py --tc 1                # 只跑 TC-01
+  python wtm_e2e_tests.py --tc 1,4,23           # 跑指定 TC
+  python wtm_e2e_tests.py --base-url http://... # 覆寫 base URL
+  python wtm_e2e_tests.py --headed              # 顯示瀏覽器視窗
+  python wtm_e2e_tests.py --report results/junit.xml  # 輸出 JUnit XML
 """
 
 import asyncio
@@ -20,16 +30,18 @@ import json
 import os
 import sys
 import traceback
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 
-# ─── 常數 ──────────────────────────────────────────────────────────────────────
+# ─── 常數（優先從環境變數讀取）──────────────────────────────────────────────────
 
-BASE_URL = "http://localhost:5000"
-ADMIN_USER = "admin"
-ADMIN_PASS = "000000"
+BASE_URL = os.environ.get("WTM_E2E_BASE_URL", "http://localhost:52837")
+ADMIN_USER = os.environ.get("WTM_E2E_ADMIN_USER", "admin")
+ADMIN_PASS = os.environ.get("WTM_E2E_ADMIN_PASS", "000000")
 SCREENSHOTS_DIR = Path(__file__).parent / "screenshots"
-TIMEOUT = 15_000  # 15s default timeout
+TIMEOUT = int(os.environ.get("WTM_E2E_TIMEOUT", "15000"))
+HEADLESS = os.environ.get("WTM_E2E_HEADLESS", "true").lower() not in ("false", "0", "no")
 
 # WTM Analysis Mode 已知 VM 型別（demo 中 [EnableAnalysis] 標記的 ListVM）
 STUDENT_LIST_VM = "WalkingTec.Mvvm.Demo.ViewModels.StudentVMs.StudentListVM"
@@ -44,12 +56,13 @@ def sc(tc_num: int, step: str) -> str:
     return str(d / f"TC-{tc_num:02d}-{step}.png")
 
 
-async def login(page, base_url=BASE_URL):
+async def login(page, base_url=None):
     """
     登入 WTM Demo（QuickDebug 模式，帳密已預填）。
     回傳後 page 位於首頁 Layout（含側邊選單）。
     """
-    await page.goto(f"{base_url}/Login/Login")
+    url = base_url or BASE_URL
+    await page.goto(f"{url}/Login/Login")
     await page.wait_for_load_state("networkidle")
 
     # QuickDebug 模式已預填帳密，直接點送出
@@ -73,7 +86,7 @@ async def navigate_via_layhref(page, lay_href_path: str):
     LayUI 使用 lay-href 屬性載入頁面到 iframe tab 中。
     直接導覽到 PartialView URL 取得內容。
     """
-    await page.goto(f"{BASE_URL}/{lay_href_path.lstrip('/')}")
+    await page.goto(f"{BASE_URL}/{lay_href_path.lstrip('/')}")  # BASE_URL 可由 env var 覆寫
     await page.wait_for_load_state("networkidle")
 
 
@@ -1661,16 +1674,20 @@ TC_REGISTRY = {
 }
 
 
-async def run_tests(tc_nums=None, headed=False, slow_mo=0):
+async def run_tests(tc_nums=None, headless=None, slow_mo=0, report_path=None):
     """
     執行指定的 TC，或全部執行。
 
     Args:
         tc_nums: 要執行的 TC 編號列表，None=全部
-        headed: 是否顯示瀏覽器視窗
+        headless: True=headless（預設），False=顯示視窗，None=讀全局 HEADLESS
         slow_mo: 操作間延遲（毫秒）
+        report_path: JUnit XML 報告輸出路徑（None=不輸出）
     """
     from playwright.async_api import async_playwright
+
+    if headless is None:
+        headless = HEADLESS
 
     if tc_nums is None:
         tc_nums = sorted(TC_REGISTRY.keys())
@@ -1680,7 +1697,7 @@ async def run_tests(tc_nums=None, headed=False, slow_mo=0):
     results = []
     async with async_playwright() as p:
         browser = await p.chromium.launch(
-            headless=not headed,
+            headless=headless,
             slow_mo=slow_mo,
         )
 
@@ -1753,19 +1770,68 @@ async def run_tests(tc_nums=None, headed=False, slow_mo=0):
     print(f"\n  Total: {total} | PASS: {passed} | FAIL: {failed} | ERROR: {errors} | SKIP: {skipped}")
     print(f"  截圖目錄: {SCREENSHOTS_DIR.resolve()}")
 
+    if report_path:
+        _write_junit_xml(results, report_path, total, passed, failed, errors, skipped)
+        print(f"  JUnit XML: {Path(report_path).resolve()}")
+
     return results
 
 
+def _write_junit_xml(results, report_path, total, passed, failed, errors, skipped):
+    """輸出 JUnit XML 格式報告（與 pytest / GitHub Actions 相容）。"""
+    suite_time = sum(r.get("elapsed", 0) for r in results)
+    suite = ET.Element("testsuite", {
+        "name": "WTM E2E",
+        "tests": str(total),
+        "failures": str(failed),
+        "errors": str(errors),
+        "skipped": str(skipped),
+        "time": f"{suite_time:.3f}",
+        "timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S"),
+    })
+
+    for r in results:
+        tc = r["tc"]
+        name, _, priority = TC_REGISTRY.get(tc, (f"TC-{tc:02d}", None, "?"))
+        case = ET.SubElement(suite, "testcase", {
+            "classname": "WTM.E2E",
+            "name": f"TC-{tc:02d}: {name} [{priority}]",
+            "time": f"{r.get('elapsed', 0):.3f}",
+        })
+        status = r["status"]
+        if status == "FAIL":
+            failure = ET.SubElement(case, "failure", {"message": r.get("error", "")})
+            failure.text = r.get("error", "")
+        elif status == "ERROR":
+            error_el = ET.SubElement(case, "error", {"message": r.get("error", "")})
+            error_el.text = r.get("error", "")
+        elif status == "SKIP":
+            ET.SubElement(case, "skipped", {"message": r.get("error", "不存在")})
+
+    out = Path(report_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tree = ET.ElementTree(suite)
+    ET.indent(tree, space="  ")
+    tree.write(str(out), encoding="utf-8", xml_declaration=True)
+
+
 def main():
+    default_report = os.environ.get("WTM_E2E_REPORT", "")
+
     parser = argparse.ArgumentParser(description="WTM Demo E2E Test Suite")
     parser.add_argument("--tc", type=str, default=None,
                         help="要執行的 TC 編號，逗號分隔（如 1,4,23）。預設全部執行。")
-    parser.add_argument("--headed", action="store_true",
-                        help="顯示瀏覽器視窗（非 headless）")
+    headed_group = parser.add_mutually_exclusive_group()
+    headed_group.add_argument("--headed", action="store_true",
+                              help="顯示瀏覽器視窗（非 headless）")
+    headed_group.add_argument("--headless", action="store_true", default=False,
+                              help="強制 headless 模式（覆寫環境變數）")
     parser.add_argument("--slow-mo", type=int, default=0,
                         help="操作間延遲（毫秒）")
     parser.add_argument("--base-url", type=str, default=None,
-                        help="覆寫 base URL（預設 http://localhost:5000）")
+                        help=f"覆寫 base URL（預設 {BASE_URL}）")
+    parser.add_argument("--report", type=str, default=default_report or None,
+                        help="JUnit XML 報告輸出路徑（如 results/junit.xml）")
 
     args = parser.parse_args()
 
@@ -1773,11 +1839,20 @@ def main():
         global BASE_URL
         BASE_URL = args.base_url
 
+    # headless 決策：--headed > --headless > HEADLESS env var
+    if args.headed:
+        headless = False
+    elif args.headless:
+        headless = True
+    else:
+        headless = HEADLESS
+
     tc_nums = None
     if args.tc:
         tc_nums = [int(x.strip()) for x in args.tc.split(",")]
 
-    results = asyncio.run(run_tests(tc_nums, headed=args.headed, slow_mo=args.slow_mo))
+    results = asyncio.run(run_tests(tc_nums, headless=headless, slow_mo=args.slow_mo,
+                                    report_path=args.report))
 
     # 非 0 退出碼表示有失敗
     failed = sum(1 for r in results if r["status"] in ("FAIL", "ERROR"))
