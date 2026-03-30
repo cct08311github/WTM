@@ -30,7 +30,7 @@ namespace WalkingTec.Mvvm.Core
 
         public DuplicatedInfo()
         {
-            Groups = new List<DuplicatedGroup<T>>();
+            Groups = [];
         }
 
         /// <summary>
@@ -41,7 +41,7 @@ namespace WalkingTec.Mvvm.Core
         {
             DuplicatedGroup<T> newGroup = new DuplicatedGroup<T>()
             {
-                Fields = new List<DuplicatedField<T>>()
+                Fields = []
             };
             foreach (var exp in FieldExps)
             {
@@ -63,7 +63,7 @@ namespace WalkingTec.Mvvm.Core
 
         public virtual List<PropertyInfo> GetProperties()
         {
-            List<PropertyInfo> rv = new List<PropertyInfo>();
+            List<PropertyInfo> rv = [];
             var prop = PropertyHelper.GetPropertyInfo(_directFieldExp);
             if (prop != null)
             {
@@ -195,7 +195,7 @@ namespace WalkingTec.Mvvm.Core
         public ComplexDuplicatedField(Expression<Func<T, List<V>>> MiddleExp, params Expression<Func<V, object>>[] FieldExps)
         {
             _middleExp = MiddleExp;
-            _subFieldExps = new List<Expression<Func<V, object>>>();
+            _subFieldExps = [];
             _subFieldExps.AddRange(FieldExps);
         }
 
@@ -219,12 +219,12 @@ namespace WalkingTec.Mvvm.Core
             {
                 return null;
             }
-            List<Expression> allExp = new List<Expression>();
+            List<Expression> allExp = [];
             Expression? rv = null;
             //循环中间表数据
             foreach (var li in list)
             {
-                List<Expression> innerExp = new List<Expression>();
+                List<Expression> innerExp = [];
                 bool needBreak = false;
                 //循环中间表要检查重复的字段
                 foreach (var SubFieldExp in _subFieldExps)
@@ -332,7 +332,7 @@ namespace WalkingTec.Mvvm.Core
         /// <returns>字段属性列表</returns>
         public override List<PropertyInfo> GetProperties()
         {
-            List<PropertyInfo> rv = new List<PropertyInfo>();
+            List<PropertyInfo> rv = [];
             foreach (var subField in _subFieldExps)
             {
                 var pro = subField.GetPropertyInfo();
