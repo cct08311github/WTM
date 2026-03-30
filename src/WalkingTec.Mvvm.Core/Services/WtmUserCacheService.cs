@@ -34,7 +34,7 @@ namespace WalkingTec.Mvvm.Core.Services
             string? currentTenant, bool hasMainHost, IDataContext? dc,
             IWtmApiClient? apiClient, params string[] roleCodes)
         {
-            List<string> userids = new List<string>();
+            var userids = new List<string>();
             if (hasMainHost && string.IsNullOrEmpty(currentTenant))
             {
                 if (apiClient != null)
@@ -52,10 +52,9 @@ namespace WalkingTec.Mvvm.Core.Services
             }
             else if (dc != null)
             {
-                userids = dc.Set<FrameworkUserRole>()
+                userids = [.. dc.Set<FrameworkUserRole>()
                     .Where(x => roleCodes.Contains(x.RoleCode))
-                    .Select(x => x.UserCode)
-                    .ToList();
+                    .Select(x => x.UserCode)];
             }
 
             foreach (var userId in userids)
@@ -69,7 +68,7 @@ namespace WalkingTec.Mvvm.Core.Services
             string? currentTenant, bool hasMainHost, IDataContext? dc,
             IWtmApiClient? apiClient, params string[] groupCodes)
         {
-            List<string> userids = new List<string>();
+            var userids = new List<string>();
             if (hasMainHost && string.IsNullOrEmpty(currentTenant))
             {
                 if (apiClient != null)
@@ -87,10 +86,9 @@ namespace WalkingTec.Mvvm.Core.Services
             }
             else if (dc != null)
             {
-                userids = dc.Set<FrameworkUserGroup>()
+                userids = [.. dc.Set<FrameworkUserGroup>()
                     .Where(x => groupCodes.Contains(x.GroupCode))
-                    .Select(x => x.UserCode)
-                    .ToList();
+                    .Select(x => x.UserCode)];
             }
 
             foreach (var userId in userids)
