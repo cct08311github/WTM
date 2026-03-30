@@ -121,12 +121,11 @@ namespace WalkingTec.Mvvm.Core
         private List<Type> CollectDirtyLookupTypes()
         {
             if (LookupCacheService == null) return new List<Type>();
-            return ChangeTracker.Entries()
+            return [.. ChangeTracker.Entries()
                 .Where(e => e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
                 .Select(e => e.Entity.GetType())
                 .Where(t => LookupCacheService.IsCacheable(t))
-                .Distinct()
-                .ToList();
+                .Distinct()];
         }
 
         private void InvalidateLookups(List<Type> types)
@@ -153,7 +152,7 @@ namespace WalkingTec.Mvvm.Core
                 if (typeof(TopBasePoco).IsAssignableFrom(item) && typeof(ISubFile).IsAssignableFrom(item) == false)
                 {
                     //将所有关联附件的外键设为不可级联删除
-                    var pros = item.GetProperties().Where(x => x.PropertyType == typeof(FileAttachment)).ToList();
+                    PropertyInfo[] pros = [.. item.GetProperties().Where(x => x.PropertyType == typeof(FileAttachment))];
                     foreach (var filepro in pros)
                     {
                         var builder = typeof(ModelBuilder).GetMethod("Entity", Type.EmptyTypes)!.MakeGenericMethod(item).Invoke(modelBuilder, null) as EntityTypeBuilder;
@@ -314,9 +313,9 @@ namespace WalkingTec.Mvvm.Core
         private FrameworkMenu? GetMenu(List<SimpleModule>? allModules, string? areaName, string controllerName, string actionName, string pageKey, int displayOrder)
         {
             if (allModules == null) return null;
-            var acts = allModules.Where(x => x.ClassName == controllerName && (areaName == null || x.Area?.Prefix?.ToLower() == areaName.ToLower())).SelectMany(x => x.Actions ?? new List<SimpleAction>()).ToList();
+            List<SimpleAction> acts = [.. allModules.Where(x => x.ClassName == controllerName && (areaName == null || x.Area?.Prefix?.ToLower() == areaName.ToLower())).SelectMany(x => x.Actions ?? [])];
             var act = acts.Where(x => x.MethodName == actionName).SingleOrDefault();
-            var rest = acts.Where(x => x.MethodName != actionName && x.IgnorePrivillege == false).ToList();
+            List<SimpleAction> rest = [.. acts.Where(x => x.MethodName != actionName && x.IgnorePrivillege == false)];
             bool allowtenant = controllerName != "FrameworkMenu";
             FrameworkMenu? menu = GetMenuFromAction(act, true, displayOrder, allowtenant);
             if (act?.Module?.IsApi == true && menu != null)
@@ -350,8 +349,8 @@ namespace WalkingTec.Mvvm.Core
         {
             if (allModules == null) return null;
             bool allowtenant = controllerName != "FrameworkMenu";
-            var acts = allModules.Where(x => (x.FullName == $"WalkingTec.Mvvm.Admin.Api,{controllerName}") && x.IsApi == true).SelectMany(x => x.Actions ?? new List<SimpleAction>()).ToList();
-            var rest = acts.Where(x => x.IgnorePrivillege == false).ToList();
+            List<SimpleAction> acts = [.. allModules.Where(x => (x.FullName == $"WalkingTec.Mvvm.Admin.Api,{controllerName}") && x.IsApi == true).SelectMany(x => x.Actions ?? [])];
+            List<SimpleAction> rest = [.. acts.Where(x => x.IgnorePrivillege == false)];
             SimpleAction? act = null;
             if (acts.Count > 0)
             {
@@ -614,7 +613,7 @@ namespace WalkingTec.Mvvm.Core
             if (entity != null && entity.ID != Guid.Empty)
             {
                 var set = this.Set<T>();
-                var entities = set.Where(x => x.ParentId == entity.ID).ToList();
+                List<T> entities = [.. set.Where(x => x.ParentId == entity.ID)];
                 if (entities.Count > 0)
                 {
                     foreach (var item in entities)

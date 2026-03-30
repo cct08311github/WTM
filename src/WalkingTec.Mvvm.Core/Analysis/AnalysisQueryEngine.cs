@@ -88,7 +88,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             // 與 IGroupByStrategy 內的 MaxRows 保持一致，若結果達到上限則標記截斷
             if (totalCount > 10_000)
             {
-                rows = rows.Take(10_000).ToList();
+                rows = [.. rows.Take(10_000)];
                 truncated = true;
             }
 
@@ -97,7 +97,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
             var response = new AnalysisQueryResponse
             {
-                Columns = req.Dimensions.Concat(req.Measures.Select(m => $"{m.Field}_{m.Func}")).ToList(),
+                Columns = [.. req.Dimensions.Concat(req.Measures.Select(m => $"{m.Field}_{m.Func}"))],
                 Rows = rows,
                 TotalCount = totalCount,
                 Truncated = truncated,
@@ -168,7 +168,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             var truncated = false;
             if (totalCount > 10_000)
             {
-                rows = rows.Take(10_000).ToList();
+                rows = [.. rows.Take(10_000)];
                 truncated = true;
             }
 
@@ -177,7 +177,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
             var response = new AnalysisQueryResponse
             {
-                Columns = req.Dimensions.Concat(req.Measures.Select(m => $"{m.Field}_{m.Func}")).ToList(),
+                Columns = [.. req.Dimensions.Concat(req.Measures.Select(m => $"{m.Field}_{m.Func}"))],
                 Rows = rows,
                 TotalCount = totalCount,
                 Truncated = truncated,
@@ -213,8 +213,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
             var rawRows = groupRes.Rows;
 
             // 2. Identify row dimensions and pivot dimension
-            var rowDims = req.Dimensions.Where(d => d != req.PivotDimension).ToList();
-            var measureNames = req.Measures.Select(m => $"{m.Field}_{m.Func}").ToList();
+            List<string> rowDims = [.. req.Dimensions.Where(d => d != req.PivotDimension)];
+            List<string> measureNames = [.. req.Measures.Select(m => $"{m.Field}_{m.Func}")];
 
             // 3. Collect unique values of the pivot dimension
             var pivotValues = rawRows
@@ -255,7 +255,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 RowDimensions = rowDims,
                 PivotValues = pivotValues,
                 MeasureNames = measureNames,
-                Rows = pivotRowsMap.Values.ToList(),
+                Rows = [.. pivotRowsMap.Values],
                 Columns = columns,
                 Truncated = groupRes.Truncated
             };
@@ -280,8 +280,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
             var groupRes = await ExecuteAsync(baseQuery, req, whitelist, dbType, identityKey, cancellationToken);
             var rawRows = groupRes.Rows;
 
-            var rowDims = req.Dimensions.Where(d => d != req.PivotDimension).ToList();
-            var measureNames = req.Measures.Select(m => $"{m.Field}_{m.Func}").ToList();
+            List<string> rowDims = [.. req.Dimensions.Where(d => d != req.PivotDimension)];
+            List<string> measureNames = [.. req.Measures.Select(m => $"{m.Field}_{m.Func}")];
 
             var pivotValues = rawRows
                 .Select(r => String(r[req.PivotDimension]))
@@ -318,7 +318,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 RowDimensions = rowDims,
                 PivotValues = pivotValues,
                 MeasureNames = measureNames,
-                Rows = pivotRowsMap.Values.ToList(),
+                Rows = [.. pivotRowsMap.Values],
                 Columns = columns,
                 Truncated = groupRes.Truncated
             };
