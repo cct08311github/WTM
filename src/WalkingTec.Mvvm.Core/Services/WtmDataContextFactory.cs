@@ -46,7 +46,7 @@ namespace WalkingTec.Mvvm.Core.Services
             string? cs = cskey ?? currentCs;
             string? tenantCode = null;
 
-            var tenants = _globalData.AllTenant ?? new List<FrameworkTenant>();
+            var tenants = _globalData.AllTenant ?? [];
 
             // Resolve tenant code: explicit parameter first, then domain-based resolution
             string? tc = currentTenant;

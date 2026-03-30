@@ -37,7 +37,7 @@ namespace WalkingTec.Mvvm.Core.Services
             {
                 if (loginUser?.TenantCode != null)
                 {
-                    var hostonly = globalData?.AllMainTenantOnlyUrls ?? new List<string>();
+                    var hostonly = globalData?.AllMainTenantOnlyUrls ?? [];
                     foreach (var au in hostonly)
                     {
                         if (MatchUrl(au, url))
@@ -49,7 +49,7 @@ namespace WalkingTec.Mvvm.Core.Services
             }
 
             // Check unrestricted (public action) URLs
-            var publicActions = globalData?.AllAccessUrls ?? new List<string>();
+            var publicActions = globalData?.AllAccessUrls ?? [];
             foreach (var au in publicActions)
             {
                 if (au != "/" && MatchUrl(au, url))

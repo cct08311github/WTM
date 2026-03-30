@@ -47,7 +47,7 @@ namespace WalkingTec.Mvvm.Core.Services
                 List<SimpleGroup>? groups = null;
                 try
                 {
-                    var tenants = _globalData.AllTenant ?? new List<FrameworkTenant>();
+                    var tenants = _globalData.AllTenant ?? [];
                     var dbtenant = tenants.Where(x => x.TCode == tenant && x.IsUsingDB == true).FirstOrDefault();
                     using var dc = CreateDCForTenant(dbtenant);
                     groups = [.. dc?.Set<FrameworkGroup>()
@@ -80,7 +80,7 @@ namespace WalkingTec.Mvvm.Core.Services
                 List<SimpleRole>? roles = null;
                 try
                 {
-                    var tenants = _globalData.AllTenant ?? new List<FrameworkTenant>();
+                    var tenants = _globalData.AllTenant ?? [];
                     var dbtenant = tenants.Where(x => x.TCode == tenant && x.IsUsingDB == true).FirstOrDefault();
                     using var dc = CreateDCForTenant(dbtenant);
                     roles = [.. dc?.Set<FrameworkRole>()

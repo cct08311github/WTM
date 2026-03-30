@@ -916,7 +916,7 @@ params string[] groupcode)
                 string? cs = cskey ?? CurrentCS;
                 string? tenantCode = null;
 
-                var tenants = GlobaInfo?.AllTenant ?? new List<FrameworkTenant>();
+                var tenants = GlobaInfo?.AllTenant ?? [];
                 string? tc = _loginUserInfo?.CurrentTenant;
                 if (tc == null && HttpContext?.Request.Headers.ContainsKey("Referer")==true)
                 {
