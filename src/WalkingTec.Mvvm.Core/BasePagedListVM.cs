@@ -630,7 +630,8 @@ namespace WalkingTec.Mvvm.Core
                     var pe = Expression.Parameter(typeof(TModel));
                     peid = Expression.Property(pe, typeof(TModel).GetSingleProperty(SelectorValueField)!);
                 }
-                var mod = new WhereReplaceModifier<TModel>(Ids.Cast<string?>().ToList().GetContainIdExpression<TModel>(peid));
+                List<string?> tmpIds = [.. Ids.Cast<string?>()];
+                var mod = new WhereReplaceModifier<TModel>(tmpIds.GetContainIdExpression<TModel>(peid));
                 var newExp = mod.Modify(baseQuery.Expression);
                 var newQuery = baseQuery.Provider.CreateQuery<TModel>(newExp) as IOrderedQueryable<TModel>;
                 return newQuery!;
@@ -731,20 +732,20 @@ namespace WalkingTec.Mvvm.Core
                             {
                                 Searcher.Page = Searcher.PageCount;
                             }
-                            EntityList = query!.Skip((Searcher.Page - 1) * Searcher.Limit).Take(Searcher.Limit).AsNoTracking().ToList();
+                            EntityList = [.. query!.Skip((Searcher.Page - 1) * Searcher.Limit).Take(Searcher.Limit).AsNoTracking()];
                         }
                         else //如果不需要分页则直接获取数据
                         {
-                            EntityList = query!.AsNoTracking().ToList();
-                            Searcher.Count = EntityList.Count();
-                            Searcher.Limit = EntityList.Count();
+                            EntityList = [.. query!.AsNoTracking()];
+                            Searcher.Count = EntityList.Count;
+                            Searcher.Limit = EntityList.Count;
                             Searcher.PageCount = 1;
                             Searcher.Page = 1;
                         }
                     }
                     else
                     {
-                        EntityList = query!.AsNoTracking().ToList();
+                        EntityList = [.. query!.AsNoTracking()];
                     }
                 }
             }
@@ -792,7 +793,7 @@ namespace WalkingTec.Mvvm.Core
                 }
                 var pa = parms.ToArray();
 
-                EntityList = DC.Run<TModel>(cmd.CommandText, cmd.CommandType, pa).ToList();
+                EntityList = [.. DC.Run<TModel>(cmd.CommandText, cmd.CommandType, pa)];
                 if (cmd.CommandType == CommandType.StoredProcedure)
                 {
                     total = pa.Last().Value;
@@ -829,7 +830,7 @@ namespace WalkingTec.Mvvm.Core
                 }
                 var pa = parms.ToArray();
 
-                EntityList = DC.Run<TModel>(cmd.CommandText, cmd.CommandType, pa).ToList();
+                EntityList = [.. DC.Run<TModel>(cmd.CommandText, cmd.CommandType, pa)];
                 if (cmd.CommandType == CommandType.StoredProcedure)
                 {
                     total = pa.Last().Value;
@@ -865,7 +866,7 @@ namespace WalkingTec.Mvvm.Core
                 }
                 var pa = parms.ToArray();
 
-                EntityList = DC.Run<TModel>(cmd.CommandText, cmd.CommandType, pa).ToList();
+                EntityList = [.. DC.Run<TModel>(cmd.CommandText, cmd.CommandType, pa)];
                 if (cmd.CommandType == CommandType.StoredProcedure)
                 {
                     total = pa.Last().Value;

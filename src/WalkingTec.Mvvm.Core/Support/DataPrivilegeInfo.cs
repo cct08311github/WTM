@@ -63,7 +63,8 @@ namespace WalkingTec.Mvvm.Core
 
             if (ids != null)
             {
-                where = ids.Select(x => (string?)x).ToList().GetContainIdExpression<T>();
+                List<string?> tmp = [.. ids.Select(x => (string?)x)];
+                where = tmp.GetContainIdExpression<T>();
             }
             else
             {
@@ -94,7 +95,7 @@ namespace WalkingTec.Mvvm.Core
             List<ComboSelectListItem> rv = new List<ComboSelectListItem>();
             if (user!.Roles?.Where(x => x.RoleCode == "001").FirstOrDefault() == null && user.DataPrivileges?.Where(x => x.RelateId == null).FirstOrDefault() == null)
             {
-                rv = wtmcontext!.DC.Set<T>().CheckIDs(user.DataPrivileges!.Select(y => y.RelateId).ToList()).Where(where!).GetSelectListItems(wtmcontext, _displayField, null, ignorDataPrivilege: true);
+                rv = wtmcontext!.DC.Set<T>().CheckIDs([.. user.DataPrivileges!.Select(y => y.RelateId)]).Where(where!).GetSelectListItems(wtmcontext, _displayField, null, ignorDataPrivilege: true);
             }
             else
             {
@@ -105,10 +106,10 @@ namespace WalkingTec.Mvvm.Core
 
         public List<string> GetTreeParentIds(WTMContext wtmcontext, List<DataPrivilege> dps)
         {
-            var ids = dps.Where(x => x.TableName == this.ModelName).Select(x => x.RelateId).ToList();
+            List<string?> ids = [.. dps.Where(x => x.TableName == this.ModelName).Select(x => x.RelateId)];
             var idscheck = ids.GetContainIdExpression<T>();
             var modified = wtmcontext.DC.Set<T>().Where(idscheck).CheckNotNull("ParentId").DynamicSelect("ParentId");
-            var skipids = modified.ToList();
+            List<string> skipids = [.. modified];
             return skipids;
         }
 
@@ -116,7 +117,8 @@ namespace WalkingTec.Mvvm.Core
         {
             ParameterExpression pe = Expression.Parameter(typeof(T));
             Expression parentid = Expression.Property(pe, typeof(T).GetSingleProperty("ParentId")!);
-            return wtmcontext.DC.Set<T>().Where(pids.Select(x => (string?)x).ToList().GetContainIdExpression<T>(parentid)).DynamicSelect("ID").ToList();
+            List<string?> tmp = [.. pids.Select(x => (string?)x)];
+            return [.. wtmcontext.DC.Set<T>().Where(tmp.GetContainIdExpression<T>(parentid)).DynamicSelect("ID")];
         }
     }
 
