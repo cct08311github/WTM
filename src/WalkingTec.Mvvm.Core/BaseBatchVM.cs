@@ -115,22 +115,22 @@ namespace WalkingTec.Mvvm.Core
         {
             bool rv = true;
             //循环所有数据Id
-            List<string> idsData = Ids!.ToList();
+            List<string> idsData = [.. Ids!];
             var modelType = typeof(TModel);
             var pros = modelType.GetAllProperties();
             //如果包含附件，则先删除附件
             List<Guid> fileids = new List<Guid>();
-            var fa = pros.Where(x => x.PropertyType == typeof(FileAttachment) || typeof(TopBasePoco).IsAssignableFrom(x.PropertyType)).ToList();
+            List<PropertyInfo> fa = [.. pros.Where(x => x.PropertyType == typeof(FileAttachment) || typeof(TopBasePoco).IsAssignableFrom(x.PropertyType))];
             var isPersist =typeof(IPersistPoco).IsAssignableFrom(modelType);
             var isBasePoco = typeof(IBasePoco).IsAssignableFrom(modelType);
             var query = DC!.Set<TModel>().AsQueryable();
-            var fas = pros.Where(x => typeof(IEnumerable<ISubFile>).IsAssignableFrom(x.PropertyType)).ToList();
+            List<PropertyInfo> fas = [.. pros.Where(x => typeof(IEnumerable<ISubFile>).IsAssignableFrom(x.PropertyType))];
             foreach (var f in fas)
             {
                 query = query.Include(f.Name);
             }
-            query = query.AsNoTracking().CheckIDs(idsData.Select(x => (string?)x).ToList());
-            var entityList = query.ToList();
+            query = query.AsNoTracking().CheckIDs([.. idsData.Select(x => (string?)x)]);
+            List<TModel> entityList = [.. query];
             for (int i = 0; i < entityList.Count; i++)
             {
                 string? checkErro = null;
@@ -271,7 +271,7 @@ namespace WalkingTec.Mvvm.Core
             //获取批量修改VM的所有属性
             var pros = LinkedVM!.GetType().GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly);
             bool rv = true;
-            List<string> idsData = Ids!.ToList();
+            List<string> idsData = [.. Ids!];
             string currentvmname = this.GetType().Name;
             Type? vmtype = null;
             //找到对应的BaseCRUDVM，并初始化
