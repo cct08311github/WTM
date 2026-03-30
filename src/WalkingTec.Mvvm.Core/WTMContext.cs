@@ -1386,7 +1386,7 @@ params string[] groupcode)
         {
             SetValuesParser p = new SetValuesParser();
             var dir = p.Parse(values);
-            return CreateVM(typeof(T), null, Ids.Cast<object>().ToArray(), dir, passInit) as T;
+            return CreateVM(typeof(T), null, [.. Ids.Cast<object>()], dir, passInit) as T;
         }
 
         /// <summary>
@@ -1401,7 +1401,7 @@ params string[] groupcode)
         {
             SetValuesParser p = new SetValuesParser();
             var dir = p.Parse(values);
-            return CreateVM(typeof(T), null, Ids.Cast<object>().ToArray(), dir, passInit) as T;
+            return CreateVM(typeof(T), null, [.. Ids.Cast<object>()], dir, passInit) as T;
         }
 
         /// <summary>
@@ -1416,7 +1416,7 @@ params string[] groupcode)
         {
             SetValuesParser p = new SetValuesParser();
             var dir = p.Parse(values);
-            return CreateVM(typeof(T), null, Ids.Cast<object>().ToArray(), dir, passInit) as T;
+            return CreateVM(typeof(T), null, [.. Ids.Cast<object>()], dir, passInit) as T;
         }
         /// <summary>
         /// Create a ViewModel, and pass Session,cache,dc...etc to the viewmodel
@@ -1430,7 +1430,7 @@ params string[] groupcode)
         {
             SetValuesParser p = new SetValuesParser();
             var dir = p.Parse(values);
-            return CreateVM(typeof(T), null, Ids.Cast<object>().ToArray(), dir, passInit) as T;
+            return CreateVM(typeof(T), null, [.. Ids.Cast<object>()], dir, passInit) as T;
         }
 
         /// <summary>
