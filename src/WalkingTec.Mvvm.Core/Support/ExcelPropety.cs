@@ -476,7 +476,7 @@ namespace WalkingTec.Mvvm.Core
         public List<EntityValue> EntityValues { get; set; }
         public ProcessResult()
         {
-            EntityValues = new List<EntityValue>();
+            EntityValues = [];
         }
     }
 
