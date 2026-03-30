@@ -22,7 +22,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             }
             else
             {
-                GenerateMenuTree(allmenus.Where(x => x.ShowOnMenu == true).ToList(), resultMenus);
+                GenerateMenuTree([.. allmenus.Where(x => x.ShowOnMenu == true)], resultMenus);
                 RemoveUnAccessableMenu(resultMenus, wtm);
                 RemoveEmptyMenu(resultMenus);
                 LocalizeMenu(resultMenus);
@@ -32,7 +32,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
 
         private static void GenerateMenuTree(List<SimpleMenu> menus, List<LayUIMenu> resultMenus, bool quickDebug = false)
         {
-            resultMenus.AddRange(menus.Where(x => x.ParentId == null).Select(x => new LayUIMenu()
+            resultMenus.AddRange([.. menus.Where(x => x.ParentId == null).Select(x => new LayUIMenu()
             {
                 Id = x.ID,
                 Title = x.PageName,
@@ -40,12 +40,11 @@ namespace WalkingTec.Mvvm.Core.Extensions
                 Order = x.DisplayOrder,
                 Icon = quickDebug && string.IsNullOrEmpty(x.Icon) ? $"_wtmicon _wtmicon-{(string.IsNullOrEmpty(x.Url) ? "folder" : "file")}" : x.Icon
             })
-            .OrderBy(x => x.Order)
-            .ToList());
+            .OrderBy(x => x.Order)]);
 
             foreach (var menu in resultMenus)
             {
-                var temp = menus.Where(x => x.ParentId == menu.Id).Select(x => new LayUIMenu()
+                List<LayUIMenu> temp = [.. menus.Where(x => x.ParentId == menu.Id).Select(x => new LayUIMenu()
                 {
                     Id = x.ID,
                     Title = x.PageName,
@@ -53,22 +52,20 @@ namespace WalkingTec.Mvvm.Core.Extensions
                     Order = x.DisplayOrder,
                     Icon = quickDebug && string.IsNullOrEmpty(x.Icon) ? $"_wtmicon _wtmicon-{(string.IsNullOrEmpty(x.Url) ? "folder" : "file")}" : x.Icon
                 })
-                .OrderBy(x => x.Order)
-                .ToList();
+                .OrderBy(x => x.Order)];
                 if (temp.Count() > 0)
                 {
                     menu.Children = temp;
                     foreach (var item in menu.Children)
                     {
-                        item.Children = menus.Where(x => x.ParentId == item.Id).Select(x => new LayUIMenu()
+                        item.Children = [.. menus.Where(x => x.ParentId == item.Id).Select(x => new LayUIMenu()
                         {
                             Title = x.PageName,
                             Url = x.Url,
                             Order = x.DisplayOrder,
                             Icon = quickDebug && string.IsNullOrEmpty(x.Icon) ? $"_wtmicon _wtmicon-{(string.IsNullOrEmpty(x.Url) ? "folder" : "file")}" : x.Icon
                         })
-                        .OrderBy(x => x.Order)
-                        .ToList();
+                        .OrderBy(x => x.Order)];
 
                         if (item.Children.Count() == 0)
                             item.Children = null;
