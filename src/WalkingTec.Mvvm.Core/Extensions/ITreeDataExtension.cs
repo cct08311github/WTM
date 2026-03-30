@@ -69,11 +69,11 @@ namespace WalkingTec.Mvvm.Core.Extensions
             List<Guid>? ids = null;
             if (subids == null)
             {
-                ids = dc.Set<T>().Where(x => x.ParentId == self.ID).Select(x => x.ID).ToList();
+                ids = [.. dc.Set<T>().Where(x => x.ParentId == self.ID).Select(x => x.ID)];
             }
             else
             {
-                ids = dc.Set<T>().Where(x => subids!.Contains(x.ParentId!.Value)).Select(x => x.ID).ToList();
+                ids = [.. dc.Set<T>().Where(x => subids!.Contains(x.ParentId!.Value)).Select(x => x.ID)];
             }
             if (ids != null && ids.Count > 0)
             {
@@ -127,14 +127,14 @@ namespace WalkingTec.Mvvm.Core.Extensions
             {
                 if(item.Children == null)
                 {
-                    item.Children = new List<T>();
+                    item.Children = [];
                 }
                 var children = self.Where(x => x.ParentId == item.ID).ToList();
                 children.ForEach(x =>x.Parent = item);
                 item.Children.AddRange(children);
                 rv.Add(item);                
             }
-            return rv.Where(x=>x.ParentId == null).ToList();
+            return [.. rv.Where(x=>x.ParentId == null)];
         }
         /// <summary>
         /// 将树形结构列表转变为标准列表
@@ -176,7 +176,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             }
             if (children != null && children.Count() > 0)
             {
-                var dictinct = children.Where(x => x.Value != self.Value).ToList();
+                List<TreeSelectListItem> dictinct = [.. (children ?? []).Where(x => x.Value != self.Value)];
                 foreach (var item in dictinct)
                 {
                     rv.Add(item);
