@@ -123,12 +123,12 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         protected virtual IEnumerable<IGridColumn<TModel>> InitGridHeader()
         {
-            return new List<GridColumn<TModel>>();
+            return [];
         }
 
         protected virtual List<GridAction> InitGridAction()
         {
-            return new List<GridAction>();
+            return [];
         }
 
         /// <summary>
@@ -982,7 +982,7 @@ namespace WalkingTec.Mvvm.Core
 
         public void RemoveAction()
         {
-            _gridActions = new List<GridAction>();
+            _gridActions = [];
         }
 
         public void RemoveActionAndIdColumn(IEnumerable<IGridColumn<TModel>>? root = null)
@@ -1259,16 +1259,16 @@ namespace WalkingTec.Mvvm.Core
             var mt = ModelType.GetParentWorkflowPoco();
             if (mt != null)
             {
-                var roleids = Wtm!.LoginUserInfo?.Roles?.Select(x => "r:" + x.ID).ToList();
-                var groupids = Wtm.LoginUserInfo?.Groups?.Select(x => "g:" + x.ID).ToList();
+                List<string> roleids = [.. Wtm!.LoginUserInfo?.Roles?.Select(x => "r:" + x.ID) ?? []];
+                List<string> groupids = [.. Wtm.LoginUserInfo?.Groups?.Select(x => "g:" + x.ID) ?? []];
 
-                var ids = DC!.Set<FrameworkWorkflow>()
+                List<FrameworkWorkflow> ids = [.. DC!.Set<FrameworkWorkflow>()
                      .CheckEqual(flowname!, x => x.WorkflowName!)
                      .CheckEqual(mt.FullName!, x => x.ModelType!)
                      .Where(x => x.UserCode == Wtm.LoginUserInfo!.ITCode
-                        || roleids!.Contains(x.UserCode)
-                        || groupids!.Contains(x.UserCode))
-                     .Where(x => x.TenantCode == Wtm.LoginUserInfo!.CurrentTenant).ToList();
+                        || roleids.Contains(x.UserCode)
+                        || groupids.Contains(x.UserCode))
+                     .Where(x => x.TenantCode == Wtm.LoginUserInfo!.CurrentTenant)];
                 return ids;
             }
             else
