@@ -745,7 +745,7 @@ namespace WalkingTec.Mvvm.Core
             if (field != null)
             {
 
-                var attribs = field.GetCustomAttributes(typeof(DisplayAttribute), true).ToList();
+                List<Attribute> attribs = [.. field.GetCustomAttributes(typeof(DisplayAttribute), true).Cast<Attribute>()];
                 if (attribs.Count > 0)
                 {
                     rv = ((DisplayAttribute)attribs[0]).GetName() ?? "";
@@ -786,7 +786,7 @@ namespace WalkingTec.Mvvm.Core
             if (field != null)
             {
 
-                var attribs = field.GetCustomAttributes(typeof(DisplayAttribute), true).ToList();
+                List<Attribute> attribs = [.. field.GetCustomAttributes(typeof(DisplayAttribute), true).Cast<Attribute>()];
                 if (attribs.Count > 0)
                 {
                     rv = ((DisplayAttribute)attribs[0]).GetName() ?? "";
