@@ -791,7 +791,7 @@ namespace WalkingTec.Mvvm.Core
                     };
                     parms.Add(outp);
                 }
-                var pa = parms.ToArray();
+                MySqlParameter[] pa = [.. parms];
 
                 EntityList = [.. DC.Run<TModel>(cmd.CommandText, cmd.CommandType, pa)];
                 if (cmd.CommandType == CommandType.StoredProcedure)
@@ -828,7 +828,7 @@ namespace WalkingTec.Mvvm.Core
                     };
                     parms.Add(outp);
                 }
-                var pa = parms.ToArray();
+                NpgsqlParameter[] pa = [.. parms];
 
                 EntityList = [.. DC.Run<TModel>(cmd.CommandText, cmd.CommandType, pa)];
                 if (cmd.CommandType == CommandType.StoredProcedure)
@@ -864,7 +864,7 @@ namespace WalkingTec.Mvvm.Core
                     };
                     parms.Add(outp);
                 }
-                var pa = parms.ToArray();
+                SqlParameter[] pa = [.. parms];
 
                 EntityList = [.. DC.Run<TModel>(cmd.CommandText, cmd.CommandType, pa)];
                 if (cmd.CommandType == CommandType.StoredProcedure)

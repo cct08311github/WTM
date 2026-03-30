@@ -184,7 +184,7 @@ namespace WalkingTec.Mvvm.Core
                 ForcePost = ispost,
                 QueryString = qs,
                 IsExport = isexport,
-                whereStr = list.ToArray()
+                whereStr = [.. list]
             };
         }
 
@@ -246,7 +246,7 @@ namespace WalkingTec.Mvvm.Core
                 DialogWidth = dialogWidth ?? 800,
                 DialogHeight = dialogHeight,
                 ShowDialog = true,
-                whereStr = list.ToArray()
+                whereStr = [.. list]
             };
         }
 
@@ -278,7 +278,7 @@ namespace WalkingTec.Mvvm.Core
                 DialogWidth = 0,
                 DialogHeight = 0,
                 ShowDialog = false,
-                whereStr = list.ToArray(),
+                whereStr = [.. list],
                  SubActions= subActions
             };
         }
