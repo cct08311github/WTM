@@ -157,23 +157,23 @@ namespace WalkingTec.Mvvm.Core.Extensions
             //根据Text对下拉菜单数据排序
             if (SortByName == true)
             {
-                rv = query.Select(lambda).ToList().OrderBy(x => x.Text).ToList();
+                rv = [.. query.Select(lambda).OrderBy(x => x.Text)];
             }
             else
             {
-                rv = query.Select(lambda).ToList();
+                rv = [.. query.Select(lambda)];
             }
 
             List<TreeSelectListItem> toDel = new List<TreeSelectListItem>();
 
             rv!.ForEach(x =>
             {
-                var c = rv.Where(y => y.ParentId == x.Id?.ToString()).ToList();
+                List<TreeSelectListItem> c = [.. rv.Where(y => y.ParentId == x.Id?.ToString())];
                 x.Children = c;
                 toDel.AddRange(c);
             });
             toDel.ForEach(x => rv.Remove(x));
-            return rv.ToList();
+            return rv;
         }
 
         #endregion
@@ -264,11 +264,11 @@ namespace WalkingTec.Mvvm.Core.Extensions
             //根据Text对下拉菜单数据排序
             if (SortByName == true)
             {
-                rv = query.Select(lambda).ToList().OrderBy(x => x.Text).ToList();
+                rv = [.. query.Select(lambda).OrderBy(x => x.Text)];
             }
             else
             {
-                rv = query.Select(lambda).ToList();
+                rv = [.. query.Select(lambda)];
             }
 
             return rv;
