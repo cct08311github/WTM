@@ -214,7 +214,8 @@ namespace WalkingTec.Mvvm.Core
                     break;
                 case ColumnDataType.ComboBox:
                 case ColumnDataType.Enum:
-                    int count = this.ListItems.Count() == 0 ? 1 : this.ListItems.Count();
+                    List<ComboSelectListItem> listItemsTemp = [.. this.ListItems];
+                    int count = listItemsTemp.Count == 0 ? 1 : listItemsTemp.Count;
                     string cloIndex = "";
                     if (porpetyIndex > 25)
                     {
@@ -227,8 +228,7 @@ namespace WalkingTec.Mvvm.Core
                     dvConstraint = (XSSFDataValidationConstraint)dvHelper.CreateFormulaListConstraint("dicRange" + porpetyIndex);
                     dataValidation = (XSSFDataValidation)dvHelper.CreateValidation(dvConstraint, CellRangeList);
                     dataValidation.CreateErrorBox(L("Sys.Error"), L("Sys.PleaseInputExistData"));
-                    var listItemsTemp = this.ListItems.ToList();
-                    for (int rowIndex = 0; rowIndex < this.ListItems.Count(); rowIndex++)
+                    for (int rowIndex = 0; rowIndex < listItemsTemp.Count; rowIndex++)
                     {
                         IRow dataSheetRow = dataSheet.GetRow(rowIndex);
                         if (dataSheetRow == null)
