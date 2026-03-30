@@ -421,11 +421,11 @@ namespace WalkingTec.Mvvm.Core
             var items = filter == null
                 ? (System.Collections.Generic.IEnumerable<T>)GetLookup<T>()
                 : GetLookup<T>().Where(filter);
-            return items.Select(x => new ComboSelectListItem
+            return [.. items.Select(x => new ComboSelectListItem
             {
                 Value = valueField(x)?.ToString(),
                 Text = textField(x)
-            }).ToList();
+            })];
         }
 
         /// <summary>
