@@ -50,7 +50,7 @@ namespace WalkingTec.Mvvm.Core.Services
                     var tenants = _globalData.AllTenant ?? new List<FrameworkTenant>();
                     var dbtenant = tenants.Where(x => x.TCode == tenant && x.IsUsingDB == true).FirstOrDefault();
                     using var dc = CreateDCForTenant(dbtenant);
-                    groups = dc?.Set<FrameworkGroup>()
+                    groups = [.. dc?.Set<FrameworkGroup>()
                         .IgnoreQueryFilters() // IgnoreQueryFilters: tenant data is queried cross-filter
                         .Where(x => x.TenantCode == tenant)
                         .Select(x => new SimpleGroup
@@ -61,7 +61,7 @@ namespace WalkingTec.Mvvm.Core.Services
                             Manager = x.Manager,
                             ParentId = x.ParentId,
                             Tenant = x.TenantCode
-                        }).ToList();
+                        })];
                 }
                 catch (Exception ex)
                 {
@@ -83,7 +83,7 @@ namespace WalkingTec.Mvvm.Core.Services
                     var tenants = _globalData.AllTenant ?? new List<FrameworkTenant>();
                     var dbtenant = tenants.Where(x => x.TCode == tenant && x.IsUsingDB == true).FirstOrDefault();
                     using var dc = CreateDCForTenant(dbtenant);
-                    roles = dc?.Set<FrameworkRole>()
+                    roles = [.. dc?.Set<FrameworkRole>()
                         .IgnoreQueryFilters() // IgnoreQueryFilters: tenant data is queried cross-filter
                         .Where(x => x.TenantCode == tenant)
                         .Select(x => new SimpleRole
@@ -92,7 +92,7 @@ namespace WalkingTec.Mvvm.Core.Services
                             RoleCode = x.RoleCode,
                             RoleName = x.RoleName,
                             Tenant = x.TenantCode
-                        }).ToList();
+                        })];
                 }
                 catch (Exception ex)
                 {

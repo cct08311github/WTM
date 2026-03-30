@@ -135,15 +135,15 @@ namespace WalkingTec.Mvvm.Core.Services
 
         private static void InitBatchVM(IBaseBatchVM<BaseVM> temp, BaseVM rv, object[]? ids, bool passInit)
         {
-            temp.Ids = Array.Empty<string>();
+            temp.Ids = [];
             if (ids != null)
             {
-                temp.Ids = ids.Select(iid => iid?.ToString() ?? "").ToArray();
+                temp.Ids = [.. ids.Select(iid => iid?.ToString() ?? "")];
             }
             if (temp.ListVM != null)
             {
                 temp.ListVM.CopyContext(rv);
-                temp.ListVM.Ids = ids == null ? new List<string>() : temp.Ids.ToList();
+                temp.ListVM.Ids = ids == null ? [] : [.. temp.Ids];
                 temp.ListVM.SearcherMode = ListVMSearchModeEnum.Batch;
                 temp.ListVM.NeedPage = false;
             }
