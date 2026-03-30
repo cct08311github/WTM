@@ -36,14 +36,13 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     $"PivotDimension '{pivotDimension}' 必須是選取維度之一。");
 
             // Row dimensions = all dimensions except pivot dimension
-            var rowDims = allDimensions.Where(d => d != pivotDimension).ToList();
+            List<string> rowDims = [.. allDimensions.Where(d => d != pivotDimension)];
 
             // Collect unique pivot values
-            var pivotValues = groupByResult.Rows
+            List<string> pivotValues = [.. groupByResult.Rows
                 .Select(r => r.GetValueOrDefault(pivotDimension)?.ToString() ?? "")
                 .Distinct()
-                .OrderBy(v => v)
-                .ToList();
+                .OrderBy(v => v)];
 
             if (pivotValues.Count > MaxPivotValues)
                 throw new InvalidOperationException(
