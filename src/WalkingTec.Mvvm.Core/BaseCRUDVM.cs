@@ -323,7 +323,7 @@ namespace WalkingTec.Mvvm.Core
                 }
             }
 
-            List<IncludeInfo> softincludes = includeInfo.Where(x => x.HasNotMapped == true).ToList();
+            List<IncludeInfo> softincludes = [.. includeInfo.Where(x => x.HasNotMapped == true)];
             if (softincludes.Count > 0)
             {
                 ParameterExpression pe = Expression.Parameter(ModelType);
@@ -377,7 +377,7 @@ namespace WalkingTec.Mvvm.Core
             }
             //如果TopBasePoco有关联的附件，则自动Include 附件名称
             var pros = typeof(TModel).GetAllProperties();
-            var fa = pros.Where(x => x.PropertyType == typeof(FileAttachment)).ToList();
+            List<PropertyInfo> fa = [.. pros.Where(x => x.PropertyType == typeof(FileAttachment))];
             foreach (var f in fa)
             {
                 var fname = DC!.GetFKName2<TModel>(f.Name);
@@ -995,7 +995,7 @@ namespace WalkingTec.Mvvm.Core
 
                 var pros = typeof(TModel).GetAllProperties();
                 //如果包含List<PersistPoco>，将子表IsValid也设置为false
-                var fas = pros.Where(x => typeof(IEnumerable<IPersistPoco>).IsAssignableFrom(x.PropertyType)).ToList();
+                List<PropertyInfo> fas = [.. pros.Where(x => typeof(IEnumerable<IPersistPoco>).IsAssignableFrom(x.PropertyType))];
                 foreach (var f in fas)
                 {
                     f.SetValue(Entity, f.PropertyType.GetConstructor(Type.EmptyTypes)!.Invoke(null));
@@ -1022,12 +1022,12 @@ namespace WalkingTec.Mvvm.Core
                 (Entity as IPersistPoco)!.IsValid = false;
                 var pros = typeof(TModel).GetAllProperties();
                 //如果包含List<PersistPoco>，将子表IsValid也设置为false
-                var fas = pros.Where(x => typeof(IEnumerable<IPersistPoco>).IsAssignableFrom(x.PropertyType)).ToList();
+                List<PropertyInfo> fas = [.. pros.Where(x => typeof(IEnumerable<IPersistPoco>).IsAssignableFrom(x.PropertyType))];
                 foreach (var f in fas)
                 {
                     f.SetValue(Entity, f.PropertyType.GetConstructor(Type.EmptyTypes)!.Invoke(null));
                 }
-                fas = pros.Where(x => typeof(TopBasePoco).IsAssignableFrom(x.PropertyType)).ToList();
+                fas = [.. pros.Where(x => typeof(TopBasePoco).IsAssignableFrom(x.PropertyType))];
                 foreach (var f in fas)
                 {
                     f.SetValue(Entity, null);
@@ -1061,7 +1061,7 @@ namespace WalkingTec.Mvvm.Core
                 var pros = typeof(TModel).GetAllProperties();
 
                 //如果包含附件，则先删除附件
-                var fa = pros.Where(x => x.PropertyType == typeof(FileAttachment) || typeof(TopBasePoco).IsAssignableFrom(x.PropertyType)).ToList();
+                List<PropertyInfo> fa = [.. pros.Where(x => x.PropertyType == typeof(FileAttachment) || typeof(TopBasePoco).IsAssignableFrom(x.PropertyType))];
                 foreach (var f in fa)
                 {
                     if (f.GetValue(Entity) is FileAttachment file)
@@ -1071,7 +1071,7 @@ namespace WalkingTec.Mvvm.Core
                     f.SetValue(Entity, null);
                 }
 
-                var fas = pros.Where(x => typeof(IEnumerable<ISubFile>).IsAssignableFrom(x.PropertyType)).ToList();
+                List<PropertyInfo> fas = [.. pros.Where(x => typeof(IEnumerable<ISubFile>).IsAssignableFrom(x.PropertyType))];
                 foreach (var f in fas)
                 {
                     var subs = f.GetValue(Entity) as IEnumerable<ISubFile>;
@@ -1127,7 +1127,7 @@ namespace WalkingTec.Mvvm.Core
                 var pros = typeof(TModel).GetAllProperties();
 
                 //如果包含附件，则先删除附件
-                var fa = pros.Where(x => x.PropertyType == typeof(FileAttachment) || typeof(TopBasePoco).IsAssignableFrom(x.PropertyType)).ToList();
+                List<PropertyInfo> fa = [.. pros.Where(x => x.PropertyType == typeof(FileAttachment) || typeof(TopBasePoco).IsAssignableFrom(x.PropertyType))];
                 foreach (var f in fa)
                 {
                     if (f.GetValue(Entity) is FileAttachment file)
@@ -1137,7 +1137,7 @@ namespace WalkingTec.Mvvm.Core
                     f.SetValue(Entity, null);
                 }
 
-                var fas = pros.Where(x => typeof(IEnumerable<ISubFile>).IsAssignableFrom(x.PropertyType)).ToList();
+                List<PropertyInfo> fas = [.. pros.Where(x => typeof(IEnumerable<ISubFile>).IsAssignableFrom(x.PropertyType))];
                 foreach (var f in fas)
                 {
                     var subs = f.GetValue(Entity) as IEnumerable<ISubFile>;

@@ -286,8 +286,8 @@ namespace WalkingTec.Mvvm.Core
 
                 //获取模板中所有字段的属性
                 List<ExcelPropety> ListTemplateProptetys = new List<ExcelPropety>();
-                var ListPropetys = Template.GetType().GetFields().Where(x => x.FieldType == typeof(ExcelPropety)).ToList();
-                for (int i = 0; i < ListPropetys.Count(); i++)
+                List<FieldInfo> ListPropetys = [.. Template.GetType().GetFields().Where(x => x.FieldType == typeof(ExcelPropety))];
+                for (int i = 0; i < ListPropetys.Count; i++)
                 {
                     ExcelPropety ep = (ExcelPropety)ListPropetys[i].GetValue(Template)!;
                     ListTemplateProptetys.Add(ep);
@@ -443,7 +443,7 @@ namespace WalkingTec.Mvvm.Core
             var pros = typeof(P).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
 
             //反射出模板类中的所有属性字段 T是模板类，ExcelProperty 是自定义的Excel属性类
-            List<FieldInfo> ListExcelFields = typeof(T).GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance).Where(x => x.FieldType == typeof(ExcelPropety)).ToList();
+            List<FieldInfo> ListExcelFields = [.. typeof(T).GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance).Where(x => x.FieldType == typeof(ExcelPropety))];
 
             //循环Excel中的数据
             foreach (var item in TemplateData!)
@@ -614,7 +614,7 @@ namespace WalkingTec.Mvvm.Core
         public virtual void SetValidateCheck()
         {
             //找到对应的BaseCRUDVM，并初始化
-            var vms = this.GetType().Assembly.GetExportedTypes().Where(x => x.IsSubclassOf(typeof(BaseCRUDVM<P>))).ToList();
+            List<Type> vms = [.. this.GetType().Assembly.GetExportedTypes().Where(x => x.IsSubclassOf(typeof(BaseCRUDVM<P>)))];
             var vmtype = vms.Where(x => x.Name.ToLower() == typeof(P).Name.ToLower() + "vm").FirstOrDefault();
             if (vmtype == null)
             {
@@ -1442,9 +1442,9 @@ namespace WalkingTec.Mvvm.Core
                 fa = fp.GetFile(UploadFileId!, true, DC!);
                 xssfworkbook = new XSSFWorkbook(fa!.DataStream);
                 fa!.DataStream?.Dispose();
-                var propetys = Template.GetType().GetFields().Where(x => x.FieldType == typeof(ExcelPropety)).ToList();
+                List<FieldInfo> propetys = [.. Template.GetType().GetFields().Where(x => x.FieldType == typeof(ExcelPropety))];
                 List<ExcelPropety> excelPropetys = new List<ExcelPropety>();
-                for (int porpetyIndex = 0; porpetyIndex < propetys.Count(); porpetyIndex++)
+                for (int porpetyIndex = 0; porpetyIndex < propetys.Count; porpetyIndex++)
                 {
                     ExcelPropety ep = (ExcelPropety)propetys[porpetyIndex].GetValue(Template)!;
                     excelPropetys.Add(ep);
