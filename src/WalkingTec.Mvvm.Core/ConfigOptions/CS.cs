@@ -31,7 +31,7 @@ namespace WalkingTec.Mvvm.Core
                 if (_cis == null)
                 {
                     var AllAssembly = Utils.GetAllAssembly();
-                     _cis = new List<ConstructorInfo>();
+                     _cis = [];
                     if (AllAssembly != null)
                     {
                         foreach (var ass in AllAssembly)
@@ -64,7 +64,7 @@ namespace WalkingTec.Mvvm.Core
                 if (_cisFull == null)
                 {
                     var AllAssembly = Utils.GetAllAssembly();
-                    _cisFull = new List<ConstructorInfo>();
+                    _cisFull = [];
                     if (AllAssembly != null)
                     {
                         foreach (var ass in AllAssembly)
