@@ -223,13 +223,13 @@ namespace WalkingTec.Mvvm.Core
             var ModelType = typeof(TModel);
             //建立基础查询
             var query = DC!.Set<TModel>().AsQueryable();
-            List<IncludeInfo> includeInfo = new List<IncludeInfo>();
+            List<IncludeInfo> includeInfo = [];
             //循环添加其他设定的Include
             if (_toInclude != null)
             {
                 foreach (var item in _toInclude)
                 {
-                    List<IncludeInfo> exps = new List<IncludeInfo>();
+                    List<IncludeInfo> exps = [];
                     Expression current = item.Body;
                     while (current != null && current.NodeType != ExpressionType.Parameter)
                     {
@@ -330,8 +330,8 @@ namespace WalkingTec.Mvvm.Core
                 NewExpression newItem = Expression.New(ModelType);
 
                 var pp = ModelType.GetAllProperties();
-                List<MemberBinding> bindExps = new List<MemberBinding>();
-                List<string> existname = new List<string>();
+                List<MemberBinding> bindExps = [];
+                List<string> existname = [];
                 foreach (var pro in pp)
                 {
                     if (existname.Contains(pro.Name))
@@ -759,7 +759,7 @@ namespace WalkingTec.Mvvm.Core
                             IEnumerable<TopBasePoco>? toremove = null;
                             Utils.CheckDifference(data, list, out toremove, out toadd);
                             //设定子表应该更新的字段
-                            List<string> setnames = new List<string>();
+                            List<string> setnames = [];
                             foreach (var field in FC.Keys)
                             {
                                 var f = field.ToLower();
@@ -1057,7 +1057,7 @@ namespace WalkingTec.Mvvm.Core
         {
             try
             {
-                List<Guid> fileids = new List<Guid>();
+                List<Guid> fileids = [];
                 var pros = typeof(TModel).GetAllProperties();
 
                 //如果包含附件，则先删除附件
@@ -1123,7 +1123,7 @@ namespace WalkingTec.Mvvm.Core
         {
             try
             {
-                List<Guid> fileids = new List<Guid>();
+                List<Guid> fileids = [];
                 var pros = typeof(TModel).GetAllProperties();
 
                 //如果包含附件，则先删除附件
@@ -1381,14 +1381,14 @@ namespace WalkingTec.Mvvm.Core
                 foreach (var group in checkCondition.Groups)
                 {
                     var innercount = new List<object>();
-                    List<Expression> conditions = new List<Expression>();
+                    List<Expression> conditions = [];
                     //生成一个表达式，类似于 x=>x.Id != id，这是为了当修改数据时验证重复性的时候，排除当前正在修改的数据
                     var idproperty = typeof(TModel).GetSingleProperty("ID");
                     MemberExpression idLeft = Expression.Property(para, idproperty!);
                     ConstantExpression idRight = Expression.Constant(Entity.GetID());
                     BinaryExpression idNotEqual = Expression.NotEqual(idLeft, idRight);
                     conditions.Add(idNotEqual);
-                    List<PropertyInfo> props = new List<PropertyInfo>();
+                    List<PropertyInfo> props = [];
                     //在每个组中循环所有字段
                     foreach (var field in group.Fields)
                     {
@@ -1666,7 +1666,7 @@ namespace WalkingTec.Mvvm.Core
                 ParameterExpression pe = Expression.Parameter(this.InnerType);
                 NewExpression newItem = Expression.New(this.InnerType);
                 var pros = this.InnerType.GetAllProperties();
-                List<MemberBinding> bindExps = new List<MemberBinding>();
+                List<MemberBinding> bindExps = [];
                 foreach (var pro in pros)
                 {
                     if (pro.GetCustomAttribute<NotMappedAttribute>() == null)
