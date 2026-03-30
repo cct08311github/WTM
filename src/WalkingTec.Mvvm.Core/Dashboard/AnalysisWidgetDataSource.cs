@@ -165,13 +165,13 @@ public class AnalysisWidgetDataSource : IWidgetDataSource
             req.ListVmType = lvt;
 
         if (parameters.TryGetValue("dimensions", out var dims) && !string.IsNullOrWhiteSpace(dims))
-            req.Dimensions = JsonSerializer.Deserialize<List<string>>(dims) ?? new List<string>();
+            req.Dimensions = JsonSerializer.Deserialize<List<string>>(dims) ?? [];
 
         if (parameters.TryGetValue("measures", out var measures) && !string.IsNullOrWhiteSpace(measures))
-            req.Measures = JsonSerializer.Deserialize<List<MeasureRequest>>(measures) ?? new List<MeasureRequest>();
+            req.Measures = JsonSerializer.Deserialize<List<MeasureRequest>>(measures) ?? [];
 
         if (parameters.TryGetValue("filters", out var filters) && !string.IsNullOrWhiteSpace(filters))
-            req.Filters = JsonSerializer.Deserialize<List<FilterCondition>>(filters) ?? new List<FilterCondition>();
+            req.Filters = JsonSerializer.Deserialize<List<FilterCondition>>(filters) ?? [];
 
         return req;
     }
