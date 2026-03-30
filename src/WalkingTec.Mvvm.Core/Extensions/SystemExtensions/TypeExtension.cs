@@ -487,19 +487,19 @@ namespace WalkingTec.Mvvm.Core.Extensions
 
         public static PropertyInfo? GetSingleProperty(this Type self, string name)
         {
-            var props = _propertyCache.GetOrAdd(self.FullName!, _ => self.GetProperties().ToList());
+            var props = _propertyCache.GetOrAdd(self.FullName!, _ => [.. self.GetProperties()]);
             return props.FirstOrDefault(x => x.Name == name);
         }
 
         public static PropertyInfo? GetSingleProperty(this Type self, Func<PropertyInfo, bool> where)
         {
-            var props = _propertyCache.GetOrAdd(self.FullName!, _ => self.GetProperties().ToList());
+            var props = _propertyCache.GetOrAdd(self.FullName!, _ => [.. self.GetProperties()]);
             return props.FirstOrDefault(where);
         }
 
         public static List<PropertyInfo> GetAllProperties(this Type self)
         {
-            return _propertyCache.GetOrAdd(self.FullName!, _ => self.GetProperties().ToList());
+            return _propertyCache.GetOrAdd(self.FullName!, _ => [.. self.GetProperties()]);
         }
 
         public static Type? GetParentWorkflowPoco(this Type self)
