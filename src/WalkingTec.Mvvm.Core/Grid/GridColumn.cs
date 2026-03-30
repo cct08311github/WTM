@@ -322,7 +322,7 @@ namespace WalkingTec.Mvvm.Core
         {
             get
             {
-                List<IGridColumn<T>> rv = new List<IGridColumn<T>>();
+                List<IGridColumn<T>> rv = [];
                 if (Children != null && Children.Any())
                 {
                     foreach (var child in Children)

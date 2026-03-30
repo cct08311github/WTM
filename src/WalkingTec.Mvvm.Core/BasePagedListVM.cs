@@ -511,7 +511,7 @@ namespace WalkingTec.Mvvm.Core
             //默认需要分页
             NeedPage = true;
             //初始化数据列表
-            EntityList = new List<TModel>();
+            EntityList = [];
             //初始化搜索条件
             Searcher = (TSearcher)typeof(TSearcher).GetConstructor(Type.EmptyTypes)!.Invoke(null);
         }
@@ -1061,7 +1061,7 @@ namespace WalkingTec.Mvvm.Core
             EntityList = Entities;
             IsSearched = true;
             bool haserror = false;
-            List<string> keys = new List<string>();
+            List<string> keys = [];
             if (string.IsNullOrEmpty(DetailGridPrix) == false)
             {
                 if (EntityList.Any(x => x.BatchError != null))
@@ -1163,7 +1163,7 @@ namespace WalkingTec.Mvvm.Core
                 IEnumerable<TopBasePoco>? toremove = null;
                 Utils.CheckDifference(data, EntityList, out toremove, out toadd);
                 //设定子表应该更新的字段
-                List<string> setnames = new List<string>();
+                List<string> setnames = [];
                 foreach (var field in FC.Keys)
                 {
                     if (field.StartsWith("EntityList[0]."))
