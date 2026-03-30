@@ -160,7 +160,7 @@ namespace WalkingTec.Mvvm.Core
             }
             else
             {
-                temp = self.Children.Cast<GridColumn<T>>().ToList();
+                temp = [.. self.Children.Cast<GridColumn<T>>()];
             }
             temp.AddRange(childrens);
             self.Children = temp;
