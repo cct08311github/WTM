@@ -93,7 +93,7 @@ public class AnalysisWidgetDataSource : IWidgetDataSource
         if (effectivePolicy != null)
         {
             var user = BuildClaimsPrincipal(wtm?.LoginUserInfo);
-            fields = effectivePolicy.Filter(fields, user).ToList();
+            fields = [.. effectivePolicy.Filter(fields, user)];
         }
 
         // 7. Build AnalysisQueryRequest from widget parameters
