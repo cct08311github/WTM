@@ -72,11 +72,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
         private static IReadOnlyList<string>? BuildAllowedValues(Type type)
         {
             if (!type.IsEnum) return null;
-            return Enum.GetValues(type)
+            IReadOnlyList<string> result = [.. Enum.GetValues(type)
                 .Cast<Enum>()
-                .Select(e => e.GetEnumDisplayName() ?? e.ToString())
-                .ToList()
-                .AsReadOnly();
+                .Select(e => e.GetEnumDisplayName() ?? e.ToString())];
+            return result;
         }
     }
 }
