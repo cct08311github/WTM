@@ -48,7 +48,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             List<TModel> items,
             AnalysisQueryRequest req)
         {
-            return items
+            List<Dictionary<string, object?>> result = [.. items
                 .GroupBy(row => BuildGroupKey(row, req.Dimensions, req.DimensionHierarchies))
                 .Take(MaxRows + 1)
                 .Select(g =>
@@ -67,7 +67,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         if (propInfo is null)
                             throw new InvalidOperationException($"Property '{m.Field}' not found on {typeof(TModel).Name}.");
 
-                        var numericValues = g
+                        List<decimal?> numericValues = [.. g
                             .Select(row => propInfo.GetValue(row))
                             .Where(v => v != null)
                             .Select(v =>
@@ -85,8 +85,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                                         $"（型別 {v!.GetType().Name}，值 '{v}'）。" +
                                         "請確認 [Measure] 僅標記數值型別屬性。", ex);
                                 }
-                            })
-                            .ToList();
+                            })];
 
                         decimal? aggValue = m.Func switch
                         {
@@ -100,8 +99,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         dict[$"{m.Field}_{m.Func}"] = aggValue;
                     }
                     return dict;
-                })
-                .ToList();
+                })];
+            return result;
         }
 
         private static string BuildGroupKey<TModel>(

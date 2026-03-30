@@ -31,7 +31,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 catch (ReflectionTypeLoadException ex)
                 {
                     // 部分型別載入失敗（常見於 plugin 或依賴版本衝突），取回已成功載入的型別繼續掃描
-                    types = ex.Types.Where(t => t != null).Cast<Type>().ToArray();
+                    types = [.. ex.Types.Where(t => t != null).Cast<Type>()];
                 }
 
                 foreach (var type in types)
