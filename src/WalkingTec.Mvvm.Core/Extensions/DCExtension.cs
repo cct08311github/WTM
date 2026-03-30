@@ -320,7 +320,8 @@ namespace WalkingTec.Mvvm.Core.Extensions
                 else
                 {
                     //在dps中找到和baseQuery源数据表名一样的关联id
-                    var ids = dps.Where(x => x.TableName == query.ElementType.Name).Select(x => x.RelateId).ToList();
+                    List<string?> ids = [.. dps.Where(x => x.TableName == query.ElementType.Name).Select(x => x.RelateId)];
+
                     if (ids == null || ids.Count == 0)
                     {
                         //if (isBasePoco == true)
@@ -516,7 +517,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                         continue;
                     }
                     //获取dps中关联到关联类的id列表
-                    var ids = dps.Where(x => x.TableName == tableName).Select(x => x.RelateId).ToList();
+                    List<string?> ids = [.. dps.Where(x => x.TableName == tableName).Select(x => x.RelateId)];
                     //如果没有关联的id，则拼接一个返回假的where，是语句查询不到任何数据
                     if (ids == null || ids.Count == 0)
                     {
