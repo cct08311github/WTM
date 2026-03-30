@@ -161,7 +161,7 @@ namespace WalkingTec.Mvvm.Core.Services
             HttpContent? content = null;
             if (!(postdata == null || postdata.Count == 0))
             {
-                List<KeyValuePair<string, string>> paras = new List<KeyValuePair<string, string>>();
+                List<KeyValuePair<string, string>> paras = [];
                 foreach (string key in postdata.Keys)
                 {
                     paras.Add(new KeyValuePair<string, string>(key, postdata[key]));

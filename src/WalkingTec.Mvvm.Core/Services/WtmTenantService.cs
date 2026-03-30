@@ -66,7 +66,7 @@ namespace WalkingTec.Mvvm.Core.Services
                 catch (Exception ex)
                 {
                     _logger?.LogWarning(ex, "Failed to load tenant groups for '{Tenant}'", tenant);
-                    groups = new List<SimpleGroup>();
+                    groups = [];
                 }
                 return groups;
             }, 360000);
@@ -97,7 +97,7 @@ namespace WalkingTec.Mvvm.Core.Services
                 catch (Exception ex)
                 {
                     _logger?.LogWarning(ex, "Failed to load tenant roles for '{Tenant}'", tenant);
-                    roles = new List<SimpleRole>();
+                    roles = [];
                 }
                 return roles;
             }, 360000);
