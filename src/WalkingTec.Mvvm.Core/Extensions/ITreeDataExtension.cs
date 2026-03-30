@@ -25,7 +25,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             var children = self.Children;
             if(order != null && children != null)
             {
-                children = children.OrderBy(order).ToList();
+                children = [.. children.OrderBy(order)];
             }
             if (children != null && children.Count() > 0)
             {
@@ -96,7 +96,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             List<T> rv = new List<T>();
             if(order != null)
             {
-                self = self.OrderBy(order).ToList();
+                self = [.. self.OrderBy(order)];
             }
             foreach (var item in self)
             {
@@ -121,7 +121,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             List<T> rv = new List<T>();
             if (order != null)
             {
-                self = self.OrderBy(order).ToList();
+                self = [.. self.OrderBy(order)];
             }
             foreach (var item in self)
             {
@@ -129,7 +129,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                 {
                     item.Children = [];
                 }
-                var children = self.Where(x => x.ParentId == item.ID).ToList();
+                List<T> children = [.. self.Where(x => x.ParentId == item.ID)];
                 children.ForEach(x =>x.Parent = item);
                 item.Children.AddRange(children);
                 rv.Add(item);                
@@ -147,7 +147,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             List<TreeSelectListItem> rv = new List<TreeSelectListItem>();
             if (order != null)
             {
-                self = self.OrderBy(order).ToList();
+                self = [.. self.OrderBy(order)];
             }
             foreach (var item in self)
             {
@@ -172,7 +172,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             var children = self.Children;
             if (order != null && children != null)
             {
-                children = children.OrderBy(order).ToList();
+                children = [.. children.OrderBy(order)];
             }
             if (children != null && children.Count() > 0)
             {
