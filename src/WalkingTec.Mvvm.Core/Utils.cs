@@ -40,7 +40,7 @@ namespace WalkingTec.Mvvm.Core
         {
             if (_allAssemblies == null)
             {
-                _allAssemblies = new List<Assembly>();
+                _allAssemblies = [];
                 string? path = null;
                 string? singlefile = null;
                 try
@@ -205,8 +205,8 @@ namespace WalkingTec.Mvvm.Core
 
         public static void CheckDifference<T>(IEnumerable<T> oldList, IEnumerable<T> newList, out IEnumerable<T> ToRemove, out IEnumerable<T> ToAdd) where T : TopBasePoco
         {
-            List<T> tempToRemove = new List<T>();
-            List<T> tempToAdd = new List<T>();
+            List<T> tempToRemove = [];
+            List<T> tempToAdd = [];
             oldList = oldList ?? [];
             newList = newList ?? [];
             foreach (var oldItem in oldList)
@@ -309,7 +309,7 @@ namespace WalkingTec.Mvvm.Core
         /// <returns></returns>
         public static List<ComboSelectListItem> GetBoolCombo(BoolComboTypes boolType, bool? defaultValue = null, string? trueText = null, string? falseText = null, string? selectText = null)
         {
-            List<ComboSelectListItem> rv = new List<ComboSelectListItem>();
+            List<ComboSelectListItem> rv = [];
             string yesText = "";
             string noText = "";
             switch (boolType)
@@ -448,7 +448,7 @@ namespace WalkingTec.Mvvm.Core
             else
             {
                 #region 截取需要格式化的代码段
-                List<int> listInt = new List<int>();
+                List<int> listInt = [];
                 int index = 0;
                 int _index;
                 while (true)
@@ -465,7 +465,7 @@ namespace WalkingTec.Mvvm.Core
                     }
                 }
 
-                List<string> listStr = new List<string>();
+                List<string> listStr = [];
                 for (int i = 0; i < listInt.Count; i++)
                 {
                     string temp = text.Substring(listInt[i] + 2, listInt[i + 1] - listInt[i] - 2);
@@ -578,7 +578,7 @@ namespace WalkingTec.Mvvm.Core
         {
             if (allFiles == null)
             {
-                allFiles = new List<string>();
+                allFiles = [];
             }
             string[] subPaths = Directory.GetDirectories(dirPath);
             foreach (var item in subPaths)
