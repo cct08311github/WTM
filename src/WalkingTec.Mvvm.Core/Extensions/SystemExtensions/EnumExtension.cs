@@ -35,7 +35,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                 values = Enum.GetValues(self.GenericTypeArguments[0]);
             }
             //生成下拉菜单数据
-            List<ComboSelectListItem> rv = new List<ComboSelectListItem>();
+            List<ComboSelectListItem> rv = [];
             if (names != null)
             {
                 for(int i=0;i<names.Length;i++)

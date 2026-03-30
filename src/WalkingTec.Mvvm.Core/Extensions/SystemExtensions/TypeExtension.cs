@@ -240,7 +240,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                     }
                     else if (pro.PropertyType.IsEnumOrNullableEnum())
                     {
-                        List<string> enumvalues = new List<string>();
+                        List<string> enumvalues = [];
                         Type? enumtype = null;
                         if (pro.PropertyType.IsNullable())
                         {
@@ -389,7 +389,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                     }
                     else if (pro.PropertyType.IsEnumOrNullableEnum())
                     {
-                        List<string> enumvalues = new List<string>();
+                        List<string> enumvalues = [];
                         Type? enumtype = null;
                         if (pro.PropertyType.IsNullable())
                         {
