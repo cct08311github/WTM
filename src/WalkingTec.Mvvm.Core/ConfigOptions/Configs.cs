@@ -26,7 +26,7 @@ namespace WalkingTec.Mvvm.Core
             {
                 if (_connectStrings == null)
                 {
-                    _connectStrings = new List<CS>();
+                    _connectStrings = [];
                 }
                 return _connectStrings;
             }
@@ -408,7 +408,7 @@ namespace WalkingTec.Mvvm.Core
                 if (_cors == null)
                 {
                     _cors = new Cors();
-                    _cors.Policy = new List<CorsPolicy>();
+                    _cors.Policy = [];
                 }
                 return _cors;
             }
@@ -450,7 +450,7 @@ namespace WalkingTec.Mvvm.Core
             {
                 if (_supportLanguages == null)
                 {
-                    _supportLanguages = new List<CultureInfo>();
+                    _supportLanguages = [];
                     var lans = Languages.Split(",");
                     foreach (var lan in lans)
                     {

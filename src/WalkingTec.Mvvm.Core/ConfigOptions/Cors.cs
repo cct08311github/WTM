@@ -8,7 +8,7 @@ namespace WalkingTec.Mvvm.Core
     public class Cors
     {
         public bool EnableAll { get; set; }
-        public List<CorsPolicy> Policy { get; set; } = new List<CorsPolicy>();
+        public List<CorsPolicy> Policy { get; set; } = [];
     }
 
     public class CorsPolicy
