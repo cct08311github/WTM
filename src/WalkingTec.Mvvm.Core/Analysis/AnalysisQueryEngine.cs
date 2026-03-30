@@ -243,7 +243,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             }
 
             // 5. Build final column list
-            var columns = new List<string>(rowDims);
+            List<string> columns = [.. rowDims];
             foreach (var pv in pivotValues)
             {
                 foreach (var m in measureNames) columns.Add($"{pv}_{m}");
@@ -305,7 +305,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 }
             }
 
-            var columns = new List<string>(rowDims);
+            List<string> columns = [.. rowDims];
             foreach (var pv in pivotValues)
             {
                 foreach (var m in measureNames) columns.Add($"{pv}_{m}");
@@ -469,7 +469,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 if (f.Value.StartsWith("@", StringComparison.Ordinal)) { hasTokens = true; break; }
             if (!hasTokens) return filters;
 
-            var result = new List<FilterCondition>(filters.Count + 4);
+            List<FilterCondition> result = [];
             var today = DateTime.Today;
             var mondayOffset = ((int)today.DayOfWeek + 6) % 7;
 

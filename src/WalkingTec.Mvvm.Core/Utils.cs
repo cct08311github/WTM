@@ -104,7 +104,7 @@ namespace WalkingTec.Mvvm.Core
             if (_allModels == null)
             {
                 var modelAsms = Utils.GetAllAssembly();
-                var allTypes = new List<Type>();// 所有 DbSet<> 的泛型类型
+                List<Type> allTypes = [];// 所有 DbSet<> 的泛型类型
                                                 // 获取所有 DbSet<T> 的泛型类型 T
                 foreach (var asm in modelAsms)
                 {
@@ -141,7 +141,7 @@ namespace WalkingTec.Mvvm.Core
             if (_allVMs == null)
             {
                 var modelAsms = Utils.GetAllAssembly();
-                var allTypes = new List<Type>();// 所有 DbSet<> 的泛型类型
+                List<Type> allTypes = [];// 所有 DbSet<> 的泛型类型
                                                 // 获取所有 DbSet<T> 的泛型类型 T
                 foreach (var asm in modelAsms)
                 {
@@ -946,7 +946,7 @@ namespace WalkingTec.Mvvm.Core
                 NameSpace = x.NameSpace,
             }).ToList();
             var mCount = m.Count;
-            var toRemove = new List<SimpleModule>();
+            List<SimpleModule> toRemove = [];
             for (int i = 0; i < mCount; i++)
             {
                 var pages = m[i].Actions?.Where(x => x.ActionDes?.IsPage == true).ToList();

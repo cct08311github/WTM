@@ -139,7 +139,7 @@ Expression.Lambda(trueExp, new ParameterExpression[] { pe }));
             else
             {
                 var modelType = node.Type.GenericTypeArguments[0];
-                List<SortInfo> info = new List<SortInfo>() { _sortinfo };
+                List<SortInfo> info = [_sortinfo];
                 Expression? rv = null;
                 foreach (var item in info)
                 {
@@ -353,10 +353,7 @@ Expression.Lambda(trueExp, new ParameterExpression[] { pe }));
                     //使用上面不是where的节点直接拼接本节点，从而删除了中间的where
                     if ((gType == typeof(IQueryable<>) || gType == typeof(QueryRootExpression)) && argType == _modelType)
                     {
-                        var paras = new List<Expression>
-                        {
-                            nowhereNode
-                        };
+                        List<Expression> paras = [nowhereNode];
                         paras.AddRange([.. node.Arguments.Skip(1)]);
                         var rv = Expression.Call(
                          node.Method,
@@ -612,7 +609,7 @@ Expression.Lambda(trueExp, new ParameterExpression[] { pe }));
                         var inner = ue.Operand as LambdaExpression;
                         if (inner?.Body is MemberInitExpression memberinit)
                         {
-                            _columns = new List<string>();
+                            _columns = [];
                             foreach (var m in memberinit.Bindings)
                             {
                                 _columns.Add(m.Member.Name);
@@ -647,7 +644,7 @@ Expression.Lambda(trueExp, new ParameterExpression[] { pe }));
 
         protected override Expression VisitMemberInit(MemberInitExpression node)
         {
-            List<MemberBinding> newbinding = new List<MemberBinding>();
+            List<MemberBinding> newbinding = [];
             for (int i = 0; i < node.Bindings.Count; i++)
             {
                 bool islist = false;

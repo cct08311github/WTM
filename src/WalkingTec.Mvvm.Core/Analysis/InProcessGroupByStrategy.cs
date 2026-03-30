@@ -23,7 +23,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             CancellationToken cancellationToken = default)
         {
             var queryToRun = query.Take(MaxMaterializeRows);
-            var items = new List<TModel>();
+            List<TModel> items = [];
             foreach (var item in queryToRun)
             {
                 cancellationToken.ThrowIfCancellationRequested();

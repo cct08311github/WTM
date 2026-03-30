@@ -17,13 +17,13 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 程序集
         /// </summary>
-        public List<Assembly> AllAssembly { get; set; } = new List<Assembly>();
+        public List<Assembly> AllAssembly { get; set; } = [];
 
         /// <summary>
         /// 可访问的url地址
         /// </summary>
-        public List<string> AllAccessUrls { get; set; } = new List<string>();
-        public List<string> AllMainTenantOnlyUrls { get; set; } = new List<string>();
+        public List<string> AllAccessUrls { get; set; } = [];
+        public List<string> AllMainTenantOnlyUrls { get; set; } = [];
         public Type? CustomUserType { get; set; }
 
         public bool IsSpa { get; set; }
@@ -33,7 +33,7 @@ namespace WalkingTec.Mvvm.Core
             get {
                 if(_customUserProperties == null)
                 {
-                    _customUserProperties = new List<PropertyInfo>();
+                    _customUserProperties = [];
                     if(CustomUserType != null)
                     {
                         _customUserProperties = [.. CustomUserType.GetProperties( BindingFlags.Public| BindingFlags.Instance | BindingFlags.DeclaredOnly).Where(x=>x.PropertyType.IsListOf<TopBasePoco>() == false && typeof(TopBasePoco).IsAssignableFrom(x.PropertyType) == false)];
@@ -45,7 +45,7 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 模块
         /// </summary>
-        public List<SimpleModule> AllModule { get; set; } = new List<SimpleModule>();
+        public List<SimpleModule> AllModule { get; set; } = [];
 
         private Func<List<SimpleMenu>>? MenuGetFunc;
         private Func<List<FrameworkTenant>>? TenantGetFunc;
@@ -61,14 +61,14 @@ namespace WalkingTec.Mvvm.Core
 
         public List<Type> GetPocoTypesAssignableFrom<T>()
         {
-            var rv = new List<Type>();
+            List<Type> rv = [];
             var allType = Utils.GetAllModels();
             rv.AddRange([.. allType.Where(x => typeof(T).IsAssignableFrom(x) && x != typeof(T) && x.IsAbstract == false)]);
             return rv;
         }
         public List<Type> GetTypesAssignableFrom<T>()
         {
-            var rv = new List<Type>();
+            List<Type> rv = [];
             foreach (var ass in AllAssembly)
             {
                 List<Type> types;

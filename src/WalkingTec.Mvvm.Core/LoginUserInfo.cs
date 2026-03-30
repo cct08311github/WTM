@@ -188,7 +188,7 @@ namespace WalkingTec.Mvvm.Core
 
         public void SetAttributesForApi(WTMContext context)
         {
-            var ms = new List<SimpleMenuApi>();
+            List<SimpleMenuApi> ms = [];
             List<string> urls = [];
             List<SimpleMenu>? menudata = null;
 

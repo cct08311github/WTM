@@ -521,7 +521,7 @@ namespace WalkingTec.Mvvm.Core
             _uiservice = _ui;
             if (_dp == null)
             {
-                _dp = new List<IDataPrivilege>();
+                _dp = [];
             }
             _dps = _dp;
             if (dc is NullContext)
@@ -749,7 +749,7 @@ namespace WalkingTec.Mvvm.Core
             var svc = ServiceProvider?.GetService(typeof(IWtmUserCacheService)) as IWtmUserCacheService;
             var apiClient = ServiceProvider?.GetService(typeof(IWtmApiClient)) as IWtmApiClient;
             if (svc != null) { await svc.RemoveUserCacheByRoleAsync(LoginUserInfo?.CurrentTenant, ConfigInfo?.HasMainHost == true, DC, apiClient, rolecode); return; }
-            List<string> userids = new List<string>();
+            List<string> userids = [];
             if (ConfigInfo?.HasMainHost == true && string.IsNullOrEmpty(LoginUserInfo?.CurrentTenant) == true)
             {
                 foreach (var item in rolecode)
@@ -778,7 +778,7 @@ params string[] groupcode)
             var svc = ServiceProvider?.GetService(typeof(IWtmUserCacheService)) as IWtmUserCacheService;
             var apiClient = ServiceProvider?.GetService(typeof(IWtmApiClient)) as IWtmApiClient;
             if (svc != null) { await svc.RemoveUserCacheByGroupAsync(LoginUserInfo?.CurrentTenant, ConfigInfo?.HasMainHost == true, DC, apiClient, groupcode); return; }
-            List<string> userids = new List<string>();
+            List<string> userids = [];
             if (ConfigInfo?.HasMainHost == true && string.IsNullOrEmpty(LoginUserInfo?.CurrentTenant) == true)
             {
                 foreach (var item in groupcode)
@@ -845,7 +845,7 @@ params string[] groupcode)
                 }
                 catch
                 {
-                    groups = new List<SimpleGroup>();
+                    groups = [];
                 }
                 return groups;
             }, 360000);
@@ -878,7 +878,7 @@ params string[] groupcode)
                 }
                 catch
                 {
-                    roles = new List<SimpleRole>();
+                    roles = [];
                 }
                 return roles;
             }, 360000);
@@ -1225,7 +1225,7 @@ params string[] groupcode)
                 temp.Ids = new string[] { };
                 if (Ids != null)
                 {
-                    var tempids = new List<string>();
+                    List<string> tempids = [];
                     foreach (var iid in Ids)
                     {
                         tempids.Add(iid?.ToString() ?? "");
@@ -1594,7 +1594,7 @@ params string[] groupcode)
             //填充表单数据
             if (!(postdata == null || postdata.Count == 0))
             {
-                List<KeyValuePair<string, string>> paras = new List<KeyValuePair<string, string>>();
+                List<KeyValuePair<string, string>> paras = [];
                 foreach (string key in postdata.Keys)
                 {
                     paras.Add(new KeyValuePair<string, string>(key, postdata[key]));

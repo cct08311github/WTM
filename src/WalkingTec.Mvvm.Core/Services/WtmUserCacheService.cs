@@ -34,7 +34,7 @@ namespace WalkingTec.Mvvm.Core.Services
             string? currentTenant, bool hasMainHost, IDataContext? dc,
             IWtmApiClient? apiClient, params string[] roleCodes)
         {
-            var userids = new List<string>();
+            List<string> userids = [];
             if (hasMainHost && string.IsNullOrEmpty(currentTenant))
             {
                 if (apiClient != null)
@@ -68,7 +68,7 @@ namespace WalkingTec.Mvvm.Core.Services
             string? currentTenant, bool hasMainHost, IDataContext? dc,
             IWtmApiClient? apiClient, params string[] groupCodes)
         {
-            var userids = new List<string>();
+            List<string> userids = [];
             if (hasMainHost && string.IsNullOrEmpty(currentTenant))
             {
                 if (apiClient != null)

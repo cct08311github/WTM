@@ -976,7 +976,7 @@ namespace WalkingTec.Mvvm.Core
             foreach (var entity in EntityList)
             {
                 var context = new ValidationContext(entity);
-                var validationResults = new List<ValidationResult>();
+                List<ValidationResult> validationResults = [];
                 TryValidateObject(entity, context, validationResults);
                 if (validationResults.Count > 0)
                 {

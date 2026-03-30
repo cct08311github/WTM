@@ -154,7 +154,7 @@ public class JsonFileDashboardService : IDashboardService
     {
         await EnsureInitializedAsync();
 
-        var result = new List<DashboardSummary>();
+        List<DashboardSummary> result = [];
         var isAdmin = userRoles != null && _options.AdminRoles.Any(r => userRoles.Contains(r, StringComparer.OrdinalIgnoreCase));
 
         foreach (var summary in _index.Values)

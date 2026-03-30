@@ -156,7 +156,7 @@ namespace WalkingTec.Mvvm.Core
             List<GridColumn<T>> temp = [];
             if (self.Children == null)
             {
-                temp = new List<GridColumn<T>>();
+                temp = [];
             }
             else
             {

@@ -34,7 +34,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             }
 
             var projected = BuildProjected<TModel>(query, req, whitelist);
-            var materialized = new List<Tuple<string, double?, double?, double?>>();
+            List<Tuple<string, double?, double?, double?>> materialized = [];
             foreach (var item in projected.Take(MaxRows + 1))
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -119,7 +119,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             List<Tuple<string, double?, double?, double?>> materialized,
             AnalysisQueryRequest req)
         {
-            var results = new List<Dictionary<string, object?>>(materialized.Count);
+            List<Dictionary<string, object?>> results = [];
             foreach (var row in materialized)
             {
                 var dict = new Dictionary<string, object?>();

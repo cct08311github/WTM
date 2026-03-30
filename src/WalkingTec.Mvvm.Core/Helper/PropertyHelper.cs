@@ -418,7 +418,7 @@ namespace WalkingTec.Mvvm.Core
 
 
                 var lambda = Expression.Lambda(select, pe);
-                var rv = new List<string>();
+                List<string> rv = [];
                 try
                 {
                     rv = (lambda.Compile().DynamicInvoke(obj) as IEnumerable<string>)?.ToList() ?? [];

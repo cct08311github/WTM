@@ -22,7 +22,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             , Expression<Func<T, object>> valueField
             , Expression<Func<T, bool>>? selectedCondition = null)
         {
-            var rv = new List<ComboSelectListItem>();
+            List<ComboSelectListItem> rv = [];
             if (self != null)
             {
                 //循环列表中的数据

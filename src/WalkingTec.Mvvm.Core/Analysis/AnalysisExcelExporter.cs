@@ -223,7 +223,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 0, chartTopRow, result.Columns.Count + 2, chartTopRow + 15);
             var chart = drawing.CreateChart(anchor);
 
-            var measureIndices = new List<int>();
+            List<int> measureIndices = [];
             for (int c = 1; c < result.Columns.Count; c++)
             {
                 if (result.Rows[0].TryGetValue(result.Columns[c], out var v)

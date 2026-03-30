@@ -119,7 +119,7 @@ namespace WalkingTec.Mvvm.Core
             var modelType = typeof(TModel);
             var pros = modelType.GetAllProperties();
             //如果包含附件，则先删除附件
-            List<Guid> fileids = new List<Guid>();
+            List<Guid> fileids = [];
             List<PropertyInfo> fa = [.. pros.Where(x => x.PropertyType == typeof(FileAttachment) || typeof(TopBasePoco).IsAssignableFrom(x.PropertyType))];
             var isPersist =typeof(IPersistPoco).IsAssignableFrom(modelType);
             var isBasePoco = typeof(IBasePoco).IsAssignableFrom(modelType);

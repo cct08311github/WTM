@@ -146,7 +146,7 @@ public class AnalysisWidgetDataSource : IWidgetDataSource
     {
         if (userInfo == null) return new ClaimsPrincipal();
 
-        var claims = new List<Claim>();
+        List<Claim> claims = [];
         if (!string.IsNullOrEmpty(userInfo.ITCode))
             claims.Add(new Claim(ClaimTypes.Name, userInfo.ITCode));
         if (userInfo.Roles != null)

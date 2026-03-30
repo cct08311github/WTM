@@ -17,8 +17,8 @@ namespace WalkingTec.Mvvm.Core.Json
         public override PostedBody Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {
             var rv = new PostedBody();
-            rv.ProNames = new List<string>();
-            List<string> prefix = new List<string>();
+            rv.ProNames = [];
+            List<string> prefix = [];
             int depth = 0;
             string lastObjecName = "";
             int insideArray = 0;

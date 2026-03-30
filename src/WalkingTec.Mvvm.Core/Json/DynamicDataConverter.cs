@@ -34,7 +34,7 @@ namespace WalkingTec.Mvvm.Core.Json
                     }
                     if(reader.TokenType == JsonTokenType.StartArray)
                     {
-                        List<object> list = new List<object>();
+                        List<object> list = [];
                         reader.Read();
                         while(reader.TokenType!= JsonTokenType.EndArray)
                         {

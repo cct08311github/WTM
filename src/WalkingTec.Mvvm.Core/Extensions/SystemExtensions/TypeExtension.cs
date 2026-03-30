@@ -177,13 +177,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             Dictionary<string, string> rv = new Dictionary<string, string>();
             string pat = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz1234567890";
             var pros = self.GetAllProperties();
-            List<string> skipFields = new List<string>()
-            {
-               nameof(TopBasePoco.BatchError),
-               nameof(TopBasePoco.Checked),
-               nameof(TopBasePoco.ExcelIndex),
-               nameof(ITenant.TenantCode)
-            };
+            List<string> skipFields = [nameof(TopBasePoco.BatchError), nameof(TopBasePoco.Checked), nameof(TopBasePoco.ExcelIndex), nameof(ITenant.TenantCode)];
             if (typeof(IBasePoco).IsAssignableFrom(self))
             {
                 skipFields.AddRange(
@@ -229,7 +223,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                     }
                     else if (pro.PropertyType.IsBoolOrNullableBool())
                     {
-                        List<string> boolvalues = new List<string> { "true", "false" };
+                        List<string> boolvalues = ["true", "false"];
                         if (pro.PropertyType.IsNullable())
                         {
                             boolvalues.Add("null");
@@ -316,13 +310,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             Dictionary<string, string> rv = new Dictionary<string, string>();
             string pat = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz1234567890";
             var pros = self.GetAllProperties();
-            List<string> skipFields = new List<string>()
-            {
-               nameof(TopBasePoco.BatchError),
-               nameof(TopBasePoco.Checked),
-               nameof(TopBasePoco.ExcelIndex),
-               nameof(ITenant.TenantCode)
-            };
+            List<string> skipFields = [nameof(TopBasePoco.BatchError), nameof(TopBasePoco.Checked), nameof(TopBasePoco.ExcelIndex), nameof(ITenant.TenantCode)];
             if (typeof(IBasePoco).IsAssignableFrom(self))
             {
                 skipFields.AddRange(
@@ -375,7 +363,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                     }
                     else if (pro.PropertyType.IsBoolOrNullableBool())
                     {
-                        List<string> boolvalues = new List<string> { "true", "false" };
+                        List<string> boolvalues = ["true", "false"];
                         if (pro.PropertyType.IsNullable())
                         {
                             if (required == false)

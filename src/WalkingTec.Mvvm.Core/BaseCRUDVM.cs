@@ -1368,7 +1368,7 @@ namespace WalkingTec.Mvvm.Core
         protected List<object> ValidateDuplicateData()
         {
             //定义一个对象列表用于存放重复数据的id
-            var count = new List<object>();
+            List<object> count = [];
             //获取设定的重复字段信息
             var checkCondition = SetDuplicatedCheck();
             if (checkCondition != null && checkCondition.Groups.Count > 0)
@@ -1380,7 +1380,7 @@ namespace WalkingTec.Mvvm.Core
                 //循环所有重复字段组
                 foreach (var group in checkCondition.Groups)
                 {
-                    var innercount = new List<object>();
+                    List<object> innercount = [];
                     List<Expression> conditions = [];
                     //生成一个表达式，类似于 x=>x.Id != id，这是为了当修改数据时验证重复性的时候，排除当前正在修改的数据
                     var idproperty = typeof(TModel).GetSingleProperty("ID");

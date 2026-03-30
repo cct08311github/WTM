@@ -200,7 +200,7 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 用于保存删除的附件ID
         /// </summary>
-        public List<string> DeletedFileIds { get; set; } = new List<string>();
+        public List<string> DeletedFileIds { get; set; } = [];
 
         [JsonIgnore]
         public string? ControllerName { get; set; }

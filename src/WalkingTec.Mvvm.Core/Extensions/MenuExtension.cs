@@ -13,7 +13,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
     {
         public static List<LayUIMenu> ToLayuiMenu(this List<SimpleMenu> allmenus, WTMContext wtm)
         {
-            var resultMenus = new List<LayUIMenu>();
+            List<LayUIMenu> resultMenus = [];
             if (wtm.ConfigInfo.IsQuickDebug == true)
             {
                 GenerateMenuTree(allmenus, resultMenus, true);

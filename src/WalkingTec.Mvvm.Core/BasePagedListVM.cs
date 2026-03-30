@@ -769,7 +769,7 @@ namespace WalkingTec.Mvvm.Core
             }
             if (DC!.DBType == DBTypeEnum.MySql)
             {
-                List<MySqlParameter> parms = new List<MySqlParameter>();
+                List<MySqlParameter> parms = [];
                 foreach (MySqlParameter item in cmd.Parameters)
                 {
                     parms.Add(new MySqlParameter($"@{item.ParameterName}", item.Value));
@@ -805,7 +805,7 @@ namespace WalkingTec.Mvvm.Core
             }
             else if (DC.Database.IsNpgsql())
             {
-                List<NpgsqlParameter> parms = new List<NpgsqlParameter>();
+                List<NpgsqlParameter> parms = [];
                 foreach (NpgsqlParameter item in cmd.Parameters)
                 {
                     parms.Add(new NpgsqlParameter($"@{item.ParameterName}", item.Value));
@@ -842,7 +842,7 @@ namespace WalkingTec.Mvvm.Core
             }
             else
             {
-                List<SqlParameter> parms = new List<SqlParameter>();
+                List<SqlParameter> parms = [];
                 foreach (SqlParameter item in cmd.Parameters)
                 {
                     parms.Add(new SqlParameter($"@{item.ParameterName}", item.Value));

@@ -176,7 +176,7 @@ namespace WalkingTec.Mvvm.Core
         {
             if (self.SubActions == null)
             {
-                self.SubActions = new List<GridAction>();
+                self.SubActions = [];
             }
             self.SubActions.AddRange(gridActions);
             return self;

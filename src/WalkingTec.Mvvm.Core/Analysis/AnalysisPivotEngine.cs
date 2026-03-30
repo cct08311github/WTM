@@ -49,7 +49,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     $"PivotDimension '{pivotDimension}' 有 {pivotValues.Count} 個唯一值，超過上限 {MaxPivotValues}。");
 
             // Build column names
-            var columns = new List<string>(rowDims);
+            List<string> columns = [.. rowDims];
             foreach (var pv in pivotValues)
             {
                 foreach (var mn in measureNames)
@@ -59,7 +59,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             }
 
             // Group input rows by row dimensions to build pivot rows
-            var pivotRows = new List<Dictionary<string, object?>>();
+            List<Dictionary<string, object?>> pivotRows = [];
             var groups = groupByResult.Rows
                 .GroupBy(r => BuildRowKey(r, rowDims));
 

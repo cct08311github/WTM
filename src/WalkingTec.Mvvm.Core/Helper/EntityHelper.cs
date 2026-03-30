@@ -21,7 +21,7 @@ namespace WalkingTec.Mvvm.Core
         /// <returns>Entity列表</returns>
         public static IList<T> GetEntityList<T>(DataTable table)
         {
-            IList<T> entityList = new List<T>();
+            IList<T> entityList = [];
 
             if (typeof(T) == typeof(DynamicData))
             {
