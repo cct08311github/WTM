@@ -5,6 +5,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Data;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using NPOI.HSSF.UserModel;
 using NPOI.HSSF.Util;
 using NPOI.SS.UserModel;
@@ -55,8 +56,8 @@ namespace WalkingTec.Mvvm.Core
         {
             ValidityTemplateType = true;
             Parms = new Dictionary<string, string>();
-            var propetys = this.GetType().GetFields().Where(x => x.FieldType == typeof(ExcelPropety)).ToList();
-            for (int porpetyIndex = 0; porpetyIndex < propetys.Count(); porpetyIndex++)
+            List<FieldInfo> propetys = [.. this.GetType().GetFields().Where(x => x.FieldType == typeof(ExcelPropety))];
+            for (int porpetyIndex = 0; porpetyIndex < propetys.Count; porpetyIndex++)
             {
                 ExcelPropety excelPropety = (ExcelPropety)propetys[porpetyIndex].GetValue(this)!;
                 if (propetys[porpetyIndex].GetCustomAttributes(typeof(DisplayAttribute), false).Length == 0)
@@ -154,7 +155,7 @@ namespace WalkingTec.Mvvm.Core
             redStyle.IsLocked = true;
 
             //取得所有ExcelPropety
-            var propetys = this.GetType().GetFields().Where(x => x.FieldType == typeof(ExcelPropety)).ToList();
+            List<FieldInfo> propetys = [.. this.GetType().GetFields().Where(x => x.FieldType == typeof(ExcelPropety))];
 
             //设置列的索引
             int _currentColunmIndex = 0;
@@ -200,7 +201,7 @@ namespace WalkingTec.Mvvm.Core
                     int dynamicColCount = excelPropety.DynamicColumns.Count();
                     for (int dynamicColIndex = 0; dynamicColIndex < dynamicColCount; dynamicColIndex++)
                     {
-                        var dynamicCol = excelPropety.DynamicColumns.ToList()[dynamicColIndex];
+                        ExcelPropety dynamicCol = excelPropety.DynamicColumns.ElementAt(dynamicColIndex);
                         string dynamicColName = excelPropety.IsNullAble ? dynamicCol.ColumnName : dynamicCol.ColumnName + "*";
                         row.CreateCell(_currentColunmIndex).SetCellValue(dynamicColName);
                         row.Cells[_currentColunmIndex].CellStyle = headerStyle;
@@ -381,7 +382,7 @@ namespace WalkingTec.Mvvm.Core
                     break;
                 case ColumnDataType.Enum:
                 case ColumnDataType.ComboBox:
-                    var items = prop.ListItems.Select(x => x.Text).Take(5).ToList();
+                    List<string> items = prop.ListItems is { } li ? [.. li.Select(x => x.Text).Take(5)] : [];
                     if (items.Count > 0)
                         parts.Append(", ").Append(string.Join("/", items));
                     break;
@@ -420,7 +421,7 @@ namespace WalkingTec.Mvvm.Core
         private void CreateDataTable()
         {
             TemplateDataTable = new DataTable();
-            var propetys = this.GetType().GetFields().Where(x => x.FieldType == typeof(ExcelPropety)).ToList();
+            List<FieldInfo> propetys = [.. this.GetType().GetFields().Where(x => x.FieldType == typeof(ExcelPropety))];
             foreach (var p in propetys)
             {
                 ExcelPropety excelPropety = (ExcelPropety)p.GetValue(this)!;

@@ -60,8 +60,8 @@ namespace WalkingTec.Mvvm.Core
                 return;
             }
             var DC = context.DC;
-            List<SimpleGroup> allgroups = context.GetTenantGroups(this.TenantCode);
-            List<SimpleRole> allroles = context.GetTenantRoles(this.TenantCode);
+            List<SimpleGroup> allgroups = context.GetTenantGroups(this.TenantCode) ?? [];
+            List<SimpleRole> allroles = context.GetTenantRoles(this.TenantCode) ?? [];
 
             if (this.Groups == null || this.Roles == null)
             {
@@ -79,10 +79,10 @@ namespace WalkingTec.Mvvm.Core
                 if (userInfo != null)
                 {
                     // 初始化用户信息
-                    var roleIDs = userInfo.UserRoles.ToList();
-                    var groupIDs = userInfo.UserGroups.ToList();
-                    List<SimpleGroup> groups = allgroups.Where(x => x.GroupCode != null && groupIDs.Contains(x.GroupCode)).ToList();
-                    List<SimpleRole>roles = allroles.Where(x => x.RoleCode != null && roleIDs.Contains(x.RoleCode)).ToList();
+                    var roleIDs = userInfo.UserRoles;
+                    var groupIDs = userInfo.UserGroups;
+                    List<SimpleGroup> groups = [.. allgroups.Where(x => x.GroupCode != null && groupIDs.Contains(x.GroupCode))];
+                    List<SimpleRole> roles = [.. allroles.Where(x => x.RoleCode != null && roleIDs.Contains(x.RoleCode))];
                     this.UserId = userInfo.user.ID.ToString();
                     this.ITCode = userInfo.user.ITCode;
                     if (string.IsNullOrEmpty(this.Name))
@@ -118,11 +118,11 @@ namespace WalkingTec.Mvvm.Core
                 return;
             }
 
-            var moregroups = this.Groups.ToList();
+            var moregroups = this.Groups is { } g ? g : [];
             for (int i = 0; i < moregroups.Count; i++)
             {
                 var group = moregroups[i];
-                var children = allgroups.Where(x => x.ParentId == group.ID).ToList();
+                List<SimpleGroup> children = [.. allgroups.Where(x => x.ParentId == group.ID)];
                 foreach (var child in children)
                 {
                     if (moregroups.Any(x => x.ID == child.ID) == false)
@@ -131,8 +131,8 @@ namespace WalkingTec.Mvvm.Core
                     }
                 }
             }
-            var gc = moregroups.Select(x => x.GroupCode).ToList();
-            var rc = this.Roles.Select(x=>x.RoleCode).ToList();
+            List<string?> gc = [.. moregroups.Select(x => x.GroupCode)];
+            List<string?> rc = this.Roles is { } r ? [.. r.Select(x => x.RoleCode)] : [];
 
             //查找登录用户的页面权限
             var funcPrivileges = await DC.Set<FunctionPrivilege>().AsNoTracking()
@@ -144,8 +144,8 @@ namespace WalkingTec.Mvvm.Core
                 .Distinct()
                 .ToListAsync();
             ProcessTreeDp(dataPris,context);
-            this.DataPrivileges = dataPris.Select(x => new SimpleDataPri { ID = x.ID, RelateId = x.RelateId, TableName = x.TableName, UserCode = x.UserCode, GroupCode = x.GroupCode }).ToList();
-            this.FunctionPrivileges = funcPrivileges.Select(x => new SimpleFunctionPri { ID = x.ID, RoleCode = x.RoleCode, Allowed = x.Allowed, MenuItemId = x.MenuItemId }).ToList();
+            this.DataPrivileges = [.. dataPris.Select(x => new SimpleDataPri { ID = x.ID, RelateId = x.RelateId, TableName = x.TableName, UserCode = x.UserCode, GroupCode = x.GroupCode })];
+            this.FunctionPrivileges = [.. funcPrivileges.Select(x => new SimpleFunctionPri { ID = x.ID, RoleCode = x.RoleCode, Allowed = x.Allowed, MenuItemId = x.MenuItemId })];
         }
 
         public void ProcessTreeDp(List<DataPrivilege> dps,WTMContext context)
@@ -155,13 +155,13 @@ namespace WalkingTec.Mvvm.Core
             {
                 if (typeof(TreePoco).IsAssignableFrom(dp.ModelType))
                 {
-                    var ids = dps.Where(x => x.TableName == dp.ModelName).Select(x => x.RelateId).ToList();
+                    List<string?> ids = [.. dps.Where(x => x.TableName == dp.ModelName).Select(x => x.RelateId)];
                     if (ids.Count > 0 && ids.Contains(null!) == false)
                     {
                         var skipids = dp.GetTreeParentIds(context, dps);
                         List<string> subids = new List<string>();
                         subids.AddRange(GetSubIds(dp, ids!, dp.ModelType, skipids,context));
-                        subids = subids.Distinct().ToList();
+                        subids = [.. subids.Distinct()];
                         subids.ForEach(x => dps.Add(new DataPrivilege
                         {
                             TableName = dp.ModelName,
@@ -174,7 +174,7 @@ namespace WalkingTec.Mvvm.Core
 
         private IEnumerable<string> GetSubIds(IDataPrivilege dp, List<string> p_id, Type modelType, List<string> skipids, WTMContext context)
         {
-            var ids = p_id.Where(x => skipids.Contains(x) == false).ToList();
+            List<string> ids = [.. p_id.Where(x => !skipids.Contains(x))];
             var subids = dp.GetTreeSubIds(context, ids);
             if (subids.Count > 0)
             {
@@ -200,7 +200,7 @@ namespace WalkingTec.Mvvm.Core
             {
                 using (var dc = context.CreateDC(false,"default"))
                 {
-                    menudata = dc?.Set<FrameworkMenu>()
+                    menudata = [.. dc?.Set<FrameworkMenu>()
                             .OrderBy(x => x.DisplayOrder)
                             .Select(x => new SimpleMenu
                             {
@@ -216,12 +216,11 @@ namespace WalkingTec.Mvvm.Core
                                 MethodName = x.MethodName,
                                 IsInside = x.IsInside,
                                 TenantAllowed = x.TenantAllowed
-                            })
-                            .ToList();
+                            })];
                 }
             }
-            var topdata = context.GlobaInfo.AllMenus.Where(x =>x.IsInside == false || x.FolderOnly == true || string.IsNullOrEmpty(x.MethodName)).ToList();
-            var allowedids = context.LoginUserInfo?.FunctionPrivileges?.Select(x => x.MenuItemId).ToList();
+            List<SimpleMenu> topdata = [.. context.GlobaInfo.AllMenus.Where(x => x.IsInside == false || x.FolderOnly == true || string.IsNullOrEmpty(x.MethodName))];
+            List<Guid?>? allowedids = context.LoginUserInfo?.FunctionPrivileges is { } fp ? [.. fp.Select(x => x.MenuItemId)] : null;
             foreach (var item in topdata)
             {
                 if (allowedids?.Contains(item.ID) == true && item.IsParentShowOnMenu(topdata))
