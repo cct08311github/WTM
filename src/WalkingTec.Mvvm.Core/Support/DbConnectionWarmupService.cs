@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -40,8 +41,8 @@ namespace WalkingTec.Mvvm.Core
             // Small delay to let the rest of the app finish starting
             await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
 
-            var enabledConnections = _configs.Connections?.Where(x => x.Enabled).ToList();
-            if (enabledConnections == null || enabledConnections.Count == 0)
+            List<CS> enabledConnections = [.. _configs.Connections?.Where(x => x.Enabled) ?? []];
+            if (enabledConnections.Count == 0)
             {
                 return;
             }
