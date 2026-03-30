@@ -753,7 +753,7 @@ namespace WalkingTec.Mvvm.Core
                                   dataquery!.Expression,
                                   Expression.Lambda(condition, new ParameterExpression[] { pe }));
                             var q = dataquery.Provider.CreateQuery(exp) as IQueryable<TopBasePoco>;
-                            IEnumerable<TopBasePoco> data = q!.AsNoTracking().ToList();
+                            IEnumerable<TopBasePoco> data = [.. q!.AsNoTracking()];
                             //比较子表原数据和新数据的区别
                             IEnumerable<TopBasePoco>? toadd = null;
                             IEnumerable<TopBasePoco>? toremove = null;
@@ -874,7 +874,7 @@ namespace WalkingTec.Mvvm.Core
                                   dataquery!.Expression,
                                   Expression.Lambda(condition, new ParameterExpression[] { pe }));
                             var q = dataquery.Provider.CreateQuery(exp) as IQueryable<TopBasePoco>;
-                            IEnumerable<TopBasePoco> removeData = q!.AsNoTracking().ToList();
+                            IEnumerable<TopBasePoco> removeData = [.. q!.AsNoTracking()];
 
                             foreach (var item in removeData)
                             {
