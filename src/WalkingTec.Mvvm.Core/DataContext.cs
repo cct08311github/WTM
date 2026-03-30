@@ -159,7 +159,7 @@ namespace WalkingTec.Mvvm.Core
                         builder!.HasOne(filepro.Name).WithMany().OnDelete(DeleteBehavior.Restrict);
                     }
                 }
-                List<Expression> list = new List<Expression>();
+                List<Expression> list = [];
                 ParameterExpression pe = Expression.Parameter(item);
                 if (item.BaseType == null || item.BaseType.IsAbstract == true || (item.BaseType == typeof(TopBasePoco) || item.BaseType == typeof(BasePoco) || item.BaseType?.BaseType == typeof(TreePoco)))
                 {
@@ -299,7 +299,7 @@ namespace WalkingTec.Mvvm.Core
             FrameworkMenu menu = new FrameworkMenu
             {
                 PageName = "MenuKey." + FolderText,
-                Children = new List<FrameworkMenu>(),
+                Children = [],
                 ShowOnMenu = isShowOnMenu,
                 IsInside = true,
                 FolderOnly = true,
@@ -395,7 +395,7 @@ namespace WalkingTec.Mvvm.Core
                 Url = act.Url,
                 ShowOnMenu = isMainLink,
                 FolderOnly = false,
-                Children = new List<FrameworkMenu>(),
+                Children = [],
                 IsPublic = false,
                 IsInside = true,
                 DisplayOrder = displayOrder,
@@ -840,7 +840,7 @@ namespace WalkingTec.Mvvm.Core
 
         public IEnumerable<TElement> Run<TElement>(string sql, CommandType commandType, params object[] paras)
         {
-            IEnumerable<TElement> entityList = new List<TElement>();
+            IEnumerable<TElement> entityList = [];
             DataTable dt = Run(sql, commandType, paras);
             entityList = EntityHelper.GetEntityList<TElement>(dt);
             return entityList;
