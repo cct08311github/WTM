@@ -922,7 +922,7 @@ namespace WalkingTec.Mvvm.Core
             var m = modules.Select(x => new SimpleModule
             {
                 ActionDes = x.ActionDes,
-                Actions = x.Actions?.Select(y => new SimpleAction
+                Actions = [.. x.Actions?.Select(y => new SimpleAction
                 {
                     ActionDes = y.ActionDes,
                     ActionName = y.ActionName,
@@ -934,7 +934,7 @@ namespace WalkingTec.Mvvm.Core
                     ModuleId = y.ModuleId,
                     Parameter = y.Parameter,
                     ParasToRunTest = y.ParasToRunTest
-                }).ToList(),
+                })],
                 Area = x.Area,
                 AreaId = x.AreaId,
                 ClassName = x.ClassName,
