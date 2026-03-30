@@ -84,7 +84,7 @@ public static class AnalysisVmInvoker
             if (result is null)
                 throw new InvalidOperationException(
                     $"VM type '{vmType.FullName}' GetAnalysisFields() returned null.");
-            return result as IList<AnalysisFieldMeta> ?? result.ToList();
+            return result as IList<AnalysisFieldMeta> ?? [.. result];
         }
         catch (TargetInvocationException ex)
         {
