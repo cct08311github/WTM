@@ -357,7 +357,7 @@ Expression.Lambda(trueExp, new ParameterExpression[] { pe }));
                         {
                             nowhereNode
                         };
-                        paras.AddRange(node.Arguments.Skip(1).ToList());
+                        paras.AddRange([.. node.Arguments.Skip(1)]);
                         var rv = Expression.Call(
                          node.Method,
                          paras);
