@@ -222,7 +222,7 @@
 
 ---
 
-### P1-03: `ImmutableDictionary` → `FrozenDictionary` 用於 PropertyCache
+### P1-03: `ImmutableDictionary` → `ConcurrentDictionary` 用於 PropertyCache ✅
 
 **現況分析**：
 - `TypeExtension._propertyCache` 用 `ImmutableDictionary<string, List<PropertyInfo>>`
@@ -230,13 +230,15 @@
 - `ImmutableDictionary` 的讀取效能不如 `FrozenDictionary`
 
 **方案**：
-- 改為 `ConcurrentDictionary` 建構期使用，startup 完成後用 `.ToFrozenDictionary()` 凍結
-- 或直接用 `ConcurrentDictionary`（如果需要 runtime 新增）
+- ~~改為 `ConcurrentDictionary` 建構期使用，startup 完成後用 `.ToFrozenDictionary()` 凍結~~
+- **已實現**：`ConcurrentDictionary<string, List<PropertyInfo>>` + `GetOrAdd` lazy init
+- 快取為 lazy loading（runtime 依需建立），無法在 startup freeze，故直接用 `ConcurrentDictionary`
 
 **影響範圍**：`TypeExtension.cs`
-**預期收益**：Model binding 路徑讀取加速（ImmutableDictionary TryGetValue = O(log n)，FrozenDictionary = O(1)）
-**風險**：低 — 需確認是否有 runtime 動態新增的需求（若有，改用 ConcurrentDictionary）
+**預期收益**：移除 ImmutableDictionary.Add() 每次複製全樹的 O(log n) 寫入成本；GetOrAdd 為 O(1)攤銷
+**風險**：低 — PR #741 merged，1202 tests passed
 **相依性**：無
+**PR**: #741
 **工作量**：**S**
 
 ---
