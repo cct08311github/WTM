@@ -86,7 +86,7 @@ namespace WalkingTec.Mvvm.Core
         public static Func<object, object?> GetPropertyExpression(Type objtype, string property)
         {
             property = Regex.Replace(property, @"\[[^\]]*\]", string.Empty);
-            List<string> level = new List<string>();
+            List<string> level = [];
             if (property.Contains('.'))
             {
                 level.AddRange(property.Split('.'));
@@ -479,7 +479,7 @@ namespace WalkingTec.Mvvm.Core
             try
             {
                 property = Regex.Replace(property, @"\[[^\]]*\]", string.Empty);
-                List<string> level = new List<string>();
+                List<string> level = [];
                 if (property.Contains('.'))
                 {
                     level.AddRange(property.Split('.'));
