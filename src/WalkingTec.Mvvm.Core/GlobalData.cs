@@ -50,8 +50,8 @@ namespace WalkingTec.Mvvm.Core
         private Func<List<SimpleMenu>>? MenuGetFunc;
         private Func<List<FrameworkTenant>>? TenantGetFunc;
 
-        public List<SimpleMenu> AllMenus => MenuGetFunc?.Invoke() ?? new List<SimpleMenu>();
-        public List<FrameworkTenant> AllTenant => TenantGetFunc?.Invoke() ?? new List<FrameworkTenant>();
+        public List<SimpleMenu> AllMenus => MenuGetFunc?.Invoke() ?? [];
+        public List<FrameworkTenant> AllTenant => TenantGetFunc?.Invoke() ?? [];
         /// <summary>
         /// 设置菜单委托
         /// </summary>
