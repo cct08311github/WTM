@@ -1,7 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
-using System.Collections.Immutable;
+using System.Collections.Concurrent;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Linq;
@@ -15,7 +15,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
     /// </summary>
     public static class TypeExtension
     {
-        public static ImmutableDictionary<string, List<PropertyInfo>> _propertyCache { get; set; } = new Dictionary<string, List<PropertyInfo>>().ToImmutableDictionary();
+        private static readonly ConcurrentDictionary<string, List<PropertyInfo>> _propertyCache = new();
         /// <summary>
         /// 判断是否是泛型
         /// </summary>
@@ -487,62 +487,19 @@ namespace WalkingTec.Mvvm.Core.Extensions
 
         public static PropertyInfo? GetSingleProperty(this Type self, string name)
         {
-            if (_propertyCache.ContainsKey(self.FullName!) == false)
-            {
-                var properties = self.GetProperties().ToList();
-                try
-                {
-                    _propertyCache = _propertyCache.Add(self.FullName!, properties);
-                }
-                catch { }
-                return properties.Where(x => x.Name == name).FirstOrDefault();
-            }
-            else
-            {
-                return _propertyCache[self.FullName!].Where(x => x.Name == name).FirstOrDefault();
-            }
+            var props = _propertyCache.GetOrAdd(self.FullName!, _ => self.GetProperties().ToList());
+            return props.FirstOrDefault(x => x.Name == name);
         }
 
-        public static PropertyInfo? GetSingleProperty(this Type self, Func<PropertyInfo,bool> where)
+        public static PropertyInfo? GetSingleProperty(this Type self, Func<PropertyInfo, bool> where)
         {
-            if (_propertyCache.ContainsKey(self.FullName!) == false)
-            {
-                var properties = self.GetProperties().ToList();
-                try
-                {
-                    _propertyCache = _propertyCache.Add(self.FullName!, properties);
-                }
-                catch { }
-                return properties.Where(where).FirstOrDefault();
-            }
-            else
-            {
-                return _propertyCache[self.FullName!].Where(where).FirstOrDefault();
-            }
+            var props = _propertyCache.GetOrAdd(self.FullName!, _ => self.GetProperties().ToList());
+            return props.FirstOrDefault(where);
         }
 
         public static List<PropertyInfo> GetAllProperties(this Type self)
         {
-            if (_propertyCache.ContainsKey(self.FullName!) == false)
-            {
-                var properties = self.GetProperties().ToList();
-                try
-                {
-                    _propertyCache = _propertyCache.Add(self.FullName!, properties);
-                }
-                catch
-                {
-                    if (_propertyCache.ContainsKey(self.FullName!) == true)
-                    {
-                        return _propertyCache[self.FullName!];
-                    }
-                }
-                return properties;
-            }
-            else
-            {
-                return _propertyCache[self.FullName!];
-            }
+            return _propertyCache.GetOrAdd(self.FullName!, _ => self.GetProperties().ToList());
         }
 
         public static Type? GetParentWorkflowPoco(this Type self)
