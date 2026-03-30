@@ -166,7 +166,7 @@ namespace WalkingTec.Mvvm.Core
             ErrorListVM = new TemplateErrorListVM();
             ValidityTemplateType = true;
             Template = new T();
-            EntityList = new List<P>();
+            EntityList = [];
         }
         #endregion
 
@@ -211,7 +211,7 @@ namespace WalkingTec.Mvvm.Core
         {
             if (!isEntityListSet)
             {
-                EntityList = new List<P>();
+                EntityList = [];
 
                 //初始化上传的模板数据
                 SetTemplateData();
@@ -242,7 +242,7 @@ namespace WalkingTec.Mvvm.Core
 
             try
             {
-                TemplateData = new List<T>();
+                TemplateData = [];
                 xssfworkbook = new XSSFWorkbook();
 
                 //【CHECK】上传附件的ID为空
@@ -285,7 +285,7 @@ namespace WalkingTec.Mvvm.Core
                 var cells = sheet.GetRow(0).Cells;
 
                 //获取模板中所有字段的属性
-                List<ExcelPropety> ListTemplateProptetys = new List<ExcelPropety>();
+                List<ExcelPropety> ListTemplateProptetys = [];
                 List<FieldInfo> ListPropetys = [.. Template.GetType().GetFields().Where(x => x.FieldType == typeof(ExcelPropety))];
                 for (int i = 0; i < ListPropetys.Count; i++)
                 {
@@ -471,7 +471,7 @@ namespace WalkingTec.Mvvm.Core
                             //保存子表字段信息稍后处理
                             if (!ChildrenEntity.ContainsKey(ep.SubTableType))
                             {
-                                ChildrenEntity[ep.SubTableType] = new List<FieldInfo>();
+                                ChildrenEntity[ep.SubTableType] = [];
                             }
                             ChildrenEntity[ep.SubTableType].Add(ExcelField);
                         }
@@ -632,7 +632,7 @@ namespace WalkingTec.Mvvm.Core
             var cinfo = this.SetDuplicatedCheck();
             finalInfo = new DuplicatedInfo<P>
             {
-                Groups = new List<DuplicatedGroup<P>>()
+                Groups = []
             };
             if (cinfo != null)
             {
@@ -744,14 +744,14 @@ namespace WalkingTec.Mvvm.Core
                 //循环所有重复字段组
                 foreach (var group in checkCondition.Groups)
                 {
-                    List<Expression> conditions = new List<Expression>();
+                    List<Expression> conditions = [];
                     //生成一个表达式，类似于 x=>x.Id != id，这是为了当修改数据时验证重复性的时候，排除当前正在修改的数据
                     var idproperty = modelType.GetSingleProperty("ID")!;
                     MemberExpression idLeft = Expression.Property(para, idproperty);
                     ConstantExpression idRight = Expression.Constant(entity.GetID());
                     BinaryExpression idNotEqual = Expression.NotEqual(idLeft, idRight);
                     conditions.Add(idNotEqual);
-                    List<PropertyInfo> props = new List<PropertyInfo>();
+                    List<PropertyInfo> props = [];
                     //在每个组中循环所有字段
                     foreach (var field in group.Fields)
                     {
@@ -806,14 +806,14 @@ namespace WalkingTec.Mvvm.Core
                 //循环所有重复字段组
                 foreach (var group in checkCondition.Groups)
                 {
-                    List<Expression> conditions = new List<Expression>();
+                    List<Expression> conditions = [];
                     //生成一个表达式，类似于 x=>x.Id != id，这是为了当修改数据时验证重复性的时候，排除当前正在修改的数据
                     var idproperty = modelType.GetSingleProperty("ExcelIndex")!;
                     MemberExpression idLeft = Expression.Property(para, idproperty);
                     ConstantExpression idRight = Expression.Constant(entity.ExcelIndex);
                     BinaryExpression idNotEqual = Expression.NotEqual(idLeft, idRight);
                     conditions.Add(idNotEqual);
-                    List<PropertyInfo> props = new List<PropertyInfo>();
+                    List<PropertyInfo> props = [];
                     //在每个组中循环所有字段
                     foreach (var field in group.Fields)
                     {
@@ -999,7 +999,7 @@ namespace WalkingTec.Mvvm.Core
             }
             var ModelType = typeof(P);
             //循环数据列表
-            List<P> ListAdd = new List<P>();
+            List<P> ListAdd = [];
             processed = 0;
             foreach (var item in EntityList)
             {
@@ -1239,7 +1239,7 @@ namespace WalkingTec.Mvvm.Core
                 FormatSingleData = excelPropety.FormatSingleData,
                 FieldName = excelPropety.FieldName
             };
-            List<ExcelPropety> li = new List<ExcelPropety>();
+            List<ExcelPropety> li = [];
             foreach (var item in excelPropety.DynamicColumns)
             {
                 li.Add(CopyExcelPropety(item));
@@ -1323,10 +1323,10 @@ namespace WalkingTec.Mvvm.Core
                 //循环所有重复字段组
                 foreach (var group in checkCondition.Groups)
                 {
-                    List<Expression> conditions = new List<Expression>();
+                    List<Expression> conditions = [];
                     //生成一个表达式，类似于 x=>x.Id != id，这是为了当修改数据时验证重复性的时候，排除当前正在修改的数据
                     //在每个组中循环所有字段
-                    List<PropertyInfo> props = new List<PropertyInfo>();
+                    List<PropertyInfo> props = [];
                     //在每个组中循环所有字段
                     foreach (var field in group.Fields)
                     {
@@ -1443,7 +1443,7 @@ namespace WalkingTec.Mvvm.Core
                 xssfworkbook = new XSSFWorkbook(fa!.DataStream);
                 fa!.DataStream?.Dispose();
                 List<FieldInfo> propetys = [.. Template.GetType().GetFields().Where(x => x.FieldType == typeof(ExcelPropety))];
-                List<ExcelPropety> excelPropetys = new List<ExcelPropety>();
+                List<ExcelPropety> excelPropetys = [];
                 for (int porpetyIndex = 0; porpetyIndex < propetys.Count; porpetyIndex++)
                 {
                     ExcelPropety ep = (ExcelPropety)propetys[porpetyIndex].GetValue(Template)!;
@@ -1510,7 +1510,7 @@ namespace WalkingTec.Mvvm.Core
 
         public TemplateErrorListVM()
         {
-            EntityList = new List<ErrorMessage>();
+            EntityList = [];
             NeedPage = false;
         }
 
