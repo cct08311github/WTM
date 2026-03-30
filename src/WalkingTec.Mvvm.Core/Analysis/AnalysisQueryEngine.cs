@@ -217,11 +217,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
             List<string> measureNames = [.. req.Measures.Select(m => $"{m.Field}_{m.Func}")];
 
             // 3. Collect unique values of the pivot dimension
-            var pivotValues = rawRows
+            List<string> pivotValues = [.. rawRows
                 .Select(r => String(r[req.PivotDimension]))
                 .Distinct()
-                .OrderBy(v => v)
-                .ToList();
+                .OrderBy(v => v)];
 
             // 4. Transform into pivot format
             // Group raw rows by the combination of RowDimensions
@@ -283,11 +282,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
             List<string> rowDims = [.. req.Dimensions.Where(d => d != req.PivotDimension)];
             List<string> measureNames = [.. req.Measures.Select(m => $"{m.Field}_{m.Func}")];
 
-            var pivotValues = rawRows
+            List<string> pivotValues = [.. rawRows
                 .Select(r => String(r[req.PivotDimension]))
                 .Distinct()
-                .OrderBy(v => v)
-                .ToList();
+                .OrderBy(v => v)];
 
             var pivotRowsMap = new Dictionary<string, Dictionary<string, object?>>();
 
