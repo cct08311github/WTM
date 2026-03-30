@@ -93,7 +93,7 @@ namespace WalkingTec.Mvvm.Core
                     {
                     }
                 }
-                var dlllist = AssemblyLoadContext.Default.Assemblies.Where(x => systemdll.Any(y => (x.FullName ?? string.Empty).StartsWith(y)) == false).ToList();
+                List<Assembly> dlllist = [.. AssemblyLoadContext.Default.Assemblies.Where(x => systemdll.All(y => !(x.FullName ?? string.Empty).StartsWith(y)))];
                 _allAssemblies.AddRange(dlllist);
             }
             return _allAssemblies;
@@ -110,7 +110,7 @@ namespace WalkingTec.Mvvm.Core
                 {
                     try
                     {
-                        var dcModule = asm.GetExportedTypes().Where(x => typeof(DbContext).IsAssignableFrom(x)).ToList();
+                        List<Type> dcModule = [.. asm.GetExportedTypes().Where(x => typeof(DbContext).IsAssignableFrom(x))];
                         if (dcModule != null && dcModule.Count > 0)
                         {
                             foreach (var module in dcModule)
@@ -147,7 +147,7 @@ namespace WalkingTec.Mvvm.Core
                 {
                     try
                     {
-                        var dcModule = asm.GetExportedTypes().Where(x => typeof(BaseVM).IsAssignableFrom(x)).ToList();
+                        List<Type> dcModule = [.. asm.GetExportedTypes().Where(x => typeof(BaseVM).IsAssignableFrom(x))];
                         allTypes.AddRange(dcModule);
                     }
                     catch { }
@@ -247,7 +247,7 @@ namespace WalkingTec.Mvvm.Core
 
         public static short GetExcelColor(string color)
         {
-            var colors = typeof(HSSFColor).GetNestedTypes().ToList();
+            List<Type> colors = [.. typeof(HSSFColor).GetNestedTypes()];
             foreach (var col in colors)
             {
                 var pro = col.GetField("hexString");
@@ -564,7 +564,7 @@ namespace WalkingTec.Mvvm.Core
         {
             DirectoryInfo dir = new DirectoryInfo(dirpath);
             var files = dir.GetFileSystemInfos();
-            return files.Select(x => x.Name).ToList();
+            return [.. files.Select(x => x.Name)];
         }
 
         #region add by wuwh 2014.10.18  递归获取目录下所有文件
@@ -585,7 +585,7 @@ namespace WalkingTec.Mvvm.Core
             {
                 GetAllFilePathRecursion(item, allFiles);
             }
-            allFiles.AddRange(Directory.GetFiles(dirPath).ToList());
+            allFiles.AddRange(Directory.GetFiles(dirPath));
 
             return allFiles;
         }
@@ -633,7 +633,7 @@ namespace WalkingTec.Mvvm.Core
             }
             if (mode?.ToLower() == "read")
             {
-                var reads = config.Connections.Where(x => x.Key?.StartsWith(cs + "_") == true && x.Enabled).Select(x => x.Key).ToList();
+                List<string?> reads = [.. config.Connections.Where(x => x.Key?.StartsWith(cs + "_") == true && x.Enabled).Select(x => x.Key)];
                 if (reads.Count > 0)
                 {
                     Random r = new Random();

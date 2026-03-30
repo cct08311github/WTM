@@ -128,10 +128,9 @@ namespace WalkingTec.Mvvm.Core.Cache
         public bool IsCacheable(Type entityType) => _registry.ContainsKey(entityType);
 
         public IReadOnlyList<Type> GetWarmupTypes() =>
-            _registry
+            [.. _registry
                 .Where(kv => kv.Value.WarmOnStartup)
-                .Select(kv => kv.Key)
-                .ToList();
+                .Select(kv => kv.Key)];
 
         public CacheLookupAttribute? GetAttribute(Type entityType) =>
             _registry.TryGetValue(entityType, out var attr) ? attr : null;
@@ -192,7 +191,7 @@ namespace WalkingTec.Mvvm.Core.Cache
         }
 
         private static List<T> LoadFromDb<T>(DbContext dc) where T : TopBasePoco =>
-            dc.Set<T>().AsNoTracking().ToList();
+            [.. dc.Set<T>().AsNoTracking()];
 
         private static Task<List<T>> LoadFromDbAsync<T>(DbContext dc, CancellationToken ct)
             where T : TopBasePoco =>
