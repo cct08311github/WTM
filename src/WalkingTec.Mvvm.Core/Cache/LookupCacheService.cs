@@ -209,7 +209,7 @@ namespace WalkingTec.Mvvm.Core.Cache
                 }
                 catch (ReflectionTypeLoadException ex)
                 {
-                    types = ex.Types.Where(t => t != null).Cast<Type>().ToArray();
+                    types = ex.Types == null ? [] : [.. ex.Types.Where(t => t != null).Cast<Type>()];
                 }
 
                 foreach (var type in types)
