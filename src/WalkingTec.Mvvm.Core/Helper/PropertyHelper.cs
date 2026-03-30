@@ -421,7 +421,7 @@ namespace WalkingTec.Mvvm.Core
                 var rv = new List<string>();
                 try
                 {
-                    rv = (lambda.Compile().DynamicInvoke(obj) as IEnumerable<string>)?.ToList() ?? new List<string>();
+                    rv = (lambda.Compile().DynamicInvoke(obj) as IEnumerable<string>)?.ToList() ?? [];
                 }
                 catch { }
                 return rv;

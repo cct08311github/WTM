@@ -207,8 +207,8 @@ namespace WalkingTec.Mvvm.Core
         {
             List<T> tempToRemove = new List<T>();
             List<T> tempToAdd = new List<T>();
-            oldList = oldList ?? new List<T>();
-            newList = newList ?? new List<T>();
+            oldList = oldList ?? [];
+            newList = newList ?? [];
             foreach (var oldItem in oldList)
             {
                 bool exist = false;

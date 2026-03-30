@@ -81,7 +81,7 @@ namespace WalkingTec.Mvvm.Core
             set
             {
                 _enumType = value;
-                this.ListItems = _enumType?.ToListItems() ?? new List<ComboSelectListItem>();
+                this.ListItems = _enumType?.ToListItems() ?? [];
             }
         }
 

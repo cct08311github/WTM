@@ -190,7 +190,7 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="exps">需要关联的类</param>
         public void SetInclude(params Expression<Func<TModel, object>>[] exps)
         {
-            _toInclude = _toInclude ?? new List<Expression<Func<TModel, object>>>();
+            _toInclude = _toInclude ?? [];
             _toInclude.AddRange(exps);
         }
 
