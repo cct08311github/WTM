@@ -346,7 +346,7 @@ namespace WalkingTec.Mvvm.Core
                 var tenantId = useTenant ? LoginUserInfo?.TenantCode : null;
 
                 var all = svc.GetAll<T>(dbCtx, tenantId);
-                return predicate == null ? all : (System.Collections.Generic.IReadOnlyList<T>)all.Where(predicate).ToList();
+                return predicate == null ? all : (System.Collections.Generic.IReadOnlyList<T>)[.. all.Where(predicate)];
             }
             finally
             {
@@ -394,7 +394,7 @@ namespace WalkingTec.Mvvm.Core
                 var tenantId = useTenant ? LoginUserInfo?.TenantCode : null;
 
                 var all = await svc.GetAllAsync<T>(dbCtx, tenantId, ct).ConfigureAwait(false);
-                return predicate == null ? all : (System.Collections.Generic.IReadOnlyList<T>)all.Where(predicate).ToList();
+                return predicate == null ? all : (System.Collections.Generic.IReadOnlyList<T>)[.. all.Where(predicate)];
             }
             finally
             {
@@ -763,7 +763,7 @@ namespace WalkingTec.Mvvm.Core
             }
             else
             {
-                userids = DC.Set<FrameworkUserRole>().Where(x => rolecode.Contains(x.RoleCode)).Select(x => x.UserCode).ToList();
+                userids = [.. DC.Set<FrameworkUserRole>().Where(x => rolecode.Contains(x.RoleCode)).Select(x => x.UserCode)];
             }
             foreach (var userId in userids)
             {
@@ -792,7 +792,7 @@ params string[] groupcode)
             }
             else
             {
-                userids = DC.Set<FrameworkUserGroup>().Where(x => groupcode.Contains(x.GroupCode)).Select(x => x.UserCode).ToList();
+                userids = [.. DC.Set<FrameworkUserGroup>().Where(x => groupcode.Contains(x.GroupCode)).Select(x => x.UserCode)];
             }
             foreach (var userId in userids)
             {
