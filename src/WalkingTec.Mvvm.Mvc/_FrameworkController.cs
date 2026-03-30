@@ -755,7 +755,7 @@ namespace WalkingTec.Mvvm.Mvc
             if (ids == null || ids.Length == 0)
                 return JsonMore(Array.Empty<object>());
 
-            var results = new List<object>();
+            List<object> results = [];
             foreach (var idStr in ids.Take(10))
             {
                 if (!Guid.TryParse(idStr, out var guid)) continue;

@@ -553,7 +553,7 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
 
         private static List<string> GetAllowedFuncNames(AggregateFunc funcs)
         {
-            var res = new List<string>();
+            List<string> res = [];
             if ((funcs & AggregateFunc.Sum) != 0) res.Add("Sum");
             if ((funcs & AggregateFunc.Count) != 0) res.Add("Count");
             if ((funcs & AggregateFunc.Avg) != 0) res.Add("Avg");

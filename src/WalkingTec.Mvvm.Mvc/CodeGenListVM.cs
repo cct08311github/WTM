@@ -58,7 +58,7 @@ namespace WalkingTec.Mvvm.Mvc
                     var subpros = Type.GetType(entity.LinkedType).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance).Where(x=>x.GetMemberType() == typeof(string) && x.Name != "BatchError").OrderBy(x => x.Name).ToList().ToListItems(x => x.Name, x => x.Name);
                     var subproswithname = subpros.Where(x => x.Text.ToLower().Contains("name")).ToList();
                     var subproswithoutname = subpros.Where(x => x.Text.ToLower().Contains("name") == false).ToList();
-                    subpros = new List<ComboSelectListItem>();
+                    subpros = [];
                     subpros.AddRange(subproswithname);
                     subpros.AddRange(subproswithoutname);
                     if(subpros.Count == 0)
@@ -79,14 +79,14 @@ namespace WalkingTec.Mvvm.Mvc
         {
             Type modeltype =  Type.GetType(ModelFullName);
             var pros = modeltype.GetAllProperties();
-            List<CodeGenListView> lv = new List<CodeGenListView>();
+            List<CodeGenListView> lv = [];
             int count = 0;
-            List<string> skipFields = new List<string>()
-            {
+            List<string> skipFields =
+            [
                nameof(TopBasePoco.BatchError),
                nameof(TopBasePoco.Checked),
                nameof(TopBasePoco.ExcelIndex),
-            };
+            ];
             if (typeof(IBasePoco).IsAssignableFrom(modeltype))
             {
                 skipFields.AddRange(
@@ -102,7 +102,7 @@ namespace WalkingTec.Mvvm.Mvc
                 skipFields.Add(nameof(IPersistPoco.IsValid));
             }
 
-            List<string> ignoreField = new List<string>();
+            List<string> ignoreField = [];
             foreach (var pro in pros)
             {
                 if (skipFields.Contains(pro.Name) == false)

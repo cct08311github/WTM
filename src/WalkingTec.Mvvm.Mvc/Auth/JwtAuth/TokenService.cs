@@ -115,11 +115,7 @@ namespace WalkingTec.Mvvm.Mvc.Auth
             var creds = new SigningCredentials(
                 new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwtOptions.SecurityKey)),
                 SecurityAlgorithms.HmacSha256);
-            var claims = new List<Claim>
-            {
-                new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("N")),
-                new(AuthConstants.JwtClaimTypes.Subject, info.ITCode)
-            };
+            List<Claim> claims = [new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("N")), new(AuthConstants.JwtClaimTypes.Subject, info.ITCode)];
             if (!string.IsNullOrEmpty(info.Name))
                 claims.Add(new Claim(AuthConstants.JwtClaimTypes.Name, info.Name));
             if (!string.IsNullOrEmpty(info.TenantCode))

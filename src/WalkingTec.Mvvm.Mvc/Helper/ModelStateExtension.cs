@@ -13,7 +13,7 @@ namespace WalkingTec.Mvvm.Mvc
         {
             var mse = new ErrorObj();
             mse.Form = new Dictionary<string, string>();
-            mse.Message = new List<string>();
+            mse.Message = [];
             foreach (var item in self)
             {
                 if (item.Value.ValidationState == ModelValidationState.Invalid)

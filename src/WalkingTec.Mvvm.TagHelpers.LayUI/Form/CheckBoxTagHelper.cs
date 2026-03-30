@@ -40,8 +40,8 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         public override void Process(TagHelperContext context, TagHelperOutput output)
         {
             var modelType = Field.Metadata.ModelType;
-            var listItems = new List<ComboSelectListItem>();
-            List<string> values = new List<string>();
+            List<ComboSelectListItem> listItems = [];
+            List<string> values = [];
             if (Field?.Name?.Contains("[") == true)
             {
                 values.AddRange(Field.ModelExplorer.Container.Model.GetPropertySiblingValues(Field.Name));
@@ -109,7 +109,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     }
                     else if (modelType.IsBoolOrNullableBool())
                     {
-                        listItems = new List<ComboSelectListItem>() { new ComboSelectListItem { Value = "true", Text = "|" } };
+                        listItems = [new ComboSelectListItem { Value = "true", Text = "|" }];
                     }
                 }
                 else

@@ -88,7 +88,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 output.Attributes.Add("wtm-linkto", $"{linkto}");
             }
 
-            List<object> vals = new List<object>();
+            List<object> vals = [];
                 if (Field?.Model != null)
                 {
                     if (MultiSelect == true)
@@ -111,7 +111,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 }
             }
 
-            List<LayuiTreeItem> treeitems = new List<LayuiTreeItem>();
+            List<LayuiTreeItem> treeitems = [];
 
                 if (string.IsNullOrEmpty(ItemUrl) == true && Items?.Model is List<TreeSelectListItem> mm)
                 {
@@ -268,7 +268,7 @@ var {Id} = xmSelect.render({{
 
         private List<LayuiTreeItem> GetLayuiTree(IEnumerable<TreeSelectListItem> tree, List<object> values)
         {
-            List<LayuiTreeItem> rv = new List<LayuiTreeItem>();
+            List<LayuiTreeItem> rv = [];
             foreach (var s in tree)
             {
                 var news = new LayuiTreeItem

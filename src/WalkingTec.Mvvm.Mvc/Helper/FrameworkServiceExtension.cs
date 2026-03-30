@@ -87,11 +87,10 @@ namespace WalkingTec.Mvvm.Mvc
         private static List<SimpleMenu> GetAllMenus(List<SimpleModule> allModule, bool isQuickdebug, List<CS> connections)
         {
             var localizer = new ResourceManagerStringLocalizerFactory(Options.Create<LocalizationOptions>(new LocalizationOptions { ResourcesPath = "Resources" }), new Microsoft.Extensions.Logging.LoggerFactory()).Create(typeof(WalkingTec.Mvvm.Core.CoreProgram));
-            var menus = new List<SimpleMenu>();
+            List<SimpleMenu> menus = [];
 
             if (isQuickdebug)
             {
-                menus = new List<SimpleMenu>();
                 var areas = allModule.Where(x => x.NameSpace != "WalkingTec.Mvvm.Admin.Api").Select(x => x.Area?.AreaName).Distinct().ToList();
                 foreach (var area in areas)
                 {
@@ -159,7 +158,7 @@ namespace WalkingTec.Mvvm.Mvc
         /// <returns></returns>
         private static List<SimpleModule> GetAllModules(List<Type> controllers)
         {
-            var modules = new List<SimpleModule>();
+            List<SimpleModule> modules = [];
 
             foreach (var ctrl in controllers)
             {
@@ -219,7 +218,7 @@ namespace WalkingTec.Mvvm.Mvc
                 {
                     methods = methods.Where(x => x.IsSpecialName == false).ToArray();
                 }
-                model.Actions = new List<SimpleAction>();
+                model.Actions = [];
                 //循环所有方法
                 foreach (var method in methods)
                 {
@@ -261,7 +260,7 @@ namespace WalkingTec.Mvvm.Mvc
                         var pars = method.GetParameters();
                         if (pars != null && pars.Length > 0)
                         {
-                            action.ParasToRunTest = new List<string>();
+                            action.ParasToRunTest = [];
                             foreach (var par in pars)
                             {
                                 action.ParasToRunTest.Add(par.Name);
@@ -320,7 +319,7 @@ namespace WalkingTec.Mvvm.Mvc
                         var pars = method.GetParameters();
                         if (pars != null && pars.Length > 0)
                         {
-                            action.ParasToRunTest = new List<string>();
+                            action.ParasToRunTest = [];
                             foreach (var par in pars)
                             {
                                 action.ParasToRunTest.Add(par.Name);
@@ -362,7 +361,7 @@ namespace WalkingTec.Mvvm.Mvc
         /// <returns></returns>
         private static List<string> GetAllAccessUrls(List<Type> controllers)
         {
-            var rv = new List<string>();
+            List<string> rv = [];
             foreach (var ctrl in controllers)
             {
                 if (typeof(BaseApiController).IsAssignableFrom(ctrl))
@@ -497,7 +496,7 @@ namespace WalkingTec.Mvvm.Mvc
                 library.Dependencies,
                 library.Serviceable);
 
-            var assemblies = new List<string>();
+            List<string> assemblies = [];
             r.TryResolveAssemblyPaths(wrapper, assemblies);
             if (assemblies.Count > 0)
             {
@@ -915,7 +914,7 @@ namespace WalkingTec.Mvvm.Mvc
             gd.CustomUserType = gd.GetPocoTypesAssignableFrom<FrameworkUserBase>().Where(x => x.Name.ToLower() == "frameworkuser").FirstOrDefault();
             gd.SetMenuGetFunc(() =>
             {
-                var menus = new List<SimpleMenu>();
+                List<SimpleMenu> menus = [];
                 var cache = app.ApplicationServices.GetRequiredService<IDistributedCache>();
                 var menuCacheKey = nameof(GlobalData.AllMenus);
                 if (cache.TryGetValue(menuCacheKey, out List<SimpleMenu> rv) == false)
@@ -934,12 +933,12 @@ namespace WalkingTec.Mvvm.Mvc
             });
             gd.SetTenantGetFunc(() =>
             {
-                var tenants = new List<FrameworkTenant>();
+                List<FrameworkTenant> tenants = [];
                 var cache = app.ApplicationServices.GetRequiredService<IDistributedCache>();
                 var tenantsCacheKey = nameof(GlobalData.AllTenant);
                 if (cache.TryGetValue(tenantsCacheKey, out tenants) == false)
                 {
-                    tenants = new List<FrameworkTenant>();
+                    tenants = [];
                     if (configs?.EnableTenant == true)
                     {
                         using (var dc = configs.Connections.Where(x => x.Key.ToLower() == "default").FirstOrDefault().CreateDC())
@@ -994,7 +993,7 @@ namespace WalkingTec.Mvvm.Mvc
                     }
                     if (tenants == null)
                     {
-                        tenants = new List<FrameworkTenant>();
+                        tenants = [];
                     }
                     cache.Add(tenantsCacheKey, tenants, new DistributedCacheEntryOptions() { AbsoluteExpirationRelativeToNow = new TimeSpan(1, 0, 0) });
                 }

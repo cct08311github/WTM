@@ -84,7 +84,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
                 if (listItems == null)
                 {
-                    listItems = new List<ComboSelectListItem>();
+                    listItems = [];
                     if (Items.Metadata.ModelType.IsList())
                     {
                         var exports = (Items.Model as IList);
@@ -105,7 +105,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
             if(listItems == null)
             {
-                listItems = new List<ComboSelectListItem>();
+                listItems = [];
             }
             var data = listItems.Select(x => new
             {
@@ -116,7 +116,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             }).ToArray();
 
             #endregion
-            var selectVal = new List<string>();
+            List<string> selectVal = [];
             if (Field.Name.Contains("["))
             {
                 //默认多对多不必填

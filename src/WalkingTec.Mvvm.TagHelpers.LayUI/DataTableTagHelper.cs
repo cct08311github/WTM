@@ -360,10 +360,10 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
         private void CalcChildCol(List<List<LayuiColumn>> layuiCols, List<IGridColumn<TopBasePoco>> rawCols, int maxDepth, int depth)
         {
-            var tempCols = new List<LayuiColumn>();
+            List<LayuiColumn> tempCols = [];
             layuiCols.Add(tempCols);
 
-            var nextCols = new List<IGridColumn<TopBasePoco>>();// 下一级列头
+            List<IGridColumn<TopBasePoco>> nextCols = [];// 下一级列头
 
             generateColHeader(rawCols, nextCols, tempCols, maxDepth, depth);
 
@@ -498,9 +498,9 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             #region 生成 Layui 所需的表头
             var rawCols = ListVM?.GetHeaders();
             var maxDepth = (ListVM?.GetChildrenDepth()) ?? 1;
-            var layuiCols = new List<List<LayuiColumn>>();
+            List<List<LayuiColumn>> layuiCols = [];
 
-            var tempCols = new List<LayuiColumn>();
+            List<LayuiColumn> tempCols = [];
             layuiCols.Add(tempCols);
             // 添加复选框
             if (!HiddenCheckbox)
@@ -537,7 +537,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 }
                 tempCols.Add(gridIndex);
             }
-            var nextCols = new List<IGridColumn<TopBasePoco>>();// 下一级列头
+            List<IGridColumn<TopBasePoco>> nextCols = [];// 下一级列头
 
             generateColHeader(rawCols, nextCols, tempCols, maxDepth,0);
 

@@ -132,7 +132,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
             #region Display Value
 
             var modelType = Field.Metadata.ModelType;
-            var list = new List<string>();
+            List<string> list = [];
             if (Field.Name.Contains("[") && modelType.IsList() == false && modelType.IsArray == false)
             {
                 //默认多对多不必填
@@ -161,7 +161,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
             if (ListVM == null || ListVM.Model == null)
                 throw new Exception("The ListVM of the Selector is null");
             var listVM = ListVM.Model as IBasePagedListVM<TopBasePoco, ISearcher>;
-            var value = new List<string>();
+            List<string> value = [];
             if (context.Items.ContainsKey("model") == true)
             {
                 listVM.CopyContext(context.Items["model"] as BaseVM);

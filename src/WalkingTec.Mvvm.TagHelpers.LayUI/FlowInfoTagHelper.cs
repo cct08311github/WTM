@@ -17,7 +17,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         public ModelExpression Vm { get; set; }
         public override async Task ProcessAsync(TagHelperContext context, TagHelperOutput output)
         {
-            List<ApproveTimeLine> data = new List<ApproveTimeLine>();
+            List<ApproveTimeLine> data = [];
             if (Vm?.Model is IBaseCRUDVM<TopBasePoco> vm)
             {
                 data = await vm.GetWorkflowTimeLineAsync();

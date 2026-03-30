@@ -92,7 +92,7 @@ namespace WalkingTec.Mvvm.Mvc
                 var itemRegex = new Regex($".({iconName}-([a-zA-Z0-9-_.#]{{1,}}))\\s{{0,}}:before\\s{{0,}}{{");
                 var itemMatchs = itemRegex.Matches(file);
 
-                var iconFontItems = new List<string>();
+                List<string> iconFontItems = [];
                 foreach (Match item in itemMatchs)
                 {
                     iconFontItems.Add(item.Groups[1].ToString());

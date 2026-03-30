@@ -220,7 +220,7 @@ namespace WalkingTec.Mvvm.Mvc
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         public IActionResult GetDataSources()
         {
-            var result = new List<object>();
+            List<object> result = [];
 
             // Custom data sources from DI
             foreach (var ds in _dataSources)

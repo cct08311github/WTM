@@ -66,7 +66,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 // 数组 or 泛型集合
                 if (type.IsArray || (type.IsGenericType && typeof(List<>).IsAssignableFrom(type.GetGenericTypeDefinition())))
                 {
-                    var list = new List<object>();
+                    List<object> list = [];
                     foreach (var item in Field.Model as dynamic)
                     {
                         list.Add(item);

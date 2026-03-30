@@ -213,7 +213,7 @@ layui.use(['tree'],function(){{
 
         private List<LayuiTreeItem2> GetLayuiTree(IEnumerable<TreeSelectListItem> tree, int level = 0)
         {
-            List<LayuiTreeItem2> rv = new List<LayuiTreeItem2>();
+            List<LayuiTreeItem2> rv = [];
             foreach (var s in tree)
             {
                 var news = new LayuiTreeItem2

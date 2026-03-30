@@ -130,8 +130,8 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
             #region 添加下拉数据 并 设置默认选中
 
-            var listItems = new List<ComboSelectListItem>();
-            var selectVal = new List<string>();
+            List<ComboSelectListItem> listItems = [];
+            List<string> selectVal = [];
             if (Field.Name.Contains("[") && modeltype.IsList() == false && modeltype.IsArray == false)
             {
                 //默认多对多不必填
@@ -348,7 +348,7 @@ var {Id} = xmSelect.render({{
 
         private List<LayuiTreeItem> GetLayuiTree(IEnumerable<ComboSelectListItem> tree, List<string> values)
         {
-            List<LayuiTreeItem> rv = new List<LayuiTreeItem>();
+            List<LayuiTreeItem> rv = [];
             foreach (var s in tree)
             {
                 var news = new LayuiTreeItem

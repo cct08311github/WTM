@@ -113,7 +113,7 @@ public class MssqlBulkLoader : IBulkLoader
     private static async Task<List<string>> GetColumnsAsync(
         SqlConnection conn, string tableName, CancellationToken ct)
     {
-        var columns = new List<string>();
+        List<string> columns = [];
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
             SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS

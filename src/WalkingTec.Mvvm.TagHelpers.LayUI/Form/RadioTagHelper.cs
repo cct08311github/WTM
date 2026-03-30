@@ -40,8 +40,8 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             output.Attributes.Add("wtm-name", Field.Name);
 
             var modeltype = Field.Metadata.ModelType;
-            var listItems = new List<ComboSelectListItem>();
-            List<string> values = new List<string>();
+            List<ComboSelectListItem> listItems = [];
+            List<string> values = [];
             if (modeltype.IsBoolOrNullableBool())
             {
                 if (Field.Model == null)

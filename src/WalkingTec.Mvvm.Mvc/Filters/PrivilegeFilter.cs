@@ -267,7 +267,7 @@ namespace WalkingTec.Mvvm.Mvc.Filters
 
         private List<string> getAuthTypes(ControllerActionDescriptor ad)
         {
-            var authenticationSchemes = new List<string>();
+            List<string> authenticationSchemes = [];
             if (ad.MethodInfo.IsDefined(typeof(AuthorizeAttribute), false))
             {
                 var authorizeAttr = ad.MethodInfo.GetCustomAttributes(typeof(AuthorizeAttribute), false).FirstOrDefault() as AuthorizeAttribute;

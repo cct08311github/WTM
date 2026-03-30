@@ -124,7 +124,7 @@ public class OracleBulkLoader : IBulkLoader
     private static async Task<List<string>> GetColumnsAsync(
         OracleConnection conn, string tableName, CancellationToken ct)
     {
-        var columns = new List<string>();
+        List<string> columns = [];
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
             SELECT COLUMN_NAME FROM USER_TAB_COLUMNS

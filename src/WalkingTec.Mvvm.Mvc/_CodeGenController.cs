@@ -106,12 +106,12 @@ namespace WalkingTec.Mvvm.Mvc
             }
             else if(vm.UI == UIEnum.VUE)
             {
-                List<string> apineeded = new List<string>();
+                List<string> apineeded = [];
                 ViewData["code"] = vm.GenerateVUEView(vm.PreviewFile,apineeded);
             }
             else if (vm.UI == UIEnum.VUE3)
             {
-                List<string> apineeded = new List<string>();
+                List<string> apineeded = [];
                 ViewData["code"] = vm.GenerateVue3View(vm.PreviewFile);
             }
             else if (vm.UI == UIEnum.Blazor)
@@ -128,7 +128,7 @@ namespace WalkingTec.Mvvm.Mvc
 
         private  List<Type> GetAllModels()
         {
-            var models = new List<Type>();
+            List<Type> models = [];
             
             //获取所有模型
             var pros = Wtm.ConfigInfo.Connections
