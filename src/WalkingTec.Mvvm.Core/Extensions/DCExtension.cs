@@ -164,7 +164,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                 rv = [.. query.Select(lambda)];
             }
 
-            List<TreeSelectListItem> toDel = new List<TreeSelectListItem>();
+            List<TreeSelectListItem> toDel = [];
 
             rv!.ForEach(x =>
             {
@@ -260,7 +260,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             var lambda = Expression.Lambda<Func<T, ComboSelectListItem>>(init, pe);
 
 
-            List<ComboSelectListItem> rv = new List<ComboSelectListItem>();
+            List<ComboSelectListItem> rv = [];
             //根据Text对下拉菜单数据排序
             if (SortByName == true)
             {
@@ -606,7 +606,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
 
         public static IOrderedQueryable<T> Sort<T>(this IQueryable<T> baseQuery, string sortInfo, params SortInfo[] defaultSorts) where T : TopBasePoco
         {
-            List<SortInfo> info = new List<SortInfo>();
+            List<SortInfo> info = [];
             IOrderedQueryable<T>? rv = null;
             if (string.IsNullOrEmpty(sortInfo))
             {
@@ -1133,7 +1133,7 @@ where S : struct
         {
             if (Ids == null)
             {
-                Ids = new List<string?>();
+                Ids = [];
             }
             if (peid == null)
             {
