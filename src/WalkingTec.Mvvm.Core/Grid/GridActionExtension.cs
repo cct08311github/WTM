@@ -159,7 +159,7 @@ namespace WalkingTec.Mvvm.Core
                 dialogTitle = gridname;
             }
 
-            var list = new List<string>();
+            List<string> list = [];
             foreach (var item in whereStr)
             {
                 list.Add(PropertyHelper.GetPropertyName(item));
@@ -227,7 +227,7 @@ namespace WalkingTec.Mvvm.Core
         {
             var iconcls = string.Empty;
 
-            var list = new List<string>();
+            List<string> list = [];
             foreach (var item in whereStr)
             {
                 list.Add(PropertyHelper.GetPropertyName(item));
@@ -259,7 +259,7 @@ namespace WalkingTec.Mvvm.Core
         {
             var iconcls = string.Empty;
 
-            var list = new List<string>();
+            List<string> list = [];
             foreach (var item in whereStr)
             {
                 list.Add(PropertyHelper.GetPropertyName(item));

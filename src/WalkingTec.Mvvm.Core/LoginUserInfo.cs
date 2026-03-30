@@ -159,7 +159,7 @@ namespace WalkingTec.Mvvm.Core
                     if (ids.Count > 0 && ids.Contains(null!) == false)
                     {
                         var skipids = dp.GetTreeParentIds(context, dps);
-                        List<string> subids = new List<string>();
+                        List<string> subids = [];
                         subids.AddRange(GetSubIds(dp, ids!, dp.ModelType, skipids,context));
                         subids = [.. subids.Distinct()];
                         subids.ForEach(x => dps.Add(new DataPrivilege
@@ -189,7 +189,7 @@ namespace WalkingTec.Mvvm.Core
         public void SetAttributesForApi(WTMContext context)
         {
             var ms = new List<SimpleMenuApi>();
-            List<string> urls = new List<string>();
+            List<string> urls = [];
             List<SimpleMenu>? menudata = null;
 
             if (context.ConfigInfo.IsQuickDebug == false)
