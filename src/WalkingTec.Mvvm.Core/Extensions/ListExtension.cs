@@ -64,10 +64,10 @@ namespace WalkingTec.Mvvm.Core.Extensions
                         cd[i].Series = "Data";
                     }
                 }
-                string[] series = cd.Select(x => x.Series ?? "Data").Distinct().ToArray();
+                string[] series = [.. cd.Select(x => x.Series ?? "Data").Distinct()];
 
 
-                var yCount = cd.GroupBy(x => x.Category).ToList();
+                List<IGrouping<string, ChartData>> yCount = [.. cd.GroupBy(x => x.Category)];
                 var isScatter = cd.Any(x => x.ValueX > 0);
                 var dataset = "{\"source\":[";
                 if (isScatter)

@@ -126,7 +126,7 @@ namespace WalkingTec.Mvvm.Core
                     if (Children != null && Children.Any())
                     {
                         len += Children.Where(x => x.Children == null || !x.Children.Any()).Count();
-                        var tempChildren = Children.Where(x => x.Children != null && x.Children.Any()).ToList();
+                        List<IGridColumn<T>> tempChildren = [.. Children.Where(x => x.Children != null && x.Children.Any())];
                         foreach (var item in tempChildren)
                         {
                             len += item.ChildrenLength;
