@@ -19,7 +19,7 @@ namespace WalkingTec.Mvvm.Core
         /// <returns></returns>
         public static IEnumerable<IGridColumn<T>> GetAllBottomColumns<T>(this IEnumerable<IGridColumn<T>> self)
         {
-            List<IGridColumn<T>> rv = new List<IGridColumn<T>>();
+            List<IGridColumn<T>> rv = [];
             foreach (var item in self)
             {
                 rv.AddRange(item.BottomChildren);
@@ -153,7 +153,7 @@ namespace WalkingTec.Mvvm.Core
         /// <returns></returns>
         public static GridColumn<T> SetChildren<T>(this GridColumn<T> self, params GridColumn<T>[] childrens) where T : TopBasePoco
         {
-            List<GridColumn<T>> temp = new List<GridColumn<T>>();
+            List<GridColumn<T>> temp = [];
             if (self.Children == null)
             {
                 temp = new List<GridColumn<T>>();
