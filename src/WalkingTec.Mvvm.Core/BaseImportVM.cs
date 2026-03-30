@@ -91,7 +91,7 @@ namespace WalkingTec.Mvvm.Core
         public IReadOnlyList<ErrorMessage> InlineErrors =>
             InlineErrorLimit <= 0
                 ? Array.Empty<ErrorMessage>()
-                : ErrorListVM.EntityList.Take(InlineErrorLimit).ToList();
+                : [.. ErrorListVM.EntityList.Take(InlineErrorLimit)];
 
         /// <summary>
         /// 是否验证模板类型（当其他系统模板导入到某模块时可设置为False）

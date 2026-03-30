@@ -168,7 +168,7 @@ namespace WalkingTec.Mvvm.Core
             //如果是1，直接下载Excel，如果是多个，下载ZIP包
             if (ExportExcelCount == 1)
             {
-                var data = query.ToList();
+                List<TModel> data = [.. query];
                 return DownLoadExcel(data);
             }
             else
@@ -210,7 +210,7 @@ namespace WalkingTec.Mvvm.Core
                 }
                 for (int i = 0; i < ExportExcelCount; i++)
                 {
-                    var data = query.Skip(i * ExportMaxCount).Take(ExportMaxCount).ToList();
+                    List<TModel> data = [.. query.Skip(i * ExportMaxCount).Take(ExportMaxCount)];
                     var WorkBook = GenerateWorkBook(data);
                     string SavePath = $"{FilePath}/{FileName}_{i + 1}.xlsx";
                     using (FileStream FS = new FileStream(SavePath, FileMode.CreateNew))
@@ -1004,11 +1004,11 @@ namespace WalkingTec.Mvvm.Core
                 {
                     if (idpro == typeof(string))
                     {
-                        remove = aroot.Where(x => x.ColumnType == GridColumnTypeEnum.Action || x.Hide == true || x.DisableExport).ToList();
+                        remove = [.. aroot.Where(x => x.ColumnType == GridColumnTypeEnum.Action || x.Hide == true || x.DisableExport)];
                     }
                     else
                     {
-                        remove = aroot.Where(x => x.ColumnType == GridColumnTypeEnum.Action || x.Hide == true || x.DisableExport || x.FieldName?.ToLower() == "id").ToList();
+                        remove = [.. aroot.Where(x => x.ColumnType == GridColumnTypeEnum.Action || x.Hide == true || x.DisableExport || x.FieldName?.ToLower() == "id")];
                     }
                     foreach (var item in remove)
                     {
@@ -1154,8 +1154,8 @@ namespace WalkingTec.Mvvm.Core
                 //打开新的数据库联接,获取数据库中的主表和子表数据
                 using (var ndc = DC!.CreateNew())
                 {
-                    var ids = EntityList.Select(x => x.GetID().ToString()).ToList();
-                    data = ndc.Set<TModel>().AsNoTracking().Where(ids.GetContainIdExpression<TModel>()).ToList();
+                    List<string?> ids = [.. EntityList.Select(x => x.GetID().ToString())];
+                    data = [.. ndc.Set<TModel>().AsNoTracking().Where(ids.GetContainIdExpression<TModel>())];
                 }
                 //比较子表原数据和新数据的区别
                 IEnumerable<TopBasePoco>? toadd = null;

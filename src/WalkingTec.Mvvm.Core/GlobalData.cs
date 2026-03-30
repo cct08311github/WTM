@@ -36,7 +36,7 @@ namespace WalkingTec.Mvvm.Core
                     _customUserProperties = new List<PropertyInfo>();
                     if(CustomUserType != null)
                     {
-                        _customUserProperties = CustomUserType.GetProperties( BindingFlags.Public| BindingFlags.Instance | BindingFlags.DeclaredOnly).Where(x=>x.PropertyType.IsListOf<TopBasePoco>() == false && typeof(TopBasePoco).IsAssignableFrom(x.PropertyType) == false).ToList();
+                        _customUserProperties = [.. CustomUserType.GetProperties( BindingFlags.Public| BindingFlags.Instance | BindingFlags.DeclaredOnly).Where(x=>x.PropertyType.IsListOf<TopBasePoco>() == false && typeof(TopBasePoco).IsAssignableFrom(x.PropertyType) == false)];
                     }
                 }
                 return _customUserProperties;
@@ -63,7 +63,7 @@ namespace WalkingTec.Mvvm.Core
         {
             var rv = new List<Type>();
             var allType = Utils.GetAllModels();
-            rv.AddRange(allType.Where(x => typeof(T).IsAssignableFrom(x) && x != typeof(T) && x.IsAbstract == false).ToList());
+            rv.AddRange([.. allType.Where(x => typeof(T).IsAssignableFrom(x) && x != typeof(T) && x.IsAbstract == false)]);
             return rv;
         }
         public List<Type> GetTypesAssignableFrom<T>()
@@ -71,14 +71,17 @@ namespace WalkingTec.Mvvm.Core
             var rv = new List<Type>();
             foreach (var ass in AllAssembly)
             {
-                var types = new List<Type>();
+                List<Type> types;
                 try
                 {
-                    types.AddRange(ass.GetExportedTypes());
+                    types = [.. ass.GetExportedTypes().Where(x => typeof(T).IsAssignableFrom(x) && x != typeof(T) && x.IsAbstract == false)];
                 }
-                catch { }
+                catch
+                {
+                    types = [];
+                }
 
-                rv.AddRange(types.Where(x => typeof(T).IsAssignableFrom(x) && x != typeof(T) && x.IsAbstract == false).ToList());
+                rv.AddRange(types);
             }
             return rv;
         }

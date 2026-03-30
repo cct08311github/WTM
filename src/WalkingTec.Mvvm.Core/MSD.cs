@@ -59,7 +59,7 @@ namespace WalkingTec.Mvvm.Core
         {
             get
             {
-                return _states.Where(x => x.Key == name).Select(x => new MsdError { ErrorMessage = x.Value }).ToList();
+                return [.. _states.Where(x => x.Key == name).Select(x => new MsdError { ErrorMessage = x.Value })];
             }
         }
 
