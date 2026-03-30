@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Improved
+- **C# 12 collection expressions** — Extended `List<T>` → `[]` modernization from Core (10.0.1) to Mvc (11 files), TagHelpers.LayUI (11 files), and Etl (2 files), covering controllers, filters, helpers, data grids, tree views, form tag helpers, and pipeline loaders. CodeGenVM string literals unchanged (52 files total, 0 new warnings, 0 errors)
+
 ## [10.1.0] - 2026-03-28
 
 ### Added
