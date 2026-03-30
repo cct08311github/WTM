@@ -81,7 +81,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                 return;
             }
 
-            List<LayUIMenu> toRemove = new List<LayUIMenu>();
+            List<LayUIMenu> toRemove = [];
             //如果没有指定用户信息，则用当前用户的登录信息
             var info = wtm.LoginUserInfo;
             //循环所有菜单项
@@ -120,7 +120,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             {
                 return;
             }
-            List<LayUIMenu> toRemove = new List<LayUIMenu>();
+            List<LayUIMenu> toRemove = [];
             //循环所有菜单项
             foreach (var menu in menus)
             {
