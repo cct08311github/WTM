@@ -31,7 +31,7 @@ namespace WalkingTec.Mvvm.Core.Support.Quartz
             {
                 try
                 {
-                    var t = ass.GetExportedTypes().Where(x => typeof(WtmJob).IsAssignableFrom(x) && x.Name != "WtmJob").ToList();
+                    List<Type> t = [.. ass.GetExportedTypes().Where(x => typeof(WtmJob).IsAssignableFrom(x) && x.Name != "WtmJob")];
                     int count = 1;
                     foreach (var st in t)
                     {

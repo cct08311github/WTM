@@ -38,7 +38,7 @@ namespace WalkingTec.Mvvm.Core
                         {
                             try
                             {
-                                var t = ass.GetExportedTypes().Where(x => typeof(DbContext).IsAssignableFrom(x) && x.Name != "DbContext" && x.Name != "FrameworkContext" && x.Name != "EmptyContext").ToList();
+                                List<Type> t = [.. ass.GetExportedTypes().Where(x => typeof(DbContext).IsAssignableFrom(x) && x.Name != "DbContext" && x.Name != "FrameworkContext" && x.Name != "EmptyContext")];
                                 foreach (var st in t)
                                 {
                                     var ci = st.GetConstructor(new Type[] { typeof(CS) });
@@ -71,7 +71,7 @@ namespace WalkingTec.Mvvm.Core
                         {
                             try
                             {
-                                var t = ass.GetExportedTypes().Where(x => typeof(DbContext).IsAssignableFrom(x) && x.Name != "DbContext" && x.Name != "FrameworkContext" && x.Name != "EmptyContext").ToList();
+                                List<Type> t = [.. ass.GetExportedTypes().Where(x => typeof(DbContext).IsAssignableFrom(x) && x.Name != "DbContext" && x.Name != "FrameworkContext" && x.Name != "EmptyContext")];
                                 foreach (var st in t)
                                 {
                                     var ci = st.GetConstructor(new Type[] { typeof(string), typeof(DBTypeEnum) });
