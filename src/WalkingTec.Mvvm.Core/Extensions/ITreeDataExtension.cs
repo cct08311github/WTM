@@ -21,7 +21,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
         public static List<T> GetAllChildren<T>(this T self, Func<T, object>? order = null)
             where T : TreePoco<T>
         {
-            List<T> rv = new List<T>();
+            List<T> rv = [];
             var children = self.Children;
             if(order != null && children != null)
             {
@@ -65,7 +65,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             , List<Guid>? subids = null)
             where T : TreePoco<T>
         {
-            List<Guid> rv = new List<Guid>();
+            List<Guid> rv = [];
             List<Guid>? ids = null;
             if (subids == null)
             {
@@ -93,7 +93,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
         public static List<T> FlatTree<T>(this List<T> self, Func<T,object>? order = null)
             where T :TreePoco<T>
         {
-            List<T> rv = new List<T>();
+            List<T> rv = [];
             if(order != null)
             {
                 self = [.. self.OrderBy(order)];
@@ -109,7 +109,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
         public static List<T> FlatTree<T>(this T self, Func<T, object>? order = null)
     where T : TreePoco<T>
         {
-            List<T> rv = new List<T>();
+            List<T> rv = [];
             rv.Add(self);
             rv.AddRange(self.GetAllChildren(order));
             return rv;
@@ -118,7 +118,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
         public static List<T> MakeTree<T>(this List<T> self, Func<T, object>? order = null)
       where T : TreePoco<T>
         {
-            List<T> rv = new List<T>();
+            List<T> rv = [];
             if (order != null)
             {
                 self = [.. self.OrderBy(order)];
@@ -144,7 +144,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
         /// <returns>返回标准列表，所有节点都在同一级上</returns>
         public static IEnumerable<TreeSelectListItem> FlatTreeSelectList(this IEnumerable<TreeSelectListItem> self, Func<TreeSelectListItem, object>? order = null)
         {
-            List<TreeSelectListItem> rv = new List<TreeSelectListItem>();
+            List<TreeSelectListItem> rv = [];
             if (order != null)
             {
                 self = [.. self.OrderBy(order)];
@@ -168,7 +168,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
         /// <returns></returns>
         public static List<TreeSelectListItem> GetTreeSelectChildren(this TreeSelectListItem self, Func<TreeSelectListItem, object>? order = null)
         {
-            List<TreeSelectListItem> rv = new List<TreeSelectListItem>();
+            List<TreeSelectListItem> rv = [];
             var children = self.Children;
             if (order != null && children != null)
             {
