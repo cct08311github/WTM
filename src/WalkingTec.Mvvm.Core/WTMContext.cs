@@ -1230,12 +1230,12 @@ params string[] groupcode)
                     {
                         tempids.Add(iid?.ToString() ?? "");
                     }
-                    temp.Ids = tempids.ToArray();
+                    temp.Ids = [.. tempids];
                 }
                 if (temp.ListVM != null)
                 {
                     temp.ListVM.CopyContext(rv);
-                    temp.ListVM.Ids = Ids == null ? new List<string>() : temp.Ids.ToList();
+                    temp.ListVM.Ids = Ids == null ? [] : [.. temp.Ids!];
                     temp.ListVM.SearcherMode = ListVMSearchModeEnum.Batch;
                     temp.ListVM.NeedPage = false;
                 }
