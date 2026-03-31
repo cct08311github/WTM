@@ -329,7 +329,12 @@ namespace WalkingTec.Mvvm.Mvc
             }
 
             var rv = string.Empty;
-            if (ConfigInfo.IsQuickDebug == true)
+            // Only expose full stack traces in debug mode when request is from localhost
+            var remoteIp = HttpContext.Connection.RemoteIpAddress;
+            var isLocalhost = remoteIp != null &&
+                (System.Net.IPAddress.IsLoopback(remoteIp) ||
+                 remoteIp.Equals(System.Net.IPAddress.IPv6Loopback));
+            if (ConfigInfo.IsQuickDebug == true && isLocalhost)
             {
                 rv = ex.Error.ToString().Replace(Environment.NewLine, "<br />");
             }
@@ -489,19 +494,23 @@ namespace WalkingTec.Mvvm.Mvc
             var file = fp.GetFile(id, false, Wtm.CreateDC(cskey: _DONOT_USE_CS));
             string html = string.Empty;
             var ext = file.FileExt.ToLower();
+            // HTML-encode all user input to prevent XSS
+            var safeId = HttpUtility.HtmlEncode(id);
+            var safeWidth = HttpUtility.HtmlEncode(width ?? "");
+            var safeCS = HttpUtility.HtmlEncode(_DONOT_USE_CS ?? "default");
             if (ext == "pdf")
             {
                 html = $@"
-<embed src=""/_Framework/GetFile?id={id}&stream=true"" width=""100%"" height=""100%"" type=""application/pdf"" ></embed>
+<embed src=""/_Framework/GetFile?id={safeId}&stream=true"" width=""100%"" height=""100%"" type=""application/pdf"" ></embed>
             ";
             }
             else if (ext == "mp4")
             {
-                html = $@"<video id='FileObject' controls='controls' style='{(string.IsNullOrEmpty(width) ? "" : $"width:{width}px")}'  border=0 src='/_Framework/GetFile?id={id}&stream=true&_DONOT_USE_CS={_DONOT_USE_CS}'></video>";
+                html = $@"<video id='FileObject' controls='controls' style='{(string.IsNullOrEmpty(safeWidth) ? "" : $"width:{safeWidth}px")}'  border=0 src='/_Framework/GetFile?id={safeId}&stream=true&_DONOT_USE_CS={safeCS}'></video>";
             }
             else
             {
-                html = $@"<img id='FileObject' style='flex:auto;{(string.IsNullOrEmpty(width) ? "" : $"width:{width}px")}'  border=0 src='/_Framework/GetFile?id={id}&stream=true&_DONOT_USE_CS={_DONOT_USE_CS}'/>";
+                html = $@"<img id='FileObject' style='flex:auto;{(string.IsNullOrEmpty(safeWidth) ? "" : $"width:{safeWidth}px")}'  border=0 src='/_Framework/GetFile?id={safeId}&stream=true&_DONOT_USE_CS={safeCS}'/>";
             }
             return Content(html);
 
@@ -534,7 +543,9 @@ namespace WalkingTec.Mvvm.Mvc
             }
             if (Wtm.IsUrlPublic(url) || Wtm.IsAccessable(url))
             {
-                return Content($@"<title>{pagetitle}</title>
+                // HTML-encode page title but allow URL in iframe src (already validated by IsUrlPublic/IsAccessable)
+                var safeTitle = HttpUtility.HtmlEncode(pagetitle);
+                return Content($@"<title>{safeTitle}</title>
 <iframe src='{url}' frameborder='0' class='layadmin-iframe'></iframe>");
             }
             else
@@ -665,12 +676,14 @@ namespace WalkingTec.Mvvm.Mvc
             if (file != null)
             {
                 string url = $"/_Framework/GetFile?id={file.GetID()}&stream=true&_DONOT_USE_CS={CurrentCS}";
-                return Content($"{{\"Code\": 200 , \"Msg\": \"success\", \"Data\": {{\"src\": \"{url}\",\"FileName\":\"{file.FileName}\"}}}}");
+                var safeFileName = HttpUtility.JavaScriptStringEncode(file.FileName ?? "");
+                return Content($"{{\"Code\": 200 , \"Msg\": \"success\", \"Data\": {{\"src\": \"{url}\",\"FileName\":\"{safeFileName}\"}}}}");
 
             }
             else
             {
-                return Content($"{{\"code\": 1 , \"msg\": \"{MvcProgram._localizer["Sys.UploadFailed"]}\", \"data\": {{\"src\": \"\"}}}}");
+                var errorMsg = HttpUtility.JavaScriptStringEncode(MvcProgram._localizer["Sys.UploadFailed"] ?? "Upload failed");
+                return Content($"{{\"code\": 1 , \"msg\": \"{errorMsg}\", \"data\": {{\"src\": \"\"}}}}");
 
             }
 
@@ -719,7 +732,9 @@ namespace WalkingTec.Mvvm.Mvc
                 new CookieOptions { Expires = DateTimeOffset.UtcNow.AddYears(1) }
             );
 
-            return Content($"<script>window.location.href='{HttpUtility.UrlDecode(redirect)}';</script>", "text/html");
+            // HTML-encode redirect to prevent XSS in window.location.href
+            var safeRedirect = HttpUtility.HtmlEncode(HttpUtility.UrlDecode(redirect));
+            return Content($"<script>window.location.href='{safeRedirect}';</script>", "text/html");
         }
 
 

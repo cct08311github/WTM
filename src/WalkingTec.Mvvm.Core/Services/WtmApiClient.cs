@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
 namespace WalkingTec.Mvvm.Core.Services
 {
@@ -17,10 +18,12 @@ namespace WalkingTec.Mvvm.Core.Services
     public class WtmApiClient : IWtmApiClient
     {
         private readonly IHttpClientFactory _httpClientFactory;
+        private readonly ILogger<WtmApiClient>? _logger;
 
-        public WtmApiClient(IHttpClientFactory httpClientFactory)
+        public WtmApiClient(IHttpClientFactory httpClientFactory, ILogger<WtmApiClient>? logger = null)
         {
             _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
+            _logger = logger;
         }
 
         #region Core overload (HttpContent)
@@ -127,14 +130,17 @@ namespace WalkingTec.Mvvm.Core.Services
                         }
                         catch { }
                     }
-                    rv.ErrorMsg = responseTxt;
+                    // Return only truncated response to avoid exposing sensitive data
+                    rv.ErrorMsg = responseTxt.Length > 500 ? responseTxt[..500] + "..." : responseTxt;
                 }
 
                 return rv;
             }
             catch (Exception ex)
             {
-                rv.ErrorMsg = ex.ToString();
+                // Log full exception details, return generic message to caller
+                _logger?.LogError(ex, "API call failed to {Url}", url);
+                rv.ErrorMsg = "An error occurred while processing the request";
                 return rv;
             }
         }

@@ -113,7 +113,20 @@ namespace WalkingTec.Mvvm.Core.Services
         private static bool MatchUrl(string pattern, string url)
         {
             var regex = _regexCache.GetOrAdd(pattern, p =>
-                new Regex("^" + p + "[/\\?]?", RegexOptions.IgnoreCase | RegexOptions.Compiled));
+            {
+                // Use NonBacktracking to prevent ReDoS attacks - guarantees linear time complexity
+                // Falls back to compiled only if NonBacktracking can't handle the pattern
+                try
+                {
+                    return new Regex("^" + p + "[/\\?]?", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.NonBacktracking);
+                }
+                catch (RegexMatchTimeoutException)
+                {
+                    // If NonBacktracking fails (e.g., pattern uses features it doesn't support),
+                    // use basic compiled regex without the dangerous features
+                    return new Regex("^" + p + "[/\\?]?", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+                }
+            });
             return regex.IsMatch(url);
         }
 

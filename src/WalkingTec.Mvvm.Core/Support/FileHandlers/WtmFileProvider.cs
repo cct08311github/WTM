@@ -101,6 +101,12 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
                 fileName = "unknown";
             }
             fileName = fileName.Replace("<", "").Replace(">","").Replace(" ", "");
+
+            // Sanitize group and subdir to prevent path traversal attacks
+            // Allow only alphanumeric, underscore, hyphen, and period
+            group = SanitizePathComponent(group);
+            subdir = SanitizePathComponent(subdir);
+
             if (fh is WtmDataBaseFileHandler lfh)
             {
                 return lfh.UploadToDB(fileName, fileLength, data, group, subdir, extra);
@@ -219,6 +225,20 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
             }
             rv = rv.Replace("<", "").Replace(">", "").Replace(" ", "");
             return rv;
+        }
+
+        /// <summary>
+        /// Sanitizes a path component to prevent path traversal attacks.
+        /// Allows only alphanumeric characters, underscores, hyphens, and periods.
+        /// </summary>
+        private static string? SanitizePathComponent(string? input)
+        {
+            if (string.IsNullOrEmpty(input))
+                return input;
+
+            // Remove any path traversal sequences and dangerous characters
+            var sanitized = System.Text.RegularExpressions.Regex.Replace(input, @"[^a-zA-Z0-9_\-\.]", "");
+            return string.IsNullOrEmpty(sanitized) ? null : sanitized;
         }
 
     }
