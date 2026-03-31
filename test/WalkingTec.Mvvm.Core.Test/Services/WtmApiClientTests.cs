@@ -204,7 +204,7 @@ namespace WalkingTec.Mvvm.Core.Test.Services
         }
 
         [TestMethod]
-        public async Task CallAPI_HttpException_ReturnsErrorMsg()
+        public async Task CallAPI_HttpException_ReturnsGenericErrorMsg()
         {
             _handler.Protected()
                 .Setup<Task<HttpResponseMessage>>(
@@ -215,7 +215,9 @@ namespace WalkingTec.Mvvm.Core.Test.Services
 
             var result = await _client.CallAPI<string>(null, "http://test/api");
 
-            result.ErrorMsg.Should().Contain("connection refused");
+            // Security fix: exception details are no longer exposed to callers
+            result.ErrorMsg.Should().NotContain("connection refused");
+            result.ErrorMsg.Should().Contain("An error occurred");
         }
 
         #endregion
