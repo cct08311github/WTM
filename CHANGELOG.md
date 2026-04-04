@@ -2,8 +2,15 @@
 
 ## [Unreleased]
 
+## [10.1.1] - 2026-04-04
+
+### Fixed
+- **Security hardening** — Resolve XSS (reflected user input in error pages), path traversal (file provider), and information disclosure (API client error responses) (#748)
+- **CI** — Update xunit.runner.visualstudio to 3.0.0 for .NET 10 compatibility
+
 ### Improved
-- **C# 12 collection expressions** — Extended `List<T>` → `[]` modernization from Core (10.0.1) to Mvc (11 files), TagHelpers.LayUI (11 files), and Etl (2 files), covering controllers, filters, helpers, data grids, tree views, form tag helpers, and pipeline loaders. CodeGenVM string literals unchanged (52 files total, 0 new warnings, 0 errors)
+- **C# 12 collection expressions** — Extended `List<T>` → `[]` modernization from Core (10.0.1) to Mvc (11 files), TagHelpers.LayUI (11 files), and Etl (2 files), covering controllers, filters, helpers, data grids, tree views, form tag helpers, and pipeline loaders (52 files total)
+- **Code comments** — Added English explanatory comments to non-obvious security logic (TokenService token-reuse detection, PasswordHashHelper legacy hash chain) and complex algorithms (DataContext multi-tenant filter, AnalysisQueryEngine expression trees, ServerSideGroupByStrategy measure projection) (#754, #755)
 
 ## [10.1.0] - 2026-03-28
 
