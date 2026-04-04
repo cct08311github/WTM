@@ -1173,9 +1173,9 @@ async def tc_23_analysis_meta_api(page, **_):
     sex_field = next((f for f in fields if f["fieldName"] == "Sex"), None)
     if sex_field:
         av = sex_field.get("allowedValues")
-        print(f"  Sex allowedValues: {av}")
+        print(f"  Sex allowedValues count: {len(av) if av else 0}")
         assert av is not None and len(av) > 0, \
-            f"[#516] Sex 的 allowedValues 為空！值={av}"
+            f"[#516] Sex 的 allowedValues 為空！"
         print(f"  [#516 驗證通過] Sex allowedValues 有 {len(av)} 個值")
     else:
         print("  [WARN] 未找到 Sex 欄位（可能未標記 [Dimension]）")

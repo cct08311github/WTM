@@ -5,6 +5,16 @@ import { observer } from 'mobx-react';
 import LayoutSpin from "components/other/LayoutSpin";
 import * as React from 'react';
 import './style.less';
+
+function isValidExternalUrl(url: string): boolean {
+    try {
+        const parsed = new URL(url);
+        return /^https?:$/.test(parsed.protocol);
+    } catch {
+        return false;
+    }
+}
+
 class MessageStore {
     constructor() {
         /**
@@ -105,6 +115,10 @@ export default class IApp extends React.Component<any, any> {
     }
     render() {
         const src = decodeURIComponent(this.props.match.params.url)
+
+        if (!isValidExternalUrl(src)) {
+            return <div>Invalid URL</div>;
+        }
 
         return (
             <div className={"app-external-iframe " + (MsgeStore.visible && "app-external-visible")}>
