@@ -4,6 +4,9 @@
 .playwright-mcp/
 demo/**/*.db
 tc*.png
+coverage/
+**/coverage/
+**/lcov-report/
 
 demo/WalkingTec.Mvvm.Demo/wwwroot/layuiadminsrc
 .Publish/

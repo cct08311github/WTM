@@ -139,7 +139,7 @@ namespace WalkingTec.Mvvm.Core.Services
             catch (Exception ex)
             {
                 // Log full exception details, return generic message to caller
-                _logger?.LogError(ex, "API call failed to {Url}", url);
+                _logger?.LogError(ex, "API call failed to {Url}", LogSanitizer.Sanitize(url));
                 rv.ErrorMsg = "An error occurred while processing the request";
                 return rv;
             }

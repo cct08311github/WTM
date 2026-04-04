@@ -131,7 +131,7 @@ namespace WalkingTec.Mvvm.Mvc
 var result = await _engine.ExecuteDynamicAsync(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
                 sw.Stop();
                 _logger.LogInformation("Analysis query completed ListVm={ListVmType} Dims={DimCount} Msrs={MsrCount} ElapsedMs={Elapsed} Truncated={Truncated}",
-                    req.ListVmType, req.Dimensions.Count, req.Measures.Count, sw.ElapsedMilliseconds, result.Truncated);
+                    LogSanitizer.Sanitize(req.ListVmType), req.Dimensions.Count, req.Measures.Count, sw.ElapsedMilliseconds, result.Truncated);
                 WriteAnalysisActionLog("Query", req.ListVmType, req.Dimensions, req.Measures, result.TotalCount, sw.ElapsedMilliseconds / 1000.0, result.Truncated);
                 return new JsonResult(result, _camelCase);
             }
@@ -161,7 +161,7 @@ var result = await _engine.ExecuteDynamicAsync(ctx!.BaseQuery, req, ctx.Fields, 
 var result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
                 sw.Stop();
                 _logger.LogInformation("Analysis pivot completed ListVm={ListVmType} Dims={DimCount} Msrs={MsrCount} Pivot={PivotDim} ElapsedMs={Elapsed}",
-                    req.ListVmType, req.Dimensions.Count, req.Measures.Count, req.PivotDimension, sw.ElapsedMilliseconds);
+                    LogSanitizer.Sanitize(req.ListVmType), req.Dimensions.Count, req.Measures.Count, LogSanitizer.Sanitize(req.PivotDimension), sw.ElapsedMilliseconds);
                 WriteAnalysisActionLog("Pivot", req.ListVmType, req.Dimensions, req.Measures, result.Rows.Count, sw.ElapsedMilliseconds / 1000.0, result.Truncated);
                 return new JsonResult(result, _camelCase);
             }
@@ -199,12 +199,12 @@ var result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fie
 result = await _engine.ExecuteDynamicAsync(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
                 sw.Stop();
                 _logger.LogInformation("Analysis export completed ListVm={ListVmType} Format={Format} ElapsedMs={Elapsed}",
-                    req.ListVmType, format, sw.ElapsedMilliseconds);
+                    LogSanitizer.Sanitize(req.ListVmType), LogSanitizer.Sanitize(format), sw.ElapsedMilliseconds);
                 WriteAnalysisActionLog($"Export({format})", req.ListVmType, req.Dimensions, req.Measures, result.TotalCount, sw.ElapsedMilliseconds / 1000.0, result.Truncated);
             }
             catch (InvalidOperationException ex)
             {
-                _logger.LogWarning(ex, "Analysis export failed ListVm={ListVmType}", req.ListVmType);
+                _logger.LogWarning(ex, "Analysis export failed ListVm={ListVmType}", LogSanitizer.Sanitize(req.ListVmType));
                 return BadRequest(new ProblemDetails { Title = ex.Message, Status = 400 });
             }
 
@@ -256,12 +256,12 @@ result = await _engine.ExecuteDynamicAsync(ctx!.BaseQuery, req, ctx.Fields, iden
 result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields, identityKey: ctx.IdentityKey, cancellationToken: HttpContext?.RequestAborted ?? default);
                 sw.Stop();
                 _logger.LogInformation("Analysis pivot export completed ListVm={ListVmType} Format={Format} ElapsedMs={Elapsed}",
-                    req.ListVmType, format, sw.ElapsedMilliseconds);
+                    LogSanitizer.Sanitize(req.ListVmType), LogSanitizer.Sanitize(format), sw.ElapsedMilliseconds);
                 WriteAnalysisActionLog($"PivotExport({format})", req.ListVmType, req.Dimensions, req.Measures, result.Rows.Count, sw.ElapsedMilliseconds / 1000.0, result.Truncated);
             }
             catch (InvalidOperationException ex)
             {
-                _logger.LogWarning(ex, "Analysis pivot export failed ListVm={ListVmType}", req.ListVmType);
+                _logger.LogWarning(ex, "Analysis pivot export failed ListVm={ListVmType}", LogSanitizer.Sanitize(req.ListVmType));
                 return BadRequest(new ProblemDetails { Title = ex.Message, Status = 400 });
             }
 
@@ -367,7 +367,7 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
             Wtm.DC.SaveChanges();
 
             _logger.LogInformation("Analysis saved query created Id={Id} Name={Name} ListVm={ListVm} Owner={Owner} IsPublic={IsPublic}",
-                entity.ID, entity.Name, entity.ListVmType, entity.OwnerCode, entity.IsPublic);
+                entity.ID, LogSanitizer.Sanitize(entity.Name), LogSanitizer.Sanitize(entity.ListVmType), LogSanitizer.Sanitize(entity.OwnerCode), entity.IsPublic);
 
             return CreatedAtAction(nameof(GetSavedQuery), new { id = entity.ID },
                 new { id = entity.ID, name = entity.Name });

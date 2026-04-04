@@ -65,7 +65,7 @@ namespace WalkingTec.Mvvm.Core.Services
                 }
                 catch (Exception ex)
                 {
-                    _logger?.LogWarning(ex, "Failed to load tenant groups for '{Tenant}'", tenant);
+                    _logger?.LogWarning(ex, "Failed to load tenant groups for '{Tenant}'", LogSanitizer.Sanitize(tenant));
                     groups = [];
                 }
                 return groups;
@@ -96,7 +96,7 @@ namespace WalkingTec.Mvvm.Core.Services
                 }
                 catch (Exception ex)
                 {
-                    _logger?.LogWarning(ex, "Failed to load tenant roles for '{Tenant}'", tenant);
+                    _logger?.LogWarning(ex, "Failed to load tenant roles for '{Tenant}'", LogSanitizer.Sanitize(tenant));
                     roles = [];
                 }
                 return roles;
