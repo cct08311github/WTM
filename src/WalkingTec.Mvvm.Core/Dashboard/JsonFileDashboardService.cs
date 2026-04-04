@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using WalkingTec.Mvvm.Core;
 
 namespace WalkingTec.Mvvm.Core.Dashboard;
 
@@ -125,6 +126,10 @@ public class JsonFileDashboardService : IDashboardService
 
     public async Task<DashboardDefinition?> GetAsync(string dashboardId, string? tenantId = null)
     {
+        ValidatePathSegment(dashboardId, nameof(dashboardId));
+        if (!string.IsNullOrEmpty(tenantId))
+            ValidatePathSegment(tenantId, nameof(tenantId));
+
         await EnsureInitializedAsync();
         var path = GetFilePath(dashboardId, tenantId);
         if (!File.Exists(path)) return null;
@@ -141,7 +146,7 @@ public class JsonFileDashboardService : IDashboardService
         {
             _logger.LogError(ex,
                 "[Dashboard] Failed to read dashboard file. DashboardId={DashboardId} Path={FilePath}",
-                dashboardId, path);
+                LogSanitizer.Sanitize(dashboardId), path);
             return null;
         }
         finally
@@ -295,6 +300,8 @@ public class JsonFileDashboardService : IDashboardService
 
     public async Task DeleteAsync(string dashboardId)
     {
+        ValidatePathSegment(dashboardId, nameof(dashboardId));
+
         await EnsureInitializedAsync();
 
         string? tenantId = null;

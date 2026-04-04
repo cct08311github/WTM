@@ -67,7 +67,7 @@ namespace WalkingTec.Mvvm.Mvc
         {
             var logger = context.RequestServices.GetService<ILogger<ProblemDetails>>();
             logger?.LogError(ex, "Unhandled exception on {Method} {Path}",
-                context.Request.Method, context.Request.Path);
+                LogSanitizer.Sanitize(context.Request.Method), LogSanitizer.Sanitize(context.Request.Path.Value));
 
             var isDebug = ResolveIsQuickDebug(context);
 

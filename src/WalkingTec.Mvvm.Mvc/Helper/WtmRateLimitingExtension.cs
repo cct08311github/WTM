@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using WalkingTec.Mvvm.Core;
 
 namespace WalkingTec.Mvvm.Mvc
 {
@@ -40,7 +41,7 @@ namespace WalkingTec.Mvvm.Mvc
                     var path = context.HttpContext.Request.Path.Value ?? "/";
                     logger?.LogWarning(
                         "Rate limit exceeded. ClientIp={ClientIp} Path={Path} Method={Method}",
-                        clientIp, path, context.HttpContext.Request.Method);
+                        LogSanitizer.Sanitize(clientIp), LogSanitizer.Sanitize(path), LogSanitizer.Sanitize(context.HttpContext.Request.Method));
                     context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
                     return ValueTask.CompletedTask;
                 };

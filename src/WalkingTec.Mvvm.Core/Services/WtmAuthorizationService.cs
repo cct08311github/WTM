@@ -104,7 +104,7 @@ namespace WalkingTec.Mvvm.Core.Services
             }
             catch (Exception ex)
             {
-                _logger?.LogWarning(ex, "Error checking if URL '{Url}' is public", url);
+                _logger?.LogWarning(ex, "Error checking if URL '{Url}' is public", LogSanitizer.Sanitize(url));
             }
             return false;
         }

@@ -1215,7 +1215,7 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
         }
         if (celltype === 1) {
             loaddata[row][col] = loaddata[row][col].replace(/(<option .*?) selected\s*>/ig, "$1>");
-            var re = new RegExp("(<option\\s*value\\s*=\\s*[\"']" + ele.value + "[\"'])\s*>", "ig");
+            var re = new RegExp("(<option\\s*value\\s*=\\s*[\"']" + ele.value + "[\"'])\\s*>", "ig");
             loaddata[row][col] = loaddata[row][col].replace(re, "$1 selected>");
         }
 
@@ -1726,7 +1726,9 @@ var wtmPermFilter = (function () {
             // &nbsp; entities in innerHTML — 4 per depth level.
             var nbspCount = (html.match(/&nbsp;/g) || []).length;
             var depth = Math.floor(nbspCount / 4);
-            var text = html.replace(/&nbsp;/g, ' ').replace(/<[^>]*>/g, '').trim();
+            var tempDiv = document.createElement('div');
+            tempDiv.innerHTML = html.replace(/&nbsp;/g, ' ');
+            var text = (tempDiv.textContent || tempDiv.innerText || '').trim();
             rowData.push({ text: text, depth: depth });
         });
 
