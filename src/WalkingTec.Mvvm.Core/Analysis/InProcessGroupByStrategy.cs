@@ -120,6 +120,9 @@ namespace WalkingTec.Mvvm.Core.Analysis
                        && h != DateHierarchy.None
                        && val is DateTime dt)
                    {
+                       // Encode date hierarchy as a compact integer for grouping:
+                       //   Year: 2026, Quarter: 20261, Month: 202603, Day: 20260309
+                       // Formatted to a human-readable label by DateTruncator.FormatKey.
                        int key = h switch
                        {
                            DateHierarchy.Year    => dt.Year,
