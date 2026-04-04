@@ -471,6 +471,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
             List<FilterCondition> result = [];
             var today = DateTime.Today;
+            // ISO week offset: (dow + 6) % 7 maps Sun=0..Sat=6 → Mon=0..Sun=6.
             var mondayOffset = ((int)today.DayOfWeek + 6) % 7;
 
             foreach (var f in filters)
@@ -629,6 +630,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
                             _ => throw new InvalidOperationException($"Operator {f.Operator} not supported in current analysis engine version.")
                         };
 
+                        // Nullable properties need a NOT-NULL guard: SQL silently excludes NULL
+                        // rows from comparisons, but LINQ-to-Objects would throw on .Value access.
                         if (Nullable.GetUnderlyingType(targetType) != null)
                         {
                             filterExpr = Expression.AndAlso(

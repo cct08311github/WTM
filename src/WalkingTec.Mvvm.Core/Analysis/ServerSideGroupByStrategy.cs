@@ -17,6 +17,9 @@ namespace WalkingTec.Mvvm.Core.Analysis
     public class ServerSideGroupByStrategy : IGroupByStrategy
     {
         private const int MaxRows = 10_000;
+        // Non-printable 3-byte separator used to join multiple dimension values into a
+        // single GROUP BY key. These characters never appear in real data, so the key can
+        // be split unambiguously after materialization.
         internal const string KeySeparator = "\x01\x02\x03";
 
         public virtual List<Dictionary<string, object?>> Execute<TModel>(
@@ -89,6 +92,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
             var gParam = Expression.Parameter(typeof(IGrouping<string, TModel>), "g");
             var keyAccess = Expression.Property(gParam, nameof(IGrouping<string, TModel>.Key));
 
+            // Fixed to Tuple<string, double?, double?, double?> — max 3 measures.
+            // EF Core's GroupBy translator requires a compile-time-known projection shape;
+            // a dynamic anonymous type cannot be expressed as a translatable expression tree.
+            // Unused slots are filled with null. double (not decimal) for SQLite compatibility.
             var measureExprs = new Expression[3];
             for (int i = 0; i < 3; i++)
             {

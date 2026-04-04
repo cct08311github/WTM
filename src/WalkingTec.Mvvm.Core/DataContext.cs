@@ -159,6 +159,13 @@ namespace WalkingTec.Mvvm.Core
                         builder!.HasOne(filepro.Name).WithMany().OnDelete(DeleteBehavior.Restrict);
                     }
                 }
+                // Dynamic global query filter construction for multi-tenancy and soft-delete.
+                // Only applied to "root" entity types (null/abstract base, or direct descendants
+                // of TopBasePoco/BasePoco/TreePoco) to avoid duplicate filters on inheritance hierarchies.
+                //   - IPersistPoco → "IsValid == true" (soft-delete)
+                //   - ITenant → "TenantCode == this.TenantCode" (tenant isolation; captures
+                //     the DataContext instance so EF reads the current TenantCode at query time)
+                // Conditions are combined with AndAlso and registered via HasQueryFilter.
                 List<Expression> list = [];
                 ParameterExpression pe = Expression.Parameter(item);
                 if (item.BaseType == null || item.BaseType.IsAbstract == true || (item.BaseType == typeof(TopBasePoco) || item.BaseType == typeof(BasePoco) || item.BaseType?.BaseType == typeof(TreePoco)))
