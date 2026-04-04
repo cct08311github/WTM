@@ -17,7 +17,7 @@
     "echarts": "^6.0.0",
     "echarts-for-react": "^2.0.16",
     "hammerjs": "^2.0.8",
-    "lodash": "^4.17.20",
+    "lodash": "^4.18.1",
     "lodash-decorators": "^6.0.1",
     "mobx": "^4.15.7",
     "mobx-persist": "^0.4.1",
