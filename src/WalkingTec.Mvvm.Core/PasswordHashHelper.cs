@@ -25,6 +25,9 @@ namespace WalkingTec.Mvvm.Core
                 string.IsNullOrEmpty(password))
                 return PasswordVerifyResult.Failed;
 
+            // Legacy hash detection chain — oldest format first.
+            // MD5 (uppercase hex, 32 chars) was used in WTM <= 8.1.12.
+            // On match, return SuccessRehashNeeded so the caller upgrades to BCrypt.
             if (IsLegacyMD5Hash(storedHash))
             {
                 var md5 = ComputeMD5(password);
@@ -45,6 +48,9 @@ namespace WalkingTec.Mvvm.Core
                     : PasswordVerifyResult.Failed;
             }
 
+            // Current algorithm: BCrypt. If the stored hash is corrupted or in an
+            // unrecognized format, BCrypt.Verify throws a parse exception — return
+            // Failed instead of crashing, since the password simply cannot be verified.
             try
             {
                 bool isMatch = BCrypt.Net.BCrypt.Verify(password, storedHash);

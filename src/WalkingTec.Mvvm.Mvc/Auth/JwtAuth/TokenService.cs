@@ -60,6 +60,9 @@ namespace WalkingTec.Mvvm.Mvc.Auth
             var existing = await dbSet.FirstOrDefaultAsync(x => x.Token == refreshToken);
             if (existing == null || !existing.IsActive)
             {
+                // Token-reuse attack detection: a revoked token that was already replaced
+                // should never be presented again. If it is, an attacker may have stolen
+                // the old token. Revoke the entire descendant chain to contain the breach.
                 if (existing is { IsRevoked: true, ReplacedByToken: not null })
                 {
                     await RevokeDescendantsAsync(dbSet, existing, ipAddress,
@@ -157,6 +160,11 @@ namespace WalkingTec.Mvvm.Mvc.Auth
             return Convert.ToBase64String(bytes);
         }
 
+        /// <summary>
+        /// Walks the refresh-token replacement chain from a compromised token and
+        /// revokes any still-active descendant. If the immediate child is already
+        /// revoked, recurses deeper until an active token is found or the chain ends.
+        /// </summary>
         private static async Task RevokeDescendantsAsync(
             DbSet<RefreshTokenEntity> dbSet, RefreshTokenEntity token,
             string ipAddress, string reason, TimeProvider timeProvider)
@@ -165,13 +173,13 @@ namespace WalkingTec.Mvvm.Mvc.Auth
             var child = await dbSet.FirstOrDefaultAsync(
                 x => x.Token == token.ReplacedByToken);
             if (child == null) return;
-            if (child.IsActive)
+            if (child.IsActive)  // Base case: revoke the active descendant directly.
             {
                 child.RevokedUtc = timeProvider.GetUtcNow().UtcDateTime;
                 child.RevokedByIp = ipAddress;
                 child.RevokeReason = reason;
             }
-            else
+            else  // Already revoked — recurse deeper; attacker's rotation may have spawned more tokens.
             {
                 await RevokeDescendantsAsync(dbSet, child, ipAddress, reason, timeProvider);
             }
