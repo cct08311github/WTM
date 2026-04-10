@@ -1190,8 +1190,12 @@ params string[] groupcode)
         {
             //Use reflection to create viewmodel
             var ctor = VMType?.GetConstructor(Type.EmptyTypes);
-            BaseVM rv = ctor?.Invoke(null) as BaseVM;
-            if(rv!=null) rv.Wtm = this;
+            BaseVM? rv = ctor?.Invoke(null) as BaseVM;
+            if (rv == null)
+            {
+                throw new InvalidOperationException($"Cannot create ViewModel of type '{VMType?.FullName}'. Type must derive from BaseVM and have a parameterless constructor.");
+            }
+            rv.Wtm = this;
 
             rv.FC = new Dictionary<string, object>();
             rv.CreatorAssembly = this.GetType().AssemblyQualifiedName;
@@ -1462,7 +1466,15 @@ params string[] groupcode)
         /// <returns>ViewModel</returns>
         public BaseVM CreateVM(string? VmFullName, object? Id = null, object[]? Ids = null, bool passInit = false)
         {
-            return CreateVM(Type.GetType(VmFullName ?? ""), Id, Ids, null, passInit);
+            var vmType = Type.GetType(VmFullName ?? "");
+
+            // Guard: reject unresolvable or non-BaseVM types (#767)
+            if (vmType == null || !typeof(BaseVM).IsAssignableFrom(vmType))
+            {
+                throw new ArgumentException($"Invalid or unregistered ViewModel type: {VmFullName}");
+            }
+
+            return CreateVM(vmType, Id, Ids, null, passInit);
         }
         #endregion
 
