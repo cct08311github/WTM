@@ -200,12 +200,44 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpPost]
         public IActionResult UpdateModelProperty(string _DONOT_USE_VMNAME, Guid id, string field, string value)
         {
+            if (string.IsNullOrWhiteSpace(field))
+            {
+                return BadRequest("Field name is required");
+            }
+
+            // Block navigation paths (dot-notation) to prevent traversal to related entities (#766)
+            if (field.Contains('.'))
+            {
+                return BadRequest("Navigation property paths are not allowed for inline editing");
+            }
+
+            // Block known sensitive/infrastructure fields from inline editing
+            var blockedFields = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "ID", "Password", "PasswordHash", "Salt",
+                "TenantCode", "IsValid", "CreateTime", "CreateBy",
+                "UpdateTime", "UpdateBy", "ITCode",
+            };
+            if (blockedFields.Contains(field))
+            {
+                return BadRequest("This field cannot be edited inline");
+            }
+
             if (value == null && Microsoft.Extensions.Primitives.StringValues.IsNullOrEmpty(Request.Form[nameof(value)]))
             {
                 value = string.Empty;
             }
             var vm = Wtm.CreateVM(_DONOT_USE_VMNAME, id, null, true) as IBaseCRUDVM<TopBasePoco>;
-            vm.Entity.SetPropertyValue(field, value);
+
+            // Verify the property exists and is writable on the entity type
+            var entityType = vm?.Entity?.GetType();
+            var prop = entityType?.GetProperty(field, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+            if (prop == null || !prop.CanWrite)
+            {
+                return BadRequest("Field not found or not writable");
+            }
+
+            vm!.Entity.SetPropertyValue(field, value);
             DC.SaveChanges();
             return JsonMore("Success");
         }
