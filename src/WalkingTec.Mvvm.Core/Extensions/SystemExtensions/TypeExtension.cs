@@ -490,21 +490,5 @@ namespace WalkingTec.Mvvm.Core.Extensions
             return _propertyCache.GetOrAdd(self.FullName!, _ => [.. self.GetProperties()]);
         }
 
-        public static Type? GetParentWorkflowPoco(this Type self)
-        {
-            if(self == typeof(object))
-            {
-                return null;
-            }
-            var ms = Utils.GetAllModels();
-            if (ms.Contains(self))
-            {
-                return self;
-            }
-            else
-            {
-                return self.BaseType?.GetParentWorkflowPoco();
-            }
-        }
     }
 }

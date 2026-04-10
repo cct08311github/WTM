@@ -34,7 +34,6 @@ namespace WalkingTec.Mvvm.BlazorDemo.Server
         public void ConfigureServices(IServiceCollection services)
         {
             var config = ConfigRoot.Get<Configs>();
-            services.AddWtmWorkflow(ConfigRoot);
             services.AddDistributedMemoryCache();
             services.AddWtmSession(3600, ConfigRoot);
             services.AddWtmCrossDomain(ConfigRoot);

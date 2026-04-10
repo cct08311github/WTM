@@ -1,13 +1,7 @@
 #nullable enable
-// using Elsa.Models;
-// using Elsa.Persistence.Specifications;
-// using Elsa.Persistence;
-// using Elsa.Services;
-// using Elsa.Services.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
-// using NodaTime;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -21,7 +15,6 @@ using System.Threading.Tasks;
 using WalkingTec.Mvvm.Core.Extensions;
 using WalkingTec.Mvvm.Core.Models;
 using WalkingTec.Mvvm.Core.Support.FileHandlers;
-using WalkingTec.Mvvm.Core.WorkFlow;
 using static Microsoft.EntityFrameworkCore.DbLoggerCategory;
 using Microsoft.EntityFrameworkCore.Metadata.Internal;
 
@@ -65,14 +58,6 @@ namespace WalkingTec.Mvvm.Core
         void DoDelete();
         Task DoDeleteAsync();
 
-        [Obsolete("WTM's built-in Elsa workflow integration has been removed. This member will be deleted in the next major version. See CHANGELOG.md for migration guidance.")]
-        Task<object?> StartWorkflowAsync(string? flowName=null);
-        [Obsolete("WTM's built-in Elsa workflow integration has been removed. This member will be deleted in the next major version. See CHANGELOG.md for migration guidance.")]
-        Task<object?> ContinueWorkflowAsync(string actionName, string remark, string? flowName=null, string? tag = null);
-        [Obsolete("WTM's built-in Elsa workflow integration has been removed. This member will be deleted in the next major version. See CHANGELOG.md for migration guidance.")]
-        Task<List<ApproveTimeLine>> GetWorkflowTimeLineAsync(string? flowName = null);
-        [Obsolete("WTM's built-in Elsa workflow integration has been removed. This member will be deleted in the next major version. See CHANGELOG.md for migration guidance.")]
-        Task<object?> GetWorkflowInstanceAsync(string? flowName = null);
         /// <summary>
         /// 彻底删除，对PersistPoco进行物理删除
         /// </summary>
@@ -1102,7 +1087,6 @@ namespace WalkingTec.Mvvm.Core
                 AppendChangeLog("Delete", SerializeScalarProps(Entity), null);
                 DC!.DeleteEntity(Entity);
                 DC!.SaveChanges();
-                // [Elsa removed] workflow instance cleanup was here
                 if (Wtm?.ServiceProvider != null)
                 {
                     var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
@@ -1163,7 +1147,6 @@ namespace WalkingTec.Mvvm.Core
                 AppendChangeLog("Delete", SerializeScalarProps(Entity), null);
                 DC!.DeleteEntity(Entity);
                 await DC!.SaveChangesAsync();
-                // [Elsa removed] workflow instance cleanup was here
                 if (Wtm?.ServiceProvider != null)
                 {
                     var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
@@ -1492,34 +1475,6 @@ namespace WalkingTec.Mvvm.Core
         private string[] GetValidationFieldName(PropertyInfo pi)
         {
             return new[] { "Entity." + pi.Name };
-        }
-
-        // [Elsa removed] StartWorkflowAsync — stubbed, returns null
-        [Obsolete("WTM's built-in Elsa workflow integration has been removed. This member will be deleted in the next major version. See CHANGELOG.md for migration guidance.")]
-        public virtual Task<object?> StartWorkflowAsync(string? flowName=null)
-        {
-            return Task.FromResult<object?>(null);
-        }
-
-        // [Elsa removed] ContinueWorkflowAsync — stubbed, returns null
-        [Obsolete("WTM's built-in Elsa workflow integration has been removed. This member will be deleted in the next major version. See CHANGELOG.md for migration guidance.")]
-        public virtual Task<object?> ContinueWorkflowAsync(string actionName, string remark, string? flowName=null, string? tag = null)
-        {
-            return Task.FromResult<object?>(null);
-        }
-
-        // [Elsa removed] GetWorkflowTimeLineAsync — returns empty list
-        [Obsolete("WTM's built-in Elsa workflow integration has been removed. This member will be deleted in the next major version. See CHANGELOG.md for migration guidance.")]
-        public virtual Task<List<ApproveTimeLine>> GetWorkflowTimeLineAsync(string? flowName = null)
-        {
-            return Task.FromResult(new List<ApproveTimeLine>());
-        }
-
-        // [Elsa removed] GetWorkflowInstanceAsync — returns null
-        [Obsolete("WTM's built-in Elsa workflow integration has been removed. This member will be deleted in the next major version. See CHANGELOG.md for migration guidance.")]
-        public virtual Task<object?> GetWorkflowInstanceAsync(string? flowName = null)
-        {
-            return Task.FromResult<object?>(null);
         }
 
     }
