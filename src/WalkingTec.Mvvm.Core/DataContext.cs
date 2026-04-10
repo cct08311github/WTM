@@ -42,17 +42,9 @@ namespace WalkingTec.Mvvm.Core
         public DbSet<FrameworkRole> BaseFrameworkRoles { get; set; } = null!;
         public DbSet<FrameworkUserRole> BaseFrameworkUserRoles { get; set; } = null!;
         public DbSet<FrameworkUserGroup> BaseFrameworkUserGroups { get; set; } = null!;
-        [Obsolete("WTM's built-in Elsa workflow integration has been removed. This member will be deleted in the next major version. See CHANGELOG.md for migration guidance.")]
-        public DbSet<FrameworkWorkflow> FrameworkWorkflows { get; set; } = null!;
         public DbSet<ActionLog> BaseActionLogs { get; set; } = null!;
         public DbSet<ChangeLog> BaseChangeLogs { get; set; } = null!;
         public DbSet<FrameworkTenant> FrameworkTenants { get; set; } = null!;
-        // [Elsa removed] DbSet properties
-        // public DbSet<Elsa_Bookmark> Elsa_Bookmarks { get; set; }
-        // public DbSet<Elsa_Trigger> Elsa_Triggers { get; set; }
-        // public DbSet<Elsa_WorkflowDefinition> Elsa_WorkflowDefinitions { get; set; }
-        // public DbSet<Elsa_WorkflowExecutionLogRecord> Elsa_WorkflowExecutionLogRecords { get; set; }
-        // public DbSet<Elsa_WorkflowInstance> Elsa_WorkflowInstances { get; set; }
         public DbSet<RefreshTokenEntity> FrameworkRefreshTokens { get; set; } = null!;
         public DbSet<AnalysisSavedQuery> AnalysisSavedQueries { get; set; } = null!;
 
@@ -673,12 +665,6 @@ namespace WalkingTec.Mvvm.Core
             if (DBType == DBTypeEnum.Oracle)
             {
                 ((IConventionModelBuilder)modelBuilder).HasMaxIdentifierLength(30);
-                // [Elsa removed] table mappings
-                // modelBuilder.Entity<Elsa_Bookmark>().ToTable("Bookmarks");
-                // modelBuilder.Entity<Elsa_Trigger>().ToTable("Triggers");
-                // modelBuilder.Entity<Elsa_WorkflowDefinition>().ToTable("WorkflowDefinitions");
-                // modelBuilder.Entity<Elsa_WorkflowExecutionLogRecord>().ToTable("WorkflowExecutionLogRecords");
-                // modelBuilder.Entity<Elsa_WorkflowInstance>().ToTable("WorkflowInstances");
             }
         }
 

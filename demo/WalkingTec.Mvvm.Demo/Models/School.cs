@@ -18,7 +18,7 @@ namespace WalkingTec.Mvvm.Demo.Models
     }
 
     [CacheLookup(TtlMinutes = 60, WarmOnStartup = true)]
-    public class School : BasePoco, IWorkflow
+    public class School : BasePoco
     {
         [Key]
         [DatabaseGenerated(DatabaseGeneratedOption.Identity)]

@@ -15,7 +15,6 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
     /// but uses async variants (DoAddAsync / DoEditAsync / DoDeleteAsync).
     ///
     /// Uses a minimal TestNote entity to avoid complex relationship setup.
-    /// Elsa workflow is NOT triggered because TestNote does not implement IWorkflow.
     /// </summary>
     [TestClass]
     public class BaseCRUDVMAsyncTests

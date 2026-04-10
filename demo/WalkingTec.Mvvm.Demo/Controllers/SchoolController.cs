@@ -1,6 +1,5 @@
 using System;
 using System.Linq;
-using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using NPOI.HSSF.Util;
@@ -84,7 +83,7 @@ namespace WalkingTec.Mvvm.Demo.Controllers
 
         [HttpPost]
         [ActionDescription("新建")]
-        public async Task<ActionResult> Create(SchoolVM vm)
+        public ActionResult Create(SchoolVM vm)
         {
             if (!ModelState.IsValid)
             {
@@ -93,7 +92,6 @@ namespace WalkingTec.Mvvm.Demo.Controllers
             else
             {
                 vm.DoAdd();
-                var rv = await vm.StartWorkflowAsync("学校审批");
                 if (!ModelState.IsValid)
                 {
                     vm.DoReInit();
@@ -117,7 +115,7 @@ namespace WalkingTec.Mvvm.Demo.Controllers
 
         [ActionDescription("修改")]
         [HttpPost]
-        public async Task<ActionResult> Edit(SchoolVM vm)
+        public ActionResult Edit(SchoolVM vm)
         {
             if (!ModelState.IsValid)
             {
@@ -126,7 +124,6 @@ namespace WalkingTec.Mvvm.Demo.Controllers
             else
             {
                 vm.DoEdit();
-                _ = await vm.ContinueWorkflowAsync("同意", "adf adf asdf ","学校审批");
                 if (!ModelState.IsValid)
                 {
                     vm.DoReInit();
@@ -167,10 +164,9 @@ namespace WalkingTec.Mvvm.Demo.Controllers
 
         #region 详细
         [ActionDescription("详细")]
-        public async Task<ActionResult> Details(int id)
+        public ActionResult Details(int id)
         {
             var vm = Wtm.CreateVM<SchoolVM>(id);
-            var test = await vm.GetWorkflowTimeLineAsync();
             return PartialView(vm);
         }
         #endregion
