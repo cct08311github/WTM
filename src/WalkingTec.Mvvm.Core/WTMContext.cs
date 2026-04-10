@@ -6,9 +6,11 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Net.Http;
 using System.Reflection;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using Microsoft.IdentityModel.Tokens;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
@@ -192,32 +194,49 @@ namespace WalkingTec.Mvvm.Core
                     var remoteToken = HttpContext?.Request.Query["_remotetoken"][0];
                     if (ConfigInfo?.HasMainHost == false)
                     {
-                        JwtSecurityToken token = new JwtSecurityToken();
+                        // Validate JWT signature — never trust an unverified token (#765)
+                        var jwtOpts = ConfigInfo.JwtOptions;
+                        var handler = new JwtSecurityTokenHandler();
+                        var validationParams = new TokenValidationParameters
+                        {
+                            ValidateIssuerSigningKey = true,
+                            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOpts.SecurityKey)),
+                            ValidateIssuer = true,
+                            ValidIssuer = jwtOpts.Issuer,
+                            ValidateAudience = true,
+                            ValidAudience = jwtOpts.Audience,
+                            ValidateLifetime = true,
+                        };
+
                         try
                         {
-                            token = new JwtSecurityToken(remoteToken);
-                        }
-                        catch { }
-                        var userIdStr = token.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject).Select(x => x.Value).FirstOrDefault();
-                        var tenant = token.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.TenantCode).Select(x => x.Value).FirstOrDefault();
-                        string? usercode = userIdStr;
-                        var cacheKey = $"{GlobalConstants.CacheKey.UserInfo}:{userIdStr + "$`$" + tenant}";
-                        _loginUserInfo = Cache?.Get<LoginUserInfo>(cacheKey);
-                        if (_loginUserInfo == null)
-                        {
-                            try
+                            var principal = handler.ValidateToken(remoteToken, validationParams, out _);
+                            var userIdStr = principal.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject).Select(x => x.Value).FirstOrDefault();
+                            var tenant = principal.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.TenantCode).Select(x => x.Value).FirstOrDefault();
+                            string? usercode = userIdStr;
+                            var cacheKey = $"{GlobalConstants.CacheKey.UserInfo}:{userIdStr + "$`$" + tenant}";
+                            _loginUserInfo = Cache?.Get<LoginUserInfo>(cacheKey);
+                            if (_loginUserInfo == null)
                             {
                                 _loginUserInfo = ReloadUser(usercode);
+                                if (_loginUserInfo != null)
+                                {
+                                    Cache?.Add(cacheKey, _loginUserInfo);
+                                }
+                                else
+                                {
+                                    return null!;
+                                }
                             }
-                            catch { }
-                            if (_loginUserInfo != null)
-                            {
-                                Cache?.Add(cacheKey, _loginUserInfo);
-                            }
-                            else
-                            {
-                                return null!;
-                            }
+                        }
+                        catch (SecurityTokenException)
+                        {
+                            // Signature validation failed — reject the token
+                            return null!;
+                        }
+                        catch (Exception)
+                        {
+                            return null!;
                         }
                     }
                     else if (string.IsNullOrEmpty(remoteToken) == false)
