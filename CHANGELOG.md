@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [10.2.0] - 2026-04-11
+
+### Changed
+- **BREAKING: Remove deprecated Elsa Workflow integration** — Delete all `[Obsolete]` workflow stubs that were non-functional since v8.3.0. Removed: `IWorkflow`, `FrameworkWorkflow`, `FlowInfoTagHelper`, `AddWtmWorkflow()`, `BaseCRUDVM.StartWorkflowAsync/ContinueWorkflowAsync/GetWorkflowTimeLineAsync/GetWorkflowInstanceAsync`, `BasePagedListVM.GetMyApproves()`, `DataContext.FrameworkWorkflows` DbSet, `TypeExtension.GetParentWorkflowPoco()`, and related WorkFlow DTOs. **Migration**: remove all references to these types and methods — they were already returning null/empty (#762)
+
+### Fixed
+- **Build: exclude Blazor WASM Client from Release build** — Prevent NETSDK1082 error when `wasm-tools` workload is not installed. Blazor demo packages upgraded 10.0.3 → 10.0.5 (#764)
+
 ## [10.1.1] - 2026-04-04
 
 ### Fixed
