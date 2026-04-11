@@ -586,10 +586,17 @@ namespace WalkingTec.Mvvm.Mvc
             }
             if (Wtm.IsUrlPublic(url) || Wtm.IsAccessable(url))
             {
-                // HTML-encode page title but allow URL in iframe src (already validated by IsUrlPublic/IsAccessable)
+                // Block dangerous URI schemes (javascript:, data:, vbscript:) (#778)
+                if (Uri.TryCreate(url, UriKind.Absolute, out var absUri)
+                    && absUri.Scheme != "http" && absUri.Scheme != "https")
+                {
+                    throw new Exception(MvcProgram._localizer["Sys.NoPrivilege"]);
+                }
+
                 var safeTitle = HttpUtility.HtmlEncode(pagetitle);
+                var safeUrl = HttpUtility.HtmlAttributeEncode(url);
                 return Content($@"<title>{safeTitle}</title>
-<iframe src='{url}' frameborder='0' class='layadmin-iframe'></iframe>");
+<iframe src=""{safeUrl}"" frameborder=""0"" class=""layadmin-iframe""></iframe>");
             }
             else
             {
@@ -775,9 +782,8 @@ namespace WalkingTec.Mvvm.Mvc
                 new CookieOptions { Expires = DateTimeOffset.UtcNow.AddYears(1) }
             );
 
-            // HTML-encode redirect to prevent XSS in window.location.href
-            var safeRedirect = HttpUtility.HtmlEncode(HttpUtility.UrlDecode(redirect));
-            return Content($"<script>window.location.href='{safeRedirect}';</script>", "text/html");
+            // Use 302 redirect instead of <script> to prevent XSS (#778)
+            return Redirect(SanitizeRedirectUrl(redirect));
         }
 
 
@@ -791,16 +797,37 @@ namespace WalkingTec.Mvvm.Mvc
         [Public]
         public async Task<ActionResult> RemoteEntry(string redirect)
         {
-            if (string.IsNullOrEmpty(redirect))
-            {
-                redirect = "/";
-            }
             if (Wtm?.LoginUserInfo != null)
             {
                 var principal = Wtm.LoginUserInfo.CreatePrincipal();
                 await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal, null);
             }
-            return Content($"<script>window.location.href='{HttpUtility.UrlDecode(redirect)}'</script>", "text/html");
+            // Use 302 redirect instead of <script> to prevent XSS (#778)
+            return Redirect(SanitizeRedirectUrl(redirect));
+        }
+
+        /// <summary>
+        /// Validates a redirect URL: allows relative paths and same-origin absolute URLs only.
+        /// Returns "/" for null, empty, or unsafe input (open-redirect prevention).
+        /// </summary>
+        private string SanitizeRedirectUrl(string? url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+                return "/";
+
+            var decoded = HttpUtility.UrlDecode(url);
+
+            // Relative paths are safe
+            if (Uri.IsWellFormedUriString(decoded, UriKind.Relative) && !decoded.StartsWith("//"))
+                return decoded;
+
+            // Absolute URLs: only allow http/https with same host
+            if (Uri.TryCreate(decoded, UriKind.Absolute, out var uri)
+                && (uri.Scheme == "http" || uri.Scheme == "https")
+                && uri.Host.Equals(Request.Host.Host, StringComparison.OrdinalIgnoreCase))
+                return decoded;
+
+            return "/";
         }
 
         /// <summary>
