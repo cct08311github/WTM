@@ -58,7 +58,11 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
 
             // Path traversal guard: ensure resolved path stays within upload root (#770)
             string uploadRoot = GetFullPath(groupdir);
-            if (!fulldir.StartsWith(uploadRoot, StringComparison.OrdinalIgnoreCase))
+            // Append separator to prevent prefix false-positive (e.g. /uploads vs /uploads-evil)
+            if (!uploadRoot.EndsWith(Path.DirectorySeparatorChar))
+                uploadRoot += Path.DirectorySeparatorChar;
+            if (!fulldir.StartsWith(uploadRoot, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(fulldir, uploadRoot.TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
             {
                 throw new UnauthorizedAccessException($"Upload path '{subdir}' escapes the upload root directory.");
             }
