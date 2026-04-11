@@ -226,10 +226,11 @@ namespace WalkingTec.Mvvm.Core
                     ZipFile.CreateFromDirectory(FilePath, ZipPath);
 
                     //读取压缩包
-                    FileStream ZipFS = new FileStream(ZipPath, FileMode.Open, FileAccess.Read);
-                    bt = new byte[ZipFS.Length];
-                    ZipFS.Read(bt, 0, bt.Length);
-                    ZipFS.Close();
+                    using (FileStream ZipFS = new FileStream(ZipPath, FileMode.Open, FileAccess.Read))
+                    {
+                        bt = new byte[ZipFS.Length];
+                        ZipFS.Read(bt, 0, bt.Length);
+                    }
                 }
                 finally
                 {

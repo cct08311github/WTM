@@ -142,8 +142,9 @@ namespace WalkingTec.Mvvm.Core.Services
 
         /// <summary>
         /// Cache-aside helper with stampede protection via per-key SemaphoreSlim.
-        /// Uses WaitAsync().GetAwaiter().GetResult() instead of Wait() to avoid
-        /// SynchronizationContext deadlocks when called from async contexts.
+        /// Uses SemaphoreSlim.Wait() for synchronous lock. This is correct for
+        /// synchronous callers; WaitAsync().GetAwaiter().GetResult() would add
+        /// overhead and risk deadlock in contexts with a SynchronizationContext.
         /// </summary>
         private T? ReadFromCache<T>(string key, Func<T?> setFunc, int timeoutSeconds)
         {
@@ -153,7 +154,7 @@ namespace WalkingTec.Mvvm.Core.Services
             }
 
             var keyLock = _keyLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
-            keyLock.WaitAsync().GetAwaiter().GetResult();
+            keyLock.Wait();
             try
             {
                 // Double-check after acquiring lock
