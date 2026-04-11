@@ -319,7 +319,7 @@ namespace WalkingTec.Mvvm.Mvc
             }
             importVM.SetParms(qs);
             var data = importVM.GenerateTemplate(out string fileName);
-            HttpContext.Response.Cookies.Append("DONOTUSEDOWNLOADING", "0", new Microsoft.AspNetCore.Http.CookieOptions() { Domain = "/", Expires = Wtm.TimeProvider.GetLocalNow().DateTime.AddDays(2) });
+            HttpContext.Response.Cookies.Append("DONOTUSEDOWNLOADING", "0", new Microsoft.AspNetCore.Http.CookieOptions() { Path = "/", Expires = Wtm.TimeProvider.GetLocalNow().DateTime.AddDays(2) });
             return File(data, "application/vnd.ms-excel", fileName);
         }
 
@@ -757,7 +757,12 @@ namespace WalkingTec.Mvvm.Mvc
             Response.Cookies.Append(
                 CookieRequestCultureProvider.DefaultCookieName,
                 CookieRequestCultureProvider.MakeCookieValue(new RequestCulture(culture)),
-                new CookieOptions { Expires = DateTimeOffset.UtcNow.AddYears(1) }
+                new CookieOptions
+                {
+                    Expires = DateTimeOffset.UtcNow.AddYears(1),
+                    SameSite = SameSiteMode.Lax,
+                    Secure = Request.IsHttps,
+                }
             );
 
             return FFResult().AddCustomScript("location.reload();");
