@@ -119,7 +119,7 @@ namespace WalkingTec.Mvvm.Core
                         }
                     }
                 }
-                catch { }
+                catch (Exception) { /* Intentionally ignored: cookie read may fail if cookies are malformed or unavailable */ }
                 return rv;
             }
         }
@@ -178,7 +178,10 @@ namespace WalkingTec.Mvvm.Core
                         {
                             _loginUserInfo = ReloadUser(usercode);
                         }
-                        catch { }
+                        catch (Exception ex)
+                        {
+                            ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("WTMContext")?.LogWarning(ex, "Failed to reload user info for usercode '{UserCode}'", usercode);
+                        }
                         if (_loginUserInfo != null)
                         {
                             Cache?.Add(cacheKey, _loginUserInfo);
@@ -245,7 +248,10 @@ namespace WalkingTec.Mvvm.Core
                         {
                             _loginUserInfo = ReloadUser("null");
                         }
-                        catch { }
+                        catch (Exception ex)
+                        {
+                            ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("WTMContext")?.LogWarning(ex, "Failed to reload user info via remote token");
+                        }
                         if (_loginUserInfo != null)
                         {
                             var cacheKey = $"{GlobalConstants.CacheKey.UserInfo}:{_loginUserInfo.ITCode + "$`$" + _loginUserInfo.TenantCode}";
@@ -1112,7 +1118,10 @@ params string[] groupcode)
                     isPublic = true;
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("WTMContext")?.LogWarning(ex, "Failed to determine if URL '{Url}' is public", url);
+            }
             return isPublic;
         }
 
@@ -1226,7 +1235,10 @@ params string[] groupcode)
                         }
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("WTMContext")?.LogWarning(ex, "Failed to populate FC dictionary from request form/query for ViewModel '{VmType}'", rv.GetType().Name);
+                }
             }
             //try to set values to the viewmodel's matching properties
             if (values != null)
@@ -1576,7 +1588,7 @@ params string[] groupcode)
                         {
                             rv.Errors = JsonSerializer.Deserialize<ErrorObj>(responseTxt, CoreProgram.DefaultJsonOption);
                         }
-                        catch { }
+                        catch (Exception) { /* Intentionally ignored: response body may not be JSON-formatted ErrorObj; ErrorMsg is set from raw text below */ }
                     }
                     rv.ErrorMsg = responseTxt;
                 }

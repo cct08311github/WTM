@@ -2,6 +2,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -504,7 +505,10 @@ namespace WalkingTec.Mvvm.Core
                                             {
                                                 itempro.SetValue(newitem, string.IsNullOrEmpty(softkey) ? Entity.GetID() : Entity.GetPropertyValue(softkey));
                                             }
-                                            catch { }
+                                            catch (Exception ex)
+                                            {
+                                                Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(ex, "Failed to set FK property '{Property}' on sub-entity during DoAdd", itempro.Name);
+                                            }
                                             found = true;
                                         }
                                     }
@@ -712,7 +716,10 @@ namespace WalkingTec.Mvvm.Core
                                             {
                                                 itempro.SetValue(newitem, string.IsNullOrEmpty(softkey) ? Entity.GetID() : Entity.GetPropertyValue(softkey));
                                             }
-                                            catch { }
+                                            catch (Exception ex)
+                                            {
+                                                Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(ex, "Failed to set FK property '{Property}' on sub-entity during DoEdit", itempro.Name);
+                                            }
                                             found = true;
                                         }
                                     }
@@ -958,7 +965,10 @@ namespace WalkingTec.Mvvm.Core
                             {
                                 parentid.SetValue(Entity, null);
                             }
-                            catch { }
+                            catch (Exception ex)
+                            {
+                                Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(ex, "Failed to clear ParentId on entity '{EntityType}'", Entity.GetType().Name);
+                            }
                         }
                     }
                 }
@@ -1231,7 +1241,7 @@ namespace WalkingTec.Mvvm.Core
                 if (p.PropertyType.IsSubclassOf(typeof(TopBasePoco))) continue;
                 if (p.PropertyType != typeof(string)
                     && typeof(System.Collections.IEnumerable).IsAssignableFrom(p.PropertyType)) continue;
-                try { dict[p.Name] = p.GetValue(entity); } catch { }
+                try { dict[p.Name] = p.GetValue(entity); } catch (Exception) { /* Intentionally ignored: property getter may throw for computed/virtual properties */ }
             }
             try
             {

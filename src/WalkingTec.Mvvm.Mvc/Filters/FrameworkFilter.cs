@@ -90,7 +90,10 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                             }
                         }
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        context.HttpContext.RequestServices.GetService<ILogger<FrameworkFilter>>()?.LogWarning(ex, "Failed to populate FC dictionary from request form/query for ViewModel '{VmType}'", model.GetType().Name);
+                    }
 
                     if (ctrl is BaseApiController apictrl)
                     {
@@ -109,7 +112,10 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                                     model.FC.Add(field, "");
                                 }
                             }
-                            catch { }
+                            catch (Exception ex)
+                            {
+                                context.HttpContext.RequestServices.GetService<ILogger<FrameworkFilter>>()?.LogWarning(ex, "Failed to deserialize PostedBody for ViewModel '{VmType}'", model.GetType().Name);
+                            }
                         }
                     }
                     SetSubVm(model);
@@ -410,7 +416,10 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                         });
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    context.HttpContext.RequestServices.GetService<ILogger<FrameworkFilter>>()?.LogWarning(ex, "Failed to write action log for '{ActionUrl}'", log.ActionUrl);
+                }
             }
             if (context.Exception != null)
             {
