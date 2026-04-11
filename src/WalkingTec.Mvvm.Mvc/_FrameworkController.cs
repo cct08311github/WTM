@@ -292,7 +292,7 @@ namespace WalkingTec.Mvvm.Mvc
                 }
 
                 var now = Wtm.TimeProvider.GetLocalNow().DateTime;
-                HttpContext.Response.Cookies.Append("DONOTUSEDOWNLOADING", "0", new Microsoft.AspNetCore.Http.CookieOptions() { Path = "/", Expires = now.AddDays(2) });
+                HttpContext.Response.Cookies.Append("DONOTUSEDOWNLOADING", "0", new Microsoft.AspNetCore.Http.CookieOptions() { Path = "/", Expires = now.AddDays(2), SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Lax, Secure = Request.IsHttps });
 
                 return File(data, "application/vnd.ms-excel", $"Export_{instanceType.Name}_{now.ToString("yyyy-MM-dd")}.xls");
             }
@@ -319,7 +319,7 @@ namespace WalkingTec.Mvvm.Mvc
             }
             importVM.SetParms(qs);
             var data = importVM.GenerateTemplate(out string fileName);
-            HttpContext.Response.Cookies.Append("DONOTUSEDOWNLOADING", "0", new Microsoft.AspNetCore.Http.CookieOptions() { Path = "/", Expires = Wtm.TimeProvider.GetLocalNow().DateTime.AddDays(2) });
+            HttpContext.Response.Cookies.Append("DONOTUSEDOWNLOADING", "0", new Microsoft.AspNetCore.Http.CookieOptions() { Path = "/", Expires = Wtm.TimeProvider.GetLocalNow().DateTime.AddDays(2), SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Lax, Secure = Request.IsHttps });
             return File(data, "application/vnd.ms-excel", fileName);
         }
 
