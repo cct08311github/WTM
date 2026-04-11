@@ -586,9 +586,10 @@ namespace WalkingTec.Mvvm.Mvc
             }
             if (Wtm.IsUrlPublic(url) || Wtm.IsAccessable(url))
             {
-                // Block dangerous URI schemes (javascript:, data:, vbscript:) (#778)
-                if (Uri.TryCreate(url, UriKind.Absolute, out var absUri)
-                    && absUri.Scheme != "http" && absUri.Scheme != "https")
+                // Block dangerous URI schemes and protocol-relative URLs (#778, #783)
+                if (url.TrimStart().StartsWith("//")
+                    || (Uri.TryCreate(url, UriKind.Absolute, out var absUri)
+                        && absUri.Scheme != "http" && absUri.Scheme != "https"))
                 {
                     throw new Exception(MvcProgram._localizer["Sys.NoPrivilege"]);
                 }
@@ -784,7 +785,7 @@ namespace WalkingTec.Mvvm.Mvc
             Response.Cookies.Append(
                 CookieRequestCultureProvider.DefaultCookieName,
                 CookieRequestCultureProvider.MakeCookieValue(new RequestCulture(culture)),
-                new CookieOptions { Expires = DateTimeOffset.UtcNow.AddYears(1) }
+                new CookieOptions { Expires = DateTimeOffset.UtcNow.AddYears(1), SameSite = SameSiteMode.Lax, Secure = Request.IsHttps }
             );
 
             // Use 302 redirect instead of <script> to prevent XSS (#778)

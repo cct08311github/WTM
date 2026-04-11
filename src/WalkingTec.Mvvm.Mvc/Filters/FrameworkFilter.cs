@@ -332,7 +332,7 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                     {
                         context.HttpContext.Response.Headers.Append("X-wtm-PageTitle", Convert.ToBase64String(Encoding.UTF8.GetBytes(pagetitle)));
                     }
-                    var dividCookieOpts = new Microsoft.AspNetCore.Http.CookieOptions { SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Lax, Path = "/" };
+                    var dividCookieOpts = new Microsoft.AspNetCore.Http.CookieOptions { SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Lax, Path = "/", Secure = context.HttpContext.Request.IsHttps };
                     context.HttpContext.Response.Cookies.Append("divid", model.ViewDivId, dividCookieOpts);
                 }
             }
@@ -348,7 +348,7 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                 if (model != null)
                 {
                     model.CurrentView = viewName;
-                    var dividCookieOpts = new Microsoft.AspNetCore.Http.CookieOptions { SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Lax, Path = "/" };
+                    var dividCookieOpts = new Microsoft.AspNetCore.Http.CookieOptions { SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Lax, Path = "/", Secure = context.HttpContext.Request.IsHttps };
                     context.HttpContext.Response.Cookies.Append("divid", model?.ViewDivId, dividCookieOpts);
                 }
             }
