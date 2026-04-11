@@ -419,6 +419,16 @@ namespace WalkingTec.Mvvm.Core
         {
             if (!string.IsNullOrEmpty(Value) && Value.IndexOf("=") == 0)
             {
+                // Block dangerous external-reference formulas to prevent formula injection attacks
+                string formulaUpper = Value.Substring(1).TrimStart().ToUpperInvariant();
+                if (formulaUpper.Contains('|') || formulaUpper.StartsWith("CMD") ||
+                    formulaUpper.StartsWith("WEBSERVICE") || formulaUpper.StartsWith("HYPERLINK") ||
+                    formulaUpper.StartsWith("IMPORTXML") || formulaUpper.StartsWith("IMPORTDATA") ||
+                    formulaUpper.StartsWith("IMPORTFEED") || formulaUpper.StartsWith("IMPORTRANGE"))
+                {
+                    return Value;
+                }
+
                 try
                 {
                     string Formula = Value.Substring(1);
