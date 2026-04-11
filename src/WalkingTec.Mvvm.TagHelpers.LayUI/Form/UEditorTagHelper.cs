@@ -1,3 +1,4 @@
+using System.Text.Encodings.Web;
 using System.Web;
 using Microsoft.AspNetCore.Razor.TagHelpers;
 using WalkingTec.Mvvm.Core;
@@ -65,10 +66,12 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
                 vm.ConfigInfo.UEditorOptions.SnapscreenActionName = url;
                 vm.ConfigInfo.UEditorOptions.VideoActionName = url;
             }
+            var contentValue = DefaultValue?.ToString() ?? Field?.Model?.ToString() ?? "";
+            var encodedContent = JavaScriptEncoder.Default.Encode(contentValue);
             output.PostElement.AppendHtml($@"
 <script>
   layui.use(['ueditorconfig'], function () {{
-    layui.ueditor.loadEditor('{Id}').ready(function(){{this.setContent('{(DefaultValue != null ? DefaultValue.ToString() : Field?.Model?.ToString())}')}});
+    layui.ueditor.loadEditor('{Id}').ready(function(){{this.setContent('{encodedContent}')}});
   }});
 </script>
 ");

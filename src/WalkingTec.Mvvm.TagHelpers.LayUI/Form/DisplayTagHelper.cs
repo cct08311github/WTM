@@ -163,7 +163,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 {
                     val = DisplayText;
                 }
-                output.Content.AppendHtml(val);
+                output.Content.Append(val);
             }
             base.Process(context, output);
         }
