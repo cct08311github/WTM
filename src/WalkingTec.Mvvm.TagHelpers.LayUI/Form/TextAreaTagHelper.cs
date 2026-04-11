@@ -1,5 +1,3 @@
-using System.Net;
-using System.Web;
 using Microsoft.AspNetCore.Razor.TagHelpers;
 
 namespace WalkingTec.Mvvm.TagHelpers.LayUI
@@ -22,11 +20,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             }
             if (DefaultValue != null)
             {
-                output.Content.SetContent(WebUtility.HtmlDecode(DefaultValue.ToString()));
+                output.Content.SetContent(DefaultValue.ToString());
             }
             else
             {
-                output.Content.SetContent(WebUtility.HtmlDecode(Field?.Model?.ToString()));
+                output.Content.SetContent(Field?.Model?.ToString());
             }
 
             base.Process(context, output);
