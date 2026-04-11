@@ -36,9 +36,16 @@ namespace WalkingTec.Mvvm.Mvc
     public class _FrameworkController(ISecurityCodeHelper securityCode) : BaseController
     {
         /// <summary>
-        /// 
+        ///
         /// </summary>
         private readonly ISecurityCodeHelper _securityCode = securityCode;
+
+        /// <summary>
+        /// Pre-compiled regex for stripping script tags from selector data — compiled once to avoid per-request allocation.
+        /// </summary>
+        private static readonly Regex ScriptTagRegex = new Regex(
+            "<script>.*?</script>",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
 
 
 
@@ -94,8 +101,7 @@ namespace WalkingTec.Mvvm.Mvc
                 var idproperty = modelType.GetSingleProperty(_DONOT_USE_VFIELD);
                 var pro = Expression.Property(para, idproperty);
                 listVM.ReplaceWhere = listVM.Ids.GetContainIdExpression(modelType, Expression.Parameter(modelType), pro);
-                Regex r = new Regex("<script>.*?</script>");
-                string selectData = r.Replace((listVM as IBasePagedListVM<TopBasePoco, BaseSearcher>).GetDataJson(), "");
+                string selectData = ScriptTagRegex.Replace((listVM as IBasePagedListVM<TopBasePoco, BaseSearcher>).GetDataJson(), "");
                 ViewBag.SelectData = selectData;
                 listVM.IsSearched = false;
                 listVM.SearcherMode = ListVMSearchModeEnum.Selector;
@@ -459,13 +465,16 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 return new EmptyResult();
             }
-            Stream rv = null;
-            try
+            Stream rv = file.DataStream;
+            var ext = file.FileExt.ToLower();
+
+            // Only attempt image resize for known image types; skip for non-images to avoid parse errors.
+            var imageExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "jpg", "jpeg", "png", "gif", "bmp", "webp" };
+            if (imageExtensions.Contains(ext) && (width != null || height != null))
             {
-                rv = file.DataStream;
-                Image oimage = Image.Load(rv);
-                if (oimage != null && (width != null || height != null))
+                try
                 {
+                    Image oimage = Image.Load(rv);
                     if (width == null)
                     {
                         width = oimage.Width * height / oimage.Height;
@@ -477,16 +486,17 @@ namespace WalkingTec.Mvvm.Mvc
                     var ms = new MemoryStream();
                     oimage.Mutate(x => x.Resize(width.Value, height.Value));
                     oimage.SaveAsJpeg(ms);
+                    oimage.Dispose();
                     rv.Dispose();
                     rv = ms;
                 }
-                else
+                catch
                 {
-
+                    // Image processing failed — reset stream position for raw file serving.
+                    rv.Position = 0;
                 }
             }
-            catch { }
-            var ext = file.FileExt.ToLower();
+
             var contenttype = "application/octet-stream";
             if (ext == "pdf")
             {
