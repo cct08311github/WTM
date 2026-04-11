@@ -27,7 +27,7 @@ public class OracleSource : IEtlSource
 
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = queryTemplate;
-        cmd.CommandTimeout = 0;
+        cmd.CommandTimeout = 300; // 5-minute hard timeout; CancellationToken provides additional control
 
         if (watermarkValue != null)
         {

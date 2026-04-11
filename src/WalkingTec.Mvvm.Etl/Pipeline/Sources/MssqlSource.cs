@@ -27,7 +27,7 @@ public class MssqlSource : IEtlSource
 
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = queryTemplate;
-        cmd.CommandTimeout = 0; // Pipeline 層的 CancellationToken 控制超時
+        cmd.CommandTimeout = 300; // 5-minute hard timeout; CancellationToken provides additional control
 
         if (watermarkValue != null)
         {
