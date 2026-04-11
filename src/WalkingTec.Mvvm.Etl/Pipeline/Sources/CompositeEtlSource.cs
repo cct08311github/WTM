@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace WalkingTec.Mvvm.Etl.Pipeline.Sources;
 
@@ -60,5 +61,11 @@ public sealed class CompositeEtlSource : IEtlSource
     {
         foreach (var (_, _, source) in _sources)
             source.Dispose();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        foreach (var (_, _, source) in _sources)
+            await source.DisposeAsync();
     }
 }

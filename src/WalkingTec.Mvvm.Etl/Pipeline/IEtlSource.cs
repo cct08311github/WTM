@@ -9,7 +9,7 @@ namespace WalkingTec.Mvvm.Etl.Pipeline;
 /// <summary>
 /// ETL Extract 介面 — 從來源 DB 串流讀取資料
 /// </summary>
-public interface IEtlSource : IDisposable
+public interface IEtlSource : IDisposable, IAsyncDisposable
 {
     /// <summary>
     /// 以 DbDataReader 方式串流讀取資料，分批 yield return DataTable
