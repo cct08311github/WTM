@@ -42,4 +42,6 @@ public class MockEtlSource : IEtlSource
     }
 
     public void Dispose() { }
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Razor.TagHelpers;
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Text.Encodings.Web;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Extensions;
 
@@ -75,14 +76,14 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
             }
             url = url.AppendQuery(ExtraQuery);
 
-
+            var encodedUrl = JavaScriptEncoder.Default.Encode(url ?? "");
             output.PostElement.AppendHtml($@"
 <script>
 layui.use('layedit', function(){{
   var layedit = layui.layedit;
   layedit.set({{
     uploadImage: {{
-      url: '{url}'
+      url: '{encodedUrl}'
     }}
   }});
   var index = layedit.build('{Id}'{(Height.HasValue?$",{{height:{Height.Value}}}":"")});

@@ -428,7 +428,11 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                 context.ExceptionHandled = true;
                 if (ctrl.Wtm.ConfigInfo.IsQuickDebug == true)
                 {
-                    context.HttpContext.Response.WriteAsync(context.Exception.ToString());
+                    var ex = context.Exception;
+                    var debugMsg = $"[Debug] {ex.GetType().Name}: {ex.Message}";
+                    if (ex.InnerException != null)
+                        debugMsg += $"\n  Inner: {ex.InnerException.GetType().Name}: {ex.InnerException.Message}";
+                    context.HttpContext.Response.WriteAsync(debugMsg);
                 }
                 else
                 {
