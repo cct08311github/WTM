@@ -55,6 +55,14 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
                 }
             }
             string fulldir = GetFullPath(pathHeader);
+
+            // Path traversal guard: ensure resolved path stays within upload root (#770)
+            string uploadRoot = GetFullPath(groupdir);
+            if (!fulldir.StartsWith(uploadRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new UnauthorizedAccessException($"Upload path '{subdir}' escapes the upload root directory.");
+            }
+
             if (!Directory.Exists(fulldir))
             {
                 Directory.CreateDirectory(fulldir);
