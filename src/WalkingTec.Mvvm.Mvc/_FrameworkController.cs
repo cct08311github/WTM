@@ -221,7 +221,7 @@ namespace WalkingTec.Mvvm.Mvc
             var blockedFields = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
                 "ID", "Password", "PasswordHash", "Salt",
-                "TenantCode", "IsValid", "CreateTime", "CreateBy",
+                "TenantCode", "CreateTime", "CreateBy",
                 "UpdateTime", "UpdateBy", "ITCode",
             };
             if (blockedFields.Contains(field))
