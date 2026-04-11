@@ -372,7 +372,8 @@ namespace WalkingTec.Mvvm.Mvc
             }
             else
             {
-                rv = ex.Error.Message.Replace(Environment.NewLine, "<br />"); ;
+                // Never expose raw exception messages — they may contain SQL, paths, or secrets (#769)
+                rv = MvcProgram._localizer?["Sys.Error"] ?? "An error occurred while processing your request.";
             }
             return BadRequest(rv);
         }
