@@ -36,9 +36,16 @@ namespace WalkingTec.Mvvm.Mvc
     public class _FrameworkController(ISecurityCodeHelper securityCode) : BaseController
     {
         /// <summary>
-        /// 
+        ///
         /// </summary>
         private readonly ISecurityCodeHelper _securityCode = securityCode;
+
+        /// <summary>
+        /// Pre-compiled regex for stripping script tags from selector data — compiled once to avoid per-request allocation.
+        /// </summary>
+        private static readonly Regex ScriptTagRegex = new Regex(
+            "<script>.*?</script>",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
 
 
 
@@ -94,8 +101,7 @@ namespace WalkingTec.Mvvm.Mvc
                 var idproperty = modelType.GetSingleProperty(_DONOT_USE_VFIELD);
                 var pro = Expression.Property(para, idproperty);
                 listVM.ReplaceWhere = listVM.Ids.GetContainIdExpression(modelType, Expression.Parameter(modelType), pro);
-                Regex r = new Regex("<script>.*?</script>");
-                string selectData = r.Replace((listVM as IBasePagedListVM<TopBasePoco, BaseSearcher>).GetDataJson(), "");
+                string selectData = ScriptTagRegex.Replace((listVM as IBasePagedListVM<TopBasePoco, BaseSearcher>).GetDataJson(), "");
                 ViewBag.SelectData = selectData;
                 listVM.IsSearched = false;
                 listVM.SearcherMode = ListVMSearchModeEnum.Selector;
@@ -200,12 +206,44 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpPost]
         public IActionResult UpdateModelProperty(string _DONOT_USE_VMNAME, Guid id, string field, string value)
         {
+            if (string.IsNullOrWhiteSpace(field))
+            {
+                return BadRequest("Field name is required");
+            }
+
+            // Block navigation paths (dot-notation) to prevent traversal to related entities (#766)
+            if (field.Contains('.'))
+            {
+                return BadRequest("Navigation property paths are not allowed for inline editing");
+            }
+
+            // Block known sensitive/infrastructure fields from inline editing
+            var blockedFields = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "ID", "Password", "PasswordHash", "Salt",
+                "TenantCode", "CreateTime", "CreateBy",
+                "UpdateTime", "UpdateBy", "ITCode",
+            };
+            if (blockedFields.Contains(field))
+            {
+                return BadRequest("This field cannot be edited inline");
+            }
+
             if (value == null && Microsoft.Extensions.Primitives.StringValues.IsNullOrEmpty(Request.Form[nameof(value)]))
             {
                 value = string.Empty;
             }
             var vm = Wtm.CreateVM(_DONOT_USE_VMNAME, id, null, true) as IBaseCRUDVM<TopBasePoco>;
-            vm.Entity.SetPropertyValue(field, value);
+
+            // Verify the property exists and is writable on the entity type
+            var entityType = vm?.Entity?.GetType();
+            var prop = entityType?.GetProperty(field, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+            if (prop == null || !prop.CanWrite)
+            {
+                return BadRequest("Field not found or not writable");
+            }
+
+            vm!.Entity.SetPropertyValue(field, value);
             DC.SaveChanges();
             return JsonMore("Success");
         }
@@ -281,7 +319,7 @@ namespace WalkingTec.Mvvm.Mvc
             }
             importVM.SetParms(qs);
             var data = importVM.GenerateTemplate(out string fileName);
-            HttpContext.Response.Cookies.Append("DONOTUSEDOWNLOADING", "0", new Microsoft.AspNetCore.Http.CookieOptions() { Domain = "/", Expires = Wtm.TimeProvider.GetLocalNow().DateTime.AddDays(2) });
+            HttpContext.Response.Cookies.Append("DONOTUSEDOWNLOADING", "0", new Microsoft.AspNetCore.Http.CookieOptions() { Path = "/", Expires = Wtm.TimeProvider.GetLocalNow().DateTime.AddDays(2) });
             return File(data, "application/vnd.ms-excel", fileName);
         }
 
@@ -340,7 +378,8 @@ namespace WalkingTec.Mvvm.Mvc
             }
             else
             {
-                rv = ex.Error.Message.Replace(Environment.NewLine, "<br />"); ;
+                // Never expose raw exception messages — they may contain SQL, paths, or secrets (#769)
+                rv = MvcProgram._localizer?["Sys.Error"] ?? "An error occurred while processing your request.";
             }
             return BadRequest(rv);
         }
@@ -426,13 +465,16 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 return new EmptyResult();
             }
-            Stream rv = null;
-            try
+            Stream rv = file.DataStream;
+            var ext = file.FileExt.ToLower();
+
+            // Only attempt image resize for known image types; skip for non-images to avoid parse errors.
+            var imageExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "jpg", "jpeg", "png", "gif", "bmp", "webp" };
+            if (imageExtensions.Contains(ext) && (width != null || height != null))
             {
-                rv = file.DataStream;
-                Image oimage = Image.Load(rv);
-                if (oimage != null && (width != null || height != null))
+                try
                 {
+                    Image oimage = Image.Load(rv);
                     if (width == null)
                     {
                         width = oimage.Width * height / oimage.Height;
@@ -444,16 +486,17 @@ namespace WalkingTec.Mvvm.Mvc
                     var ms = new MemoryStream();
                     oimage.Mutate(x => x.Resize(width.Value, height.Value));
                     oimage.SaveAsJpeg(ms);
+                    oimage.Dispose();
                     rv.Dispose();
                     rv = ms;
                 }
-                else
+                catch
                 {
-
+                    // Image processing failed — reset stream position for raw file serving.
+                    rv.Position = 0;
                 }
             }
-            catch { }
-            var ext = file.FileExt.ToLower();
+
             var contenttype = "application/octet-stream";
             if (ext == "pdf")
             {
@@ -543,10 +586,18 @@ namespace WalkingTec.Mvvm.Mvc
             }
             if (Wtm.IsUrlPublic(url) || Wtm.IsAccessable(url))
             {
-                // HTML-encode page title but allow URL in iframe src (already validated by IsUrlPublic/IsAccessable)
+                // Block dangerous URI schemes and protocol-relative URLs (#778, #783)
+                if (url.TrimStart().StartsWith("//")
+                    || (Uri.TryCreate(url, UriKind.Absolute, out var absUri)
+                        && absUri.Scheme != "http" && absUri.Scheme != "https"))
+                {
+                    throw new Exception(MvcProgram._localizer["Sys.NoPrivilege"]);
+                }
+
                 var safeTitle = HttpUtility.HtmlEncode(pagetitle);
+                var safeUrl = HttpUtility.HtmlAttributeEncode(url);
                 return Content($@"<title>{safeTitle}</title>
-<iframe src='{url}' frameborder='0' class='layadmin-iframe'></iframe>");
+<iframe src=""{safeUrl}"" frameborder=""0"" class=""layadmin-iframe""></iframe>");
             }
             else
             {
@@ -707,7 +758,12 @@ namespace WalkingTec.Mvvm.Mvc
             Response.Cookies.Append(
                 CookieRequestCultureProvider.DefaultCookieName,
                 CookieRequestCultureProvider.MakeCookieValue(new RequestCulture(culture)),
-                new CookieOptions { Expires = DateTimeOffset.UtcNow.AddYears(1) }
+                new CookieOptions
+                {
+                    Expires = DateTimeOffset.UtcNow.AddYears(1),
+                    SameSite = SameSiteMode.Lax,
+                    Secure = Request.IsHttps,
+                }
             );
 
             return FFResult().AddCustomScript("location.reload();");
@@ -729,12 +785,11 @@ namespace WalkingTec.Mvvm.Mvc
             Response.Cookies.Append(
                 CookieRequestCultureProvider.DefaultCookieName,
                 CookieRequestCultureProvider.MakeCookieValue(new RequestCulture(culture)),
-                new CookieOptions { Expires = DateTimeOffset.UtcNow.AddYears(1) }
+                new CookieOptions { Expires = DateTimeOffset.UtcNow.AddYears(1), SameSite = SameSiteMode.Lax, Secure = Request.IsHttps }
             );
 
-            // HTML-encode redirect to prevent XSS in window.location.href
-            var safeRedirect = HttpUtility.HtmlEncode(HttpUtility.UrlDecode(redirect));
-            return Content($"<script>window.location.href='{safeRedirect}';</script>", "text/html");
+            // Use 302 redirect instead of <script> to prevent XSS (#778)
+            return Redirect(SanitizeRedirectUrl(redirect));
         }
 
 
@@ -748,16 +803,37 @@ namespace WalkingTec.Mvvm.Mvc
         [Public]
         public async Task<ActionResult> RemoteEntry(string redirect)
         {
-            if (string.IsNullOrEmpty(redirect))
-            {
-                redirect = "/";
-            }
             if (Wtm?.LoginUserInfo != null)
             {
                 var principal = Wtm.LoginUserInfo.CreatePrincipal();
                 await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal, null);
             }
-            return Content($"<script>window.location.href='{HttpUtility.UrlDecode(redirect)}'</script>", "text/html");
+            // Use 302 redirect instead of <script> to prevent XSS (#778)
+            return Redirect(SanitizeRedirectUrl(redirect));
+        }
+
+        /// <summary>
+        /// Validates a redirect URL: allows relative paths and same-origin absolute URLs only.
+        /// Returns "/" for null, empty, or unsafe input (open-redirect prevention).
+        /// </summary>
+        private string SanitizeRedirectUrl(string? url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+                return "/";
+
+            var decoded = HttpUtility.UrlDecode(url);
+
+            // Relative paths are safe
+            if (Uri.IsWellFormedUriString(decoded, UriKind.Relative) && !decoded.StartsWith("//"))
+                return decoded;
+
+            // Absolute URLs: only allow http/https with same host
+            if (Uri.TryCreate(decoded, UriKind.Absolute, out var uri)
+                && (uri.Scheme == "http" || uri.Scheme == "https")
+                && uri.Host.Equals(Request.Host.Host, StringComparison.OrdinalIgnoreCase))
+                return decoded;
+
+            return "/";
         }
 
         /// <summary>

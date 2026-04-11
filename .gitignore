@@ -1,6 +1,6 @@
 # wtm custom
 .worktrees/
-.claude/worktrees/
+.claude/
 .playwright-mcp/
 demo/**/*.db
 tc*.png

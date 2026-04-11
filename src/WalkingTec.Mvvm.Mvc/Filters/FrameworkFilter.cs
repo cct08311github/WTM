@@ -90,7 +90,10 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                             }
                         }
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        context.HttpContext.RequestServices.GetService<ILogger<FrameworkFilter>>()?.LogWarning(ex, "Failed to populate FC dictionary from request form/query for ViewModel '{VmType}'", model.GetType().Name);
+                    }
 
                     if (ctrl is BaseApiController apictrl)
                     {
@@ -109,7 +112,10 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                                     model.FC.Add(field, "");
                                 }
                             }
-                            catch { }
+                            catch (Exception ex)
+                            {
+                                context.HttpContext.RequestServices.GetService<ILogger<FrameworkFilter>>()?.LogWarning(ex, "Failed to deserialize PostedBody for ViewModel '{VmType}'", model.GetType().Name);
+                            }
                         }
                     }
                     SetSubVm(model);
@@ -326,7 +332,8 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                     {
                         context.HttpContext.Response.Headers.Append("X-wtm-PageTitle", Convert.ToBase64String(Encoding.UTF8.GetBytes(pagetitle)));
                     }
-                    context.HttpContext.Response.Cookies.Append("divid", model.ViewDivId);
+                    var dividCookieOpts = new Microsoft.AspNetCore.Http.CookieOptions { SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Lax, Path = "/", Secure = context.HttpContext.Request.IsHttps };
+                    context.HttpContext.Response.Cookies.Append("divid", model.ViewDivId, dividCookieOpts);
                 }
             }
             if (context.Result is ViewResult)
@@ -341,7 +348,8 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                 if (model != null)
                 {
                     model.CurrentView = viewName;
-                    context.HttpContext.Response.Cookies.Append("divid", model?.ViewDivId);
+                    var dividCookieOpts = new Microsoft.AspNetCore.Http.CookieOptions { SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Lax, Path = "/", Secure = context.HttpContext.Request.IsHttps };
+                    context.HttpContext.Response.Cookies.Append("divid", model?.ViewDivId, dividCookieOpts);
                 }
             }
             base.OnActionExecuted(context);
@@ -410,7 +418,10 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                         });
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    context.HttpContext.RequestServices.GetService<ILogger<FrameworkFilter>>()?.LogWarning(ex, "Failed to write action log for '{ActionUrl}'", log.ActionUrl);
+                }
             }
             if (context.Exception != null)
             {

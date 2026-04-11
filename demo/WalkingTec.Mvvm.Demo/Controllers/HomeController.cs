@@ -39,7 +39,6 @@ namespace WalkingTec.Mvvm.Demo.Controllers
         [ActionDescription("FrontPage")]
         public IActionResult FrontPage()
         {
-            //var test = Wtm.CallAPI<List<FrameworkWorkflow>>("", $"{Wtm.HostAddress}/_workflow/GetMyApprove").Result;
             return PartialView();
         }
 

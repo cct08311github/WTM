@@ -162,26 +162,29 @@ namespace WalkingTec.Mvvm.Mvc.Auth
 
         /// <summary>
         /// Walks the refresh-token replacement chain from a compromised token and
-        /// revokes any still-active descendant. If the immediate child is already
-        /// revoked, recurses deeper until an active token is found or the chain ends.
+        /// revokes any still-active descendant. Iterates up to <c>maxDepth</c> hops
+        /// to avoid unbounded recursion on attacker-crafted chains.
         /// </summary>
         private static async Task RevokeDescendantsAsync(
             DbSet<RefreshTokenEntity> dbSet, RefreshTokenEntity token,
             string ipAddress, string reason, TimeProvider timeProvider)
         {
-            if (string.IsNullOrEmpty(token.ReplacedByToken)) return;
-            var child = await dbSet.FirstOrDefaultAsync(
-                x => x.Token == token.ReplacedByToken);
-            if (child == null) return;
-            if (child.IsActive)  // Base case: revoke the active descendant directly.
+            const int maxDepth = 50;
+            var current = token;
+            for (int i = 0; i < maxDepth; i++)
             {
-                child.RevokedUtc = timeProvider.GetUtcNow().UtcDateTime;
-                child.RevokedByIp = ipAddress;
-                child.RevokeReason = reason;
-            }
-            else  // Already revoked — recurse deeper; attacker's rotation may have spawned more tokens.
-            {
-                await RevokeDescendantsAsync(dbSet, child, ipAddress, reason, timeProvider);
+                if (string.IsNullOrEmpty(current.ReplacedByToken)) return;
+                var child = await dbSet.FirstOrDefaultAsync(
+                    x => x.Token == current.ReplacedByToken);
+                if (child == null) return;
+                if (child.IsActive)  // Revoke the active descendant and stop.
+                {
+                    child.RevokedUtc = timeProvider.GetUtcNow().UtcDateTime;
+                    child.RevokedByIp = ipAddress;
+                    child.RevokeReason = reason;
+                    return;
+                }
+                current = child; // Already revoked — iterate deeper.
             }
         }
     }

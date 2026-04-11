@@ -6,9 +6,11 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Net.Http;
 using System.Reflection;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using Microsoft.IdentityModel.Tokens;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
@@ -117,7 +119,7 @@ namespace WalkingTec.Mvvm.Core
                         }
                     }
                 }
-                catch { }
+                catch (Exception) { /* Intentionally ignored: cookie read may fail if cookies are malformed or unavailable */ }
                 return rv;
             }
         }
@@ -176,7 +178,10 @@ namespace WalkingTec.Mvvm.Core
                         {
                             _loginUserInfo = ReloadUser(usercode);
                         }
-                        catch { }
+                        catch (Exception ex)
+                        {
+                            ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("WTMContext")?.LogWarning(ex, "Failed to reload user info for usercode '{UserCode}'", usercode);
+                        }
                         if (_loginUserInfo != null)
                         {
                             Cache?.Add(cacheKey, _loginUserInfo);
@@ -192,32 +197,49 @@ namespace WalkingTec.Mvvm.Core
                     var remoteToken = HttpContext?.Request.Query["_remotetoken"][0];
                     if (ConfigInfo?.HasMainHost == false)
                     {
-                        JwtSecurityToken token = new JwtSecurityToken();
+                        // Validate JWT signature — never trust an unverified token (#765)
+                        var jwtOpts = ConfigInfo.JwtOptions;
+                        var handler = new JwtSecurityTokenHandler();
+                        var validationParams = new TokenValidationParameters
+                        {
+                            ValidateIssuerSigningKey = true,
+                            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOpts.SecurityKey)),
+                            ValidateIssuer = true,
+                            ValidIssuer = jwtOpts.Issuer,
+                            ValidateAudience = true,
+                            ValidAudience = jwtOpts.Audience,
+                            ValidateLifetime = true,
+                        };
+
                         try
                         {
-                            token = new JwtSecurityToken(remoteToken);
-                        }
-                        catch { }
-                        var userIdStr = token.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject).Select(x => x.Value).FirstOrDefault();
-                        var tenant = token.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.TenantCode).Select(x => x.Value).FirstOrDefault();
-                        string? usercode = userIdStr;
-                        var cacheKey = $"{GlobalConstants.CacheKey.UserInfo}:{userIdStr + "$`$" + tenant}";
-                        _loginUserInfo = Cache?.Get<LoginUserInfo>(cacheKey);
-                        if (_loginUserInfo == null)
-                        {
-                            try
+                            var principal = handler.ValidateToken(remoteToken, validationParams, out _);
+                            var userIdStr = principal.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject).Select(x => x.Value).FirstOrDefault();
+                            var tenant = principal.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.TenantCode).Select(x => x.Value).FirstOrDefault();
+                            string? usercode = userIdStr;
+                            var cacheKey = $"{GlobalConstants.CacheKey.UserInfo}:{userIdStr + "$`$" + tenant}";
+                            _loginUserInfo = Cache?.Get<LoginUserInfo>(cacheKey);
+                            if (_loginUserInfo == null)
                             {
                                 _loginUserInfo = ReloadUser(usercode);
+                                if (_loginUserInfo != null)
+                                {
+                                    Cache?.Add(cacheKey, _loginUserInfo);
+                                }
+                                else
+                                {
+                                    return null!;
+                                }
                             }
-                            catch { }
-                            if (_loginUserInfo != null)
-                            {
-                                Cache?.Add(cacheKey, _loginUserInfo);
-                            }
-                            else
-                            {
-                                return null!;
-                            }
+                        }
+                        catch (SecurityTokenException)
+                        {
+                            // Signature validation failed — reject the token
+                            return null!;
+                        }
+                        catch (Exception)
+                        {
+                            return null!;
                         }
                     }
                     else if (string.IsNullOrEmpty(remoteToken) == false)
@@ -226,7 +248,10 @@ namespace WalkingTec.Mvvm.Core
                         {
                             _loginUserInfo = ReloadUser("null");
                         }
-                        catch { }
+                        catch (Exception ex)
+                        {
+                            ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("WTMContext")?.LogWarning(ex, "Failed to reload user info via remote token");
+                        }
                         if (_loginUserInfo != null)
                         {
                             var cacheKey = $"{GlobalConstants.CacheKey.UserInfo}:{_loginUserInfo.ITCode + "$`$" + _loginUserInfo.TenantCode}";
@@ -1093,7 +1118,10 @@ params string[] groupcode)
                     isPublic = true;
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("WTMContext")?.LogWarning(ex, "Failed to determine if URL '{Url}' is public", url);
+            }
             return isPublic;
         }
 
@@ -1171,8 +1199,12 @@ params string[] groupcode)
         {
             //Use reflection to create viewmodel
             var ctor = VMType?.GetConstructor(Type.EmptyTypes);
-            BaseVM rv = ctor?.Invoke(null) as BaseVM;
-            if(rv!=null) rv.Wtm = this;
+            BaseVM? rv = ctor?.Invoke(null) as BaseVM;
+            if (rv == null)
+            {
+                throw new InvalidOperationException($"Cannot create ViewModel of type '{VMType?.FullName}'. Type must derive from BaseVM and have a parameterless constructor.");
+            }
+            rv.Wtm = this;
 
             rv.FC = new Dictionary<string, object>();
             rv.CreatorAssembly = this.GetType().AssemblyQualifiedName;
@@ -1203,7 +1235,10 @@ params string[] groupcode)
                         }
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("WTMContext")?.LogWarning(ex, "Failed to populate FC dictionary from request form/query for ViewModel '{VmType}'", rv.GetType().Name);
+                }
             }
             //try to set values to the viewmodel's matching properties
             if (values != null)
@@ -1443,7 +1478,15 @@ params string[] groupcode)
         /// <returns>ViewModel</returns>
         public BaseVM CreateVM(string? VmFullName, object? Id = null, object[]? Ids = null, bool passInit = false)
         {
-            return CreateVM(Type.GetType(VmFullName ?? ""), Id, Ids, null, passInit);
+            var vmType = Type.GetType(VmFullName ?? "");
+
+            // Guard: reject unresolvable or non-BaseVM types (#767)
+            if (vmType == null || !typeof(BaseVM).IsAssignableFrom(vmType))
+            {
+                throw new ArgumentException($"Invalid or unregistered ViewModel type: {VmFullName}");
+            }
+
+            return CreateVM(vmType, Id, Ids, null, passInit);
         }
         #endregion
 
@@ -1545,7 +1588,7 @@ params string[] groupcode)
                         {
                             rv.Errors = JsonSerializer.Deserialize<ErrorObj>(responseTxt, CoreProgram.DefaultJsonOption);
                         }
-                        catch { }
+                        catch (Exception) { /* Intentionally ignored: response body may not be JSON-formatted ErrorObj; ErrorMsg is set from raw text below */ }
                     }
                     rv.ErrorMsg = responseTxt;
                 }

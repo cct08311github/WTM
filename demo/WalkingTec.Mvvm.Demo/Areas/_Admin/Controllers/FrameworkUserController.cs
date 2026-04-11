@@ -149,7 +149,6 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
             {
                 ModelState.Clear();
                 await vm.DoEditAsync();
-                await vm.ContinueWorkflowAsync(vm.ActionName,vm.Remark);
                 if (!ModelState.IsValid)
                 {
                     vm.DoReInit();

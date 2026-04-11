@@ -1,7 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using WalkingTec.Mvvm.Core;
-using WalkingTec.Mvvm.Mvc.Admin.ViewModels.FrameworkUserVms;
 
 namespace WalkingTec.Mvvm.Demo.ViewModels.HomeVMs
 {
@@ -71,8 +70,6 @@ namespace WalkingTec.Mvvm.Demo.ViewModels.HomeVMs
 
             DC.Set<FrameworkUser>().Add(user);
             DC.SaveChanges();
-            var vm = Wtm.CreateVM<FrameworkUserVM>(user.ID);
-            _=vm.StartWorkflowAsync().GetAwaiter().GetResult();
             return true;
         }
     }

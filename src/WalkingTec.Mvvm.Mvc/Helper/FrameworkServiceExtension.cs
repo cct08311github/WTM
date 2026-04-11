@@ -618,35 +618,6 @@ namespace WalkingTec.Mvvm.Mvc
             return services;
         }
 
-        public static IServiceCollection AddWtmWorkflow(this IServiceCollection services, IConfiguration config,string csName="default")
-        {
-            var elsaSection = config.GetSection("Workflow");
-            var conf = config.Get<Configs>();
-            
-            // Elsa removed: AddWtmWorkflow stubbed natively
-            // services.AddSingleton<AuthenticationBasedHttpEndpointAuthorizationHandler>();
-            // ...
-            // services.AddElsaApiEndpoints();
-            if (conf.Domains.ContainsKey("server"))
-            {
-                services.AddHttpClient("SendHttpRequest").ConfigureHttpClient((s,x) =>
-                {
-                    x.BaseAddress = new Uri(conf.Domains["server"].Address);
-                    var ss = s.CreateScope();
-                    var _wtm = ss.ServiceProvider.GetRequiredService<WTMContext>();
-                    x.DefaultRequestHeaders.Add("Authorization", "Bearer " + _wtm.LoginUserInfo?.RemoteToken);
-                });
-            }
-
-
-            services.AddMvc(options =>
-            {
-                options.Conventions.Add(new MyNewtonsoftJsonConvention(null));
-            });
-
-            return services;
-        }
-
         public static IServiceCollection AddWtmCrossDomain(this IServiceCollection services, IConfiguration config)
         {
             var conf = config.Get<Configs>();
@@ -690,6 +661,9 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 options.Cookie.Name = conf.CookiePre + ".Session";
                 options.IdleTimeout = TimeSpan.FromSeconds(timeout);
+                options.Cookie.HttpOnly = true;
+                options.Cookie.SameSite = SameSiteMode.Lax;
+                options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
             });
             return services;
         }
@@ -767,6 +741,7 @@ namespace WalkingTec.Mvvm.Mvc
                         options.Cookie.Name = CookieAuthenticationDefaults.CookiePrefix + conf.CookiePre + "." + AuthConstants.CookieAuthName;
                         options.Cookie.HttpOnly = true;
                         options.Cookie.SameSite = SameSiteMode.Strict;
+                        options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
                         options.Cookie.Domain = string.IsNullOrEmpty(cookieOptions.Domain) ? null : cookieOptions.Domain;
                         options.ClaimsIssuer = cookieOptions.Issuer;
                         options.SlidingExpiration = cookieOptions.SlidingExpiration;

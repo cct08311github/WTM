@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Data.SqlClient;
 
 namespace WalkingTec.Mvvm.Etl.Pipeline.Sources;
@@ -11,7 +12,7 @@ namespace WalkingTec.Mvvm.Etl.Pipeline.Sources;
 /// <summary>
 /// MSSQL 資料來源 — 使用 DbDataReader 串流讀取，分批 yield DataTable
 /// </summary>
-public class MssqlSource : IEtlSource
+public class MssqlSource : IEtlSource, IAsyncDisposable
 {
     private SqlConnection? _connection;
 
@@ -22,43 +23,62 @@ public class MssqlSource : IEtlSource
         int batchSize,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        _connection = new SqlConnection(connectionString);
-        await _connection.OpenAsync(cancellationToken);
+        var connection = new SqlConnection(connectionString);
+        _connection = connection;
+        await connection.OpenAsync(cancellationToken);
 
-        await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = queryTemplate;
-        cmd.CommandTimeout = 0; // Pipeline 層的 CancellationToken 控制超時
-
-        if (watermarkValue != null)
+        try
         {
-            cmd.Parameters.AddWithValue("@watermark", watermarkValue);
-        }
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = queryTemplate;
+            cmd.CommandTimeout = 300; // 5-minute hard timeout; CancellationToken provides additional control
 
-        await using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess, cancellationToken);
-
-        while (true)
-        {
-            var batch = new DataTable();
-            for (int i = 0; i < reader.FieldCount; i++)
+            if (watermarkValue != null)
             {
-                batch.Columns.Add(reader.GetName(i), reader.GetFieldType(i) ?? typeof(object));
+                cmd.Parameters.AddWithValue("@watermark", watermarkValue);
             }
 
-            int count = 0;
-            while (count < batchSize && await reader.ReadAsync(cancellationToken))
+            await using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess, cancellationToken);
+
+            while (true)
             {
-                var row = batch.NewRow();
+                var batch = new DataTable();
                 for (int i = 0; i < reader.FieldCount; i++)
                 {
-                    row[i] = reader.IsDBNull(i) ? DBNull.Value : reader.GetValue(i);
+                    batch.Columns.Add(reader.GetName(i), reader.GetFieldType(i) ?? typeof(object));
                 }
-                batch.Rows.Add(row);
-                count++;
-            }
 
-            if (count == 0) break;
-            yield return batch;
-            if (count < batchSize) break; // 最後一批
+                int count = 0;
+                while (count < batchSize && await reader.ReadAsync(cancellationToken))
+                {
+                    var row = batch.NewRow();
+                    for (int i = 0; i < reader.FieldCount; i++)
+                    {
+                        row[i] = reader.IsDBNull(i) ? DBNull.Value : reader.GetValue(i);
+                    }
+                    batch.Rows.Add(row);
+                    count++;
+                }
+
+                if (count == 0) break;
+                yield return batch;
+                if (count < batchSize) break; // 最後一批
+            }
+        }
+        finally
+        {
+            // Ensure connection is released even if the iterator is abandoned mid-enumeration
+            await connection.DisposeAsync();
+            _connection = null;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_connection != null)
+        {
+            await _connection.DisposeAsync();
+            _connection = null;
         }
     }
 

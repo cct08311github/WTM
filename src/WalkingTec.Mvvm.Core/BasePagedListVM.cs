@@ -175,64 +175,68 @@ namespace WalkingTec.Mvvm.Core
             {
                 Guid g = Guid.NewGuid();
                 var FileName = typeof(TModel).Name + "_" + Wtm!.TimeProvider.GetLocalNow().DateTime.ToString("yyyyMMddHHmmssffff");
-                //文件根目录
-                string RootPath = $"{Wtm!.ConfigInfo.HostRoot}\\export{g}";
+                //文件根目录 — use Path.Combine for cross-platform compatibility
+                string RootPath = Path.Combine(Wtm!.ConfigInfo.HostRoot, $"export{g}");
 
                 //文件夹目录
-                string FilePath = $"{RootPath}//FileFolder";
+                string FilePath = Path.Combine(RootPath, "FileFolder");
 
                 //压缩包目录
-                string ZipPath = $"{RootPath}//{g}.zip";
+                string ZipPath = Path.Combine(RootPath, $"{g}.zip");
 
-                //打开文件夹
-                DirectoryInfo FileFolder = new DirectoryInfo(FilePath);
-                if (!FileFolder.Exists)
+                byte[] bt;
+                try
                 {
-                    //创建文件夹
-                    FileFolder.Create();
-                }
-                else
-                {
-                    //清空文件夹
-                    FileSystemInfo[] Files = FileFolder.GetFileSystemInfos();
-                    foreach (var item in Files)
+                    //打开文件夹
+                    DirectoryInfo FileFolder = new DirectoryInfo(FilePath);
+                    if (!FileFolder.Exists)
                     {
-                        if (item is DirectoryInfo)
+                        //创建文件夹
+                        FileFolder.Create();
+                    }
+                    else
+                    {
+                        //清空文件夹
+                        FileSystemInfo[] Files = FileFolder.GetFileSystemInfos();
+                        foreach (var item in Files)
                         {
-                            DirectoryInfo Directory = new DirectoryInfo(item.FullName);
-                            Directory.Delete(true);
-                        }
-                        else
-                        {
-                            File.Delete(item.FullName);
+                            if (item is DirectoryInfo)
+                            {
+                                DirectoryInfo Directory = new DirectoryInfo(item.FullName);
+                                Directory.Delete(true);
+                            }
+                            else
+                            {
+                                File.Delete(item.FullName);
+                            }
                         }
                     }
-                }
-                for (int i = 0; i < ExportExcelCount; i++)
-                {
-                    List<TModel> data = [.. query.Skip(i * ExportMaxCount).Take(ExportMaxCount)];
-                    var WorkBook = GenerateWorkBook(data);
-                    string SavePath = $"{FilePath}/{FileName}_{i + 1}.xlsx";
-                    using (FileStream FS = new FileStream(SavePath, FileMode.CreateNew))
+                    for (int i = 0; i < ExportExcelCount; i++)
                     {
-                        WorkBook.Write(FS);
+                        List<TModel> data = [.. query.Skip(i * ExportMaxCount).Take(ExportMaxCount)];
+                        var WorkBook = GenerateWorkBook(data);
+                        string SavePath = Path.Combine(FilePath, $"{FileName}_{i + 1}.xlsx");
+                        using (FileStream FS = new FileStream(SavePath, FileMode.CreateNew))
+                        {
+                            WorkBook.Write(FS);
+                        }
+                    }
+
+                    //生成压缩包
+                    ZipFile.CreateFromDirectory(FilePath, ZipPath);
+
+                    //读取压缩包
+                    using (FileStream ZipFS = new FileStream(ZipPath, FileMode.Open, FileAccess.Read))
+                    {
+                        bt = new byte[ZipFS.Length];
+                        ZipFS.Read(bt, 0, bt.Length);
                     }
                 }
-
-                //生成压缩包
-                ZipFile.CreateFromDirectory(FilePath, ZipPath);
-
-                //读取压缩包
-                FileStream ZipFS = new FileStream(ZipPath, FileMode.Open, FileAccess.Read);
-                byte[] bt = new byte[ZipFS.Length];
-                ZipFS.Read(bt, 0, bt.Length);
-                ZipFS.Close();
-
-                //删除根目录文件夹
-                DirectoryInfo RootFolder = new DirectoryInfo(RootPath);
-                if (RootFolder.Exists)
+                finally
                 {
-                    RootFolder.Delete(true);
+                    // Best-effort cleanup: remove the temp directory regardless of success or failure.
+                    try { if (Directory.Exists(RootPath)) Directory.Delete(RootPath, true); }
+                    catch { /* best-effort cleanup */ }
                 }
                 return bt;
             }
@@ -1255,27 +1259,5 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
-        public List<FrameworkWorkflow> GetMyApproves(string? flowname = null)
-        {
-            var mt = ModelType.GetParentWorkflowPoco();
-            if (mt != null)
-            {
-                List<string> roleids = [.. Wtm!.LoginUserInfo?.Roles?.Select(x => "r:" + x.ID) ?? []];
-                List<string> groupids = [.. Wtm.LoginUserInfo?.Groups?.Select(x => "g:" + x.ID) ?? []];
-
-                List<FrameworkWorkflow> ids = [.. DC!.Set<FrameworkWorkflow>()
-                     .CheckEqual(flowname!, x => x.WorkflowName!)
-                     .CheckEqual(mt.FullName!, x => x.ModelType!)
-                     .Where(x => x.UserCode == Wtm.LoginUserInfo!.ITCode
-                        || roleids.Contains(x.UserCode)
-                        || groupids.Contains(x.UserCode))
-                     .Where(x => x.TenantCode == Wtm.LoginUserInfo!.CurrentTenant)];
-                return ids;
-            }
-            else
-            {
-                return new List<FrameworkWorkflow>();
-            }
-        }
     }
 }

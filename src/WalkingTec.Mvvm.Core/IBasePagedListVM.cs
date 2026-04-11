@@ -42,7 +42,6 @@ namespace WalkingTec.Mvvm.Core
 
         string? TotalText { get; set; }
 
-        List<FrameworkWorkflow> GetMyApproves(string? flowname = null);
         #region Old
         event Action<IBasePagedListVM<T, S>>? OnAfterInitList;
         /// <summary>

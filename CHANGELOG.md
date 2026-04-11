@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [10.2.0] - 2026-04-11
+
+### Changed
+- **BREAKING: Remove deprecated Elsa Workflow integration** — Delete all `[Obsolete]` workflow stubs that were non-functional since v8.3.0. Removed: `IWorkflow`, `FrameworkWorkflow`, `FlowInfoTagHelper`, `AddWtmWorkflow()`, `BaseCRUDVM.StartWorkflowAsync/ContinueWorkflowAsync/GetWorkflowTimeLineAsync/GetWorkflowInstanceAsync`, `BasePagedListVM.GetMyApproves()`, `DataContext.FrameworkWorkflows` DbSet, `TypeExtension.GetParentWorkflowPoco()`, and related WorkFlow DTOs. **Migration**: remove all references to these types and methods — they were already returning null/empty (#762)
+
+### Fixed
+- **Build: exclude Blazor WASM Client from Release build** — Prevent NETSDK1082 error when `wasm-tools` workload is not installed. Blazor demo packages upgraded 10.0.3 → 10.0.5 (#764)
+- **Security (CRITICAL): validate JWT signature for `_remotetoken`** — Standalone deployments accepted unsigned JWT tokens, allowing identity impersonation. Now validates signature, issuer, and audience (#765)
+- **Security (HIGH): block mass assignment in `UpdateModelProperty`** — Inline cell editing accepted arbitrary field names. Now rejects sensitive fields and navigation paths (#766)
+- **Security (HIGH): validate VM type in `CreateVM(string)`** — User-supplied type names were passed to `Type.GetType()` without restriction. Now requires `BaseVM` subclass (#767)
+- **Security (HIGH): stop leaking exception messages in error page** — Production error handler returned raw `ex.Message` to clients. Now returns generic localized message (#769)
+- **Security (MEDIUM): prevent path traversal in file upload** — `subdir` parameter was concatenated without validation. Now enforces upload root boundary (#770)
+- **TokenService: convert recursive revocation to iterative** — Prevent StackOverflow on circular refresh-token chains with max depth 50 (#771)
+- **GetFile: guard image processing against non-image files** — Only attempt `Image.Load` for known image extensions, safely reset stream on failure (#775)
+- **Export: cross-platform paths and temp directory cleanup** — Replace Windows-only path separators with `Path.Combine()`, delete temp directories in `finally` block (#776)
+
+### Improved
+- **WtmTenantService: replace blocking `Wait()` with `WaitAsync()`** — Prevent thread pool starvation under concurrent load (#772)
+- **ETL: set CommandTimeout to 300s** — Replace infinite timeout (0) with 5-minute safety net in MssqlSource and OracleSource (#773)
+- **Regex: static compilation in `_FrameworkController.Selector`** — Avoid per-request Regex allocation (#774)
+- **Exception logging: replace 13 bare `catch {}` blocks** — Add `ILogger.LogWarning` in WTMContext (6), BaseCRUDVM (4), FrameworkFilter (3) to surface silent failures (#777)
+
 ## [10.1.1] - 2026-04-04
 
 ### Fixed

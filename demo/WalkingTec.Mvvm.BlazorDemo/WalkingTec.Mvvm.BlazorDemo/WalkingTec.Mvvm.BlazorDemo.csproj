@@ -14,12 +14,14 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="10.0.3" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="10.0.5" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\..\src\WalkingTec.Mvvm.Mvc\WalkingTec.Mvvm.Mvc.csproj" />
-    <ProjectReference Include="..\WalkingTec.Mvvm.BlazorDemo.Client\WalkingTec.Mvvm.BlazorDemo.Client.csproj" />
+    <!-- WASM Client excluded from Release: requires wasm-tools workload not needed for framework dev/CI.
+         To build/publish the Blazor demo: dotnet workload install wasm-tools, then build in Debug. -->
+    <ProjectReference Include="..\WalkingTec.Mvvm.BlazorDemo.Client\WalkingTec.Mvvm.BlazorDemo.Client.csproj" Condition="'$(Configuration)' != 'Release'" />
     <ProjectReference Include="..\WalkingTec.Mvvm.BlazorDemo.DataAccess\WalkingTec.Mvvm.BlazorDemo.DataAccess.csproj" />
     <ProjectReference Include="..\WalkingTec.Mvvm.BlazorDemo.Shared\WalkingTec.Mvvm.BlazorDemo.Shared.csproj" />
   </ItemGroup>

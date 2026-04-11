@@ -142,6 +142,9 @@ namespace WalkingTec.Mvvm.Core.Services
 
         /// <summary>
         /// Cache-aside helper with stampede protection via per-key SemaphoreSlim.
+        /// Uses SemaphoreSlim.Wait() for synchronous lock. This is correct for
+        /// synchronous callers; WaitAsync().GetAwaiter().GetResult() would add
+        /// overhead and risk deadlock in contexts with a SynchronizationContext.
         /// </summary>
         private T? ReadFromCache<T>(string key, Func<T?> setFunc, int timeoutSeconds)
         {
