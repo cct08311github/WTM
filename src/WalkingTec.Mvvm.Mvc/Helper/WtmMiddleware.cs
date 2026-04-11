@@ -58,8 +58,15 @@ namespace WalkingTec.Mvvm.Mvc
             }
             if (context.Request.Path == "/")
             {
-                context.Response.Cookies.Append("pagemode", wtm.ConfigInfo.PageMode.ToString());
-                context.Response.Cookies.Append("tabmode", wtm.ConfigInfo.TabMode.ToString());
+                // UI preference cookies — NOT HttpOnly because LayUI JS reads them via $.cookie() (#779)
+                var uiCookieOptions = new CookieOptions
+                {
+                    SameSite = SameSiteMode.Lax,
+                    Secure = context.Request.IsHttps,
+                    Path = "/",
+                };
+                context.Response.Cookies.Append("pagemode", wtm.ConfigInfo.PageMode.ToString(), uiCookieOptions);
+                context.Response.Cookies.Append("tabmode", wtm.ConfigInfo.TabMode.ToString(), uiCookieOptions);
             }
             if (context.Request.ContentLength > 0 && context.Request.HasFormContentType == false)
             {
