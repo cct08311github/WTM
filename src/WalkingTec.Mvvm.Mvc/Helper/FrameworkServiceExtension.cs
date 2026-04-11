@@ -661,6 +661,9 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 options.Cookie.Name = conf.CookiePre + ".Session";
                 options.IdleTimeout = TimeSpan.FromSeconds(timeout);
+                options.Cookie.HttpOnly = true;
+                options.Cookie.SameSite = SameSiteMode.Lax;
+                options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
             });
             return services;
         }
