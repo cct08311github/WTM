@@ -682,7 +682,7 @@ window.ff = {
                     if (controltype === "tree") {
                         var df = [];
                         if (usedefaultvalue == true) {
-                            df = eval(comboid + "defaultvalues");
+                            df = window[comboid + "defaultvalues"];
                         }
                        window[comboid].update({ data: ff.getTreeItems(data.Data,df) });
                     }
@@ -695,7 +695,7 @@ window.ff = {
                     if (controltype === "combo") {
                         var df = [];
                         if (usedefaultvalue == true) {
-                            df = eval(comboid + "defaultvalues"); 
+                            df = window[comboid + "defaultvalues"]; 
                       }
                         window[comboid].update({ data: ff.getComboItems(data.Data, df, usedefaultvalue) });
                     }
@@ -704,7 +704,7 @@ window.ff = {
                             item = data.Data[i];
                             if (usedefaultvalue == true) {
                                 var df = [];
-                                df = eval(comboid + "defaultvalues"); 
+                                df = window[comboid + "defaultvalues"]; 
                                 if (df.indexOf(item.Value) > -1) {
                                     target.append("<input type='checkbox'  name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "' checked />");
                                 }
@@ -728,7 +728,7 @@ window.ff = {
                             item = data.Data[i];
                             if (usedefaultvalue == true) {
                                 var df = [];
-                                df = eval(comboid + "defaultvalues");
+                                df = window[comboid + "defaultvalues"];
                                 if (df.indexOf(item.Value) > -1) {
                                     target.append("<input type='radio'  name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "' checked />");
                                 }
@@ -965,7 +965,7 @@ window.ff = {
         }
         var tc = $("#" + formId).closest("div[wtm-ctype='tc']")
         if (tc.length > 0) {
-            var obj = eval(tc[0].id + "selected");
+            var obj = window[tc[0].id + "selected"];
             if (obj !== undefined && obj !== null) {
                 for (var item in obj) {
                     if (listvm == "") {
@@ -1241,7 +1241,7 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
     },
 
     setSelectorPara: function (id, obj) {
-        eval(id + "filter = obj;");
+        window[id + "filter"] = obj;
     },
 
     guid: function () {
