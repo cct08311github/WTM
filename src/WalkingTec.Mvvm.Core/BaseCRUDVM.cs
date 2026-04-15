@@ -933,8 +933,9 @@ namespace WalkingTec.Mvvm.Core
                                 DC!.UpdateProperty(Entity, itempro.Name);
                             }
                         }
-                        catch (Exception)
+                        catch (Exception ex)
                         {
+                            Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(ex, "DoEdit: UpdateProperty failed for FC field '{Field}'", name);
                         }
                     }
                 }
@@ -945,8 +946,9 @@ namespace WalkingTec.Mvvm.Core
                         DC!.UpdateProperty(Entity, "UpdateTime");
                         DC!.UpdateProperty(Entity, "UpdateBy");
                     }
-                    catch (Exception)
+                    catch (Exception ex)
                     {
+                        Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(ex, "DoEdit: UpdateProperty failed for UpdateTime/UpdateBy on '{EntityType}'", typeof(TModel).Name);
                     }
                 }
             }

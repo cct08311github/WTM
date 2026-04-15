@@ -5,6 +5,7 @@ using System.ComponentModel.DataAnnotations;
 using System.IO;
 using System.Linq;
 using System.Text;
+using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Core.Extensions;
 using WalkingTec.Mvvm.Core.Models;
 
@@ -95,7 +96,10 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
                 {
                     File.Delete(GetFullPath(file?.Path!));
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    CoreProgram.GetLogger("WtmLocalFileHandler")?.LogWarning(ex, "DeleteFile failed for path '{Path}'", file?.Path);
+                }
             }
         }
 

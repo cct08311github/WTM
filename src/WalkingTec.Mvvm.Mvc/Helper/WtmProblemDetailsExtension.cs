@@ -129,7 +129,10 @@ namespace WalkingTec.Mvvm.Mvc
                 if (wtm?.ConfigInfo != null)
                     return wtm.ConfigInfo.IsQuickDebug;
             }
-            catch { }
+            catch (Exception ex)
+            {
+                context.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("WtmProblemDetailsExtension")?.LogDebug(ex, "ResolveIsQuickDebug: WTMContext lookup failed; falling back to Configs");
+            }
 
             try
             {
@@ -137,7 +140,10 @@ namespace WalkingTec.Mvvm.Mvc
                 if (configs != null)
                     return configs.IsQuickDebug;
             }
-            catch { }
+            catch (Exception ex)
+            {
+                context.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("WtmProblemDetailsExtension")?.LogDebug(ex, "ResolveIsQuickDebug: Configs lookup failed; defaulting to false");
+            }
 
             return false;
         }

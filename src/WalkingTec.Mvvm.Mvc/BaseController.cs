@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Localization;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -421,7 +422,10 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 rv.Controller.Response?.Headers?.Append("IsScript", "true");
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseController")?.LogDebug(ex, "FFResult: setting 'IsScript' response header failed (response may already be started)");
+            }
             return rv;
         }
 

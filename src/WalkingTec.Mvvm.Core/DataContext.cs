@@ -202,7 +202,10 @@ namespace WalkingTec.Mvvm.Core
             {
                 emptydb = Set<FrameworkUserRole>().Count() == 0 && Set<FrameworkMenu>().Count() == 0;
             }
-            catch { }
+            catch (Exception ex)
+            {
+                CoreProgram.GetLogger("DataContext")?.LogDebug(ex, "DataInit: FrameworkUserRole/FrameworkMenu count probe failed; assuming seeded DB");
+            }
 
             if (emptydb == true)
             {

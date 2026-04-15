@@ -13,6 +13,8 @@ using System.Reflection;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Internal;
 using MySql.Data.MySqlClient;
@@ -890,7 +892,10 @@ namespace WalkingTec.Mvvm.Core
                         Searcher.Count = long.Parse(total.ToString()!);
                         Searcher.PageCount = (int)((Searcher.Count - 1) / Searcher.Limit + 1);
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BasePagedListVM")?.LogDebug(ex, "Paging count parse failed for total='{Total}'", total);
+                    }
                 }
             }
             else
@@ -1091,7 +1096,10 @@ namespace WalkingTec.Mvvm.Core
                                         haserror = true;
                                     }
                                 }
-                                catch { }
+                                catch (Exception ex)
+                                {
+                                    Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BasePagedListVM")?.LogDebug(ex, "BatchError detail-grid index parse failed for key '{Key}'", item);
+                                }
                             }
                         }
                     }

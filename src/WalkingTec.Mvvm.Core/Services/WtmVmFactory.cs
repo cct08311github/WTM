@@ -5,6 +5,8 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Core.Extensions;
 
 namespace WalkingTec.Mvvm.Core.Services
@@ -130,7 +132,10 @@ namespace WalkingTec.Mvvm.Core.Services
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                httpContext.RequestServices?.GetService<ILoggerFactory>()?.CreateLogger("WtmVmFactory")?.LogDebug(ex, "PopulateFormCollection: reading query/form for ViewModel '{VmType}' failed", rv.GetType().Name);
+            }
         }
 
         private static void InitBatchVM(IBaseBatchVM<BaseVM> temp, BaseVM rv, object[]? ids, bool passInit)

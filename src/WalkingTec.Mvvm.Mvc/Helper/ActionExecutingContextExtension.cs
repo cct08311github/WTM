@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Core;
 
 namespace WalkingTec.Mvvm.Mvc
@@ -26,7 +27,10 @@ namespace WalkingTec.Mvvm.Mvc
                 controller.Wtm.MSD = new ModelStateServiceProvider(self.ModelState);
                 controller.Wtm.Session = new SessionServiceProvider(self.HttpContext.Session);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                self.HttpContext.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("ActionExecutingContextExtension")?.LogDebug(ex, "SetWtmContext: attaching ModelState/Session providers failed (session may be disabled)");
+            }
         }
     }
 }

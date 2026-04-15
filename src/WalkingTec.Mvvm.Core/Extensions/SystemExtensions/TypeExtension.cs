@@ -7,6 +7,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 using System.Linq;
 using System.Reflection;
 using Fare;
+using Microsoft.Extensions.Logging;
 
 namespace WalkingTec.Mvvm.Core.Extensions
 {
@@ -216,7 +217,10 @@ namespace WalkingTec.Mvvm.Core.Extensions
                                 start = (int)Math.Truncate(double.Parse(range.Minimum.ToString()!));
                                 end = (int)Math.Truncate(double.Parse(range.Maximum.ToString()!));
                             }
-                            catch { }
+                            catch (Exception ex)
+                            {
+                                CoreProgram.GetLogger("TypeExtension")?.LogDebug(ex, "Range attribute parse failed for '{Property}'; using default 0..100", pro.Name);
+                            }
                         }
                         Random r = new Random();
                         val = r.Next(start, end).ToString();
@@ -355,7 +359,10 @@ namespace WalkingTec.Mvvm.Core.Extensions
                                     start = (int)Math.Truncate(double.Parse(range.Minimum.ToString()!));
                                     end = (int)Math.Truncate(double.Parse(range.Maximum.ToString()!));
                                 }
-                                catch { }
+                                catch (Exception ex)
+                                {
+                                    CoreProgram.GetLogger("TypeExtension")?.LogDebug(ex, "Range attribute parse failed for '{Property}'; using default 0..100", pro.Name);
+                                }
                             }
                             Random r = new Random();
                             val = r.Next(start, end).ToString();

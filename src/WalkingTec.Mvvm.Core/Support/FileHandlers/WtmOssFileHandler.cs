@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using Aliyun.OSS;
+using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Core.ConfigOptions;
 using WalkingTec.Mvvm.Core.Extensions;
 using WalkingTec.Mvvm.Core.Models;
@@ -140,7 +141,10 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
                 OssClient client = new OssClient(groupInfo.ServerUrl, groupInfo.Key, groupInfo.Secret);
                 client.DeleteObject(groupInfo.GroupLocation, file.Path);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                CoreProgram.GetLogger("WtmOssFileHandler")?.LogWarning(ex, "OSS DeleteObject failed for bucket '{Bucket}', path '{Path}'", groupInfo.GroupLocation, file.Path);
+            }
             return;
         }
     }

@@ -12,6 +12,7 @@ using System.Reflection;
 using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using NPOI.HSSF.Util;
 using NPOI.SS.UserModel;
 using NPOI.XSSF.UserModel;
@@ -436,8 +437,9 @@ namespace WalkingTec.Mvvm.Core
                     XE.EvaluateFormulaCell(cell!);
                     Value = cell!.NumericCellValue.ToString();
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
+                    Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseImportVM")?.LogDebug(ex, "Excel formula evaluation failed for '{Value}'; falling back to raw string", Value);
                 }
             }
             return Value;
@@ -1034,7 +1036,10 @@ namespace WalkingTec.Mvvm.Core
                                 {
                                     DC!.UpdateProperty(exist, proToSet.Name);
                                 }
-                                catch { }
+                                catch (Exception ex)
+                                {
+                                    Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseImportVM")?.LogWarning(ex, "Import update: UpdateProperty failed for '{Property}' on duplicate row", proToSet.Name);
+                                }
                             }
                         }
 

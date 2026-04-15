@@ -1,6 +1,7 @@
 #nullable enable
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Logging;
 using NPOI.HSSF.Util;
 using System;
 using System.Collections.Generic;
@@ -47,7 +48,10 @@ namespace WalkingTec.Mvvm.Core
                 {
                     path = Assembly.GetEntryAssembly()?.Location;
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    CoreProgram.GetLogger("Utils")?.LogDebug(ex, "GetEntryAssembly().Location failed (single-file publish?); falling back to process main module");
+                }
                 if (string.IsNullOrEmpty(path))
                 {
                     singlefile = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
@@ -89,8 +93,9 @@ namespace WalkingTec.Mvvm.Core
                     {
                         AssemblyLoadContext.Default.LoadFromAssemblyPath(dll.FullName);
                     }
-                    catch
+                    catch (Exception ex)
                     {
+                        CoreProgram.GetLogger("Utils")?.LogDebug(ex, "LoadFromAssemblyPath failed for '{Dll}'; skipping", dll.FullName);
                     }
                 }
                 List<Assembly> dlllist = [.. AssemblyLoadContext.Default.Assemblies.Where(x => systemdll.All(y => !(x.FullName ?? string.Empty).StartsWith(y)))];
@@ -128,7 +133,10 @@ namespace WalkingTec.Mvvm.Core
                             }
                         }
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        CoreProgram.GetLogger("Utils")?.LogDebug(ex, "GetAllModels: scanning assembly '{Asm}' threw; skipping", asm.FullName);
+                    }
                 }
                 _allModels = allTypes;
             }
@@ -150,7 +158,10 @@ namespace WalkingTec.Mvvm.Core
                         List<Type> dcModule = [.. asm.GetExportedTypes().Where(x => typeof(BaseVM).IsAssignableFrom(x))];
                         allTypes.AddRange(dcModule);
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        CoreProgram.GetLogger("Utils")?.LogDebug(ex, "GetAllVms: scanning assembly '{Asm}' threw; skipping", asm.FullName);
+                    }
                 }
                 _allVMs = allTypes;
             }
@@ -428,7 +439,10 @@ namespace WalkingTec.Mvvm.Core
             {
                 System.IO.File.Delete(path);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                CoreProgram.GetLogger("Utils")?.LogWarning(ex, "DeleteFile failed for '{Path}'", path);
+            }
         }
 
         #region 格式化文本  add by wuwh 2014.6.12

@@ -7,6 +7,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core.Extensions;
 using WalkingTec.Mvvm.Core.Models;
@@ -205,7 +206,10 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
                     var fh = CreateFileHandler(file.SaveMode, dc);
                     fh.DeleteFile(file);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    CoreProgram.GetLogger("WtmFileProvider")?.LogWarning(ex, "DeleteFile failed for FileAttachment '{FileId}' (name '{FileName}')", file.ID, file.FileName);
+                }
             }
 
         }
