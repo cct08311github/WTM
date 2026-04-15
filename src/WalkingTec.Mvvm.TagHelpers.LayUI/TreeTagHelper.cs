@@ -209,7 +209,7 @@ var {Id} = xmSelect.render({{
 	height: '400px',
     on:function(data){{
         {((LinkField != null || string.IsNullOrEmpty(LinkId) == false) ? @$"
-            if (eval(""{(string.IsNullOrEmpty(ChangeFunc) ? "1==1" : FormatFuncName(ChangeFunc))}"") != false) {{
+            if ({(string.IsNullOrEmpty(ChangeFunc) ? "true" : FormatFuncName(ChangeFunc))} != false) {{
                 var u = ""{(TriggerUrl ?? "")}"";
                 if (u.indexOf(""?"") == -1) {{
                     u += ""?t="" + new Date().getTime();
