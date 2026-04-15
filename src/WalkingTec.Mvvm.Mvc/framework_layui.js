@@ -227,7 +227,15 @@ window.ff = {
     LoadPage1: function (url, where) {
         url = url.toLowerCase();
         if (url.indexOf("http://") === 0 || url.indexOf("https://") === 0) {
-            $('#' + where).html("<iframe frameborder='no' border='0' height='100%' src='" + url + "'></iframe>");
+            // Issue #789 Phase 3A: build iframe via DOM API so the url is set
+            // through the .src setter (which safely serializes any quotes or
+            // HTML metacharacters) instead of string-concat into innerHTML.
+            var _iframe = document.createElement('iframe');
+            _iframe.setAttribute('frameborder', 'no');
+            _iframe.setAttribute('border', '0');
+            _iframe.setAttribute('height', '100%');
+            _iframe.src = url;
+            $('#' + where).empty().append(_iframe);
             $('#' + where).css("overflow-y", "auto");
         }
         else {
@@ -312,13 +320,18 @@ window.ff = {
                     eval(data);
                 }
                 else {
+                    // Issue #789 Phase 3A: build wrapper via jQuery .attr() so the
+                    // cookie-sourced id is set through setAttribute (safe) instead
+                    // of being concatenated into an HTML string (breakable).
                     var inlayer = $("#" + formId).parents(".layui-layer-content");
-                    if (inlayer !== undefined && inlayer.length > 0) {
-                        data = "<div id='" + $.cookie("divid") + "' class='donotuse_pdiv'>" + data + "</div>";
-                    } else {
-                        data = "<div id='" + $.cookie("divid") + "' class='layui-card-body donotuse_pdiv'>" + data + "</div>";
-                    }
-                    $("#" + divid).parent().html(data);
+                    var _wrapperClass = (inlayer !== undefined && inlayer.length > 0)
+                        ? 'donotuse_pdiv'
+                        : 'layui-card-body donotuse_pdiv';
+                    var _wrapper = $('<div/>')
+                        .attr('id', $.cookie("divid") || '')
+                        .addClass(_wrapperClass)
+                        .html(data);
+                    $("#" + divid).parent().empty().append(_wrapper);
                 }
                 layer.close(index);
             }
@@ -353,9 +366,12 @@ window.ff = {
                     eval(str);
                 }
                 else {
-                    data = "<div id='" + $.cookie("divid") + "' class='layui-card-body donotuse_pdiv'>" + str + "</div>";
-                    var p = $("#" + divid).parent();
-                    p.html(data);
+                    // Issue #789 Phase 3A: same cookie-to-id fix as PostForm above.
+                    var _wrapper = $('<div/>')
+                        .attr('id', $.cookie("divid") || '')
+                        .addClass('layui-card-body donotuse_pdiv')
+                        .html(str);
+                    $("#" + divid).parent().empty().append(_wrapper);
                 }
             }
         });
@@ -411,7 +427,14 @@ window.ff = {
                     eval(str);
                 }
                 else {
-                    str = "<div  id='" + $.cookie("divid") + "' class='donotuse_pdiv'>" + str + "</div>";
+                    // Issue #789 Phase 3A: build wrapper via DOM API and serialize
+                    // through outerHTML so the cookie-sourced id is safely escaped
+                    // in the resulting markup that becomes layer.open({content}).
+                    var _wrapperEl = document.createElement('div');
+                    _wrapperEl.setAttribute('id', $.cookie("divid") || '');
+                    _wrapperEl.className = 'donotuse_pdiv';
+                    _wrapperEl.innerHTML = str;
+                    str = _wrapperEl.outerHTML;
                     var area = 'auto';
                     if (width > document.body.clientWidth) {
                         max = false;
