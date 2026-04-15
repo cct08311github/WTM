@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
 using WalkingTec.Mvvm.Test.Mock;
@@ -89,6 +91,75 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             }
 
         }
+
+        [TestMethod]
+        [Description("Issue #790: SetExceptionMessage with duplicate key must not throw (TryAdd semantics)")]
+        public void SetExceptionMessage_DuplicateKey_DoesNotThrow_PreservesFirstValue()
+        {
+            var vm = new ConcurrencyTestBatchVM<School, SchoolEdit>();
+
+            vm.InvokeSetExceptionMessage(new InvalidOperationException("first"), "id1");
+            vm.InvokeSetExceptionMessage(new InvalidOperationException("second"), "id1");
+
+            Assert.AreEqual(1, vm.ErrorMessage.Count);
+            Assert.AreEqual("first", vm.ErrorMessage["id1"]);
+        }
+
+        [TestMethod]
+        [Description("Issue #790: SetExceptionMessage under parallel distinct keys must not lose writes or throw")]
+        public void SetExceptionMessage_Concurrent_DistinctKeys_AllAddedWithoutException()
+        {
+            var vm = new ConcurrencyTestBatchVM<School, SchoolEdit>();
+            const int count = 5000;
+            var exceptions = new ConcurrentBag<Exception>();
+
+            Parallel.For(0, count, i =>
+            {
+                try
+                {
+                    vm.InvokeSetExceptionMessage(new InvalidOperationException("err" + i), i.ToString());
+                }
+                catch (Exception ex)
+                {
+                    exceptions.Add(ex);
+                }
+            });
+
+            Assert.AreEqual(0, exceptions.Count, "Unexpected exceptions: " + string.Join(";", exceptions.Select(e => e.GetType().Name + ":" + e.Message)));
+            Assert.AreEqual(count, vm.ErrorMessage.Count);
+        }
+
+        [TestMethod]
+        [Description("Issue #790: concurrent duplicate-key SetExceptionMessage must not throw — one value wins")]
+        public void SetExceptionMessage_Concurrent_DuplicateKeys_DoesNotThrow()
+        {
+            var vm = new ConcurrencyTestBatchVM<School, SchoolEdit>();
+            const int count = 500;
+            var exceptions = new ConcurrentBag<Exception>();
+
+            Parallel.For(0, count, i =>
+            {
+                try
+                {
+                    vm.InvokeSetExceptionMessage(new InvalidOperationException("err" + i), "same-id");
+                }
+                catch (Exception ex)
+                {
+                    exceptions.Add(ex);
+                }
+            });
+
+            Assert.AreEqual(0, exceptions.Count, "Unexpected exceptions: " + string.Join(";", exceptions.Select(e => e.GetType().Name)));
+            Assert.AreEqual(1, vm.ErrorMessage.Count);
+            Assert.IsTrue(vm.ErrorMessage.ContainsKey("same-id"));
+        }
+    }
+
+    internal sealed class ConcurrencyTestBatchVM<TModel, TLinkModel> : BaseBatchVM<TModel, TLinkModel>
+        where TModel : TopBasePoco, new()
+        where TLinkModel : BaseVM
+    {
+        public void InvokeSetExceptionMessage(Exception e, string id) => SetExceptionMessage(e, id);
     }
 
     public class SchoolEdit:BaseVM
