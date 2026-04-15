@@ -37,7 +37,9 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     layui.element.on('tab({Id}filter)', function(data){{
         $('#{Id}').find(""div[ischart = '1']"").each(
             function (index) {{
-                eval($(this).attr('id') + 'Chart.resize();');
+                // Issue #789 Phase 1: replaced eval(id+'Chart.resize()') with safe window[] lookup
+                var _chart = window[$(this).attr('id') + 'Chart'];
+                if (_chart && typeof _chart.resize === 'function') _chart.resize();
             }}
         );
 }});
