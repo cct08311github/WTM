@@ -68,6 +68,11 @@ namespace WalkingTec.Mvvm.Core
         [JsonIgnore]
         public Dictionary<string, string> ErrorMessage { get; set; }
 
+        // Issue #790: guards every mutation of ErrorMessage so that concurrent
+        // batch calls (Task.WhenAll / Parallel.ForEach against a shared instance)
+        // cannot corrupt the underlying Dictionary<string,string>.
+        private readonly object _errorMessageLock = new();
+
         /// <summary>
         /// 列表数据的Id数组
         /// </summary>
@@ -91,7 +96,12 @@ namespace WalkingTec.Mvvm.Core
         {
             if (id != null)
             {
-                ErrorMessage.Add(id, e.Message);
+                lock (_errorMessageLock)
+                {
+                    // TryAdd preserves the first recorded error for a given id
+                    // instead of throwing on duplicate keys (cf. old Dictionary.Add).
+                    ErrorMessage.TryAdd(id, e.Message);
+                }
             }
         }
 
@@ -137,7 +147,10 @@ namespace WalkingTec.Mvvm.Core
                 //检查是否可以删除，如不能删除则直接跳过
                 if (CheckIfCanDelete(idsData[i], out checkErro) == false)
                 {
-                    ErrorMessage.Add(idsData[i], checkErro!);
+                    lock (_errorMessageLock)
+                    {
+                        ErrorMessage.TryAdd(idsData[i], checkErro!);
+                    }
                     rv = false;
                     break;
                 }
@@ -238,22 +251,28 @@ namespace WalkingTec.Mvvm.Core
             //如果失败，添加错误信息
             if (rv == false)
             {
-                if (ErrorMessage.Count > 0)
+                lock (_errorMessageLock)
                 {
-                    foreach (var id in idsData)
+                    if (ErrorMessage.Count > 0)
                     {
-                        if (!ErrorMessage.ContainsKey(id))
+                        var fallback = (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.Rollback"] : null) ?? "";
+                        foreach (var id in idsData)
                         {
-                            ErrorMessage.Add(id, (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.Rollback"] : null) ?? "");
+                            ErrorMessage.TryAdd(id, fallback);
                         }
                     }
                 }
                 ListVM?.DoSearch();
                 if (ListVM != null)
                 {
+                    Dictionary<string, string> errorSnapshot;
+                    lock (_errorMessageLock)
+                    {
+                        errorSnapshot = new Dictionary<string, string>(ErrorMessage);
+                    }
                     foreach (var item in ListVM.GetEntityList())
                     {
-                        item.BatchError = ErrorMessage.Where(x => x.Key == item.GetID().ToString()).Select(x => x.Value).FirstOrDefault();
+                        item.BatchError = errorSnapshot.Where(x => x.Key == item.GetID().ToString()).Select(x => x.Value).FirstOrDefault();
                     }
                 }
                 MSD?.AddModelError("", CoreProgram._localizer?["Sys.DataCannotDelete"]?.Value ?? "");
@@ -339,7 +358,10 @@ namespace WalkingTec.Mvvm.Core
                             }
                             if (error != "")
                             {
-                                ErrorMessage.Add(idsData[i], error);
+                                lock (_errorMessageLock)
+                                {
+                                    ErrorMessage.TryAdd(idsData[i], error);
+                                }
                                 rv = false;
                                 break;
                             }
@@ -383,13 +405,14 @@ namespace WalkingTec.Mvvm.Core
             //如果有错误，输出错误信息
             if (rv == false)
             {
-                if (ErrorMessage.Count > 0)
+                lock (_errorMessageLock)
                 {
-                    foreach (var id in idsData)
+                    if (ErrorMessage.Count > 0)
                     {
-                        if (!ErrorMessage.ContainsKey(id))
+                        var fallback = (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.Rollback"] : null) ?? "";
+                        foreach (var id in idsData)
                         {
-                            ErrorMessage.Add(id, (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.Rollback"] : null) ?? "");
+                            ErrorMessage.TryAdd(id, fallback);
                         }
                     }
                 }
@@ -403,9 +426,14 @@ namespace WalkingTec.Mvvm.Core
             ListVM?.DoSearch();
             if (ListVM != null)
             {
+                Dictionary<string, string> errorSnapshot;
+                lock (_errorMessageLock)
+                {
+                    errorSnapshot = new Dictionary<string, string>(ErrorMessage);
+                }
                 foreach (var item in ListVM.GetEntityList())
                 {
-                    item.BatchError = ErrorMessage.Where(x => x.Key == item.GetID().ToString()).Select(x => x.Value).FirstOrDefault();
+                    item.BatchError = errorSnapshot.Where(x => x.Key == item.GetID().ToString()).Select(x => x.Value).FirstOrDefault();
                 }
             }
         }
