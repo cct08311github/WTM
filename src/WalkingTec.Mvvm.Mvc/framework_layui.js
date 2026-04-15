@@ -445,7 +445,7 @@ window.ff = {
                             ff.triggerResize();
                           $(layero).find("div[ischart = '1']").each(
                                 function (index) {
-                                    eval($(this).attr('id') + 'Chart.resize();');
+                                    var _chart = window[$(this).attr('id') + 'Chart']; if (_chart && typeof _chart.resize === 'function') _chart.resize();
                                 }
                             );
                         }
@@ -453,7 +453,7 @@ window.ff = {
                             ff.triggerResize();
                             $(layero).find("div[ischart = '1']").each(
                                 function (index) {
-                                    eval($(this).attr('id') + 'Chart.resize();');
+                                    var _chart = window[$(this).attr('id') + 'Chart']; if (_chart && typeof _chart.resize === 'function') _chart.resize();
                                 }
                             );
                         }
@@ -461,7 +461,7 @@ window.ff = {
                             ff.triggerResize();
                           $(layero).find("div[ischart = '1']").each(
                                 function (index) {
-                                    eval($(this).attr('id') + 'Chart.resize();');
+                                    var _chart = window[$(this).attr('id') + 'Chart']; if (_chart && typeof _chart.resize === 'function') _chart.resize();
                                 }
                             );
                         }
@@ -602,7 +602,7 @@ window.ff = {
                     {
                        $("div[ischart = '1']").each(
                             function (index) {
-                                eval($(this).attr('id') + 'Chart.resize();');
+                                var _chart = window[$(this).attr('id') + 'Chart']; if (_chart && typeof _chart.resize === 'function') _chart.resize();
                             }
                         );
                     }
@@ -616,7 +616,7 @@ window.ff = {
                     {
                         $("#"+id).find("div[ischart = '1']").each(
                             function (index) {
-                               eval($(this).attr('id') + 'Chart.resize();');
+                               var _chart = window[$(this).attr('id') + 'Chart']; if (_chart && typeof _chart.resize === 'function') _chart.resize();
                             }
                         );
                     }
@@ -1075,16 +1075,26 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
             $.ajax({
                 cache: false,
                 type: 'POST',
-                url: eval(chartid+"ChartUrl"),
+                url: window[chartid + "ChartUrl"],
                 data: postdata,
                 async: true,
                 success: function (data, textStatus, request) {
                     if (data.series != undefined) {
-                        data.series = data.series.replace(/"type":"charttype"/g, eval(chartid + 'ChartType'));
+                        data.series = data.series.replace(/"type":"charttype"/g, window[chartid + 'ChartType']);
                     }
-                    eval(chartid + 'Chart.setOption({dataset: JSON.parse(data.dataset),series: JSONfns.parse(data.series)},{replaceMerge:\'series\'});');
-                    if (eval(chartid + 'ChartLegend') == 'true') {
-                        eval(chartid + 'Chart.setOption({legend:JSON.parse(data.legend)});');
+                    (function () {
+                        var _chart = window[chartid + 'Chart'];
+                        if (_chart && typeof _chart.setOption === 'function') {
+                            _chart.setOption({dataset: JSON.parse(data.dataset), series: JSONfns.parse(data.series)}, {replaceMerge: 'series'});
+                        }
+                    })();
+                    if (window[chartid + 'ChartLegend'] == 'true') {
+                        (function () {
+                            var _chart = window[chartid + 'Chart'];
+                            if (_chart && typeof _chart.setOption === 'function') {
+                                _chart.setOption({legend: JSON.parse(data.legend)});
+                            }
+                        })();
                     }
                 }
             });
