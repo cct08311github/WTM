@@ -219,9 +219,6 @@ namespace WalkingTec.Mvvm.Core
                             }
                         }
                         DC!.DeleteEntity(Entity);
-
-                        // [Elsa removed] workflow instance cleanup was here
-
                     }
                 }
                 catch (Exception e)

@@ -668,12 +668,6 @@ namespace WalkingTec.Mvvm.Core
             if (DBType == DBTypeEnum.Oracle)
             {
                 ((IConventionModelBuilder)modelBuilder).HasMaxIdentifierLength(30);
-                // [Elsa removed] table mappings
-                // modelBuilder.Entity<Elsa_Bookmark>().ToTable("Bookmarks");
-                // modelBuilder.Entity<Elsa_Trigger>().ToTable("Triggers");
-                // modelBuilder.Entity<Elsa_WorkflowDefinition>().ToTable("WorkflowDefinitions");
-                // modelBuilder.Entity<Elsa_WorkflowExecutionLogRecord>().ToTable("WorkflowExecutionLogRecords");
-                // modelBuilder.Entity<Elsa_WorkflowInstance>().ToTable("WorkflowInstances");
             }
         }
 
