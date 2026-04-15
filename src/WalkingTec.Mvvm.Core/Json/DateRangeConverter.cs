@@ -2,6 +2,7 @@
 using System;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.Logging;
 
 namespace WalkingTec.Mvvm.Core.Json
 {
@@ -34,8 +35,9 @@ namespace WalkingTec.Mvvm.Core.Json
                     }
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                CoreProgram.GetLogger("DateRangeConverter")?.LogDebug(ex, "DateRangeConverter.Read: array parse failed; returning null");
             }
             return null;
         }

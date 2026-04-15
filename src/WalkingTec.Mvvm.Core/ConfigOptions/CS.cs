@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace WalkingTec.Mvvm.Core
 {
@@ -48,7 +49,10 @@ namespace WalkingTec.Mvvm.Core
                                     }
                                 }
                             }
-                            catch { }
+                            catch (Exception ex)
+                            {
+                                CoreProgram.GetLogger("CS")?.LogDebug(ex, "CS.Cis: scanning assembly '{Asm}' for DbContext(CS) constructors threw; skipping", ass.FullName);
+                            }
                         }
                     }
                 }
@@ -81,7 +85,10 @@ namespace WalkingTec.Mvvm.Core
                                     }
                                 }
                             }
-                            catch { }
+                            catch (Exception ex)
+                            {
+                                CoreProgram.GetLogger("CS")?.LogDebug(ex, "CS.CisFull: scanning assembly '{Asm}' for DbContext(string,DBTypeEnum) constructors threw; skipping", ass.FullName);
+                            }
                         }
                     }
                 }

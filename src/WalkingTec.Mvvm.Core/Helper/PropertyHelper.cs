@@ -1,5 +1,6 @@
 #nullable enable
 using Microsoft.Extensions.Localization;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Primitives;
 using System;
 using System.Collections;
@@ -423,7 +424,10 @@ namespace WalkingTec.Mvvm.Core
                 {
                     rv = (lambda.Compile().DynamicInvoke(obj) as IEnumerable<string>)?.ToList() ?? [];
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    CoreProgram.GetLogger("PropertyHelper")?.LogDebug(ex, "GetPropertyStringValues dynamic-invoke failed; returning empty list");
+                }
                 return rv;
             }
             else
@@ -580,7 +584,10 @@ namespace WalkingTec.Mvvm.Core
                                     list = value.ConvertValue(propertyType) as IList;
                                 }
                             }
-                            catch { }
+                            catch (Exception ex)
+                            {
+                                CoreProgram.GetLogger("PropertyHelper")?.LogDebug(ex, "SetPropertyValue list-conversion failed for '{Property}'", fproperty.Name);
+                            }
                             fproperty.SetMemberValue(temp, list, null);
                         }
                     }
@@ -600,7 +607,10 @@ namespace WalkingTec.Mvvm.Core
                                 fproperty.SetMemberValue(temp, arr, null);
                             }
                         }
-                        catch { }
+                        catch (Exception ex)
+                        {
+                            CoreProgram.GetLogger("PropertyHelper")?.LogDebug(ex, "SetPropertyValue array-conversion failed for '{Property}'", fproperty.Name);
+                        }
                     }
                     else
                     {
@@ -629,8 +639,9 @@ namespace WalkingTec.Mvvm.Core
                     fproperty.SetMemberValue(temp, value, null);
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                CoreProgram.GetLogger("PropertyHelper")?.LogDebug(ex, "SetPropertyValue failed for '{Property}'", property);
             }
         }
 
@@ -823,7 +834,10 @@ namespace WalkingTec.Mvvm.Core
                 {
                     val = ConvertValue(value, gs[0]);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    CoreProgram.GetLogger("PropertyHelper")?.LogDebug(ex, "ConvertValue nullable-generic fallback for type '{Type}', value '{Value}'", propertyType.Name, value);
+                }
             }
             else if (propertyType.IsEnum())
             {
@@ -880,8 +894,9 @@ namespace WalkingTec.Mvvm.Core
                         val = Convert.ChangeType(value?.ToString(), propertyType);
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
+                    CoreProgram.GetLogger("PropertyHelper")?.LogDebug(ex, "ConvertValue generic fallback for type '{Type}', value '{Value}'", propertyType.Name, value);
                 }
             }
             return val;

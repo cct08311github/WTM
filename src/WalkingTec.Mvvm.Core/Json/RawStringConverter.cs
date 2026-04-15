@@ -3,6 +3,7 @@ using System;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.Logging;
 
 namespace WalkingTec.Mvvm.Core.Json
 {
@@ -22,8 +23,9 @@ namespace WalkingTec.Mvvm.Core.Json
                     return reader.GetString();
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                CoreProgram.GetLogger("RawStringConverter")?.LogDebug(ex, "RawStringConverter.Read: GetString failed at TokenType '{Token}'; returning null", reader.TokenType);
             }
             return null;
         }

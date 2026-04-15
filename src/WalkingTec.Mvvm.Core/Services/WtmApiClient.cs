@@ -128,7 +128,10 @@ namespace WalkingTec.Mvvm.Core.Services
                         {
                             rv.Errors = JsonSerializer.Deserialize<ErrorObj>(responseTxt, CoreProgram.DefaultJsonOption);
                         }
-                        catch { }
+                        catch (Exception ex)
+                        {
+                            _logger?.LogDebug(ex, "CallAPI: 400 response body could not be deserialized into ErrorObj; keeping raw text");
+                        }
                     }
                     // Return only truncated response to avoid exposing sensitive data
                     rv.ErrorMsg = responseTxt.Length > 500 ? responseTxt[..500] + "..." : responseTxt;

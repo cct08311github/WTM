@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Quartz;
 using Quartz.Impl;
 
@@ -96,7 +97,10 @@ namespace WalkingTec.Mvvm.Core.Support.Quartz
                         }
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    CoreProgram.GetLogger("QuartzHostService")?.LogWarning(ex, "QuartzHostService.StartAsync: scanning/scheduling jobs in assembly '{Asm}' threw; skipping", ass.FullName);
+                }
             }
             // 开始运行
             await _scheduler.Start(cancellationToken);

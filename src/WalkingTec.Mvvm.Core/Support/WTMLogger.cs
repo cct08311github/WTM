@@ -143,10 +143,17 @@ namespace WalkingTec.Mvvm.Core
                                     dc.AddEntity<ActionLog>(log);
                                     dc.SaveChanges();
                                 }
+                                // Intentional: if writing an ActionLog row fails we cannot log that
+                                // failure via ILogger without re-entering this same logger and
+                                // recursing forever. Swallow silently — this is the one place in
+                                // the codebase where a bare catch is correct. (Issue #791)
                                 catch { }
                             }
                         }
                     }
+                    // Intentional: creating the DataContext inside a logger must not throw
+                    // upwards — any such failure here would recurse through this logger's Log()
+                    // again. Swallow silently. (Issue #791)
                     catch { }
                 }
             }

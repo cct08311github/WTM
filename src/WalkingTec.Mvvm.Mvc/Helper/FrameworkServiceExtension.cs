@@ -32,6 +32,7 @@ using Microsoft.Extensions.DependencyModel;
 using Microsoft.Extensions.DependencyModel.Resolution;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Localization;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
@@ -146,7 +147,10 @@ namespace WalkingTec.Mvvm.Mvc
                                 .ToList());
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    Core.CoreProgram.GetLogger("FrameworkServiceExtension")?.LogWarning(ex, "GetAllMenus: failed to load FrameworkMenu from default connection; returning empty list");
+                }
             }
             return menus;
         }
@@ -881,6 +885,11 @@ namespace WalkingTec.Mvvm.Mvc
             var programLocalizer = localfactory.Create(programType);
             Core.CoreProgram._localizer = programLocalizer;
 
+            // Issue #791: give static utility classes (PropertyHelper, Utils, TypeExtension,
+            // CS, JSON converters, QuartzHostService, ...) a way to emit diagnostic logs
+            // instead of silently swallowing exceptions in bare catch blocks.
+            Core.CoreProgram._loggerFactory = app.ApplicationServices.GetService<ILoggerFactory>();
+
             var controllers = gd.GetTypesAssignableFrom<IBaseController>();
             var test = app.ApplicationServices.GetService<ISpaStaticFileProvider>();
             gd.IsSpa = isspa == true || test != null;
@@ -957,7 +966,10 @@ namespace WalkingTec.Mvvm.Mvc
                                             {
                                                 item.Attributes.Add(pro.Name, pro.GetValue(item));
                                             }
-                                            catch { }
+                                            catch (Exception ex)
+                                            {
+                                                Core.CoreProgram.GetLogger("FrameworkServiceExtension")?.LogDebug(ex, "Custom tenant attribute getter threw for property '{Property}'", pro.Name);
+                                            }
                                         }
                                     }
 
