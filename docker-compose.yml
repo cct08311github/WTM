@@ -1,0 +1,41 @@
+# Local development services for WTM.
+#
+# Primary use case: running the WalkingTec.Mvvm.Integration.Test suite
+# against a real SQL Server, mirroring the CI environment
+# (.github/workflows/integration-test.yml).
+#
+# Bring up:
+#   docker compose up -d mssql
+#
+# Run integration tests:
+#   dotnet test test/WalkingTec.Mvvm.Integration.Test -c Release
+#
+# Tear down (deletes data):
+#   docker compose down -v
+#
+# Note: credentials here match the CI workflow defaults — the container is
+# ephemeral and never connected to a persistent resource. Override via
+# WTM_TEST_MSSQL if you prefer a different password.
+
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-CU16-ubuntu-22.04
+    container_name: wtm-mssql
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "YourStr0ng!Pass"
+      MSSQL_PID: "Developer"
+    ports:
+      - "1433:1433"
+    healthcheck:
+      # sqlcmd ships inside the container; use it to confirm SQL is accepting
+      # auth (port-open alone does not mean auth is ready on cold start).
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'YourStr0ng!Pass' -C -Q 'SELECT 1' || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
