@@ -272,8 +272,8 @@ public class EtlJobControllerTests
         var result = ctrl.Create(vm) as WtmActionResult;
 
         Assert.IsNotNull(result, "Valid Create POST should return WtmActionResult (FFResultJson, #789 Phase 3C)");
-        Assert.IsTrue(result!.Actions.Any(a => a.Type == "closeDialog"));
-        Assert.IsTrue(result!.Actions.Any(a => a.Type == "refreshGrid"));
+        Assert.IsTrue(result!.Actions.Any(a => a.Type == WtmActionType.CloseDialog));
+        Assert.IsTrue(result!.Actions.Any(a => a.Type == WtmActionType.RefreshGrid));
 
         // Verify persisted
         var dc = new EtlTestDataContext(seed, DBTypeEnum.Memory);
@@ -324,8 +324,8 @@ public class EtlJobControllerTests
         var result = ctrl.Edit(vm) as WtmActionResult;
 
         Assert.IsNotNull(result, "Valid Edit POST should return WtmActionResult (FFResultJson, #789 Phase 3C)");
-        Assert.IsTrue(result!.Actions.Any(a => a.Type == "closeDialog"));
-        Assert.IsTrue(result!.Actions.Any(a => a.Type == "refreshGrid"));
+        Assert.IsTrue(result!.Actions.Any(a => a.Type == WtmActionType.CloseDialog));
+        Assert.IsTrue(result!.Actions.Any(a => a.Type == WtmActionType.RefreshGrid));
 
         var dc = new EtlTestDataContext(seed, DBTypeEnum.Memory);
         Assert.AreEqual("UpdatedJob", dc.EtlJobDefinitions.First(j => j.ID == job.ID).Name);
@@ -357,8 +357,8 @@ public class EtlJobControllerTests
         var result = ctrl.Delete(job.ID, noUse) as WtmActionResult;
 
         Assert.IsNotNull(result, "Valid Delete POST should return WtmActionResult (FFResultJson, #789 Phase 3C)");
-        Assert.IsTrue(result!.Actions.Any(a => a.Type == "closeDialog"));
-        Assert.IsTrue(result!.Actions.Any(a => a.Type == "refreshGrid"));
+        Assert.IsTrue(result!.Actions.Any(a => a.Type == WtmActionType.CloseDialog));
+        Assert.IsTrue(result!.Actions.Any(a => a.Type == WtmActionType.RefreshGrid));
 
         var dc = new EtlTestDataContext(seed, DBTypeEnum.Memory);
         Assert.IsFalse(dc.EtlJobDefinitions.Any(j => j.ID == job.ID));

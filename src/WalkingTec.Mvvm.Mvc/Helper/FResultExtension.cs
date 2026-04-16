@@ -2,6 +2,7 @@ using System;
 
 namespace WalkingTec.Mvvm.Mvc
 {
+    [Obsolete("Use WtmActionResultExtension (via BaseController.FFResultJson()) instead. The FResult-based helpers emit JavaScript response bodies that require client-side script evaluation and block strict Content-Security-Policy. See issue #789 Phase 3C.", DiagnosticId = "WTM789")]
     public static class FResultExtension
     {
         /// <summary>

@@ -27,7 +27,11 @@ namespace WalkingTec.Mvvm.Mvc
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            // Issue #806: WtmActionType serializes as camelCase strings
+            // ("alert", "closeDialog", "refreshGrid", ...) matching the
+            // literals in framework_layui.js's dispatcher switch.
+            Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
         };
 
         public override async Task ExecuteResultAsync(ActionContext context)

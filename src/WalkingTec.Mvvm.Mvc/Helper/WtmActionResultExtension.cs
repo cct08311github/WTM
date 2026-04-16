@@ -11,28 +11,32 @@ namespace WalkingTec.Mvvm.Mvc
     {
         public static WtmActionResult CloseDialog(this WtmActionResult self)
         {
-            self.Actions.Add(new WtmAction { Type = "closeDialog" });
+            self.Actions.Add(new WtmAction { Type = WtmActionType.CloseDialog });
             return self;
         }
 
         public static WtmActionResult Alert(this WtmActionResult self, string msg, string? title = null)
         {
             var resolvedTitle = title ?? MvcProgram._localizer?["Sys.Info"];
-            self.Actions.Add(new WtmAction { Type = "alert", Message = msg, Title = resolvedTitle });
+            self.Actions.Add(new WtmAction { Type = WtmActionType.Alert, Message = msg, Title = resolvedTitle });
             return self;
         }
 
         public static WtmActionResult Message(this WtmActionResult self, string msg, string? title = null)
         {
             var resolvedTitle = title ?? MvcProgram._localizer?["Sys.Info"];
-            self.Actions.Add(new WtmAction { Type = "message", Message = msg, Title = resolvedTitle });
+            self.Actions.Add(new WtmAction { Type = WtmActionType.Message, Message = msg, Title = resolvedTitle });
             return self;
         }
 
         public static WtmActionResult RefreshGrid(this WtmActionResult self, string winId = "", int index = 0)
         {
             var effectiveWinId = string.IsNullOrEmpty(winId) ? null : winId;
-            self.Actions.Add(new WtmAction { Type = "refreshGrid", WinId = effectiveWinId, Index = index });
+            // Issue #806: emit index only when non-zero to honor the
+            // WhenWritingNull contract — a plain .RefreshGrid() should
+            // serialize as {"type":"refreshGrid"}, not {"type":"refreshGrid","index":0}.
+            int? effectiveIndex = index == 0 ? null : index;
+            self.Actions.Add(new WtmAction { Type = WtmActionType.RefreshGrid, WinId = effectiveWinId, Index = effectiveIndex });
             return self;
         }
 
@@ -45,13 +49,13 @@ namespace WalkingTec.Mvvm.Mvc
 
         public static WtmActionResult RefreshPage(this WtmActionResult self)
         {
-            self.Actions.Add(new WtmAction { Type = "refreshPage" });
+            self.Actions.Add(new WtmAction { Type = WtmActionType.RefreshPage });
             return self;
         }
 
         public static WtmActionResult Reload(this WtmActionResult self)
         {
-            self.Actions.Add(new WtmAction { Type = "reload" });
+            self.Actions.Add(new WtmAction { Type = WtmActionType.Reload });
             return self;
         }
 
@@ -96,7 +100,7 @@ namespace WalkingTec.Mvvm.Mvc
                     "Got: " + url, nameof(url));
             }
 
-            self.Actions.Add(new WtmAction { Type = "redirect", Url = url });
+            self.Actions.Add(new WtmAction { Type = WtmActionType.Redirect, Url = url });
             return self;
         }
     }

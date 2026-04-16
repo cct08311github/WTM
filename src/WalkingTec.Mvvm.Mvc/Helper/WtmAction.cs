@@ -19,7 +19,7 @@ namespace WalkingTec.Mvvm.Mvc
     public class WtmAction
     {
         [JsonPropertyName("type")]
-        public string Type { get; set; } = string.Empty;
+        public WtmActionType Type { get; set; } = WtmActionType.None;
 
         [JsonPropertyName("message")]
         public string? Message { get; set; }

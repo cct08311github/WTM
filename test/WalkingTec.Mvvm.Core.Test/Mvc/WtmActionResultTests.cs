@@ -168,7 +168,7 @@ namespace WalkingTec.Mvvm.Core.Test.Mvc
             result.Redirect(goodUrl);
 
             Assert.AreEqual(1, result.Actions.Count);
-            Assert.AreEqual("redirect", result.Actions[0].Type);
+            Assert.AreEqual(WtmActionType.Redirect, result.Actions[0].Type);
             Assert.AreEqual(goodUrl, result.Actions[0].Url);
         }
 
