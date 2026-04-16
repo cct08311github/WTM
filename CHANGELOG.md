@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+- **Security: `UseWtmContentSecurityPolicy()` opt-in CSP middleware** — Apps can now register a Content-Security-Policy response header via `app.UseWtmContentSecurityPolicy()`. Default policy enforces `script-src 'self' 'unsafe-inline'` — `'unsafe-eval'` is intentionally omitted, which closes the issue #789 eval()-execution attack surface built up through Phases 1/2/3A/3B/3C. Keeps `'unsafe-inline'` so existing Razor TagHelper inline scripts still work without a nonce refactor. Supports `ReportOnly` mode and a custom `report-uri` for staged rollout. First-writer-wins: respects any CSP header already set by upstream middleware or reverse proxy. **Breaking for apps that still call `eval()` in their own JS** — opt-in means the default is unchanged; to enable, add `app.UseWtmContentSecurityPolicy()` after eliminating app-level `eval()`. (#789 Phase 3D)
+
+### Fixed
+- **Security: CSP-safe JSON action dispatcher replaces `IsScript` eval()** — `framework_layui.js` now routes AJAX responses through `ff.DispatchAction` when the server returns `X-WTM-Action: application/json` (via new `FFResultJson()` + `WtmActionResult`). The legacy `IsScript: true` path still works but emits a deprecation warning through the single centralized `ff._legacyScriptEval` helper. Active-code `eval(` count in `framework_layui.js` dropped from 18 (pre-#789) to 1. `FFResult()` is marked `[Obsolete(DiagnosticId = "WTM789")]` — suppressible per-project via `<NoWarn>WTM789</NoWarn>`. Framework-owned callers migrated (`_FrameworkController`, `_CodeGenController`, `_EtlJobController`, `Controller.txt` codegen template). Demo/app callers stay on the legacy path for one release. (#789 Phase 3C, #802)
+- **Security: sanitize AJAX response HTML via DOMPurify** — The four `.html(data)` / `innerHTML = str` sinks in `framework_layui.js` (`LoadPage1`, `PostForm`, `BgRequest`, `OpenDialog`) now pass raw AJAX bodies through `ff.SafeHtml` which wraps DOMPurify. Vendored `dompurify.js` as an EmbeddedResource served alongside `framework_layui.js`; load order documented in `_Layout.cshtml`. Fail-closed: when DOMPurify did not load, SafeHtml returns empty string rather than rendering attacker HTML. (#789 Phase 3B, #801)
+- **Security: DOM XSS via cookie-to-id and iframe URL concatenation** — Cookie-sourced ids (`$.cookie("divid")`) are now passed through jQuery `.attr()` / DOM `setAttribute` rather than concatenated into HTML strings, and iframe URLs are set via the `.src` setter. (#789 Phase 3A, #800)
+- **Security: eliminate remaining non-FFResult eval() sites** — combo/tc/selector global-variable access and three TagHelper-templated call sites now use the safe `window[name]` property-lookup pattern. (#789 Phase 2, #799)
+- **Security: chart-related eval() removal** — 11 chart dispatch sites in `framework_layui.js` no longer call `eval(identifier + suffix)`. (#789 Phase 1, #798)
+
 ## [10.2.0] - 2026-04-11
 
 ### Changed
