@@ -15,6 +15,8 @@
   <script src="/jquery.min.js"></script>
   <script src="/jquery.cookie.js"></script>
   <script src="/layui/layui.js"></script>
+  @* Issue #789 Phase 3B: DOMPurify must load BEFORE framework_layui.js so ff.SafeHtml works. *@
+  <script src="/_js/dompurify.js?time=@DateTime.Now.Ticks"></script>
   <script src="/_js/framework_layui.js?time=@DateTime.Now.Ticks"></script>
   <link rel="stylesheet" href="~/sitecss/logincss.css">
   <title>WTM</title>

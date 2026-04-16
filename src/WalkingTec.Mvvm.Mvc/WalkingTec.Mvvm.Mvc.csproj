@@ -36,6 +36,7 @@
     <Content Include="fonts\Candara.ttf">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
+    <EmbeddedResource Include="dompurify.js" />
     <EmbeddedResource Include="framework_layui.js" />
     <EmbeddedResource Include="framework_analysis.js" />
     <EmbeddedResource Include="framework_analysis.css" />

@@ -30,6 +30,8 @@
   <script src="/echarts/walden.js"></script>
   <script src="/echarts/westeros.js"></script>
   <script src="/echarts/wonderland.js"></script>
+  @* Issue #789 Phase 3B: DOMPurify must load BEFORE framework_layui.js so ff.SafeHtml works. *@
+  <script src="/_js/dompurify.js?time=@DateTime.Now.Ticks"></script>
   <script src="/_js/framework_layui.js?time=@DateTime.Now.Ticks"></script>
   <script>
     var DONOTUSE_IGNOREHASH = false;
