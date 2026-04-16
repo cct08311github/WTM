@@ -36,8 +36,10 @@ namespace WalkingTec.Mvvm.Mvc
         public bool ReportOnly { get; set; } = false;
 
         /// <summary>
-        /// Optional <c>report-uri</c> / <c>report-to</c> endpoint appended to
-        /// the policy string. When null the directive is omitted.
+        /// Optional <c>report-uri</c> endpoint appended to the policy string.
+        /// When null the directive is omitted. See issue #807 for tracking
+        /// <c>report-to</c> + <c>Reporting-Endpoints</c> support (separate
+        /// modern directive with different wire format; not wired here).
         /// </summary>
         public string? ReportUri { get; set; } = null;
     }
