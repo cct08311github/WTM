@@ -60,6 +60,108 @@ window.ff = {
         });
     },
 
+    // Issue #789 Phase 3C: CSP-safe JSON action dispatcher. The server returns
+    // a WtmActionResult payload (X-WTM-Action: application/json header set) and
+    // this function walks the whitelisted action types. Unknown action types
+    // are logged and skipped — there is no dynamic-code-execution path here.
+    DispatchAction: function (payload) {
+        if (!payload || !payload.actions || !payload.actions.length) {
+            return;
+        }
+        var actions = payload.actions;
+        for (var i = 0; i < actions.length; i++) {
+            var action = actions[i];
+            if (!action || !action.type) { continue; }
+            switch (action.type) {
+                case 'closeDialog':
+                    if (typeof ff.CloseDialog === 'function') { ff.CloseDialog(); }
+                    break;
+                case 'alert':
+                    if (typeof ff.Alert === 'function') {
+                        ff.Alert(action.message || '', action.title || '');
+                    }
+                    break;
+                case 'message':
+                    if (typeof ff.Msg === 'function') {
+                        ff.Msg(action.message || '', action.title || '');
+                    }
+                    break;
+                case 'refreshGrid':
+                    if (typeof ff.RefreshGrid === 'function') {
+                        ff.RefreshGrid(action.winId || 'LAY_app_body', action.index || 0);
+                    }
+                    break;
+                case 'refreshPage':
+                    if (typeof layui !== 'undefined' && layui.index &&
+                        typeof layui.index.render === 'function') {
+                        layui.index.render();
+                    }
+                    break;
+                case 'reload':
+                    if (typeof location !== 'undefined' &&
+                        typeof location.reload === 'function') {
+                        location.reload();
+                    }
+                    break;
+                case 'redirect':
+                    if (action.url) { location.href = action.url; }
+                    break;
+                default:
+                    if (typeof console !== 'undefined' && console.warn) {
+                        console.warn('[WTM] Unknown WtmAction type:', action.type);
+                    }
+            }
+        }
+    },
+
+    // Issue #789 Phase 3C: centralized legacy fallback for the deprecated
+    // IsScript response header. Every call site routes through this single
+    // helper so the total number of eval( tokens in this file is 1 (down
+    // from 18 before Phase 1), making the removal of this helper a one-line
+    // change once downstream apps have finished migrating to FFResultJson.
+    _legacyScriptEval: function (code) {
+        if (typeof console !== 'undefined' && console.warn) {
+            console.warn('[WTM] IsScript script-body response is deprecated. ' +
+                         'Migrate server-side controllers to FFResultJson() ' +
+                         '(X-WTM-Action header) to enable strict CSP. See #789 Phase 3C.');
+        }
+        // eslint-disable-next-line no-eval
+        eval(code);
+    },
+
+    // Issue #789 Phase 3C: simple fire-and-dispatch helper for "click the
+    // button to run a server action" pattern (used by LayuiUIService button
+    // generation). Replaces the former inline eval(data) in the generated
+    // onclick handler. Response handling matches PostForm/BgRequest: prefer
+    // X-WTM-Action JSON over IsScript eval fallback.
+    RunAction: function (url) {
+        $.ajax({
+            cache: false,
+            type: 'GET',
+            url: url,
+            async: true,
+            error: function () {
+                if (typeof layui !== 'undefined' && layui.layer) {
+                    layui.layer.alert(ff.DONOTUSE_Text_LoadFailed);
+                }
+            },
+            success: function (data, textStatus, request) {
+                var wtmAction = request.getResponseHeader('X-WTM-Action');
+                if (wtmAction === 'application/json') {
+                    try {
+                        ff.DispatchAction(typeof data === 'string' ? JSON.parse(data) : data);
+                    } catch (e) {
+                        if (typeof console !== 'undefined' && console.error) {
+                            console.error('[WTM] RunAction JSON parse failed:', e);
+                        }
+                    }
+                } else if (request.getResponseHeader('IsScript') === 'true') {
+                    ff._legacyScriptEval(data);
+                }
+            }
+        });
+    },
+
     SetCookie: function (name, value, allwindow) {
         try {
             var cookiePrefix = '', windowGuid = '';
@@ -335,8 +437,21 @@ window.ff = {
                 }
             },
             success: function (data, textStatus, request) {
+                var wtmActionHdr = request.getResponseHeader('X-WTM-Action');
+                if (wtmActionHdr === 'application/json') {
+                    // Issue #789 Phase 3C: CSP-safe JSON action dispatch.
+                    try {
+                        ff.DispatchAction(typeof data === 'string' ? JSON.parse(data) : data);
+                    } catch (e) {
+                        if (typeof console !== 'undefined' && console.error) {
+                            console.error('[WTM] PostForm X-WTM-Action parse failed:', e);
+                        }
+                    }
+                    layer.close(index);
+                    return;
+                }
                 if (request.getResponseHeader('IsScript') === 'true') {
-                    eval(data);
+                    ff._legacyScriptEval(data);
                 }
                 else {
                     // Issue #789 Phase 3A: build wrapper via jQuery .attr() so the
@@ -381,8 +496,20 @@ window.ff = {
             },
             success: function (str, textStatus, request) {
                 layer.close(index);
+                var wtmActionHdr = request.getResponseHeader('X-WTM-Action');
+                if (wtmActionHdr === 'application/json') {
+                    // Issue #789 Phase 3C: CSP-safe JSON action dispatch.
+                    try {
+                        ff.DispatchAction(typeof str === 'string' ? JSON.parse(str) : str);
+                    } catch (e) {
+                        if (typeof console !== 'undefined' && console.error) {
+                            console.error('[WTM] BgRequest X-WTM-Action parse failed:', e);
+                        }
+                    }
+                    return;
+                }
                 if (request.getResponseHeader('IsScript') === 'true') {
-                    eval(str);
+                    ff._legacyScriptEval(str);
                 }
                 else {
                     // Issue #789 Phase 3A: same cookie-to-id fix as PostForm above.
@@ -441,9 +568,22 @@ window.ff = {
             success: function (str, textStatus, request) {
                 layer.close(index);
                 max = true;
+                var wtmActionHdr = request.getResponseHeader('X-WTM-Action');
+                if (wtmActionHdr === 'application/json') {
+                    // Issue #789 Phase 3C: CSP-safe JSON action dispatch.
+                    ff.SetCookie("windowids", owid);
+                    try {
+                        ff.DispatchAction(typeof str === 'string' ? JSON.parse(str) : str);
+                    } catch (e) {
+                        if (typeof console !== 'undefined' && console.error) {
+                            console.error('[WTM] OpenDialog X-WTM-Action parse failed:', e);
+                        }
+                    }
+                    return;
+                }
                 if (request.getResponseHeader('IsScript') === 'true') {
                     ff.SetCookie("windowids", owid);
-                    eval(str);
+                    ff._legacyScriptEval(str);
                 }
                 else {
                     // Issue #789 Phase 3A: build wrapper via DOM API and serialize

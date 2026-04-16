@@ -83,7 +83,7 @@ public class _EtlJobController : BaseController
         vm.DoAdd();
         if (!ModelState.IsValid)
             return PartialView(vm);
-        return FFResult().CloseDialog().RefreshGrid();
+        return FFResultJson().CloseDialog().RefreshGrid();
     }
 
     [ActionDescription("編輯 Job")]
@@ -102,7 +102,7 @@ public class _EtlJobController : BaseController
         vm.DoEdit();
         if (!ModelState.IsValid)
             return PartialView(vm);
-        return FFResult().CloseDialog().RefreshGrid();
+        return FFResultJson().CloseDialog().RefreshGrid();
     }
 
     [ActionDescription("刪除 Job")]
@@ -120,7 +120,7 @@ public class _EtlJobController : BaseController
         vm.DoDelete();
         if (!ModelState.IsValid)
             return PartialView(vm);
-        return FFResult().CloseDialog().RefreshGrid();
+        return FFResultJson().CloseDialog().RefreshGrid();
     }
 
     // ─── 操作 API ───

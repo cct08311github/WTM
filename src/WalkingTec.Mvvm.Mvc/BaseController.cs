@@ -412,6 +412,7 @@ namespace WalkingTec.Mvvm.Mvc
         #endregion
 
         [NonAction]
+        [Obsolete("Use FFResultJson() instead. The string-based FFResult path requires client-side script evaluation and blocks the strict Content-Security-Policy header. See #789 Phase 3C.", DiagnosticId = "WTM789")]
         public FResult FFResult()
         {
             var rv = new FResult
@@ -427,6 +428,19 @@ namespace WalkingTec.Mvvm.Mvc
                 Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseController")?.LogDebug(ex, "FFResult: setting 'IsScript' response header failed (response may already be started)");
             }
             return rv;
+        }
+
+        /// <summary>
+        /// CSP-safe successor to <see cref="FFResult"/>. Returns a
+        /// <see cref="WtmActionResult"/> that serializes declarative actions
+        /// as JSON under the <c>X-WTM-Action</c> header, which the client-side
+        /// <c>ff.DispatchAction</c> handler dispatches through a whitelist.
+        /// See #789 Phase 3C for the migration rationale.
+        /// </summary>
+        [NonAction]
+        public WtmActionResult FFResultJson()
+        {
+            return new WtmActionResult();
         }
 
         protected ActionResult JsonMore(object data, int statusCode = StatusCodes.Status200OK, string msg = "success")

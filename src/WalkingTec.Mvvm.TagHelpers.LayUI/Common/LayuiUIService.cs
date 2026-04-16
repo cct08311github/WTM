@@ -23,7 +23,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
             }
             else
             {
-                innerClick = $"$.ajax({{cache: false,type: 'GET',url: '{url}',async: true,success: function(data, textStatus, request) {{eval(data);}} }});";
+                innerClick = $"ff.RunAction('{url}');";  // Issue #789 Phase 3C: CSP-safe dispatcher (replaces inline AJAX + eval)
             }
             string funcname = $"x{buttonID.Replace("-", "")}click";
             var click = $"<script>function {funcname}(){{{innerClick};return false;}}</script>";

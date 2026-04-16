@@ -48,9 +48,9 @@ describe('#789 Phase 2A — framework_layui.js global-variable eval removal', ()
     expect(active).toMatch(/window\[\s*id\s*\+\s*["\']filter["\']\]\s*=/);
   });
 
-  test('total remaining eval( sites in framework_layui.js is exactly 3 (IsScript, Phase 2C scope)', () => {
+  test('total remaining eval( sites in framework_layui.js is exactly 1 (centralized _legacyScriptEval after Phase 3C)', () => {
     const matches = active.match(/\beval\(/g) || [];
-    expect(matches).toHaveLength(3);
+    expect(matches).toHaveLength(1);
   });
 });
 
