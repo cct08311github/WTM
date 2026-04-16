@@ -766,7 +766,7 @@ namespace WalkingTec.Mvvm.Mvc
                 }
             );
 
-            return FFResult().AddCustomScript("location.reload();");
+            return FFResultJson().Reload();
         }
 
         [Public]
@@ -775,7 +775,7 @@ namespace WalkingTec.Mvvm.Mvc
             Wtm.SetCurrentTenant(tenant == "" ? null : tenant);
             var principal = Wtm.LoginUserInfo.CreatePrincipal();
             HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal, null);
-            return FFResult().AddCustomScript("location.reload();");
+            return FFResultJson().Reload();
         }
 
 
