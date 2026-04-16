@@ -104,7 +104,25 @@ window.ff = {
                     }
                     break;
                 case 'redirect':
-                    if (action.url) { location.href = action.url; }
+                    // Issue #804: defense in depth. Server-side
+                    // WtmActionResultExtension.Redirect throws on absolute
+                    // URLs, but if a compromised downstream controller
+                    // emits raw JSON bypassing the extension, reject
+                    // absolute URLs here too.
+                    if (action.url) {
+                        var _u = action.url;
+                        if (_u.charAt(0) === '/' && _u.charAt(1) !== '/') {
+                            location.href = _u;
+                            return;
+                        }
+                        if (_u.charAt(0) === '#' || _u.charAt(0) === '?') {
+                            location.href = _u;
+                            return;
+                        }
+                        if (typeof console !== 'undefined' && console.warn) {
+                            console.warn('[WTM] Redirect blocked: non-relative URL', _u);
+                        }
+                    }
                     break;
                 default:
                     if (typeof console !== 'undefined' && console.warn) {

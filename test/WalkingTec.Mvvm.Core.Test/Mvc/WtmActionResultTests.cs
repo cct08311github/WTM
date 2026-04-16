@@ -125,6 +125,53 @@ namespace WalkingTec.Mvvm.Core.Test.Mvc
             Assert.AreEqual("/admin/home", first.GetProperty("url").GetString());
         }
 
+        // ── Issue #804 open-redirect guard tests ─────────────────────────
+
+        [TestMethod]
+        [DataRow("https://evil.com/phish")]
+        [DataRow("http://evil.com")]
+        [DataRow("//evil.com/path")]
+        [DataRow("javascript:alert(1)")]
+        [DataRow("data:text/html,<script>alert(1)</script>")]
+        [DataRow("ftp://evil.com/")]
+        [DataRow("evil.com")]
+        [DataRow("www.example.com/path")]
+        public void Redirect_rejects_absolute_or_protocol_relative_urls(string badUrl)
+        {
+            var result = new WtmActionResult();
+            Assert.ThrowsException<System.ArgumentException>(
+                () => result.Redirect(badUrl),
+                $"Redirect should reject absolute URL: {badUrl}");
+        }
+
+        [TestMethod]
+        [DataRow("")]
+        [DataRow("   ")]
+        [DataRow(null)]
+        public void Redirect_rejects_empty_or_null_url(string? badUrl)
+        {
+            var result = new WtmActionResult();
+            Assert.ThrowsException<System.ArgumentException>(
+                () => result.Redirect(badUrl!));
+        }
+
+        [TestMethod]
+        [DataRow("/admin/home")]
+        [DataRow("/api/v1/users")]
+        [DataRow("~/login")]
+        [DataRow("#top")]
+        [DataRow("?page=2")]
+        [DataRow("/")]
+        public void Redirect_accepts_relative_urls(string goodUrl)
+        {
+            var result = new WtmActionResult();
+            result.Redirect(goodUrl);
+
+            Assert.AreEqual(1, result.Actions.Count);
+            Assert.AreEqual("redirect", result.Actions[0].Type);
+            Assert.AreEqual(goodUrl, result.Actions[0].Url);
+        }
+
         [TestMethod]
         public async Task ContentType_is_application_json_not_html()
         {
