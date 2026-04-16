@@ -60,10 +60,25 @@ window.ff = {
         });
     },
 
+    // Issue #805: escape a plain-text string into HTML-entity-encoded form
+    // using the browser's own DOM text node. Used by DispatchAction to
+    // enforce the WtmAction.Message / WtmAction.Title "plain text" contract
+    // before passing into layui layer.alert (which parses HTML in msg/title).
+    // Relies on jQuery which is always loaded before framework_layui.js.
+    EscapeText: function (s) {
+        if (s === null || s === undefined) { return ''; }
+        return $('<div/>').text(String(s)).html();
+    },
+
     // Issue #789 Phase 3C: CSP-safe JSON action dispatcher. The server returns
     // a WtmActionResult payload (X-WTM-Action: application/json header set) and
     // this function walks the whitelisted action types. Unknown action types
     // are logged and skipped — there is no dynamic-code-execution path here.
+    //
+    // Issue #805: 'alert' and 'message' branches escape action.message /
+    // action.title through ff.EscapeText before handing off to ff.Alert /
+    // ff.Msg. layui's layer.alert concatenates msg into innerHTML, which
+    // would otherwise render attacker-controlled HTML (XSS).
     DispatchAction: function (payload) {
         if (!payload || !payload.actions || !payload.actions.length) {
             return;
@@ -78,12 +93,20 @@ window.ff = {
                     break;
                 case 'alert':
                     if (typeof ff.Alert === 'function') {
-                        ff.Alert(action.message || '', action.title || '');
+                        // Issue #805: escape to enforce plain-text contract.
+                        ff.Alert(
+                            ff.EscapeText(action.message || ''),
+                            ff.EscapeText(action.title || '')
+                        );
                     }
                     break;
                 case 'message':
                     if (typeof ff.Msg === 'function') {
-                        ff.Msg(action.message || '', action.title || '');
+                        // Issue #805: escape to enforce plain-text contract.
+                        ff.Msg(
+                            ff.EscapeText(action.message || ''),
+                            ff.EscapeText(action.title || '')
+                        );
                     }
                     break;
                 case 'refreshGrid':
