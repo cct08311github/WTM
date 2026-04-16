@@ -269,9 +269,11 @@ public class EtlJobControllerTests
         vm.Entity.QueryTemplate = "SELECT * FROM Orders";
         vm.Entity.Status = EtlJobStatus.Disabled;
 
-        var result = ctrl.Create(vm) as ContentResult;
+        var result = ctrl.Create(vm) as WtmActionResult;
 
-        Assert.IsNotNull(result, "Valid Create POST should return ContentResult (FFResult)");
+        Assert.IsNotNull(result, "Valid Create POST should return WtmActionResult (FFResultJson, #789 Phase 3C)");
+        Assert.IsTrue(result!.Actions.Any(a => a.Type == "closeDialog"));
+        Assert.IsTrue(result!.Actions.Any(a => a.Type == "refreshGrid"));
 
         // Verify persisted
         var dc = new EtlTestDataContext(seed, DBTypeEnum.Memory);
@@ -319,9 +321,11 @@ public class EtlJobControllerTests
         vm!.Entity.Name = "UpdatedJob";
         vm.FC = new Dictionary<string, object> { ["Entity.Name"] = "" };
 
-        var result = ctrl.Edit(vm) as ContentResult;
+        var result = ctrl.Edit(vm) as WtmActionResult;
 
-        Assert.IsNotNull(result, "Valid Edit POST should return ContentResult (FFResult)");
+        Assert.IsNotNull(result, "Valid Edit POST should return WtmActionResult (FFResultJson, #789 Phase 3C)");
+        Assert.IsTrue(result!.Actions.Any(a => a.Type == "closeDialog"));
+        Assert.IsTrue(result!.Actions.Any(a => a.Type == "refreshGrid"));
 
         var dc = new EtlTestDataContext(seed, DBTypeEnum.Memory);
         Assert.AreEqual("UpdatedJob", dc.EtlJobDefinitions.First(j => j.ID == job.ID).Name);
@@ -350,9 +354,11 @@ public class EtlJobControllerTests
         var ctrl = CreateControllerWithDb(seed);
         var noUse = new FormCollection(new Dictionary<string, StringValues>());
 
-        var result = ctrl.Delete(job.ID, noUse) as ContentResult;
+        var result = ctrl.Delete(job.ID, noUse) as WtmActionResult;
 
-        Assert.IsNotNull(result, "Valid Delete POST should return ContentResult (FFResult)");
+        Assert.IsNotNull(result, "Valid Delete POST should return WtmActionResult (FFResultJson, #789 Phase 3C)");
+        Assert.IsTrue(result!.Actions.Any(a => a.Type == "closeDialog"));
+        Assert.IsTrue(result!.Actions.Any(a => a.Type == "refreshGrid"));
 
         var dc = new EtlTestDataContext(seed, DBTypeEnum.Memory);
         Assert.IsFalse(dc.EtlJobDefinitions.Any(j => j.ID == job.ID));
