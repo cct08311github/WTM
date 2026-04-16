@@ -15,6 +15,9 @@ public class MultiTenantTests
     [TestInitialize]
     public void Setup()
     {
+        // Issue #811: Inconclusive when SQL Server not reachable locally.
+        IntegrationTestBase.EnsureSqlServerAvailable();
+
         _cs = IntegrationTestBase.GetConnectionStringForDb("WtmIntTest_MultiTenant");
         _seedDC = new TenantFrameworkContext(_cs, DBTypeEnum.SqlServer);
         _seedDC.Database.EnsureDeleted();

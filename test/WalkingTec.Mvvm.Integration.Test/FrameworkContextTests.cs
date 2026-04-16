@@ -12,6 +12,9 @@ public class FrameworkContextTests
     [TestInitialize]
     public void Setup()
     {
+        // Issue #811: Inconclusive when SQL Server not reachable locally.
+        IntegrationTestBase.EnsureSqlServerAvailable();
+
         var cs = IntegrationTestBase.GetConnectionStringForDb("WtmIntTest_FrameworkCtx");
         _dc = new TestFrameworkContext(cs, DBTypeEnum.SqlServer);
         _dc.Database.EnsureDeleted();
