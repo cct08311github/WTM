@@ -42,6 +42,24 @@ window.ff = {
     DONOTUSE_Text_FailedLoadData: "",
     DONOTUSE_Text_ExportNoData: "",
 
+    // Issue #789 Phase 3B: sanitize AJAX response HTML before inserting into
+    // the DOM via jQuery .html() or innerHTML. Delegates to DOMPurify which
+    // MUST be loaded before framework_layui.js (see _Layout.cshtml,
+    // Login.cshtml script tag order). Fails closed — if DOMPurify is absent
+    // the helper returns an empty string so attacker-controlled HTML is
+    // dropped rather than rendered.
+    SafeHtml: function (rawHtml) {
+        if (typeof window.DOMPurify === 'undefined' ||
+            !window.DOMPurify ||
+            typeof window.DOMPurify.sanitize !== 'function') {
+            return '';
+        }
+        return window.DOMPurify.sanitize(rawHtml || '', {
+            FORBID_TAGS: ['script', 'style'],
+            FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'onblur', 'onchange', 'onsubmit']
+        });
+    },
+
     SetCookie: function (name, value, allwindow) {
         try {
             var cookiePrefix = '', windowGuid = '';
@@ -244,7 +262,8 @@ window.ff = {
                 url: decodeURIComponent(url),
                 type: 'GET',
                 success: function (data) {
-                    $('#' + where).html(data);
+                    // Issue #789 Phase 3B: sanitize raw AJAX response before writing HTML.
+                    $('#' + where).html(ff.SafeHtml(data));
                     $('#' + where).css("overflow-y", "scroll");
                     layer.close(index);
                 },
@@ -330,7 +349,7 @@ window.ff = {
                     var _wrapper = $('<div/>')
                         .attr('id', $.cookie("divid") || '')
                         .addClass(_wrapperClass)
-                        .html(data);
+                        .html(ff.SafeHtml(data));
                     $("#" + divid).parent().empty().append(_wrapper);
                 }
                 layer.close(index);
@@ -370,7 +389,7 @@ window.ff = {
                     var _wrapper = $('<div/>')
                         .attr('id', $.cookie("divid") || '')
                         .addClass('layui-card-body donotuse_pdiv')
-                        .html(str);
+                        .html(ff.SafeHtml(str));
                     $("#" + divid).parent().empty().append(_wrapper);
                 }
             }
@@ -433,7 +452,8 @@ window.ff = {
                     var _wrapperEl = document.createElement('div');
                     _wrapperEl.setAttribute('id', $.cookie("divid") || '');
                     _wrapperEl.className = 'donotuse_pdiv';
-                    _wrapperEl.innerHTML = str;
+                    // Issue #789 Phase 3B: sanitize via DOMPurify before innerHTML.
+                    _wrapperEl.innerHTML = ff.SafeHtml(str);
                     str = _wrapperEl.outerHTML;
                     var area = 'auto';
                     if (width > document.body.clientWidth) {
