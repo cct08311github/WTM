@@ -25,10 +25,10 @@ jobs:
       WTM_E2E_REPORT: test/e2e/results/junit.xml
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup .NET 10
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
@@ -78,7 +78,7 @@ jobs:
 
       - name: Upload screenshots
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: e2e-screenshots
           path: test/e2e/screenshots/
@@ -87,7 +87,7 @@ jobs:
 
       - name: Upload JUnit XML report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: e2e-junit-report
           path: test/e2e/results/junit.xml
