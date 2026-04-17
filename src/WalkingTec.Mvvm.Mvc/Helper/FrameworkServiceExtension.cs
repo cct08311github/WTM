@@ -661,13 +661,17 @@ namespace WalkingTec.Mvvm.Mvc
         public static IServiceCollection AddWtmSession(this IServiceCollection services, int timeout, IConfiguration config)
         {
             var conf = config.Get<Configs>();
+            // Issue #813: honor CookieOptions.SecurePolicy so operators can
+            // force 'Secure' in production (e.g., behind a TLS-terminating
+            // reverse proxy). Default preserved as SameAsRequest.
+            var securePolicy = conf.CookieOptions?.SecurePolicy ?? CookieSecurePolicy.SameAsRequest;
             services.AddSession(options =>
             {
                 options.Cookie.Name = conf.CookiePre + ".Session";
                 options.IdleTimeout = TimeSpan.FromSeconds(timeout);
                 options.Cookie.HttpOnly = true;
                 options.Cookie.SameSite = SameSiteMode.Lax;
-                options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+                options.Cookie.SecurePolicy = securePolicy;
             });
             return services;
         }
@@ -745,7 +749,8 @@ namespace WalkingTec.Mvvm.Mvc
                         options.Cookie.Name = CookieAuthenticationDefaults.CookiePrefix + conf.CookiePre + "." + AuthConstants.CookieAuthName;
                         options.Cookie.HttpOnly = true;
                         options.Cookie.SameSite = SameSiteMode.Strict;
-                        options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+                        // Issue #813: honor CookieOptions.SecurePolicy. Default preserved as SameAsRequest.
+                        options.Cookie.SecurePolicy = cookieOptions.SecurePolicy;
                         options.Cookie.Domain = string.IsNullOrEmpty(cookieOptions.Domain) ? null : cookieOptions.Domain;
                         options.ClaimsIssuer = cookieOptions.Issuer;
                         options.SlidingExpiration = cookieOptions.SlidingExpiration;
