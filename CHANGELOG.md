@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [10.3.0] - 2026-04-17
+
+Security hardening release. Issue #789 six-phase `framework_layui.js`
+refactor plus post-merge follow-ups (#804 / #805 / #806 / #811 / #813).
+Active-code `eval(` count in `framework_layui.js`: **18 → 1** (single centralized
+legacy fallback behind console deprecation warning). DOM-XSS sinks: **7 → 0**.
+All changes are additive / opt-in — no breaking defaults.
+
 ### Added
 - **Security: `UseWtmContentSecurityPolicy()` opt-in CSP middleware** — Apps can now register a Content-Security-Policy response header via `app.UseWtmContentSecurityPolicy()`. Default policy enforces `script-src 'self' 'unsafe-inline'` — `'unsafe-eval'` is intentionally omitted, which closes the issue #789 eval()-execution attack surface built up through Phases 1/2/3A/3B/3C. Keeps `'unsafe-inline'` so existing Razor TagHelper inline scripts still work without a nonce refactor. Supports `ReportOnly` mode and a custom `report-uri` for staged rollout. First-writer-wins: respects any CSP header already set by upstream middleware or reverse proxy. **Breaking for apps that still call `eval()` in their own JS** — opt-in means the default is unchanged; to enable, add `app.UseWtmContentSecurityPolicy()` after eliminating app-level `eval()`. (#789 Phase 3D)
 
@@ -10,7 +18,14 @@
 - **Security: sanitize AJAX response HTML via DOMPurify** — The four `.html(data)` / `innerHTML = str` sinks in `framework_layui.js` (`LoadPage1`, `PostForm`, `BgRequest`, `OpenDialog`) now pass raw AJAX bodies through `ff.SafeHtml` which wraps DOMPurify. Vendored `dompurify.js` as an EmbeddedResource served alongside `framework_layui.js`; load order documented in `_Layout.cshtml`. Fail-closed: when DOMPurify did not load, SafeHtml returns empty string rather than rendering attacker HTML. (#789 Phase 3B, #801)
 - **Security: DOM XSS via cookie-to-id and iframe URL concatenation** — Cookie-sourced ids (`$.cookie("divid")`) are now passed through jQuery `.attr()` / DOM `setAttribute` rather than concatenated into HTML strings, and iframe URLs are set via the `.src` setter. (#789 Phase 3A, #800)
 - **Security: eliminate remaining non-FFResult eval() sites** — combo/tc/selector global-variable access and three TagHelper-templated call sites now use the safe `window[name]` property-lookup pattern. (#789 Phase 2, #799)
+- **Security: `WtmActionResult.Redirect` rejects non-relative URLs** — Open-redirect (CWE-601) hardening. `WtmActionResultExtension.Redirect(url)` now throws `ArgumentException` on `null` / empty / absolute (`http://`, `https://`) / protocol-relative (`//evil.com`) / non-http schemes (`javascript:`, `data:`). Only relative shapes (`/...`, `~/...`, `#...`, `?...`) are accepted. Client-side `ff.DispatchAction` adds a defense-in-depth shape check via `charAt(0)` before assigning `location.href`. (#804, PR #808)
+- **Security: escape `WtmAction.Message` / `Title` before `layui.layer.alert`** — Research confirmed layui 2.5.7's `layer.alert(msg)` concatenates `msg` into `innerHTML`, so the new Phase 3C dispatcher must escape before handing off. `ff.DispatchAction` now routes `action.message` + `action.title` through a new `ff.EscapeText` helper (jQuery `.text()/.html()` idiom) on the `alert` and `message` branches. `ff.Alert` / `ff.Msg` themselves unchanged — legacy callers that pass intentional HTML still work. (#805, PR #809)
+- **Security: `CookieOption.SecurePolicy` is now configurable** — `AddWtmSession` and `AddWtmAuthentication` previously hardcoded `CookieSecurePolicy.SameAsRequest`. Behind a TLS-terminating reverse proxy (nginx, Azure App Service, IIS ARR, Cloudflare) the app sees HTTP from the proxy, so cookies were emitted without the `Secure` flag. New `CookieOption.SecurePolicy` property lets operators set `Always` for production via `appsettings.json` (`CookieOptions:SecurePolicy`). Default preserved as `SameAsRequest` — zero breaking change; explicit opt-in for the hardened behavior. (#813, PR #814)
 - **Security: chart-related eval() removal** — 11 chart dispatch sites in `framework_layui.js` no longer call `eval(identifier + suffix)`. (#789 Phase 1, #798)
+
+### Improved
+- **DX: Integration.Test SQL reachability probe + docker-compose** — `IntegrationTestBase.EnsureSqlServerAvailable()` now runs a short 2 s TCP probe once per assembly (cached via `Lazy<T>`); when SQL Server is not reachable, each integration test reports `AssertInconclusive` (yellow) with a multi-line setup guide instead of `Failed` (red). Added `docker-compose.yml` at repo root (`docker compose up -d mssql`) and `test/WalkingTec.Mvvm.Integration.Test/README.md` with three run-options runbook. From-fresh-clone `dotnet test` now shows 9 yellow skipped (was 9 red failed / 1m13s). CI unchanged — probe succeeds against the service container. (#811, PR #812)
+- **Quality: `#789` tidy-up bundle** — `[Obsolete(DiagnosticId = "WTM789")]` now also on `FResult` class declaration + `FResultExtension` class (previously only on the `FFResult()` factory method). `WtmAction.Type` converted from raw `string` to typed `WtmActionType` enum with `JsonStringEnumConverter(CamelCase)` — wire format unchanged, type system closed. `WtmActionResultExtension.RefreshGrid` emits `Index` only when non-zero (honors `WhenWritingNull`). `WtmCspOptions.ReportUri` XML doc no longer conflates `report-uri` with `report-to`. (#806, PR #810)
 
 ## [10.2.0] - 2026-04-11
 
