@@ -7,7 +7,7 @@ using FluentAssertions;
 using Microsoft.IdentityModel.Tokens;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Mvc.Tests.Fixtures;
-using Xunit;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace WalkingTec.Mvvm.Mvc.Tests.Security
 {
@@ -20,7 +20,8 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
     /// - Validate permission claims boundaries (itcode, tenant, jti present)
     /// - Validate expired tokens (expiration matches config)
     /// </summary>
-    public class JwtClaimsValidationTests : IDisposable
+    [TestClass]
+    public class JwtClaimsValidationTests
     {
         private readonly TokenTestFixture _fixture = new();
         private const string TestSecurityKey = "WTM_Test_Key_AtLeast_32_Characters!!";
@@ -29,7 +30,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
 
         // ─── Claims Content ─────────────────────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public async Task IssuedToken_ContainsItCodeClaim()
         {
             var user = CreateUser("alice");
@@ -39,7 +40,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
             jwt.Claims.Should().Contain(c => c.Type == "itcode" && c.Value == "alice");
         }
 
-        [Fact]
+        [TestMethod]
         public async Task IssuedToken_ContainsJtiClaim()
         {
             var user = CreateUser("bob");
@@ -51,7 +52,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
             jti.Should().NotBeNullOrEmpty();
         }
 
-        [Fact]
+        [TestMethod]
         public async Task IssuedToken_JtiIsUniquePerIssuance()
         {
             var user = CreateUser("charlie");
@@ -63,7 +64,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
             jti1.Should().NotBe(jti2, "each issuance must have a unique JTI to prevent replay");
         }
 
-        [Fact]
+        [TestMethod]
         public async Task IssuedToken_WithTenant_ContainsTenantClaim()
         {
             var user = CreateUser("dave", tenantCode: "tenant_a");
@@ -73,7 +74,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
             jwt.Claims.Should().Contain(c => c.Type == "tenant" && c.Value == "tenant_a");
         }
 
-        [Fact]
+        [TestMethod]
         public async Task IssuedToken_WithoutTenant_OmitsTenantClaim()
         {
             var user = CreateUser("eve");
@@ -85,7 +86,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
 
         // ─── Expiration Boundaries ──────────────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public async Task IssuedToken_ExpirationMatchesConfiguredLifetime()
         {
             var before = DateTime.UtcNow;
@@ -98,7 +99,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
             jwt.ValidTo.Should().BeBefore(after.AddSeconds(3601));
         }
 
-        [Fact]
+        [TestMethod]
         public async Task IssuedToken_ExpiresInMatchesConfiguredSeconds()
         {
             var user = CreateUser("grace");
@@ -110,7 +111,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
 
         // ─── Signature Validation ───────────────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public async Task IssuedToken_ValidatesWithCorrectKey()
         {
             var user = CreateUser("heidi");
@@ -134,7 +135,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
             validatedToken.Should().NotBeNull();
         }
 
-        [Fact]
+        [TestMethod]
         public async Task IssuedToken_FailsValidationWithWrongKey()
         {
             var user = CreateUser("ivan");
@@ -157,7 +158,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
             act.Should().Throw<SecurityTokenSignatureKeyNotFoundException>();
         }
 
-        [Fact]
+        [TestMethod]
         public async Task IssuedToken_FailsValidationWithWrongIssuer()
         {
             var user = CreateUser("judy");
@@ -178,7 +179,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
             act.Should().Throw<SecurityTokenInvalidIssuerException>();
         }
 
-        [Fact]
+        [TestMethod]
         public async Task IssuedToken_FailsValidationWithWrongAudience()
         {
             var user = CreateUser("karl");
@@ -199,7 +200,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
             act.Should().Throw<SecurityTokenInvalidAudienceException>();
         }
 
-        [Fact]
+        [TestMethod]
         public async Task TamperedToken_FailsSignatureValidation()
         {
             var user = CreateUser("lisa");
@@ -230,7 +231,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
 
         // ─── Token Structure ────────────────────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public async Task IssuedToken_HasBearerTypeAndRefreshToken()
         {
             var user = CreateUser("mike");
@@ -242,7 +243,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
             token.ExpiresIn.Should().BeGreaterThan(0);
         }
 
-        [Fact]
+        [TestMethod]
         public async Task IssuedToken_AccessTokenIsThreePartJwt()
         {
             var user = CreateUser("nina");
@@ -270,6 +271,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
             return handler.ReadJwtToken(token);
         }
 
-        public void Dispose() => _fixture.Dispose();
+        [TestCleanup]
+        public void Cleanup() => _fixture?.Dispose();
     }
 }

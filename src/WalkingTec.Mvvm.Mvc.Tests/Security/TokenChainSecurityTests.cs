@@ -5,7 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Auth;
 using WalkingTec.Mvvm.Mvc.Tests.Fixtures;
-using Xunit;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace WalkingTec.Mvvm.Mvc.Tests.Security
 {
@@ -14,18 +14,20 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
     /// Verifies theft-detection, chain revocation, and token uniqueness properties
     /// that go beyond basic happy-path coverage in TokenServiceIntegrationTests.
     /// </summary>
-    public class TokenChainSecurityTests : IDisposable
+    [TestClass]
+    public class TokenChainSecurityTests
     {
-        private readonly TokenTestFixture _fx;
+        private TokenTestFixture _fx = null!;
 
-        public TokenChainSecurityTests()
+        [TestInitialize]
+        public void Setup()
         {
             _fx = new TokenTestFixture();
         }
 
         // ─── Reuse Detection — Multi-Hop Chain ──────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public async Task RefreshChain_ThreeHops_EachPriorTokenRevoked()
         {
             // Issue T1, refresh → T2, refresh → T3
@@ -54,7 +56,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
             e3.IsActive.Should().BeTrue("T3 is the live token at the end of the chain");
         }
 
-        [Fact]
+        [TestMethod]
         public async Task RefreshChain_ReuseAtMidpoint_RevokesAllDescendants()
         {
             // Issue T1 → T2 → T3
@@ -81,7 +83,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
 
         // ─── Token Uniqueness ────────────────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public async Task IssueTokenAsync_RepeatedCalls_AlwaysProduceUniqueTokens()
         {
             const int count = 20;
@@ -98,7 +100,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
                 $"each of {count} issue calls must produce a cryptographically unique refresh token");
         }
 
-        [Fact]
+        [TestMethod]
         public async Task RefreshTokenAsync_Consecutive_NewTokenDiffersFromOld()
         {
             var user = new LoginUserInfo { ITCode = "rotate_user" };
@@ -115,7 +117,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
 
         // ─── Revoke Propagation ──────────────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public async Task RevokedToken_ImmediatelyInactive_CannotRefresh()
         {
             var user = new LoginUserInfo { ITCode = "revoke_user" };
@@ -128,7 +130,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
             result.Should().BeNull("explicitly revoked token must be rejected on refresh");
         }
 
-        [Fact]
+        [TestMethod]
         public async Task ManualRevoke_DoesNotAffectOtherUsersTokens()
         {
             var userA = new LoginUserInfo { ITCode = "user_a" };
@@ -148,7 +150,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
 
         // ─── Expired Token Boundary ──────────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public async Task ExpiredToken_CannotBeRefreshed_EvenIfNotExplicitlyRevoked()
         {
             var expired = new RefreshTokenEntity
@@ -164,6 +166,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
             result.Should().BeNull("expired tokens must be rejected regardless of revocation state");
         }
 
-        public void Dispose() => _fx.Dispose();
+        [TestCleanup]
+        public void Cleanup() => _fx?.Dispose();
     }
 }

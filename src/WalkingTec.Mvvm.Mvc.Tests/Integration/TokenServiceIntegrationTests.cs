@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Auth;
 using WalkingTec.Mvvm.Mvc.Tests.Fixtures;
-using Xunit;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace WalkingTec.Mvvm.Mvc.Tests.Integration
 {
@@ -14,18 +14,20 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Integration
     /// Integration tests for TokenService.
     /// Each test class instance gets its own isolated InMemory DB via TokenTestFixture.
     /// </summary>
-    public class TokenServiceIntegrationTests : IDisposable
+    [TestClass]
+    public class TokenServiceIntegrationTests
     {
-        private readonly TokenTestFixture _fx;
+        private TokenTestFixture _fx = null!;
 
-        public TokenServiceIntegrationTests()
+        [TestInitialize]
+        public void Setup()
         {
             _fx = new TokenTestFixture();
         }
 
         // ─── IssueTokenAsync ───────────────────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public async Task IssueTokenAsync_ValidUser_ReturnsAccessAndRefreshToken()
         {
             var user = new LoginUserInfo { ITCode = "alice", TenantCode = null };
@@ -39,7 +41,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Integration
             token.ExpiresIn.Should().BeGreaterThan(0);
         }
 
-        [Fact]
+        [TestMethod]
         public async Task IssueTokenAsync_PersistsRefreshTokenInDb()
         {
             var user = new LoginUserInfo { ITCode = "bob" };
@@ -54,7 +56,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Integration
             stored.IsActive.Should().BeTrue();
         }
 
-        [Fact]
+        [TestMethod]
         public async Task IssueTokenAsync_NullUser_ThrowsArgumentNullException()
         {
             var act = () => _fx.TokenService.IssueTokenAsync(null!);
@@ -62,7 +64,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Integration
             await act.Should().ThrowAsync<ArgumentNullException>();
         }
 
-        [Fact]
+        [TestMethod]
         public async Task IssueTokenAsync_TwoIssues_ProduceDistinctRefreshTokens()
         {
             var user = new LoginUserInfo { ITCode = "charlie" };
@@ -74,7 +76,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Integration
                 "each issue produces a cryptographically unique token");
         }
 
-        [Fact]
+        [TestMethod]
         public async Task IssueTokenAsync_PreservesTenantCode()
         {
             var user = new LoginUserInfo { ITCode = "tenant_user", TenantCode = "tenant_a" };
@@ -89,7 +91,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Integration
 
         // ─── RefreshTokenAsync ─────────────────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public async Task RefreshTokenAsync_ValidToken_ReturnsNewTokenPairAndRotatesOld()
         {
             var user = new LoginUserInfo { ITCode = "dave" };
@@ -111,7 +113,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Integration
             old.ReplacedByToken.Should().Be(refreshed.RefreshToken);
         }
 
-        [Fact]
+        [TestMethod]
         public async Task RefreshTokenAsync_ExpiredToken_ReturnsNull()
         {
             var expired = new RefreshTokenEntity
@@ -128,7 +130,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Integration
             result.Should().BeNull();
         }
 
-        [Fact]
+        [TestMethod]
         public async Task RefreshTokenAsync_RevokedToken_ReturnsNull()
         {
             var revoked = new RefreshTokenEntity
@@ -146,16 +148,16 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Integration
             result.Should().BeNull();
         }
 
-        [Fact]
+        [TestMethod]
         public async Task RefreshTokenAsync_NonexistentToken_ReturnsNull()
         {
             var result = await _fx.TokenService.RefreshTokenAsync("does_not_exist_token");
             result.Should().BeNull();
         }
 
-        [Theory]
-        [InlineData(null)]
-        [InlineData("")]
+        [TestMethod]
+        [DataRow(null)]
+        [DataRow("")]
         public async Task RefreshTokenAsync_NullOrEmpty_ReturnsNull(string? token)
         {
             var result = await _fx.TokenService.RefreshTokenAsync(token!);
@@ -164,7 +166,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Integration
 
         // ─── Reuse Detection ───────────────────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public async Task RefreshTokenAsync_ReusedToken_RevokesDescendantChain()
         {
             // Issue T1
@@ -192,7 +194,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Integration
 
         // ─── RevokeTokenAsync ──────────────────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public async Task RevokeTokenAsync_ActiveToken_SetsRevokedUtcAndReason()
         {
             var user = new LoginUserInfo { ITCode = "helen" };
@@ -209,7 +211,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Integration
             entity.RevokedByIp.Should().Be("127.0.0.1");
         }
 
-        [Fact]
+        [TestMethod]
         public async Task RevokeTokenAsync_AlreadyRevoked_IsNoOp()
         {
             var revoked = new RefreshTokenEntity
@@ -234,9 +236,9 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Integration
                 "already-revoked token is not modified");
         }
 
-        [Theory]
-        [InlineData(null)]
-        [InlineData("")]
+        [TestMethod]
+        [DataRow(null)]
+        [DataRow("")]
         public async Task RevokeTokenAsync_NullOrEmpty_DoesNotThrow(string? token)
         {
             var act = () => _fx.TokenService.RevokeTokenAsync(token!);
@@ -245,7 +247,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Integration
 
         // ─── Tenant Isolation ──────────────────────────────────────────────────
 
-        [Fact]
+        [TestMethod]
         public async Task IssueTokenAsync_DifferentTenants_TokensHaveDifferentTenantCodes()
         {
             var userA = new LoginUserInfo { ITCode = "judy", TenantCode = "tenant_a" };
@@ -265,6 +267,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Integration
             tokenA.RefreshToken.Should().NotBe(tokenB.RefreshToken);
         }
 
-        public void Dispose() => _fx.Dispose();
+        [TestCleanup]
+        public void Cleanup() => _fx?.Dispose();
     }
 }
