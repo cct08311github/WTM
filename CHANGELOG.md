@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Security: eliminate NU1903 from `System.Security.Cryptography.Xml 8.0.2` transitive** — NPOI 2.7.6 was pulling a vulnerable 8.0.2 version (GHSA-37gx-xxp4-5rgx + GHSA-w3x6-4m5h-cxqf, both HIGH severity) into every test/demo project in the solution. Add a direct `PackageReference` to `WalkingTec.Mvvm.Core.csproj` pinning to 10.0.6 via new `<SystemSecurityCryptographyXmlVersion>` variable in `common.props` (aligns with the rest of the central-version table). All downstream projects now inherit the patched version; `dotnet list package --vulnerable --include-transitive` returns zero NU1903 rows. NPOI unchanged. (#816)
+
 ## [10.3.0] - 2026-04-17
 
 Security hardening release. Issue #789 six-phase `framework_layui.js`
