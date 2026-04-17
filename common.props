@@ -55,6 +55,10 @@
     <SerilogAspNetCoreVersion>10.0.0</SerilogAspNetCoreVersion>
     <QuartzVersion>3.16.1</QuartzVersion>
     <NPOIVersion>2.7.6</NPOIVersion>
+    <!-- Issue #816: pin transitive System.Security.Cryptography.Xml to patched 10.0.6;
+         NPOI 2.7.6 pulls 8.0.2 which has 2 HIGH CVEs (GHSA-37gx-xxp4-5rgx, GHSA-w3x6-4m5h-cxqf).
+         Direct reference on WalkingTec.Mvvm.Core beats transitive. -->
+    <SystemSecurityCryptographyXmlVersion>10.0.6</SystemSecurityCryptographyXmlVersion>
     <ImageSharpVersion>3.1.12</ImageSharpVersion>
     <ImageSharpDrawingVersion>2.1.7</ImageSharpDrawingVersion>
     <AspVersioningVersion>8.1.1</AspVersioningVersion>
