@@ -99,7 +99,7 @@ namespace WalkingTec.Mvvm.Demo.Controllers
                 }
                 else
                 {
-                    return FFResult().CloseDialog().RefreshGrid();
+                    return FFResultJson().CloseDialog().RefreshGrid();
                 }
             }
         }
@@ -131,7 +131,7 @@ namespace WalkingTec.Mvvm.Demo.Controllers
                 }
                 else
                 {
-                    return FFResult().CloseDialog().RefreshGridRow(vm.Entity.ID);
+                    return FFResultJson().CloseDialog().RefreshGridRow(vm.Entity.ID);
                 }
             }
         }
@@ -157,7 +157,7 @@ namespace WalkingTec.Mvvm.Demo.Controllers
             }
             else
             {
-                return FFResult().CloseDialog().RefreshGrid();
+                return FFResultJson().CloseDialog().RefreshGrid();
             }
         }
         #endregion
@@ -190,7 +190,7 @@ namespace WalkingTec.Mvvm.Demo.Controllers
             }
             else
             {
-                return FFResult().RefreshGrid().CloseDialog().Alert("操作成功，共有" + vm.Ids.Length + "条数据被修改");
+                return FFResultJson().RefreshGrid().CloseDialog().Alert("操作成功，共有" + vm.Ids.Length + "条数据被修改");
             }
         }
         #endregion
@@ -211,11 +211,11 @@ namespace WalkingTec.Mvvm.Demo.Controllers
             }
             if (!ModelState.IsValid || !vm.DoBatchDelete())
             {
-                return FFResult().Alert(ModelState.GetErrorJson().GetFirstError());
+                return FFResultJson().Alert(ModelState.GetErrorJson().GetFirstError());
             }
             else
             {
-                return FFResult().RefreshGrid().Alert(Localizer["Sys.BatchDeleteSuccess",vm.Ids.Length]);
+                return FFResultJson().RefreshGrid().Alert(Localizer["Sys.BatchDeleteSuccess",vm.Ids.Length]);
             }
         }
 
@@ -239,7 +239,7 @@ namespace WalkingTec.Mvvm.Demo.Controllers
             }
             else
             {
-                return FFResult().RefreshGrid().CloseDialog().Alert(Localizer["Sys.ImportSuccess", vm.EntityList.Count.ToString()]);
+                return FFResultJson().RefreshGrid().CloseDialog().Alert(Localizer["Sys.ImportSuccess", vm.EntityList.Count.ToString()]);
             }
         }
         #endregion
@@ -278,7 +278,7 @@ namespace WalkingTec.Mvvm.Demo.Controllers
                 }
                 else
                 {
-                    return FFResult().CloseDialog().RefreshGrid();
+                    return FFResultJson().CloseDialog().RefreshGrid();
                 }
             }
         }
@@ -319,7 +319,7 @@ namespace WalkingTec.Mvvm.Demo.Controllers
                 }
                 else
                 {
-                    return FFResult().CloseDialog().RefreshGridRow(vm.Entity.ID);
+                    return FFResultJson().CloseDialog().RefreshGridRow(vm.Entity.ID);
                 }
             }
         }

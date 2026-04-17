@@ -82,7 +82,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
                 }
                 else
                 {
-                    return FFResult().CloseDialog().RefreshGrid();
+                    return FFResultJson().CloseDialog().RefreshGrid();
                 }
             }
         }
@@ -123,7 +123,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
                 }
                 else
                 {
-                    return FFResult().CloseDialog().RefreshGridRow(vm.Entity.ID);
+                    return FFResultJson().CloseDialog().RefreshGridRow(vm.Entity.ID);
                 }
             }
         }
@@ -156,7 +156,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
                 }
                 else
                 {
-                    return FFResult().CloseDialog().RefreshGridRow(vm.Entity.ID);
+                    return FFResultJson().CloseDialog().RefreshGridRow(vm.Entity.ID);
                 }
             }
         }
@@ -204,7 +204,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
                 }
                 else
                 {
-                    return FFResult().CloseDialog().RefreshGridRow(vm.Entity.ID);
+                    return FFResultJson().CloseDialog().RefreshGridRow(vm.Entity.ID);
                 }
             }
         }
@@ -236,7 +236,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
             }
             else
             {
-                return FFResult().CloseDialog().RefreshGrid();
+                return FFResultJson().CloseDialog().RefreshGrid();
             }
         }
 
@@ -273,7 +273,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
             }
             else
             {
-                return FFResult().CloseDialog().RefreshGrid().Alert(Localizer["Sys.BatchEditSuccess", vm.Ids.Length]);
+                return FFResultJson().CloseDialog().RefreshGrid().Alert(Localizer["Sys.BatchEditSuccess", vm.Ids.Length]);
             }
         }
 
@@ -323,7 +323,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
                 }
 
                 await Wtm.RemoveUserCache(itcode.ToArray());
-                return FFResult().CloseDialog().RefreshGrid().Alert(Localizer["Sys.OprationSuccess"]);
+                return FFResultJson().CloseDialog().RefreshGrid().Alert(Localizer["Sys.OprationSuccess"]);
             }
         }
 
@@ -352,7 +352,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
             }
             else
             {
-                return FFResult().CloseDialog().RefreshGrid().Alert(Localizer["Sys.ImportSuccess", vm.EntityList.Count.ToString()]);
+                return FFResultJson().CloseDialog().RefreshGrid().Alert(Localizer["Sys.ImportSuccess", vm.EntityList.Count.ToString()]);
             }
         }
 
@@ -367,7 +367,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
             user.IsValid = enable;
             DC.UpdateProperty(user, x => x.IsValid);
             DC.SaveChanges();
-            return FFResult().RefreshGrid(CurrentWindowId);
+            return FFResultJson().RefreshGrid(CurrentWindowId);
         }
 
         [AllRights]
