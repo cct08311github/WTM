@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Changed
+- **Tests: migrate `WalkingTec.Mvvm.Mvc.Tests` from deprecated xunit 2.9.3 to MSTest** — The only test project still on xunit is now unified with the rest of the WTM test suite (Core/Admin/Api/Etl/Integration all MSTest). Removes the last `dotnet list package --deprecated` hit. 38 tests unchanged; `FluentAssertions` style preserved (framework-agnostic). `[Fact]` → `[TestMethod]`, `[Theory]` + `[InlineData]` → `[TestMethod]` + `[DataRow]`, constructor → `[TestInitialize]`, `IDisposable.Dispose` → `[TestCleanup]`. (#822)
 - **Demo: migrate `FFResult()` → `FFResultJson()` across all demo Controllers** — 123 call sites across 21 files in `demo/WalkingTec.Mvvm.Demo/Controllers/` + `demo/.../Areas/_Admin/Controllers/` updated to the CSP-safe JSON dispatcher path introduced in 10.3.0 (#789 Phase 3C). Demo is now the canonical reference implementation for downstream WTM apps — copy-paste starter code uses the non-deprecated API. Zero `WTM789` obsolete warnings from the demo project (was 123). Build warning count drops 340 → 218. No behavior change: `Alert/Message/CloseDialog/RefreshGrid/RefreshGridRow` have identical wire semantics between `FResult` and `WtmActionResult`. (#818)
 
 ### Fixed
