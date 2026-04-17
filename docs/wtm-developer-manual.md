@@ -1,6 +1,6 @@
 # WTM 開發與使用手冊
 
-> **版本**：10.2.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-04-11
+> **版本**：10.3.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-04-17
 
 WalkingTec MVVM Framework (WTM) 是一套 ASP.NET Core 快速開發框架，以四種 ViewModel 類型為核心，搭配內建代碼生成器、LayUI TagHelper、Analysis Mode、ETL 模組與 Dashboard，提供完整的企業級 CRUD 開發體驗。
 
@@ -726,19 +726,68 @@ public class EmployeeApiController : BaseApiController
 | 認證 | Cookie + Session | JWT Bearer Token |
 | 典型前端 | LayUI（server-rendered） | React / Vue / 手機 App |
 
-### 5.4 FFResult 流暢 API
+### 5.4 FFResultJson 流暢 API（推薦，10.3.0+）
 
-FFResult 是 WTM 特有的前端指令回傳機制，告訴 LayUI 執行動作後該做什麼：
+FFResultJson 是 WTM 的 **CSP 安全** JSON 動作分派機制，告訴 LayUI 執行動作後該做什麼。Server 回傳 `X-WTM-Action: application/json` 標頭 + JSON body，client `ff.DispatchAction` 走白名單 switch，無任何動態代碼執行。
 
 ```csharp
-FFResult()
+FFResultJson()
     .CloseDialog()                  // 關閉對話框
     .RefreshGrid()                  // 重新載入列表
-    .RefreshGridRow(id)             // 僅更新特定行
-    .Alert("成功")                   // 提示訊息
-    .RedirectTo("/Home/Index")      // 跳轉
-    .AddCustomScript("alert('hi')") // 自訂 JS
+    .RefreshGridRow(id)             // 等同 RefreshGrid（layui 無單行刷新）
+    .Alert("成功")                   // 對話框提示
+    .Message("已儲存")               // 輕量 toast 訊息
+    .Redirect("/Home/Index")        // 跳轉（僅接受相對路徑，阻擋 open-redirect）
+    .Reload()                        // 重新載入當前頁面
+    .RefreshPage();                  // 重新渲染 LayUI 主面板
 ```
+
+**常用組合場景：**
+```csharp
+// 場景：新增成功後關閉對話框並刷新列表
+return FFResultJson().CloseDialog().RefreshGrid();
+
+// 場景：編輯成功後刷新
+return FFResultJson().CloseDialog().RefreshGridRow(vm.Entity.ID);
+
+// 場景：刪除成功後刷新並提示
+return FFResultJson().CloseDialog().RefreshGrid()
+    .Alert(Localizer["Sys.DeleteSuccess"]);
+```
+
+**安全契約**：
+- `Alert` / `Message` 的 `msg` / `title` 參數由 dispatcher 透過 `ff.EscapeText`（jQuery `.text()/.html()` idiom）自動轉義，**視為純文字**（避免 layui `layer.alert` 的 innerHTML XSS）
+- `Redirect(url)` 僅接受 `/`, `~/`, `#`, `?` 開頭的相對路徑；絕對 URL / protocol-relative / `javascript:` 一律 `ArgumentException`
+- `Type` 以 `WtmActionType` enum 型別保證（wire 格式為 `"alert"`、`"closeDialog"` 等 camelCase，client 已鎖死）
+
+**Action 清單**：
+
+| 方法 | 客戶端行為 |
+|------|-----------|
+| `CloseDialog()` | `ff.CloseDialog()` |
+| `Alert(msg, title?)` | `layer.alert(escape(msg), { title })` |
+| `Message(msg, title?)` | `layer.msg(escape(msg))` |
+| `RefreshGrid(winId?, index?)` | `ff.RefreshGrid(winId \|\| 'LAY_app_body', index \|\| 0)` |
+| `RefreshGridRow(id, winId?)` | 同 `RefreshGrid`（layui 無單行刷新） |
+| `RefreshPage()` | `layui.index.render()` |
+| `Reload()` | `location.reload()` |
+| `Redirect(url)` | `location.href = url`（僅相對路徑） |
+
+### 5.4.1 FFResult 遺留 API（已 `[Obsolete]`）
+
+舊版 `FFResult()` 透過 `IsScript: true` header + 回傳 JavaScript 字串由 client `eval()` 執行。**10.3.0 起標記 `[Obsolete(DiagnosticId = "WTM789")]`**，編譯期警告 downstream 遷移至 `FFResultJson()`。
+
+```csharp
+// 舊寫法（仍可用，會產生 WTM789 編譯警告）
+return FFResult().CloseDialog().RefreshGrid();
+
+// 新寫法
+return FFResultJson().CloseDialog().RefreshGrid();
+```
+
+**抑制警告（暫緩遷移期間）：** 在 `.csproj` 加 `<NoWarn>WTM789</NoWarn>`。
+
+**Client 端 legacy 路徑**：`ff.DispatchAction` 先檢查 `X-WTM-Action` header，若非 JSON 再走 `IsScript` → `ff._legacyScriptEval` → `eval()`（集中於單一 helper，僅剩 1 個 `eval(` 在 `framework_layui.js`）。下次 major release 將移除此 fallback。
 
 **常用組合場景：**
 ```csharp
@@ -2311,6 +2360,90 @@ _EtlController.Pause   →  URL: /_etl/pause/{id}
 
 **在 `FrameworkFilter.OnResultExecuted` 中寫入**，所以即使 Action 拋出例外也會被記錄。
 
+### 10.7 Content Security Policy（opt-in 中介軟體，10.3.0+）
+
+`UseWtmContentSecurityPolicy()` 為可選 CSP 中介軟體，在 response 掛 `Content-Security-Policy` 標頭，封鎖 `'unsafe-eval'`（issue #789 六階段 `framework_layui.js` eval 清除的收益落地）。
+
+**預設策略（不含 `'unsafe-eval'`）：**
+
+```
+default-src 'self';
+script-src  'self' 'unsafe-inline';
+style-src   'self' 'unsafe-inline' https://fonts.googleapis.com;
+img-src     'self' data: https:;
+font-src    'self' data: https://fonts.gstatic.com;
+connect-src 'self';
+frame-src   'self';
+object-src  'none';
+base-uri    'self';
+form-action 'self';
+```
+
+**啟用：**
+
+```csharp
+// Startup.Configure
+app.UseWtmContentSecurityPolicy();                         // 預設策略
+
+app.UseWtmContentSecurityPolicy(o => o.ReportOnly = true); // 監控模式（不封鎖、只報告）
+
+app.UseWtmContentSecurityPolicy(o =>
+{
+    o.ScriptSrc = "'self'";               // 嚴格：禁 inline scripts（需配合 TagHelper 重構）
+    o.ReportUri = "/csp-report";
+});
+```
+
+**關鍵取捨：**
+
+| 指令 | 預設 | 原因 |
+|------|------|------|
+| `'unsafe-eval'` | **omitted** | #789 六階段清除 eval，框架自身無需此例外 |
+| `'unsafe-inline'` | **kept** | LayUI TagHelper 大量輸出 inline `<script>` 與 `style=""`；移除需重構所有 TagHelper（#807 epic 追蹤） |
+| `img-src data: https:` | 寬鬆 | 支援上傳圖片 base64 + 外部 CDN |
+
+**行為：**
+- **Opt-in**：app 未呼叫 → 不加 header（零 breaking change）
+- **First-writer-wins**：若上游中介軟體或反向代理已設過 `Content-Security-Policy`，本中介軟體不覆蓋
+- **ReportOnly 模式**：emit `Content-Security-Policy-Report-Only` 而非 enforcement
+
+**遷移須知：** 啟用前先搜尋 app 自有 JS 的 `" + "eval(" + "` 呼叫，全部改用 JSON 或 `Function` 等 CSP 相容寫法。
+
+### 10.8 Cookie SecurePolicy（10.3.0+）
+
+`CookieOption.SecurePolicy` 控制 session 與認證 cookie 的 `Secure` flag 設定策略，影響 `AddWtmSession` 與 `AddWtmAuthentication` 兩條路徑：
+
+| 值 | 行為 | 場景 |
+|---|------|------|
+| `SameAsRequest`（預設） | 請求為 HTTPS 時設 `Secure`，HTTP 則不設 | 本地 HTTP dev、direct-HTTPS production |
+| `Always` | **永遠**設 `Secure` flag | Production 建議，特別是 TLS-terminating reverse proxy（nginx、Azure App Service、IIS ARR、Cloudflare）後面 |
+| `None` | 永不設 `Secure` flag | 僅用於 HTTP-only 特殊場景（非常不建議） |
+
+**反向代理場景的陷阱：**
+
+```
+Client ──HTTPS──▶ nginx ──HTTP──▶ WTM app
+                                    │
+                                    └── 看到 HTTP → SameAsRequest 不加 Secure flag
+                                        → cookie 可被瀏覽器送往任意 HTTP endpoint
+                                        → session hijack 風險
+```
+
+**Production 設定：**
+
+```json
+// appsettings.Production.json
+{
+  "CookieOptions": {
+    "SecurePolicy": "Always",
+    "LoginPath": "/Login/Login",
+    "Expires": 3600
+  }
+}
+```
+
+**預設保持 `SameAsRequest`**：upgrade WTM 不會突然中斷本地 HTTP dev 或現有 direct-HTTPS 部署。只有明確 opt-in `Always` 才獲得強化行為。
+
 ---
 
 ## 11. 多租戶
@@ -2761,13 +2894,37 @@ WTM 支援對真實資料庫執行整合測試，以驗證 EF Core 查詢、Migr
 
 ### 15.1 執行整合測試
 
-整合測試透過 `TestCategory` 標記區分，需設定環境變數指定連線字串：
+**選項 1：Docker（推薦，10.3.0+）**
+
+專案根目錄備有 `docker-compose.yml`，一鍵啟動與 CI 相同版本的 SQL Server 2022：
 
 ```bash
-# SQL Server 整合測試
+# 啟動 SQL Server（同 CI 使用的映像）
+docker compose up -d mssql
+
+# 等 ~15s 冷啟動完成，執行整合測試
+dotnet test test/WalkingTec.Mvvm.Integration.Test -c Release
+
+# 用完清除
+docker compose down -v
+```
+
+**選項 2：連線現有 SQL Server**
+
+```bash
 export WTM_TEST_MSSQL="Server=localhost;Database=WtmTest;User Id=sa;Password=YourPassword;TrustServerCertificate=True"
 dotnet test --filter "TestCategory=Integration" -c Release
 ```
+
+**選項 3：跳過整合測試**
+
+```bash
+dotnet test WalkingTec.Mvvm.sln --filter "TestCategory!=Integration" -c Release
+# 或使用 CI 專用的 solution filter
+dotnet test ci.slnf -c Release
+```
+
+**無 SQL 時的行為（10.3.0+）**：若本機未跑 SQL Server，`IntegrationTestBase.EnsureSqlServerAvailable()` 會透過 `Lazy<T>` 快取的 2 秒 TCP 探測偵測，每個整合測試改報 `AssertInconclusive`（黃色略過）而非 `Failed`（紅色），並附多行設定指引訊息。CI 上的 service container 能連 → 探測回傳 null → 正常執行。
 
 ### 15.2 撰寫整合測試
 
@@ -2998,13 +3155,16 @@ public class ProductVM : BaseCRUDVM<Product>
 | `JwtOptions.Expires` | `3600` | Access Token 有效期（秒） |
 | `JwtOptions.RefreshExpires` | `604800` | Refresh Token 有效期（秒，預設 7 天） |
 | `JwtOptions.SecurityKey` | — | JWT 簽名金鑰（至少 32 字元，**必須修改**） |
+| `CookieOptions.SecurePolicy` | `"SameAsRequest"` | Cookie `Secure` flag 策略（`SameAsRequest` / `Always` / `None`；production 建議 `Always`，詳見 §10.8） |
+| `CookieOptions.Expires` | `3600` | Cookie 驗證有效期（秒） |
+| `CookieOptions.LoginPath` | `"/Login/Login"` | 未登入時重導向的登入路徑 |
 
 ### 17.4 version.props
 
 ```xml
 <Project>
   <PropertyGroup>
-    <VersionPrefix>8.5.1</VersionPrefix>
+    <VersionPrefix>10.3.0</VersionPrefix>
   </PropertyGroup>
 </Project>
 ```
