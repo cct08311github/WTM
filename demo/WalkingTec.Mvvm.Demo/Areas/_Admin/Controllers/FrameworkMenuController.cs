@@ -75,7 +75,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
                 }
                 else
                 {
-                    return FFResult().CloseDialog().RefreshGrid();
+                    return FFResultJson().CloseDialog().RefreshGrid();
                 }
             }
         }
@@ -130,7 +130,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
                 }
                 else
                 {
-                    return FFResult().CloseDialog().RefreshGrid();
+                    return FFResultJson().CloseDialog().RefreshGrid();
                 }
             }
         }
@@ -154,7 +154,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
             }
             else
             {
-                return FFResult().CloseDialog().RefreshGrid();
+                return FFResultJson().CloseDialog().RefreshGrid();
             }
         }
 
@@ -176,7 +176,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
         public ActionResult RefreshMenu()
         {
             Cache.Delete(nameof(GlobalData.AllMenus));
-            return FFResult().Alert(Localizer["Sys.OprationSuccess"]);
+            return FFResultJson().Alert(Localizer["Sys.OprationSuccess"]);
         }
 
         [ActionDescription("GetActionsByModelId")]

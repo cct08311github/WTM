@@ -108,7 +108,7 @@ namespace WalkingTec.Mvvm.Demo.Controllers
 
                 if (rv == true && ModelState.IsValid)
                 {
-                    return FFResult().CloseDialog().Message(Localizer["Reg.Success"]);
+                    return FFResultJson().CloseDialog().Message(Localizer["Reg.Success"]);
                 }
                 else
                 {
@@ -153,7 +153,7 @@ namespace WalkingTec.Mvvm.Demo.Controllers
                 var result = await Wtm.CallAPI<string>("mainhost", "/api/_account/ChangePassword", HttpMethodEnum.POST, vm, 10);
                 if (result.StatusCode == System.Net.HttpStatusCode.OK)
                 {
-                    return FFResult().CloseDialog().Alert(Localizer["Login.ChangePasswordSuccess"]);
+                    return FFResultJson().CloseDialog().Alert(Localizer["Login.ChangePasswordSuccess"]);
                 }
                 else if (result.StatusCode == System.Net.HttpStatusCode.BadRequest)
                 {
@@ -170,7 +170,7 @@ namespace WalkingTec.Mvvm.Demo.Controllers
                 }
                 else
                 {
-                    return FFResult().CloseDialog().Alert(Localizer["Sys.Error"]);
+                    return FFResultJson().CloseDialog().Alert(Localizer["Sys.Error"]);
                 }
             }
             else
@@ -182,7 +182,7 @@ namespace WalkingTec.Mvvm.Demo.Controllers
                 else
                 {
                     vm.DoChange();
-                    return FFResult().CloseDialog().Alert(Localizer["Login.ChangePasswordSuccess"]);
+                    return FFResultJson().CloseDialog().Alert(Localizer["Login.ChangePasswordSuccess"]);
                 }
             }
         }

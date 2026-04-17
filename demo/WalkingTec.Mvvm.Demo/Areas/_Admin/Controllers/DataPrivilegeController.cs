@@ -64,7 +64,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
             else
             {
                 await vm.DoAddAsync();
-                return FFResult().CloseDialog().RefreshGrid();
+                return FFResultJson().CloseDialog().RefreshGrid();
             }
         }
 
@@ -94,7 +94,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
             else
             {
                 await vm.DoEditAsync();
-                return FFResult().CloseDialog().RefreshGrid();
+                return FFResultJson().CloseDialog().RefreshGrid();
             }
         }
 
@@ -111,7 +111,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
                 vm = Wtm.CreateVM<DataPrivilegeVM>(values: x => x.Entity.TableName == ModelName && x.Entity.GroupCode == Id && x.DpType == Type);
             }
             await vm.DoDeleteAsync();
-            return FFResult().RefreshGrid();
+            return FFResultJson().RefreshGrid();
         }
 
         [AllRights]

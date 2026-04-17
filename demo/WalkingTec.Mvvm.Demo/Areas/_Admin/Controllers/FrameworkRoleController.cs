@@ -68,7 +68,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
             else
             {
                 vm.DoAdd();
-                return FFResult().CloseDialog().RefreshGrid();
+                return FFResultJson().CloseDialog().RefreshGrid();
             }
         }
 
@@ -99,7 +99,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
             else
             {
                 vm.DoEdit();
-                return FFResult().CloseDialog().RefreshGrid();
+                return FFResultJson().CloseDialog().RefreshGrid();
             }
         }
 
@@ -130,7 +130,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
             }
             else
             {
-                return FFResult().CloseDialog().RefreshGrid();
+                return FFResultJson().CloseDialog().RefreshGrid();
             }
         }
 
@@ -167,7 +167,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
                 DC.SaveChanges();
                 await Wtm.RemoveUserCacheByRole(RoleCode.ToArray());
                 await Wtm.RemoveRoleCache(Wtm.LoginUserInfo.CurrentTenant);
-                return FFResult().CloseDialog().RefreshGrid();
+                return FFResultJson().CloseDialog().RefreshGrid();
             }
         }
 
@@ -197,7 +197,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
             else
             {
                 await Wtm.RemoveRoleCache(Wtm.LoginUserInfo.CurrentTenant);
-                return FFResult().CloseDialog().RefreshGrid().Alert(Localizer["Sys.ImportSuccess", vm.EntityList.Count.ToString()]);
+                return FFResultJson().CloseDialog().RefreshGrid().Alert(Localizer["Sys.ImportSuccess", vm.EntityList.Count.ToString()]);
             }
         }
 
@@ -224,9 +224,9 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
             await vm.DoChangeAsync();
             //if(vm.MSD.IsValid == false)
             //{
-            //    return FFResult().CloseDialog().Alert(vm.MSD.GetFirstError());
+            //    return FFResultJson().CloseDialog().Alert(vm.MSD.GetFirstError());
             //}
-            return FFResult().CloseDialog().Alert(Localizer["Sys.OprationSuccess"]);
+            return FFResultJson().CloseDialog().Alert(Localizer["Sys.OprationSuccess"]);
         }
 
         [ActionDescription("Sys.Export")]

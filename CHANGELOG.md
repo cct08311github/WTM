@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **Demo: migrate `FFResult()` → `FFResultJson()` across all demo Controllers** — 123 call sites across 21 files in `demo/WalkingTec.Mvvm.Demo/Controllers/` + `demo/.../Areas/_Admin/Controllers/` updated to the CSP-safe JSON dispatcher path introduced in 10.3.0 (#789 Phase 3C). Demo is now the canonical reference implementation for downstream WTM apps — copy-paste starter code uses the non-deprecated API. Zero `WTM789` obsolete warnings from the demo project (was 123). Build warning count drops 340 → 218. No behavior change: `Alert/Message/CloseDialog/RefreshGrid/RefreshGridRow` have identical wire semantics between `FResult` and `WtmActionResult`. (#818)
+
 ### Fixed
 - **Security: eliminate NU1903 from `System.Security.Cryptography.Xml 8.0.2` transitive** — NPOI 2.7.6 was pulling a vulnerable 8.0.2 version (GHSA-37gx-xxp4-5rgx + GHSA-w3x6-4m5h-cxqf, both HIGH severity) into every test/demo project in the solution. Add a direct `PackageReference` to `WalkingTec.Mvvm.Core.csproj` pinning to 10.0.6 via new `<SystemSecurityCryptographyXmlVersion>` variable in `common.props` (aligns with the rest of the central-version table). All downstream projects now inherit the patched version; `dotnet list package --vulnerable --include-transitive` returns zero NU1903 rows. NPOI unchanged. (#816)
 
