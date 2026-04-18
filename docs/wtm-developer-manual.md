@@ -2421,6 +2421,41 @@ _EtlController.Pause   →  URL: /_etl/pause/{id}
 
 **在 `FrameworkFilter.OnResultExecuted` 中寫入**，所以即使 Action 拋出例外也會被記錄。
 
+#### 10.6.1 ActionLog 保留政策（opt-in 背景服務，10.4.0+，#832）
+
+`ActionLog` 會隨流量線性成長（典型每日 1K–10K 筆），半年就會累積百萬筆，造成：
+
+- 後台 ActionLog 列表查詢分頁變慢
+- 資料庫儲存 / 備份成本增加
+- 金融、醫療等合規場景要求「保留期限」—原生 WTM 無此機制
+- 單次 `DELETE FROM ActionLogs WHERE ActionTime < ...` 是地雷—大交易鎖表
+
+`AddWtmActionLogRetention(configure)` 是 opt-in 的 `IHostedService`，每日排定時間跑一次批次刪除：
+
+```csharp
+// Program.cs
+services.AddWtmActionLogRetention(opt =>
+{
+    opt.Enabled = true;          // master switch
+    opt.RunAtLocalHour = 3;       // 03:00 local
+    opt.NormalDays = 90;
+    opt.ExceptionDays = 365;      // 例外留久一點，方便事後 debug
+    opt.DebugDays = 30;
+    opt.JobDays = 90;
+    opt.BatchSize = 5000;         // 每次 DELETE 最多 5000 列，避免大交易鎖表
+});
+```
+
+**關鍵設計決策：**
+
+- **per-`LogType` TTL**：Normal/Exception/Debug/Job 各自獨立天數；設 `0` 或負數等於保留無限（該類別不刪）。
+- **批次迴圈**：使用 EF Core 7+ `ExecuteDeleteAsync`（`DELETE ... WHERE ActionTime < @cutoff AND LogType = @t`），搭配 `OrderBy(ActionTime).Take(BatchSize)` 分批刪；每輪迴圈直到該類別當日配額耗盡才收工，避免一次大交易導致鎖表。
+- **容錯**：任何單輪失敗都只記 Warning（不 crash hosting），下一個排程還會重試。
+- **結構化日誌**：每輪結束寫一筆 `ActionLogRetention: sweep complete. Normal=... Exception=... total=...`。
+- **opt-out**：`opt.Enabled = false` 則服務閒置（不刪任何東西），方便某些金融客戶以外部 archival pipeline 管理保留。
+
+**手動觸發**：測試或 admin API 可直接呼叫 `svc.RunRetentionOnceAsync(options, ct)`，不必等到排程時間。
+
 ### 10.7 Content Security Policy（opt-in 中介軟體，10.3.0+）
 
 `UseWtmContentSecurityPolicy()` 為可選 CSP 中介軟體，在 response 掛 `Content-Security-Policy` 標頭，封鎖 `'unsafe-eval'`（issue #789 六階段 `framework_layui.js` eval 清除的收益落地）。
