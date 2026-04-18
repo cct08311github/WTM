@@ -48,5 +48,17 @@ namespace WalkingTec.Mvvm.Core.Cache
         /// </summary>
         Task RefreshAsync<T>(DbContext dc, string? tenantId = null, CancellationToken ct = default)
             where T : TopBasePoco;
+
+        /// <summary>
+        /// 取得指定型別的統計快照（hits / misses / timestamps / currently-cached keys count）。
+        /// 未註冊為 cacheable 的型別回傳 <c>null</c>。統計僅在本 process 生命週期內累積，
+        /// 重啟歸零。Issue #826。
+        /// </summary>
+        LookupCacheStats? GetStats(Type entityType);
+
+        /// <summary>
+        /// 取得所有註冊型別的統計快照。順序依 type FullName 升冪。Issue #826。
+        /// </summary>
+        IReadOnlyList<LookupCacheStats> GetStats();
     }
 }

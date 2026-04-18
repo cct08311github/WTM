@@ -2768,6 +2768,79 @@ public override void Validate()
 
 **經驗法則：** 資料量 < 1000 筆 且 變動頻率 < 每分鐘 1 次 → 適合用 Lookup Cache。
 
+### 12.8 Stats / Health API（10.4.0+）
+
+`ILookupCacheService.GetStats()` 公開內部統計，讓 admin / SRE 判斷 cache 是否 warm、invalidate 是否生效、hit rate 是否合理。
+
+```csharp
+// 取得所有已註冊型別的統計
+var all = _lookupCacheService.GetStats();
+foreach (var s in all)
+{
+    Console.WriteLine($"{s.EntityTypeName}: hits={s.Hits} misses={s.Misses} " +
+        $"cached-keys={s.CurrentlyCachedTenantKeys} " +
+        $"last-warm={s.LastWarmAt:o} last-invalidate={s.LastInvalidatedAt:o}");
+}
+
+// 取得單一型別
+var cityStats = _lookupCacheService.GetStats(typeof(CityCode));
+if (cityStats == null)
+{
+    // 該型別未標 [CacheLookup]
+}
+```
+
+**`LookupCacheStats` 欄位：**
+
+| 欄位 | 意義 |
+|------|------|
+| `EntityTypeName` | 型別 FullName（string） |
+| `Hits` | Cache-hit read 次數（fast-path） |
+| `Misses` | Cache-miss read 次數（DB load path，含首次載入與 TTL 到期後重載） |
+| `InvalidateCount` | `Invalidate<T>` / `InvalidateType` 呼叫次數 |
+| `CurrentlyCachedTenantKeys` | 目前記憶體中持有的 tenant key 數；多租戶場景每 tenant 獨立 key |
+| `LastAccessAt` | 最後一次 `GetAll`（hit or miss）UTC 時間；從未存取則為 null |
+| `LastWarmAt` | 最後一次 SetCache（`WarmOnStartup` 啟動載入 或 `RefreshAsync` 完成）UTC 時間 |
+| `LastInvalidatedAt` | 最後一次 invalidate UTC 時間 |
+| `TtlMinutesConfigured` | 對應 `CacheLookupAttribute.TtlMinutes` |
+| `WarmOnStartup` | 對應 `CacheLookupAttribute.WarmOnStartup` |
+
+**範疇與限制：**
+- 計數器為 **process-lifetime** — 重啟歸零，非持久化
+- 統計查詢本身（`GetStats` 呼叫）**不**計入 Hits / Misses
+- 聚合粒度為 per-type（跨 tenant 合併）；tenant 分層維度刻意不做（記憶體膨脹 vs 效益不符）
+- 未暴露 Prometheus / OpenTelemetry exporter — app 可自行在 `/metrics` endpoint 或 background hosted service 取 stats 轉換為想要的監控格式
+- 框架不內建 HTTP endpoint；app 可寫 5 行 controller 包：
+
+```csharp
+[ApiController, Route("admin/cache"), Authorize(Roles = "Admin")]
+public class CacheStatsController : ControllerBase
+{
+    private readonly ILookupCacheService _cache;
+    public CacheStatsController(ILookupCacheService cache) => _cache = cache;
+
+    [HttpGet("stats")]
+    public ActionResult<IReadOnlyList<LookupCacheStats>> Stats() => Ok(_cache.GetStats());
+}
+```
+
+**運維場景範例：**
+
+```
+scenario：用戶回報「我改了資料，前端還看到舊值」
+  1. admin hit /admin/cache/stats
+  2. 看對應 type 的 LastInvalidatedAt：
+     - null / 很久以前 → cache 沒失效，確認 Invalidate 呼叫邏輯
+     - 剛剛 → cache 已失效，問題在 DB replication / app 層
+  3. 看 CurrentlyCachedTenantKeys：失效後應為 0；大於 0 則是其他 tenant 的 key（不影響當前用戶）
+
+scenario：部署後啟動 warmup 是否成功
+  1. admin hit /admin/cache/stats
+  2. 看 WarmOnStartup=true 的 type：LastWarmAt 應為啟動時間（幾分鐘內）
+     - null → warmup service 沒跑 或 DB 查詢拋例外；查 Serilog
+     - 遠早於啟動 → warmup 失敗且 fallback 到 lazy load
+```
+
 ---
 
 ## 13. 測試指南

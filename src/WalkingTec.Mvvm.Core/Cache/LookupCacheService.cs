@@ -37,11 +37,78 @@ namespace WalkingTec.Mvvm.Core.Cache
         // 啟動時掃描結果（Build 後不再修改，FrozenDictionary 優化讀取路徑）
         private readonly FrozenDictionary<Type, CacheLookupAttribute> _registry;
 
+        // Issue #826: per-type stats tracker (thread-safe counters + timestamps
+        // + live tenant-key set). Lazy-populated the first time a type is
+        // touched via any stats-affecting path.
+        private readonly ConcurrentDictionary<Type, TypeStatsTracker> _stats = new();
+
         public LookupCacheService(IMemoryCache cache, IEnumerable<Assembly> assemblies, LookupCacheOptions? options = null)
         {
             _cache = cache ?? throw new ArgumentNullException(nameof(cache));
             _options = options ?? new LookupCacheOptions();
             _registry = ScanAssemblies(assemblies);
+        }
+
+        // ─── Issue #826: internal stats tracker ──────────────────────────────
+
+        private sealed class TypeStatsTracker
+        {
+            public long Hits;
+            public long Misses;
+            public long InvalidateCount;
+            public long LastAccessAtTicks;       // 0 = never
+            public long LastWarmAtTicks;         // 0 = never
+            public long LastInvalidatedAtTicks;  // 0 = never
+
+            // Tenant keys currently in memory. Guarded by lock because
+            // set/remove happens in small bursts, never hot-loop.
+            public readonly HashSet<string> TenantKeys = new();
+            public readonly Lock TenantKeysLock = new();
+        }
+
+        private TypeStatsTracker GetOrCreateTracker(Type t) =>
+            _stats.GetOrAdd(t, _ => new TypeStatsTracker());
+
+        private void RecordHit(Type t)
+        {
+            var tracker = GetOrCreateTracker(t);
+            Interlocked.Increment(ref tracker.Hits);
+            Interlocked.Exchange(ref tracker.LastAccessAtTicks, DateTimeOffset.UtcNow.Ticks);
+        }
+
+        private void RecordMiss(Type t)
+        {
+            var tracker = GetOrCreateTracker(t);
+            Interlocked.Increment(ref tracker.Misses);
+            Interlocked.Exchange(ref tracker.LastAccessAtTicks, DateTimeOffset.UtcNow.Ticks);
+        }
+
+        private void RecordWarm(Type t, string key)
+        {
+            var tracker = GetOrCreateTracker(t);
+            Interlocked.Exchange(ref tracker.LastWarmAtTicks, DateTimeOffset.UtcNow.Ticks);
+            lock (tracker.TenantKeysLock)
+            {
+                tracker.TenantKeys.Add(key);
+            }
+        }
+
+        private void RecordInvalidate(Type t, string? tenantSpecificKey)
+        {
+            var tracker = GetOrCreateTracker(t);
+            Interlocked.Increment(ref tracker.InvalidateCount);
+            Interlocked.Exchange(ref tracker.LastInvalidatedAtTicks, DateTimeOffset.UtcNow.Ticks);
+            lock (tracker.TenantKeysLock)
+            {
+                if (tenantSpecificKey != null)
+                {
+                    tracker.TenantKeys.Remove(tenantSpecificKey);
+                }
+                else
+                {
+                    tracker.TenantKeys.Clear();
+                }
+            }
         }
 
         // ─── ILookupCacheService ──────────────────────────────────────────────
@@ -52,7 +119,10 @@ namespace WalkingTec.Mvvm.Core.Cache
 
             // Fast path：快取命中直接回傳
             if (_cache.TryGetValue<IReadOnlyList<T>>(key, out var cached) && cached != null)
+            {
+                RecordHit(typeof(T));
                 return cached;
+            }
 
             // Slow path：per-key lock 防 stampede
             var semaphore = _keyLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
@@ -61,9 +131,13 @@ namespace WalkingTec.Mvvm.Core.Cache
             {
                 // Double-check：其他執行緒可能已填入
                 if (_cache.TryGetValue<IReadOnlyList<T>>(key, out cached) && cached != null)
+                {
+                    RecordHit(typeof(T));
                     return cached;
+                }
 
                 // 此為唯一查 DB 的執行緒（或 timeout fallback）
+                RecordMiss(typeof(T));
                 var data = LoadFromDb<T>(dc);
                 return SetCache<T>(key, data, tenantId);
             }
@@ -82,7 +156,10 @@ namespace WalkingTec.Mvvm.Core.Cache
 
             // Fast path
             if (_cache.TryGetValue<IReadOnlyList<T>>(key, out var cached) && cached != null)
+            {
+                RecordHit(typeof(T));
                 return cached;
+            }
 
             // Slow path：per-key async lock 防 stampede
             var semaphore = _keyLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
@@ -91,8 +168,12 @@ namespace WalkingTec.Mvvm.Core.Cache
             {
                 // Double-check
                 if (_cache.TryGetValue<IReadOnlyList<T>>(key, out cached) && cached != null)
+                {
+                    RecordHit(typeof(T));
                     return cached;
+                }
 
+                RecordMiss(typeof(T));
                 var data = await LoadFromDbAsync<T>(dc, ct).ConfigureAwait(false);
                 return SetCache<T>(key, data, tenantId);
             }
@@ -104,7 +185,9 @@ namespace WalkingTec.Mvvm.Core.Cache
 
         public void Invalidate<T>(string? tenantId = null) where T : TopBasePoco
         {
-            _cache.Remove(BuildKey(typeof(T), tenantId));
+            var key = BuildKey(typeof(T), tenantId);
+            _cache.Remove(key);
+            RecordInvalidate(typeof(T), key);
         }
 
         public void InvalidateType(Type entityType)
@@ -123,6 +206,9 @@ namespace WalkingTec.Mvvm.Core.Cache
             }
             old?.Cancel();
             // Intentionally not calling old.Dispose() — see comment above.
+
+            // Issue #826: stats — all tenant keys for this type dropped.
+            RecordInvalidate(entityType, tenantSpecificKey: null);
         }
 
         public bool IsCacheable(Type entityType) => _registry.ContainsKey(entityType);
@@ -187,7 +273,63 @@ namespace WalkingTec.Mvvm.Core.Cache
             }
             entry.AddExpirationToken(new CancellationChangeToken(token));
 
+            // Issue #826: record warm + add to tenant-key set.
+            RecordWarm(typeof(T), key);
+
             return data;
+        }
+
+        // Issue #826: GetStats implementations.
+        public LookupCacheStats? GetStats(Type entityType)
+        {
+            if (!_registry.TryGetValue(entityType, out var attr)) { return null; }
+
+            _stats.TryGetValue(entityType, out var tracker);
+            return BuildStats(entityType, attr, tracker);
+        }
+
+        public IReadOnlyList<LookupCacheStats> GetStats()
+        {
+            var results = new List<LookupCacheStats>(_registry.Count);
+            foreach (var kv in _registry.OrderBy(x => x.Key.FullName, StringComparer.Ordinal))
+            {
+                _stats.TryGetValue(kv.Key, out var tracker);
+                results.Add(BuildStats(kv.Key, kv.Value, tracker));
+            }
+            return results;
+        }
+
+        private static LookupCacheStats BuildStats(Type t, CacheLookupAttribute attr, TypeStatsTracker? tracker)
+        {
+            static DateTimeOffset? FromTicks(long ticks) =>
+                ticks == 0 ? null : new DateTimeOffset(ticks, TimeSpan.Zero);
+
+            if (tracker == null)
+            {
+                return new LookupCacheStats
+                {
+                    EntityTypeName = t.FullName ?? t.Name,
+                    TtlMinutesConfigured = attr.TtlMinutes,
+                    WarmOnStartup = attr.WarmOnStartup,
+                };
+            }
+
+            int currentKeys;
+            lock (tracker.TenantKeysLock) { currentKeys = tracker.TenantKeys.Count; }
+
+            return new LookupCacheStats
+            {
+                EntityTypeName = t.FullName ?? t.Name,
+                Hits = Interlocked.Read(ref tracker.Hits),
+                Misses = Interlocked.Read(ref tracker.Misses),
+                InvalidateCount = Interlocked.Read(ref tracker.InvalidateCount),
+                CurrentlyCachedTenantKeys = currentKeys,
+                LastAccessAt = FromTicks(Interlocked.Read(ref tracker.LastAccessAtTicks)),
+                LastWarmAt = FromTicks(Interlocked.Read(ref tracker.LastWarmAtTicks)),
+                LastInvalidatedAt = FromTicks(Interlocked.Read(ref tracker.LastInvalidatedAtTicks)),
+                TtlMinutesConfigured = attr.TtlMinutes,
+                WarmOnStartup = attr.WarmOnStartup,
+            };
         }
 
         private static List<T> LoadFromDb<T>(DbContext dc) where T : TopBasePoco =>
