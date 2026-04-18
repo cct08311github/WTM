@@ -3191,6 +3191,63 @@ fakeTime.Advance(TimeSpan.FromHours(2));
 
 ---
 
+## 14A. 健康檢查（10.4.0+）
+
+WTM 提供 ASP.NET Core Health Check 的 wrapper，預設內建 liveness 探針，可擴充至 readiness 群組並用於 Kubernetes / load balancer 健康狀態判斷。
+
+### 14A.1 最小設定
+
+```csharp
+// Program.cs
+services.AddWtmHealthChecks();
+app.UseWtmHealthChecks();  // /healthz（liveness）+ /healthz/ready（readiness）
+```
+
+- `/healthz` → 固定 200（只要 process 還活著）— K8s liveness 用
+- `/healthz/ready` → 跑所有註冊 check（readiness 判斷）
+
+### 14A.2 Framework-owned checks（#836）
+
+內建 `WtmDataContextHealthCheck`：用 `IDataContext.Database.CanConnectAsync` 檢 DB，預設 2 秒 timeout。
+
+```csharp
+services.AddWtmHealthChecks(checks =>
+    checks.AddWtmDataContextCheck(
+        name: "datacontext",         // default
+        timeout: TimeSpan.FromSeconds(2),
+        tags: new[] { "ready" })     // default tag
+);
+```
+
+回應（`/healthz/ready`）：
+
+```json
+{
+  "status": "Healthy",
+  "totalDurationMs": 42,
+  "checks": [
+    { "name": "self", "status": "Healthy", "durationMs": 0, "tags": ["live"] },
+    { "name": "datacontext", "status": "Healthy", "durationMs": 12,
+      "description": "DataContext connection OK.", "tags": ["ready"],
+      "data": { "dbType": "SQLite" } }
+  ]
+}
+```
+
+Unhealthy 時加 `exception` 欄位（sanitize 過的 message，不含 stack trace）。
+
+### 14A.3 JSON 回應格式
+
+`useJsonResponse` 預設 `false`（保留原本 plain-text 行為避免 silent breaking change）。要換成結構化 JSON 請明確 opt-in：
+
+```csharp
+app.UseWtmHealthChecks(useJsonResponse: true);  // application/json + per-check detail
+```
+
+打開後 Kubernetes / Prometheus / Datadog 可直接 scrape 每個 check 的 `durationMs` / `description` / `exception`。
+
+---
+
 ## 15. Integration Tests 整合測試
 
 WTM 支援對真實資料庫執行整合測試，以驗證 EF Core 查詢、Migration 和 DB-specific 行為。
