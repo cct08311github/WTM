@@ -19,6 +19,13 @@ namespace WalkingTec.Mvvm.Core.Dashboard
 
             services.AddSingleton<IDashboardService, JsonFileDashboardService>();
 
+            // Issue #824: register built-in REST widget data source. Requires
+            // IHttpClientFactory + IMemoryCache — register them here if the
+            // host hasn't already (both are idempotent via TryAdd-style).
+            services.AddHttpClient();
+            services.AddMemoryCache();
+            services.AddTransient<IWidgetDataSource, RestWidgetDataSource>();
+
             if (services.All(d => d.ServiceType != typeof(GroupByStrategyResolver)))
             {
                 services.AddSingleton(GroupByStrategyResolver.Default);
