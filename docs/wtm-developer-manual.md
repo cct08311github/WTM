@@ -2728,6 +2728,51 @@ app.UseWtmContentSecurityPolicy();     // CSP 獨立 middleware，繼續用
 - 不處理 CSP — 已在 #789 Phase 3D 交付（see §10.7）
 - 不打 COOP / COEP / CORP — 高級 cross-origin isolation 通常需要 app-level 取捨，framework 預設留白
 
+### 10.12 Slow-request logging middleware（opt-in，10.4.0+，#840）
+
+`UseWtmSlowRequestLogging()` 是輕量 SRE helper：用 `Stopwatch` 包住整個 middleware pipeline，當 request 耗時超過門檻就發一筆 **structured Warning log**。沒超門檻就幾乎零成本（只有 stopwatch + 一次 path 前綴比對）。
+
+```csharp
+app.UseWtmSlowRequestLogging();                              // 預設 1000 ms
+
+app.UseWtmSlowRequestLogging(opt =>
+{
+    opt.ThresholdMs = 500;
+    opt.LogLevel = LogLevel.Error;                            // 改打 Error 方便分流
+    opt.IncludeQueryString = false;                           // 預設 false 避免 PII 外漏
+    opt.IncludeClientIp = true;
+    opt.PathExclusions = new[] { "/healthz", "/_framework", "/_js", "/static" };
+});
+```
+
+**日誌欄位**（Serilog structured template）：
+
+```
+WRN SlowRequest Path={Path} Method={Method} Status={StatusCode} ElapsedMs={Elapsed} User={User} ClientIp={ClientIp}
+```
+
+log aggregator（Loki / Seq / Elastic）按 `Path` / `Method` / `User` 分組就能直接畫 P95 latency dashboard，**不需要** APM。
+
+**Options**：
+
+| 欄位 | 預設 | 說明 |
+|------|------|------|
+| `ThresholdMs` | `1000` | 超過此毫秒數才 log |
+| `LogLevel` | `Warning` | 超門檻 log 的 level（SRE 可分流到 Error / alerting pipeline）|
+| `IncludeClientIp` | `true` | 是否把 request 來源 IP 放進 log（PII 議題：IP 有時也算）|
+| `IncludeQueryString` | **`false`** | 預設不記 query string — tokens / IDs / emails 常常從這裡洩漏 |
+| `PathExclusions` | `["/healthz", "/_framework", "/_js", "/_content", "/favicon.ico"]` | prefix 比對，大小寫不敏感；靜態資源 / health probe 預設排除避免 log 洪水 |
+
+**安全設計**：
+- `LogSanitizer` 處理 path / IP / query string — 防 CR/LF / 控制字元 log injection
+- `IncludeQueryString` 預設 false — 因 structured log 通常被 index，query string 裡的 token 容易變成 searchable secret
+- `PathExclusions` 有預設覆蓋率：static + health，避免「一開啟就發現 healthz 每 5 秒 spam 一次」的常見 footgun
+
+**不做**：
+- 不維護 per-endpoint histogram / percentile — 那是 OpenTelemetry metrics 的領域，非 log middleware 職責
+- 不做 per-endpoint 門檻 — v1 只支援一個 global threshold；app 應設為最嚴 SLA 的值
+- 不做 sampled full-request tracing — 是另一個 surface
+
 ---
 
 ## 11. 多租戶
