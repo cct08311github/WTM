@@ -3,10 +3,12 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
+using System.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Quartz;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Etl.Models;
+using WalkingTec.Mvvm.Etl.Pipeline;
 
 namespace WalkingTec.Mvvm.Etl.Scheduling;
 
@@ -193,6 +195,65 @@ public class EtlSchedulerService
             await _scheduler.DeleteJob(jobKey);
 
         await UpdateStatusAsync(jobId, EtlJobStatus.Disabled);
+    }
+
+    /// <summary>
+    /// Dry-run (#834): execute the pipeline in preview mode — Extract + Transform
+    /// only, skip EnsureStaging / Truncate / BulkLoad / Merge / watermark commit.
+    /// Returns the first-batch preview + validation warnings without writing any
+    /// row to the target DB. Bypasses Quartz entirely and does not write any
+    /// <see cref="EtlRunLog"/> record (operator can preview without polluting
+    /// the audit trail).
+    /// </summary>
+    /// <param name="jobId">Job definition ID to preview.</param>
+    /// <param name="sampleSize">Max preview rows to return (default 10).</param>
+    /// <param name="cancellationToken">Cancellation.</param>
+    public virtual async Task<EtlExecutionResult> DryRunAsync(
+        Guid jobId,
+        int sampleSize = 10,
+        CancellationToken cancellationToken = default)
+    {
+        using var scope = _sp.CreateScope();
+        var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
+
+        var jobDef = await wtm.DC.Set<EtlJobDefinition>().FindAsync(new object[] { jobId }, cancellationToken);
+        if (jobDef == null)
+            throw new InvalidOperationException($"Job {jobId} not found.");
+
+        var sourceCs = wtm.ConfigInfo.Connections?
+            .FirstOrDefault(c => c.Key == jobDef.SourceCsKey);
+        if (sourceCs == null)
+            throw new InvalidOperationException($"Connection key '{jobDef.SourceCsKey}' not found in Configs.Connections");
+
+        var targetCsEntry = wtm.ConfigInfo.Connections?
+            .FirstOrDefault(c => c.Key == jobDef.TargetCsKey);
+        if (targetCsEntry == null)
+            throw new InvalidOperationException($"Target connection key '{jobDef.TargetCsKey}' not found in Configs.Connections");
+
+        using var source = EtlSourceFactory.CreateSource(jobDef.SourceDbType);
+        var loader = EtlSourceFactory.CreateLoader(jobDef.TargetDbType);
+
+        var watermarkValue = jobDef.LastWatermarkValue ?? jobDef.InitialWatermarkValue;
+        var watermark = new WatermarkStrategy(
+            jobDef.WatermarkType, jobDef.WatermarkColumn, watermarkValue, jobDef.WatermarkTimeZone);
+
+        var config = new EtlPipelineConfig
+        {
+            JobId = jobId,
+            JobName = jobDef.Name,
+            SourceConnectionString = sourceCs.Value ?? "",
+            TargetConnectionString = targetCsEntry.Value ?? "",
+            QueryTemplate = jobDef.QueryTemplate,
+            TargetTableName = jobDef.TargetTableName,
+            MergeKeyColumn = jobDef.MergeKeyColumn,
+            BatchSize = 1000, // dry-run caps batch size — preview, not full extract
+            StagingTable = new StagingTableSpec($"STG_{jobDef.TargetTableName}_dryrun"),
+            IsDryRun = true,
+            DryRunPreviewSampleSize = Math.Max(0, sampleSize),
+        };
+
+        var executor = new EtlPipelineExecutor(source, loader);
+        return await executor.ExecuteAsync(config, watermark, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>從 RunLog snapshot 重跑</summary>

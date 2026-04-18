@@ -144,6 +144,42 @@ public class _EtlJobController : BaseController
         }
     }
 
+    /// <summary>
+    /// Dry-run preview (#834): extract + transform only, never writes to target.
+    /// Returns extracted row count, the first N preview rows, any validation
+    /// warnings (missing merge key, etc.), and the watermark value that *would*
+    /// be committed if this were a real run.
+    /// </summary>
+    [ActionDescription("預覽執行 (Dry-Run)")]
+    [HttpPost]
+    public async Task<IActionResult> DryRun(Guid id, [FromQuery] int? sampleSize)
+    {
+        try
+        {
+            var size = sampleSize is int s && s > 0 ? Math.Min(s, 100) : 10;
+            var result = await _scheduler.DryRunAsync(id, size, HttpContext.RequestAborted);
+            return Ok(new
+            {
+                success = result.Success,
+                isDryRun = result.IsDryRun,
+                extractedRows = result.ExtractedRows,
+                elapsedMs = result.ElapsedMs,
+                newWatermarkValue = result.NewWatermarkValue,
+                previewRows = result.PreviewRows,
+                validationWarnings = result.ValidationWarnings,
+                errorMessage = result.ErrorMessage,
+            });
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("not found"))
+        {
+            return NotFound(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
     [ActionDescription("暫停 Job")]
     [HttpPost]
     public async Task<IActionResult> Pause(Guid id)

@@ -119,4 +119,9 @@ public class WatermarkStrategy
     {
         _pendingValue = null;
     }
+
+    /// <summary>
+    /// 偷看 pending value（不 commit，不清除）— 乾跑模式用來報告「如果真跑 watermark 會變成什麼」(#834)
+    /// </summary>
+    public string? PeekPendingValue() => _pendingValue ?? CurrentValue;
 }
