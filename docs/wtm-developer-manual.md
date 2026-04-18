@@ -1,6 +1,6 @@
 # WTM 開發與使用手冊
 
-> **版本**：10.3.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-04-17
+> **版本**：10.4.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-04-18
 
 WalkingTec MVVM Framework (WTM) 是一套 ASP.NET Core 快速開發框架，以四種 ViewModel 類型為核心，搭配內建代碼生成器、LayUI TagHelper、Analysis Mode、ETL 模組與 Dashboard，提供完整的企業級 CRUD 開發體驗。
 
@@ -1612,6 +1612,8 @@ ETL 模組內建完整管理介面（`_EtlJobController`），支援 CRUD 和即
 
 #### 8.7.1 Dry-Run 預覽模式（10.4.0+，#834）
 
+關鍵 API：`EtlPipelineConfig.IsDryRun` 旗標 + `POST /_EtlJob/DryRun` 管理端點。
+
 新增 Job 或改 `QueryTemplate` / `MergeKeyColumn` 之後，**先 Dry-Run 再 TriggerNow** 可以在不動目標表的前提下驗證：
 
 - SQL 語法、權限、連線字串是否可行（Extract 會真的執行）
@@ -1909,6 +1911,8 @@ public class QuarterTargetDataSource : IWidgetDataSource
 ```
 
 ### 9.4.1 REST 資料來源（10.4.0+，無需 C#）
+
+關鍵 API：`RestWidgetDataSource` + `WidgetDataSourceKind.Rest`。
 
 **用途**：直接從外部 HTTP endpoint 取 JSON 資料，不需要寫 `IWidgetDataSource` 實作；admin 在 Dashboard JSON config 填 URL + headers + `jsonPath` 即可。
 
@@ -3344,6 +3348,8 @@ app.UseWtmHealthChecks(useJsonResponse: true);  // application/json + per-check 
 ```
 
 打開後 Kubernetes / Prometheus / Datadog 可直接 scrape 每個 check 的 `durationMs` / `description` / `exception`。
+
+關鍵 API：`WtmHealthCheckResponseWriter.WriteJsonResponse` 是寫入 JSON payload 的靜態集回。
 
 ---
 
