@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **Cache: Lookup Cache stats / health API** — New `ILookupCacheService.GetStats()` / `.GetStats(Type)` methods expose hits, misses, invalidate count, last-access / last-warm / last-invalidate timestamps, and currently-cached tenant key count per type. Closes the "is my cache actually warm?" / "did the invalidate take effect?" observability gap. Process-lifetime counters (reset on restart) via `Interlocked`; tenant-key set guarded by `Lock`. Framework stays SDK-agnostic — apps wire `LookupCacheStats` into their telemetry (Prometheus / OpenTelemetry / custom). Manual §12.8. (#826)
 - **Dashboard: `RestWidgetDataSource` (no C# required for external HTTP endpoints)** — New built-in `WidgetDataSourceKind.Rest` lets admins configure REST-backed widgets via Dashboard JSON config: `{"kind":"Rest","options":{"url":...,"jsonPath":"$.data",...}}`. Supports GET/POST with custom headers, simple dot-path JSON extraction, response caching via `IMemoryCache`, response size cap (default 1 MiB), request timeout (default 10 s). SSRF guard rejects private/loopback/link-local/multicast/IPv6-ULA IPs by default (incl. AWS IMDS `169.254.169.254`); opt-in via `allowPrivateNetwork: true`. HTTPS-only by default; opt-in `allowHttp: true` for internal plain-HTTP endpoints. Zero breaking change — existing `Custom` and `Analysis` data sources untouched. Manual §9.4.1. (#824)
 
 ### Changed
