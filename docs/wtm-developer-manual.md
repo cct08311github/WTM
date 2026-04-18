@@ -2505,6 +2505,52 @@ Client ──HTTPS──▶ nginx ──HTTP──▶ WTM app
 
 **預設保持 `SameAsRequest`**：upgrade WTM 不會突然中斷本地 HTTP dev 或現有 direct-HTTPS 部署。只有明確 opt-in `Always` 才獲得強化行為。
 
+### 10.9 Per-endpoint Rate Limit `[WtmRateLimit]`（10.4.0+）
+
+`[WtmRateLimit(permits, windowSeconds)]` 為單一 controller action 或整個 controller 加上**較嚴格的 per-IP quota**，疊加在 `AddWtmRateLimiting` 裝的全域 limiter 之上。專為 brute-force-sensitive 端點設計（登入 / 密碼重設 / 忘記密碼）。
+
+```csharp
+[HttpPost("/Login/Login")]
+[WtmRateLimit(5, 60)]    // 每 IP 每 60 秒最多 5 次
+public IActionResult Login(LoginDTO vm) { ... }
+
+[HttpPost("/Account/ResetPassword")]
+[WtmRateLimit(3, 300)]   // 每 IP 每 5 分鐘最多 3 次
+public IActionResult ResetPassword(ResetPasswordDTO vm) { ... }
+
+// 也可貼在 Controller 類別上（action 層覆寫優先）
+[WtmRateLimit(10, 60)]
+public class SensitiveController : ControllerBase { ... }
+```
+
+**設計要點**：
+- **Per-IP per-endpoint 獨立 bucket** — 攻擊者在 `/Login` 耗光 quota 不影響 `/ResetPassword`
+- **Policy dedup**：多個 actions 共用相同 `(permits, window, queue)` → 共用單一 registered policy（避免 policy 爆炸）
+- **疊加全域 limiter**：per-endpoint 不會取消全域；兩者皆檢查，先命中的拒絕
+- **預設 queue=0**：超過限額立即 429（brute-force 場景中 queue 不幫攻擊者）
+- **啟動時 assembly 掃描**：`AddWtmRateLimiting` 掃描所有已載入 assembly，找出所有 `[WtmRateLimit]` 的 `(permits, window, queue)` unique 組合，動態 `AddPolicy` 註冊
+- **ASP.NET Core 集成**：`IActionModelConvention` 於 model-build 階段把 `WtmRateLimitAttribute` 映射成 `EnableRateLimitingAttribute` 放進 endpoint metadata；runtime 由內建 rate-limit middleware 接手
+- **未啟用則無效**：必須同時 `services.AddWtmRateLimiting()` + `app.UseWtmRateLimiting()` 才生效
+
+**拒絕回應**：HTTP 429 Too Many Requests，Serilog 會記錄一筆 `Rate limit exceeded` warning（`ClientIp` + `Path` + `Method`）— 跟全域 limiter 的 `OnRejected` 同一 logger。
+
+**驗證範例**：
+
+```csharp
+// 在測試用 TestServer 裡
+var r1 = await client.GetAsync("/Login");  // 200
+var r2 = await client.GetAsync("/Login");  // 200 (第 2 次)
+var r3 = await client.GetAsync("/Login");  // 200 (第 3 次)
+var r4 = await client.GetAsync("/Login");  // 200 (第 4 次)
+var r5 = await client.GetAsync("/Login");  // 200 (第 5 次)
+var r6 = await client.GetAsync("/Login");  // 429 ⛔ quota 用罄
+```
+
+**限制**：
+- 只支援 fixed-window（非 sliding / token-bucket）— 簡單、低延遲、足夠擋 brute-force
+- Per-IP 分區；未支援 per-user / per-tenant 分區（後者可透過 `WtmRateLimitingOptions.CustomConfig` 自行加 policy）
+- Controller 類別與 action 同時貼 `[WtmRateLimit]` 時 **action 層優先**
+
 ---
 
 ## 11. 多租戶
