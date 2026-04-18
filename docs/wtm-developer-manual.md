@@ -2674,6 +2674,60 @@ app.UseWtmCorrelationId(o => o.AdoptInbound = false);          // 不信任 upst
 - 不支援多 header fallback chain（一個主 header 即可）
 - 不加 HMAC / 簽章（correlation ID 非安全 token）
 
+### 10.11 Secure response headers middleware（opt-in，10.4.0+，#838）
+
+`UseWtmSecureHeaders()` 把 OWASP Secure Headers Project 推薦的 hardening header 一次打在每個 response 上，跟 `UseWtmContentSecurityPolicy()` 互補：
+
+```csharp
+// Startup.Configure — 用預設值（HSTS 仍然 off）
+app.UseWtmSecureHeaders();
+
+// 生產環境：打開 HSTS + DENY frame
+app.UseWtmSecureHeaders(opt =>
+{
+    opt.HstsEnabled = true;
+    opt.HstsMaxAgeSeconds = 63_072_000;     // 2 年
+    opt.HstsIncludePreload = true;          // 僅在登記 hstspreload.org 後才開
+    opt.XFrameOptions = "DENY";
+});
+```
+
+**預設寫入的 headers**：
+
+| Header | 預設值 | 說明 |
+|--------|-------|------|
+| `X-Content-Type-Options` | `nosniff` | 防止 MIME sniffing 繞過 |
+| `X-Frame-Options` | `SAMEORIGIN` | Clickjacking baseline（舊瀏覽器 fallback；CSP `frame-ancestors` 在新瀏覽器優先）|
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | 限制 Referer header 外漏（同步於主流瀏覽器預設）|
+| `Permissions-Policy` | `accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()` | 預設拒絕所有敏感 Web API（app 需要時 override）|
+| `Strict-Transport-Security` | **opt-in**（`HstsEnabled = false`）| 啟用後 `max-age=31536000; includeSubDomains`；**僅在 HTTPS 請求才寫入** |
+
+**設計要點**：
+
+1. **Per-header 關閉**：把欄位設成 `null` 即不輸出該 header，例如 `opt.ReferrerPolicy = null`
+2. **HSTS 預設 off**：因為 HSTS 指令一旦 cache，瀏覽器會拒絕未來的 HTTP fallback；在 TLS 還未確定完美的階段打開是 footgun。我們 force explicit opt-in（`HstsEnabled = true`）並在 middleware 裡再用 `Request.IsHttps` gate，雙保險
+3. **First-writer-wins**：上游 reverse proxy（AWS ALB / Cloudflare / nginx）已經寫了某個 header，本 middleware 不覆寫。App 可用自訂 middleware 在前面 pre-set 來 override 本 middleware 的預設值
+4. **與 CSP 分開**：CSP 複雜度高（directive 組合、nonce、reporting）值得獨立 middleware；hardening bundle 則是幾個 constant-ish header 打一起即可
+
+**完整推薦配置（production + HTTPS + 主域）**：
+
+```csharp
+app.UseWtmSecureHeaders(opt =>
+{
+    opt.HstsEnabled = true;
+    opt.HstsMaxAgeSeconds = 63_072_000;
+    opt.HstsIncludeSubDomains = true;
+    opt.HstsIncludePreload = false;    // 等穩定再送審 hstspreload.org
+    opt.XFrameOptions = "DENY";        // 完全禁止被框架嵌入
+});
+app.UseWtmContentSecurityPolicy();     // CSP 獨立 middleware，繼續用
+```
+
+**不做**：
+- 不輸出 `X-XSS-Protection` — 該 header 自 Chrome 78 / Firefox 17 後已 deprecate，新瀏覽器忽略，舊瀏覽器 coverage 不足以值得 framework 層管理
+- 不處理 CSP — 已在 #789 Phase 3D 交付（see §10.7）
+- 不打 COOP / COEP / CORP — 高級 cross-origin isolation 通常需要 app-level 取捨，framework 預設留白
+
 ---
 
 ## 11. 多租戶
