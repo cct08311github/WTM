@@ -1163,22 +1163,32 @@ namespace WalkingTec.Mvvm.Mvc
         /// <list type="bullet">
         ///   <item><term><paramref name="livePath"/></term><description>Liveness probe — returns 200 if the process is alive (default: <c>/healthz</c>).</description></item>
         ///   <item><term><paramref name="readyPath"/></term><description>Readiness probe — runs all registered checks (default: <c>/healthz/ready</c>).</description></item>
+        ///   <item><term><paramref name="useJsonResponse"/></term><description>When <c>true</c>, responses include per-check duration / description / exception as JSON (<see cref="WtmHealthCheckResponseWriter.WriteJsonResponse"/>). Default <c>false</c> to preserve the ASP.NET Core plain-text writer — opt in via <c>app.UseWtmHealthChecks(useJsonResponse: true)</c> (#836).</description></item>
         /// </list>
         /// </summary>
         public static IApplicationBuilder UseWtmHealthChecks(
             this IApplicationBuilder app,
             string livePath = "/healthz",
-            string readyPath = "/healthz/ready")
+            string readyPath = "/healthz/ready",
+            bool useJsonResponse = false)
         {
-            app.UseHealthChecks(livePath, new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+            var liveOptions = new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
             {
                 Predicate = r => r.Tags.Contains("live")
-            });
-
-            app.UseHealthChecks(readyPath, new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+            };
+            var readyOptions = new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
             {
                 Predicate = _ => true
-            });
+            };
+
+            if (useJsonResponse)
+            {
+                liveOptions.ResponseWriter = WtmHealthCheckResponseWriter.WriteJsonResponse;
+                readyOptions.ResponseWriter = WtmHealthCheckResponseWriter.WriteJsonResponse;
+            }
+
+            app.UseHealthChecks(livePath, liveOptions);
+            app.UseHealthChecks(readyPath, readyOptions);
 
             return app;
         }
