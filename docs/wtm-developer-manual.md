@@ -1870,6 +1870,67 @@ public class QuarterTargetDataSource : IWidgetDataSource
 }
 ```
 
+### 9.4.1 REST 資料來源（10.4.0+，無需 C#）
+
+**用途**：直接從外部 HTTP endpoint 取 JSON 資料，不需要寫 `IWidgetDataSource` 實作；admin 在 Dashboard JSON config 填 URL + headers + `jsonPath` 即可。
+
+**Dashboard config：**
+
+```json
+{
+  "id": "weather-taipei",
+  "widget": "kpi",
+  "dataSource": {
+    "kind": "Rest",
+    "options": {
+      "url": "https://api.weather.gov/points/25.03,121.56",
+      "method": "GET",
+      "headers": { "Accept": "application/json" },
+      "jsonPath": "$.properties.forecast",
+      "cacheTtlSeconds": 300,
+      "timeoutSeconds": 10,
+      "maxResponseBytes": 1048576,
+      "allowPrivateNetwork": false,
+      "allowHttp": false
+    }
+  }
+}
+```
+
+**`jsonPath` 支援**：僅簡單 dot-path（`$`、`$.data`、`$.result.items`）。不支援 wildcard、array filter；進階需求用 `Custom` DataSource。
+
+**回應型別映射：**
+
+| JSON 形狀 | `WidgetDataResult` | 適合 widget |
+|-----------|-------------------|-------------|
+| scalar (`42`, `"hi"`, `true`) | `Value` | `kpi`, `progress` |
+| array of objects | `Rows[]` + `Columns[]` | `table`, `chart` |
+| array of primitives | `Rows[{value}]` + `Columns=["value"]` | `chart` |
+| single object | `Rows[ { ...obj } ]` + `Columns[]` | `kpi`, `list` |
+
+**SSRF 防護（預設 on）：**
+
+Admin-supplied URL 是 classic SSRF 攻擊面。預設禁以下 IP 範圍（hostname resolve 後檢查）：
+
+| 範圍 | 例子 |
+|------|------|
+| RFC 1918 私網 | `10.*.*.*`, `172.16-31.*.*`, `192.168.*.*` |
+| Loopback | `127.*.*.*`, `::1` |
+| Link-local | `169.254.*.*`（含 AWS IMDS `169.254.169.254`） |
+| Multicast | `224.0.0.0/4` |
+| IPv6 ULA / link-local / multicast | `fc00::/7`, `fe80::/10`, `ff00::/8` |
+
+opt-in 內部 endpoint：設 `allowPrivateNetwork: true`（搭配 `allowHttp: true` 若用 plain HTTP）。
+
+**安全與性能上限：**
+
+- Response body 上限 `maxResponseBytes`（預設 1 MiB）— 防 memory 爆炸
+- 請求 timeout `timeoutSeconds`（預設 10s）
+- 回應以 `cacheTtlSeconds`（預設 60s）快取於 `IMemoryCache`，key = `method + url + body + jsonPath`；設 0 停用快取
+- URL 僅接受 `https://`（預設）；`http://` 需 `allowHttp: true` opt-in
+
+**不支援的範圍**：無 OAuth2 flow、無 retry/backoff、無 streaming、無 outbound webhook 接收（這些請用 `Custom` DataSource）。
+
 ### 9.5 Analysis Mode 資料來源
 
 Widget 可直接使用任何 `[EnableAnalysis]` 的 ListVM 作為資料來源，無需寫自訂 DataSource：
