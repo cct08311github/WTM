@@ -1604,10 +1604,48 @@ ETL 模組內建完整管理介面（`_EtlJobController`），支援 CRUD 和即
 | 列表/搜尋 | `/_EtlJob/Index`, `Search` | Job 清單（含狀態、下次執行時間） |
 | 新增/編輯/刪除 | `/_EtlJob/Create`, `Edit`, `Delete` | 標準 CRUD |
 | 手動觸發 | `POST /_EtlJob/TriggerNow?id=` | 立即執行一次（不影響排程） |
+| 預覽執行（Dry-Run）| `POST /_EtlJob/DryRun?id=&sampleSize=10` | 只抓第一批 + transform，**不寫目標表**（10.4.0+，#834） |
 | 暫停/恢復 | `POST /_EtlJob/Pause`, `Resume` | Quartz 排程暫停/恢復 |
 | 中斷執行 | `POST /_EtlJob/Abort?id=` | 中斷正在執行的 Job |
 | 跳過下次 | `POST /_EtlJob/SkipNext?id=` | 設定 SkipCount++ |
 | 重新排程 | `POST /_EtlJob/Reschedule?id=&newCron=` | 更新 Cron 並重排 |
+
+#### 8.7.1 Dry-Run 預覽模式（10.4.0+，#834）
+
+新增 Job 或改 `QueryTemplate` / `MergeKeyColumn` 之後，**先 Dry-Run 再 TriggerNow** 可以在不動目標表的前提下驗證：
+
+- SQL 語法、權限、連線字串是否可行（Extract 會真的執行）
+- `MergeKeyColumn` 是否存在於 source columns
+- Transform mapper 輸出長什麼樣
+- 下次真跑時 watermark 會 commit 成什麼值
+- source 有沒有資料可抓（空 source 會出警告）
+
+**與 TriggerNow 的差異：**
+
+| | TriggerNow | DryRun |
+|-|-----------|--------|
+| Extract | ✓ 全部 | ✓ 只第一批 |
+| Transform | ✓ | ✓ |
+| EnsureStagingTable / Truncate / BulkLoad / Merge | ✓ | ✗ |
+| Watermark commit | ✓ | ✗（計算但不寫回） |
+| 寫入 RunLog | ✓ | ✗（不污染 audit trail）|
+
+**Response payload：**
+
+```json
+{
+  "success": true,
+  "isDryRun": true,
+  "extractedRows": 1000,
+  "elapsedMs": 412,
+  "newWatermarkValue": "2026-04-18T05:30:00",
+  "previewRows": [ { "OrderNo": "ORD-00000001", "Amount": 100, "UpdatedAt": "..." } ],
+  "validationWarnings": [ "MergeKeyColumn 'bogus' not found in source columns: [...]" ],
+  "errorMessage": null
+}
+```
+
+`sampleSize` query param 控制 `previewRows` 長度（預設 10，上限 100）。
 
 ### 8.8 監控 API
 

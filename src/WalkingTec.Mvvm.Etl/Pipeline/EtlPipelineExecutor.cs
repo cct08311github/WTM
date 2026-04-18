@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Generic;
 using System.Data;
 using System.Diagnostics;
 using System.Linq;
@@ -22,6 +23,13 @@ namespace WalkingTec.Mvvm.Etl.Pipeline;
 ///    d. 更新進度
 /// 4. Merge staging → target
 /// 5. 成功 → commit watermark；失敗 → discard watermark
+///
+/// Dry-run mode（<see cref="EtlPipelineConfig.IsDryRun"/>, #834）：
+///   0. 僅做快速參數驗證
+///   1. Extract（只抓第一個 batch，驗證 SQL）
+///   2. Transform
+///   3. 驗證 MergeKeyColumn 存在於 source columns
+///   4. 回傳前 N 筆預覽 + ValidationWarnings；<b>不</b>寫 staging / target / watermark
 /// </summary>
 public class EtlPipelineExecutor
 {
@@ -37,13 +45,18 @@ public class EtlPipelineExecutor
     }
 
     /// <summary>
-    /// 執行完整 ETL Pipeline
+    /// 執行完整 ETL Pipeline（或 dry-run 預覽模式）
     /// </summary>
     public async Task<EtlExecutionResult> ExecuteAsync(
         EtlPipelineConfig config,
         WatermarkStrategy watermark,
         CancellationToken cancellationToken = default)
     {
+        if (config.IsDryRun)
+        {
+            return await ExecuteDryRunAsync(config, watermark, cancellationToken).ConfigureAwait(false);
+        }
+
         var sw = Stopwatch.StartNew();
         int totalExtracted = 0;
         int totalLoaded = 0;
@@ -147,6 +160,141 @@ public class EtlPipelineExecutor
                 LoadedRows = totalLoaded,
                 ElapsedMs = sw.ElapsedMilliseconds,
                 ErrorMessage = EtlErrorSanitizer.Sanitize(ex)
+            };
+        }
+    }
+
+    /// <summary>
+    /// Dry-run mode: extract-and-inspect without writing anything (#834).
+    /// Never calls EnsureStagingTable / TruncateStaging / BulkLoad / Merge /
+    /// watermark commit. Iterates at most one batch so operator gets feedback
+    /// quickly regardless of source size.
+    /// </summary>
+    private async Task<EtlExecutionResult> ExecuteDryRunAsync(
+        EtlPipelineConfig config,
+        WatermarkStrategy watermark,
+        CancellationToken cancellationToken)
+    {
+        var sw = Stopwatch.StartNew();
+        int extractedRows = 0;
+        var warnings = new List<string>();
+        var preview = new List<IDictionary<string, object?>>();
+
+        try
+        {
+            // Parameter validation upgraded to warnings in dry-run (informational,
+            // never fatal) so operator sees all issues in one pass.
+            if (config.BatchSize <= 0)
+                warnings.Add($"BatchSize must be greater than 0, got {config.BatchSize}.");
+            if (string.IsNullOrWhiteSpace(config.MergeKeyColumn))
+                warnings.Add("MergeKeyColumn is null or empty — real run will throw ArgumentException.");
+            if (config.DryRunPreviewSampleSize < 0)
+                warnings.Add($"DryRunPreviewSampleSize is negative ({config.DryRunPreviewSampleSize}); treated as 0.");
+
+            var sampleCap = Math.Max(0, config.DryRunPreviewSampleSize);
+            var wmParam = watermark.GetParameterValue();
+
+            await foreach (var batch in _source.ExtractBatchesAsync(
+                config.SourceConnectionString, config.QueryTemplate, wmParam,
+                Math.Max(1, config.BatchSize), cancellationToken))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                extractedRows = batch.Rows.Count;
+
+                var transformed = config.TransformFunc != null
+                    ? config.TransformFunc(batch)
+                    : batch;
+
+                // Validate that MergeKeyColumn exists in source columns — the
+                // most common misconfiguration and the one that causes the
+                // worst downstream damage (merge on wrong key → dup rows).
+                if (!string.IsNullOrWhiteSpace(config.MergeKeyColumn) &&
+                    !transformed.Columns.Contains(config.MergeKeyColumn))
+                {
+                    var availableCols = string.Join(", ",
+                        transformed.Columns.Cast<DataColumn>().Select(c => c.ColumnName));
+                    warnings.Add(
+                        $"MergeKeyColumn '{config.MergeKeyColumn}' not found in source columns: [{availableCols}].");
+                }
+
+                // Capture first-N rows as preview.
+                var takeCount = Math.Min(sampleCap, transformed.Rows.Count);
+                for (int i = 0; i < takeCount; i++)
+                {
+                    var row = transformed.Rows[i];
+                    var dict = new Dictionary<string, object?>(transformed.Columns.Count);
+                    foreach (DataColumn col in transformed.Columns)
+                    {
+                        var value = row[col];
+                        dict[col.ColumnName] = value == DBNull.Value ? null : value;
+                    }
+                    preview.Add(dict);
+                }
+
+                // Calculate pending watermark (but never commit).
+                if (watermark.Type != EtlWatermarkType.FullLoad && !string.IsNullOrEmpty(watermark.Column))
+                {
+                    var maxVal = GetMaxValue(batch, watermark.Column);
+                    if (maxVal != null) watermark.UpdateFromBatchMax(maxVal);
+                }
+
+                break; // Dry-run stops after first batch — bounded cost.
+            }
+
+            // What would the real run commit? (Does NOT actually commit.)
+            var pendingWatermark = watermark.PeekPendingValue();
+            watermark.DiscardPendingValue();
+
+            if (extractedRows == 0)
+            {
+                warnings.Add("Source returned zero rows. Check QueryTemplate and watermark value.");
+            }
+
+            sw.Stop();
+            return new EtlExecutionResult
+            {
+                Success = true,
+                IsDryRun = true,
+                ExtractedRows = extractedRows,
+                LoadedRows = 0,
+                ElapsedMs = sw.ElapsedMilliseconds,
+                NewWatermarkValue = pendingWatermark,
+                PreviewRows = preview,
+                ValidationWarnings = warnings,
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            watermark.DiscardPendingValue();
+            sw.Stop();
+            return new EtlExecutionResult
+            {
+                Success = false,
+                Aborted = true,
+                IsDryRun = true,
+                ExtractedRows = extractedRows,
+                LoadedRows = 0,
+                ElapsedMs = sw.ElapsedMilliseconds,
+                ErrorMessage = "Dry-run aborted.",
+                PreviewRows = preview,
+                ValidationWarnings = warnings,
+            };
+        }
+        catch (Exception ex)
+        {
+            watermark.DiscardPendingValue();
+            sw.Stop();
+            return new EtlExecutionResult
+            {
+                Success = false,
+                IsDryRun = true,
+                ExtractedRows = extractedRows,
+                LoadedRows = 0,
+                ElapsedMs = sw.ElapsedMilliseconds,
+                ErrorMessage = EtlErrorSanitizer.Sanitize(ex),
+                PreviewRows = preview,
+                ValidationWarnings = warnings,
             };
         }
     }
