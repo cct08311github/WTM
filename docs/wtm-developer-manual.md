@@ -2551,6 +2551,56 @@ var r6 = await client.GetAsync("/Login");  // 429 ⛔ quota 用罄
 - Per-IP 分區；未支援 per-user / per-tenant 分區（後者可透過 `WtmRateLimitingOptions.CustomConfig` 自行加 policy）
 - Controller 類別與 action 同時貼 `[WtmRateLimit]` 時 **action 層優先**
 
+### 10.10 X-Correlation-Id middleware（opt-in，10.4.0+）
+
+`UseWtmCorrelationId()` 中介軟體讓跨服務 trace ID 可從 upstream → WTM → log 連貫穿透，解決 SRE/on-call 查問題要手動比對 timestamp+IP 的痛點。
+
+```csharp
+// Startup.Configure
+app.UseWtmCorrelationId();                                     // 預設 X-Correlation-Id
+app.UseWtmCorrelationId(o => o.HeaderName = "X-Request-Id");   // Heroku/Rails 風格
+app.UseWtmCorrelationId(o => o.AdoptInbound = false);          // 不信任 upstream，永遠自產
+```
+
+**行為**：
+1. **Inbound**：讀請求 header（default `X-Correlation-Id`），通過 sanitization 則採用為此請求的 trace ID
+2. **Fallback**：缺少 / 不合格 → 自產 `Guid.NewGuid("N")` 32-hex UUID
+3. **Propagate**：覆寫 `HttpContext.TraceIdentifier` → Serilog scope / `Activity.Current.Id` / `WtmProblemDetails.traceId` **自動** 使用同一 ID
+4. **Outbound**：回寫 response header（可 opt-out）
+
+**Sanitization 規則（防 log injection）**：
+- 空值 / 超過 `MaxLength`（default 128） → 拒絕
+- 只允許 `[A-Za-z0-9\-_.]` 字符 — 涵蓋 UUID / W3C Trace Context / slug / 點分命名；拒絕 CR/LF、分號、逗號、空格、control char、非 ASCII
+- 不合格 → 轉為 fallback auto-gen（不是錯誤，是 silent replace）
+
+**Options**：
+
+| 欄位 | 預設 | 說明 |
+|------|------|------|
+| `HeaderName` | `"X-Correlation-Id"` | Request 讀 / Response 寫 的 header 名 |
+| `MaxLength` | `128` | 允許 inbound ID 最大長度 |
+| `AdoptInbound` | `true` | 是否採用 upstream 傳進的 ID；zero-trust 環境可設 `false` |
+| `EmitOutbound` | `true` | 是否在 response 回寫 header；純內部服務可設 `false` |
+
+**驗證範例**：
+
+```
+→ GET /api/orders/42
+  X-Correlation-Id: caller-abc-123
+
+← 200 OK
+  X-Correlation-Id: caller-abc-123            ← 原樣回寫
+  ProblemDetails traceId = "caller-abc-123"   ← 錯誤響應自動用新 ID
+  Serilog log: TraceIdentifier = "caller-abc-123"  ← scope 自動關聯
+```
+
+**與 OpenTelemetry 整合**：WTM 的 `AddWtmOpenTelemetry()` 已設 `Activity.Current` 串接；本 middleware 覆寫 `TraceIdentifier` 後，OpenTelemetry propagator（W3C Trace Context）可自行銜接，或 app 用標準 `propagation.extract` / `inject` pattern。
+
+**不做**：
+- 不自動整合 W3C `traceparent` / `tracestate` 解析 — 用標準 `System.Diagnostics.Activity` propagator 即可
+- 不支援多 header fallback chain（一個主 header 即可）
+- 不加 HMAC / 簽章（correlation ID 非安全 token）
+
 ---
 
 ## 11. 多租戶
