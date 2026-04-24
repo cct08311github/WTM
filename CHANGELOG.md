@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **Ops: `UseWtmMaintenanceMode()` opt-in maintenance-mode middleware** — Planned-outage / deploy-window kill-switch for non-allow-listed traffic. When `WtmMaintenanceModeOptions.Enabled = true` (or the dynamic `IsEnabled` delegate returns true), every request that doesn't hit an `AllowedPathPrefixes` entry or an `AllowedClientIps` entry short-circuits with `503 Service Unavailable` + `Retry-After: 60` + an `application/problem+json` body (`type`, `title`, `status`, `detail`, `retryAfterSeconds`, `traceId`). Default allow-list keeps `/healthz`, `/_framework`, `/_js`, `/_content`, `/_admin` reachable so (a) k8s readiness probes stay green through the outage and (b) operators can still drive the admin plane to toggle maintenance mode off again. `AllowedClientIps` gives ops a bastion / jump-host bypass. `IsEnabled` is a `Func<HttpContext, bool>` — wire it to `IOptionsMonitor<WtmMaintenanceModeOptions>`, a Redis feature flag, or a LaunchDarkly-style service to flip the switch without restarting the app; a throwing delegate is caught and falls back to the static `Enabled` flag so a flag-service outage does not crash production. `ContentType` defaults to `application/problem+json` (aligns with `UseWtmProblemDetails`) but `text/html` is supported via a minimal inline HTML fallback or a custom `HtmlBodyFactory`. When `Enabled` is `false` and no provider is set, the middleware is a single bool check — effectively free. Opt-in via explicit `app.UseWtmMaintenanceMode()` placed after `UseRouting` but before auth / MVC so the 503 short-circuits before expensive middleware runs. Zero breaking change.
+
 ## [10.4.0] - 2026-04-18
 
 ### Added
