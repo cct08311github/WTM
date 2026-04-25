@@ -644,12 +644,19 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     case "@today":
                         start = today; end = today;
                         break;
+                    case "@yesterday":
+                        start = today.AddDays(-1); end = today.AddDays(-1);
+                        break;
                     case "@thisweek":
                         start = today.AddDays(-mondayOffset);
                         end = start.AddDays(6);
                         break;
                     case "@lastweek":
                         start = today.AddDays(-mondayOffset - 7);
+                        end = start.AddDays(6);
+                        break;
+                    case "@nextweek":
+                        start = today.AddDays(-mondayOffset + 7);
                         end = start.AddDays(6);
                         break;
                     case "@thismonth":
@@ -660,17 +667,55 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         start = new DateTime(today.Year, today.Month, 1).AddMonths(-1);
                         end = new DateTime(today.Year, today.Month, 1).AddDays(-1);
                         break;
+                    case "@nextmonth":
+                        start = new DateTime(today.Year, today.Month, 1).AddMonths(1);
+                        end = start.AddMonths(1).AddDays(-1);
+                        break;
+                    case "@last7days":
+                        start = today.AddDays(-7);
+                        end = today;
+                        break;
                     case "@last30days":
                         start = today.AddDays(-30);
                         end = today;
                         break;
+                    case "@last90days":
+                        start = today.AddDays(-90);
+                        end = today;
+                        break;
+                    case "@last365days":
+                        start = today.AddDays(-365);
+                        end = today;
+                        break;
                     case "@thisquarter":
+                        // Quarter-start through today (not quarter-end) —
+                        // matches @ytd semantics: "this period to date".
                         start = new DateTime(today.Year, ((today.Month - 1) / 3) * 3 + 1, 1);
                         end = today;
                         break;
+                    case "@lastquarter":
+                    {
+                        // Full previous calendar quarter, regardless of today.
+                        var thisQStart = new DateTime(today.Year, ((today.Month - 1) / 3) * 3 + 1, 1);
+                        start = thisQStart.AddMonths(-3);
+                        end = thisQStart.AddDays(-1);
+                        break;
+                    }
                     case "@ytd":
+                        // Year-to-date: Jan 1 of this year through today.
                         start = new DateTime(today.Year, 1, 1);
                         end = today;
+                        break;
+                    case "@thisyear":
+                        // Full current calendar year (Jan 1 through Dec 31),
+                        // distinct from @ytd which clamps to today.
+                        start = new DateTime(today.Year, 1, 1);
+                        end = new DateTime(today.Year, 12, 31);
+                        break;
+                    case "@lastyear":
+                        // Full previous calendar year.
+                        start = new DateTime(today.Year - 1, 1, 1);
+                        end = new DateTime(today.Year - 1, 12, 31);
                         break;
                     default:
                         throw new InvalidOperationException($"Unknown relative date token '{f.Value}'.");
