@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Data;
+using WalkingTec.Mvvm.Etl.Models;
 
 namespace WalkingTec.Mvvm.Etl.Pipeline;
 
@@ -67,4 +68,40 @@ public record EtlPipelineConfig
     /// 重試風暴 — 第 N 次延遲計算結果若超過此上限，會夾到此值。
     /// </summary>
     public int BatchRetryMaxDelayMs { get; init; } = 30_000;
+
+    /// <summary>
+    /// 目標載入模式（10.5+）。
+    /// 預設 <see cref="EtlLoadMode.Merge"/>（與 10.4.x 之前完全一致）。
+    /// 設為 <see cref="EtlLoadMode.Replace"/> 啟用「先刪後插」模式：
+    /// staging 載完後在單一 transaction 內 <c>DELETE FROM target</c>
+    /// （可選 <see cref="ReplaceWhereClause"/>）然後
+    /// <c>INSERT INTO target SELECT * FROM staging</c>。
+    /// </summary>
+    public EtlLoadMode LoadMode { get; init; } = EtlLoadMode.Merge;
+
+    /// <summary>
+    /// Replace 模式下的 DELETE WHERE 子句（不含 "WHERE" 關鍵字本身）。
+    /// 例：<c>"OrderDate &gt;= '2026-01-01' AND OrderDate &lt; '2026-02-01'"</c>
+    /// 為 null / 空白時會刪除 target 整張表所有列（謹慎使用）。
+    /// 操作員必須自行確保此字串無 SQL injection 風險 — 框架做基本
+    /// guard（拒絕 <c>;</c> / <c>--</c> / <c>/*</c> / 已知 system-procedure
+    /// prefix）但不做完整 parser。Merge 模式下被忽略。
+    /// </summary>
+    public string? ReplaceWhereClause { get; init; }
+
+    /// <summary>
+    /// 來源欄位 → 目標欄位的對應表（10.5+，opt-in）。
+    /// 例：<c>{ ["cust_id"] = "CustomerID", ["order_no"] = "OrderNumber" }</c>
+    /// — 來源叫 <c>cust_id</c> 寫到 staging 時改名為 <c>CustomerID</c>。
+    /// <para>
+    /// 為 null（預設）時走原本的「同名 1:1」行為，與 10.4.x 完全相同。
+    /// 為非空時改成「白名單 + 改名」：
+    /// </para>
+    /// <list type="bullet">
+    /// <item>來源中存在於 mapping key 的欄位 → 改名為對應 value 後寫入</item>
+    /// <item>來源中不在 mapping key 的欄位 → <b>不寫入</b>（drop 掉）</item>
+    /// </list>
+    /// staging table 的 schema 必須對應 mapping value（已改名後的目標欄位）。
+    /// </summary>
+    public System.Collections.Generic.IDictionary<string, string>? ColumnMappings { get; init; }
 }

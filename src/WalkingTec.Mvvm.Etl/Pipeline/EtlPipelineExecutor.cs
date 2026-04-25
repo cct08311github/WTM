@@ -67,8 +67,10 @@ public class EtlPipelineExecutor
             // 0. 快速失敗驗證
             if (config.BatchSize <= 0)
                 throw new ArgumentException($"BatchSize must be greater than 0, got {config.BatchSize}.", nameof(config));
-            if (string.IsNullOrWhiteSpace(config.MergeKeyColumn))
-                throw new ArgumentException("MergeKeyColumn must not be null or empty.", nameof(config));
+            if (config.LoadMode == EtlLoadMode.Merge && string.IsNullOrWhiteSpace(config.MergeKeyColumn))
+                throw new ArgumentException(
+                    "MergeKeyColumn must not be null or empty when LoadMode = Merge.",
+                    nameof(config));
 
             // 1. 確認 staging table
             await _loader.EnsureStagingTableAsync(
@@ -116,13 +118,24 @@ public class EtlPipelineExecutor
                 ReportProgress(config, totalLoaded, sw);
             }
 
-            // 4. Merge staging → target
-            ReportProgress(config, totalLoaded, sw, "Merging");
+            // 4. Load to target — Merge or Replace per LoadMode
+            ReportProgress(config, totalLoaded, sw,
+                config.LoadMode == EtlLoadMode.Replace ? "Replacing" : "Merging");
 
-            await _loader.MergeAsync(
-                config.TargetConnectionString, config.StagingTable.TableName,
-                config.TargetTableName, config.MergeKeyColumn,
-                cancellationToken);
+            if (config.LoadMode == EtlLoadMode.Replace)
+            {
+                await _loader.ReplaceAsync(
+                    config.TargetConnectionString, config.StagingTable.TableName,
+                    config.TargetTableName, config.ReplaceWhereClause,
+                    cancellationToken);
+            }
+            else
+            {
+                await _loader.MergeAsync(
+                    config.TargetConnectionString, config.StagingTable.TableName,
+                    config.TargetTableName, config.MergeKeyColumn,
+                    cancellationToken);
+            }
 
             // 5. 成功 → commit watermark
             var newWatermark = watermark.CommitPendingValue();

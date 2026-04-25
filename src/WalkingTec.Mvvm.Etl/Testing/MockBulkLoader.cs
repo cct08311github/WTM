@@ -69,6 +69,21 @@ public class MockBulkLoader : IBulkLoader
         return Task.CompletedTask;
     }
 
+    /// <summary>True 表示 ReplaceAsync 被呼叫過（10.5+，<see cref="EtlLoadMode.Replace"/> 路徑）。</summary>
+    public bool ReplaceCalled { get; private set; }
+
+    /// <summary>記錄 ReplaceAsync 被呼叫時的 whereClause（供測試斷言）。</summary>
+    public string? ReplaceWhereClauseCaptured { get; private set; }
+
+    public Task ReplaceAsync(string connectionString, string stagingTableName,
+        string targetTableName, string? whereClause,
+        CancellationToken cancellationToken = default)
+    {
+        ReplaceCalled = true;
+        ReplaceWhereClauseCaptured = whereClause;
+        return Task.CompletedTask;
+    }
+
     public Task TruncateStagingAsync(string connectionString, string stagingTableName,
         CancellationToken cancellationToken = default)
     {
