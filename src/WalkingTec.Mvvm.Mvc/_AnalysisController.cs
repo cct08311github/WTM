@@ -619,6 +619,32 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
                 });
                 sb.AppendLine(string.Join(",", values));
             }
+
+            // Grand-total footer (mirrors AnalysisExcelExporter): first
+            // null-dimension cell carries the "總計" label, subsequent
+            // null cells stay blank (matches hand-written Excel totals);
+            // null measure cells (Avg / DistinctCount, by design) render
+            // as empty strings rather than "0" — same contract as the
+            // Excel renderer.
+            if (result.GrandTotalRow != null)
+            {
+                bool labelEmitted = false;
+                var values = result.Columns.Select(c =>
+                {
+                    result.GrandTotalRow.TryGetValue(c, out var v);
+                    if (v == null)
+                    {
+                        if (!labelEmitted)
+                        {
+                            labelEmitted = true;
+                            return EscapeCsvCell("總計");
+                        }
+                        return "";
+                    }
+                    return EscapeCsvCell(v.ToString());
+                });
+                sb.AppendLine(string.Join(",", values));
+            }
             return sb.ToString();
         }
 
