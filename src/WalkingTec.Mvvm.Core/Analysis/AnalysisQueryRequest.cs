@@ -25,6 +25,37 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
         /// <summary>維度對應的日期階層（僅日期維度需要，key=fieldName, value=hierarchy）</summary>
         public Dictionary<string, DateHierarchy>? DimensionHierarchies { get; set; }
+
+        /// <summary>
+        /// 結果排序規格。每筆 <see cref="SortSpec"/> 指定一個欄位與升降冪。
+        /// 多筆 = 多級排序（依序套用，前一筆優先）。<c>Field</c> 必須是
+        /// <see cref="Dimensions"/> 中的維度，或 <c>{measure.Field}_{measure.Func}</c>
+        /// 形式的度量結果欄位（例如 <c>Amount_Sum</c>）— 與
+        /// <see cref="AnalysisQueryResponse.Columns"/> 命名一致。任何不在
+        /// 維度或度量結果欄位中的 <c>Field</c> 會在驗證階段被拒絕，避免
+        /// 排序語意不明確或洩漏白名單外的欄位。
+        /// </summary>
+        public List<SortSpec>? Sort { get; set; }
+
+        /// <summary>
+        /// 取結果前 N 筆（聚合 + 排序之後）。<c>null</c> = 不限制（仍受
+        /// 10,000 列硬上限）。範圍 1‒10,000；超出範圍會在驗證階段被拒絕。
+        /// 建議與 <see cref="Sort"/> 同時使用 — 沒有排序的「Top N」幾乎
+        /// 一定不是調用者想要的；引擎會給予提示但不阻擋（保持向後相容）。
+        /// </summary>
+        public int? TopN { get; set; }
+    }
+
+    /// <summary>
+    /// 排序規格 — 維度或度量結果欄位 + 升/降冪。
+    /// </summary>
+    public class SortSpec
+    {
+        /// <summary>排序欄位名稱（必須是維度名或 <c>{measure}_{Func}</c>）。</summary>
+        public string Field { get; set; } = string.Empty;
+
+        /// <summary>True = 降冪（DESC），預設 false = 升冪（ASC）。</summary>
+        public bool Descending { get; set; }
     }
 
     /// <summary>

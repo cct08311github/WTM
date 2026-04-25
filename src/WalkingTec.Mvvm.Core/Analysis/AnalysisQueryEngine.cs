@@ -92,6 +92,11 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 truncated = true;
             }
 
+            // Sort + TopN. TotalCount above already reflects the full set
+            // (so the client can see the underlying cardinality even when
+            // TopN trims the visible rows).
+            rows = ApplySortAndTopN(rows, req);
+
             var displayNames = BuildColumnDisplayNames(req, wl);
             var columnFormats = BuildColumnFormats(req, wl);
 
@@ -171,6 +176,9 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 rows = [.. rows.Take(10_000)];
                 truncated = true;
             }
+
+            // Sort + TopN — same semantics as the sync path.
+            rows = ApplySortAndTopN(rows, req);
 
             var displayNames = BuildColumnDisplayNames(req, wl);
             var columnFormats = BuildColumnFormats(req, wl);
@@ -455,6 +463,154 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     throw new AnalysisFieldNotFoundException(m.Field, "Measure");
                 if ((meta.AllowedFuncs & m.Func) == 0)
                     throw new NotSupportedException($"Function '{m.Func}' is not allowed for field '{m.Field}'.");
+            }
+            ValidateSortAndTopN(req);
+        }
+
+        /// <summary>
+        /// Validate <see cref="AnalysisQueryRequest.Sort"/> and
+        /// <see cref="AnalysisQueryRequest.TopN"/>. Sort fields must reference a
+        /// requested dimension or a measure-result column (<c>{Field}_{Func}</c>);
+        /// rejecting unknown sort fields prevents leaking whitelisted-but-not-selected
+        /// columns and matches the explicit-allow-list posture of the rest of the
+        /// engine. TopN is range-checked to keep the Take(N) bounded.
+        /// </summary>
+        internal static void ValidateSortAndTopN(AnalysisQueryRequest req)
+        {
+            if (req.TopN is int topN && (topN <= 0 || topN > 10_000))
+            {
+                throw new AnalysisException(
+                    $"TopN must be between 1 and 10000 (got {topN}).");
+            }
+
+            if (req.Sort == null || req.Sort.Count == 0) { return; }
+
+            var allowedSortFields = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var d in req.Dimensions) { allowedSortFields.Add(d); }
+            foreach (var m in req.Measures) { allowedSortFields.Add($"{m.Field}_{m.Func}"); }
+
+            foreach (var s in req.Sort)
+            {
+                if (string.IsNullOrWhiteSpace(s.Field))
+                {
+                    throw new AnalysisException("Sort.Field must not be empty.");
+                }
+                if (!allowedSortFields.Contains(s.Field))
+                {
+                    throw new AnalysisException(
+                        $"Sort field '{s.Field}' is not in the requested Dimensions or Measures. " +
+                        $"For measures, use '{{Field}}_{{Func}}' (e.g. 'Amount_Sum').");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Apply Sort + TopN to the materialised rows in-place semantics
+        /// (returns a new list when the input requires mutation). Run after
+        /// the strategy has produced rows and after the result-row hard cap
+        /// — see <see cref="ApplySortAndTopN"/> call sites in
+        /// <see cref="Execute"/> / <see cref="ExecuteAsync"/>.
+        /// </summary>
+        /// <remarks>
+        /// Comparison handles mixed-type measure values (decimal / int /
+        /// double / nullable) by using <see cref="Comparer{T}.Default"/>
+        /// over <see cref="IComparable"/>; null values sort first on ASC
+        /// (last on DESC) — the SQL convention. Strings use ordinal
+        /// comparison for determinism across cultures.
+        /// </remarks>
+        internal static List<Dictionary<string, object?>> ApplySortAndTopN(
+            List<Dictionary<string, object?>> rows,
+            AnalysisQueryRequest req)
+        {
+            if (rows.Count <= 1 && req.TopN is null) { return rows; }
+
+            IEnumerable<Dictionary<string, object?>> seq = rows;
+
+            if (req.Sort != null && req.Sort.Count > 0)
+            {
+                IOrderedEnumerable<Dictionary<string, object?>>? ordered = null;
+                foreach (var s in req.Sort)
+                {
+                    if (ordered == null)
+                    {
+                        ordered = s.Descending
+                            ? rows.OrderByDescending(r => Pluck(r, s.Field), SortValueComparer.Instance)
+                            : rows.OrderBy(r => Pluck(r, s.Field), SortValueComparer.Instance);
+                    }
+                    else
+                    {
+                        ordered = s.Descending
+                            ? ordered.ThenByDescending(r => Pluck(r, s.Field), SortValueComparer.Instance)
+                            : ordered.ThenBy(r => Pluck(r, s.Field), SortValueComparer.Instance);
+                    }
+                }
+                seq = ordered!;
+            }
+
+            if (req.TopN is int n)
+            {
+                seq = seq.Take(n);
+            }
+
+            // Materialise once. Avoid IEnumerable<T> bleed-through to callers
+            // that re-enumerate the list (Excel / CSV exporters do).
+            return seq is List<Dictionary<string, object?>> list ? list : seq.ToList();
+
+            static object? Pluck(Dictionary<string, object?> row, string key)
+                => row.TryGetValue(key, out var v) ? v : null;
+        }
+
+        /// <summary>
+        /// Tolerant comparer for sort values that may be a mix of
+        /// <see cref="decimal"/>, <see cref="int"/>, <see cref="long"/>,
+        /// <see cref="double"/>, <see cref="DateTime"/>, <see cref="string"/>,
+        /// or <c>null</c>. Falls back to ordinal string comparison when
+        /// types disagree so the sort is deterministic instead of throwing.
+        /// </summary>
+        private sealed class SortValueComparer : IComparer<object?>
+        {
+            public static readonly SortValueComparer Instance = new();
+
+            public int Compare(object? x, object? y)
+            {
+                if (ReferenceEquals(x, y)) { return 0; }
+                if (x is null) { return -1; }
+                if (y is null) { return 1; }
+
+                // Unify numeric types via decimal where possible.
+                if (TryAsDecimal(x, out var xd) && TryAsDecimal(y, out var yd))
+                {
+                    return xd.CompareTo(yd);
+                }
+
+                if (x is DateTime xt && y is DateTime yt)
+                {
+                    return xt.CompareTo(yt);
+                }
+
+                if (x is IComparable xc && x.GetType() == y.GetType())
+                {
+                    return xc.CompareTo(y);
+                }
+
+                // Mixed types — fall back to ordinal string comparison so
+                // the sort still produces a stable order rather than
+                // raising at runtime.
+                return string.CompareOrdinal(x.ToString(), y.ToString());
+            }
+
+            private static bool TryAsDecimal(object v, out decimal d)
+            {
+                switch (v)
+                {
+                    case decimal dec: d = dec; return true;
+                    case int i: d = i; return true;
+                    case long l: d = l; return true;
+                    case short s: d = s; return true;
+                    case double dbl when !double.IsNaN(dbl) && !double.IsInfinity(dbl): d = (decimal)dbl; return true;
+                    case float f when !float.IsNaN(f) && !float.IsInfinity(f): d = (decimal)f; return true;
+                    default: d = 0; return false;
+                }
             }
         }
 
