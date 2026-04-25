@@ -60,6 +60,7 @@ public class EtlPipelineExecutor
         var sw = Stopwatch.StartNew();
         int totalExtracted = 0;
         int totalLoaded = 0;
+        int retryAttempts = 0;
 
         try
         {
@@ -97,9 +98,10 @@ public class EtlPipelineExecutor
                     ? config.TransformFunc(batch)
                     : batch;
 
-                await _loader.BulkLoadAsync(
-                    config.TargetConnectionString, config.StagingTable.TableName,
-                    transformed, cancellationToken);
+                await BulkLoadWithRetryAsync(
+                    config, transformed,
+                    onRetryStarted: () => retryAttempts++,
+                    cancellationToken).ConfigureAwait(false);
 
                 totalLoaded += transformed.Rows.Count;
 
@@ -132,7 +134,8 @@ public class EtlPipelineExecutor
                 ExtractedRows = totalExtracted,
                 LoadedRows = totalLoaded,
                 ElapsedMs = sw.ElapsedMilliseconds,
-                NewWatermarkValue = newWatermark
+                NewWatermarkValue = newWatermark,
+                RetryAttemptsTotal = retryAttempts,
             };
         }
         catch (OperationCanceledException)
@@ -146,7 +149,8 @@ public class EtlPipelineExecutor
                 ExtractedRows = totalExtracted,
                 LoadedRows = totalLoaded,
                 ElapsedMs = sw.ElapsedMilliseconds,
-                ErrorMessage = "Job was aborted"
+                ErrorMessage = "Job was aborted",
+                RetryAttemptsTotal = retryAttempts,
             };
         }
         catch (Exception ex)
@@ -159,8 +163,67 @@ public class EtlPipelineExecutor
                 ExtractedRows = totalExtracted,
                 LoadedRows = totalLoaded,
                 ElapsedMs = sw.ElapsedMilliseconds,
-                ErrorMessage = EtlErrorSanitizer.Sanitize(ex)
+                ErrorMessage = EtlErrorSanitizer.Sanitize(ex),
+                RetryAttemptsTotal = retryAttempts,
             };
+        }
+    }
+
+    /// <summary>
+    /// Wrap <see cref="IBulkLoader.BulkLoadAsync"/> with exponential-
+    /// backoff retry per <see cref="EtlPipelineConfig.MaxBatchRetries"/>.
+    /// Returns the number of *retry* attempts (not counting the first
+    /// try); 0 means "first try succeeded". When retries are exhausted
+    /// the original exception is re-thrown so callers see the same
+    /// failure shape as before.
+    /// </summary>
+    /// <remarks>
+    /// Exponential backoff with full jitter:
+    /// <c>delay = random(0, BaseDelay × 2^attempt)</c>,
+    /// clamped to <see cref="EtlPipelineConfig.BatchRetryMaxDelayMs"/>.
+    /// Cancellation is honoured — a cancellation token observed during
+    /// the wait short-circuits the retry loop and surfaces as
+    /// <see cref="OperationCanceledException"/>.
+    /// </remarks>
+    private async Task BulkLoadWithRetryAsync(
+        EtlPipelineConfig config,
+        DataTable transformed,
+        Action onRetryStarted,
+        CancellationToken cancellationToken)
+    {
+        var maxRetries = Math.Clamp(config.MaxBatchRetries, 0, 50);
+        var baseDelay = Math.Max(0, config.BatchRetryBaseDelayMs);
+        var maxDelay = Math.Max(baseDelay, config.BatchRetryMaxDelayMs);
+        var attempt = 0;
+
+        while (true)
+        {
+            try
+            {
+                await _loader.BulkLoadAsync(
+                    config.TargetConnectionString, config.StagingTable.TableName,
+                    transformed, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                // Don't swallow — caller's outer try/catch handles abort.
+                throw;
+            }
+            catch when (attempt < maxRetries && !cancellationToken.IsCancellationRequested)
+            {
+                attempt++;
+                onRetryStarted();
+                // Exponential w/ full jitter; attempt is capped at 50 so
+                // (long)baseDelay << attempt won't overflow Int64.
+                var ceilingMs = (long)baseDelay << Math.Min(attempt, 30);
+                ceilingMs = Math.Min(ceilingMs, maxDelay);
+                var jittered = ceilingMs <= 0 ? 0 : Random.Shared.NextInt64(0, ceilingMs + 1);
+                if (jittered > 0)
+                {
+                    await Task.Delay((int)jittered, cancellationToken).ConfigureAwait(false);
+                }
+            }
         }
     }
 

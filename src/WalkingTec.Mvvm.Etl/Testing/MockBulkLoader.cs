@@ -25,12 +25,33 @@ public class MockBulkLoader : IBulkLoader
     /// <summary>設定此值讓指定 batch 拋出異常（從 1 開始計數）</summary>
     public int? FailOnBatch { get; set; }
 
+    /// <summary>
+    /// 模擬「轉瞬故障」：前 N 次 BulkLoad 拋例外，第 N+1 次以後成功。
+    /// 用來驗證 per-batch retry-with-backoff 的恢復行為（測試用）。
+    /// 0 = 不模擬轉瞬故障。每成功一次自動歸零。
+    /// </summary>
+    public int TransientFailuresBeforeSuccess { get; set; }
+
+    /// <summary>計數已發生的轉瞬故障（測試斷言用）。</summary>
+    public int TransientFailuresObserved { get; private set; }
+
     /// <summary>每次 BulkLoad 完成後觸發</summary>
     public event EventHandler? OnBatchLoaded;
 
     public Task BulkLoadAsync(string connectionString, string stagingTableName,
         DataTable batch, CancellationToken cancellationToken = default)
     {
+        // Transient-failure simulation runs BEFORE the success-path
+        // bookkeeping so the executor's retry loop sees a clean
+        // exception-then-success sequence.
+        if (TransientFailuresBeforeSuccess > 0)
+        {
+            TransientFailuresBeforeSuccess--;
+            TransientFailuresObserved++;
+            throw new InvalidOperationException(
+                $"MockBulkLoader: simulated transient failure (#{TransientFailuresObserved})");
+        }
+
         LoadedBatches.Add(batch.Copy());
 
         if (FailOnBatch.HasValue && LoadedBatches.Count == FailOnBatch.Value)
