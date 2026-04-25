@@ -97,10 +97,14 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
             var totalCount = rows.Count;
             var truncated = false;
-            // 與 IGroupByStrategy 內的 MaxRows 保持一致，若結果達到上限則標記截斷
-            if (totalCount > 10_000)
+            // Cap shared with IGroupByStrategy via AnalysisLimits; if the
+            // operator raised it for a bigger reporting surface, both the
+            // strategy-side Take(MaxRows + 1) and this guard see the same
+            // value.
+            var maxResultRows = AnalysisLimits.MaxResultRows;
+            if (totalCount > maxResultRows)
             {
-                rows = [.. rows.Take(10_000)];
+                rows = [.. rows.Take(maxResultRows)];
                 truncated = true;
             }
 
@@ -190,9 +194,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
             var totalCount = rows.Count;
             var truncated = false;
-            if (totalCount > 10_000)
+            var maxResultRowsAsync = AnalysisLimits.MaxResultRows;
+            if (totalCount > maxResultRowsAsync)
             {
-                rows = [.. rows.Take(10_000)];
+                rows = [.. rows.Take(maxResultRowsAsync)];
                 truncated = true;
             }
 
@@ -724,10 +729,15 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// </summary>
         internal static void ValidateSortAndTopN(AnalysisQueryRequest req)
         {
-            if (req.TopN is int topN && (topN <= 0 || topN > 10_000))
+            // Upper bound tracks AnalysisLimits.MaxResultRows so that
+            // raising the cap also raises the legal TopN range — they
+            // describe the same dimension of "how many groups can the
+            // response carry?"
+            var maxTopN = AnalysisLimits.MaxResultRows;
+            if (req.TopN is int topN && (topN <= 0 || topN > maxTopN))
             {
                 throw new AnalysisException(
-                    $"TopN must be between 1 and 10000 (got {topN}).");
+                    $"TopN must be between 1 and {maxTopN} (got {topN}).");
             }
 
             if (req.Sort == null || req.Sort.Count == 0) { return; }

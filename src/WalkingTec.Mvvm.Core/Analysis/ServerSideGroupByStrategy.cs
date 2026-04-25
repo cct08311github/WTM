@@ -16,7 +16,9 @@ namespace WalkingTec.Mvvm.Core.Analysis
     /// </summary>
     public class ServerSideGroupByStrategy : IGroupByStrategy
     {
-        private const int MaxRows = 10_000;
+        // Result-row cap is centralised in AnalysisLimits; preserve the
+        // local read-site shape so per-call sites don't change.
+        private static int MaxRows => AnalysisLimits.MaxResultRows;
         // Non-printable 3-byte separator used to join multiple dimension values into a
         // single GROUP BY key. These characters never appear in real data, so the key can
         // be split unambiguously after materialization.

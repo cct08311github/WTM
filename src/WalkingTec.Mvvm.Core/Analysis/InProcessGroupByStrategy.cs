@@ -13,8 +13,12 @@ namespace WalkingTec.Mvvm.Core.Analysis
     /// </summary>
     public class InProcessGroupByStrategy : IGroupByStrategy
     {
-        internal const int MaxMaterializeRows = 50_000;
-        private const int MaxRows = 10_000;
+        // Tunables live in AnalysisLimits; these wrappers preserve the
+        // existing read-site references inside this file and from
+        // AnalysisQueryEngine without forcing every call site to know
+        // about the limits class.
+        internal static int MaxMaterializeRows => AnalysisLimits.MaxMaterializeRows;
+        private static int MaxRows => AnalysisLimits.MaxResultRows;
 
         public List<Dictionary<string, object?>> Execute<TModel>(
             IQueryable<TModel> query,
