@@ -83,6 +83,12 @@ namespace WalkingTec.Mvvm.Core.Analysis
             // Resolve enum dimension values to their [Display] names
             ResolveEnumDisplayNames(rows, req.Dimensions, wl);
 
+            // SQL-standard pipeline: GROUP BY → HAVING → ORDER BY → LIMIT.
+            // Apply HAVING before the totalCount snapshot so "showing X of Y"
+            // counts the post-filter groups (the user filtered them out, so
+            // they shouldn't show in the cardinality report).
+            rows = ApplyHavingFilters(rows, req);
+
             var totalCount = rows.Count;
             var truncated = false;
             // 與 IGroupByStrategy 內的 MaxRows 保持一致，若結果達到上限則標記截斷
@@ -92,9 +98,9 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 truncated = true;
             }
 
-            // Sort + TopN. TotalCount above already reflects the full set
-            // (so the client can see the underlying cardinality even when
-            // TopN trims the visible rows).
+            // Sort + TopN. TotalCount above already reflects the post-having
+            // group cardinality, so the client can render "showing 3 of 5"
+            // even when TopN trims the visible rows.
             rows = ApplySortAndTopN(rows, req);
 
             var displayNames = BuildColumnDisplayNames(req, wl);
@@ -168,6 +174,9 @@ namespace WalkingTec.Mvvm.Core.Analysis
             }
 
             ResolveEnumDisplayNames(rows, req.Dimensions, wl);
+
+            // SQL-standard pipeline: GROUP BY → HAVING → ORDER BY → LIMIT.
+            rows = ApplyHavingFilters(rows, req);
 
             var totalCount = rows.Count;
             var truncated = false;
@@ -465,6 +474,135 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     throw new NotSupportedException($"Function '{m.Func}' is not allowed for field '{m.Field}'.");
             }
             ValidateSortAndTopN(req);
+            ValidateHavingFilters(req);
+        }
+
+        /// <summary>
+        /// Validate <see cref="AnalysisQueryRequest.HavingFilters"/>: each
+        /// filter's <c>Field</c> must reference a requested
+        /// <c>{measure.Field}_{measure.Func}</c> result column;
+        /// <c>Operator</c> must be one of the numeric-comparison set
+        /// (Eq / NotEq / Gt / Gte / Lt / Lte) — Contains/In/etc. don't
+        /// apply to scalar aggregate values.
+        /// </summary>
+        internal static void ValidateHavingFilters(AnalysisQueryRequest req)
+        {
+            if (req.HavingFilters == null || req.HavingFilters.Count == 0) { return; }
+
+            var allowed = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var m in req.Measures) { allowed.Add($"{m.Field}_{m.Func}"); }
+
+            foreach (var h in req.HavingFilters)
+            {
+                if (string.IsNullOrWhiteSpace(h.Field))
+                {
+                    throw new AnalysisException("HavingFilter.Field must not be empty.");
+                }
+                if (!allowed.Contains(h.Field))
+                {
+                    throw new AnalysisException(
+                        $"HavingFilter field '{h.Field}' is not in the requested Measures. " +
+                        $"Use the '{{Field}}_{{Func}}' name (e.g. 'Amount_Sum').");
+                }
+                switch (h.Operator)
+                {
+                    case FilterOperator.Eq:
+                    case FilterOperator.NotEq:
+                    case FilterOperator.Gt:
+                    case FilterOperator.Gte:
+                    case FilterOperator.Lt:
+                    case FilterOperator.Lte:
+                        break;
+                    default:
+                        throw new AnalysisException(
+                            $"HavingFilter operator '{h.Operator}' is not supported. " +
+                            "HAVING applies to scalar aggregate values; allowed operators are Eq, NotEq, Gt, Gte, Lt, Lte.");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Apply <see cref="AnalysisQueryRequest.HavingFilters"/> to the
+        /// materialised rows. Runs in-memory after the strategy produces
+        /// rows but before <see cref="ApplySortAndTopN"/>, so the
+        /// pipeline (GroupBy → HAVING → ORDER BY → LIMIT) matches SQL
+        /// standard semantics.
+        /// </summary>
+        internal static List<Dictionary<string, object?>> ApplyHavingFilters(
+            List<Dictionary<string, object?>> rows,
+            AnalysisQueryRequest req)
+        {
+            if (req.HavingFilters == null || req.HavingFilters.Count == 0)
+            {
+                return rows;
+            }
+
+            // Pre-parse each filter's value to decimal once. A non-decimal
+            // value is treated as "filter never matches" — conservative
+            // rejection so a typo in the request body can't widen the
+            // result set unexpectedly.
+            var parsed = new List<(HavingFilter F, decimal V, bool Valid)>(req.HavingFilters.Count);
+            foreach (var h in req.HavingFilters)
+            {
+                var ok = decimal.TryParse(h.Value, System.Globalization.NumberStyles.Number,
+                    System.Globalization.CultureInfo.InvariantCulture, out var v);
+                parsed.Add((h, v, ok));
+            }
+
+            var result = new List<Dictionary<string, object?>>(rows.Count);
+            foreach (var row in rows)
+            {
+                bool keep = true;
+                foreach (var (f, v, valid) in parsed)
+                {
+                    if (!valid)
+                    {
+                        keep = false;
+                        break;
+                    }
+                    if (!row.TryGetValue(f.Field, out var raw) || raw == null)
+                    {
+                        // Comparing against null aggregate — only NotEq
+                        // is meaningful (and it's true since v is decimal,
+                        // raw is null). For all other operators reject.
+                        if (f.Operator != FilterOperator.NotEq) { keep = false; }
+                        break;
+                    }
+                    if (!TryAsDecimal(raw, out var rowDec))
+                    {
+                        keep = false;
+                        break;
+                    }
+                    var cmp = rowDec.CompareTo(v);
+                    bool match = f.Operator switch
+                    {
+                        FilterOperator.Eq    => cmp == 0,
+                        FilterOperator.NotEq => cmp != 0,
+                        FilterOperator.Gt    => cmp >  0,
+                        FilterOperator.Gte   => cmp >= 0,
+                        FilterOperator.Lt    => cmp <  0,
+                        FilterOperator.Lte   => cmp <= 0,
+                        _                    => false,
+                    };
+                    if (!match) { keep = false; break; }
+                }
+                if (keep) { result.Add(row); }
+            }
+            return result;
+
+            static bool TryAsDecimal(object v, out decimal d)
+            {
+                switch (v)
+                {
+                    case decimal dec: d = dec; return true;
+                    case int i: d = i; return true;
+                    case long l: d = l; return true;
+                    case short s: d = s; return true;
+                    case double dbl when !double.IsNaN(dbl) && !double.IsInfinity(dbl): d = (decimal)dbl; return true;
+                    case float f when !float.IsNaN(f) && !float.IsInfinity(f): d = (decimal)f; return true;
+                    default: d = 0; return false;
+                }
+            }
         }
 
         /// <summary>

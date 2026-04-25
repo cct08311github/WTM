@@ -44,6 +44,34 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// 一定不是調用者想要的；引擎會給予提示但不阻擋（保持向後相容）。
         /// </summary>
         public int? TopN { get; set; }
+
+        /// <summary>
+        /// 對聚合結果欄位的過濾條件（等同 SQL HAVING 子句）。
+        /// 例如 <c>HavingFilters = [ { Field = "Amount_Sum", Op = Gte, Value = "1000000" } ]</c>
+        /// 過濾出「銷售額 ≥ 1,000,000」的群組。<c>Field</c> 必須是
+        /// <c>{measure.Field}_{measure.Func}</c> 形式（與 <see cref="Sort"/>
+        /// 規則一致），不在已選度量結果欄位內的條件會在驗證階段被拒絕。
+        /// 套用順序為 GroupBy → HavingFilters → Sort → TopN，符合 SQL
+        /// 標準語意。空 list 或 null = 不過濾。
+        /// </summary>
+        public List<HavingFilter>? HavingFilters { get; set; }
+    }
+
+    /// <summary>
+    /// HAVING 子句條件 — 對聚合結果欄位（measure 的 <c>{Field}_{Func}</c>）
+    /// 套用數值比較。值統一以字串傳入，server-side 嘗試解析為 decimal；
+    /// 不可解析則該條件被視為不成立（保守拒絕，避免污染結果）。
+    /// </summary>
+    public class HavingFilter
+    {
+        /// <summary>聚合結果欄位名（例如 <c>"Amount_Sum"</c>）。</summary>
+        public string Field { get; set; } = string.Empty;
+
+        /// <summary>數值比較運算子。僅支援 Eq / NotEq / Gt / Gte / Lt / Lte。</summary>
+        public FilterOperator Operator { get; set; } = FilterOperator.Gte;
+
+        /// <summary>比較值（會解析為 decimal）。</summary>
+        public string Value { get; set; } = string.Empty;
     }
 
     /// <summary>
