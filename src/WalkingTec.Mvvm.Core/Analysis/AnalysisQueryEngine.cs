@@ -127,6 +127,13 @@ namespace WalkingTec.Mvvm.Core.Analysis
             var displayNames = BuildColumnDisplayNames(req, wl);
             var columnFormats = BuildColumnFormats(req, wl);
 
+            // Auto-generated BI insights (operator-friendly Chinese
+            // sentences). Computed AFTER Sort+TopN so the narrative
+            // reflects what the user actually sees on the dashboard.
+            var insights = req.IncludeInsights
+                ? BuildInsights(rows, req, displayNames)
+                : null;
+
             var response = new AnalysisQueryResponse
             {
                 Columns = BuildResponseColumns(req),
@@ -141,6 +148,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 ColumnDisplayNames = displayNames,
                 ColumnFormats = columnFormats,
                 GrandTotalRow = grandTotal,
+                Insights = insights,
             };
 
             _cache?.Set(queryHash, response, _defaultTtl);
@@ -227,6 +235,11 @@ namespace WalkingTec.Mvvm.Core.Analysis
             var displayNames = BuildColumnDisplayNames(req, wl);
             var columnFormats = BuildColumnFormats(req, wl);
 
+            // Auto-generated BI insights — same semantics as sync path.
+            var insights = req.IncludeInsights
+                ? BuildInsights(rows, req, displayNames)
+                : null;
+
             var response = new AnalysisQueryResponse
             {
                 Columns = BuildResponseColumns(req),
@@ -241,6 +254,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 ColumnDisplayNames = displayNames,
                 ColumnFormats = columnFormats,
                 GrandTotalRow = grandTotal,
+                Insights = insights,
             };
 
             _cache?.Set(queryHash, response, _defaultTtl);
@@ -738,6 +752,197 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 if (!TryAsDecimal(compare, out var c)) { return null; }
                 if (c == 0m) { return null; } // divide-by-zero guard — null beats Infinity in JSON
                 return (p - c) / c;
+            }
+
+            static bool TryAsDecimal(object? v, out decimal d)
+            {
+                d = 0m;
+                if (v == null) { return false; }
+                switch (v)
+                {
+                    case decimal dec: d = dec; return true;
+                    case int i: d = i; return true;
+                    case long l: d = l; return true;
+                    case short s: d = s; return true;
+                    case double dbl when !double.IsNaN(dbl) && !double.IsInfinity(dbl): d = (decimal)dbl; return true;
+                    case float f when !float.IsNaN(f) && !float.IsInfinity(f): d = (decimal)f; return true;
+                    default: return false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Build human-readable BI insight sentences. Operates on the
+        /// first measure in <paramref name="req"/> (focus heuristic —
+        /// multi-measure narrative gets noisy). Each heuristic runs in
+        /// its own try/catch so a single failing rule doesn't lose the
+        /// rest. Empty / single-row / all-null inputs degrade to an
+        /// empty list (callers should handle that — UI just hides the
+        /// callout box).
+        /// </summary>
+        /// <remarks>
+        /// Output is unstable across versions — the engine is free to
+        /// improve heuristics, change wording, add new lines. Callers
+        /// must NOT parse the strings; use the underlying numeric
+        /// columns when programmatic access is needed.
+        /// </remarks>
+        internal static List<string> BuildInsights(
+            List<Dictionary<string, object?>> rows,
+            AnalysisQueryRequest req,
+            Dictionary<string, string> columnDisplayNames)
+        {
+            var insights = new List<string>();
+            if (rows.Count == 0 || req.Measures.Count == 0) { return insights; }
+
+            var primary = req.Measures[0];
+            var measureKey = $"{primary.Field}_{primary.Func}";
+            var measureLabel = columnDisplayNames.TryGetValue(measureKey, out var dn) ? dn : measureKey;
+
+            // Pre-extract numeric values + their dim labels so each
+            // heuristic operates on a consistent view.
+            var samples = new List<(string DimLabel, decimal Value, Dictionary<string, object?> Row)>();
+            foreach (var row in rows)
+            {
+                if (!row.TryGetValue(measureKey, out var raw) || raw == null) { continue; }
+                if (!TryAsDecimal(raw, out var v)) { continue; }
+                samples.Add((BuildDimLabel(row, req.Dimensions), v, row));
+            }
+            if (samples.Count == 0) { return insights; }
+
+            // 1. Top performer + ratio to average
+            try
+            {
+                var avg = samples.Average(s => s.Value);
+                var top = samples.OrderByDescending(s => s.Value).First();
+                if (avg != 0m && samples.Count >= 2)
+                {
+                    var ratio = top.Value / avg;
+                    insights.Add(
+                        $"本期最高: {top.DimLabel} ({measureLabel} = {FormatNumber(top.Value)})，為平均的 {FormatNumber(ratio, 2)} 倍");
+                }
+                else
+                {
+                    insights.Add($"本期最高: {top.DimLabel} ({measureLabel} = {FormatNumber(top.Value)})");
+                }
+            }
+            catch { /* skip silently — heuristic is best-effort */ }
+
+            // 2. Bottom performer (only when ≥ 2 samples; with 1 sample
+            // it duplicates the Top line).
+            try
+            {
+                if (samples.Count >= 2)
+                {
+                    var bottom = samples.OrderBy(s => s.Value).First();
+                    insights.Add($"本期最低: {bottom.DimLabel} ({measureLabel} = {FormatNumber(bottom.Value)})");
+                }
+            }
+            catch { }
+
+            // 3. Period-over-period leaders (only when CompareWith on)
+            try
+            {
+                if (req.CompareWith != null)
+                {
+                    var pctKey = measureKey + "_ChangePct";
+                    var pctSamples = new List<(string DimLabel, decimal Pct)>();
+                    foreach (var row in rows)
+                    {
+                        if (!row.TryGetValue(pctKey, out var raw) || raw == null) { continue; }
+                        if (!TryAsDecimal(raw, out var v)) { continue; }
+                        pctSamples.Add((BuildDimLabel(row, req.Dimensions), v));
+                    }
+                    if (pctSamples.Count >= 1)
+                    {
+                        var topGain = pctSamples.OrderByDescending(s => s.Pct).First();
+                        var topLoss = pctSamples.OrderBy(s => s.Pct).First();
+                        if (pctSamples.Count == 1 || topGain.DimLabel == topLoss.DimLabel)
+                        {
+                            insights.Add(
+                                $"與對比期相比，{topGain.DimLabel} 變化 {FormatPct(topGain.Pct)}");
+                        }
+                        else
+                        {
+                            insights.Add(
+                                $"與對比期相比，{topGain.DimLabel} 漲幅最大 ({FormatPct(topGain.Pct)})，{topLoss.DimLabel} 跌幅最大 ({FormatPct(topLoss.Pct)})");
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            // 4. Pareto concentration: do the top 20% of groups carry
+            // ≥ 80% of total? Skip when fewer than 5 groups (Pareto
+            // ratio is not meaningful at small N).
+            try
+            {
+                if (samples.Count >= 5)
+                {
+                    var sorted = samples.OrderByDescending(s => s.Value).ToList();
+                    var totalSum = sorted.Sum(s => s.Value);
+                    if (totalSum > 0m)
+                    {
+                        var topN = Math.Max(1, (int)Math.Ceiling(sorted.Count * 0.20));
+                        var topSum = sorted.Take(topN).Sum(s => s.Value);
+                        var topPct = topSum / totalSum;
+                        if (topPct >= 0.80m)
+                        {
+                            insights.Add(
+                                $"Top {topN} 群組佔總計的 {FormatPct(topPct, signed: false)}（Pareto 集中度高）");
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            // 5. Outliers (z-score > 2). Skip when N < 4 — population
+            // stddev on tiny samples is noise.
+            try
+            {
+                if (samples.Count >= 4)
+                {
+                    var avg = samples.Average(s => s.Value);
+                    var variance = samples.Sum(s => (s.Value - avg) * (s.Value - avg)) / samples.Count;
+                    var stddev = (decimal)Math.Sqrt((double)variance);
+                    if (stddev > 0m)
+                    {
+                        var outliers = samples
+                            .Select(s => (s.DimLabel, s.Value, Z: (s.Value - avg) / stddev))
+                            .Where(s => Math.Abs(s.Z) > 2m)
+                            .OrderByDescending(s => Math.Abs(s.Z))
+                            .ToList();
+                        if (outliers.Count > 0)
+                        {
+                            var top = outliers.First();
+                            insights.Add(
+                                $"{outliers.Count} 個群組為異常離群值（|z| > 2.0）：{top.DimLabel} ({measureLabel}, z = {FormatNumber(top.Z, 2)})");
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            return insights;
+
+            static string BuildDimLabel(Dictionary<string, object?> row, List<string> dims)
+            {
+                if (dims.Count == 0) { return "(整體)"; }
+                var parts = dims.Select(d =>
+                {
+                    row.TryGetValue(d, out var v);
+                    return v?.ToString() ?? "(空)";
+                });
+                return string.Join(" / ", parts);
+            }
+
+            static string FormatNumber(decimal v, int decimals = 0)
+                => v.ToString($"N{decimals}", System.Globalization.CultureInfo.InvariantCulture);
+
+            static string FormatPct(decimal v, bool signed = true)
+            {
+                var pct = v * 100m;
+                var sign = (signed && pct >= 0m) ? "+" : "";
+                return sign + pct.ToString("F1", System.Globalization.CultureInfo.InvariantCulture) + "%";
             }
 
             static bool TryAsDecimal(object? v, out decimal d)

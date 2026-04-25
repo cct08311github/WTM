@@ -50,6 +50,16 @@ namespace WalkingTec.Mvvm.Core.Analysis
         public Dictionary<string, string> ColumnDisplayNames { get; set; } = new Dictionary<string, string>();
 
         /// <summary>
+        /// 自動產生的 BI 洞察句子（中文，operator-friendly）。當
+        /// <see cref="AnalysisQueryRequest.IncludeInsights"/> 為 <c>true</c>
+        /// 時非 null，內含 0‒5 條短句涵蓋 Top / Bottom / 比較期漲跌幅 /
+        /// Pareto 集中度 / 離群值。空結果或極端邊界情境下可能空 list。
+        /// 純展示用 — 引擎不保證句子格式、順序、語言會跨版本穩定，
+        /// 客戶端不應 parse；要程式化使用請從 <see cref="Rows"/> 直接讀數值。
+        /// </summary>
+        public List<string>? Insights { get; set; }
+
+        /// <summary>
         /// 「總計」彙總列。當 <see cref="AnalysisQueryRequest.IncludeGrandTotal"/>
         /// 為 <c>true</c> 時非 null，每個 measure-result 欄位填入合適的彙
         /// 總值（Sum/Count → 群組值總和；Max → 全體最大；Min → 全體最

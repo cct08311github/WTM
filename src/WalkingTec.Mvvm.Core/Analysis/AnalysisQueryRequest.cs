@@ -72,6 +72,19 @@ namespace WalkingTec.Mvvm.Core.Analysis
         public bool IncludeGrandTotal { get; set; }
 
         /// <summary>
+        /// 是否在回應中附加自動產生的 BI 洞察文字
+        /// (<see cref="AnalysisQueryResponse.Insights"/>)。預設 <c>false</c>
+        /// 完全不影響舊呼叫者。為 <c>true</c> 時，引擎在所有資料增益
+        /// (HAVING、CompareWith、GrandTotal、Sort、TopN) 完成後，依當前
+        /// 第一個度量產生 2‒5 條人類可讀的洞察句子，每條獨立 try/catch
+        /// 避免單條 heuristic 失敗影響其他。涵蓋的 heuristic：
+        /// (1) Top performer + 平均倍率；(2) Bottom performer；
+        /// (3) 比較期最大漲幅 / 跌幅 (僅當 <see cref="CompareWith"/> 啟用)；
+        /// (4) Pareto 集中度（Top 20% 占總計）；(5) z-score 離群值。
+        /// </summary>
+        public bool IncludeInsights { get; set; }
+
+        /// <summary>
         /// 期間對比設定 — 啟用「本期 vs 對比期」雙查詢模式。預設
         /// <c>null</c> 不影響舊呼叫者。
         /// 設定後，引擎會以 <see cref="ComparisonRequest.Filters"/>
