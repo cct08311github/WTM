@@ -70,6 +70,46 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// 一基準，<see cref="TopN"/> 只截短可見列、不影響總計範圍。
         /// </summary>
         public bool IncludeGrandTotal { get; set; }
+
+        /// <summary>
+        /// 期間對比設定 — 啟用「本期 vs 對比期」雙查詢模式。預設
+        /// <c>null</c> 不影響舊呼叫者。
+        /// 設定後，引擎會以 <see cref="ComparisonRequest.Filters"/>
+        /// 取代 <see cref="Filters"/>（其餘維度/度量沿用本請求）跑第二
+        /// 次查詢，再以維度為 join key 在每個結果列附加三個衍生欄位：
+        /// <c>{Field}_{Func}_Compare</c>（對比期值）、
+        /// <c>{Field}_{Func}_Delta</c>（差值 = 本期 − 對比期）、
+        /// <c>{Field}_{Func}_ChangePct</c>（變化百分比；對比期為 0 時
+        /// 輸出 <c>null</c> 避免 Infinity）。本期沒有但對比期有的群組
+        /// 也會出現在結果中，本期欄位 <c>null</c>。
+        /// 與 <see cref="Sort"/> / <see cref="TopN"/> / <see cref="HavingFilters"/>
+        /// 完全相容；Sort 可指向衍生欄位（例如
+        /// <c>Amount_Sum_ChangePct</c> 做「漲幅前 N 名」）。
+        /// </summary>
+        public ComparisonRequest? CompareWith { get; set; }
+    }
+
+    /// <summary>
+    /// 對比查詢設定 — 與主查詢共用維度和度量，但用獨立的 filter set
+    /// 取得對比期資料。常見用法：本月 vs 上月、本年 vs 去年、本週 vs
+    /// 對應週、A 通路 vs B 通路（不限於日期維度）。
+    /// </summary>
+    public class ComparisonRequest
+    {
+        /// <summary>
+        /// 對比期的篩選條件（取代主查詢的 <see cref="AnalysisQueryRequest.Filters"/>）。
+        /// 與主查詢的 Filters 同樣支援相對日期 token（@today、@lastMonth…）。
+        /// 必要欄位 — 沒設等於沒做對比。
+        /// </summary>
+        public List<FilterCondition> Filters { get; set; } = [];
+
+        /// <summary>
+        /// 對比期的人類可讀標籤（顯示於回應的
+        /// <see cref="AnalysisQueryResponse.ColumnDisplayNames"/> 中，
+        /// 例如「上月」「去年同期」「對照組」）。為 null 時 fallback
+        /// 為 "Compare"。不影響資料行為，純顯示用。
+        /// </summary>
+        public string? Label { get; set; }
     }
 
     /// <summary>

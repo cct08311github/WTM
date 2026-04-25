@@ -89,6 +89,17 @@ namespace WalkingTec.Mvvm.Core.Analysis
             // they shouldn't show in the cardinality report).
             rows = ApplyHavingFilters(rows, req);
 
+            // Period-over-period comparison. Run the second query with the
+            // alternate filter set, then augment rows in-place with
+            // _Compare / _Delta / _ChangePct columns. Done BEFORE Sort+TopN
+            // so the user can sort by the derived columns.
+            if (req.CompareWith != null)
+            {
+                var compareReq = BuildComparisonSubRequest(req);
+                var compareResp = Execute(baseQuery, compareReq, whitelist, dbType, identityKey, cancellationToken);
+                rows = AugmentWithComparison(rows, compareResp.Rows, req);
+            }
+
             // Grand total covers the same post-HAVING universe as TotalCount
             // (computed here, BEFORE TopN trims the visible rows, so the
             // total is "of the user's filtered universe" not "of what's on
@@ -118,7 +129,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
             var response = new AnalysisQueryResponse
             {
-                Columns = [.. req.Dimensions.Concat(req.Measures.Select(m => $"{m.Field}_{m.Func}"))],
+                Columns = BuildResponseColumns(req),
                 Rows = rows,
                 TotalCount = totalCount,
                 Truncated = truncated,
@@ -189,6 +200,15 @@ namespace WalkingTec.Mvvm.Core.Analysis
             // SQL-standard pipeline: GROUP BY → HAVING → ORDER BY → LIMIT.
             rows = ApplyHavingFilters(rows, req);
 
+            // Period-over-period comparison — same semantics as sync path.
+            if (req.CompareWith != null)
+            {
+                var compareReq = BuildComparisonSubRequest(req);
+                var compareResp = await ExecuteAsync(baseQuery, compareReq, whitelist, dbType, identityKey, cancellationToken)
+                    .ConfigureAwait(false);
+                rows = AugmentWithComparison(rows, compareResp.Rows, req);
+            }
+
             // Grand total — same post-HAVING / pre-TopN semantics as sync path.
             var grandTotal = req.IncludeGrandTotal ? ComputeGrandTotal(rows, req) : null;
 
@@ -209,7 +229,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
             var response = new AnalysisQueryResponse
             {
-                Columns = [.. req.Dimensions.Concat(req.Measures.Select(m => $"{m.Field}_{m.Func}"))],
+                Columns = BuildResponseColumns(req),
                 Rows = rows,
                 TotalCount = totalCount,
                 Truncated = truncated,
@@ -565,6 +585,178 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// free to append a "Total" / "總計" label anywhere it fits the
         /// rendering surface.
         /// </remarks>
+        /// <summary>
+        /// Assemble the response Columns list. Dimensions first, then
+        /// per-measure result column, and (when comparison is on) the
+        /// three derived columns (<c>_Compare</c>, <c>_Delta</c>,
+        /// <c>_ChangePct</c>) interleaved per measure so the front end
+        /// can render the four-column comparison group together rather
+        /// than scattering across the row.
+        /// </summary>
+        internal static List<string> BuildResponseColumns(AnalysisQueryRequest req)
+        {
+            var cols = new List<string>(req.Dimensions);
+            var hasCompare = req.CompareWith != null;
+            foreach (var m in req.Measures)
+            {
+                var key = $"{m.Field}_{m.Func}";
+                cols.Add(key);
+                if (hasCompare)
+                {
+                    cols.Add($"{key}_Compare");
+                    cols.Add($"{key}_Delta");
+                    cols.Add($"{key}_ChangePct");
+                }
+            }
+            return cols;
+        }
+
+        /// <summary>
+        /// Build the secondary AnalysisQueryRequest used for the
+        /// period-over-period comparison query. Same dimensions /
+        /// measures / dimension hierarchies as the primary; the
+        /// alternate <see cref="ComparisonRequest.Filters"/> replaces
+        /// the primary's. Sort / TopN / HavingFilters / IncludeGrandTotal /
+        /// CompareWith are all dropped on the secondary so the engine
+        /// doesn't recurse infinitely or produce a partial mismatch.
+        /// Public for unit-test determinism.
+        /// </summary>
+        internal static AnalysisQueryRequest BuildComparisonSubRequest(AnalysisQueryRequest primary)
+        {
+            return new AnalysisQueryRequest
+            {
+                ListVmType = primary.ListVmType,
+                SearcherFormData = primary.SearcherFormData,
+                Dimensions = primary.Dimensions,
+                Measures = primary.Measures,
+                Filters = primary.CompareWith?.Filters ?? new List<FilterCondition>(),
+                DimensionHierarchies = primary.DimensionHierarchies,
+                // Intentionally clear: avoid infinite recursion / mismatched
+                // shape between primary and comparison row sets.
+                Sort = null,
+                TopN = null,
+                HavingFilters = null,
+                IncludeGrandTotal = false,
+                CompareWith = null,
+            };
+        }
+
+        /// <summary>
+        /// Augment the primary query's rows with three derived columns
+        /// per measure (<c>{Field}_{Func}_Compare</c>,
+        /// <c>{Field}_{Func}_Delta</c>, <c>{Field}_{Func}_ChangePct</c>)
+        /// using <paramref name="compareRows"/> as the comparison
+        /// data set. Rows are joined by the dimension-tuple; rows that
+        /// exist only in the comparison set are appended with primary
+        /// measure values <c>null</c> so the client sees both sides
+        /// of the picture. Public for unit-test determinism.
+        /// </summary>
+        internal static List<Dictionary<string, object?>> AugmentWithComparison(
+            List<Dictionary<string, object?>> primaryRows,
+            List<Dictionary<string, object?>> compareRows,
+            AnalysisQueryRequest req)
+        {
+            // Build a dimension-key → comparison row lookup. Use the
+            // same encoding as InProcessGroupByStrategy's group key so
+            // join semantics are stable across both strategies.
+            string KeyOf(Dictionary<string, object?> row)
+            {
+                var sb = new System.Text.StringBuilder();
+                for (var i = 0; i < req.Dimensions.Count; i++)
+                {
+                    if (i > 0) { sb.Append('\0'); }
+                    row.TryGetValue(req.Dimensions[i], out var v);
+                    sb.Append(v?.ToString() ?? "");
+                }
+                return sb.ToString();
+            }
+
+            var compareLookup = new Dictionary<string, Dictionary<string, object?>>();
+            foreach (var c in compareRows)
+            {
+                compareLookup[KeyOf(c)] = c;
+            }
+
+            var measureKeys = req.Measures.Select(m => $"{m.Field}_{m.Func}").ToList();
+            var matchedCompareKeys = new HashSet<string>();
+
+            foreach (var row in primaryRows)
+            {
+                var key = KeyOf(row);
+                compareLookup.TryGetValue(key, out var compareRow);
+                if (compareRow != null) { matchedCompareKeys.Add(key); }
+
+                foreach (var mKey in measureKeys)
+                {
+                    object? primaryVal = row.TryGetValue(mKey, out var pv) ? pv : null;
+                    object? compareVal = compareRow != null && compareRow.TryGetValue(mKey, out var cv) ? cv : null;
+
+                    row[$"{mKey}_Compare"] = compareVal;
+                    row[$"{mKey}_Delta"] = ComputeDelta(primaryVal, compareVal);
+                    row[$"{mKey}_ChangePct"] = ComputeChangePct(primaryVal, compareVal);
+                }
+            }
+
+            // Comparison rows that didn't match any primary group still
+            // matter — "本期沒有但對比期有的" is a legitimate finding
+            // (e.g. a region that lost all sales). Append with primary
+            // measure values null and Compare values populated.
+            foreach (var compareRow in compareRows)
+            {
+                var key = KeyOf(compareRow);
+                if (matchedCompareKeys.Contains(key)) { continue; }
+
+                var newRow = new Dictionary<string, object?>();
+                foreach (var d in req.Dimensions)
+                {
+                    compareRow.TryGetValue(d, out var dv);
+                    newRow[d] = dv;
+                }
+                foreach (var mKey in measureKeys)
+                {
+                    compareRow.TryGetValue(mKey, out var cv);
+                    newRow[mKey] = null;
+                    newRow[$"{mKey}_Compare"] = cv;
+                    newRow[$"{mKey}_Delta"] = ComputeDelta(null, cv);
+                    newRow[$"{mKey}_ChangePct"] = ComputeChangePct(null, cv);
+                }
+                primaryRows.Add(newRow);
+            }
+
+            return primaryRows;
+
+            static decimal? ComputeDelta(object? primary, object? compare)
+            {
+                if (!TryAsDecimal(primary, out var p)) { return null; }
+                if (!TryAsDecimal(compare, out var c)) { return null; }
+                return p - c;
+            }
+
+            static decimal? ComputeChangePct(object? primary, object? compare)
+            {
+                if (!TryAsDecimal(primary, out var p)) { return null; }
+                if (!TryAsDecimal(compare, out var c)) { return null; }
+                if (c == 0m) { return null; } // divide-by-zero guard — null beats Infinity in JSON
+                return (p - c) / c;
+            }
+
+            static bool TryAsDecimal(object? v, out decimal d)
+            {
+                d = 0m;
+                if (v == null) { return false; }
+                switch (v)
+                {
+                    case decimal dec: d = dec; return true;
+                    case int i: d = i; return true;
+                    case long l: d = l; return true;
+                    case short s: d = s; return true;
+                    case double dbl when !double.IsNaN(dbl) && !double.IsInfinity(dbl): d = (decimal)dbl; return true;
+                    case float f when !float.IsNaN(f) && !float.IsInfinity(f): d = (decimal)f; return true;
+                    default: return false;
+                }
+            }
+        }
+
         internal static Dictionary<string, object?> ComputeGrandTotal(
             List<Dictionary<string, object?>> rows,
             AnalysisQueryRequest req)
@@ -744,7 +936,21 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
             var allowedSortFields = new HashSet<string>(StringComparer.Ordinal);
             foreach (var d in req.Dimensions) { allowedSortFields.Add(d); }
-            foreach (var m in req.Measures) { allowedSortFields.Add($"{m.Field}_{m.Func}"); }
+            foreach (var m in req.Measures)
+            {
+                var key = $"{m.Field}_{m.Func}";
+                allowedSortFields.Add(key);
+                // When period-over-period comparison is on, the engine
+                // augments rows with three derived columns per measure;
+                // surface them as legal sort targets so users can do
+                // "top 5 regions by ChangePct DESC" out of the box.
+                if (req.CompareWith != null)
+                {
+                    allowedSortFields.Add($"{key}_Compare");
+                    allowedSortFields.Add($"{key}_Delta");
+                    allowedSortFields.Add($"{key}_ChangePct");
+                }
+            }
 
             foreach (var s in req.Sort)
             {
@@ -1248,6 +1454,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
             }
 
             // 量值欄位
+            var compareLabel = req.CompareWith?.Label ?? "Compare";
             foreach (var m in req.Measures)
             {
                 var key = $"{m.Field}_{m.Func}";
@@ -1255,7 +1462,19 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     ? meta.DisplayName
                     : m.Field;
                 var funcDisplay = _funcDisplayNames.TryGetValue(m.Func, out var fd) ? fd : m.Func.ToString();
-                map[key] = $"{fieldDisplay} {funcDisplay}";
+                var baseLabel = $"{fieldDisplay} {funcDisplay}";
+                map[key] = baseLabel;
+
+                // Period-over-period — surface the comparison columns
+                // with human-readable headers so the front-end picker
+                // can render "金額 合計 (上月)" / "差值" / "變化%" out
+                // of the box without per-app i18n plumbing.
+                if (req.CompareWith != null)
+                {
+                    map[$"{key}_Compare"]    = $"{baseLabel} ({compareLabel})";
+                    map[$"{key}_Delta"]      = $"{baseLabel} 差值";
+                    map[$"{key}_ChangePct"]  = $"{baseLabel} 變化%";
+                }
             }
 
             return map;
