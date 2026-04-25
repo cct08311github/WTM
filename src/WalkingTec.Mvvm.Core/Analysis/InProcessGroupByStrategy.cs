@@ -67,6 +67,23 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         if (propInfo is null)
                             throw new InvalidOperationException($"Property '{m.Field}' not found on {typeof(TModel).Name}.");
 
+                        // DistinctCount works on the raw value set — no
+                        // numeric conversion required, since "how many
+                        // unique values" is meaningful regardless of CLR
+                        // type. Computing it before the decimal pipeline
+                        // also lets it tolerate non-numeric values that
+                        // would otherwise throw at conversion.
+                        if (m.Func == AggregateFunc.DistinctCount)
+                        {
+                            int distinct = g
+                                .Select(row => propInfo.GetValue(row))
+                                .Where(v => v != null)
+                                .Distinct()
+                                .Count();
+                            dict[$"{m.Field}_{m.Func}"] = (decimal?)distinct;
+                            continue;
+                        }
+
                         List<decimal?> numericValues = [.. g
                             .Select(row => propInfo.GetValue(row))
                             .Where(v => v != null)

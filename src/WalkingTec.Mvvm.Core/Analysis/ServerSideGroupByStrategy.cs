@@ -227,6 +227,47 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 }
             }
 
+            if (measure.Func == AggregateFunc.DistinctCount)
+            {
+                // Canonical EF Core 8+ pattern that translates to
+                // SQL COUNT(DISTINCT col): g.Select(e => e.Prop).Distinct().Count().
+                // For a nullable property, EF emits COUNT(DISTINCT col) which
+                // already excludes NULLs per ANSI SQL semantics, so no
+                // pre-filter is needed on the server-side path.
+                Expression propAccess = Expression.Property(innerParam, measure.Field);
+                var keyType = propAccess.Type;
+                var keySelector = Expression.Lambda(
+                    typeof(Func<,>).MakeGenericType(typeof(TModel), keyType),
+                    propAccess, innerParam);
+
+                var selectMethod = typeof(Enumerable)
+                    .GetMethods()
+                    .First(m => m.Name == nameof(Enumerable.Select)
+                                && m.IsGenericMethod
+                                && m.GetParameters().Length == 2
+                                && m.GetParameters()[1].ParameterType.GetGenericArguments().Length == 2)
+                    .MakeGenericMethod(typeof(TModel), keyType);
+                Expression projected = Expression.Call(selectMethod, gParam, keySelector);
+
+                var distinctMethod = typeof(Enumerable)
+                    .GetMethods()
+                    .First(m => m.Name == nameof(Enumerable.Distinct)
+                                && m.IsGenericMethod
+                                && m.GetParameters().Length == 1)
+                    .MakeGenericMethod(keyType);
+                Expression distinct = Expression.Call(distinctMethod, projected);
+
+                var countMethod = typeof(Enumerable)
+                    .GetMethods()
+                    .First(m => m.Name == nameof(Enumerable.Count)
+                                && m.IsGenericMethod
+                                && m.GetParameters().Length == 1)
+                    .MakeGenericMethod(keyType);
+                return Expression.Convert(
+                    Expression.Call(countMethod, distinct),
+                    typeof(double?));
+            }
+
             Expression pAccess = Expression.Property(innerParam, measure.Field);
             pAccess = Expression.Convert(pAccess, typeof(double?));
 

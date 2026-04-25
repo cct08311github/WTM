@@ -559,6 +559,7 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
             if ((funcs & AggregateFunc.Avg) != 0) res.Add("Avg");
             if ((funcs & AggregateFunc.Max) != 0) res.Add("Max");
             if ((funcs & AggregateFunc.Min) != 0) res.Add("Min");
+            if ((funcs & AggregateFunc.DistinctCount) != 0) res.Add("DistinctCount");
             return res;
         }
 

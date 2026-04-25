@@ -951,11 +951,12 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
         private static readonly FrozenDictionary<AggregateFunc, string> _funcDisplayNames = new Dictionary<AggregateFunc, string>
         {
-            { AggregateFunc.Sum,   "合計" },
-            { AggregateFunc.Count, "計數" },
-            { AggregateFunc.Avg,   "平均" },
-            { AggregateFunc.Max,   "最大" },
-            { AggregateFunc.Min,   "最小" },
+            { AggregateFunc.Sum,           "合計" },
+            { AggregateFunc.Count,         "計數" },
+            { AggregateFunc.Avg,           "平均" },
+            { AggregateFunc.Max,           "最大" },
+            { AggregateFunc.Min,           "最小" },
+            { AggregateFunc.DistinctCount, "不重複計數" },
         }.ToFrozenDictionary();
 
         /// <summary>
