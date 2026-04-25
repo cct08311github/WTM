@@ -1,7 +1,7 @@
 # WTM Analysis Mode — 新組件開發使用手冊
 
-**適用版本**：WTM 8.1.17+（v2 拖曳面板自 8.7.0+）
-**最後更新**：2026-03-13
+**適用版本**：WTM 8.1.17+（v2 拖曳面板自 8.7.0+；進階查詢屬性自 10.5.0+）
+**最後更新**：2026-04-25
 
 ---
 
@@ -16,6 +16,7 @@
 7. [API 規格參考](#7-api-規格參考)
 8. [安全性設計](#8-安全性設計)
 9. [目前限制與 Phase 2 預告](#9-目前限制與-phase-2-預告)
+10. [進階查詢功能 (10.5+)](#10-進階查詢功能105) — Sort / TopN / HavingFilters / DistinctCount / GrandTotal / CompareWith / Insights / AnalysisLimits
 
 ---
 
@@ -623,7 +624,7 @@ builder.Services.AddSingleton<IAnalysisFieldPolicy, MyFieldPolicy>();
 - [x] `[Dimension]` / `[Measure]` 屬性標注系統
 - [x] `[EnableAnalysis]` 白名單機制
 - [x] `/_analysis/meta` — 維度/度量清單 API
-- [x] `/_analysis/query` — 動態 GroupBy 聚合 API（Sum / Count / Avg / Max / Min）
+- [x] `/_analysis/query` — 動態 GroupBy 聚合 API（Sum / Count / Avg / Max / Min / **DistinctCount**）
 - [x] `/_analysis/export` — Excel (.xlsx) 匯出
 - [x] `DataTableTagHelper.EnableAnalysis` — 一鍵啟用
 - [x] ECharts 自動選型（Bar / Stacked Bar / Line / 數字卡片）
@@ -641,18 +642,32 @@ builder.Services.AddSingleton<IAnalysisFieldPolicy, MyFieldPolicy>();
 - [x] 多 Grid 隔離（同一頁面多個分析面板互不干擾）
 - [x] 測試覆蓋（Engine 30 + Exporter 6 + Controller 16 + JS 196）
 
+### 進階查詢能力已實作（10.5+）
+
+下表為從 10.5.0 起新增、目前 unreleased 的進階查詢欄位。所有欄位均
+**opt-in、零破壞性**，舊呼叫者完全不受影響。
+
+- [x] **`Sort` + `TopN`** — 結果排序與限筆 (§10.1)
+- [x] **新增 9 個相對日期 token** — `@yesterday` / `@nextWeek` / `@nextMonth` / `@last7days` / `@last90days` / `@last365days` / `@lastQuarter` / `@thisYear` / `@lastYear` (§10.2)
+- [x] **`DistinctCount` 聚合函式** — `COUNT DISTINCT` 推到 DB (§10.3)
+- [x] **`HavingFilters`** — 聚合後過濾，等同 SQL HAVING (§10.4)
+- [x] **`IncludeGrandTotal` + `GrandTotalRow`** — 報表總計列（Excel + CSV 自動渲染）(§10.5)
+- [x] **`AnalysisLimits`** — 結果列數與原始載入上限可調 (§10.6)
+- [x] **`CompareWith`** — 期間對比（自動長出 `_Compare` / `_Delta` / `_ChangePct` 欄）(§10.7)
+- [x] **`IncludeInsights` + `Insights`** — 自動產生 BI 洞察敘述句 (§10.8)
+
 ### Phase 1 已知限制
 
 | 限制 | 說明 |
 |------|------|
-| **In-process GroupBy** | 先 `Take(50,000).ToList()` 再 in-process GroupBy，高基數欄位或大資料量時效能較低。Phase 2 改為 EF Core server-side GroupBy。 |
+| **In-process GroupBy** | 先 `Take(MaxMaterializeRows).ToList()` 再 in-process GroupBy，高基數欄位或大資料量時效能較低。Phase 2 改為 EF Core server-side GroupBy。**10.5+ 起載入上限可透過 `AnalysisLimits.MaxMaterializeRows` 調整（§10.6）。** |
 | **無日期鑽取** | `DateHierarchy` 已預留，Phase 2 實作年/季/月/週/日鑽取 |
 | **無 Pivot 表** | Phase 2 功能 |
 | **無圖表 drill-down** | Phase 2 功能 |
 | **無結果快取** | `QueryHash` 已生成，Phase 2 接 Redis/MemoryCache |
 | **無欄位級權限** | Phase 2 評估，目前只有登入驗證 |
 | **雙 Y 軸僅支援恰好 2 個度量** | `detectDualAxis` 在度量數 ≠ 2 時不觸發。選取 1 個或 3 個度量時使用單 Y 軸；`bar-stacked` 圖表類型也不啟用雙 Y 軸。觸發條件：2 個度量且最大值 ratio ≥ 10 倍。 |
-| **Excel 匯出最多 10,000 行** | 超過上限時回傳截斷結果，response 包含 `X-Analysis-Truncated: true` header。CSV 匯出維持 50,000 行上限。 |
+| ~~**Excel 匯出最多 10,000 行**~~ | **10.5+ 已可調**：`AnalysisLimits.MaxResultRows` 控制群組結果上限（預設 10,000），同一個值也是 `TopN` 的合法上限。 |
 
 ### Phase 2 路線圖
 
@@ -665,6 +680,268 @@ Phase 2（規劃中）
 ├── 圖表 drill-down 互動
 └── 欄位級權限控制
 ```
+
+---
+
+## 10. 進階查詢功能（10.5+）
+
+10.5.0 起 `AnalysisQueryRequest` / `AnalysisQueryResponse` 新增多項
+opt-in 屬性，把分析模組從 SQL-shape 工具升級成「帶敘述的 BI 平台」。
+本節提供每項屬性的最小 request 範本與行為要點；完整 schema 見
+`AnalysisQueryRequest.cs` 的 XML 文件。
+
+### 10.1 `Sort` + `TopN` — 結果排序與限筆
+
+過去 GroupBy 結果順序未定義；想做「Top 5 業績區域」必須前端排序，
+又會被 `AnalysisLimits.MaxResultRows` 截掉真正的 Top N。新增：
+
+```jsonc
+{
+  "dimensions": ["Region"],
+  "measures": [{ "field": "Amount", "func": "Sum" }],
+  "sort": [
+    { "field": "Amount_Sum", "descending": true }
+  ],
+  "topN": 5
+}
+```
+
+- `Sort.Field` 必須是 `Dimensions` 中的維度名 **或** 度量結果欄
+  `{Field}_{Func}`（例：`Amount_Sum`）；其他值會在驗證階段被拒絕
+- 多筆 `Sort` = 多級排序（依序套用，前者優先）
+- `TopN` 範圍 `1 ≤ N ≤ AnalysisLimits.MaxResultRows`
+- `TopN` 只 trim 顯示列，**`TotalCount` 仍報原始群組數** → 前端可顯示
+  「showing 5 of 23」
+
+### 10.2 9 個新相對日期 token
+
+`Filters` 內以 `@token` 形式表示動態日期區間，server-side 自動展開為
+`(Gte, Lte)` 對。
+
+| Token | 語意 |
+|-------|------|
+| `@today` | 今天（單日） |
+| **`@yesterday`** | 昨天（單日） |
+| `@thisWeek` | 本週 Mon..Sun（完整 7 天） |
+| `@lastWeek` | 上週完整 |
+| **`@nextWeek`** | 下週完整 |
+| `@thisMonth` | 本月完整曆月 |
+| `@lastMonth` | 上月完整曆月 |
+| **`@nextMonth`** | 下月完整曆月 |
+| **`@last7days`** | today − 7 .. today（滾動） |
+| `@last30days` | today − 30 .. today（滾動） |
+| **`@last90days`** | today − 90 .. today（滾動） |
+| **`@last365days`** | today − 365 .. today（滾動） |
+| `@thisQuarter` | 本季 quarter-start .. today |
+| **`@lastQuarter`** | 上一個**完整**曆季 |
+| **`@thisYear`** | 1/1 .. 12/31（完整年） |
+| **`@lastYear`** | 上一個完整曆年 |
+| `@ytd` | 年初 .. today |
+
+**粗體**為 10.5 新增。Token 大小寫不敏感。
+
+### 10.3 `DistinctCount` 聚合函式
+
+回答「每區獨立客戶數」「每類別不重複產品數」這類核心 BI 問題。
+與其他聚合一樣由 `[Measure(AllowedFuncs = ...)]` 白名單控管：
+
+```csharp
+[Measure(AllowedFuncs = AggregateFunc.Count | AggregateFunc.DistinctCount,
+         DisplayName = "客戶 ID")]
+public int CustomerId { get; set; }
+```
+
+```jsonc
+{
+  "dimensions": ["Region"],
+  "measures": [{ "field": "CustomerId", "func": "DistinctCount" }]
+}
+```
+
+- Server-side strategy 翻譯成 SQL `COUNT(DISTINCT col)`，DB pushdown
+- In-process strategy 用 LINQ `Distinct().Count()`
+- 兩條路徑都按 ANSI SQL 排除 NULL
+- 結果欄位命名 `{Field}_DistinctCount`，可被 `Sort` 直接 target
+
+### 10.4 `HavingFilters` — 聚合後過濾
+
+對 measure 結果欄做數值比較，等同 SQL `HAVING`。
+
+```jsonc
+{
+  "dimensions": ["Region"],
+  "measures": [{ "field": "Amount", "func": "Sum" }],
+  "havingFilters": [
+    { "field": "Amount_Sum", "operator": "Gte", "value": "1000000" }
+  ]
+}
+```
+
+- `Field` 必須是已選度量的 `{Field}_{Func}`，白名單驗證
+- `Operator` 限定數值比較子集：`Eq` / `NotEq` / `Gt` / `Gte` / `Lt` / `Lte`
+- 多筆條件 AND；不可解析的 `Value` 會 filter 出全部群組（保守處理）
+- 執行管線：`GROUP BY → HAVING → ORDER BY → LIMIT`，
+  `TotalCount` 與 `GrandTotalRow` 都基於 post-having 群組
+
+### 10.5 `IncludeGrandTotal` + `GrandTotalRow` — 報表總計列
+
+```jsonc
+{
+  "dimensions": ["Region"],
+  "measures": [{ "field": "Amount", "func": "Sum" }],
+  "includeGrandTotal": true
+}
+```
+
+回應新增：
+
+```jsonc
+{
+  "rows": [...],
+  "grandTotalRow": {
+    "Region":     null,    // 維度欄空值，前端可填「總計」
+    "Amount_Sum": 1500     // 各群組 Sum 加總
+  }
+}
+```
+
+聚合規則：
+
+| 函式 | 總計值 |
+|------|--------|
+| Sum / Count | 群組值總和 |
+| Max / Min | 全體極值 |
+| **Avg** / **DistinctCount** | **`null`**（合理彙總需原始資料；返回 null 優於默默算錯） |
+
+- 範圍 = post-HAVING / pre-TopN，與 `TotalCount` 同一基準
+- **Excel + CSV 匯出器自動渲染** 總計列：bold + LightYellow 底色，
+  第一個 null 維度欄位置「總計」字樣
+
+### 10.6 `AnalysisLimits` — 上限可調
+
+```csharp
+// Program.cs（一次性設定）
+WalkingTec.Mvvm.Core.Analysis.AnalysisLimits.MaxResultRows = 50_000;
+WalkingTec.Mvvm.Core.Analysis.AnalysisLimits.MaxMaterializeRows = 200_000;
+```
+
+- `MaxResultRows`（預設 10,000）：群組結果硬上限，同步影響：
+  - Engine truncation guard
+  - 兩個 GroupBy strategies 的 `Take(MaxRows + 1)` 行為
+  - `TopN` 驗證上限
+- `MaxMaterializeRows`（預設 50,000）：In-process strategy 載入原始
+  資料的上限。Server-side strategy 不受此限
+- **Set-once-at-startup**：mutating at runtime 是支援的但有 race 風險，
+  測試以 `try / finally` 還原
+
+### 10.7 `CompareWith` — 期間對比
+
+每個儀表板都需要的「本月 vs 上月」「今年 vs 去年」現在一個請求搞定。
+
+```jsonc
+{
+  "dimensions": ["Region"],
+  "measures": [{ "field": "Amount", "func": "Sum" }],
+  "filters": [
+    { "field": "OrderDate", "operator": "Eq", "value": "@thisMonth" }
+  ],
+  "compareWith": {
+    "filters": [
+      { "field": "OrderDate", "operator": "Eq", "value": "@lastMonth" }
+    ],
+    "label": "上月"
+  }
+}
+```
+
+每個 measure 自動長出 3 個衍生欄位：
+
+| 欄位 | 內容 |
+|------|------|
+| `{Field}_{Func}_Compare` | 對比期值 |
+| `{Field}_{Func}_Delta` | 本期 − 對比期 |
+| `{Field}_{Func}_ChangePct` | 變化百分比（decimal，0.25 = +25%） |
+
+**Cardinality 處理**：
+
+- 兩邊都有 → 四個欄位都填值
+- 只有本期 → `_Compare` / `_Delta` / `_ChangePct` 全 `null`
+- **只有對比期** → 該列以 primary cell `null` 出現（區域歸零的事實
+  不會「消失」）
+
+**邊界守護**：
+
+- 對比期值為 0 時 `_ChangePct = null`（不序列化 `Infinity`）
+- `Sort` 自動辨識 3 個衍生欄 → `Sort = [{ field: "Amount_Sum_ChangePct", descending: true }]` 直接做漲幅 Top 5
+- `ColumnDisplayNames` 自動產生「金額 合計 (上月)」/「差值」/「變化%」
+
+**遞迴防護**：sub-request 強制清掉 `Sort` / `TopN` /
+`IncludeGrandTotal` / `HavingFilters` / `CompareWith`，引擎不會無限重執行。
+
+### 10.8 `IncludeInsights` — 自動產生 BI 洞察
+
+```jsonc
+{
+  "dimensions": ["Region"],
+  "measures": [{ "field": "Amount", "func": "Sum" }],
+  "includeInsights": true
+}
+```
+
+回應新增 `insights: List<string>`（可為空）：
+
+```text
+✓ 本期最高: 北 (金額 合計 = 1,000)，為平均的 2.31 倍
+✓ 本期最低: 東 (金額 合計 = 100)
+✓ 與對比期相比，北 漲幅最大 (+25.0%)，南 跌幅最大 (-20.0%)
+✓ Top 1 群組佔總計的 86.6%（Pareto 集中度高）
+✓ 1 個群組為異常離群值（|z| > 2.0）：Outlier (金額 合計, z = 2.66)
+```
+
+5 條 heuristic（每條獨立 try/catch；只看第一個 measure）：
+
+| # | 條件 |
+|---|------|
+| 1. Top performer + 平均倍率 | 始終嘗試 |
+| 2. Bottom performer | N ≥ 2 |
+| 3. 比較期最大漲跌 | `CompareWith != null` |
+| 4. Pareto 集中度 | N ≥ 5 且 Top 20% 佔 ≥ 80% |
+| 5. z-score 離群值 | N ≥ 4 且 \|z\| > 2 |
+
+**重要約定**：輸出字串為 *人類可讀*、版本不穩，**呼叫端不應 parse**；
+要程式化讀數值請從 `Rows` / `GrandTotalRow` 取。執行時機在 Sort + TopN
+*之後* — 所以敘述反映的是畫面實際看到的群組。
+
+### 10.9 屬性整合範例
+
+把 §10.1‒10.8 串在一起的完整 request：
+
+```jsonc
+{
+  "dimensions": ["Region"],
+  "measures": [{ "field": "Amount", "func": "Sum" }],
+  "filters": [
+    { "field": "OrderDate", "operator": "Eq", "value": "@thisMonth" }
+  ],
+  "havingFilters": [
+    { "field": "Amount_Sum", "operator": "Gte", "value": "10000" }
+  ],
+  "compareWith": {
+    "filters": [
+      { "field": "OrderDate", "operator": "Eq", "value": "@lastMonth" }
+    ],
+    "label": "上月"
+  },
+  "sort": [
+    { "field": "Amount_Sum_ChangePct", "descending": true }
+  ],
+  "topN": 10,
+  "includeGrandTotal": true,
+  "includeInsights": true
+}
+```
+
+語意：「列出本月銷售額 ≥ 10,000 的區域，依漲幅 DESC 取前 10，附總計列與洞察敘述。」
 
 ---
 
