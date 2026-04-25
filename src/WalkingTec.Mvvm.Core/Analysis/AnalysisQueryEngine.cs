@@ -89,6 +89,12 @@ namespace WalkingTec.Mvvm.Core.Analysis
             // they shouldn't show in the cardinality report).
             rows = ApplyHavingFilters(rows, req);
 
+            // Grand total covers the same post-HAVING universe as TotalCount
+            // (computed here, BEFORE TopN trims the visible rows, so the
+            // total is "of the user's filtered universe" not "of what's on
+            // screen").
+            var grandTotal = req.IncludeGrandTotal ? ComputeGrandTotal(rows, req) : null;
+
             var totalCount = rows.Count;
             var truncated = false;
             // 與 IGroupByStrategy 內的 MaxRows 保持一致，若結果達到上限則標記截斷
@@ -118,7 +124,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     : null,
                 QueryHash = queryHash,
                 ColumnDisplayNames = displayNames,
-                ColumnFormats = columnFormats
+                ColumnFormats = columnFormats,
+                GrandTotalRow = grandTotal,
             };
 
             _cache?.Set(queryHash, response, _defaultTtl);
@@ -178,6 +185,9 @@ namespace WalkingTec.Mvvm.Core.Analysis
             // SQL-standard pipeline: GROUP BY → HAVING → ORDER BY → LIMIT.
             rows = ApplyHavingFilters(rows, req);
 
+            // Grand total — same post-HAVING / pre-TopN semantics as sync path.
+            var grandTotal = req.IncludeGrandTotal ? ComputeGrandTotal(rows, req) : null;
+
             var totalCount = rows.Count;
             var truncated = false;
             if (totalCount > 10_000)
@@ -204,7 +214,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     : null,
                 QueryHash = queryHash,
                 ColumnDisplayNames = displayNames,
-                ColumnFormats = columnFormats
+                ColumnFormats = columnFormats,
+                GrandTotalRow = grandTotal,
             };
 
             _cache?.Set(queryHash, response, _defaultTtl);
@@ -517,6 +528,104 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         throw new AnalysisException(
                             $"HavingFilter operator '{h.Operator}' is not supported. " +
                             "HAVING applies to scalar aggregate values; allowed operators are Eq, NotEq, Gt, Gte, Lt, Lte.");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Compute the grand-total row for the supplied
+        /// <paramref name="rows"/> per the requested measures. Runs
+        /// after <see cref="ApplyHavingFilters"/> and before
+        /// <see cref="ApplySortAndTopN"/> so the total reflects the
+        /// HAVING-filtered universe (matches
+        /// <see cref="AnalysisQueryResponse.TotalCount"/> semantics);
+        /// TopN-trimming the visible rows does NOT shrink the total.
+        /// </summary>
+        /// <remarks>
+        /// Aggregation rules (per measure column <c>{Field}_{Func}</c>):
+        /// <list type="bullet">
+        /// <item><c>Sum</c> / <c>Count</c> → sum of group values.</item>
+        /// <item><c>Max</c> → max of group values.</item>
+        /// <item><c>Min</c> → min of group values.</item>
+        /// <item><c>Avg</c> → null. A meaningful weighted average
+        /// requires per-group counts, which the GroupBy result drops;
+        /// emitting a "simple average of group averages" would be
+        /// silently wrong.</item>
+        /// <item><c>DistinctCount</c> → null. Grand-total distinct
+        /// would require re-querying the raw rows; summing per-group
+        /// distincts is wrong because the same value can repeat across
+        /// groups.</item>
+        /// </list>
+        /// All dimension columns receive <c>null</c> so the client is
+        /// free to append a "Total" / "總計" label anywhere it fits the
+        /// rendering surface.
+        /// </remarks>
+        internal static Dictionary<string, object?> ComputeGrandTotal(
+            List<Dictionary<string, object?>> rows,
+            AnalysisQueryRequest req)
+        {
+            var total = new Dictionary<string, object?>();
+
+            foreach (var d in req.Dimensions) { total[d] = null; }
+
+            foreach (var m in req.Measures)
+            {
+                var key = $"{m.Field}_{m.Func}";
+                total[key] = m.Func switch
+                {
+                    AggregateFunc.Sum   => SumOf(rows, key),
+                    AggregateFunc.Count => SumOf(rows, key),
+                    AggregateFunc.Max   => ExtremaOf(rows, key, max: true),
+                    AggregateFunc.Min   => ExtremaOf(rows, key, max: false),
+                    _                   => (object?)null, // Avg / DistinctCount intentionally null
+                };
+            }
+            return total;
+
+            static decimal? SumOf(List<Dictionary<string, object?>> rows, string key)
+            {
+                decimal sum = 0;
+                bool anyNonNull = false;
+                foreach (var row in rows)
+                {
+                    if (!row.TryGetValue(key, out var raw) || raw == null) { continue; }
+                    if (TryAsDecimal(raw, out var d))
+                    {
+                        sum += d;
+                        anyNonNull = true;
+                    }
+                }
+                return anyNonNull ? sum : null;
+            }
+
+            static decimal? ExtremaOf(List<Dictionary<string, object?>> rows, string key, bool max)
+            {
+                decimal? extreme = null;
+                foreach (var row in rows)
+                {
+                    if (!row.TryGetValue(key, out var raw) || raw == null) { continue; }
+                    if (!TryAsDecimal(raw, out var d)) { continue; }
+                    if (extreme is null
+                        || (max && d > extreme.Value)
+                        || (!max && d < extreme.Value))
+                    {
+                        extreme = d;
+                    }
+                }
+                return extreme;
+            }
+
+            static bool TryAsDecimal(object v, out decimal d)
+            {
+                switch (v)
+                {
+                    case decimal dec: d = dec; return true;
+                    case int i: d = i; return true;
+                    case long l: d = l; return true;
+                    case short s: d = s; return true;
+                    case double dbl when !double.IsNaN(dbl) && !double.IsInfinity(dbl): d = (decimal)dbl; return true;
+                    case float f when !float.IsNaN(f) && !float.IsInfinity(f): d = (decimal)f; return true;
+                    default: d = 0; return false;
                 }
             }
         }

@@ -48,5 +48,16 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// 匯出標頭應優先使用此表；key 不存在時 fallback 回 column key 本身。
         /// </summary>
         public Dictionary<string, string> ColumnDisplayNames { get; set; } = new Dictionary<string, string>();
+
+        /// <summary>
+        /// 「總計」彙總列。當 <see cref="AnalysisQueryRequest.IncludeGrandTotal"/>
+        /// 為 <c>true</c> 時非 null，每個 measure-result 欄位填入合適的彙
+        /// 總值（Sum/Count → 群組值總和；Max → 全體最大；Min → 全體最
+        /// 小；Avg/DistinctCount → 無法合理彙總，輸出 <c>null</c>）。
+        /// 維度欄位輸出 <c>null</c> 讓前端自由附加 "總計 / Total" 字樣。
+        /// 總計範圍與 <see cref="TotalCount"/> 同步：包含所有 HAVING-
+        /// 篩選後的群組，<see cref="AnalysisQueryRequest.TopN"/> 不影響範圍。
+        /// </summary>
+        public Dictionary<string, object?>? GrandTotalRow { get; set; }
     }
 }

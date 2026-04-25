@@ -55,6 +55,21 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// 標準語意。空 list 或 null = 不過濾。
         /// </summary>
         public List<HavingFilter>? HavingFilters { get; set; }
+
+        /// <summary>
+        /// 是否在回應中附加一筆「總計」資料於
+        /// <see cref="AnalysisQueryResponse.GrandTotalRow"/>。預設 <c>false</c>
+        /// 完全不影響舊呼叫者。為 <c>true</c> 時，引擎在套用
+        /// <see cref="HavingFilters"/> 之後（但在 <see cref="Sort"/> /
+        /// <see cref="TopN"/> 之前）依各度量函式產生彙總值：
+        /// Sum / Count → 各群組值相加；Max → 全體最大；Min → 全體最小；
+        /// Avg / DistinctCount → 不適用（合理彙總需要原始資料；客戶端應
+        /// 自行取捨），輸出 <c>null</c>。維度欄位輸出 <c>null</c>，前端
+        /// 自由顯示「總計 / Total」字樣。總計是相對於 HAVING-篩選後的
+        /// 群組集合，與 <see cref="AnalysisQueryResponse.TotalCount"/> 同
+        /// 一基準，<see cref="TopN"/> 只截短可見列、不影響總計範圍。
+        /// </summary>
+        public bool IncludeGrandTotal { get; set; }
     }
 
     /// <summary>
