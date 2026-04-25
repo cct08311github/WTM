@@ -1395,7 +1395,13 @@ namespace WalkingTec.Mvvm.Core.Analysis
             return result;
         }
 
-        private static IQueryable<TModel> ApplyFilters<TModel>(
+        /// <summary>
+        /// Public for the <see cref="BuildDrillThroughQuery"/> entry point —
+        /// drill-through reuses the same expression-tree filter pipeline
+        /// (whitelist validation, type conversion, relative-date tokens)
+        /// instead of duplicating it.
+        /// </summary>
+        public static IQueryable<TModel> ApplyFilters<TModel>(
             IQueryable<TModel> query,
             List<FilterCondition>? filters,
             Dictionary<string, AnalysisFieldMeta> whitelist)
