@@ -100,6 +100,17 @@ public class EtlPipelineExecutor
                     ? config.TransformFunc(batch)
                     : batch;
 
+                // Column mapping (10.5+): rename source-column names to
+                // target-column names and drop columns not in the map.
+                // Runs AFTER TransformFunc so apps can use Transform to
+                // synthesise columns that the mapping then renames /
+                // forwards. No-op when ColumnMappings is null/empty
+                // (back-compat with 10.4.x — same-name 1:1 SqlBulkCopy).
+                if (config.ColumnMappings != null && config.ColumnMappings.Count > 0)
+                {
+                    transformed = ApplyColumnMappings(transformed, config.ColumnMappings);
+                }
+
                 await BulkLoadWithRetryAsync(
                     config, transformed,
                     onRetryStarted: () => retryAttempts++,
@@ -387,6 +398,60 @@ public class EtlPipelineExecutor
             RowsPerSecond = totalLoaded / Math.Max(sw.Elapsed.TotalSeconds, 0.001),
             StartedAt = DateTime.UtcNow - sw.Elapsed
         });
+    }
+
+    /// <summary>
+    /// Apply <see cref="EtlPipelineConfig.ColumnMappings"/> to a batch:
+    /// build a NEW <see cref="DataTable"/> containing only the columns
+    /// listed in <paramref name="mappings"/>, renamed to the target name.
+    /// Source columns absent from the map are dropped (whitelist
+    /// semantics). When a mapping key is not present in the source
+    /// batch, the target column is created and filled with DBNull —
+    /// matches operator intent of "this column should always be in
+    /// the output, sometimes the source has it sometimes not". Public
+    /// for unit-test determinism.
+    /// </summary>
+    public static DataTable ApplyColumnMappings(
+        DataTable source, IDictionary<string, string> mappings)
+    {
+        if (mappings == null) { throw new ArgumentNullException(nameof(mappings)); }
+
+        var output = new DataTable();
+        // Build target column schema in mapping-iteration order so the
+        // operator controls column order at the load step.
+        foreach (var kv in mappings)
+        {
+            var srcName = kv.Key;
+            var tgtName = kv.Value;
+            if (string.IsNullOrWhiteSpace(srcName) || string.IsNullOrWhiteSpace(tgtName))
+            {
+                throw new ArgumentException(
+                    "Column mapping entry has empty source or target name.", nameof(mappings));
+            }
+            var srcType = source.Columns.Contains(srcName)
+                ? source.Columns[srcName]!.DataType
+                : typeof(object);
+            output.Columns.Add(tgtName, srcType);
+        }
+
+        foreach (DataRow srcRow in source.Rows)
+        {
+            var newRow = output.NewRow();
+            foreach (var kv in mappings)
+            {
+                var tgtName = kv.Value;
+                if (source.Columns.Contains(kv.Key))
+                {
+                    newRow[tgtName] = srcRow[kv.Key];
+                }
+                else
+                {
+                    newRow[tgtName] = DBNull.Value;
+                }
+            }
+            output.Rows.Add(newRow);
+        }
+        return output;
     }
 
     private static object? GetMaxValue(DataTable batch, string columnName)
