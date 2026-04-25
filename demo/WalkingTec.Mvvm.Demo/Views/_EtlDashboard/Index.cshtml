@@ -1,0 +1,293 @@
+@*
+  ETL 維運儀表板 (10.5+) — 一頁看完所有 ETL 狀態
+  ─────────────────────────────────────────────────────────────
+  KPI 卡片 + 狀態圓餅 + 每日趨勢長條 + 執行中清單 + 最近失敗 + 最慢 Job
+  資料源：GET /_EtlDashboard/Stats?days=N&topN=M
+  圖表：ECharts (CDN inline)，無 framework 依賴
+*@
+
+<style>
+  .etl-dash             { padding: 8px; font-size: 13px; }
+  .etl-dash h2          { font-size: 18px; margin: 0 0 12px 0; }
+  .etl-dash-toolbar     { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .etl-dash-toolbar select, .etl-dash-toolbar button { padding: 4px 10px; }
+  .etl-dash-refreshed   { color: #888; font-size: 12px; margin-left: auto; }
+  .etl-kpi-row          { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; margin-bottom: 14px; }
+  .etl-kpi              { background: #f7f9fc; border: 1px solid #e6eaf2; border-radius: 4px; padding: 10px 12px; }
+  .etl-kpi-label        { color: #888; font-size: 12px; }
+  .etl-kpi-value        { font-size: 22px; font-weight: bold; margin-top: 4px; }
+  .etl-kpi-value.success-rate.bad { color: #c0392b; }
+  .etl-kpi-value.success-rate.warn { color: #d68910; }
+  .etl-kpi-value.success-rate.good { color: #1e9fff; }
+  .etl-grid-2           { display: grid; grid-template-columns: 1fr 1.6fr; gap: 12px; margin-bottom: 14px; }
+  .etl-card             { background: #fff; border: 1px solid #e6eaf2; border-radius: 4px; padding: 12px; }
+  .etl-card h3          { font-size: 14px; margin: 0 0 8px 0; color: #555; }
+  .etl-chart            { width: 100%; height: 240px; }
+  .etl-list             { max-height: 260px; overflow: auto; border-collapse: collapse; width: 100%; font-size: 12px; }
+  .etl-list th, .etl-list td { padding: 4px 8px; border-bottom: 1px solid #eee; text-align: left; }
+  .etl-list th          { background: #f3f5f9; font-weight: bold; }
+  .etl-list tr:hover    { background: #f9fafd; }
+  .etl-error-msg        { color: #c0392b; max-width: 380px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: help; }
+  .etl-empty            { color: #999; font-style: italic; padding: 12px 4px; }
+  .etl-progress         { display: inline-block; width: 80px; height: 6px; background: #eee; border-radius: 3px; overflow: hidden; vertical-align: middle; }
+  .etl-progress > span  { display: block; height: 100%; background: #1e9fff; }
+</style>
+
+<script src="https://cdn.jsdelivr.net/npm/echarts@5"></script>
+
+<div class="etl-dash" id="etl-dashboard">
+
+  <h2>ETL 維運儀表板</h2>
+
+  <div class="etl-dash-toolbar">
+    <label>視窗範圍：</label>
+    <select id="etl-dash-days">
+      <option value="1">最近 1 天</option>
+      <option value="7" selected>最近 7 天</option>
+      <option value="14">最近 14 天</option>
+      <option value="30">最近 30 天</option>
+      <option value="90">最近 90 天</option>
+    </select>
+    <button class="layui-btn layui-btn-sm" type="button" onclick="EtlDashboard.refresh()">立即重新整理</button>
+    <span class="etl-dash-refreshed" id="etl-dash-refreshed">尚未載入</span>
+  </div>
+
+  @* ── KPI 卡片 ─────────────────────────────────────────── *@
+  <div class="etl-kpi-row">
+    <div class="etl-kpi"><div class="etl-kpi-label">總 Job 數</div><div class="etl-kpi-value" id="etl-kpi-total">—</div></div>
+    <div class="etl-kpi"><div class="etl-kpi-label">啟用中</div>  <div class="etl-kpi-value" id="etl-kpi-active">—</div></div>
+    <div class="etl-kpi"><div class="etl-kpi-label">停用 / 失敗</div><div class="etl-kpi-value" id="etl-kpi-disabled">—</div></div>
+    <div class="etl-kpi"><div class="etl-kpi-label">執行中</div>  <div class="etl-kpi-value" id="etl-kpi-running">—</div></div>
+    <div class="etl-kpi"><div class="etl-kpi-label">視窗內執行</div><div class="etl-kpi-value" id="etl-kpi-runs">—</div></div>
+    <div class="etl-kpi"><div class="etl-kpi-label">成功率</div>  <div class="etl-kpi-value success-rate" id="etl-kpi-success">—</div></div>
+    <div class="etl-kpi"><div class="etl-kpi-label">載入列數</div><div class="etl-kpi-value" id="etl-kpi-rows">—</div></div>
+  </div>
+
+  @* ── 狀態圓餅 + 每日趨勢 ───────────────────────────────── *@
+  <div class="etl-grid-2">
+    <div class="etl-card">
+      <h3>結果分布</h3>
+      <div class="etl-chart" id="etl-chart-status"></div>
+    </div>
+    <div class="etl-card">
+      <h3>每日執行趨勢</h3>
+      <div class="etl-chart" id="etl-chart-trend"></div>
+    </div>
+  </div>
+
+  @* ── 執行中 + 最近失敗 ─────────────────────────────────── *@
+  <div class="etl-grid-2">
+    <div class="etl-card">
+      <h3>執行中 Job</h3>
+      <div id="etl-running-area"><div class="etl-empty">目前沒有執行中的 Job</div></div>
+    </div>
+    <div class="etl-card">
+      <h3>最近失敗</h3>
+      <div id="etl-failures-area"><div class="etl-empty">視窗內沒有失敗紀錄</div></div>
+    </div>
+  </div>
+
+  @* ── 最慢 Job ──────────────────────────────────────────── *@
+  <div class="etl-card">
+    <h3>最慢 Job (依平均耗時)</h3>
+    <div id="etl-slowest-area"><div class="etl-empty">尚無成功完成的 Job 可分析</div></div>
+  </div>
+
+</div>
+
+<script>
+  window.EtlDashboard = (function () {
+    var charts = { status: null, trend: null };
+    var pollTimer = null;
+    var POLL_MS = 10000;
+
+    function $(id) { return document.getElementById(id); }
+    function fmt(n) { return (n == null) ? '—' : Number(n).toLocaleString(); }
+    function fmtPct(r) {
+      if (r == null) return '—';
+      var pct = (Number(r) * 100).toFixed(1);
+      var el = $('etl-kpi-success');
+      el.classList.remove('bad', 'warn', 'good');
+      if (Number(r) < 0.8) el.classList.add('bad');
+      else if (Number(r) < 0.95) el.classList.add('warn');
+      else el.classList.add('good');
+      return pct + '%';
+    }
+    function fmtDateOnly(iso) { return (iso || '').substring(0, 10); }
+    function fmtDateTime(iso) { return (iso || '').replace('T', ' ').substring(0, 19); }
+    function escapeHtml(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+        return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+      });
+    }
+
+    function refresh() {
+      var days = $('etl-dash-days').value;
+      fetch('/_EtlDashboard/Stats?days=' + encodeURIComponent(days) + '&topN=10', { credentials: 'same-origin' })
+        .then(function (r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
+        })
+        .then(render)
+        .catch(function (err) {
+          $('etl-dash-refreshed').textContent = '載入失敗: ' + err.message;
+        });
+    }
+
+    function render(s) {
+      // KPI
+      $('etl-kpi-total').textContent    = fmt(s.kpi.totalJobs);
+      $('etl-kpi-active').textContent   = fmt(s.kpi.activeJobs);
+      $('etl-kpi-disabled').textContent = fmt(s.kpi.disabledJobs);
+      $('etl-kpi-running').textContent  = fmt(s.kpi.runningNow);
+      $('etl-kpi-runs').textContent     = fmt(s.kpi.runsInWindow);
+      $('etl-kpi-success').textContent  = fmtPct(s.kpi.successRate);
+      $('etl-kpi-rows').textContent     = fmt(s.kpi.totalRowsLoadedInWindow);
+
+      $('etl-dash-refreshed').textContent = '已更新於 ' + fmtDateTime(s.generatedAtUtc) + ' UTC';
+
+      // Status pie
+      drawStatusPie(s.statusDistribution);
+      // Daily trend stacked-bar
+      drawTrendBar(s.dailyTrend);
+      // Running list
+      drawRunning(s.running);
+      // Recent failures
+      drawFailures(s.recentFailures);
+      // Slowest
+      drawSlowest(s.slowestJobs);
+    }
+
+    function drawStatusPie(slices) {
+      if (!charts.status) charts.status = echarts.init($('etl-chart-status'));
+      var palette = { Success: '#5fb878', Failed: '#c0392b', Aborted: '#888', Skipped: '#d68910' };
+      var data = (slices || []).map(function (sl) {
+        return { name: sl.result, value: sl.count, itemStyle: { color: palette[sl.result] || '#1e9fff' } };
+      });
+      charts.status.setOption({
+        tooltip: { trigger: 'item' },
+        legend: { bottom: 0 },
+        series: [{ type: 'pie', radius: ['40%', '65%'], center: ['50%', '45%'],
+                   label: { formatter: '{b}: {c}' }, data: data }],
+      });
+    }
+
+    function drawTrendBar(points) {
+      if (!charts.trend) charts.trend = echarts.init($('etl-chart-trend'));
+      var dates = (points || []).map(function (p) { return fmtDateOnly(p.date); });
+      var success = (points || []).map(function (p) { return p.success; });
+      var failed  = (points || []).map(function (p) { return p.failed; });
+      var aborted = (points || []).map(function (p) { return p.aborted; });
+      var skipped = (points || []).map(function (p) { return p.skipped; });
+      charts.trend.setOption({
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+        legend: { bottom: 0 },
+        grid: { top: 20, bottom: 40, left: 40, right: 20 },
+        xAxis: { type: 'category', data: dates, axisLabel: { rotate: 30 } },
+        yAxis: { type: 'value', minInterval: 1 },
+        series: [
+          { name: 'Success', type: 'bar', stack: 'r', itemStyle: { color: '#5fb878' }, data: success },
+          { name: 'Failed',  type: 'bar', stack: 'r', itemStyle: { color: '#c0392b' }, data: failed  },
+          { name: 'Aborted', type: 'bar', stack: 'r', itemStyle: { color: '#888' },    data: aborted },
+          { name: 'Skipped', type: 'bar', stack: 'r', itemStyle: { color: '#d68910' }, data: skipped },
+        ],
+      });
+    }
+
+    function drawRunning(rows) {
+      var el = $('etl-running-area');
+      if (!rows || rows.length === 0) {
+        el.innerHTML = '<div class="etl-empty">目前沒有執行中的 Job</div>';
+        return;
+      }
+      var html = '<table class="etl-list"><thead><tr>'
+               + '<th>Job</th><th>階段</th><th>進度</th><th>列/秒</th><th>已執行</th>'
+               + '</tr></thead><tbody>';
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        var pct = r.totalRows ? Math.min(100, Math.round(100 * r.processedRows / r.totalRows)) : null;
+        var bar = pct != null
+          ? '<span class="etl-progress"><span style="width:' + pct + '%"></span></span> ' + pct + '%'
+          : fmt(r.processedRows);
+        html += '<tr>'
+              + '<td>' + escapeHtml(r.jobName) + '</td>'
+              + '<td>' + escapeHtml(r.phase) + '</td>'
+              + '<td>' + bar + '</td>'
+              + '<td>' + (r.rowsPerSecond ? r.rowsPerSecond.toFixed(1) : '—') + '</td>'
+              + '<td>' + fmtDateTime(r.startedAtUtc) + '</td>'
+              + '</tr>';
+      }
+      html += '</tbody></table>';
+      el.innerHTML = html;
+    }
+
+    function drawFailures(rows) {
+      var el = $('etl-failures-area');
+      if (!rows || rows.length === 0) {
+        el.innerHTML = '<div class="etl-empty">視窗內沒有失敗紀錄</div>';
+        return;
+      }
+      var html = '<table class="etl-list"><thead><tr>'
+               + '<th>Job</th><th>時間</th><th>耗時</th><th>錯誤</th>'
+               + '</tr></thead><tbody>';
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        html += '<tr>'
+              + '<td>' + escapeHtml(r.jobName) + '</td>'
+              + '<td>' + fmtDateTime(r.startedAtUtc) + '</td>'
+              + '<td>' + fmt(r.elapsedMs) + ' ms</td>'
+              + '<td><span class="etl-error-msg" title="' + escapeHtml(r.errorMessage) + '">'
+              +     escapeHtml(r.errorMessage) + '</span></td>'
+              + '</tr>';
+      }
+      html += '</tbody></table>';
+      el.innerHTML = html;
+    }
+
+    function drawSlowest(rows) {
+      var el = $('etl-slowest-area');
+      if (!rows || rows.length === 0) {
+        el.innerHTML = '<div class="etl-empty">尚無成功完成的 Job 可分析</div>';
+        return;
+      }
+      var html = '<table class="etl-list"><thead><tr>'
+               + '<th>Job</th><th>平均耗時</th><th>最大耗時</th><th>成功次數</th>'
+               + '</tr></thead><tbody>';
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        html += '<tr>'
+              + '<td>' + escapeHtml(r.jobName) + '</td>'
+              + '<td>' + fmt(r.avgElapsedMs) + ' ms</td>'
+              + '<td>' + fmt(r.maxElapsedMs) + ' ms</td>'
+              + '<td>' + fmt(r.runCount) + '</td>'
+              + '</tr>';
+      }
+      html += '</tbody></table>';
+      el.innerHTML = html;
+    }
+
+    function startPolling() {
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = setInterval(refresh, POLL_MS);
+    }
+
+    // Resize handler — ECharts charts need explicit resize.
+    function bindResize() {
+      window.addEventListener('resize', function () {
+        if (charts.status) charts.status.resize();
+        if (charts.trend) charts.trend.resize();
+      });
+    }
+
+    // ── Init ─────────────────────────────────────────────
+    document.addEventListener('DOMContentLoaded', function () { refresh(); });
+    // Some hosting paths render the partial dynamically — safe to call immediately too.
+    setTimeout(refresh, 0);
+    bindResize();
+    startPolling();
+
+    $('etl-dash-days').addEventListener('change', refresh);
+
+    return { refresh: refresh };
+  })();
+</script>
