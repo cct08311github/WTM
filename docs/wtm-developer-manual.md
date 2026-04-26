@@ -1,8 +1,10 @@
 # WTM 開發與使用手冊
 
-> **版本**：10.4.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-04-18
+> **版本**：10.5.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-04-26
 
-WalkingTec MVVM Framework (WTM) 是一套 ASP.NET Core 快速開發框架，以四種 ViewModel 類型為核心，搭配內建代碼生成器、LayUI TagHelper、Analysis Mode、ETL 模組與 Dashboard，提供完整的企業級 CRUD 開發體驗。
+WalkingTec MVVM Framework (WTM) 是一套 ASP.NET Core 快速開發框架，以四種 ViewModel 類型為核心，搭配內建代碼生成器、LayUI TagHelper、Analysis Mode、ETL 模組（含可視化儀表板）與 Dashboard，提供完整的企業級 CRUD 開發體驗。
+
+10.5.0 一次帶來 31 個新增能力 — 涵蓋 10 個可選 middleware/attribute（維運、可靠度、頻寬、API lifecycle、可觀測性、功能旗標、IP allow-list、cache 控制）、11 個 Analysis Mode 進階 BI 功能（Sort/TopN、相對日期 token、DistinctCount、HavingFilters、GrandTotal、可調 Limits、CompareWith、自動洞察、drill-through、CSV/Excel 總計列）、7 個 ETL 模組強化（Replace 載入模式、欄位對應、Schema 自動探勘、批次重試、表單驗證、3 步驟精靈、可視化儀表板）、3 個安全強化（CSP 三態、frame-ancestors、CSP 違規回報端點）。所有新功能均為**加值式 / 預設關閉**，零行為破壞。
 
 ---
 
@@ -1407,6 +1409,217 @@ services.AddSingleton<IAnalysisFieldPolicy, MyFieldPolicy>();
 
 使用者可手動切換圖表類型，不受自動偵測限制。
 
+### 7.11 結果排序與 TopN（10.5.0+）
+
+兩個欄位讓 dashboard 直接表達「銷售額 DESC 取前 5 名」的查詢，不必 fetch 10,000 列再前端排序：
+
+```csharp
+var req = new AnalysisQueryRequest
+{
+    VmType   = typeof(SalesAnalysisVM).AssemblyQualifiedName,
+    Dimensions = new() { new() { Field = "Region" } },
+    Measures   = new() { new() { Field = "Amount", Func = AggregateFunc.Sum } },
+    Sort = new()
+    {
+        new() { Field = "Amount_Sum", Descending = true },     // 多鍵排序：再加一筆即可
+    },
+    TopN = 5,
+};
+```
+
+- `Sort.Field` 必須是已請求的維度或度量結果欄（命名格式 `{Field}_{Func}`，例 `Amount_Sum`），白名單外直接 reject
+- `TopN` 範圍：`1..AnalysisLimits.MaxResultRows`（預設 10,000）
+- `TopN` 只裁 `Rows`，**`TotalCount` 仍報全量 group 數** — 前端可顯示「showing 5 of 47」
+- `SortValueComparer` 處理混型：數值統一到 `decimal`、日期直接比、混型 fallback ordinal — 保證可決定論不丟例外
+- 預設不排序（保持向後相容）
+
+### 7.12 9 個新增相對日期 token（10.5.0+）
+
+filter UI 預設集合在 10.5.0 從 8 個擴到 17 個：
+
+| 新 token | 涵義 |
+|--------|------|
+| `@yesterday` | 今日 − 1（單日） |
+| `@nextWeek` / `@nextMonth` | 預測窗口（運維 dashboard / 排程 job） |
+| `@last7days` / `@last90days` / `@last365days` | 滾動窗口 |
+| `@lastQuarter` | 完整上一個自然季 |
+| `@thisYear` | 1/1 至 12/31（與 `@ytd` 不同：`@ytd` 截止今天） |
+| `@lastYear` | 完整上一個自然年 |
+
+token 大小寫不敏感、展開為 `(Gte, Lte)` filter pair，server side 型別轉換與 expression tree 組裝完全沿用既有路徑。**沒動到** 8 個舊 token 行為。
+
+```csharp
+new FilterSpec { Field = "OrderDate", Operator = FilterOperator.RelativeDate, Value = "@last90days" }
+```
+
+### 7.13 DistinctCount 聚合函數（10.5.0+）
+
+回答「每區獨立客戶數」/「每分類獨立商品數」這類經典 BI 問題：
+
+```csharp
+[Measure(AllowedFuncs = AggregateFunc.Sum | AggregateFunc.DistinctCount)]
+public Guid CustomerId { get; set; }
+
+// 請求：
+new MeasureSpec { Field = "CustomerId", Func = AggregateFunc.DistinctCount }
+```
+
+| 路徑 | 行為 |
+|------|------|
+| `InProcessGroupByStrategy` | `g.Select(propGet).Where(non-null).Distinct().Count()` — 處理非數值（FK id 字串）也安全 |
+| `ServerSideGroupByStrategy` | `g.Select(e => e.Prop).Distinct().Count()` → EF Core 翻譯為 SQL `COUNT(DISTINCT col)` 整批下推 |
+
+NULL 排除（符合 ANSI-SQL `COUNT(DISTINCT)` 語意），結果欄命名 `CustomerId_DistinctCount` 可直接放進 `Sort.Field`。
+
+### 7.14 HavingFilters 後聚合過濾（10.5.0+）
+
+10.4 之前 Analysis 只有 `Filters`（pre-aggregation, SQL `WHERE`）+ Sort/TopN（post-aggregation），**沒有** 後聚合篩選。10.5 補上：
+
+```csharp
+var req = new AnalysisQueryRequest
+{
+    Measures = new() { new() { Field = "Amount", Func = AggregateFunc.Sum } },
+    HavingFilters = new()
+    {
+        new() { Field = "Amount_Sum", Operator = FilterOperator.Gte, Value = "1000000" },  // 月銷售 >= 1M 的區
+    },
+};
+```
+
+- `HavingFilter.Operator` 限數值子集：`Eq`/`NotEq`/`Gt`/`Gte`/`Lt`/`Lte`（`Contains`/`In` 對標量聚合無意義）
+- `Value` 用 `InvariantCulture` 解析為 `decimal`；**無法解析則保守過濾掉所有 group**（不靜默放行）
+- 多筆 AND
+- 執行管線：`GROUP BY → HAVING → ORDER BY → LIMIT`（match SQL 標準）
+- `TotalCount` 反映 **post-having** 的 group 基數，所以「showing 3 of 5」是針對使用者過濾後的世界
+
+### 7.15 GrandTotal 總計列（10.5.0+）
+
+dashboard 想要「合計」footer 不必前端再算一遍：
+
+```csharp
+var req = new AnalysisQueryRequest
+{
+    Measures = new() {
+        new() { Field = "Amount", Func = AggregateFunc.Sum },
+        new() { Field = "OrderId", Func = AggregateFunc.Count },
+    },
+    IncludeGrandTotal = true,
+};
+var resp = engine.Execute(req);
+// resp.GrandTotalRow != null
+```
+
+**聚合規則：**
+
+| 度量 Func | GrandTotalRow 行為 |
+|------|------|
+| `Sum` / `Count` | 群組值的總和 |
+| `Max` / `Min` | 群組的 Max / Min |
+| `Avg` / `DistinctCount` | **`null`** — 加權平均需要 per-group sample count（GroupBy 結果丟掉了），distinct 不能直接相加 — 靜默錯誤比 null 更糟 |
+
+- 維度欄統一輸出 `null`（client 自由標 "總計"）
+- 範圍：**post-HAVING / pre-TopN**（與 `TotalCount` 同一宇宙，`TopN` 不影響合計）
+- 空結果仍輸出 `GrandTotalRow`（度量欄 `null` 而非 `0`，避免「平均為零」誤導）
+- Excel exporter 自動加一列底色淡黃 + 粗體底列；CSV exporter 加 footer line（`null` 維度欄輸出 "總計" 標籤、後續 `null` 維度欄留白；數值維持 `.ToString()` + RFC 4180 escape；首字元為 `=` `+` `-` `@` 仍走 CSV-formula-injection escape — 縱深防禦）
+
+### 7.16 AnalysisLimits 可調列數上限（10.5.0+）
+
+把硬編碼的 `10,000`（group result）/ `50,000`（raw materialize）拉成 static class，不必 fork 框架：
+
+```csharp
+// Program.cs（一次設定）
+WalkingTec.Mvvm.Core.Analysis.AnalysisLimits.MaxResultRows     = 50_000;
+WalkingTec.Mvvm.Core.Analysis.AnalysisLimits.MaxMaterializeRows = 200_000;
+```
+
+- `MaxResultRows` 同時作為 `TopN` 驗證上限 — 兩者永遠對齊同一維度
+- 預設值（10,000 / 50,000）= 10.4.x 行為，沒動程式碼就完全相同
+- 測試裡用 `try / finally` 在單測逐筆 override
+
+### 7.17 CompareWith 期間對比（10.5.0+）
+
+「本月 vs 上月」/「本年 vs 去年」/「A 通路 vs B 通路」一發請求搞定：
+
+```csharp
+var req = new AnalysisQueryRequest
+{
+    Filters = new()
+    {
+        new() { Field = "OrderDate", Operator = FilterOperator.RelativeDate, Value = "@thisMonth" },
+    },
+    Measures = new() { new() { Field = "Amount", Func = AggregateFunc.Sum } },
+    CompareWith = new ComparisonRequest
+    {
+        Label = "上月",
+        Filters = new()
+        {
+            new() { Field = "OrderDate", Operator = FilterOperator.RelativeDate, Value = "@lastMonth" },
+        },
+    },
+    Sort = new() { new() { Field = "Amount_Sum_ChangePct", Descending = true } },  // 漲幅榜
+    TopN = 5,
+};
+```
+
+每個度量自動派生 3 欄：
+
+| 派生欄 | 涵義 |
+|------|------|
+| `{Field}_{Func}_Compare` | 對比期值 |
+| `{Field}_{Func}_Delta` | 當期 − 對比期 |
+| `{Field}_{Func}_ChangePct` | 變化百分比（`0.25` = +25%）；對比期為 0 時為 `null`（避免 `Infinity` 序列化） |
+
+- 對比期才有的 row 會以主度量 `null` 加入 — 失去全部營收的區也看得見
+- `Sort.Field` 自動白名單派生欄，「漲幅 / 跌幅榜」一行 query 完成
+- 自動加上 `ColumnDisplayNames`：`金額 合計 (上期)` / `金額 合計 差值` / `金額 合計 變化%`
+- 內部 sub-request **drop** 掉 `Sort` / `TopN` / `IncludeGrandTotal` / `HavingFilters` / `CompareWith` — 不會無窮遞迴、不會 shape 錯位
+
+### 7.18 自動洞察（Insights）BI 敘事（10.5.0+）
+
+把 `Rows` 從「光秃秃的數字」升級成「數字 + 可貼進 callout 的 2~5 行中文短句」：
+
+```csharp
+req.IncludeInsights = true;
+var resp = engine.Execute(req);
+// resp.Insights = [
+//   "本期最高: 北 (金額 合計 = 1,000)，為平均的 2.31 倍",
+//   "本期最低: 西 (金額 合計 = 200)",
+//   "與對比期相比，北 漲幅最大 (+25.0%)，南 跌幅最大 (-20.0%)",
+//   "Top 1 群組佔總計的 86.6%（Pareto 集中度高）",
+//   "1 個群組為異常離群值（|z| > 2.0）：Outlier (金額 合計, z = 2.66)"
+// ]
+```
+
+5 條啟發式（heuristic）依序套在第一個 measure：top performer + ratio、bottom performer（單一群組會 skip 避免重複）、period-over-period 漲跌冠軍（需 `CompareWith`）、Pareto 集中度（N≥5 且 top 20% ≥ 80% 總計）、z-score 離群值（N≥4 且 |z|>2）。
+
+- 每條獨立 try/catch — 一條炸不影響其他
+- 空結果 / 單列 / 全 null measure → 空 list（UI 隱藏 callout）
+- 計算發生在 **Sort+TopN 之後**，敘事反映使用者實際看到的內容
+- **輸出字串跨版本不穩定**，prog 取值請用底層數值欄
+
+### 7.19 Drill-through 點選下鑽（10.5.0+）
+
+dashboard 的「點 group → 看背後原始列」終於有官方 helper：
+
+```csharp
+var raw = AnalysisDrillThrough.BuildQuery<Order>(
+    baseQuery: dc.Set<Order>(),
+    originalReq: req,                       // dashboard 當前請求（保留 Filters）
+    groupValues: new Dictionary<string, string?>
+    {
+        ["Region"]      = "北",              // dashboard 點到的 cell
+        ["OrderDate"]   = "2026 Q1",         // 日期階層自動反查為 [start, endExclusive)
+    },
+    whitelist: AnalysisDrillThrough.BuildWhitelistFor<Order>());
+// raw 是過濾後的 IQueryable<Order> — 可直接 Take(50).ToList() 成 detail grid
+```
+
+- 重用 engine 的 `ApplyFilters`（已 `public`）— 白名單 / 型別轉換 / 相對日期語意一致
+- 保留 `originalReq.Filters`（drill 仍在 dashboard 既有 scope 內）
+- 日期階層維度（`Year` / `Quarter` / `Month` / `Day`）的人類標籤（"2026 Q1"）由 `DateTruncator.TryParseLabel` 反查為半開區間 `[start, endExclusive)`；Eq 比對毫秒精度永遠 0 列
+- 標籤無法 parse → `Take(0)` 優雅退化（dashboard 顯示「無資料」），不丟例外、也不傳回未過濾結果
+- 缺維度值 → 該維度不過濾（drill 自動放寬）；多維度 AND
+
 ---
 
 ## 8. ETL 模組
@@ -1704,6 +1917,203 @@ POST /_EtlRunLog/Rerun?runLogId=X → 從某次執行的水印快照重跑
 - **失敗處理**：水印不更新（`DiscardPendingValue`），下次自動從上次成功點重跑
 - **`OperationCanceledException`**：標記為 `Aborted`（手動中斷或逾時）
 - **重跑機制**：每次 RunLog 保存 `WatermarkSnapshot`，可從任何歷史時間點重跑
+
+### 8.11 載入模式：Merge vs Replace（10.5.0+）
+
+10.4 之前 ETL 的 BulkLoad 階段只有 Merge（依主鍵 upsert）。10.5 補上 Replace（先刪後插），用於 dimension table 完整重建、或「按月份覆寫銷售報表分區」這類場景。
+
+```csharp
+public enum EtlLoadMode { Merge, Replace }
+
+var config = new EtlPipelineConfig
+{
+    LoadMode = EtlLoadMode.Replace,
+    ReplaceWhereClause = "OrderDate >= '2026-01-01' AND OrderDate < '2026-02-01'",
+    // null = 整表清空後重灌；非 null = 只清符合 WHERE 的列
+    ColumnMappings = new()
+    {
+        ["src_cust_id"] = "CustomerID",      // rename：source 欄 → target 欄
+        ["raw_blob"]    = null,              // null/empty = drop（不要寫入 target）
+    },
+};
+```
+
+**`IBulkLoader.ReplaceAsync`：**
+- `MssqlBulkLoader`：開 transaction → `DELETE FROM target WHERE <clause>` → `SqlBulkCopy.WriteToServer` → commit
+- `OracleBulkLoader`：同上但用 `ManagedDataAccess` + array-binding insert
+- `IsSafeWhereClause` 公開工具：拒絕含 `;` / `--` / `xp_` / DML keyword 的字串。VM 層在 save 時就跑這個檢查，**不安全的 WHERE 在保存就被擋下，不會等到第一次跑 job**
+
+### 8.12 ColumnMappings 欄位對應 / drop（10.5.0+）
+
+跨資料庫遷移最常見痛點：source 與 target 欄名不一致 / 部分欄不要灌入。`EtlPipelineConfig.ColumnMappings: Dictionary<string, string?>?`：
+
+```csharp
+config.ColumnMappings = new()
+{
+    ["cust_id"]       = "CustomerID",        // rename
+    ["order_no"]      = "OrderNumber",
+    ["raw_payload"]   = null,                // drop（任何 null/empty 都當 drop）
+    ["debug_flag"]    = "",                  // drop
+};
+```
+
+執行階段：`EtlPipelineExecutor.ApplyColumnMappings(table, mappings)`（已 public 供測）— 改寫 `DataTable.Columns` 名稱、刪掉 drop 欄。`null`/沒設 = 沿用 source 欄名（向後相容）。
+
+ColumnMappings 也支援 JSON 表示，存於 `EtlJobDefinition.ColumnMappingJson`（VM 驗證會解析、檢查 key/value 非空）：
+
+```json
+{ "cust_id": "CustomerID", "order_no": "OrderNumber", "raw_payload": "" }
+```
+
+### 8.13 IEtlSchemaService DB 自動探勘（10.5.0+）
+
+3 步驟精靈裡「下一步」要列出 source DB 有哪些 table、target DB 有哪些 column — 由 `IEtlSchemaService` + `_EtlSchemaController` 提供：
+
+```csharp
+public interface IEtlSchemaService
+{
+    Task<IReadOnlyList<string>> ListTablesAsync(string csKey, string? schema = null, CancellationToken ct = default);
+    Task<IReadOnlyList<EtlColumnInfo>> ListColumnsAsync(string csKey, string table, string? schema = null, CancellationToken ct = default);
+}
+
+public sealed record EtlColumnInfo(string Name, string DataType, bool IsNullable, int? MaxLength);
+```
+
+實作：
+- `MssqlEtlSchemaService` — `INFORMATION_SCHEMA.TABLES` / `.COLUMNS`
+- `OracleEtlSchemaService` — `ALL_TABLES` / `ALL_TAB_COLUMNS`
+- `EtlSchemaServiceFactory.For(dbType)` 根據 `DBTypeEnum` 取對應實作
+
+**Controller endpoints：**
+
+```
+GET /_EtlSchema/Tables?csKey=src&dbType=SqlServer
+GET /_EtlSchema/Columns?csKey=src&dbType=SqlServer&table=Orders
+```
+
+RBAC 與 `_EtlJobController` 同一把鑰匙（Admin / ETLAdmin / IsQuickDebug bypass）。
+
+### 8.14 批次重試與指數退避（10.5.0+）
+
+任一個 BulkLoad 批次的 transient 失敗（DB lock timeout、network jitter、deadlock）以前會炸掉整個 job。10.5 補上 per-batch retry：
+
+```csharp
+var config = new EtlPipelineConfig
+{
+    MaxBatchRetries        = 5,                   // 預設 0（向後相容）；clamp 到 [0, 50]
+    BatchRetryBaseDelayMs  = 200,
+    BatchRetryMaxDelayMs   = 30_000,
+};
+```
+
+退避公式：`delay = random(0, BaseDelay × 2^attempt)`（full-jitter exponential backoff），上限 `BatchRetryMaxDelayMs`。Cancellation 在等待中被尊重 — token 取消會以 `Aborted = true` 結束。
+
+**水印契約不變**：耗盡重試預算 → 整個 job 失敗 + watermark 不 commit；其中一批 recover 成功 → watermark 正常 commit。
+
+`EtlExecutionResult.RetryAttemptsTotal`（10.5.0+）報出本次執行所有批次的累計重試次數，可拉長條圖看「我的 ETL 多 flaky」。
+
+`MockBulkLoader.TransientFailuresBeforeSuccess` 模擬 flaky bulk-load — 用來在自家 pipeline 寫 unit test：
+
+```csharp
+var loader = new MockBulkLoader { TransientFailuresBeforeSuccess = 2 };
+// 前 2 次 BulkLoad 丟 transient exception，第 3 次成功
+```
+
+### 8.15 EtlJobDefinitionVM 表單驗證（10.5.0+）
+
+`EtlJobDefinitionVM.Validate()` 的新增規則（save 時就抓，不等 first run 才炸）：
+
+| 規則 | 條件 | 訊息欄位 |
+|------|------|------|
+| Merge 模式必填 MergeKeyColumn | `LoadMode == Merge && string.IsNullOrEmpty(MergeKeyColumn)` | `Entity.MergeKeyColumn` |
+| Replace 模式 WHERE 安全檢查 | `LoadMode == Replace && !IsSafeWhereClause(ReplaceWhereClause)` | `Entity.ReplaceWhereClause` |
+| ColumnMappingJson 必須是合法 JSON object | parse fail / 非 object | `Entity.ColumnMappingJson` |
+| ColumnMappingJson key/value 不可為空白 | 任一鍵為空白 / 任一值為空白 | `Entity.ColumnMappingJson` |
+
+```csharp
+// Replace + null/empty WHERE = 「整表重灌」；操作員自負其責，validator 接受
+vm.Entity.LoadMode           = EtlLoadMode.Replace;
+vm.Entity.ReplaceWhereClause = null;
+vm.Validate();   // 不 raise error
+
+// Replace + 含 SQL injection 的 WHERE = 拒
+vm.Entity.ReplaceWhereClause = "1=1; DROP TABLE Users";
+vm.Validate();   // MSD["Entity.ReplaceWhereClause"] 出現
+
+// Merge + 不安全 WHERE = 不檢查（WHERE 在 Merge 模式根本沒用）
+vm.Entity.LoadMode = EtlLoadMode.Merge;
+vm.Validate();   // 不 raise error
+```
+
+### 8.16 三步驟 Job 精靈 UI（10.5.0+）
+
+`Views/_EtlJob/Create.cshtml` + `Edit.cshtml` 提供 wizard：
+
+1. **Step 1 — Source**：填 `SourceCsKey` / `SourceDbType` → 點「探勘」呼叫 `_EtlSchema/Tables` → table 下拉自動填入 → 選表後 `_EtlSchema/Columns` 自動填出來、勾選想抽取的欄位
+2. **Step 2 — Target**：填 `TargetCsKey` / `TargetTableName` → 同樣探勘 target schema → UI 用 left-right list 拉欄位對應（rename / drop）→ 自動序列化為 `ColumnMappingJson`
+3. **Step 3 — Schedule + Mode**：cron 表達式視覺化解析、`LoadMode` 切換、`ReplaceWhereClause` / `MergeKeyColumn` 條件式顯示對應欄位
+
+JS 命名空間 `EtlWizard`，AJAX 注入文字一律走 `escapeHtml()`（XSS 防禦）。Razor 中的字面 `@watermark_clause` 用 `@@watermark_clause` 雙 `@` 跳脫（不要被當識別字符）。
+
+> **後端必須註冊 schema 服務：** `services.AddSingleton<MssqlEtlSchemaService>(); services.AddSingleton<OracleEtlSchemaService>();`（demo 已預註冊）
+
+### 8.17 ETL 可視化儀表板（10.5.0+）
+
+ETL 模組單頁總覽，view 路徑 `/_EtlDashboard/Index`：
+
+```
+┌─────────────── 7 個 KPI 卡 ────────────────┐
+│ TotalJobs / ActiveJobs / DisabledJobs       │
+│ RunningNow / RunsInWindow / SuccessRate     │
+│ TotalRowsLoadedInWindow                     │
+└─────────────────────────────────────────────┘
+┌── 結果分布 donut ───┬── 每日 stacked-bar ──┐
+│ Success/Failed/      │ 過去 N 天 4 種狀態   │
+│ Aborted/Skipped      │ 疊圖 + RowsLoaded    │
+└─────────────────────┴──────────────────────┘
+┌── 進行中（live） ────┬── 最近失敗（topN）──┐
+│ JobName/Phase/進度   │ JobName/StartedAt/   │
+│ Bar/RowsPerSec       │ ElapsedMs/ErrorMsg   │
+└─────────────────────┴──────────────────────┘
+        ┌── 最慢 jobs（topN）──┐
+        │ JobName/Avg/Max/Run #│
+        └──────────────────────┘
+```
+
+**Backend：**
+
+```csharp
+public class EtlDashboardService
+{
+    public EtlDashboardSummary BuildSummary(IDataContext dc, int windowDays = 7, int topN = 10);
+}
+```
+
+```csharp
+services.AddSingleton<EtlDashboardService>();   // AddWtmEtl() 已內建
+```
+
+- `windowDays` clamp 到 `[1, 90]`、`topN` clamp 到 `[1, 100]`
+- `DailyTrend` 永遠輸出 `windowDays` 個資料點（oldest first）— front-end 圖表 x 軸密度恆定，零 run 的天 fall back 到 0 0 0 0
+- `SlowestJobs` **只計** `Result == Success` 的 run — 失敗常 abort early 會把均值偏快、結果誤導
+- 進行中的 `JobName` 從 `EtlProgressTracker` 取，空字串時從 DB 反查 `EtlJobDefinition.Name` 補上
+- UTC 桶（避免 timezone bug）
+
+**Endpoints：**
+
+| Method | Path | 用途 |
+|------|------|------|
+| GET | `/_EtlDashboard/Index` | 渲染 partial view |
+| GET | `/_EtlDashboard/Stats?days=N&topN=M` | 回 JSON snapshot（front-end polling） |
+
+RBAC 與 `_EtlJobController` 同一把鑰匙（Admin / ETLAdmin / IsQuickDebug bypass）。
+
+**Front-end（demo Razor + ECharts 5）：**
+- 載 ECharts 5 from CDN（`<script>` 直接加，不必動 `_Layout`）
+- 每 10 秒 polling `/Stats`；window-range select 變更觸發即時 refresh
+- `window.addEventListener("resize")` → 圖表 resize
+- 所有 AJAX 注入文字過 `escapeHtml()` — 連錯誤訊息都不洩 XSS sink
+- SuccessRate 顯色：`<80%` 紅 / `80–95%` 琥珀 / `≥95%` 藍
 
 ---
 
@@ -2777,6 +3187,311 @@ log aggregator（Loki / Seq / Elastic）按 `Path` / `Method` / `User` 分組就
 - 不做 per-endpoint 門檻 — v1 只支援一個 global threshold；app 應設為最嚴 SLA 的值
 - 不做 sampled full-request tracing — 是另一個 surface
 
+### 10.13 CSP 三態模式 + frame-ancestors（10.5.0+，#843–#846）
+
+10.3.0 引入 `UseWtmContentSecurityPolicy()` 時用了 `bool ReportOnly` 表達兩種狀態。10.5.0 升級為 `WtmCspMode` 三態 enum，並補上 `frame-ancestors`（取代過時的 `X-Frame-Options`）與 server-side 違規回報端點。
+
+**三種模式：**
+
+```csharp
+public enum WtmCspMode { Disabled, ReportOnly, Enforce }
+```
+
+| 值 | header | 適用情境 |
+|------|------|------|
+| `Disabled` | 不寫 | 維運切回（不必動程式碼）、本地除錯、灰度回滾 |
+| `ReportOnly` | `Content-Security-Policy-Report-Only` | 上線前評估規則對使用者影響 |
+| `Enforce` | `Content-Security-Policy` | 正式啟用（預設） |
+
+**完整啟用：**
+
+```csharp
+app.UseWtmCspReport();                  // 接收瀏覽器回報，必須在 CSP 之前
+app.UseWtmContentSecurityPolicy(opt =>
+{
+    opt.Mode = WtmCspMode.Enforce;       // 取代舊 ReportOnly bool
+    opt.FrameAncestors = "'self'";       // 反 clickjacking — 預設 'none'
+    opt.DefaultPolicy =
+        "default-src 'self'; " +
+        "script-src 'self' 'unsafe-inline'; " +
+        "style-src 'self' 'unsafe-inline'; " +
+        "img-src 'self' data:; " +
+        "connect-src 'self'";
+    opt.ReportUri = "/_csp/report";      // 與 UseWtmCspReport() 配對
+});
+```
+
+**舊 `ReportOnly` 仍向下相容**（標 `[Obsolete]`），但不要再在新程式碼裡用 — `Mode` 設了非預設值就以 `Mode` 為準。
+
+**回報端點 `_CspReportMiddleware`：**
+
+```csharp
+app.UseWtmCspReport(opt =>
+{
+    opt.RatePerMinute = 10;              // 每 IP 每分鐘上限（防 amplification）；0 = 關閉
+    opt.MaxBodyBytes  = 8 * 1024;
+    opt.OnReport      = report =>
+    {
+        // 自訂回報處理 — 例如轉送至 Sentry
+        sentryClient.CaptureMessage($"CSP violation: {report.ViolatedDirective}");
+    };
+});
+```
+
+預設行為：違規以 Serilog Warning 寫成 `CspViolation Document=… Directive=… Blocked=… Source=…:…` — 既有 log pipeline 直接變成 CSP 違規可觀測介面，不必再接 Sentry / Datadog。
+
+| 回應碼 | 條件 |
+|------|------|
+| 204 | 成功收下 |
+| 400 | body 解析失敗 |
+| 413 | body > MaxBodyBytes |
+| 429 | 同 IP 超過 RatePerMinute |
+
+### 10.14 SecureHeaders Overwrite（10.5.0+，#843）
+
+10.4 的 `UseWtmSecureHeaders()` 採 first-writer-wins（避免覆蓋上游 reverse proxy 設定）；10.5 新增 `Overwrite = true` 給金融/醫療等需要保證 header 出現的場景：
+
+```csharp
+app.UseWtmSecureHeaders(opt =>
+{
+    opt.XFrameOptions = "DENY";         // 想保證一定是 DENY，不接受 proxy 改成 SAMEORIGIN
+    opt.Overwrite     = true;
+});
+```
+
+`Overwrite = true` **不會**繞過 HSTS 的 HTTPS gate（HSTS 仍需 `Request.IsHttps`），也不會啟用設成 `null` 的 header — 它只翻轉「先寫者贏 vs 後寫者贏」的順序。
+
+### 10.15 [WtmIpAllowList] CIDR 白名單（10.5.0+）
+
+把 controller / action 鎖在內網或特定 IP 段：
+
+```csharp
+[WtmIpAllowList("10.0.0.0/8", "192.168.0.0/16", "172.16.0.0/12")]
+public class AdminApiController : BaseApiController { ... }
+
+[HttpPost]
+[WtmIpAllowList("203.0.113.0/24",
+                FallbackStatusCode = 404)]   // 404 隱藏端點存在
+public ActionResult<int> Webhook([FromBody] Payload p) { ... }
+```
+
+- 多個 CIDR OR 起來；單一 host 用 `/32`（IPv4）/ `/128`（IPv6）
+- 由 `System.Net.IPNetwork` 解析，IPv4 / IPv6 同樣支援
+- `IAsyncAuthorizationFilter` 自動發現，**無需 Program.cs 註冊**
+- 拒絕日誌：Warning 級含 client IP + CIDR 列表
+- CIDR 字串在 attribute 建構時驗證（typo 在啟動時就 throw，不會等到第一次請求）
+- 容忍 `X-Forwarded-For: addr1, addr2` 的 comma list（取第一個）— 但 X-Forwarded-For 容易偽造，**正式公網部署必須結合 nginx/Cloudflare/ALB 邊緣防線**，本 attribute 是「縱深防禦的最後一層」
+
+### 10.16 [WtmNoCache] / [WtmCacheControl] 回應快取控制（10.5.0+）
+
+**`[WtmNoCache]`** — 一行修掉「登出後按上一頁仍看得到 profile」的經典問題：
+
+```csharp
+[WtmNoCache]
+public class ProfileController : BaseController { ... }
+```
+
+自動寫出三段防禦：
+- `Cache-Control: no-store, no-cache, must-revalidate, max-age=0, private`
+- `Pragma: no-cache`（HTTP/1.0 fallback，企業內網 proxy 仍見得到）
+- `Expires: 0`
+
+**`[WtmCacheControl(...)]`** — 顯式宣告快取策略：
+
+```csharp
+[WtmCacheControl("public, max-age=300", Vary = "Accept-Encoding, Authorization")]
+public ActionResult<List<Region>> Regions() => _regions;
+```
+
+- 字串原樣寫入（caller 自負 RFC 7234 正確性）
+- `Vary` 寫到對應 header，告訴 CDN/proxy 用哪些 request header 當 cache key
+- First-writer-wins：上游 reverse proxy 已寫 `Cache-Control` 就尊重不覆蓋
+- ctor 對 null/whitespace 直接 throw，typo 啟動就抓
+
+### 10.17 UseWtmMaintenanceMode 計畫性停機 kill-switch（10.5.0+）
+
+正式運維場景：「半夜 2:00 要做 schema migration，10 分鐘窗口期間擋掉所有外部流量、留下 healthz 給 k8s probe、留下 admin plane 給操作者切回」。
+
+```csharp
+app.UseWtmMaintenanceMode(opt =>
+{
+    opt.Enabled              = false;     // 預設不啟，靠 IsEnabled 動態決定
+    opt.IsEnabled            = ctx => featureFlags.IsOn("maintenance-mode");
+    opt.AllowedPathPrefixes  = new[] { "/healthz", "/_admin", "/_framework", "/_js", "/_content" };
+    opt.AllowedClientIps     = new[] { "10.0.0.0/8" };  // bastion / jump host
+    opt.RetryAfterSeconds    = 60;
+    opt.ContentType          = "application/problem+json";  // 也支援 text/html + HtmlBodyFactory
+});
+```
+
+**運作：**
+- 不在白名單 → 503 + `Retry-After: 60` + `application/problem+json` body
+- `IsEnabled` 例外被吞並 fallback 到 `Enabled` 旗標 — flag 服務當機不會把 production 弄爛
+- `Enabled = false` 且沒設 `IsEnabled` → 等同單一 bool 檢查，幾乎零成本
+
+**位置：** 放 `UseRouting` 之後、auth/MVC 之前 — 503 在 expensive middleware 之前 short-circuit。
+
+### 10.18 [WtmDeprecated] API 退役旗標（10.5.0+）
+
+對舊 API 加上 IETF 標準的 `Deprecation: true` / RFC 8594 `Sunset` / RFC 8288 `Link`，告訴 client SDK 該升級了：
+
+```csharp
+[WtmDeprecated(
+    Message = "Use /api/v2/orders instead",
+    Sunset  = "2026-12-31",
+    Link    = "</api/v2/orders>; rel=\"successor-version\"")]
+public ActionResult<Order> GetOrderV1(Guid id) => _svc.Get(id);
+```
+
+每次被呼叫多帶三組 header + 一筆 `Information` 級 Serilog（`DeprecatedEndpointHit Path=… Method=… Message=… Since=…`）— 用日誌 pipeline 直接答得出「誰還在打 v1」。`LogHit = false` 可關。Sunset 字串不合法時不寫該 header，warning 只記一次。
+
+### 10.19 UseWtmServerTiming W3C Server-Timing（10.5.0+）
+
+每個非排除路徑回應掛 `Server-Timing: app;dur=<ms>` — Chrome DevTools → Network → Timing 自動秀後端 latency，**不必接 APM**：
+
+```csharp
+app.UseWtmServerTiming(opt =>
+{
+    opt.MetricName     = "app";
+    opt.Description    = "WTM backend";
+    opt.MinDurationMs  = 200;            // 0=每筆都送；200=只標慢的
+    opt.PathExclusions = new[] { "/healthz", "/_framework", "/_js", "/_content" };
+});
+```
+
+排除路徑 short-circuit 在 stopwatch 之前，**零成本**。多層 `Server-Timing` 用 W3C 規定的 comma list 共存（CDN/proxy 寫的不會被蓋）。Metric 名做 RFC 7230 token 過濾（含空白/控制字元就靜默不寫）；數字用 invariant culture 格式化（不會在 de-DE locale 變成 `12,34`）。
+
+### 10.20 IWtmFeatureFlags 功能旗標（10.5.0+）
+
+不必引 `Microsoft.FeatureManagement` 或 LaunchDarkly：
+
+```csharp
+services.AddWtmFeatureFlags(opt =>
+{
+    opt.Defaults["new-checkout"] = false;
+    opt.Defaults["beta-search"]  = true;
+
+    // 自訂 resolver — 灰度 / 租戶 / user-id rollout / 外部 SDK adapter
+    opt.Resolver = (httpCtx, name) =>
+    {
+        var tenant = httpCtx?.User.FindFirst("tenant")?.Value;
+        if (tenant == "early-access") return true;
+        return null;                      // null 代表「沒意見、繼續往下找」
+    };
+});
+```
+
+**解析順序**（決定論、可單元測）：
+1. `Resolver` delegate（per-request 動態，return null = 沒意見）
+2. `IConfiguration` 的 `FeatureFlags:<name>`（每次都 re-read，`appsettings.json` 改了不必重啟）
+3. `Options.Defaults`（大小寫不敏感）
+4. `false` — 沒宣告就視為關閉（fail-closed，避免忘記註冊就洩漏 pre-release endpoint）
+
+**用法：** 注入 `IWtmFeatureFlags`，或 attribute 守門：
+
+```csharp
+[WtmFeatureGate("new-checkout")]                       // 預設 disabled→404（隱藏存在）
+public ActionResult<Order> CheckoutV2([FromBody] CartDto c) { ... }
+
+[WtmFeatureGate("beta-search", FallbackStatusCode = 503)]
+public IActionResult Search() { ... }
+```
+
+`Snapshot()` 列出所有已知旗標 + 當前值 — admin diagnostic 頁直接吃。Resolver 例外被 catch + Warning，**flag 服務 outage 不會把 production 拖垮**。
+
+### 10.21 [WtmIdempotent] + UseWtmIdempotency 重試安全（10.5.0+）
+
+讓 mutating endpoint 有 retry-safe 能力，不必在 action 內手動防重複提交。遵循 Stripe / PayPal / AWS 的 `Idempotency-Key` 慣例（draft-ietf-httpapi-idempotency-key-header） — 多數現代 API SDK 已預設帶這個 header。
+
+```csharp
+services.AddMemoryCache();
+app.UseWtmIdempotency(opt =>
+{
+    opt.HeaderName            = "Idempotency-Key";
+    opt.DefaultWindowSeconds  = 300;
+    opt.MaxKeyLength          = 128;
+    opt.MaxCachedBodyBytes    = 1 * 1024 * 1024;
+});
+```
+
+```csharp
+[HttpPost]
+[WtmIdempotent(WindowSeconds = 600, RequireKey = true)]
+public ActionResult<Order> Place([FromBody] PlaceOrderDto dto) => _svc.Place(dto);
+```
+
+- 同一個 `Idempotency-Key` 在 600 秒內重打：原樣回放上次 2xx 回應，並加 `Idempotency-Replay: true` header 讓 client/test 區分 cache hit
+- Cache key = `method + path + key`，被偷的 key 不能跨 endpoint 重放
+- 只快取 2xx — 4xx/5xx 直通（暫時失敗不會毒化 slot）
+- 只回放 `Content-Type`，**不回放 `Set-Cookie`** — 防止前一次的 session 被別人撿到
+- Key 只允許 `[A-Za-z0-9\-_.:]`（拒控制字元 / UTF-8 / log injection）；長度 > 128 / `RequireKey = true` 卻沒帶 → 400 + `application/problem+json`
+- `GET` / `HEAD` 故意排除（已 RFC-9110 safe，快取會掩蓋 bug）
+- backing store 是 `IMemoryCache`（in-process）— 多實例部署需要 sticky LB 或自己包 distributed wrapper
+
+### 10.22 UseWtmETag 條件請求頻寬節省（10.5.0+）
+
+對 GET/HEAD 計算 SHA-256 → base64url 截 22 字元（132 bits 熵）作 ETag，client 帶對的 `If-None-Match` 就回 `304 Not Modified`（無 body）。**省的是頻寬不是 server 計算** — 但 dashboard / reference data / 後台 list 通常變動少，每筆 304 從幾 KB 降到 ~300 bytes header。
+
+```csharp
+app.UseWtmETag(opt =>
+{
+    opt.EligibleMethods    = new[] { HttpMethods.Get, HttpMethods.Head };  // POST/PUT 故意不支援
+    opt.MaxBufferedBytes   = 2 * 1024 * 1024;     // 超過直通不算 ETag，避免變記憶體炸彈
+    opt.EmitWeakETag       = false;               // 啟動 → 用 W/"..."
+    opt.PathExclusions     = new[] { "/healthz", "/_framework", "/_js", "/_content" };
+});
+```
+
+- RFC 9110 §13.1.2 / §8.8.3.2 比對：通配 `*`、comma list、`W/` 前綴弱比對都支援
+- 上游已寫 ETag → first-writer-wins
+- 放在 `UseRouting` 之後、compression 之前 — 雜湊算在未壓縮表示上
+
+### 10.23 UseWtmRequestTimeouts per-request 截止期（10.5.0+）
+
+10.4 的 `UseWtmSlowRequestLogging`「**事後**」抓慢，10.5 的 `UseWtmRequestTimeouts`「**進行中**」直接砍。把 `IHttpRequestLifetimeFeature` 換成 deadline-linked `CancellationToken` — EF Core / `HttpClient` / `Task.Delay(_, ct)` 等任何觀察 `HttpContext.RequestAborted` 的 framework 都會合作式取消：
+
+```csharp
+app.UseWtmRequestTimeouts(opt =>
+{
+    opt.DefaultTimeoutMs = 30_000;
+    opt.PathOverrides = new Dictionary<string, int>
+    {
+        ["/api/export"]         = 5  * 60_000,    // 報表慢些
+        ["/api/admin/migrate"]  = 10 * 60_000,    // schema 維護更慢
+        ["/sse"]                = 0,              // SSE 串流，opt-out
+    };
+    opt.PathExclusions = new[] { "/healthz", "/_framework", "/_js", "/_content" };
+});
+```
+
+**Deadline trip 行為：**
+- response 還沒開始送 → 寫 `504 Gateway Timeout` + `application/problem+json`（含 `timeoutMs` / `traceId`）+ Warning log（`RequestTimeout Path={Path} Method={Method} TimeoutMs={Timeout}`）
+- response 已經開始（chunked / SSE）→ abort connection（無法回送 504 over partial body）
+- handler 吞掉 `OperationCanceledException` 還回 200 → middleware 也會把空 200 改成 504（行為不端的 handler 不能藏 deadline）
+- 區分「deadline 砍 handler」vs「client 先放棄」（兩者都是 `OperationCanceledException`），只前者產 504
+
+### 10.24 WtmDataSeeder 冪等資料填充（10.5.0+）
+
+```csharp
+await WtmDataSeeder.SeedAsync(
+    dc,
+    new[]
+    {
+        new Region { Code = "TW", Name = "Taiwan"  },
+        new Region { Code = "JP", Name = "Japan"   },
+        new Region { Code = "US", Name = "America" },
+    },
+    x => x.Code);                              // 業務鍵
+```
+
+回傳 `WtmSeedResult(Added, Skipped)`。重跑同一份 seed — 不論放在 `Program.cs`、test `[TestInitialize]`、migration job 還是 demo 還原 hook — 第二次起 0 inserts，所以「每次啟動 idempotent seed」變成一行。
+
+**內部設計：**
+- 業務鍵存在性檢查 = 一次 `SELECT … WHERE Key IN (…)` 而非 per-item EXISTS — 數百筆 fixture 只一次 round-trip + 一次 `SaveChangesAsync`
+- 完全沒新增才不呼叫 `SaveChangesAsync` — pure-skip re-seed 不會誤觸 audit interceptor / SaveChanges filter
+- 輸入 array 內重複的鍵自動取第一筆（cut-and-paste fixture 不會炸）
+- 純 insert，不更新既有 row（要 upsert 自己包）
+
 ---
 
 ## 11. 多租戶
@@ -3841,3 +4556,12 @@ public class Employee : PersistPoco
 ### B. 版本歷史
 
 詳見 `CHANGELOG.md`。
+
+**10.5.0（2026-04-26）摘要 — 31 個新增能力，零行為破壞：**
+
+| 區塊 | 新增 | 對應章節 |
+|------|------|------|
+| Middleware / 安全 / 可靠度 / 觀測 | `[WtmIpAllowList]` / `[WtmNoCache]` / `[WtmCacheControl]` / `UseWtmMaintenanceMode` / `[WtmDeprecated]` / `UseWtmServerTiming` / `IWtmFeatureFlags` + `[WtmFeatureGate]` / `[WtmIdempotent]` + `UseWtmIdempotency` / `UseWtmETag` / `UseWtmRequestTimeouts` / `WtmDataSeeder` | §10.13–§10.24 |
+| 安全 | `WtmCspMode` 三態 + `FrameAncestors` + `UseWtmCspReport` + `SecureHeadersOptions.Overwrite` | §10.13–§10.14 |
+| Analysis Mode | Sort + TopN / 9 個相對日期 token / DistinctCount / HavingFilters / GrandTotal / AnalysisLimits / CompareWith / Insights / Drill-through / CSV+Excel 總計列 | §7.11–§7.19 |
+| ETL | `LoadMode.Replace` / ColumnMappings / `IEtlSchemaService` / 批次重試 / VM 驗證 / 三步驟精靈 / **可視化儀表板** | §8.11–§8.17 |
