@@ -44,4 +44,19 @@ public class EtlExecutionResult
     /// 來源 / 目標 DB 有持續的轉瞬故障值得調查。
     /// </summary>
     public int RetryAttemptsTotal { get; init; }
+
+    /// <summary>
+    /// 經 <see cref="EtlPipelineConfig.QualityRules"/> 判定為違規的列數累計
+    /// （10.5.1+）。0 = 沒違規或未設定品質規則。<see cref="EtlPipelineConfig.QualityRuleAction"/>
+    /// 為 <see cref="EtlQualityRuleAction.Drop"/> 時，<see cref="LoadedRows"/>
+    /// 不會包含這些列；為 <see cref="EtlQualityRuleAction.Continue"/> 時則會
+    /// （audit-only），可用此值監控資料品質趨勢。
+    /// </summary>
+    public int QualityFailedRows { get; init; }
+
+    /// <summary>
+    /// 違規列的範例（前 20 筆，避免 OOM）— 每筆描述違反的規則 + 欄位 +
+    /// 值的擷取。10.5.1+。空 list = 沒違規或未啟用。
+    /// </summary>
+    public IList<string> QualityFailureSamples { get; init; } = new List<string>();
 }

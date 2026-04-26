@@ -61,6 +61,8 @@ public class EtlPipelineExecutor
         int totalExtracted = 0;
         int totalLoaded = 0;
         int retryAttempts = 0;
+        int qualityFailedRows = 0;
+        var qualityFailureSamples = new List<string>();
 
         try
         {
@@ -109,6 +111,21 @@ public class EtlPipelineExecutor
                 if (config.ColumnMappings != null && config.ColumnMappings.Count > 0)
                 {
                     transformed = ApplyColumnMappings(transformed, config.ColumnMappings);
+                }
+
+                // Quality rules (10.5.1+) — Drop / Continue / Abort 違規列。
+                // Abort 會 throw 並沿用既有 catch 走 watermark discard 路徑。
+                if (config.QualityRules != null && config.QualityRules.Count > 0)
+                {
+                    transformed = EtlQualityRuleEvaluator.Apply(
+                        transformed, config.QualityRules, config.QualityRuleAction,
+                        out int batchFailed, out var batchSamples);
+                    qualityFailedRows += batchFailed;
+                    foreach (var s in batchSamples)
+                    {
+                        if (qualityFailureSamples.Count >= EtlQualityRuleEvaluator.MaxFailureSamples) { break; }
+                        qualityFailureSamples.Add(s);
+                    }
                 }
 
                 await BulkLoadWithRetryAsync(
@@ -160,6 +177,8 @@ public class EtlPipelineExecutor
                 ElapsedMs = sw.ElapsedMilliseconds,
                 NewWatermarkValue = newWatermark,
                 RetryAttemptsTotal = retryAttempts,
+                QualityFailedRows = qualityFailedRows,
+                QualityFailureSamples = qualityFailureSamples,
             };
         }
         catch (OperationCanceledException)
@@ -175,6 +194,8 @@ public class EtlPipelineExecutor
                 ElapsedMs = sw.ElapsedMilliseconds,
                 ErrorMessage = "Job was aborted",
                 RetryAttemptsTotal = retryAttempts,
+                QualityFailedRows = qualityFailedRows,
+                QualityFailureSamples = qualityFailureSamples,
             };
         }
         catch (Exception ex)
@@ -189,6 +210,8 @@ public class EtlPipelineExecutor
                 ElapsedMs = sw.ElapsedMilliseconds,
                 ErrorMessage = EtlErrorSanitizer.Sanitize(ex),
                 RetryAttemptsTotal = retryAttempts,
+                QualityFailedRows = qualityFailedRows,
+                QualityFailureSamples = qualityFailureSamples,
             };
         }
     }
