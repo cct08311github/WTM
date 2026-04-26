@@ -69,5 +69,14 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// 篩選後的群組，<see cref="AnalysisQueryRequest.TopN"/> 不影響範圍。
         /// </summary>
         public Dictionary<string, object?>? GrandTotalRow { get; set; }
+
+        /// <summary>
+        /// 為 <c>true</c> 時表示 <see cref="Rows"/> 結尾包含預測列（每筆帶
+        /// <c>"_IsForecast" = true</c> 旗標）。前端可據此將預測段以虛線 /
+        /// 不同色繪製。<see cref="TotalCount"/> 仍只反映實際列數，不含預測。
+        /// 觸發條件：<see cref="AnalysisQueryRequest.Forecast"/> 非 null
+        /// 且預測引擎成功產出至少 1 筆預測列。
+        /// </summary>
+        public bool HasForecast { get; set; }
     }
 }
