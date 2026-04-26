@@ -51,7 +51,7 @@
     <SystemTextJsonVersion>10.0.4</SystemTextJsonVersion>
     <!-- Third-party packages -->
     <SwashbuckleVersion>10.1.5</SwashbuckleVersion>
-    <OpenTelemetryVersion>1.15.0</OpenTelemetryVersion>
+    <OpenTelemetryVersion>1.15.3</OpenTelemetryVersion>
     <SerilogAspNetCoreVersion>10.0.0</SerilogAspNetCoreVersion>
     <QuartzVersion>3.16.1</QuartzVersion>
     <NPOIVersion>2.7.6</NPOIVersion>
