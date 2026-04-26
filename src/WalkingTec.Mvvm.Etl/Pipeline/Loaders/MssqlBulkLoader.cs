@@ -71,6 +71,92 @@ public class MssqlBulkLoader : IBulkLoader
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    public async Task ReplaceAsync(
+        string connectionString, string stagingTableName,
+        string targetTableName, string? whereClause,
+        CancellationToken cancellationToken = default)
+    {
+        // Basic SQL-injection guard. Operator owns the where clause
+        // (it sits in EtlJobDefinition, edited by an admin), but we
+        // still refuse the obvious foot-guns so a typo/paste from
+        // user input can't escalate.
+        if (!IsSafeWhereClause(whereClause))
+        {
+            throw new System.ArgumentException(
+                $"Replace whereClause contains disallowed characters or token: '{whereClause}'. " +
+                "Reject: ';', '--', '/*', system-procedure prefixes (xp_/sp_).",
+                nameof(whereClause));
+        }
+
+        await using var conn = new SqlConnection(connectionString);
+        await conn.OpenAsync(cancellationToken);
+
+        var columns = await GetColumnsAsync(conn, stagingTableName, cancellationToken);
+        if (columns.Count == 0)
+        {
+            // Replace with no source columns is meaningless; surface
+            // before the DELETE wipes target.
+            throw new System.InvalidOperationException(
+                $"Replace mode aborted: staging table '{stagingTableName}' has no columns.");
+        }
+
+        await using var tran = (SqlTransaction)await conn.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            // 1. DELETE matching rows (or whole table if no WHERE)
+            var deleteSql = string.IsNullOrWhiteSpace(whereClause)
+                ? $"DELETE FROM [{targetTableName}]"
+                : $"DELETE FROM [{targetTableName}] WHERE {whereClause}";
+            await using (var del = conn.CreateCommand())
+            {
+                del.Transaction = tran;
+                del.CommandText = deleteSql;
+                del.CommandTimeout = 0;
+                await del.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            // 2. INSERT FROM staging
+            var colList = string.Join(", ", columns.Select(c => $"[{c}]"));
+            var insertSql =
+                $"INSERT INTO [{targetTableName}] ({colList}) " +
+                $"SELECT {colList} FROM [{stagingTableName}]";
+            await using (var ins = conn.CreateCommand())
+            {
+                ins.Transaction = tran;
+                ins.CommandText = insertSql;
+                ins.CommandTimeout = 0;
+                await ins.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await tran.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await tran.RollbackAsync(System.Threading.CancellationToken.None);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Conservative whitelist for the operator-supplied DELETE WHERE
+    /// clause. Public for unit-test determinism. Returns true for
+    /// null/empty (which means "delete entire table" — a deliberate
+    /// caller choice, not an injection).
+    /// </summary>
+    public static bool IsSafeWhereClause(string? whereClause)
+    {
+        if (string.IsNullOrWhiteSpace(whereClause)) { return true; }
+        // Statement separator / comments — block them outright.
+        if (whereClause.Contains(';')) { return false; }
+        if (whereClause.Contains("--")) { return false; }
+        if (whereClause.Contains("/*")) { return false; }
+        // Block extended-procedure prefixes regardless of case.
+        var lower = whereClause.ToLowerInvariant();
+        if (lower.Contains("xp_")) { return false; }
+        if (lower.Contains("sp_")) { return false; }
+        return true;
+    }
+
     public async Task TruncateStagingAsync(
         string connectionString, string stagingTableName,
         CancellationToken cancellationToken = default)

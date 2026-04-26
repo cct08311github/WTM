@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using WalkingTec.Mvvm.Etl.Alerting;
+using WalkingTec.Mvvm.Etl.Dashboard;
 using WalkingTec.Mvvm.Etl.Models;
 using WalkingTec.Mvvm.Etl.Scheduling;
 
@@ -14,13 +15,14 @@ namespace WalkingTec.Mvvm.Etl;
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// 註冊 ETL 模組服務（排程、進度追蹤）。
+    /// 註冊 ETL 模組服務（排程、進度追蹤、儀表板）。
     /// 如需告警功能，請額外呼叫 <see cref="AddWtmEtlAlerts"/>。
     /// </summary>
     public static IServiceCollection AddWtmEtl(this IServiceCollection services)
     {
         services.AddSingleton<EtlSchedulerService>();
         services.AddSingleton<EtlProgressTracker>();
+        services.AddSingleton<EtlDashboardService>();
         services.AddHostedService<EtlHostedService>();
 
         return services;

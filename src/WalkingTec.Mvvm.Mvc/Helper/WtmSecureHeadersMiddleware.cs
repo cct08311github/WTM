@@ -50,15 +50,16 @@ namespace WalkingTec.Mvvm.Mvc
             context.Response.OnStarting(() =>
             {
                 var headers = context.Response.Headers;
+                var overwrite = options.Overwrite;
 
-                SetIfAbsent(headers, "X-Content-Type-Options", options.XContentTypeOptions);
-                SetIfAbsent(headers, "X-Frame-Options", options.XFrameOptions);
-                SetIfAbsent(headers, "Referrer-Policy", options.ReferrerPolicy);
-                SetIfAbsent(headers, "Permissions-Policy", options.PermissionsPolicy);
+                SetHeader(headers, "X-Content-Type-Options", options.XContentTypeOptions, overwrite);
+                SetHeader(headers, "X-Frame-Options", options.XFrameOptions, overwrite);
+                SetHeader(headers, "Referrer-Policy", options.ReferrerPolicy, overwrite);
+                SetHeader(headers, "Permissions-Policy", options.PermissionsPolicy, overwrite);
 
                 if (hstsValue != null && context.Request.IsHttps)
                 {
-                    SetIfAbsent(headers, "Strict-Transport-Security", hstsValue);
+                    SetHeader(headers, "Strict-Transport-Security", hstsValue, overwrite);
                 }
 
                 return Task.CompletedTask;
@@ -67,9 +68,24 @@ namespace WalkingTec.Mvvm.Mvc
             return _next(context);
         }
 
-        private static void SetIfAbsent(IHeaderDictionary headers, string name, string? value)
+        /// <summary>
+        /// Writes <paramref name="value"/> to <paramref name="name"/> in
+        /// <paramref name="headers"/>, choosing first-writer-wins
+        /// (default, <paramref name="overwrite"/> = false) or
+        /// always-overwrite (defense-in-depth, #843). Whitespace /
+        /// null values are no-ops in either mode so toggling
+        /// <see cref="WtmSecureHeadersOptions.Overwrite"/> never
+        /// emits a header the caller explicitly disabled by setting it
+        /// to null. Public for unit-test determinism.
+        /// </summary>
+        public static void SetHeader(IHeaderDictionary headers, string name, string? value, bool overwrite)
         {
             if (string.IsNullOrWhiteSpace(value)) { return; }
+            if (overwrite)
+            {
+                headers[name] = value;
+                return;
+            }
             if (headers.ContainsKey(name)) { return; }
             headers.Append(name, value);
         }

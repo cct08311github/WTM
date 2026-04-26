@@ -61,9 +61,8 @@ public class EtlJobDefinition : BasePoco
     [StringLength(100)]
     public string TargetTableName { get; set; } = string.Empty;
 
-    /// <summary>合併主鍵欄位</summary>
+    /// <summary>合併主鍵欄位（Merge 模式必填；Replace 模式忽略）</summary>
     [Display(Name = "合併主鍵 (Merge Key)")]
-    [Required]
     [StringLength(100)]
     public string MergeKeyColumn { get; set; } = string.Empty;
 
@@ -71,6 +70,31 @@ public class EtlJobDefinition : BasePoco
     [Display(Name = "查詢模板 (SQL)")]
     [Required]
     public string QueryTemplate { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 載入模式（10.5+）。預設 <see cref="EtlLoadMode.Merge"/>；
+    /// 設為 <see cref="EtlLoadMode.Replace"/> 啟用「先刪後插」，
+    /// 配合 <see cref="ReplaceWhereClause"/> 使用。
+    /// </summary>
+    [Display(Name = "載入模式")]
+    public EtlLoadMode LoadMode { get; set; } = EtlLoadMode.Merge;
+
+    /// <summary>
+    /// Replace 模式下的 DELETE WHERE 子句（不含 "WHERE" 關鍵字本身）。
+    /// 例：<c>OrderDate &gt;= '2026-01-01'</c>。為 null/空白則刪整張
+    /// target table。Merge 模式忽略。
+    /// </summary>
+    [Display(Name = "Replace 模式條件 (WHERE)")]
+    [StringLength(2000)]
+    public string? ReplaceWhereClause { get; set; }
+
+    /// <summary>
+    /// 來源欄位 → 目標欄位 的 JSON 對應字典（10.5+）。
+    /// 例：<c>{"cust_id":"CustomerID","order_no":"OrderNumber"}</c>
+    /// 為 null/空白時走「同名 1:1」（與 10.4.x 完全一致）。
+    /// </summary>
+    [Display(Name = "欄位對應 (JSON)")]
+    public string? ColumnMappingJson { get; set; }
 
     // ─── Watermark 設定 ───
 

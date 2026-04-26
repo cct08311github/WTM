@@ -13,8 +13,12 @@ namespace WalkingTec.Mvvm.Core.Analysis
     /// </summary>
     public class InProcessGroupByStrategy : IGroupByStrategy
     {
-        internal const int MaxMaterializeRows = 50_000;
-        private const int MaxRows = 10_000;
+        // Tunables live in AnalysisLimits; these wrappers preserve the
+        // existing read-site references inside this file and from
+        // AnalysisQueryEngine without forcing every call site to know
+        // about the limits class.
+        internal static int MaxMaterializeRows => AnalysisLimits.MaxMaterializeRows;
+        private static int MaxRows => AnalysisLimits.MaxResultRows;
 
         public List<Dictionary<string, object?>> Execute<TModel>(
             IQueryable<TModel> query,
@@ -66,6 +70,23 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         var propInfo = typeof(TModel).GetProperty(m.Field);
                         if (propInfo is null)
                             throw new InvalidOperationException($"Property '{m.Field}' not found on {typeof(TModel).Name}.");
+
+                        // DistinctCount works on the raw value set — no
+                        // numeric conversion required, since "how many
+                        // unique values" is meaningful regardless of CLR
+                        // type. Computing it before the decimal pipeline
+                        // also lets it tolerate non-numeric values that
+                        // would otherwise throw at conversion.
+                        if (m.Func == AggregateFunc.DistinctCount)
+                        {
+                            int distinct = g
+                                .Select(row => propInfo.GetValue(row))
+                                .Where(v => v != null)
+                                .Distinct()
+                                .Count();
+                            dict[$"{m.Field}_{m.Func}"] = (decimal?)distinct;
+                            continue;
+                        }
 
                         List<decimal?> numericValues = [.. g
                             .Select(row => propInfo.GetValue(row))

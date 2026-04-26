@@ -36,4 +36,12 @@ public class EtlExecutionResult
     /// 實際執行時若遇到同樣情況會 throw；乾跑只警告以便 operator 修正。非乾跑為空。(#834)
     /// </summary>
     public IList<string> ValidationWarnings { get; init; } = new List<string>();
+
+    /// <summary>
+    /// 本次 job 中所有 batch 累計的重試次數。0 = 沒發生過重試（包含
+    /// <see cref="EtlPipelineConfig.MaxBatchRetries"/> = 0 的場景）。
+    /// 用於觀測「我的 ETL 有多不穩」— 若在乾淨環境長期 > 0，代表
+    /// 來源 / 目標 DB 有持續的轉瞬故障值得調查。
+    /// </summary>
+    public int RetryAttemptsTotal { get; init; }
 }

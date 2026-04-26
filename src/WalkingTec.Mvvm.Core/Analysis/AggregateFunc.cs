@@ -18,6 +18,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// <summary>最大值</summary>
         Max = 8,
         /// <summary>最小值</summary>
-        Min = 16
+        Min = 16,
+        /// <summary>不重複值的筆數（COUNT DISTINCT）</summary>
+        DistinctCount = 32,
     }
 }

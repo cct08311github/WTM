@@ -1,5 +1,7 @@
 #nullable enable
+using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Quartz;
@@ -7,6 +9,7 @@ using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Etl.Models;
 using WalkingTec.Mvvm.Etl.Scheduling;
 using WalkingTec.Mvvm.Etl.Pipeline;
+using WalkingTec.Mvvm.Etl.Pipeline.Loaders;
 
 namespace WalkingTec.Mvvm.Etl.ViewModels;
 
@@ -32,7 +35,64 @@ public class EtlJobDefinitionVM : BaseCRUDVM<EtlJobDefinition>
             MSD.AddModelError("Entity.CronExpression", "無效的 Cron 表達式");
         }
 
-        if (!string.IsNullOrEmpty(Entity.MergeKeyColumn) && !string.IsNullOrEmpty(Entity.TargetTableName) && !string.IsNullOrEmpty(Entity.TargetCsKey))
+        // ── LoadMode coherence (10.5+) ──────────────────────────────────
+        // Merge mode requires MergeKeyColumn; Replace mode requires either
+        // a WHERE clause or explicit acknowledgement that the whole target
+        // table will be wiped (we just warn-by-omission via empty clause).
+        if (Entity.LoadMode == EtlLoadMode.Merge
+            && string.IsNullOrWhiteSpace(Entity.MergeKeyColumn))
+        {
+            MSD.AddModelError("Entity.MergeKeyColumn",
+                "Merge 模式必須提供合併主鍵欄位 (MergeKeyColumn)。");
+        }
+
+        // Replace whereClause SQL-injection guard — same rule the loader
+        // applies at runtime, but surfaced at save time so the operator
+        // gets feedback in the form rather than at next scheduled run.
+        if (Entity.LoadMode == EtlLoadMode.Replace
+            && !string.IsNullOrWhiteSpace(Entity.ReplaceWhereClause)
+            && !MssqlBulkLoader.IsSafeWhereClause(Entity.ReplaceWhereClause))
+        {
+            MSD.AddModelError("Entity.ReplaceWhereClause",
+                "WHERE 條件含有不允許的字元或 token (';' / '--' / '/*' / xp_ / sp_)。");
+        }
+
+        // ── Column mapping JSON validation ──────────────────────────────
+        // Parse-once at save time so a typo in the dashboard's mapping
+        // textarea is caught here rather than at first run. Empty / null
+        // mapping is the back-compat default and silently OK.
+        if (!string.IsNullOrWhiteSpace(Entity.ColumnMappingJson))
+        {
+            try
+            {
+                var parsed = JsonSerializer.Deserialize<Dictionary<string, string>>(
+                    Entity.ColumnMappingJson);
+                if (parsed != null)
+                {
+                    foreach (var kv in parsed)
+                    {
+                        if (string.IsNullOrWhiteSpace(kv.Key) || string.IsNullOrWhiteSpace(kv.Value))
+                        {
+                            MSD.AddModelError("Entity.ColumnMappingJson",
+                                "欄位對應 JSON 中存在空白的 key 或 value。");
+                            break;
+                        }
+                    }
+                }
+            }
+            catch (JsonException ex)
+            {
+                MSD.AddModelError("Entity.ColumnMappingJson",
+                    $"欄位對應 JSON 格式錯誤：{ex.Message}");
+            }
+        }
+
+        // ── Merge-key uniqueness probe (Merge mode only) ────────────────
+        // Replace mode doesn't use MergeKey so don't probe.
+        if (Entity.LoadMode == EtlLoadMode.Merge
+            && !string.IsNullOrEmpty(Entity.MergeKeyColumn)
+            && !string.IsNullOrEmpty(Entity.TargetTableName)
+            && !string.IsNullOrEmpty(Entity.TargetCsKey))
         {
             try
             {

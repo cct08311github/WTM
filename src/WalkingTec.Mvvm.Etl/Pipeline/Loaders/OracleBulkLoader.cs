@@ -93,6 +93,66 @@ public class OracleBulkLoader : IBulkLoader
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    public async Task ReplaceAsync(
+        string connectionString, string stagingTableName,
+        string targetTableName, string? whereClause,
+        CancellationToken cancellationToken = default)
+    {
+        // Reuse the same conservative whitelist as MSSQL — Oracle is
+        // arguably more restrictive about ;-terminators inside command
+        // text, but the operator-vetted clause posture is identical.
+        if (!Loaders.MssqlBulkLoader.IsSafeWhereClause(whereClause))
+        {
+            throw new System.ArgumentException(
+                $"Replace whereClause contains disallowed characters or token: '{whereClause}'.",
+                nameof(whereClause));
+        }
+
+        await using var conn = new OracleConnection(connectionString);
+        await conn.OpenAsync(cancellationToken);
+
+        var columns = await GetColumnsAsync(conn, stagingTableName, cancellationToken);
+        if (columns.Count == 0)
+        {
+            throw new System.InvalidOperationException(
+                $"Replace mode aborted: staging table '{stagingTableName}' has no columns.");
+        }
+
+        await using var tran = (Oracle.ManagedDataAccess.Client.OracleTransaction)await conn.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            var deleteSql = string.IsNullOrWhiteSpace(whereClause)
+                ? $"DELETE FROM {targetTableName}"
+                : $"DELETE FROM {targetTableName} WHERE {whereClause}";
+            await using (var del = conn.CreateCommand())
+            {
+                del.Transaction = tran;
+                del.CommandText = deleteSql;
+                del.CommandTimeout = 0;
+                await del.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            var colList = string.Join(", ", columns);
+            var insertSql =
+                $"INSERT INTO {targetTableName} ({colList}) " +
+                $"SELECT {colList} FROM {stagingTableName}";
+            await using (var ins = conn.CreateCommand())
+            {
+                ins.Transaction = tran;
+                ins.CommandText = insertSql;
+                ins.CommandTimeout = 0;
+                await ins.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await tran.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await tran.RollbackAsync(System.Threading.CancellationToken.None);
+            throw;
+        }
+    }
+
     public async Task EnsureStagingTableAsync(
         string connectionString, string stagingTableName,
         StagingTableSpec spec, CancellationToken cancellationToken = default)

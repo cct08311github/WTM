@@ -1,33 +1,328 @@
+@*
+  ETL Job 建立精靈（10.5+）
+  ─────────────────────────────────────────────────────────────
+  3 步驟引導使用者完成設定，每步都是同一個 `<wt:form>` 內的
+  div panel，由 JS 切顯。所有伺服器端 binding 維持原本 wt: 元件，
+  即使 JS 失效也能 fallback 為平面表單。
+
+  Step 1 連線與排程：Name / Cron / LoadMode / SourceCsKey+DbType /
+                     TargetCsKey+DbType / Status
+  Step 2 表選擇      ：[列出表] → 來源表 / 目標表（透過
+                       /_EtlSchema/Tables AJAX）
+  Step 3 欄位對應    ：[載入欄位] 從 source table 帶出欄位（透過
+                       /_EtlSchema/Columns AJAX），動態生成
+                       mapping 列；Merge / Replace 模式對應欄位；
+                       水印設定、告警設定。
+*@
 @model WalkingTec.Mvvm.Etl.ViewModels.EtlJobDefinitionVM
 
-<wt:form vm="@Model">
-  <wt:row items-per-row="ItemsPerRowEnum.Two">
-    <wt:textbox field="Entity.Name" />
-    <wt:textbox field="Entity.Description" />
-    <wt:textbox field="Entity.CronExpression" />
-    <wt:textbox field="Entity.JobClassName" />
-    <wt:combobox field="Entity.Status" />
-    <wt:textbox field="Entity.SourceCsKey" />
-    <wt:combobox field="Entity.SourceDbType" />
-    <wt:textbox field="Entity.TargetCsKey" />
-    <wt:combobox field="Entity.TargetDbType" />
-    <wt:textbox field="Entity.TargetTableName" />
-    <wt:textbox field="Entity.MergeKeyColumn" />
-    <wt:combobox field="Entity.WatermarkType" />
-    <wt:textbox field="Entity.WatermarkColumn" />
-    <wt:textbox field="Entity.InitialWatermarkValue" />
-    <wt:textbox field="Entity.WatermarkTimeZone" />
-    <wt:textbox field="Entity.RetryCount" />
-    <wt:textbox field="Entity.TimeoutMinutes" />
-    <wt:textbox field="Entity.AlertEmail" />
-    <wt:textbox field="Entity.AlertWebhookUrl" />
-    <wt:textbox field="Entity.AlertAfterConsecutiveFailures" />
-  </wt:row>
-  <wt:row items-per-row="ItemsPerRowEnum.One">
-    <wt:textarea field="Entity.QueryTemplate" height="200" />
-  </wt:row>
-  <wt:row align="AlignEnum.Right">
-    <wt:submitbutton />
-    <wt:closebutton />
-  </wt:row>
+<style>
+  .etl-wizard       { display: block; }
+  .etl-step         { display: none; padding: 8px 4px; }
+  .etl-step.active  { display: block; }
+  .etl-stepper      { display: flex; gap: 6px; margin: 0 0 12px 0; }
+  .etl-stepper > b  { flex: 1; padding: 6px 10px; background: #eee; border-radius: 3px;
+                      text-align: center; cursor: default; font-weight: normal; }
+  .etl-stepper > b.active { background: #1e9fff; color: #fff; font-weight: bold; }
+  .etl-table-list   { max-height: 220px; overflow: auto; border: 1px solid #ddd;
+                      padding: 4px 8px; background: #fafafa; }
+  .etl-table-list a { display: block; padding: 2px 0; cursor: pointer; }
+  .etl-table-list a:hover { background: #e7f3ff; }
+  .etl-mapping-row  { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; }
+  .etl-mapping-row label { width: 200px; }
+  .etl-mapping-row input[type=text] { flex: 1; }
+  .etl-actions      { margin-top: 16px; text-align: right; }
+  .etl-hint         { font-size: 12px; color: #999; margin-left: 6px; }
+</style>
+
+<wt:form vm="@Model" id="etl-wizard-form">
+
+  <div class="etl-stepper">
+    <b data-step="1" class="active">1. 連線與排程</b>
+    <b data-step="2">2. 表選擇</b>
+    <b data-step="3">3. 欄位對應與條件</b>
+  </div>
+
+  <div class="etl-wizard">
+
+    @* ── Step 1 ───────────────────────────────────────── *@
+    <div class="etl-step active" data-step="1">
+      <wt:row items-per-row="ItemsPerRowEnum.Two">
+        <wt:textbox field="Entity.Name" />
+        <wt:textbox field="Entity.Description" />
+        <wt:textbox field="Entity.CronExpression" />
+        <wt:combobox field="Entity.LoadMode" />
+        <wt:textbox field="Entity.SourceCsKey" />
+        <wt:combobox field="Entity.SourceDbType" />
+        <wt:textbox field="Entity.TargetCsKey" />
+        <wt:combobox field="Entity.TargetDbType" />
+        <wt:combobox field="Entity.Status" />
+      </wt:row>
+      <div class="etl-actions">
+        <button type="button" class="layui-btn layui-btn-primary" onclick="EtlWizard.next(1)">下一步 →</button>
+      </div>
+    </div>
+
+    @* ── Step 2 ───────────────────────────────────────── *@
+    <div class="etl-step" data-step="2">
+      <wt:row items-per-row="ItemsPerRowEnum.One">
+        <div>
+          <button type="button" class="layui-btn layui-btn-sm" onclick="EtlWizard.loadSourceTables()">列出來源表</button>
+          <span class="etl-hint" id="etl-src-hint"></span>
+          <div class="etl-table-list" id="etl-src-tables" style="display:none"></div>
+        </div>
+      </wt:row>
+      <wt:row items-per-row="ItemsPerRowEnum.Two">
+        <wt:textarea field="Entity.QueryTemplate" height="120" />
+        <wt:textbox field="Entity.TargetTableName" />
+      </wt:row>
+      <wt:row items-per-row="ItemsPerRowEnum.One">
+        <div>
+          <button type="button" class="layui-btn layui-btn-sm" onclick="EtlWizard.loadTargetTables()">列出目標表</button>
+          <span class="etl-hint" id="etl-tgt-hint"></span>
+          <div class="etl-table-list" id="etl-tgt-tables" style="display:none"></div>
+        </div>
+      </wt:row>
+      <div class="etl-actions">
+        <button type="button" class="layui-btn layui-btn-primary" onclick="EtlWizard.prev(2)">← 上一步</button>
+        <button type="button" class="layui-btn layui-btn-primary" onclick="EtlWizard.next(2)">下一步 →</button>
+      </div>
+    </div>
+
+    @* ── Step 3 ───────────────────────────────────────── *@
+    <div class="etl-step" data-step="3">
+      <wt:row items-per-row="ItemsPerRowEnum.One">
+        <div>
+          <button type="button" class="layui-btn layui-btn-sm" onclick="EtlWizard.loadSourceColumns()">載入來源欄位以建立對應</button>
+          <span class="etl-hint">空白 = source 同名直接複製到 target</span>
+          <div id="etl-mapping-area" style="margin-top:8px"></div>
+        </div>
+      </wt:row>
+      <wt:row items-per-row="ItemsPerRowEnum.Two">
+        <wt:textbox field="Entity.MergeKeyColumn" />
+        <wt:textarea field="Entity.ReplaceWhereClause" height="60" />
+      </wt:row>
+      <wt:row items-per-row="ItemsPerRowEnum.One">
+        <wt:textarea field="Entity.ColumnMappingJson" height="100" />
+      </wt:row>
+      <wt:row items-per-row="ItemsPerRowEnum.Two">
+        <wt:combobox field="Entity.WatermarkType" />
+        <wt:textbox field="Entity.WatermarkColumn" />
+        <wt:textbox field="Entity.InitialWatermarkValue" />
+        <wt:textbox field="Entity.WatermarkTimeZone" />
+        <wt:textbox field="Entity.RetryCount" />
+        <wt:textbox field="Entity.TimeoutMinutes" />
+        <wt:textbox field="Entity.AlertEmail" />
+        <wt:textbox field="Entity.AlertWebhookUrl" />
+        <wt:textbox field="Entity.AlertAfterConsecutiveFailures" />
+        <wt:textbox field="Entity.JobClassName" />
+      </wt:row>
+      <div class="etl-actions">
+        <button type="button" class="layui-btn layui-btn-primary" onclick="EtlWizard.prev(3)">← 上一步</button>
+        <wt:submitbutton />
+        <wt:closebutton />
+      </div>
+    </div>
+  </div>
+
 </wt:form>
+
+<script>
+  // EtlWizard — namespaced so the layui dialog hosting this view doesn't
+  // collide with siblings (each modal opens fresh).
+  window.EtlWizard = (function () {
+    function $form() { return document.getElementById('etl-wizard-form'); }
+    function getValue(name) {
+      var el = $form().querySelector('[name="' + name + '"]');
+      return el ? el.value : '';
+    }
+
+    function showStep(n) {
+      var steps = $form().querySelectorAll('.etl-step');
+      for (var i = 0; i < steps.length; i++) {
+        steps[i].classList.toggle('active', steps[i].getAttribute('data-step') == n);
+      }
+      var stepper = $form().querySelectorAll('.etl-stepper > b');
+      for (var j = 0; j < stepper.length; j++) {
+        stepper[j].classList.toggle('active', stepper[j].getAttribute('data-step') == n);
+      }
+    }
+
+    // Minimum guards before letting the operator move on.
+    function next(current) {
+      if (current === 1) {
+        if (!getValue('Entity.Name')) { alert('請先填寫 Job 名稱'); return; }
+        if (!getValue('Entity.SourceCsKey')) { alert('請先填寫來源連線 Key'); return; }
+        if (!getValue('Entity.TargetCsKey')) { alert('請先填寫目標連線 Key'); return; }
+      }
+      if (current === 2) {
+        if (!getValue('Entity.TargetTableName')) { alert('請先選擇或填寫目標表'); return; }
+      }
+      showStep(current + 1);
+    }
+    function prev(current) { showStep(current - 1); }
+
+    function fetchJson(url) {
+      return fetch(url, { credentials: 'same-origin' }).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      });
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+      });
+    }
+
+    function renderTableList(divId, hintId, tables, onPick) {
+      var div = document.getElementById(divId);
+      var hint = document.getElementById(hintId);
+      if (!tables || tables.length === 0) {
+        hint.textContent = '（沒有可見的表）';
+        div.style.display = 'none';
+        return;
+      }
+      hint.textContent = '共 ' + tables.length + ' 個表，點選即填入';
+      var html = '';
+      for (var i = 0; i < tables.length; i++) {
+        var t = tables[i];
+        var label = t.fullName || t.name;
+        html += '<a data-name="' + escapeHtml(label) + '">' + escapeHtml(label) + '</a>';
+      }
+      div.innerHTML = html;
+      div.style.display = 'block';
+      var anchors = div.querySelectorAll('a');
+      for (var k = 0; k < anchors.length; k++) {
+        anchors[k].addEventListener('click', (function (a) {
+          return function () { onPick(a.getAttribute('data-name')); };
+        })(anchors[k]));
+      }
+    }
+
+    function loadSourceTables() {
+      var csKey = getValue('Entity.SourceCsKey');
+      var dbType = getValue('Entity.SourceDbType');
+      if (!csKey || !dbType) { alert('請先在 Step 1 設定來源連線'); return; }
+      var url = '/_EtlSchema/Tables?csKey=' + encodeURIComponent(csKey)
+                + '&dbType=' + encodeURIComponent(dbType);
+      fetchJson(url)
+        .then(function (rows) {
+          renderTableList('etl-src-tables', 'etl-src-hint', rows, function (name) {
+            // Auto-fill QueryTemplate with a starter SELECT * FROM <table>
+            var qt = $form().querySelector('[name="Entity.QueryTemplate"]');
+            if (qt && !qt.value.trim()) {
+              qt.value = 'SELECT * FROM ' + name + ' WHERE @@watermark_clause';
+            }
+          });
+        })
+        .catch(function (err) {
+          document.getElementById('etl-src-hint').textContent = '載入失敗: ' + err.message;
+        });
+    }
+
+    function loadTargetTables() {
+      var csKey = getValue('Entity.TargetCsKey');
+      var dbType = getValue('Entity.TargetDbType');
+      if (!csKey || !dbType) { alert('請先在 Step 1 設定目標連線'); return; }
+      var url = '/_EtlSchema/Tables?csKey=' + encodeURIComponent(csKey)
+                + '&dbType=' + encodeURIComponent(dbType);
+      fetchJson(url)
+        .then(function (rows) {
+          renderTableList('etl-tgt-tables', 'etl-tgt-hint', rows, function (name) {
+            var tt = $form().querySelector('[name="Entity.TargetTableName"]');
+            if (tt) tt.value = name;
+          });
+        })
+        .catch(function (err) {
+          document.getElementById('etl-tgt-hint').textContent = '載入失敗: ' + err.message;
+        });
+    }
+
+    function loadSourceColumns() {
+      var csKey = getValue('Entity.SourceCsKey');
+      var dbType = getValue('Entity.SourceDbType');
+      // Derive table name from the QueryTemplate "FROM <table>" — best-
+      // effort regex match.
+      var qt = getValue('Entity.QueryTemplate') || '';
+      var m = qt.match(/from\s+([\w\.]+)/i);
+      var srcTable = m ? m[1] : getValue('Entity.TargetTableName');
+      if (!csKey || !dbType || !srcTable) {
+        alert('需要在 Step 1 設定來源連線、Step 2 確認 QueryTemplate（含 FROM 子句）');
+        return;
+      }
+      var url = '/_EtlSchema/Columns?csKey=' + encodeURIComponent(csKey)
+                + '&dbType=' + encodeURIComponent(dbType)
+                + '&table=' + encodeURIComponent(srcTable);
+      fetchJson(url)
+        .then(function (cols) {
+          renderMapping(cols);
+        })
+        .catch(function (err) {
+          document.getElementById('etl-mapping-area').innerHTML =
+            '<span class="etl-hint" style="color:#c00">載入失敗: ' + escapeHtml(err.message) + '</span>';
+        });
+    }
+
+    function renderMapping(columns) {
+      var area = document.getElementById('etl-mapping-area');
+      if (!columns || columns.length === 0) {
+        area.innerHTML = '<span class="etl-hint">沒有取得欄位</span>';
+        return;
+      }
+      var html = '<div class="etl-mapping-rows">';
+      for (var i = 0; i < columns.length; i++) {
+        var c = columns[i];
+        var pkBadge = c.isPrimaryKey ? ' <small style="color:#1e9fff">[PK]</small>' : '';
+        var nameEsc = escapeHtml(c.name);
+        var typeEsc = escapeHtml(c.dataType || '');
+        html += '<div class="etl-mapping-row">'
+              + '  <input type="checkbox" data-src="' + nameEsc + '" checked>'
+              + '  <label>' + nameEsc + pkBadge + ' <small>(' + typeEsc + ')</small></label>'
+              + '  → '
+              + '  <input type="text" data-tgt="' + nameEsc + '" placeholder="留空=同名" value="' + nameEsc + '">'
+              + '</div>';
+      }
+      html += '</div>'
+            + '<button type="button" class="layui-btn layui-btn-sm layui-btn-normal" onclick="EtlWizard.applyMapping()">套用對應到 JSON</button>';
+      area.innerHTML = html;
+    }
+
+    function applyMapping() {
+      var area = document.getElementById('etl-mapping-area');
+      var rows = area.querySelectorAll('.etl-mapping-row');
+      var dict = {};
+      var any = false;
+      for (var i = 0; i < rows.length; i++) {
+        var cb = rows[i].querySelector('input[type=checkbox]');
+        if (!cb.checked) continue;
+        var src = cb.getAttribute('data-src');
+        var tgtInput = rows[i].querySelector('input[type=text]');
+        var tgt = (tgtInput.value || '').trim();
+        if (!tgt) tgt = src;
+        dict[src] = tgt;
+        any = true;
+      }
+      var json = $form().querySelector('[name="Entity.ColumnMappingJson"]');
+      if (any) {
+        json.value = JSON.stringify(dict, null, 2);
+      } else {
+        json.value = '';
+      }
+      var hint = document.createElement('span');
+      hint.className = 'etl-hint';
+      hint.style.marginLeft = '8px';
+      hint.textContent = any ? ('已寫入 ' + Object.keys(dict).length + ' 條對應') : '已清空對應';
+      area.appendChild(hint);
+    }
+
+    return {
+      next: next,
+      prev: prev,
+      loadSourceTables: loadSourceTables,
+      loadTargetTables: loadTargetTables,
+      loadSourceColumns: loadSourceColumns,
+      applyMapping: applyMapping,
+    };
+  })();
+</script>

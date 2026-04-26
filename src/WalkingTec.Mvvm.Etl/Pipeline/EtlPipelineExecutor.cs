@@ -60,14 +60,17 @@ public class EtlPipelineExecutor
         var sw = Stopwatch.StartNew();
         int totalExtracted = 0;
         int totalLoaded = 0;
+        int retryAttempts = 0;
 
         try
         {
             // 0. 快速失敗驗證
             if (config.BatchSize <= 0)
                 throw new ArgumentException($"BatchSize must be greater than 0, got {config.BatchSize}.", nameof(config));
-            if (string.IsNullOrWhiteSpace(config.MergeKeyColumn))
-                throw new ArgumentException("MergeKeyColumn must not be null or empty.", nameof(config));
+            if (config.LoadMode == EtlLoadMode.Merge && string.IsNullOrWhiteSpace(config.MergeKeyColumn))
+                throw new ArgumentException(
+                    "MergeKeyColumn must not be null or empty when LoadMode = Merge.",
+                    nameof(config));
 
             // 1. 確認 staging table
             await _loader.EnsureStagingTableAsync(
@@ -97,9 +100,21 @@ public class EtlPipelineExecutor
                     ? config.TransformFunc(batch)
                     : batch;
 
-                await _loader.BulkLoadAsync(
-                    config.TargetConnectionString, config.StagingTable.TableName,
-                    transformed, cancellationToken);
+                // Column mapping (10.5+): rename source-column names to
+                // target-column names and drop columns not in the map.
+                // Runs AFTER TransformFunc so apps can use Transform to
+                // synthesise columns that the mapping then renames /
+                // forwards. No-op when ColumnMappings is null/empty
+                // (back-compat with 10.4.x — same-name 1:1 SqlBulkCopy).
+                if (config.ColumnMappings != null && config.ColumnMappings.Count > 0)
+                {
+                    transformed = ApplyColumnMappings(transformed, config.ColumnMappings);
+                }
+
+                await BulkLoadWithRetryAsync(
+                    config, transformed,
+                    onRetryStarted: () => retryAttempts++,
+                    cancellationToken).ConfigureAwait(false);
 
                 totalLoaded += transformed.Rows.Count;
 
@@ -114,13 +129,24 @@ public class EtlPipelineExecutor
                 ReportProgress(config, totalLoaded, sw);
             }
 
-            // 4. Merge staging → target
-            ReportProgress(config, totalLoaded, sw, "Merging");
+            // 4. Load to target — Merge or Replace per LoadMode
+            ReportProgress(config, totalLoaded, sw,
+                config.LoadMode == EtlLoadMode.Replace ? "Replacing" : "Merging");
 
-            await _loader.MergeAsync(
-                config.TargetConnectionString, config.StagingTable.TableName,
-                config.TargetTableName, config.MergeKeyColumn,
-                cancellationToken);
+            if (config.LoadMode == EtlLoadMode.Replace)
+            {
+                await _loader.ReplaceAsync(
+                    config.TargetConnectionString, config.StagingTable.TableName,
+                    config.TargetTableName, config.ReplaceWhereClause,
+                    cancellationToken);
+            }
+            else
+            {
+                await _loader.MergeAsync(
+                    config.TargetConnectionString, config.StagingTable.TableName,
+                    config.TargetTableName, config.MergeKeyColumn,
+                    cancellationToken);
+            }
 
             // 5. 成功 → commit watermark
             var newWatermark = watermark.CommitPendingValue();
@@ -132,7 +158,8 @@ public class EtlPipelineExecutor
                 ExtractedRows = totalExtracted,
                 LoadedRows = totalLoaded,
                 ElapsedMs = sw.ElapsedMilliseconds,
-                NewWatermarkValue = newWatermark
+                NewWatermarkValue = newWatermark,
+                RetryAttemptsTotal = retryAttempts,
             };
         }
         catch (OperationCanceledException)
@@ -146,7 +173,8 @@ public class EtlPipelineExecutor
                 ExtractedRows = totalExtracted,
                 LoadedRows = totalLoaded,
                 ElapsedMs = sw.ElapsedMilliseconds,
-                ErrorMessage = "Job was aborted"
+                ErrorMessage = "Job was aborted",
+                RetryAttemptsTotal = retryAttempts,
             };
         }
         catch (Exception ex)
@@ -159,8 +187,67 @@ public class EtlPipelineExecutor
                 ExtractedRows = totalExtracted,
                 LoadedRows = totalLoaded,
                 ElapsedMs = sw.ElapsedMilliseconds,
-                ErrorMessage = EtlErrorSanitizer.Sanitize(ex)
+                ErrorMessage = EtlErrorSanitizer.Sanitize(ex),
+                RetryAttemptsTotal = retryAttempts,
             };
+        }
+    }
+
+    /// <summary>
+    /// Wrap <see cref="IBulkLoader.BulkLoadAsync"/> with exponential-
+    /// backoff retry per <see cref="EtlPipelineConfig.MaxBatchRetries"/>.
+    /// Returns the number of *retry* attempts (not counting the first
+    /// try); 0 means "first try succeeded". When retries are exhausted
+    /// the original exception is re-thrown so callers see the same
+    /// failure shape as before.
+    /// </summary>
+    /// <remarks>
+    /// Exponential backoff with full jitter:
+    /// <c>delay = random(0, BaseDelay × 2^attempt)</c>,
+    /// clamped to <see cref="EtlPipelineConfig.BatchRetryMaxDelayMs"/>.
+    /// Cancellation is honoured — a cancellation token observed during
+    /// the wait short-circuits the retry loop and surfaces as
+    /// <see cref="OperationCanceledException"/>.
+    /// </remarks>
+    private async Task BulkLoadWithRetryAsync(
+        EtlPipelineConfig config,
+        DataTable transformed,
+        Action onRetryStarted,
+        CancellationToken cancellationToken)
+    {
+        var maxRetries = Math.Clamp(config.MaxBatchRetries, 0, 50);
+        var baseDelay = Math.Max(0, config.BatchRetryBaseDelayMs);
+        var maxDelay = Math.Max(baseDelay, config.BatchRetryMaxDelayMs);
+        var attempt = 0;
+
+        while (true)
+        {
+            try
+            {
+                await _loader.BulkLoadAsync(
+                    config.TargetConnectionString, config.StagingTable.TableName,
+                    transformed, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                // Don't swallow — caller's outer try/catch handles abort.
+                throw;
+            }
+            catch when (attempt < maxRetries && !cancellationToken.IsCancellationRequested)
+            {
+                attempt++;
+                onRetryStarted();
+                // Exponential w/ full jitter; attempt is capped at 50 so
+                // (long)baseDelay << attempt won't overflow Int64.
+                var ceilingMs = (long)baseDelay << Math.Min(attempt, 30);
+                ceilingMs = Math.Min(ceilingMs, maxDelay);
+                var jittered = ceilingMs <= 0 ? 0 : Random.Shared.NextInt64(0, ceilingMs + 1);
+                if (jittered > 0)
+                {
+                    await Task.Delay((int)jittered, cancellationToken).ConfigureAwait(false);
+                }
+            }
         }
     }
 
@@ -311,6 +398,60 @@ public class EtlPipelineExecutor
             RowsPerSecond = totalLoaded / Math.Max(sw.Elapsed.TotalSeconds, 0.001),
             StartedAt = DateTime.UtcNow - sw.Elapsed
         });
+    }
+
+    /// <summary>
+    /// Apply <see cref="EtlPipelineConfig.ColumnMappings"/> to a batch:
+    /// build a NEW <see cref="DataTable"/> containing only the columns
+    /// listed in <paramref name="mappings"/>, renamed to the target name.
+    /// Source columns absent from the map are dropped (whitelist
+    /// semantics). When a mapping key is not present in the source
+    /// batch, the target column is created and filled with DBNull —
+    /// matches operator intent of "this column should always be in
+    /// the output, sometimes the source has it sometimes not". Public
+    /// for unit-test determinism.
+    /// </summary>
+    public static DataTable ApplyColumnMappings(
+        DataTable source, IDictionary<string, string> mappings)
+    {
+        if (mappings == null) { throw new ArgumentNullException(nameof(mappings)); }
+
+        var output = new DataTable();
+        // Build target column schema in mapping-iteration order so the
+        // operator controls column order at the load step.
+        foreach (var kv in mappings)
+        {
+            var srcName = kv.Key;
+            var tgtName = kv.Value;
+            if (string.IsNullOrWhiteSpace(srcName) || string.IsNullOrWhiteSpace(tgtName))
+            {
+                throw new ArgumentException(
+                    "Column mapping entry has empty source or target name.", nameof(mappings));
+            }
+            var srcType = source.Columns.Contains(srcName)
+                ? source.Columns[srcName]!.DataType
+                : typeof(object);
+            output.Columns.Add(tgtName, srcType);
+        }
+
+        foreach (DataRow srcRow in source.Rows)
+        {
+            var newRow = output.NewRow();
+            foreach (var kv in mappings)
+            {
+                var tgtName = kv.Value;
+                if (source.Columns.Contains(kv.Key))
+                {
+                    newRow[tgtName] = srcRow[kv.Key];
+                }
+                else
+                {
+                    newRow[tgtName] = DBNull.Value;
+                }
+            }
+            output.Rows.Add(newRow);
+        }
+        return output;
     }
 
     private static object? GetMaxValue(DataTable batch, string columnName)

@@ -67,5 +67,27 @@ namespace WalkingTec.Mvvm.Mvc
         /// to <see href="https://hstspreload.org/"/>.
         /// </summary>
         public bool HstsIncludePreload { get; set; }
+
+        /// <summary>
+        /// When <c>true</c>, every header configured on this options
+        /// instance is written even if a value already exists in the
+        /// response (overwriting upstream proxy / sibling-middleware
+        /// values). Default <c>false</c> preserves the original
+        /// first-writer-wins behaviour, which is the right call for
+        /// most apps because reverse proxies usually inject *stricter*
+        /// values than the app could compute.
+        /// <para>
+        /// Flip on for **defense-in-depth** scenarios where the app
+        /// owner does not trust upstream proxy configuration to be
+        /// correct — banking / healthcare / regulated industries that
+        /// must guarantee certain headers regardless of how the request
+        /// arrives. Closes #843.
+        /// </para>
+        /// <para>
+        /// HSTS still respects the HTTPS-only gate: <c>Overwrite = true</c>
+        /// does NOT cause an HSTS header to appear on plain-HTTP requests.
+        /// </para>
+        /// </summary>
+        public bool Overwrite { get; set; }
     }
 }

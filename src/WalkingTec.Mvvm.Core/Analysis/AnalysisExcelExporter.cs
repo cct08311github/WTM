@@ -113,6 +113,70 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 }
             }
 
+            // ── Grand-total footer row (when AnalysisQueryRequest.IncludeGrandTotal = true) ──
+            // Bold + light-yellow fill so the consumer's eye lands on the
+            // rollup without the row blending into ordinary data. Numeric
+            // formats inherit from the column so currency / percent / etc.
+            // remain consistent with the body.
+            if (result.GrandTotalRow != null)
+            {
+                var totalFont = workbook.CreateFont();
+                totalFont.IsBold = true;
+
+                ICellStyle MakeTotalStyle(ICellStyle? baseStyle)
+                {
+                    var s = workbook.CreateCellStyle();
+                    if (baseStyle != null)
+                    {
+                        s.DataFormat = baseStyle.DataFormat;
+                    }
+                    s.SetFont(totalFont);
+                    s.FillForegroundColor = IndexedColors.LightYellow.Index;
+                    s.FillPattern = FillPattern.SolidForeground;
+                    return s;
+                }
+
+                var totalRow = sheet.CreateRow(result.Rows.Count + 1);
+                bool labelEmitted = false;
+                for (int c = 0; c < result.Columns.Count; c++)
+                {
+                    var colKey = result.Columns[c];
+                    result.GrandTotalRow.TryGetValue(colKey, out var val);
+                    var cell = totalRow.CreateCell(c);
+
+                    if (val == null)
+                    {
+                        // First null dimension cell carries the "總計" label
+                        // so users see WHY the row exists; subsequent null
+                        // cells stay blank to match how Excel users typically
+                        // build manual grand-total rows.
+                        if (!labelEmitted)
+                        {
+                            cell.SetCellValue("總計");
+                            labelEmitted = true;
+                        }
+                        else
+                        {
+                            cell.SetCellValue("");
+                        }
+                    }
+                    else if (val is decimal d)
+                        cell.SetCellValue((double)d);
+                    else if (val is double db)
+                        cell.SetCellValue(db);
+                    else if (val is float fv)
+                        cell.SetCellValue(fv);
+                    else if (val is int iv)
+                        cell.SetCellValue(iv);
+                    else if (val is long lv)
+                        cell.SetCellValue(lv);
+                    else
+                        cell.SetCellValue(val.ToString() ?? "");
+
+                    cell.CellStyle = MakeTotalStyle(colStyles[c]);
+                }
+            }
+
             // ── Auto-size all columns, cap at MaxColumnWidth ──────────────────────
             for (int i = 0; i < result.Columns.Count; i++)
             {
@@ -218,7 +282,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
         private static (IChart chart, List<int> measureIndices) CreateChartBase(ISheet sheet, AnalysisQueryResponse result)
         {
             var drawing = sheet.CreateDrawingPatriarch();
-            int chartTopRow = result.Rows.Count + 3;
+            // Shift chart down one row when a grand-total footer is
+            // present so the chart anchor sits below it cleanly.
+            int totalRowOffset = result.GrandTotalRow != null ? 1 : 0;
+            int chartTopRow = result.Rows.Count + 3 + totalRowOffset;
             var anchor = drawing.CreateAnchor(0, 0, 0, 0,
                 0, chartTopRow, result.Columns.Count + 2, chartTopRow + 15);
             var chart = drawing.CreateChart(anchor);
