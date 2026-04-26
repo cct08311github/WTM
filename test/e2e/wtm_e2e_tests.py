@@ -362,8 +362,11 @@ async def tc_04_analysis_mode_page(page, **_):
     await page.screenshot(path=sc(4, "02-toolbar"))
     assert btn_count > 0, "找不到「分析模式」按鈕！"
 
-    # 點擊切換
-    await analysis_btn.first.click()
+    # 點擊切換 — explicit visibility sync to avoid layout-fade flake (issue #851)
+    first_btn = analysis_btn.first
+    await first_btn.scroll_into_view_if_needed()
+    await first_btn.wait_for(state="visible", timeout=10000)
+    await first_btn.click()
     # 等待 meta API 載入和面板渲染
     try:
         await page.wait_for_selector("[id^='analysis-panel-']", state="visible", timeout=5000)
