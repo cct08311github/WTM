@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [10.5.0] - 2026-04-26
+
+Major feature release. 10 opt-in middleware/attributes (maintenance mode,
+request timeouts, ETag, idempotency, server-timing, feature gate, IP
+allow-list, cache-control, deprecated, secure-headers overwrite),
+11 Analysis Mode BI extensions (Sort/TopN, relative-date tokens,
+DistinctCount, HavingFilters, GrandTotal, configurable Limits, CompareWith,
+auto Insights, drill-through, Excel/CSV total rows), 7 ETL enhancements
+(per-batch retry with backoff, column mapping, schema discovery, dashboard,
+Replace load mode, dry-run validation hardening), 3 CSP security
+hardenings (3-state Mode enum, frame-ancestors directive, server-side
+violation report endpoint with rate-limit). All additive / opt-in —
+zero breaking change.
+
+Plus the security release-hardening that gated this version: OpenTelemetry
+1.15.0 → 1.15.3 transitive bump (#849, GHSA-g94r/q834/mr8r) and
+TC-04 e2e flake fix (#851).
+
 ### Added
 - **Analysis Mode: drill-through helper (`AnalysisDrillThrough.BuildQuery`)** — Closes the canonical "click a group → see the raw rows behind it" UX that every dashboard wants but none of WTM's public surface previously supported; apps had to manually rebuild filter expressions on the controller side, duplicating the engine's filter-and-validate logic. New `AnalysisDrillThrough.BuildQuery<TModel>(baseQuery, originalReq, groupValues, whitelist)` returns the source `IQueryable` filtered down to the rows that aggregated into the clicked result row. Reuses the engine's `ApplyFilters` (now `public`) so all whitelist + type-conversion + relative-date semantics stay consistent. `originalReq.Filters` are preserved (drill stays within the dashboard's existing scope). For dimensions with `DateHierarchy.Year/Quarter/Month/Day`, the human-readable label ("2026 Q1") is reversed via the new `DateTruncator.TryParseLabel` into a half-open `[start, endExclusive)` range filter — single-point Eq comparison against millisecond-precision DateTime would always match zero rows. Unparseable date labels short-circuit to `Take(0)` so the dashboard renders "no rows" gracefully (vs. throwing or, worse, returning unfiltered). Missing dimension values widen the drill (no filter for that dim). Multi-dimension drills AND together. 13 new tests cover string-dimension drills, original-filter preservation, year/quarter/month/day hierarchy reversals, unparseable-label graceful degradation, multi-dimension AND, unknown-dimension validation, missing-value widening, null-arg guards, and `DateTruncator.TryParseLabel` round-trips. Targeted Analysis regression: 153/153 green.
 - **ETL: per-batch retry with exponential backoff (`MaxBatchRetries`)** — Closes the operational gap that any single `BulkLoad` blip — DB lock timeout, network jitter, transient deadlock — failed the entire job, forcing the next run to re-extract from scratch. New `EtlPipelineConfig.MaxBatchRetries` (default `0` — back-compat with 10.4.x), `BatchRetryBaseDelayMs` (default 200), `BatchRetryMaxDelayMs` (default 30,000ms). When > 0, `BulkLoadAsync` is wrapped in a retry loop with full-jitter exponential backoff: `delay = random(0, BaseDelay × 2^attempt)`, clamped to the max. `MaxBatchRetries` is clamped to `[0, 50]` at runtime so a misconfigured value can't loop forever. Cancellation is honoured during the wait — a token cancelled mid-backoff surfaces as `Aborted = true`. Watermark contract unchanged: a recovered run commits, an exhausted-budget run discards. Failed runs preserve the original exception sanitization. New `EtlExecutionResult.RetryAttemptsTotal` reports cumulative retries across all batches (0 = no retries needed); useful for observing "how flaky is my ETL?" over time. `MockBulkLoader.TransientFailuresBeforeSuccess` simulates flaky bulk-load behavior so apps can unit-test their own pipeline. 8 new tests cover default off (back-compat), single + multiple transient recoveries, exhausted-budget abort with retry count surfacing, watermark commit/discard contracts, cancellation during backoff, and clamp behavior on negative values. Targeted ETL Pipeline regression: 80/80 green (5 Oracle integration tests skipped — require live DB).
