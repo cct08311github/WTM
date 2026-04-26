@@ -104,4 +104,28 @@ public record EtlPipelineConfig
     /// staging table 的 schema 必須對應 mapping value（已改名後的目標欄位）。
     /// </summary>
     public System.Collections.Generic.IDictionary<string, string>? ColumnMappings { get; init; }
+
+    /// <summary>
+    /// 資料品質規則（10.5.1+，opt-in）。在 Transform 與 ColumnMapping 之後、
+    /// BulkLoad 之前依序套用每筆規則檢查每列；違規列依
+    /// <see cref="QualityRuleAction"/> 處理。null / 空 list = 不檢查
+    /// （與 10.5.0 行為完全一致）。常見場景：
+    /// <list type="bullet">
+    /// <item><see cref="EtlQualityRuleType.NotNull"/> — 主鍵 / FK 欄位禁止 null</item>
+    /// <item><see cref="EtlQualityRuleType.Range"/> — 數值在合理區間（如年齡 0..120）</item>
+    /// <item><see cref="EtlQualityRuleType.Regex"/> — Email / 電話 / 身分證號格式</item>
+    /// <item><see cref="EtlQualityRuleType.In"/> — 列舉值白名單（如 OrderStatus 只能 NEW/PAID/SHIPPED）</item>
+    /// </list>
+    /// </summary>
+    public System.Collections.Generic.IList<EtlQualityRule>? QualityRules { get; init; }
+
+    /// <summary>
+    /// 違規列的處理策略。預設 <see cref="EtlQualityRuleAction.Drop"/>
+    /// — 違規列被剔除、合規列正常 BulkLoad，job 整體仍視為成功
+    /// （但 <see cref="EtlExecutionResult.QualityFailedRows"/> 帶出總數）。
+    /// 切到 <see cref="EtlQualityRuleAction.Abort"/> 後任一違規即整個 job
+    /// 失敗、watermark discard，下次重抓。<see cref="QualityRules"/>
+    /// 為 null / 空 list 時此設定無效。
+    /// </summary>
+    public EtlQualityRuleAction QualityRuleAction { get; init; } = EtlQualityRuleAction.Drop;
 }

@@ -151,6 +151,16 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 Insights = insights,
             };
 
+            // Forecasting (10.5.0+) — 在所有資料增益完成後外推 N 期。失敗
+            // 條件下 (無時間維度、實際列不足) 靜默 no-op；不影響 TotalCount /
+            // Insights / GrandTotalRow。
+            if (req.Forecast != null)
+            {
+                AnalysisForecastEngine.ApplyForecast(
+                    response, req.Forecast, req.Dimensions,
+                    BuildMeasureColumnNames(req), req.DimensionHierarchies);
+            }
+
             _cache?.Set(queryHash, response, _defaultTtl);
 
             return response;
@@ -256,6 +266,13 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 GrandTotalRow = grandTotal,
                 Insights = insights,
             };
+
+            if (req.Forecast != null)
+            {
+                AnalysisForecastEngine.ApplyForecast(
+                    response, req.Forecast, req.Dimensions,
+                    BuildMeasureColumnNames(req), req.DimensionHierarchies);
+            }
 
             _cache?.Set(queryHash, response, _defaultTtl);
 
@@ -607,6 +624,20 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// can render the four-column comparison group together rather
         /// than scattering across the row.
         /// </summary>
+        /// <summary>
+        /// 取得每個 measure 的 result column key（<c>{Field}_{Func}</c>）— 預測
+        /// 引擎用來決定要外推哪些欄。不含維度與對比衍生欄。
+        /// </summary>
+        internal static List<string> BuildMeasureColumnNames(AnalysisQueryRequest req)
+        {
+            var cols = new List<string>(req.Measures.Count);
+            foreach (var m in req.Measures)
+            {
+                cols.Add($"{m.Field}_{m.Func}");
+            }
+            return cols;
+        }
+
         internal static List<string> BuildResponseColumns(AnalysisQueryRequest req)
         {
             var cols = new List<string>(req.Dimensions);

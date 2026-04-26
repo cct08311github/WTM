@@ -100,6 +100,24 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// <c>Amount_Sum_ChangePct</c> 做「漲幅前 N 名」）。
         /// </summary>
         public ComparisonRequest? CompareWith { get; set; }
+
+        /// <summary>
+        /// 預測（forecast）設定 — 啟用後引擎會在所有資料增益（HAVING、
+        /// CompareWith、GrandTotal、Sort、TopN、Insights）完成後，依時間
+        /// 序的第一個維度（必須是 <see cref="DimensionHierarchies"/>
+        /// 中宣告為日期階層的維度）外推 <see cref="ForecastSpec.Periods"/>
+        /// 期。每筆預測列以下一期的人類可讀標籤（例如
+        /// <c>"2026-05"</c>）作為維度值，並在每個 measure-result 欄位
+        /// 填入估計值；除原本的欄位外，預測列額外帶一個
+        /// <c>"_IsForecast" = true</c> 的旗標 key，前端用以區分實際 vs
+        /// 預測（例如以虛線繪製預測段）。預測**不**重新計算 Insights /
+        /// GrandTotalRow / TotalCount — 那些反映實際資料；預測純為
+        /// 視覺輔助。<see cref="ForecastMethod.Linear"/> 走最小平方法
+        /// 線性回歸，<see cref="ForecastMethod.MovingAverage"/> 走最後
+        /// 3 期均值（小於 3 期則用全部）。預設 <c>null</c> 完全不影響
+        /// 舊呼叫者。
+        /// </summary>
+        public ForecastSpec? Forecast { get; set; }
     }
 
     /// <summary>
@@ -191,5 +209,31 @@ namespace WalkingTec.Mvvm.Core.Analysis
     {
         Eq, Gt, Gte, Lt, Lte, Contains, In,
         NotEq, NotContains, NotIn
+    }
+
+    /// <summary>
+    /// 預測規格 — 設定外推期數與方法。
+    /// </summary>
+    public class ForecastSpec
+    {
+        /// <summary>
+        /// 要外推的期數。範圍 1..12，超出範圍由引擎驗證階段拒絕。
+        /// 預測長度受實際序列長度限制 — 線性回歸至少需 2 期實際資料，
+        /// 移動平均至少需 1 期；不足則該欄輸出 <c>null</c>（前端可隱藏
+        /// 該段預測線而非 throw）。
+        /// </summary>
+        public int Periods { get; set; } = 1;
+
+        /// <summary>預測方法，預設 <see cref="ForecastMethod.Linear"/>。</summary>
+        public ForecastMethod Method { get; set; } = ForecastMethod.Linear;
+    }
+
+    /// <summary>預測方法列舉。</summary>
+    public enum ForecastMethod
+    {
+        /// <summary>最小平方法線性回歸 — 適合明顯有趨勢的時間序列。</summary>
+        Linear,
+        /// <summary>移動平均 — 適合平穩、無趨勢的時間序列。常數預測。</summary>
+        MovingAverage,
     }
 }

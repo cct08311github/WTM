@@ -127,6 +127,38 @@ namespace WalkingTec.Mvvm.Core.Analysis
             }
         }
 
+        /// <summary>
+        /// 給定一個合法的 hierarchy label（例如 <c>"2026-03"</c>）回傳其
+        /// 「下一期」的 label（<c>"2026-04"</c>）。為預測引擎產生未來
+        /// 期間的維度標籤；label 無法 parse 則回 <c>null</c>。
+        /// </summary>
+        public static string? NextLabel(string? label, DateHierarchy hierarchy, int step = 1)
+        {
+            if (!TryParseLabel(label, hierarchy, out var start, out var endExclusive))
+            {
+                return null;
+            }
+            return hierarchy switch
+            {
+                DateHierarchy.Year =>
+                    FormatKey(start.Year + step, hierarchy),
+                DateHierarchy.Quarter =>
+                    FormatKey(QuarterKey(endExclusive.AddMonths(3 * (step - 1))), hierarchy),
+                DateHierarchy.Month =>
+                    FormatKey(MonthKey(endExclusive.AddMonths(step - 1)), hierarchy),
+                DateHierarchy.Day =>
+                    FormatKey(DayKey(endExclusive.AddDays(step - 1)), hierarchy),
+                _ => null,
+            };
+        }
+
+        private static int QuarterKey(DateTime d) =>
+            d.Year * 10 + ((d.Month - 1) / 3 + 1);
+        private static int MonthKey(DateTime d) =>
+            d.Year * 100 + d.Month;
+        private static int DayKey(DateTime d) =>
+            d.Year * 10000 + d.Month * 100 + d.Day;
+
         private static Expression BuildQuarterKey(Expression dateExpr)
         {
             var year = Expression.Property(dateExpr, nameof(DateTime.Year));
