@@ -237,8 +237,9 @@ namespace WalkingTec.Mvvm.Core
                             // Signature validation failed — reject the token
                             return null!;
                         }
-                        catch (Exception)
+                        catch (Exception ex)
                         {
+                            ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("WTMContext")?.LogWarning(ex, "JWT token validation failed unexpectedly (non-signature error)");
                             return null!;
                         }
                     }
@@ -868,8 +869,9 @@ params string[] groupcode)
                         }).ToList();
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
+                    ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("WTMContext")?.LogWarning(ex, "Failed to load tenant groups for tenant {Tenant}; returning empty list (cached for 6 minutes)", tenant);
                     groups = [];
                 }
                 return groups;
@@ -901,8 +903,9 @@ params string[] groupcode)
                         }).ToList();
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
+                    ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("WTMContext")?.LogWarning(ex, "Failed to load tenant roles for tenant {Tenant}; returning empty list (cached for 6 minutes)", tenant);
                     roles = [];
                 }
                 return roles;
