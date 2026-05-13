@@ -1,6 +1,6 @@
 # WTM 開發與使用手冊
 
-> **版本**：10.5.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-04-26
+> **版本**：10.5.1 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-05-13
 
 WalkingTec MVVM Framework (WTM) 是一套 ASP.NET Core 快速開發框架，以四種 ViewModel 類型為核心，搭配內建代碼生成器、LayUI TagHelper、Analysis Mode、ETL 模組（含可視化儀表板）與 Dashboard，提供完整的企業級 CRUD 開發體驗。
 
@@ -4129,7 +4129,7 @@ public class StudentIntegrationTests
 
 ### 15.3 CI 整合
 
-GitHub Actions 中，整合測試需在 `services` 區塊啟動資料庫容器，並將連線字串透過 `env` 傳入。預設 CI 只執行單元測試（不含 `TestCategory=Integration`）。
+Gitea Actions 中，整合測試需在 `services` 區塊啟動資料庫容器，並將連線字串透過 `env` 傳入。預設 CI 只執行單元測試（不含 `TestCategory=Integration`）。
 
 ---
 
@@ -4556,6 +4556,14 @@ public class Employee : PersistPoco
 ### B. 版本歷史
 
 詳見 `CHANGELOG.md`。
+
+**10.5.1（2026-05-13）摘要 — infra-only release，無 src/* 程式碼變更：**
+
+- CI / NuGet publish 完全遷至 Gitea（GitHub Packages / GitHub Actions Marketplace / github-archive remote 全部停用）
+- `scripts/publish-to-gitea.sh` 新增 local fallback（`--suffix` / `--dry-run`；dry-run 時 token 已 mask）
+- CI publish secret 改為 `PAT_TOKEN`
+- `scripts/release-github-package.sh` 重命名為 `release-gitea-package.sh`，內部由 `gh` 改為 `curl`
+- `common.props` `RepositoryUrl` / `PackageProjectUrl` 指向 Gitea repo
 
 **10.5.0（2026-04-26）摘要 — 31 個新增能力，零行為破壞：**
 
