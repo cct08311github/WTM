@@ -7,7 +7,8 @@ All detailed rules live in `.claude/rules/` — this file is the entry point.
 
 Personal fork of WalkingTec MVVM Framework (WTM), taken over 2026-03.
 Goal: **stable, modernized, actively-evolved** .NET rapid-development framework.
-Current phase: **Takeover & Revival** — stabilize, modernize, improve quality, then add features.
+Current phase: **Feature growth on solid ground** — security audit cleared (10.2.0), Clean Architecture (10.1.0), and 10.4.0/10.5.0 added 20+ opt-in middleware + BI extensions; now iterating on observability, BI, and ETL.
+Active branch: `dotnet10`. Origin: Gitea (`mac-mini.tailde842d.ts.net/chiu0831/WTM.git`) — sole authoritative remote. NuGet publishes go to Gitea's NuGet registry (`/api/packages/chiu0831/nuget`). GitHub is no longer used (mirror removed 2026-05-13, Issue #1).
 
 ## Decision Priorities (in order)
 
@@ -36,17 +37,22 @@ Current phase: **Takeover & Revival** — stabilize, modernize, improve quality,
 
 Four VM types: `BaseCRUDVM<T>`, `BasePagedListVM<T,S>`, `BaseImportVM<T>`, `BaseBatchVM<T>` — all extend `BaseVM`.
 
-WTMContext (10.1.0) was refactored from a God Object into 8 focused services:
-`IWtmContextAccessor`, `IWtmContextFactory`, `ILogService`, `IDataContextFactory`,
-`IEncryptionService`, `ITokenService`, `IQAContext`. Register via `services.AddWtmContext(config)`.
+WTMContext (10.1.0) was refactored from a God Object into focused `IWtm*Service` interfaces
+(`IWtmDataContextFactory`, `IWtmLogService`, `ITokenService`, `IWtmAuthService`, `IWtmTenantService`,
+`IWtmVmFactory`, `IWtmUserCacheService`, `IWtmFileHandler`, etc.). Register via `services.AddWtmContext(config)`.
+Full list and roles → `.claude/rules/architecture.md`.
 
 Startup: `services.AddWtmContext(config)` → `app.UseWtmContext()` → `app.UseWtmStaticFiles()`.
 
 ## Security Summary
 
-- Passwords: PBKDF2 via `PasswordHashHelper` (auto-migrates legacy MD5)
-- JWT: access + refresh token rotation; `jti` claim prevents replay
-- Analysis Mode: all fields whitelist-validated before entering Expression Trees
+Core safeguards (full detail in `.claude/rules/architecture.md` § Security):
+
+- Passwords: PBKDF2 with legacy MD5 auto-migration
+- JWT: access + refresh rotation, `jti` replay guard, `_remotetoken` signature-validated
+- Analysis Mode: field whitelist before Expression Tree
+- File upload: path-traversal guard
+- `UpdateModelProperty` / `CreateVM(string)`: blocklist + type validation
 
 ## Quick Commands
 
@@ -71,6 +77,7 @@ Full command reference → `.claude/rules/tools-commands.md`
 
 | File | Covers |
 |------|--------|
+| `workflow.md` | Branch strategy, commit message format, PR checklist, Issue references |
 | `architecture.md` | Full architecture, WTMContext services, Analysis Mode, DataContext, compatibility |
 | `dotnet-conventions.md` | Code style, nullable policy, EF Core conventions |
 | `testing.md` | Test projects, mock patterns, JS test conventions |

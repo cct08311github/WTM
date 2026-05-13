@@ -5,23 +5,24 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  ./scripts/release-github-package.sh [--dry-run] <version> [suffix]
+  ./scripts/release-gitea-package.sh [--dry-run] <version> [suffix]
 
 Examples:
-  ./scripts/release-github-package.sh 8.2.2
-  ./scripts/release-github-package.sh 8.2.2 beta.1
-  ./scripts/release-github-package.sh --dry-run 8.2.2
+  ./scripts/release-gitea-package.sh 10.5.1
+  ./scripts/release-gitea-package.sh 10.5.1 beta.1
+  ./scripts/release-gitea-package.sh --dry-run 10.5.1
 
 Behavior:
   1. Updates VersionPrefix in version.props
   2. Commits the version change
-  3. Pushes to origin/dotnet8
-  4. Triggers publish-nuget.yml
+  3. Pushes to origin/dotnet10
+  4. Triggers publish-nuget.yml on Gitea Actions
 
 Notes:
   - If suffix is omitted, a stable release is published.
   - If suffix is provided, a pre-release is published as <version>-<suffix>.
   - --dry-run prints the actions without changing files or triggering workflows.
+  - Requires GITEA_TOKEN env var or export in ~/.gitea-token.
 EOF
 }
 
@@ -41,15 +42,13 @@ if ! command -v git >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v gh >/dev/null 2>&1; then
-  echo "gh is required" >&2
-  exit 1
-fi
-
 VERSION="$1"
 SUFFIX="${2:-}"
-BRANCH="dotnet8"
+BRANCH="dotnet10"
 VERSION_FILE="version.props"
+GITEA_API="https://mac-mini.tailde842d.ts.net/api/v1"
+GITEA_OWNER="chiu0831"
+GITEA_REPO="WTM"
 
 if [[ ! -f "$VERSION_FILE" ]]; then
   echo "Cannot find $VERSION_FILE" >&2
@@ -57,7 +56,7 @@ if [[ ! -f "$VERSION_FILE" ]]; then
 fi
 
 if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "Version must look like 8.2.1" >&2
+  echo "Version must look like 10.5.1" >&2
   exit 1
 fi
 
@@ -72,8 +71,22 @@ if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
   exit 1
 fi
 
-if ! gh auth status >/dev/null 2>&1; then
-  echo "gh is not authenticated. Run 'gh auth login' first." >&2
+# Resolve Gitea token: prefer env var, then ~/.gitea-token file
+if [[ -z "${GITEA_TOKEN:-}" ]]; then
+  if [[ -f "$HOME/.gitea-token" ]]; then
+    # shellcheck source=/dev/null
+    source "$HOME/.gitea-token"
+  fi
+fi
+if [[ -z "${GITEA_TOKEN:-}" ]]; then
+  echo "GITEA_TOKEN is not set. Set it as env var or put 'export GITEA_TOKEN=...' in ~/.gitea-token" >&2
+  exit 1
+fi
+
+# Verify Gitea reachability
+if ! curl -sf -H "Authorization: token ${GITEA_TOKEN}" \
+    "${GITEA_API}/repos/${GITEA_OWNER}/${GITEA_REPO}" >/dev/null 2>&1; then
+  echo "Cannot reach Gitea API at ${GITEA_API}. Check token and network." >&2
   exit 1
 fi
 
@@ -90,22 +103,37 @@ print(match.group(1))
 PY
 )"
 
+trigger_gitea_workflow() {
+  local ref="$1"
+  local suffix="$2"
+  local payload
+  if [[ -n "$suffix" ]]; then
+    payload="{\"ref\":\"${ref}\",\"inputs\":{\"version_suffix\":\"${suffix}\"}}"
+  else
+    payload="{\"ref\":\"${ref}\",\"inputs\":{}}"
+  fi
+  curl -sf -X POST \
+    -H "Authorization: token ${GITEA_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "$payload" \
+    "${GITEA_API}/repos/${GITEA_OWNER}/${GITEA_REPO}/actions/workflows/publish-nuget.yml/dispatches"
+}
+
 if [[ "$CURRENT_VERSION" == "$VERSION" ]]; then
   echo "VersionPrefix is already $VERSION"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     if [[ -n "$SUFFIX" ]]; then
-      echo "[dry-run] Would trigger GitHub Packages publish for $VERSION-$SUFFIX"
+      echo "[dry-run] Would trigger Gitea Packages publish for $VERSION-$SUFFIX"
     else
-      echo "[dry-run] Would trigger GitHub Packages publish for $VERSION"
+      echo "[dry-run] Would trigger Gitea Packages publish for $VERSION"
     fi
     exit 0
   fi
+  trigger_gitea_workflow "$BRANCH" "$SUFFIX"
   if [[ -n "$SUFFIX" ]]; then
-    gh workflow run publish-nuget.yml --ref "$BRANCH" -f "version_suffix=$SUFFIX"
-    echo "Triggered GitHub Packages publish for $VERSION-$SUFFIX"
+    echo "Triggered Gitea Packages publish for $VERSION-$SUFFIX"
   else
-    gh workflow run publish-nuget.yml --ref "$BRANCH"
-    echo "Triggered GitHub Packages publish for $VERSION"
+    echo "Triggered Gitea Packages publish for $VERSION"
   fi
   exit 0
 fi
@@ -115,9 +143,9 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "[dry-run] Would commit: chore: release $VERSION"
   echo "[dry-run] Would push to origin/$BRANCH"
   if [[ -n "$SUFFIX" ]]; then
-    echo "[dry-run] Would trigger GitHub Packages publish for $VERSION-$SUFFIX"
+    echo "[dry-run] Would trigger Gitea Packages publish for $VERSION-$SUFFIX"
   else
-    echo "[dry-run] Would trigger GitHub Packages publish for $VERSION"
+    echo "[dry-run] Would trigger Gitea Packages publish for $VERSION"
   fi
   exit 0
 fi
@@ -145,10 +173,9 @@ git add "$VERSION_FILE"
 git commit -m "chore: release $VERSION"
 git push origin "$BRANCH"
 
+trigger_gitea_workflow "$BRANCH" "$SUFFIX"
 if [[ -n "$SUFFIX" ]]; then
-  gh workflow run publish-nuget.yml --ref "$BRANCH" -f "version_suffix=$SUFFIX"
-  echo "Triggered GitHub Packages publish for $VERSION-$SUFFIX"
+  echo "Triggered Gitea Packages publish for $VERSION-$SUFFIX"
 else
-  gh workflow run publish-nuget.yml --ref "$BRANCH"
-  echo "Triggered GitHub Packages publish for $VERSION"
+  echo "Triggered Gitea Packages publish for $VERSION"
 fi

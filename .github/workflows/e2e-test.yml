@@ -94,10 +94,3 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      - name: Publish test results
-        if: always()
-        uses: mikepenz/action-junit-report@v4
-        with:
-          report_paths: test/e2e/results/junit.xml
-          check_name: 'E2E Test Results'
-          fail_on_failure: true
