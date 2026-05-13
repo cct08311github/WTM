@@ -54,18 +54,20 @@ WTM 支援以下資料庫（透過 EF Core）：
 
 ## 2. 安裝 WTM 套件
 
-WTM 套件發佈於 GitHub Packages。需先配置 NuGet source。
+WTM 套件發佈於 Gitea NuGet registry。需先配置 NuGet source。
 
-### 2.1 配置 GitHub Packages NuGet source
+### 2.1 配置 Gitea NuGet source
 
 ```bash
-dotnet nuget add source "https://nuget.pkg.github.com/cct08311github/index.json" \
-  --name github-wtm \
-  --username YOUR_GITHUB_USERNAME \
-  --password YOUR_GITHUB_TOKEN
+dotnet nuget add source "https://mac-mini.tailde842d.ts.net/api/packages/chiu0831/nuget/index.json" \
+  --name gitea-wtm \
+  --username YOUR_GITEA_USERNAME \
+  --password YOUR_GITEA_PAT \
+  --store-password-in-clear-text
 ```
 
-> **注意**：`YOUR_GITHUB_TOKEN` 需要 `read:packages` 權限。可在 GitHub Settings > Developer settings > Personal access tokens 建立。
+> **注意**：`YOUR_GITEA_PAT` 需要 `read:package` scope。可在 Gitea UI → Settings → Applications → Generate New Token 建立。
+> 詳見 [`docs/gitea-packages.md`](gitea-packages.md)。
 
 ### 2.2 建立新專案
 
@@ -77,9 +79,9 @@ cd WtmDemo
 ### 2.3 安裝三個核心套件
 
 ```bash
-dotnet add package WalkingTec.Mvvm.Core --version 10.0.1 --source github-wtm
-dotnet add package WalkingTec.Mvvm.Mvc --version 10.0.1 --source github-wtm
-dotnet add package WalkingTec.Mvvm.TagHelpers.LayUI --version 10.0.1 --source github-wtm
+dotnet add package WalkingTec.Mvvm.Core --version 10.5.1 --source gitea-wtm
+dotnet add package WalkingTec.Mvvm.Mvc --version 10.5.1 --source gitea-wtm
+dotnet add package WalkingTec.Mvvm.TagHelpers.LayUI --version 10.5.1 --source gitea-wtm
 ```
 
 | 套件 | 說明 |
