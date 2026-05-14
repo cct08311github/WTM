@@ -20,7 +20,15 @@
     <PackageReference Include="Aliyun.OSS.SDK.NetCore" Version="2.13.0" />
     <PackageReference Include="BCrypt.Net-Next" Version="4.1.0" />
     <PackageReference Include="NPOI" Version="$(NPOIVersion)" />
-    <!-- Issue #816: pin vulnerable transitive from NPOI (GHSA-37gx-xxp4-5rgx, GHSA-w3x6-4m5h-cxqf). -->
+    <!--
+      Issue #816 — pin vulnerable transitive from NPOI.
+      NPOI's transitive pull of System.Security.Cryptography.Xml 8.0.2 has HIGH-severity
+      CVEs (GHSA-37gx-xxp4-5rgx, GHSA-w3x6-4m5h-cxqf). This direct PackageReference at
+      10.0.6 overrides the transitive across the whole solution.
+      .NET 10 will emit NU1510 ("framework already provides this package") on this line.
+      DO NOT remove based on NU1510 — that signal is the EXPECTED positive side-effect
+      of the override working. See commit 7b63587b and Issue #13 post-mortem.
+    -->
     <PackageReference Include="System.Security.Cryptography.Xml" Version="$(SystemSecurityCryptographyXmlVersion)" />
     <PackageReference Include="Fare" Version="2.2.1" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="$(EntityFrameworkCoreVersion)" />
