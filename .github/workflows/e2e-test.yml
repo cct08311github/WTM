@@ -78,7 +78,8 @@ jobs:
 
       - name: Upload screenshots
         if: always()
-        uses: actions/upload-artifact@v5
+        continue-on-error: true
+        uses: actions/upload-artifact@v3
         with:
           name: e2e-screenshots
           path: test/e2e/screenshots/
@@ -87,7 +88,8 @@ jobs:
 
       - name: Upload JUnit XML report
         if: always()
-        uses: actions/upload-artifact@v5
+        continue-on-error: true
+        uses: actions/upload-artifact@v3
         with:
           name: e2e-junit-report
           path: test/e2e/results/junit.xml
