@@ -3492,6 +3492,14 @@ await WtmDataSeeder.SeedAsync(
 - 輸入 array 內重複的鍵自動取第一筆（cut-and-paste fixture 不會炸）
 - 純 insert，不更新既有 row（要 upsert 自己包）
 
+### 10.25 安全相關深入閱讀
+
+本章節涵蓋 WTM 框架內建的安全機制。實際 production 部署還需要關注：
+
+- [`docs/production-readiness.md`](./production-readiness.md) — production 場景適用矩陣、補強清單；含「測試覆蓋僅 ~20%」「單人維護」「NPOI 漏洞透過 pin 緩解」等要誠實面對的弱點
+- [`docs/dependency-management.md`](./dependency-management.md) — 套件版本政策、**NU1510 雙意義警告**、NPOI → System.Security.Cryptography.Xml security pin 與移除 PackageReference 強制 SOP（誤刪會引入 13+ 專案 high-severity 漏洞）
+- [`docs/ci-operations.md`](./ci-operations.md) — CI 工作流與漏洞掃描 gate 配置
+
 ---
 
 ## 11. 多租戶

@@ -108,10 +108,14 @@ Frame QQ communication group: 694148336(full), 892848149 (group2)
 ## Local Docs
 
 - [Getting Started 快速入門](./docs/getting-started.md)
+- [Production Readiness 評估](./docs/production-readiness.md) — 哪些場景可以上 prod、補強清單
+- [Dependency Management](./docs/dependency-management.md) — 套件版本政策、NU1510 雙意義警告、NPOI security pin
+- [CI Operations](./docs/ci-operations.md) — Gitea Actions 工作流、四大已知不相容、排錯 SOP
+- [WTM Developer Manual 開發手冊](./docs/wtm-developer-manual.md) — 18 章節完整參考
 - [WTM System Architecture Guide](./docs/system-architecture.md)
 - [WTM Analysis Mode Guide](./docs/analysis-mode.md)
-- [GitHub Packages Guide](./docs/github-packages.md)
-- [WTM 8.3 Roadmap](./docs/roadmap-8.3.md)
+- [Gitea Packages Guide](./docs/gitea-packages.md) — Gitea NuGet registry 安裝/發佈
+- [WTM 8.3 Roadmap](./docs/roadmap-8.3.md) (legacy)
 
 version 5.0x is in VNext branch
 
