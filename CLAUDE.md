@@ -20,7 +20,7 @@ Active branch: `dotnet10`. Origin: Gitea (`mac-mini.tailde842d.ts.net/chiu0831/W
 ## Red Lines — Never Violate
 
 - **Never bypass the VM layer** to access DataContext directly from controllers
-- **Never silently change default behaviour** — additive (opt-in) over breaking
+- **Never silently change default behaviour** — new functionality must be opt-in; behaviour changes need a `CHANGELOG.md` entry with migration notes
 - **Never use `IgnoreQueryFilters()`** without a comment explaining why
 - **Never commit `#nullable disable`** in new code
 - **Never use double-`!` null-forgiving chains** — split into separate checks
@@ -59,9 +59,30 @@ Core safeguards (full detail in `.claude/rules/architecture.md` § Security):
 ```bash
 dotnet build WalkingTec.Mvvm.sln -c Release
 dotnet test WalkingTec.Mvvm.sln -c Release --verbosity normal
+
+# Single test class (most-used dev loop)
+dotnet test test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj \
+  --filter "FullyQualifiedName~AnalysisControllerTests" -c Release
 ```
 
+> First-time setup: `dotnet restore` requires the Gitea NuGet source configured —
+> see `README.md` § Quick Start step 1, or `docs/gitea-packages.md`.
+
 Full command reference → `.claude/rules/tools-commands.md`
+
+## CI Status Caveat
+
+`actions/upload-artifact@v4` is incompatible with the local Gitea Actions API.
+`build-and-test` and `e2e` jobs can finish with `conclusion: failure` even when tests passed.
+**Always verify by reading the log:** look for `Test Run Successful` (.NET) and `PASS: 30 | FAIL: 0` (e2e).
+Detail + workaround SOP → `docs/ci-operations.md`. Tracking: Issue #11.
+
+## Available Slash Commands
+
+- `/wtm-release-check` — BLOCKING gate before any release (build + test + vuln scan)
+- `/wtm-manual-update` — Updates `docs/wtm-developer-manual.md` for the version
+- `/wtm-test` — Runs the full .NET + JS test suite with summary
+- `/wtm-nullable-scan` — Identifies files needing nullable annotation
 
 ## Key Files
 
@@ -69,9 +90,12 @@ Full command reference → `.claude/rules/tools-commands.md`
 |------|---------|
 | `version.props` | Single source of framework version |
 | `common.props` | Centralized NuGet package versions |
+| `global.json` | Pins .NET SDK 10.0.0+ (`rollForward: latestFeature`) |
 | `CHANGELOG.md` | Version history (update when releasing) |
 | `docs/analysis-mode.md` | Analysis Mode manual |
 | `docs/lookup-cache.md` | Lookup Cache manual |
+| `docs/production-readiness.md` | Prod-readiness scorecard (PR #17) |
+| `docs/ci-operations.md` | Gitea Actions CI quirks + SOP (PR #17) |
 
 ## Detailed Rules (`.claude/rules/`)
 
