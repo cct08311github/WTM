@@ -196,6 +196,14 @@ namespace WalkingTec.Mvvm.Mvc
             if (string.IsNullOrEmpty(ip)) { return true; }
             var now = DateTimeOffset.UtcNow;
 
+            // Opportunistic eviction: 1-in-N requests we sweep the dictionary
+            // for buckets that are empty AND have not been touched in 60 s.
+            // Random sample keeps cost O(1) per request on average.
+            if (_buckets.Count > 64 && Random.Shared.Next(32) == 0)
+            {
+                EvictStaleBuckets(now);
+            }
+
             var bucket = _buckets.GetOrAdd(ip, _ => new RateBucket());
             lock (bucket)
             {
@@ -206,6 +214,29 @@ namespace WalkingTec.Mvvm.Mvc
                 }
                 bucket.Add(now);
                 return true;
+            }
+        }
+
+        /// <summary>
+        /// Removes buckets that have no in-window hits and were last touched
+        /// over 60 s ago. Exposed internal for unit-test determinism.
+        /// </summary>
+        internal void EvictStaleBuckets(DateTimeOffset now)
+        {
+            var cutoff = now.AddSeconds(-60);
+            foreach (var kvp in _buckets)
+            {
+                var b = kvp.Value;
+                lock (b)
+                {
+                    b.Trim(now);
+                    if (b.Count == 0 && b.LastHit < cutoff)
+                    {
+                        // ConcurrentDictionary.TryRemove(KeyValuePair) only
+                        // removes if the value reference still matches.
+                        _buckets.TryRemove(new System.Collections.Generic.KeyValuePair<string, RateBucket>(kvp.Key, b));
+                    }
+                }
             }
         }
 
@@ -236,6 +267,7 @@ namespace WalkingTec.Mvvm.Mvc
         private sealed class RateBucket
         {
             private readonly System.Collections.Generic.Queue<DateTimeOffset> _hits = new();
+            public DateTimeOffset LastHit { get; private set; }
 
             public int Count => _hits.Count;
 
@@ -248,7 +280,11 @@ namespace WalkingTec.Mvvm.Mvc
                 }
             }
 
-            public void Add(DateTimeOffset now) => _hits.Enqueue(now);
+            public void Add(DateTimeOffset now)
+            {
+                _hits.Enqueue(now);
+                LastHit = now;
+            }
         }
     }
 }

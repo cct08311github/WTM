@@ -31,6 +31,15 @@ namespace WalkingTec.Mvvm.Core
 {
     public class WTMContext : IDisposable
     {
+        /// <summary>
+        /// Pre-computed BCrypt hash used to keep authentication response times
+        /// comparable when an ITCode does not exist. Prevents username
+        /// enumeration via timing-side-channel. The plaintext does not matter
+        /// — VerifyPassword will return Failed against any user-supplied password.
+        /// </summary>
+        private static readonly string _loginDecoyHash =
+            BCrypt.Net.BCrypt.HashPassword(Guid.NewGuid().ToString("N"));
+
         private HttpContext? _httpContext;
         public HttpContext? HttpContext { get => _httpContext; }
 
@@ -677,6 +686,14 @@ namespace WalkingTec.Mvvm.Core
                                 }
                             }
                         }
+                    }
+                    else
+                    {
+                        // Discarded BCrypt to keep response timing comparable with the
+                        // user-exists / wrong-password path. Prevents username enumeration
+                        // via timing-side-channel.
+                        _ = PasswordHashHelper.VerifyPassword(_loginDecoyHash, password);
+                        exist = false;
                     }
                 }
                 if (exist == false)

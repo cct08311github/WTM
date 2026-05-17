@@ -116,6 +116,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="WalkingTec.Mvvm.Mvc.Tests" />
+    <InternalsVisibleTo Include="WalkingTec.Mvvm.Core.Test" />
   </ItemGroup>
 
 

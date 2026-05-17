@@ -17,6 +17,13 @@
 - Narrow JWT query-string token acceptance to WebSocket upgrade requests
   only. Prevents `?access_token=…` leaking into HTTP logs, browser
   history, and `Referer` headers on regular HTTP requests.
+- Eliminate login timing-side-channel that allowed username enumeration.
+  `DoLoginAsync` now performs a discarded BCrypt comparison when the
+  ITCode does not exist, keeping response times comparable with the
+  user-exists / wrong-password path.
+- `WtmCspReportMiddleware` evicts empty rate-limit buckets older than
+  60 s instead of accumulating one entry per distinct client IP for
+  the lifetime of the process.
 
 ## [10.5.1] - 2026-05-13
 
