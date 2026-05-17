@@ -937,8 +937,10 @@ namespace WalkingTec.Mvvm.Mvc
                             {
                                 var set = dc.GetType().GetMethod("Set", Type.EmptyTypes).MakeGenericMethod(cusTenantType);
                                 var q = set.Invoke(dc, null) as IQueryable<FrameworkTenant>;
+                                // IgnoreQueryFilters: bootstrap global tenant list across filter scopes
                                 tenants = q.IgnoreQueryFilters().Where(x => x.Enabled).ToList();
                             }
+                            // IgnoreQueryFilters: bootstrap global tenant list across filter scopes
                             var _all = dc.Set<FrameworkTenant>().IgnoreQueryFilters().Where(x => x.Enabled).ToList();
                             foreach (var item in _all)
                             {

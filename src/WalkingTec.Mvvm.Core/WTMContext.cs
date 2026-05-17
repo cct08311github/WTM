@@ -581,14 +581,14 @@ namespace WalkingTec.Mvvm.Core
             {
                 tenant = DC!.TenantCode;
             }
-            if (tenant == null && HttpContext!.User!.Identity!.IsAuthenticated)
+            if (tenant == null && HttpContext?.User?.Identity?.IsAuthenticated == true)
             {
                 tenant = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.TenantCode).Select(x => x.Value).FirstOrDefault() ?? tenant;
             }
             if (ConfigInfo?.HasMainHost == true && string.IsNullOrEmpty(tenant) == true)
             {
                 var remoteToken = _loginUserInfo?.RemoteToken ?? HttpContext?.Request.Query?.Where(x => x.Key == "_remotetoken").Select(x => x.Value.First()).FirstOrDefault();
-                if (HttpContext!.User!.Identity!.IsAuthenticated)
+                if (HttpContext?.User?.Identity?.IsAuthenticated == true)
                 {
                     remoteToken = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.RToken).Select(x => x.Value).FirstOrDefault();
                 }
@@ -629,7 +629,7 @@ namespace WalkingTec.Mvvm.Core
             else
             {
                 bool exist = false;
-                username = HttpContext!.User!.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject).Select(x => x.Value).FirstOrDefault() ?? username;
+                username = HttpContext?.User?.Claims?.Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject).Select(x => x.Value).FirstOrDefault() ?? username;
                 var ct = GlobaInfo?.AllTenant.Where(x => x.TCode == tenant).FirstOrDefault();
                 if(ct == null && string.IsNullOrEmpty(tenant) == false)
                 {
@@ -639,12 +639,14 @@ namespace WalkingTec.Mvvm.Core
                 {
                     _dc = ct.CreateDC(this);
                 }
-                if (HttpContext!.User!.Identity!.IsAuthenticated)
+                if (HttpContext?.User?.Identity?.IsAuthenticated == true)
                 {
+                    // IgnoreQueryFilters: cross-tenant user existence probe during login
                     exist = BaseUserQuery!.IgnoreQueryFilters().Any(x => x.ITCode == username && x.TenantCode == tenant && x.IsValid==true);
                 }
                 else
                 {
+                    // IgnoreQueryFilters: cross-tenant password lookup during anonymous login
                     var userRecord = BaseUserQuery!.IgnoreQueryFilters()
                         .Where(x => x.ITCode == username &&
                                     x.TenantCode == tenant &&
@@ -664,6 +666,7 @@ namespace WalkingTec.Mvvm.Core
                             exist = true;
                             if (verifyResult == PasswordVerifyResult.SuccessRehashNeeded)
                             {
+                                // IgnoreQueryFilters: load full user record across tenants after verification
                                 var fullUser = BaseUserQuery.IgnoreQueryFilters()
                                     .FirstOrDefault(x => x.ITCode == username &&
                                                          x.TenantCode == tenant);
@@ -858,6 +861,7 @@ params string[] groupcode)
                     var dbtenant = GlobaInfo?.AllTenant?.Where(x => x.TCode == tenant && x.IsUsingDB == true).FirstOrDefault();
                     using (var dc = dbtenant == null ? ConfigInfo?.Connections?.Where(x => x.Key.ToLower() == "default").FirstOrDefault()?.CreateDC() : dbtenant.CreateDC(this))
                     {
+                        // IgnoreQueryFilters: global tenant-group cache populated cross-filter
                         groups = dc?.Set<FrameworkGroup>().IgnoreQueryFilters().Where(x => x.TenantCode == tenant).Select(x => new SimpleGroup
                         {
                             ID = x.ID,
@@ -894,6 +898,7 @@ params string[] groupcode)
                     var dbtenant = GlobaInfo?.AllTenant?.Where(x => x.TCode == tenant && x.IsUsingDB == true).FirstOrDefault();
                     using (var dc = dbtenant == null ? ConfigInfo?.Connections?.Where(x => x.Key.ToLower() == "default").FirstOrDefault()?.CreateDC() : dbtenant.CreateDC(this))
                     {
+                        // IgnoreQueryFilters: global tenant-role cache populated cross-filter
                         roles = dc?.Set<FrameworkRole>().IgnoreQueryFilters().Where(x => x.TenantCode == tenant).Select(x => new SimpleRole
                         {
                             ID = x.ID,
