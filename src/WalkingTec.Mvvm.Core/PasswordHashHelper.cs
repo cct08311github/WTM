@@ -28,10 +28,13 @@ namespace WalkingTec.Mvvm.Core
             // Legacy hash detection chain — oldest format first.
             // MD5 (uppercase hex, 32 chars) was used in WTM <= 8.1.12.
             // On match, return SuccessRehashNeeded so the caller upgrades to BCrypt.
+            // Uses constant-time compare to prevent timing-based hash oracle attacks.
             if (IsLegacyMD5Hash(storedHash))
             {
-                var md5 = ComputeMD5(password);
-                return string.Equals(storedHash, md5, StringComparison.Ordinal)
+                Span<byte> computed = stackalloc byte[16];
+                MD5.HashData(Encoding.UTF8.GetBytes(password), computed);
+                if (!TryParseHex(storedHash!, out var stored)) return PasswordVerifyResult.Failed;
+                return CryptographicOperations.FixedTimeEquals(stored, computed)
                     ? PasswordVerifyResult.SuccessRehashNeeded
                     : PasswordVerifyResult.Failed;
             }
@@ -87,6 +90,25 @@ namespace WalkingTec.Mvvm.Core
             Span<byte> hash = stackalloc byte[16]; // MD5 = 16 bytes
             MD5.HashData(Encoding.UTF8.GetBytes(input), hash);
             return Convert.ToHexString(hash);
+        }
+
+        /// <summary>
+        /// Parses an uppercase hex string (e.g. a 32-char MD5 digest) into a byte array.
+        /// Returns false on any parse error so callers can safely return Failed.
+        /// </summary>
+        private static bool TryParseHex(string hex, out byte[] bytes)
+        {
+            bytes = new byte[hex.Length / 2];
+            try
+            {
+                for (int i = 0; i < bytes.Length; i++)
+                    bytes[i] = Convert.ToByte(hex.Substring(i * 2, 2), 16);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
     }
 

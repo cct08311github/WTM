@@ -22,7 +22,8 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
 
         public override Stream? GetFileData(IWtmFile file)
         {
-            return File.OpenRead(GetFullPath(file.Path!));
+            var fullPath = ResolveUnderUploadRoot(file.Path);
+            return File.OpenRead(fullPath);
         }
 
 
@@ -94,13 +95,65 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
             {
                 try
                 {
-                    File.Delete(GetFullPath(file?.Path!));
+                    var fullPath = ResolveUnderUploadRoot(file.Path);
+                    File.Delete(fullPath);
+                }
+                catch (UnauthorizedAccessException uae)
+                {
+                    CoreProgram.GetLogger("WtmLocalFileHandler")?.LogWarning(uae, "DeleteFile blocked: path escapes upload root");
+                    throw;
                 }
                 catch (Exception ex)
                 {
                     CoreProgram.GetLogger("WtmLocalFileHandler")?.LogWarning(ex, "DeleteFile failed for path '{Path}'", file?.Path);
                 }
             }
+        }
+
+        /// <summary>
+        /// Resolves a file path and verifies it stays within a configured upload root.
+        /// Throws <see cref="UnauthorizedAccessException"/> (without leaking the path) if
+        /// the resolved absolute path escapes every candidate upload root.
+        /// </summary>
+        private string ResolveUnderUploadRoot(string? path)
+        {
+            if (string.IsNullOrEmpty(path))
+                throw new UnauthorizedAccessException("File path is empty.");
+
+            string fullPath = GetFullPath(path);
+
+            var localSettings = wtm.ConfigInfo?.FileUploadOptions?.Settings?
+                .Where(x => x.Key.ToLower() == "local")
+                .Select(x => x.Value)
+                .FirstOrDefault();
+
+            var candidateRoots = new List<string>();
+            if (localSettings != null)
+            {
+                foreach (var s in localSettings)
+                {
+                    if (!string.IsNullOrEmpty(s.GroupLocation))
+                        candidateRoots.Add(GetFullPath(s.GroupLocation));
+                }
+            }
+            if (candidateRoots.Count == 0)
+                candidateRoots.Add(GetFullPath("./uploads"));
+
+            foreach (var rootRaw in candidateRoots)
+            {
+                var root = rootRaw.EndsWith(Path.DirectorySeparatorChar)
+                    ? rootRaw
+                    : rootRaw + Path.DirectorySeparatorChar;
+                if (fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(fullPath, root.TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
+                {
+                    return fullPath;
+                }
+            }
+
+            CoreProgram.GetLogger("WtmLocalFileHandler")?.LogWarning(
+                "Path traversal attempt detected: resolved path '{FullPath}' escapes all upload roots.", fullPath);
+            throw new UnauthorizedAccessException("Resolved file path escapes the upload root.");
         }
 
         private string GetFullPath(string path)
