@@ -2,28 +2,84 @@
 
 ## [Unreleased]
 
+## [10.5.2] - 2026-05-17
+
+Security-focused release driven by a deep bug-hunt audit. Six issues
+(#20, #22, #24, #26, #28, #30) fixed across six merged PRs (#21, #23,
+#25, #27, #29, #31). Highest-impact change is closing a P0 privilege-
+escalation in `_FrameworkController.BatchAssignRoles`.
+
+Locally verified: `dotnet build -c Release` → 0 errors;
+`dotnet test -c Release` → 2061 pass / 0 fail (baseline 2035 + 26 new
+regression tests across the six PRs);
+`dotnet list package --vulnerable --include-transitive` → 0 vulnerable.
+
 ### Security
 
-- **P0 RBAC bypass fix**: `_FrameworkController.BatchAssignRoles` was
-  marked `[AllRights]`, allowing any authenticated user to grant
+- **P0 RBAC bypass fix** (#30, #31): `_FrameworkController.BatchAssignRoles`
+  was marked `[AllRights]`, allowing any authenticated user to grant
   themselves any role (privilege escalation to admin). Added runtime
   admin check that returns 403 for non-admin callers. Same guard added
   to the three `RemoveUserCacheBy*` cache-invalidation endpoints.
-- Reject JWTs missing an `exp` claim or with a future `nbf` claim in the
-  primary auth pipeline. Previously, the custom `LifetimeValidator`
-  silently treated no-`exp` tokens as valid forever, undermining
-  `ValidateLifetime`. Tokens issued by `TokenService` are unaffected
-  since they always include `exp`.
-- Narrow JWT query-string token acceptance to WebSocket upgrade requests
-  only. Prevents `?access_token=…` leaking into HTTP logs, browser
-  history, and `Referer` headers on regular HTTP requests.
-- Eliminate login timing-side-channel that allowed username enumeration.
-  `DoLoginAsync` now performs a discarded BCrypt comparison when the
-  ITCode does not exist, keeping response times comparable with the
-  user-exists / wrong-password path.
-- `WtmCspReportMiddleware` evicts empty rate-limit buckets older than
+- **JWT lifetime hardening** (#24, #25): reject JWTs missing an `exp`
+  claim or with a future `nbf` claim in the primary auth pipeline.
+  Previously, the custom `LifetimeValidator` silently treated no-`exp`
+  tokens as valid forever, undermining `ValidateLifetime`. Tokens
+  issued by `TokenService` are unaffected since they always include
+  `exp`.
+- **JWT query-token scoping** (#24, #25): narrow JWT query-string token
+  acceptance to WebSocket upgrade requests only. Prevents
+  `?access_token=…` leaking into HTTP logs, browser history, and
+  `Referer` headers on regular HTTP requests.
+- **Login timing-side-channel** (#26, #27): `DoLoginAsync` now performs
+  a discarded BCrypt comparison when the ITCode does not exist, keeping
+  response times comparable with the user-exists / wrong-password path.
+  Previously, the timing gap (~5 ms vs ~100 ms) let attackers enumerate
+  valid ITCodes over the network.
+- **File path-traversal defense-in-depth** (#22, #23):
+  `WtmLocalFileHandler.GetFileData` and `DeleteFile` now validate the
+  resolved path stays inside a configured upload root, matching the
+  guard that already applied to `Upload()`. Closes a defense-in-depth
+  gap when `FileAttachment.Path` is poisoned via another vector.
+- **MD5 legacy compare constant-time** (#22, #23):
+  `PasswordHashHelper` MD5 migration branch now uses
+  `CryptographicOperations.FixedTimeEquals` instead of `string.Equals`.
+- **CSP report bucket eviction** (#26, #27):
+  `WtmCspReportMiddleware` evicts empty rate-limit buckets older than
   60 s instead of accumulating one entry per distinct client IP for
-  the lifetime of the process.
+  the lifetime of the process. Prevents unbounded `ConcurrentDictionary`
+  growth under hostile traffic.
+
+### Fixed
+
+- **Triple-`!` null-forgiving chains in `WTMContext.DoLoginAsync`**
+  (#20, #21): replaced 4 chains (`HttpContext!.User!.Identity!`) with
+  `?.` null-safe equivalents. Resolves a CLAUDE.md red-line violation
+  and removes the NRE risk when `WTMContext` is used from non-HTTP
+  contexts (background jobs, MockWtmContext).
+- **Silent catches in `WtmFileProvider.GetFile` and
+  `BaseCRUDVM.DoRealDelete[Async]`** (#20, #21): now log the swallowed
+  exception via `ILogger.LogWarning` / `LogError` instead of discarding
+  it. Improves admin triage for delete failures.
+
+### Tests
+
+- **47 `TimeSpan.Seconds` → `TotalSeconds` corrections** (#28, #29):
+  test assertions used the seconds component (0-59) when total elapsed
+  was intended. Tests fail on slow CI (≥10 s) and silently pass when
+  duration is 60-69 s. All occurrences in `BaseCRUDVM*Test`,
+  `FrameworkUser*Test`, `FrameworkRoleApiTest` files corrected.
+- New test files added by the six PRs (31 new tests total):
+  `BatchAssignRolesRbacTests.cs`, `JwtLifetimeValidatorTests.cs`,
+  `LoginTimingSideChannelTests.cs`,
+  `WtmCspReportRateBucketEvictionTests.cs`,
+  `WtmLocalFileHandlerPathTraversalTests.cs`, plus expanded
+  `PasswordHashHelperTests.cs`.
+
+### Documentation
+
+- 11 `IgnoreQueryFilters()` call sites now carry rationale comments per
+  `.claude/rules/architecture.md` (#20, #21).
 
 ## [10.5.1] - 2026-05-13
 

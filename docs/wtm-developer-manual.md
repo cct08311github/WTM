@@ -1,6 +1,8 @@
 # WTM 開發與使用手冊
 
-> **版本**：10.5.1 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-05-13
+> **版本**：10.5.2 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-05-17
+>
+> **10.5.2 重點**（security-focused）：修補 P0 RBAC 提權（`BatchAssignRoles`）、JWT no-`exp` 永久 token 漏洞、URL `access_token` 洩漏、登入 timing-side-channel 帳號列舉、檔案讀刪 path traversal、CSP report bucket 無上限成長。新增 26 個 regression 測試。詳見 `CHANGELOG.md`。
 
 WalkingTec MVVM Framework (WTM) 是一套 ASP.NET Core 快速開發框架，以四種 ViewModel 類型為核心，搭配內建代碼生成器、LayUI TagHelper、Analysis Mode、ETL 模組（含可視化儀表板）與 Dashboard，提供完整的企業級 CRUD 開發體驗。
 
