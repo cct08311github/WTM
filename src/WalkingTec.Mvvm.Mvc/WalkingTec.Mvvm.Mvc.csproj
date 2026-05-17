@@ -127,4 +127,11 @@
     </None>
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Allow test project to access internal members (e.g. CallerIsAdmin) — see #30 -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>WalkingTec.Mvvm.Core.Test</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
 </Project>

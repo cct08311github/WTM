@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Security
+
+- **P0 RBAC bypass fix**: `_FrameworkController.BatchAssignRoles` was
+  marked `[AllRights]`, allowing any authenticated user to grant
+  themselves any role (privilege escalation to admin). Added runtime
+  admin check that returns 403 for non-admin callers. Same guard added
+  to the three `RemoveUserCacheBy*` cache-invalidation endpoints.
+
 ## [10.5.1] - 2026-05-13
 
 Infra-only release. All NuGet publish and CI now run on Gitea; GitHub
