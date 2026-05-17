@@ -248,9 +248,9 @@ namespace WalkingTec.Mvvm.Core.Test.VM
                 Assert.AreEqual(MajorTypeEnum.Required, rv[1].MajorType);
 
                 Assert.AreEqual("schooluser", rv[0].CreateBy);
-                Assert.IsTrue(DateTime.Now.Subtract(rv[0].CreateTime.Value).Seconds < 10);
+                Assert.IsTrue(DateTime.Now.Subtract(rv[0].CreateTime.Value).TotalSeconds < 10);
                 Assert.AreEqual("schooluser", rv[1].CreateBy);
-                Assert.IsTrue(DateTime.Now.Subtract(rv[1].CreateTime.Value).Seconds < 10);
+                Assert.IsTrue(DateTime.Now.Subtract(rv[1].CreateTime.Value).TotalSeconds < 10);
 
             }
         }
@@ -353,9 +353,9 @@ namespace WalkingTec.Mvvm.Core.Test.VM
                 Assert.AreEqual(MajorTypeEnum.Optional, rv2.MajorType);
 
                 Assert.AreEqual("schooluser", rv1.UpdateBy);
-                Assert.IsTrue(DateTime.Now.Subtract(rv1.UpdateTime.Value).Seconds < 10);
+                Assert.IsTrue(DateTime.Now.Subtract(rv1.UpdateTime.Value).TotalSeconds < 10);
                 Assert.AreEqual("schooluser", rv2.CreateBy);
-                Assert.IsTrue(DateTime.Now.Subtract(rv2.CreateTime.Value).Seconds < 10);
+                Assert.IsTrue(DateTime.Now.Subtract(rv2.CreateTime.Value).TotalSeconds < 10);
 
 
             }
@@ -404,9 +404,9 @@ namespace WalkingTec.Mvvm.Core.Test.VM
                 Assert.AreEqual(MajorTypeEnum.Optional, rv2.MajorType);
 
                 Assert.AreEqual("schooluser", rv1.UpdateBy);
-                Assert.IsTrue(DateTime.Now.Subtract(rv1.UpdateTime.Value).Seconds < 10);
+                Assert.IsTrue(DateTime.Now.Subtract(rv1.UpdateTime.Value).TotalSeconds < 10);
                 Assert.AreEqual("schooluser", rv2.CreateBy);
-                Assert.IsTrue(DateTime.Now.Subtract(rv2.CreateTime.Value).Seconds < 10);
+                Assert.IsTrue(DateTime.Now.Subtract(rv2.CreateTime.Value).TotalSeconds < 10);
 
 
             }

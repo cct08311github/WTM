@@ -50,7 +50,7 @@ namespace WalkingTec.Mvvm.Admin.Test
                 Assert.AreEqual(data.RoleCode, "101");
                 Assert.AreEqual(data.RoleName, "TestRole");
                 Assert.AreEqual(data.CreateBy, "user");
-                Assert.IsTrue(DateTime.Now.Subtract(data.CreateTime.Value).Seconds < 10);
+                Assert.IsTrue(DateTime.Now.Subtract(data.CreateTime.Value).TotalSeconds < 10);
             }
         }
 
@@ -84,7 +84,7 @@ namespace WalkingTec.Mvvm.Admin.Test
                 var data = context.Set<FrameworkRole>().FirstOrDefault();
                 Assert.AreEqual(data.RoleName, "UpdatedRoleName");
                 Assert.AreEqual(data.UpdateBy, "user");
-                Assert.IsTrue(DateTime.Now.Subtract(data.UpdateTime.Value).Seconds < 10);
+                Assert.IsTrue(DateTime.Now.Subtract(data.UpdateTime.Value).TotalSeconds < 10);
             }
         }
 
