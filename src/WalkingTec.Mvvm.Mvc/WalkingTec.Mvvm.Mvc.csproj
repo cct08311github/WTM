@@ -114,6 +114,10 @@
     <ProjectReference Include="..\WalkingTec.Mvvm.TagHelpers.LayUI\WalkingTec.Mvvm.TagHelpers.LayUI.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="WalkingTec.Mvvm.Mvc.Tests" />
+  </ItemGroup>
+
 
   <ItemGroup>
     <None Update="fonts\impact.ttf">

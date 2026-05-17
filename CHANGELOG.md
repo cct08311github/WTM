@@ -9,6 +9,14 @@
   themselves any role (privilege escalation to admin). Added runtime
   admin check that returns 403 for non-admin callers. Same guard added
   to the three `RemoveUserCacheBy*` cache-invalidation endpoints.
+- Reject JWTs missing an `exp` claim or with a future `nbf` claim in the
+  primary auth pipeline. Previously, the custom `LifetimeValidator`
+  silently treated no-`exp` tokens as valid forever, undermining
+  `ValidateLifetime`. Tokens issued by `TokenService` are unaffected
+  since they always include `exp`.
+- Narrow JWT query-string token acceptance to WebSocket upgrade requests
+  only. Prevents `?access_token=…` leaking into HTTP logs, browser
+  history, and `Referer` headers on regular HTTP requests.
 
 ## [10.5.1] - 2026-05-13
 
