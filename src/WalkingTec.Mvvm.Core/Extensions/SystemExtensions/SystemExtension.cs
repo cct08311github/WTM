@@ -41,6 +41,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                         //将所有TopBasePoco的属性赋空值，防止添加关联的重复内容
                         foreach (var pro in pros)
                         {
+                            if (pro.CanWrite == false) continue;
                             if (pro.PropertyType.GetTypeInfo().IsSubclassOf(typeof(TopBasePoco)) == false)
                             {
                                 if (isBasePoco == false || (pro.Name != "UpdateTime" && pro.Name != "UpdateBy"))

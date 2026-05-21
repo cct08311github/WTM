@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixes
+
+- Fix `GetCleanCrudVM` aborting the property copy loop when an entity has a computed get-only property (Closes #44)
+
 ## [10.5.2] - 2026-05-17
 
 Security-focused release driven by a deep bug-hunt audit. Six issues

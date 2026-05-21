@@ -61,23 +61,63 @@ namespace WalkingTec.Mvvm.Core.Test.Extensions.SystemExtensions
             str.GetCleanCrudVM().Should().BeNull();
         }
 
+        // ─── Entity with computed get-only property (IsBasePoco regression) ─────
+
+        private class EntityWithComputedProp : TopBasePoco
+        {
+            public string? Name { get; set; }
+            // Inherits computed get-only IsBasePoco from TopBasePoco — the source of the bug.
+        }
+
+        private class CrudVmWithComputedProp : BaseCRUDVM<EntityWithComputedProp> { }
+
+        [TestMethod]
+        public void GetCleanCrudVM_EntityWithComputedGetOnlyProperty_DoesNotThrow()
+        {
+            // Regression test for Issue #44:
+            // GetCleanCrudVM threw ArgumentException ("Property set method not found") when
+            // the entity type had a computed get-only property (e.g. TopBasePoco.IsBasePoco).
+            // The fix adds `if (pro.CanWrite == false) continue;` at the top of the inner loop.
+            //
+            // This test FAILS (ArgumentException) against the unfixed code and PASSES after fix.
+            var seed = Guid.NewGuid().ToString();
+            var vm = new CrudVmWithComputedProp();
+            vm.Wtm = MockWtmContext.CreateWtmContext(new DataContext(seed, DBTypeEnum.Memory), "user");
+            vm.Entity = new EntityWithComputedProp { Name = "hello" };
+
+            Action act = () => vm.GetCleanCrudVM();
+            act.Should().NotThrow("computed get-only properties must be skipped, not set");
+        }
+
+        [TestMethod]
+        public void GetCleanCrudVM_EntityWithComputedGetOnlyProperty_CopiesWritableProperties()
+        {
+            // Companion to the regression test: once the fix prevents the throw, the returned
+            // VM's Entity must have the writable property copied across correctly.
+            var seed = Guid.NewGuid().ToString();
+            var vm = new CrudVmWithComputedProp();
+            vm.Wtm = MockWtmContext.CreateWtmContext(new DataContext(seed, DBTypeEnum.Memory), "user");
+            vm.Entity = new EntityWithComputedProp { Name = "copied-value" };
+
+            var clean = vm.GetCleanCrudVM();
+
+            clean.Should().NotBeNull();
+            var cleanVm = clean as CrudVmWithComputedProp;
+            cleanVm.Should().NotBeNull();
+            cleanVm!.Entity.Name.Should().Be("copied-value");
+        }
+
         [TestMethod]
         public void GetCleanCrudVM_CrudVm_ReturnsNewInstance()
         {
-            // GetCleanCrudVM iterates all properties of the entity and tries to copy them.
-            // This throws if the entity has computed (setter-less) properties inherited from
-            // TopBasePoco (e.g., IsBasePoco). The method is exercised but currently throws for
-            // entities with read-only computed properties — lock in that known behaviour.
+            // Smoke test: GetCleanCrudVM returns a non-null new instance for a valid CrudVM.
             var seed = Guid.NewGuid().ToString();
             var vm = new BaseCRUDVM<School>();
             vm.Wtm = MockWtmContext.CreateWtmContext(new DataContext(seed, DBTypeEnum.Memory), "user");
             vm.Entity = new School { SchoolCode = "S001", SchoolName = "Test School" };
 
-            // The method reaches the IBaseCRUDVM branch and creates a new VM instance,
-            // but throws when it hits a property without a setter on the entity type
-            // (e.g. the computed IsBasePoco property on TopBasePoco).
-            Action act = () => vm.GetCleanCrudVM();
-            act.Should().Throw<Exception>(); // ArgumentException or TargetInvocationException depending on runtime
+            var result = vm.GetCleanCrudVM();
+            result.Should().NotBeNull();
         }
 
         [TestMethod]
