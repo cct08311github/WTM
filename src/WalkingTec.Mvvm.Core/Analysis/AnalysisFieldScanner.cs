@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using WalkingTec.Mvvm.Core.Helper;
 
 namespace WalkingTec.Mvvm.Core.Analysis
 {
@@ -20,11 +21,44 @@ namespace WalkingTec.Mvvm.Core.Analysis
         public static IEnumerable<AnalysisFieldMeta> ScanModel(Type modelType)
         {
             ArgumentNullException.ThrowIfNull(modelType);
-            return ScanModelCore(modelType);
+            return BuildFromTemplates(modelType);
         }
 
-        private static IEnumerable<AnalysisFieldMeta> ScanModelCore(Type modelType)
+        private static AnalysisFieldMeta[] BuildFromTemplates(Type modelType)
         {
+            // Fetch or build the structural template (cached, no localizer-dependent fields).
+            var templates = ReflectionCache.AnalysisFieldTemplates.GetOrAdd(
+                modelType,
+                static t => BuildTemplates(t));
+
+            // Materialize into AnalysisFieldMeta; regenerate AllowedValues per-call so
+            // localisation changes are respected at runtime.
+            var result = new AnalysisFieldMeta[templates.Length];
+            for (int i = 0; i < templates.Length; i++)
+            {
+                var tmpl = templates[i];
+                result[i] = new AnalysisFieldMeta
+                {
+                    FieldName = tmpl.FieldName,
+                    DisplayName = tmpl.DisplayName,
+                    Kind = tmpl.Kind,
+                    AllowedFuncs = tmpl.AllowedFuncs,
+                    ClrType = tmpl.ClrType,
+                    IsDate = tmpl.IsDate,
+                    Hierarchy = tmpl.Hierarchy,
+                    AllowedRoles = tmpl.AllowedRoles,
+                    Format = tmpl.Format,
+                    AllowedValues = tmpl.UnderlyingEnumType != null
+                        ? BuildAllowedValues(tmpl.UnderlyingEnumType)
+                        : null
+                };
+            }
+            return result;
+        }
+
+        private static AnalysisFieldScanTemplate[] BuildTemplates(Type modelType)
+        {
+            var list = new List<AnalysisFieldScanTemplate>();
             foreach (var prop in modelType.GetProperties(BindingFlags.Public | BindingFlags.Instance))
             {
                 var dim = prop.GetCustomAttribute<DimensionAttribute>();
@@ -33,9 +67,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     var clrType = prop.PropertyType;
                     var underlying = Nullable.GetUnderlyingType(clrType) ?? clrType;
                     var isDate = underlying == typeof(DateTime);
-                    var allowedValues = BuildAllowedValues(underlying);
 
-                    yield return new AnalysisFieldMeta
+                    list.Add(new AnalysisFieldScanTemplate
                     {
                         FieldName = prop.Name,
                         DisplayName = dim.DisplayName ?? prop.Name,
@@ -44,15 +77,16 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         IsDate = isDate,
                         Hierarchy = isDate ? dim.Hierarchy : DateHierarchy.None,
                         AllowedRoles = dim.AllowedRoles,
-                        AllowedValues = allowedValues
-                    };
+                        // Store the underlying enum type for per-call AllowedValues generation.
+                        UnderlyingEnumType = underlying.IsEnum ? underlying : null
+                    });
                     continue;
                 }
 
                 var msr = prop.GetCustomAttribute<MeasureAttribute>();
                 if (msr != null)
                 {
-                    yield return new AnalysisFieldMeta
+                    list.Add(new AnalysisFieldScanTemplate
                     {
                         FieldName = prop.Name,
                         DisplayName = msr.DisplayName ?? prop.Name,
@@ -60,14 +94,17 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         AllowedFuncs = msr.AllowedFuncs,
                         ClrType = prop.PropertyType,
                         AllowedRoles = msr.AllowedRoles,
-                        Format = msr.Format
-                    };
+                        Format = msr.Format,
+                        UnderlyingEnumType = null
+                    });
                 }
             }
+            return list.ToArray();
         }
 
         /// <summary>
         /// 若 type 為枚舉，回傳所有成員的顯示名稱清單；否則回傳 null。
+        /// Localizer is invoked per-call through GetEnumDisplayName.
         /// </summary>
         private static IReadOnlyList<string>? BuildAllowedValues(Type type)
         {

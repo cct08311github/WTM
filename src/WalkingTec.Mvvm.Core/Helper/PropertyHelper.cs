@@ -11,6 +11,7 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.RegularExpressions;
 using WalkingTec.Mvvm.Core.Extensions;
+using WalkingTec.Mvvm.Core.Helper;
 
 namespace WalkingTec.Mvvm.Core
 {
@@ -86,24 +87,32 @@ namespace WalkingTec.Mvvm.Core
 
         public static Func<object, object?> GetPropertyExpression(Type objtype, string property)
         {
-            property = Regex.Replace(property, @"\[[^\]]*\]", string.Empty);
-            List<string> level = [];
-            if (property.Contains('.'))
-            {
-                level.AddRange(property.Split('.'));
-            }
-            else
-            {
-                level.Add(property);
-            }
+            string normalizedProperty = Regex.Replace(property, @"\[[^\]]*\]", string.Empty);
+            return ReflectionCache.PropertyAccessors.GetOrAdd(
+                (objtype, normalizedProperty),
+                static key =>
+                {
+                    var (type, prop) = key;
+                    List<string> level = [];
+                    if (prop.Contains('.'))
+                    {
+                        level.AddRange(prop.Split('.'));
+                    }
+                    else
+                    {
+                        level.Add(prop);
+                    }
 
-            var pe = Expression.Parameter(objtype);
-            var member = Expression.Property(pe, objtype.GetSingleProperty(level[0])!);
-            for (int i = 1; i < level.Count; i++)
-            {
-                member = Expression.Property(member, member.Type.GetSingleProperty(level[i])!);
-            }
-            return Expression.Lambda<Func<object, object?>>(Expression.Convert(member, typeof(object)), pe).Compile();
+                    // Use object parameter + Convert so the compiled delegate matches Func<object, object?>.
+                    var objParam = Expression.Parameter(typeof(object), "obj");
+                    var typedParam = Expression.Convert(objParam, type);
+                    MemberExpression member = Expression.Property(typedParam, type.GetSingleProperty(level[0])!);
+                    for (int i = 1; i < level.Count; i++)
+                    {
+                        member = Expression.Property(member, member.Type.GetSingleProperty(level[i])!);
+                    }
+                    return Expression.Lambda<Func<object, object?>>(Expression.Convert(member, typeof(object)), objParam).Compile();
+                });
         }
 
         /// <summary>
@@ -243,31 +252,33 @@ namespace WalkingTec.Mvvm.Core
         /// <returns>属性名称</returns>
         public static string GetPropertyDisplayName(this MemberInfo? pi, IStringLocalizer? local = null)
         {
-            string rv = "";
             if (pi == null)
             {
                 return "";
             }
-            if (pi.GetCustomAttributes(typeof(DisplayAttribute), false).FirstOrDefault() is DisplayAttribute dis && !string.IsNullOrEmpty(dis.Name))
-            {
-                rv = dis.Name;
-                if (local == null)
+            // Cache the raw (pre-localization) name keyed by MemberInfo.
+            string rawName = ReflectionCache.RawDisplayNames.GetOrAdd(
+                pi,
+                static m =>
                 {
-                    if (CoreProgram._localizer != null)
+                    if (m.GetCustomAttributes(typeof(DisplayAttribute), false).FirstOrDefault() is DisplayAttribute dis
+                        && !string.IsNullOrEmpty(dis.Name))
                     {
-                        rv = CoreProgram._localizer[rv];
+                        return dis.Name;
                     }
-                }
-                else
-                {
-                    rv = local[rv];
-                }
-            }
-            else
+                    return m.Name;
+                });
+
+            // Localizer lookup always happens at call-time so culture changes are respected.
+            if (local != null)
             {
-                rv = pi.Name;
+                return local[rawName];
             }
-            return rv;
+            if (CoreProgram._localizer != null)
+            {
+                return CoreProgram._localizer[rawName];
+            }
+            return rawName;
         }
 
         /// <summary>
@@ -443,30 +454,32 @@ namespace WalkingTec.Mvvm.Core
         /// <returns>是否必填</returns>
         public static bool IsPropertyRequired(this MemberInfo? pi)
         {
-            bool isRequired = false;
-            if (pi != null)
+            if (pi == null)
             {
-                //如果需要显示星号，则判断是否是必填项，如果是必填则在内容后面加上星号
-                //所有int，float。。。这种Primitive类型的，肯定都是必填
-                Type? t = pi.GetMemberType();
-                if (t != null && (t.IsPrimitive() || t.IsEnum() || t == typeof(decimal) || t == typeof(Guid)))
-                {
-                    isRequired = true;
-                }
-                else
-                {
-                    //对于其他类，检查是否有RequiredAttribute，如果有就是必填
-                    if (pi.GetCustomAttributes(typeof(RequiredAttribute), false).FirstOrDefault() is RequiredAttribute required && required.AllowEmptyStrings == false)
-                    {
-                        isRequired = true;
-                    }
-                    else if (pi.GetCustomAttributes(typeof(KeyAttribute), false).FirstOrDefault() != null)
-                    {
-                        isRequired = true;
-                    }
-                }
+                return false;
             }
-            return isRequired;
+            return ReflectionCache.RequiredFlags.GetOrAdd(
+                pi,
+                static m =>
+                {
+                    //如果需要显示星号，则判断是否是必填项，如果是必填则在内容后面加上星号
+                    //所有int，float。。。这种Primitive类型的，肯定都是必填
+                    Type? t = m.GetMemberType();
+                    if (t != null && (t.IsPrimitive() || t.IsEnum() || t == typeof(decimal) || t == typeof(Guid)))
+                    {
+                        return true;
+                    }
+                    //对于其他类，检查是否有RequiredAttribute，如果有就是必填
+                    if (m.GetCustomAttributes(typeof(RequiredAttribute), false).FirstOrDefault() is RequiredAttribute required && required.AllowEmptyStrings == false)
+                    {
+                        return true;
+                    }
+                    if (m.GetCustomAttributes(typeof(KeyAttribute), false).FirstOrDefault() != null)
+                    {
+                        return true;
+                    }
+                    return false;
+                });
         }
 
         /// <summary>
@@ -740,37 +753,45 @@ namespace WalkingTec.Mvvm.Core
             {
                 return "";
             }
-            string rv = "";
-            FieldInfo? field = null;
-
-            if (enumType.IsEnum())
-            {
-                field = enumType.GetField(value);
-            }
-            //如果是nullable的枚举
-            if (enumType.IsGeneric(typeof(Nullable<>)) && enumType.GetGenericArguments()[0].IsEnum())
-            {
-                field = enumType.GenericTypeArguments[0].GetField(value);
-            }
-
-            if (field != null)
-            {
-
-                List<Attribute> attribs = [.. field.GetCustomAttributes(typeof(DisplayAttribute), true).Cast<Attribute>()];
-                if (attribs.Count > 0)
+            // Cache the raw (pre-localization) name by (Type, string-value).
+            string rawName = ReflectionCache.RawEnumDisplayNames.GetOrAdd(
+                (enumType, value),
+                static key =>
                 {
-                    rv = ((DisplayAttribute)attribs[0]).GetName() ?? "";
-                    if (CoreProgram._localizer != null)
+                    var (eType, eValue) = key;
+                    FieldInfo? field = null;
+                    if (eType.IsEnum())
                     {
-                        rv = CoreProgram._localizer[rv];
+                        field = eType.GetField(eValue);
                     }
-                }
-                else
-                {
-                    rv = value;
-                }
+                    // If it's a nullable enum
+                    if (eType.IsGeneric(typeof(Nullable<>)) && eType.GetGenericArguments()[0].IsEnum())
+                    {
+                        field = eType.GenericTypeArguments[0].GetField(eValue);
+                    }
+
+                    if (field != null)
+                    {
+                        List<Attribute> attribs = [.. field.GetCustomAttributes(typeof(DisplayAttribute), true).Cast<Attribute>()];
+                        if (attribs.Count > 0)
+                        {
+                            return ((DisplayAttribute)attribs[0]).GetName() ?? "";
+                        }
+                        return eValue;
+                    }
+                    return "";
+                });
+
+            if (string.IsNullOrEmpty(rawName))
+            {
+                return rawName;
             }
-            return rv;
+            // Localizer runs per-call so culture changes are respected.
+            if (CoreProgram._localizer != null)
+            {
+                return CoreProgram._localizer[rawName];
+            }
+            return rawName;
         }
 
         public static string GetEnumDisplayName(Type? enumType, int value)
@@ -779,39 +800,48 @@ namespace WalkingTec.Mvvm.Core
             {
                 return "";
             }
-            string rv = "";
-            FieldInfo? field = null;
-            string? ename = "";
-            if (enumType.IsEnum())
-            {
-                ename = enumType.GetEnumName(value);
-                if (ename != null) field = enumType.GetField(ename);
-            }
-            //如果是nullable的枚举
-            if (enumType.IsGeneric(typeof(Nullable<>)) && enumType.GetGenericArguments()[0].IsEnum())
-            {
-                ename = enumType.GenericTypeArguments[0].GetEnumName(value);
-                if (ename != null) field = enumType.GenericTypeArguments[0].GetField(ename);
-            }
-
-            if (field != null)
-            {
-
-                List<Attribute> attribs = [.. field.GetCustomAttributes(typeof(DisplayAttribute), true).Cast<Attribute>()];
-                if (attribs.Count > 0)
+            // Cache the raw (pre-localization) name by (Type, int-value).
+            string rawName = ReflectionCache.RawEnumDisplayNamesByInt.GetOrAdd(
+                (enumType, value),
+                static key =>
                 {
-                    rv = ((DisplayAttribute)attribs[0]).GetName() ?? "";
-                    if (CoreProgram._localizer != null && !string.IsNullOrEmpty(rv))
+                    var (eType, eValue) = key;
+                    FieldInfo? field = null;
+                    string? ename = "";
+                    if (eType.IsEnum())
                     {
-                        rv = CoreProgram._localizer[rv];
+                        ename = eType.GetEnumName(eValue);
+                        if (ename != null) field = eType.GetField(ename);
                     }
-                }
-                else
-                {
-                    rv = ename ?? "";
-                }
+                    // If it's a nullable enum
+                    if (eType.IsGeneric(typeof(Nullable<>)) && eType.GetGenericArguments()[0].IsEnum())
+                    {
+                        ename = eType.GenericTypeArguments[0].GetEnumName(eValue);
+                        if (ename != null) field = eType.GenericTypeArguments[0].GetField(ename);
+                    }
+
+                    if (field != null)
+                    {
+                        List<Attribute> attribs = [.. field.GetCustomAttributes(typeof(DisplayAttribute), true).Cast<Attribute>()];
+                        if (attribs.Count > 0)
+                        {
+                            return ((DisplayAttribute)attribs[0]).GetName() ?? "";
+                        }
+                        return ename ?? "";
+                    }
+                    return "";
+                });
+
+            if (string.IsNullOrEmpty(rawName))
+            {
+                return rawName;
             }
-            return rv;
+            // Localizer runs per-call so culture changes are respected.
+            if (CoreProgram._localizer != null)
+            {
+                return CoreProgram._localizer[rawName];
+            }
+            return rawName;
         }
 
         /// <summary>
