@@ -111,6 +111,202 @@ namespace WalkingTec.Mvvm.Core.Test.Services
 
         #endregion
 
+        #region CreateVM<T> with id overload
+
+        [TestMethod]
+        public void CreateVM_GenericWithId_CreatesVm()
+        {
+            var id = Guid.NewGuid();
+            // SimpleTestVM doesn't implement IBaseCRUDVM, so id path is silently skipped
+            var vm = _factory.CreateVM<SimpleTestVM>(_wtm, id);
+            vm.Should().NotBeNull();
+            vm.Wtm.Should().BeSameAs(_wtm);
+        }
+
+        [TestMethod]
+        public void CreateVM_GenericWithId_PassInit_SkipsInit()
+        {
+            var vm = _factory.CreateVM<SimpleTestVM>(_wtm, Guid.NewGuid(), passInit: true);
+            vm.InitCalled.Should().BeFalse();
+        }
+
+        #endregion
+
+        #region CreateVM<T> with ids array overload
+
+        [TestMethod]
+        public void CreateVM_GenericWithIds_CreatesVm()
+        {
+            var ids = new object[] { Guid.NewGuid(), Guid.NewGuid() };
+            var vm = _factory.CreateVM<SimpleTestVM>(_wtm, ids);
+            vm.Should().NotBeNull();
+            vm.Wtm.Should().BeSameAs(_wtm);
+        }
+
+        [TestMethod]
+        public void CreateVM_GenericWithIds_PassInit_SkipsInit()
+        {
+            var ids = new object[] { Guid.NewGuid() };
+            var vm = _factory.CreateVM<SimpleTestVM>(_wtm, ids, passInit: true);
+            vm.InitCalled.Should().BeFalse();
+        }
+
+        #endregion
+
+        #region CreateVM<T> with lambda values
+
+        [TestMethod]
+        public void CreateVM_GenericWithLambdaValues_SetsProperty()
+        {
+            var vm = _factory.CreateVM<SimpleTestVM>(_wtm,
+                values: x => x.TestProperty == "fromLambda");
+            vm.TestProperty.Should().Be("fromLambda");
+        }
+
+        [TestMethod]
+        public void CreateVM_GenericWithNullValues_DoesNotThrow()
+        {
+            var vm = _factory.CreateVM<SimpleTestVM>(_wtm, values: null);
+            vm.Should().NotBeNull();
+        }
+
+        #endregion
+
+        #region CreateVM with IBasePagedListVM
+
+        [TestMethod]
+        public void CreateVM_ListVM_InitializesSearcher()
+        {
+            var vm = _factory.CreateVM<TestListVM>(_wtm, passInit: false);
+            vm.Should().NotBeNull();
+            vm.Searcher.Should().NotBeNull();
+        }
+
+        [TestMethod]
+        public void CreateVM_ListVM_PassInit_SearcherDoInitNotCalled()
+        {
+            var vm = _factory.CreateVM<TestListVM>(_wtm, passInit: true);
+            vm.Should().NotBeNull();
+        }
+
+        #endregion
+
+        #region SetSubVm — VM with sub-VM property
+
+        [TestMethod]
+        public void CreateVM_WithSubVm_SubVmIsInitialized()
+        {
+            var vm = _factory.CreateVM<ParentVM>(_wtm, passInit: false);
+            vm.Should().NotBeNull();
+            vm.Sub.Should().NotBeNull();
+            vm.Sub!.Wtm.Should().BeSameAs(_wtm);
+        }
+
+        [TestMethod]
+        public void CreateVM_WithSubVm_PassInit_SubVmCreatedButInitSkipped()
+        {
+            var vm = _factory.CreateVM<ParentVM>(_wtm, passInit: true);
+            vm.Sub.Should().NotBeNull();
+        }
+
+        [TestMethod]
+        public void CreateVM_WithExistingSubVm_DoesNotReplaceIt()
+        {
+            // ParentWithPresetSub has Sub pre-populated in ctor
+            var vm = _factory.CreateVM<ParentWithPresetSub>(_wtm, passInit: true);
+            vm.Sub.Should().NotBeNull();
+            vm.Sub!.Tag.Should().Be("preset");
+        }
+
+        #endregion
+
+        #region CreateVM by type — null ids handled
+
+        [TestMethod]
+        public void CreateVM_ByType_NullIds_DoesNotThrow()
+        {
+            var vm = _factory.CreateVM(_wtm, typeof(SimpleTestVM), null, null, null, true);
+            vm.Should().NotBeNull();
+        }
+
+        [TestMethod]
+        public void CreateVM_ByType_EmptyIds_DoesNotThrow()
+        {
+            var vm = _factory.CreateVM(_wtm, typeof(SimpleTestVM), null, [], null, true);
+            vm.Should().NotBeNull();
+        }
+
+        #endregion
+
+        #region CRUDVM with id (covers line 44 — SetEntityById)
+
+        [TestMethod]
+        public void CreateVM_CRUDVMWithId_TriesSetEntityById_ThrowsWhenNotFound()
+        {
+            // BaseCRUDVM<School> implements IBaseCRUDVM<School> → IBaseCRUDVM<TopBasePoco>.
+            // Line 44 (cvm.SetEntityById(id)) IS executed; SetEntityById then throws
+            // "数据不存在" because the random ID doesn't exist.  The factory propagates
+            // that exception — we assert on it so the test passes.
+            var seed = Guid.NewGuid().ToString();
+            var dc = new DataContext(seed, DBTypeEnum.Memory);
+            dc.Database.EnsureCreated();
+            var wtm = MockWtmContext.CreateWtmContext(dc);
+            var nonExistentId = Guid.NewGuid();
+
+            Action act = () => _factory.CreateVM(wtm, typeof(BaseCRUDVM<School>), nonExistentId, null, null, true);
+            act.Should().Throw<Exception>().WithMessage("*不存在*");
+        }
+
+        #endregion
+
+        #region BatchVM — covers InitBatchVM path (lines 51 and 135-179)
+
+        [TestMethod]
+        public void CreateVM_BatchVM_WithNullIds_InitBatchVm_DoesNotThrow()
+        {
+            var vm = _factory.CreateVM<TestBatchVM>(_wtm, ids: null!, passInit: true);
+            vm.Should().NotBeNull();
+            vm.Ids.Should().NotBeNull();
+        }
+
+        [TestMethod]
+        public void CreateVM_BatchVM_WithIds_PopulatesIds()
+        {
+            var id1 = Guid.NewGuid();
+            var id2 = Guid.NewGuid();
+            var vm = _factory.CreateVM<TestBatchVM>(_wtm, new object[] { id1, id2 }, passInit: true);
+            vm.Should().NotBeNull();
+            vm.Ids.Should().HaveCount(2);
+        }
+
+        [TestMethod]
+        public void CreateVM_BatchVM_WithListVM_ListVmCopyContextCalled()
+        {
+            // TestBatchWithListVM has a ListVM — exercises the ListVM sub-branch in InitBatchVM
+            var vm = _factory.CreateVM<TestBatchWithListVM>(_wtm, passInit: true);
+            vm.Should().NotBeNull();
+            vm.ListVM.Should().NotBeNull();
+        }
+
+        [TestMethod]
+        public void CreateVM_BatchVM_WithLinkedVM_LinkedVmCopyContextCalled()
+        {
+            // TestBatchWithLinkedVM exercises the LinkedVM branch in InitBatchVM
+            var vm = _factory.CreateVM<TestBatchWithLinkedVM>(_wtm, passInit: true);
+            vm.Should().NotBeNull();
+            vm.LinkedVM.Should().NotBeNull();
+        }
+
+        [TestMethod]
+        public void CreateVM_BatchVM_WithErrors_AddErrorColumnCalled()
+        {
+            // After adding an error we expect AddErrorColumn to be invoked on ListVM
+            var vm = _factory.CreateVM<TestBatchWithListAndError>(_wtm, passInit: true);
+            vm.Should().NotBeNull();
+        }
+
+        #endregion
+
         #region Test VM classes
 
         public class SimpleTestVM : BaseVM
@@ -121,6 +317,72 @@ namespace WalkingTec.Mvvm.Core.Test.Services
             protected override void InitVM()
             {
                 InitCalled = true;
+            }
+        }
+
+        /// <summary>Simple concrete ListVM for factory path coverage.</summary>
+        public class TestListVM : BasePagedListVM<Student, BaseSearcher>
+        {
+            protected override System.Collections.Generic.IEnumerable<IGridColumn<Student>> InitGridHeader()
+            {
+                return [];
+            }
+        }
+
+        /// <summary>VM with a sub-VM property — exercises SetSubVm.</summary>
+        public class SubVM : BaseVM
+        {
+            public string? Tag { get; set; }
+        }
+
+        public class ParentVM : BaseVM
+        {
+            public SubVM? Sub { get; set; }
+        }
+
+        public class ParentWithPresetSub : BaseVM
+        {
+            public SubVM? Sub { get; set; } = new SubVM { Tag = "preset" };
+        }
+
+        /// <summary>Minimal BatchVM with no ListVM or LinkedVM.</summary>
+        public class TestBatchVM : BaseBatchVM<School, BaseVM>
+        {
+        }
+
+        /// <summary>BatchVM with a LinkedVM (exercises LinkedVM.CopyContext path).</summary>
+        public class TestBatchWithLinkedVM : BaseBatchVM<School, SimpleTestVM>
+        {
+            public TestBatchWithLinkedVM()
+            {
+                LinkedVM = new SimpleTestVM();
+            }
+        }
+
+        /// <summary>BatchVM with a ListVM (exercises ListVM sub-branch).</summary>
+        public class TestBatchListInner : BasePagedListVM<School, BaseSearcher>
+        {
+            protected override System.Collections.Generic.IEnumerable<IGridColumn<School>> InitGridHeader()
+            {
+                return [];
+            }
+        }
+
+        public class TestBatchWithListVM : BaseBatchVM<School, BaseVM>
+        {
+            public TestBatchWithListVM()
+            {
+                ListVM = new TestBatchListInner();
+            }
+        }
+
+        /// <summary>BatchVM with ListVM and a pre-added error — exercises AddErrorColumn.</summary>
+        public class TestBatchWithListAndError : BaseBatchVM<School, BaseVM>
+        {
+            public TestBatchWithListAndError()
+            {
+                ListVM = new TestBatchListInner();
+                ErrorMessage["row1"] = "some error";
             }
         }
 
