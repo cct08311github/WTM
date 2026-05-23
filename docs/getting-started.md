@@ -61,13 +61,13 @@ WTM 套件發佈於 internal NuGet registry。需先配置 NuGet source。
 ```bash
 dotnet nuget add source "https://<internal-registry-host>/api/packages/chiu0831/nuget/index.json" \
   --name private-feed \
-  --username YOUR_GITEA_USERNAME \
-  --password YOUR_GITEA_PAT \
+  --username YOUR_REGISTRY_USERNAME \
+  --password YOUR_REGISTRY_PAT \
   --store-password-in-clear-text
 ```
 
-> **注意**：`YOUR_GITEA_PAT` 需要 `read:package` scope。可在 internal infrastructure UI → Settings → Applications → Generate New Token 建立。
-> 詳見 [`docs/gitea-packages.md`](gitea-packages.md)。
+> **注意**：`YOUR_REGISTRY_PAT` 需要 `read:package` scope。可在 internal infrastructure UI → Settings → Applications → Generate New Token 建立。
+> 詳見 [`docs/internal-packages.md`](internal-packages.md)。
 
 ### 2.2 建立新專案
 

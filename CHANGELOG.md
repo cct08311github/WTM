@@ -136,7 +136,7 @@ is fully retired. No source code changes — same binaries as 10.5.0.
 - **`common.props`** `RepositoryUrl` / `PackageProjectUrl` now point to the
   internal infrastructure repo URL.
 - **`scripts/release-github-package.sh`** renamed to
-  `scripts/release-gitea-package.sh`; internals rewritten from `gh` CLI to
+  `scripts/release-internal-package.sh`; internals rewritten from `gh` CLI to
   `curl` against the internal infrastructure API.
 - **`e2e-test.yml`** dropped the `mikepenz/action-junit-report` step
   (GitHub Marketplace-only action). E2E artifacts continue to upload via
@@ -144,14 +144,14 @@ is fully retired. No source code changes — same binaries as 10.5.0.
 
 ### Added
 
-- **`scripts/publish-to-gitea.sh`** — local manual publish fallback used
+- **`scripts/publish-to-internal.sh`** — local manual publish fallback used
   when the internal CI runner is unavailable. Supports `--suffix
   <pre-release>` and `--dry-run`. Token sourced from the `REGISTRY_TOKEN`
   environment variable or `<private-token-file>`.
 
 ### Security
 
-- `scripts/publish-to-gitea.sh` masks the internal infrastructure token in `--dry-run`
+- `scripts/publish-to-internal.sh` masks the internal infrastructure token in `--dry-run`
   output (`<prefix>***`) instead of echoing the full secret. Real
   execution still passes the full token to `dotnet nuget push`.
 
