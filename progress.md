@@ -30,7 +30,7 @@ Current HEAD: `bfc58961` (`docs: reconcile progress handoff with verified repo s
 - `Extensions/ListVMExtension.cs` is still `#nullable disable`
 - only 2 Core files remain explicitly disabled, but the nullable cleanup is not functionally done because many enabled files still warn
 - current forced rebuild baseline:
-  - `/Users/openclaw/.dotnet/dotnet build src/WalkingTec.Mvvm.Core/WalkingTec.Mvvm.Core.csproj -c Release -t:Rebuild`
+  - `~/.dotnet/dotnet build src/WalkingTec.Mvvm.Core/WalkingTec.Mvvm.Core.csproj -c Release -t:Rebuild`
   - result: `56 warnings / 0 errors`
 - do not claim "only WTMContext remains" unless `PropertyHelper.cs`, `Utils.cs`, `ExcelPropety.cs`, and other enabled files are brought back to a stable warning target
 
@@ -51,10 +51,10 @@ The previously separate `feature/8.1.15-testing` work is now merged into `dotnet
 
 ## Verified Commands
 
-- `/Users/openclaw/.dotnet/dotnet build src/WalkingTec.Mvvm.Core/WalkingTec.Mvvm.Core.csproj -c Release -t:Rebuild`
+- `~/.dotnet/dotnet build src/WalkingTec.Mvvm.Core/WalkingTec.Mvvm.Core.csproj -c Release -t:Rebuild`
   - PASS
   - `56 warnings / 0 errors`
-- `/Users/openclaw/.dotnet/dotnet test WalkingTec.Mvvm.sln -c Release`
+- `~/.dotnet/dotnet test WalkingTec.Mvvm.sln -c Release`
   - PASS
   - Core.Tests `61/61`
   - Mvc.Tests `24/24`

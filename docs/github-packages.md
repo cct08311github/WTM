@@ -17,7 +17,7 @@ WTM 目前主要發佈以下三個 package：
 - `WalkingTec.Mvvm.Mvc`
 - `WalkingTec.Mvvm.TagHelpers.LayUI`
 
-版本號統一由 [version.props](/Users/openclaw/.openclaw/shared/projects/WTM/version.props) 的 `VersionPrefix` 控制。
+版本號統一由 [version.props](~/.openclaw/shared/projects/WTM/version.props) 的 `VersionPrefix` 控制。
 
 ---
 
@@ -99,7 +99,7 @@ dotnet pack src/WalkingTec.Mvvm.Mvc/WalkingTec.Mvvm.Mvc.csproj -c Release -o nup
 
 ### 穩定版
 
-直接修改 [version.props](/Users/openclaw/.openclaw/shared/projects/WTM/version.props)：
+直接修改 [version.props](~/.openclaw/shared/projects/WTM/version.props)：
 
 ```xml
 <VersionPrefix>8.2.1</VersionPrefix>
@@ -127,7 +127,7 @@ workflow dispatch 時可帶 `version_suffix`，例如：
 
 本 repo 已內建 workflow：
 
-- [`.github/workflows/publish-nuget.yml`](/Users/openclaw/.openclaw/shared/projects/WTM/.github/workflows/publish-nuget.yml)
+- [`.github/workflows/publish-nuget.yml`](~/.openclaw/shared/projects/WTM/.github/workflows/publish-nuget.yml)
 
 它具備以下行為：
 
@@ -140,7 +140,7 @@ workflow dispatch 時可帶 `version_suffix`，例如：
 
 repo 內提供：
 
-- [`scripts/release-github-package.sh`](/Users/openclaw/.openclaw/shared/projects/WTM/scripts/release-github-package.sh)
+- [`scripts/release-github-package.sh`](~/.openclaw/shared/projects/WTM/scripts/release-github-package.sh)
 
 穩定版：
 
@@ -162,7 +162,7 @@ repo 內提供：
 
 這個腳本會：
 
-1. 修改 [version.props](/Users/openclaw/.openclaw/shared/projects/WTM/version.props) 的 `VersionPrefix`
+1. 修改 [version.props](~/.openclaw/shared/projects/WTM/version.props) 的 `VersionPrefix`
 2. 建立 release commit
 3. push 到 `origin/dotnet8`
 4. 觸發 `publish-nuget.yml`
@@ -253,4 +253,4 @@ NuGet package version 應視為不可變。若已發過：
 
 ### 為什麼 workflow 用 tag 觸發，但版本不是 tag 名稱
 
-因為目前 workflow 的版本來源是 [version.props](/Users/openclaw/.openclaw/shared/projects/WTM/version.props) 與 `version_suffix`，不是從 tag 名稱解析。
+因為目前 workflow 的版本來源是 [version.props](~/.openclaw/shared/projects/WTM/version.props) 與 `version_suffix`，不是從 tag 名稱解析。
