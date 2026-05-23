@@ -7,7 +7,7 @@
 - 一般 MVC/API 請求如何流過 Controller、ViewModel、`WTMContext` 與 `DataContext`
 - Analysis Mode 如何在既有 ListVM 上擴充分析能力
 
-如果你要看 Analysis Mode 的 API、欄位標註與安全限制細節，請直接搭配 [docs/analysis-mode.md](/Users/openclaw/.openclaw/shared/projects/WTM/docs/analysis-mode.md) 一起讀。
+如果你要看 Analysis Mode 的 API、欄位標註與安全限制細節，請直接搭配 [docs/analysis-mode.md](~/.openclaw/shared/projects/WTM/docs/analysis-mode.md) 一起讀。
 
 ---
 
@@ -85,7 +85,7 @@ WTM 的啟動分成兩件事：
 
 ### `AddWtmContext(config)` 做了什麼
 
-根據 [src/WalkingTec.Mvvm.Mvc/Helper/FrameworkServiceExtension.cs](/Users/openclaw/.openclaw/shared/projects/WTM/src/WalkingTec.Mvvm.Mvc/Helper/FrameworkServiceExtension.cs)，這個方法會完成以下核心工作：
+根據 [src/WalkingTec.Mvvm.Mvc/Helper/FrameworkServiceExtension.cs](~/.openclaw/shared/projects/WTM/src/WalkingTec.Mvvm.Mvc/Helper/FrameworkServiceExtension.cs)，這個方法會完成以下核心工作：
 
 - 註冊 `HttpContextAccessor`
 - 註冊 `GlobalData`
@@ -206,7 +206,7 @@ sequenceDiagram
 
 #### `WtmMiddleware`
 
-根據 [src/WalkingTec.Mvvm.Mvc/Helper/WtmMiddleware.cs](/Users/openclaw/.openclaw/shared/projects/WTM/src/WalkingTec.Mvvm.Mvc/Helper/WtmMiddleware.cs)，它主要做的是框架層級請求預處理：
+根據 [src/WalkingTec.Mvvm.Mvc/Helper/WtmMiddleware.cs](~/.openclaw/shared/projects/WTM/src/WalkingTec.Mvvm.Mvc/Helper/WtmMiddleware.cs)，它主要做的是框架層級請求預處理：
 
 - 設定最大 request body size
 - 特殊處理工作流路由
@@ -364,14 +364,14 @@ flowchart LR
 
 如果你要真正進入這套系統，建議照這個順序讀：
 
-1. [src/WalkingTec.Mvvm.Core/BaseVM.cs](/Users/openclaw/.openclaw/shared/projects/WTM/src/WalkingTec.Mvvm.Core/BaseVM.cs)
-2. [src/WalkingTec.Mvvm.Core/WTMContext.cs](/Users/openclaw/.openclaw/shared/projects/WTM/src/WalkingTec.Mvvm.Core/WTMContext.cs)
-3. [src/WalkingTec.Mvvm.Core/BasePagedListVM.cs](/Users/openclaw/.openclaw/shared/projects/WTM/src/WalkingTec.Mvvm.Core/BasePagedListVM.cs)
-4. [src/WalkingTec.Mvvm.Mvc/BaseController.cs](/Users/openclaw/.openclaw/shared/projects/WTM/src/WalkingTec.Mvvm.Mvc/BaseController.cs)
-5. [src/WalkingTec.Mvvm.Mvc/Helper/FrameworkServiceExtension.cs](/Users/openclaw/.openclaw/shared/projects/WTM/src/WalkingTec.Mvvm.Mvc/Helper/FrameworkServiceExtension.cs)
-6. [src/WalkingTec.Mvvm.Mvc/Helper/WtmMiddleware.cs](/Users/openclaw/.openclaw/shared/projects/WTM/src/WalkingTec.Mvvm.Mvc/Helper/WtmMiddleware.cs)
-7. [src/WalkingTec.Mvvm.Mvc/_AnalysisController.cs](/Users/openclaw/.openclaw/shared/projects/WTM/src/WalkingTec.Mvvm.Mvc/_AnalysisController.cs)
-8. [docs/analysis-mode.md](/Users/openclaw/.openclaw/shared/projects/WTM/docs/analysis-mode.md)
+1. [src/WalkingTec.Mvvm.Core/BaseVM.cs](~/.openclaw/shared/projects/WTM/src/WalkingTec.Mvvm.Core/BaseVM.cs)
+2. [src/WalkingTec.Mvvm.Core/WTMContext.cs](~/.openclaw/shared/projects/WTM/src/WalkingTec.Mvvm.Core/WTMContext.cs)
+3. [src/WalkingTec.Mvvm.Core/BasePagedListVM.cs](~/.openclaw/shared/projects/WTM/src/WalkingTec.Mvvm.Core/BasePagedListVM.cs)
+4. [src/WalkingTec.Mvvm.Mvc/BaseController.cs](~/.openclaw/shared/projects/WTM/src/WalkingTec.Mvvm.Mvc/BaseController.cs)
+5. [src/WalkingTec.Mvvm.Mvc/Helper/FrameworkServiceExtension.cs](~/.openclaw/shared/projects/WTM/src/WalkingTec.Mvvm.Mvc/Helper/FrameworkServiceExtension.cs)
+6. [src/WalkingTec.Mvvm.Mvc/Helper/WtmMiddleware.cs](~/.openclaw/shared/projects/WTM/src/WalkingTec.Mvvm.Mvc/Helper/WtmMiddleware.cs)
+7. [src/WalkingTec.Mvvm.Mvc/_AnalysisController.cs](~/.openclaw/shared/projects/WTM/src/WalkingTec.Mvvm.Mvc/_AnalysisController.cs)
+8. [docs/analysis-mode.md](~/.openclaw/shared/projects/WTM/docs/analysis-mode.md)
 
 ---
 
