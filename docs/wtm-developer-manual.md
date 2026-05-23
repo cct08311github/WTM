@@ -1,8 +1,8 @@
 # WTM 開發與使用手冊
 
-> **版本**：10.5.2 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-05-17
+> **版本**：10.5.3 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-05-23
 >
-> **10.5.2 重點**（security-focused）：修補 P0 RBAC 提權（`BatchAssignRoles`）、JWT no-`exp` 永久 token 漏洞、URL `access_token` 洩漏、登入 timing-side-channel 帳號列舉、檔案讀刪 path traversal、CSP report bucket 無上限成長。新增 26 個 regression 測試。詳見 `CHANGELOG.md`。
+> **10.5.3 重點**（patch）：`PropertyHelper` + `AnalysisFieldScanner` 反射 hot path 加 `ConcurrentDictionary` cache，BDN 實測 18×–135× 加速、消除 per-call allocation；`GetCleanCrudVM` 內層 copy loop 補 `CanWrite` 守衛，修復遇 computed get-only property（如 `TopBasePoco.IsBasePoco`）丟 `ArgumentException` 中斷複製的 bug。內部另含 7 個 coverage test PR（Phase 1-7，~1,270 新測試，codebase line coverage ~40%→~50%、Core ~55%→~70%）。詳見 `CHANGELOG.md`。
 
 WalkingTec MVVM Framework (WTM) 是一套 ASP.NET Core 快速開發框架，以四種 ViewModel 類型為核心，搭配內建代碼生成器、LayUI TagHelper、Analysis Mode、ETL 模組（含可視化儀表板）與 Dashboard，提供完整的企業級 CRUD 開發體驗。
 
@@ -4354,7 +4354,7 @@ public class ProductVM : BaseCRUDVM<Product>
 ```xml
 <Project>
   <PropertyGroup>
-    <VersionPrefix>10.3.0</VersionPrefix>
+    <VersionPrefix>10.5.3</VersionPrefix>
   </PropertyGroup>
 </Project>
 ```

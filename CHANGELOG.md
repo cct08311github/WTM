@@ -2,9 +2,45 @@
 
 ## [Unreleased]
 
+## [10.5.3] - 2026-05-23
+
+Patch release: one significant performance improvement to reflection
+hot paths and one bug fix discovered during a coverage audit. No new
+features, no breaking changes.
+
+Locally verified: `dotnet build -c Release` → 0 errors;
+`dotnet test -c Release` → 3,394 pass / 0 fail; `dotnet list package
+--vulnerable --include-transitive` → 0 vulnerable.
+
+Bundled internally (not separately listed below as they have no user-
+facing behaviour change): seven coverage test PRs (#37, #39, #41, #43,
+#46, #48, #50; Phases 1–7, ~1,270 new tests) that lifted codebase line
+coverage from ~40% to ~50% and the `Core` project from ~55% to ~70%.
+
+### Performance
+
+- **Reflection + expression cache for hot paths** (#33, #34):
+  `PropertyHelper` and `AnalysisFieldScanner` now memoize per-type
+  reflection and compiled-expression results in `ConcurrentDictionary`.
+  Independently verified with BenchmarkDotNet (Apple M4, .NET 10.0.5,
+  ShortRun): **18× faster** on `AnalysisFieldScanner.ScanModel`, up to
+  **135× faster** on `PropertyHelper` getter paths, and per-call
+  allocation eliminated in three methods. Localizer behaviour is
+  unchanged — only the raw reflection/expression results are cached;
+  the localizer is still invoked per call so culture changes take
+  effect immediately.
+
 ### Fixes
 
-- Fix `GetCleanCrudVM` aborting the property copy loop when an entity has a computed get-only property (Closes #44)
+- **`GetCleanCrudVM` computed-property crash** (#44, #51): the inner
+  copy loop in `SystemExtension.GetCleanCrudVM` previously called
+  `PropertyInfo.SetValue` without checking `CanWrite`, throwing
+  `ArgumentException: Property set method not found` when iterating an
+  entity with a computed get-only property (e.g. `TopBasePoco.IsBasePoco`).
+  The crash aborted the entire copy loop, silently skipping every
+  property declared after the computed one. Added a `CanWrite` guard at
+  the top of the inner loop, matching the existing guard in the outer
+  loop. Regression tests added.
 
 ## [10.5.2] - 2026-05-17
 
