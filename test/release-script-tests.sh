@@ -61,7 +61,7 @@ EOF
 chmod +x "$FAKE_BIN/curl"
 
 export PATH="$FAKE_BIN:$PATH"
-export GITEA_TOKEN="fake-token-for-tests"
+export REGISTRY_TOKEN="fake-token-for-tests"
 export FAKE_GIT_LOG="$TMP_DIR/git.log"
 export FAKE_CURL_LOG="$TMP_DIR/curl.log"
 touch "$FAKE_GIT_LOG" "$FAKE_CURL_LOG"
@@ -77,14 +77,14 @@ run_case() {
 }
 
 run_case "dry-run same version" --dry-run 10.5.1 > "$TMP_DIR/out1.txt"
-grep -q '\[dry-run\] Would trigger Gitea Packages publish for 10.5.1' "$TMP_DIR/out1.txt"
+grep -q '\[dry-run\] Would trigger internal package registry publish for 10.5.1' "$TMP_DIR/out1.txt"
 if [[ -s "$FAKE_GIT_LOG" || -s "$FAKE_CURL_LOG" ]]; then
   echo "dry-run same version unexpectedly executed git/curl actions" >&2
   exit 1
 fi
 
 run_case "same version triggers workflow" 10.5.1 > "$TMP_DIR/out2.txt"
-grep -q 'Triggered Gitea Packages publish for 10.5.1' "$TMP_DIR/out2.txt"
+grep -q 'Triggered internal package registry publish for 10.5.1' "$TMP_DIR/out2.txt"
 grep -q 'dispatches' "$FAKE_CURL_LOG"
 
 : > "$FAKE_CURL_LOG"
@@ -92,7 +92,7 @@ grep -q 'dispatches' "$FAKE_CURL_LOG"
 
 run_case "dry-run version bump" --dry-run 10.5.2 beta.1 > "$TMP_DIR/out3.txt"
 grep -q '\[dry-run\] Would update VersionPrefix from 10.5.1 to 10.5.2' "$TMP_DIR/out3.txt"
-grep -q '\[dry-run\] Would trigger Gitea Packages publish for 10.5.2-beta.1' "$TMP_DIR/out3.txt"
+grep -q '\[dry-run\] Would trigger internal package registry publish for 10.5.2-beta.1' "$TMP_DIR/out3.txt"
 if [[ -s "$FAKE_GIT_LOG" || -s "$FAKE_CURL_LOG" ]]; then
   echo "dry-run version bump unexpectedly executed git/curl actions" >&2
   exit 1

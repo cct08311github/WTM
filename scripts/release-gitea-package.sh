@@ -16,13 +16,13 @@ Behavior:
   1. Updates VersionPrefix in version.props
   2. Commits the version change
   3. Pushes to origin/dotnet10
-  4. Triggers publish-nuget.yml on Gitea Actions
+  4. Triggers publish-nuget.yml on internal CI
 
 Notes:
   - If suffix is omitted, a stable release is published.
   - If suffix is provided, a pre-release is published as <version>-<suffix>.
   - --dry-run prints the actions without changing files or triggering workflows.
-  - Requires GITEA_TOKEN env var or export in ~/.gitea-token.
+  - Requires REGISTRY_TOKEN env var or export in <private-token-file>.
 EOF
 }
 
@@ -46,7 +46,7 @@ VERSION="$1"
 SUFFIX="${2:-}"
 BRANCH="dotnet10"
 VERSION_FILE="version.props"
-GITEA_API="https://mac-mini.tailde842d.ts.net/api/v1"
+GITEA_API="https://<internal-registry-host>/api/v1"
 GITEA_OWNER="chiu0831"
 GITEA_REPO="WTM"
 
@@ -71,22 +71,22 @@ if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
   exit 1
 fi
 
-# Resolve Gitea token: prefer env var, then ~/.gitea-token file
-if [[ -z "${GITEA_TOKEN:-}" ]]; then
+# Resolve internal infrastructure token: prefer env var, then <private-token-file> file
+if [[ -z "${REGISTRY_TOKEN:-}" ]]; then
   if [[ -f "$HOME/.gitea-token" ]]; then
     # shellcheck source=/dev/null
     source "$HOME/.gitea-token"
   fi
 fi
-if [[ -z "${GITEA_TOKEN:-}" ]]; then
-  echo "GITEA_TOKEN is not set. Set it as env var or put 'export GITEA_TOKEN=...' in ~/.gitea-token" >&2
+if [[ -z "${REGISTRY_TOKEN:-}" ]]; then
+  echo "REGISTRY_TOKEN is not set. Set it as env var or put 'export REGISTRY_TOKEN=...' in <private-token-file>" >&2
   exit 1
 fi
 
-# Verify Gitea reachability
-if ! curl -sf -H "Authorization: token ${GITEA_TOKEN}" \
+# Verify internal infrastructure reachability
+if ! curl -sf -H "Authorization: token ${REGISTRY_TOKEN}" \
     "${GITEA_API}/repos/${GITEA_OWNER}/${GITEA_REPO}" >/dev/null 2>&1; then
-  echo "Cannot reach Gitea API at ${GITEA_API}. Check token and network." >&2
+  echo "Cannot reach internal infrastructure API at ${GITEA_API}. Check token and network." >&2
   exit 1
 fi
 
@@ -113,7 +113,7 @@ trigger_gitea_workflow() {
     payload="{\"ref\":\"${ref}\",\"inputs\":{}}"
   fi
   curl -sf -X POST \
-    -H "Authorization: token ${GITEA_TOKEN}" \
+    -H "Authorization: token ${REGISTRY_TOKEN}" \
     -H "Content-Type: application/json" \
     -d "$payload" \
     "${GITEA_API}/repos/${GITEA_OWNER}/${GITEA_REPO}/actions/workflows/publish-nuget.yml/dispatches"
@@ -123,17 +123,17 @@ if [[ "$CURRENT_VERSION" == "$VERSION" ]]; then
   echo "VersionPrefix is already $VERSION"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     if [[ -n "$SUFFIX" ]]; then
-      echo "[dry-run] Would trigger Gitea Packages publish for $VERSION-$SUFFIX"
+      echo "[dry-run] Would trigger internal package registry publish for $VERSION-$SUFFIX"
     else
-      echo "[dry-run] Would trigger Gitea Packages publish for $VERSION"
+      echo "[dry-run] Would trigger internal package registry publish for $VERSION"
     fi
     exit 0
   fi
   trigger_gitea_workflow "$BRANCH" "$SUFFIX"
   if [[ -n "$SUFFIX" ]]; then
-    echo "Triggered Gitea Packages publish for $VERSION-$SUFFIX"
+    echo "Triggered internal package registry publish for $VERSION-$SUFFIX"
   else
-    echo "Triggered Gitea Packages publish for $VERSION"
+    echo "Triggered internal package registry publish for $VERSION"
   fi
   exit 0
 fi
@@ -143,9 +143,9 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "[dry-run] Would commit: chore: release $VERSION"
   echo "[dry-run] Would push to origin/$BRANCH"
   if [[ -n "$SUFFIX" ]]; then
-    echo "[dry-run] Would trigger Gitea Packages publish for $VERSION-$SUFFIX"
+    echo "[dry-run] Would trigger internal package registry publish for $VERSION-$SUFFIX"
   else
-    echo "[dry-run] Would trigger Gitea Packages publish for $VERSION"
+    echo "[dry-run] Would trigger internal package registry publish for $VERSION"
   fi
   exit 0
 fi
@@ -175,7 +175,7 @@ git push origin "$BRANCH"
 
 trigger_gitea_workflow "$BRANCH" "$SUFFIX"
 if [[ -n "$SUFFIX" ]]; then
-  echo "Triggered Gitea Packages publish for $VERSION-$SUFFIX"
+  echo "Triggered internal package registry publish for $VERSION-$SUFFIX"
 else
-  echo "Triggered Gitea Packages publish for $VERSION"
+  echo "Triggered internal package registry publish for $VERSION"
 fi
