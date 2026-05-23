@@ -70,7 +70,7 @@ gh issue edit NNN --repo cct08311github/WalkingTec.Mvvm --add-label "in-progress
 - [ ] **Step 3: Create feature branch**
 
 ```bash
-cd /Users/openclaw/.openclaw/shared/projects/WTM
+cd ~/.openclaw/shared/projects/WTM
 git checkout dotnet8
 git pull origin dotnet8
 git checkout -b chore/issue-NNN-dotnet10-package-upgrade
