@@ -31,6 +31,15 @@ namespace WalkingTec.Mvvm.Core
 {
     public class WTMContext : IDisposable
     {
+        /// <summary>
+        /// Pre-computed BCrypt hash used to keep authentication response times
+        /// comparable when an ITCode does not exist. Prevents username
+        /// enumeration via timing-side-channel. The plaintext does not matter
+        /// — VerifyPassword will return Failed against any user-supplied password.
+        /// </summary>
+        private static readonly string _loginDecoyHash =
+            BCrypt.Net.BCrypt.HashPassword(Guid.NewGuid().ToString("N"));
+
         private HttpContext? _httpContext;
         public HttpContext? HttpContext { get => _httpContext; }
 
@@ -237,8 +246,9 @@ namespace WalkingTec.Mvvm.Core
                             // Signature validation failed — reject the token
                             return null!;
                         }
-                        catch (Exception)
+                        catch (Exception ex)
                         {
+                            ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("WTMContext")?.LogWarning(ex, "JWT token validation failed unexpectedly (non-signature error)");
                             return null!;
                         }
                     }
@@ -580,14 +590,14 @@ namespace WalkingTec.Mvvm.Core
             {
                 tenant = DC!.TenantCode;
             }
-            if (tenant == null && HttpContext!.User!.Identity!.IsAuthenticated)
+            if (tenant == null && HttpContext?.User?.Identity?.IsAuthenticated == true)
             {
                 tenant = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.TenantCode).Select(x => x.Value).FirstOrDefault() ?? tenant;
             }
             if (ConfigInfo?.HasMainHost == true && string.IsNullOrEmpty(tenant) == true)
             {
                 var remoteToken = _loginUserInfo?.RemoteToken ?? HttpContext?.Request.Query?.Where(x => x.Key == "_remotetoken").Select(x => x.Value.First()).FirstOrDefault();
-                if (HttpContext!.User!.Identity!.IsAuthenticated)
+                if (HttpContext?.User?.Identity?.IsAuthenticated == true)
                 {
                     remoteToken = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.RToken).Select(x => x.Value).FirstOrDefault();
                 }
@@ -628,7 +638,7 @@ namespace WalkingTec.Mvvm.Core
             else
             {
                 bool exist = false;
-                username = HttpContext!.User!.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject).Select(x => x.Value).FirstOrDefault() ?? username;
+                username = HttpContext?.User?.Claims?.Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject).Select(x => x.Value).FirstOrDefault() ?? username;
                 var ct = GlobaInfo?.AllTenant.Where(x => x.TCode == tenant).FirstOrDefault();
                 if(ct == null && string.IsNullOrEmpty(tenant) == false)
                 {
@@ -638,12 +648,14 @@ namespace WalkingTec.Mvvm.Core
                 {
                     _dc = ct.CreateDC(this);
                 }
-                if (HttpContext!.User!.Identity!.IsAuthenticated)
+                if (HttpContext?.User?.Identity?.IsAuthenticated == true)
                 {
+                    // IgnoreQueryFilters: cross-tenant user existence probe during login
                     exist = BaseUserQuery!.IgnoreQueryFilters().Any(x => x.ITCode == username && x.TenantCode == tenant && x.IsValid==true);
                 }
                 else
                 {
+                    // IgnoreQueryFilters: cross-tenant password lookup during anonymous login
                     var userRecord = BaseUserQuery!.IgnoreQueryFilters()
                         .Where(x => x.ITCode == username &&
                                     x.TenantCode == tenant &&
@@ -663,6 +675,7 @@ namespace WalkingTec.Mvvm.Core
                             exist = true;
                             if (verifyResult == PasswordVerifyResult.SuccessRehashNeeded)
                             {
+                                // IgnoreQueryFilters: load full user record across tenants after verification
                                 var fullUser = BaseUserQuery.IgnoreQueryFilters()
                                     .FirstOrDefault(x => x.ITCode == username &&
                                                          x.TenantCode == tenant);
@@ -673,6 +686,14 @@ namespace WalkingTec.Mvvm.Core
                                 }
                             }
                         }
+                    }
+                    else
+                    {
+                        // Discarded BCrypt to keep response timing comparable with the
+                        // user-exists / wrong-password path. Prevents username enumeration
+                        // via timing-side-channel.
+                        _ = PasswordHashHelper.VerifyPassword(_loginDecoyHash, password);
+                        exist = false;
                     }
                 }
                 if (exist == false)
@@ -857,6 +878,7 @@ params string[] groupcode)
                     var dbtenant = GlobaInfo?.AllTenant?.Where(x => x.TCode == tenant && x.IsUsingDB == true).FirstOrDefault();
                     using (var dc = dbtenant == null ? ConfigInfo?.Connections?.Where(x => x.Key.ToLower() == "default").FirstOrDefault()?.CreateDC() : dbtenant.CreateDC(this))
                     {
+                        // IgnoreQueryFilters: global tenant-group cache populated cross-filter
                         groups = dc?.Set<FrameworkGroup>().IgnoreQueryFilters().Where(x => x.TenantCode == tenant).Select(x => new SimpleGroup
                         {
                             ID = x.ID,
@@ -868,8 +890,9 @@ params string[] groupcode)
                         }).ToList();
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
+                    ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("WTMContext")?.LogWarning(ex, "Failed to load tenant groups for tenant {Tenant}; returning empty list (cached for 6 minutes)", tenant);
                     groups = [];
                 }
                 return groups;
@@ -892,6 +915,7 @@ params string[] groupcode)
                     var dbtenant = GlobaInfo?.AllTenant?.Where(x => x.TCode == tenant && x.IsUsingDB == true).FirstOrDefault();
                     using (var dc = dbtenant == null ? ConfigInfo?.Connections?.Where(x => x.Key.ToLower() == "default").FirstOrDefault()?.CreateDC() : dbtenant.CreateDC(this))
                     {
+                        // IgnoreQueryFilters: global tenant-role cache populated cross-filter
                         roles = dc?.Set<FrameworkRole>().IgnoreQueryFilters().Where(x => x.TenantCode == tenant).Select(x => new SimpleRole
                         {
                             ID = x.ID,
@@ -901,8 +925,9 @@ params string[] groupcode)
                         }).ToList();
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
+                    ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("WTMContext")?.LogWarning(ex, "Failed to load tenant roles for tenant {Tenant}; returning empty list (cached for 6 minutes)", tenant);
                     roles = [];
                 }
                 return roles;

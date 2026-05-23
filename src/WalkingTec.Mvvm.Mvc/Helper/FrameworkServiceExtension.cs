@@ -710,30 +710,20 @@ namespace WalkingTec.Mvvm.Mvc
 
                              ValidateIssuerSigningKey = true,
                              IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.SecurityKey)),
-                             LifetimeValidator = (DateTime? notBefore, DateTime? expires, SecurityToken securityToken, TokenValidationParameters validationParameters) =>
-                             {
-                                 if (expires == null)
-                                 {
-                                     return true;
-                                 }
-                                 else
-                                 {
-                                     return expires.Value > DateTime.UtcNow;
-                                 }
-                             },
+                             LifetimeValidator = ValidateJwtLifetime,
                              ValidateLifetime = true
                          };
                          options.Events = new JwtBearerEvents
                          {
                              OnMessageReceived = context =>
                              {
+                                 // Only honor query-string tokens on WebSocket upgrade requests, where
+                                 // clients cannot set Authorization headers. Normal HTTP requests with
+                                 // ?access_token=… are ignored to prevent URL/log/Referer leakage.
                                  var accessToken = context.Request.Query["access_token"];
-
-                                 // If the request is for our hub...
-                                 var path = context.HttpContext.Request.Path;
-                                 if (!string.IsNullOrEmpty(accessToken))
+                                 if (!string.IsNullOrEmpty(accessToken)
+                                     && context.HttpContext.WebSockets.IsWebSocketRequest)
                                  {
-                                     // Read the token out of the query string
                                      context.Token = accessToken;
                                  }
                                  return Task.CompletedTask;
@@ -937,8 +927,10 @@ namespace WalkingTec.Mvvm.Mvc
                             {
                                 var set = dc.GetType().GetMethod("Set", Type.EmptyTypes).MakeGenericMethod(cusTenantType);
                                 var q = set.Invoke(dc, null) as IQueryable<FrameworkTenant>;
+                                // IgnoreQueryFilters: bootstrap global tenant list across filter scopes
                                 tenants = q.IgnoreQueryFilters().Where(x => x.Enabled).ToList();
                             }
+                            // IgnoreQueryFilters: bootstrap global tenant list across filter scopes
                             var _all = dc.Set<FrameworkTenant>().IgnoreQueryFilters().Where(x => x.Enabled).ToList();
                             foreach (var item in _all)
                             {
@@ -1191,6 +1183,27 @@ namespace WalkingTec.Mvvm.Mvc
             app.UseHealthChecks(readyPath, readyOptions);
 
             return app;
+        }
+
+        /// <summary>
+        /// JWT lifetime validator used in the primary auth pipeline.
+        /// Rejects tokens that have no <c>exp</c> claim or whose <c>nbf</c> claim
+        /// is in the future (with a small clock-skew tolerance). Exposed as
+        /// <c>internal static</c> so unit tests can verify the logic directly.
+        /// </summary>
+        internal static bool ValidateJwtLifetime(
+            DateTime? notBefore,
+            DateTime? expires,
+            SecurityToken securityToken,
+            TokenValidationParameters validationParameters)
+        {
+            // A token with no `exp` claim is rejected (matches Microsoft default when
+            // RequireExpirationTime=true). Pre-`nbf` tokens are also rejected.
+            var now = DateTime.UtcNow;
+            var skew = validationParameters?.ClockSkew ?? TimeSpan.FromSeconds(5);
+            if (expires == null) return false;
+            if (notBefore.HasValue && notBefore.Value > now + skew) return false;
+            return expires.Value > now - skew;
         }
 
     }

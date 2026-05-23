@@ -7,6 +7,7 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Analysis;
 
@@ -18,6 +19,9 @@ namespace WalkingTec.Mvvm.Core.Analysis
     /// </summary>
     public class AnalysisQueryEngine
     {
+        private static readonly ILogger? _logger =
+            CoreProgram.GetLogger(nameof(AnalysisQueryEngine));
+
         private readonly GroupByStrategyResolver _resolver;
         private readonly IAnalysisCache? _cache;
         private readonly TimeSpan _defaultTtl;
@@ -856,7 +860,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     insights.Add($"本期最高: {top.DimLabel} ({measureLabel} = {FormatNumber(top.Value)})");
                 }
             }
-            catch { /* skip silently — heuristic is best-effort */ }
+            catch (Exception ex)
+            {
+                _logger?.LogDebug(ex, "AnalysisQueryEngine insight skipped: top performer");
+            }
 
             // 2. Bottom performer (only when ≥ 2 samples; with 1 sample
             // it duplicates the Top line).
@@ -868,7 +875,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     insights.Add($"本期最低: {bottom.DimLabel} ({measureLabel} = {FormatNumber(bottom.Value)})");
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger?.LogDebug(ex, "AnalysisQueryEngine insight skipped: lowest sample");
+            }
 
             // 3. Period-over-period leaders (only when CompareWith on)
             try
@@ -900,7 +910,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger?.LogDebug(ex, "AnalysisQueryEngine insight skipped: P-o-P leaders");
+            }
 
             // 4. Pareto concentration: do the top 20% of groups carry
             // ≥ 80% of total? Skip when fewer than 5 groups (Pareto
@@ -924,7 +937,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger?.LogDebug(ex, "AnalysisQueryEngine insight skipped: Pareto concentration");
+            }
 
             // 5. Outliers (z-score > 2). Skip when N < 4 — population
             // stddev on tiny samples is noise.
@@ -951,7 +967,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger?.LogDebug(ex, "AnalysisQueryEngine insight skipped: z-score outliers");
+            }
 
             return insights;
 

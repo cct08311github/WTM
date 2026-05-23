@@ -47,6 +47,19 @@ namespace WalkingTec.Mvvm.Mvc
             "<script>.*?</script>",
             RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
 
+        /// <summary>
+        /// Returns true if the authenticated caller has the "Admin" role in their
+        /// current tenant. Used to gate framework-controller endpoints that are
+        /// marked [AllRights] but in fact require admin authority — see #30.
+        /// </summary>
+        internal bool CallerIsAdmin()
+        {
+            var roles = Wtm?.LoginUserInfo?.Roles;
+            if (roles == null) return false;
+            return roles.Any(r => string.Equals(
+                r.RoleCode, "Admin", StringComparison.OrdinalIgnoreCase));
+        }
+
 
 
 
@@ -864,6 +877,7 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpPost]
         public async Task<IActionResult> BatchAssignRoles(string roleCode, string[] userCodes)
         {
+            if (!CallerIsAdmin()) return Forbid();
             if (string.IsNullOrWhiteSpace(roleCode) || userCodes == null || userCodes.Length == 0)
                 return BadRequest();
 
@@ -893,6 +907,7 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpPost]
         public async Task<ActionResult> RemoveUserCacheByAccount(string[] itcode)
         {
+            if (!CallerIsAdmin()) return Forbid();
             await Wtm.RemoveUserCache(itcode);
             return Ok();
         }
@@ -901,6 +916,7 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpPost]
         public async Task<ActionResult> RemoveUserCacheByRole(string[] rolecode)
         {
+            if (!CallerIsAdmin()) return Forbid();
             await Wtm.RemoveUserCacheByRole(rolecode);
             return Ok();
         }
@@ -909,6 +925,7 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpPost]
         public async Task<ActionResult> RemoveUserCacheByGroup(string[] groupcode)
         {
+            if (!CallerIsAdmin()) return Forbid();
             await Wtm.RemoveUserCacheByGroup(groupcode);
             return Ok();
         }

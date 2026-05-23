@@ -57,7 +57,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
                 Assert.AreEqual(schooltype, rv[0].SchoolType);
                 Assert.AreEqual(remark, rv[0].Remark);
                 Assert.AreEqual("schooluser", rv[0].CreateBy);
-                Assert.IsTrue(DateTime.Now.Subtract(rv[0].CreateTime!.Value).Seconds < 10);
+                Assert.IsTrue(DateTime.Now.Subtract(rv[0].CreateTime!.Value).TotalSeconds < 10);
             }
             Assert.IsTrue(_schoolvm.MSD.Count == 0);
         }
@@ -104,7 +104,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
                 Assert.AreEqual(schooltype, rv[0].SchoolType);
                 Assert.AreEqual(remark, rv[0].Remark);
                 Assert.AreEqual("schooluser", rv[0].UpdateBy);
-                Assert.IsTrue(DateTime.Now.Subtract(rv[0].UpdateTime!.Value).Seconds < 10);
+                Assert.IsTrue(DateTime.Now.Subtract(rv[0].UpdateTime!.Value).TotalSeconds < 10);
             }
         }
 
@@ -151,7 +151,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
                 Assert.AreEqual(SchoolTypeEnum.PRI, rv[0].SchoolType);
                 Assert.AreEqual("default", rv[0].Remark);
                 Assert.AreEqual("schooluser", rv[0].UpdateBy);
-                Assert.IsTrue(DateTime.Now.Subtract(rv[0].UpdateTime!.Value).Seconds < 10);
+                Assert.IsTrue(DateTime.Now.Subtract(rv[0].UpdateTime!.Value).TotalSeconds < 10);
             }
         }
 
@@ -212,7 +212,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
                 var rv = context.Set<Student>().IgnoreQueryFilters().ToList()[0];
                 Assert.AreEqual(false, rv.IsValid);
                 Assert.AreEqual("studentuser", rv.UpdateBy);
-                Assert.IsTrue(DateTime.Now.Subtract(rv.UpdateTime!.Value).Seconds < 10);
+                Assert.IsTrue(DateTime.Now.Subtract(rv.UpdateTime!.Value).TotalSeconds < 10);
             }
         }
 
@@ -286,7 +286,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             Assert.AreEqual(MajorTypeEnum.Required, rv[1].MajorType);
 
             Assert.AreEqual("schooluser", context.Set<School>().First().CreateBy);
-            Assert.IsTrue(DateTime.Now.Subtract(context.Set<School>().First().CreateTime!.Value).Seconds < 10);
+            Assert.IsTrue(DateTime.Now.Subtract(context.Set<School>().First().CreateTime!.Value).TotalSeconds < 10);
         }
 
         // ─── One-to-Many Edit ─────────────────────────────────────────────────
@@ -473,7 +473,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
                 var rv2 = context.Set<GoodsCatalog>().IgnoreQueryFilters().ToList()[0];
                 Assert.AreEqual(true, rv2.IsValid);
 
-                Assert.IsTrue(DateTime.Now.Subtract(rv.UpdateTime!.Value).Seconds < 10);
+                Assert.IsTrue(DateTime.Now.Subtract(rv.UpdateTime!.Value).TotalSeconds < 10);
             }
         }
 
@@ -520,7 +520,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
                 Assert.AreEqual(false, rv.IsValid);
                 Assert.AreEqual("goodcatalogsuser", rv.UpdateBy);
 
-                Assert.IsTrue(DateTime.Now.Subtract(rv.UpdateTime!.Value).Seconds < 10);
+                Assert.IsTrue(DateTime.Now.Subtract(rv.UpdateTime!.Value).TotalSeconds < 10);
             }
         }
     }

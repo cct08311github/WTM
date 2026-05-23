@@ -2,6 +2,159 @@
 
 ## [Unreleased]
 
+## [10.5.3] - 2026-05-23
+
+Patch release: one significant performance improvement to reflection
+hot paths and one bug fix discovered during a coverage audit. No new
+features, no breaking changes.
+
+Locally verified: `dotnet build -c Release` → 0 errors;
+`dotnet test -c Release` → 3,394 pass / 0 fail; `dotnet list package
+--vulnerable --include-transitive` → 0 vulnerable.
+
+Bundled internally (not separately listed below as they have no user-
+facing behaviour change): seven coverage test PRs (#37, #39, #41, #43,
+#46, #48, #50; Phases 1–7, ~1,270 new tests) that lifted codebase line
+coverage from ~40% to ~50% and the `Core` project from ~55% to ~70%.
+
+### Performance
+
+- **Reflection + expression cache for hot paths** (#33, #34):
+  `PropertyHelper` and `AnalysisFieldScanner` now memoize per-type
+  reflection and compiled-expression results in `ConcurrentDictionary`.
+  Independently verified with BenchmarkDotNet (Apple M4, .NET 10.0.5,
+  ShortRun): **18× faster** on `AnalysisFieldScanner.ScanModel`, up to
+  **135× faster** on `PropertyHelper` getter paths, and per-call
+  allocation eliminated in three methods. Localizer behaviour is
+  unchanged — only the raw reflection/expression results are cached;
+  the localizer is still invoked per call so culture changes take
+  effect immediately.
+
+### Fixes
+
+- **`GetCleanCrudVM` computed-property crash** (#44, #51): the inner
+  copy loop in `SystemExtension.GetCleanCrudVM` previously called
+  `PropertyInfo.SetValue` without checking `CanWrite`, throwing
+  `ArgumentException: Property set method not found` when iterating an
+  entity with a computed get-only property (e.g. `TopBasePoco.IsBasePoco`).
+  The crash aborted the entire copy loop, silently skipping every
+  property declared after the computed one. Added a `CanWrite` guard at
+  the top of the inner loop, matching the existing guard in the outer
+  loop. Regression tests added.
+
+## [10.5.2] - 2026-05-17
+
+Security-focused release driven by a deep bug-hunt audit. Six issues
+(#20, #22, #24, #26, #28, #30) fixed across six merged PRs (#21, #23,
+#25, #27, #29, #31). Highest-impact change is closing a P0 privilege-
+escalation in `_FrameworkController.BatchAssignRoles`.
+
+Locally verified: `dotnet build -c Release` → 0 errors;
+`dotnet test -c Release` → 2061 pass / 0 fail (baseline 2035 + 26 new
+regression tests across the six PRs);
+`dotnet list package --vulnerable --include-transitive` → 0 vulnerable.
+
+### Security
+
+- **P0 RBAC bypass fix** (#30, #31): `_FrameworkController.BatchAssignRoles`
+  was marked `[AllRights]`, allowing any authenticated user to grant
+  themselves any role (privilege escalation to admin). Added runtime
+  admin check that returns 403 for non-admin callers. Same guard added
+  to the three `RemoveUserCacheBy*` cache-invalidation endpoints.
+- **JWT lifetime hardening** (#24, #25): reject JWTs missing an `exp`
+  claim or with a future `nbf` claim in the primary auth pipeline.
+  Previously, the custom `LifetimeValidator` silently treated no-`exp`
+  tokens as valid forever, undermining `ValidateLifetime`. Tokens
+  issued by `TokenService` are unaffected since they always include
+  `exp`.
+- **JWT query-token scoping** (#24, #25): narrow JWT query-string token
+  acceptance to WebSocket upgrade requests only. Prevents
+  `?access_token=…` leaking into HTTP logs, browser history, and
+  `Referer` headers on regular HTTP requests.
+- **Login timing-side-channel** (#26, #27): `DoLoginAsync` now performs
+  a discarded BCrypt comparison when the ITCode does not exist, keeping
+  response times comparable with the user-exists / wrong-password path.
+  Previously, the timing gap (~5 ms vs ~100 ms) let attackers enumerate
+  valid ITCodes over the network.
+- **File path-traversal defense-in-depth** (#22, #23):
+  `WtmLocalFileHandler.GetFileData` and `DeleteFile` now validate the
+  resolved path stays inside a configured upload root, matching the
+  guard that already applied to `Upload()`. Closes a defense-in-depth
+  gap when `FileAttachment.Path` is poisoned via another vector.
+- **MD5 legacy compare constant-time** (#22, #23):
+  `PasswordHashHelper` MD5 migration branch now uses
+  `CryptographicOperations.FixedTimeEquals` instead of `string.Equals`.
+- **CSP report bucket eviction** (#26, #27):
+  `WtmCspReportMiddleware` evicts empty rate-limit buckets older than
+  60 s instead of accumulating one entry per distinct client IP for
+  the lifetime of the process. Prevents unbounded `ConcurrentDictionary`
+  growth under hostile traffic.
+
+### Fixed
+
+- **Triple-`!` null-forgiving chains in `WTMContext.DoLoginAsync`**
+  (#20, #21): replaced 4 chains (`HttpContext!.User!.Identity!`) with
+  `?.` null-safe equivalents. Resolves a CLAUDE.md red-line violation
+  and removes the NRE risk when `WTMContext` is used from non-HTTP
+  contexts (background jobs, MockWtmContext).
+- **Silent catches in `WtmFileProvider.GetFile` and
+  `BaseCRUDVM.DoRealDelete[Async]`** (#20, #21): now log the swallowed
+  exception via `ILogger.LogWarning` / `LogError` instead of discarding
+  it. Improves admin triage for delete failures.
+
+### Tests
+
+- **47 `TimeSpan.Seconds` → `TotalSeconds` corrections** (#28, #29):
+  test assertions used the seconds component (0-59) when total elapsed
+  was intended. Tests fail on slow CI (≥10 s) and silently pass when
+  duration is 60-69 s. All occurrences in `BaseCRUDVM*Test`,
+  `FrameworkUser*Test`, `FrameworkRoleApiTest` files corrected.
+- New test files added by the six PRs (31 new tests total):
+  `BatchAssignRolesRbacTests.cs`, `JwtLifetimeValidatorTests.cs`,
+  `LoginTimingSideChannelTests.cs`,
+  `WtmCspReportRateBucketEvictionTests.cs`,
+  `WtmLocalFileHandlerPathTraversalTests.cs`, plus expanded
+  `PasswordHashHelperTests.cs`.
+
+### Documentation
+
+- 11 `IgnoreQueryFilters()` call sites now carry rationale comments per
+  `.claude/rules/architecture.md` (#20, #21).
+
+## [10.5.1] - 2026-05-13
+
+Infra-only release. All NuGet publish and CI now run on Gitea; GitHub
+(github-archive mirror, nuget.pkg.github.com, GitHub Actions Marketplace)
+is fully retired. No source code changes — same binaries as 10.5.0.
+
+### Changed
+
+- **NuGet publish target** moved from `nuget.pkg.github.com/cct08311github/`
+  to Gitea NuGet registry (`/api/packages/chiu0831/nuget`).
+- **CI workflows** continue to live in `.github/workflows/` (Gitea Actions
+  reads this path natively); the publish secret is now `PAT_TOKEN`.
+- **`common.props`** `RepositoryUrl` / `PackageProjectUrl` now point to the
+  Gitea repo URL.
+- **`scripts/release-github-package.sh`** renamed to
+  `scripts/release-gitea-package.sh`; internals rewritten from `gh` CLI to
+  `curl` against the Gitea API.
+- **`e2e-test.yml`** dropped the `mikepenz/action-junit-report` step
+  (GitHub Marketplace-only action). E2E artifacts continue to upload via
+  `actions/upload-artifact`.
+
+### Added
+
+- **`scripts/publish-to-gitea.sh`** — local manual publish fallback used
+  when the Gitea Actions runner is unavailable. Supports `--suffix
+  <pre-release>` and `--dry-run`. Token sourced from the `GITEA_TOKEN`
+  environment variable or `~/.gitea-token`.
+
+### Security
+
+- `scripts/publish-to-gitea.sh` masks the Gitea token in `--dry-run`
+  output (`<prefix>***`) instead of echoing the full secret. Real
+  execution still passes the full token to `dotnet nuget push`.
+
 ## [10.5.0] - 2026-04-26
 
 Major feature release. 10 opt-in middleware/attributes (maintenance mode,

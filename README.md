@@ -4,14 +4,13 @@ English | [简体中文](./README.zh-CN.md)
 
 WalkingTec.Mvvm framework (WTM) is a rapid development framework based on .NET 10. It supports LayUI, React, Vue 2/3, and Blazor. WTM has a built-in code generator to maximize development efficiency. It is a powerful tool for efficient web development.
 
-[![Build Status](https://github.com/cct08311github/WTM/actions/workflows/build.yml/badge.svg?branch=dotnet10)](https://github.com/cct08311github/WTM/actions/workflows/build.yml)
-[![GitHub license](https://img.shields.io/github/license/dotnetcore/WTM.svg)](https://github.com/dotnetcore/WTM/blob/master/LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## CI Build Status
 
 | Platform | Build Server | SDK | Branch | Status |
 | -------- | ------------ | ---- |--------|--------|
-| GitHub Actions | Ubuntu | .NET 10 | dotnet10 | [![Build Status](https://github.com/cct08311github/WTM/actions/workflows/build.yml/badge.svg?branch=dotnet10)](https://github.com/cct08311github/WTM/actions/workflows/build.yml) |
+| Gitea Actions | Ubuntu (act_runner 0.6.1) | .NET 10 | dotnet10 | see `.github/workflows/ci-build.yml` runs on Gitea |
 ## Nuget Packages
 
 Package name                              | Version                     | Downloads
@@ -25,20 +24,25 @@ Package name                              | Version                     | Downlo
 
 > 完整安裝指南與 DB 配置請見 [Getting Started](docs/getting-started.md)
 
-**1. 配置 GitHub Packages NuGet source**
+**1. 配置 Gitea NuGet source**
+
+需要一個有 `read:package` scope 的 Gitea PAT（可在 Gitea UI → Settings → Applications 建立）。
 
 ```bash
-dotnet nuget add source "https://nuget.pkg.github.com/cct08311github/index.json" \
-  --name github-wtm --username YOUR_GITHUB_USERNAME --password YOUR_GITHUB_TOKEN
+dotnet nuget add source "https://mac-mini.tailde842d.ts.net/api/packages/chiu0831/nuget/index.json" \
+  --name gitea-wtm --username YOUR_GITEA_USERNAME --password YOUR_GITEA_PAT \
+  --store-password-in-clear-text
 ```
 
 **2. 安裝套件**
 
 ```bash
-dotnet add package WalkingTec.Mvvm.Core --version 10.0.1 --source github-wtm
-dotnet add package WalkingTec.Mvvm.Mvc --version 10.0.1 --source github-wtm
-dotnet add package WalkingTec.Mvvm.TagHelpers.LayUI --version 10.0.1 --source github-wtm
+dotnet add package WalkingTec.Mvvm.Core --version 10.5.1 --source gitea-wtm
+dotnet add package WalkingTec.Mvvm.Mvc --version 10.5.1 --source gitea-wtm
+dotnet add package WalkingTec.Mvvm.TagHelpers.LayUI --version 10.5.1 --source gitea-wtm
 ```
+
+> 詳細安裝/發佈說明見 [`docs/gitea-packages.md`](docs/gitea-packages.md)
 
 **3. 最小 Program.cs**
 
@@ -104,10 +108,14 @@ Frame QQ communication group: 694148336(full), 892848149 (group2)
 ## Local Docs
 
 - [Getting Started 快速入門](./docs/getting-started.md)
+- [Production Readiness 評估](./docs/production-readiness.md) — 哪些場景可以上 prod、補強清單
+- [Dependency Management](./docs/dependency-management.md) — 套件版本政策、NU1510 雙意義警告、NPOI security pin
+- [CI Operations](./docs/ci-operations.md) — Gitea Actions 工作流、四大已知不相容、排錯 SOP
+- [WTM Developer Manual 開發手冊](./docs/wtm-developer-manual.md) — 18 章節完整參考
 - [WTM System Architecture Guide](./docs/system-architecture.md)
 - [WTM Analysis Mode Guide](./docs/analysis-mode.md)
-- [GitHub Packages Guide](./docs/github-packages.md)
-- [WTM 8.3 Roadmap](./docs/roadmap-8.3.md)
+- [Gitea Packages Guide](./docs/gitea-packages.md) — Gitea NuGet registry 安裝/發佈
+- [WTM 8.3 Roadmap](./docs/roadmap-8.3.md) (legacy)
 
 version 5.0x is in VNext branch
 

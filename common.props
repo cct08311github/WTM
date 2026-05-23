@@ -10,8 +10,8 @@
     <PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>
     <PackageLicenseFile>LICENSE</PackageLicenseFile>
     <PackageIcon>icon.png</PackageIcon>
-    <RepositoryUrl>https://github.com/dotnetcore/WTM</RepositoryUrl>
-    <PackageProjectUrl>https://github.com/dotnetcore/WTM</PackageProjectUrl>
+    <RepositoryUrl>https://mac-mini.tailde842d.ts.net/chiu0831/WTM</RepositoryUrl>
+    <PackageProjectUrl>https://mac-mini.tailde842d.ts.net/chiu0831/WTM</PackageProjectUrl>
     <PackageTags>aspnetcore, mvc, mvvm, layui, wtm</PackageTags>
     <PackageReleaseNotes>框架文档地址：https://wtmdoc.walkingtec.cn，QQ群：694148336</PackageReleaseNotes>
     <IncludeSource>false</IncludeSource>
@@ -55,9 +55,7 @@
     <SerilogAspNetCoreVersion>10.0.0</SerilogAspNetCoreVersion>
     <QuartzVersion>3.16.1</QuartzVersion>
     <NPOIVersion>2.7.6</NPOIVersion>
-    <!-- Issue #816: pin transitive System.Security.Cryptography.Xml to patched 10.0.6;
-         NPOI 2.7.6 pulls 8.0.2 which has 2 HIGH CVEs (GHSA-37gx-xxp4-5rgx, GHSA-w3x6-4m5h-cxqf).
-         Direct reference on WalkingTec.Mvvm.Core beats transitive. -->
+    <!-- Security pin for NPOI transitive — see Core.csproj Issue #816 note. -->
     <SystemSecurityCryptographyXmlVersion>10.0.6</SystemSecurityCryptographyXmlVersion>
     <ImageSharpVersion>3.1.12</ImageSharpVersion>
     <ImageSharpDrawingVersion>2.1.7</ImageSharpDrawingVersion>

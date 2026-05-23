@@ -1108,8 +1108,9 @@ namespace WalkingTec.Mvvm.Core
                     }
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                CoreProgram.GetLogger("BaseCRUDVM")?.LogError(ex, "DoRealDelete failed for {Entity} id={Id}", typeof(TModel).Name, Entity?.GetID());
                 MSD?.AddModelError("", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DeleteFailed"] ?? "" : "");
             }
         }
@@ -1168,8 +1169,9 @@ namespace WalkingTec.Mvvm.Core
                     }
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                CoreProgram.GetLogger("BaseCRUDVM")?.LogError(ex, "DoRealDeleteAsync failed for {Entity} id={Id}", typeof(TModel).Name, Entity?.GetID());
                 MSD?.AddModelError("", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DeleteFailed"] ?? "" : "");
             }
         }
@@ -1369,6 +1371,7 @@ namespace WalkingTec.Mvvm.Core
             if (checkCondition != null && checkCondition.Groups.Count > 0)
             {
                 //生成基础Query
+                // IgnoreQueryFilters: duplicate-check must see records across tenants/soft-deletes
                 var baseExp = DC!.Set<TModel>().IgnoreQueryFilters().AsQueryable();
                 var modelType = typeof(TModel);
                 ParameterExpression para = Expression.Parameter(modelType, "tm");

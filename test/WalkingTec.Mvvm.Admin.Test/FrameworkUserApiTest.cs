@@ -53,7 +53,7 @@ namespace WalkingTec.Mvvm.Admin.Test
                 var verifyResult = PasswordHashHelper.VerifyPassword(data.Password, "password");
                 Assert.AreNotEqual(PasswordVerifyResult.Failed, verifyResult);
                 Assert.AreEqual(data.CreateBy, "user");
-                Assert.IsTrue(DateTime.Now.Subtract(data.CreateTime.Value).Seconds < 10);
+                Assert.IsTrue(DateTime.Now.Subtract(data.CreateTime.Value).TotalSeconds < 10);
             }
 
         }
@@ -89,7 +89,7 @@ namespace WalkingTec.Mvvm.Admin.Test
                 Assert.AreEqual(data.ITCode, "itcode");
                 Assert.AreEqual(data.Name, "name1");
                 Assert.AreEqual(data.UpdateBy, "user");
-                Assert.IsTrue(DateTime.Now.Subtract(data.UpdateTime.Value).Seconds < 10);
+                Assert.IsTrue(DateTime.Now.Subtract(data.UpdateTime.Value).TotalSeconds < 10);
             }
 
         }

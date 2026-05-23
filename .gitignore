@@ -7,6 +7,7 @@ tc*.png
 coverage/
 **/coverage/
 **/lcov-report/
+nupkgs/
 
 demo/WalkingTec.Mvvm.Demo/wwwroot/layuiadminsrc
 .Publish/

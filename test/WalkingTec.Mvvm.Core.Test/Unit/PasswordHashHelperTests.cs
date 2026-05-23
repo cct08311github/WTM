@@ -189,5 +189,44 @@ namespace WalkingTec.Mvvm.Core.Test.Unit
             PasswordHashHelper.VerifyPassword(md5Hash, "wrong")
                 .Should().Be(PasswordVerifyResult.Failed);
         }
+
+        // ─── FixedTimeEquals MD5 branch (Issue #22) ───────────────────────────
+
+        [TestMethod]
+        public void VerifyPassword_LegacyMD5_CorrectPassword_ConstantTimeCompare_ReturnsRehashNeeded()
+        {
+            // Regression: constant-time compare must still return SuccessRehashNeeded
+            // for a correct password against its own MD5 hash (mirrors the
+            // string.Equals path it replaced — same semantics, safer implementation).
+            var md5Hash = PasswordHashHelper.ComputeMD5("000000");
+            PasswordHashHelper.VerifyPassword(md5Hash, "000000")
+                .Should().Be(PasswordVerifyResult.SuccessRehashNeeded,
+                    "correct MD5 match must return SuccessRehashNeeded for auto-migration");
+        }
+
+        [TestMethod]
+        public void VerifyPassword_LegacyMD5_WrongPassword_ConstantTimeCompare_ReturnsFailed()
+        {
+            // Constant-time compare must reject mismatched passwords without
+            // leaking timing information.
+            var md5Hash = PasswordHashHelper.ComputeMD5("000000");
+            PasswordHashHelper.VerifyPassword(md5Hash, "111111")
+                .Should().Be(PasswordVerifyResult.Failed,
+                    "wrong password must be rejected even with constant-time compare");
+        }
+
+        [TestMethod]
+        public void VerifyPassword_LegacyMD5_KnownVector_MatchesExpectedBehavior()
+        {
+            // Known-good vector: ensures the hex parsing step in TryParseHex is
+            // consistent with ComputeMD5 output (both uppercase hex).
+            const string password = "hunter2";
+            var storedHash = PasswordHashHelper.ComputeMD5(password);
+            storedHash.Should().HaveLength(32, "MD5 hex is always 32 uppercase chars");
+            PasswordHashHelper.VerifyPassword(storedHash, password)
+                .Should().Be(PasswordVerifyResult.SuccessRehashNeeded);
+            PasswordHashHelper.VerifyPassword(storedHash, "HUNTER2")
+                .Should().Be(PasswordVerifyResult.Failed, "case-sensitive compare");
+        }
     }
 }

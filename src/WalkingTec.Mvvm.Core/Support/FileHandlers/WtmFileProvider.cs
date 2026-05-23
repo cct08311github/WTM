@@ -151,6 +151,7 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
             {
                 dc = _wtm.CreateDC();
             }
+            // IgnoreQueryFilters: file metadata lookup is tenant-agnostic by ID
             rv = dc.Set<FileAttachment>().IgnoreQueryFilters().CheckID(id).Select(x => new FileAttachment
             {
                 ID = x.ID,
@@ -169,7 +170,9 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
                     var fh = CreateFileHandler(rv.SaveMode, dc);
                     rv.DataStream = fh.GetFileData(rv);
                 }
-                catch {
+                catch (Exception ex)
+                {
+                    CoreProgram.GetLogger("WtmFileProvider")?.LogWarning(ex, "GetFileData failed for FileAttachment '{FileId}' (name '{FileName}'); returning null", rv.GetID(), rv.FileName);
                     rv = null;
                 }
             }
@@ -184,6 +187,7 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
             {
                 dc = _wtm.CreateDC();
             }
+            // IgnoreQueryFilters: file metadata lookup is tenant-agnostic by ID
             file = dc.Set<FileAttachment>().IgnoreQueryFilters().CheckID(id)
                 .Select(x => new FileAttachment
                 {
@@ -222,6 +226,7 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
             {
                 dc = _wtm.CreateDC();
             }
+            // IgnoreQueryFilters: file metadata lookup is tenant-agnostic by ID
             rv = dc.Set<FileAttachment>().IgnoreQueryFilters().CheckID(id).Select(x => x.FileName).FirstOrDefault();
             if(rv == null)
             {
