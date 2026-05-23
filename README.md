@@ -1,5 +1,3 @@
-English | [简体中文](./README.zh-CN.md)
-
 # WalkingTec.Mvvm for asp.net core
 
 WalkingTec.Mvvm framework (WTM) is a rapid development framework based on .NET 10. It supports LayUI, React, Vue 2/3, and Blazor. WTM has a built-in code generator to maximize development efficiency. It is a powerful tool for efficient web development.
@@ -37,9 +35,9 @@ dotnet nuget add source "https://mac-mini.tailde842d.ts.net/api/packages/chiu083
 **2. 安裝套件**
 
 ```bash
-dotnet add package WalkingTec.Mvvm.Core --version 10.5.1 --source gitea-wtm
-dotnet add package WalkingTec.Mvvm.Mvc --version 10.5.1 --source gitea-wtm
-dotnet add package WalkingTec.Mvvm.TagHelpers.LayUI --version 10.5.1 --source gitea-wtm
+dotnet add package WalkingTec.Mvvm.Core --version 10.5.3 --source gitea-wtm
+dotnet add package WalkingTec.Mvvm.Mvc --version 10.5.3 --source gitea-wtm
+dotnet add package WalkingTec.Mvvm.TagHelpers.LayUI --version 10.5.3 --source gitea-wtm
 ```
 
 > 詳細安裝/發佈說明見 [`docs/gitea-packages.md`](docs/gitea-packages.md)
@@ -115,9 +113,6 @@ Frame QQ communication group: 694148336(full), 892848149 (group2)
 - [WTM System Architecture Guide](./docs/system-architecture.md)
 - [WTM Analysis Mode Guide](./docs/analysis-mode.md)
 - [Gitea Packages Guide](./docs/gitea-packages.md) — Gitea NuGet registry 安裝/發佈
-- [WTM 8.3 Roadmap](./docs/roadmap-8.3.md) (legacy)
-
-version 5.0x is in VNext branch
 
 ## Click <a href="http://wtmdoc.walkingtec.cn/setup">here</a>  to generate a WTM project online and experience the beauty of WTM immediately~~~
 
