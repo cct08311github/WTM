@@ -1,0 +1,108 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <!--
+    Central Package Management (CPM) — single source of truth for all NuGet versions.
+
+    Why CPM instead of MSBuild variable expansion via common.props:
+    On newer .NET 10 SDKs (GitHub-hosted ubuntu), <PackageReference> items are evaluated
+    BEFORE <Import> runs, so $(NPOIVersion) / $(EntityFrameworkCoreVersion) etc. expand
+    to empty strings, causing NU1015 errors or silent fallback to oldest version.
+    CPM evaluation is order-independent and SDK-patch-independent.
+
+    Version groups:
+      - Microsoft .NET 10 runtime packages: 10.0.4 (GA cadence)
+      - Blazor WebAssembly SDK packages: 10.0.5 (slightly ahead of runtime GA)
+      - Third-party: pinned to latest stable as of 2026-05
+      - DB providers: independent cadence, pinned explicitly
+      - Test packages: aligned with test/Directory.Build.props
+
+    Security overrides:
+      System.Security.Cryptography.Xml — direct pin at 10.0.6 to override
+      NPOI's transitive pull of 8.0.2 (GHSA-37gx-xxp4-5rgx, GHSA-w3x6-4m5h-cxqf).
+      NU1510 on this entry is EXPECTED (override working). See Issue #816.
+
+    Common.Logging — transitive from NPOI; pinned to 3.4.1 (.NET Standard 2.0)
+    to avoid malformed TFM in 1.2.0 that newer NuGet rejects with NU1202.
+  -->
+
+  <ItemGroup>
+    <!-- ===== Microsoft ASP.NET Core / EF Core (10.0.4) ===== -->
+    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.4" />
+    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="10.0.5" />
+    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.5" />
+    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="10.0.5" />
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.NewtonsoftJson" Version="10.0.4" />
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Razor.RuntimeCompilation" Version="10.0.4" />
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.4" />
+    <PackageVersion Include="Microsoft.AspNetCore.SpaServices.Extensions" Version="10.0.4" />
+    <PackageVersion Include="Microsoft.Data.SqlClient" Version="6.1.1" />
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.4" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.4" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.4" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.4" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.4" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="10.0.4" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.4" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.0.0" />
+
+    <!-- ===== DB Providers (independent cadence) ===== -->
+    <PackageVersion Include="MySql.EntityFrameworkCore" Version="10.0.1" />
+    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
+    <PackageVersion Include="Oracle.EntityFrameworkCore" Version="10.23.26100" />
+
+    <!-- ===== Third-party framework packages ===== -->
+    <PackageVersion Include="Aliyun.OSS.SDK.NetCore" Version="2.13.0" />
+    <PackageVersion Include="Asp.Versioning.Mvc" Version="8.1.1" />
+    <PackageVersion Include="Asp.Versioning.Mvc.ApiExplorer" Version="8.1.1" />
+    <PackageVersion Include="BCrypt.Net-Next" Version="4.1.0" />
+    <PackageVersion Include="DUWENINK.Captcha" Version="0.8.0" />
+    <PackageVersion Include="Fare" Version="2.2.1" />
+    <PackageVersion Include="NPOI" Version="2.7.6" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.15.2" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.15.1" />
+    <PackageVersion Include="Quartz" Version="3.16.1" />
+    <PackageVersion Include="Serilog.AspNetCore" Version="10.0.0" />
+    <PackageVersion Include="SixLabors.ImageSharp" Version="3.1.12" />
+    <PackageVersion Include="SixLabors.ImageSharp.Drawing" Version="2.1.7" />
+    <PackageVersion Include="Swashbuckle.AspNetCore.Swagger" Version="10.1.5" />
+    <PackageVersion Include="Swashbuckle.AspNetCore.SwaggerGen" Version="10.1.5" />
+    <PackageVersion Include="Swashbuckle.AspNetCore.SwaggerUI" Version="10.1.5" />
+    <PackageVersion Include="VueCliMiddleware" Version="6.0.0" />
+
+    <!-- ===== Security overrides (transitive pins) ===== -->
+    <!--
+      Issue #816: NPOI transitively pulls System.Security.Cryptography.Xml 8.0.2
+      which has HIGH CVEs. Pinned to 10.0.6. NU1510 here is EXPECTED = override working.
+      See dependency-management.md § NU1510 section before removing this.
+    -->
+    <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.6" />
+    <!--
+      NPOI 1.2.3 (legacy compat shim) transitively pulls Common.Logging 1.2.0 which has
+      a malformed TFM that newer NuGet rejects with NU1202. Pinned to 3.4.1 (netstandard2.0).
+    -->
+    <PackageVersion Include="Common.Logging" Version="3.4.1" />
+    <PackageVersion Include="Common.Logging.Core" Version="3.4.1" />
+
+    <!-- ===== Blazor UI component packages ===== -->
+    <PackageVersion Include="BootstrapBlazor" Version="8.7.2" />
+    <PackageVersion Include="BootstrapBlazor.Chart" Version="8.1.5" />
+    <PackageVersion Include="BootstrapBlazor.SummerNote" Version="8.0.3" />
+
+    <!-- ===== Test packages ===== -->
+    <PackageVersion Include="BenchmarkDotNet" Version="0.14.0" />
+    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+    <PackageVersion Include="FluentAssertions" Version="6.12.2" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageVersion Include="Microsoft.TypeScript.MSBuild" Version="5.4.2" />
+    <PackageVersion Include="Moq" Version="4.20.72" />
+    <PackageVersion Include="MSTest.TestAdapter" Version="3.6.4" />
+    <PackageVersion Include="MSTest.TestFramework" Version="3.6.4" />
+  </ItemGroup>
+
+</Project>

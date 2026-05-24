@@ -1,44 +1,17 @@
 <Project>
   <!--
-    Root-level transitive overrides applied to every project in the solution.
+    Root Directory.Build.props — applies to all projects in the solution.
 
-    Context: NPOI 1.2.3 is a .NET Framework–era package used transitively by
-    the framework. Because it targets only .NET Framework, NuGet falls back to
-    the NU1701 compatibility shim but still carries its transitive dependencies.
-    Several of those deps conflict with .NET 10 / EF Core 10:
+    Package version management has migrated to Central Package Management (CPM).
+    All package versions are declared in Directory.Packages.props at the repo root.
+    Individual .csproj files use bare <PackageReference Include="X" /> without Version.
 
-    1. Common.Logging 1.2.0 — .nuspec declares a malformed TFM
-       "10 (1.0,Version=v0.0)" that newer NuGet rejects with NU1202.
-       Pinned via Include to 3.4.1 (.NETStandard 2.0). NPOI only uses the basic
-       LogManager.GetLogger API which is unchanged between 1.x and 3.x.
+    Transitive overrides that previously lived here as <PackageReference Include="..." Version="...">
+    (Common.Logging, Microsoft.EntityFrameworkCore.Relational, Microsoft.EntityFrameworkCore.Sqlite)
+    are now declared as <PackageVersion> entries in Directory.Packages.props.
+    CPM applies these version pins solution-wide without needing explicit references in every project.
 
-    2. Microsoft.EntityFrameworkCore.Relational 1.0.0 — dragged in via
-       an old transitive path through NPOI / Quartz 1.x, conflicting with
-       EFCore.Sqlite 10.0.4 which requires Relational >= 10.0.4 (NU1107).
-       Pinned via Include to 10.0.4. Projects that explicitly reference this
-       package (e.g. Core.csproj) will see a NU1504 "duplicate PackageReference"
-       warning — this is accepted. NuGet picks the higher version (10.0.4).
-
-    3. Microsoft.EntityFrameworkCore.Sqlite 1.0.0 — same ancient transitive
-       path as above; conflicts with Test.Mock which explicitly references
-       EFCore.Sqlite >= 10.0.4 (NU1107). Pinned via Include for the same reason.
-       NU1504 warning accepted.
-
-    WHY Include (NOT Update): Update in Directory.Build.props activates .NET 10
-    SDK Central Package Management (CPM) mode. CPM then requires every .csproj
-    to omit the Version attribute — but our .csproj files keep explicit versions,
-    causing NU1015 errors for all packages on GitHub-hosted runners. Include
-    avoids CPM activation; the duplicate-ref NU1504 warning is the accepted
-    trade-off. The long-term fix is migrating to Directory.Packages.props (CPM)
-    which requires updating every .csproj — out of scope for this CI fix.
-
-    These pins are intentional compatibility overrides (see also
-    dependency-management.md § NU1510 for why NU1510 warnings on these
-    entries should NOT be treated as "remove me" signals).
+    See dependency-management.md § NU1510 for the security-pin policy
+    (System.Security.Cryptography.Xml, Common.Logging).
   -->
-  <ItemGroup>
-    <PackageReference Include="Common.Logging" Version="3.4.1" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.4" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.4" />
-  </ItemGroup>
 </Project>

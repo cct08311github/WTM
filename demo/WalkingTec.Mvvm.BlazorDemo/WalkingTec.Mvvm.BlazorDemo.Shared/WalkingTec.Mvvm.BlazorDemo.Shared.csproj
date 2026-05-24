@@ -13,9 +13,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="BootstrapBlazor" Version="8.7.2" />
-    <PackageReference Include="BootstrapBlazor.Chart" Version="8.1.5" />
-    <PackageReference Include="BootstrapBlazor.SummerNote" Version="8.0.3" />
+    <PackageReference Include="BootstrapBlazor" />
+    <PackageReference Include="BootstrapBlazor.Chart" />
+    <PackageReference Include="BootstrapBlazor.SummerNote" />
   </ItemGroup>
 
   <ItemGroup>

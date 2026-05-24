@@ -38,7 +38,7 @@
     <TypeScriptCompile Remove="ClientApp\src\pages\frameworktenant\local.ts" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.TypeScript.MSBuild" Version="5.4.2">
+    <PackageReference Include="Microsoft.TypeScript.MSBuild">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>

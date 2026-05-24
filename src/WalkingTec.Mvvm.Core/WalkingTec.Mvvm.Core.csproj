@@ -17,9 +17,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Aliyun.OSS.SDK.NetCore" Version="2.13.0" />
-    <PackageReference Include="BCrypt.Net-Next" Version="4.1.0" />
-    <PackageReference Include="NPOI" Version="$(NPOIVersion)" />
+    <PackageReference Include="Aliyun.OSS.SDK.NetCore" />
+    <PackageReference Include="BCrypt.Net-Next" />
+    <PackageReference Include="NPOI" />
     <!--
       Issue #816 — pin vulnerable transitive from NPOI.
       NPOI's transitive pull of System.Security.Cryptography.Xml 8.0.2 has HIGH-severity
@@ -29,16 +29,16 @@
       DO NOT remove based on NU1510 — that signal is the EXPECTED positive side-effect
       of the override working. See commit 7b63587b and Issue #13 post-mortem.
     -->
-    <PackageReference Include="System.Security.Cryptography.Xml" Version="$(SystemSecurityCryptographyXmlVersion)" />
-    <PackageReference Include="Fare" Version="2.2.1" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="$(EntityFrameworkCoreVersion)" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="$(EntityFrameworkCoreVersion)" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="$(EntityFrameworkCoreVersion)" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="$(EntityFrameworkCoreVersion)" />
-    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
-    <PackageReference Include="Oracle.EntityFrameworkCore" Version="10.23.26100" />
-    <PackageReference Include="MySql.EntityFrameworkCore" Version="10.0.1" />
-    <PackageReference Include="Quartz" Version="$(QuartzVersion)" />
+    <PackageReference Include="System.Security.Cryptography.Xml" />
+    <PackageReference Include="Fare" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="Oracle.EntityFrameworkCore" />
+    <PackageReference Include="MySql.EntityFrameworkCore" />
+    <PackageReference Include="Quartz" />
   </ItemGroup>
 
   <ItemGroup>
