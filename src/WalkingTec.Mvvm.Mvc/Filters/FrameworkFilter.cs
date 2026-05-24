@@ -420,7 +420,7 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                 }
                 catch (Exception ex)
                 {
-                    context.HttpContext.RequestServices.GetService<ILogger<FrameworkFilter>>()?.LogWarning(ex, "Failed to write action log for '{ActionUrl}'", log.ActionUrl);
+                    context.HttpContext.RequestServices.GetService<ILogger<FrameworkFilter>>()?.LogWarning(ex, "Failed to write action log for '{ActionUrl}'", LogSanitizer.Sanitize(log.ActionUrl));
                 }
             }
             if (context.Exception != null)

@@ -654,7 +654,7 @@ namespace WalkingTec.Mvvm.Core
             }
             catch (Exception ex)
             {
-                CoreProgram.GetLogger("PropertyHelper")?.LogDebug(ex, "SetPropertyValue failed for '{Property}'", property);
+                CoreProgram.GetLogger("PropertyHelper")?.LogDebug(ex, "SetPropertyValue failed for '{Property}'", LogSanitizer.Sanitize(property));
             }
         }
 
@@ -866,7 +866,7 @@ namespace WalkingTec.Mvvm.Core
                 }
                 catch (Exception ex)
                 {
-                    CoreProgram.GetLogger("PropertyHelper")?.LogDebug(ex, "ConvertValue nullable-generic fallback for type '{Type}', value '{Value}'", propertyType.Name, value);
+                    CoreProgram.GetLogger("PropertyHelper")?.LogDebug(ex, "ConvertValue nullable-generic fallback for type '{Type}', value '{Value}'", propertyType.Name, LogSanitizer.Sanitize(value?.ToString()));
                 }
             }
             else if (propertyType.IsEnum())
@@ -926,7 +926,7 @@ namespace WalkingTec.Mvvm.Core
                 }
                 catch (Exception ex)
                 {
-                    CoreProgram.GetLogger("PropertyHelper")?.LogDebug(ex, "ConvertValue generic fallback for type '{Type}', value '{Value}'", propertyType.Name, value);
+                    CoreProgram.GetLogger("PropertyHelper")?.LogDebug(ex, "ConvertValue generic fallback for type '{Type}', value '{Value}'", propertyType.Name, LogSanitizer.Sanitize(value?.ToString()));
                 }
             }
             return val;
