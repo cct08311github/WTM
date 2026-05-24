@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   release-tooling-test:
+    if: github.repository != 'cct08311github/WTM'  # internal-tooling only, skipped on public GitHub mirror where scripts are excluded by .sync/ manifest
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5

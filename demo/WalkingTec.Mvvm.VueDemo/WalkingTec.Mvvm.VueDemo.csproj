@@ -44,14 +44,6 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
-    <!-- NPOI 1.2.3 transitively pulls Common.Logging 1.2.0, whose .nuspec
-         declares a malformed TFM "10 (1.0,Version=v0.0)" rejected by newer
-         NuGet (NU1202). Direct-pin to 3.4.1 (.NETStandard 2.0 compatible)
-         to override the transitive. The NPOI runtime call sites use only
-         basic LogManager.GetLogger API which is unchanged 1.x -> 3.x. -->
-    <PackageReference Include="Common.Logging" Version="3.4.1" />
-  </ItemGroup>
-  <ItemGroup>
     <ProjectReference Include="..\..\src\WalkingTec.Mvvm.Core\WalkingTec.Mvvm.Core.csproj" />
     <ProjectReference Include="..\..\src\WalkingTec.Mvvm.Mvc\WalkingTec.Mvvm.Mvc.csproj" />
     <ProjectReference Include="..\..\src\WalkingTec.Mvvm.TagHelpers.LayUI\WalkingTec.Mvvm.TagHelpers.LayUI.csproj" />
