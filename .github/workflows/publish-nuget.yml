@@ -18,7 +18,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     env:
-      PACKAGE_SOURCE: https://<internal-registry-host>/api/packages/chiu0831/nuget/index.json
+      PACKAGE_SOURCE: https://internal.registry.invalid/api/packages/chiu0831/nuget/index.json
 
     steps:
       - uses: actions/checkout@v5

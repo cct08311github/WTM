@@ -147,7 +147,7 @@ is fully retired. No source code changes — same binaries as 10.5.0.
 - **`scripts/publish-to-internal.sh`** — local manual publish fallback used
   when the internal CI runner is unavailable. Supports `--suffix
   <pre-release>` and `--dry-run`. Token sourced from the `REGISTRY_TOKEN`
-  environment variable or `<private-token-file>`.
+  environment variable or `.local-token-file`.
 
 ### Security
 

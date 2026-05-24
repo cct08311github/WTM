@@ -59,7 +59,7 @@ WTM 套件發佈於 internal NuGet registry。需先配置 NuGet source。
 ### 2.1 配置 internal NuGet source
 
 ```bash
-dotnet nuget add source "https://<internal-registry-host>/api/packages/chiu0831/nuget/index.json" \
+dotnet nuget add source "https://internal.registry.invalid/api/packages/chiu0831/nuget/index.json" \
   --name internal-feed \
   --username YOUR_REGISTRY_USERNAME \
   --password YOUR_REGISTRY_PAT \
