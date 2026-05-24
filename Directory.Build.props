@@ -15,26 +15,30 @@
     2. Microsoft.EntityFrameworkCore.Relational 1.0.0 — dragged in via
        an old transitive path through NPOI / Quartz 1.x, conflicting with
        EFCore.Sqlite 10.0.4 which requires Relational >= 10.0.4 (NU1107).
-       Uses Update (not Include) so projects that already reference this
-       package explicitly (e.g. Core.csproj) do not produce a NU1504 duplicate.
+       Pinned via Include to 10.0.4. Projects that explicitly reference this
+       package (e.g. Core.csproj) will see a NU1504 "duplicate PackageReference"
+       warning — this is accepted. NuGet picks the higher version (10.0.4).
 
     3. Microsoft.EntityFrameworkCore.Sqlite 1.0.0 — same ancient transitive
        path as above; conflicts with Test.Mock which explicitly references
-       EFCore.Sqlite >= 10.0.4 (NU1107). Uses Update for the same reason.
+       EFCore.Sqlite >= 10.0.4 (NU1107). Pinned via Include for the same reason.
+       NU1504 warning accepted.
+
+    WHY Include (NOT Update): Update in Directory.Build.props activates .NET 10
+    SDK Central Package Management (CPM) mode. CPM then requires every .csproj
+    to omit the Version attribute — but our .csproj files keep explicit versions,
+    causing NU1015 errors for all packages on GitHub-hosted runners. Include
+    avoids CPM activation; the duplicate-ref NU1504 warning is the accepted
+    trade-off. The long-term fix is migrating to Directory.Packages.props (CPM)
+    which requires updating every .csproj — out of scope for this CI fix.
 
     These pins are intentional compatibility overrides (see also
     dependency-management.md § NU1510 for why NU1510 warnings on these
     entries should NOT be treated as "remove me" signals).
-
-    NOTE: Common.Logging uses Include (not Update) because no project in the
-    solution explicitly references Common.Logging — it only arrives as a pure
-    transitive dep from NPOI. Include forces it into the resolved graph so the
-    malformed 1.2.0 nuspec is never evaluated. Update would be a no-op here
-    since the package is never directly referenced.
   -->
   <ItemGroup>
     <PackageReference Include="Common.Logging" Version="3.4.1" />
-    <PackageReference Update="Microsoft.EntityFrameworkCore.Relational" Version="10.0.4" />
-    <PackageReference Update="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.4" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.4" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.4" />
   </ItemGroup>
 </Project>
