@@ -11,6 +11,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Extensions;
+using WalkingTec.Mvvm.Core.Helper;
 
 namespace WalkingTec.Mvvm.Mvc
 {
@@ -113,27 +114,41 @@ namespace WalkingTec.Mvvm.Mvc
                 if (_vmdir == null)
                 {
                     var up = Directory.GetParent(MainDir);
+                    // Solution root (parent of the web project) is the boundary for VM and other sibling-project directories.
+                    string solutionRoot = up?.FullName ?? MainDir;
                     var vmdir = up.GetDirectories().Where(x => x.Name.ToLower().EndsWith(".viewmodel")).FirstOrDefault();
                     if (vmdir == null)
                     {
                         if (string.IsNullOrEmpty(Area))
                         {
-                            vmdir = Directory.CreateDirectory(MainDir + $"{Path.DirectorySeparatorChar}ViewModels{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName)}VMs");
+                            var path = EnsureWithinBoundary(
+                                Path.Combine(MainDir, "ViewModels", SanitizePathComponent(ModelName) + "VMs"),
+                                solutionRoot);
+                            vmdir = Directory.CreateDirectory(path);
                         }
                         else
                         {
-                            vmdir = Directory.CreateDirectory(MainDir + $"{Path.DirectorySeparatorChar}Areas{Path.DirectorySeparatorChar}{SanitizePathComponent(Area)}{Path.DirectorySeparatorChar}ViewModels{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName)}VMs");
+                            var path = EnsureWithinBoundary(
+                                Path.Combine(MainDir, "Areas", SanitizePathComponent(Area), "ViewModels", SanitizePathComponent(ModelName) + "VMs"),
+                                solutionRoot);
+                            vmdir = Directory.CreateDirectory(path);
                         }
                     }
                     else
                     {
                         if (string.IsNullOrEmpty(Area))
                         {
-                            vmdir = Directory.CreateDirectory(vmdir.FullName + $"{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName)}VMs");
+                            var path = EnsureWithinBoundary(
+                                Path.Combine(vmdir.FullName, SanitizePathComponent(ModelName) + "VMs"),
+                                solutionRoot);
+                            vmdir = Directory.CreateDirectory(path);
                         }
                         else
                         {
-                            vmdir = Directory.CreateDirectory(vmdir.FullName + $"{Path.DirectorySeparatorChar}{SanitizePathComponent(Area)}{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName)}VMs");
+                            var path = EnsureWithinBoundary(
+                                Path.Combine(vmdir.FullName, SanitizePathComponent(Area), SanitizePathComponent(ModelName) + "VMs"),
+                                solutionRoot);
+                            vmdir = Directory.CreateDirectory(path);
                         }
 
                     }
@@ -152,14 +167,21 @@ namespace WalkingTec.Mvvm.Mvc
                 if (_sharedir == null)
                 {
                     var up = Directory.GetParent(MainDir);
+                    string solutionRoot = up?.FullName ?? MainDir;
                     var sharedir = up.GetDirectories().Where(x => x.Name.ToLower().EndsWith(".shared")).FirstOrDefault();
                     if (string.IsNullOrEmpty(Area))
                     {
-                        sharedir = Directory.CreateDirectory(sharedir.FullName + $"{Path.DirectorySeparatorChar}Pages{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName)}");
+                        var path = EnsureWithinBoundary(
+                            Path.Combine(sharedir.FullName, "Pages", SanitizePathComponent(ModelName)),
+                            solutionRoot);
+                        sharedir = Directory.CreateDirectory(path);
                     }
                     else
                     {
-                        sharedir = Directory.CreateDirectory(sharedir.FullName + $"{Path.DirectorySeparatorChar}Pages{Path.DirectorySeparatorChar}{SanitizePathComponent(Area)}{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName)}");
+                        var path = EnsureWithinBoundary(
+                            Path.Combine(sharedir.FullName, "Pages", SanitizePathComponent(Area), SanitizePathComponent(ModelName)),
+                            solutionRoot);
+                        sharedir = Directory.CreateDirectory(path);
                     }
 
                     _sharedir = sharedir.FullName;
@@ -196,11 +218,17 @@ namespace WalkingTec.Mvvm.Mvc
                 {
                     if (string.IsNullOrEmpty(Area))
                     {
-                        _controllerdir = Directory.CreateDirectory(MainDir + $"{Path.DirectorySeparatorChar}Controllers").FullName;
+                        var path = EnsureWithinBoundary(
+                            Path.Combine(MainDir, "Controllers"),
+                            MainDir);
+                        _controllerdir = Directory.CreateDirectory(path).FullName;
                     }
                     else
                     {
-                        _controllerdir = Directory.CreateDirectory(MainDir + $"{Path.DirectorySeparatorChar}Areas{Path.DirectorySeparatorChar}{SanitizePathComponent(Area)}{Path.DirectorySeparatorChar}Controllers").FullName;
+                        var path = EnsureWithinBoundary(
+                            Path.Combine(MainDir, "Areas", SanitizePathComponent(Area), "Controllers"),
+                            MainDir);
+                        _controllerdir = Directory.CreateDirectory(path).FullName;
                     }
                 }
                 return _controllerdir;
@@ -217,11 +245,17 @@ namespace WalkingTec.Mvvm.Mvc
                 {
                     if (string.IsNullOrEmpty(Area))
                     {
-                        _viewdir = Directory.CreateDirectory(MainDir + $"{Path.DirectorySeparatorChar}Views{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName)}").FullName;
+                        var path = EnsureWithinBoundary(
+                            Path.Combine(MainDir, "Views", SanitizePathComponent(ModelName)),
+                            MainDir);
+                        _viewdir = Directory.CreateDirectory(path).FullName;
                     }
                     else
                     {
-                        _viewdir = Directory.CreateDirectory(MainDir + $"{Path.DirectorySeparatorChar}Areas{Path.DirectorySeparatorChar}{SanitizePathComponent(Area)}{Path.DirectorySeparatorChar}Views{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName)}").FullName;
+                        var path = EnsureWithinBoundary(
+                            Path.Combine(MainDir, "Areas", SanitizePathComponent(Area), "Views", SanitizePathComponent(ModelName)),
+                            MainDir);
+                        _viewdir = Directory.CreateDirectory(path).FullName;
                     }
                 }
                 return _viewdir;
@@ -411,6 +445,11 @@ namespace WalkingTec.Mvvm.Mvc
                 return $"Warning: Cannot find {modelFileName}. Please manually add [Dimension]/[Measure] attributes.";
             }
 
+            // Validate that the found model file is within the project tree (MainDir's parent =
+            // solution root) to guard against a crafted SelectedModel that might resolve outside.
+            string solutionRootForAnalysis = Directory.GetParent(MainDir)?.FullName ?? MainDir;
+            EnsureWithinBoundary(modelFilePath, solutionRootForAnalysis);
+
             string content = File.ReadAllText(modelFilePath, Encoding.UTF8);
             string originalContent = content;
             bool modified = false;
@@ -539,66 +578,106 @@ namespace WalkingTec.Mvvm.Mvc
             return System.Text.RegularExpressions.Regex.Replace(input, @"[^a-zA-Z0-9_\-\.]", "");
         }
 
+        /// <summary>
+        /// Verify that <paramref name="resolvedPath"/> (which has already been
+        /// resolved via <see cref="Path.GetFullPath"/>) stays within
+        /// <paramref name="boundaryDir"/>. Throws <see cref="ArgumentException"/>
+        /// if the path escapes the boundary — defending against path-traversal
+        /// even after regex sanitization of individual user-supplied segments.
+        /// </summary>
+        private static string EnsureWithinBoundary(string resolvedPath, string boundaryDir)
+        {
+            string canonical = Path.GetFullPath(resolvedPath);
+            string boundary  = Path.GetFullPath(boundaryDir);
+            if (!boundary.EndsWith(Path.DirectorySeparatorChar)
+                && !boundary.EndsWith(Path.AltDirectorySeparatorChar))
+            {
+                boundary += Path.DirectorySeparatorChar;
+            }
+            if (!canonical.StartsWith(boundary, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException(
+                    $"Code-gen path '{canonical}' escapes the allowed boundary '{boundary}'. " +
+                    "Ensure module name, area name, and output directory are valid.");
+            }
+            return canonical;
+        }
+
         public void DoGen()
         {
-            File.WriteAllText($"{ControllerDir}{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName)}{(IsApi == true ? "Api" : "")}Controller.cs", GenerateController(), Encoding.UTF8);
+            // All file-write paths that incorporate user-supplied segments (ModelName, Area)
+            // are resolved through EnsureWithinBoundary or SafePathHelper.SafeCombine so that
+            // a path-traversal attempt is caught before any I/O takes place.
+            string safeModelName = SanitizePathComponent(ModelName);
+            string safeModelNameLower = safeModelName.ToLower();
+            string safeArea = SanitizePathComponent(Area);
 
-            File.WriteAllText($"{VmDir}{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName)}{(IsApi == true ? "Api" : "")}VM.cs", GenerateVM("CrudVM"), Encoding.UTF8);
-            File.WriteAllText($"{VmDir}{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName)}{(IsApi == true ? "Api" : "")}ListVM.cs", GenerateVM("ListVM"), Encoding.UTF8);
-            File.WriteAllText($"{VmDir}{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName)}{(IsApi == true ? "Api" : "")}BatchVM.cs", GenerateVM("BatchVM"), Encoding.UTF8);
-            File.WriteAllText($"{VmDir}{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName)}{(IsApi == true ? "Api" : "")}ImportVM.cs", GenerateVM("ImportVM"), Encoding.UTF8);
-            File.WriteAllText($"{VmDir}{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName)}{(IsApi == true ? "Api" : "")}Searcher.cs", GenerateVM("Searcher"), Encoding.UTF8);
+            File.WriteAllText(
+                SafePathHelper.SafeCombine(ControllerDir, $"{safeModelName}{(IsApi == true ? "Api" : "")}Controller.cs"),
+                GenerateController(), Encoding.UTF8);
+
+            File.WriteAllText(SafePathHelper.SafeCombine(VmDir, $"{safeModelName}{(IsApi == true ? "Api" : "")}VM.cs"), GenerateVM("CrudVM"), Encoding.UTF8);
+            File.WriteAllText(SafePathHelper.SafeCombine(VmDir, $"{safeModelName}{(IsApi == true ? "Api" : "")}ListVM.cs"), GenerateVM("ListVM"), Encoding.UTF8);
+            File.WriteAllText(SafePathHelper.SafeCombine(VmDir, $"{safeModelName}{(IsApi == true ? "Api" : "")}BatchVM.cs"), GenerateVM("BatchVM"), Encoding.UTF8);
+            File.WriteAllText(SafePathHelper.SafeCombine(VmDir, $"{safeModelName}{(IsApi == true ? "Api" : "")}ImportVM.cs"), GenerateVM("ImportVM"), Encoding.UTF8);
+            File.WriteAllText(SafePathHelper.SafeCombine(VmDir, $"{safeModelName}{(IsApi == true ? "Api" : "")}Searcher.cs"), GenerateVM("Searcher"), Encoding.UTF8);
 
             if (IsApi == false)
             {
                 if (UI == UIEnum.LayUI)
                 {
-                    File.WriteAllText($"{ViewDir}{Path.DirectorySeparatorChar}Index.cshtml", GenerateView("ListView"), Encoding.UTF8);
-                    File.WriteAllText($"{ViewDir}{Path.DirectorySeparatorChar}Create.cshtml", GenerateView("CreateView"), Encoding.UTF8);
-                    File.WriteAllText($"{ViewDir}{Path.DirectorySeparatorChar}Edit.cshtml", GenerateView("EditView"), Encoding.UTF8);
-                    File.WriteAllText($"{ViewDir}{Path.DirectorySeparatorChar}Delete.cshtml", GenerateView("DeleteView"), Encoding.UTF8);
-                    File.WriteAllText($"{ViewDir}{Path.DirectorySeparatorChar}Details.cshtml", GenerateView("DetailsView"), Encoding.UTF8);
-                    File.WriteAllText($"{ViewDir}{Path.DirectorySeparatorChar}Import.cshtml", GenerateView("ImportView"), Encoding.UTF8);
-                    File.WriteAllText($"{ViewDir}{Path.DirectorySeparatorChar}BatchEdit.cshtml", GenerateView("BatchEditView"), Encoding.UTF8);
-                    File.WriteAllText($"{ViewDir}{Path.DirectorySeparatorChar}BatchDelete.cshtml", GenerateView("BatchDeleteView"), Encoding.UTF8);
+                    File.WriteAllText(SafePathHelper.SafeCombine(ViewDir, "Index.cshtml"), GenerateView("ListView"), Encoding.UTF8);
+                    File.WriteAllText(SafePathHelper.SafeCombine(ViewDir, "Create.cshtml"), GenerateView("CreateView"), Encoding.UTF8);
+                    File.WriteAllText(SafePathHelper.SafeCombine(ViewDir, "Edit.cshtml"), GenerateView("EditView"), Encoding.UTF8);
+                    File.WriteAllText(SafePathHelper.SafeCombine(ViewDir, "Delete.cshtml"), GenerateView("DeleteView"), Encoding.UTF8);
+                    File.WriteAllText(SafePathHelper.SafeCombine(ViewDir, "Details.cshtml"), GenerateView("DetailsView"), Encoding.UTF8);
+                    File.WriteAllText(SafePathHelper.SafeCombine(ViewDir, "Import.cshtml"), GenerateView("ImportView"), Encoding.UTF8);
+                    File.WriteAllText(SafePathHelper.SafeCombine(ViewDir, "BatchEdit.cshtml"), GenerateView("BatchEditView"), Encoding.UTF8);
+                    File.WriteAllText(SafePathHelper.SafeCombine(ViewDir, "BatchDelete.cshtml"), GenerateView("BatchDeleteView"), Encoding.UTF8);
                 }
                 if (UI == UIEnum.React || UI == UIEnum.VUE)
                 {
-                    if (Directory.Exists($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}pages{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName).ToLower()}") == false)
-                    {
-                        Directory.CreateDirectory($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}pages{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName).ToLower()}");
-                    }
-                    if (Directory.Exists($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}pages{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName).ToLower()}{Path.DirectorySeparatorChar}views") == false)
-                    {
-                        Directory.CreateDirectory($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}pages{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName).ToLower()}{Path.DirectorySeparatorChar}views");
-                    }
-                    if (Directory.Exists($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}pages{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName).ToLower()}{Path.DirectorySeparatorChar}store") == false)
-                    {
-                        Directory.CreateDirectory($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}pages{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName).ToLower()}{Path.DirectorySeparatorChar}store");
-                    }
+                    // Compute the per-model ClientApp pages directory, validated against MainDir.
+                    string pagesModelDir = EnsureWithinBoundary(
+                        Path.Combine(MainDir, "ClientApp", "src", "pages", safeModelNameLower), MainDir);
+                    if (!Directory.Exists(pagesModelDir))
+                        Directory.CreateDirectory(pagesModelDir);
+
+                    string pagesModelViewsDir = EnsureWithinBoundary(
+                        Path.Combine(pagesModelDir, "views"), MainDir);
+                    if (!Directory.Exists(pagesModelViewsDir))
+                        Directory.CreateDirectory(pagesModelViewsDir);
+
+                    string pagesModelStoreDir = EnsureWithinBoundary(
+                        Path.Combine(pagesModelDir, "store"), MainDir);
+                    if (!Directory.Exists(pagesModelStoreDir))
+                        Directory.CreateDirectory(pagesModelStoreDir);
+
                     if (UI == UIEnum.React)
                     {
-                        File.WriteAllText($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}pages{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName).ToLower()}{Path.DirectorySeparatorChar}views{Path.DirectorySeparatorChar}action.tsx", GenerateReactView("action"), Encoding.UTF8);
-                        File.WriteAllText($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}pages{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName).ToLower()}{Path.DirectorySeparatorChar}views{Path.DirectorySeparatorChar}forms.tsx", GenerateReactView("forms"), Encoding.UTF8);
-                        File.WriteAllText($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}pages{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName).ToLower()}{Path.DirectorySeparatorChar}views{Path.DirectorySeparatorChar}models.tsx", GenerateReactView("models"), Encoding.UTF8);
-                        File.WriteAllText($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}pages{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName).ToLower()}{Path.DirectorySeparatorChar}views{Path.DirectorySeparatorChar}other.tsx", GenerateReactView("other"), Encoding.UTF8);
-                        File.WriteAllText($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}pages{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName).ToLower()}{Path.DirectorySeparatorChar}views{Path.DirectorySeparatorChar}search.tsx", GenerateReactView("search"), Encoding.UTF8);
-                        File.WriteAllText($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}pages{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName).ToLower()}{Path.DirectorySeparatorChar}views{Path.DirectorySeparatorChar}table.tsx", GenerateReactView("table"), Encoding.UTF8);
-                        File.WriteAllText($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}pages{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName).ToLower()}{Path.DirectorySeparatorChar}store{Path.DirectorySeparatorChar}index.ts", GetResource("index.txt", "Spa.React.store").Replace("$modelname$", ModelName.ToLower()), Encoding.UTF8);
-                        File.WriteAllText($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}pages{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName).ToLower()}{Path.DirectorySeparatorChar}index.tsx", GetResource("index.txt", "Spa.React").Replace("$modelname$", ModelName.ToLower()), Encoding.UTF8);
-                        File.WriteAllText($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}pages{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName).ToLower()}{Path.DirectorySeparatorChar}style.less", GetResource("style.txt", "Spa.React").Replace("$modelname$", ModelName.ToLower()), Encoding.UTF8);
+                        File.WriteAllText(SafePathHelper.SafeCombine(pagesModelViewsDir, "action.tsx"), GenerateReactView("action"), Encoding.UTF8);
+                        File.WriteAllText(SafePathHelper.SafeCombine(pagesModelViewsDir, "forms.tsx"), GenerateReactView("forms"), Encoding.UTF8);
+                        File.WriteAllText(SafePathHelper.SafeCombine(pagesModelViewsDir, "models.tsx"), GenerateReactView("models"), Encoding.UTF8);
+                        File.WriteAllText(SafePathHelper.SafeCombine(pagesModelViewsDir, "other.tsx"), GenerateReactView("other"), Encoding.UTF8);
+                        File.WriteAllText(SafePathHelper.SafeCombine(pagesModelViewsDir, "search.tsx"), GenerateReactView("search"), Encoding.UTF8);
+                        File.WriteAllText(SafePathHelper.SafeCombine(pagesModelViewsDir, "table.tsx"), GenerateReactView("table"), Encoding.UTF8);
+                        File.WriteAllText(SafePathHelper.SafeCombine(pagesModelStoreDir, "index.ts"), GetResource("index.txt", "Spa.React.store").Replace("$modelname$", ModelName.ToLower()), Encoding.UTF8);
+                        File.WriteAllText(SafePathHelper.SafeCombine(pagesModelDir, "index.tsx"), GetResource("index.txt", "Spa.React").Replace("$modelname$", ModelName.ToLower()), Encoding.UTF8);
+                        File.WriteAllText(SafePathHelper.SafeCombine(pagesModelDir, "style.less"), GetResource("style.txt", "Spa.React").Replace("$modelname$", ModelName.ToLower()), Encoding.UTF8);
                     }
                     if (UI == UIEnum.VUE)
                     {
                         List<string> apipneeded = new List<string>();
-                        File.WriteAllText($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}pages{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName).ToLower()}{Path.DirectorySeparatorChar}index.vue", GenerateVUEView("index", apipneeded), Encoding.UTF8);
-                        File.WriteAllText($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}pages{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName).ToLower()}{Path.DirectorySeparatorChar}config.ts", GenerateVUEView("config", apipneeded), Encoding.UTF8);
-                        File.WriteAllText($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}pages{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName).ToLower()}{Path.DirectorySeparatorChar}views{Path.DirectorySeparatorChar}dialog-form.vue", GenerateVUEView("views.dialog-form", apipneeded), Encoding.UTF8);
-                        File.WriteAllText($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}pages{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName).ToLower()}{Path.DirectorySeparatorChar}store{Path.DirectorySeparatorChar}index.ts", GetResource("index.txt", "Spa.Vue.store").Replace("$modelname$", ModelName.ToLower()), Encoding.UTF8);
-                        File.WriteAllText($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}pages{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName).ToLower()}{Path.DirectorySeparatorChar}store{Path.DirectorySeparatorChar}api.ts", GenerateVUEView("store.api", apipneeded), Encoding.UTF8);
+                        File.WriteAllText(SafePathHelper.SafeCombine(pagesModelDir, "index.vue"), GenerateVUEView("index", apipneeded), Encoding.UTF8);
+                        File.WriteAllText(SafePathHelper.SafeCombine(pagesModelDir, "config.ts"), GenerateVUEView("config", apipneeded), Encoding.UTF8);
+                        File.WriteAllText(SafePathHelper.SafeCombine(pagesModelViewsDir, "dialog-form.vue"), GenerateVUEView("views.dialog-form", apipneeded), Encoding.UTF8);
+                        File.WriteAllText(SafePathHelper.SafeCombine(pagesModelStoreDir, "index.ts"), GetResource("index.txt", "Spa.Vue.store").Replace("$modelname$", ModelName.ToLower()), Encoding.UTF8);
+                        File.WriteAllText(SafePathHelper.SafeCombine(pagesModelStoreDir, "api.ts"), GenerateVUEView("store.api", apipneeded), Encoding.UTF8);
                     }
                     #region 设置react和vue的默认页面和默认菜单，vue3不需要这部分
-                    var index = File.ReadAllText($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}pages{Path.DirectorySeparatorChar}index.ts");
+                    string pagesIndexPath = EnsureWithinBoundary(
+                        Path.Combine(MainDir, "ClientApp", "src", "pages", "index.ts"), MainDir);
+                    var index = File.ReadAllText(pagesIndexPath);
                     if (index.Contains($"path: '/{ModelName.ToLower()}'") == false)
                     {
                         if (UI == UIEnum.React)
@@ -625,12 +704,14 @@ namespace WalkingTec.Mvvm.Mvc
  ");
 
                         }
-                        File.WriteAllText($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}pages{Path.DirectorySeparatorChar}index.ts", index, Encoding.UTF8);
+                        File.WriteAllText(pagesIndexPath, index, Encoding.UTF8);
                     }
                     string menu = "";
                     if (UI == UIEnum.React)
                     {
-                        menu = File.ReadAllText($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}public{Path.DirectorySeparatorChar}subMenu.json");
+                        string subMenuPath = EnsureWithinBoundary(
+                            Path.Combine(MainDir, "ClientApp", "public", "subMenu.json"), MainDir);
+                        menu = File.ReadAllText(subMenuPath);
                         if (menu.Contains($@"""Url"": ""/{ModelName.ToLower()}""") == false)
                         {
                             var i = menu.LastIndexOf("}");
@@ -642,13 +723,15 @@ namespace WalkingTec.Mvvm.Mvc
     ""Url"": ""/{ModelName.ToLower()}""
     }}
 ");
-                            File.WriteAllText($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}public{Path.DirectorySeparatorChar}subMenu.json", menu, Encoding.UTF8);
+                            File.WriteAllText(subMenuPath, menu, Encoding.UTF8);
 
                         }
                     }
                     if (UI == UIEnum.VUE)
                     {
-                        menu = File.ReadAllText($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}subMenu.json");
+                        string subMenuPath = EnsureWithinBoundary(
+                            Path.Combine(MainDir, "ClientApp", "src", "subMenu.json"), MainDir);
+                        menu = File.ReadAllText(subMenuPath);
                         if (menu.Contains($@"""Url"": ""/{ModelName.ToLower()}""") == false)
                         {
                             var i = menu.LastIndexOf("}");
@@ -660,7 +743,7 @@ namespace WalkingTec.Mvvm.Mvc
     ""Url"": ""/{ModelName.ToLower()}""
     }}
 ");
-                            File.WriteAllText($"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}subMenu.json", menu, Encoding.UTF8);
+                            File.WriteAllText(subMenuPath, menu, Encoding.UTF8);
 
                         }
                     }
@@ -669,44 +752,46 @@ namespace WalkingTec.Mvvm.Mvc
 
                 if (UI == UIEnum.Blazor)
                 {
-                    File.WriteAllText($"{ShareDir}{Path.DirectorySeparatorChar}Index.razor", GenerateBlazorView("Index"), Encoding.UTF8);
-                    File.WriteAllText($"{ShareDir}{Path.DirectorySeparatorChar}Create.razor", GenerateBlazorView("Create"), Encoding.UTF8);
-                    File.WriteAllText($"{ShareDir}{Path.DirectorySeparatorChar}Edit.razor", GenerateBlazorView("Edit"), Encoding.UTF8);
-                    File.WriteAllText($"{ShareDir}{Path.DirectorySeparatorChar}Details.razor", GenerateBlazorView("Details"), Encoding.UTF8);
-                    File.WriteAllText($"{ShareDir}{Path.DirectorySeparatorChar}Import.razor", GenerateBlazorView("Import"), Encoding.UTF8);
+                    File.WriteAllText(SafePathHelper.SafeCombine(ShareDir, "Index.razor"), GenerateBlazorView("Index"), Encoding.UTF8);
+                    File.WriteAllText(SafePathHelper.SafeCombine(ShareDir, "Create.razor"), GenerateBlazorView("Create"), Encoding.UTF8);
+                    File.WriteAllText(SafePathHelper.SafeCombine(ShareDir, "Edit.razor"), GenerateBlazorView("Edit"), Encoding.UTF8);
+                    File.WriteAllText(SafePathHelper.SafeCombine(ShareDir, "Details.razor"), GenerateBlazorView("Details"), Encoding.UTF8);
+                    File.WriteAllText(SafePathHelper.SafeCombine(ShareDir, "Import.razor"), GenerateBlazorView("Import"), Encoding.UTF8);
                 }
                 if (UI == UIEnum.VUE3)
                 {
                     //Todo 生成vue3页面
-                    var pathvue3 = $"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}views{Path.DirectorySeparatorChar}{SanitizePathComponent(Area).ToLower()}{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName).ToLower()}{Path.DirectorySeparatorChar}";
-                    if (Directory.Exists(pathvue3) == false)
-                    {
+                    string pathvue3 = EnsureWithinBoundary(
+                        Path.Combine(MainDir, "ClientApp", "src", "views", safeArea.ToLower(), safeModelNameLower),
+                        MainDir);
+                    if (!Directory.Exists(pathvue3))
                         Directory.CreateDirectory(pathvue3);
-                    }
-                    var pathapi = $"{MainDir}{Path.DirectorySeparatorChar}ClientApp{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}api{Path.DirectorySeparatorChar}{SanitizePathComponent(Area).ToLower()}{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName)}{Path.DirectorySeparatorChar}";
-                    if (Directory.Exists(pathapi) == false)
-                    {
-                        Directory.CreateDirectory(pathapi);
-                    }
-                    File.WriteAllText($"{pathvue3}index.vue", GenerateVue3View("Index"), Encoding.UTF8);
-                    File.WriteAllText($"{pathvue3}create.vue", GenerateVue3View("Create"), Encoding.UTF8);
-                    File.WriteAllText($"{pathvue3}edit.vue", GenerateVue3View("Edit"), Encoding.UTF8);
-                    File.WriteAllText($"{pathvue3}details.vue", GenerateVue3View("Details"), Encoding.UTF8);
-                    File.WriteAllText($"{pathvue3}import.vue", GenerateVue3View("Import"), Encoding.UTF8);
 
-                    File.WriteAllText($"{pathapi}index.ts", GenerateVue3View("indexapi"), Encoding.UTF8);
+                    string pathapi = EnsureWithinBoundary(
+                        Path.Combine(MainDir, "ClientApp", "src", "api", safeArea.ToLower(), safeModelName),
+                        MainDir);
+                    if (!Directory.Exists(pathapi))
+                        Directory.CreateDirectory(pathapi);
+
+                    File.WriteAllText(SafePathHelper.SafeCombine(pathvue3, "index.vue"), GenerateVue3View("Index"), Encoding.UTF8);
+                    File.WriteAllText(SafePathHelper.SafeCombine(pathvue3, "create.vue"), GenerateVue3View("Create"), Encoding.UTF8);
+                    File.WriteAllText(SafePathHelper.SafeCombine(pathvue3, "edit.vue"), GenerateVue3View("Edit"), Encoding.UTF8);
+                    File.WriteAllText(SafePathHelper.SafeCombine(pathvue3, "details.vue"), GenerateVue3View("Details"), Encoding.UTF8);
+                    File.WriteAllText(SafePathHelper.SafeCombine(pathvue3, "import.vue"), GenerateVue3View("Import"), Encoding.UTF8);
+
+                    File.WriteAllText(SafePathHelper.SafeCombine(pathapi, "index.ts"), GenerateVue3View("indexapi"), Encoding.UTF8);
                 }
             }
             var test = GenerateTest();
-            if (test != "")
+            if (test != "" && TestDir != null)
             {
                 if (UI == UIEnum.LayUI && IsApi == false)
                 {
-                    File.WriteAllText($"{TestDir}{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName)}ControllerTest.cs", test, Encoding.UTF8);
+                    File.WriteAllText(SafePathHelper.SafeCombine(TestDir, $"{safeModelName}ControllerTest.cs"), test, Encoding.UTF8);
                 }
                 else
                 {
-                    File.WriteAllText($"{TestDir}{Path.DirectorySeparatorChar}{SanitizePathComponent(ModelName)}ApiTest.cs", test, Encoding.UTF8);
+                    File.WriteAllText(SafePathHelper.SafeCombine(TestDir, $"{safeModelName}ApiTest.cs"), test, Encoding.UTF8);
                 }
             }
 

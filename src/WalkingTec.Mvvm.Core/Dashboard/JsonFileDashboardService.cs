@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Core.Helper;
 
 namespace WalkingTec.Mvvm.Core.Dashboard;
 
@@ -105,17 +106,18 @@ public class JsonFileDashboardService : IDashboardService
         if (!string.IsNullOrEmpty(tenantId))
             ValidatePathSegment(tenantId, nameof(tenantId));
 
+        // Build the per-tenant subdirectory using SafeCombine so the canonical
+        // path check (including separator-awareness) is applied to the tenant
+        // segment, then construct the final file path inside that directory.
         var dir = string.IsNullOrEmpty(tenantId)
-            ? Path.Combine(_baseDir, "_default")
-            : Path.Combine(_baseDir, tenantId);
+            ? SafePathHelper.SafeCombine(_baseDir, "_default")
+            : SafePathHelper.SafeCombine(_baseDir, tenantId);
+
         if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
 
-        var fullPath = Path.GetFullPath(Path.Combine(dir, $"{id}.json"));
-        var baseFullPath = Path.GetFullPath(_baseDir);
-        if (!fullPath.StartsWith(baseFullPath, StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException($"Path traversal detected in dashboard ID or tenant ID.");
-
-        return fullPath;
+        // The file name is id + ".json"; SafeCombine validates that the
+        // resolved path stays within the per-tenant directory.
+        return SafePathHelper.SafeCombine(dir, $"{id}.json");
     }
 
     private static void ValidatePathSegment(string value, string paramName)
