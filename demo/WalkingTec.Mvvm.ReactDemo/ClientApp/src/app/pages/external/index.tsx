@@ -90,26 +90,10 @@ export default class IApp extends React.Component<any, any> {
     state = {
         loding: true
     }
-    /**
-     * 发送消息
-     */
-    sendPostMessage() {
-        return {
-            type: "Portal_Token",
-            token: globalConfig.token.get(),
-        }
-    }
     componentDidMount() {
 
     }
     UNSAFE_componentWillMount() {
-    }
-    onLoad(e) {
-        // console.dir(e.target.contentWindow)
-        // 发送消息
-        // e.target.contentWindow.postMessage(this.sendPostMessage(), decodeURIComponent(this.props.match.params.url));
-        // console.log(decodeURIComponent(this.props.match.params.url), this.ref.current.contentWindow)
-        this.setState({ loding: false })
     }
     render() {
         const src = decodeURIComponent(this.props.match.params.url)
