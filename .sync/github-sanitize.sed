@@ -5,10 +5,10 @@
 # Targets: internal hostname, tailnet name, macOS username, internal token names.
 # Replacement strings are intentionally generic / clearly-placeholder.
 
-s|mac-mini\.tailde842d\.ts\.net|<internal-registry-host>|g
-s|tailde842d|<tailnet>|g
+s|mac-mini\.tailde842d\.ts\.net|internal.registry.invalid|g
+s|tailde842d|internal-tailnet|g
 s|/Users/openclaw/|~/|g
-s|~/\.gitea-token|<private-token-file>|g
+s|~/\.gitea-token|.local-token-file|g
 s|\bGITEA_TOKEN\b|REGISTRY_TOKEN|g
 s|\bGITEA_HOST\b|REGISTRY_HOST|g
 s|\bGITEA_USER\b|REGISTRY_USER|g
