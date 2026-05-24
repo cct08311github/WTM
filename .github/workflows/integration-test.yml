@@ -61,7 +61,7 @@ jobs:
           WTM_TEST_MSSQL: "Server=localhost,1433;Database=WtmIntegrationTest;User Id=sa;Password=YourStr0ng!Pass;TrustServerCertificate=True"
 
       - name: Upload test results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         continue-on-error: true
         with:
