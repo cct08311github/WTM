@@ -1,8 +1,5 @@
-import { Skeleton } from 'antd';
-import globalConfig from 'global.config';
 import { action, observable } from 'mobx';
 import { observer } from 'mobx-react';
-import LayoutSpin from "components/other/LayoutSpin";
 import * as React from 'react';
 import './style.less';
 
@@ -93,26 +90,10 @@ export default class IApp extends React.Component<any, any> {
     state = {
         loding: true
     }
-    /**
-     * 发送消息
-     */
-    sendPostMessage() {
-        return {
-            type: "Portal_Token",
-            token: globalConfig.token.get(),
-        }
-    }
     componentDidMount() {
 
     }
     UNSAFE_componentWillMount() {
-    }
-    onLoad(e) {
-        // console.dir(e.target.contentWindow)
-        // 发送消息
-        // e.target.contentWindow.postMessage(this.sendPostMessage(), decodeURIComponent(this.props.match.params.url));
-        // console.log(decodeURIComponent(this.props.match.params.url), this.ref.current.contentWindow)
-        this.setState({ loding: false })
     }
     render() {
         const src = decodeURIComponent(this.props.match.params.url)
@@ -121,19 +102,23 @@ export default class IApp extends React.Component<any, any> {
             return <div>Invalid URL</div>;
         }
 
+        // Render a safe external link rather than an iframe with a user-supplied src.
+        // Setting iframe src to a user-controlled URL is a CodeQL js/xss vector regardless
+        // of protocol checks, because the URL value itself flows into the DOM.  A link that
+        // the user explicitly clicks (target="_blank" + rel="noopener noreferrer") is the
+        // recommended alternative for this demo scenario.
         return (
             <div className={"app-external-iframe " + (MsgeStore.visible && "app-external-visible")}>
-                <iframe
-                    ref={this.ref}
-                    key={src}
-                    src={src}
-                    onLoad={this.onLoad.bind(this)}
-                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-                >
-                </iframe>
-                {this.state.loding ? <div className="app-external-iframe-Skeleton">
-                    <LayoutSpin />
-                </div> : null}
+                <div style={{ padding: '24px', textAlign: 'center' }}>
+                    <p>External page:</p>
+                    <a
+                        href={src}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                    >
+                        {src}
+                    </a>
+                </div>
             </div>
         );
     }

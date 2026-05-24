@@ -148,7 +148,7 @@ public class JsonFileDashboardService : IDashboardService
         {
             _logger.LogError(ex,
                 "[Dashboard] Failed to read dashboard file. DashboardId={DashboardId} Path={FilePath}",
-                LogSanitizer.Sanitize(dashboardId), path);
+                LogSanitizer.Sanitize(dashboardId), LogSanitizer.Sanitize(path));
             return null;
         }
         finally
