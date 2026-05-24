@@ -801,8 +801,11 @@ namespace WalkingTec.Mvvm.Mvc
                 new CookieOptions { Expires = DateTimeOffset.UtcNow.AddYears(1), SameSite = SameSiteMode.Lax, Secure = Request.IsHttps }
             );
 
-            // Use 302 redirect instead of <script> to prevent XSS (#778)
-            return Redirect(SanitizeRedirectUrl(redirect));
+            // Use 302 redirect instead of <script> to prevent XSS (#778).
+            // Url.IsLocalUrl is recognised by CodeQL as a sanitizer for cs/web/unvalidated-url-redirection.
+            if (!Url.IsLocalUrl(redirect))
+                return Redirect("/");
+            return Redirect(redirect);
         }
 
 
@@ -821,32 +824,11 @@ namespace WalkingTec.Mvvm.Mvc
                 var principal = Wtm.LoginUserInfo.CreatePrincipal();
                 await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal, null);
             }
-            // Use 302 redirect instead of <script> to prevent XSS (#778)
-            return Redirect(SanitizeRedirectUrl(redirect));
-        }
-
-        /// <summary>
-        /// Validates a redirect URL: allows relative paths and same-origin absolute URLs only.
-        /// Returns "/" for null, empty, or unsafe input (open-redirect prevention).
-        /// </summary>
-        private string SanitizeRedirectUrl(string? url)
-        {
-            if (string.IsNullOrWhiteSpace(url))
-                return "/";
-
-            var decoded = HttpUtility.UrlDecode(url);
-
-            // Relative paths are safe
-            if (Uri.IsWellFormedUriString(decoded, UriKind.Relative) && !decoded.StartsWith("//"))
-                return decoded;
-
-            // Absolute URLs: only allow http/https with same host
-            if (Uri.TryCreate(decoded, UriKind.Absolute, out var uri)
-                && (uri.Scheme == "http" || uri.Scheme == "https")
-                && uri.Host.Equals(Request.Host.Host, StringComparison.OrdinalIgnoreCase))
-                return decoded;
-
-            return "/";
+            // Use 302 redirect instead of <script> to prevent XSS (#778).
+            // Url.IsLocalUrl is recognised by CodeQL as a sanitizer for cs/web/unvalidated-url-redirection.
+            if (!Url.IsLocalUrl(redirect))
+                return Redirect("/");
+            return Redirect(redirect);
         }
 
         /// <summary>
