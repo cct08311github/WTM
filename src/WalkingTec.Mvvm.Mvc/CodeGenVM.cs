@@ -66,7 +66,13 @@ namespace WalkingTec.Mvvm.Mvc
         [Required(ErrorMessage = "Validate.{0}required")]
         [Display(Name = "_Admin.SelectedModel")]
         public string SelectedModel { get; set; }
+        // [BindNever] prevents any HTTP model-binding from overriding this value;
+        // it is set server-side only (AppDomain.CurrentDomain.BaseDirectory) by
+        // _CodeGenController.  Allowing model-binding would let a crafted POST set
+        // an arbitrary base directory and turn MainDir — and all derived paths — into
+        // a user-controlled value, defeating SafeCombine's boundary checks.
         [ValidateNever()]
+        [BindNever()]
         public string EntryDir { get; set; }
 
 
