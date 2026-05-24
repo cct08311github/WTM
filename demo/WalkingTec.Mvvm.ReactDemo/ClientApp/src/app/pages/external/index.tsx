@@ -9,7 +9,8 @@ import './style.less';
 function isValidExternalUrl(url: string): boolean {
     try {
         const parsed = new URL(url);
-        return /^https?:$/.test(parsed.protocol);
+        // Allow only http and https — blocks javascript:, data:, vbscript:, etc.
+        return parsed.protocol === 'http:' || parsed.protocol === 'https:';
     } catch {
         return false;
     }
@@ -127,6 +128,7 @@ export default class IApp extends React.Component<any, any> {
                     key={src}
                     src={src}
                     onLoad={this.onLoad.bind(this)}
+                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
                 >
                 </iframe>
                 {this.state.loding ? <div className="app-external-iframe-Skeleton">
