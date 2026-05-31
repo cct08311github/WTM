@@ -77,7 +77,14 @@ namespace WalkingTec.Mvvm.Mvc
 
 
         public string _mainDir;
+        // [BindNever] prevents HTTP model-binding from overriding this value.
+        // MainDir is the write root for all generated files — VmDir, ShareDir, ControllerDir,
+        // ViewDir, and every SafeCombine call anchors from this property. Allowing model-binding
+        // would let a crafted POST supply an arbitrary root, defeating SafeCombine's boundary
+        // checks in the same way EntryDir was already protected. The setter is kept for
+        // server-side / internal use only (see CodeGenAnalysisTests._mainDir direct assignment).
         [ValidateNever()]
+        [BindNever()]
         public string MainDir
         {
             get
@@ -172,7 +179,28 @@ namespace WalkingTec.Mvvm.Mvc
                 {
                     var up = Directory.GetParent(MainDir);
                     var sharedir = up.GetDirectories().Where(x => x.Name.ToLower().EndsWith(".shared")).FirstOrDefault();
-                    if (string.IsNullOrEmpty(Area))
+                    if (sharedir == null)
+                    {
+                        // No sibling *.shared project found (e.g. Blazor project without the
+                        // conventional shared project, or a non-standard solution layout).
+                        // Fall back to a "Shared/Pages" folder under MainDir, mirroring how
+                        // VmDir falls back to a folder under MainDir when *.viewmodel is absent.
+                        if (string.IsNullOrEmpty(Area))
+                        {
+                            var path = SafePathHelper.SafeCombine(
+                                MainDir,
+                                Path.Combine("Shared", "Pages", SanitizePathComponent(ModelName)));
+                            sharedir = Directory.CreateDirectory(path);
+                        }
+                        else
+                        {
+                            var path = SafePathHelper.SafeCombine(
+                                MainDir,
+                                Path.Combine("Shared", "Pages", SanitizePathComponent(Area), SanitizePathComponent(ModelName)));
+                            sharedir = Directory.CreateDirectory(path);
+                        }
+                    }
+                    else if (string.IsNullOrEmpty(Area))
                     {
                         var path = SafePathHelper.SafeCombine(
                             sharedir.FullName,

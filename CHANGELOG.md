@@ -4,6 +4,23 @@
 
 ### Security
 
+- **CodeGenVM: `MainDir` HTTP model-binding vector closed; `ShareDir` NRE fixed** (#122):
+  Two bugs in `CodeGenVM` (`src/WalkingTec.Mvvm.Mvc/CodeGenVM.cs`):
+  - **HIGH** — `MainDir` was missing `[BindNever]` despite being the write root for all
+    generated files. A crafted POST could override `MainDir` with an attacker-controlled
+    path, making `SafePathHelper.SafeCombine`'s boundary checks anchor to that arbitrary
+    root instead of the server-derived `EntryDir` value — effectively an arbitrary file-write
+    escalation. Fix: added `[BindNever]` to `MainDir` (mirroring the same protection already
+    present on `EntryDir`). The property setter and internal server-side assignment are
+    unaffected.
+  - **MEDIUM** — `ShareDir` getter called `sharedir.FullName` unconditionally after a
+    `.FirstOrDefault()` lookup that can return `null` when no sibling `*.shared` project
+    directory exists (e.g. Blazor projects not following the `*.shared` naming convention).
+    This caused an unhandled `NullReferenceException` at codegen time. Fix: added a null
+    guard mirroring the `VmDir` pattern — when no `*.shared` sibling is found, the getter
+    falls back to a `Shared/Pages/<ModelName>` directory under `MainDir`.
+  Five regression tests added to `CodeGenAnalysisTests`.
+
 - **Refresh-token double-rotation (TOCTOU race) — atomic claim fix** (#118):
   `TokenService.RefreshTokenAsync` previously used a non-atomic read-check-modify-save
   sequence that allowed two concurrent requests presenting the **same** refresh token
