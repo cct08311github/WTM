@@ -92,7 +92,16 @@ public class EtlQuartzJob : WtmJob
             var loader = EtlSourceFactory.CreateLoader(jobDef.TargetDbType);
 
             // 7. 建立 WatermarkStrategy
-            var watermarkValue = jobDef.LastWatermarkValue ?? jobDef.InitialWatermarkValue;
+            // 優先使用 JobDataMap 中的覆蓋值（由 RerunFromSnapshotAsync 傳入）：
+            // 防 TOCTOU 競態 — 即使 DB 中 LastWatermarkValue 在本次觸發和執行之間
+            // 被另一個 job finally 覆蓋，重跑仍會從快照的起點開始。
+            // 正常排程觸發不傳此 key，行為完全不變。
+            var watermarkOverride = context.MergedJobDataMap.ContainsKey("EtlWatermarkOverride")
+                ? context.MergedJobDataMap.GetString("EtlWatermarkOverride")
+                : null;
+            var watermarkValue = watermarkOverride
+                ?? jobDef.LastWatermarkValue
+                ?? jobDef.InitialWatermarkValue;
             var watermark = new WatermarkStrategy(
                 jobDef.WatermarkType,
                 jobDef.WatermarkColumn,

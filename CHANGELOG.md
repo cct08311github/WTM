@@ -213,6 +213,35 @@
   Referer-based tenant routing entirely — including for unauthenticated
   requests.  Recommended for security-strict deployments where tenant identity
   is always established through claims or explicit configuration.
+- **ETL RerunFromSnapshotAsync — data-loss TOCTOU race (HIGH)** (#120):
+  `RerunFromSnapshotAsync` had two related bugs that silently caused reruns
+  to start from the wrong watermark, skipping the intended replay window.
+
+  **Bug 1 (Running guard):** If the job was executing when a rerun was
+  requested, Quartz's `[DisallowConcurrentExecution]` would queue the new
+  trigger rather than reject it.  The still-running job's `finally` block
+  then wrote `result.NewWatermarkValue` ("W2") back to `LastWatermarkValue`,
+  overwriting the snapshot value ("W0") that had just been saved by
+  `RerunFromSnapshotAsync`.  When the queued trigger fired it read W2 from
+  the DB and reported Success, silently skipping all data in [W0, W2).
+  Fix: `RerunFromSnapshotAsync` now throws `InvalidOperationException` if
+  `jobDef.Status == EtlJobStatus.Running`, rejecting the rerun immediately
+  so the operator knows to retry once the current execution finishes.
+
+  **Bug 2 (JobDataMap override — defense in depth):** Even when the job is
+  not Running at the moment the check runs, a residual window exists between
+  the DB write and `TriggerJob` where another execution could overwrite the
+  watermark.  Fix: `TriggerNowAsync` now accepts an optional
+  `watermarkOverride` parameter.  `RerunFromSnapshotAsync` passes the
+  snapshot watermark ("W0") through Quartz's per-trigger `JobDataMap`
+  (key `EtlWatermarkOverride`).  `EtlQuartzJob.Execute` reads this key
+  before falling back to `jobDef.LastWatermarkValue`, so the intended
+  replay start point is preserved even if the DB value is modified between
+  the write and the trigger firing.  Normal scheduled and manual triggers
+  do not pass this key and are completely unaffected.
+
+  **API compatibility:** `TriggerNowAsync(Guid)` callers require no
+  changes — the `watermarkOverride` parameter defaults to `null`.
 
 ## [10.5.3] - 2026-05-23
 

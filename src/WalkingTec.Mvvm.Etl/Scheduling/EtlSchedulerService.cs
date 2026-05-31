@@ -83,7 +83,13 @@ public class EtlSchedulerService
     }
 
     /// <summary>▶ 立即執行（Trigger = Manual）</summary>
-    public virtual async Task TriggerNowAsync(Guid jobId)
+    /// <param name="jobId">Job ID。</param>
+    /// <param name="watermarkOverride">
+    /// 選填：傳入此值時，執行的 watermark 起始值將使用此覆蓋值而非 DB 中的
+    /// <c>LastWatermarkValue</c>（defense-in-depth 防 TOCTOU 競態）。
+    /// 正常手動觸發請保持 <c>null</c>。
+    /// </param>
+    public virtual async Task TriggerNowAsync(Guid jobId, string? watermarkOverride = null)
     {
         EnsureScheduler();
 
@@ -101,6 +107,8 @@ public class EtlSchedulerService
 
         var data = new JobDataMap();
         data.Put("EtlTriggerType", EtlRunTrigger.Manual.ToString());
+        if (watermarkOverride != null)
+            data.Put("EtlWatermarkOverride", watermarkOverride);
         await _scheduler!.TriggerJob(jobKey, data);
     }
 
@@ -257,6 +265,10 @@ public class EtlSchedulerService
     }
 
     /// <summary>從 RunLog snapshot 重跑</summary>
+    /// <exception cref="InvalidOperationException">
+    /// 若 Job 目前正在執行（Status == Running），拒絕重跑以避免 TOCTOU 競態
+    /// 導致重跑起點被正在執行的 job finally 寫覆。
+    /// </exception>
     public virtual async Task RerunFromSnapshotAsync(Guid runLogId)
     {
         using var scope = _sp.CreateScope();
@@ -267,12 +279,25 @@ public class EtlSchedulerService
         var jobDef = await wtm.DC.Set<EtlJobDefinition>().FindAsync(runLog.JobId);
         if (jobDef == null) return;
 
-        // 暫時設回 watermark
+        // Guard 1: 拒絕在 Job 執行中觸發重跑。
+        // 若允許，Quartz [DisallowConcurrentExecution] 會將新觸發排隊；
+        // 正在執行的 job finally 寫回 result.NewWatermarkValue（"W2"），
+        // 覆蓋掉剛寫進 DB 的 WatermarkSnapshot（"W0"），
+        // 使排隊的重跑從 W2 開始而非 W0，靜默跳過 [W0, W2) 的資料。
+        if (jobDef.Status == EtlJobStatus.Running)
+            throw new InvalidOperationException(
+                $"Cannot rerun job '{jobDef.Name}' ({jobDef.ID}) while it is running. " +
+                "Wait for the current execution to finish, then retry.");
+
+        // 設回 watermark 至快照值（設定合理 DB 基準；Guard 2 透過 JobDataMap 提供更強保護）
         jobDef.LastWatermarkValue = runLog.WatermarkSnapshot;
         wtm.DC.Set<EtlJobDefinition>().Update(jobDef);
         await wtm.DC.SaveChangesAsync();
 
-        await TriggerNowAsync(runLog.JobId);
+        // Guard 2: 透過 JobDataMap 傳遞快照 watermark 作為覆蓋值（防 TOCTOU 殘餘競態）。
+        // EtlQuartzJob.Execute 會優先使用此值而非重新讀取 DB 中的 LastWatermarkValue，
+        // 確保即使 DB 值被再次修改，重跑仍從正確的 W0 開始。
+        await TriggerNowAsync(runLog.JobId, runLog.WatermarkSnapshot);
     }
 
     /// <summary>判斷 Job 是否應該執行</summary>
