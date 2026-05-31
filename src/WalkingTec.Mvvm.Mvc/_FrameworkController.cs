@@ -112,13 +112,22 @@ namespace WalkingTec.Mvvm.Mvc
                 Type modelType = listVM.ModelType;
                 var para = Expression.Parameter(modelType);
                 var idproperty = modelType.GetSingleProperty(_DONOT_USE_VFIELD);
-                var pro = Expression.Property(para, idproperty);
-                listVM.ReplaceWhere = listVM.Ids.GetContainIdExpression(modelType, Expression.Parameter(modelType), pro);
-                string selectData = ScriptTagRegex.Replace((listVM as IBasePagedListVM<TopBasePoco, BaseSearcher>).GetDataJson(), "");
-                ViewBag.SelectData = selectData;
-                listVM.IsSearched = false;
-                listVM.SearcherMode = ListVMSearchModeEnum.Selector;
-                listVM.NeedPage = originNeedPage;
+                // Guard: an attacker-supplied _DONOT_USE_VFIELD that names a
+                // non-existent property would cause GetSingleProperty to return
+                // null, and the subsequent Expression.Property call would throw
+                // ArgumentNullException (unauthenticated DoS — issue #106).
+                // When the property is not found, skip SelectData population and
+                // fall through to return the PartialView with empty SelectData ("[]").
+                if (idproperty != null)
+                {
+                    var pro = Expression.Property(para, idproperty);
+                    listVM.ReplaceWhere = listVM.Ids.GetContainIdExpression(modelType, Expression.Parameter(modelType), pro);
+                    string selectData = ScriptTagRegex.Replace((listVM as IBasePagedListVM<TopBasePoco, BaseSearcher>).GetDataJson(), "");
+                    ViewBag.SelectData = selectData;
+                    listVM.IsSearched = false;
+                    listVM.SearcherMode = ListVMSearchModeEnum.Selector;
+                    listVM.NeedPage = originNeedPage;
+                }
             }
             #endregion
 

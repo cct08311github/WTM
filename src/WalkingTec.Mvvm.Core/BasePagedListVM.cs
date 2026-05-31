@@ -633,8 +633,17 @@ namespace WalkingTec.Mvvm.Core
                 Expression? peid = null;
                 if (string.IsNullOrEmpty(SelectorValueField) == false && SelectorValueField.ToLower() != "id")
                 {
-                    var pe = Expression.Parameter(typeof(TModel));
-                    peid = Expression.Property(pe, typeof(TModel).GetSingleProperty(SelectorValueField)!);
+                    // Guard: a form-bound SelectorValueField that names a non-existent
+                    // property would make GetSingleProperty return null, causing the
+                    // Expression.Property call to throw ArgumentNullException at runtime
+                    // (issue #106). When the property is not found, leave peid as null so
+                    // the query falls back to the default id-based Contains predicate.
+                    var selectorProp = typeof(TModel).GetSingleProperty(SelectorValueField);
+                    if (selectorProp != null)
+                    {
+                        var pe = Expression.Parameter(typeof(TModel));
+                        peid = Expression.Property(pe, selectorProp);
+                    }
                 }
                 List<string?> tmpIds = [.. Ids.Cast<string?>()];
                 var mod = new WhereReplaceModifier<TModel>(tmpIds.GetContainIdExpression<TModel>(peid));

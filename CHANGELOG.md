@@ -38,7 +38,6 @@
   `AllowPrivateNetwork=true` or `AllowHttp=true` for internal REST widgets,
   move those flags into the widget's server-side
   `WidgetSourceDefinition.RestOptions` in your dashboard JSON.
-=======
 - **BaseBatchVM.DoBatchDelete — wrong entity deleted on unordered DB return** (#104):
   Built a dictionary mapping each entity's ID to the entity so that the permission
   check (`CheckIfCanDelete`) and the deletion always operate on the same record,
@@ -67,6 +66,20 @@
   `ValidateDuplicateData` excludes the correct entity ID (the row being edited) from
   its uniqueness query. Previously `vm.Entity.ID` was `Guid.Empty`, causing every
   batch-edit row to be flagged as a duplicate of itself.
+- **Unauthenticated DoS via null `PropertyInfo` in `Selector` and `GetBatchQuery`** (#106):
+  `_FrameworkController.Selector` is marked `[Public]` (no authentication required).
+  When `Ids.Count > 0`, it resolves `_DONOT_USE_VFIELD` via
+  `modelType.GetSingleProperty()`, which returns `null` for any property name
+  that does not exist on the model. The return value was previously passed
+  directly to `Expression.Property`, throwing `ArgumentNullException` and
+  producing an unhandled 500 on every request — a crash-on-demand vector for
+  unauthenticated callers. A matching null-forgiving `!` in
+  `BasePagedListVM.GetBatchQuery` exposed the same crash for a form-bound
+  `SelectorValueField`. Fix: resolve the property into a local variable,
+  null-check before use, and fall through gracefully (Selector returns
+  `PartialView` with empty `SelectData`; `GetBatchQuery` falls back to the
+  default id-based `Contains` predicate). No behaviour change on the happy
+  path. Regression tests added.
 
 ## [10.5.3] - 2026-05-23
 

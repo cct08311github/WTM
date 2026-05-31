@@ -1206,5 +1206,55 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             }
             dc.SaveChanges();
         }
+
+        // ----------------------------------------------------------------------
+        // GetBatchQuery — null-guard for invalid SelectorValueField (issue #106)
+        // ----------------------------------------------------------------------
+
+        /// <summary>
+        /// Regression test for issue #106: when SelectorValueField names a property
+        /// that does not exist on TModel, GetSingleProperty returns null and the
+        /// previous code passed it (via !) to Expression.Property, throwing
+        /// ArgumentNullException at runtime. The fix falls back to the default
+        /// id-based Contains predicate and must not throw.
+        /// </summary>
+        [TestMethod]
+        public void GetBatchQuery_with_nonexistent_SelectorValueField_does_not_throw()
+        {
+            var vm = new SelectorStudentListVM();
+            vm.Wtm = MockWtmContext.CreateWtmContext(new DataContext(_seed, DBTypeEnum.Memory));
+            AddStudents(vm.DC!, 3);
+
+            // Set a field name that does NOT exist on Student — this is the attacker input.
+            vm.SelectorValueField = "___NonExistentField___";
+            vm.Ids = new List<string> { "any-id" };
+            vm.SearcherMode = ListVMSearchModeEnum.Batch;
+            vm.NeedPage = false;
+
+            // Must not throw ArgumentNullException; falls back to id-based Contains
+            // predicate (no student has id "any-id", so result is empty).
+            IOrderedQueryable<Student>? result = vm.GetBatchQuery();
+            Assert.IsNotNull(result);
+        }
+
+        /// <summary>
+        /// Complementary regression: when SelectorValueField names a valid property
+        /// the happy path still works correctly and is not affected by the guard.
+        /// </summary>
+        [TestMethod]
+        public void GetBatchQuery_with_valid_SelectorValueField_still_filters_correctly()
+        {
+            var vm = new SelectorStudentListVM();
+            vm.Wtm = MockWtmContext.CreateWtmContext(new DataContext(_seed, DBTypeEnum.Memory));
+            AddStudents(vm.DC!, 4);
+
+            vm.SelectorValueField = "LoginName";
+            vm.Ids = new List<string> { "u0", "u1" };
+            vm.SearcherMode = ListVMSearchModeEnum.Batch;
+            vm.NeedPage = false;
+            vm.DoSearch();
+
+            Assert.AreEqual(2, vm.EntityList.Count);
+        }
     }
 }
