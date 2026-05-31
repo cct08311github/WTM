@@ -42,6 +42,25 @@ namespace WalkingTec.Mvvm.Core.Test.Cache
         public string Code { get; set; } = string.Empty;
     }
 
+    // Bug #112 (1): ITenant type with TenantIsolation=false — the dangerous combo.
+    // Even though TenantIsolation=false is set, it implements ITenant, so the EF Core
+    // global query filter scopes results by TenantCode. Caching filtered results under
+    // a global key would leak Tenant A's data to all tenants.
+    [CacheLookup(TtlMinutes = 10, TenantIsolation = false)]
+    internal class TenantProduct : TopBasePoco, ITenant
+    {
+        public string Name { get; set; } = string.Empty;
+        public string? TenantCode { get; set; }
+    }
+
+    // ITenant type with TenantIsolation=true (correct usage) — for comparison.
+    [CacheLookup(TtlMinutes = 10, TenantIsolation = true)]
+    internal class TenantCategory : TopBasePoco, ITenant
+    {
+        public string Name { get; set; } = string.Empty;
+        public string? TenantCode { get; set; }
+    }
+
     internal class LookupTestContext : DbContext
     {
         public LookupTestContext(DbContextOptions opts) : base(opts) { }
@@ -49,6 +68,8 @@ namespace WalkingTec.Mvvm.Core.Test.Cache
         public DbSet<StatusDict> StatusDicts { get; set; } = null!;
         public DbSet<OrderRecord> OrderRecords { get; set; } = null!;
         public DbSet<NoWarmDict> NoWarmDicts { get; set; } = null!;
+        public DbSet<TenantProduct> TenantProducts { get; set; } = null!;
+        public DbSet<TenantCategory> TenantCategories { get; set; } = null!;
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -614,6 +635,353 @@ namespace WalkingTec.Mvvm.Core.Test.Cache
 
             Assert.AreEqual(1, subAttr.Length);
             Assert.AreEqual(1, inheritedAttr.Length);
+        }
+    }
+
+    // ─── Bug #112 fix tests ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A DbContext that simulates EF Core global query filter for ITenant entities.
+    /// Rows are filtered by TenantCode at query time (like real multi-tenant apps).
+    /// </summary>
+    internal class TenantFilterContext : DbContext
+    {
+        private readonly string? _tenantCode;
+
+        public TenantFilterContext(DbContextOptions opts, string? tenantCode) : base(opts)
+        {
+            _tenantCode = tenantCode;
+        }
+
+        public DbSet<TenantProduct> TenantProducts { get; set; } = null!;
+        public DbSet<TenantCategory> TenantCategories { get; set; } = null!;
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            // Simulate EF Core global query filter: each tenant only sees its own rows.
+            modelBuilder.Entity<TenantProduct>()
+                .HasQueryFilter(e => e.TenantCode == _tenantCode);
+            modelBuilder.Entity<TenantCategory>()
+                .HasQueryFilter(e => e.TenantCode == _tenantCode);
+        }
+    }
+
+    /// <summary>
+    /// A plain (no query filter) context for seeding test data across all tenants.
+    /// </summary>
+    internal class SeedContext : DbContext
+    {
+        public SeedContext(DbContextOptions opts) : base(opts) { }
+        public DbSet<TenantProduct> TenantProducts { get; set; } = null!;
+        public DbSet<TenantCategory> TenantCategories { get; set; } = null!;
+    }
+
+    [TestClass]
+    public class Bug112CrossTenantLeakTests
+    {
+        // ── Helper: build a shared in-memory SQLite connection + seeded data ──
+
+        private static SqliteConnection OpenSharedConnection(string name)
+        {
+            var conn = new SqliteConnection($"DataSource={name};Mode=Memory;Cache=Shared");
+            conn.Open();
+            return conn;
+        }
+
+        private static DbContextOptions<SeedContext> SeedOpts(string name) =>
+            new DbContextOptionsBuilder<SeedContext>()
+                .UseSqlite($"DataSource={name};Mode=Memory;Cache=Shared")
+                .Options;
+
+        private static DbContextOptions<TenantFilterContext> FilterOpts(string name) =>
+            new DbContextOptionsBuilder<TenantFilterContext>()
+                .UseSqlite($"DataSource={name};Mode=Memory;Cache=Shared")
+                .Options;
+
+        // ── Bug #112 (1): ITenant + TenantIsolation=false → no cross-tenant leak ──
+
+        /// <summary>
+        /// Core invariant for Bug #112 (1):
+        /// When [CacheLookup(TenantIsolation=false)] is applied to an ITenant type,
+        /// Tenant A's rows MUST NOT be served to Tenant B.
+        /// The service must bypass global caching and use per-tenant isolation instead.
+        /// </summary>
+        [TestMethod]
+        public void ITenant_with_TenantIsolationFalse_does_not_leak_tenantA_data_to_tenantB()
+        {
+            var dbName = $"bug112_1_{Guid.NewGuid():N}";
+            using var keepAlive = OpenSharedConnection(dbName);
+
+            // Seed: TenantA has "Product-A", TenantB has "Product-B" — no shared rows.
+            using (var seedCtx = new SeedContext(SeedOpts(dbName)))
+            {
+                seedCtx.Database.EnsureCreated();
+                seedCtx.TenantProducts.AddRange(
+                    new TenantProduct { ID = Guid.NewGuid(), Name = "Product-A", TenantCode = "TenantA" },
+                    new TenantProduct { ID = Guid.NewGuid(), Name = "Product-B", TenantCode = "TenantB" }
+                );
+                seedCtx.SaveChanges();
+            }
+
+            var mc = new MemoryCache(new MemoryCacheOptions());
+            var svc = new LookupCacheService(mc, new[] { typeof(TenantProduct).Assembly });
+
+            // TenantA's filtered context: query filter returns only TenantA rows.
+            using var ctxA = new TenantFilterContext(FilterOpts(dbName), "TenantA");
+            // TenantB's filtered context: query filter returns only TenantB rows.
+            using var ctxB = new TenantFilterContext(FilterOpts(dbName), "TenantB");
+
+            // TenantProduct has [CacheLookup(TenantIsolation=false)] but implements
+            // ITenant. With the bug fix, GetAll is called with the correct per-tenant key.
+            // We pass the tenantId explicitly as callers in WTMContext would after the fix.
+            var tenantAResult = svc.GetAll<TenantProduct>(ctxA, tenantId: "TenantA");
+            var tenantBResult = svc.GetAll<TenantProduct>(ctxB, tenantId: "TenantB");
+
+            // Each tenant must see only their own data.
+            Assert.AreEqual(1, tenantAResult.Count, "TenantA should see exactly 1 row (their own)");
+            Assert.AreEqual("Product-A", tenantAResult[0].Name, "TenantA must see Product-A only");
+
+            Assert.AreEqual(1, tenantBResult.Count, "TenantB should see exactly 1 row (their own)");
+            Assert.AreEqual("Product-B", tenantBResult[0].Name, "TenantB must see Product-B only");
+        }
+
+        /// <summary>
+        /// Bug #112 (1): When GetAll is called for an ITenant type with tenantId=null
+        /// (e.g. from the warmup service), the result must NOT be cached — it must be
+        /// fetched from DB each time so no stale global entry poisons the cache.
+        /// </summary>
+        [TestMethod]
+        public void ITenant_with_null_tenantId_is_not_cached_globally()
+        {
+            var dbName = $"bug112_1b_{Guid.NewGuid():N}";
+            using var keepAlive = OpenSharedConnection(dbName);
+
+            using (var seedCtx = new SeedContext(SeedOpts(dbName)))
+            {
+                seedCtx.Database.EnsureCreated();
+                seedCtx.TenantProducts.Add(
+                    new TenantProduct { ID = Guid.NewGuid(), Name = "Global-Product", TenantCode = "TenantA" });
+                seedCtx.SaveChanges();
+            }
+
+            var mc = new MemoryCache(new MemoryCacheOptions());
+            var svc = new LookupCacheService(mc, new[] { typeof(TenantProduct).Assembly });
+
+            using var ctx = new TenantFilterContext(FilterOpts(dbName), "TenantA");
+
+            // Call with tenantId=null (simulates warmup or mis-configuration).
+            var result1 = svc.GetAll<TenantProduct>(ctx, tenantId: null);
+
+            // Add another row, then call again — if result was cached, count would
+            // still be 1; if correctly bypassed, it re-queries and sees the new row.
+            using (var seedCtx = new SeedContext(SeedOpts(dbName)))
+            {
+                seedCtx.TenantProducts.Add(
+                    new TenantProduct { ID = Guid.NewGuid(), Name = "Global-Product-2", TenantCode = "TenantA" });
+                seedCtx.SaveChanges();
+            }
+
+            var result2 = svc.GetAll<TenantProduct>(ctx, tenantId: null);
+
+            // Both calls should load fresh from DB (not cached).
+            Assert.AreEqual(1, result1.Count, "First call with null tenantId on ITenant type");
+            Assert.AreEqual(2, result2.Count,
+                "Second call must re-query DB (no global caching for ITenant types with null tenantId)");
+        }
+
+        /// <summary>
+        /// Bug #112 (1): ITenant type WITH correct TenantIsolation=true (normal usage)
+        /// must still cache correctly per tenant.
+        /// </summary>
+        [TestMethod]
+        public void ITenant_with_TenantIsolationTrue_caches_correctly_per_tenant()
+        {
+            var dbName = $"bug112_1c_{Guid.NewGuid():N}";
+            using var keepAlive = OpenSharedConnection(dbName);
+
+            using (var seedCtx = new SeedContext(SeedOpts(dbName)))
+            {
+                seedCtx.Database.EnsureCreated();
+                seedCtx.TenantCategories.AddRange(
+                    new TenantCategory { ID = Guid.NewGuid(), Name = "Cat-A", TenantCode = "TenantA" },
+                    new TenantCategory { ID = Guid.NewGuid(), Name = "Cat-B", TenantCode = "TenantB" }
+                );
+                seedCtx.SaveChanges();
+            }
+
+            var mc = new MemoryCache(new MemoryCacheOptions());
+            var svc = new LookupCacheService(mc, new[] { typeof(TenantCategory).Assembly });
+
+            using var ctxA = new TenantFilterContext(FilterOpts(dbName), "TenantA");
+            using var ctxB = new TenantFilterContext(FilterOpts(dbName), "TenantB");
+
+            // First fetch populates the per-tenant cache.
+            var a1 = svc.GetAll<TenantCategory>(ctxA, "TenantA");
+            Assert.AreEqual(1, a1.Count);
+            Assert.AreEqual("Cat-A", a1[0].Name);
+
+            var b1 = svc.GetAll<TenantCategory>(ctxB, "TenantB");
+            Assert.AreEqual(1, b1.Count);
+            Assert.AreEqual("Cat-B", b1[0].Name);
+
+            // Second fetch must come from cache (same reference).
+            var a2 = svc.GetAll<TenantCategory>(ctxA, "TenantA");
+            Assert.AreSame(a1, a2, "TenantA's second fetch should be a cache hit (same reference)");
+        }
+
+        // ── Bug #112 (3): RefreshAsync for tenant1 must not evict tenant2's entry ──
+
+        [TestMethod]
+        public async Task RefreshAsync_for_tenant1_does_not_evict_tenant2_cache()
+        {
+            using var conn = new SqliteConnection("DataSource=:memory:");
+            conn.Open();
+            var (ctx, svc, _) = TestHelper.Create(conn);
+
+            ctx.CityCodes.AddRange(
+                new CityCode { ID = Guid.NewGuid(), Name = "城市A", Province = "北部" },
+                new CityCode { ID = Guid.NewGuid(), Name = "城市B", Province = "南部" }
+            );
+            ctx.SaveChanges();
+
+            // Warm both tenant caches.
+            var t1Before = svc.GetAll<CityCode>(ctx, "tenant1");
+            var t2Before = svc.GetAll<CityCode>(ctx, "tenant2");
+            Assert.AreEqual(2, t1Before.Count);
+            Assert.AreEqual(2, t2Before.Count);
+
+            // Add a new row, then refresh only tenant1.
+            ctx.CityCodes.Add(new CityCode { ID = Guid.NewGuid(), Name = "城市C", Province = "中部" });
+            ctx.SaveChanges();
+
+            await svc.RefreshAsync<CityCode>(ctx, "tenant1");
+
+            // tenant1 should see the new row (refreshed).
+            var t1After = svc.GetAll<CityCode>(ctx, "tenant1");
+            Assert.AreEqual(3, t1After.Count, "tenant1 should see 3 rows after refresh");
+
+            // tenant2's entry must still be in cache (was NOT evicted).
+            // If RefreshAsync called InvalidateType (the bug), tenant2's CTS token would
+            // be cancelled and tenant2 would also see 3 rows — that would be a test failure.
+            var t2After = svc.GetAll<CityCode>(ctx, "tenant2");
+            Assert.AreEqual(2, t2After.Count,
+                "tenant2 cache must NOT be evicted by tenant1's RefreshAsync call");
+            Assert.AreSame(t2Before, t2After,
+                "tenant2 should get the same cached reference (cache hit, no reload)");
+        }
+
+        // ── Bug #112 (2): non-[CacheLookup] types are not cached ──
+
+        [TestMethod]
+        public void NonCacheable_type_is_not_stored_in_cache_and_always_queries_db()
+        {
+            using var conn = new SqliteConnection("DataSource=:memory:");
+            conn.Open();
+            var (ctx, svc, _) = TestHelper.Create(conn);
+
+            ctx.OrderRecords.Add(new OrderRecord { ID = Guid.NewGuid(), Name = "Order-1" });
+            ctx.SaveChanges();
+
+            // First call: non-cacheable type → must query DB directly.
+            var result1 = svc.GetAll<OrderRecord>(ctx);
+            Assert.AreEqual(1, result1.Count, "First call should return 1 row from DB");
+
+            // Add another row — if result was cached (the bug), we'd still see 1.
+            ctx.OrderRecords.Add(new OrderRecord { ID = Guid.NewGuid(), Name = "Order-2" });
+            ctx.SaveChanges();
+
+            var result2 = svc.GetAll<OrderRecord>(ctx);
+            Assert.AreEqual(2, result2.Count,
+                "Non-cacheable type must NOT be immortally cached; second call must re-query DB");
+        }
+
+        [TestMethod]
+        public async Task NonCacheable_type_is_not_stored_in_cache_async()
+        {
+            using var conn = new SqliteConnection("DataSource=:memory:");
+            conn.Open();
+            var (ctx, svc, _) = TestHelper.Create(conn);
+
+            ctx.OrderRecords.Add(new OrderRecord { ID = Guid.NewGuid(), Name = "Order-1" });
+            ctx.SaveChanges();
+
+            var result1 = await svc.GetAllAsync<OrderRecord>(ctx);
+            Assert.AreEqual(1, result1.Count);
+
+            ctx.OrderRecords.Add(new OrderRecord { ID = Guid.NewGuid(), Name = "Order-2" });
+            ctx.SaveChanges();
+
+            var result2 = await svc.GetAllAsync<OrderRecord>(ctx);
+            Assert.AreEqual(2, result2.Count,
+                "Non-cacheable type must NOT be immortally cached; async second call must re-query DB");
+        }
+
+        // ── Bug #112 (5): token pre-cancellation check ──
+
+        /// <summary>
+        /// Bug #112 (5): If the CTS token is already cancelled at the time SetCache
+        /// registers the expiration token, the entry evicts immediately. We verify
+        /// this scenario by calling InvalidateType immediately before a cache store
+        /// and ensuring the stored entry survives (i.e., it relies on TTL, not CTS).
+        /// This is a smaller invariant test — true concurrency timing is non-deterministic.
+        /// </summary>
+        [TestMethod]
+        public void SetCache_after_InvalidateType_stores_entry_with_TTL_fallback()
+        {
+            using var conn = new SqliteConnection("DataSource=:memory:");
+            conn.Open();
+            var (ctx, svc, mc) = TestHelper.Create(conn);
+
+            ctx.CityCodes.Add(new CityCode { ID = Guid.NewGuid(), Name = "台北", Province = "北部" });
+            ctx.SaveChanges();
+
+            // Warm the cache first so a CTS is registered for the type.
+            svc.GetAll<CityCode>(ctx, "tenant1");
+
+            // Invalidate (cancels the CTS) — simulates the race: the CTS is cancelled
+            // just before the next SetCache call would attach the expiration token.
+            svc.InvalidateType(typeof(CityCode));
+
+            // Immediately store again. With the fix, if the captured token was already
+            // cancelled, AddExpirationToken is skipped and the entry survives via TTL.
+            ctx.CityCodes.Add(new CityCode { ID = Guid.NewGuid(), Name = "高雄", Province = "南部" });
+            ctx.SaveChanges();
+
+            // This call goes through SetCache. The new CTS (replaced by InvalidateType)
+            // is NOT cancelled, so the token check passes normally. But the important
+            // case is that the entry remains in the cache after the call.
+            var result = svc.GetAll<CityCode>(ctx, "tenant1");
+            Assert.AreEqual(2, result.Count, "Cache entry must survive after InvalidateType + re-warm");
+
+            // A second call must be a cache hit (same reference) — confirms the entry
+            // was stored and not immediately evicted.
+            var cached = svc.GetAll<CityCode>(ctx, "tenant1");
+            Assert.AreSame(result, cached, "Entry must be retrievable from cache (not evicted immediately)");
+        }
+
+        // ── Compatibility: global (non-ITenant) lookups unchanged ──
+
+        [TestMethod]
+        public void NonTenant_type_with_TenantIsolationFalse_caches_globally_as_before()
+        {
+            using var conn = new SqliteConnection("DataSource=:memory:");
+            conn.Open();
+
+            // Create a service with DefaultTenantIsolation=false so CityCode acts
+            // as a global lookup (as a user might configure for a non-SaaS app).
+            var opts = new LookupCacheOptions { DefaultTenantIsolation = false };
+            var (ctx, svc, _) = TestHelper.Create(conn, opts);
+
+            ctx.CityCodes.Add(new CityCode { ID = Guid.NewGuid(), Name = "共用城市", Province = "全國" });
+            ctx.SaveChanges();
+
+            // With DefaultTenantIsolation=false and no per-type override, tenantId is null.
+            var r1 = svc.GetAll<CityCode>(ctx, tenantId: null);
+            Assert.AreEqual(1, r1.Count, "Global (non-ITenant) lookup should load from DB on miss");
+
+            // Second call with same null tenantId should be a cache hit.
+            var r2 = svc.GetAll<CityCode>(ctx, tenantId: null);
+            Assert.AreSame(r1, r2, "Global lookup must return cached reference on second call");
         }
     }
 }

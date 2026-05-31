@@ -116,6 +116,27 @@
   `BuildCacheKey` signature updated from 3-arg to 4-arg; all existing tests updated
   and three new security-focused tests added (same-user replay still works; different
   users do not share entries; unauthenticated requests are not cached).
+- **LookupCache: five concurrency and correctness bugs fixed (#112)**:
+  (1) Cross-tenant data leak — `[CacheLookup(TenantIsolation=false)]` on an
+  `ITenant` type caused Tenant A's EF-filtered rows to be stored under a
+  global cache key and served to all tenants for the full TTL; the service
+  now forces per-tenant isolation for any type implementing `ITenant`
+  regardless of the attribute setting, and logs a Warning when the setting is
+  ignored. (2) Non-`[CacheLookup]` types were silently stored in the cache
+  without a TTL (immortal entry) and never invalidated; `GetAll`/`GetAllAsync`
+  now bypass the cache entirely for uncacheable types and query the DB
+  directly. (3) `RefreshAsync<T>(dc, tenantId)` called `InvalidateType` which
+  cancelled the shared CTS and evicted all tenants' entries for that type,
+  causing a cross-tenant stampede; it now calls `Invalidate<T>(tenantId)` to
+  remove only the single requesting tenant's key. (4) After a per-key
+  semaphore timeout, timed-out threads skipped the double-check and hit the DB
+  concurrently, defeating the stampede guard; they now re-check the cache
+  before falling through, and the semaphore is only released when it was
+  actually acquired. (5) A race between `InvalidateType` and
+  `AddExpirationToken` could cancel the `CancellationChangeToken` before it
+  was registered, evicting the just-stored entry immediately; the service now
+  checks `token.IsCancellationRequested` before registering the token and
+  falls back to the absolute TTL expiry.
 
 ## [10.5.3] - 2026-05-23
 

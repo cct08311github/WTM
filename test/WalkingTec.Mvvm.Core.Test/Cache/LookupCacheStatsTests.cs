@@ -162,8 +162,9 @@ namespace WalkingTec.Mvvm.Core.Test.Cache
             var all = svc.GetStats();
 
             // Registered cacheable types in the test assembly:
-            //   CityCode, StatusDict, NoWarmDict  (OrderRecord is NOT marked)
-            Assert.AreEqual(3, all.Count, "Expected 3 registered cacheable types.");
+            //   CityCode, StatusDict, NoWarmDict, TenantProduct, TenantCategory
+            //   (OrderRecord is NOT marked [CacheLookup])
+            Assert.AreEqual(5, all.Count, "Expected 5 registered cacheable types.");
             CollectionAssert.AllItemsAreNotNull((System.Collections.ICollection)all);
             // Sorted by FullName ascending
             var names = all.Select(s => s.EntityTypeName).ToArray();

@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Primitives;
 
 namespace WalkingTec.Mvvm.Core.Cache
@@ -25,6 +26,7 @@ namespace WalkingTec.Mvvm.Core.Cache
     {
         private readonly IMemoryCache _cache;
         private readonly LookupCacheOptions _options;
+        private readonly ILogger<LookupCacheService>? _logger;
 
         // per-type CTS，用於 InvalidateType（IMemoryCache 無 Clear 方法）
         private readonly Dictionary<Type, CancellationTokenSource> _ctsByType = new();
@@ -37,16 +39,57 @@ namespace WalkingTec.Mvvm.Core.Cache
         // 啟動時掃描結果（Build 後不再修改，FrozenDictionary 優化讀取路徑）
         private readonly FrozenDictionary<Type, CacheLookupAttribute> _registry;
 
+        // Bug #112 (1): 實作 ITenant 的型別集合，必須強制 tenant 隔離，
+        // 無論 [CacheLookup(TenantIsolation = false)] 如何設定。
+        // 原因：EF Core global query filter 會依 TenantCode 過濾資料，
+        // 若以 global key 快取，Tenant A 的過濾結果將洩漏給所有租戶。
+        private readonly FrozenSet<Type> _forcedTenantIsolationTypes;
+
         // Issue #826: per-type stats tracker (thread-safe counters + timestamps
         // + live tenant-key set). Lazy-populated the first time a type is
         // touched via any stats-affecting path.
         private readonly ConcurrentDictionary<Type, TypeStatsTracker> _stats = new();
 
         public LookupCacheService(IMemoryCache cache, IEnumerable<Assembly> assemblies, LookupCacheOptions? options = null)
+            : this(cache, assemblies, options, logger: null) { }
+
+        public LookupCacheService(
+            IMemoryCache cache,
+            IEnumerable<Assembly> assemblies,
+            LookupCacheOptions? options,
+            ILogger<LookupCacheService>? logger)
         {
             _cache = cache ?? throw new ArgumentNullException(nameof(cache));
             _options = options ?? new LookupCacheOptions();
+            _logger = logger;
             _registry = ScanAssemblies(assemblies);
+
+            // Bug #112 (1): build the forced-isolation set once at startup.
+            // Any type that implements ITenant MUST use tenant isolation even if
+            // [CacheLookup(TenantIsolation = false)] is present, because the EF
+            // Core global query filter scopes the DB query by TenantCode — caching
+            // the filtered result under a global key would serve Tenant A's rows
+            // to all other tenants for the full TTL.
+            var forced = new HashSet<Type>();
+            foreach (var t in _registry.Keys)
+            {
+                if (typeof(ITenant).IsAssignableFrom(t))
+                {
+                    forced.Add(t);
+                    var attr = _registry[t];
+                    // Warn only when the developer explicitly opted out of isolation.
+                    if (attr.TenantIsolationOrNull == false)
+                    {
+                        _logger?.LogWarning(
+                            "[WTM] LookupCache: {TypeName} implements ITenant but has " +
+                            "[CacheLookup(TenantIsolation = false)]. " +
+                            "TenantIsolation=false is ignored for ITenant types to prevent " +
+                            "cross-tenant data leaks. Tenant isolation will be enforced.",
+                            t.FullName ?? t.Name);
+                    }
+                }
+            }
+            _forcedTenantIsolationTypes = forced.ToFrozenSet();
         }
 
         // ─── Issue #826: internal stats tracker ──────────────────────────────
@@ -115,6 +158,25 @@ namespace WalkingTec.Mvvm.Core.Cache
 
         public IReadOnlyList<T> GetAll<T>(DbContext dc, string? tenantId = null) where T : TopBasePoco
         {
+            // Bug #112 (2): non-[CacheLookup] types must never be stored in the
+            // cache — without a TTL they would be immortal, and SaveChanges
+            // invalidation skips them (IsCacheable=false). Query directly and return.
+            if (!_registry.ContainsKey(typeof(T)))
+            {
+                return LoadFromDb<T>(dc);
+            }
+
+            // Bug #112 (1): ITenant types MUST use per-tenant cache keys.
+            // If the caller passed tenantId=null for an ITenant type (e.g. warmup
+            // service), we cannot safely cache: the DC's global query filter may
+            // scope to a specific tenant or return all-tenant rows depending on
+            // context — caching either under the global key risks a cross-tenant
+            // data leak. Skip caching and load directly from DB.
+            if (_forcedTenantIsolationTypes.Contains(typeof(T)) && tenantId == null)
+            {
+                return LoadFromDb<T>(dc);
+            }
+
             var key = BuildKey(typeof(T), tenantId);
 
             // Fast path：快取命中直接回傳
@@ -136,6 +198,26 @@ namespace WalkingTec.Mvvm.Core.Cache
                     return cached;
                 }
 
+                // Bug #112 (4): if we timed out waiting for the semaphore,
+                // re-check the cache one more time before falling through to a DB
+                // load. Under heavy concurrency the holder may have already filled
+                // the cache; a re-check avoids an unnecessary DB hit for most
+                // timed-out callers. If still absent, this thread loads from DB
+                // as a safe fallback — it just won't be stored under the semaphore
+                // protection (no double-store risk: SetCache uses CreateEntry which
+                // is idempotent, and the semaphore holder will overwrite with the
+                // same data).
+                if (!acquired)
+                {
+                    if (_cache.TryGetValue<IReadOnlyList<T>>(key, out cached) && cached != null)
+                    {
+                        RecordHit(typeof(T));
+                        return cached;
+                    }
+                    // Still absent: fall through and load from DB.
+                    // NOTE: semaphore was NOT acquired, so we must NOT Release it below.
+                }
+
                 // 此為唯一查 DB 的執行緒（或 timeout fallback）
                 RecordMiss(typeof(T));
                 var data = LoadFromDb<T>(dc);
@@ -143,6 +225,7 @@ namespace WalkingTec.Mvvm.Core.Cache
             }
             finally
             {
+                // Bug #112 (4): only release if we actually acquired the semaphore.
                 if (acquired) semaphore.Release();
             }
         }
@@ -152,6 +235,19 @@ namespace WalkingTec.Mvvm.Core.Cache
             string? tenantId = null,
             CancellationToken ct = default) where T : TopBasePoco
         {
+            // Bug #112 (2): non-[CacheLookup] types must never be stored in cache.
+            if (!_registry.ContainsKey(typeof(T)))
+            {
+                return await LoadFromDbAsync<T>(dc, ct).ConfigureAwait(false);
+            }
+
+            // Bug #112 (1): ITenant types with tenantId=null — skip cache (same
+            // rationale as sync path above).
+            if (_forcedTenantIsolationTypes.Contains(typeof(T)) && tenantId == null)
+            {
+                return await LoadFromDbAsync<T>(dc, ct).ConfigureAwait(false);
+            }
+
             var key = BuildKey(typeof(T), tenantId);
 
             // Fast path
@@ -173,12 +269,24 @@ namespace WalkingTec.Mvvm.Core.Cache
                     return cached;
                 }
 
+                // Bug #112 (4): semaphore timeout re-check (see sync version for rationale).
+                if (!acquired)
+                {
+                    if (_cache.TryGetValue<IReadOnlyList<T>>(key, out cached) && cached != null)
+                    {
+                        RecordHit(typeof(T));
+                        return cached;
+                    }
+                    // Fall through to DB load without holding the semaphore.
+                }
+
                 RecordMiss(typeof(T));
                 var data = await LoadFromDbAsync<T>(dc, ct).ConfigureAwait(false);
                 return SetCache<T>(key, data, tenantId);
             }
             finally
             {
+                // Bug #112 (4): only release if actually acquired.
                 if (acquired) semaphore.Release();
             }
         }
@@ -223,6 +331,17 @@ namespace WalkingTec.Mvvm.Core.Cache
 
         public bool DefaultTenantIsolation => _options.DefaultTenantIsolation;
 
+        /// <summary>
+        /// 判斷型別是否強制 tenant 隔離。
+        /// <para>
+        /// Bug #112 (1): ITenant 型別無論 [CacheLookup(TenantIsolation=false)] 設定如何，
+        /// 一律強制使用 tenant 隔離，避免 EF Core global query filter 過濾後的結果
+        /// 被快取在 global key 下洩漏給其他租戶。
+        /// </para>
+        /// </summary>
+        public bool IsEffectivelyTenantIsolated(Type entityType) =>
+            _forcedTenantIsolationTypes.Contains(entityType);
+
         public async Task RefreshAsync<T>(DbContext dc, string? tenantId = null, CancellationToken ct = default)
             where T : TopBasePoco
         {
@@ -231,7 +350,11 @@ namespace WalkingTec.Mvvm.Core.Cache
             bool acquired = await semaphore.WaitAsync(StampedeTimeout, ct).ConfigureAwait(false);
             try
             {
-                InvalidateType(typeof(T));
+                // Bug #112 (3): was InvalidateType(typeof(T)) which cancels the
+                // shared CTS → evicts ALL tenants' entries, causing a cross-tenant
+                // stampede. Replace with single-tenant Invalidate<T>(tenantId) which
+                // only removes the one cache key for this tenant.
+                Invalidate<T>(tenantId);
                 var data = await LoadFromDbAsync<T>(dc, ct).ConfigureAwait(false);
                 SetCache<T>(key, data, tenantId);
             }
@@ -271,7 +394,21 @@ namespace WalkingTec.Mvvm.Core.Cache
                 }
                 token = cts.Token;
             }
-            entry.AddExpirationToken(new CancellationChangeToken(token));
+
+            // Bug #112 (5): check for already-cancelled token before registering.
+            // A concurrent InvalidateType call may have cancelled the CTS between
+            // when we read the token and when we call AddExpirationToken. If the
+            // token is already cancelled the CancellationChangeToken fires
+            // immediately, evicting the entry we are still building and driving
+            // cache-hit rate to zero under high-frequency invalidation.
+            // Skip the CTS-based expiration when already cancelled; the
+            // AbsoluteExpirationRelativeToNow TTL above is sufficient for
+            // correctness — the CTS registration is only an eager-invalidation
+            // optimisation.
+            if (!token.IsCancellationRequested)
+            {
+                entry.AddExpirationToken(new CancellationChangeToken(token));
+            }
 
             // Issue #826: record warm + add to tenant-key set.
             RecordWarm(typeof(T), key);
