@@ -6,6 +6,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Text.Encodings.Web;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Extensions;
 using System.Text.Json;
@@ -181,7 +182,9 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     });
 
                 }
-                output.PostElement.AppendHtml($"<script>ff.LoadComboItems('combo','{ItemUrl}','{Id}','{Field.Name}',{JsonSerializer.Serialize(selectVal)})</script>");
+                // Issue #108: ItemUrl is developer-configured but defensive JS-encode to prevent
+                // JS string breakout if ever it contained quotes or backslashes.
+                output.PostElement.AppendHtml($"<script>ff.LoadComboItems('combo','{JavaScriptEncoder.Default.Encode(ItemUrl)}','{Id}','{Field.Name}',{JsonSerializer.Serialize(selectVal)})</script>");
             }
 
             else

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.AspNetCore.Razor.TagHelpers;
 using Microsoft.Extensions.Options;
@@ -261,8 +262,8 @@ layui.use(['laydate'],function(){{
   var dateIns = laydate.render({{
     elem: '#{Id}',
     type: '{Type.ToString().ToLower()}'
-    {(string.IsNullOrEmpty(RangeSplit) ? string.Empty : $",range:'{RangeSplit}'")}
-    {(string.IsNullOrEmpty(Format) ? string.Empty : $",format: '{Format}'")}
+    {(string.IsNullOrEmpty(RangeSplit) ? string.Empty : $",range:'{JavaScriptEncoder.Default.Encode(RangeSplit)}'")}
+    {(string.IsNullOrEmpty(Format) ? string.Empty : $",format: '{JavaScriptEncoder.Default.Encode(Format)}'")}
     {(string.IsNullOrEmpty(Min) ? string.Empty : $",min: {Min}")}
     {(string.IsNullOrEmpty(Max) ? string.Empty : $",max: {Max}")}
     {(!ZIndex.HasValue ? string.Empty : $",zIndex: {ZIndex.Value}")}
@@ -297,7 +298,7 @@ layui.use(['laydate'], function() {{
         elem: '#{Id}',
         type: '{Type.ToString().ToLower()}',
         range: true
-        {(string.IsNullOrEmpty(Format) ? string.Empty : $",format: '{Format}'")}
+        {(string.IsNullOrEmpty(Format) ? string.Empty : $",format: '{JavaScriptEncoder.Default.Encode(Format)}'")}
         {(string.IsNullOrEmpty(Min) ? string.Empty : $",min: {Min}")}
         {(string.IsNullOrEmpty(Max) ? string.Empty : $",max: {Max}")}
         {(!ZIndex.HasValue ? string.Empty : $",zIndex: {ZIndex.Value}")}

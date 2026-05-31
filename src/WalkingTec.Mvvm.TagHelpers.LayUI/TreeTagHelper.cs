@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.Razor.TagHelpers;
 using System;
 using System.Collections.Generic;
+using System.Net;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Extensions;
 using System.Linq;
@@ -247,13 +248,16 @@ var {Id} = xmSelect.render({{
                     {
                         foreach (var item in Field.Model as dynamic)
                         {
+                            // Issue #108: model values are user-influenceable data — encode to prevent
+                            // HTML-attribute injection via a crafted value containing ' or >.
                             hidden += $@"
-<input type='hidden' name='{Field?.Name}' value='{item.ToString()}'/>";
+<input type='hidden' name='{Field?.Name}' value='{WebUtility.HtmlEncode(item.ToString())}'/>";
                         }
                     }
                     else
                     {
-                        hidden += $"<input type='hidden' name='{Field?.Name}' value='{Field.Model}'/>";
+                        // Issue #108: same as above for single-select value.
+                        hidden += $"<input type='hidden' name='{Field?.Name}' value='{WebUtility.HtmlEncode(Field.Model?.ToString() ?? string.Empty)}'/>";
                     }
                     hidden += " </p>";
                 }

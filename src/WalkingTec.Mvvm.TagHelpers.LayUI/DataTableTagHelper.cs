@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -883,7 +885,7 @@ layui.use(['element'], function() {{
                         {
                             rowBtnStrBuilder.Append("{{#  if(d." + item.BindVisiableColName + " == true || d." + item.BindVisiableColName + " == 'true' || d." + item.BindVisiableColName + " == 'True' ){ }}");
                         }
-                        rowBtnStrBuilder.Append($@"<a class=""layui-btn {(string.IsNullOrEmpty(item.ButtonClass) ? "layui-btn-primary" : $"{item.ButtonClass}")} layui-btn-xs"" lay-event=""{item.Area + item.ControllerName + item.ActionName + item.QueryString}"">{item.Name}</a>");
+                        rowBtnStrBuilder.Append($@"<a class=""layui-btn {(string.IsNullOrEmpty(item.ButtonClass) ? "layui-btn-primary" : $"{item.ButtonClass}")} layui-btn-xs"" lay-event=""{item.Area + item.ControllerName + item.ActionName + item.QueryString}"">{WebUtility.HtmlEncode(item.Name)}</a>");
                         if (condition == true)
                         {
                             rowBtnStrBuilder.Append("{{#  } else{ }}");
@@ -892,7 +894,7 @@ layui.use(['element'], function() {{
                     }
                     else
                     {
-                        rowBtnStrBuilder.Append($@"<a class=""layui-btn {(string.IsNullOrEmpty(item.ButtonClass) ? "layui-btn-primary" : $"{item.ButtonClass}")} layui-btn-xs"" onclick=""ff.RemoveGridRow('{Id}',{Id}option,{{{{d.LAY_INDEX}}}});"">{item.Name}</a>");
+                        rowBtnStrBuilder.Append($@"<a class=""layui-btn {(string.IsNullOrEmpty(item.ButtonClass) ? "layui-btn-primary" : $"{item.ButtonClass}")} layui-btn-xs"" onclick=""ff.RemoveGridRow('{Id}',{Id}option,{{{{d.LAY_INDEX}}}});"">{WebUtility.HtmlEncode(item.Name)}</a>");
                     }
                 }
 
@@ -924,7 +926,7 @@ layui.use(['element'], function() {{
                         }
                         toolBarBtnStrBuilder.Append($@"<button type=""button"" class=""layui-btn {(string.IsNullOrEmpty(item.ButtonClass) ? "" : $"{item.ButtonClass}")} layui-btn-sm layui-unselect layui-form-select downpanel"" style=""z-index:9999;"" id=""btn_{item.ButtonId}"">
                                  <div class=""layui-select-title"" style=""padding-right:20px;"">
-                                        {item.Name}
+                                        {WebUtility.HtmlEncode(item.Name)}
                                  <i class=""layui-edge""></i>
                                  </div>
                                  <dl class=""layui-anim layui-anim-upbit"" style=""top: initial;padding:1px 0px 0px 0px;"" >
@@ -941,7 +943,7 @@ layui.use(['element'], function() {{
                         string substyle = "style=\"";
                         substyle += isSub ? "width: 100%;" : "";
                         substyle += "\"";
-                        toolBarBtnStrBuilder.Append($@"<a href=""javascript:void(0)"" onclick=""wtToolBarFunc_{Id}({{event:'{item.Area + item.ControllerName + item.ActionName + item.QueryString}'}});"" class=""layui-btn {(string.IsNullOrEmpty(item.ButtonClass) ? "" : $"{item.ButtonClass}")} layui-btn-sm"" {substyle}>{icon}{item.Name}</a>");
+                        toolBarBtnStrBuilder.Append($@"<a href=""javascript:void(0)"" onclick=""wtToolBarFunc_{Id}({{event:'{item.Area + item.ControllerName + item.ActionName + item.QueryString}'}});"" class=""layui-btn {(string.IsNullOrEmpty(item.ButtonClass) ? "" : $"{item.ButtonClass}")} layui-btn-sm"" {substyle}>{icon}{WebUtility.HtmlEncode(item.Name)}</a>");
                     }
                 }
                 var url = item.Url;
@@ -1091,8 +1093,10 @@ case '{item.Area + item.ControllerName + item.ActionName + item.QueryString}':{{
                     }
                     if (string.IsNullOrEmpty(item.PromptMessage) == false)
                     {
+                        // Issue #108: PromptMessage is developer-configured but still JS-encode it
+                        // defensively to prevent JS string breakout if it ever contains quotes/backslashes.
                         actionScript = $@"
-        layer.confirm('{item.PromptMessage}', {{title:'{THProgram._localizer["Sys.Info"]}'}},function(index){{
+        layer.confirm('{JavaScriptEncoder.Default.Encode(item.PromptMessage)}', {{title:'{JavaScriptEncoder.Default.Encode(THProgram._localizer["Sys.Info"])}'}},function(index){{
             {actionScript}
         layer.close(index);
       }});";
@@ -1110,7 +1114,12 @@ var isPost = false;
 
         private string getTemplate(string field,string random)
         {
-            return $@"function(d){{var sty = '';var bg = '';var did = '{field}{random}_'+d.LAY_INDEX;if(d.{field}__bgcolor != undefined) bg = ""<script>$('#""+did+""').closest('td').css('background-color','""+d.{field}__bgcolor+""');</s""+""cript>""; if(d.{field}__forecolor != undefined) sty = 'color:'+d.{field}__forecolor+';'; return '<div style=""'+sty+'"" id=""'+did+'"">'+d.{field}.replace(/\""/g,""'"")+bg+'</div>';}}";
+            // Issue #108: d.{field} is attacker-influenceable row data. Use ff.EscapeText
+            // (the jQuery-based HTML entity encoder already in the framework) so the value
+            // is HTML-encoded before being concatenated into the innerHTML of the cell div.
+            // Plain text still renders correctly because the browser decodes the entities;
+            // markup/script payloads are neutralised as literal characters.
+            return $@"function(d){{var sty = '';var bg = '';var did = '{field}{random}_'+d.LAY_INDEX;if(d.{field}__bgcolor != undefined) bg = ""<script>$('#""+did+""').closest('td').css('background-color','""+d.{field}__bgcolor+""');</s""+""cript>""; if(d.{field}__forecolor != undefined) sty = 'color:'+d.{field}__forecolor+';'; return '<div style=""'+sty+'"" id=""'+did+'"">'+ff.EscapeText(d.{field})+bg+'</div>';}}";
         }
 
         /// <summary>

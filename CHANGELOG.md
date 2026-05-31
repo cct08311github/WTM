@@ -80,6 +80,31 @@
   `PartialView` with empty `SelectData`; `GetBatchQuery` falls back to the
   default id-based `Contains` predicate). No behaviour change on the happy
   path. Regression tests added.
+- **XSS encoding in LayUI TagHelpers** (#108): Five encoding defects fixed
+  across DataTableTagHelper, TreeTagHelper, SelectorTagHelper,
+  ComboBoxTagHelper, DateTimeTagHelper, and UploadTagHelper.
+  - `DataTableTagHelper.getTemplate`: row data values (`d.<field>`) now
+    routed through `ff.EscapeText` before insertion as innerHTML, closing a
+    stored XSS vector where a DB cell containing markup would execute in the
+    browser.
+  - `DataTableTagHelper` button labels (`item.Name`) now HTML-encoded into
+    button/anchor HTML; `PromptMessage` now JS-encoded into `layer.confirm`
+    JS string.
+  - `TreeTagHelper` hidden `<input value>` now HTML-attribute-encoded
+    (`WebUtility.HtmlEncode`) for both multi-select and single-select model
+    values.
+  - `SelectorTagHelper` hidden `<input value>` for selected IDs now
+    HTML-attribute-encoded.
+  - `ComboBoxTagHelper` `ItemUrl` now JS-encoded before emission into the
+    `ff.LoadComboItems` script call.
+  - `DateTimeTagHelper` `Format` and `RangeSplit` now JS-encoded in both
+    the single and range `laydate.render` blocks.
+  - `UploadTagHelper` `Field.Model` (Guid) now HTML-encoded in the hidden
+    `<input value>` attribute.
+  - `FrameworkFilter.cs` line 377 (`model?.ViewDivId`): analysed and left
+    unmodified — `ViewDivId` is a framework-generated identifier
+    (`"ViewDiv" + UniqueId`) that is never user-influenceable; no fix
+    required.
 
 ## [10.5.3] - 2026-05-23
 

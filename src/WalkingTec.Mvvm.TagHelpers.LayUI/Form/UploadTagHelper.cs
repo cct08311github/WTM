@@ -1,4 +1,5 @@
 using System;
+using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Razor.TagHelpers;
@@ -167,9 +168,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 requiredtext = $" lay-verify=\"required\" lay-reqText=\"{THProgram._localizer["Validate.{0}required", Field?.Metadata?.DisplayName ?? Field?.Metadata?.Name]}\"";
             }
 
+            // Issue #108: Field.Model is a Guid stored in the DB but defensive HTML-encode
+            // to prevent attribute injection if it were ever non-Guid (e.g. test data or tampering).
             output.PostElement.SetHtmlContent($@"
-<input type='hidden' id='{Id}' name='{Field.Name}' value='{Field.Model}' {requiredtext} />
-");    
+<input type='hidden' id='{Id}' name='{Field.Name}' value='{WebUtility.HtmlEncode(Field.Model?.ToString() ?? string.Empty)}' {requiredtext} />
+");
             if (ShowProgress != null)
             {
                 if (ShowProgress == true)

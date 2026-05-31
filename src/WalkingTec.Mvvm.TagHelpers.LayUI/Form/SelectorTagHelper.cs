@@ -5,6 +5,7 @@ using System.Text.Json;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
 using WalkingTec.Mvvm.Core;
@@ -350,7 +351,9 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
                 var sb = new StringBuilder();
                 foreach (var item in list)
                 {
-                    sb.Append($"<input type='hidden' name='{Field.Name}' value='{item.ToString()}' />");
+                    // Issue #108: selected IDs come from the request and are user-influenceable.
+                    // Encode to prevent HTML-attribute injection via a crafted value containing ' or >.
+                    sb.Append($"<input type='hidden' name='{Field.Name}' value='{WebUtility.HtmlEncode(item.ToString())}' />");
                 }
                 hiddenStr = sb.ToString();
                 output.PreElement.AppendHtml($@"
