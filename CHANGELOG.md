@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Security
+
+- **Refresh-token double-rotation (TOCTOU race) — atomic claim fix** (#118):
+  `TokenService.RefreshTokenAsync` previously used a non-atomic read-check-modify-save
+  sequence that allowed two concurrent requests presenting the **same** refresh token
+  to both pass the `IsActive` guard, both rotate, and both receive independent
+  descendant tokens.  The attacker's token would stay alive permanently because
+  the reuse-detection chain only tracked one branch.
+  Fix: the revocation that "claims" a token for rotation is now a single
+  `ExecuteUpdateAsync` bulk-`UPDATE` with the active conditions embedded in the
+  `WHERE` clause (`RevokedUtc IS NULL AND ExpiresUtc > @now`).  Only one
+  concurrent caller can match the row; all others get `affected == 0` and are
+  immediately rejected — no new token is issued.  The existing sequential
+  reuse-detection behaviour (`RevokeDescendantsAsync`) is preserved and still
+  fires when a revoked token is replayed.  No DB schema change required;
+  compatible with all supported providers (MSSQL / MySQL / PostgreSQL / SQLite /
+  Oracle).  A concurrency-focused test suite (`RefreshTokenAtomicRotationTests`)
+  with 7 test cases was added to `test/WalkingTec.Mvvm.Core.Test/Security/`.
+
 ### Fixes
 
 - **REST widget SSRF hardening** (#101): seven security defects in the REST

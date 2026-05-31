@@ -57,35 +57,73 @@ namespace WalkingTec.Mvvm.Mvc.Auth
             var dc = scope.ServiceProvider.GetService<IDataContext>() as DbContext;
             if (dc == null) return null;
             var dbSet = dc.Set<RefreshTokenEntity>();
-            var existing = await dbSet.FirstOrDefaultAsync(x => x.Token == refreshToken);
-            if (existing == null || !existing.IsActive)
+
+            // ── Reuse-attack detection (read-only; no mutation yet) ──────────────
+            // Load with AsNoTracking so this read does not conflict with the
+            // ExecuteUpdateAsync claim below (which bypasses the change-tracker).
+            var existing = await dbSet.AsNoTracking()
+                .FirstOrDefaultAsync(x => x.Token == refreshToken);
+
+            if (existing == null)
+                return null;
+
+            if (existing.IsRevoked)
             {
-                // Token-reuse attack detection: a revoked token that was already replaced
-                // should never be presented again. If it is, an attacker may have stolen
-                // the old token. Revoke the entire descendant chain to contain the breach.
-                if (existing is { IsRevoked: true, ReplacedByToken: not null })
+                // A revoked token presented again is a reuse-attack signal.
+                // If it was previously rotated (ReplacedByToken != null), revoke
+                // the entire descendant chain to contain the potential breach.
+                if (existing.ReplacedByToken != null)
                 {
-                    await RevokeDescendantsAsync(dbSet, existing, ipAddress,
-                        "Attempted reuse of revoked token", _timeProvider);
-                    await dc.SaveChangesAsync();
+                    // Re-query with tracking so the descendant revocation can save.
+                    var tracked = await dbSet.FirstOrDefaultAsync(x => x.Token == refreshToken);
+                    if (tracked != null)
+                    {
+                        await RevokeDescendantsAsync(dbSet, tracked, ipAddress,
+                            "Attempted reuse of revoked token", _timeProvider);
+                        await dc.SaveChangesAsync();
+                    }
                 }
                 return null;
             }
+
+            if (existing.IsExpired)
+                return null;
+
+            // ── Atomic claim via ExecuteUpdateAsync ───────────────────────────────
+            // Only the first concurrent caller wins; any later caller that presents
+            // the same token finds RevokedUtc already set and gets claimed == 0.
+            var now = _timeProvider.GetUtcNow().UtcDateTime;
             var newTokenString = GenerateRefreshTokenString();
-            existing.RevokedUtc = _timeProvider.GetUtcNow().UtcDateTime;
-            existing.RevokedByIp = ipAddress;
-            existing.ReplacedByToken = newTokenString;
-            existing.RevokeReason = "Rotated";
+
+            var claimed = await dbSet
+                .Where(x => x.Token == refreshToken
+                             && x.RevokedUtc == null          // still active
+                             && x.ExpiresUtc > now)           // not expired
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(x => x.RevokedUtc, now)
+                    .SetProperty(x => x.RevokedByIp, ipAddress)
+                    .SetProperty(x => x.ReplacedByToken, newTokenString)
+                    .SetProperty(x => x.RevokeReason, "Rotated"));
+
+            if (claimed == 0)
+            {
+                // Another concurrent request already rotated this token — or it
+                // became inactive between our read and this update. Treat as failure.
+                return null;
+            }
+
+            // ── Issue new token ───────────────────────────────────────────────────
             var newEntity = new RefreshTokenEntity
             {
                 Token = newTokenString,
                 ITCode = existing.ITCode,
                 TenantCode = existing.TenantCode,
-                ExpiresUtc = _timeProvider.GetUtcNow().UtcDateTime.AddDays(RefreshTokenExpiryDays),
+                ExpiresUtc = now.AddDays(RefreshTokenExpiryDays),
                 CreatedByIp = ipAddress
             };
             await dbSet.AddAsync(newEntity);
             await dc.SaveChangesAsync();
+
             var userInfo = new LoginUserInfo
             { ITCode = existing.ITCode, TenantCode = existing.TenantCode };
             return new Token
