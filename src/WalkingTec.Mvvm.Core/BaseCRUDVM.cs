@@ -385,7 +385,9 @@ namespace WalkingTec.Mvvm.Core
         {
             DoAddPrepare();
             AppendChangeLog("Add", null, SerializeScalarProps(Entity));
-            //删除不需要的附件
+            // Persist to DB first; only delete orphaned files after a successful save
+            // so that a failed insert does not leave files permanently deleted (Issue #104, Bug 3).
+            DC!.SaveChanges();
             if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm?.ServiceProvider != null)
             {
                 var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
@@ -395,14 +397,15 @@ namespace WalkingTec.Mvvm.Core
                     fp.DeleteFile(item.ToString(), DC!);
                 }
             }
-            DC!.SaveChanges();
         }
 
         public virtual async Task DoAddAsync()
         {
             DoAddPrepare();
             AppendChangeLog("Add", null, SerializeScalarProps(Entity));
-            //删除不需要的附件
+            // Persist to DB first; only delete orphaned files after a successful save
+            // so that a failed insert does not leave files permanently deleted (Issue #104, Bug 3).
+            await DC!.SaveChangesAsync();
             if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm?.ServiceProvider != null)
             {
                 var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
@@ -412,7 +415,6 @@ namespace WalkingTec.Mvvm.Core
                     fp.DeleteFile(item.ToString(), DC!.ReCreate());
                 }
             }
-            await DC!.SaveChangesAsync();
         }
 
         private void DoAddPrepare()
@@ -567,9 +569,13 @@ namespace WalkingTec.Mvvm.Core
             DoEditPrepare(updateAllFields);
             AppendChangeLog("Edit", SerializeScalarProps(_auditSnapshot), SerializeScalarProps(Entity));
 
+            // Track whether SaveChanges succeeded so we only delete files on success
+            // (Issue #104, Bug 2).
+            bool saved = false;
             try
             {
                 DC!.SaveChanges();
+                saved = true;
             }
             catch (DbUpdateConcurrencyException)
             {
@@ -580,8 +586,8 @@ namespace WalkingTec.Mvvm.Core
             {
                 MSD?.AddModelError(" ", Localizer?["Sys.EditFailed"] ?? "Edit failed");
             }
-            //删除不需要的附件
-            if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm?.ServiceProvider != null)
+            //删除不需要的附件 — only when the DB save succeeded (Issue #104, Bug 2)
+            if (saved && DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm?.ServiceProvider != null)
             {
                 var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
 
@@ -599,9 +605,13 @@ namespace WalkingTec.Mvvm.Core
             DoEditPrepare(updateAllFields);
             AppendChangeLog("Edit", SerializeScalarProps(_auditSnapshot), SerializeScalarProps(Entity));
 
+            // Track whether SaveChangesAsync succeeded so we only delete files on success
+            // (Issue #104, Bug 2).
+            bool saved = false;
             try
             {
                 await DC!.SaveChangesAsync();
+                saved = true;
             }
             catch (DbUpdateConcurrencyException)
             {
@@ -612,8 +622,8 @@ namespace WalkingTec.Mvvm.Core
             {
                 MSD?.AddModelError(" ", Localizer?["Sys.EditFailed"] ?? "Edit failed");
             }
-            //删除不需要的附件
-            if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm?.ServiceProvider != null)
+            //删除不需要的附件 — only when the DB save succeeded (Issue #104, Bug 2)
+            if (saved && DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm?.ServiceProvider != null)
             {
                 var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
 

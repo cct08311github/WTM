@@ -38,6 +38,35 @@
   `AllowPrivateNetwork=true` or `AllowHttp=true` for internal REST widgets,
   move those flags into the widget's server-side
   `WidgetSourceDefinition.RestOptions` in your dashboard JSON.
+=======
+- **BaseBatchVM.DoBatchDelete — wrong entity deleted on unordered DB return** (#104):
+  Built a dictionary mapping each entity's ID to the entity so that the permission
+  check (`CheckIfCanDelete`) and the deletion always operate on the same record,
+  regardless of the order in which the DB returns rows. Non-existent IDs continue to
+  be silently skipped (backward-compatible).
+
+- **BaseCRUDVM.DoEdit / DoEditAsync — files deleted when SaveChanges failed** (#104):
+  Added a `saved` flag that is set to `true` only inside the `try` block after
+  `SaveChanges()` succeeds. The `DeletedFileIds` file-deletion block is now gated
+  on `saved`, so orphaned-attachment cleanup never runs when the DB update fails
+  (e.g. `DbUpdateConcurrencyException`).
+
+- **BaseCRUDVM.DoAdd / DoAddAsync — files deleted before SaveChanges** (#104):
+  Moved the `DeletedFileIds` deletion block to after `SaveChanges()` /
+  `SaveChangesAsync()`. A failed insert no longer permanently deletes the
+  referenced file attachments.
+
+- **BaseImportVM — IndexOutOfRangeException on templates with Dynamic columns** (#104):
+  Restored correct `pIndex` / `i` advancement in the header-validation loop.
+  For a `ColumnDataType.Dynamic` property the outer column index `i` now skips
+  forward by `DynamicColumns.Count - 1` while `pIndex` only advances once,
+  matching the expanded column count. Normal (non-dynamic) templates are unaffected.
+
+- **BaseBatchVM.DoBatchEdit — false-positive duplicate for every edited row** (#104):
+  Added `vm.SetEntity(entity)` before `vm.Validate()` in the per-row loop so that
+  `ValidateDuplicateData` excludes the correct entity ID (the row being edited) from
+  its uniqueness query. Previously `vm.Entity.ID` was `Guid.Empty`, causing every
+  batch-edit row to be flagged as a duplicate of itself.
 
 ## [10.5.3] - 2026-05-23
 

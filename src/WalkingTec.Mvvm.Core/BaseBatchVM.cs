@@ -141,15 +141,24 @@ namespace WalkingTec.Mvvm.Core
             }
             query = query.AsNoTracking().CheckIDs([.. idsData.Select(x => (string?)x)]);
             List<TModel> entityList = [.. query];
-            for (int i = 0; i < entityList.Count; i++)
+            // Build a dictionary so that each submitted ID maps to its own entity,
+            // regardless of the unordered DB return sequence (Issue #104, Bug 1).
+            var entityById = entityList.ToDictionary(e => e.GetID().ToString()!);
+            foreach (string idsDataItem in idsData)
             {
+                // If the entity was not found in the DB, skip it silently (preserves
+                // backward-compatible behaviour for IDs that no longer exist).
+                if (!entityById.TryGetValue(idsDataItem, out var foundEntity))
+                {
+                    continue;
+                }
                 string? checkErro = null;
                 //检查是否可以删除，如不能删除则直接跳过
-                if (CheckIfCanDelete(idsData[i], out checkErro) == false)
+                if (CheckIfCanDelete(idsDataItem, out checkErro) == false)
                 {
                     lock (_errorMessageLock)
                     {
-                        ErrorMessage.TryAdd(idsData[i], checkErro!);
+                        ErrorMessage.TryAdd(idsDataItem, checkErro!);
                     }
                     rv = false;
                     break;
@@ -157,7 +166,7 @@ namespace WalkingTec.Mvvm.Core
                 //进行删除
                 try
                 {
-                    var Entity = entityList[i];
+                    var Entity = foundEntity;
                     if (isPersist)
                     {
                         (Entity as IPersistPoco)!.IsValid = false;
@@ -223,7 +232,7 @@ namespace WalkingTec.Mvvm.Core
                 }
                 catch (Exception e)
                 {
-                    SetExceptionMessage(e, idsData[i]);
+                    SetExceptionMessage(e, idsDataItem);
                     rv = false;
                 }
             }
@@ -341,6 +350,9 @@ namespace WalkingTec.Mvvm.Core
                     //如果有对应的BaseCRUDVM则使用其进行数据验证
                     if (vm != null)
                     {
+                        // Set the entity on the CRUD VM so ValidateDuplicateData excludes
+                        // the correct ID, preventing false-positive duplicate errors (Issue #104, Bug 5).
+                        vm.SetEntity(entity);
                         vm.Validate();
                         var errors = vm.MSD;
                         if (errors != null && errors.Count > 0)

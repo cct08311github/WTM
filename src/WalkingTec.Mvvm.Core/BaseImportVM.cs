@@ -304,37 +304,28 @@ namespace WalkingTec.Mvvm.Core
                 }
 
                 //【CHECK】判断字段是否根据顺序能一对一相对应。  //是否可以去除？
+                // pIndex tracks position in ListTemplateProptetys (one per template property).
+                // i tracks position in the actual Excel column headers (may be more for Dynamic).
+                // Dynamic columns expand to DynamicColumns.Count cells, so i must skip forward
+                // by that many steps while pIndex only advances once (Issue #104, Bug 4).
                 int pIndex = 0;
                 HasSubTable = false;
                 for (int i = 0; i < cells.Count; i++)
                 {
                     //是否有子表
                     HasSubTable = ListTemplateProptetys[pIndex].SubTableType != null ? true : HasSubTable;
-                    //if (ListTemplateProptetys[pIndex].DataType != ColumnDataType.Dynamic)
-                    //{
-                    //    if (cells[i].ToString().Trim('*') != ListTemplateProptetys[pIndex].ColumnName)
-                    //    {
-                    //        ErrorListVM.EntityList.Add(new ErrorMessage { Message = (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.WrongTemplate"] : null) });
-                    //        return;
-                    //    }
-                    //    pIndex++;
-                    //}
-                    //else
-                    //{
-                    //    var listDynamicColumns = ListTemplateProptetys[i].DynamicColumns;
-                    //    int dcCount = listDynamicColumns.Count;
-                    //    for (int dclIndex = 0; dclIndex < dcCount; dclIndex++)
-                    //    {
-                    //        if (cells[i].ToString().Trim('*') != listDynamicColumns[dclIndex].ColumnName)
-                    //        {
-                    //            ErrorListVM.EntityList.Add(new ErrorMessage { Message = (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.WrongTemplate"] : null) });
-                    //            break;
-                    //        }
-                    //        i = i + 1;
-                    //    }
-                    //    i = i - 1;
+                    if (ListTemplateProptetys[pIndex].DataType == ColumnDataType.Dynamic)
+                    {
+                        // Skip forward by the number of dynamic sub-columns minus 1
+                        // (the outer for-loop will add 1 more on the next iteration).
+                        int dcCount = ListTemplateProptetys[pIndex].DynamicColumns.Count;
+                        i += dcCount - 1;
                         pIndex++;
-                    //}
+                    }
+                    else
+                    {
+                        pIndex++;
+                    }
                 }
 
                 //如果有子表，则设置主表字段非必填
