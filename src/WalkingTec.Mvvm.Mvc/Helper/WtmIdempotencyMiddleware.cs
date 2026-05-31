@@ -1,12 +1,14 @@
 #nullable enable
 using System;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Core.Auth;
 
 namespace WalkingTec.Mvvm.Mvc
 {
@@ -40,9 +42,14 @@ namespace WalkingTec.Mvvm.Mvc
     /// Security notes:
     /// </para>
     /// <list type="bullet">
-    /// <item>Keys are length-capped and scoped by <c>method + path + key</c>
+    /// <item>Keys are length-capped and scoped by <c>user + method + path + key</c>
     /// so an attacker cannot reuse the same key to grab a cached
-    /// response from a different endpoint.</item>
+    /// response from a different endpoint or a different user.</item>
+    /// <item>Unauthenticated requests (no resolvable user identity) are
+    /// passed through without idempotency caching. This prevents cache
+    /// poisoning via shared anonymous buckets and is safe because
+    /// idempotent endpoints in WTM are inherently authenticated
+    /// (payments, orders, mutations).</item>
     /// <item>Only the body + status + content-type are cached. Response
     /// headers such as <c>Set-Cookie</c> are intentionally NOT replayed
     /// (would leak a previous user's session into a new caller).</item>
@@ -116,7 +123,29 @@ namespace WalkingTec.Mvvm.Mvc
                 return;
             }
 
-            var cacheKey = BuildCacheKey(context.Request.Method, context.Request.Path, rawKey);
+            // Resolve per-user identity using the same claim WTMContext uses
+            // (AuthConstants.JwtClaimTypes.Subject == "itcode"). Falling back to
+            // ClaimTypes.NameIdentifier covers non-WTM token issuers.
+            // If no identity is found the request is unauthenticated and we
+            // skip caching entirely — this prevents anonymous callers from
+            // poisoning a shared bucket or observing another user's cached body.
+            var userId = context.User?.Claims
+                .Where(c => c.Type == AuthConstants.JwtClaimTypes.Subject)
+                .Select(c => c.Value)
+                .FirstOrDefault()
+                ?? context.User?.Claims
+                .Where(c => c.Type == System.Security.Claims.ClaimTypes.NameIdentifier)
+                .Select(c => c.Value)
+                .FirstOrDefault();
+
+            if (string.IsNullOrEmpty(userId))
+            {
+                // Unauthenticated: pass through without caching (see security notes).
+                await _next(context).ConfigureAwait(false);
+                return;
+            }
+
+            var cacheKey = BuildCacheKey(context.Request.Method, context.Request.Path, rawKey, userId);
             if (_cache.TryGetValue(cacheKey, out CachedResponse? cached) && cached != null)
             {
                 await ReplayAsync(context, cached).ConfigureAwait(false);
@@ -196,14 +225,27 @@ namespace WalkingTec.Mvvm.Mvc
             return context.Response.WriteAsync(JsonSerializer.Serialize(payload, JsonOptions));
         }
 
-        /// <summary>Deterministic cache-key scoping by method + path + user-supplied idempotency key. Public for unit-test determinism.</summary>
-        public static string BuildCacheKey(string method, PathString path, string idempotencyKey)
+        /// <summary>
+        /// Deterministic cache-key scoping by user identity + method + path + user-supplied
+        /// idempotency key. Public for unit-test determinism.
+        /// </summary>
+        /// <param name="method">HTTP method (normalised to uppercase).</param>
+        /// <param name="path">Request path.</param>
+        /// <param name="idempotencyKey">Client-supplied <c>Idempotency-Key</c> header value.</param>
+        /// <param name="userId">
+        /// Authenticated user identity (from <c>itcode</c> / <c>NameIdentifier</c> claim).
+        /// Must be non-null and non-empty; callers are responsible for skipping caching
+        /// when no identity is available (unauthenticated requests).
+        /// </param>
+        public static string BuildCacheKey(string method, PathString path, string idempotencyKey, string userId)
         {
-            // Scoping by method + path prevents an attacker from reusing
-            // a stolen key against a different endpoint (e.g. trying the
-            // same key against /api/admin/* that worked on /api/orders).
+            // Scoping by user + method + path prevents cross-user response
+            // replay: two authenticated users submitting the same
+            // Idempotency-Key against the same endpoint no longer share a
+            // cache entry. Scoping by method + path also prevents an attacker
+            // from reusing a stolen key against a different endpoint.
             var p = path.HasValue ? path.Value : "/";
-            return string.Concat("wtm:idem:", method.ToUpperInvariant(), ":", p, ":", idempotencyKey);
+            return string.Concat("wtm:idem:u:", userId, ":", method.ToUpperInvariant(), ":", p, ":", idempotencyKey);
         }
 
         /// <summary>Allow-list check against a conservative ASCII subset (letters / digits / <c>-_.:</c>). Public for unit-test determinism.</summary>

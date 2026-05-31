@@ -105,6 +105,17 @@
     unmodified — `ViewDivId` is a framework-generated identifier
     (`"ViewDiv" + UniqueId`) that is never user-influenceable; no fix
     required.
+- **Cross-user idempotency cache replay (security)** (#110): `WtmIdempotencyMiddleware`
+  previously built cache keys from `method + path + Idempotency-Key` only, allowing
+  two authenticated users with the same `Idempotency-Key` to share a cache entry.
+  An attacker who guessed or observed another user's key could receive that user's
+  cached 2xx response body (order, payment, PII). Fixed by incorporating the
+  authenticated user identity (`itcode` claim, falling back to `NameIdentifier`) into
+  the cache key as a `u:{userId}` prefix segment. Unauthenticated requests now pass
+  through the pipeline without caching to prevent anonymous shared-bucket poisoning.
+  `BuildCacheKey` signature updated from 3-arg to 4-arg; all existing tests updated
+  and three new security-focused tests added (same-user replay still works; different
+  users do not share entries; unauthenticated requests are not cached).
 
 ## [10.5.3] - 2026-05-23
 
