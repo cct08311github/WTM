@@ -137,6 +137,42 @@
   was registered, evicting the just-stored entry immediately; the service now
   checks `token.IsCancellationRequested` before registering the token and
   falls back to the absolute TTL expiry.
+### Security
+
+- **`GetRemoteIpAddress` no longer trusts `X-Forwarded-For` by default** (#114):
+  `HttpContextExtention.GetRemoteIpAddress` previously read the raw
+  `X-Forwarded-For` header unconditionally, allowing any attacker to spoof
+  their client IP and bypass maintenance-mode allow-lists, rate-limit
+  partitions, CSP-report per-IP buckets, and `WtmIpAllowListAttribute`.
+  The method now returns `Connection.RemoteIpAddress` (the verified TCP peer
+  address) by default.
+
+  **Migration** — choose one:
+
+  1. *(Recommended)* **Configure ASP.NET Core's built-in `ForwardedHeaders`
+     middleware** so that `Connection.RemoteIpAddress` is already set to the
+     real client IP by the time WTM middleware runs.  Call in `Program.cs`:
+     ```csharp
+     builder.Services.AddWtmForwardedHeaders(opts =>
+     {
+         opts.KnownNetworks.Add(new IPNetwork(IPAddress.Parse("10.0.0.0"), 8));
+         // add all your proxy subnets
+     });
+     // ... then in app pipeline (before UseRouting):
+     app.UseWtmForwardedHeaders();
+     ```
+     No other code changes are needed — all call sites continue to call
+     `GetRemoteIpAddress()` and automatically receive the validated client IP.
+
+  2. *(Temporary back-compat)* Set `TrustForwardedForHeader: true` in
+     `appsettings.json` (or via `AddWtmContext`) to restore the old
+     raw-XFF-first behaviour:
+     ```json
+     { "TrustForwardedForHeader": true }
+     ```
+     This is spoofable when the app is not behind a trusted proxy that strips
+     inbound `X-Forwarded-For` values.  Use only as a short-term measure while
+     migrating to option 1.
 
 ## [10.5.3] - 2026-05-23
 

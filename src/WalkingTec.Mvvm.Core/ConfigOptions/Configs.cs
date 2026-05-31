@@ -533,5 +533,42 @@ namespace WalkingTec.Mvvm.Core
 
         #endregion
 
+        #region TrustForwardedForHeader
+
+        private bool? _trustForwardedForHeader;
+
+        /// <summary>
+        /// When <c>true</c>, <c>HttpContextExtention.GetRemoteIpAddress</c>
+        /// reads the raw <c>X-Forwarded-For</c> header first (legacy / back-compat behaviour).
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <b>Default: <c>false</c> (secure).</b> With the default, client IP is resolved
+        /// from <c>HttpContext.Connection.RemoteIpAddress</c> — the verified TCP peer address —
+        /// so an attacker cannot spoof IP-based controls such as maintenance-mode allow-lists,
+        /// rate-limit partitions, CSP-report buckets, or <c>WtmIpAllowListAttribute</c>.
+        /// </para>
+        /// <para>
+        /// <b>For reverse-proxy deployments</b> (nginx, Kestrel behind a load balancer, etc.)
+        /// the <em>recommended</em> migration path is to call
+        /// <c>services.AddWtmForwardedHeaders()</c> and <c>app.UseWtmForwardedHeaders()</c>
+        /// with your <c>KnownProxies</c>/<c>KnownNetworks</c> configured.  ASP.NET Core's
+        /// built-in <c>ForwardedHeadersMiddleware</c> then rewrites
+        /// <c>Connection.RemoteIpAddress</c> to the validated client IP before any WTM
+        /// middleware runs, so no code change is needed in business logic.
+        /// </para>
+        /// <para>
+        /// Set to <c>true</c> only as a short-term back-compat measure when adopting
+        /// <c>UseWtmForwardedHeaders</c> is not immediately feasible.  Issue #114.
+        /// </para>
+        /// </remarks>
+        public bool TrustForwardedForHeader
+        {
+            get => _trustForwardedForHeader ?? false;
+            set => _trustForwardedForHeader = value;
+        }
+
+        #endregion
+
     }
 }

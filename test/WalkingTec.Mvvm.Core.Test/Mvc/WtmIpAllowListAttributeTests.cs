@@ -138,10 +138,15 @@ namespace WalkingTec.Mvvm.Core.Test.Mvc
 
         // ── MVC integration ─────────────────────────────────────────────
 
+        /// <summary>
+        /// Issue #114 (back-compat): with <c>TrustForwardedForHeader=true</c>,
+        /// a matching <c>X-Forwarded-For</c> header still allows access to a
+        /// guarded action — this is the legacy behaviour preserved behind the opt-in flag.
+        /// </summary>
         [TestMethod]
-        public async Task Allowed_ip_in_xforwarded_reaches_action()
+        public async Task Allowed_ip_in_xforwarded_reaches_action_when_trust_flag_set()
         {
-            using var host = await BuildHostAsync();
+            using var host = await BuildHostAsync(trustXff: true);
             var client = host.GetTestClient();
 
             var req = new HttpRequestMessage(HttpMethod.Get, "/ipguard/restricted");
@@ -152,10 +157,31 @@ namespace WalkingTec.Mvvm.Core.Test.Mvc
             Assert.AreEqual("inside", await response.Content.ReadAsStringAsync());
         }
 
+        /// <summary>
+        /// Issue #114 (secure default): with the default
+        /// <c>TrustForwardedForHeader=false</c>, a spoofed
+        /// <c>X-Forwarded-For</c> header does NOT bypass the IP allow-list.
+        /// The real connection IP (127.0.0.1 from TestServer) is used instead,
+        /// which is not in the allow-list.
+        /// </summary>
+        [TestMethod]
+        public async Task Spoofed_xff_does_not_bypass_ip_allowlist_by_default()
+        {
+            using var host = await BuildHostAsync(trustXff: false);
+            var client = host.GetTestClient();
+
+            var req = new HttpRequestMessage(HttpMethod.Get, "/ipguard/restricted");
+            req.Headers.Add("X-Forwarded-For", "10.5.5.5"); // spoofed — in the CIDR list
+            var response = await client.SendAsync(req);
+
+            Assert.AreEqual(HttpStatusCode.Forbidden, response.StatusCode,
+                "Spoofed XFF must not bypass WtmIpAllowListAttribute under the secure default.");
+        }
+
         [TestMethod]
         public async Task Rejected_ip_returns_403()
         {
-            using var host = await BuildHostAsync();
+            using var host = await BuildHostAsync(trustXff: true);
             var client = host.GetTestClient();
 
             var req = new HttpRequestMessage(HttpMethod.Get, "/ipguard/restricted");
@@ -168,7 +194,7 @@ namespace WalkingTec.Mvvm.Core.Test.Mvc
         [TestMethod]
         public async Task Custom_fallback_status_code_is_honoured()
         {
-            using var host = await BuildHostAsync();
+            using var host = await BuildHostAsync(trustXff: true);
             var client = host.GetTestClient();
 
             var req = new HttpRequestMessage(HttpMethod.Get, "/ipguard/teapot");
@@ -181,7 +207,7 @@ namespace WalkingTec.Mvvm.Core.Test.Mvc
         [TestMethod]
         public async Task Undecorated_action_ignores_ip_filter()
         {
-            using var host = await BuildHostAsync();
+            using var host = await BuildHostAsync(trustXff: false);
             var client = host.GetTestClient();
 
             var req = new HttpRequestMessage(HttpMethod.Get, "/ipguard/open");
@@ -193,7 +219,7 @@ namespace WalkingTec.Mvvm.Core.Test.Mvc
 
         // ── Scaffolding ─────────────────────────────────────────────────
 
-        private static async Task<IHost> BuildHostAsync()
+        private static async Task<IHost> BuildHostAsync(bool trustXff = false)
         {
             var host = new HostBuilder()
                 .ConfigureWebHost(w =>
@@ -204,6 +230,8 @@ namespace WalkingTec.Mvvm.Core.Test.Mvc
                         services.AddLogging();
                         services.AddControllers()
                                 .AddApplicationPart(typeof(WtmIpAllowListAttributeTests).Assembly);
+                        services.Configure<WalkingTec.Mvvm.Core.Configs>(c =>
+                            c.TrustForwardedForHeader = trustXff);
                     });
                     w.Configure(app =>
                     {

@@ -132,14 +132,21 @@ namespace WalkingTec.Mvvm.Core.Test.Mvc
 
         // ── Allow-list: IP ────────────────────────────────────────────────
 
+        /// <summary>
+        /// Issue #114 (back-compat): with <c>TrustForwardedForHeader=true</c>,
+        /// a matching <c>X-Forwarded-For</c> header still bypasses maintenance
+        /// mode — this is the legacy behaviour preserved behind the opt-in flag.
+        /// </summary>
         [TestMethod]
-        public async Task Allowed_client_ip_via_xforwarded_bypasses_maintenance()
+        public async Task Allowed_client_ip_via_xforwarded_bypasses_maintenance_when_trust_flag_set()
         {
-            using var host = await BuildHostAsync(o =>
-            {
-                o.Enabled = true;
-                o.AllowedClientIps.Add("10.1.2.3");
-            });
+            using var host = await BuildHostAsync(
+                o =>
+                {
+                    o.Enabled = true;
+                    o.AllowedClientIps.Add("10.1.2.3");
+                },
+                trustXff: true);  // opt-in to back-compat XFF-first behaviour
             var client = host.GetTestClient();
 
             var req = new HttpRequestMessage(HttpMethod.Get, "/secret");
@@ -149,14 +156,44 @@ namespace WalkingTec.Mvvm.Core.Test.Mvc
             Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
         }
 
+        /// <summary>
+        /// Issue #114 (secure default): with the default
+        /// <c>TrustForwardedForHeader=false</c>, a spoofed
+        /// <c>X-Forwarded-For</c> header does NOT bypass maintenance mode.
+        /// The real connection IP (127.0.0.1 from TestServer) is used instead.
+        /// </summary>
+        [TestMethod]
+        public async Task Spoofed_xff_does_not_bypass_maintenance_by_default()
+        {
+            using var host = await BuildHostAsync(
+                o =>
+                {
+                    o.Enabled = true;
+                    o.AllowedClientIps.Add("10.1.2.3");
+                    // 127.0.0.1 (TestServer peer) is intentionally NOT in the list.
+                },
+                trustXff: false);  // secure default
+            var client = host.GetTestClient();
+
+            var req = new HttpRequestMessage(HttpMethod.Get, "/secret");
+            req.Headers.Add("X-Forwarded-For", "10.1.2.3"); // spoofed
+            var response = await client.SendAsync(req);
+
+            Assert.AreEqual(HttpStatusCode.ServiceUnavailable, response.StatusCode,
+                "Spoofed XFF must not bypass the maintenance-mode IP allow-list " +
+                "under the secure default (TrustForwardedForHeader=false).");
+        }
+
         [TestMethod]
         public async Task Unrelated_client_ip_still_gets_503()
         {
-            using var host = await BuildHostAsync(o =>
-            {
-                o.Enabled = true;
-                o.AllowedClientIps.Add("10.1.2.3");
-            });
+            using var host = await BuildHostAsync(
+                o =>
+                {
+                    o.Enabled = true;
+                    o.AllowedClientIps.Add("10.1.2.3");
+                },
+                trustXff: true);  // use back-compat to keep original test logic
             var client = host.GetTestClient();
 
             var req = new HttpRequestMessage(HttpMethod.Get, "/secret");
@@ -270,12 +307,18 @@ namespace WalkingTec.Mvvm.Core.Test.Mvc
         // ── Test scaffolding ──────────────────────────────────────────────
 
         private static async Task<IHost> BuildHostAsync(
-            Action<WtmMaintenanceModeOptions>? configure = null)
+            Action<WtmMaintenanceModeOptions>? configure = null,
+            bool trustXff = false)
         {
             var host = new HostBuilder()
                 .ConfigureWebHost(webBuilder =>
                 {
                     webBuilder.UseTestServer();
+                    webBuilder.ConfigureServices(services =>
+                    {
+                        services.Configure<WalkingTec.Mvvm.Core.Configs>(c =>
+                            c.TrustForwardedForHeader = trustXff);
+                    });
                     webBuilder.Configure(app =>
                     {
                         if (configure != null)
