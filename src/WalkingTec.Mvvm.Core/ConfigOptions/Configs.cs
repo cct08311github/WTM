@@ -148,6 +148,31 @@ namespace WalkingTec.Mvvm.Core
 
         #endregion
 
+        #region DisableRefererTenantResolution
+
+        private bool? _disableRefererTenantResolution;
+
+        /// <summary>
+        /// When true, disables Referer-based tenant resolution entirely — including for
+        /// unauthenticated requests.  Set to true in security-strict deployments where
+        /// tenants are always identified through identity claims or explicit configuration
+        /// rather than the HTTP Referer header.
+        /// Default: false (Referer routing applies only to unauthenticated requests).
+        /// </summary>
+        public bool DisableRefererTenantResolution
+        {
+            get
+            {
+                return _disableRefererTenantResolution ?? false;
+            }
+            set
+            {
+                _disableRefererTenantResolution = value;
+            }
+        }
+
+        #endregion
+
 
         public string ErrorHandler { get; set; } = "/_Framework/Error";
 

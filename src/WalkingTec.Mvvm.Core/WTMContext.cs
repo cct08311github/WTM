@@ -968,7 +968,23 @@ params string[] groupcode)
 
                 var tenants = GlobaInfo?.AllTenant ?? [];
                 string? tc = _loginUserInfo?.CurrentTenant;
-                if (tc == null && HttpContext?.Request.Headers.ContainsKey("Referer")==true)
+                // Security fix (#116): Referer-based tenant resolution is only safe for
+                // unauthenticated requests. An authenticated user's tenant must come solely
+                // from their identity/claims; consulting the attacker-controlled Referer
+                // header for authenticated requests allows cross-tenant data access.
+                // When DisableRefererTenantResolution is true, skip Referer routing entirely.
+                //
+                // Robustness note: _loginUserInfo is lazily populated by the LoginUserInfo
+                // getter only after that getter is first accessed. To prevent a timing
+                // window where CreateDC() runs before the getter is called on an authenticated
+                // principal, we ALSO check the request principal directly. Any authenticated
+                // principal (HttpContext.User.Identity.IsAuthenticated == true) is excluded
+                // from Referer-based routing regardless of whether _loginUserInfo has been
+                // resolved yet.
+                if (_loginUserInfo == null
+                    && HttpContext?.User?.Identity?.IsAuthenticated != true
+                    && ConfigInfo?.DisableRefererTenantResolution != true
+                    && HttpContext?.Request.Headers.ContainsKey("Referer") == true)
                 {
                     Regex r = new Regex("(http://|https://)?(.+?)(/)?$");
                     var m = r.Match(HttpContext?.Request.Headers["Referer"]);

@@ -173,6 +173,27 @@
      This is spoofable when the app is not behind a trusted proxy that strips
      inbound `X-Forwarded-For` values.  Use only as a short-term measure while
      migrating to option 1.
+- **Security (#116): Close cross-tenant data-read via forged `Referer` header.**
+  `CreateDC()` previously used the HTTP `Referer` header to select a tenant's
+  database whenever `LoginUserInfo.CurrentTenant` was `null` — a condition that
+  includes authenticated main-host administrators.  An authenticated attacker
+  could send a forged `Referer` matching another tenant's domain and read that
+  tenant's data through any `[AllRights]` endpoint.  The Referer-based tenant
+  routing now applies **only to unauthenticated requests** (`_loginUserInfo ==
+  null`).  For authenticated users, the tenant is derived solely from identity
+  claims; a `null` tenant means main-host database.
+
+  **Migration note:** Main-host administrators who previously relied on a
+  `Referer` header to implicitly browse a tenant's data must instead use the
+  explicit, authorised tenant-switch mechanism (e.g. the `SetTenant` action in
+  `_FrameworkController`).  No changes are required for tenant users or for
+  unauthenticated flows (e.g. per-domain login pages).
+
+  **New opt-in flag:** Set `DisableRefererTenantResolution: true` in
+  `appsettings.json` (under the WTM configuration section) to disable
+  Referer-based tenant routing entirely — including for unauthenticated
+  requests.  Recommended for security-strict deployments where tenant identity
+  is always established through claims or explicit configuration.
 
 ## [10.5.3] - 2026-05-23
 
