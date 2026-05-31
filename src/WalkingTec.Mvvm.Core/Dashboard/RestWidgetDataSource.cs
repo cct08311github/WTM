@@ -24,20 +24,46 @@ namespace WalkingTec.Mvvm.Core.Dashboard;
 /// <remarks>
 /// Security model:
 /// <list type="bullet">
-///   <item>HTTPS by default; plain HTTP requires <see cref="RestWidgetDataSourceOptions.AllowHttp"/>.</item>
+///   <item>HTTPS by default; plain HTTP requires <see cref="RestWidgetDataSourceOptions.AllowHttp"/>
+///         set server-side in <see cref="WidgetSourceDefinition.RestOptions"/>.</item>
 ///   <item>SSRF guard: resolved URL host must not map to private, loopback,
-///         link-local (incl. cloud IMDS), or multicast IPs unless
-///         <see cref="RestWidgetDataSourceOptions.AllowPrivateNetwork"/> is set.</item>
+///         link-local (incl. cloud IMDS), CGNAT (100.64/10), or multicast IPs unless
+///         <see cref="RestWidgetDataSourceOptions.AllowPrivateNetwork"/> is set server-side.</item>
+///   <item>DNS pinning via <c>SocketsHttpHandler.ConnectCallback</c>: the IP validated at
+///         connect time by <see cref="PinnedConnectAsync"/> is the IP that the socket actually
+///         connects to, eliminating DNS rebinding / TOCTOU windows. TLS SNI and server-certificate
+///         validation use the original hostname URI (not an IP rewrite), so HTTPS works correctly.</item>
+///   <item>Redirects disabled: the named HttpClient <see cref="HttpClientName"/> is registered
+///         with <c>AllowAutoRedirect=false</c> — 302 redirects cannot bypass the SSRF guard.</item>
 ///   <item>Response body capped at <see cref="RestWidgetDataSourceOptions.MaxResponseBytes"/>
-///         (default 1 MiB) to prevent memory exhaustion.</item>
+///         (default 1 MiB, hard limit <see cref="MaxResponseBytesHardLimit"/> 10 MiB)
+///         to prevent memory exhaustion.</item>
 ///   <item>Request timeout bounded by <see cref="RestWidgetDataSourceOptions.TimeoutSeconds"/>
-///         (default 10 s).</item>
+///         (clamped to [1, 60]).</item>
 /// </list>
 /// </remarks>
 public class RestWidgetDataSource : IWidgetDataSource
 {
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IMemoryCache _cache;
+
+    /// <summary>Named HttpClient key — registered with <c>AllowAutoRedirect=false</c> and
+    /// <c>ConnectCallback = <see cref="PinnedConnectAsync"/></c>.</summary>
+    public const string HttpClientName = "WtmRestWidget";
+
+    /// <summary>Hard upper limit on <see cref="RestWidgetDataSourceOptions.MaxResponseBytes"/> (10 MiB).</summary>
+    public const long MaxResponseBytesHardLimit = 10 * 1024 * 1024;
+
+    /// <summary>
+    /// <see cref="HttpRequestOptions"/> key used to pass the per-request
+    /// <c>AllowPrivateNetwork</c> policy to <see cref="PinnedConnectAsync"/>.
+    /// </summary>
+    internal const string AllowPrivateNetworkOptionKey = "WtmRestWidget.AllowPrivateNetwork";
+
+    private const int TimeoutSecondsMin = 1;
+    private const int TimeoutSecondsMax = 60;
+    private const int MaxResponseBytesMin = 1024;           // 1 KB
+    private const int MaxResponseBytesDefault = 1024 * 1024; // 1 MiB
 
     public string Name => "rest";
     public WidgetDataSourceKind Kind => WidgetDataSourceKind.Rest;
@@ -51,7 +77,13 @@ public class RestWidgetDataSource : IWidgetDataSource
     public async Task<WidgetDataResult> GetDataAsync(WidgetDataRequest request, CancellationToken ct = default)
     {
         var options = ParseOptions(request.Parameters);
-        ValidateUrl(options);
+
+        // Fast-fail pre-check: validate URL scheme and, for public-only mode, verify
+        // that the host resolves to a non-blocked IP. This surfaces friendly error
+        // messages before we even attempt the TCP connection.
+        // The authoritative TOCTOU-safe check happens again at actual connect time
+        // inside PinnedConnectAsync via SocketsHttpHandler.ConnectCallback.
+        await ValidateUrlAsync(options, ct).ConfigureAwait(false);
 
         var cacheKey = BuildCacheKey(options);
         if (options.CacheTtlSeconds > 0 && _cache.TryGetValue(cacheKey, out WidgetDataResult? cached) && cached != null)
@@ -72,29 +104,56 @@ public class RestWidgetDataSource : IWidgetDataSource
 
     // ── Parsing ──────────────────────────────────────────────────────────
 
-    private static RestWidgetDataSourceOptions ParseOptions(Dictionary<string, string> parameters)
+    internal static RestWidgetDataSourceOptions ParseOptions(Dictionary<string, string> parameters)
     {
         if (!parameters.TryGetValue("options", out var json) || string.IsNullOrWhiteSpace(json))
         {
             throw new InvalidOperationException(
                 "REST widget request missing required parameter 'options' (JSON-serialized RestWidgetDataSourceOptions).");
         }
+        RestWidgetDataSourceOptions opts;
         try
         {
-            var opts = JsonSerializer.Deserialize<RestWidgetDataSourceOptions>(
+            opts = JsonSerializer.Deserialize<RestWidgetDataSourceOptions>(
                 json,
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            return opts ?? throw new InvalidOperationException("REST widget options JSON deserialized to null.");
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                ?? throw new InvalidOperationException("REST widget options JSON deserialized to null.");
         }
         catch (JsonException ex)
         {
             throw new InvalidOperationException("REST widget options JSON is malformed: " + ex.Message, ex);
         }
+
+        // Clamp security-bounded values to prevent DoS from extreme inputs.
+        // Negative or zero TimeoutSeconds → floor to minimum; above max → cap.
+        opts.TimeoutSeconds = Math.Clamp(opts.TimeoutSeconds, TimeoutSecondsMin, TimeoutSecondsMax);
+
+        // MaxResponseBytes: clamp to [1 KB, 10 MiB]. Zero or negative → use default 1 MiB.
+        if (opts.MaxResponseBytes <= 0)
+        {
+            opts.MaxResponseBytes = MaxResponseBytesDefault;
+        }
+        else
+        {
+            opts.MaxResponseBytes = (int)Math.Clamp((long)opts.MaxResponseBytes, MaxResponseBytesMin, MaxResponseBytesHardLimit);
+        }
+
+        return opts;
     }
 
-    // ── URL validation + SSRF guard ──────────────────────────────────────
+    // ── URL validation + SSRF guard (fast-fail pre-check) ───────────────
 
-    internal static void ValidateUrl(RestWidgetDataSourceOptions options)
+    /// <summary>
+    /// Fast-fail pre-check: validates URL scheme and resolves the host to verify
+    /// no resolved IP is in a blocked range. Throws <see cref="InvalidOperationException"/>
+    /// with a descriptive message on failure.
+    /// </summary>
+    /// <remarks>
+    /// This is a best-effort early check. The authoritative TOCTOU-safe enforcement
+    /// happens at actual connect time in <see cref="PinnedConnectAsync"/>.
+    /// </remarks>
+    internal static async Task ValidateUrlAsync(
+        RestWidgetDataSourceOptions options, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(options.Url))
         {
@@ -114,7 +173,8 @@ public class RestWidgetDataSource : IWidgetDataSource
             {
                 throw new InvalidOperationException(
                     "REST widget: http:// URLs are rejected by default. " +
-                    "Set AllowHttp=true in the options to permit plain HTTP (typically for internal endpoints).");
+                    "Set AllowHttp=true in the server-side RestOptions to permit plain HTTP " +
+                    "(typically for internal endpoints).");
             }
         }
         else
@@ -123,11 +183,13 @@ public class RestWidgetDataSource : IWidgetDataSource
                 "REST widget: only http / https URL schemes are supported. Got: " + uri.Scheme);
         }
 
-        if (options.AllowPrivateNetwork) { return; }
+        if (options.AllowPrivateNetwork)
+        {
+            // Private network explicitly allowed — skip SSRF pre-check.
+            return;
+        }
 
-        // Resolve host and check every returned IP. A hostname that could
-        // resolve to both a private and public IP would be rejected — safe
-        // default for SSRF protection.
+        // Resolve host and check every returned IP.
         IPAddress[] ips;
         if (IPAddress.TryParse(uri.Host, out var literalIp))
         {
@@ -137,7 +199,7 @@ public class RestWidgetDataSource : IWidgetDataSource
         {
             try
             {
-                ips = Dns.GetHostAddresses(uri.Host);
+                ips = await Dns.GetHostAddressesAsync(uri.Host, ct).ConfigureAwait(false);
             }
             catch (SocketException ex)
             {
@@ -152,34 +214,49 @@ public class RestWidgetDataSource : IWidgetDataSource
             {
                 throw new InvalidOperationException(
                     $"REST widget: URL host '{uri.Host}' resolves to a blocked IP range ({ip}). " +
-                    "Set AllowPrivateNetwork=true in the options to permit internal endpoints (SSRF mitigation).");
+                    "Set AllowPrivateNetwork=true in the server-side RestOptions to permit " +
+                    "internal endpoints (SSRF mitigation).");
             }
         }
     }
 
     internal static bool IsBlockedIp(IPAddress ip)
     {
+        // Unwrap IPv4-mapped IPv6 (e.g. ::ffff:169.254.169.254) first so that the IPv4 rules
+        // below apply correctly. Without this step, an attacker could bypass the check by
+        // supplying the IPv4-mapped form.
+        if (ip.IsIPv4MappedToIPv6)
+        {
+            ip = ip.MapToIPv4();
+        }
+
         if (IPAddress.IsLoopback(ip)) { return true; }
+
         if (ip.AddressFamily == AddressFamily.InterNetwork)
         {
             var bytes = ip.GetAddressBytes();
-            // 10.0.0.0/8
+            // 10.0.0.0/8 (RFC 1918 private)
             if (bytes[0] == 10) { return true; }
-            // 172.16.0.0/12
+            // 172.16.0.0/12 (RFC 1918 private)
             if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) { return true; }
-            // 192.168.0.0/16
+            // 192.168.0.0/16 (RFC 1918 private)
             if (bytes[0] == 192 && bytes[1] == 168) { return true; }
             // 169.254.0.0/16 (link-local, includes AWS IMDS 169.254.169.254)
             if (bytes[0] == 169 && bytes[1] == 254) { return true; }
-            // 127.0.0.0/8 (already caught by IsLoopback, but explicit)
+            // 100.64.0.0/10 (CGNAT / shared address space, RFC 6598)
+            if (bytes[0] == 100 && (bytes[1] & 0xC0) == 64) { return true; }
+            // 127.0.0.0/8 (loopback — already caught by IsLoopback, but explicit for clarity)
             if (bytes[0] == 127) { return true; }
             // 224.0.0.0/4 (multicast)
             if (bytes[0] >= 224 && bytes[0] <= 239) { return true; }
             // 0.0.0.0/8 (invalid source)
             if (bytes[0] == 0) { return true; }
+            // 240.0.0.0/4 (reserved)
+            if (bytes[0] >= 240) { return true; }
         }
         else if (ip.AddressFamily == AddressFamily.InterNetworkV6)
         {
+            // ::1 is already caught by IPAddress.IsLoopback above.
             if (ip.IsIPv6LinkLocal || ip.IsIPv6SiteLocal || ip.IsIPv6Multicast) { return true; }
             // ULA fc00::/7
             var bytes = ip.GetAddressBytes();
@@ -188,11 +265,97 @@ public class RestWidgetDataSource : IWidgetDataSource
         return false;
     }
 
+    // ── DNS-pinning ConnectCallback ──────────────────────────────────────
+
+    /// <summary>
+    /// <c>SocketsHttpHandler.ConnectCallback</c> implementation that performs an
+    /// authoritative, TOCTOU-safe SSRF check at the moment of actual TCP connection.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The request URI is kept as the original hostname so that TLS SNI and
+    /// server-certificate validation use the correct hostname — HTTPS works correctly.
+    /// This callback resolves DNS, selects an allowed IP via
+    /// <see cref="SelectConnectableIp"/>, and opens the socket directly to that IP.
+    /// </para>
+    /// <para>
+    /// The per-request <c>AllowPrivateNetwork</c> policy is read from
+    /// <see cref="HttpRequestMessage.Options"/> using <see cref="AllowPrivateNetworkOptionKey"/>.
+    /// </para>
+    /// </remarks>
+    internal static async ValueTask<Stream> PinnedConnectAsync(
+        SocketsHttpConnectionContext context, CancellationToken ct)
+    {
+        // Read the per-request AllowPrivateNetwork policy injected by FetchJsonAsync.
+        context.InitialRequestMessage.Options.TryGetValue(
+            new HttpRequestOptionsKey<bool>(AllowPrivateNetworkOptionKey),
+            out var allowPrivateNetwork);
+
+        var host = context.DnsEndPoint.Host;
+        var port = context.DnsEndPoint.Port;
+
+        // Resolve the host to candidate IPs (literal IPs resolve instantly from OS).
+        IPAddress[] candidates;
+        if (IPAddress.TryParse(host, out var literalIp))
+        {
+            candidates = new[] { literalIp };
+        }
+        else
+        {
+            candidates = await Dns.GetHostAddressesAsync(host, ct).ConfigureAwait(false);
+        }
+
+        var chosen = SelectConnectableIp(candidates, allowPrivateNetwork);
+        if (chosen == null)
+        {
+            // All resolved IPs are in blocked ranges. Throw a generic message
+            // so no host/IP details leak through the 502 response.
+            throw new InvalidOperationException(
+                "REST widget: connection refused — target resolved to a blocked IP range.");
+        }
+
+        var socket = new Socket(chosen.AddressFamily, SocketType.Stream, ProtocolType.Tcp)
+        {
+            NoDelay = true
+        };
+        try
+        {
+            await socket.ConnectAsync(new IPEndPoint(chosen, port), ct).ConfigureAwait(false);
+            return new NetworkStream(socket, ownsSocket: true);
+        }
+        catch
+        {
+            socket.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Selects the first candidate IP that is allowed given the
+    /// <paramref name="allowPrivateNetwork"/> policy.
+    /// </summary>
+    /// <returns>
+    /// The first connectable <see cref="IPAddress"/>, or <c>null</c> if all
+    /// candidates are blocked.
+    /// </returns>
+    internal static IPAddress? SelectConnectableIp(IPAddress[] candidates, bool allowPrivateNetwork)
+    {
+        foreach (var ip in candidates)
+        {
+            if (allowPrivateNetwork || !IsBlockedIp(ip))
+            {
+                return ip;
+            }
+        }
+        return null;
+    }
+
     // ── HTTP fetch ───────────────────────────────────────────────────────
 
-    private async Task<string> FetchJsonAsync(RestWidgetDataSourceOptions options, CancellationToken ct)
+    private async Task<string> FetchJsonAsync(
+        RestWidgetDataSourceOptions options, CancellationToken ct)
     {
-        var client = _httpClientFactory.CreateClient("WtmRestWidget");
+        var client = _httpClientFactory.CreateClient(HttpClientName);
         client.Timeout = TimeSpan.FromSeconds(options.TimeoutSeconds);
 
         using var req = new HttpRequestMessage(new HttpMethod(options.Method.ToUpperInvariant()), options.Url);
@@ -207,13 +370,26 @@ public class RestWidgetDataSource : IWidgetDataSource
             req.Content = new StringContent(options.Body, Encoding.UTF8, "application/json");
         }
 
+        // Pass the per-request AllowPrivateNetwork policy to PinnedConnectAsync via
+        // HttpRequestMessage.Options. The ConnectCallback reads this key to decide
+        // whether to permit private-range IPs at actual connect time.
+        req.Options.Set(
+            new HttpRequestOptionsKey<bool>(AllowPrivateNetworkOptionKey),
+            options.AllowPrivateNetwork);
+
+        // Note: the request URI is kept as the original hostname URL.
+        // TLS SNI and server-certificate validation derive from the URI host (hostname),
+        // so HTTPS works correctly. PinnedConnectAsync handles the actual IP selection.
+
         using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct)
                                      .ConfigureAwait(false);
 
         if (!resp.IsSuccessStatusCode)
         {
+            // Avoid leaking the target URL or status details to the caller.
+            // The controller catches InvalidOperationException and returns a generic 502.
             throw new InvalidOperationException(
-                $"REST widget: upstream returned {(int)resp.StatusCode} {resp.StatusCode} for {options.Url}");
+                "REST widget: upstream returned an unsuccessful HTTP status code.");
         }
 
         await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);

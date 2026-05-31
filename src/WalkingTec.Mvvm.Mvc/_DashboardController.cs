@@ -5,6 +5,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Analysis;
@@ -21,16 +23,19 @@ namespace WalkingTec.Mvvm.Mvc
         private readonly DashboardOptions _options;
         private readonly IEnumerable<IWidgetDataSource> _dataSources;
         private readonly AnalysisVmRegistry _registry;
+        private readonly ILogger<_DashboardController> _logger;
 
         public _DashboardController(
             IDashboardService dashboardService,
             IOptions<DashboardOptions> options,
             IEnumerable<IWidgetDataSource> dataSources,
-            AnalysisVmRegistry registry = null)
+            AnalysisVmRegistry registry = null,
+            ILogger<_DashboardController>? logger = null)
         {
             _dashboardService = dashboardService;
             _options = options.Value;
             _dataSources = dataSources;
+            _logger = logger ?? NullLogger<_DashboardController>.Instance;
             _registry = registry;
         }
 
@@ -180,6 +185,15 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 return NotFound();
             }
+            catch (InvalidOperationException ex)
+            {
+                // Log full detail server-side (includes target URL, status, etc.) but return a
+                // generic message to the client to avoid leaking internal topology (issue #101).
+                _logger.LogWarning(ex,
+                    "[Dashboard] Widget data fetch failed. DashboardId={DashboardId} WidgetId={WidgetId}",
+                    id, wid);
+                return StatusCode(StatusCodes.Status502BadGateway, "Widget data fetch failed.");
+            }
         }
 
         [HttpPost("{id}/widget/{wid}/data")]
@@ -212,6 +226,14 @@ namespace WalkingTec.Mvvm.Mvc
             catch (KeyNotFoundException)
             {
                 return NotFound();
+            }
+            catch (InvalidOperationException ex)
+            {
+                // Log full detail server-side but return a generic message to the client (issue #101).
+                _logger.LogWarning(ex,
+                    "[Dashboard] Widget data fetch failed. DashboardId={DashboardId} WidgetId={WidgetId}",
+                    id, wid);
+                return StatusCode(StatusCodes.Status502BadGateway, "Widget data fetch failed.");
             }
         }
 

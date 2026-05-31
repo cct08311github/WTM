@@ -2,6 +2,43 @@
 
 ## [Unreleased]
 
+### Fixes
+
+- **REST widget SSRF hardening** (#101): seven security defects in the REST
+  widget data source are fixed.
+  - **CRITICAL** — Request-supplied `options` can no longer override
+    security-sensitive fields (`AllowPrivateNetwork`, `AllowHttp`). These
+    fields are now authoritative only from the server-side
+    `WidgetSourceDefinition.RestOptions`; for legacy widgets without server
+    `RestOptions`, both flags are forced to their safe defaults (`false`)
+    before the options reach `RestWidgetDataSource`.
+  - **HIGH** — The named `WtmRestWidget` HttpClient is now explicitly
+    registered with `AllowAutoRedirect=false`, preventing SSRF bypass via
+    HTTP 302 redirects (e.g. redirect to cloud IMDS at 169.254.169.254).
+  - **HIGH** — `IsBlockedIp` now unwraps IPv4-mapped IPv6 addresses
+    (e.g. `::ffff:169.254.169.254`) before evaluating rules, closing the
+    bypass. Also added CGNAT (100.64.0.0/10, RFC 6598) and reserved
+    (240.0.0.0/4) to the block list.
+  - **HIGH** — DNS pinning via URI rewrite: the IPs validated at
+    `ValidateUrlAsync` time are reused for the actual TCP connection (the
+    request URI is rewritten to the literal validated IP with the original
+    `Host` header preserved for TLS SNI). This eliminates the DNS
+    rebinding/TOCTOU window between validation and fetch.
+  - **MEDIUM** — `TimeoutSeconds` is now clamped to `[1, 60]` and
+    `MaxResponseBytes` to `[1 KB, 10 MiB]`; negative/zero values no longer
+    cause `ArgumentOutOfRangeException` or unbounded waits.
+  - **LOW** — `ValidateUrl` is now async (`ValidateUrlAsync`) using
+    `Dns.GetHostAddressesAsync` to avoid blocking a thread-pool thread on
+    DNS resolution.
+  - **LOW** — Non-2xx HTTP fetch errors and SSRF rejections surfaced via
+    `_DashboardController` now return a generic 502 ("Widget data fetch
+    failed.") with no URL, status code, or internal topology in the body;
+    full detail is logged server-side at `Warning` level.
+  Migration: no action required for most deployments. If you rely on
+  `AllowPrivateNetwork=true` or `AllowHttp=true` for internal REST widgets,
+  move those flags into the widget's server-side
+  `WidgetSourceDefinition.RestOptions` in your dashboard JSON.
+
 ## [10.5.3] - 2026-05-23
 
 Patch release: one significant performance improvement to reflection

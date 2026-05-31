@@ -1,5 +1,7 @@
 using System;
 using System.Linq;
+using System.Net.Http;
+using System.Net.Sockets;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using WalkingTec.Mvvm.Core.Analysis;
@@ -24,6 +26,26 @@ namespace WalkingTec.Mvvm.Core.Dashboard
             // host hasn't already (both are idempotent via TryAdd-style).
             services.AddHttpClient();
             services.AddMemoryCache();
+
+            // Issue #101 (SSRF hardening): register the named HttpClient used by RestWidgetDataSource
+            // with AllowAutoRedirect=false and a ConnectCallback that enforces the SSRF block at
+            // actual TCP connect time (TOCTOU-safe DNS pinning).
+            //
+            // ConnectCallback = RestWidgetDataSource.PinnedConnectAsync:
+            //   - Resolves the hostname to IPs at connection time (not request-build time).
+            //   - Selects only IPs that pass the SSRF block list (via SelectConnectableIp).
+            //   - The outgoing HttpRequestMessage.RequestUri keeps the original hostname URL,
+            //     so TLS SNI and server-certificate validation use the correct hostname — HTTPS works.
+            //   - AllowPrivateNetwork policy is threaded per-request via HttpRequestMessage.Options.
+            //
+            // AllowAutoRedirect=false: defence-in-depth — 302 redirects cannot bypass the guard.
+            services.AddHttpClient(RestWidgetDataSource.HttpClientName)
+                .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+                {
+                    AllowAutoRedirect = false,
+                    ConnectCallback = RestWidgetDataSource.PinnedConnectAsync
+                });
+
             services.AddTransient<IWidgetDataSource, RestWidgetDataSource>();
 
             if (services.All(d => d.ServiceType != typeof(GroupByStrategyResolver)))

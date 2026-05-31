@@ -372,6 +372,42 @@ public class JsonFileDashboardService : IDashboardService
                 parameters["measures"] = JsonSerializer.Serialize(widgetSource.Measures);
             if (widgetSource.Filters != null && !parameters.ContainsKey("filters"))
                 parameters["filters"] = JsonSerializer.Serialize(widgetSource.Filters.Select(f => new { f.Field, f.Op, f.Value }).ToList());
+
+            // SSRF hardening (issue #101): for REST widgets, the server-side RestOptions are
+            // authoritative. When present, they completely replace any request-supplied "options"
+            // parameter so that a caller cannot override security-sensitive fields such as
+            // AllowPrivateNetwork or AllowHttp. When RestOptions is absent (legacy widget), fall
+            // through but strip AllowPrivateNetwork/AllowHttp from any request-supplied JSON.
+            if (string.Equals(sourceName, "rest", StringComparison.OrdinalIgnoreCase))
+            {
+                if (widgetSource.RestOptions != null)
+                {
+                    // Authoritative server-side options — overwrite whatever the request sent.
+                    parameters["options"] = JsonSerializer.Serialize(widgetSource.RestOptions);
+                }
+                else if (parameters.TryGetValue("options", out var requestOptionsJson)
+                         && !string.IsNullOrWhiteSpace(requestOptionsJson))
+                {
+                    // Legacy widget: caller-supplied options. Strip the two security-sensitive flags
+                    // so that a request can never enable private-network access or plain HTTP.
+                    try
+                    {
+                        var requestOpts = JsonSerializer.Deserialize<RestWidgetDataSourceOptions>(
+                            requestOptionsJson,
+                            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                        if (requestOpts != null)
+                        {
+                            requestOpts.AllowPrivateNetwork = false;
+                            requestOpts.AllowHttp = false;
+                            parameters["options"] = JsonSerializer.Serialize(requestOpts);
+                        }
+                    }
+                    catch (JsonException)
+                    {
+                        // Malformed JSON — leave as-is; RestWidgetDataSource.ParseOptions will reject it.
+                    }
+                }
+            }
         }
 
         var request = new WidgetDataRequest

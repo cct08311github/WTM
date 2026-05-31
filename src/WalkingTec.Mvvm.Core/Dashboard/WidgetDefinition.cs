@@ -21,6 +21,15 @@ public class WidgetSourceDefinition
     public List<DimensionConfig>? Dimensions { get; set; }
     public List<MeasureConfig>? Measures { get; set; }
     public List<FilterConfig>? Filters { get; set; }
+
+    /// <summary>
+    /// Server-side REST widget options. When set, these options are authoritative and
+    /// completely override any <c>options</c> parameter supplied by the HTTP request.
+    /// Security-sensitive fields (<see cref="RestWidgetDataSourceOptions.AllowPrivateNetwork"/>
+    /// and <see cref="RestWidgetDataSourceOptions.AllowHttp"/>) can only be enabled here —
+    /// they are always forced to their safe defaults when options originate from the request.
+    /// </summary>
+    public RestWidgetDataSourceOptions? RestOptions { get; set; }
 }
 
 public class DimensionConfig
