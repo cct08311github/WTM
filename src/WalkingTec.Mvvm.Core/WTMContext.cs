@@ -1638,7 +1638,18 @@ params string[] groupcode)
             }
             catch (Exception ex)
             {
-                rv.ErrorMsg = ex.ToString();
+                // Never expose exception detail (which may include connection strings or
+                // stack traces) in the ApiResult returned to callers.  Log full detail
+                // server-side; surface only a generic message.
+                ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("WTMContext")?.LogError(ex, "CallAPI failed to '{Url}'", LogSanitizer.Sanitize(url));
+                if (_configInfo?.IsQuickDebug == true)
+                {
+                    rv.ErrorMsg = ex.ToString();
+                }
+                else
+                {
+                    rv.ErrorMsg = "An error occurred while processing the request.";
+                }
                 return rv;
             }
         }

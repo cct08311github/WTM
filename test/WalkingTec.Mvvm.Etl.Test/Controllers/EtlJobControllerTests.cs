@@ -5,6 +5,8 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Primitives;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
@@ -30,7 +32,7 @@ public class EtlJobControllerTests
         var mockSp = new Mock<IServiceProvider>();
         _mockScheduler = new Mock<EtlSchedulerService>(mockSp.Object);
 
-        _controller = new _EtlJobController(_mockScheduler.Object);
+        _controller = new _EtlJobController(_mockScheduler.Object, NullLogger<_EtlJobController>.Instance);
         _controller.Wtm = MockWtmContext.CreateWtmContext();
 
         var mockHttpContext = new Mock<HttpContext>();
@@ -173,7 +175,7 @@ public class EtlJobControllerTests
         var mockSp = new Mock<IServiceProvider>();
         var scheduler = new Mock<EtlSchedulerService>(mockSp.Object);
 
-        var ctrl = new _EtlJobController(scheduler.Object);
+        var ctrl = new _EtlJobController(scheduler.Object, NullLogger<_EtlJobController>.Instance);
         ctrl.Wtm = MockWtmContext.CreateWtmContext(dc);
 
         var mockHttp = new Mock<HttpContext>();
@@ -380,7 +382,7 @@ public class EtlJobControllerTests
         scheduler.Setup(x => x.DisableAsync(It.IsAny<Guid>())).Returns(Task.CompletedTask);
         scheduler.Setup(x => x.RescheduleAsync(It.IsAny<Guid>(), It.IsAny<string>())).Returns(Task.CompletedTask);
 
-        var ctrl = new _EtlJobController(scheduler.Object);
+        var ctrl = new _EtlJobController(scheduler.Object, NullLogger<_EtlJobController>.Instance);
         ctrl.Wtm = MockWtmContext.CreateWtmContext(dc);
 
         // Wire scheduler into VM-level ServiceProvider so DoAdd/DoEdit can find it

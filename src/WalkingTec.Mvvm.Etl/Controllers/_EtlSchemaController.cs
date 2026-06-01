@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Etl.Schema;
 using WalkingTec.Mvvm.Mvc;
@@ -25,6 +26,13 @@ namespace WalkingTec.Mvvm.Mvc;
 [ActionDescription("ETL Schema")]
 public class _EtlSchemaController : BaseController
 {
+    private readonly ILogger<_EtlSchemaController> _logger;
+
+    public _EtlSchemaController(ILogger<_EtlSchemaController> logger)
+    {
+        _logger = logger;
+    }
+
     /// <summary>
     /// List tables on a connection.
     ///
@@ -63,9 +71,10 @@ public class _EtlSchemaController : BaseController
         }
         catch (Exception ex)
         {
-            // Don't leak exception text to admin browser tab — operator
-            // can pull stack from server log.
-            return StatusCode(500, new { error = "Schema introspection failed; see server log.", message = ex.Message });
+            // Never expose connection-string or DB exception detail to the client.
+            // Full detail is in the server log; the client receives a generic message.
+            _logger.LogError(ex, "Schema introspection (Tables) failed for key '{CsKey}', dbType '{DbType}'", csKey, dbType);
+            return StatusCode(500, new { error = "Schema introspection failed; see server log." });
         }
     }
 
@@ -112,7 +121,10 @@ public class _EtlSchemaController : BaseController
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { error = "Schema introspection failed; see server log.", message = ex.Message });
+            // Never expose connection-string or DB exception detail to the client.
+            // Full detail is in the server log; the client receives a generic message.
+            _logger.LogError(ex, "Schema introspection (Columns) failed for key '{CsKey}', table '{Table}', dbType '{DbType}'", csKey, table, dbType);
+            return StatusCode(500, new { error = "Schema introspection failed; see server log." });
         }
     }
 }

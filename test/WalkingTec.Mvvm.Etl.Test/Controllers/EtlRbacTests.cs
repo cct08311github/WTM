@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Abstractions;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
 using WalkingTec.Mvvm.Core;
@@ -186,7 +187,7 @@ public class EtlRbacTests
 
     private static _EtlJobController CreateEtlControllerWithRoles(params string[] roleCodes)
     {
-        var controller = new _EtlJobController(null!);
+        var controller = new _EtlJobController(null!, NullLogger<_EtlJobController>.Instance);
         controller.Wtm = MockWtmContext.CreateWtmContext();
         controller.Wtm.LoginUserInfo!.Roles = roleCodes
             .Select(r => new SimpleRole { RoleCode = r })

@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
+using Microsoft.Extensions.Logging;
 using Quartz;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Extensions;
@@ -18,10 +19,12 @@ namespace WalkingTec.Mvvm.Mvc;
 public class _EtlJobController : BaseController
 {
     private readonly EtlSchedulerService _scheduler;
+    private readonly ILogger<_EtlJobController> _logger;
 
-    public _EtlJobController(EtlSchedulerService scheduler)
+    public _EtlJobController(EtlSchedulerService scheduler, ILogger<_EtlJobController> logger)
     {
         _scheduler = scheduler;
+        _logger = logger;
     }
 
     // ─── Authorization gate ───────────────────────────────────────────────────
@@ -136,11 +139,15 @@ public class _EtlJobController : BaseController
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("not found"))
         {
-            return NotFound(new { error = ex.Message });
+            _logger.LogWarning(ex, "TriggerNow: job not found Id={JobId}", id);
+            var msg = Wtm?.ConfigInfo?.IsQuickDebug == true ? ex.Message : "找不到指定的 Job。";
+            return NotFound(new { error = msg });
         }
         catch (InvalidOperationException ex)
         {
-            return BadRequest(new { error = ex.Message });
+            _logger.LogWarning(ex, "TriggerNow failed Id={JobId}", id);
+            var msg = Wtm?.ConfigInfo?.IsQuickDebug == true ? ex.Message : "操作失敗，請稍後再試。";
+            return BadRequest(new { error = msg });
         }
     }
 
@@ -172,11 +179,15 @@ public class _EtlJobController : BaseController
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("not found"))
         {
-            return NotFound(new { error = ex.Message });
+            _logger.LogWarning(ex, "DryRun: job not found Id={JobId}", id);
+            var msg = Wtm?.ConfigInfo?.IsQuickDebug == true ? ex.Message : "找不到指定的 Job。";
+            return NotFound(new { error = msg });
         }
         catch (InvalidOperationException ex)
         {
-            return BadRequest(new { error = ex.Message });
+            _logger.LogWarning(ex, "DryRun failed Id={JobId}", id);
+            var msg = Wtm?.ConfigInfo?.IsQuickDebug == true ? ex.Message : "操作失敗，請稍後再試。";
+            return BadRequest(new { error = msg });
         }
     }
 
@@ -191,7 +202,9 @@ public class _EtlJobController : BaseController
         }
         catch (InvalidOperationException ex)
         {
-            return BadRequest(new { error = ex.Message });
+            _logger.LogWarning(ex, "Pause failed Id={JobId}", id);
+            var msg = Wtm?.ConfigInfo?.IsQuickDebug == true ? ex.Message : "操作失敗，請稍後再試。";
+            return BadRequest(new { error = msg });
         }
     }
 
@@ -206,7 +219,9 @@ public class _EtlJobController : BaseController
         }
         catch (InvalidOperationException ex)
         {
-            return BadRequest(new { error = ex.Message });
+            _logger.LogWarning(ex, "Resume failed Id={JobId}", id);
+            var msg = Wtm?.ConfigInfo?.IsQuickDebug == true ? ex.Message : "操作失敗，請稍後再試。";
+            return BadRequest(new { error = msg });
         }
     }
 
@@ -221,7 +236,9 @@ public class _EtlJobController : BaseController
         }
         catch (InvalidOperationException ex)
         {
-            return BadRequest(new { error = ex.Message });
+            _logger.LogWarning(ex, "Abort failed Id={JobId}", id);
+            var msg = Wtm?.ConfigInfo?.IsQuickDebug == true ? ex.Message : "操作失敗，請稍後再試。";
+            return BadRequest(new { error = msg });
         }
     }
 
@@ -236,7 +253,9 @@ public class _EtlJobController : BaseController
         }
         catch (InvalidOperationException ex)
         {
-            return BadRequest(new { error = ex.Message });
+            _logger.LogWarning(ex, "SkipNext failed Id={JobId}", id);
+            var msg = Wtm?.ConfigInfo?.IsQuickDebug == true ? ex.Message : "操作失敗，請稍後再試。";
+            return BadRequest(new { error = msg });
         }
     }
 

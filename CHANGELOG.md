@@ -4,6 +4,27 @@
 
 ### Security
 
+- **Exception/connection-string information leak fixed in four production paths** (#124):
+  - `_EtlSchemaController` (Tables + Columns endpoints): raw `ex.Message` — which may contain
+    the full DB connection string from EF/ADO.NET exceptions — was included in the 500 response
+    body.  Fix: full detail is now logged server-side via `ILogger`; the client receives only
+    `"Schema introspection failed; see server log."` regardless of `IsQuickDebug`.  Connection
+    strings must never appear in HTTP responses in any mode.
+  - `_EtlJobController` (TriggerNow, DryRun, Pause, Resume, Abort, SkipNext): raw
+    `InvalidOperationException.Message` was echoed to the client in all environments.  Fix:
+    full detail is now logged via `ILogger`; in production (`IsQuickDebug == false`) a generic
+    `"操作失敗，請稍後再試。"` or `"找不到指定的 Job。"` is returned instead.  Dev mode retains
+    the original message to aid diagnostics.
+  - `_AnalysisController` (Query, Pivot, Export, PivotExport): the `AnalysisQueryEngine` wraps
+    unexpected DB/EF exceptions in `InvalidOperationException` (line 1575 of
+    `AnalysisQueryEngine.cs`), so `ex.Message` could expose internal detail.  Fix: engine-level
+    catches now log via `ILogger` and return a generic title in production.  Registry-resolution
+    and input-validation catches (intentionally user-facing messages) are unchanged.
+  - `WTMContext.CallAPI` catch block: `ex.ToString()` (including stack trace) was set as
+    `ApiResult.ErrorMsg`.  Fix: full exception is logged via `ILoggerFactory`; `ErrorMsg` is
+    set to `"An error occurred while processing the request."` in production.  Dev mode
+    (`IsQuickDebug == true`) retains the full `ex.ToString()` for diagnostics.
+
 - **CodeGenVM: `MainDir` HTTP model-binding vector closed; `ShareDir` NRE fixed** (#122):
   Two bugs in `CodeGenVM` (`src/WalkingTec.Mvvm.Mvc/CodeGenVM.cs`):
   - **HIGH** — `MainDir` was missing `[BindNever]` despite being the write root for all

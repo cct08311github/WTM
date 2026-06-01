@@ -135,7 +135,14 @@ var result = await _engine.ExecuteDynamicAsync(ctx!.BaseQuery, req, ctx.Fields, 
                 WriteAnalysisActionLog("Query", req.ListVmType, req.Dimensions, req.Measures, result.TotalCount, sw.ElapsedMilliseconds / 1000.0, result.Truncated);
                 return new JsonResult(result, _camelCase);
             }
-            catch (InvalidOperationException ex) { return BadRequest(new ProblemDetails { Title = ex.Message, Status = 400 }); }
+            catch (InvalidOperationException ex)
+            {
+                // The engine may wrap unexpected DB/EF errors in InvalidOperationException.
+                // Log full detail; return a generic client message in production.
+                _logger.LogWarning(ex, "Analysis query engine error ListVm={ListVmType}", LogSanitizer.Sanitize(req.ListVmType));
+                var title = Wtm?.ConfigInfo?.IsQuickDebug == true ? ex.Message : "查詢執行失敗，請檢查查詢條件後重試。";
+                return BadRequest(new ProblemDetails { Title = title, Status = 400 });
+            }
         }
 
         [HttpPost("pivot")]
@@ -165,7 +172,14 @@ var result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fie
                 WriteAnalysisActionLog("Pivot", req.ListVmType, req.Dimensions, req.Measures, result.Rows.Count, sw.ElapsedMilliseconds / 1000.0, result.Truncated);
                 return new JsonResult(result, _camelCase);
             }
-            catch (InvalidOperationException ex) { return BadRequest(new ProblemDetails { Title = ex.Message, Status = 400 }); }
+            catch (InvalidOperationException ex)
+            {
+                // The engine may wrap unexpected DB/EF errors in InvalidOperationException.
+                // Log full detail; return a generic client message in production.
+                _logger.LogWarning(ex, "Analysis pivot engine error ListVm={ListVmType}", LogSanitizer.Sanitize(req.ListVmType));
+                var title = Wtm?.ConfigInfo?.IsQuickDebug == true ? ex.Message : "查詢執行失敗，請檢查查詢條件後重試。";
+                return BadRequest(new ProblemDetails { Title = title, Status = 400 });
+            }
         }
 
         /// <summary>
@@ -204,8 +218,11 @@ result = await _engine.ExecuteDynamicAsync(ctx!.BaseQuery, req, ctx.Fields, iden
             }
             catch (InvalidOperationException ex)
             {
-                _logger.LogWarning(ex, "Analysis export failed ListVm={ListVmType}", LogSanitizer.Sanitize(req.ListVmType));
-                return BadRequest(new ProblemDetails { Title = ex.Message, Status = 400 });
+                // The engine may wrap unexpected DB/EF errors in InvalidOperationException.
+                // Log full detail; return a generic client message in production.
+                _logger.LogWarning(ex, "Analysis export engine error ListVm={ListVmType}", LogSanitizer.Sanitize(req.ListVmType));
+                var exportTitle = Wtm?.ConfigInfo?.IsQuickDebug == true ? ex.Message : "匯出失敗，請檢查查詢條件後重試。";
+                return BadRequest(new ProblemDetails { Title = exportTitle, Status = 400 });
             }
 
             if (result.Truncated)
@@ -261,8 +278,11 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
             }
             catch (InvalidOperationException ex)
             {
-                _logger.LogWarning(ex, "Analysis pivot export failed ListVm={ListVmType}", LogSanitizer.Sanitize(req.ListVmType));
-                return BadRequest(new ProblemDetails { Title = ex.Message, Status = 400 });
+                // The engine may wrap unexpected DB/EF errors in InvalidOperationException.
+                // Log full detail; return a generic client message in production.
+                _logger.LogWarning(ex, "Analysis pivot export engine error ListVm={ListVmType}", LogSanitizer.Sanitize(req.ListVmType));
+                var pivotExportTitle = Wtm?.ConfigInfo?.IsQuickDebug == true ? ex.Message : "匯出失敗，請檢查查詢條件後重試。";
+                return BadRequest(new ProblemDetails { Title = pivotExportTitle, Status = 400 });
             }
 
             // Adapt AnalysisPivotResponse to AnalysisQueryResponse format for CSV/Excel export
