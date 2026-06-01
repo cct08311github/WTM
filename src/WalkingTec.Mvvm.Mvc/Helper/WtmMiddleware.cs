@@ -90,6 +90,13 @@ namespace WalkingTec.Mvvm.Mvc
                     context.Request.Body.Position = 0;
                 }
             }
+            // Pre-resolve LoginUserInfo asynchronously so the sync getter
+            // on the PrivilegeFilter hot path finds _loginUserInfo already set
+            // and does not block a ThreadPool thread via GetAwaiter().GetResult().
+            // EnsureLoginUserInfoAsync is a no-op when the user is not authenticated
+            // or when _loginUserInfo is already populated.
+            await wtm.EnsureLoginUserInfoAsync().ConfigureAwait(false);
+
             await _next(context);
             if (context.Response.StatusCode == 404)
             {

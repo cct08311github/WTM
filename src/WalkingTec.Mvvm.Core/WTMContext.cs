@@ -334,6 +334,93 @@ namespace WalkingTec.Mvvm.Core
             return user;
         }
 
+        /// <summary>
+        /// Async twin of <see cref="ReloadUser"/>. Resolves the user from
+        /// <see cref="ReloadUserFunc"/> or <see cref="DoLoginAsync"/> without
+        /// blocking a ThreadPool thread.
+        /// </summary>
+        /// <param name="itcode">User code (ITCode) to load.</param>
+        /// <returns>The resolved <see cref="LoginUserInfo"/>, or <c>null</c> if not found.</returns>
+        public virtual async Task<LoginUserInfo?> ReloadUserAsync(string? itcode)
+        {
+            if (ReloadUserFunc != null)
+            {
+                var reload = ReloadUserFunc.Invoke(this, itcode ?? string.Empty);
+                if (reload != null)
+                {
+                    return reload;
+                }
+            }
+            if (DC == null)
+            {
+                return null;
+            }
+            return await DoLoginAsync(itcode, null, null).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Pre-resolves <see cref="LoginUserInfo"/> asynchronously for the current
+        /// authenticated HTTP request. Call this from middleware (after
+        /// <c>UseAuthentication</c>) so that the subsequent synchronous
+        /// <see cref="LoginUserInfo"/> getter on the hot path finds
+        /// <c>_loginUserInfo</c> already populated and does not need to
+        /// block a ThreadPool thread via <c>GetAwaiter().GetResult()</c>.
+        ///
+        /// This method mirrors <strong>only</strong> the authenticated-user branch
+        /// of <see cref="LoginUserInfo"/> getter (the branch guarded by
+        /// <c>_loginUserInfo == null &amp;&amp; HttpContext?.User?.Identity?.IsAuthenticated == true</c>).
+        /// The <c>_remotetoken</c> branch and all other fallbacks remain handled
+        /// lazily by the sync getter — they are not touched here.
+        ///
+        /// The method is a no-op when:
+        /// <list type="bullet">
+        ///   <item><c>_loginUserInfo</c> is already set.</item>
+        ///   <item>The request is not authenticated.</item>
+        /// </list>
+        /// </summary>
+        public async Task EnsureLoginUserInfoAsync()
+        {
+            // Only pre-resolve the authenticated-user branch — mirrors the first
+            // if-block in the LoginUserInfo getter exactly.
+            if (_loginUserInfo != null || HttpContext?.User?.Identity?.IsAuthenticated != true)
+            {
+                return;
+            }
+
+            var userIdStr = HttpContext.User.Claims
+                .Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject)
+                .Select(x => x.Value)
+                .FirstOrDefault();
+            var tenant = HttpContext.User.Claims
+                .Where(x => x.Type == AuthConstants.JwtClaimTypes.TenantCode)
+                .Select(x => x.Value)
+                .FirstOrDefault();
+            string? usercode = userIdStr;
+
+            // Cache key must be identical to the one built in the sync getter
+            // so that the getter hits the cache on its first access.
+            var cacheKey = $"{GlobalConstants.CacheKey.UserInfo}:{userIdStr + "$`$" + tenant}";
+            _loginUserInfo = Cache?.Get<LoginUserInfo>(cacheKey);
+
+            if (_loginUserInfo == null)
+            {
+                try
+                {
+                    _loginUserInfo = await ReloadUserAsync(usercode).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("WTMContext")
+                        ?.LogWarning(ex, "EnsureLoginUserInfoAsync: failed to reload user info for usercode '{UserCode}'", usercode);
+                }
+
+                if (_loginUserInfo != null)
+                {
+                    Cache?.Add(cacheKey, _loginUserInfo);
+                }
+            }
+        }
+
         #endregion
 
         #region URL

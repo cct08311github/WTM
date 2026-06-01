@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+### Fixes
+
+- **ThreadPool starvation on authenticated-request hot path eliminated** (#128):
+  `WTMContext.LoginUserInfo` is a synchronous property getter. On a cache miss for an
+  authenticated user it called `ReloadUser` → `DoLoginAsync(...).GetAwaiter().GetResult()`,
+  blocking a ThreadPool thread. When `HasMainHost` is true, `DoLoginAsync` makes an outbound
+  HTTP call, making starvation under load a real risk.
+  Fix (conservative, no breaking changes):
+  - Added `ReloadUserAsync(string? itcode)` — async twin of `ReloadUser` that awaits
+    `DoLoginAsync` instead of blocking.
+  - Added `EnsureLoginUserInfoAsync()` — replicates only the authenticated-user branch of
+    the `LoginUserInfo` getter, building the identical cache key and populating
+    `_loginUserInfo` asynchronously. No-op when unauthenticated or already resolved.
+  - `WtmMiddleware.InvokeAsync` now calls `await wtm.EnsureLoginUserInfoAsync()` immediately
+    before `await _next(context)`. Because `WtmMiddleware` is registered after
+    `UseAuthentication` (confirmed in demo `Startup.cs`), `HttpContext.User` is fully
+    populated at that point. The subsequent synchronous `LoginUserInfo` getter in
+    `PrivilegeFilter` finds `_loginUserInfo` already set and returns immediately.
+  The synchronous `LoginUserInfo` getter is unchanged — it remains the fallback for
+  background jobs, `_remotetoken` requests, and non-middleware contexts.
+
 ### Security
 
 - **Exception/connection-string information leak fixed in four production paths** (#124):
