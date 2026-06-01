@@ -6,8 +6,10 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using WalkingTec.Mvvm.Core;
@@ -149,6 +151,59 @@ namespace WalkingTec.Mvvm.Mvc.Auth
             existing.RevokedByIp = ipAddress;
             existing.RevokeReason = reason ?? "Explicit revocation";
             await dc.SaveChangesAsync();
+
+            // Immediately deny the current request's access token so it cannot be
+            // reused after logout even before its natural expiry (Issue #126).
+            DenyCurrentAccessToken();
+        }
+
+        /// <summary>
+        /// Reads the <c>jti</c> and <c>exp</c> claims from the current HTTP request's
+        /// access token and adds the JTI to the <see cref="IAccessTokenDenylist"/>.
+        ///
+        /// Silently skips when called outside an HTTP request context (e.g. background
+        /// jobs), when there is no <c>jti</c> claim, or when the denylist service is
+        /// unavailable — the refresh-token revocation above has already occurred.
+        /// </summary>
+        private void DenyCurrentAccessToken()
+        {
+            try
+            {
+                var httpContextAccessor = _sp.GetService<IHttpContextAccessor>();
+                var httpContext = httpContextAccessor?.HttpContext;
+                if (httpContext == null) return;
+
+                var user = httpContext.User;
+                var jti = user.FindFirstValue(JwtRegisteredClaimNames.Jti);
+                if (string.IsNullOrEmpty(jti)) return;
+
+                var denylist = httpContext.RequestServices.GetService<IAccessTokenDenylist>();
+                if (denylist == null) return;
+
+                // Compute expiry: prefer the token's own exp claim (Unix seconds);
+                // fall back to now + configured access-token lifetime.
+                DateTimeOffset expiresUtc;
+                var expClaim = user.FindFirstValue(JwtRegisteredClaimNames.Exp);
+                if (!string.IsNullOrEmpty(expClaim)
+                    && long.TryParse(expClaim, out var expUnix))
+                {
+                    expiresUtc = DateTimeOffset.FromUnixTimeSeconds(expUnix);
+                }
+                else
+                {
+                    expiresUtc = _timeProvider.GetUtcNow().AddSeconds(_jwtOptions.Expires);
+                }
+
+                denylist.Deny(jti, expiresUtc);
+            }
+            catch (Exception ex)
+            {
+                // Failure to populate the denylist must never surface as an exception:
+                // the refresh-token has already been revoked, which is the primary
+                // security action. A failed denylist write is a best-effort degradation.
+                _sp.GetService<ILoggerFactory>()?.CreateLogger("TokenService")
+                    ?.LogWarning(ex, "Failed to add current access-token jti to the revocation denylist; the access token may remain valid until expiry.");
+            }
         }
 
         private string GenerateAccessToken(LoginUserInfo info)

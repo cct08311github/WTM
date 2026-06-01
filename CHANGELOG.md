@@ -24,6 +24,23 @@
     `ApiResult.ErrorMsg`.  Fix: full exception is logged via `ILoggerFactory`; `ErrorMsg` is
     set to `"An error occurred while processing the request."` in production.  Dev mode
     (`IsQuickDebug == true`) retains the full `ex.ToString()` for diagnostics.
+- **Access-token revocation via JTI denylist** (#126):
+  A valid JWT access token remained fully usable until its natural `exp` time even after
+  the user logged out or the associated refresh token was explicitly revoked. There was no
+  server-side mechanism to invalidate issued access tokens before their expiry.
+  Fix: introduced `IAccessTokenDenylist` (backed by `IMemoryCache`) that stores revoked
+  JTI values with an absolute cache expiration matching the token's own `exp` claim —
+  entries auto-evict when the token would have expired anyway, keeping memory bounded.
+  `TokenService.RevokeTokenAsync` now calls `IAccessTokenDenylist.Deny()` with the current
+  request's `jti` and `exp` immediately after revoking the refresh token.
+  The `OnTokenValidated` JWT-bearer event checks the denylist on every authenticated
+  request; if the JTI is denied it calls `context.Fail("Token has been revoked.")` so the
+  request is rejected as `401 Unauthorized`.
+  **Single-node note:** the default `IMemoryCache` implementation is process-local.
+  Multi-node / load-balanced deployments should replace `IAccessTokenDenylist` with a
+  distributed-cache-backed implementation (e.g. Redis via `IDistributedCache`) by
+  registering a custom `IAccessTokenDenylist` before calling `AddWtmAuthentication`.
+  New tests in `test/WalkingTec.Mvvm.Core.Test/Security/AccessTokenDenylistTests.cs`.
 
 - **CodeGenVM: `MainDir` HTTP model-binding vector closed; `ShareDir` NRE fixed** (#122):
   Two bugs in `CodeGenVM` (`src/WalkingTec.Mvvm.Mvc/CodeGenVM.cs`):

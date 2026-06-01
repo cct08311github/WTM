@@ -679,6 +679,12 @@ namespace WalkingTec.Mvvm.Mvc
         {
             var conf = config.Get<Configs>();
             services.AddScoped<ITokenService, TokenService>();
+            // Singleton denylist backed by IMemoryCache (already registered via AddMemoryCache()
+            // in AddWtmContext). Entries auto-evict at token expiry time — bounded memory growth.
+            // See IAccessTokenDenylist for multi-node deployment guidance.
+            services.TryAddSingleton<IAccessTokenDenylist>(sp =>
+                new MemoryCacheAccessTokenDenylist(
+                    sp.GetRequiredService<Microsoft.Extensions.Caching.Memory.IMemoryCache>()));
 
             var jwtOptions = conf.JwtOptions;
 
@@ -728,9 +734,29 @@ namespace WalkingTec.Mvvm.Mvc
                                  }
                                  return Task.CompletedTask;
                              },
-                             OnTokenValidated = (context) => {
-                                 JsonWebToken token = context.SecurityToken as JsonWebToken;
-                                 return Task.FromResult(token);
+                             OnTokenValidated = (context) =>
+                             {
+                                 // Guard against revoked access tokens (Issue #126).
+                                 // After logout / explicit revocation, the jti is added to the
+                                 // in-process denylist so the token is rejected even before its
+                                 // natural expiry time.
+                                 if (context.SecurityToken is JsonWebToken jwt)
+                                 {
+                                     // Use the literal "jti" to avoid ambiguity between
+                                     // System.IdentityModel.Tokens.Jwt and Microsoft.IdentityModel.JsonWebTokens.
+                                     var jti = jwt.GetClaim("jti")?.Value;
+                                     if (!string.IsNullOrEmpty(jti))
+                                     {
+                                         var denylist = context.HttpContext.RequestServices
+                                             .GetRequiredService<IAccessTokenDenylist>();
+                                         if (denylist.IsDenied(jti))
+                                         {
+                                             context.Fail("Token has been revoked.");
+                                             return Task.CompletedTask;
+                                         }
+                                     }
+                                 }
+                                 return Task.CompletedTask;
                              }
                             };
                      })
