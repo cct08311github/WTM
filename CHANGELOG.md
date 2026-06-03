@@ -344,6 +344,7 @@
   `EntityList.LastOrDefault()` returns null) now adds a clear diagnostic error
   ("Sub-table row appears before any parent row") and skips the row, instead of
   dereferencing null and producing an unhandled 500.
+- **Cache stampede fixes in Core services** (#133): two stampede-protection defects corrected. (M21) `WtmTenantService._keyLocks` promoted to `static` so per-key `SemaphoreSlim` locks are shared across all scoped instances — previously each request got a fresh empty dictionary, letting concurrent cold-key requests each issue an independent DB query. (M10) `LookupCacheService` fall-through callers (semaphore timeout) now skip `SetCache`; they return the DB result directly, preventing unlocked writes that could overwrite a fresher value stored by the lock holder.
 
 ## [10.5.3] - 2026-05-23
 

@@ -25,7 +25,15 @@ namespace WalkingTec.Mvvm.Core.Services
         private readonly IOptionsMonitor<Configs> _configs;
         private readonly GlobalData _globalData;
         private readonly ILogger<WtmTenantService>? _logger;
-        private readonly ConcurrentDictionary<string, SemaphoreSlim> _keyLocks = new();
+        // Static so the per-key locks are shared across all scoped instances.
+        // WtmTenantService is AddScoped: a fresh instance per request means an
+        // instance-field ConcurrentDictionary would be empty for every request,
+        // so concurrent requests for the same cold key would all acquire "their
+        // own" semaphore and each issue a duplicate DB query (stampede).
+        // Making the dictionary static ensures the semaphores are process-shared
+        // and truly serialise concurrent cold-key requests. The service lifetime
+        // is NOT changed (remains AddScoped) — only the lock table is promoted.
+        private static readonly ConcurrentDictionary<string, SemaphoreSlim> _keyLocks = new();
 
         public WtmTenantService(
             IDistributedCache cache,

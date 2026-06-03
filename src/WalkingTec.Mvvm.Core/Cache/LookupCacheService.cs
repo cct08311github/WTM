@@ -198,15 +198,15 @@ namespace WalkingTec.Mvvm.Core.Cache
                     return cached;
                 }
 
-                // Bug #112 (4): if we timed out waiting for the semaphore,
-                // re-check the cache one more time before falling through to a DB
-                // load. Under heavy concurrency the holder may have already filled
-                // the cache; a re-check avoids an unnecessary DB hit for most
-                // timed-out callers. If still absent, this thread loads from DB
-                // as a safe fallback — it just won't be stored under the semaphore
-                // protection (no double-store risk: SetCache uses CreateEntry which
-                // is idempotent, and the semaphore holder will overwrite with the
-                // same data).
+                // Bug #112 (4) / M10 fix: semaphore timeout handling.
+                // If we timed out, re-check the cache — the holder may have already
+                // filled it while we were waiting. If still absent, fall through to
+                // a DB load as a safe fallback so the caller is never blocked forever.
+                // IMPORTANT: timed-out callers must NOT call SetCache because they do
+                // NOT hold the lock. Writing to the cache without the semaphore would
+                // race with the legitimate lock holder's SetCache, potentially
+                // overwriting a fresher value with a stale one and defeating the
+                // stampede-protection invariant. Return the raw DB result directly.
                 if (!acquired)
                 {
                     if (_cache.TryGetValue<IReadOnlyList<T>>(key, out cached) && cached != null)
@@ -214,11 +214,20 @@ namespace WalkingTec.Mvvm.Core.Cache
                         RecordHit(typeof(T));
                         return cached;
                     }
-                    // Still absent: fall through and load from DB.
+                    // Still absent: load from DB but skip SetCache (no lock held).
+                    // Log once so operators can tune StampedeTimeout if this is frequent.
+                    _logger?.LogWarning(
+                        "[WTM] LookupCache stampede-protection bypassed for key '{Key}': " +
+                        "semaphore timed out after {TimeoutMs}ms. " +
+                        "DB query result returned to caller without caching. " +
+                        "Consider increasing StampedeTimeout if this occurs frequently.",
+                        key, (int)StampedeTimeout.TotalMilliseconds);
+                    RecordMiss(typeof(T));
+                    return LoadFromDb<T>(dc);
                     // NOTE: semaphore was NOT acquired, so we must NOT Release it below.
                 }
 
-                // 此為唯一查 DB 的執行緒（或 timeout fallback）
+                // 此為唯一查 DB 的執行緒（持有 semaphore）
                 RecordMiss(typeof(T));
                 var data = LoadFromDb<T>(dc);
                 return SetCache<T>(key, data, tenantId);
@@ -269,7 +278,9 @@ namespace WalkingTec.Mvvm.Core.Cache
                     return cached;
                 }
 
-                // Bug #112 (4): semaphore timeout re-check (see sync version for rationale).
+                // Bug #112 (4) / M10 fix: semaphore timeout handling (async path).
+                // Mirror the sync path: timed-out callers must not call SetCache
+                // because they do not hold the lock. Return the DB result directly.
                 if (!acquired)
                 {
                     if (_cache.TryGetValue<IReadOnlyList<T>>(key, out cached) && cached != null)
@@ -277,7 +288,16 @@ namespace WalkingTec.Mvvm.Core.Cache
                         RecordHit(typeof(T));
                         return cached;
                     }
-                    // Fall through to DB load without holding the semaphore.
+                    // Still absent: load from DB but skip SetCache (no lock held).
+                    _logger?.LogWarning(
+                        "[WTM] LookupCache stampede-protection bypassed for key '{Key}' (async): " +
+                        "semaphore timed out after {TimeoutMs}ms. " +
+                        "DB query result returned to caller without caching. " +
+                        "Consider increasing StampedeTimeout if this occurs frequently.",
+                        key, (int)StampedeTimeout.TotalMilliseconds);
+                    RecordMiss(typeof(T));
+                    return await LoadFromDbAsync<T>(dc, ct).ConfigureAwait(false);
+                    // NOTE: semaphore was NOT acquired, so we must NOT Release it below.
                 }
 
                 RecordMiss(typeof(T));
