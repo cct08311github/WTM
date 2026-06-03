@@ -318,6 +318,22 @@
 
   **API compatibility:** `TriggerNowAsync(Guid)` callers require no
   changes — the `watermarkOverride` parameter defaults to `null`.
+- **Analysis engine: six correctness and security fixes (#130)**:
+  (M1) `FilterCondition.Value` null-guard — relative-date token checks and
+  all other `f.Value` accesses now use null-safe operators, preventing NullReferenceException
+  when STJ deserialises a missing JSON field. (M2) Unbounded filter/sort
+  clause lists capped at 50 entries (`MaxFilterClauses`) in `_AnalysisController` — requests
+  exceeding the cap are rejected with HTTP 400 before reaching the Expression-tree builder.
+  (M3) Pivot row-key collision fixed — `|` and `\` in dimension values are now
+  backslash-escaped before joining with `|`, so a value containing the delimiter
+  can no longer shadow a different row. (M4) Data-privilege fingerprint folded into the
+  cache identity key — stale cached results can no longer be served to users whose
+  row-level data-privilege set has changed since the cache was populated. (M5)
+  `ServerSideGroupByStrategy` now throws `InvalidOperationException` when more than
+  3 measures are requested, surfacing the error explicitly instead of silently
+  dropping measure 4+. (M29) `ComputeHash` returns `null` when `identityKey` is
+  absent — cache get/set are skipped entirely for identity-less callers, closing
+  a cross-user cache read vector.
 
 ## [10.5.3] - 2026-05-23
 

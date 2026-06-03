@@ -33,6 +33,12 @@ namespace WalkingTec.Mvvm.Core.Analysis
             if (req.Dimensions.Count == 0)
                 return [];
 
+            // M5: the fixed Tuple<string, double?, double?, double?> projection supports
+            // exactly 3 measure slots. A 4th measure would be silently dropped (null).
+            // Throw early with a clear diagnostic so the caller knows to switch strategy.
+            if (req.Measures != null && req.Measures.Count > 3)
+                throw new InvalidOperationException("ServerSideGroupByStrategy supports at most 3 measures.");
+
             if (req.DimensionHierarchies != null && req.Dimensions.Any(d => req.DimensionHierarchies.TryGetValue(d, out var h) && h != DateHierarchy.None))
             {
                 throw new InvalidOperationException("ServerSideGroupByStrategy does not support DateHierarchy. Falling back to InProcess.");
@@ -57,6 +63,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
         {
             if (req.Dimensions.Count == 0)
                 return [];
+
+            // M5: same guard as Execute; keeps sync/async behaviour identical.
+            if (req.Measures != null && req.Measures.Count > 3)
+                throw new InvalidOperationException("ServerSideGroupByStrategy supports at most 3 measures.");
 
             if (req.DimensionHierarchies != null && req.Dimensions.Any(d => req.DimensionHierarchies.TryGetValue(d, out var h) && h != DateHierarchy.None))
             {

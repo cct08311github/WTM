@@ -50,11 +50,13 @@ namespace WalkingTec.Mvvm.Core.Analysis
             var wl = whitelist.ToDictionary(f => f.FieldName);
             ValidateFields(req, wl);
 
-            // 先計算 hash，用於快取查詢（hash 僅由 request 決定，與資料無關）
+            // 先計算 hash，用於快取查詢（hash 僅由 request 決定，與資料無關）。
+            // M29 fix: ComputeHash returns null when identityKey is absent —
+            // null means "do not cache", so both get and set are skipped.
             var queryHash = ComputeHash(req, identityKey);
 
-            // 快取命中時直接回傳
-            if (_cache != null && _cache.TryGet(queryHash, out var cached) && cached != null)
+            // 快取命中時直接回傳（僅在 queryHash 非 null 時才查快取）
+            if (queryHash != null && _cache != null && _cache.TryGet(queryHash, out var cached) && cached != null)
                 return cached;
 
             var filtered = ApplyFilters(baseQuery, req.Filters, wl);
@@ -165,7 +167,9 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     BuildMeasureColumnNames(req), req.DimensionHierarchies);
             }
 
-            _cache?.Set(queryHash, response, _defaultTtl);
+            // M29 fix: only populate the cache when queryHash is non-null (i.e. identityKey was present)
+            if (queryHash != null)
+                _cache?.Set(queryHash, response, _defaultTtl);
 
             return response;
         }
@@ -188,9 +192,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
             var wl = whitelist.ToDictionary(f => f.FieldName);
             ValidateFields(req, wl);
 
+            // M29 fix: null queryHash means "do not cache" (identity-less request)
             var queryHash = ComputeHash(req, identityKey);
 
-            if (_cache != null && _cache.TryGet(queryHash, out var cached) && cached != null)
+            if (queryHash != null && _cache != null && _cache.TryGet(queryHash, out var cached) && cached != null)
                 return cached;
 
             var filtered = ApplyFilters(baseQuery, req.Filters, wl);
@@ -278,7 +283,9 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     BuildMeasureColumnNames(req), req.DimensionHierarchies);
             }
 
-            _cache?.Set(queryHash, response, _defaultTtl);
+            // M29 fix: only populate the cache when queryHash is non-null (i.e. identityKey was present)
+            if (queryHash != null)
+                _cache?.Set(queryHash, response, _defaultTtl);
 
             return response;
         }
@@ -311,12 +318,14 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 .OrderBy(v => v)];
 
             // 4. Transform into pivot format
-            // Group raw rows by the combination of RowDimensions
+            // Group raw rows by the combination of RowDimensions.
+            // M3 fix: escape each segment so that a literal '|' in a dimension value
+            // cannot collide with the '|' join delimiter.
             var pivotRowsMap = new Dictionary<string, Dictionary<string, object?>>();
 
             foreach (var row in rawRows)
             {
-                var rowKey = string.Join("|", rowDims.Select(d => String(row[d])));
+                var rowKey = string.Join("|", rowDims.Select(d => EscapeKeySeg(String(row[d]))));
                 if (!pivotRowsMap.TryGetValue(rowKey, out var pivotRow))
                 {
                     pivotRowsMap[rowKey] = pivotRow = new Dictionary<string, object?>();
@@ -375,11 +384,13 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 .Distinct()
                 .OrderBy(v => v)];
 
+            // M3 fix: escape each segment so that a literal '|' in a dimension value
+            // cannot collide with the '|' join delimiter.
             var pivotRowsMap = new Dictionary<string, Dictionary<string, object?>>();
 
             foreach (var row in rawRows)
             {
-                var rowKey = string.Join("|", rowDims.Select(d => String(row[d])));
+                var rowKey = string.Join("|", rowDims.Select(d => EscapeKeySeg(String(row[d]))));
                 if (!pivotRowsMap.TryGetValue(rowKey, out var pivotRow))
                 {
                     pivotRowsMap[rowKey] = pivotRow = new Dictionary<string, object?>();
@@ -1340,7 +1351,8 @@ namespace WalkingTec.Mvvm.Core.Analysis
         {
             bool hasTokens = false;
             foreach (var f in filters)
-                if (f.Value.StartsWith("@", StringComparison.Ordinal)) { hasTokens = true; break; }
+                // M1 fix: f.Value may be null (STJ overrides the = string.Empty default with null)
+                if ((f.Value ?? string.Empty).StartsWith("@", StringComparison.Ordinal)) { hasTokens = true; break; }
             if (!hasTokens) return filters;
 
             List<FilterCondition> result = [];
@@ -1350,14 +1362,15 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
             foreach (var f in filters)
             {
-                if (!f.Value.StartsWith("@", StringComparison.Ordinal))
+                // M1 fix: guard against null Value — a null Value is not a relative-date token
+                if (!(f.Value ?? string.Empty).StartsWith("@", StringComparison.Ordinal))
                 {
                     result.Add(f);
                     continue;
                 }
 
                 DateTime start, end;
-                switch (f.Value.ToLowerInvariant())
+                switch ((f.Value ?? string.Empty).ToLowerInvariant())
                 {
                     case "@today":
                         start = today; end = today;
@@ -1613,6 +1626,19 @@ namespace WalkingTec.Mvvm.Core.Analysis
         private static string String(object? val) => val?.ToString() ?? string.Empty;
 
         /// <summary>
+        /// Escape a single pivot row-key segment so that a literal '|' or '\' in a
+        /// dimension value cannot collide with the '|' join delimiter used in
+        /// <see cref="ExecutePivot{TModel}"/> / <see cref="ExecutePivotAsync{TModel}"/>.
+        /// Encoding: '\' → '\\', '|' → '\|'.  Decoding is not needed because the
+        /// pivot map uses the full escaped key only as a dictionary key (no split).
+        /// </summary>
+        private static string EscapeKeySeg(string? seg)
+        {
+            if (seg == null) return string.Empty;
+            return seg.Replace("\\", "\\\\").Replace("|", "\\|");
+        }
+
+        /// <summary>
         /// Replace enum string values in dimension columns with their [Display(Name)] if available.
         /// </summary>
         private static void ResolveEnumDisplayNames(
@@ -1741,13 +1767,20 @@ namespace WalkingTec.Mvvm.Core.Analysis
             return map;
         }
 
-        private static string ComputeHash(AnalysisQueryRequest req, string? identityKey = null)
+        /// <summary>
+        /// 計算查詢快取 key。
+        /// 當 <paramref name="identityKey"/> 為 null 或空字串時回傳 null，
+        /// 表示「此請求不應寫入或讀取共用快取」（M29 修復：防止匿名請求共用快取）。
+        /// </summary>
+        private static string? ComputeHash(AnalysisQueryRequest req, string? identityKey = null)
         {
+            // M29 fix: identity-less requests must never share a cache entry.
+            // Returning null signals callers to skip both get and set.
+            if (string.IsNullOrEmpty(identityKey))
+                return null;
+
             var raw = System.Text.Json.JsonSerializer.Serialize(req, _hashSerializerOptions);
-            if (!string.IsNullOrEmpty(identityKey))
-            {
-                raw += "|" + identityKey;
-            }
+            raw += "|" + identityKey;
             Span<byte> hash = stackalloc byte[32]; // SHA256 = 32 bytes
             System.Security.Cryptography.SHA256.HashData(
                 System.Text.Encoding.UTF8.GetBytes(raw), hash);

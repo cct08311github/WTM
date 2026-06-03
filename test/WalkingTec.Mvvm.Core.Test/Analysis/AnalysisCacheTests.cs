@@ -135,7 +135,10 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 Filters = new List<FilterCondition>()
             };
 
-            var result1 = engine.Execute(ctx.SaleRecords.AsQueryable(), req, whitelist);
+            // M29: identityKey must be supplied so ComputeHash returns a non-null hash
+            // and the cache is both populated and consulted.
+            var result1 = engine.Execute(ctx.SaleRecords.AsQueryable(), req, whitelist,
+                identityKey: "test_user");
             Assert.AreEqual(1, result1.Rows.Count);
             Assert.AreEqual(100m, Convert.ToDecimal(result1.Rows[0]["Amount_Sum"]));
 
@@ -146,7 +149,8 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             });
             ctx.SaveChanges();
 
-            var result2 = engine.Execute(ctx.SaleRecords.AsQueryable(), req, whitelist);
+            var result2 = engine.Execute(ctx.SaleRecords.AsQueryable(), req, whitelist,
+                identityKey: "test_user");
 
             // 快取命中：結果應與第一次一致（1 列，非 2 列）
             Assert.AreEqual(1, result2.Rows.Count);
@@ -180,11 +184,12 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 Filters = new List<FilterCondition>()
             };
 
+            // M29: no identityKey → ComputeHash returns null → QueryHash is null (no caching).
             var result = engine.Execute(ctx.SaleRecords.AsQueryable(), req, whitelist);
 
             Assert.AreEqual(1, result.Rows.Count);
             Assert.AreEqual(100m, Convert.ToDecimal(result.Rows[0]["Amount_Sum"]));
-            Assert.AreEqual(16, result.QueryHash.Length);
+            Assert.IsNull(result.QueryHash, "QueryHash must be null when no identityKey is supplied (M29).");
         }
 
         [TestMethod]
@@ -215,7 +220,9 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 Filters = new List<FilterCondition>()
             };
 
-            var result1 = engine.Execute(ctx.SaleRecords.AsQueryable(), req, whitelist);
+            // M29: identityKey required for cache to be active.
+            var result1 = engine.Execute(ctx.SaleRecords.AsQueryable(), req, whitelist,
+                identityKey: "test_user");
             Assert.AreEqual(1, result1.Rows.Count);
 
             // 等待 TTL 過期
@@ -225,7 +232,8 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             ctx.SaleRecords.Add(new SaleRecord { ID = Guid.NewGuid(), Region = "南", Amount = 200m });
             ctx.SaveChanges();
 
-            var result2 = engine.Execute(ctx.SaleRecords.AsQueryable(), req, whitelist);
+            var result2 = engine.Execute(ctx.SaleRecords.AsQueryable(), req, whitelist,
+                identityKey: "test_user");
 
             // 快取已過期：應回傳 2 列新資料，而非快取的 1 列
             Assert.AreEqual(2, result2.Rows.Count);
@@ -260,7 +268,8 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 Filters = new List<FilterCondition>()
             };
 
-            engine.Execute(ctx.SaleRecords.AsQueryable(), req, whitelist);
+            // M29: identityKey required so cache.Set is actually called.
+            engine.Execute(ctx.SaleRecords.AsQueryable(), req, whitelist, identityKey: "test_user");
 
             Assert.IsNotNull(capturingCache.LastTtl, "Engine should pass TTL to cache.Set");
             Assert.AreEqual(expectedTtl, capturingCache.LastTtl!.Value);

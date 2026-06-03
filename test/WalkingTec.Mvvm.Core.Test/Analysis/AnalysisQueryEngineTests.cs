@@ -782,7 +782,8 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 dims: new[] { "Region" },
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
-            var result = Engine().Execute(Q(), req, _whitelist);
+            // M29: identityKey required so ComputeHash returns a non-null hash.
+            var result = Engine().Execute(Q(), req, _whitelist, identityKey: "test_user");
 
             Assert.IsNotNull(result.QueryHash);
             Assert.AreEqual(16, result.QueryHash.Length);
@@ -865,7 +866,9 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 dims: new[] { "Region" },
                 msrs: new[] { ("Amount", AggregateFunc.Sum) });
 
-            var result = engine.Execute(Q(), req, _whitelist, DBTypeEnum.SqlServer);
+            // M29: identityKey required so ComputeHash returns a non-null hash.
+            var result = engine.Execute(Q(), req, _whitelist, DBTypeEnum.SqlServer,
+                identityKey: "test_user");
 
             Assert.IsNotNull(result.QueryHash);
             Assert.AreEqual(16, result.QueryHash.Length);
