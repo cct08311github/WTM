@@ -334,6 +334,16 @@
   dropping measure 4+. (M29) `ComputeHash` returns `null` when `identityKey` is
   absent — cache get/set are skipped entirely for identity-less callers, closing
   a cross-user cache read vector.
+- **BaseImportVM: three import correctness fixes (#131)**: (M7) blank rows mid-file
+  no longer truncate the import — a `return` inside the row loop was replaced with
+  `continue` so separator blank rows are skipped and subsequent data rows are
+  still processed. (M8) XLSX uploads exceeding `MaxImportFileBytes` (default 10 MiB,
+  virtual/overridable) are now rejected before NPOI loads the workbook into memory;
+  `OutOfMemoryException` is rethrown instead of being silently swallowed as
+  "WrongTemplate". (M9) a sub-table row that appears before any parent row (i.e.
+  `EntityList.LastOrDefault()` returns null) now adds a clear diagnostic error
+  ("Sub-table row appears before any parent row") and skips the row, instead of
+  dereferencing null and producing an unhandled 500.
 
 ## [10.5.3] - 2026-05-23
 

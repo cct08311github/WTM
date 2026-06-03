@@ -141,6 +141,12 @@ namespace WalkingTec.Mvvm.Core
         protected XSSFWorkbook? xssfworkbook;
 
         /// <summary>
+        /// Maximum allowed XLSX upload size in bytes (default 10 MiB).
+        /// Override in a subclass to raise or lower the limit for a specific import.
+        /// </summary>
+        protected virtual long MaxImportFileBytes => 10 * 1024 * 1024;
+
+        /// <summary>
         /// 唯一性验证
         /// </summary>
         protected DuplicatedInfo<P>? finalInfo;
@@ -265,6 +271,17 @@ namespace WalkingTec.Mvvm.Core
                     ErrorListVM.EntityList.Add(new ErrorMessage { Message = (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.WrongTemplate"] : null) });
                     return;
                 }
+                // M8: reject oversized uploads before NPOI allocates memory for the full file.
+                // Without this guard an attacker can upload a multi-hundred-MB XLSX and
+                // exhaust heap; the bare catch below would swallow the OOM as "WrongTemplate".
+                if (file.DataStream != null && file.DataStream.CanSeek && file.DataStream.Length > MaxImportFileBytes)
+                {
+                    ErrorListVM.EntityList.Add(new ErrorMessage
+                    {
+                        Message = $"Import file exceeds the maximum allowed size ({MaxImportFileBytes / 1024 / 1024} MiB)."
+                    });
+                    return;
+                }
                 xssfworkbook = new XSSFWorkbook(file.DataStream);
                 file.DataStream?.Dispose();
                 Template.InitExcelData();
@@ -353,7 +370,10 @@ namespace WalkingTec.Mvvm.Core
                     XSSFRow row = (XSSFRow)rows.Current;
                     if (IsEmptyRow(row, columnCount))
                     {
-                        return;
+                        // M7: skip blank rows mid-file instead of terminating the whole import.
+                        // A bare `return` here caused every blank separator row to silently
+                        // truncate all subsequent data and report success.
+                        continue;
                     }
 
                     T result = new T();
@@ -399,6 +419,13 @@ namespace WalkingTec.Mvvm.Core
                 }
 
                 return;
+            }
+            catch (OutOfMemoryException)
+            {
+                // M8: OOM must not be swallowed as "WrongTemplate" — it indicates a resource
+                // exhaustion that the process cannot safely recover from.  Rethrow so the
+                // runtime crash-handler / ASP.NET middleware can recycle or log appropriately.
+                throw;
             }
             catch
             {
@@ -505,6 +532,19 @@ namespace WalkingTec.Mvvm.Core
                 if (string.IsNullOrEmpty(ParentEntityValues))
                 {
                     entity = EntityList.LastOrDefault();
+                    // M9: if EntityList is empty the very first row already has empty parent
+                    // columns (sub-table row before any parent row).  Dereferencing null below
+                    // (GetType, GetID, SetPropertyValue, ExcelIndex) would produce an NRE → 500.
+                    // Emit a clear diagnostic and skip this orphaned row.
+                    if (entity == null)
+                    {
+                        ErrorListVM.EntityList.Add(new ErrorMessage
+                        {
+                            Message = "Sub-table row appears before any parent row.",
+                            ExcelIndex = item.ExcelIndex
+                        });
+                        continue;
+                    }
                 }
                 else
                 {
