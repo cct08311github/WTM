@@ -22,6 +22,7 @@
     `PrivilegeFilter` finds `_loginUserInfo` already set and returns immediately.
   The synchronous `LoginUserInfo` getter is unchanged — it remains the fallback for
   background jobs, `_remotetoken` requests, and non-middleware contexts.
+- **Core robustness: invariant culture conversion, thread-safe static caches, JSON error escaping, regex fallback** (#134): `PropertyHelper.ConvertValue` now passes `InvariantCulture` to both `Convert.ChangeType` calls, preventing decimal/date corruption on non-invariant-locale servers; `Utils.GetAllAssembly`, `GetAllModels`, and `GetAllVms` use double-checked locking to eliminate the empty-intermediate-state race; `ListVMExtension.GetError` escapes backslash and double-quote in error text before JSON interpolation, preventing malformed JSON; `WtmAuthorizationService.MatchUrl` catches `NotSupportedException` and `ArgumentException` in addition to `RegexMatchTimeoutException` so patterns unsupported by the `NonBacktracking` engine fall back gracefully instead of surfacing as a 500.
 
 ### Security
 

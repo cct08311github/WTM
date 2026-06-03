@@ -915,13 +915,15 @@ namespace WalkingTec.Mvvm.Core
                             var gs = propertyType.GetGenericArguments();
                             foreach (var p in pair)
                             {
-                                (val as IList)?.Add(Convert.ChangeType(p, gs[0]));
+                                // Pass InvariantCulture to prevent decimal/date corruption on non-invariant servers.
+                                (val as IList)?.Add(Convert.ChangeType(p, gs[0], System.Globalization.CultureInfo.InvariantCulture));
                             }
                         }
                     }
                     else
                     {
-                        val = Convert.ChangeType(value?.ToString(), propertyType);
+                        // Pass InvariantCulture to prevent decimal/date corruption on non-invariant servers.
+                        val = Convert.ChangeType(value?.ToString(), propertyType, System.Globalization.CultureInfo.InvariantCulture);
                     }
                 }
                 catch (Exception ex)

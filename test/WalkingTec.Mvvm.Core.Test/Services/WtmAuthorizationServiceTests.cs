@@ -307,6 +307,50 @@ namespace WalkingTec.Mvvm.Core.Test.Services
 
         #endregion
 
+        #region MatchUrl — NonBacktracking fallback (M20)
+
+        [TestMethod]
+        public void IsAccessable_PatternUnsupportedByNonBacktracking_FallsBackAndDoesNotThrow()
+        {
+            // Regex patterns that use backreferences, look-aheads, or other constructs
+            // unsupported by RegexOptions.NonBacktracking throw NotSupportedException at
+            // CONSTRUCTION time (not at match time). Before the fix the exception was
+            // uncaught and surfaced as a 500. After the fix the code falls back to a
+            // compiled regex without NonBacktracking and returns a valid result.
+            //
+            // A lookahead "(?=...)" triggers NotSupportedException with NonBacktracking.
+            var patternWithLookahead = "/admin(?=/users)";
+
+            var gd = MakeGlobalData();
+            // Put the problematic pattern into AllAccessUrls so MatchUrl is invoked.
+            gd.AllAccessUrls = new List<string> { patternWithLookahead };
+            var config = new Configs { IsQuickDebug = false };
+
+            // Must not throw — should fall back gracefully to compiled regex.
+            Action act = () => _service.IsAccessable("/admin/users", null, config, gd);
+            act.Should().NotThrow("NonBacktracking-unsupported patterns must fall back to compiled regex, not throw 500");
+        }
+
+        [TestMethod]
+        public void IsAccessable_ValidPattern_StillMatchesAfterCachingFallback()
+        {
+            // Ensure normal patterns still work even when the cache may have been seeded
+            // from a previous test that triggered the fallback.
+            var menuId = Guid.NewGuid();
+            var gd = MakeGlobalData(new List<SimpleMenu>
+            {
+                new SimpleMenu { ID = menuId, Url = "/api/data" }
+            });
+            gd.AllAccessUrls = new List<string> { "/api/data" };
+            var config = new Configs { IsQuickDebug = false };
+
+            // A plain pattern should match without error.
+            var result = _service.IsAccessable("/api/data", null, config, gd);
+            result.Should().BeTrue("a valid AllAccessUrls pattern must still match after the fallback fix");
+        }
+
+        #endregion
+
         #region Helpers
 
         private static GlobalData MakeGlobalData(List<SimpleMenu>? menus = null)

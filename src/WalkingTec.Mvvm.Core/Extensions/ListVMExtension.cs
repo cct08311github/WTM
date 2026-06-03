@@ -397,7 +397,11 @@ namespace WalkingTec.Mvvm.Core.Extensions
 
         public static string GetError<T>(this IBasePagedListVM<T, BaseSearcher> self) where T : TopBasePoco, new()
         {
-            return $@"{{""Data"":{{}},""Count"":0,""Page"":0,""PageCount"":0,""Msg"":""{(self as BaseVM)?.MSD?.GetFirstError() ?? ""} "",""Code"":400}}";
+            // Escape backslash and double-quote so the error text cannot break the JSON string,
+            // mirroring the same escaping used in GetSingleDataJson (~line 313).
+            var rawError = (self as BaseVM)?.MSD?.GetFirstError() ?? "";
+            var escapedError = rawError.Replace("\\", "\\\\").Replace("\"", "\\\"");
+            return $@"{{""Data"":{{}},""Count"":0,""Page"":0,""PageCount"":0,""Msg"":""{escapedError} "",""Code"":400}}";
         }
 
 

@@ -114,16 +114,23 @@ namespace WalkingTec.Mvvm.Core.Services
         {
             var regex = _regexCache.GetOrAdd(pattern, p =>
             {
-                // Use NonBacktracking to prevent ReDoS attacks - guarantees linear time complexity
-                // Falls back to compiled only if NonBacktracking can't handle the pattern
+                // Use NonBacktracking to prevent ReDoS attacks — guarantees linear time complexity.
+                // NotSupportedException is thrown at construction (not at match time) when the pattern
+                // uses features unsupported by NonBacktracking (e.g. backreferences, look-aheads).
+                // ArgumentException is thrown for invalid regex patterns.
+                // Both must be caught here because ConcurrentDictionary.GetOrAdd does not retry
+                // a failed factory, and an uncaught exception would surface as an unhandled 500.
                 try
                 {
                     return new Regex("^" + p + "[/\\?]?", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.NonBacktracking);
                 }
-                catch (RegexMatchTimeoutException)
+                catch (Exception ex) when (ex is RegexMatchTimeoutException or NotSupportedException or ArgumentException)
                 {
-                    // If NonBacktracking fails (e.g., pattern uses features it doesn't support),
-                    // use basic compiled regex without the dangerous features
+                    // Log so operators can detect problematic URL patterns.
+                    CoreProgram.GetLogger(nameof(WtmAuthorizationService))
+                        ?.LogWarning(ex, "MatchUrl: NonBacktracking regex failed for pattern '{Pattern}'; falling back to compiled regex", LogSanitizer.Sanitize(p));
+
+                    // Fall back to compiled regex without NonBacktracking engine.
                     return new Regex("^" + p + "[/\\?]?", RegexOptions.IgnoreCase | RegexOptions.Compiled);
                 }
             });

@@ -22,6 +22,11 @@ namespace WalkingTec.Mvvm.Core
 {
     public class Utils
     {
+        // Lock objects for thread-safe lazy initialisation of the three static caches.
+        // Using separate locks avoids unnecessary contention between unrelated fields.
+        private static readonly object _allAssembliesLock = new();
+        private static readonly object _allModelsLock = new();
+        private static readonly object _allVMsLock = new();
 
         private static List<Assembly>? _allAssemblies;
         private static List<Type>? _allModels;
@@ -39,106 +44,121 @@ namespace WalkingTec.Mvvm.Core
 
         public static List<Assembly> GetAllAssembly()
         {
+            // Double-checked lock: avoids the observable empty-list window that existed when
+            // _allAssemblies was assigned to [] before being populated via AddRange.
             if (_allAssemblies == null)
             {
-                _allAssemblies = [];
-                string? path = null;
-                string? singlefile = null;
-                try
+                lock (_allAssembliesLock)
                 {
-                    path = Assembly.GetEntryAssembly()?.Location;
-                }
-                catch (Exception ex)
-                {
-                    CoreProgram.GetLogger("Utils")?.LogDebug(ex, "GetEntryAssembly().Location failed (single-file publish?); falling back to process main module");
-                }
-                if (string.IsNullOrEmpty(path))
-                {
-                    singlefile = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
-                    path = Path.GetDirectoryName(singlefile);
-                }
-                path ??= AppContext.BaseDirectory;
-                var dirPath = Path.GetDirectoryName(path) ?? path;
-                var dir = new DirectoryInfo(dirPath);
-
-                var dlls = dir.GetFiles("*.dll", SearchOption.TopDirectoryOnly);
-                string[] systemdll = new string[]
-                {
-                "Microsoft.",
-                "System.",
-                "Swashbuckle.",
-                "ICSharpCode",
-                "Newtonsoft.",
-                "Oracle.",
-                "MySql.",
-                "SQLitePCLRaw.",
-                "Aliyun.OSS",
-                "BouncyCastle.",
-                "FreeSql.",
-                "Google.Protobuf.dll",
-                "Humanizer.dll",
-                "IdleBus.dll",
-                "K4os.",
-                "MySql.Data.",
-                "Npgsql.",
-                "NPOI.",
-                "netstandard",
-                "VueCliMiddleware"
-                };
-
-                var filtered = dlls.Where(x => systemdll.Any(y => x.Name.StartsWith(y)) == false);
-                foreach (var dll in filtered)
-                {
-                    try
+                    if (_allAssemblies == null)
                     {
-                        AssemblyLoadContext.Default.LoadFromAssemblyPath(dll.FullName);
-                    }
-                    catch (Exception ex)
-                    {
-                        CoreProgram.GetLogger("Utils")?.LogDebug(ex, "LoadFromAssemblyPath failed for '{Dll}'; skipping", dll.FullName);
+                        string? path = null;
+                        string? singlefile = null;
+                        try
+                        {
+                            path = Assembly.GetEntryAssembly()?.Location;
+                        }
+                        catch (Exception ex)
+                        {
+                            CoreProgram.GetLogger("Utils")?.LogDebug(ex, "GetEntryAssembly().Location failed (single-file publish?); falling back to process main module");
+                        }
+                        if (string.IsNullOrEmpty(path))
+                        {
+                            singlefile = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+                            path = Path.GetDirectoryName(singlefile);
+                        }
+                        path ??= AppContext.BaseDirectory;
+                        var dirPath = Path.GetDirectoryName(path) ?? path;
+                        var dir = new DirectoryInfo(dirPath);
+
+                        var dlls = dir.GetFiles("*.dll", SearchOption.TopDirectoryOnly);
+                        string[] systemdll = new string[]
+                        {
+                        "Microsoft.",
+                        "System.",
+                        "Swashbuckle.",
+                        "ICSharpCode",
+                        "Newtonsoft.",
+                        "Oracle.",
+                        "MySql.",
+                        "SQLitePCLRaw.",
+                        "Aliyun.OSS",
+                        "BouncyCastle.",
+                        "FreeSql.",
+                        "Google.Protobuf.dll",
+                        "Humanizer.dll",
+                        "IdleBus.dll",
+                        "K4os.",
+                        "MySql.Data.",
+                        "Npgsql.",
+                        "NPOI.",
+                        "netstandard",
+                        "VueCliMiddleware"
+                        };
+
+                        var filtered = dlls.Where(x => systemdll.Any(y => x.Name.StartsWith(y)) == false);
+                        foreach (var dll in filtered)
+                        {
+                            try
+                            {
+                                AssemblyLoadContext.Default.LoadFromAssemblyPath(dll.FullName);
+                            }
+                            catch (Exception ex)
+                            {
+                                CoreProgram.GetLogger("Utils")?.LogDebug(ex, "LoadFromAssemblyPath failed for '{Dll}'; skipping", dll.FullName);
+                            }
+                        }
+                        List<Assembly> dlllist = [.. AssemblyLoadContext.Default.Assemblies.Where(x => systemdll.All(y => !(x.FullName ?? string.Empty).StartsWith(y)))];
+                        // Assign fully-populated list atomically so no thread sees an empty intermediate state.
+                        _allAssemblies = dlllist;
                     }
                 }
-                List<Assembly> dlllist = [.. AssemblyLoadContext.Default.Assemblies.Where(x => systemdll.All(y => !(x.FullName ?? string.Empty).StartsWith(y)))];
-                _allAssemblies.AddRange(dlllist);
             }
             return _allAssemblies;
         }
 
         public static List<Type> GetAllModels()
         {
+            // Double-checked lock for thread-safe lazy initialisation.
             if (_allModels == null)
             {
-                var modelAsms = Utils.GetAllAssembly();
-                List<Type> allTypes = [];// 所有 DbSet<> 的泛型类型
-                                                // 获取所有 DbSet<T> 的泛型类型 T
-                foreach (var asm in modelAsms)
+                lock (_allModelsLock)
                 {
-                    try
+                    if (_allModels == null)
                     {
-                        List<Type> dcModule = [.. asm.GetExportedTypes().Where(x => typeof(DbContext).IsAssignableFrom(x))];
-                        if (dcModule != null && dcModule.Count > 0)
+                        var modelAsms = Utils.GetAllAssembly();
+                        List<Type> allTypes = [];// 所有 DbSet<> 的泛型类型
+                                                        // 获取所有 DbSet<T> 的泛型类型 T
+                        foreach (var asm in modelAsms)
                         {
-                            foreach (var module in dcModule)
+                            try
                             {
-                                foreach (var pro in module.GetProperties())
+                                List<Type> dcModule = [.. asm.GetExportedTypes().Where(x => typeof(DbContext).IsAssignableFrom(x))];
+                                if (dcModule != null && dcModule.Count > 0)
                                 {
-                                    if (pro.PropertyType.IsGeneric(typeof(DbSet<>)))
+                                    foreach (var module in dcModule)
                                     {
-                                        if (!allTypes.Contains(pro.PropertyType.GenericTypeArguments[0], new TypeComparer()))
+                                        foreach (var pro in module.GetProperties())
                                         {
-                                            allTypes.Add(pro.PropertyType.GenericTypeArguments[0]);
+                                            if (pro.PropertyType.IsGeneric(typeof(DbSet<>)))
+                                            {
+                                                if (!allTypes.Contains(pro.PropertyType.GenericTypeArguments[0], new TypeComparer()))
+                                                {
+                                                    allTypes.Add(pro.PropertyType.GenericTypeArguments[0]);
+                                                }
+                                            }
                                         }
                                     }
                                 }
                             }
+                            catch (Exception ex)
+                            {
+                                CoreProgram.GetLogger("Utils")?.LogDebug(ex, "GetAllModels: scanning assembly '{Asm}' threw; skipping", asm.FullName);
+                            }
                         }
-                    }
-                    catch (Exception ex)
-                    {
-                        CoreProgram.GetLogger("Utils")?.LogDebug(ex, "GetAllModels: scanning assembly '{Asm}' threw; skipping", asm.FullName);
+                        _allModels = allTypes;
                     }
                 }
-                _allModels = allTypes;
             }
             return _allModels;
         }
@@ -146,24 +166,31 @@ namespace WalkingTec.Mvvm.Core
         private static List<Type>? _allVMs;
         public static List<Type> GetAllVms()
         {
+            // Double-checked lock for thread-safe lazy initialisation.
             if (_allVMs == null)
             {
-                var modelAsms = Utils.GetAllAssembly();
-                List<Type> allTypes = [];// 所有 DbSet<> 的泛型类型
-                                                // 获取所有 DbSet<T> 的泛型类型 T
-                foreach (var asm in modelAsms)
+                lock (_allVMsLock)
                 {
-                    try
+                    if (_allVMs == null)
                     {
-                        List<Type> dcModule = [.. asm.GetExportedTypes().Where(x => typeof(BaseVM).IsAssignableFrom(x))];
-                        allTypes.AddRange(dcModule);
-                    }
-                    catch (Exception ex)
-                    {
-                        CoreProgram.GetLogger("Utils")?.LogDebug(ex, "GetAllVms: scanning assembly '{Asm}' threw; skipping", asm.FullName);
+                        var modelAsms = Utils.GetAllAssembly();
+                        List<Type> allTypes = [];// 所有 DbSet<> 的泛型类型
+                                                        // 获取所有 DbSet<T> 的泛型类型 T
+                        foreach (var asm in modelAsms)
+                        {
+                            try
+                            {
+                                List<Type> dcModule = [.. asm.GetExportedTypes().Where(x => typeof(BaseVM).IsAssignableFrom(x))];
+                                allTypes.AddRange(dcModule);
+                            }
+                            catch (Exception ex)
+                            {
+                                CoreProgram.GetLogger("Utils")?.LogDebug(ex, "GetAllVms: scanning assembly '{Asm}' threw; skipping", asm.FullName);
+                            }
+                        }
+                        _allVMs = allTypes;
                     }
                 }
-                _allVMs = allTypes;
             }
             return _allVMs;
 

@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Threading;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
 
@@ -299,6 +301,57 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             // Convert.ChangeType(null, int) throws, caught silently
             var result = ((object?)null).ConvertValue(typeof(int));
             Assert.IsNull(result);
+        }
+
+        // ─── InvariantCulture (M19) ──────────────────────────────────
+        // Verify that ConvertValue uses InvariantCulture so decimal parsing is
+        // not affected by the thread's current culture (e.g. de-DE uses comma
+        // as decimal separator, which would corrupt "19.99" → 1999 on German servers).
+
+        [TestMethod]
+        public void ConvertValue_Decimal_InvariantFormat_ParsesCorrectly_UnderGermanCulture()
+        {
+            // Simulate running on a German-locale server (comma = decimal separator).
+            var prevCulture = Thread.CurrentThread.CurrentCulture;
+            try
+            {
+                Thread.CurrentThread.CurrentCulture = new CultureInfo("de-DE");
+
+                // "19.99" in InvariantCulture means 19.99; with de-DE it would mean 1999 (dot=thousands sep).
+                var result = "19.99".ConvertValue(typeof(decimal));
+
+                // After the fix (InvariantCulture passed to Convert.ChangeType), must parse as 19.99.
+                Assert.AreEqual(19.99m, result,
+                    "ConvertValue must use InvariantCulture so '19.99' is always 19.99, not 1999 on German servers.");
+            }
+            finally
+            {
+                Thread.CurrentThread.CurrentCulture = prevCulture;
+            }
+        }
+
+        [TestMethod]
+        public void ConvertValue_BacktickList_Decimal_InvariantFormat_UnderGermanCulture()
+        {
+            // Same InvariantCulture guard, but through the List<T> backtick path.
+            var prevCulture = Thread.CurrentThread.CurrentCulture;
+            try
+            {
+                Thread.CurrentThread.CurrentCulture = new CultureInfo("de-DE");
+
+                var result = "`1.5,2.5`".ConvertValue(typeof(List<double>)) as List<double>;
+
+                Assert.IsNotNull(result);
+                Assert.AreEqual(2, result!.Count);
+                Assert.AreEqual(1.5, result[0], 0.0001,
+                    "List element 0 must be 1.5 with InvariantCulture, not corrupted by de-DE culture.");
+                Assert.AreEqual(2.5, result[1], 0.0001,
+                    "List element 1 must be 2.5 with InvariantCulture.");
+            }
+            finally
+            {
+                Thread.CurrentThread.CurrentCulture = prevCulture;
+            }
         }
     }
 }

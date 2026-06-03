@@ -3,7 +3,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using FluentAssertions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
@@ -824,6 +827,84 @@ namespace WalkingTec.Mvvm.Core.Test.Utils
 
             var result = WalkingTec.Mvvm.Core.Utils.ResetModule(modules);
             result.Should().HaveCountGreaterThanOrEqualTo(3);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Thread-safe static init: GetAllAssembly / GetAllModels / GetAllVms (M22)
+    // ─────────────────────────────────────────────────────────────────────────
+    [TestClass]
+    public class UtilsThreadSafetyTests
+    {
+        /// <summary>
+        /// GetAllAssembly() invoked concurrently must return a non-empty list
+        /// and must never return an empty intermediate list to any caller.
+        /// Before the fix: _allAssemblies was assigned to [] then populated with
+        /// AddRange — a racing thread could observe the empty intermediate state.
+        /// After the fix: assignment is atomic (fully-populated list written once).
+        /// </summary>
+        [TestMethod]
+        public void GetAllAssembly_ConcurrentCalls_AllReturnNonEmpty()
+        {
+            const int threadCount = 8;
+            var results = new List<int>[threadCount];
+            var errors = new Exception?[threadCount];
+
+            var barrier = new Barrier(threadCount);
+            var threads = Enumerable.Range(0, threadCount).Select(i => new Thread(() =>
+            {
+                try
+                {
+                    barrier.SignalAndWait(); // start all threads simultaneously
+                    var assemblies = WalkingTec.Mvvm.Core.Utils.GetAllAssembly();
+                    results[i] = new List<int> { assemblies.Count };
+                }
+                catch (Exception ex)
+                {
+                    errors[i] = ex;
+                }
+            })).ToList();
+
+            threads.ForEach(t => t.Start());
+            threads.ForEach(t => t.Join(TimeSpan.FromSeconds(15)));
+
+            // No thread should have thrown.
+            errors.Where(e => e != null).Should().BeEmpty("no thread should throw when calling GetAllAssembly() concurrently");
+
+            // Every thread must have seen a non-empty list (the empty-intermediate-state bug).
+            foreach (var r in results)
+            {
+                r.Should().NotBeNull();
+                r![0].Should().BeGreaterThan(0, "GetAllAssembly() must never return an empty list to any concurrent caller");
+            }
+        }
+
+        /// <summary>
+        /// GetAllAssembly() called repeatedly from multiple threads must return
+        /// the same stable count — no partial re-initialisation.
+        /// </summary>
+        [TestMethod]
+        public void GetAllAssembly_ConcurrentCalls_ReturnConsistentCount()
+        {
+            // Warm up once first (static field may already be populated from a prior test).
+            var baseline = WalkingTec.Mvvm.Core.Utils.GetAllAssembly().Count;
+
+            const int threadCount = 10;
+            var counts = new int[threadCount];
+            var barrier = new Barrier(threadCount);
+
+            var threads = Enumerable.Range(0, threadCount).Select(i => new Thread(() =>
+            {
+                barrier.SignalAndWait();
+                counts[i] = WalkingTec.Mvvm.Core.Utils.GetAllAssembly().Count;
+            })).ToList();
+
+            threads.ForEach(t => t.Start());
+            threads.ForEach(t => t.Join(TimeSpan.FromSeconds(15)));
+
+            // All threads must see the same count as the baseline.
+            counts.Should().AllSatisfy(c => c.Should().Be(baseline,
+                "GetAllAssembly() must return a stable consistent list across concurrent threads"));
         }
     }
 }

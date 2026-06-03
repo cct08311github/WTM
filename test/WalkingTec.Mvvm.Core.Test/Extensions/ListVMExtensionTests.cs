@@ -378,6 +378,44 @@ namespace WalkingTec.Mvvm.Core.Test.Extensions
             errorJson.Should().Contain("\"Page\":0");
         }
 
+        // ─── GetError — JSON escaping (M17) ───────────────────────────────────────
+
+        [TestMethod]
+        public void GetError_ErrorContainingDoubleQuote_IsEscapedAndProducesValidJson()
+        {
+            // Arrange: inject an error message that contains a double-quote character.
+            // Before the fix this would produce broken JSON: "Msg":"say "hello" "
+            // MSD on the VM is wired to Wtm.MSD (read-only property).
+            _vm.Wtm.MSD!.AddModelError("field", "say \"hello\"");
+
+            var errorJson = _vm.GetError();
+
+            // The result must parse as valid JSON.
+            Action parse = () => System.Text.Json.JsonDocument.Parse(errorJson);
+            parse.Should().NotThrow("error message with double-quotes must be properly escaped");
+
+            // The Msg field must contain the literal escaped value (not a raw double-quote).
+            using var doc = System.Text.Json.JsonDocument.Parse(errorJson);
+            doc.RootElement.GetProperty("Msg").GetString().Should().Contain("say");
+            doc.RootElement.GetProperty("Code").GetInt32().Should().Be(400);
+        }
+
+        [TestMethod]
+        public void GetError_ErrorContainingBackslash_IsEscapedAndProducesValidJson()
+        {
+            // Arrange: inject an error message that contains a backslash character.
+            // Before the fix this would produce broken JSON: "Msg":"C:\path "
+            _vm.Wtm.MSD!.AddModelError("path", "C:\\path");
+
+            var errorJson = _vm.GetError();
+
+            Action parse = () => System.Text.Json.JsonDocument.Parse(errorJson);
+            parse.Should().NotThrow("error message with backslash must be properly escaped");
+
+            using var doc = System.Text.Json.JsonDocument.Parse(errorJson);
+            doc.RootElement.GetProperty("Msg").GetString().Should().Contain("path");
+        }
+
         // ─── GetSingleDataJson — basic ────────────────────────────────────────────
 
         [TestMethod]
