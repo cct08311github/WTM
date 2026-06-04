@@ -379,6 +379,7 @@
   authenticated tenant identity from `LoginUserInfo.TenantCode`. Existing callers that omit
   the parameter continue to resolve `_default` dashboards unchanged.
 - **Analysis: four low-severity defects fixed (#149)**: (L1) `FilterCondition.Values` (List&lt;string&gt;) is now honoured before comma-splitting `FilterCondition.Value` in the In/NotIn branch; (L2) `MemoryAnalysisCache.Set` moves `_cache.Set` inside the same `lock(_lock)` block as `AddExpirationToken`, closing a race with `InvalidateAll`; (L20) `AnalysisSavedQuery.ConfigJson` gains `[StringLength(65536)]` and `SaveQuery` rejects inserts exceeding the 100-row per-user cap; (L21) `Export`/`PivotExport` validate the `format` query-string against the allowlist {xlsx, csv} before logging, preventing log injection.
+- **ETL: missing WatermarkColumn warns instead of silently freezing; MssqlBulkLoader timeouts default to 300 s** (#153): when the configured `WatermarkColumn` is absent from the batch schema, `EtlPipelineExecutor` now logs a warning and records it in `ValidationWarnings` so operators discover the misconfiguration immediately instead of silently re-processing already-ingested rows; `MssqlBulkLoader` replaces all hardcoded `BulkCopyTimeout = 0` / `CommandTimeout = 0` (infinite) with a constructor-injected `timeoutSeconds` (default 300) so pathological network/SQL hangs abort after 5 minutes rather than hanging the job permanently.
 
 ## [10.5.3] - 2026-05-23
 

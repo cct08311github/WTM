@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Etl.Models;
 
 namespace WalkingTec.Mvvm.Etl.Pipeline;
@@ -36,12 +37,18 @@ public class EtlPipelineExecutor
     private readonly IEtlSource _source;
     private readonly IBulkLoader _loader;
     private readonly IProgress<EtlProgress>? _progress;
+    private readonly ILogger? _logger;
 
-    public EtlPipelineExecutor(IEtlSource source, IBulkLoader loader, IProgress<EtlProgress>? progress = null)
+    public EtlPipelineExecutor(
+        IEtlSource source,
+        IBulkLoader loader,
+        IProgress<EtlProgress>? progress = null,
+        ILogger? logger = null)
     {
         _source = source;
         _loader = loader;
         _progress = progress;
+        _logger = logger;
     }
 
     /// <summary>
@@ -63,6 +70,7 @@ public class EtlPipelineExecutor
         int retryAttempts = 0;
         int qualityFailedRows = 0;
         var qualityFailureSamples = new List<string>();
+        var warnings = new List<string>();
 
         try
         {
@@ -138,8 +146,23 @@ public class EtlPipelineExecutor
                 // 更新 watermark 暫存
                 if (watermark.Type != EtlWatermarkType.FullLoad && !string.IsNullOrEmpty(watermark.Column))
                 {
-                    var maxVal = GetMaxValue(batch, watermark.Column);
-                    if (maxVal != null) watermark.UpdateFromBatchMax(maxVal);
+                    // L16: surface a warning when the watermark column is absent from the batch
+                    // schema so operators discover misconfiguration immediately rather than
+                    // silently re-processing already-ingested rows on every subsequent run.
+                    if (!batch.Columns.Contains(watermark.Column))
+                    {
+                        var msg = $"WatermarkColumn '{watermark.Column}' is not present in the batch schema. " +
+                                  "Watermark will not advance; the next run will re-process this batch. " +
+                                  "Verify EtlPipelineConfig.WatermarkColumn matches a column returned by the source query.";
+                        _logger?.LogWarning(msg);
+                        if (!warnings.Contains(msg))
+                            warnings.Add(msg);
+                    }
+                    else
+                    {
+                        var maxVal = GetMaxValue(batch, watermark.Column);
+                        if (maxVal != null) watermark.UpdateFromBatchMax(maxVal);
+                    }
                 }
 
                 // 回報進度
@@ -179,6 +202,7 @@ public class EtlPipelineExecutor
                 RetryAttemptsTotal = retryAttempts,
                 QualityFailedRows = qualityFailedRows,
                 QualityFailureSamples = qualityFailureSamples,
+                ValidationWarnings = warnings,
             };
         }
         catch (OperationCanceledException)
@@ -196,6 +220,7 @@ public class EtlPipelineExecutor
                 RetryAttemptsTotal = retryAttempts,
                 QualityFailedRows = qualityFailedRows,
                 QualityFailureSamples = qualityFailureSamples,
+                ValidationWarnings = warnings,
             };
         }
         catch (Exception ex)
@@ -212,6 +237,7 @@ public class EtlPipelineExecutor
                 RetryAttemptsTotal = retryAttempts,
                 QualityFailedRows = qualityFailedRows,
                 QualityFailureSamples = qualityFailureSamples,
+                ValidationWarnings = warnings,
             };
         }
     }

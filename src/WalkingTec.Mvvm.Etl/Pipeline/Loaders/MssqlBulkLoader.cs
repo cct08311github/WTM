@@ -14,6 +14,28 @@ namespace WalkingTec.Mvvm.Etl.Pipeline.Loaders;
 /// </summary>
 public class MssqlBulkLoader : IBulkLoader
 {
+    /// <summary>
+    /// Timeout in seconds applied to both <see cref="SqlBulkCopy.BulkCopyTimeout"/>
+    /// and all <c>SqlCommand.CommandTimeout</c> calls.
+    /// Defaults to 300 s (5 minutes) so pathological hangs on blocked network/SQL
+    /// connections abort instead of hanging the ETL job permanently (L17/#153).
+    /// Pass 0 to restore the previous infinite-wait behaviour.
+    /// </summary>
+    public int TimeoutSeconds { get; }
+
+    /// <summary>
+    /// Initialises the loader with a configurable timeout.
+    /// </summary>
+    /// <param name="timeoutSeconds">
+    /// Seconds before bulk-copy and SQL commands time out.
+    /// 0 = no limit (infinite, previous behaviour).
+    /// Defaults to 300.
+    /// </param>
+    public MssqlBulkLoader(int timeoutSeconds = 300)
+    {
+        TimeoutSeconds = timeoutSeconds;
+    }
+
     public async Task BulkLoadAsync(
         string connectionString, string stagingTableName,
         DataTable batch, CancellationToken cancellationToken = default)
@@ -25,7 +47,7 @@ public class MssqlBulkLoader : IBulkLoader
         {
             DestinationTableName = stagingTableName,
             BatchSize = batch.Rows.Count,
-            BulkCopyTimeout = 0
+            BulkCopyTimeout = TimeoutSeconds
         };
 
         foreach (DataColumn col in batch.Columns)
@@ -67,7 +89,7 @@ public class MssqlBulkLoader : IBulkLoader
 
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = sb.ToString();
-        cmd.CommandTimeout = 0;
+        cmd.CommandTimeout = TimeoutSeconds;
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -111,7 +133,7 @@ public class MssqlBulkLoader : IBulkLoader
             {
                 del.Transaction = tran;
                 del.CommandText = deleteSql;
-                del.CommandTimeout = 0;
+                del.CommandTimeout = TimeoutSeconds;
                 await del.ExecuteNonQueryAsync(cancellationToken);
             }
 
@@ -124,7 +146,7 @@ public class MssqlBulkLoader : IBulkLoader
             {
                 ins.Transaction = tran;
                 ins.CommandText = insertSql;
-                ins.CommandTimeout = 0;
+                ins.CommandTimeout = TimeoutSeconds;
                 await ins.ExecuteNonQueryAsync(cancellationToken);
             }
 
