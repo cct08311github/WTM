@@ -3,9 +3,11 @@ using Microsoft.EntityFrameworkCore.Query;
 using Microsoft.EntityFrameworkCore.Query.Internal;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Text.Json.Serialization;
 using WalkingTec.Mvvm.Core.Extensions;
 
 namespace WalkingTec.Mvvm.Core
@@ -118,6 +120,32 @@ Expression.Lambda(trueExp, new ParameterExpression[] { pe }));
         }
 
         /// <summary>
+        /// L14: Returns true when sorting by the given property should be blocked.
+        /// Blocks properties decorated with [JsonIgnore] or [NotMapped], and a
+        /// conservative name-based list matching the blocklist in UpdateModelProperty.
+        /// This is intentionally conservative: only properties that should never be
+        /// exposed through ordering are blocked; legitimate API sorts are unaffected.
+        /// </summary>
+        private static bool IsSensitiveSortProperty(PropertyInfo prop)
+        {
+            // Attribute-based: skip [JsonIgnore] and [NotMapped] properties
+            if (prop.IsDefined(typeof(JsonIgnoreAttribute), inherit: true))
+            {
+                return true;
+            }
+            if (prop.IsDefined(typeof(NotMappedAttribute), inherit: true))
+            {
+                return true;
+            }
+            // Name-based blocklist — matches the set used by UpdateModelProperty
+            var sensitiveNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "Password", "PasswordHash", "Salt", "Token"
+            };
+            return sensitiveNames.Contains(prop.Name);
+        }
+
+        /// <summary>
         /// 检查方法调用类型的表达式
         /// </summary>
         /// <param name="node">表达式节点</param>
@@ -145,6 +173,11 @@ Expression.Lambda(trueExp, new ParameterExpression[] { pe }));
                 {
                     var idproperty = modelType.GetSingleProperty(item.Property!);
                     if (idproperty == null)
+                    {
+                        return node;
+                    }
+                    // L14: skip sorting on sensitive/non-serialised properties to prevent info-leak oracle
+                    if (IsSensitiveSortProperty(idproperty))
                     {
                         return node;
                     }
@@ -194,8 +227,12 @@ Expression.Lambda(trueExp, new ParameterExpression[] { pe }));
                                    Expression.Lambda(pro, new ParameterExpression[] { pe }));
                         }
                     }
+                    // L13: if Direction was neither Asc nor Desc (e.g. an unknown integer value),
+                    // rv remains null here — fall through and return node unchanged below.
                 }
-                return rv!;
+                // L13: if rv is still null (invalid direction or no items), return the node unchanged
+                // rather than returning null!, which would cause CreateQuery(null) ArgumentNullException.
+                return rv ?? node;
 
             }
             return base.VisitMethodCall(node!)!;

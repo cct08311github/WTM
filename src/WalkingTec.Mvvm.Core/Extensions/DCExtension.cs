@@ -8,6 +8,7 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -604,6 +605,28 @@ namespace WalkingTec.Mvvm.Core.Extensions
         }
         #endregion
 
+        /// <summary>
+        /// L14: Returns true when sorting by the given property should be blocked.
+        /// Blocks [JsonIgnore] / [NotMapped] properties and a conservative name-based
+        /// list of sensitive fields, matching the UpdateModelProperty blocklist concept.
+        /// </summary>
+        private static bool IsSensitiveSortPropertyDC(PropertyInfo prop)
+        {
+            if (prop.IsDefined(typeof(JsonIgnoreAttribute), inherit: true))
+            {
+                return true;
+            }
+            if (prop.IsDefined(typeof(NotMappedAttribute), inherit: true))
+            {
+                return true;
+            }
+            var sensitiveNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "Password", "PasswordHash", "Salt", "Token"
+            };
+            return sensitiveNames.Contains(prop.Name);
+        }
+
         public static IOrderedQueryable<T> Sort<T>(this IQueryable<T> baseQuery, string sortInfo, params SortInfo[] defaultSorts) where T : TopBasePoco
         {
             List<SortInfo> info = [];
@@ -645,8 +668,18 @@ namespace WalkingTec.Mvvm.Core.Extensions
             {
                 ParameterExpression pe = Expression.Parameter(typeof(T));
                 var idproperty = typeof(T).GetSingleProperty(item.Property!);
-                Expression pro = Expression.Property(pe, idproperty!);
-                Type proType = typeof(T).GetSingleProperty(item.Property!)!.PropertyType;
+                // L11: skip sort fields that don't exist on T — avoids NRE from Expression.Property(pe, null!)
+                if (idproperty == null)
+                {
+                    continue;
+                }
+                // L14: skip sensitive properties (password/token/etc.) to prevent info-leak via sort-order oracle
+                if (IsSensitiveSortPropertyDC(idproperty))
+                {
+                    continue;
+                }
+                Expression pro = Expression.Property(pe, idproperty);
+                Type proType = idproperty.PropertyType;
                 if (item.Direction == SortDir.Asc)
                 {
                     if (rv == null)

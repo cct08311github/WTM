@@ -894,6 +894,11 @@ namespace WalkingTec.Mvvm.Core
             }
             if (NeedPage && Searcher.Limit != -1)
             {
+                // L5: guard divide-by-zero if Searcher.Limit was not set before calling ProcessCommand
+                if (Searcher.Limit <= 0)
+                {
+                    Searcher.Limit = ConfigInfo?.UIOptions.DataTable.RPP ?? 20;
+                }
                 if (total != null)
                 {
                     try
