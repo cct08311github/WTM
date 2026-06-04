@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -11,31 +12,52 @@ using WalkingTec.Mvvm.Mvc.Auth;
 namespace WalkingTec.Mvvm.Mvc.Tests.Fixtures
 {
     /// <summary>
-    /// Provides an isolated TokenService instance backed by EF InMemory for integration tests.
+    /// Provides an isolated TokenService instance backed by SQLite shared in-memory for integration tests.
     /// Each test class should create a new fixture instance (don't share across tests).
     ///
+    /// SQLite shared in-memory is used instead of EF InMemory because TokenService.RefreshTokenAsync
+    /// uses ExecuteUpdateAsync, which is not supported by the EF InMemory provider.
+    ///
+    /// A keep-alive SqliteConnection is held open for the fixture lifetime so the shared in-memory
+    /// database is not dropped between DI scope instantiations (shared in-memory SQLite is dropped
+    /// when the last connection closes).
+    ///
     /// TokenService uses IServiceProvider.CreateScope() to resolve IDataContext.
-    /// We satisfy this by registering a scoped EmptyContext with InMemory EF in the DI container.
+    /// We satisfy this by registering a scoped FrameworkContext in the DI container.
     /// </summary>
     public class TokenTestFixture : IDisposable
     {
         private readonly ServiceProvider _serviceProvider;
+        private readonly SqliteConnection _keepAlive;
         private bool _disposed;
 
         public ITokenService TokenService { get; }
 
-        /// <summary>The InMemory DB name — unique per fixture to isolate tests.</summary>
-        public string DbName { get; } = $"TokenTest_{Guid.NewGuid():N}";
+        /// <summary>The SQLite shared in-memory connection string — unique per fixture to isolate tests.</summary>
+        public string DbConnectionString { get; }
 
         public TokenTestFixture()
         {
+            var dbName = $"TokenTest_{Guid.NewGuid():N}";
+            DbConnectionString = $"DataSource={dbName}?mode=memory&cache=shared";
+
+            // Open a keep-alive connection so the shared in-memory DB persists for the fixture lifetime.
+            _keepAlive = new SqliteConnection(DbConnectionString);
+            _keepAlive.Open();
+
+            // Create schema once before DI scopes start resolving contexts.
+            using (var initCtx = new FrameworkContext(DbConnectionString, DBTypeEnum.SQLite))
+            {
+                initCtx.Database.EnsureCreated();
+            }
+
             var services = new ServiceCollection();
 
             // Use FrameworkContext (not EmptyContext) so RefreshTokenEntity is in the EF model.
-            // Use the (string, DBTypeEnum) constructor so OnConfiguring picks Memory provider only.
+            // Use the (string, DBTypeEnum) constructor so OnConfiguring picks the SQLite provider.
             // Avoid AddDbContext() — it would pass DbContextOptions that combines with
             // OnConfiguring's SqlServer default, causing "two providers" InvalidOperationException.
-            services.AddScoped<FrameworkContext>(_ => new FrameworkContext(DbName, DBTypeEnum.Memory));
+            services.AddScoped<FrameworkContext>(_ => new FrameworkContext(DbConnectionString, DBTypeEnum.SQLite));
             services.AddScoped<IDataContext>(sp => sp.GetRequiredService<FrameworkContext>());
 
             // Build minimal Configs with JWT options
@@ -56,7 +78,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Fixtures
         }
 
         /// <summary>
-        /// Access the InMemory DbContext directly for seeding or assertion queries.
+        /// Access the SQLite DbContext directly for seeding or assertion queries.
         /// Caller is responsible for disposing the scope.
         /// </summary>
         public FrameworkContext CreateDbContext()
@@ -65,7 +87,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Fixtures
             return scope.ServiceProvider.GetRequiredService<FrameworkContext>();
         }
 
-        /// <summary>Seed a RefreshTokenEntity and save to InMemory DB.</summary>
+        /// <summary>Seed a RefreshTokenEntity and save to the SQLite DB.</summary>
         public void SeedToken(RefreshTokenEntity token)
         {
             using var db = CreateDbContext();
@@ -78,6 +100,8 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Fixtures
             if (!_disposed)
             {
                 _serviceProvider.Dispose();
+                _keepAlive.Close();
+                _keepAlive.Dispose();
                 _disposed = true;
             }
         }
