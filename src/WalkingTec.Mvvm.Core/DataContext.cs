@@ -531,7 +531,18 @@ namespace WalkingTec.Mvvm.Core
                 }
                 else
                 {
-                   rv =(IDataContext)this.GetType().GetConstructor(new Type[] { typeof(string), typeof(DBTypeEnum) })!.Invoke(new object[] { CSName, DBType });
+                    // Prefer the 3-arg constructor so the Version (DB compatibility level) is
+                    // preserved.  Fall back to the 2-arg constructor only when the subtype does
+                    // not expose the 3-arg form (e.g. an old custom subclass).
+                    var ctor3 = this.GetType().GetConstructor(new Type[] { typeof(string), typeof(DBTypeEnum), typeof(string) });
+                    if (ctor3 != null)
+                    {
+                        rv = (IDataContext)ctor3.Invoke(new object?[] { CSName, DBType, Version });
+                    }
+                    else
+                    {
+                        rv = (IDataContext)this.GetType().GetConstructor(new Type[] { typeof(string), typeof(DBTypeEnum) })!.Invoke(new object[] { CSName, DBType });
+                    }
                 }
                 rv.SetTenantCode(this.TenantCode);
                 if (_logger != null)
@@ -621,19 +632,30 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="entity"></param>
         public void CascadeDelete<T>(T entity) where T : TreePoco
         {
-            if (entity != null && entity.ID != Guid.Empty)
+            CascadeDelete(entity, new HashSet<Guid>());
+        }
+
+        // Internal overload with a visited set to guard against cyclic parent-child references
+        // and extremely deep trees (both would cause an unbounded StackOverflowException in the
+        // original public method).
+        private void CascadeDelete<T>(T entity, HashSet<Guid> visited) where T : TreePoco
+        {
+            if (entity == null || entity.ID == Guid.Empty)
             {
-                var set = this.Set<T>();
-                List<T> entities = [.. set.Where(x => x.ParentId == entity.ID)];
-                if (entities.Count > 0)
-                {
-                    foreach (var item in entities)
-                    {
-                        CascadeDelete(item);
-                    }
-                }
-                DeleteEntity(entity);
+                return;
             }
+            // If we have already processed this node (cycle or duplicate), skip it.
+            if (!visited.Add(entity.ID))
+            {
+                return;
+            }
+            var set = this.Set<T>();
+            List<T> entities = [.. set.Where(x => x.ParentId == entity.ID)];
+            foreach (var item in entities)
+            {
+                CascadeDelete(item, visited);
+            }
+            DeleteEntity(entity);
         }
 
         /// <summary>
