@@ -329,9 +329,23 @@ public class JsonFileDashboardService : IDashboardService
         }
     }
 
-    public async Task<WidgetDataResult> GetWidgetDataAsync(string dashboardId, string widgetId, Dictionary<string, string>? filters = null, CancellationToken ct = default)
+    /// <summary>
+    /// Original (backward-compatible) 4-arg overload. Delegates to the tenant-aware
+    /// overload with <c>tenantId = null</c> so all logic lives in one place.
+    /// </summary>
+    public Task<WidgetDataResult> GetWidgetDataAsync(string dashboardId, string widgetId, Dictionary<string, string>? filters = null, CancellationToken ct = default)
+        => GetWidgetDataAsync(dashboardId, widgetId, filters, null, ct);
+
+    /// <summary>
+    /// Tenant-aware overload. Contains the real widget-data logic; the 4-arg overload
+    /// forwards here with <c>tenantId = null</c>.
+    /// </summary>
+    public async Task<WidgetDataResult> GetWidgetDataAsync(string dashboardId, string widgetId, Dictionary<string, string>? filters, string? tenantId, CancellationToken ct = default)
     {
-        var dashboard = await GetAsync(dashboardId);
+        // Pass tenantId so GetAsync resolves the correct per-tenant storage directory.
+        // Without this, tenant-owned dashboards are not found (they live under tenantId/,
+        // not _default/) and _default dashboards may be returned to wrong-tenant callers.
+        var dashboard = await GetAsync(dashboardId, tenantId);
         if (dashboard == null)
         {
             throw new KeyNotFoundException($"Dashboard {dashboardId} not found.");

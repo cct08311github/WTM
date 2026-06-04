@@ -12,7 +12,24 @@ public interface IDashboardService
     Task<string> CreateAsync(DashboardDefinition dashboard);
     Task UpdateAsync(DashboardDefinition dashboard);
     Task DeleteAsync(string dashboardId);
+
+    /// <summary>
+    /// Original (backward-compatible) overload. External implementers implement this method.
+    /// Callers that do not need tenant-aware routing should use this overload.
+    /// </summary>
     Task<WidgetDataResult> GetWidgetDataAsync(string dashboardId, string widgetId, Dictionary<string, string>? filters = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// Tenant-aware overload added as a default interface member so that existing
+    /// external implementations of <see cref="IDashboardService"/> do not need to be
+    /// updated. The <paramref name="tenantId"/> parameter is intentionally non-optional
+    /// to avoid overload-resolution ambiguity with the original 4-arg overload above.
+    /// The default body delegates to the tenant-unaware original; concrete implementations
+    /// (e.g. <see cref="JsonFileDashboardService"/>) can override it with real tenant logic.
+    /// </summary>
+    Task<WidgetDataResult> GetWidgetDataAsync(string dashboardId, string widgetId, Dictionary<string, string>? filters, string? tenantId, CancellationToken ct = default)
+        => GetWidgetDataAsync(dashboardId, widgetId, filters, ct);
+
     bool CanAccess(DashboardDefinition dashboard, string userId, string[] userRoles);
     bool CanEdit(DashboardDefinition dashboard, string userId, string[] userRoles);
 }

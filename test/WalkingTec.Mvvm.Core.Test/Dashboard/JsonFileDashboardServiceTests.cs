@@ -604,5 +604,113 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             var tmpFiles = Directory.GetFiles(_tempDir, "*.tmp", SearchOption.AllDirectories);
             tmpFiles.Should().BeEmpty("tmp files must be cleaned up after successful atomic write");
         }
+
+        // ─── M13: GetWidgetDataAsync tenant isolation (#137) ─────────────────────
+
+        /// <summary>
+        /// Regression test for M13: GetWidgetDataAsync previously called GetAsync without
+        /// tenantId, always reading from _default. A tenant-scoped dashboard (stored under
+        /// tenantId/) was never found, causing KeyNotFoundException.
+        /// </summary>
+        [TestMethod]
+        public async Task GetWidgetDataAsync_finds_tenant_scoped_dashboard()
+        {
+            // Arrange: create a dashboard under "tenantA"
+            var capture = new CapturingDataSource();
+            var svc = CreateServiceWithDataSource(capture);
+
+            var def = new DashboardDefinition
+            {
+                Title = "Tenant Dashboard",
+                TenantId = "tenantA",
+                Widgets = new Dictionary<string, WidgetDefinition>
+                {
+                    ["w1"] = new WidgetDefinition
+                    {
+                        Type = "kpi",
+                        Title = "KPI",
+                        Source = new WidgetSourceDefinition { Name = "test-capture" }
+                    }
+                }
+            };
+            await svc.CreateAsync(def);
+
+            // Act: pass matching tenantId — the dashboard must be found and data returned
+            var result = await svc.GetWidgetDataAsync(def.Id, "w1", null, "tenantA");
+
+            // Assert: data source was called, meaning the dashboard was resolved correctly
+            result.Value.Should().Be(42);
+            capture.CapturedRequest.Should().NotBeNull(
+                "widget data request must reach the data source when tenantId matches");
+        }
+
+        /// <summary>
+        /// Cross-tenant isolation: a request carrying the wrong tenantId must NOT
+        /// be able to read another tenant's widget data.
+        /// </summary>
+        [TestMethod]
+        public async Task GetWidgetDataAsync_throws_for_wrong_tenantId()
+        {
+            // Arrange: create a dashboard stored under "tenantA"
+            var capture = new CapturingDataSource();
+            var svc = CreateServiceWithDataSource(capture);
+
+            var def = new DashboardDefinition
+            {
+                Title = "Tenant A Dashboard",
+                TenantId = "tenantA",
+                Widgets = new Dictionary<string, WidgetDefinition>
+                {
+                    ["w1"] = new WidgetDefinition
+                    {
+                        Type = "kpi",
+                        Title = "KPI",
+                        Source = new WidgetSourceDefinition { Name = "test-capture" }
+                    }
+                }
+            };
+            await svc.CreateAsync(def);
+
+            // Act: request with a different tenantId — must NOT find tenantA's dashboard
+            Func<Task> act = async () => await svc.GetWidgetDataAsync(def.Id, "w1", null, "tenantB");
+
+            // Assert: dashboard is not found under tenantB, so KeyNotFoundException is thrown
+            await act.Should().ThrowAsync<KeyNotFoundException>(
+                "a tenant-B caller must not be able to read a tenant-A dashboard");
+        }
+
+        /// <summary>
+        /// Backward-compatibility check: omitting tenantId (null) still finds dashboards
+        /// stored in the _default directory, preserving existing single-tenant behaviour.
+        /// </summary>
+        [TestMethod]
+        public async Task GetWidgetDataAsync_without_tenantId_finds_default_dashboard()
+        {
+            // Arrange: create a dashboard with no tenant (stored in _default)
+            var capture = new CapturingDataSource();
+            var svc = CreateServiceWithDataSource(capture);
+
+            var def = new DashboardDefinition
+            {
+                Title = "Default Dashboard",
+                // TenantId deliberately omitted → stored in _default/
+                Widgets = new Dictionary<string, WidgetDefinition>
+                {
+                    ["w1"] = new WidgetDefinition
+                    {
+                        Type = "kpi",
+                        Title = "KPI",
+                        Source = new WidgetSourceDefinition { Name = "test-capture" }
+                    }
+                }
+            };
+            await svc.CreateAsync(def);
+
+            // Act: omit tenantId (defaults to null) — backward-compatible path
+            var result = await svc.GetWidgetDataAsync(def.Id, "w1");
+
+            // Assert: data source reached; backward-compat preserved
+            result.Value.Should().Be(42);
+        }
     }
 }

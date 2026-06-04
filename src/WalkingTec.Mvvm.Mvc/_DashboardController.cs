@@ -178,7 +178,9 @@ namespace WalkingTec.Mvvm.Mvc
 
             try
             {
-                var result = await _dashboardService.GetWidgetDataAsync(id, wid, parameters, ct);
+                // Pass authenticated tenantId so GetWidgetDataAsync resolves the correct
+                // per-tenant dashboard directory (issue #137).
+                var result = await _dashboardService.GetWidgetDataAsync(id, wid, parameters, tenantId, ct);
                 return Ok(result);
             }
             catch (KeyNotFoundException)
@@ -220,7 +222,9 @@ namespace WalkingTec.Mvvm.Mvc
 
             try
             {
-                var result = await _dashboardService.GetWidgetDataAsync(id, wid, filters, ct);
+                // Pass authenticated tenantId so GetWidgetDataAsync resolves the correct
+                // per-tenant dashboard directory (issue #137).
+                var result = await _dashboardService.GetWidgetDataAsync(id, wid, filters, tenantId, ct);
                 return Ok(result);
             }
             catch (KeyNotFoundException)

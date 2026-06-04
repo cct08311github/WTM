@@ -456,7 +456,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             var widgetResult = new WidgetDataResult { Value = 42 };
             _service.Setup(x => x.GetAsync("id1", It.IsAny<string?>())).ReturnsAsync(def);
             _service.Setup(x => x.CanAccess(def, "bob", It.IsAny<string[]>())).Returns(true);
-            _service.Setup(x => x.GetWidgetDataAsync("id1", "w1", It.IsAny<Dictionary<string, string>>(), It.IsAny<CancellationToken>()))
+            _service.Setup(x => x.GetWidgetDataAsync("id1", "w1", It.IsAny<Dictionary<string, string>>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(widgetResult);
 
             var result = await _controller.GetWidgetData("id1", "w1", CancellationToken.None) as OkObjectResult;
@@ -476,7 +476,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             };
             _service.Setup(x => x.GetAsync("id1", It.IsAny<string?>())).ReturnsAsync(def);
             _service.Setup(x => x.CanAccess(def, "bob", It.IsAny<string[]>())).Returns(true);
-            _service.Setup(x => x.GetWidgetDataAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Dictionary<string, string>>(), It.IsAny<CancellationToken>()))
+            _service.Setup(x => x.GetWidgetDataAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Dictionary<string, string>>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
                 .ThrowsAsync(new KeyNotFoundException("data source not found"));
 
             var result = await _controller.GetWidgetData("id1", "w1", CancellationToken.None) as NotFoundResult;
@@ -546,7 +546,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             var filters = new Dictionary<string, string> { { "year", "2026" } };
             _service.Setup(x => x.GetAsync("id1", It.IsAny<string?>())).ReturnsAsync(def);
             _service.Setup(x => x.CanAccess(def, "bob", It.IsAny<string[]>())).Returns(true);
-            _service.Setup(x => x.GetWidgetDataAsync("id1", "w1", filters, It.IsAny<CancellationToken>()))
+            _service.Setup(x => x.GetWidgetDataAsync("id1", "w1", filters, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(widgetResult);
 
             var result = await _controller.PostWidgetData("id1", "w1", filters, CancellationToken.None) as OkObjectResult;
@@ -566,7 +566,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             };
             _service.Setup(x => x.GetAsync("id1", It.IsAny<string?>())).ReturnsAsync(def);
             _service.Setup(x => x.CanAccess(def, "bob", It.IsAny<string[]>())).Returns(true);
-            _service.Setup(x => x.GetWidgetDataAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Dictionary<string, string>>(), It.IsAny<CancellationToken>()))
+            _service.Setup(x => x.GetWidgetDataAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Dictionary<string, string>>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
                 .ThrowsAsync(new KeyNotFoundException("widget config error"));
 
             var result = await _controller.PostWidgetData("id1", "w1", new Dictionary<string, string>(), CancellationToken.None) as NotFoundResult;
@@ -600,6 +600,85 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             var result = await _controller.Update("id-A", mismatch) as BadRequestResult;
 
             result.Should().NotBeNull("route id 與 body id 不符應被拒絕並回傳 400");
+        }
+
+        // ─── M13: GetWidgetDataAsync tenantId forwarding (#137) ──────────────────
+
+        /// <summary>
+        /// Regression test for M13: the controller must forward the authenticated tenantId
+        /// to GetWidgetDataAsync so the service reads from the correct tenant directory.
+        /// </summary>
+        [TestMethod]
+        public async Task GetWidgetData_forwards_tenantId_from_session_to_service()
+        {
+            // Arrange: user belongs to "tenantXYZ"
+            SetUser("bob");
+            _controller.Wtm.LoginUserInfo!.TenantCode = "tenantXYZ";
+
+            var def = new DashboardDefinition
+            {
+                Id = "id1", Owner = "bob",
+                Widgets = new Dictionary<string, WidgetDefinition> { { "w1", new WidgetDefinition { Type = "chart" } } }
+            };
+            var widgetResult = new WidgetDataResult { Value = 99 };
+            _service.Setup(x => x.GetAsync("id1", "tenantXYZ")).ReturnsAsync(def);
+            _service.Setup(x => x.CanAccess(def, "bob", It.IsAny<string[]>())).Returns(true);
+            _service.Setup(x => x.GetWidgetDataAsync(
+                    "id1", "w1",
+                    It.IsAny<Dictionary<string, string>>(),
+                    "tenantXYZ",                  // tenantId must be passed from session
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(widgetResult);
+
+            // Act
+            var result = await _controller.GetWidgetData("id1", "w1", CancellationToken.None) as OkObjectResult;
+
+            // Assert: 200 returned and service was called with the correct tenantId
+            result.Should().NotBeNull();
+            result!.Value.Should().Be(widgetResult);
+            _service.Verify(x => x.GetWidgetDataAsync(
+                "id1", "w1",
+                It.IsAny<Dictionary<string, string>>(),
+                "tenantXYZ",
+                It.IsAny<CancellationToken>()), Times.Once,
+                "GetWidgetDataAsync must receive the authenticated tenantId from session");
+        }
+
+        [TestMethod]
+        public async Task PostWidgetData_forwards_tenantId_from_session_to_service()
+        {
+            // Arrange: user belongs to "tenantXYZ"
+            SetUser("bob");
+            _controller.Wtm.LoginUserInfo!.TenantCode = "tenantXYZ";
+
+            var def = new DashboardDefinition
+            {
+                Id = "id1", Owner = "bob",
+                Widgets = new Dictionary<string, WidgetDefinition> { { "w1", new WidgetDefinition { Type = "chart" } } }
+            };
+            var widgetResult = new WidgetDataResult { Value = 88 };
+            var filters = new Dictionary<string, string> { { "year", "2026" } };
+            _service.Setup(x => x.GetAsync("id1", "tenantXYZ")).ReturnsAsync(def);
+            _service.Setup(x => x.CanAccess(def, "bob", It.IsAny<string[]>())).Returns(true);
+            _service.Setup(x => x.GetWidgetDataAsync(
+                    "id1", "w1",
+                    filters,
+                    "tenantXYZ",
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(widgetResult);
+
+            // Act
+            var result = await _controller.PostWidgetData("id1", "w1", filters, CancellationToken.None) as OkObjectResult;
+
+            // Assert
+            result.Should().NotBeNull();
+            result!.Value.Should().Be(widgetResult);
+            _service.Verify(x => x.GetWidgetDataAsync(
+                "id1", "w1",
+                filters,
+                "tenantXYZ",
+                It.IsAny<CancellationToken>()), Times.Once,
+                "PostWidgetData must forward tenantId to GetWidgetDataAsync");
         }
     }
 }

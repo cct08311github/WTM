@@ -365,6 +365,15 @@
   ("Sub-table row appears before any parent row") and skips the row, instead of
   dereferencing null and producing an unhandled 500.
 - **Cache stampede fixes in Core services** (#133): two stampede-protection defects corrected. (M21) `WtmTenantService._keyLocks` promoted to `static` so per-key `SemaphoreSlim` locks are shared across all scoped instances — previously each request got a fresh empty dictionary, letting concurrent cold-key requests each issue an independent DB query. (M10) `LookupCacheService` fall-through callers (semaphore timeout) now skip `SetCache`; they return the DB result directly, preventing unlocked writes that could overwrite a fresher value stored by the lock holder.
+- **Dashboard `GetWidgetDataAsync` ignores tenantId — cross-tenant widget data (#137)**:
+  `GetWidgetDataAsync` called `GetAsync(dashboardId)` without forwarding the tenantId, so
+  all widget-data requests read from the `_default` storage directory. Tenant-scoped dashboards
+  (stored under `tenantId/`) were never found, and requests could inadvertently resolve
+  `_default` data regardless of the caller's tenant. Fixed by adding `string? tenantId = null`
+  to both `IDashboardService.GetWidgetDataAsync` and `JsonFileDashboardService.GetWidgetDataAsync`,
+  and updating `_DashboardController.GetWidgetData` / `PostWidgetData` to forward the
+  authenticated tenant identity from `LoginUserInfo.TenantCode`. Existing callers that omit
+  the parameter continue to resolve `_default` dashboards unchanged.
 
 ## [10.5.3] - 2026-05-23
 
