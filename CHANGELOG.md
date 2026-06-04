@@ -1,5 +1,11 @@
 # 更新日志
 
+## [Unreleased]
+
+### Fixes
+
+- **DataContext.Run() parameterized raw SQL works on Oracle** (#147): parameters are built via the provider-agnostic `DbCommand.CreateParameter()` factory; removes the Oracle `NotSupportedException` stopgap from #145 in the Run path.
+
 ## [10.5.4] - 2026-06-04
 
 ### Fixes

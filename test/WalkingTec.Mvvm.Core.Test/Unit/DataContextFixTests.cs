@@ -1,8 +1,9 @@
 #nullable enable
-// Tests for DataContext fixes in issue #132:
+// Tests for DataContext fixes in issue #132 and #147:
 //   M14 — CreateCommandParameter Oracle case throws NotSupportedException (not silent NRE)
 //   M15 — EnableSensitiveDataLogging gated behind explicit opt-in (default false)
 //   M16 — Run() connection leak: try/finally ensures connection.Close() on exception
+//   #147 — Run() parameterized SQL works on all providers via command.CreateParameter()
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -138,6 +139,39 @@ namespace WalkingTec.Mvvm.Core.Test.Unit
                 "connection should be closed when it was not open before Run()");
         }
 
+        // ─── #147 — Run() builds parameters via DbCommand.CreateParameter() ─────────────
+
+        [TestMethod]
+        public void Run_ParameterizedSql_ReturnsFilteredRows_ViaCmdCreateParameter()
+        {
+            // Arrange: SQLite shared in-memory DB — exercises the same command.CreateParameter()
+            // code path that Oracle uses at runtime.
+            using var ctx = new ParameterizedRunContext();
+            var connection = ctx.Database.GetDbConnection();
+            connection.Open();
+            using (var setup = connection.CreateCommand())
+            {
+                setup.CommandText =
+                    "CREATE TABLE IF NOT EXISTS Items (Id INTEGER PRIMARY KEY, Name TEXT NOT NULL);" +
+                    "INSERT INTO Items (Id, Name) VALUES (1, 'Alpha');" +
+                    "INSERT INTO Items (Id, Name) VALUES (2, 'Beta');";
+                setup.ExecuteNonQuery();
+            }
+            connection.Close();
+
+            // Use CreateCommandParameter to build a SqliteParameter (any DbParameter will do).
+            // Run() internally copies Name/Value/Direction via command.CreateParameter() — that
+            // is the provider-agnostic path that makes Oracle work.
+            var param = (System.Data.Common.DbParameter)ctx.CreateCommandParameter("@name", "Alpha", ParameterDirection.Input);
+
+            // Act
+            var result = ctx.RunSQL("SELECT Id, Name FROM Items WHERE Name = @name", param);
+
+            // Assert: only the 'Alpha' row should be returned.
+            result.Rows.Count.Should().Be(1);
+            result.Rows[0]["Name"].Should().Be("Alpha");
+        }
+
         // ─── Inner test helpers ────────────────────────────────────────────────────────
 
         /// <summary>
@@ -181,6 +215,27 @@ namespace WalkingTec.Mvvm.Core.Test.Unit
                 optionsBuilder.UseInMemoryDatabase(_dbName);
                 // Call base to trigger the IsDebug/EnableSensitiveQueryLogging branching.
                 base.OnConfiguring(optionsBuilder);
+            }
+        }
+
+        /// <summary>
+        /// SQLite context used to exercise the #147 Run() parameterized-SQL fix.
+        /// Shares the in-memory DB across connections (cache=shared) so the test
+        /// can CREATE TABLE via the raw connection then query via Run().
+        /// </summary>
+        private sealed class ParameterizedRunContext : EmptyContext
+        {
+            public ParameterizedRunContext()
+                : base($"DataSource=ParamRunTest_{Guid.NewGuid():N}?mode=memory&cache=shared",
+                       DBTypeEnum.SQLite)
+            { }
+
+            protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+                => optionsBuilder.UseSqlite(CSName);
+
+            protected override void OnModelCreating(ModelBuilder modelBuilder)
+            {
+                // Empty model — no WTM entity scanning to avoid MajorId column conflicts.
             }
         }
 

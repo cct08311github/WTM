@@ -16,6 +16,7 @@ using MySql.EntityFrameworkCore.Extensions;
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Data.Common;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -860,16 +861,19 @@ namespace WalkingTec.Mvvm.Core
                     {
                         foreach (var param in paras)
                         {
-                            // M14: guard against null parameters (e.g. from Oracle case that
-                            // returns null) so we throw a clear error instead of an NRE.
-                            if (param is null)
-                            {
-                                throw new NotSupportedException(
-                                    $"CreateCommandParameter returned null for provider '{this.DBType}'. " +
-                                    "This provider may not be fully supported. " +
-                                    "Use a provider-specific DbParameter instead.");
-                            }
-                            command.Parameters.Add(param);
+                            // #147: build each parameter via the command's own factory so all
+                            // providers (including Oracle) get a correctly-typed DbParameter.
+                            // The caller passes any DbParameter (e.g. built via
+                            // CreateCommandParameter for non-Oracle, or a bare SqlParameter)
+                            // and Run() re-creates it from the executing command's factory,
+                            // which returns the right type (OracleParameter, SqlParameter, etc.)
+                            // without requiring a compile-time reference to any provider assembly.
+                            var dp = (DbParameter)param;
+                            var p = command.CreateParameter();
+                            p.ParameterName = dp.ParameterName;
+                            p.Value = dp.Value ?? DBNull.Value;
+                            p.Direction = dp.Direction;
+                            command.Parameters.Add(p);
                         }
                     }
                     using (var reader = command.ExecuteReader())
@@ -899,6 +903,12 @@ namespace WalkingTec.Mvvm.Core
         }
 
 
+        /// <remarks>
+        /// As of #147, <see cref="Run(string,CommandType,object[])"/> builds parameters via
+        /// <c>DbCommand.CreateParameter()</c> instead of this method, so Oracle works without a
+        /// provider-assembly reference. This helper is kept for external callers; its Oracle
+        /// <see cref="NotSupportedException"/> is intentional and must remain.
+        /// </remarks>
         public object CreateCommandParameter(string name, object value, ParameterDirection dir)
         {
             switch (this.DBType)
@@ -915,12 +925,11 @@ namespace WalkingTec.Mvvm.Core
                     // M14: Oracle provider (Oracle.EntityFrameworkCore) is loaded at runtime.
                     // Rather than a commented-out OracleParameter (which silently returned null
                     // and caused an NRE in Run()), throw a clear NotSupportedException so the
-                    // caller gets actionable feedback. Use Run() overloads that accept pre-built
-                    // OracleParameter instances directly via command.Parameters if you need
-                    // Oracle stored-procedure support.
+                    // caller gets actionable feedback. Use Run() which calls command.CreateParameter()
+                    // internally (provider-agnostic) for parameterized Oracle raw SQL.
                     throw new NotSupportedException(
                         "CreateCommandParameter does not support Oracle. " +
-                        "Create an OracleParameter directly and add it via the DbCommand.");
+                        "Pass any DbParameter to Run() — it rebuilds parameters via DbCommand.CreateParameter() internally.");
                 default:
                     throw new NotSupportedException(
                         $"CreateCommandParameter does not support DBType '{this.DBType}'.");
