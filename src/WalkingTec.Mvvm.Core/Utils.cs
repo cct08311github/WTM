@@ -507,7 +507,7 @@ namespace WalkingTec.Mvvm.Core
                 }
 
                 List<string> listStr = [];
-                for (int i = 0; i < listInt.Count; i++)
+                for (int i = 0; i + 1 < listInt.Count; i++)
                 {
                     string temp = text.Substring(listInt[i] + 2, listInt[i + 1] - listInt[i] - 2);
 

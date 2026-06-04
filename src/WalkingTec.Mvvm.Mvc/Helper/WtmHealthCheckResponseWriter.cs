@@ -15,6 +15,14 @@ namespace WalkingTec.Mvvm.Mvc
     /// (Kubernetes, Prometheus, Datadog) can scrape structured data
     /// instead of parsing the ASP.NET Core default plain-text output (#836).
     /// </summary>
+    /// <remarks>
+    /// <strong>Security note:</strong> the <c>exception</c> field in the JSON output is
+    /// redacted (omitted) by default. Raw exception messages may contain connection-string
+    /// fragments or hostnames that should not be exposed to unauthenticated callers.
+    /// Enable exception detail only in development environments by passing
+    /// <c>includeExceptionDetail: true</c> to <see cref="WriteJsonResponse(HttpContext,HealthReport,bool)"/>
+    /// or by using <see cref="CreateWriter"/> with an <c>IWebHostEnvironment</c> check.
+    /// </remarks>
     public static class WtmHealthCheckResponseWriter
     {
         // Static options for hot-path — thread-safe, reusable.
@@ -29,20 +37,45 @@ namespace WalkingTec.Mvvm.Mvc
         };
 
         /// <summary>
-        /// Writes a JSON body describing the overall and per-check health
-        /// status. Shape:
+        /// Creates a <see cref="Func{HttpContext,HealthReport,Task}"/> delegate suitable for
+        /// <c>HealthCheckOptions.ResponseWriter</c> that includes exception detail only when
+        /// <paramref name="includeExceptionDetail"/> is <c>true</c>.
+        /// <para>
+        /// Typical usage in <c>UseWtmHealthChecks</c>:
+        /// </para>
+        /// <code>
+        /// var isDev = env.IsDevelopment();
+        /// options.ResponseWriter = WtmHealthCheckResponseWriter.CreateWriter(isDev);
+        /// </code>
+        /// </summary>
+        public static Func<HttpContext, HealthReport, Task> CreateWriter(bool includeExceptionDetail)
+            => (ctx, report) => WriteJsonResponse(ctx, report, includeExceptionDetail);
+
+        /// <summary>
+        /// Writes a JSON body describing the overall and per-check health status.
+        /// The <c>exception</c> field is emitted only when <paramref name="includeExceptionDetail"/>
+        /// is <c>true</c>; in all other cases it is redacted to <c>null</c> (omitted from JSON
+        /// by <c>DefaultIgnoreCondition = WhenWritingNull</c>).
+        /// <para>Shape:</para>
         /// <code>
         /// {
         ///   "status": "Healthy",
         ///   "totalDurationMs": 42,
         ///   "checks": [
         ///     { "name": "self", "status": "Healthy", "durationMs": 0 },
-        ///     { "name": "datacontext", "status": "Unhealthy", "durationMs": 2004, "description": "...", "exception": "..." }
+        ///     { "name": "datacontext", "status": "Unhealthy", "durationMs": 2004, "description": "..." }
         ///   ]
         /// }
         /// </code>
         /// </summary>
-        public static Task WriteJsonResponse(HttpContext httpContext, HealthReport report)
+        /// <param name="httpContext">The current HTTP context.</param>
+        /// <param name="report">The health report to serialise.</param>
+        /// <param name="includeExceptionDetail">
+        /// When <c>true</c>, includes <c>entry.Exception.Message</c> in the JSON output.
+        /// Default is <c>false</c>; set to <c>true</c> only in development environments.
+        /// </param>
+        public static Task WriteJsonResponse(
+            HttpContext httpContext, HealthReport report, bool includeExceptionDetail = false)
         {
             ArgumentNullException.ThrowIfNull(httpContext);
             ArgumentNullException.ThrowIfNull(report);
@@ -59,7 +92,9 @@ namespace WalkingTec.Mvvm.Mvc
                     Status = entry.Status.ToString(),
                     DurationMs = (long)entry.Duration.TotalMilliseconds,
                     Description = string.IsNullOrEmpty(entry.Description) ? null : entry.Description,
-                    Exception = entry.Exception?.Message,
+                    // Redact exception message in non-development environments to prevent
+                    // leaking connection strings or hostnames to unauthenticated callers.
+                    Exception = includeExceptionDetail ? entry.Exception?.Message : null,
                     Data = entry.Data.Count == 0 ? null : new Dictionary<string, object?>(entry.Data),
                     Tags = entry.Tags.Any() ? new List<string>(entry.Tags) : null,
                 });

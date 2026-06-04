@@ -80,8 +80,9 @@ namespace WalkingTec.Mvvm.Mvc.Auth
                     var tracked = await dbSet.FirstOrDefaultAsync(x => x.Token == refreshToken);
                     if (tracked != null)
                     {
+                        var revLogger = _sp.GetService<ILoggerFactory>()?.CreateLogger("TokenService");
                         await RevokeDescendantsAsync(dbSet, tracked, ipAddress,
-                            "Attempted reuse of revoked token", _timeProvider);
+                            "Attempted reuse of revoked token", _timeProvider, revLogger);
                         await dc.SaveChangesAsync();
                     }
                 }
@@ -258,9 +259,15 @@ namespace WalkingTec.Mvvm.Mvc.Auth
         /// revokes any still-active descendant. Iterates up to <c>maxDepth</c> hops
         /// to avoid unbounded recursion on attacker-crafted chains.
         /// </summary>
+        /// <remarks>
+        /// If the chain is deeper than <c>maxDepth</c>, a warning is logged via
+        /// <paramref name="logger"/> so the truncation is observable in production;
+        /// any active leaf token beyond that depth remains un-revoked in this edge case.
+        /// </remarks>
         private static async Task RevokeDescendantsAsync(
             DbSet<RefreshTokenEntity> dbSet, RefreshTokenEntity token,
-            string ipAddress, string reason, TimeProvider timeProvider)
+            string ipAddress, string reason, TimeProvider timeProvider,
+            ILogger? logger = null)
         {
             const int maxDepth = 50;
             var current = token;
@@ -279,6 +286,14 @@ namespace WalkingTec.Mvvm.Mvc.Auth
                 }
                 current = child; // Already revoked — iterate deeper.
             }
+            // Loop exhausted maxDepth without finding an active leaf to revoke.
+            // Log a warning so the truncation is observable; an active descendant
+            // beyond depth 50 may remain un-revoked in an attacker-crafted chain.
+            logger?.LogWarning(
+                "RevokeDescendantsAsync: revocation chain exceeds maxDepth ({MaxDepth}); " +
+                "an active descendant token may remain un-revoked. " +
+                "IpAddress: {IpAddress}, Reason: {Reason}",
+                maxDepth, ipAddress, reason);
         }
     }
 }

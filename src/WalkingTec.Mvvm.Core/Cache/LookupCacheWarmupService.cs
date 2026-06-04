@@ -17,7 +17,18 @@ namespace WalkingTec.Mvvm.Core.Cache
     /// <list type="bullet">
     ///   <item>後台非同步執行，不阻擋應用啟動</item>
     ///   <item>失敗只記 warning log，首次查詢會自動走 cache-miss 路徑補充</item>
-    ///   <item>僅預熱 main tenant（TenantCode = null），多租戶各自在首次請求時暖機</item>
+    ///   <item>
+    ///     <strong>Single-tenant (null-tenant) only.</strong>
+    ///     This service performs a single best-effort warmup pass using
+    ///     <c>TenantCode = null</c> (the main/default tenant). Each additional
+    ///     tenant in a multi-tenant deployment is <em>not</em> pre-warmed here;
+    ///     its cache is populated lazily on the first request that carries that
+    ///     tenant's code. Multi-tenant deployments that require startup-time
+    ///     warmup across all tenants should provide their own
+    ///     <see cref="Microsoft.Extensions.Hosting.IHostedService"/> implementation
+    ///     that iterates the tenant list and calls
+    ///     <see cref="ILookupCacheService.GetAllAsync{T}"/> once per tenant.
+    ///   </item>
     /// </list>
     /// </para>
     /// </summary>

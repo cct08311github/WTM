@@ -907,4 +907,66 @@ namespace WalkingTec.Mvvm.Core.Test.Utils
                 "GetAllAssembly() must return a stable consistent list across concurrent threads"));
         }
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // FormatText — L15: odd-count && must not throw IndexOutOfRangeException
+    // ─────────────────────────────────────────────────────────────────────────
+    [TestClass]
+    public class FormatTextTests
+    {
+        /// <summary>
+        /// L15: an input string containing an ODD number of &amp;&amp; occurrences
+        /// (i.e. a dangling unpaired delimiter) must NOT throw
+        /// <see cref="ArgumentOutOfRangeException"/> or
+        /// <see cref="IndexOutOfRangeException"/>.
+        /// The unpaired trailing &amp;&amp; is simply skipped.
+        /// </summary>
+        [TestMethod]
+        public void FormatText_OddNumberOf_DoubleAmpersand_DoesNotThrow()
+        {
+            // 1 && — odd count; the loop guard i+1 < listInt.Count skips the dangling entry.
+            var input = "prefix &&code&& suffix &&trailing";
+            // Must not throw — the trailing unpaired && is silently skipped.
+            var act = () => WalkingTec.Mvvm.Core.Utils.FormatText(input);
+            act.Should().NotThrow("FormatText must not IndexOutOfRange on an odd && count");
+        }
+
+        [TestMethod]
+        public void FormatText_SingleDoubleAmpersand_DoesNotThrow()
+        {
+            // Only one && in the text — trivially odd.
+            var input = "&&alone";
+            var act = () => WalkingTec.Mvvm.Core.Utils.FormatText(input);
+            act.Should().NotThrow("a single && (no closing pair) must not throw");
+        }
+
+        [TestMethod]
+        public void FormatText_ThreeDoubleAmpersands_DoesNotThrow()
+        {
+            // Three &&'s — the first pair forms a segment, the third is orphaned.
+            var input = "&&hello&& world &&orphan";
+            var act = () => WalkingTec.Mvvm.Core.Utils.FormatText(input);
+            act.Should().NotThrow("three &&'s (one orphan) must not throw");
+        }
+
+        [TestMethod]
+        public void FormatText_EvenPairs_ProducesExpectedOutput()
+        {
+            // Even number of &&'s — happy path: two pairs.
+            var input = "&&int x = 1;&& some text &&int y = 2;&&";
+            var result = WalkingTec.Mvvm.Core.Utils.FormatText(input);
+            // FormatCode wraps the content; the surrounding text must survive.
+            result.Should().NotBeNull("even pairs must produce non-null output");
+            result.Should().NotContain("&&int x = 1;&&",
+                "the first code segment should have been replaced by FormatCode");
+        }
+
+        [TestMethod]
+        public void FormatText_NoDoubleAmpersand_ReturnsInputUnchanged()
+        {
+            var input = "plain text with no code markers";
+            var result = WalkingTec.Mvvm.Core.Utils.FormatText(input);
+            result.Should().Be(input, "text without && should be returned unchanged");
+        }
+    }
 }

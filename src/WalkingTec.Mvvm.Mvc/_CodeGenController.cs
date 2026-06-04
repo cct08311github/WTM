@@ -36,8 +36,8 @@ namespace WalkingTec.Mvvm.Mvc
         {
             if (vm.SelectedModel != null)
             {
-                Type modeltype = Type.GetType(vm.SelectedModel);
-                if(modeltype.IsSubclassOf(typeof(TopBasePoco)) == false)
+                Type? modeltype = Type.GetType(vm.SelectedModel);
+                if (modeltype == null || modeltype.IsSubclassOf(typeof(TopBasePoco)) == false)
                 {
                     ModelState.AddModelError("SelectedModel", MvcProgram._localizer["Codegen.SelectedModelMustBeBasePoco"]);
                 }

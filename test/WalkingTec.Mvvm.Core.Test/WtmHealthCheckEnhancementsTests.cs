@@ -115,7 +115,7 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         [TestMethod]
-        public async Task JsonResponseWriter_includes_exception_message_on_unhealthy()
+        public async Task JsonResponseWriter_includes_exception_message_on_unhealthy_when_dev()
         {
             var entries = new Dictionary<string, HealthReportEntry>
             {
@@ -128,13 +128,39 @@ namespace WalkingTec.Mvvm.Core.Test
                     tags: null),
             };
 
-            var body = await InvokeWriter(HealthStatus.Unhealthy, entries);
+            // includeExceptionDetail: true simulates development mode.
+            var body = await InvokeWriter(HealthStatus.Unhealthy, entries, includeExceptionDetail: true);
 
             using var doc = JsonDocument.Parse(body);
             Assert.AreEqual("Unhealthy", doc.RootElement.GetProperty("status").GetString());
             var check = doc.RootElement.GetProperty("checks")[0];
             Assert.AreEqual("Unhealthy", check.GetProperty("status").GetString());
             Assert.AreEqual("simulated DB outage", check.GetProperty("exception").GetString());
+        }
+
+        [TestMethod]
+        public async Task JsonResponseWriter_redacts_exception_message_in_production()
+        {
+            // L19: exception message must be omitted (redacted) when includeExceptionDetail is false
+            var entries = new Dictionary<string, HealthReportEntry>
+            {
+                ["db"] = new(
+                    status: HealthStatus.Unhealthy,
+                    description: "probe threw",
+                    duration: TimeSpan.FromMilliseconds(12),
+                    exception: new InvalidOperationException("Server=prod-db;Password=secret"),
+                    data: new Dictionary<string, object>(),
+                    tags: null),
+            };
+
+            // includeExceptionDetail: false (default) simulates production mode.
+            var body = await InvokeWriter(HealthStatus.Unhealthy, entries, includeExceptionDetail: false);
+
+            using var doc = JsonDocument.Parse(body);
+            var check = doc.RootElement.GetProperty("checks")[0];
+            // Exception field must not be present in the JSON output.
+            Assert.IsFalse(check.TryGetProperty("exception", out _),
+                "exception field must be redacted (omitted) in production mode");
         }
 
         [TestMethod]
@@ -225,11 +251,12 @@ namespace WalkingTec.Mvvm.Core.Test
 
         private static async Task<string> InvokeWriter(
             HealthStatus overallStatus,
-            IReadOnlyDictionary<string, HealthReportEntry> entries)
+            IReadOnlyDictionary<string, HealthReportEntry> entries,
+            bool includeExceptionDetail = false)
         {
             var ctx = new DefaultHttpContext { Response = { Body = new MemoryStream() } };
             var report = new HealthReport(entries, overallStatus, TimeSpan.FromMilliseconds(100));
-            await WtmHealthCheckResponseWriter.WriteJsonResponse(ctx, report);
+            await WtmHealthCheckResponseWriter.WriteJsonResponse(ctx, report, includeExceptionDetail);
             ctx.Response.Body.Position = 0;
             using var reader = new StreamReader(ctx.Response.Body);
             return await reader.ReadToEndAsync();

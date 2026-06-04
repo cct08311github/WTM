@@ -1201,8 +1201,15 @@ namespace WalkingTec.Mvvm.Mvc
 
             if (useJsonResponse)
             {
-                liveOptions.ResponseWriter = WtmHealthCheckResponseWriter.WriteJsonResponse;
-                readyOptions.ResponseWriter = WtmHealthCheckResponseWriter.WriteJsonResponse;
+                // Resolve the host environment to decide whether to include raw exception
+                // messages in the health-check JSON. In development environments the full
+                // exception message is useful for diagnostics; in production it is redacted
+                // to prevent leaking connection strings or hostnames to unauthenticated callers.
+                var env = app.ApplicationServices.GetService<Microsoft.AspNetCore.Hosting.IWebHostEnvironment>();
+                var includeExceptionDetail = env?.IsDevelopment() ?? false;
+                var writer = WtmHealthCheckResponseWriter.CreateWriter(includeExceptionDetail);
+                liveOptions.ResponseWriter = writer;
+                readyOptions.ResponseWriter = writer;
             }
 
             app.UseHealthChecks(livePath, liveOptions);
