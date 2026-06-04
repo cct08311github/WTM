@@ -98,6 +98,8 @@
   Oracle).  A concurrency-focused test suite (`RefreshTokenAtomicRotationTests`)
   with 7 test cases was added to `test/WalkingTec.Mvvm.Core.Test/Security/`.
 
+- **ETL: MssqlBulkLoader schema-qualified existence check; EtlQuartzJob terminal-failure trigger label** (#136): `EnsureStagingTableAsync` now filters `INFORMATION_SCHEMA.TABLES` on both `TABLE_NAME` and `TABLE_SCHEMA` (defaulting to `dbo`) so a same-named staging table in another schema no longer causes `CREATE` to be silently skipped. `EtlQuartzJob.Execute` terminal-failure else branch no longer overwrites the original trigger value (e.g. `Scheduled`) with `Retry`, so `EtlRunLog.Trigger` accurately reflects how the job was initiated.
+
 ### Fixes
 
 - **REST widget SSRF hardening** (#101): seven security defects in the REST

@@ -192,7 +192,10 @@ public class EtlQuartzJob : WtmJob
             }
             else
             {
-                trigger = EtlRunTrigger.Retry;
+                // Terminal failure — no retry will be scheduled.
+                // Do NOT overwrite trigger here; preserve the original trigger value
+                // (e.g. Scheduled, Manual) so the RunLog accurately reflects how this
+                // execution was initiated rather than mislabeling it as Retry (M24).
                 jobDef.LastError = sanitized;
                 jobDef.Status = EtlJobStatus.Failed;
                 jobDef.ConsecutiveFailureCount++;

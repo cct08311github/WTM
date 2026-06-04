@@ -157,6 +157,26 @@ public class MssqlBulkLoader : IBulkLoader
         return true;
     }
 
+    /// <summary>
+    /// Splits a staging table name into (schema, tableName) pair.
+    /// Supports bracketed and un-bracketed forms:
+    ///   "audit.STG_Orders"      → ("audit", "STG_Orders")
+    ///   "[audit].[STG_Orders]"  → ("audit", "STG_Orders")
+    ///   "STG_Orders"            → ("dbo",   "STG_Orders")
+    /// Public for unit-test determinism.
+    /// </summary>
+    public static (string Schema, string Table) ParseSchemaAndTable(string stagingTableName)
+    {
+        var dotIndex = stagingTableName.IndexOf('.');
+        if (dotIndex >= 0)
+        {
+            var schema = stagingTableName[..dotIndex].Trim('[', ']');
+            var table = stagingTableName[(dotIndex + 1)..].Trim('[', ']');
+            return (schema, table);
+        }
+        return ("dbo", stagingTableName);
+    }
+
     public async Task TruncateStagingAsync(
         string connectionString, string stagingTableName,
         CancellationToken cancellationToken = default)
@@ -175,11 +195,19 @@ public class MssqlBulkLoader : IBulkLoader
         await using var conn = new SqlConnection(connectionString);
         await conn.OpenAsync(cancellationToken);
 
+        // Derive schema name from staging table name if it contains a schema prefix
+        // (e.g. "audit.STG_Orders" → schema="audit", table="STG_Orders"),
+        // otherwise default to 'dbo'. Without the schema filter, a same-named table in
+        // another schema causes CREATE to be silently skipped (M23).
+        var (schemaName, tableNameOnly) = ParseSchemaAndTable(stagingTableName);
+
         await using var checkCmd = conn.CreateCommand();
         checkCmd.CommandText = @"
             SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES
-            WHERE TABLE_NAME = @tableName";
-        checkCmd.Parameters.AddWithValue("@tableName", stagingTableName);
+            WHERE TABLE_NAME = @tableName
+              AND TABLE_SCHEMA = @schemaName";
+        checkCmd.Parameters.AddWithValue("@tableName", tableNameOnly);
+        checkCmd.Parameters.AddWithValue("@schemaName", schemaName);
         var exists = (int)(await checkCmd.ExecuteScalarAsync(cancellationToken))! > 0;
 
         if (!exists)
