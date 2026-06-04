@@ -374,6 +374,7 @@
   and updating `_DashboardController.GetWidgetData` / `PostWidgetData` to forward the
   authenticated tenant identity from `LoginUserInfo.TenantCode`. Existing callers that omit
   the parameter continue to resolve `_default` dashboards unchanged.
+- **Analysis: four low-severity defects fixed (#149)**: (L1) `FilterCondition.Values` (List&lt;string&gt;) is now honoured before comma-splitting `FilterCondition.Value` in the In/NotIn branch; (L2) `MemoryAnalysisCache.Set` moves `_cache.Set` inside the same `lock(_lock)` block as `AddExpirationToken`, closing a race with `InvalidateAll`; (L20) `AnalysisSavedQuery.ConfigJson` gains `[StringLength(65536)]` and `SaveQuery` rejects inserts exceeding the 100-row per-user cap; (L21) `Export`/`PivotExport` validate the `format` query-string against the allowlist {xlsx, csv} before logging, preventing log injection.
 
 ## [10.5.3] - 2026-05-23
 

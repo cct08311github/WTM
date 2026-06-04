@@ -18,7 +18,12 @@ namespace WalkingTec.Mvvm.Core.Analysis
         public string ListVmType { get; set; } = string.Empty;
 
         /// <summary>JSON-serialized AnalysisQueryRequest（dims、msrs、filters、hierarchies）。</summary>
+        /// <remarks>
+        /// L20: [StringLength(65536)] bounds the column to 64 KB.  Tightens validation for
+        /// new input only; existing DB column widths are unaffected.
+        /// </remarks>
         [Required]
+        [StringLength(65536)]
         public string ConfigJson { get; set; } = string.Empty;
 
         /// <summary>擁有者的 ITCode（登入代碼）。</summary>

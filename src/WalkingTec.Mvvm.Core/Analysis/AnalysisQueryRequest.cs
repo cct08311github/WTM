@@ -195,10 +195,21 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// <summary>比較運算子。</summary>
         public FilterOperator Operator { get; set; }
 
-        /// <summary>過濾值（統一 string，server-side 做 type conversion）。</summary>
+        /// <summary>
+        /// 過濾值（統一 string，server-side 做 type conversion）。
+        /// 對 <see cref="FilterOperator.In"/> / <see cref="FilterOperator.NotIn"/> 運算子，
+        /// 此欄位為逗號分隔字串形式（向後相容）。
+        /// 若同時提供 <see cref="Values"/>（且不為空），引擎會優先使用 <see cref="Values"/>
+        /// 並忽略本欄位（L1 修正：<see cref="Values"/> 優先於逗號分割的 <see cref="Value"/>）。
+        /// </summary>
         public string Value { get; set; } = string.Empty;
 
-        /// <summary>In 運算子的多個值（以逗號分隔或 JSON array）</summary>
+        /// <summary>
+        /// In / NotIn 運算子的多個值（List&lt;string&gt; 形式，優先於 <see cref="Value"/> 的逗號分割）。
+        /// 當此屬性為非空 list 時，引擎直接使用此 list 作為值來源，忽略 <see cref="Value"/>。
+        /// 當此屬性為 null 或空 list 時，引擎 fallback 到對 <see cref="Value"/> 做逗號分割。
+        /// 非 In/NotIn 運算子不使用此欄位。
+        /// </summary>
         public List<string>? Values { get; set; }
     }
 

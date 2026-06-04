@@ -1489,8 +1489,16 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 {
                     if (f.Operator == FilterOperator.In || f.Operator == FilterOperator.NotIn)
                     {
+                        // L1: honour the strongly-typed list form (f.Values) first.
+                        // f.Values is populated by callers that already hold a List<string>
+                        // (e.g. AnalysisQueryRequest.FilterCondition.Values).  Fall back to
+                        // comma-splitting f.Value for callers that use the legacy string form.
                         System.Collections.IEnumerable? values = null;
-                        if (f.Value is string s)
+                        if (f.Values is { Count: > 0 } valuesList)
+                        {
+                            values = valuesList;
+                        }
+                        else if (f.Value is string s && s.Length > 0)
                         {
                             values = s.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim());
                         }

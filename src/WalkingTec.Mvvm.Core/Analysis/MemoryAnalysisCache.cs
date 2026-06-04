@@ -36,12 +36,15 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 AbsoluteExpirationRelativeToNow = ttl ?? _defaultTtl
             };
 
+            // L2: AddExpirationToken AND _cache.Set must be inside the same lock block.
+            // If Set were called outside the lock, InvalidateAll could cancel+replace _cts
+            // between the token capture and the cache write, causing the just-stored entry to
+            // be immediately evicted by the new CTS token that was never registered on it.
             lock (_lock)
             {
                 options.AddExpirationToken(new CancellationChangeToken(_cts.Token));
+                _cache.Set(queryHash, response, options);
             }
-
-            _cache.Set(queryHash, response, options);
         }
 
         public void Invalidate(string queryHash)

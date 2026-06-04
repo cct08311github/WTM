@@ -114,6 +114,11 @@ namespace WalkingTec.Mvvm.Mvc
         // nested expression trees built by ApplyFilters / ApplyHavingFilters / ApplySortAndTopN.
         private const int MaxFilterClauses = 50;
 
+        // L20: per-user cap on saved queries.  Prevents unbounded row growth in
+        // AnalysisSavedQuery when a user (or script) calls SaveQuery repeatedly.
+        // Only rejects insert; existing rows above the cap are not touched.
+        private const int MaxSavedQueriesPerUser = 100;
+
         [HttpPost("query")]
         [ProducesResponseType(typeof(AnalysisQueryResponse), StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(string), StatusCodes.Status400BadRequest)]
@@ -210,6 +215,12 @@ var result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fie
             [FromQuery] string chartType = "bar",
             [FromQuery] bool includeMetadata = false)
         {
+            // L21: validate format against allowlist before it reaches WriteAnalysisActionLog
+            // to prevent log injection from raw user-supplied query-string values.
+            if (!format.Equals("xlsx", StringComparison.OrdinalIgnoreCase) &&
+                !format.Equals("csv",  StringComparison.OrdinalIgnoreCase))
+                return BadRequest(new ProblemDetails { Title = "format 參數僅支援 xlsx 或 csv。", Status = 400 });
+
             if (req == null) return BadRequest(new ProblemDetails { Title = "Request body is required.", Status = 400 });
             if (req.Dimensions.Count == 0) return BadRequest(new ProblemDetails { Title = "至少需要選取 1 個維度。", Status = 400 });
             if (req.Dimensions.Count > 3) return BadRequest(new ProblemDetails { Title = "最多選取 3 個維度。", Status = 400 });
@@ -274,6 +285,12 @@ result = await _engine.ExecuteDynamicAsync(ctx!.BaseQuery, req, ctx.Fields, iden
             [FromQuery] string chartType = "bar",
             [FromQuery] bool includeMetadata = false)
         {
+            // L21: validate format against allowlist before it reaches WriteAnalysisActionLog
+            // to prevent log injection from raw user-supplied query-string values.
+            if (!format.Equals("xlsx", StringComparison.OrdinalIgnoreCase) &&
+                !format.Equals("csv",  StringComparison.OrdinalIgnoreCase))
+                return BadRequest(new ProblemDetails { Title = "format 參數僅支援 xlsx 或 csv。", Status = 400 });
+
             if (req == null) return BadRequest(new ProblemDetails { Title = "Request body is required.", Status = 400 });
             if (req.Dimensions.Count == 0) return BadRequest(new ProblemDetails { Title = "至少需要選取 1 個維度。", Status = 400 });
             if (req.Dimensions.Count > 3) return BadRequest(new ProblemDetails { Title = "最多選取 3 個維度。", Status = 400 });
@@ -387,6 +404,13 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
             if (!CheckAccess(vmType)) return Forbid();
 
             var userCode = Wtm?.LoginUserInfo?.ITCode ?? string.Empty;
+
+            // L20: enforce per-user row cap to prevent unbounded table growth.
+            var existingCount = Wtm!.DC.Set<AnalysisSavedQuery>()
+                .Count(q => q.OwnerCode == userCode);
+            if (existingCount >= MaxSavedQueriesPerUser)
+                return BadRequest($"每位使用者最多可儲存 {MaxSavedQueriesPerUser} 個查詢設定，請先刪除不需要的項目。");
+
             var configJson = JsonSerializer.Serialize(req.Config, _camelCase);
 
             var entity = new AnalysisSavedQuery
