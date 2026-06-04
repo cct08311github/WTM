@@ -1,6 +1,6 @@
 # 更新日志
 
-## [Unreleased]
+## [10.5.4] - 2026-06-04
 
 ### Fixes
 
@@ -44,83 +44,6 @@
 - **ProcessCommand divide-by-zero, DCExtension.Sort NRE on unknown property, invalid SortDir crash, and sort-order info-leak via sensitive fields fixed** (#151): `ProcessCommand` now normalises `Searcher.Limit` to the configured default before the `(Count-1)/Limit` page-count division so `Limit=0` no longer causes a swallowed `DivideByZeroException`; `DCExtension.Sort` skips sort fields that don't exist on `T` (prevents NRE via `Expression.Property(pe, null!)`); `OrderReplaceModifier` returns `node` unchanged when `SortDir` is outside `{Asc, Desc}` so an unknown direction value no longer yields a null expression that crashes `CreateQuery`; both `DCExtension.Sort` and `OrderReplaceModifier` now silently skip properties decorated with `[JsonIgnore]`/`[NotMapped]` and name-matched sensitive fields (`Password`, `PasswordHash`, `Salt`, `Token`), preventing an authenticated sort-order oracle attack.
 - **`EmptyContext.ReCreate()` now preserves `Version`; `CascadeDelete` guards against cyclic trees** (#152): `ReCreate()` previously used the 2-arg `(string, DBTypeEnum)` constructor in the null-`ConnectionString` branch, silently dropping the configured DB compatibility `Version`; it now prefers the 3-arg constructor so `Version` is propagated (falls back gracefully when the subtype only exposes 2-arg). `CascadeDelete<T>` used unbounded recursion — a cyclic parent-child reference (A.ParentId=B, B.ParentId=A) or an exceptionally deep tree would cause an uncatchable `StackOverflowException`; fixed by introducing an internal overload that carries a `HashSet<Guid> visited` set and short-circuits on already-visited nodes; the public signature is unchanged.
 
-### Security
-
-- **Exception/connection-string information leak fixed in four production paths** (#124):
-  - `_EtlSchemaController` (Tables + Columns endpoints): raw `ex.Message` — which may contain
-    the full DB connection string from EF/ADO.NET exceptions — was included in the 500 response
-    body.  Fix: full detail is now logged server-side via `ILogger`; the client receives only
-    `"Schema introspection failed; see server log."` regardless of `IsQuickDebug`.  Connection
-    strings must never appear in HTTP responses in any mode.
-  - `_EtlJobController` (TriggerNow, DryRun, Pause, Resume, Abort, SkipNext): raw
-    `InvalidOperationException.Message` was echoed to the client in all environments.  Fix:
-    full detail is now logged via `ILogger`; in production (`IsQuickDebug == false`) a generic
-    `"操作失敗，請稍後再試。"` or `"找不到指定的 Job。"` is returned instead.  Dev mode retains
-    the original message to aid diagnostics.
-  - `_AnalysisController` (Query, Pivot, Export, PivotExport): the `AnalysisQueryEngine` wraps
-    unexpected DB/EF exceptions in `InvalidOperationException` (line 1575 of
-    `AnalysisQueryEngine.cs`), so `ex.Message` could expose internal detail.  Fix: engine-level
-    catches now log via `ILogger` and return a generic title in production.  Registry-resolution
-    and input-validation catches (intentionally user-facing messages) are unchanged.
-  - `WTMContext.CallAPI` catch block: `ex.ToString()` (including stack trace) was set as
-    `ApiResult.ErrorMsg`.  Fix: full exception is logged via `ILoggerFactory`; `ErrorMsg` is
-    set to `"An error occurred while processing the request."` in production.  Dev mode
-    (`IsQuickDebug == true`) retains the full `ex.ToString()` for diagnostics.
-- **Access-token revocation via JTI denylist** (#126):
-  A valid JWT access token remained fully usable until its natural `exp` time even after
-  the user logged out or the associated refresh token was explicitly revoked. There was no
-  server-side mechanism to invalidate issued access tokens before their expiry.
-  Fix: introduced `IAccessTokenDenylist` (backed by `IMemoryCache`) that stores revoked
-  JTI values with an absolute cache expiration matching the token's own `exp` claim —
-  entries auto-evict when the token would have expired anyway, keeping memory bounded.
-  `TokenService.RevokeTokenAsync` now calls `IAccessTokenDenylist.Deny()` with the current
-  request's `jti` and `exp` immediately after revoking the refresh token.
-  The `OnTokenValidated` JWT-bearer event checks the denylist on every authenticated
-  request; if the JTI is denied it calls `context.Fail("Token has been revoked.")` so the
-  request is rejected as `401 Unauthorized`.
-  **Single-node note:** the default `IMemoryCache` implementation is process-local.
-  Multi-node / load-balanced deployments should replace `IAccessTokenDenylist` with a
-  distributed-cache-backed implementation (e.g. Redis via `IDistributedCache`) by
-  registering a custom `IAccessTokenDenylist` before calling `AddWtmAuthentication`.
-  New tests in `test/WalkingTec.Mvvm.Core.Test/Security/AccessTokenDenylistTests.cs`.
-
-- **CodeGenVM: `MainDir` HTTP model-binding vector closed; `ShareDir` NRE fixed** (#122):
-  Two bugs in `CodeGenVM` (`src/WalkingTec.Mvvm.Mvc/CodeGenVM.cs`):
-  - **HIGH** — `MainDir` was missing `[BindNever]` despite being the write root for all
-    generated files. A crafted POST could override `MainDir` with an attacker-controlled
-    path, making `SafePathHelper.SafeCombine`'s boundary checks anchor to that arbitrary
-    root instead of the server-derived `EntryDir` value — effectively an arbitrary file-write
-    escalation. Fix: added `[BindNever]` to `MainDir` (mirroring the same protection already
-    present on `EntryDir`). The property setter and internal server-side assignment are
-    unaffected.
-  - **MEDIUM** — `ShareDir` getter called `sharedir.FullName` unconditionally after a
-    `.FirstOrDefault()` lookup that can return `null` when no sibling `*.shared` project
-    directory exists (e.g. Blazor projects not following the `*.shared` naming convention).
-    This caused an unhandled `NullReferenceException` at codegen time. Fix: added a null
-    guard mirroring the `VmDir` pattern — when no `*.shared` sibling is found, the getter
-    falls back to a `Shared/Pages/<ModelName>` directory under `MainDir`.
-  Five regression tests added to `CodeGenAnalysisTests`.
-
-- **Refresh-token double-rotation (TOCTOU race) — atomic claim fix** (#118):
-  `TokenService.RefreshTokenAsync` previously used a non-atomic read-check-modify-save
-  sequence that allowed two concurrent requests presenting the **same** refresh token
-  to both pass the `IsActive` guard, both rotate, and both receive independent
-  descendant tokens.  The attacker's token would stay alive permanently because
-  the reuse-detection chain only tracked one branch.
-  Fix: the revocation that "claims" a token for rotation is now a single
-  `ExecuteUpdateAsync` bulk-`UPDATE` with the active conditions embedded in the
-  `WHERE` clause (`RevokedUtc IS NULL AND ExpiresUtc > @now`).  Only one
-  concurrent caller can match the row; all others get `affected == 0` and are
-  immediately rejected — no new token is issued.  The existing sequential
-  reuse-detection behaviour (`RevokeDescendantsAsync`) is preserved and still
-  fires when a revoked token is replayed.  No DB schema change required;
-  compatible with all supported providers (MSSQL / MySQL / PostgreSQL / SQLite /
-  Oracle).  A concurrency-focused test suite (`RefreshTokenAtomicRotationTests`)
-  with 7 test cases was added to `test/WalkingTec.Mvvm.Core.Test/Security/`.
-
-- **ETL: MssqlBulkLoader schema-qualified existence check; EtlQuartzJob terminal-failure trigger label** (#136): `EnsureStagingTableAsync` now filters `INFORMATION_SCHEMA.TABLES` on both `TABLE_NAME` and `TABLE_SCHEMA` (defaulting to `dbo`) so a same-named staging table in another schema no longer causes `CREATE` to be silently skipped. `EtlQuartzJob.Execute` terminal-failure else branch no longer overwrites the original trigger value (e.g. `Scheduled`) with `Retry`, so `EtlRunLog.Trigger` accurately reflects how the job was initiated.
-
-### Fixes
 
 - **REST widget SSRF hardening** (#101): seven security defects in the REST
   widget data source are fixed.
@@ -256,7 +179,83 @@
   checks `token.IsCancellationRequested` before registering the token and
   falls back to the absolute TTL expiry.
 - **CodeGen: InjectAnalysisAttributes write-boundary + ModuleName injection** (#135): `InjectAnalysisAttributes` previously verified the discovered model file via `SafeCombine` anchored to the file's own directory rather than `MainDir`, allowing `FindModelFile`'s 5-level climb to return and overwrite a same-named `.cs` file outside the project tree. Fixed by comparing the canonical resolved path against `MainDir` before any read/write. `ModuleName` lacked input validation and was interpolated raw into generated JS object literals and JSON menu strings; fixed with `[RegularExpression]` (letters, digits, underscores, hyphens, spaces only) and defense-in-depth `EscapeForJson`/`EscapeForJsSingleQuoted` helpers at each interpolation site.
+
 ### Security
+
+- **Exception/connection-string information leak fixed in four production paths** (#124):
+  - `_EtlSchemaController` (Tables + Columns endpoints): raw `ex.Message` — which may contain
+    the full DB connection string from EF/ADO.NET exceptions — was included in the 500 response
+    body.  Fix: full detail is now logged server-side via `ILogger`; the client receives only
+    `"Schema introspection failed; see server log."` regardless of `IsQuickDebug`.  Connection
+    strings must never appear in HTTP responses in any mode.
+  - `_EtlJobController` (TriggerNow, DryRun, Pause, Resume, Abort, SkipNext): raw
+    `InvalidOperationException.Message` was echoed to the client in all environments.  Fix:
+    full detail is now logged via `ILogger`; in production (`IsQuickDebug == false`) a generic
+    `"操作失敗，請稍後再試。"` or `"找不到指定的 Job。"` is returned instead.  Dev mode retains
+    the original message to aid diagnostics.
+  - `_AnalysisController` (Query, Pivot, Export, PivotExport): the `AnalysisQueryEngine` wraps
+    unexpected DB/EF exceptions in `InvalidOperationException` (line 1575 of
+    `AnalysisQueryEngine.cs`), so `ex.Message` could expose internal detail.  Fix: engine-level
+    catches now log via `ILogger` and return a generic title in production.  Registry-resolution
+    and input-validation catches (intentionally user-facing messages) are unchanged.
+  - `WTMContext.CallAPI` catch block: `ex.ToString()` (including stack trace) was set as
+    `ApiResult.ErrorMsg`.  Fix: full exception is logged via `ILoggerFactory`; `ErrorMsg` is
+    set to `"An error occurred while processing the request."` in production.  Dev mode
+    (`IsQuickDebug == true`) retains the full `ex.ToString()` for diagnostics.
+- **Access-token revocation via JTI denylist** (#126):
+  A valid JWT access token remained fully usable until its natural `exp` time even after
+  the user logged out or the associated refresh token was explicitly revoked. There was no
+  server-side mechanism to invalidate issued access tokens before their expiry.
+  Fix: introduced `IAccessTokenDenylist` (backed by `IMemoryCache`) that stores revoked
+  JTI values with an absolute cache expiration matching the token's own `exp` claim —
+  entries auto-evict when the token would have expired anyway, keeping memory bounded.
+  `TokenService.RevokeTokenAsync` now calls `IAccessTokenDenylist.Deny()` with the current
+  request's `jti` and `exp` immediately after revoking the refresh token.
+  The `OnTokenValidated` JWT-bearer event checks the denylist on every authenticated
+  request; if the JTI is denied it calls `context.Fail("Token has been revoked.")` so the
+  request is rejected as `401 Unauthorized`.
+  **Single-node note:** the default `IMemoryCache` implementation is process-local.
+  Multi-node / load-balanced deployments should replace `IAccessTokenDenylist` with a
+  distributed-cache-backed implementation (e.g. Redis via `IDistributedCache`) by
+  registering a custom `IAccessTokenDenylist` before calling `AddWtmAuthentication`.
+  New tests in `test/WalkingTec.Mvvm.Core.Test/Security/AccessTokenDenylistTests.cs`.
+
+- **CodeGenVM: `MainDir` HTTP model-binding vector closed; `ShareDir` NRE fixed** (#122):
+  Two bugs in `CodeGenVM` (`src/WalkingTec.Mvvm.Mvc/CodeGenVM.cs`):
+  - **HIGH** — `MainDir` was missing `[BindNever]` despite being the write root for all
+    generated files. A crafted POST could override `MainDir` with an attacker-controlled
+    path, making `SafePathHelper.SafeCombine`'s boundary checks anchor to that arbitrary
+    root instead of the server-derived `EntryDir` value — effectively an arbitrary file-write
+    escalation. Fix: added `[BindNever]` to `MainDir` (mirroring the same protection already
+    present on `EntryDir`). The property setter and internal server-side assignment are
+    unaffected.
+  - **MEDIUM** — `ShareDir` getter called `sharedir.FullName` unconditionally after a
+    `.FirstOrDefault()` lookup that can return `null` when no sibling `*.shared` project
+    directory exists (e.g. Blazor projects not following the `*.shared` naming convention).
+    This caused an unhandled `NullReferenceException` at codegen time. Fix: added a null
+    guard mirroring the `VmDir` pattern — when no `*.shared` sibling is found, the getter
+    falls back to a `Shared/Pages/<ModelName>` directory under `MainDir`.
+  Five regression tests added to `CodeGenAnalysisTests`.
+
+- **Refresh-token double-rotation (TOCTOU race) — atomic claim fix** (#118):
+  `TokenService.RefreshTokenAsync` previously used a non-atomic read-check-modify-save
+  sequence that allowed two concurrent requests presenting the **same** refresh token
+  to both pass the `IsActive` guard, both rotate, and both receive independent
+  descendant tokens.  The attacker's token would stay alive permanently because
+  the reuse-detection chain only tracked one branch.
+  Fix: the revocation that "claims" a token for rotation is now a single
+  `ExecuteUpdateAsync` bulk-`UPDATE` with the active conditions embedded in the
+  `WHERE` clause (`RevokedUtc IS NULL AND ExpiresUtc > @now`).  Only one
+  concurrent caller can match the row; all others get `affected == 0` and are
+  immediately rejected — no new token is issued.  The existing sequential
+  reuse-detection behaviour (`RevokeDescendantsAsync`) is preserved and still
+  fires when a revoked token is replayed.  No DB schema change required;
+  compatible with all supported providers (MSSQL / MySQL / PostgreSQL / SQLite /
+  Oracle).  A concurrency-focused test suite (`RefreshTokenAtomicRotationTests`)
+  with 7 test cases was added to `test/WalkingTec.Mvvm.Core.Test/Security/`.
+
+- **ETL: MssqlBulkLoader schema-qualified existence check; EtlQuartzJob terminal-failure trigger label** (#136): `EnsureStagingTableAsync` now filters `INFORMATION_SCHEMA.TABLES` on both `TABLE_NAME` and `TABLE_SCHEMA` (defaulting to `dbo`) so a same-named staging table in another schema no longer causes `CREATE` to be silently skipped. `EtlQuartzJob.Execute` terminal-failure else branch no longer overwrites the original trigger value (e.g. `Scheduled`) with `Retry`, so `EtlRunLog.Trigger` accurately reflects how the job was initiated.
+
 
 - **`GetRemoteIpAddress` no longer trusts `X-Forwarded-For` by default** (#114):
   `HttpContextExtention.GetRemoteIpAddress` previously read the raw

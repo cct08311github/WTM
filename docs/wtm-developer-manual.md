@@ -1,8 +1,8 @@
 # WTM 開發與使用手冊
 
-> **版本**：10.5.3 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-05-23
+> **版本**：10.5.4 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-06-04
 >
-> **10.5.3 重點**（patch）：`PropertyHelper` + `AnalysisFieldScanner` 反射 hot path 加 `ConcurrentDictionary` cache，BDN 實測 18×–135× 加速、消除 per-call allocation；`GetCleanCrudVM` 內層 copy loop 補 `CanWrite` 守衛，修復遇 computed get-only property（如 `TopBasePoco.IsBasePoco`）丟 `ArgumentException` 中斷複製的 bug。內部另含 7 個 coverage test PR（Phase 1-7，~1,270 新測試，codebase line coverage ~40%→~50%、Core ~55%→~70%）。詳見 `CHANGELOG.md`。
+> **10.5.4 重點**（patch，bug-hunt remediation）：對抗式 bug 獵捕（Opus orchestrate → Sonnet 偵查 → 獨立 skeptic 對抗驗證 → Opus review）修復 **CRITICAL(1) + HIGH(20) + MEDIUM(24) + LOW(20) = 65 個對抗驗證確認缺陷**，全數相容（無 breaking change）。新增/變更的使用者可見表面（皆 opt-in 或非破壞多載）：`DataContext.EnableSensitiveQueryLogging`（opt-in，預設 `false`；EF Core 敏感查詢參數日誌現需顯式開啟，避免 debug 模式洩漏 PII，見 §10）；`MssqlBulkLoader` 逾時可設定（建構參數 `timeoutSeconds`，預設 300s，取代原無限 `0`，見 §8）；`IDashboardService.GetWidgetDataAsync` 新增 `tenantId` 非破壞多載（default interface member，租戶隔離，見 §9）；`FilterCondition.Values`（In/NotIn 的 List 形式優先於逗號字串 `Value`，見 §7）；`BaseImportVM` 實作 `IDisposable`（釋放 `XSSFWorkbook`，見 §4.5）；Analysis SaveQuery 加 per-user 數量上限 + `AnalysisSavedQuery.ConfigJson` `[StringLength(65536)]`（見 §7）。詳見 `CHANGELOG.md` `[10.5.4]`。
 
 WalkingTec MVVM Framework (WTM) 是一套 ASP.NET Core 快速開發框架，以四種 ViewModel 類型為核心，搭配內建代碼生成器、LayUI TagHelper、Analysis Mode、ETL 模組（含可視化儀表板）與 Dashboard，提供完整的企業級 CRUD 開發體驗。
 
@@ -4354,7 +4354,7 @@ public class ProductVM : BaseCRUDVM<Product>
 ```xml
 <Project>
   <PropertyGroup>
-    <VersionPrefix>10.5.3</VersionPrefix>
+    <VersionPrefix>10.5.4</VersionPrefix>
   </PropertyGroup>
 </Project>
 ```
