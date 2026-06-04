@@ -66,9 +66,10 @@ jobs:
             --skip-duplicate
 
       # ── GitHub mirror sync ─────────────────────────────────────────────────
-      # Required secret: GITHUB_PAT — a Personal Access Token for account
+      # Required secret: GH_MIRROR_PAT — a Personal Access Token for account
       # `cct08311github` with scopes: repo, workflow, write:packages, read:packages.
-      # Add it in Gitea repo Settings → Secrets → GITHUB_PAT.
+      # Add it in Gitea repo Settings → Secrets → GH_MIRROR_PAT.
+      # (must NOT start with GITHUB_ — Gitea reserves that prefix)
       #
       # These steps run only on real tag pushes (not workflow_dispatch without
       # a tag ref). If any step here fails the job exits non-zero, which means
@@ -82,7 +83,7 @@ jobs:
       - name: Configure GitHub remote
         if: startsWith(github.ref, 'refs/tags/')
         env:
-          GH_PAT: ${{ secrets.GITHUB_PAT }}
+          GH_PAT: ${{ secrets.GH_MIRROR_PAT }}
         run: |
           git remote add github \
             "https://x-access-token:${GH_PAT}@github.com/cct08311github/WTM.git"
@@ -144,7 +145,8 @@ jobs:
           # Run sed in-place over all remaining text source files, skipping .git/.
           find . -path './.git' -prune -o \
             \( -name '*.md' -o -name '*.yml' -o -name '*.props' \
-               -o -name '*.csproj' -o -name '*.json' -o -name '*.cs' \) \
+               -o -name '*.csproj' -o -name '*.json' -o -name '*.cs' \
+               -o -name '*.sh' \) \
             -print | xargs sed -i -f .sync/github-sanitize.sed
           git add -A
           # Bundle all manifest changes into a single commit.
@@ -188,7 +190,7 @@ jobs:
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         env:
-          GH_PAT: ${{ secrets.GITHUB_PAT }}
+          GH_PAT: ${{ secrets.GH_MIRROR_PAT }}
           TAG: ${{ github.ref_name }}
           PKG_VERSION: ${{ steps.version.outputs.version }}
         run: |
@@ -222,7 +224,7 @@ jobs:
       - name: Push NuGet packages to GitHub Packages
         if: startsWith(github.ref, 'refs/tags/')
         env:
-          GH_PAT: ${{ secrets.GITHUB_PAT }}
+          GH_PAT: ${{ secrets.GH_MIRROR_PAT }}
         run: |
           dotnet nuget push "nupkgs/*.nupkg" \
             --api-key "$GH_PAT" \
