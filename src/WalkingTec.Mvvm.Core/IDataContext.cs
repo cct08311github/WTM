@@ -23,6 +23,16 @@ namespace WalkingTec.Mvvm.Core
         bool IsFake { get; set; }
 
         bool IsDebug { get; set; }
+
+        /// <summary>
+        /// Opt-in flag to enable EF Core sensitive data logging (query parameter values).
+        /// Requires <see cref="IsDebug"/> to also be <c>true</c>.
+        /// Default is <c>false</c> — query parameters are redacted even in debug mode.
+        /// External implementers of <see cref="IDataContext"/> are not required to override
+        /// this member; the default implementation returns <c>false</c> and ignores writes.
+        /// </summary>
+        bool EnableSensitiveQueryLogging { get => false; set { } }
+
         string? CurrentUserCode { get; set; }
         string? TenantCode { get; }
         DBTypeEnum DBType { get; set; }

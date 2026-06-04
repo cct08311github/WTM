@@ -24,6 +24,22 @@
   background jobs, `_remotetoken` requests, and non-middleware contexts.
 - **Core robustness: invariant culture conversion, thread-safe static caches, JSON error escaping, regex fallback** (#134): `PropertyHelper.ConvertValue` now passes `InvariantCulture` to both `Convert.ChangeType` calls, preventing decimal/date corruption on non-invariant-locale servers; `Utils.GetAllAssembly`, `GetAllModels`, and `GetAllVms` use double-checked locking to eliminate the empty-intermediate-state race; `ListVMExtension.GetError` escapes backslash and double-quote in error text before JSON interpolation, preventing malformed JSON; `WtmAuthorizationService.MatchUrl` catches `NotSupportedException` and `ArgumentException` in addition to `RegexMatchTimeoutException` so patterns unsupported by the `NonBacktracking` engine fall back gracefully instead of surfacing as a 500.
 
+- **DataContext: Oracle parameter NRE, sensitive-logging PII gate, and connection leak fixed** (#132):
+  Three medium-severity fixes in `EmptyContext.Run()` and related helpers:
+  - `CreateCommandParameter` for Oracle was a commented-out no-op that silently returned `null`,
+    causing `Parameters.Add(null)` → NRE in `Run()`. Now throws `NotSupportedException` with a
+    clear message naming the provider, so callers get actionable feedback.
+  - `EnableSensitiveDataLogging()` was called unconditionally whenever `IsDebug = true`, logging
+    query parameter values (PII/credentials) to any configured logger in debug deployments.
+    A new `EnableSensitiveQueryLogging` property (default `false`) must now be explicitly set to
+    `true` to activate sensitive logging; `EnableDetailedErrors` is unaffected and remains debug-only.
+    **Migration:** if you relied on `IsDebug = true` enabling sensitive logging, also set
+    `dc.EnableSensitiveQueryLogging = true` in local dev configuration.
+  - `Run()` opened the connection before the `using (command)` block; an exception from
+    `ExecuteReader` or `DataTable.Load` would skip the `connection.Close()` call, leaking the
+    connection. Fixed with a `try/finally` ensuring `Close()` always runs when the connection
+    was opened by `Run()`.
+
 ### Security
 
 - **Exception/connection-string information leak fixed in four production paths** (#124):

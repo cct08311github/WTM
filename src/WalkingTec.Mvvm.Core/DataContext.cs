@@ -441,6 +441,15 @@ namespace WalkingTec.Mvvm.Core
             }
         }
         public bool IsDebug { get; set; }
+
+        /// <summary>
+        /// Controls whether EF Core query parameter values are included in log output.
+        /// Default is <c>false</c> to protect PII/credentials in debug deployments.
+        /// Set to <c>true</c> only in trusted local development environments.
+        /// Requires <see cref="IsDebug"/> to also be <c>true</c> to take effect.
+        /// </summary>
+        public bool EnableSensitiveQueryLogging { get; set; } = false;
+
         public string? CurrentUserCode { get; set; }
         /// <summary>
         /// CSName
@@ -728,7 +737,13 @@ namespace WalkingTec.Mvvm.Core
             if (IsDebug == true)
             {
                 optionsBuilder.EnableDetailedErrors();
-                optionsBuilder.EnableSensitiveDataLogging();
+                // EnableSensitiveDataLogging logs query parameter values which may contain
+                // PII or credentials. It is gated behind a separate explicit opt-in so that
+                // debug deployments do not leak sensitive data unintentionally. (M15)
+                if (EnableSensitiveQueryLogging)
+                {
+                    optionsBuilder.EnableSensitiveDataLogging();
+                }
                 if (_loggerFactory != null)
                 {
                     optionsBuilder.UseLoggerFactory(_loggerFactory);
@@ -806,28 +821,47 @@ namespace WalkingTec.Mvvm.Core
             {
                 connection.Open();
             }
-            using (var command = connection.CreateCommand())
+            // M16: try/finally ensures the connection is closed even if ExecuteReader or
+            // DataTable.Load throws, preventing a connection leak on error paths.
+            try
             {
-                command.CommandText = sql;
-                command.CommandTimeout = 2400;
-                command.CommandType = commandType;
-                if (this.Database.CurrentTransaction != null)
+                using (var command = connection.CreateCommand())
                 {
-                    command.Transaction = this.Database.CurrentTransaction.GetDbTransaction();
-                }
-                if (paras != null)
-                {
-                    foreach (var param in paras)
-                        command.Parameters.Add(param);
-                }
-                using (var reader = command.ExecuteReader())
-                {
-                    table.Load(reader);
+                    command.CommandText = sql;
+                    command.CommandTimeout = 2400;
+                    command.CommandType = commandType;
+                    if (this.Database.CurrentTransaction != null)
+                    {
+                        command.Transaction = this.Database.CurrentTransaction.GetDbTransaction();
+                    }
+                    if (paras != null)
+                    {
+                        foreach (var param in paras)
+                        {
+                            // M14: guard against null parameters (e.g. from Oracle case that
+                            // returns null) so we throw a clear error instead of an NRE.
+                            if (param is null)
+                            {
+                                throw new NotSupportedException(
+                                    $"CreateCommandParameter returned null for provider '{this.DBType}'. " +
+                                    "This provider may not be fully supported. " +
+                                    "Use a provider-specific DbParameter instead.");
+                            }
+                            command.Parameters.Add(param);
+                        }
+                    }
+                    using (var reader = command.ExecuteReader())
+                    {
+                        table.Load(reader);
+                    }
                 }
             }
-            if (isClosed)
+            finally
             {
-                connection.Close();
+                if (isClosed)
+                {
+                    connection.Close();
+                }
             }
             return table;
         }
@@ -845,26 +879,30 @@ namespace WalkingTec.Mvvm.Core
 
         public object CreateCommandParameter(string name, object value, ParameterDirection dir)
         {
-            object rv = null!;
             switch (this.DBType)
             {
                 case DBTypeEnum.SqlServer:
-                    rv = new SqlParameter(name, value) { Direction = dir };
-                    break;
+                    return new SqlParameter(name, value) { Direction = dir };
                 case DBTypeEnum.MySql:
-                    rv = new MySqlParameter(name, value) { Direction = dir };
-                    break;
+                    return new MySqlParameter(name, value) { Direction = dir };
                 case DBTypeEnum.PgSql:
-                    rv = new NpgsqlParameter(name, value) { Direction = dir };
-                    break;
+                    return new NpgsqlParameter(name, value) { Direction = dir };
                 case DBTypeEnum.SQLite:
-                    rv = new SqliteParameter(name, value) { Direction = dir };
-                    break;
+                    return new SqliteParameter(name, value) { Direction = dir };
                 case DBTypeEnum.Oracle:
-                    //rv = new OracleParameter(name, value) { Direction = dir };
-                    break;
+                    // M14: Oracle provider (Oracle.EntityFrameworkCore) is loaded at runtime.
+                    // Rather than a commented-out OracleParameter (which silently returned null
+                    // and caused an NRE in Run()), throw a clear NotSupportedException so the
+                    // caller gets actionable feedback. Use Run() overloads that accept pre-built
+                    // OracleParameter instances directly via command.Parameters if you need
+                    // Oracle stored-procedure support.
+                    throw new NotSupportedException(
+                        "CreateCommandParameter does not support Oracle. " +
+                        "Create an OracleParameter directly and add it via the DbCommand.");
+                default:
+                    throw new NotSupportedException(
+                        $"CreateCommandParameter does not support DBType '{this.DBType}'.");
             }
-            return rv;
         }
 
         private void ApplyAuditFields()
@@ -939,6 +977,7 @@ namespace WalkingTec.Mvvm.Core
         public string CSName { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
         public DBTypeEnum DBType { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
         public bool IsDebug { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+        public bool EnableSensitiveQueryLogging { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
         public string? CurrentUserCode { get; set; }
 
         public void AddEntity<T>(T entity) where T : TopBasePoco

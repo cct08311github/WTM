@@ -253,6 +253,7 @@ namespace WalkingTec.Mvvm.Core.Test
             // ── IDataContext surface ─────────────────────────────────────
             bool IDataContext.IsFake { get; set; } = true;
             bool IDataContext.IsDebug { get; set; }
+            bool IDataContext.EnableSensitiveQueryLogging { get; set; }
             string? IDataContext.CurrentUserCode { get; set; }
             string? IDataContext.TenantCode => null;
             DBTypeEnum IDataContext.DBType { get => DBTypeEnum.Memory; set { } }

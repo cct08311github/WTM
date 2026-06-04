@@ -339,6 +339,7 @@ namespace WalkingTec.Mvvm.Core.Test.Support
 
         bool IDataContext.IsFake { get; set; }
         bool IDataContext.IsDebug { get; set; }
+        bool IDataContext.EnableSensitiveQueryLogging { get; set; }
         string? IDataContext.CurrentUserCode { get; set; }
         string? IDataContext.TenantCode => null;
         DBTypeEnum IDataContext.DBType { get => DBTypeEnum.SQLite; set { } }
