@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Extensions;
@@ -57,6 +58,11 @@ namespace WalkingTec.Mvvm.Mvc
         public string ModelNS => SelectedModel?.Split(',').FirstOrDefault()?.Split('.').SkipLast(1).ToSepratedString(seperator: ".");
         [Display(Name = "Codegen.ModuleName")]
         [Required(ErrorMessage = "Validate.{0}required")]
+        // Prevent code/JSON injection: allow Unicode letters (covers CJK, Latin, etc.),
+        // Unicode digits, underscores, hyphens, and literal spaces (U+0020 only, not \s,
+        // to exclude newlines/tabs). \p{L} and \p{N} accept CJK module names like "用户管理"
+        // while still blocking quotes, backslashes, angle-brackets and other injection chars.
+        [RegularExpression(@"^[\p{L}\p{N}_\- ]+$", ErrorMessage = "Codegen.ModuleNameInvalid")]
         public string ModuleName { get; set; }
         [RegularExpression("^[A-Za-z_]+$", ErrorMessage = "Codegen.EnglishOnly")]
         public string Area { get; set; }
@@ -474,12 +480,23 @@ namespace WalkingTec.Mvvm.Mvc
                 return $"Warning: Cannot find {modelFileName}. Please manually add [Dimension]/[Measure] attributes.";
             }
 
-            // Validate that the found model file is within the project tree by re-deriving
-            // the path through SafePathHelper.SafeCombine, which performs a canonical
-            // boundary check recognised by static-analysis tools (CodeQL cs/path-injection).
-            string modelFileDir = Path.GetDirectoryName(modelFilePath)!;
-            string modelFileNameOnly = Path.GetFileName(modelFilePath);
-            modelFilePath = SafePathHelper.SafeCombine(modelFileDir, modelFileNameOnly);
+            // Verify that the resolved model file is contained within MainDir.
+            // FindModelFile searches AllDirectories up to 5 levels ABOVE MainDir, so a
+            // same-named .cs file anywhere in the solution tree can be returned.
+            // SafeCombine anchored to the found file's own directory would not detect this;
+            // we must compare canonical paths against MainDir directly.
+            string canonicalMainDir = Path.GetFullPath(MainDir);
+            string canonicalModelFile = Path.GetFullPath(modelFilePath);
+            // Ensure separator-terminated prefix so "/foobar" does not match "/foo"
+            string mainDirPrefix = canonicalMainDir.EndsWith(Path.DirectorySeparatorChar)
+                ? canonicalMainDir
+                : canonicalMainDir + Path.DirectorySeparatorChar;
+            if (!canonicalModelFile.StartsWith(mainDirPrefix, StringComparison.Ordinal)
+                && !string.Equals(canonicalModelFile, canonicalMainDir, StringComparison.Ordinal))
+            {
+                return $"Error: Model file '{canonicalModelFile}' is outside the project root '{canonicalMainDir}'. " +
+                       "Please manually add [Dimension]/[Measure] attributes.";
+            }
 
             string content = File.ReadAllText(modelFilePath, Encoding.UTF8);
             string originalContent = content;
@@ -609,6 +626,33 @@ namespace WalkingTec.Mvvm.Mvc
             return System.Text.RegularExpressions.Regex.Replace(input, @"[^a-zA-Z0-9_\-\.]", "");
         }
 
+        /// <summary>
+        /// Returns a JSON-safe string value (without surrounding quotes) for use inside
+        /// a double-quoted JSON string literal. Defense-in-depth: the [RegularExpression]
+        /// attribute on ModuleName is the primary gate; this escaping handles any value
+        /// that reaches this code path at runtime.
+        /// </summary>
+        private static string EscapeForJson(string? input)
+        {
+            if (input is null) return "";
+            // JsonSerializer.Serialize produces a JSON string including outer quotes; strip them.
+            string serialized = JsonSerializer.Serialize(input);
+            return serialized.Length >= 2
+                ? serialized[1..^1]  // strip leading and trailing '"'
+                : "";
+        }
+
+        /// <summary>
+        /// Returns a JS-safe string value for use inside a single-quoted JS string literal.
+        /// Escapes backslash and single-quote characters.
+        /// </summary>
+        private static string EscapeForJsSingleQuoted(string? input)
+        {
+            if (input is null) return "";
+            // Backslash must be escaped first to avoid double-escaping.
+            return input.Replace("\\", "\\\\").Replace("'", "\\'");
+        }
+
         public void DoGen()
         {
             // All file-write paths that incorporate user-supplied segments (ModelName, Area)
@@ -690,9 +734,10 @@ namespace WalkingTec.Mvvm.Mvc
                     {
                         if (UI == UIEnum.React)
                         {
+                            // EscapeForJsSingleQuoted: defense-in-depth; [RegularExpression] on ModuleName is the primary gate.
                             index = index.Replace("/**WTM**/", $@"
 , {ModelName.ToLower()}: {{
-        name: '{ModuleName.ToLower()}',
+        name: '{EscapeForJsSingleQuoted(ModuleName.ToLower())}',
         path: '/{ModelName.ToLower()}',
         controller: '{ControllerNs},{ModelName}',
         component: React.lazy(() => import('./{ModelName.ToLower()}'))
@@ -702,9 +747,10 @@ namespace WalkingTec.Mvvm.Mvc
                         }
                         if (UI == UIEnum.VUE)
                         {
+                            // EscapeForJsSingleQuoted: defense-in-depth; [RegularExpression] on ModuleName is the primary gate.
                             index = index.Replace("/**WTM**/", $@"
 , {ModelName.ToLower()}: {{
-    name: '{ModuleName.ToLower()}',
+    name: '{EscapeForJsSingleQuoted(ModuleName.ToLower())}',
     path: '/{ModelName.ToLower()}',
     controller: '{ControllerNs},{ModelName}'
     }}
@@ -724,11 +770,12 @@ namespace WalkingTec.Mvvm.Mvc
                         if (menu.Contains($@"""Url"": ""/{ModelName.ToLower()}""") == false)
                         {
                             var i = menu.LastIndexOf("}");
+                            // EscapeForJson: defense-in-depth; [RegularExpression] on ModuleName is the primary gate.
                             menu = menu.Insert(i + 1, $@"
 ,{{
     ""Id"": ""{Guid.NewGuid()}"",
     ""ParentId"": null,
-    ""Text"": ""{ModuleName.ToLower()}"",
+    ""Text"": ""{EscapeForJson(ModuleName.ToLower())}"",
     ""Url"": ""/{ModelName.ToLower()}""
     }}
 ");
@@ -745,11 +792,12 @@ namespace WalkingTec.Mvvm.Mvc
                         if (menu.Contains($@"""Url"": ""/{ModelName.ToLower()}""") == false)
                         {
                             var i = menu.LastIndexOf("}");
+                            // EscapeForJson: defense-in-depth; [RegularExpression] on ModuleName is the primary gate.
                             menu = menu.Insert(i + 1, $@"
 ,{{
     ""Id"": ""{Guid.NewGuid()}"",
     ""ParentId"": null,
-    ""Text"": ""{ModuleName.ToLower()}"",
+    ""Text"": ""{EscapeForJson(ModuleName.ToLower())}"",
     ""Url"": ""/{ModelName.ToLower()}""
     }}
 ");

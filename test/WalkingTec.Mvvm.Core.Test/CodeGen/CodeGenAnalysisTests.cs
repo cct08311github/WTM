@@ -1,6 +1,8 @@
 using System;
-using System.IO;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
+using System.IO;
+using System.Linq;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Mvc;
@@ -383,6 +385,201 @@ namespace TestApp.Models
                 _mainDir = mainDir,
                 SelectedModel = $"TestApp.Models.{modelName}, TestAssembly"
             };
+        }
+
+        // ---------------------------------------------------------------
+        // Bug #135 — M26: InjectAnalysisAttributes write-boundary containment
+        // ---------------------------------------------------------------
+
+        /// <summary>
+        /// M26: A same-named .cs file placed ABOVE MainDir (reachable by FindModelFile's
+        /// AllDirectories + 5-level climb) must be rejected with an error message rather
+        /// than written-to.  This was the bug: SafeCombine was anchored to the discovered
+        /// file's OWN directory, not to MainDir, so out-of-tree files slipped through.
+        /// </summary>
+        [TestMethod]
+        public void InjectAnalysisAttributes_RejectsFileOutsideMainDir()
+        {
+            // Arrange:
+            //   <root>/
+            //     Attacker.cs    ← same name as model, BUT outside MainDir
+            //     MainDir/       ← the write root (no matching file here)
+            var root = Path.Combine(Path.GetTempPath(), "wtm_m26_boundary_" + Guid.NewGuid().ToString("N")[..8]);
+            var mainDir = Path.Combine(root, "MainDir");
+            Directory.CreateDirectory(mainDir);
+
+            // Place the target file one level ABOVE MainDir — FindModelFile will find it
+            // when it climbs up from MainDir.
+            var attackerFilePath = Path.Combine(root, "Attacker.cs");
+            var attackerContent = @"using System;
+namespace Attacker
+{
+    public class Attacker { public string Name { get; set; } }
+}";
+            File.WriteAllText(attackerFilePath, attackerContent);
+
+            var vm = new CodeGenVM
+            {
+                EnableAnalysis = true,
+                FieldInfos = new List<FieldInfo>
+                {
+                    new FieldInfo { FieldName = "Name", IsDimensionField = true }
+                },
+                _mainDir = mainDir,
+                SelectedModel = "Attacker.Attacker, TestAssembly"  // model name = "Attacker"
+            };
+
+            try
+            {
+                // Act
+                var result = vm.InjectAnalysisAttributes();
+
+                // Assert: must not succeed silently; must report an error indicating the
+                // file is outside the project root.
+                Assert.IsTrue(
+                    result.StartsWith("Error:", StringComparison.Ordinal),
+                    $"Expected an error indicating out-of-tree file, got: '{result}'");
+
+                // The attacker file must NOT have been modified.
+                var afterContent = File.ReadAllText(attackerFilePath);
+                Assert.AreEqual(attackerContent, afterContent,
+                    "The out-of-tree .cs file must not have been written by InjectAnalysisAttributes.");
+            }
+            finally
+            {
+                if (Directory.Exists(root))
+                    Directory.Delete(root, true);
+            }
+        }
+
+        /// <summary>
+        /// M26 boundary — file legitimately inside a subdirectory of MainDir: must be found
+        /// and written (happy-path boundary test).
+        /// </summary>
+        [TestMethod]
+        public void InjectAnalysisAttributes_AcceptsFileInsideMainDir()
+        {
+            // Arrange: model file lives in a Models sub-folder of MainDir.
+            var root = Path.Combine(Path.GetTempPath(), "wtm_m26_inside_" + Guid.NewGuid().ToString("N")[..8]);
+            var mainDir = Path.Combine(root, "MainDir");
+            var modelsDir = Path.Combine(mainDir, "Models");
+            Directory.CreateDirectory(modelsDir);
+
+            var modelContent = @"using System;
+namespace TestApp.Models
+{
+    public class Widget : BasePoco
+    {
+        public string Color { get; set; }
+        public decimal Price { get; set; }
+    }
+}";
+            File.WriteAllText(Path.Combine(modelsDir, "Widget.cs"), modelContent);
+
+            var vm = CreateCodeGenVM("Widget", mainDir, new List<FieldInfo>
+            {
+                new FieldInfo { FieldName = "Color", IsDimensionField = true },
+                new FieldInfo { FieldName = "Price", IsMeasureField = true }
+            });
+
+            try
+            {
+                // Act
+                var result = vm.InjectAnalysisAttributes();
+
+                // Assert: must succeed and report injection.
+                Assert.IsTrue(result.Contains("injected", StringComparison.OrdinalIgnoreCase),
+                    $"Expected success message containing 'injected', got: '{result}'");
+
+                var written = File.ReadAllText(Path.Combine(modelsDir, "Widget.cs"));
+                Assert.IsTrue(written.Contains("[Dimension]"), "Should contain [Dimension]");
+                Assert.IsTrue(written.Contains("[Measure]"), "Should contain [Measure]");
+            }
+            finally
+            {
+                if (Directory.Exists(root))
+                    Directory.Delete(root, true);
+            }
+        }
+
+        // ---------------------------------------------------------------
+        // Bug #135 — M27: ModuleName [RegularExpression] validation
+        // ---------------------------------------------------------------
+
+        /// <summary>
+        /// M27: ModuleName property must carry a [RegularExpression] attribute that rejects
+        /// characters capable of injecting content into JS object literals and JSON strings
+        /// (e.g. single-quote, double-quote, backslash, angle-bracket).
+        /// </summary>
+        [TestMethod]
+        public void ModuleName_RegularExpression_Attribute_RejectsInjectionCharacters()
+        {
+            // Verify the attribute is present on the property.
+            var prop = typeof(CodeGenVM).GetProperty(nameof(CodeGenVM.ModuleName));
+            Assert.IsNotNull(prop, "ModuleName property must exist.");
+
+            var regexAttr = prop.GetCustomAttributes(typeof(RegularExpressionAttribute), inherit: false)
+                                .Cast<RegularExpressionAttribute>()
+                                .FirstOrDefault();
+            Assert.IsNotNull(regexAttr,
+                "ModuleName must carry [RegularExpression] to prevent JS/JSON injection.");
+
+            // Values that must FAIL validation (each contains an injection-capable character).
+            string[] badValues = [
+                "'; alert(1); //",          // JS single-quote injection
+                @"""text"",""evil"":""val", // JSON double-quote injection
+                @"foo\bar",                  // backslash
+                "<script>alert(1)</script>", // angle-bracket HTML/JS
+                "abc\ndef",                  // newline
+            ];
+
+            foreach (var bad in badValues)
+            {
+                var ctx = new ValidationContext(new object()) { MemberName = "ModuleName" };
+                var result = regexAttr.GetValidationResult(bad, ctx);
+                Assert.IsNotNull(result,
+                    $"ModuleName value '{bad}' should fail [RegularExpression] validation but was accepted.");
+            }
+        }
+
+        /// <summary>
+        /// M27: Valid ModuleName values (letters, digits, underscores, hyphens, spaces)
+        /// must pass the [RegularExpression] validation — i.e., the fix must not break
+        /// legitimate module names that include spaces, hyphens, or CJK characters.
+        /// WTM is a Chinese-origin framework; module names like "用户管理" are common and
+        /// must be accepted. The regex uses \p{L}\p{N} (Unicode letter/digit categories)
+        /// rather than [A-Za-z0-9] to allow CJK and other Unicode scripts.
+        /// </summary>
+        [TestMethod]
+        public void ModuleName_RegularExpression_Attribute_AcceptsValidNames()
+        {
+            var prop = typeof(CodeGenVM).GetProperty(nameof(CodeGenVM.ModuleName));
+            Assert.IsNotNull(prop, "ModuleName property must exist.");
+
+            var regexAttr = prop.GetCustomAttributes(typeof(RegularExpressionAttribute), inherit: false)
+                                .Cast<RegularExpressionAttribute>()
+                                .FirstOrDefault();
+            Assert.IsNotNull(regexAttr, "ModuleName must carry [RegularExpression].");
+
+            // Values that must PASS validation.
+            string[] goodValues = [
+                "Student",
+                "OrderManagement",
+                "My Module",         // space allowed
+                "HR-Admin",          // hyphen allowed
+                "Module_01",         // underscore and digit
+                "A",
+                "用户管理",           // CJK — WTM is Chinese-origin; this must pass
+                "订单 管理",          // CJK with space
+            ];
+
+            foreach (var good in goodValues)
+            {
+                var ctx = new ValidationContext(new object()) { MemberName = "ModuleName" };
+                var result = regexAttr.GetValidationResult(good, ctx);
+                Assert.IsNull(result,
+                    $"ModuleName value '{good}' should pass [RegularExpression] validation but was rejected.");
+            }
         }
     }
 }

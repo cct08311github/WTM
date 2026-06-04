@@ -235,6 +235,7 @@
   was registered, evicting the just-stored entry immediately; the service now
   checks `token.IsCancellationRequested` before registering the token and
   falls back to the absolute TTL expiry.
+- **CodeGen: InjectAnalysisAttributes write-boundary + ModuleName injection** (#135): `InjectAnalysisAttributes` previously verified the discovered model file via `SafeCombine` anchored to the file's own directory rather than `MainDir`, allowing `FindModelFile`'s 5-level climb to return and overwrite a same-named `.cs` file outside the project tree. Fixed by comparing the canonical resolved path against `MainDir` before any read/write. `ModuleName` lacked input validation and was interpolated raw into generated JS object literals and JSON menu strings; fixed with `[RegularExpression]` (letters, digits, underscores, hyphens, spaces only) and defense-in-depth `EscapeForJson`/`EscapeForJsSingleQuoted` helpers at each interpolation site.
 ### Security
 
 - **`GetRemoteIpAddress` no longer trusts `X-Forwarded-For` by default** (#114):
