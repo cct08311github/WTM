@@ -14,9 +14,16 @@ progress.md
 # Internal infrastructure docs (private registry / internal CI quirks)
 docs/ci-operations.md
 docs/gitea-packages.md
+# Internal-registry getting-started (NuGet source config for the private feed;
+# references the private registry + GITEA_USERNAME/PAT and links to the excluded
+# gitea-packages.md). Public users install from public package sources instead.
+docs/getting-started.md
 
-# Internal helper scripts
+# Internal helper scripts (private-registry release tooling — also carry the
+# internal hostname/token names and are NOT covered by the sanitize .sed extension set)
 scripts/publish-to-gitea.sh
+scripts/release-gitea-package.sh
+test/release-script-tests.sh
 
 # Historical sprint planning / specs (kept for maintainer history only)
 docs/archive/
