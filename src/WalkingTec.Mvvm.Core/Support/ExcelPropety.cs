@@ -7,6 +7,7 @@ using NPOI.XSSF.UserModel;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
+using System.Globalization;
 using System.Linq;
 using System.Linq.Expressions;
 using WalkingTec.Mvvm.Core.Extensions;
@@ -189,8 +190,8 @@ namespace WalkingTec.Mvvm.Core
                     dataValidation.CreatePromptBox(L("Sys.PleaseInputNumberFormat"), L("Sys.DataRange", MinValueOrLength, MaxValuseOrLength));
                     break;
                 case ColumnDataType.Float:
-                    this.MinValueOrLength = string.IsNullOrEmpty(this.MinValueOrLength) ? decimal.MinValue.ToString() : this.MinValueOrLength;
-                    this.MaxValuseOrLength = string.IsNullOrEmpty(this.MaxValuseOrLength) ? decimal.MaxValue.ToString() : this.MaxValuseOrLength;
+                    this.MinValueOrLength = string.IsNullOrEmpty(this.MinValueOrLength) ? decimal.MinValue.ToString(CultureInfo.InvariantCulture) : this.MinValueOrLength;
+                    this.MaxValuseOrLength = string.IsNullOrEmpty(this.MaxValuseOrLength) ? decimal.MaxValue.ToString(CultureInfo.InvariantCulture) : this.MaxValuseOrLength;
                     dvConstraint = (XSSFDataValidationConstraint)dvHelper.CreateNumericConstraint(ValidationType.DECIMAL, OperatorType.BETWEEN, this.MinValueOrLength, this.MaxValuseOrLength);
                     dataValidation = (XSSFDataValidation)dvHelper.CreateValidation(dvConstraint, CellRangeList);
                     dataValidation.CreateErrorBox(L("Sys.Error"), L("Sys.PleaseInputDecimal"));
@@ -287,7 +288,7 @@ namespace WalkingTec.Mvvm.Core
                     case ColumnDataType.Date:
                     case ColumnDataType.DateTime:
                         DateTime tryDateTimeResult;
-                        if (!DateTime.TryParse(value, out tryDateTimeResult))
+                        if (!DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out tryDateTimeResult))
                         {
                             err = new ErrorMessage { Index = rowIndex, Message = L("Sys.{0}formaterror", this.ColumnName) };
                         }
@@ -303,7 +304,7 @@ namespace WalkingTec.Mvvm.Core
                         break;
                     case ColumnDataType.Float:
                         decimal tryDecimalResult;
-                        if (!decimal.TryParse(value, out tryDecimalResult))
+                        if (!decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out tryDecimalResult))
                         {
                             err = new ErrorMessage { Index = rowIndex, Message = L("Sys.{0}formaterror", this.ColumnName) };
                         }

@@ -40,6 +40,8 @@
     connection. Fixed with a `try/finally` ensuring `Close()` always runs when the connection
     was opened by `Run()`.
 
+- **BaseImportVM / ExcelPropety: workbook memory leak, wrong error row number, and culture-sensitive decimal/date parse fixed** (#150): `BaseImportVM` now implements `IDisposable` and disposes its `XSSFWorkbook` field on dispose; the redundant placeholder `new XSSFWorkbook()` allocation in `SetTemplateData` was removed; `GetErrorJson` uses a local `using var` workbook instead of overwriting the field. `SetEntityData` now derives `rowIndex` from `item.ExcelIndex` so `FormatData`/`FormatSingleData` errors report the correct Excel row instead of always reporting row 2. `ExcelPropety.ValueValidity` passes `CultureInfo.InvariantCulture` to `decimal.TryParse` and `DateTime.TryParse` so decimal values such as `1.5` and ISO dates parse correctly regardless of server locale; `SetColumnFormat` likewise uses `InvariantCulture` for `decimal.MinValue/MaxValue.ToString()`.
+
 ### Security
 
 - **Exception/connection-string information leak fixed in four production paths** (#124):

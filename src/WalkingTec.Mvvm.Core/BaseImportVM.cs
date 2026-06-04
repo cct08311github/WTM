@@ -52,10 +52,21 @@ namespace WalkingTec.Mvvm.Core
     /// </summary>
     /// <typeparam name="T">导入模版类</typeparam>
     /// <typeparam name="P">导入的Model类</typeparam>
-    public class BaseImportVM<T, P> : BaseVM, IBaseImport<T>
+    public class BaseImportVM<T, P> : BaseVM, IBaseImport<T>, IDisposable
         where T : BaseTemplateVM, new()
         where P : TopBasePoco, new()
     {
+        private bool _disposed;
+
+        /// <inheritdoc/>
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            xssfworkbook?.Close();
+            xssfworkbook = null;
+        }
+
         #region 字段、属性
         /// <summary>
         /// 上传文件的Id，方便导入等操作中进行绑定，这类操作需要上传文件但不需要记录在数据库中，所以Model层中没有文件Id的字段
@@ -250,7 +261,6 @@ namespace WalkingTec.Mvvm.Core
             try
             {
                 TemplateData = [];
-                xssfworkbook = new XSSFWorkbook();
 
                 //【CHECK】上传附件的ID为空
                 if (UploadFileId == null)
@@ -478,7 +488,9 @@ namespace WalkingTec.Mvvm.Core
             //循环Excel中的数据
             foreach (var item in TemplateData!)
             {
-                int rowIndex = 2;
+                // Derive the real Excel row number from the template item so that error
+                // messages in FormatData/FormatSingleData report the correct row (#150 L4).
+                int rowIndex = (int)item.ExcelIndex;
                 bool isMainData = false;
 
                 //主表信息
@@ -1486,7 +1498,9 @@ namespace WalkingTec.Mvvm.Core
                 }
                 var fp = Wtm!.ServiceProvider.GetRequiredService<WtmFileProvider>();
                 fa = fp.GetFile(UploadFileId!, true, DC!);
-                xssfworkbook = new XSSFWorkbook(fa!.DataStream);
+                // Use a local workbook so GetErrorJson does not overwrite (and leak) the
+                // field-level xssfworkbook that SetTemplateData already opened. (#150 L3)
+                using var localWb = new XSSFWorkbook(fa!.DataStream);
                 fa!.DataStream?.Dispose();
                 List<FieldInfo> propetys = [.. Template.GetType().GetFields().Where(x => x.FieldType == typeof(ExcelPropety))];
                 List<ExcelPropety> excelPropetys = [];
@@ -1502,9 +1516,9 @@ namespace WalkingTec.Mvvm.Core
                 {
                     columnCount = columnCount + dynamicColumn.DynamicColumns.Count - 1;
                 }
-                ISheet sheet = xssfworkbook.GetSheetAt(0);
-                var errorStyle = xssfworkbook.CreateCellStyle();
-                IFont f = xssfworkbook.CreateFont();
+                ISheet sheet = localWb.GetSheetAt(0);
+                var errorStyle = localWb.CreateCellStyle();
+                IFont f = localWb.CreateFont();
                 f.Color = HSSFColor.Red.Index;
                 errorStyle.SetFont(f);
                 errorStyle.IsLocked = true;
@@ -1518,7 +1532,7 @@ namespace WalkingTec.Mvvm.Core
                     }
                 }
                 MemoryStream ms = new MemoryStream();
-                xssfworkbook.Write(ms);
+                localWb.Write(ms);
                 ms.Position = 0;
 
                 var newfile = fp.Upload("Error-" + fa!.FileName, ms.Length, ms);
