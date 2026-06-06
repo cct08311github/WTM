@@ -47,6 +47,10 @@ public class RestWidgetDataSource : IWidgetDataSource
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IMemoryCache _cache;
 
+    // Shared options for case-insensitive JSON deserialization (avoids per-call allocation).
+    private static readonly JsonSerializerOptions _caseInsensitiveOptions =
+        new() { PropertyNameCaseInsensitive = true };
+
     /// <summary>Named HttpClient key — registered with <c>AllowAutoRedirect=false</c> and
     /// <c>ConnectCallback = <see cref="PinnedConnectAsync"/></c>.</summary>
     public const string HttpClientName = "WtmRestWidget";
@@ -116,7 +120,7 @@ public class RestWidgetDataSource : IWidgetDataSource
         {
             opts = JsonSerializer.Deserialize<RestWidgetDataSourceOptions>(
                 json,
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                _caseInsensitiveOptions)
                 ?? throw new InvalidOperationException("REST widget options JSON deserialized to null.");
         }
         catch (JsonException ex)
@@ -407,7 +411,10 @@ public class RestWidgetDataSource : IWidgetDataSource
             }
             limited.Write(buffer, 0, read);
         }
-        return Encoding.UTF8.GetString(limited.ToArray());
+        // Rewind and use StreamReader to decode UTF-8 without allocating an intermediate byte[].
+        limited.Position = 0;
+        using var reader = new StreamReader(limited, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: -1, leaveOpen: true);
+        return await reader.ReadToEndAsync(ct).ConfigureAwait(false);
     }
 
     // ── JSON parsing ─────────────────────────────────────────────────────

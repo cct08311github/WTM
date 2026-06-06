@@ -138,19 +138,23 @@ namespace WalkingTec.Mvvm.Core.Analysis
         internal static double?[] PredictLinear(double?[] series, int periods)
         {
             var output = new double?[periods];
-            // 取出非 null 點並用其原始 index 為 x
-            var pts = new List<(double X, double Y)>();
+            // Single-pass accumulation — no intermediate List<> or 4 LINQ Sum passes.
+            // Collects (x, y) stats directly while iterating the series once.
+            int n = 0;
+            double sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
             for (int i = 0; i < series.Length; i++)
             {
-                if (series[i].HasValue) { pts.Add((i, series[i]!.Value)); }
+                if (!series[i].HasValue) continue;
+                double x = i;
+                double y = series[i]!.Value;
+                n++;
+                sumX += x;
+                sumY += y;
+                sumXY += x * y;
+                sumXX += x * x;
             }
-            if (pts.Count < 2) { return output; }
+            if (n < 2) { return output; }
 
-            int n = pts.Count;
-            double sumX = pts.Sum(p => p.X);
-            double sumY = pts.Sum(p => p.Y);
-            double sumXY = pts.Sum(p => p.X * p.Y);
-            double sumXX = pts.Sum(p => p.X * p.X);
             double denom = n * sumXX - sumX * sumX;
             if (denom == 0)
             {

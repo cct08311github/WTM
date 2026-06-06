@@ -26,6 +26,17 @@ public class JsonFileDashboardService : IDashboardService
     private volatile bool _initialized;
     private readonly SemaphoreSlim _initLock = new(1, 1);
 
+    // ── Definition cache: file path → (DashboardDefinition, LastWriteTimeUtc) ──
+    // Avoids repeated file reads for the same dashboard when the file has not changed.
+    // Keyed by resolved file path; staleness guard uses LastWriteTimeUtc.
+    // Invalidated on Create, Update, and Delete so readers never see stale data.
+    private readonly ConcurrentDictionary<string, (DashboardDefinition Def, DateTimeOffset Stamp)>
+        _defCache = new();
+
+    // Shared options for the legacy REST-options JSON strip path (case-insensitive field matching).
+    private static readonly JsonSerializerOptions _caseInsensitiveOptions =
+        new() { PropertyNameCaseInsensitive = true };
+
     public JsonFileDashboardService(
         IOptions<DashboardOptions> options,
         IEnumerable<IWidgetDataSource> dataSources,
@@ -136,13 +147,27 @@ public class JsonFileDashboardService : IDashboardService
         var path = GetFilePath(dashboardId, tenantId);
         if (!File.Exists(path)) return null;
 
+        // Fast-path: return cached definition when the file has not changed.
+        var lastWrite = new DateTimeOffset(new FileInfo(path).LastWriteTimeUtc, TimeSpan.Zero);
+        if (_defCache.TryGetValue(path, out var cached) && cached.Stamp == lastWrite)
+            return cached.Def;
+
         var lockObj = GetLock(dashboardId);
         await lockObj.WaitAsync();
         try
         {
             if (!File.Exists(path)) return null;
+
+            // Re-check stamp under lock in case another thread just refreshed the cache.
+            lastWrite = new DateTimeOffset(new FileInfo(path).LastWriteTimeUtc, TimeSpan.Zero);
+            if (_defCache.TryGetValue(path, out cached) && cached.Stamp == lastWrite)
+                return cached.Def;
+
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            return await JsonSerializer.DeserializeAsync<DashboardDefinition>(fs);
+            var def = await JsonSerializer.DeserializeAsync<DashboardDefinition>(fs);
+            if (def != null)
+                _defCache[path] = (def, lastWrite);
+            return def;
         }
         catch (Exception ex)
         {
@@ -224,6 +249,9 @@ public class JsonFileDashboardService : IDashboardService
                 throw;
             }
 
+            // Invalidate definition cache so the next GetAsync reads the new file.
+            _defCache.TryRemove(path, out _);
+
             _index[dashboard.Id] = new DashboardSummary
             {
                 Id = dashboard.Id,
@@ -284,6 +312,9 @@ public class JsonFileDashboardService : IDashboardService
                 throw;
             }
 
+            // Invalidate definition cache so the next GetAsync reads the updated file.
+            _defCache.TryRemove(path, out _);
+
             _index[dashboard.Id] = new DashboardSummary
             {
                 Id = dashboard.Id,
@@ -321,6 +352,8 @@ public class JsonFileDashboardService : IDashboardService
             {
                 File.Delete(path);
             }
+            // Invalidate definition cache for deleted dashboard.
+            _defCache.TryRemove(path, out _);
             _index.TryRemove(dashboardId, out _);
         }
         finally
@@ -408,7 +441,7 @@ public class JsonFileDashboardService : IDashboardService
                     {
                         var requestOpts = JsonSerializer.Deserialize<RestWidgetDataSourceOptions>(
                             requestOptionsJson,
-                            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                            _caseInsensitiveOptions);
                         if (requestOpts != null)
                         {
                             requestOpts.AllowPrivateNetwork = false;

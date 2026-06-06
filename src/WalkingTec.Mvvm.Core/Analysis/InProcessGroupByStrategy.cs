@@ -1,7 +1,9 @@
 #nullable enable
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -19,6 +21,23 @@ namespace WalkingTec.Mvvm.Core.Analysis
         // about the limits class.
         internal static int MaxMaterializeRows => AnalysisLimits.MaxMaterializeRows;
         private static int MaxRows => AnalysisLimits.MaxResultRows;
+
+        // ── Property accessor cache ────────────────────────────────────────────
+        // Keyed by (clrType, propertyName) → PropertyInfo resolved once per type.
+        // PropertyInfo is immutable — safe for concurrent reads without locking.
+        private static readonly ConcurrentDictionary<(Type, string), PropertyInfo> _propCache = new();
+
+        private static PropertyInfo ResolveProperty(Type type, string name)
+        {
+            return _propCache.GetOrAdd((type, name), k =>
+            {
+                var pi = k.Item1.GetProperty(k.Item2);
+                if (pi is null)
+                    throw new InvalidOperationException(
+                        $"Property '{k.Item2}' not found on {k.Item1.Name}.");
+                return pi;
+            });
+        }
 
         public List<Dictionary<string, object?>> Execute<TModel>(
             IQueryable<TModel> query,
@@ -48,12 +67,35 @@ namespace WalkingTec.Mvvm.Core.Analysis
             return GroupAndAggregate(items, req);
         }
 
+        // ── MeasureAccumulator: single-pass struct to collect sum/count/max/min ───
+        private struct MeasureAccumulator
+        {
+            public decimal Sum;
+            public int Count;      // non-null numeric rows
+            public decimal Max;
+            public decimal Min;
+            public bool HasValue;  // true once at least one non-null row is seen
+            // DistinctCount uses a HashSet; null-safe via Where in caller
+            public HashSet<object?>? DistinctSet;
+        }
+
         private static List<Dictionary<string, object?>> GroupAndAggregate<TModel>(
             List<TModel> items,
             AnalysisQueryRequest req)
         {
+            // Pre-resolve dimension PropertyInfos once (avoids per-row GetProperty calls
+            // inside BuildGroupKey and the key-building lambda).
+            var dimProps = req.Dimensions
+                .Select(d => ResolveProperty(typeof(TModel), d))
+                .ToArray();
+
+            // Pre-resolve measure PropertyInfos once.
+            var measureProps = req.Measures
+                .Select(m => ResolveProperty(typeof(TModel), m.Field))
+                .ToArray();
+
             List<Dictionary<string, object?>> result = [.. items
-                .GroupBy(row => BuildGroupKey(row, req.Dimensions, req.DimensionHierarchies))
+                .GroupBy(row => BuildGroupKey(row, req.Dimensions, req.DimensionHierarchies, dimProps))
                 .Take(MaxRows + 1)
                 .Select(g =>
                 {
@@ -65,60 +107,90 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         dict[req.Dimensions[i]] = DecodeKeyPart(raw);
                     }
 
-                    foreach (var m in req.Measures)
+                    // Single-pass accumulation over the group rows.
+                    int measureCount = req.Measures.Count;
+                    var accumulators = new MeasureAccumulator[measureCount];
+                    // Initialise DistinctSet only for DistinctCount measures.
+                    for (int mi = 0; mi < measureCount; mi++)
                     {
-                        var propInfo = typeof(TModel).GetProperty(m.Field);
-                        if (propInfo is null)
-                            throw new InvalidOperationException($"Property '{m.Field}' not found on {typeof(TModel).Name}.");
+                        if (req.Measures[mi].Func == AggregateFunc.DistinctCount)
+                            accumulators[mi].DistinctSet = new HashSet<object?>();
+                    }
 
-                        // DistinctCount works on the raw value set — no
-                        // numeric conversion required, since "how many
-                        // unique values" is meaningful regardless of CLR
-                        // type. Computing it before the decimal pipeline
-                        // also lets it tolerate non-numeric values that
-                        // would otherwise throw at conversion.
+                    foreach (var row in g)
+                    {
+                        for (int mi = 0; mi < measureCount; mi++)
+                        {
+                            var m = req.Measures[mi];
+                            var rawVal = measureProps[mi].GetValue(row);
+
+                            if (m.Func == AggregateFunc.DistinctCount)
+                            {
+                                if (rawVal != null)
+                                    accumulators[mi].DistinctSet!.Add(rawVal);
+                                continue;
+                            }
+
+                            if (rawVal == null) continue;
+
+                            decimal dec;
+                            try
+                            {
+                                dec = Convert.ToDecimal(rawVal);
+                            }
+                            catch (Exception ex) when (ex is FormatException
+                                                     || ex is InvalidCastException
+                                                     || ex is OverflowException)
+                            {
+                                throw new InvalidOperationException(
+                                    $"欄位 '{m.Field}' 包含無法轉換為數值的值" +
+                                    $"（型別 {rawVal.GetType().Name}，值 '{rawVal}'）。" +
+                                    "請確認 [Measure] 僅標記數值型別屬性。", ex);
+                            }
+
+                            ref var acc = ref accumulators[mi];
+                            acc.Sum += dec;
+                            acc.Count++;
+                            if (!acc.HasValue)
+                            {
+                                acc.Max = dec;
+                                acc.Min = dec;
+                                acc.HasValue = true;
+                            }
+                            else
+                            {
+                                if (dec > acc.Max) acc.Max = dec;
+                                if (dec < acc.Min) acc.Min = dec;
+                            }
+                        }
+                    }
+
+                    // Convert accumulators to final aggregate values.
+                    for (int mi = 0; mi < measureCount; mi++)
+                    {
+                        var m = req.Measures[mi];
+                        ref var acc = ref accumulators[mi];
+
+                        decimal? aggValue;
                         if (m.Func == AggregateFunc.DistinctCount)
                         {
-                            int distinct = g
-                                .Select(row => propInfo.GetValue(row))
-                                .Where(v => v != null)
-                                .Distinct()
-                                .Count();
-                            dict[$"{m.Field}_{m.Func}"] = (decimal?)distinct;
-                            continue;
+                            aggValue = (decimal?)acc.DistinctSet!.Count;
                         }
-
-                        List<decimal?> numericValues = [.. g
-                            .Select(row => propInfo.GetValue(row))
-                            .Where(v => v != null)
-                            .Select(v =>
-                            {
-                                try
-                                {
-                                    return Convert.ToDecimal(v);
-                                }
-                                catch (Exception ex) when (ex is FormatException
-                                                         || ex is InvalidCastException
-                                                         || ex is OverflowException)
-                                {
-                                    throw new InvalidOperationException(
-                                        $"欄位 '{m.Field}' 包含無法轉換為數值的值" +
-                                        $"（型別 {v!.GetType().Name}，值 '{v}'）。" +
-                                        "請確認 [Measure] 僅標記數值型別屬性。", ex);
-                                }
-                            })];
-
-                        decimal? aggValue = m.Func switch
+                        else
                         {
-                            AggregateFunc.Sum   => numericValues.Count == 0 ? 0m : numericValues.Sum(),
-                            AggregateFunc.Count => numericValues.Count,
-                            AggregateFunc.Avg   => numericValues.Count == 0 ? (decimal?)null : numericValues.Average(),
-                            AggregateFunc.Max   => numericValues.Count == 0 ? (decimal?)null : numericValues.Max(),
-                            AggregateFunc.Min   => numericValues.Count == 0 ? (decimal?)null : numericValues.Min(),
-                            _ => throw new NotSupportedException($"Unsupported func {m.Func}")
-                        };
+                            aggValue = m.Func switch
+                            {
+                                AggregateFunc.Sum   => acc.Count == 0 ? 0m : acc.Sum,
+                                AggregateFunc.Count => (decimal?)acc.Count,
+                                AggregateFunc.Avg   => acc.Count == 0 ? (decimal?)null : acc.Sum / acc.Count,
+                                AggregateFunc.Max   => acc.HasValue ? (decimal?)acc.Max : (decimal?)null,
+                                AggregateFunc.Min   => acc.HasValue ? (decimal?)acc.Min : (decimal?)null,
+                                _ => throw new NotSupportedException($"Unsupported func {m.Func}")
+                            };
+                        }
                         dict[$"{m.Field}_{m.Func}"] = aggValue;
                     }
+
                     return dict;
                 })];
             return result;
@@ -127,12 +199,11 @@ namespace WalkingTec.Mvvm.Core.Analysis
         private static string BuildGroupKey<TModel>(
             TModel row,
             List<string> dimensions,
-            Dictionary<string, DateHierarchy>? hierarchies)
-            => string.Join('\0', dimensions.Select(d =>
+            Dictionary<string, DateHierarchy>? hierarchies,
+            PropertyInfo[] dimProps)
+            => string.Join('\0', dimensions.Select((d, idx) =>
                {
-                   var propInfo = typeof(TModel).GetProperty(d);
-                   if (propInfo is null)
-                       throw new InvalidOperationException($"Property '{d}' not found on {typeof(TModel).Name}.");
+                   var propInfo = dimProps[idx];
                    var val = propInfo.GetValue(row);
                    if (val == null) return string.Empty;
 

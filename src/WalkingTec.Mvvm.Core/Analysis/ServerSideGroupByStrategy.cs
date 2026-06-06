@@ -1,8 +1,10 @@
 #nullable enable
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -23,6 +25,47 @@ namespace WalkingTec.Mvvm.Core.Analysis
         // single GROUP BY key. These characters never appear in real data, so the key can
         // be split unambiguously after materialization.
         internal const string KeySeparator = "\x01\x02\x03";
+
+        // ── Enumerable aggregate method caches ─────────────────────────────────
+        // Resolved once via typed GetMethod overloads instead of GetMethods().First(predicate).
+        // Closed specialisations (keyed by TModel) are cached in per-method dictionaries.
+        // MethodInfo is immutable — safe for concurrent reads without locking.
+        private static readonly MethodInfo _countWithPredicateOpen =
+            typeof(Enumerable).GetMethods()
+                .First(m => m.Name == nameof(Enumerable.Count)
+                            && m.IsGenericMethod
+                            && m.GetParameters().Length == 2);
+
+        private static readonly MethodInfo _countWithoutPredicateOpen =
+            typeof(Enumerable).GetMethods()
+                .First(m => m.Name == nameof(Enumerable.Count)
+                            && m.IsGenericMethod
+                            && m.GetParameters().Length == 1);
+
+        private static readonly MethodInfo _selectOpen =
+            typeof(Enumerable).GetMethods()
+                .First(m => m.Name == nameof(Enumerable.Select)
+                            && m.IsGenericMethod
+                            && m.GetParameters().Length == 2
+                            && m.GetParameters()[1].ParameterType.GetGenericArguments().Length == 2);
+
+        private static readonly MethodInfo _distinctOpen =
+            typeof(Enumerable).GetMethods()
+                .First(m => m.Name == nameof(Enumerable.Distinct)
+                            && m.IsGenericMethod
+                            && m.GetParameters().Length == 1);
+
+        // Aggregate methods for Sum/Avg/Max/Min with Func<TModel, double?> selector
+        // key: (methodName, TModel) → closed MethodInfo
+        private static readonly ConcurrentDictionary<(string, Type), MethodInfo> _aggMethodCache = new();
+        // Count/Distinct caches keyed by TModel or keyType
+        private static readonly ConcurrentDictionary<Type, MethodInfo> _countWithPredicateCache = new();
+        private static readonly ConcurrentDictionary<Type, MethodInfo> _countWithoutPredicateCache = new();
+        private static readonly ConcurrentDictionary<Type, MethodInfo> _distinctCache = new();
+        // Select<TModel,TKey>: keyed by (TModel, keyType)
+        private static readonly ConcurrentDictionary<(Type, Type), MethodInfo> _selectCache = new();
+        // Count<keyType>(no predicate): keyed by keyType
+        private static readonly ConcurrentDictionary<Type, MethodInfo> _countForDistinctCache = new();
 
         public virtual List<Dictionary<string, object?>> Execute<TModel>(
             IQueryable<TModel> query,
@@ -213,12 +256,9 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     var predicateBody = Expression.NotEqual(propAccess, Expression.Constant(null, propType));
                     var predicate = Expression.Lambda<Func<TModel, bool>>(predicateBody, innerParam);
 
-                    var countWithPredicateMethod = typeof(Enumerable)
-                        .GetMethods()
-                        .First(m => m.Name == nameof(Enumerable.Count)
-                                    && m.IsGenericMethod
-                                    && m.GetParameters().Length == 2)
-                        .MakeGenericMethod(typeof(TModel));
+                    var countWithPredicateMethod = _countWithPredicateCache.GetOrAdd(
+                        typeof(TModel),
+                        t => _countWithPredicateOpen.MakeGenericMethod(t));
 
                     return Expression.Convert(
                         Expression.Call(countWithPredicateMethod, gParam, predicate),
@@ -226,12 +266,9 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 }
                 else
                 {
-                    var countMethod = typeof(Enumerable)
-                        .GetMethods()
-                        .First(m => m.Name == nameof(Enumerable.Count)
-                                    && m.IsGenericMethod
-                                    && m.GetParameters().Length == 1)
-                        .MakeGenericMethod(typeof(TModel));
+                    var countMethod = _countWithoutPredicateCache.GetOrAdd(
+                        typeof(TModel),
+                        t => _countWithoutPredicateOpen.MakeGenericMethod(t));
 
                     return Expression.Convert(
                         Expression.Call(countMethod, gParam),
@@ -252,29 +289,19 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     typeof(Func<,>).MakeGenericType(typeof(TModel), keyType),
                     propAccess, innerParam);
 
-                var selectMethod = typeof(Enumerable)
-                    .GetMethods()
-                    .First(m => m.Name == nameof(Enumerable.Select)
-                                && m.IsGenericMethod
-                                && m.GetParameters().Length == 2
-                                && m.GetParameters()[1].ParameterType.GetGenericArguments().Length == 2)
-                    .MakeGenericMethod(typeof(TModel), keyType);
+                var selectMethod = _selectCache.GetOrAdd(
+                    (typeof(TModel), keyType),
+                    k => _selectOpen.MakeGenericMethod(k.Item1, k.Item2));
                 Expression projected = Expression.Call(selectMethod, gParam, keySelector);
 
-                var distinctMethod = typeof(Enumerable)
-                    .GetMethods()
-                    .First(m => m.Name == nameof(Enumerable.Distinct)
-                                && m.IsGenericMethod
-                                && m.GetParameters().Length == 1)
-                    .MakeGenericMethod(keyType);
+                var distinctMethod = _distinctCache.GetOrAdd(
+                    keyType,
+                    t => _distinctOpen.MakeGenericMethod(t));
                 Expression distinct = Expression.Call(distinctMethod, projected);
 
-                var countMethod = typeof(Enumerable)
-                    .GetMethods()
-                    .First(m => m.Name == nameof(Enumerable.Count)
-                                && m.IsGenericMethod
-                                && m.GetParameters().Length == 1)
-                    .MakeGenericMethod(keyType);
+                var countMethod = _countForDistinctCache.GetOrAdd(
+                    keyType,
+                    t => _countWithoutPredicateOpen.MakeGenericMethod(t));
                 return Expression.Convert(
                     Expression.Call(countMethod, distinct),
                     typeof(double?));
@@ -298,17 +325,19 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 _ => throw new NotSupportedException($"Unsupported aggregate function: {measure.Func}")
             };
 
-            var aggMethod = typeof(Enumerable)
-                .GetMethods()
-                .Where(m => m.Name == methodName && m.GetParameters().Length == 2)
-                .First(m =>
-                {
-                    if (!m.IsGenericMethod) return false;
-                    var gm = m.MakeGenericMethod(typeof(TModel));
-                    var selectorParam = gm.GetParameters()[1];
-                    return selectorParam.ParameterType == typeof(Func<TModel, double?>);
-                })
-                .MakeGenericMethod(typeof(TModel));
+            var aggMethod = _aggMethodCache.GetOrAdd(
+                (methodName, typeof(TModel)),
+                k => typeof(Enumerable)
+                    .GetMethods()
+                    .Where(m => m.Name == k.Item1 && m.GetParameters().Length == 2)
+                    .First(m =>
+                    {
+                        if (!m.IsGenericMethod) return false;
+                        var gm = m.MakeGenericMethod(typeof(TModel));
+                        var selectorParam = gm.GetParameters()[1];
+                        return selectorParam.ParameterType == typeof(Func<TModel, double?>);
+                    })
+                    .MakeGenericMethod(typeof(TModel)));
 
             return Expression.Call(aggMethod, gParam, valueSelector);
         }

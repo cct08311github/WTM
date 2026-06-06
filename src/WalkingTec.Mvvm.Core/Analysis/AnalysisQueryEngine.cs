@@ -1,5 +1,7 @@
 #nullable enable
 using System;
+using System.Buffers;
+using System.Collections.Concurrent;
 using System.Collections.Frozen;
 using System.Collections.Generic;
 using System.Linq;
@@ -21,6 +23,26 @@ namespace WalkingTec.Mvvm.Core.Analysis
     {
         private static readonly ILogger? _logger =
             CoreProgram.GetLogger(nameof(AnalysisQueryEngine));
+
+        // ── ExecuteDynamic* reflection caches ─────────────────────────────────
+        // One separate dictionary per entry-point because each resolves a different
+        // open generic method. Keyed by runtime elementType.
+        private static readonly ConcurrentDictionary<Type, MethodInfo> _executeMethodCache = new();
+        private static readonly ConcurrentDictionary<Type, MethodInfo> _executeAsyncMethodCache = new();
+        private static readonly ConcurrentDictionary<Type, MethodInfo> _executePivotMethodCache = new();
+        private static readonly ConcurrentDictionary<Type, MethodInfo> _executePivotAsyncMethodCache = new();
+
+        // ── ApplyFilters Contains MethodInfo caches ────────────────────────────
+        // Open generic methods resolved once; closed specialisations cached per CLR type.
+        private static readonly MethodInfo _enumerableContainsOpenMethod =
+            typeof(Enumerable)
+                .GetMethods()
+                .First(m => m.Name == "Contains" && m.GetParameters().Length == 2);
+
+        private static readonly MethodInfo _stringContainsMethod =
+            typeof(string).GetMethod("Contains", new[] { typeof(string) })!;
+
+        private static readonly ConcurrentDictionary<Type, MethodInfo> _enumerableContainsClosedCache = new();
 
         private readonly GroupByStrategyResolver _resolver;
         private readonly IAnalysisCache? _cache;
@@ -433,11 +455,13 @@ namespace WalkingTec.Mvvm.Core.Analysis
             CancellationToken cancellationToken = default)
         {
             var elementType = baseQuery.ElementType;
-            var method = typeof(AnalysisQueryEngine)
-                .GetMethod(nameof(Execute));
-            if (method is null)
-                throw new InvalidOperationException("Execute method not found.");
-            method = method.MakeGenericMethod(elementType);
+            var method = _executeMethodCache.GetOrAdd(elementType, t =>
+            {
+                var m = typeof(AnalysisQueryEngine).GetMethod(nameof(Execute));
+                if (m is null)
+                    throw new InvalidOperationException("Execute method not found.");
+                return m.MakeGenericMethod(t);
+            });
             try
             {
                 var result = method.Invoke(this, new object?[] { baseQuery, req, whitelist, dbType, identityKey, cancellationToken }) as AnalysisQueryResponse;
@@ -463,11 +487,13 @@ namespace WalkingTec.Mvvm.Core.Analysis
             CancellationToken cancellationToken = default)
         {
             var elementType = baseQuery.ElementType;
-            var method = typeof(AnalysisQueryEngine)
-                .GetMethod(nameof(ExecuteAsync));
-            if (method is null)
-                throw new InvalidOperationException("ExecuteAsync method not found.");
-            method = method.MakeGenericMethod(elementType);
+            var method = _executeAsyncMethodCache.GetOrAdd(elementType, t =>
+            {
+                var m = typeof(AnalysisQueryEngine).GetMethod(nameof(ExecuteAsync));
+                if (m is null)
+                    throw new InvalidOperationException("ExecuteAsync method not found.");
+                return m.MakeGenericMethod(t);
+            });
             try
             {
                 var task = method.Invoke(this, new object?[] { baseQuery, req, whitelist, dbType, identityKey, cancellationToken }) as Task<AnalysisQueryResponse>;
@@ -493,11 +519,13 @@ namespace WalkingTec.Mvvm.Core.Analysis
             CancellationToken cancellationToken = default)
         {
             var elementType = baseQuery.ElementType;
-            var method = typeof(AnalysisQueryEngine)
-                .GetMethod(nameof(ExecutePivot));
-            if (method is null)
-                throw new InvalidOperationException("ExecutePivot method not found.");
-            method = method.MakeGenericMethod(elementType);
+            var method = _executePivotMethodCache.GetOrAdd(elementType, t =>
+            {
+                var m = typeof(AnalysisQueryEngine).GetMethod(nameof(ExecutePivot));
+                if (m is null)
+                    throw new InvalidOperationException("ExecutePivot method not found.");
+                return m.MakeGenericMethod(t);
+            });
             try
             {
                 var result = method.Invoke(this, new object?[] { baseQuery, req, whitelist, dbType, identityKey, cancellationToken }) as AnalysisPivotResponse;
@@ -523,11 +551,13 @@ namespace WalkingTec.Mvvm.Core.Analysis
             CancellationToken cancellationToken = default)
         {
             var elementType = baseQuery.ElementType;
-            var method = typeof(AnalysisQueryEngine)
-                .GetMethod(nameof(ExecutePivotAsync));
-            if (method is null)
-                throw new InvalidOperationException("ExecutePivotAsync method not found.");
-            method = method.MakeGenericMethod(elementType);
+            var method = _executePivotAsyncMethodCache.GetOrAdd(elementType, t =>
+            {
+                var m = typeof(AnalysisQueryEngine).GetMethod(nameof(ExecutePivotAsync));
+                if (m is null)
+                    throw new InvalidOperationException("ExecutePivotAsync method not found.");
+                return m.MakeGenericMethod(t);
+            });
             try
             {
                 var task = method.Invoke(this, new object?[] { baseQuery, req, whitelist, dbType, identityKey, cancellationToken }) as Task<AnalysisPivotResponse>;
@@ -1521,9 +1551,9 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         list.CopyTo(typedList);
                         var listConst = Expression.Constant(typedList);
 
-                        var containsMethod = typeof(Enumerable).GetMethods()
-                            .First(m => m.Name == "Contains" && m.GetParameters().Length == 2)
-                            .MakeGenericMethod(underlyingType);
+                        var containsMethod = _enumerableContainsClosedCache.GetOrAdd(
+                            underlyingType,
+                            t => _enumerableContainsOpenMethod.MakeGenericMethod(t));
 
                         Expression propForIn = prop;
                         if (Nullable.GetUnderlyingType(targetType) != null)
@@ -1553,7 +1583,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         if (targetType != typeof(string))
                             throw new InvalidOperationException($"'Contains'/'NotContains' operator is only supported for string fields, not '{targetType.Name}'.");
                         var val = Expression.Constant(f.Value?.ToString() ?? "");
-                        Expression containsExpr = Expression.Call(prop, typeof(string).GetMethod("Contains", new[] { typeof(string) })!, val);
+                        Expression containsExpr = Expression.Call(prop, _stringContainsMethod, val);
                         filterExpr = f.Operator == FilterOperator.NotContains ? Expression.Not(containsExpr) : containsExpr;
                     }
                     else
@@ -1780,7 +1810,9 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// 當 <paramref name="identityKey"/> 為 null 或空字串時回傳 null，
         /// 表示「此請求不應寫入或讀取共用快取」（M29 修復：防止匿名請求共用快取）。
         /// </summary>
-        private static string? ComputeHash(AnalysisQueryRequest req, string? identityKey = null)
+        // internal (not public) so Core.Test can call it directly via InternalsVisibleTo;
+        // kept out of the public surface to preserve encapsulation.
+        internal static string? ComputeHash(AnalysisQueryRequest req, string? identityKey = null)
         {
             // M29 fix: identity-less requests must never share a cache entry.
             // Returning null signals callers to skip both get and set.
@@ -1789,10 +1821,23 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
             var raw = System.Text.Json.JsonSerializer.Serialize(req, _hashSerializerOptions);
             raw += "|" + identityKey;
-            Span<byte> hash = stackalloc byte[32]; // SHA256 = 32 bytes
-            System.Security.Cryptography.SHA256.HashData(
-                System.Text.Encoding.UTF8.GetBytes(raw), hash);
-            return Convert.ToHexString(hash)[..16];
+
+            // Use ArrayPool to avoid a heap allocation for the UTF-8 byte array.
+            // GetByteCount + GetBytes produces the EXACT same byte sequence as
+            // Encoding.UTF8.GetBytes(raw) — byte-identical hash guaranteed.
+            int byteCount = System.Text.Encoding.UTF8.GetByteCount(raw);
+            byte[] rented = ArrayPool<byte>.Shared.Rent(byteCount);
+            try
+            {
+                System.Text.Encoding.UTF8.GetBytes(raw, 0, raw.Length, rented, 0);
+                Span<byte> hash = stackalloc byte[32]; // SHA256 = 32 bytes
+                System.Security.Cryptography.SHA256.HashData(rented.AsSpan(0, byteCount), hash);
+                return Convert.ToHexString(hash)[..16];
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(rented);
+            }
         }
     }
 }

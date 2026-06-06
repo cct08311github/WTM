@@ -123,17 +123,24 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 var totalFont = workbook.CreateFont();
                 totalFont.IsBold = true;
 
-                ICellStyle MakeTotalStyle(ICellStyle? baseStyle)
+                // Pre-build one ICellStyle per distinct DataFormat key to avoid
+                // creating a new workbook style object for every grand-total cell
+                // (NPOI has a workbook-level style limit; sharing reduces pressure).
+                var totalStyleByFormat = new Dictionary<short, ICellStyle>();
+                ICellStyle GetOrCreateTotalStyle(ICellStyle? baseStyle)
                 {
-                    var s = workbook.CreateCellStyle();
-                    if (baseStyle != null)
+                    short fmt = baseStyle?.DataFormat ?? 0;
+                    if (!totalStyleByFormat.TryGetValue(fmt, out var cached))
                     {
-                        s.DataFormat = baseStyle.DataFormat;
+                        var s = workbook.CreateCellStyle();
+                        s.DataFormat = fmt;
+                        s.SetFont(totalFont);
+                        s.FillForegroundColor = IndexedColors.LightYellow.Index;
+                        s.FillPattern = FillPattern.SolidForeground;
+                        totalStyleByFormat[fmt] = s;
+                        cached = s;
                     }
-                    s.SetFont(totalFont);
-                    s.FillForegroundColor = IndexedColors.LightYellow.Index;
-                    s.FillPattern = FillPattern.SolidForeground;
-                    return s;
+                    return cached;
                 }
 
                 var totalRow = sheet.CreateRow(result.Rows.Count + 1);
@@ -173,7 +180,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     else
                         cell.SetCellValue(val.ToString() ?? "");
 
-                    cell.CellStyle = MakeTotalStyle(colStyles[c]);
+                    cell.CellStyle = GetOrCreateTotalStyle(colStyles[c]);
                 }
             }
 

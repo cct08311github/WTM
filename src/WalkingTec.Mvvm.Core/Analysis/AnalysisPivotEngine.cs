@@ -59,13 +59,14 @@ namespace WalkingTec.Mvvm.Core.Analysis
             }
 
             // Group input rows by row dimensions to build pivot rows
+            int pivotRowCapacity = rowDims.Count + pivotValues.Count * measureNames.Count;
             List<Dictionary<string, object?>> pivotRows = [];
             var groups = groupByResult.Rows
                 .GroupBy(r => BuildRowKey(r, rowDims));
 
             foreach (var group in groups)
             {
-                var pivotRow = new Dictionary<string, object?>();
+                var pivotRow = new Dictionary<string, object?>(pivotRowCapacity);
 
                 // Set row dimension values from first row in group
                 var firstRow = group.First();
@@ -108,8 +109,17 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
         private static string BuildRowKey(Dictionary<string, object?> row, List<string> rowDims)
         {
-            if (rowDims.Count == 0) return "";
-            return string.Join("\0", rowDims.Select(d => row.GetValueOrDefault(d)?.ToString() ?? ""));
+            // Fast-path for common single/double-dim cases; fall through to Join for 3+.
+            return rowDims.Count switch
+            {
+                0 => "",
+                1 => row.GetValueOrDefault(rowDims[0])?.ToString() ?? "",
+                2 => string.Concat(
+                        row.GetValueOrDefault(rowDims[0])?.ToString() ?? "",
+                        "\0",
+                        row.GetValueOrDefault(rowDims[1])?.ToString() ?? ""),
+                _ => string.Join("\0", rowDims.Select(d => row.GetValueOrDefault(d)?.ToString() ?? ""))
+            };
         }
     }
 }
