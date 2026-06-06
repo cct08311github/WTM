@@ -16,6 +16,31 @@ namespace WalkingTec.Mvvm.Etl.Pipeline.Loaders;
 /// </summary>
 public class OracleBulkLoader : IBulkLoader
 {
+    /// <summary>
+    /// Timeout in seconds applied to all <c>OracleCommand.CommandTimeout</c> calls
+    /// inside this loader (Merge, Replace, Truncate, EnsureStaging, and BulkLoad).
+    /// <para>
+    /// Defaults to 0 = Oracle's "no limit" (infinite-wait), which is the exact
+    /// pre-10.6 behaviour. This default is intentional: Oracle DDL/DML operations can
+    /// be legitimately long-running and users should consciously opt in to a timeout
+    /// rather than have it silently imposed. Pass a positive value to enable a hard
+    /// timeout per command.
+    /// </para>
+    /// </summary>
+    public int TimeoutSeconds { get; }
+
+    /// <summary>
+    /// Initialises the loader with a configurable per-command timeout.
+    /// </summary>
+    /// <param name="timeoutSeconds">
+    /// Seconds before each Oracle command times out.
+    /// 0 (default) = no limit (infinite, pre-10.6 behaviour preserved exactly).
+    /// </param>
+    public OracleBulkLoader(int timeoutSeconds = 0)
+    {
+        TimeoutSeconds = timeoutSeconds;
+    }
+
     public async Task BulkLoadAsync(
         string connectionString, string stagingTableName,
         DataTable batch, CancellationToken cancellationToken = default)
@@ -34,6 +59,8 @@ public class OracleBulkLoader : IBulkLoader
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = insertSql.ToString();
         cmd.ArrayBindCount = batch.Rows.Count;
+        // Apply opt-in timeout (0 = no limit, preserving pre-10.6 default).
+        cmd.CommandTimeout = TimeoutSeconds;
 
         foreach (var col in columns)
         {
@@ -57,7 +84,43 @@ public class OracleBulkLoader : IBulkLoader
         await using var conn = new OracleConnection(connectionString);
         await conn.OpenAsync(cancellationToken);
 
+        // Public interface path: no pre-resolved column list available,
+        // so fall back to the USER_TAB_COLUMNS round-trip.
         var columns = await GetColumnsAsync(conn, stagingTableName, cancellationToken);
+        await ExecuteMergeAsync(conn, stagingTableName, targetTableName, mergeKeyColumn,
+            columns, cancellationToken);
+    }
+
+    /// <summary>
+    /// Additive internal overload: accepts a pre-resolved column list from the
+    /// caller (typically the batch <see cref="DataTable.Columns"/> names) to
+    /// skip the USER_TAB_COLUMNS metadata round-trip. Preserves identical
+    /// SQL/semantics as the public path. Called by the pipeline executor when
+    /// it has the column names already.
+    /// <para>
+    /// This overload intentionally does NOT appear on <see cref="IBulkLoader"/>
+    /// so third-party implementors are unaffected.
+    /// </para>
+    /// </summary>
+    internal async Task MergeAsync(
+        string connectionString, string stagingTableName,
+        string targetTableName, string mergeKeyColumn,
+        IReadOnlyList<string> columns,
+        CancellationToken cancellationToken = default)
+    {
+        await using var conn = new OracleConnection(connectionString);
+        await conn.OpenAsync(cancellationToken);
+
+        await ExecuteMergeAsync(conn, stagingTableName, targetTableName, mergeKeyColumn,
+            columns, cancellationToken);
+    }
+
+    private async Task ExecuteMergeAsync(
+        OracleConnection conn,
+        string stagingTableName, string targetTableName, string mergeKeyColumn,
+        IReadOnlyList<string> columns,
+        CancellationToken cancellationToken)
+    {
         var updateCols = columns.Where(c => c != mergeKeyColumn).ToList();
 
         var sb = new StringBuilder();
@@ -80,7 +143,8 @@ public class OracleBulkLoader : IBulkLoader
 
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = sb.ToString();
-        cmd.CommandTimeout = 0;
+        // 0 = no limit (Oracle default); opt-in timeout when TimeoutSeconds > 0.
+        cmd.CommandTimeout = TimeoutSeconds;
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -92,6 +156,8 @@ public class OracleBulkLoader : IBulkLoader
         await conn.OpenAsync(cancellationToken);
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = $"TRUNCATE TABLE {stagingTableName}";
+        // 0 = no limit (Oracle default); opt-in timeout when TimeoutSeconds > 0.
+        cmd.CommandTimeout = TimeoutSeconds;
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -130,7 +196,7 @@ public class OracleBulkLoader : IBulkLoader
             {
                 del.Transaction = tran;
                 del.CommandText = deleteSql;
-                del.CommandTimeout = 0;
+                del.CommandTimeout = TimeoutSeconds;
                 await del.ExecuteNonQueryAsync(cancellationToken);
             }
 
@@ -142,7 +208,7 @@ public class OracleBulkLoader : IBulkLoader
             {
                 ins.Transaction = tran;
                 ins.CommandText = insertSql;
-                ins.CommandTimeout = 0;
+                ins.CommandTimeout = TimeoutSeconds;
                 await ins.ExecuteNonQueryAsync(cancellationToken);
             }
 
@@ -167,6 +233,7 @@ public class OracleBulkLoader : IBulkLoader
             SELECT COUNT(*) FROM USER_TABLES
             WHERE TABLE_NAME = :tableName";
         checkCmd.Parameters.Add(new OracleParameter("tableName", stagingTableName.ToUpperInvariant()));
+        checkCmd.CommandTimeout = TimeoutSeconds;
         var count = Convert.ToInt32(await checkCmd.ExecuteScalarAsync(cancellationToken));
 
         if (count == 0)
@@ -179,6 +246,7 @@ public class OracleBulkLoader : IBulkLoader
 
             await using var createCmd = conn.CreateCommand();
             createCmd.CommandText = sb.ToString();
+            createCmd.CommandTimeout = TimeoutSeconds;
             await createCmd.ExecuteNonQueryAsync(cancellationToken);
         }
     }

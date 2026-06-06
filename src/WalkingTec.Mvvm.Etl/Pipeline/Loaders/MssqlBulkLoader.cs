@@ -24,16 +24,58 @@ public class MssqlBulkLoader : IBulkLoader
     public int TimeoutSeconds { get; }
 
     /// <summary>
-    /// Initialises the loader with a configurable timeout.
+    /// <see cref="SqlBulkCopy"/> options used when copying rows to the staging table.
+    /// Defaults to <see cref="SqlBulkCopyOptions.Default"/> to preserve existing behaviour.
+    /// <para>
+    /// <b>Opt-in recommendation:</b> pass <see cref="SqlBulkCopyOptions.TableLock"/> for
+    /// private/exclusive staging tables (e.g. per-job temp staging tables) to maximise
+    /// throughput by acquiring an exclusive lock on the destination and avoiding per-row
+    /// lock escalation. Do NOT use TableLock on shared staging tables that multiple jobs
+    /// write concurrently.
+    /// </para>
+    /// </summary>
+    public SqlBulkCopyOptions BulkCopyOptions { get; }
+
+    /// <summary>
+    /// Internal batch size passed to <see cref="SqlBulkCopy.BatchSize"/>.
+    /// <para>
+    /// 0 (default) = one network round-trip per <c>BulkLoadAsync</c> call, which matches
+    /// the pre-10.6 behaviour where <c>BatchSize</c> was set to the full
+    /// <c>DataTable.Rows.Count</c>. When set to a positive value N, SqlBulkCopy will
+    /// commit rows in sub-batches of N, which trades throughput for smaller individual
+    /// transactions and lower peak memory on very large batches.
+    /// </para>
+    /// </summary>
+    public int InternalBatchSize { get; }
+
+    /// <summary>
+    /// Initialises the loader with configurable timeout, SqlBulkCopy options,
+    /// and internal batch size.
     /// </summary>
     /// <param name="timeoutSeconds">
     /// Seconds before bulk-copy and SQL commands time out.
     /// 0 = no limit (infinite, previous behaviour).
     /// Defaults to 300.
     /// </param>
-    public MssqlBulkLoader(int timeoutSeconds = 300)
+    /// <param name="bulkCopyOptions">
+    /// <see cref="SqlBulkCopyOptions"/> passed to the <see cref="SqlBulkCopy"/>
+    /// constructor. Defaults to <see cref="SqlBulkCopyOptions.Default"/>, which
+    /// preserves the pre-10.6 row-lock behaviour. Use
+    /// <see cref="SqlBulkCopyOptions.TableLock"/> for private staging tables to
+    /// improve throughput.
+    /// </param>
+    /// <param name="internalBatchSize">
+    /// Number of rows per SqlBulkCopy sub-batch. 0 (default) = full
+    /// <c>DataTable.Rows.Count</c> in one shot (pre-10.6 behaviour).
+    /// </param>
+    public MssqlBulkLoader(
+        int timeoutSeconds = 300,
+        SqlBulkCopyOptions bulkCopyOptions = SqlBulkCopyOptions.Default,
+        int internalBatchSize = 0)
     {
         TimeoutSeconds = timeoutSeconds;
+        BulkCopyOptions = bulkCopyOptions;
+        InternalBatchSize = internalBatchSize;
     }
 
     public async Task BulkLoadAsync(
@@ -43,10 +85,13 @@ public class MssqlBulkLoader : IBulkLoader
         await using var conn = new SqlConnection(connectionString);
         await conn.OpenAsync(cancellationToken);
 
-        using var bulkCopy = new SqlBulkCopy(conn)
+        // Pass BulkCopyOptions (opt-in; default is SqlBulkCopyOptions.Default
+        // which preserves pre-10.6 row-lock behaviour).
+        using var bulkCopy = new SqlBulkCopy(conn, BulkCopyOptions, externalTransaction: null)
         {
             DestinationTableName = stagingTableName,
-            BatchSize = batch.Rows.Count,
+            // InternalBatchSize == 0 → use full count, matching pre-10.6 behaviour.
+            BatchSize = InternalBatchSize > 0 ? InternalBatchSize : batch.Rows.Count,
             BulkCopyTimeout = TimeoutSeconds
         };
 
@@ -66,7 +111,43 @@ public class MssqlBulkLoader : IBulkLoader
         await using var conn = new SqlConnection(connectionString);
         await conn.OpenAsync(cancellationToken);
 
+        // Public interface path: no pre-resolved column list available,
+        // so fall back to the INFORMATION_SCHEMA round-trip.
         var columns = await GetColumnsAsync(conn, stagingTableName, cancellationToken);
+        await ExecuteMergeAsync(conn, stagingTableName, targetTableName, mergeKeyColumn,
+            columns, cancellationToken);
+    }
+
+    /// <summary>
+    /// Additive internal overload: accepts a pre-resolved column list from the
+    /// caller (typically the batch <see cref="DataTable.Columns"/> names) to
+    /// skip the INFORMATION_SCHEMA metadata round-trip. Preserves identical
+    /// SQL/semantics as the public path. Called by the pipeline executor when
+    /// it has the column names already.
+    /// <para>
+    /// This overload intentionally does NOT appear on <see cref="IBulkLoader"/>
+    /// so third-party implementors are unaffected.
+    /// </para>
+    /// </summary>
+    internal async Task MergeAsync(
+        string connectionString, string stagingTableName,
+        string targetTableName, string mergeKeyColumn,
+        IReadOnlyList<string> columns,
+        CancellationToken cancellationToken = default)
+    {
+        await using var conn = new SqlConnection(connectionString);
+        await conn.OpenAsync(cancellationToken);
+
+        await ExecuteMergeAsync(conn, stagingTableName, targetTableName, mergeKeyColumn,
+            columns, cancellationToken);
+    }
+
+    private async Task ExecuteMergeAsync(
+        SqlConnection conn,
+        string stagingTableName, string targetTableName, string mergeKeyColumn,
+        IReadOnlyList<string> columns,
+        CancellationToken cancellationToken)
+    {
         var updateCols = columns.Where(c => c != mergeKeyColumn).ToList();
 
         var sb = new StringBuilder();
@@ -207,6 +288,8 @@ public class MssqlBulkLoader : IBulkLoader
         await conn.OpenAsync(cancellationToken);
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = $"TRUNCATE TABLE [{stagingTableName}]";
+        // Apply timeout when explicitly set (opt-in; 0 = no limit as before).
+        cmd.CommandTimeout = TimeoutSeconds;
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -230,6 +313,7 @@ public class MssqlBulkLoader : IBulkLoader
               AND TABLE_SCHEMA = @schemaName";
         checkCmd.Parameters.AddWithValue("@tableName", tableNameOnly);
         checkCmd.Parameters.AddWithValue("@schemaName", schemaName);
+        checkCmd.CommandTimeout = TimeoutSeconds;
         var exists = (int)(await checkCmd.ExecuteScalarAsync(cancellationToken))! > 0;
 
         if (!exists)
@@ -242,20 +326,31 @@ public class MssqlBulkLoader : IBulkLoader
 
             await using var createCmd = conn.CreateCommand();
             createCmd.CommandText = sb.ToString();
+            createCmd.CommandTimeout = TimeoutSeconds;
             await createCmd.ExecuteNonQueryAsync(cancellationToken);
         }
     }
 
+    /// <summary>
+    /// Queries INFORMATION_SCHEMA.COLUMNS for the column names of
+    /// <paramref name="tableName"/>, filtering on both TABLE_NAME and
+    /// TABLE_SCHEMA to correctly handle schema-qualified names such as
+    /// "audit.STG_x" (previously TABLE_NAME-only filter returned 0 rows).
+    /// </summary>
     private static async Task<List<string>> GetColumnsAsync(
         SqlConnection conn, string tableName, CancellationToken ct)
     {
+        var (schemaName, tableNameOnly) = ParseSchemaAndTable(tableName);
+
         List<string> columns = [];
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
             SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-            WHERE TABLE_NAME = @tableName
+            WHERE TABLE_NAME   = @tableName
+              AND TABLE_SCHEMA = @schemaName
             ORDER BY ORDINAL_POSITION";
-        cmd.Parameters.AddWithValue("@tableName", tableName);
+        cmd.Parameters.AddWithValue("@tableName", tableNameOnly);
+        cmd.Parameters.AddWithValue("@schemaName", schemaName);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
@@ -275,7 +370,7 @@ public class MssqlBulkLoader : IBulkLoader
         await using var cmd = conn.CreateCommand();
         // Check PK or Unique constraints in MSSQL
         cmd.CommandText = @"
-            SELECT COUNT(*) 
+            SELECT COUNT(*)
             FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
             JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS t ON k.CONSTRAINT_NAME = t.CONSTRAINT_NAME
             WHERE k.TABLE_NAME = @tableName AND k.COLUMN_NAME = @colName

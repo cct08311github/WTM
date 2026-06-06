@@ -11,6 +11,11 @@
   <Import Project="..\..\common.props" />
 
   <ItemGroup>
+    <!-- Expose internal members (e.g. MssqlBulkLoader.MergeAsync column overload) to test assembly -->
+    <InternalsVisibleTo Include="WalkingTec.Mvvm.Etl.Test" />
+  </ItemGroup>
+
+  <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 

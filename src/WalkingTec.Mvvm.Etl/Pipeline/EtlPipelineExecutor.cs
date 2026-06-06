@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Etl.Models;
+using WalkingTec.Mvvm.Etl.Pipeline.Loaders;
 
 namespace WalkingTec.Mvvm.Etl.Pipeline;
 
@@ -94,6 +95,11 @@ public class EtlPipelineExecutor
 
             // 3. Extract + Load to staging
             var wmParam = watermark.GetParameterValue();
+            // Capture staging column names from the first transformed batch so we can
+            // pass them to the concrete-type MergeAsync overload and skip the
+            // INFORMATION_SCHEMA/USER_TAB_COLUMNS round-trip at merge time.
+            // Null until the first batch is processed.
+            IReadOnlyList<string>? stagingColumnNames = null;
 
             await foreach (var batch in _source.ExtractBatchesAsync(
                 config.SourceConnectionString, config.QueryTemplate, wmParam,
@@ -134,6 +140,18 @@ public class EtlPipelineExecutor
                         if (qualityFailureSamples.Count >= EtlQualityRuleEvaluator.MaxFailureSamples) { break; }
                         qualityFailureSamples.Add(s);
                     }
+                }
+
+                // Capture column names from the first transformed batch (all batches share
+                // the same schema). Used to skip the INFORMATION_SCHEMA/USER_TAB_COLUMNS
+                // round-trip when the concrete loader exposes the internal MergeAsync
+                // overload accepting pre-resolved column names.
+                if (stagingColumnNames == null)
+                {
+                    stagingColumnNames = transformed.Columns
+                        .Cast<DataColumn>()
+                        .Select(c => c.ColumnName)
+                        .ToList();
                 }
 
                 await BulkLoadWithRetryAsync(
@@ -182,10 +200,10 @@ public class EtlPipelineExecutor
             }
             else
             {
-                await _loader.MergeAsync(
+                await MergeWithColumnHintAsync(
                     config.TargetConnectionString, config.StagingTable.TableName,
                     config.TargetTableName, config.MergeKeyColumn,
-                    cancellationToken);
+                    stagingColumnNames, cancellationToken);
             }
 
             // 5. 成功 → commit watermark
@@ -298,6 +316,41 @@ public class EtlPipelineExecutor
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Dispatches to the concrete-loader internal MergeAsync overload when
+    /// <paramref name="columnNames"/> is available (batch schema captured earlier),
+    /// skipping the INFORMATION_SCHEMA/USER_TAB_COLUMNS round-trip. Falls back to
+    /// the public <see cref="IBulkLoader.MergeAsync"/> for third-party loaders or
+    /// when no batch was processed (columnNames is null).
+    /// This wiring does NOT change the <see cref="IBulkLoader"/> interface.
+    /// </summary>
+    private async Task MergeWithColumnHintAsync(
+        string connectionString, string stagingTableName,
+        string targetTableName, string mergeKeyColumn,
+        IReadOnlyList<string>? columnNames,
+        CancellationToken cancellationToken)
+    {
+        if (columnNames != null)
+        {
+            // Concrete-type fast path: skip metadata round-trip.
+            if (_loader is MssqlBulkLoader mssql)
+            {
+                await mssql.MergeAsync(connectionString, stagingTableName,
+                    targetTableName, mergeKeyColumn, columnNames, cancellationToken);
+                return;
+            }
+            if (_loader is OracleBulkLoader oracle)
+            {
+                await oracle.MergeAsync(connectionString, stagingTableName,
+                    targetTableName, mergeKeyColumn, columnNames, cancellationToken);
+                return;
+            }
+        }
+        // Fallback: public IBulkLoader path (third-party loaders, or no batches processed).
+        await _loader.MergeAsync(connectionString, stagingTableName,
+            targetTableName, mergeKeyColumn, cancellationToken);
     }
 
     /// <summary>
