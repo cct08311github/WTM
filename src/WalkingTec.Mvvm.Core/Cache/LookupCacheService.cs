@@ -172,7 +172,13 @@ namespace WalkingTec.Mvvm.Core.Cache
             // scope to a specific tenant or return all-tenant rows depending on
             // context — caching either under the global key risks a cross-tenant
             // data leak. Skip caching and load directly from DB.
-            if (_forcedTenantIsolationTypes.Contains(typeof(T)) && tenantId == null)
+            //
+            // Bug #168: only apply this bypass when tenant isolation is actually
+            // enabled (DefaultTenantIsolation == true). In single-tenant deployments
+            // (DefaultTenantIsolation == false) there is no cross-tenant boundary, so
+            // it is safe to cache ITenant types under the shared (null-tenant) global
+            // key "wtm:lookup:{Type}:_" instead of querying the DB on every call.
+            if (_forcedTenantIsolationTypes.Contains(typeof(T)) && tenantId == null && DefaultTenantIsolation)
             {
                 return LoadFromDb<T>(dc);
             }
@@ -252,7 +258,13 @@ namespace WalkingTec.Mvvm.Core.Cache
 
             // Bug #112 (1): ITenant types with tenantId=null — skip cache (same
             // rationale as sync path above).
-            if (_forcedTenantIsolationTypes.Contains(typeof(T)) && tenantId == null)
+            //
+            // Bug #168: only apply this bypass when tenant isolation is actually
+            // enabled (DefaultTenantIsolation == true). In single-tenant deployments
+            // (DefaultTenantIsolation == false) there is no cross-tenant boundary, so
+            // it is safe to cache ITenant types under the shared (null-tenant) global
+            // key "wtm:lookup:{Type}:_" instead of querying the DB on every call.
+            if (_forcedTenantIsolationTypes.Contains(typeof(T)) && tenantId == null && DefaultTenantIsolation)
             {
                 return await LoadFromDbAsync<T>(dc, ct).ConfigureAwait(false);
             }

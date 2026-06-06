@@ -985,6 +985,227 @@ namespace WalkingTec.Mvvm.Core.Test.Cache
         }
     }
 
+    // ─── Bug #168 fix tests ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Regression tests for Bug #168: in single-tenant mode (DefaultTenantIsolation=false),
+    /// ITenant lookup types must be cached under the global key instead of bypassing
+    /// the cache and hitting the DB on every call.
+    /// The #112 bypass guard must only fire when tenant isolation is actually enabled.
+    /// </summary>
+    [TestClass]
+    public class Bug168SingleTenantCacheTests
+    {
+        // ── Counting DbContext: tracks how many times DB was actually queried ────
+
+        // Each test validates "DB was queried" indirectly via row counts:
+        // insert a row AFTER the first GetAll call; if the second GetAll still
+        // returns the old count → cache hit (good for single-tenant).
+        // If it returns the new count → DB was re-queried (expected for multi-tenant bypass).
+        private class CountingContext : DbContext
+        {
+            public CountingContext(DbContextOptions opts) : base(opts) { }
+            public DbSet<TenantProduct> TenantProducts { get; set; } = null!;
+        }
+
+        private static (CountingContext ctx, LookupCacheService svc) CreateSingleTenant(
+            SqliteConnection conn)
+        {
+            var opts = new DbContextOptionsBuilder<CountingContext>().UseSqlite(conn).Options;
+            var ctx = new CountingContext(opts);
+            ctx.Database.EnsureCreated();
+
+            var mc = new MemoryCache(new MemoryCacheOptions());
+            var options = new LookupCacheOptions { DefaultTenantIsolation = false };
+            var svc = new LookupCacheService(mc, new[] { typeof(TenantProduct).Assembly }, options);
+            return (ctx, svc);
+        }
+
+        private static (CountingContext ctx, LookupCacheService svc) CreateMultiTenant(
+            SqliteConnection conn)
+        {
+            var opts = new DbContextOptionsBuilder<CountingContext>().UseSqlite(conn).Options;
+            var ctx = new CountingContext(opts);
+            ctx.Database.EnsureCreated();
+
+            var mc = new MemoryCache(new MemoryCacheOptions());
+            // DefaultTenantIsolation defaults to true — multi-tenant
+            var svc = new LookupCacheService(mc, new[] { typeof(TenantProduct).Assembly });
+            return (ctx, svc);
+        }
+
+        // ── Test 1 (sync): single-tenant caches on second call ──────────────────
+
+        /// <summary>
+        /// Bug #168 regression (sync): In single-tenant mode (DefaultTenantIsolation=false),
+        /// calling GetAll&lt;TenantProduct&gt;(dc, null) twice must hit the DB only ONCE.
+        /// The second call must be a cache hit (same reference, stale row count).
+        /// TenantProduct implements ITenant — before the fix, the #112 guard fired
+        /// unconditionally and bypassed the cache on every call.
+        /// </summary>
+        [TestMethod]
+        public void SingleTenant_ITenantType_caches_on_second_call_db_queried_only_once()
+        {
+            using var conn = new SqliteConnection("DataSource=:memory:");
+            conn.Open();
+            var (ctx, svc) = CreateSingleTenant(conn);
+
+            ctx.TenantProducts.Add(new TenantProduct
+            {
+                ID = Guid.NewGuid(),
+                Name = "Product-Initial",
+                TenantCode = null   // single-tenant: no tenant code
+            });
+            ctx.SaveChanges();
+
+            // First call: cache miss → DB query → stored in cache.
+            var first = svc.GetAll<TenantProduct>(ctx, tenantId: null);
+            Assert.AreEqual(1, first.Count, "First call must load 1 row from DB");
+
+            // Insert a new row — if the second call re-queries the DB it would see 2 rows,
+            // which means the cache bypass is still active (the bug).
+            ctx.TenantProducts.Add(new TenantProduct
+            {
+                ID = Guid.NewGuid(),
+                Name = "Product-AfterCache",
+                TenantCode = null
+            });
+            ctx.SaveChanges();
+
+            // Second call: must be a cache hit — must NOT see the new row.
+            var second = svc.GetAll<TenantProduct>(ctx, tenantId: null);
+
+            Assert.AreEqual(1, second.Count,
+                "Bug #168: second call must be a cache hit (1 row), not a DB re-query (2 rows). " +
+                "The #112 bypass must NOT fire when DefaultTenantIsolation=false.");
+            Assert.AreSame(first, second,
+                "Cache hit must return the identical reference stored on the first call.");
+        }
+
+        // ── Test 2 (async): single-tenant caches on second call ─────────────────
+
+        /// <summary>
+        /// Bug #168 regression (async): same invariant as the sync test for GetAllAsync.
+        /// </summary>
+        [TestMethod]
+        public async Task SingleTenant_ITenantType_caches_on_second_call_async_db_queried_only_once()
+        {
+            using var conn = new SqliteConnection("DataSource=:memory:");
+            conn.Open();
+            var (ctx, svc) = CreateSingleTenant(conn);
+
+            ctx.TenantProducts.Add(new TenantProduct
+            {
+                ID = Guid.NewGuid(),
+                Name = "AsyncProduct-Initial",
+                TenantCode = null
+            });
+            ctx.SaveChanges();
+
+            // First async call: cache miss → DB query → stored in cache.
+            var first = await svc.GetAllAsync<TenantProduct>(ctx, tenantId: null);
+            Assert.AreEqual(1, first.Count, "Async first call must load 1 row from DB");
+
+            // Insert a new row.
+            ctx.TenantProducts.Add(new TenantProduct
+            {
+                ID = Guid.NewGuid(),
+                Name = "AsyncProduct-AfterCache",
+                TenantCode = null
+            });
+            ctx.SaveChanges();
+
+            // Second async call: must be a cache hit — must NOT see the new row.
+            var second = await svc.GetAllAsync<TenantProduct>(ctx, tenantId: null);
+
+            Assert.AreEqual(1, second.Count,
+                "Bug #168 (async): second call must be a cache hit (1 row), not a DB re-query (2 rows). " +
+                "The #112 bypass must NOT fire when DefaultTenantIsolation=false.");
+            Assert.AreSame(first, second,
+                "Async cache hit must return the identical reference stored on the first call.");
+        }
+
+        // ── Test 3 (sync): multi-tenant bypass still active ─────────────────────
+
+        /// <summary>
+        /// Bug #112 regression guard (sync): With DefaultTenantIsolation=true (multi-tenant),
+        /// calling GetAll&lt;TenantProduct&gt;(dc, null) twice must hit the DB BOTH times —
+        /// the #112 bypass must still be active for the genuine cross-tenant risk.
+        /// </summary>
+        [TestMethod]
+        public void MultiTenant_ITenantType_with_null_tenantId_bypasses_cache_both_calls()
+        {
+            using var conn = new SqliteConnection("DataSource=:memory:");
+            conn.Open();
+            var (ctx, svc) = CreateMultiTenant(conn);
+
+            ctx.TenantProducts.Add(new TenantProduct
+            {
+                ID = Guid.NewGuid(),
+                Name = "MT-Product-Initial",
+                TenantCode = "TenantA"
+            });
+            ctx.SaveChanges();
+
+            // First call: ITenant + null tenantId + multi-tenant → bypass, DB hit.
+            var first = svc.GetAll<TenantProduct>(ctx, tenantId: null);
+            Assert.AreEqual(1, first.Count, "Multi-tenant first call: 1 row from DB");
+
+            // Insert a new row — if bypass is active, second call re-queries and sees 2.
+            ctx.TenantProducts.Add(new TenantProduct
+            {
+                ID = Guid.NewGuid(),
+                Name = "MT-Product-Second",
+                TenantCode = "TenantB"
+            });
+            ctx.SaveChanges();
+
+            // Second call: bypass must still fire → re-query → sees 2 rows (not cached).
+            var second = svc.GetAll<TenantProduct>(ctx, tenantId: null);
+
+            Assert.AreEqual(2, second.Count,
+                "Multi-tenant: second call with null tenantId on ITenant type must bypass cache (#112 protection intact). " +
+                "Both calls must go to DB.");
+        }
+
+        // ── Test 4 (async): multi-tenant bypass still active ────────────────────
+
+        /// <summary>
+        /// Bug #112 regression guard (async): same invariant as test 3 for GetAllAsync.
+        /// </summary>
+        [TestMethod]
+        public async Task MultiTenant_ITenantType_with_null_tenantId_bypasses_cache_both_calls_async()
+        {
+            using var conn = new SqliteConnection("DataSource=:memory:");
+            conn.Open();
+            var (ctx, svc) = CreateMultiTenant(conn);
+
+            ctx.TenantProducts.Add(new TenantProduct
+            {
+                ID = Guid.NewGuid(),
+                Name = "MT-Async-Initial",
+                TenantCode = "TenantA"
+            });
+            ctx.SaveChanges();
+
+            var first = await svc.GetAllAsync<TenantProduct>(ctx, tenantId: null);
+            Assert.AreEqual(1, first.Count, "Multi-tenant async first call: 1 row from DB");
+
+            ctx.TenantProducts.Add(new TenantProduct
+            {
+                ID = Guid.NewGuid(),
+                Name = "MT-Async-Second",
+                TenantCode = "TenantB"
+            });
+            ctx.SaveChanges();
+
+            var second = await svc.GetAllAsync<TenantProduct>(ctx, tenantId: null);
+
+            Assert.AreEqual(2, second.Count,
+                "Multi-tenant async: second call with null tenantId on ITenant type must bypass cache (#112 protection intact).");
+        }
+    }
+
     // ─── M10 fix: semaphore-timeout fall-through must not call SetCache ──────────
 
     /// <summary>

@@ -5,6 +5,7 @@
 ### Fixes
 
 - **DataContext.Run() parameterized raw SQL works on Oracle** (#147): parameters are built via the provider-agnostic `DbCommand.CreateParameter()` factory; removes the Oracle `NotSupportedException` stopgap from #145 in the Run path.
+- **LookupCache: ITenant types are cached again in single-tenant mode** (#168): the #112/#113 cross-tenant bypass now only applies when tenant isolation is enabled (DefaultTenantIsolation=true); single-tenant apps (DefaultTenantIsolation=false) cache ITenant lookups under the global key instead of querying the DB on every call.
 
 ## [10.5.4] - 2026-06-04
 
