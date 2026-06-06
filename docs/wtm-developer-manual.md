@@ -1,6 +1,8 @@
 # WTM 開發與使用手冊
 
-> **版本**：10.5.4 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-06-04
+> **版本**：10.5.5 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-06-06
+>
+> **10.5.5 重點**（patch）：兩個相容性修復。`DataContext.Run()` 參數化 raw SQL 現在於 **Oracle** 可用（改用 provider-agnostic 的 `DbCommand.CreateParameter()` 建參數，移除 #145 對 Oracle 丟 `NotSupportedException` 的 stopgap；無新 API、無介面變更，#147）。`LookupCache` 在**單租戶**部署（`LookupCacheOptions.DefaultTenantIsolation = false`）下恢復對 `ITenant` 型別（如 `FrameworkUser`）的快取——#112/#113 的跨租戶繞過現在只在租戶隔離實際啟用（`DefaultTenantIsolation = true`）時才生效，單租戶 app 改用全域 key 快取而非每次查 DB；多租戶跨租戶保護不變（#168）。詳見 `CHANGELOG.md` `[10.5.5]`。
 >
 > **10.5.4 重點**（patch，bug-hunt remediation）：對抗式 bug 獵捕（Opus orchestrate → Sonnet 偵查 → 獨立 skeptic 對抗驗證 → Opus review）修復 **CRITICAL(1) + HIGH(20) + MEDIUM(24) + LOW(20) = 65 個對抗驗證確認缺陷**，全數相容（無 breaking change）。新增/變更的使用者可見表面（皆 opt-in 或非破壞多載）：`DataContext.EnableSensitiveQueryLogging`（opt-in，預設 `false`；EF Core 敏感查詢參數日誌現需顯式開啟，避免 debug 模式洩漏 PII，見 §10）；`MssqlBulkLoader` 逾時可設定（建構參數 `timeoutSeconds`，預設 300s，取代原無限 `0`，見 §8）；`IDashboardService.GetWidgetDataAsync` 新增 `tenantId` 非破壞多載（default interface member，租戶隔離，見 §9）；`FilterCondition.Values`（In/NotIn 的 List 形式優先於逗號字串 `Value`，見 §7）；`BaseImportVM` 實作 `IDisposable`（釋放 `XSSFWorkbook`，見 §4.5）；Analysis SaveQuery 加 per-user 數量上限 + `AnalysisSavedQuery.ConfigJson` `[StringLength(65536)]`（見 §7）。詳見 `CHANGELOG.md` `[10.5.4]`。
 
@@ -4354,7 +4356,7 @@ public class ProductVM : BaseCRUDVM<Product>
 ```xml
 <Project>
   <PropertyGroup>
-    <VersionPrefix>10.5.4</VersionPrefix>
+    <VersionPrefix>10.5.5</VersionPrefix>
   </PropertyGroup>
 </Project>
 ```
