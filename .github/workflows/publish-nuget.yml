@@ -168,6 +168,7 @@ jobs:
             git fetch github dotnet10
             git merge github/dotnet10 \
               -X ours \
+              --allow-unrelated-histories \
               -m "merge: sync Gitea release to GitHub" \
               --no-edit
             # Retry after merge; still failing means a genuine conflict we
