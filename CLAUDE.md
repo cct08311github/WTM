@@ -28,31 +28,16 @@ Active branch: `dotnet10`. Origin: Gitea (`mac-mini.tailde842d.ts.net/chiu0831/W
 
 ## Architecture at a Glance
 
-| Project | Role |
-|---------|------|
-| `WalkingTec.Mvvm.Core` | Core: VMs, DataContext, Models, Analysis engine, WTMContext |
-| `WalkingTec.Mvvm.Mvc` | Controllers, startup extensions, JS assets, API |
-| `WalkingTec.Mvvm.TagHelpers.LayUI` | LayUI TagHelpers (Grid, Form, Dialog, etc.) |
-| `WalkingTec.Mvvm.Etl` | ETL module |
-
-Four VM types: `BaseCRUDVM<T>`, `BasePagedListVM<T,S>`, `BaseImportVM<T>`, `BaseBatchVM<T>` — all extend `BaseVM`.
-
-WTMContext (10.1.0) was refactored from a God Object into focused `IWtm*Service` interfaces
-(`IWtmDataContextFactory`, `IWtmLogService`, `ITokenService`, `IWtmAuthService`, `IWtmTenantService`,
-`IWtmVmFactory`, `IWtmUserCacheService`, `IWtmFileHandler`, etc.). Register via `services.AddWtmContext(config)`.
-Full list and roles → `.claude/rules/architecture.md`.
-
-Startup: `services.AddWtmContext(config)` → `app.UseWtmContext()` → `app.UseWtmStaticFiles()`.
+Four projects: `Core` (VMs, DataContext, Models, Analysis, WTMContext), `Mvc` (Controllers, startup, API),
+`TagHelpers.LayUI` (UI), `Etl` (data pipeline). Four VM types all extend `BaseVM`.
+WTMContext uses focused `IWtm*Service` interfaces. Startup: `AddWtmContext` → `UseWtmContext` → `UseWtmStaticFiles`.
+Full detail → `.claude/rules/architecture.md`.
 
 ## Security Summary
 
-Core safeguards (full detail in `.claude/rules/architecture.md` § Security):
-
-- Passwords: PBKDF2 with legacy MD5 auto-migration
-- JWT: access + refresh rotation, `jti` replay guard, `_remotetoken` signature-validated
-- Analysis Mode: field whitelist before Expression Tree
-- File upload: path-traversal guard
-- `UpdateModelProperty` / `CreateVM(string)`: blocklist + type validation
+Passwords (PBKDF2 + legacy MD5 migration), JWT (access/refresh rotation + `jti` replay guard),
+Analysis Mode (field whitelist before Expression Tree), file upload (path-traversal guard),
+dynamic ops (blocklist + type validation). Full detail → `.claude/rules/architecture.md` § Security.
 
 ## Quick Commands
 
@@ -89,7 +74,8 @@ Detail + workaround SOP → `docs/ci-operations.md`. Tracking: Issue #11.
 | File | Purpose |
 |------|---------|
 | `version.props` | Single source of framework version |
-| `common.props` | Centralized NuGet package versions |
+| `Directory.Packages.props` | Central Package Management — all NuGet versions |
+| `common.props` | Package metadata (authors, license, repo URL) |
 | `global.json` | Pins .NET SDK 10.0.0+ (`rollForward: latestFeature`) |
 | `CHANGELOG.md` | Version history (update when releasing) |
 | `docs/analysis-mode.md` | Analysis Mode manual |
