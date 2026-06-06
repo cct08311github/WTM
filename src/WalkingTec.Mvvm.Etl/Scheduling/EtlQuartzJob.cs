@@ -66,10 +66,17 @@ public class EtlQuartzJob : WtmJob
         if (jobDef.Status != EtlJobStatus.Enabled && jobDef.Status != EtlJobStatus.Failed)
             return;
 
-        // 4. 更新 Status = Running
+        // 4. 更新 Status = Running — targeted update avoids full entity round-trip.
+        // Also stamp UpdateTime to preserve ApplyAuditFields parity (TimeProvider.GetLocalNow().DateTime).
+        // Background scheduler has no HTTP user context so UpdateBy is left unchanged (null parity with old code).
+        // Keep jobDef.Status in memory so the finally-block Update picks up the correct value.
         jobDef.Status = EtlJobStatus.Running;
-        dc.Set<EtlJobDefinition>().Update(jobDef);
-        await dc.SaveChangesAsync();
+        var runningUpdateTime = Wtm.TimeProvider.GetLocalNow().DateTime;
+        await dc.Set<EtlJobDefinition>()
+            .Where(j => j.ID == jobDefId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(j => j.Status, EtlJobStatus.Running)
+                .SetProperty(j => j.UpdateTime, runningUpdateTime));
 
         var startedAt = Wtm.TimeProvider.GetUtcNow().UtcDateTime;
 

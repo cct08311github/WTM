@@ -40,19 +40,30 @@ public class MssqlSource : IEtlSource, IAsyncDisposable
 
             await using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess, cancellationToken);
 
+            // Hoist GetName/GetFieldType out of the per-batch loop — the reader schema
+            // is fixed for the lifetime of one query execution.
+            int fieldCount = reader.FieldCount;
+            var colNames = new string[fieldCount];
+            var colTypes = new Type[fieldCount];
+            for (int i = 0; i < fieldCount; i++)
+            {
+                colNames[i] = reader.GetName(i);
+                colTypes[i] = reader.GetFieldType(i) ?? typeof(object);
+            }
+
             while (true)
             {
                 var batch = new DataTable();
-                for (int i = 0; i < reader.FieldCount; i++)
+                for (int i = 0; i < fieldCount; i++)
                 {
-                    batch.Columns.Add(reader.GetName(i), reader.GetFieldType(i) ?? typeof(object));
+                    batch.Columns.Add(colNames[i], colTypes[i]);
                 }
 
                 int count = 0;
                 while (count < batchSize && await reader.ReadAsync(cancellationToken))
                 {
                     var row = batch.NewRow();
-                    for (int i = 0; i < reader.FieldCount; i++)
+                    for (int i = 0; i < fieldCount; i++)
                     {
                         row[i] = reader.IsDBNull(i) ? DBNull.Value : reader.GetValue(i);
                     }

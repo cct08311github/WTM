@@ -2,6 +2,7 @@
 using System;
 using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -16,18 +17,27 @@ namespace WalkingTec.Mvvm.Etl.Test.Scheduling;
 /// <summary>
 /// 測試 EtlSchedulerService.ResetGhostRunningJobsAsync()：
 /// 服務啟動時將上次崩潰遺留的 Running Job 重置為 Failed。
+///
+/// SQLite shared in-memory (instead of EF InMemory) so that
+/// ExecuteUpdateAsync in scheduler paths works correctly.
 /// </summary>
 [TestClass]
-public class GhostRunningJobsTests
+public class GhostRunningJobsTests : IDisposable
 {
     private EtlTestDataContext _dc = null!;
     private IServiceProvider _sp = null!;
+    // Keep-alive connection holds the shared SQLite in-memory DB alive across
+    // the EtlTestDataContext scope (which may open/close its own connection).
+    private SqliteConnection _keepAlive = null!;
 
     [TestInitialize]
     public void Setup()
     {
-        var dbName = Guid.NewGuid().ToString();
-        _dc = new EtlTestDataContext(dbName, DBTypeEnum.Memory);
+        var dbName = $"GhostJobs_{Guid.NewGuid():N}";
+        _keepAlive = new SqliteConnection($"DataSource={dbName}?mode=memory&cache=shared");
+        _keepAlive.Open();
+        _dc = new EtlTestDataContext($"DataSource={dbName}?mode=memory&cache=shared", DBTypeEnum.SQLite);
+        _dc.Database.EnsureCreated();
         var wtm = MockWtmContext.CreateWtmContext(_dc);
 
         var services = new ServiceCollection();
@@ -105,4 +115,14 @@ public class GhostRunningJobsTests
         await svc.ResetGhostRunningJobsAsync(); // should not throw
         Assert.AreEqual(0, _dc.Set<EtlRunLog>().Count());
     }
+
+    [TestCleanup]
+    public void Cleanup()
+    {
+        _dc?.Dispose();
+        _keepAlive?.Close();
+        _keepAlive?.Dispose();
+    }
+
+    public void Dispose() => Cleanup();
 }

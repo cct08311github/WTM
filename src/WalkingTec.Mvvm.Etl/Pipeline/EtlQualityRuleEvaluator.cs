@@ -51,6 +51,11 @@ public static class EtlQualityRuleEvaluator
         // 預先決定每個規則的欄位 index — 規則欄不存在於表中就丟例外
         // （表示 mapping / config 對不上，不該悄悄忽略）
         var ruleColIdx = new int[rules.Count];
+        // Pre-build HashSet<string> for In-rules so per-row Contains is O(1) instead of O(n).
+        // StringComparer.Ordinal matches the case-sensitivity of the previous IList.Contains
+        // (which used the default object.Equals → string ordinal comparison).
+        // Allowed property stays IList<string> — no public API change.
+        var inRuleSets = new HashSet<string>?[rules.Count];
         for (int i = 0; i < rules.Count; i++)
         {
             var col = table.Columns[rules[i].Column];
@@ -61,6 +66,11 @@ public static class EtlQualityRuleEvaluator
                     nameof(rules));
             }
             ruleColIdx[i] = col.Ordinal;
+            if (rules[i].RuleType == EtlQualityRuleType.In
+                && rules[i].Allowed != null && rules[i].Allowed!.Count > 0)
+            {
+                inRuleSets[i] = new HashSet<string>(rules[i].Allowed!, StringComparer.Ordinal);
+            }
         }
 
         var keepRows = new List<DataRow>(table.Rows.Count);
@@ -70,7 +80,22 @@ public static class EtlQualityRuleEvaluator
             string? violation = null;
             for (int i = 0; i < rules.Count; i++)
             {
-                violation = Evaluate(rules[i], row[ruleColIdx[i]]);
+                // Fast-path for In-rules: use pre-built HashSet when available.
+                if (inRuleSets[i] != null)
+                {
+                    var val = row[ruleColIdx[i]];
+                    if (val != null && val != DBNull.Value)
+                    {
+                        var sv = val.ToString() ?? string.Empty;
+                        if (!inRuleSets[i]!.Contains(sv))
+                            violation = $"{rules[i].Column}={Truncate(sv)} not in allow-list (rule: In)";
+                    }
+                    // else: null/DBNull → same pass-through as Evaluate
+                }
+                else
+                {
+                    violation = Evaluate(rules[i], row[ruleColIdx[i]]);
+                }
                 if (violation != null) { break; }
             }
             if (violation == null)

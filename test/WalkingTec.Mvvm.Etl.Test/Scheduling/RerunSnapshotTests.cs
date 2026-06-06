@@ -2,6 +2,7 @@
 using System;
 using System.Threading.Tasks;
 using FluentAssertions;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Quartz;
@@ -19,18 +20,26 @@ namespace WalkingTec.Mvvm.Etl.Test.Scheduling;
 /// 2. JobDataMap override — 重跑觸發帶著快照 watermark，
 ///    使 EtlQuartzJob 優先使用此值而非重新讀取 DB（防 TOCTOU 競態）。
 /// 3. Watermark 優先級邏輯 — 直接驗證 EtlQuartzJob 從 JobDataMap 的選擇邏輯。
+///
+/// SQLite shared in-memory (instead of EF InMemory) so that
+/// ExecuteUpdateAsync in scheduler paths works correctly.
 /// </summary>
 [TestClass]
-public class RerunSnapshotTests
+public class RerunSnapshotTests : IDisposable
 {
     private EtlTestDataContext _dc = null!;
     private IServiceProvider _sp = null!;
+    // Keep-alive connection holds the shared SQLite in-memory DB alive for the test lifetime.
+    private SqliteConnection _keepAlive = null!;
 
     [TestInitialize]
     public void Setup()
     {
-        var dbName = Guid.NewGuid().ToString();
-        _dc = new EtlTestDataContext(dbName, DBTypeEnum.Memory);
+        var dbName = $"RerunSnapshot_{Guid.NewGuid():N}";
+        _keepAlive = new SqliteConnection($"DataSource={dbName}?mode=memory&cache=shared");
+        _keepAlive.Open();
+        _dc = new EtlTestDataContext($"DataSource={dbName}?mode=memory&cache=shared", DBTypeEnum.SQLite);
+        _dc.Database.EnsureCreated();
         var wtm = MockWtmContext.CreateWtmContext(_dc);
 
         var services = new ServiceCollection();
@@ -278,6 +287,16 @@ public class RerunSnapshotTests
         jobDataMap.ContainsKey("EtlWatermarkOverride").Should().BeFalse(
             "Normal scheduled trigger must not have EtlWatermarkOverride in JobDataMap");
     }
+
+    [TestCleanup]
+    public void Cleanup()
+    {
+        _dc?.Dispose();
+        _keepAlive?.Close();
+        _keepAlive?.Dispose();
+    }
+
+    public void Dispose() => Cleanup();
 }
 
 /// <summary>

@@ -508,11 +508,19 @@ public class EtlPipelineExecutor
         if (!batch.Columns.Contains(columnName) || batch.Rows.Count == 0)
             return null;
 
-        var values = batch.AsEnumerable()
-            .Select(r => r[columnName])
-            .Where(v => v != null && v != DBNull.Value)
-            .ToList();
-
-        return values.Count == 0 ? null : values.Max();
+        // Single-pass: pre-resolve ordinal once; use Comparer<object>.Default to
+        // preserve null-semantics identical to the previous LINQ .Max() — no
+        // IComparable cast that would throw on atypical DataTable column types.
+        int ord = batch.Columns[columnName]!.Ordinal;
+        var comparer = Comparer<object>.Default;
+        object? max = null;
+        foreach (DataRow row in batch.Rows)
+        {
+            var v = row[ord];
+            if (v == null || v == DBNull.Value) continue;
+            if (max == null || comparer.Compare(v, max) > 0)
+                max = v;
+        }
+        return max;
     }
 }

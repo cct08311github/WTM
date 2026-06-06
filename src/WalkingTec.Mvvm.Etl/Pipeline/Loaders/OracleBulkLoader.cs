@@ -37,9 +37,11 @@ public class OracleBulkLoader : IBulkLoader
 
         foreach (var col in columns)
         {
+            // Pre-resolve ordinal once to avoid per-row string dictionary lookup.
+            int ord = col.Ordinal;
             var values = new object[batch.Rows.Count];
             for (int i = 0; i < batch.Rows.Count; i++)
-                values[i] = batch.Rows[i][col.ColumnName];
+                values[i] = batch.Rows[i][ord];
 
             cmd.Parameters.Add(new OracleParameter(col.ColumnName, values));
         }

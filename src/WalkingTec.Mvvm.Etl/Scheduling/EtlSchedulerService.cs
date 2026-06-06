@@ -345,18 +345,21 @@ public class EtlSchedulerService
 
         await _scheduler.ScheduleJob(job, trigger);
 
-        // 更新 NextFireAt 並持久化到 DB
+        // 更新 NextFireAt — targeted ExecuteUpdateAsync avoids entity materialisation.
+        // Also stamp UpdateTime to preserve ApplyAuditFields parity (TimeProvider.GetLocalNow().DateTime).
+        // Background scheduler has no HTTP user context so UpdateBy is left unchanged (null parity with old code).
         jobDef.NextFireAt = trigger.GetNextFireTimeUtc()?.UtcDateTime;
+        var nextFireAt = jobDef.NextFireAt;
+        var jobDefId = jobDef.ID;
+        var scheduleUpdateTime = (_sp.GetService<TimeProvider>() ?? TimeProvider.System).GetLocalNow().DateTime;
 
         using var scope = _sp.CreateScope();
         var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
-        var tracked = await wtm.DC.Set<EtlJobDefinition>().FindAsync(jobDef.ID);
-        if (tracked != null)
-        {
-            tracked.NextFireAt = jobDef.NextFireAt;
-            wtm.DC.Set<EtlJobDefinition>().Update(tracked);
-            await wtm.DC.SaveChangesAsync();
-        }
+        await wtm.DC.Set<EtlJobDefinition>()
+            .Where(j => j.ID == jobDefId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(j => j.NextFireAt, nextFireAt)
+                .SetProperty(j => j.UpdateTime, scheduleUpdateTime));
     }
 
     private async Task UpdateStatusAsync(Guid jobId, EtlJobStatus status)
