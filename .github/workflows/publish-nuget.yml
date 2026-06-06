@@ -102,6 +102,8 @@ jobs:
           git checkout -b sync-to-github-tmp
           git config user.email "ci@wtm-sync"
           git config user.name "WTM Sync Bot"
+          # Preserve the sanitize rules before the excludes step deletes .sync/.
+          cp .sync/github-sanitize.sed "$RUNNER_TEMP/wtm-sanitize.sed"
 
       - name: Sync manifest — apply github-replace.txt
         if: startsWith(github.ref, 'refs/tags/')
@@ -147,7 +149,7 @@ jobs:
             \( -name '*.md' -o -name '*.yml' -o -name '*.props' \
                -o -name '*.csproj' -o -name '*.json' -o -name '*.cs' \
                -o -name '*.sh' \) \
-            -print | xargs sed -i -f .sync/github-sanitize.sed
+            -print | xargs sed -i -f "$RUNNER_TEMP/wtm-sanitize.sed"
           git add -A
           # Bundle all manifest changes into a single commit.
           git diff --cached --quiet || \
