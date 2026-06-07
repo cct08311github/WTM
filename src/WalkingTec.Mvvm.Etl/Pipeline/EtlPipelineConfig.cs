@@ -128,4 +128,14 @@ public record EtlPipelineConfig
     /// 為 null / 空 list 時此設定無效。
     /// </summary>
     public EtlQualityRuleAction QualityRuleAction { get; init; } = EtlQualityRuleAction.Drop;
+
+    /// <summary>
+    /// MSSQL watermark 參數型別（opt-in，10.6+）。
+    /// 設為非 <c>null</c> 時，<see cref="MssqlSource"/> 改用明確型別的
+    /// <c>SqlParameter</c>（避免 <c>AddWithValue</c> 的隱式型別推斷導致
+    /// 錯誤的執行計劃，例如 <c>datetime2</c> watermark 被推斷為 <c>nvarchar</c>）。
+    /// <c>null</c>（預設）= 維持現有 <c>AddWithValue</c> 行為，
+    /// 與 10.5.x 完全一致。
+    /// </summary>
+    public SqlDbType? WatermarkSqlType { get; init; } = null;
 }

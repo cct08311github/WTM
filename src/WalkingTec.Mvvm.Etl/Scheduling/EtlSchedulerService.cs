@@ -168,13 +168,18 @@ public class EtlSchedulerService
     {
         using var scope = _sp.CreateScope();
         var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
-        var jobDef = await wtm.DC.Set<EtlJobDefinition>().FindAsync(jobId);
-        if (jobDef != null)
-        {
-            jobDef.SkipCount++;
-            wtm.DC.Set<EtlJobDefinition>().Update(jobDef);
-            await wtm.DC.SaveChangesAsync();
-        }
+
+        // NOTE: ExecuteUpdateAsync bypasses EF ChangeTracker / ApplyAuditFields interceptor.
+        // UpdateTime is stamped explicitly here to match the exact value that
+        // ApplyAuditFields would have written: TimeProvider.GetLocalNow().DateTime.
+        // SkipCount is incremented server-side (j => j.SkipCount + 1) to eliminate
+        // the read-then-write ABA race present in the old FindAsync + ++ + SaveChangesAsync path.
+        var now = (_sp.GetService<TimeProvider>() ?? TimeProvider.System).GetLocalNow().DateTime;
+        await wtm.DC.Set<EtlJobDefinition>()
+            .Where(j => j.ID == jobId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(j => j.SkipCount, j => j.SkipCount + 1)
+                .SetProperty(j => j.UpdateTime, now));
     }
 
     /// <summary>🔄 啟用</summary>
@@ -366,13 +371,19 @@ public class EtlSchedulerService
     {
         using var scope = _sp.CreateScope();
         var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
-        var jobDef = await wtm.DC.Set<EtlJobDefinition>().FindAsync(jobId);
-        if (jobDef != null)
-        {
-            jobDef.Status = status;
-            wtm.DC.Set<EtlJobDefinition>().Update(jobDef);
-            await wtm.DC.SaveChangesAsync();
-        }
+
+        // NOTE: ExecuteUpdateAsync bypasses EF ChangeTracker / ApplyAuditFields interceptor.
+        // UpdateTime is stamped explicitly here to match the exact value that
+        // ApplyAuditFields would have written: TimeProvider.GetLocalNow().DateTime.
+        // Background scheduler has no HTTP user context so UpdateBy is left unchanged
+        // (null parity with the old SaveChanges path — the interceptor also leaves UpdateBy
+        // as-is when there is no active HTTP session).
+        var now = (_sp.GetService<TimeProvider>() ?? TimeProvider.System).GetLocalNow().DateTime;
+        await wtm.DC.Set<EtlJobDefinition>()
+            .Where(j => j.ID == jobId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(j => j.Status, status)
+                .SetProperty(j => j.UpdateTime, now));
     }
 
     private void EnsureScheduler()

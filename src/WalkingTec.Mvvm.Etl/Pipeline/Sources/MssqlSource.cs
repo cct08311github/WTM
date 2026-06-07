@@ -16,6 +16,17 @@ public class MssqlSource : IEtlSource, IAsyncDisposable
 {
     private SqlConnection? _connection;
 
+    /// <summary>
+    /// Watermark 參數的 SQL 型別（opt-in，10.6+）。
+    /// 設為非 <c>null</c> 時，改用明確型別的 <c>SqlParameter</c>，
+    /// 避免 <c>AddWithValue</c> 的隱式型別推斷（例如 <c>datetime2</c>
+    /// watermark 被推斷為 <c>nvarchar</c>，導致索引無法使用）。
+    /// <c>null</c>（預設）= 維持 <c>AddWithValue</c> 行為，
+    /// 與 10.5.x 完全一致。
+    /// 既有的 <c>new MssqlSource()</c> 呼叫端不受影響。
+    /// </summary>
+    public SqlDbType? WatermarkSqlType { get; set; } = null;
+
     public async IAsyncEnumerable<DataTable> ExtractBatchesAsync(
         string connectionString,
         string queryTemplate,
@@ -35,7 +46,18 @@ public class MssqlSource : IEtlSource, IAsyncDisposable
 
             if (watermarkValue != null)
             {
-                cmd.Parameters.AddWithValue("@watermark", watermarkValue);
+                if (WatermarkSqlType.HasValue)
+                {
+                    // Opt-in explicit typed parameter: avoids AddWithValue implicit type inference
+                    // (e.g. a datetime2 watermark being inferred as nvarchar, killing index seeks).
+                    // WatermarkSqlType == null (default) → AddWithValue path, identical to 10.5.x.
+                    var p = new SqlParameter("@watermark", WatermarkSqlType.Value) { Value = watermarkValue };
+                    cmd.Parameters.Add(p);
+                }
+                else
+                {
+                    cmd.Parameters.AddWithValue("@watermark", watermarkValue);
+                }
             }
 
             await using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess, cancellationToken);

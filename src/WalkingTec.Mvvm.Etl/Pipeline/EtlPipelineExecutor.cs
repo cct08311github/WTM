@@ -94,6 +94,15 @@ public class EtlPipelineExecutor
                 cancellationToken);
 
             // 3. Extract + Load to staging
+
+            // Opt-in: propagate WatermarkSqlType to MssqlSource when config specifies it.
+            // This is a set property (not init) so it can be applied here after construction.
+            // Cast is safe: no-op when source is not MssqlSource (e.g. OracleSource).
+            if (config.WatermarkSqlType.HasValue && _source is WalkingTec.Mvvm.Etl.Pipeline.Sources.MssqlSource mssqlSrc)
+            {
+                mssqlSrc.WatermarkSqlType = config.WatermarkSqlType;
+            }
+
             var wmParam = watermark.GetParameterValue();
             // Capture staging column names from the first transformed batch so we can
             // pass them to the concrete-type MergeAsync overload and skip the

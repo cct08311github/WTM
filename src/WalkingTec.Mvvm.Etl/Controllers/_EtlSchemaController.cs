@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Etl.Schema;
@@ -22,16 +23,42 @@ namespace WalkingTec.Mvvm.Mvc;
 /// connection string from outside. The connection user determines
 /// what tables are visible, matching the existing ETL job-execution
 /// permission model.
+///
+/// When <see cref="IMemoryCache"/> is registered in the DI container,
+/// schema results are cached for 60 seconds
+/// (<see cref="CachingEtlSchemaService.DefaultTtlSeconds"/>) to reduce
+/// repeated round-trips to the source DB during the "browse tables"
+/// UX flow. Behavior without <c>IMemoryCache</c> is unchanged (opt-in, 10.6+).
 /// </remarks>
 [ActionDescription("ETL Schema")]
 public class _EtlSchemaController : BaseController
 {
     private readonly ILogger<_EtlSchemaController> _logger;
+    private readonly IMemoryCache? _cache;
 
-    public _EtlSchemaController(ILogger<_EtlSchemaController> logger)
+    /// <param name="logger">Logger (required).</param>
+    /// <param name="cache">
+    /// Optional memory cache. When present, schema results are cached with a
+    /// 60 s TTL (<see cref="CachingEtlSchemaService.DefaultTtlSeconds"/>).
+    /// Inject via <c>AddMemoryCache()</c> in your startup to opt in.
+    /// When <c>null</c>, behavior is identical to 10.5.x (no cache).
+    /// </param>
+    public _EtlSchemaController(
+        ILogger<_EtlSchemaController> logger,
+        IMemoryCache? cache = null)
     {
         _logger = logger;
+        _cache = cache;
     }
+
+    /// <summary>
+    /// Picks the schema service: caching when IMemoryCache is available,
+    /// plain otherwise. Behavior without cache is identical to 10.5.x.
+    /// </summary>
+    private IEtlSchemaService CreateSchemaService(DBTypeEnum dbType) =>
+        _cache != null
+            ? EtlSchemaServiceFactory.CreateWithCache(dbType, _cache)
+            : EtlSchemaServiceFactory.Create(dbType);
 
     /// <summary>
     /// List tables on a connection.
@@ -61,7 +88,7 @@ public class _EtlSchemaController : BaseController
 
         try
         {
-            var svc = EtlSchemaServiceFactory.Create(dbType);
+            var svc = CreateSchemaService(dbType);
             var tables = await svc.ListTablesAsync(cs.Value ?? "", schema, cancellationToken);
             return Ok(tables);
         }
@@ -111,7 +138,7 @@ public class _EtlSchemaController : BaseController
 
         try
         {
-            var svc = EtlSchemaServiceFactory.Create(dbType);
+            var svc = CreateSchemaService(dbType);
             var columns = await svc.ListColumnsAsync(cs.Value ?? "", table, schema, cancellationToken);
             return Ok(columns);
         }
