@@ -1606,9 +1606,20 @@ params string[] groupcode)
         /// <returns>ViewModel</returns>
         public BaseVM CreateVM(string? VmFullName, object? Id = null, object[]? Ids = null, bool passInit = false)
         {
-            var vmType = Type.GetType(VmFullName ?? "");
-
+            // First try Type.GetType (handles assembly-qualified names and same-assembly types).
+            // Then fall back to scanning GlobaInfo.AllAssembly (covers types in the host app
+            // and other loaded assemblies that Type.GetType cannot resolve by short name).
             // Guard: reject unresolvable or non-BaseVM types (#767)
+            var vmType = Type.GetType(VmFullName ?? "");
+            if (vmType == null && GlobaInfo?.AllAssembly != null)
+            {
+                foreach (var asm in GlobaInfo.AllAssembly)
+                {
+                    vmType = asm.GetType(VmFullName ?? "");
+                    if (vmType != null) break;
+                }
+            }
+
             if (vmType == null || !typeof(BaseVM).IsAssignableFrom(vmType))
             {
                 throw new ArgumentException($"Invalid or unregistered ViewModel type: {VmFullName}");

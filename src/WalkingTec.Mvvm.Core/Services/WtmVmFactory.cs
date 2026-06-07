@@ -100,7 +100,19 @@ namespace WalkingTec.Mvvm.Core.Services
         public BaseVM CreateVM(WTMContext wtm, string? vmFullName, object? id = null,
             object[]? ids = null, bool passInit = false)
         {
-            return CreateVM(wtm, Type.GetType(vmFullName ?? ""), id, ids, null, passInit);
+            // First try Type.GetType (handles assembly-qualified names and same-assembly types).
+            // Then fall back to scanning GlobaInfo.AllAssembly so host-app VMs are resolved (#767).
+            var vmType = Type.GetType(vmFullName ?? "");
+            if (vmType == null && wtm.GlobaInfo?.AllAssembly != null)
+            {
+                foreach (var asm in wtm.GlobaInfo.AllAssembly)
+                {
+                    vmType = asm.GetType(vmFullName ?? "");
+                    if (vmType != null) break;
+                }
+            }
+
+            return CreateVM(wtm, vmType, id, ids, null, passInit);
         }
 
         #region Private helpers

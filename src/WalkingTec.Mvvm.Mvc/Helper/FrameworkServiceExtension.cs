@@ -876,6 +876,25 @@ namespace WalkingTec.Mvvm.Mvc
             var localfactory = app.ApplicationServices.GetRequiredService<IStringLocalizerFactory>();
             var lop = app.ApplicationServices.GetService<WtmLocalizationOption>();
 
+            // WTM-SEC-006: IsQuickDebug bypasses ALL RBAC checks (WtmAuthorizationService:30,
+            // PrivilegeFilter:99). Treat it as a P0 misconfiguration in any non-Development
+            // environment — fail fast at startup so operators cannot accidentally deploy with
+            // it enabled, mirroring the JWT weak-key guard in AddWtmAuthentication.
+            var env = app.ApplicationServices.GetService<IWebHostEnvironment>();
+            if (configs.IsQuickDebug == true && env != null && !env.IsDevelopment())
+            {
+                var logger = app.ApplicationServices.GetService<ILoggerFactory>()
+                    ?.CreateLogger("WTM.Security");
+                logger?.LogCritical(
+                    "[WTM Security] IsQuickDebug=true in a non-Development environment. " +
+                    "This bypasses ALL RBAC checks and must not be used in production. " +
+                    "Set IsQuickDebug=false or run with ASPNETCORE_ENVIRONMENT=Development.");
+                throw new InvalidOperationException(
+                    "[WTM Security] IsQuickDebug=true is not allowed outside of the Development environment. " +
+                    "It bypasses all RBAC checks (WtmAuthorizationService, PrivilegeFilter). " +
+                    "Set IsQuickDebug=false in your production configuration.");
+            }
+
             //获取所有程序集
             //var mvc = GetRuntimeAssembly("WalkingTec.Mvvm.Mvc");
             //if (mvc != null && gd.AllAssembly.Contains(mvc) == false)

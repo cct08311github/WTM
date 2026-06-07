@@ -48,6 +48,20 @@ namespace WalkingTec.Mvvm.Mvc
             RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
 
         /// <summary>
+        /// MVC-010: Validates that the supplied connection-string key is an explicitly
+        /// configured key in Configs.Connections.  Returns true if the key is null/empty
+        /// (caller will use the default) or is a known key.  Returns false for any
+        /// unrecognised value — the caller must reject the request (400/throw).
+        /// </summary>
+        private bool IsKnownConnectionKey(string? csKey)
+        {
+            if (string.IsNullOrEmpty(csKey))
+                return true; // null → default; always safe
+            return ConfigInfo.Connections.Any(c =>
+                string.Equals(c.Key, csKey, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
         /// Returns true if the authenticated caller has the "Admin" role in their
         /// current tenant. Used to gate framework-controller endpoints that are
         /// marked [AllRights] but in fact require admin authority — see #30.
@@ -64,8 +78,13 @@ namespace WalkingTec.Mvvm.Mvc
 
 
 
+        // MVC-006 (BREAKING): Selector was previously [Public] (unauthenticated).
+        // Changed to [AllRights] so an authenticated session is required.
+        // To restore the old open behaviour (e.g. for public kiosk deployments),
+        // set "AllowUnauthenticatedSelector": true in your appsettings.json / Configs.
+        // See CHANGELOG for migration notes.
         [HttpPost]
-        [Public]
+        [AllRights]
         public IActionResult Selector(string _DONOT_USE_VMNAME
             , string _DONOT_USE_KFIELD
             , string _DONOT_USE_VFIELD
@@ -78,6 +97,13 @@ namespace WalkingTec.Mvvm.Mvc
             , string _DONOT_USE_CURRENTCS
         )
         {
+            // MVC-006 opt-out: when AllowUnauthenticatedSelector=true, allow
+            // unauthenticated callers (legacy / public-kiosk mode). Default = false (secure).
+            if (ConfigInfo.AllowUnauthenticatedSelector != true && Wtm.LoginUserInfo == null)
+            {
+                return Unauthorized();
+            }
+
             string cs =_DONOT_USE_CURRENTCS;
             Wtm.CurrentCS = cs;
             var listVM = Wtm.CreateVM(_DONOT_USE_VMNAME, null, null, true) as IBasePagedListVM<TopBasePoco, ISearcher>;
@@ -158,15 +184,15 @@ namespace WalkingTec.Mvvm.Mvc
         [ActionDescription("GetPagingData")]
         public async Task<IActionResult> GetPagingData(string _DONOT_USE_VMNAME, string _DONOT_USE_CS)
         {
+            // MVC-010: reject unknown connection-string keys to prevent lateral DB reads
+            if (!IsKnownConnectionKey(_DONOT_USE_CS))
+                return BadRequest("Unknown connection string key");
+
             var qs = new Dictionary<string, object>();
             foreach (var item in Request.Form.Keys)
             {
                 qs.Add(item, Request.Form[item]);
             }
-            //LogDebug.Info($"QueryString:{JsonConvert.SerializeObject(qs)}");
-            //var vmType = Type.GetType(_DONOT_USE_VMNAME);
-            //var vmCreater = vmType.GetConstructor(Type.EmptyTypes);
-            //var listVM = vmCreater.Invoke(null) as BaseVM;
             Wtm.CurrentCS = _DONOT_USE_CS;
             var listVM = Wtm.CreateVM(_DONOT_USE_VMNAME, null, null, true) as IBasePagedListVM<TopBasePoco, BaseSearcher>;
             listVM.FC = qs;
@@ -225,6 +251,16 @@ namespace WalkingTec.Mvvm.Mvc
         /// <param name="field">属性名</param>
         /// <param name="value">属性值</param>
         /// <returns></returns>
+        /// <summary>
+        /// MVC-004: Override this method to restrict which fields may be edited via
+        /// the inline-grid single-cell endpoint.  The default implementation returns
+        /// <c>true</c> for all fields that pass the built-in blocklist.
+        /// </summary>
+        /// <param name="entity">The entity instance that would be mutated.</param>
+        /// <param name="propertyName">The property name requested by the client.</param>
+        /// <returns><c>true</c> if the edit is allowed; <c>false</c> to return 403.</returns>
+        protected virtual bool CanEditProperty(object entity, string propertyName) => true;
+
         [HttpPost]
         public IActionResult UpdateModelProperty(string _DONOT_USE_VMNAME, Guid id, string field, string value)
         {
@@ -255,18 +291,39 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 value = string.Empty;
             }
+
+            // MVC-004: load the entity via the CRUD VM so field validation, duplicate
+            // checking, and row-level auth are all exercised through the normal VM path.
             var vm = Wtm.CreateVM(_DONOT_USE_VMNAME, id, null, true) as IBaseCRUDVM<TopBasePoco>;
+            if (vm?.Entity == null)
+            {
+                return BadRequest("Entity not found");
+            }
 
             // Verify the property exists and is writable on the entity type
-            var entityType = vm?.Entity?.GetType();
-            var prop = entityType?.GetProperty(field, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+            var entityType = vm.Entity.GetType();
+            var prop = entityType.GetProperty(field, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
             if (prop == null || !prop.CanWrite)
             {
                 return BadRequest("Field not found or not writable");
             }
 
-            vm!.Entity.SetPropertyValue(field, value);
-            DC.SaveChanges();
+            // MVC-004: honour the opt-in per-property authz hook
+            if (!CanEditProperty(vm.Entity, field))
+            {
+                return Forbid();
+            }
+
+            vm.Entity.SetPropertyValue(field, value);
+
+            // MVC-004: route the save through DoEdit() so VM-level Validate() and
+            // DuplicateCheck() apply, exactly as the normal edit endpoint does.
+            vm.DoEdit(false);
+            if (!vm.MSD.IsValid)
+            {
+                var firstError = vm.MSD.GetFirstError();
+                return BadRequest(string.IsNullOrEmpty(firstError) ? "Validation failed" : firstError);
+            }
             return JsonMore("Success");
         }
 
@@ -282,6 +339,10 @@ namespace WalkingTec.Mvvm.Mvc
         [ActionDescription("Export")]
         public IActionResult GetExportExcel(string _DONOT_USE_VMNAME, string _DONOT_USE_CS)
         {
+            // MVC-010: reject unknown connection-string keys to prevent lateral DB reads
+            if (!IsKnownConnectionKey(_DONOT_USE_CS))
+                return BadRequest("Unknown connection string key");
+
             var qs = new Dictionary<string, object>();
             foreach (var item in Request.Query.Keys)
             {
@@ -332,6 +393,9 @@ namespace WalkingTec.Mvvm.Mvc
         [ActionDescription("DownloadTemplate")]
         public IActionResult GetExcelTemplate(string _DONOT_USE_VMNAME, string _DONOT_USE_CS)
         {
+            // MVC-010: reject unknown connection-string keys to prevent lateral DB reads
+            if (!IsKnownConnectionKey(_DONOT_USE_CS))
+                return BadRequest("Unknown connection string key");
             //Wtm.CurrentCS = _DONOT_USE_CS ?? "default";
             var importVM = Wtm.CreateVM(_DONOT_USE_VMNAME) as IBaseImport<BaseTemplateVM>;
             var qs = new Dictionary<string, string>();
@@ -357,12 +421,17 @@ namespace WalkingTec.Mvvm.Mvc
             log.ActionTime = Wtm.TimeProvider.GetLocalNow().DateTime;
             log.ITCode = Wtm.LoginUserInfo?.ITCode ?? string.Empty;
 
-            var controllerDes = ex.Error.TargetSite.DeclaringType.GetCustomAttributes(typeof(ActionDescriptionAttribute), false).Cast<ActionDescriptionAttribute>().FirstOrDefault();
-            var actionDes = ex.Error.TargetSite.GetCustomAttributes(typeof(ActionDescriptionAttribute), false).Cast<ActionDescriptionAttribute>().FirstOrDefault();
-            var postDes = ex.Error.TargetSite.GetCustomAttributes(typeof(HttpPostAttribute), false).Cast<HttpPostAttribute>().FirstOrDefault();
+            // MVC-002: EF dynamic-query exceptions have null TargetSite — guard to
+            // prevent a double-fault that would mask the original error in the log.
+            var targetSite = ex?.Error?.TargetSite;
+            var declaringType = targetSite?.DeclaringType;
+
+            var controllerDes = declaringType?.GetCustomAttributes(typeof(ActionDescriptionAttribute), false).Cast<ActionDescriptionAttribute>().FirstOrDefault();
+            var actionDes = targetSite?.GetCustomAttributes(typeof(ActionDescriptionAttribute), false).Cast<ActionDescriptionAttribute>().FirstOrDefault();
+            var postDes = targetSite?.GetCustomAttributes(typeof(HttpPostAttribute), false).Cast<HttpPostAttribute>().FirstOrDefault();
             //给日志的多语言属性赋值
-            log.ModuleName = controllerDes?.GetDescription(ex.Error.TargetSite.DeclaringType) ?? ex.Error.TargetSite.DeclaringType.Name.Replace("Controller", string.Empty);
-            log.ActionName = actionDes?.GetDescription(ex.Error.TargetSite.DeclaringType) ?? ex.Error.TargetSite.Name;
+            log.ModuleName = controllerDes?.GetDescription(declaringType) ?? declaringType?.Name.Replace("Controller", string.Empty) ?? "Unknown";
+            log.ActionName = actionDes?.GetDescription(declaringType) ?? targetSite?.Name ?? "Unknown";
             if (postDes != null)
             {
                 log.ActionName += "[P]";
@@ -410,6 +479,9 @@ namespace WalkingTec.Mvvm.Mvc
         [ActionDescription("UploadFileRoute")]
         public IActionResult Upload([FromServices] WtmFileProvider fp, string sm = null, string groupName = null, string subdir = null, string extra = null, bool IsTemprory = true, string _DONOT_USE_CS=null)
         {
+            // MVC-010: reject unknown connection-string keys to prevent lateral DB reads
+            if (!IsKnownConnectionKey(_DONOT_USE_CS))
+                return BadRequest("Unknown connection string key");
             var FileData = Request.Form.Files[0];
             var file = fp.Upload(FileData.FileName, FileData.Length, FileData.OpenReadStream(), groupName, subdir, extra, sm, Wtm.CreateDC(cskey: _DONOT_USE_CS));
             return JsonMore(new { Id = file.GetID(), Name = file.FileName });

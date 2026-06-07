@@ -169,7 +169,15 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
             {
                 return Content(Localizer["_Admin.HasMainHost"]);
             }
+            // MVC-008 (DEMO reference fix): only admins may change another user's password.
+            // A non-admin can only change their own password (ITCode matches the login).
             var vm = Wtm.CreateVM<FrameworkUserVM>(id, passInit: true);
+            var isAdmin = Wtm.LoginUserInfo?.Roles?.Any(r =>
+                string.Equals(r.RoleCode, "Admin", StringComparison.OrdinalIgnoreCase)) == true;
+            if (!isAdmin && !string.Equals(vm.Entity?.ITCode, Wtm.LoginUserInfo?.ITCode, StringComparison.OrdinalIgnoreCase))
+            {
+                return Content(Localizer["Sys.NoPrivilege"]);
+            }
             vm.Entity.Password = null;
             return PartialView(vm);
         }
@@ -181,6 +189,14 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
             if (ConfigInfo.HasMainHost && Wtm.LoginUserInfo?.CurrentTenant == null)
             {
                 return Content(Localizer["_Admin.HasMainHost"]);
+            }
+            // MVC-008 (DEMO reference fix): re-check ownership on POST to guard against
+            // direct POST bypassing the GET guard.
+            var isAdmin = Wtm.LoginUserInfo?.Roles?.Any(r =>
+                string.Equals(r.RoleCode, "Admin", StringComparison.OrdinalIgnoreCase)) == true;
+            if (!isAdmin && !string.Equals(vm.Entity?.ITCode, Wtm.LoginUserInfo?.ITCode, StringComparison.OrdinalIgnoreCase))
+            {
+                return Content(Localizer["Sys.NoPrivilege"]);
             }
             var keys = ModelState.Keys.ToList();
             foreach (var item in keys)

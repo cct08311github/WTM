@@ -127,6 +127,17 @@ namespace WalkingTec.Mvvm.Core
 
         #endregion
 
+        #region SelectorAccess
+
+        /// <summary>
+        /// MVC-006 opt-out: when true, the Selector endpoint is accessible without authentication
+        /// (legacy / public-kiosk mode).  Default is false — the secure default added in 10.6.x.
+        /// Set to true in appsettings.json only if your deployment requires unauthenticated selector access.
+        /// </summary>
+        public bool AllowUnauthenticatedSelector { get; set; } = false;
+
+        #endregion
+
         #region Tenant
 
         private bool? _enableTenant;
