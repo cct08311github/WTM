@@ -43,6 +43,14 @@ namespace WalkingTec.Mvvm.Mvc
         [Display(Name = "Codegen.EnableAnalysis")]
         public bool EnableAnalysis { get; set; }
 
+        /// <summary>
+        /// CG-09: When true, apply a name-based smart heuristic for search fields:
+        /// string properties whose names end with "Code", "No", or "Id" get
+        /// CheckEqual instead of CheckContain. Explicit [SearchField(Operator=...)]
+        /// always overrides this heuristic. Default: false (off; preserves current output).
+        /// </summary>
+        public bool UseSmartSearchDefaults { get; set; } = false;
+
         [Display(Name = "Codegen.AuthMode")]
         public ApiAuthMode AuthMode { get; set; }
 
@@ -626,6 +634,69 @@ namespace WalkingTec.Mvvm.Mvc
             return System.Text.RegularExpressions.Regex.Replace(input, @"[^a-zA-Z0-9_\-\.]", "");
         }
 
+        // ---------------------------------------------------------------------------
+        // CG-08: Build the fluent method chain appended after MakeGridHeader(x => x.Foo)
+        // when [ListColumn] is present on the property, or when the type-based width
+        // heuristic applies (absent attribute = current auto behavior, zero extra chain).
+        // ---------------------------------------------------------------------------
+        private static string BuildGridHeaderChain(
+            string fieldName,
+            PropertyInfo? prop,
+            ListColumnAttribute? attr,
+            bool isFkLookup = false)
+        {
+            // Compute the width to emit.
+            int width = 0;
+            if (attr != null && attr.Width > 0)
+            {
+                width = attr.Width;
+            }
+            else
+            {
+                // Type-based heuristic (only applies when no explicit [ListColumn] Width given).
+                if (prop != null)
+                {
+                    var propType = prop.PropertyType;
+                    var baseType = propType.IsNullable() ? propType.GetGenericArguments()[0] : propType;
+                    if (isFkLookup)
+                        width = 180;
+                    else if (baseType == typeof(string))
+                        width = 150;
+                    else if (baseType == typeof(DateTime))
+                        width = 160;
+                    else if (baseType == typeof(bool))
+                        width = 80;
+                    else if (baseType == typeof(int) || baseType == typeof(long) ||
+                             baseType == typeof(decimal) || baseType == typeof(double) ||
+                             baseType == typeof(float) || baseType == typeof(short))
+                        width = 100;
+                }
+            }
+
+            if (attr == null)
+            {
+                // No attribute — emit only the width heuristic when non-zero.
+                return width > 0 ? $".SetWidth({width})" : "";
+            }
+
+            // Attribute present — emit only non-default modifier calls.
+            var chain = new StringBuilder();
+            int emitWidth = attr.Width > 0 ? attr.Width : width;
+            if (emitWidth > 0)
+                chain.Append($".SetWidth({emitWidth})");
+            if (attr.Align != GridColumnAlignEnum.Auto)
+                chain.Append($".SetAlign(GridColumnAlignEnum.{attr.Align})");
+            if (!attr.Sort)
+                chain.Append(".SetSort(false)");
+            if (attr.Hide)
+                chain.Append(".SetHide(true)");
+            if (attr.Fixed != GridColumnFixedEnum.None)
+                chain.Append($".SetFixed(GridColumnFixedEnum.{attr.Fixed})");
+            if (attr.ShowTotal)
+                chain.Append(".SetShowTotal(true)");
+            return chain.ToString();
+        }
+
         /// <summary>
         /// Returns a JSON-safe string value (without surrounding quotes) for use inside
         /// a double-quoted JSON string literal. Defense-in-depth: the [RegularExpression]
@@ -653,6 +724,56 @@ namespace WalkingTec.Mvvm.Mvc
             return input.Replace("\\", "\\\\").Replace("'", "\\'");
         }
 
+        // ---------------------------------------------------------------------------
+        // CG-02: regenerate-safe two-zone file write helper.
+        //   *.Generated.cs  — always overwritten; carries the scaffold body.
+        //   *.cs             — written ONLY if it does not exist; keeps dev edits safe.
+        // ---------------------------------------------------------------------------
+        private static void WriteGeneratedZone(string generatedPath, string content)
+        {
+            File.WriteAllText(generatedPath, content, Encoding.UTF8);
+        }
+
+        private static void WritePartialZone(string partialPath, string partialContent)
+        {
+            if (!File.Exists(partialPath))
+            {
+                File.WriteAllText(partialPath, partialContent, Encoding.UTF8);
+            }
+            // If the file already exists, leave it untouched so developer edits survive re-gen.
+        }
+
+        /// <summary>
+        /// Derives a minimal empty-partial shell from a generated file's namespace/class
+        /// declaration so the companion *.cs compiles together with *.Generated.cs.
+        /// </summary>
+        private static string MakeEmptyPartial(string generatedContent, string generatedFileName)
+        {
+            // Extract the first namespace and first public partial class line via simple text scan.
+            string ns = "";
+            string classDecl = "";
+            foreach (var line in generatedContent.Split('\n'))
+            {
+                var trimmed = line.Trim();
+                if (ns == "" && trimmed.StartsWith("namespace "))
+                    ns = trimmed["namespace ".Length..].TrimEnd('{', ' ', '\r');
+                if (classDecl == "" && trimmed.Contains("public partial class "))
+                {
+                    // Keep only up to the opening brace.
+                    int brace = trimmed.IndexOf('{');
+                    classDecl = brace >= 0 ? trimmed[..brace].TrimEnd() : trimmed;
+                }
+                if (ns != "" && classDecl != "")
+                    break;
+            }
+            if (ns == "" || classDecl == "")
+                return $"// Hand-edit partial for {generatedFileName}\n// (auto-generated stub; customize here)\n";
+
+            return $"// Hand-edit partial for {generatedFileName}\n// This file is NEVER overwritten by code generation.\n" +
+                   $"// Add your customizations here.\n\n" +
+                   $"namespace {ns}\n{{\n    // {classDecl}\n    // {{\n    // }}\n}}\n";
+        }
+
         public void DoGen()
         {
             // All file-write paths that incorporate user-supplied segments (ModelName, Area)
@@ -662,15 +783,29 @@ namespace WalkingTec.Mvvm.Mvc
             string safeModelNameLower = safeModelName.ToLower();
             string safeArea = SanitizePathComponent(Area);
 
-            File.WriteAllText(
-                SafePathHelper.SafeCombine(ControllerDir, $"{safeModelName}{(IsApi == true ? "Api" : "")}Controller.cs"),
-                GenerateController(), Encoding.UTF8);
+            // CG-02: Controller → two-zone split
+            string controllerSuffix = $"{safeModelName}{(IsApi == true ? "Api" : "")}Controller";
+            string controllerGenPath = SafePathHelper.SafeCombine(ControllerDir, $"{controllerSuffix}.Generated.cs");
+            string controllerPartialPath = SafePathHelper.SafeCombine(ControllerDir, $"{controllerSuffix}.cs");
+            string controllerGenContent = GenerateController();
+            WriteGeneratedZone(controllerGenPath, controllerGenContent);
+            WritePartialZone(controllerPartialPath, MakeEmptyPartial(controllerGenContent, $"{controllerSuffix}.Generated.cs"));
 
-            File.WriteAllText(SafePathHelper.SafeCombine(VmDir, $"{safeModelName}{(IsApi == true ? "Api" : "")}VM.cs"), GenerateVM("CrudVM"), Encoding.UTF8);
-            File.WriteAllText(SafePathHelper.SafeCombine(VmDir, $"{safeModelName}{(IsApi == true ? "Api" : "")}ListVM.cs"), GenerateVM("ListVM"), Encoding.UTF8);
-            File.WriteAllText(SafePathHelper.SafeCombine(VmDir, $"{safeModelName}{(IsApi == true ? "Api" : "")}BatchVM.cs"), GenerateVM("BatchVM"), Encoding.UTF8);
-            File.WriteAllText(SafePathHelper.SafeCombine(VmDir, $"{safeModelName}{(IsApi == true ? "Api" : "")}ImportVM.cs"), GenerateVM("ImportVM"), Encoding.UTF8);
-            File.WriteAllText(SafePathHelper.SafeCombine(VmDir, $"{safeModelName}{(IsApi == true ? "Api" : "")}Searcher.cs"), GenerateVM("Searcher"), Encoding.UTF8);
+            // CG-02: VM files → two-zone split
+            void WriteVmZones(string vmSuffix, string vmContent)
+            {
+                string genPath = SafePathHelper.SafeCombine(VmDir, $"{vmSuffix}.Generated.cs");
+                string partialPath = SafePathHelper.SafeCombine(VmDir, $"{vmSuffix}.cs");
+                WriteGeneratedZone(genPath, vmContent);
+                WritePartialZone(partialPath, MakeEmptyPartial(vmContent, $"{vmSuffix}.Generated.cs"));
+            }
+
+            string vmPrefix = $"{safeModelName}{(IsApi == true ? "Api" : "")}";
+            WriteVmZones($"{vmPrefix}VM", GenerateVM("CrudVM"));
+            WriteVmZones($"{vmPrefix}ListVM", GenerateVM("ListVM"));
+            WriteVmZones($"{vmPrefix}BatchVM", GenerateVM("BatchVM"));
+            WriteVmZones($"{vmPrefix}ImportVM", GenerateVM("ImportVM"));
+            WriteVmZones($"{vmPrefix}Searcher", GenerateVM("Searcher"));
 
             if (IsApi == false)
             {
@@ -1054,8 +1189,12 @@ namespace WalkingTec.Mvvm.Mvc
                 {
                     if (pro.InfoType == FieldInfoType.Normal)
                     {
+                        // CG-08: read [ListColumn] attribute from model property.
+                        var modelProp = modelType?.GetSingleProperty(pro.FieldName);
+                        var listColAttr = modelProp?.GetCustomAttribute<ListColumnAttribute>();
+                        string headerChain = BuildGridHeaderChain(pro.FieldName, modelProp, listColAttr);
                         headerstring += $@"
-                this.MakeGridHeader(x => x.{pro.FieldName}),";
+                this.MakeGridHeader(x => x.{pro.FieldName}){headerChain},";
                         if (pro.FieldName.ToLower() != "id")
                         {
                             selectstring += $@"
@@ -1068,8 +1207,11 @@ namespace WalkingTec.Mvvm.Mvc
                         if (subtype == typeof(FileAttachment))
                         {
                             var filefk = DC.GetFKName2(modelType, pro.FieldName);
+                            var fileProp = modelType?.GetSingleProperty(filefk);
+                            var fileListColAttr = fileProp?.GetCustomAttribute<ListColumnAttribute>();
+                            string fileHeaderChain = BuildGridHeaderChain(filefk, fileProp, fileListColAttr);
                             headerstring += $@"
-                this.MakeGridHeader(x => x.{filefk}).SetFormat({filefk}Format),";
+                this.MakeGridHeader(x => x.{filefk}).SetFormat({filefk}Format){fileHeaderChain},";
                             selectstring += $@"
                     {filefk} = x.{filefk},";
                             formatstring += GetResource("HeaderFormat.txt").Replace("$modelname$", ModelName).Replace("$field$", filefk).Replace("$classname$", $"{ModelName}{(IsApi == true ? "Api" : "")}");
@@ -1091,8 +1233,11 @@ namespace WalkingTec.Mvvm.Mvc
                             }
 
                             var subdisplay = subpro.GetCustomAttribute<DisplayAttribute>();
+                            // CG-08: FK lookup columns default to width 180 when no [ListColumn] is present.
+                            var fkListColAttr = subpro.GetCustomAttribute<ListColumnAttribute>();
+                            string fkHeaderChain = BuildGridHeaderChain(pro.SubField + "_view" + prefix, subpro, fkListColAttr, isFkLookup: true);
                             headerstring += $@"
-                this.MakeGridHeader(x => x.{pro.SubField + "_view" + prefix}),";
+                this.MakeGridHeader(x => x.{pro.SubField + "_view" + prefix}){fkHeaderChain},";
                             if (pro.InfoType == FieldInfoType.One2Many)
                             {
                                 selectstring += $@"
@@ -1136,18 +1281,39 @@ namespace WalkingTec.Mvvm.Mvc
                     switch (pro.InfoType)
                     {
                         case FieldInfoType.Normal:
-                            if (proType == typeof(string))
+                            // CG-09: resolve search operator — explicit [SearchField] wins,
+                            // then smart-name heuristic (opt-in), then type-based Auto rule.
+                            var sfProp = modelType?.GetSingleProperty(pro.FieldName);
+                            var sfAttr = sfProp?.GetCustomAttribute<SearchFieldAttribute>();
+                            SearchOperator resolvedOp = sfAttr?.Operator ?? SearchOperator.Auto;
+
+                            // Apply smart-name heuristic only when opted-in and operator is still Auto.
+                            if (resolvedOp == SearchOperator.Auto && UseSmartSearchDefaults && proType == typeof(string))
+                            {
+                                var fieldName = pro.FieldName;
+                                if (fieldName.EndsWith("Code", StringComparison.OrdinalIgnoreCase) ||
+                                    fieldName.EndsWith("No", StringComparison.OrdinalIgnoreCase) ||
+                                    fieldName.EndsWith("Id", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    resolvedOp = SearchOperator.Equal;
+                                }
+                            }
+
+                            if (resolvedOp == SearchOperator.Contains ||
+                                (resolvedOp == SearchOperator.Auto && proType == typeof(string)))
                             {
                                 wherestring += $@"
                 .CheckContain(Searcher.{pro.FieldName}, x=>x.{pro.FieldName})";
                             }
-                            else if (proType == typeof(DateTime) || proType == typeof(DateTime?))
+                            else if (resolvedOp == SearchOperator.Between ||
+                                     (resolvedOp == SearchOperator.Auto && (proType == typeof(DateTime) || proType == typeof(DateTime?))))
                             {
                                 wherestring += $@"
                 .CheckBetween(Searcher.{pro.FieldName}?.GetStartTime(), Searcher.{pro.FieldName}?.GetEndTime(), x => x.{pro.FieldName}, includeMax: false)";
                             }
                             else
                             {
+                                // Equal — explicit, smart-name, or Auto type-based default.
                                 wherestring += $@"
                 .CheckEqual(Searcher.{pro.FieldName}, x=>x.{pro.FieldName})";
                             }
@@ -1292,6 +1458,55 @@ namespace WalkingTec.Mvvm.Mvc
                     {
                         prostring += $@"
         public ExcelPropety {pro.FieldName + "_Excel"} = ExcelPropety.CreateProperty<{ModelName}>(x => x.{pro.FieldName});";
+                    }
+
+                    // CG-07: carry [ImportConfig] overrides into generated InitVM post-assignment.
+                    var importCfg = proType.GetCustomAttribute<ImportConfigAttribute>();
+                    string excelVarName = pro.FieldName + "_Excel";
+                    if (importCfg != null)
+                    {
+                        // RequiredOnImport → flip IsNullAble to false (not-nullable = required).
+                        if (importCfg.RequiredOnImport)
+                        {
+                            initstr += $@"
+            {excelVarName}.IsNullAble = false;";
+                        }
+                        // ColumnHeader override.
+                        if (!string.IsNullOrEmpty(importCfg.ColumnHeader))
+                        {
+                            initstr += $@"
+            {excelVarName}.ColumnName = ""{importCfg.ColumnHeader}"";";
+                        }
+                        // DataType override (only when explicitly set, not the default Dynamic).
+                        if (importCfg.DataType != ColumnDataType.Dynamic)
+                        {
+                            initstr += $@"
+            {excelVarName}.DataType = ColumnDataType.{importCfg.DataType};";
+                        }
+                    }
+                    // CG-07: auto-carry model validation constraints ([Required] / [StringLength] / [RegularExpression]).
+                    // These mirror what ExcelPropety.CreateProperty already reads from the expression tree,
+                    // so we emit explicit overrides only when the attribute is present on the model property.
+                    var reqAttr = proType.GetCustomAttribute<System.ComponentModel.DataAnnotations.RequiredAttribute>();
+                    if (reqAttr != null && importCfg?.RequiredOnImport != true)
+                    {
+                        // Only set if ImportConfig didn't already set it.
+                        initstr += $@"
+            {excelVarName}.IsNullAble = false;";
+                    }
+                    var slAttr = proType.GetCustomAttribute<StringLengthAttribute>();
+                    if (slAttr != null)
+                    {
+                        if (slAttr.MaximumLength > 0)
+                        {
+                            initstr += $@"
+            {excelVarName}.MaxValuseOrLength = ""{slAttr.MaximumLength}"";";
+                        }
+                        if (slAttr.MinimumLength > 0)
+                        {
+                            initstr += $@"
+            {excelVarName}.MinValueOrLength = ""{slAttr.MinimumLength}"";";
+                        }
                     }
                 }
                 rv = rv.Replace("$pros$", prostring).Replace("$init$", initstr);
@@ -1674,7 +1889,7 @@ namespace WalkingTec.Mvvm.Mvc
         private {idpro.PropertyType.Name} Add{t.Name}()
         {{
             {mname} v = new {mname}();
-            using (var context = new DataContext(_seed, DBTypeEnum.Memory))
+            using (var context = new DataContext(_seed, DBTypeEnum.SQLite, $""Data Source={{_seed}};Mode=Memory;Cache=Shared""))
             {{
                 try{{
 {cpros}

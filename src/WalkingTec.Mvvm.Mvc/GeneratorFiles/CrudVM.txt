@@ -22,8 +22,13 @@ namespace $vmnamespace$
         }
 
         public override void DoAdd()
-        {$add$           
+        {$add$
             base.DoAdd();
+        }
+
+        public override async Task DoAddAsync()
+        {$add$
+            await base.DoAddAsync();
         }
 
         public override void DoEdit(bool updateAllFields = false)
@@ -31,9 +36,19 @@ namespace $vmnamespace$
             base.DoEdit(updateAllFields);
         }
 
+        public override async Task DoEditAsync(bool updateAllFields = false)
+        {$edit$
+            await base.DoEditAsync(updateAllFields);
+        }
+
         public override void DoDelete()
         {
             base.DoDelete();
+        }
+
+        public override async Task DoDeleteAsync()
+        {
+            await base.DoDeleteAsync();
         }
     }
 }

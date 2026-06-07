@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Data.Sqlite;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
@@ -13,16 +14,31 @@ $othernamespace$
 
 namespace $tns$
 {
+    // CG-06: SQLite shared-memory fixture — avoids EF InMemory provider limitations
+    // (ExecuteUpdate, sub-queries, etc.) that were root-cause of the #119 test trap.
     [TestClass]
     public class $model$ControllerTest
     {
         private $model$Controller _controller;
         private string _seed;
+        private SqliteConnection _keepAlive;
 
         public $model$ControllerTest()
         {
-            _seed = Guid.NewGuid().ToString();
-            _controller = MockController.CreateController<$model$Controller>(new DataContext(_seed, DBTypeEnum.Memory), "user");
+            _seed = Guid.NewGuid().ToString("N");
+            // Keep the connection open for the lifetime of the fixture so the
+            // shared-memory database is not dropped between DataContext usages.
+            var connStr = $"Data Source={_seed};Mode=Memory;Cache=Shared";
+            _keepAlive = new SqliteConnection(connStr);
+            _keepAlive.Open();
+            _controller = MockController.CreateController<$model$Controller>(new DataContext(_seed, DBTypeEnum.SQLite, connStr), "user");
+        }
+
+        [TestCleanup]
+        public void Cleanup()
+        {
+            _keepAlive?.Close();
+            _keepAlive?.Dispose();
         }
 
         [TestMethod]
@@ -46,7 +62,7 @@ namespace $tns$
             vm.Entity = v;
             _controller.Create(vm);
 
-            using (var context = new DataContext(_seed, DBTypeEnum.Memory))
+            using (var context = new DataContext(_seed, DBTypeEnum.SQLite, $"Data Source={_seed};Mode=Memory;Cache=Shared"))
             {
                 var data = context.Set<$model$>().Find(v.ID);
 				$assert$
@@ -58,7 +74,7 @@ namespace $tns$
         public void EditTest()
         {
             $model$ v = new $model$();
-            using (var context = new DataContext(_seed, DBTypeEnum.Memory))
+            using (var context = new DataContext(_seed, DBTypeEnum.SQLite, $"Data Source={_seed};Mode=Memory;Cache=Shared"))
             {
        			$pros$
                 context.Set<$model$>().Add(v);
@@ -69,7 +85,7 @@ namespace $tns$
             Assert.IsInstanceOfType(rv.Model, typeof($model$VM));
 
             $model$VM vm = rv.Model as $model$VM;
-            vm.Wtm.DC = new DataContext(_seed, DBTypeEnum.Memory);
+            vm.Wtm.DC = new DataContext(_seed, DBTypeEnum.SQLite, $"Data Source={_seed};Mode=Memory;Cache=Shared");
             v = new $model$();
             v.ID = vm.Entity.ID;
        		$epros$
@@ -78,7 +94,7 @@ namespace $tns$
 			$fc$
             _controller.Edit(vm);
 
-            using (var context = new DataContext(_seed, DBTypeEnum.Memory))
+            using (var context = new DataContext(_seed, DBTypeEnum.SQLite, $"Data Source={_seed};Mode=Memory;Cache=Shared"))
             {
                 var data = context.Set<$model$>().Find(v.ID);
  				$eassert$
@@ -91,7 +107,7 @@ namespace $tns$
         public void DeleteTest()
         {
             $model$ v = new $model$();
-            using (var context = new DataContext(_seed, DBTypeEnum.Memory))
+            using (var context = new DataContext(_seed, DBTypeEnum.SQLite, $"Data Source={_seed};Mode=Memory;Cache=Shared"))
             {
         		$pros$
                 context.Set<$model$>().Add(v);
@@ -107,7 +123,7 @@ namespace $tns$
             vm.Entity = v;
             _controller.Delete(v.ID.ToString(),null);
 
-            using (var context = new DataContext(_seed, DBTypeEnum.Memory))
+            using (var context = new DataContext(_seed, DBTypeEnum.SQLite, $"Data Source={_seed};Mode=Memory;Cache=Shared"))
             {
                 var data = context.Set<$model$>().Find(v.ID);
                 $del$
@@ -120,7 +136,7 @@ namespace $tns$
         public void DetailsTest()
         {
             $model$ v = new $model$();
-            using (var context = new DataContext(_seed, DBTypeEnum.Memory))
+            using (var context = new DataContext(_seed, DBTypeEnum.SQLite, $"Data Source={_seed};Mode=Memory;Cache=Shared"))
             {
 				$pros$
                 context.Set<$model$>().Add(v);
@@ -136,7 +152,7 @@ namespace $tns$
         {
             $model$ v1 = new $model$();
             $model$ v2 = new $model$();
-            using (var context = new DataContext(_seed, DBTypeEnum.Memory))
+            using (var context = new DataContext(_seed, DBTypeEnum.SQLite, $"Data Source={_seed};Mode=Memory;Cache=Shared"))
             {
 				$mpros$
                 context.Set<$model$>().Add(v1);
@@ -154,7 +170,7 @@ namespace $tns$
 			$linkedfc$
             _controller.DoBatchEdit(vm, null);
 
-            using (var context = new DataContext(_seed, DBTypeEnum.Memory))
+            using (var context = new DataContext(_seed, DBTypeEnum.SQLite, $"Data Source={_seed};Mode=Memory;Cache=Shared"))
             {
                 var data1 = context.Set<$model$>().Find(v1.ID);
                 var data2 = context.Set<$model$>().Find(v2.ID);
@@ -168,7 +184,7 @@ namespace $tns$
         {
             $model$ v1 = new $model$();
             $model$ v2 = new $model$();
-            using (var context = new DataContext(_seed, DBTypeEnum.Memory))
+            using (var context = new DataContext(_seed, DBTypeEnum.SQLite, $"Data Source={_seed};Mode=Memory;Cache=Shared"))
             {
 				$mpros$
                 context.Set<$model$>().Add(v1);
@@ -183,7 +199,7 @@ namespace $tns$
             vm.Ids = new string[] { v1.ID.ToString(), v2.ID.ToString() };
             _controller.DoBatchDelete(vm, null);
 
-            using (var context = new DataContext(_seed, DBTypeEnum.Memory))
+            using (var context = new DataContext(_seed, DBTypeEnum.SQLite, $"Data Source={_seed};Mode=Memory;Cache=Shared"))
             {
                 var data1 = context.Set<$model$>().Find(v1.ID);
                 var data2 = context.Set<$model$>().Find(v2.ID);
