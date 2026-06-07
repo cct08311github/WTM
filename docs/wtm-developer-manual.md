@@ -4179,7 +4179,7 @@ public class StudentIntegrationTests
 
 ### 15.3 CI 整合
 
-Gitea Actions 中，整合測試需在 `services` 區塊啟動資料庫容器，並將連線字串透過 `env` 傳入。預設 CI 只執行單元測試（不含 `TestCategory=Integration`）。
+internal CI 中，整合測試需在 `services` 區塊啟動資料庫容器，並將連線字串透過 `env` 傳入。預設 CI 只執行單元測試（不含 `TestCategory=Integration`）。
 
 ---
 
@@ -4609,11 +4609,11 @@ public class Employee : PersistPoco
 
 **10.5.1（2026-05-13）摘要 — infra-only release，無 src/* 程式碼變更：**
 
-- CI / NuGet publish 完全遷至 Gitea（GitHub Packages / GitHub Actions Marketplace / github-archive remote 全部停用）
+- CI / NuGet publish 完全遷至 internal infrastructure（GitHub Packages / GitHub Actions Marketplace / github-archive remote 全部停用）
 - `scripts/publish-to-gitea.sh` 新增 local fallback（`--suffix` / `--dry-run`；dry-run 時 token 已 mask）
 - CI publish secret 改為 `PAT_TOKEN`
 - `scripts/release-github-package.sh` 重命名為 `release-gitea-package.sh`，內部由 `gh` 改為 `curl`
-- `common.props` `RepositoryUrl` / `PackageProjectUrl` 指向 Gitea repo
+- `common.props` `RepositoryUrl` / `PackageProjectUrl` 指向 internal infrastructure repo
 
 **10.5.0（2026-04-26）摘要 — 31 個新增能力，零行為破壞：**
 
