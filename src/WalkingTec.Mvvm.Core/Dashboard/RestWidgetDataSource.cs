@@ -145,6 +145,13 @@ public class RestWidgetDataSource : IWidgetDataSource
         return opts;
     }
 
+    /// <summary>
+    /// The set of HTTP methods permitted for widget data sources.
+    /// Widget fetches must be idempotent reads; only GET and POST are accepted.
+    /// </summary>
+    private static readonly HashSet<string> _allowedMethods =
+        new(StringComparer.OrdinalIgnoreCase) { "GET", "POST" };
+
     // ── URL validation + SSRF guard (fast-fail pre-check) ───────────────
 
     /// <summary>
@@ -187,9 +194,22 @@ public class RestWidgetDataSource : IWidgetDataSource
                 "REST widget: only http / https URL schemes are supported. Got: " + uri.Scheme);
         }
 
+        // S5: Port allowlist — blocks probing of Redis/ES/DB ports even when
+        // AllowPrivateNetwork=true. -1 means the URI uses the default port for
+        // its scheme (443 for https, 80 for http) which is always permitted.
+        if (options.AllowedPorts is { Length: > 0 } allowedPorts && uri.Port != -1)
+        {
+            if (!Array.Exists(allowedPorts, p => p == uri.Port))
+            {
+                throw new InvalidOperationException(
+                    $"REST widget: port {uri.Port} is not in the AllowedPorts list. " +
+                    "Configure AllowedPorts in the server-side RestOptions to permit additional ports.");
+            }
+        }
+
         if (options.AllowPrivateNetwork)
         {
-            // Private network explicitly allowed — skip SSRF pre-check.
+            // Private network explicitly allowed — skip SSRF IP pre-check.
             return;
         }
 
@@ -362,14 +382,37 @@ public class RestWidgetDataSource : IWidgetDataSource
         var client = _httpClientFactory.CreateClient(HttpClientName);
         client.Timeout = TimeSpan.FromSeconds(options.TimeoutSeconds);
 
-        using var req = new HttpRequestMessage(new HttpMethod(options.Method.ToUpperInvariant()), options.Url);
+        // S1: HTTP method injection guard — only GET and POST are permitted.
+        // new HttpMethod(string) accepts arbitrary strings; without this check an
+        // operator could supply "DELETE" or "CONNECT" through config.
+        var normalizedMethod = (options.Method ?? "GET").Trim().ToUpperInvariant();
+        if (!_allowedMethods.Contains(normalizedMethod))
+        {
+            throw new InvalidOperationException(
+                $"REST widget: HTTP method '{options.Method}' is not allowed. " +
+                "Only GET and POST are supported for widget data sources.");
+        }
+
+        using var req = new HttpRequestMessage(new HttpMethod(normalizedMethod), options.Url);
         foreach (var h in options.Headers)
         {
-            req.Headers.TryAddWithoutValidation(h.Key, h.Value);
+            // S3: Header injection / CRLF guard — use the validating Add() instead of
+            // TryAddWithoutValidation(). HttpRequestHeaders.Add() throws FormatException
+            // when a name or value contains CRLF sequences or other invalid characters,
+            // preventing HTTP request-splitting via operator-controlled header config.
+            try
+            {
+                req.Headers.Add(h.Key, h.Value);
+            }
+            catch (Exception ex) when (ex is FormatException || ex is InvalidOperationException)
+            {
+                throw new InvalidOperationException(
+                    $"REST widget: header '{h.Key}' was rejected by the HTTP stack " +
+                    "(possible invalid characters or CRLF in name/value).", ex);
+            }
         }
         if (!string.IsNullOrEmpty(options.Body) &&
-            (options.Method.Equals("POST", StringComparison.OrdinalIgnoreCase) ||
-             options.Method.Equals("PUT", StringComparison.OrdinalIgnoreCase)))
+            string.Equals(normalizedMethod, "POST", StringComparison.OrdinalIgnoreCase))
         {
             req.Content = new StringContent(options.Body, Encoding.UTF8, "application/json");
         }

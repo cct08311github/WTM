@@ -47,6 +47,22 @@ public class MeasureConfig
 public class FilterConfig
 {
     public string Field { get; set; } = "";
+
+    /// <summary>
+    /// Filter operator. Must be one of the allowlisted values (case-insensitive):
+    /// eq, ne, gt, ge, lt, le, contains, notcontains, in, notin.
+    /// Default: "eq".
+    /// </summary>
     public string Op { get; set; } = "eq";
+
     public string Value { get; set; } = "";
+
+    /// <summary>
+    /// Allowlisted operator strings (lower-case canonical form).
+    /// Maps to <see cref="WalkingTec.Mvvm.Core.Analysis.FilterOperator"/> members.
+    /// </summary>
+    public static readonly HashSet<string> AllowedOps = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "eq", "ne", "gt", "ge", "lt", "le", "contains", "notcontains", "in", "notin"
+    };
 }

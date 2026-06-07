@@ -288,6 +288,22 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 if (string.IsNullOrWhiteSpace(def.Type))
                     return $"Widget '{wid}' 缺少必填的 Type 屬性。";
+
+                // S2: Widget title length cap.
+                if (!string.IsNullOrEmpty(def.Title) && def.Title.Length > 200)
+                    return $"Widget '{wid}' Title 超過 200 個字元上限。";
+
+                // S4: Filter Op allowlist — prevents unknown operator strings from
+                // reaching the expression-tree builder.
+                if (def.Source?.Filters != null)
+                {
+                    foreach (var filter in def.Source.Filters)
+                    {
+                        if (!FilterConfig.AllowedOps.Contains(filter.Op))
+                            return $"Widget '{wid}' 的篩選條件包含不支援的運算子 '{filter.Op}'。" +
+                                   $"允許的運算子：{string.Join(", ", FilterConfig.AllowedOps)}.";
+                    }
+                }
             }
             return null;
         }

@@ -76,4 +76,13 @@ public class RestWidgetDataSourceOptions
     /// combined with <see cref="AllowPrivateNetwork"/>).
     /// </summary>
     public bool AllowHttp { get; set; } = false;
+
+    /// <summary>
+    /// Port allowlist for SSRF mitigation. When non-null and non-empty, only
+    /// the listed destination ports are allowed. Default: {80, 443, 8080, 8443}.
+    /// Set to <c>null</c> or empty to disable port restriction (not recommended
+    /// unless <see cref="AllowPrivateNetwork"/> is also <c>true</c> for intentional
+    /// internal-network scanning use-cases).
+    /// </summary>
+    public int[]? AllowedPorts { get; set; } = new[] { 80, 443, 8080, 8443 };
 }

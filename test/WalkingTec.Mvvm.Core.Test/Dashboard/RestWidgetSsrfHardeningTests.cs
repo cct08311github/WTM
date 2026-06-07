@@ -478,6 +478,237 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         {
             Assert.AreEqual(10 * 1024 * 1024, RestWidgetDataSource.MaxResponseBytesHardLimit);
         }
+
+        // ── S1: HTTP method allowlist ─────────────────────────────────────────
+
+        [TestMethod]
+        [DataRow("GET")]
+        [DataRow("POST")]
+        [DataRow("get")]    // case-insensitive
+        [DataRow("post")]
+        public async Task GetDataAsync_accepts_allowed_http_methods(string method)
+        {
+            // GET/POST must succeed (mock returns valid JSON).
+            var handler = new MockHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"ok\":true}", Encoding.UTF8, "application/json")
+            });
+            var factory = new SingleClientFactory(handler);
+            var cache = new MemoryCache(new MemoryCacheOptions());
+            var source = new RestWidgetDataSource(factory, cache);
+
+            var req = new WidgetDataRequest
+            {
+                Parameters = new Dictionary<string, string>
+                {
+                    ["options"] = JsonSerializer.Serialize(new RestWidgetDataSourceOptions
+                    {
+                        Url = "https://8.8.8.8/test",
+                        Method = method,
+                        CacheTtlSeconds = 0
+                    })
+                }
+            };
+
+            // Should not throw — GET and POST are allowed methods.
+            var result = await source.GetDataAsync(req, CancellationToken.None);
+            Assert.IsNotNull(result);
+        }
+
+        [TestMethod]
+        [DataRow("DELETE")]
+        [DataRow("PUT")]
+        [DataRow("PATCH")]
+        [DataRow("HEAD")]
+        [DataRow("OPTIONS")]
+        [DataRow("TRACE")]
+        [DataRow("CONNECT")]
+        [DataRow("PROPFIND")]
+        public async Task GetDataAsync_rejects_disallowed_http_methods(string method)
+        {
+            var handler = new MockHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{}", Encoding.UTF8, "application/json")
+            });
+            var factory = new SingleClientFactory(handler);
+            var cache = new MemoryCache(new MemoryCacheOptions());
+            var source = new RestWidgetDataSource(factory, cache);
+
+            var req = new WidgetDataRequest
+            {
+                Parameters = new Dictionary<string, string>
+                {
+                    ["options"] = JsonSerializer.Serialize(new RestWidgetDataSourceOptions
+                    {
+                        Url = "https://8.8.8.8/test",
+                        Method = method,
+                        CacheTtlSeconds = 0
+                    })
+                }
+            };
+
+            var ex = await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                () => source.GetDataAsync(req, CancellationToken.None),
+                $"HTTP method '{method}' must be rejected by the allowlist");
+
+            StringAssert.Contains(ex.Message, "not allowed",
+                "Rejection message should indicate the method is not allowed");
+        }
+
+        // ── S3: Header injection / CRLF rejection ─────────────────────────────
+
+        [TestMethod]
+        [DataRow("X-Injected\r\nX-Evil: injected", "header-value")]
+        [DataRow("X-Injected\nX-Evil: injected", "header-value")]
+        [DataRow("Normal-Header", "value\r\nX-Evil: injected")]
+        [DataRow("Normal-Header", "value\nX-Evil: injected")]
+        public async Task GetDataAsync_rejects_headers_with_CRLF_injection(string headerName, string headerValue)
+        {
+            var handler = new MockHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{}", Encoding.UTF8, "application/json")
+            });
+            var factory = new SingleClientFactory(handler);
+            var cache = new MemoryCache(new MemoryCacheOptions());
+            var source = new RestWidgetDataSource(factory, cache);
+
+            var req = new WidgetDataRequest
+            {
+                Parameters = new Dictionary<string, string>
+                {
+                    ["options"] = JsonSerializer.Serialize(new RestWidgetDataSourceOptions
+                    {
+                        Url = "https://8.8.8.8/test",
+                        CacheTtlSeconds = 0,
+                        Headers = new Dictionary<string, string>
+                        {
+                            [headerName] = headerValue
+                        }
+                    })
+                }
+            };
+
+            // HttpRequestHeaders.Add() validates headers and throws on CRLF / invalid chars.
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                () => source.GetDataAsync(req, CancellationToken.None),
+                "CRLF injection in headers must be rejected");
+        }
+
+        // ── S4: FilterConfig Op allowlist ─────────────────────────────────────
+
+        [TestMethod]
+        [DataRow("eq")]
+        [DataRow("ne")]
+        [DataRow("gt")]
+        [DataRow("ge")]
+        [DataRow("lt")]
+        [DataRow("le")]
+        [DataRow("contains")]
+        [DataRow("notcontains")]
+        [DataRow("in")]
+        [DataRow("notin")]
+        [DataRow("EQ")]   // case-insensitive
+        [DataRow("Contains")]
+        public void FilterConfig_AllowedOps_accepts_valid_operators(string op)
+        {
+            Assert.IsTrue(FilterConfig.AllowedOps.Contains(op),
+                $"Operator '{op}' should be in the AllowedOps set");
+        }
+
+        [TestMethod]
+        [DataRow("like")]
+        [DataRow("between")]
+        [DataRow("IS NULL")]
+        [DataRow("OR 1=1--")]
+        [DataRow("exists")]
+        [DataRow("")]
+        [DataRow("!eq")]
+        public void FilterConfig_AllowedOps_rejects_unknown_operators(string op)
+        {
+            Assert.IsFalse(FilterConfig.AllowedOps.Contains(op),
+                $"Operator '{op}' must NOT be in the AllowedOps set");
+        }
+
+        // ── S5: AllowedPorts enforcement ──────────────────────────────────────
+
+        [TestMethod]
+        [DataRow(6379,  "redis")]           // Redis
+        [DataRow(9200,  "elasticsearch")]   // Elasticsearch
+        [DataRow(5432,  "postgres")]        // PostgreSQL
+        [DataRow(3306,  "mysql")]           // MySQL
+        [DataRow(27017, "mongodb")]         // MongoDB
+        [DataRow(2379,  "etcd")]            // etcd
+        [DataRow(22,    "ssh")]             // SSH
+        [DataRow(25,    "smtp")]            // SMTP
+        public async Task ValidateUrlAsync_rejects_non_allowlisted_ports(int port, string label)
+        {
+            var opts = new RestWidgetDataSourceOptions
+            {
+                Url = $"https://8.8.8.8:{port}/data",
+                // AllowedPorts defaults to {80, 443, 8080, 8443}
+            };
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                () => RestWidgetDataSource.ValidateUrlAsync(opts),
+                $"Port {port} ({label}) must be rejected by the AllowedPorts check");
+        }
+
+        [TestMethod]
+        [DataRow(80)]
+        [DataRow(443)]
+        [DataRow(8080)]
+        [DataRow(8443)]
+        public async Task ValidateUrlAsync_accepts_default_allowlisted_ports(int port)
+        {
+            var opts = new RestWidgetDataSourceOptions
+            {
+                Url = $"https://8.8.8.8:{port}/data",
+                // Default AllowedPorts = {80, 443, 8080, 8443}
+            };
+
+            // Should not throw — these are in the default allowlist.
+            await RestWidgetDataSource.ValidateUrlAsync(opts);
+        }
+
+        [TestMethod]
+        public async Task ValidateUrlAsync_accepts_default_scheme_port_when_no_explicit_port_in_url()
+        {
+            // When the URL has no explicit port (Uri.Port == -1 for default scheme ports),
+            // the port check should not trigger.
+            var opts = new RestWidgetDataSourceOptions
+            {
+                Url = "https://8.8.8.8/data",  // no explicit port — HTTPS default is 443
+            };
+
+            // Should not throw — no explicit port means port check is skipped.
+            await RestWidgetDataSource.ValidateUrlAsync(opts);
+        }
+
+        [TestMethod]
+        public async Task ValidateUrlAsync_allows_any_port_when_AllowedPorts_is_null()
+        {
+            var opts = new RestWidgetDataSourceOptions
+            {
+                Url = "https://8.8.8.8:6379/data",
+                AllowedPorts = null   // null means port restriction disabled
+            };
+
+            // Should not throw — AllowedPorts=null disables the port check.
+            await RestWidgetDataSource.ValidateUrlAsync(opts);
+        }
+
+        [TestMethod]
+        public async Task ValidateUrlAsync_allows_any_port_when_AllowedPorts_is_empty()
+        {
+            var opts = new RestWidgetDataSourceOptions
+            {
+                Url = "https://8.8.8.8:6379/data",
+                AllowedPorts = Array.Empty<int>()   // empty means port restriction disabled
+            };
+
+            // Should not throw — empty AllowedPorts disables the port check.
+            await RestWidgetDataSource.ValidateUrlAsync(opts);
+        }
     }
 
     // ── Redirect-tracking test double ────────────────────────────────────────

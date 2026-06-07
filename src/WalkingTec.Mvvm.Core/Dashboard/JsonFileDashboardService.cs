@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Core.Analysis;
 using WalkingTec.Mvvm.Core.Helper;
 
 namespace WalkingTec.Mvvm.Core.Dashboard;
@@ -418,7 +419,36 @@ public class JsonFileDashboardService : IDashboardService
             if (widgetSource.Measures != null && !parameters.ContainsKey("measures"))
                 parameters["measures"] = JsonSerializer.Serialize(widgetSource.Measures);
             if (widgetSource.Filters != null && !parameters.ContainsKey("filters"))
-                parameters["filters"] = JsonSerializer.Serialize(widgetSource.Filters.Select(f => new { f.Field, f.Op, f.Value }).ToList());
+            {
+                // S4 defense-in-depth: validate Op allowlist and map to FilterOperator enum
+                // before building the expression-tree input. Unknown op strings are rejected
+                // here as well as at Create/Update time (belt-and-suspenders).
+                var filterConditions = new List<FilterCondition>(widgetSource.Filters.Count);
+                foreach (var f in widgetSource.Filters)
+                {
+                    if (!FilterConfig.AllowedOps.Contains(f.Op))
+                        throw new InvalidOperationException(
+                            $"Widget filter has unsupported operator '{f.Op}'. " +
+                            $"Allowed operators: {string.Join(", ", FilterConfig.AllowedOps)}.");
+
+                    var op = f.Op.ToLowerInvariant() switch
+                    {
+                        "eq"          => FilterOperator.Eq,
+                        "ne"          => FilterOperator.NotEq,
+                        "gt"          => FilterOperator.Gt,
+                        "ge"          => FilterOperator.Gte,
+                        "lt"          => FilterOperator.Lt,
+                        "le"          => FilterOperator.Lte,
+                        "contains"    => FilterOperator.Contains,
+                        "notcontains" => FilterOperator.NotContains,
+                        "in"          => FilterOperator.In,
+                        "notin"       => FilterOperator.NotIn,
+                        _ => throw new InvalidOperationException($"Unexpected operator '{f.Op}' after allowlist check.")
+                    };
+                    filterConditions.Add(new FilterCondition { Field = f.Field, Operator = op, Value = f.Value });
+                }
+                parameters["filters"] = JsonSerializer.Serialize(filterConditions);
+            }
 
             // SSRF hardening (issue #101): for REST widgets, the server-side RestOptions are
             // authoritative. When present, they completely replace any request-supplied "options"

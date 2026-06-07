@@ -572,11 +572,17 @@
                 }
                 
                 DashboardManager._renderAllWidgets(def);
-                
+
                 if (def.links) {
                     DashboardManager._registerLinks(def.links);
                 }
-                
+
+                // Q1: When any filter changes, re-fetch all widgets so the new
+                // filter values are forwarded to the data sources.
+                FilterBar.onChange(function() {
+                    DashboardManager._renderAllWidgets(def);
+                });
+
                 if (def.refreshInterval && def.refreshInterval > 0) {
                     DashboardManager.startRefresh(def.refreshInterval);
                 }
@@ -614,7 +620,22 @@
             container.className = 'wtm-widget-loading';
             container.textContent = 'Loading...';
 
-            var url = '/_dashboard/' + _currentDashboard.id + '/widget/' + widgetId + '/data';
+            // Q1: Wire FilterBar values into the widget data request.
+            // FilterBar.getValues() returns the current filter state as a plain
+            // key→value map.  Append each non-empty value as a query-string
+            // parameter so the server can forward them to the data source.
+            var baseUrl = '/_dashboard/' + _currentDashboard.id + '/widget/' + widgetId + '/data';
+            var filterValues = FilterBar.getValues();
+            var params = [];
+            for (var k in filterValues) {
+                if (Object.prototype.hasOwnProperty.call(filterValues, k)) {
+                    var v = filterValues[k];
+                    if (v !== null && v !== undefined && String(v).length > 0) {
+                        params.push(encodeURIComponent(k) + '=' + encodeURIComponent(v));
+                    }
+                }
+            }
+            var url = params.length > 0 ? baseUrl + '?' + params.join('&') : baseUrl;
 
             global.fetch(url)
                 .then(function(res) {

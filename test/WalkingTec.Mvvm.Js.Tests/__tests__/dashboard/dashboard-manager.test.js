@@ -92,4 +92,157 @@ describe('WtmDashboard.DashboardManager', () => {
         wd.DashboardManager.stopRefresh();
         expect(ctx.clearInterval).toHaveBeenCalledWith(999);
     });
+
+    // ── Q1: FilterBar values are forwarded in widget data fetch URL ───────
+
+    // Helper: make a minimal document mock whose createElement returns elements
+    // with addEventListener so FilterBar.init does not throw.
+    function makeDocWithWidget(widgetId) {
+        function makeEl(tag) {
+            return {
+                tag,
+                className: '',
+                textContent: '',
+                value: '',
+                type: '',
+                name: '',
+                style: {},
+                children: [],
+                appendChild: jest.fn(function(c) { this.children.push(c); return c; }),
+                addEventListener: jest.fn()
+            };
+        }
+        const widgetContainer = makeEl('div');
+        widgetContainer.id = widgetId;
+        return {
+            getElementById: jest.fn((id) => id === widgetId ? widgetContainer : null),
+            createElement: jest.fn((tag) => makeEl(tag)),
+            widgetContainer
+        };
+    }
+
+    test('Q1: widget data request URL includes active FilterBar values as query params', async () => {
+        const mockDocW = makeDocWithWidget('w1');
+        const mockGridStack = { init: jest.fn(() => ({ load: jest.fn() })) };
+        const mockFetch = jest.fn();
+
+        const { wd } = makeEnv({
+            document: mockDocW,
+            GridStack: mockGridStack,
+            fetch: mockFetch
+        });
+
+        // Step 1: load dashboard definition
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            json: jest.fn().mockResolvedValue({
+                id: 'dash1',
+                layout: [],
+                widgets: { 'w1': { type: 'kpi' } }
+            })
+        });
+        // Step 2: widget data response
+        mockFetch.mockResolvedValue({
+            ok: true,
+            json: jest.fn().mockResolvedValue({ value: 42 })
+        });
+
+        // Prime the FilterBar with a value before init
+        wd.FilterBar.init([
+            { field: 'Region', type: 'text', defaultValue: 'North' }
+        ], mockDocW.createElement('div'));
+
+        await wd.DashboardManager.init('container', 'dash1');
+
+        // The widget data fetch URL must include the filter value
+        const calls = mockFetch.mock.calls.map(c => c[0]);
+        const widgetDataCall = calls.find(url => url.includes('/widget/w1/data'));
+        expect(widgetDataCall).toBeDefined();
+        expect(widgetDataCall).toContain('Region=North');
+    });
+
+    test('Q1: FilterBar change triggers a new widget data fetch with updated filter value', async () => {
+        const mockDocW = makeDocWithWidget('w1');
+        const mockGridStack = { init: jest.fn(() => ({ load: jest.fn() })) };
+        const mockFetch = jest.fn();
+
+        const { wd } = makeEnv({
+            document: mockDocW,
+            GridStack: mockGridStack,
+            fetch: mockFetch
+        });
+
+        // Load dashboard first, then widget data
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            json: jest.fn().mockResolvedValue({
+                id: 'dash1',
+                layout: [],
+                widgets: { 'w1': { type: 'kpi' } }
+            })
+        });
+        mockFetch.mockResolvedValue({
+            ok: true,
+            json: jest.fn().mockResolvedValue({ value: 0 })
+        });
+
+        wd.FilterBar.init([
+            { field: 'Year', type: 'text', defaultValue: '2024' }
+        ], mockDocW.createElement('div'));
+
+        await wd.DashboardManager.init('container', 'dash1');
+
+        // Clear previous fetch calls
+        const callsBefore = mockFetch.mock.calls.length;
+
+        // Change the filter value (triggers onChange → _renderAllWidgets → _fetchAndRenderWidget)
+        wd.FilterBar.setValue('Year', '2025');
+
+        // Wait for async fetch
+        await new Promise(r => setTimeout(r, 10));
+
+        const newCalls = mockFetch.mock.calls.slice(callsBefore).map(c => c[0]);
+        const refetchCall = newCalls.find(url => url.includes('/widget/w1/data'));
+        expect(refetchCall).toBeDefined();
+        expect(refetchCall).toContain('Year=2025');
+    });
+
+    test('Q1: empty FilterBar values are omitted from widget data URL', async () => {
+        const mockDocW = makeDocWithWidget('w1');
+        const mockGridStack = { init: jest.fn(() => ({ load: jest.fn() })) };
+        const mockFetch = jest.fn();
+
+        const { wd } = makeEnv({
+            document: mockDocW,
+            GridStack: mockGridStack,
+            fetch: mockFetch
+        });
+
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            json: jest.fn().mockResolvedValue({
+                id: 'dash1',
+                layout: [],
+                widgets: { 'w1': { type: 'kpi' } }
+            })
+        });
+        mockFetch.mockResolvedValue({
+            ok: true,
+            json: jest.fn().mockResolvedValue({ value: 1 })
+        });
+
+        // FilterBar with empty default values — nothing should appear in URL
+        wd.FilterBar.init([
+            { field: 'Region', type: 'text', defaultValue: '' }
+        ], mockDocW.createElement('div'));
+
+        await wd.DashboardManager.init('container', 'dash1');
+
+        const calls = mockFetch.mock.calls.map(c => c[0]);
+        const widgetDataCall = calls.find(url => url.includes('/widget/w1/data'));
+        expect(widgetDataCall).toBeDefined();
+        // No query string appended for empty values
+        expect(widgetDataCall).not.toContain('?');
+        expect(widgetDataCall).toBe('/_dashboard/dash1/widget/w1/data');
+    });
 });
