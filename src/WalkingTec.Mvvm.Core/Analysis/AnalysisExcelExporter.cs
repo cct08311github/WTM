@@ -28,6 +28,22 @@ namespace WalkingTec.Mvvm.Core.Analysis
         public static byte[] Export(AnalysisQueryResponse result, bool includeChart = false, string? chartType = null, bool includeMetadata = false)
         {
             using var workbook = new XSSFWorkbook();
+            BuildWorkbook(workbook, result, includeChart, chartType, includeMetadata);
+            var ms = new MemoryStream();
+            workbook.Write(ms);
+            return ms.ToArray();
+        }
+
+        /// <summary>
+        /// 共用的 workbook 建置邏輯，供 <see cref="Export"/> 和 <see cref="ExportToStream"/> 呼叫。
+        /// </summary>
+        private static void BuildWorkbook(
+            XSSFWorkbook workbook,
+            AnalysisQueryResponse result,
+            bool includeChart,
+            string? chartType,
+            bool includeMetadata)
+        {
             var sheet = workbook.CreateSheet("Analysis");
 
             // ── Styles ────────────────────────────────────────────────────────────
@@ -245,9 +261,28 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     metaRow.CreateCell(1).SetCellValue(rows[i].Item2);
                 }
             }
-            var ms = new MemoryStream();
-            workbook.Write(ms);
-            return ms.ToArray();
+        }
+
+        /// <summary>
+        /// 將分析結果匯出為 Excel（xlsx），直接寫入指定的 <see cref="Stream"/>。
+        /// 相較於 <see cref="Export"/> 避免了一次 <c>ms.ToArray()</c> 的中間記憶體複製，
+        /// 適合用於 HTTP 回應串流（<c>Response.Body</c>）或大型報表直寫場景。
+        /// </summary>
+        /// <param name="result">查詢結果。</param>
+        /// <param name="destination">目標串流，必須可寫入（Writable）。</param>
+        /// <param name="includeChart">是否嵌入圖表（預設 false）。</param>
+        /// <param name="chartType">圖表類型：bar, pie, line, bar-stacked（預設 bar）。</param>
+        /// <param name="includeMetadata">是否輸出 Metadata 工作表（預設 false）。</param>
+        public static void ExportToStream(
+            AnalysisQueryResponse result,
+            Stream destination,
+            bool includeChart = false,
+            string? chartType = null,
+            bool includeMetadata = false)
+        {
+            using var workbook = new XSSFWorkbook();
+            BuildWorkbook(workbook, result, includeChart, chartType, includeMetadata);
+            workbook.Write(destination);
         }
 
         internal static (double Divisor, string Unit) ComputeScale(double maxAbsValue)

@@ -9,7 +9,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
     /// </summary>
     public class GroupByStrategyResolver
     {
-        private static readonly InProcessGroupByStrategy InProcess = new();
+        // ServerSideGroupByStrategy is stateless — safe to share as a process-wide singleton.
         private static readonly ServerSideGroupByStrategy ServerSide = new();
 
         /// <summary>預設 Resolver 實例。</summary>
@@ -20,6 +20,14 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// SqlServer、Oracle、MySql、PgSql 均支援標準 SQL GROUP BY，使用 ServerSideGroupByStrategy；
         /// SQLite 的 GroupBy Expression Tree 翻譯有限制，使用 InProcessGroupByStrategy。
         /// </summary>
+        /// <remarks>
+        /// <see cref="InProcessGroupByStrategy"/> carries mutable per-call state
+        /// (<c>LastMaterializeCount</c>) and MUST NOT be shared across concurrent
+        /// requests. A fresh instance is returned for every Resolve() call for the
+        /// in-process path so that two simultaneous OLAP requests cannot race on
+        /// that field. <see cref="ServerSideGroupByStrategy"/> is stateless and
+        /// remains a shared singleton.
+        /// </remarks>
         public virtual IGroupByStrategy Resolve(DBTypeEnum dbType, AnalysisQueryRequest req)
         {
             return dbType switch
@@ -28,7 +36,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 DBTypeEnum.Oracle    => ServerSide,
                 DBTypeEnum.MySql     => ServerSide,
                 DBTypeEnum.PgSql     => ServerSide,
-                _                    => InProcess
+                _                    => new InProcessGroupByStrategy()
             };
         }
     }

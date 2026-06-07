@@ -94,18 +94,20 @@ namespace WalkingTec.Mvvm.Core.Analysis
             }
             catch (InvalidOperationException) when (strategy is ServerSideGroupByStrategy)
             {
-                // SQL 翻譯失敗 → fallback to in-process; probe is now needed.
-                // Take(N+1) 讓 DB/記憶體只掃到第 N+1 筆即停止，代價遠小於 COUNT(*)。
-                var fbProbe = filtered.Take(InProcessGroupByStrategy.MaxMaterializeRows + 1).Count();
-                dataTruncated = fbProbe > InProcessGroupByStrategy.MaxMaterializeRows;
-                rows = new InProcessGroupByStrategy().Execute(filtered, req, wl, cancellationToken);
+                // SQL 翻譯失敗 → fallback to in-process.
+                // InProcessGroupByStrategy materialises N+1 rows internally and
+                // exposes LastMaterializeCount, so NO second COUNT(*) probe is needed.
+                var fbStrategy = new InProcessGroupByStrategy();
+                rows = fbStrategy.Execute(filtered, req, wl, cancellationToken);
+                dataTruncated = fbStrategy.LastMaterializeCount > InProcessGroupByStrategy.MaxMaterializeRows;
             }
 
-            // In-process path: probe whether source exceeds MaxMaterializeRows.
-            if (strategy is InProcessGroupByStrategy)
+            // In-process path: read truncation flag from the strategy instance —
+            // InProcessGroupByStrategy already materialised N+1 rows and recorded
+            // LastMaterializeCount, so no additional DB round-trip is needed.
+            if (strategy is InProcessGroupByStrategy ip)
             {
-                var probeCount = filtered.Take(InProcessGroupByStrategy.MaxMaterializeRows + 1).Count();
-                dataTruncated = probeCount > InProcessGroupByStrategy.MaxMaterializeRows;
+                dataTruncated = ip.LastMaterializeCount > InProcessGroupByStrategy.MaxMaterializeRows;
             }
 
             // Resolve enum dimension values to their [Display] names
@@ -231,17 +233,19 @@ namespace WalkingTec.Mvvm.Core.Analysis
             }
             catch (InvalidOperationException) when (strategy is ServerSideGroupByStrategy)
             {
-                var fbProbe = await AsyncQueryHelper.SafeCountAsync(
-                    filtered.Take(InProcessGroupByStrategy.MaxMaterializeRows + 1), cancellationToken);
-                dataTruncated = fbProbe > InProcessGroupByStrategy.MaxMaterializeRows;
-                rows = await new InProcessGroupByStrategy().ExecuteAsync(filtered, req, wl, cancellationToken);
+                // SQL 翻譯失敗 → fallback to in-process.
+                // InProcessGroupByStrategy materialises N+1 rows internally and
+                // exposes LastMaterializeCount, so NO second COUNT(*) probe is needed.
+                var fbStrategy = new InProcessGroupByStrategy();
+                rows = await fbStrategy.ExecuteAsync(filtered, req, wl, cancellationToken);
+                dataTruncated = fbStrategy.LastMaterializeCount > InProcessGroupByStrategy.MaxMaterializeRows;
             }
 
-            if (strategy is InProcessGroupByStrategy)
+            // In-process path: read truncation flag from the strategy instance —
+            // no additional async DB round-trip needed.
+            if (strategy is InProcessGroupByStrategy ipAsync)
             {
-                var probeCount = await AsyncQueryHelper.SafeCountAsync(
-                    filtered.Take(InProcessGroupByStrategy.MaxMaterializeRows + 1), cancellationToken);
-                dataTruncated = probeCount > InProcessGroupByStrategy.MaxMaterializeRows;
+                dataTruncated = ipAsync.LastMaterializeCount > InProcessGroupByStrategy.MaxMaterializeRows;
             }
 
             ResolveEnumDisplayNames(rows, req.Dimensions, wl);

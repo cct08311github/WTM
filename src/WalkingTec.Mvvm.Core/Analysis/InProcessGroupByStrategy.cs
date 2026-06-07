@@ -22,6 +22,19 @@ namespace WalkingTec.Mvvm.Core.Analysis
         internal static int MaxMaterializeRows => AnalysisLimits.MaxMaterializeRows;
         private static int MaxRows => AnalysisLimits.MaxResultRows;
 
+        // ── Truncation probe elimination (Bucket B opt-in) ────────────────────
+        // Records how many rows were actually pulled from the DB for the most
+        // recent Execute/ExecuteAsync call. Set to MaxMaterializeRows + 1 when
+        // the source contained MORE rows than the limit so the engine can
+        // compute dataTruncated without issuing a second COUNT(*) query.
+        // The field is internal so AnalysisQueryEngine can access it via a
+        // concrete-type check; the IGroupByStrategy interface is unchanged.
+        //
+        // THREADING: this is per-call mutable state. Instances MUST NOT be
+        // shared across concurrent queries. GroupByStrategyResolver.Resolve()
+        // returns a fresh InProcessGroupByStrategy per call to enforce this.
+        internal int LastMaterializeCount { get; private set; }
+
         // ── Property accessor cache ────────────────────────────────────────────
         // Keyed by (clrType, propertyName) → PropertyInfo resolved once per type.
         // PropertyInfo is immutable — safe for concurrent reads without locking.
@@ -45,13 +58,20 @@ namespace WalkingTec.Mvvm.Core.Analysis
             Dictionary<string, AnalysisFieldMeta> whitelist,
             CancellationToken cancellationToken = default)
         {
-            var queryToRun = query.Take(MaxMaterializeRows);
+            // Materialise N+1 rows so we can detect truncation in a single
+            // DB round-trip — no second COUNT(*) probe needed.
+            var queryToRun = query.Take(MaxMaterializeRows + 1);
             List<TModel> items = [];
             foreach (var item in queryToRun)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 items.Add(item);
             }
+            LastMaterializeCount = items.Count;
+            // Trim to MaxMaterializeRows before aggregating so behaviour
+            // is identical to the old Take(MaxMaterializeRows) path.
+            if (items.Count > MaxMaterializeRows)
+                items = items.Take(MaxMaterializeRows).ToList();
             return GroupAndAggregate(items, req);
         }
 
@@ -62,8 +82,14 @@ namespace WalkingTec.Mvvm.Core.Analysis
             Dictionary<string, AnalysisFieldMeta> whitelist,
             CancellationToken cancellationToken = default)
         {
-            var items = await AsyncQueryHelper.SafeToListAsync(
-                query.Take(MaxMaterializeRows), cancellationToken);
+            // Materialise N+1 rows to enable single-round-trip truncation detection.
+            var raw = await AsyncQueryHelper.SafeToListAsync(
+                query.Take(MaxMaterializeRows + 1), cancellationToken);
+            LastMaterializeCount = raw.Count;
+            // Trim to MaxMaterializeRows before aggregating.
+            var items = raw.Count > MaxMaterializeRows
+                ? raw.Take(MaxMaterializeRows).ToList()
+                : raw;
             return GroupAndAggregate(items, req);
         }
 

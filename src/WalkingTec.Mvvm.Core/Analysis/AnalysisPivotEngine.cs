@@ -15,7 +15,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
         public const int MaxPivotValues = 50;
 
         /// <summary>
-        /// 執行 Pivot 轉置。
+        /// 執行 Pivot 轉置（預設填零模式：所有缺少的儲存格填入 0m）。
         /// </summary>
         /// <param name="groupByResult">標準 GroupBy 查詢結果。</param>
         /// <param name="pivotDimension">要展開為欄位的維度名稱。</param>
@@ -27,6 +27,27 @@ namespace WalkingTec.Mvvm.Core.Analysis
             string pivotDimension,
             List<string> allDimensions,
             List<string> measureNames)
+            => Pivot(groupByResult, pivotDimension, allDimensions, measureNames, fillZero: true);
+
+        /// <summary>
+        /// 執行 Pivot 轉置，支援 <paramref name="fillZero"/> 控制稀疏輸出。
+        /// </summary>
+        /// <param name="groupByResult">標準 GroupBy 查詢結果。</param>
+        /// <param name="pivotDimension">要展開為欄位的維度名稱。</param>
+        /// <param name="allDimensions">原始查詢的所有維度名稱。</param>
+        /// <param name="measureNames">度量欄位名（Field_Func 格式）。</param>
+        /// <param name="fillZero">
+        ///   <c>true</c>（預設）：缺少的 pivot value/measure 組合填入 0m，與舊版行為相同。<br/>
+        ///   <c>false</c>：稀疏輸出——不寫入 0 儲存格，僅包含原始資料中實際有值的組合。
+        ///   適合下游程式碼需要區分「確認為 0」與「無資料」的場景。
+        /// </param>
+        /// <returns>Pivot 結果。</returns>
+        public static AnalysisPivotResponse Pivot(
+            AnalysisQueryResponse groupByResult,
+            string pivotDimension,
+            List<string> allDimensions,
+            List<string> measureNames,
+            bool fillZero)
         {
             if (string.IsNullOrEmpty(pivotDimension))
                 throw new InvalidOperationException("PivotDimension 不可為空。");
@@ -75,16 +96,20 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     pivotRow[rd] = firstRow.GetValueOrDefault(rd);
                 }
 
-                // Initialize all pivot cells to 0
-                foreach (var pv in pivotValues)
+                // Initialize all pivot cells to 0 (dense) or skip (sparse)
+                if (fillZero)
                 {
-                    foreach (var mn in measureNames)
+                    foreach (var pv in pivotValues)
                     {
-                        pivotRow[$"{pv}_{mn}"] = 0m;
+                        foreach (var mn in measureNames)
+                        {
+                            pivotRow[$"{pv}_{mn}"] = 0m;
+                        }
                     }
                 }
 
-                // Fill in actual values
+                // Fill in actual values (overwrites zeros when fillZero=true;
+                // adds only real entries when fillZero=false).
                 foreach (var row in group)
                 {
                     var pvKey = row.GetValueOrDefault(pivotDimension)?.ToString() ?? "";

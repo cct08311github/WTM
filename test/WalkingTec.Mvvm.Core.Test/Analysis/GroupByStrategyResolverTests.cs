@@ -66,13 +66,27 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         [TestMethod]
-        public void InProcess_returns_same_instance_across_calls()
+        public void InProcess_returns_distinct_instances_across_calls()
         {
             var req = new AnalysisQueryRequest();
-            // SQLite and Memory are both InProcess — verify they share the same singleton instance
+            // Each Resolve() call for SQLite/Memory must return a NEW InProcessGroupByStrategy
+            // so that LastMaterializeCount cannot race between concurrent requests (#186).
             var s1 = GroupByStrategyResolver.Default.Resolve(DBTypeEnum.SQLite, req);
+            var s2 = GroupByStrategyResolver.Default.Resolve(DBTypeEnum.SQLite, req);
+            Assert.AreNotSame(s1, s2,
+                "Resolve() must return a fresh InProcessGroupByStrategy per call — " +
+                "sharing a single instance would cause LastMaterializeCount to race " +
+                "across concurrent OLAP requests.");
+        }
+
+        [TestMethod]
+        public void InProcess_returns_distinct_instances_for_Memory()
+        {
+            var req = new AnalysisQueryRequest();
+            var s1 = GroupByStrategyResolver.Default.Resolve(DBTypeEnum.Memory, req);
             var s2 = GroupByStrategyResolver.Default.Resolve(DBTypeEnum.Memory, req);
-            Assert.AreSame(s1, s2, "InProcess should be a singleton instance.");
+            Assert.AreNotSame(s1, s2,
+                "Resolve() must return a fresh InProcessGroupByStrategy per call (Memory path).");
         }
 
         [TestMethod]
