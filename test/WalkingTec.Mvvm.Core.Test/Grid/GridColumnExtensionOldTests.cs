@@ -281,6 +281,45 @@ namespace WalkingTec.Mvvm.Core.Test.Grid
             col.DisableExport.Should().BeTrue();
         }
 
+        // ─── SetShowTotal compiles for all concrete poco base types (#208) ────
+        // Issue #208: verify that the CG-08-emitted .SetShowTotal(true) call compiles
+        // for models whose base type is BasePoco (not just TopBasePoco directly).
+        // BasePoco : TopBasePoco, so GridColumn<BasePoco> satisfies where T : TopBasePoco.
+        // Since GridColumn<T> itself requires T : TopBasePoco, any model that can appear
+        // in a generated ListVM already satisfies the SetShowTotal constraint — this test
+        // pair is a compile-time + runtime regression guard against the constraint being
+        // accidentally narrowed in the future.
+
+        private sealed class BasePocoDerived : BasePoco
+        {
+            public decimal Amount { get; set; }
+        }
+
+        [TestMethod]
+        public void SetShowTotal_CompilesAndWorks_ForBasePocoDerived()
+        {
+            // BasePoco : TopBasePoco — covers the common host-app model pattern.
+            // If the SetShowTotal constraint were narrowed past TopBasePoco this file
+            // would fail to compile, which is the primary regression being guarded.
+            var col = new GridColumn<BasePocoDerived>();
+            var result = col.SetShowTotal(true);
+            result.Should().BeSameAs(col, "SetShowTotal must return self for fluent chaining");
+            col.ShowTotal.Should().BeTrue("ShowTotal property must be set to true");
+        }
+
+        [TestMethod]
+        public void SetShowTotal_GeneratedStyle_ChainCompiles_ForBasePocoDerived()
+        {
+            // Simulates the exact chain CG-08 emits for a ShowTotal=true column:
+            //   this.MakeGridHeader(x => x.Amount).SetShowTotal(true)
+            // Using BasePoco-derived model — the host-app scenario raised in issue #208.
+            // Expression<Func<BasePocoDerived, object>> requires a box cast for value types.
+            System.Linq.Expressions.Expression<Func<BasePocoDerived, object>> exp = x => (object)x.Amount;
+            var col = new GridColumn<BasePocoDerived>(exp, null);
+            col.SetShowTotal(true);
+            col.ShowTotal.Should().BeTrue("Generated .SetShowTotal(true) chain must work for BasePoco-derived models");
+        }
+
         // ─── Fluent chain ─────────────────────────────────────────────────────
 
         [TestMethod]
