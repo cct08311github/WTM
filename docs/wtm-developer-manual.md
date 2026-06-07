@@ -1,8 +1,8 @@
 # WTM 開發與使用手冊
 
-> **版本**：10.5.5 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-06-06
+> **版本**：10.6.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-06-07
 >
-> **10.5.5 重點**（patch）：兩個相容性修復。`DataContext.Run()` 參數化 raw SQL 現在於 **Oracle** 可用（改用 provider-agnostic 的 `DbCommand.CreateParameter()` 建參數，移除 #145 對 Oracle 丟 `NotSupportedException` 的 stopgap；無新 API、無介面變更，#147）。`LookupCache` 在**單租戶**部署（`LookupCacheOptions.DefaultTenantIsolation = false`）下恢復對 `ITenant` 型別（如 `FrameworkUser`）的快取——#112/#113 的跨租戶繞過現在只在租戶隔離實際啟用（`DefaultTenantIsolation = true`）時才生效，單租戶 app 改用全域 key 快取而非每次查 DB；多租戶跨租戶保護不變（#168）。詳見 `CHANGELOG.md` `[10.5.5]`。
+> **10.6.0 重點**（ETL + OLAP 深度優化，#179）：效能改善皆為內部、不改變可觀察行為；新增的調校旋鈕一律 opt-in 並預設維持舊行為。新增 ETL bulk-loader 調校（`MssqlBulkLoader` 的 `bulkCopyOptions` / `internalBatchSize`、`OracleBulkLoader` 的 `timeoutSeconds`，見 §8.18）、ETL source/schema 調校（`OracleSource.FetchRowCount`、`EtlPipelineConfig.WatermarkSqlType`、`EtlSchemaServiceFactory.CreateWithCache` 的 `CachingEtlSchemaService` 快取裝飾器，見 §8.18）、OLAP overload（`AnalysisExcelExporter.ExportToStream`、`AnalysisPivotEngine.Pivot(..., fillZero)`，見 §7.17）。修復 ETL MSSQL schema-qualified 欄位查詢（`audit.STG_x` 0 欄位問題，#184）與 scheduler 狀態變更的 `SkipCount` 競態 + `UpdateTime` 稽核（#185）。Analysis 引擎消除一次多餘 DB round-trip 並 per-request 解析策略以維持執行緒安全（#186）；`AnalysisQueryEngine.cs` 拆成 4 個 partial 檔（#190）。詳見 `CHANGELOG.md` `[10.6.0]`。
 >
 > **10.5.4 重點**（patch，bug-hunt remediation）：對抗式 bug 獵捕（Opus orchestrate → Sonnet 偵查 → 獨立 skeptic 對抗驗證 → Opus review）修復 **CRITICAL(1) + HIGH(20) + MEDIUM(24) + LOW(20) = 65 個對抗驗證確認缺陷**，全數相容（無 breaking change）。新增/變更的使用者可見表面（皆 opt-in 或非破壞多載）：`DataContext.EnableSensitiveQueryLogging`（opt-in，預設 `false`；EF Core 敏感查詢參數日誌現需顯式開啟，避免 debug 模式洩漏 PII，見 §10）；`MssqlBulkLoader` 逾時可設定（建構參數 `timeoutSeconds`，預設 300s，取代原無限 `0`，見 §8）；`IDashboardService.GetWidgetDataAsync` 新增 `tenantId` 非破壞多載（default interface member，租戶隔離，見 §9）；`FilterCondition.Values`（In/NotIn 的 List 形式優先於逗號字串 `Value`，見 §7）；`BaseImportVM` 實作 `IDisposable`（釋放 `XSSFWorkbook`，見 §4.5）；Analysis SaveQuery 加 per-user 數量上限 + `AnalysisSavedQuery.ConfigJson` `[StringLength(65536)]`（見 §7）。詳見 `CHANGELOG.md` `[10.5.4]`。
 
@@ -1624,6 +1624,19 @@ var raw = AnalysisDrillThrough.BuildQuery<Order>(
 - 標籤無法 parse → `Take(0)` 優雅退化（dashboard 顯示「無資料」），不丟例外、也不傳回未過濾結果
 - 缺維度值 → 該維度不過濾（drill 自動放寬）；多維度 AND
 
+### 7.17 OLAP 匯出 / Pivot opt-in overload（10.6.0+）
+
+兩個 additive overload，既有簽章不變、預設行為完全保留：
+
+- **`AnalysisExcelExporter.ExportToStream(response, destination, ...)`**：把 workbook 直接寫到目標 `Stream`，省去 `byte[] Export(...)` 路徑那次 `ms.ToArray()` 全量複製（大型匯出減半尖峰記憶體）。既有 `byte[] Export(...)` 簽章與回傳型別不變。
+
+  ```csharp
+  // 串流到 HTTP Response（不在記憶體中保留整份 byte[]）
+  exporter.ExportToStream(response, httpContext.Response.Body, includeMetadata: true);
+  ```
+
+- **`AnalysisPivotEngine.Pivot(..., bool fillZero)`**：新增 5 參數 overload；`fillZero: false` 時略過不存在的 pivot 值 / 度量組合的零值儲存格（稀疏輸出）。既有 4 參數 `Pivot(...)` 委派為 `fillZero: true`，所有現有呼叫端的零值填滿行為不變。
+
 ---
 
 ## 8. ETL 模組
@@ -2118,6 +2131,31 @@ RBAC 與 `_EtlJobController` 同一把鑰匙（Admin / ETLAdmin / IsQuickDebug b
 - `window.addEventListener("resize")` → 圖表 resize
 - 所有 AJAX 注入文字過 `escapeHtml()` — 連錯誤訊息都不洩 XSS sink
 - SuccessRate 顯色：`<80%` 紅 / `80–95%` 琥珀 / `≥95%` 藍
+
+### 8.18 ETL 效能調校 opt-in 選項（10.6.0+）
+
+10.6.0 為 ETL pipeline 加入一組 opt-in 調校旋鈕。**全部 additive、預設維持舊行為**；`IBulkLoader` 介面簽章不變（第三方 loader 實作不受影響）。
+
+| 選項 | 位置 | 預設 | 說明 |
+|------|------|------|------|
+| `bulkCopyOptions` | `MssqlBulkLoader` ctor | `SqlBulkCopyOptions.Default` | 傳給 `SqlBulkCopy`；私有 staging 表建議用 `TableLock`（20–50% 吞吐）。 |
+| `internalBatchSize` | `MssqlBulkLoader` ctor | `0`（= 整批一次） | >0 時設 `SqlBulkCopy.BatchSize`，分批 checkpoint、降 TDS 尖峰記憶體。 |
+| `timeoutSeconds` | `OracleBulkLoader` ctor | `0`（= 無限等待，舊行為） | >0 時對 Merge/Replace/Truncate/EnsureStaging/BulkLoad 設 `CommandTimeout`，避免永久卡死。 |
+| `FetchRowCount` | `OracleSource` 屬性 | `0`（= ODP.NET 預設） | >0 時設 reader `FetchSize`，寬列 / 高延遲連線可 3–10× 抽取吞吐。 |
+| `WatermarkSqlType` | `EtlPipelineConfig` | `null`（= `AddWithValue`） | 設定後 MSSQL watermark 改用明確型別的 `SqlParameter`，避免 plan-cache 污染 / 隱式轉換。 |
+
+**Schema 快取裝飾器**：`EtlSchemaServiceFactory.CreateWithCache(dbType, IMemoryCache, ttl?)` 回傳 `CachingEtlSchemaService`（預設 60 秒 TTL，cache key 以連線字串的 SHA256 摘要區隔，不存明文）；裸 `Create(...)` 維持不快取。`_EtlSchemaController` 在 DI 提供 `IMemoryCache` 時自動採用。
+
+```csharp
+// 範例：opt-in MSSQL TableLock + 分批；Oracle 逾時保護
+var loader = new MssqlBulkLoader(bulkCopyOptions: SqlBulkCopyOptions.TableLock, internalBatchSize: 5000);
+var oracle = new OracleBulkLoader(timeoutSeconds: 300);
+
+// 範例：schema 探勘加 60s 快取
+var schemaSvc = EtlSchemaServiceFactory.CreateWithCache(DBTypeEnum.SqlServer, memoryCache);
+```
+
+> 修復（10.6.0）：MSSQL `GetColumnsAsync` 先前只用 `TABLE_NAME` 過濾，對 schema-qualified staging 表（如 `audit.STG_x`）回傳 0 欄位；現在一併過濾 `TABLE_SCHEMA`（未限定 schema → `dbo`）。Scheduler 的 `UpdateStatusAsync` / `SkipNextAsync` 改用 `ExecuteUpdateAsync`，`SkipCount` 改伺服器端遞增（消除 read-then-write 競態）並明確補 `UpdateTime` 稽核欄位。
 
 ---
 

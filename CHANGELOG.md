@@ -1,5 +1,28 @@
 # 更新日志
 
+## [10.6.0] - 2026-06-07
+
+Deep optimization of the ETL and OLAP (Analysis) modules (#179): 52 profiled opportunities, 40 adversarially confirmed. Performance improvements are internal and behavior-neutral; new tuning knobs are opt-in and default to prior behavior.
+
+### Added
+
+- **ETL bulk-loader tuning (opt-in)** (#184): `MssqlBulkLoader` gains a `bulkCopyOptions` ctor parameter (default `SqlBulkCopyOptions.Default`; `TableLock` recommended for private staging tables) and an `internalBatchSize` parameter (default `0` = single full batch). `OracleBulkLoader` gains a `timeoutSeconds` parameter (default `0` = prior infinite wait); when set, `CommandTimeout` is applied across Merge/Replace/Truncate/EnsureStaging/BulkLoad. All additive — the `IBulkLoader` interface is unchanged.
+- **ETL source/quality/schema tuning (opt-in)** (#185): `OracleSource.FetchRowCount` (default `0` = ODP.NET default) sets the reader `FetchSize` when positive; `EtlPipelineConfig.WatermarkSqlType` (default `null`) uses an explicit typed `SqlParameter` for the MSSQL watermark instead of `AddWithValue`; `EtlSchemaServiceFactory.CreateWithCache(dbType, IMemoryCache, ttl?)` returns a `CachingEtlSchemaService` decorator (60s default TTL) — the bare `Create(...)` stays non-caching.
+- **OLAP export/pivot overloads (opt-in)** (#186): `AnalysisExcelExporter.ExportToStream(response, stream, ...)` writes the workbook directly to a destination stream (no second full-buffer copy); `AnalysisPivotEngine.Pivot(..., bool fillZero)` enables sparse output. Existing `byte[] Export(...)` and the 4-parameter `Pivot(...)` signatures are unchanged.
+
+### Fixed
+
+- **ETL MSSQL schema-qualified column lookup** (#184): `GetColumnsAsync` filtered on `TABLE_NAME` only, returning 0 columns for schema-qualified staging tables such as `audit.STG_x`; it now filters on `TABLE_SCHEMA` too (unqualified names default to `dbo`).
+- **ETL scheduler status mutations** (#185): `UpdateStatusAsync`/`SkipNextAsync` now use `ExecuteUpdateAsync` with a server-side `SkipCount` increment (eliminating a read-then-write race) and stamp `UpdateTime` explicitly to match the EF audit interceptor.
+
+### Improved
+
+- **OLAP Analysis engine performance** (#180): cached reflection on the request hot path (four `ExecuteDynamic*` `MethodInfo` caches, the `ApplyFilters` `Contains` lookups, and the `ServerSideGroupByStrategy` aggregate-method lookups); single-pass in-process GroupBy with a struct accumulator over pre-resolved `PropertyInfo`; `ComputeHash` now rents its UTF-8 buffer from `ArrayPool` (byte-identical hash, so cache keys are unchanged); single-pass forecast regression; pivot row-key fast paths and output-dictionary pre-sizing; Excel total-cell style reuse.
+- **OLAP Dashboard performance** (#180): JSON dashboard definitions are cached with a `LastWriteTimeUtc` staleness guard (N widget reads become 1 per refresh); static `JsonSerializerOptions`; REST widget bodies read via `StreamReader` instead of an intermediate byte array.
+- **ETL pipeline performance** (#181): single-pass watermark max via `Comparer<object>.Default`; ordinal column access in the Oracle array-binding loop; hoisted reader-schema snapshot in the MSSQL and Oracle sources; `HashSet` membership for `In`-rule quality checks; scheduler `NextFireAt` and the Quartz `Running` flag use targeted `ExecuteUpdateAsync` (with `UpdateTime` stamped for audit parity).
+- **OLAP redundant DB round-trip eliminated** (#186): the in-process group-by truncation check reuses the materialized row count instead of issuing a second `COUNT`-with-limit query — roughly halves analysis-engine database load on auto-refreshing dashboards. The in-process strategy is now resolved per request to keep this thread-safe.
+- **`AnalysisQueryEngine.cs` split** (#190): the 1847-line file is split into four `partial class` files (core / Filters / PostProcess / Hashing), each under 700 LOC, with no behavior or public-API change.
+
 ## [10.5.5] - 2026-06-06
 
 ### Fixes
