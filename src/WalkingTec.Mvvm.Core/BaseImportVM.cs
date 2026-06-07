@@ -1028,14 +1028,32 @@ namespace WalkingTec.Mvvm.Core
             SetEntityList();
             int total = EntityList.Count;
             int processed = 0;
+
+            // EVM-008: wrap per-row data-annotation validation in try/catch so a single
+            // bad row records its own error instead of aborting the entire file with
+            // "WrongTemplate".  We collect ALL per-row errors before returning, then
+            // report them via ErrorListVM (the framework's existing import-error channel).
             foreach (var entity in EntityList)
             {
-                var context = new ValidationContext(entity);
-                List<ValidationResult> validationResults = [];
-                TryValidateObject(entity, context, validationResults);
-                if (validationResults.Count > 0)
+                try
                 {
-                    ErrorListVM.EntityList.Add(new ErrorMessage { Message = validationResults.FirstOrDefault()?.ErrorMessage ?? "Error", ExcelIndex = entity.ExcelIndex, Index = entity.ExcelIndex });
+                    var context = new ValidationContext(entity);
+                    List<ValidationResult> validationResults = [];
+                    TryValidateObject(entity, context, validationResults);
+                    if (validationResults.Count > 0)
+                    {
+                        ErrorListVM.EntityList.Add(new ErrorMessage { Message = validationResults.FirstOrDefault()?.ErrorMessage ?? "Error", ExcelIndex = entity.ExcelIndex, Index = entity.ExcelIndex });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Surface which row failed and why — do not swallow silently.
+                    ErrorListVM.EntityList.Add(new ErrorMessage
+                    {
+                        Message = ex.Message,
+                        ExcelIndex = entity.ExcelIndex,
+                        Index = entity.ExcelIndex
+                    });
                 }
                 progress?.Report(new ImportProgress { Processed = ++processed, Total = total, Phase = "Validating" });
             }
@@ -1056,103 +1074,129 @@ namespace WalkingTec.Mvvm.Core
             //循环数据列表
             List<P> ListAdd = [];
             processed = 0;
+
+            // EVM-002 + EVM-008 (import contract): validate-all-then-commit.
+            // Open a transaction that covers both the per-row DC staging and the final
+            // SaveChanges so a mid-row exception or SaveChanges failure rolls back ALL
+            // rows atomically, preventing partial imports.
+            // BeginTransaction() is a no-op for the InMemory provider so the single-DB
+            // happy path is completely unaffected.
+            using var tx = DC!.BeginTransaction();
             foreach (var item in EntityList)
             {
-                //根据唯一性的设定查找数据库中是否有同样的数据
-                P? exist = IsDuplicateData(item, finalInfo);
-                //如果设置了覆盖功能
-                if (IsOverWriteExistData)
+                // EVM-008: isolate per-row staging exceptions — record against the row
+                // and continue so ALL bad rows are reported before stopping.
+                try
                 {
-                    if (exist != null)
+                    //根据唯一性的设定查找数据库中是否有同样的数据
+                    P? exist = IsDuplicateData(item, finalInfo);
+                    //如果设置了覆盖功能
+                    if (IsOverWriteExistData)
                     {
-                        //如果有重复数据，则进行修改
-                        var tempPros = typeof(T).GetFields();
-                        foreach (var pro in tempPros)
+                        if (exist != null)
                         {
-                            var excelProp = Template.GetType().GetField(pro.Name)?.GetValue(Template) as ExcelPropety;
-                            var proToSet = excelProp != null ? typeof(P).GetSingleProperty(excelProp.FieldName) : null;
-                            if (proToSet != null)
+                            //如果有重复数据，则进行修改
+                            var tempPros = typeof(T).GetFields();
+                            foreach (var pro in tempPros)
                             {
-                                var val = proToSet.GetValue(item);
-                                PropertyHelper.SetPropertyValue(exist, excelProp!.FieldName, val, stringBasedValue: true);
-                                try
+                                var excelProp = Template.GetType().GetField(pro.Name)?.GetValue(Template) as ExcelPropety;
+                                var proToSet = excelProp != null ? typeof(P).GetSingleProperty(excelProp.FieldName) : null;
+                                if (proToSet != null)
                                 {
-                                    DC!.UpdateProperty(exist, proToSet.Name);
+                                    var val = proToSet.GetValue(item);
+                                    PropertyHelper.SetPropertyValue(exist, excelProp!.FieldName, val, stringBasedValue: true);
+                                    try
+                                    {
+                                        DC!.UpdateProperty(exist, proToSet.Name);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseImportVM")?.LogWarning(ex, "Import update: UpdateProperty failed for '{Property}' on duplicate row", proToSet.Name);
+                                    }
                                 }
-                                catch (Exception ex)
+                            }
+
+                            if (tempPros.Where(x => x.Name == "UpdateTime").SingleOrDefault() == null)
+                            {
+                                if (typeof(IBasePoco).IsAssignableFrom(exist.GetType()))
                                 {
-                                    Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseImportVM")?.LogWarning(ex, "Import update: UpdateProperty failed for '{Property}' on duplicate row", proToSet.Name);
+                                    (exist as IBasePoco)!.UpdateTime = Wtm!.TimeProvider.GetLocalNow().DateTime;
+                                    DC!.UpdateProperty(exist, "UpdateTime");
                                 }
                             }
-                        }
 
-                        if (tempPros.Where(x => x.Name == "UpdateTime").SingleOrDefault() == null)
-                        {
-                            if (typeof(IBasePoco).IsAssignableFrom(exist.GetType()))
+                            if (tempPros.Where(x => x.Name == "UpdateBy").SingleOrDefault() == null)
                             {
-                                (exist as IBasePoco)!.UpdateTime = Wtm!.TimeProvider.GetLocalNow().DateTime;
-                                DC!.UpdateProperty(exist, "UpdateTime");
+                                if (typeof(IBasePoco).IsAssignableFrom(exist.GetType()))
+                                {
+                                    (exist as IBasePoco)!.UpdateBy = LoginUserInfo?.ITCode;
+                                    DC!.UpdateProperty(exist, "UpdateBy");
+                                }
+                            }
+                            exist.ExcelIndex = item.ExcelIndex;
+                            //DC.UpdateEntity(exist);
+
+                            continue;
+                        }
+                        else
+                        {
+                            if (typeof(IPersistPoco).IsAssignableFrom(item.GetType()))
+                            {
+                                (item as IPersistPoco)!.IsValid = true;
                             }
                         }
-
-                        if (tempPros.Where(x => x.Name == "UpdateBy").SingleOrDefault() == null)
-                        {
-                            if (typeof(IBasePoco).IsAssignableFrom(exist.GetType()))
-                            {
-                                (exist as IBasePoco)!.UpdateBy = LoginUserInfo?.ITCode;
-                                DC!.UpdateProperty(exist, "UpdateBy");
-                            }
-                        }
-                        exist.ExcelIndex = item.ExcelIndex;
-                        //DC.UpdateEntity(exist);
-
-                        continue;
                     }
                     else
                     {
-                        if (typeof(IPersistPoco).IsAssignableFrom(item.GetType()))
+                        if (exist == null)
                         {
-                            (item as IPersistPoco)!.IsValid = true;
+                            if (typeof(IPersistPoco).IsAssignableFrom(ModelType))
+                            {
+                                (item as IPersistPoco)!.IsValid = true;
+                            }
                         }
                     }
-                }
-                else
-                {
-                    if (exist == null)
+                    //进行添加操作
+                    if (typeof(IBasePoco).IsAssignableFrom(item.GetType()))
                     {
-                        if (typeof(IPersistPoco).IsAssignableFrom(ModelType))
-                        {
-                            (item as IPersistPoco)!.IsValid = true;
-                        }
+                        (item as IBasePoco)!.CreateTime = Wtm!.TimeProvider.GetLocalNow().DateTime;
+                        (item as IBasePoco)!.CreateBy = LoginUserInfo?.ITCode;
                     }
-                }
-                //进行添加操作
-                if (typeof(IBasePoco).IsAssignableFrom(item.GetType()))
-                {
-                    (item as IBasePoco)!.CreateTime = Wtm!.TimeProvider.GetLocalNow().DateTime;
-                    (item as IBasePoco)!.CreateBy = LoginUserInfo?.ITCode;
-                }
-                if (typeof(ITenant).IsAssignableFrom(ModelType))
-                {
-                    ITenant? ent = item as ITenant;
-                    if (ent != null) ent.TenantCode = LoginUserInfo?.CurrentTenant;
-                }
+                    if (typeof(ITenant).IsAssignableFrom(ModelType))
+                    {
+                        ITenant? ent = item as ITenant;
+                        if (ent != null) ent.TenantCode = LoginUserInfo?.CurrentTenant;
+                    }
 
-                //如果是SqlServer数据库，而且没有主子表功能，进行Bulk插入
-                var connInfo = ConfigInfo?.Connections.Where(x => x.Key == (CurrentCS ?? "default")).FirstOrDefault();
-                if (connInfo != null && connInfo.DbType == DBTypeEnum.SqlServer && !HasSubTable && UseBulkSave == true)
-                {
-                    //ListAdd.Add(item);
+                    //如果是SqlServer数据库，而且没有主子表功能，进行Bulk插入
+                    var connInfo = ConfigInfo?.Connections.Where(x => x.Key == (CurrentCS ?? "default")).FirstOrDefault();
+                    if (connInfo != null && connInfo.DbType == DBTypeEnum.SqlServer && !HasSubTable && UseBulkSave == true)
+                    {
+                        //ListAdd.Add(item);
+                    }
+                    else
+                    {
+                        DC!.Set<P>().Add(item);
+                    }
+                    progress?.Report(new ImportProgress { Processed = ++processed, Total = total, Phase = "Saving" });
                 }
-                else
+                catch (Exception ex)
                 {
-                    DC!.Set<P>().Add(item);
+                    // EVM-008: record the per-row error and continue to collect remaining
+                    // row errors — do NOT silently swallow; surface row index + reason.
+                    ErrorListVM.EntityList.Add(new ErrorMessage
+                    {
+                        Message = ex.Message,
+                        ExcelIndex = item.ExcelIndex,
+                        Index = item.ExcelIndex
+                    });
                 }
-                progress?.Report(new ImportProgress { Processed = ++processed, Total = total, Phase = "Saving" });
             }
 
+            // If any row-staging errors occurred, roll back the transaction and report.
             if (ErrorListVM.EntityList.Count > 0)
             {
+                try { tx.Rollback(); } catch { /* swallow nested-tx rethrow */ }
                 DoReInit();
                 return false;
             }
@@ -1163,6 +1207,7 @@ namespace WalkingTec.Mvvm.Core
                 try
                 {
                     DC!.SaveChanges();
+                    tx.Commit();
 
                     if (ListAdd.Count > 0)
                     {
@@ -1171,11 +1216,18 @@ namespace WalkingTec.Mvvm.Core
                 }
                 catch (Exception e)
                 {
+                    try { tx.Rollback(); } catch { /* swallow nested-tx rethrow */ }
                     SetExceptionMessage(e, null);
                     DoReInit();
                     return false;
                 }
             }
+            else
+            {
+                // ValidateOnly mode or empty list — nothing to commit; dispose cleanly.
+                try { tx.Rollback(); } catch { /* swallow nested-tx rethrow */ }
+            }
+
             if (!ValidateOnly && string.IsNullOrEmpty(UploadFileId) == false && Wtm!.ServiceProvider != null)
             {
                 var fp = Wtm!.ServiceProvider.GetRequiredService<WtmFileProvider>();

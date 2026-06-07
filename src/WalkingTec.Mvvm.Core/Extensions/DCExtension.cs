@@ -1007,7 +1007,13 @@ where S : struct
         {
             ParameterExpression pe = Expression.Parameter(typeof(T));
             var idproperty = typeof(T).GetSingleProperty(fieldName);
-            Expression pro = Expression.Property(pe, idproperty!);
+            // EVM-009: guard against unknown field names the same way Sort() does (L11).
+            // Without this guard Expression.Property(pe, null!) throws NRE at runtime.
+            if (idproperty == null)
+            {
+                return Enumerable.Empty<string>().AsQueryable();
+            }
+            Expression pro = Expression.Property(pe, idproperty);
             Expression tostring = Expression.Call(pro, "ToString", new Type[] { });
             Type proType = typeof(string);
             Expression final = Expression.Call(

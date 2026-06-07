@@ -144,6 +144,12 @@ namespace WalkingTec.Mvvm.Core
             // Build a dictionary so that each submitted ID maps to its own entity,
             // regardless of the unordered DB return sequence (Issue #104, Bug 1).
             var entityById = entityList.ToDictionary(e => e.GetID().ToString()!);
+
+            // EVM-002: wrap the entire delete loop + SaveChanges in a single transaction
+            // so a mid-batch failure never leaves partial state committed in the database.
+            // BeginTransaction() (DCExtension) is a no-op for the InMemory provider and
+            // returns FakeNestedTransaction.DefaultTransaction for SQLite/SQL Server/etc.
+            using var tx = DC!.BeginTransaction();
             foreach (string idsDataItem in idsData)
             {
                 // If the entity was not found in the DB, skip it silently (preserves
@@ -242,6 +248,7 @@ namespace WalkingTec.Mvvm.Core
                 try
                 {
                     DC!.SaveChanges();
+                    tx.Commit();
                     var fp = Wtm!.ServiceProvider.GetRequiredService<WtmFileProvider>();
                     foreach (var item in fileids)
                     {
@@ -250,9 +257,16 @@ namespace WalkingTec.Mvvm.Core
                 }
                 catch (Exception e)
                 {
+                    try { tx.Rollback(); } catch { /* swallow nested-tx rethrow */ }
                     SetExceptionMessage(e, null);
                     rv = false;
                 }
+            }
+            else
+            {
+                // A pre-save error (CheckIfCanDelete / per-row exception) — roll back
+                // any tracked changes so no partial state reaches the DB.
+                try { tx.Rollback(); } catch { /* swallow nested-tx rethrow */ }
             }
             //如果失败，添加错误信息
             if (rv == false)
@@ -314,6 +328,9 @@ namespace WalkingTec.Mvvm.Core
                 vm = vmtype.GetConstructor(System.Type.EmptyTypes)?.Invoke(null) as IBaseCRUDVM<TModel>;
                 vm?.CopyContext(this);
             }
+            // EVM-002: wrap all per-row entity updates + SaveChanges in a single transaction
+            // so a validation error or SaveChanges failure rolls back the entire batch atomically.
+            using var tx = DC!.BeginTransaction();
             //循环所有数据
             for (int i = 0; i < idsData.Count; i++)
             {
@@ -403,12 +420,19 @@ namespace WalkingTec.Mvvm.Core
                 try
                 {
                     DC!.SaveChanges();
+                    tx.Commit();
                 }
                 catch (Exception e)
                 {
+                    try { tx.Rollback(); } catch { /* swallow nested-tx rethrow */ }
                     SetExceptionMessage(e, null);
                     rv = false;
                 }
+            }
+            else
+            {
+                // Pre-save validation failure — discard any tracked changes atomically.
+                try { tx.Rollback(); } catch { /* swallow nested-tx rethrow */ }
             }
 
             //如果有错误，输出错误信息
