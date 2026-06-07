@@ -74,6 +74,63 @@ namespace WalkingTec.Mvvm.Core.Test.Services
 
         #endregion
 
+        #region Type guard — non-BaseVM types must be rejected before constructor invocation (#201)
+
+        /// <summary>
+        /// Passing typeof(string) must throw InvalidOperationException and must NOT
+        /// invoke string's constructor (string has no parameterless ctor, but the key
+        /// assertion is that the guard fires before any reflection-invoke attempt).
+        /// </summary>
+        [TestMethod]
+        public void CreateVM_NonBaseVmType_ThrowsInvalidOperation_WithoutInvokingCtor()
+        {
+            Action act = () => _factory.CreateVM(_wtm, typeof(string));
+            act.Should().Throw<InvalidOperationException>()
+               .WithMessage("*is not a BaseVM*");
+        }
+
+        /// <summary>
+        /// A type whose parameterless constructor has observable side effects must NOT
+        /// run when the type is not a BaseVM.  The sentinel static field stays false.
+        /// </summary>
+        [TestMethod]
+        public void CreateVM_NonBaseVmType_DoesNotInvokeConstructor()
+        {
+            NonBaseVmWithSideEffectCtor.CtorInvoked = false;
+
+            Action act = () => _factory.CreateVM(_wtm, typeof(NonBaseVmWithSideEffectCtor));
+            act.Should().Throw<InvalidOperationException>()
+               .WithMessage("*is not a BaseVM*");
+
+            // The constructor must never have run.
+            NonBaseVmWithSideEffectCtor.CtorInvoked.Should().BeFalse(
+                "WtmVmFactory must not invoke a non-BaseVM constructor");
+        }
+
+        /// <summary>
+        /// Passing null must still throw InvalidOperationException (regression guard).
+        /// </summary>
+        [TestMethod]
+        public void CreateVM_NullType_ThrowsInvalidOperation_WithGuardMessage()
+        {
+            Action act = () => _factory.CreateVM(_wtm, (Type?)null);
+            act.Should().Throw<InvalidOperationException>()
+               .WithMessage("*is not a BaseVM*");
+        }
+
+        /// <summary>
+        /// Valid BaseVM subclass must still be constructed normally after the guard was added.
+        /// </summary>
+        [TestMethod]
+        public void CreateVM_ValidBaseVmType_ConstructsNormally()
+        {
+            var vm = _factory.CreateVM(_wtm, typeof(SimpleTestVM), passInit: true);
+            vm.Should().NotBeNull().And.BeOfType<SimpleTestVM>();
+            vm.Wtm.Should().BeSameAs(_wtm);
+        }
+
+        #endregion
+
         #region CreateVM by name
 
         [TestMethod]
@@ -303,6 +360,24 @@ namespace WalkingTec.Mvvm.Core.Test.Services
             // After adding an error we expect AddErrorColumn to be invoked on ListVM
             var vm = _factory.CreateVM<TestBatchWithListAndError>(_wtm, passInit: true);
             vm.Should().NotBeNull();
+        }
+
+        #endregion
+
+        #region Sentinel helper — non-BaseVM type with observable constructor side-effect (#201)
+
+        /// <summary>
+        /// NOT a BaseVM.  The static flag is set to true if the parameterless constructor
+        /// ever runs, letting tests assert the guard fired before constructor invocation.
+        /// </summary>
+        public class NonBaseVmWithSideEffectCtor
+        {
+            public static bool CtorInvoked;
+
+            public NonBaseVmWithSideEffectCtor()
+            {
+                CtorInvoked = true;
+            }
         }
 
         #endregion

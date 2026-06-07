@@ -21,9 +21,19 @@ namespace WalkingTec.Mvvm.Core.Services
             object[]? ids = null, Dictionary<string, object>? values = null,
             bool passInit = false)
         {
-            var ctor = vmType?.GetConstructor(Type.EmptyTypes);
+            // Defense-in-depth type guard: reject non-BaseVM types BEFORE resolving or
+            // invoking the constructor.  Without this guard a crafted client-supplied VM
+            // name (resolved via GlobaInfo.AllAssembly scan in the string overload) could
+            // cause an arbitrary parameterless constructor to execute. (#201)
+            if (vmType == null || !typeof(BaseVM).IsAssignableFrom(vmType))
+            {
+                throw new InvalidOperationException(
+                    $"Type '{vmType?.FullName ?? "(null)"}' is not a BaseVM and cannot be instantiated by WtmVmFactory.");
+            }
+
+            var ctor = vmType.GetConstructor(Type.EmptyTypes);
             BaseVM rv = ctor?.Invoke(null) as BaseVM
-                ?? throw new InvalidOperationException($"Cannot create instance of {vmType?.FullName}. Ensure it has a parameterless constructor.");
+                ?? throw new InvalidOperationException($"Cannot create instance of {vmType.FullName}. Ensure it has a parameterless constructor.");
             rv.Wtm = wtm;
             rv.FC = new Dictionary<string, object>();
             rv.CreatorAssembly = wtm.GetType().AssemblyQualifiedName;
