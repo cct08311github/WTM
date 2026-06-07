@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.Razor.TagHelpers;
 using Microsoft.Extensions.Options;
 using System.Linq;
+using System.Reflection;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.ConfigOptions;
 using WalkingTec.Mvvm.Core.Extensions;
@@ -84,6 +85,29 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             {
                 output.Attributes.SetAttribute("name", string.IsNullOrEmpty(Name) ? Field?.Name : Name);
             }
+
+            // ── [FormField] runtime defaults (STEP 0: before Disabled is evaluated) ──────
+            // Resolve the [FormField] attribute early so that ReadonlyOnEdit can flip
+            // Disabled=true before the readonly/disabled HTML attribute is emitted below.
+            // This block is purely additive: absent attribute → zero change.
+            var _formFieldPro = Field?.Metadata.ContainerType.GetSingleProperty(Field?.Metadata.PropertyName);
+            FormFieldAttribute? _formFieldAttr = _formFieldPro?.GetCustomAttribute<FormFieldAttribute>();
+            if (_formFieldAttr != null)
+            {
+                // ReadonlyOnEdit — flip Disabled only when not already set by the Razor author.
+                if (_formFieldAttr.ReadonlyOnEdit && !Disabled)
+                {
+                    // Edit mode = the form VM is a BaseCRUDVM whose Entity already has a persisted key.
+                    if (context.Items.TryGetValue("model", out var modelObj) &&
+                        modelObj is IBaseCRUDVM<TopBasePoco> crudVm &&
+                        crudVm.Entity?.HasID() == true)
+                    {
+                        Disabled = true;
+                    }
+                }
+            }
+            // ── end [FormField] pre-processing ───────────────────────────────────────────
+
                 if (Disabled )
                 {
                 if (this is DateTimeTagHelper)
@@ -140,10 +164,23 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
             if (LabelText == null)
             {
-                var pro = Field?.Metadata.ContainerType.GetSingleProperty(Field?.Metadata.PropertyName);
+                // Reuse property info already resolved for [FormField] pre-processing above.
+                var pro = _formFieldPro;
                 if (pro != null)
                 {
                     LabelText = pro.GetPropertyDisplayName();
+
+                    // --- [FormField] Placeholder ---
+                    // Apply only when the Razor author did not set an explicit EmptyText value.
+                    // Subclasses (TextBoxTagHelper, TextAreaTagHelper, …) add the placeholder
+                    // attribute as "" when EmptyText is null; we overwrite the empty/absent case
+                    // so that an explicit EmptyText in Razor markup always wins.
+                    if (_formFieldAttr?.Placeholder != null &&
+                        output.Attributes.TryGetAttribute("placeholder", out var existingPlaceholder) &&
+                        string.IsNullOrEmpty(existingPlaceholder?.Value?.ToString()))
+                    {
+                        output.Attributes.SetAttribute("placeholder", _formFieldAttr.Placeholder);
+                    }
                 }
                 else
                 {

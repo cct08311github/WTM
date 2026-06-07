@@ -50,7 +50,59 @@ namespace WalkingTec.Mvvm.Core
                 }
             }
 
-            return new GridColumn<T>(columnExp, width) { ColumnType = GridColumnTypeEnum.Normal, Align = alignType };
+            var col = new GridColumn<T>(columnExp, width) { ColumnType = GridColumnTypeEnum.Normal, Align = alignType };
+
+            // Apply [ListColumn] attribute as initial defaults.
+            // Any explicit fluent call (.SetWidth / .SetAlign / .SetSort / .SetHide / .SetFixed)
+            // made by the caller on the returned column AFTER MakeGridHeader wins because those
+            // setters simply overwrite the same fields — the attribute only seeds values here.
+            var pi = columnExp.GetPropertyInfo();
+            if (pi != null)
+            {
+                var attr = pi.GetCustomAttribute<ListColumnAttribute>();
+                if (attr != null)
+                {
+                    // Width — only apply when the caller did NOT pass an explicit width AND the
+                    // attribute specifies a non-zero value (0 = "auto", same as the default).
+                    if (width == null && attr.Width > 0)
+                    {
+                        col.Width = attr.Width;
+                    }
+
+                    // Align — apply when the attribute differs from the "Auto" sentinel which
+                    // means "let MakeGridHeader decide by type" (already done above).
+                    if (attr.Align != GridColumnAlignEnum.Auto)
+                    {
+                        col.Align = attr.Align;
+                    }
+
+                    // Sort=false disables sorting (true is the constructor default, no-op).
+                    if (!attr.Sort)
+                    {
+                        col.Sort = false;
+                    }
+
+                    // Hide=true hides the column (false is the default, no-op).
+                    if (attr.Hide)
+                    {
+                        col.Hide = true;
+                    }
+
+                    // Fixed — apply when non-None.
+                    if (attr.Fixed != GridColumnFixedEnum.None)
+                    {
+                        col.Fixed = attr.Fixed;
+                    }
+
+                    // ShowTotal — apply when true (false is the default, no-op).
+                    if (attr.ShowTotal)
+                    {
+                        col.ShowTotal = true;
+                    }
+                }
+            }
+
+            return col;
         }
 
         /// <summary>
