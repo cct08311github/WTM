@@ -5,6 +5,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace WalkingTec.Mvvm.Core
 {
     [Table("FrameworkUserRoles")]
+    [AuditChanges]
     public class FrameworkUserRole : BasePoco, ITenant
     {
         [Required]

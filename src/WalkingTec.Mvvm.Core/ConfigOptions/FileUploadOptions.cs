@@ -21,6 +21,21 @@ namespace WalkingTec.Mvvm.Core.ConfigOptions
 
         public Dictionary<string, List<FileHandlerOptions>> Settings { get; set; } = new Dictionary<string, List<FileHandlerOptions>>();
 
+        /// <summary>
+        /// When <c>true</c>, <see cref="WalkingTec.Mvvm.Core.Support.FileHandlers.WtmFileProvider"/>
+        /// will NOT call <c>IgnoreQueryFilters()</c> on <c>FileAttachment</c> queries, so the
+        /// EF Core global ITenant query filter is honoured and cross-tenant file access is blocked.
+        ///
+        /// Default is <c>false</c> (backward-compatible: file lookup is tenant-agnostic by ID).
+        ///
+        /// <para><strong>Trade-off:</strong> Setting this to <c>true</c> means a file uploaded by
+        /// tenant A cannot be resolved by tenant B even if the caller has the correct GUID.  Enable
+        /// this flag only when all file uploads are strictly tenant-scoped and you want the database
+        /// layer to enforce that boundary.  Leave it <c>false</c> (default) when files are shared
+        /// across tenants or when the caller already enforces access control at a higher layer.</para>
+        /// </summary>
+        public bool EnforceTenantFileScope { get; set; } = false;
+
     }
 
     public class FileHandlerOptions

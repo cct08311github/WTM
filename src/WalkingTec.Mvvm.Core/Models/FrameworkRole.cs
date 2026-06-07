@@ -9,6 +9,7 @@ namespace WalkingTec.Mvvm.Core
     /// </summary>
     [Table("FrameworkRoles")]
     [SoftKey(nameof(FrameworkRole.RoleCode))]
+    [AuditChanges]
     public class FrameworkRole : BasePoco,ITenant
     {
         [Display(Name = "_Admin.RoleCode")]

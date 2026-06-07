@@ -10,6 +10,7 @@ namespace WalkingTec.Mvvm.Core
     /// FrameworkMenu
     /// </summary>
     [Table("FrameworkMenus")]
+    [AuditChanges]
     public class FrameworkMenu : TreePoco<FrameworkMenu>
     {
 

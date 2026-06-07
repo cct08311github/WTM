@@ -7,6 +7,7 @@ namespace WalkingTec.Mvvm.Core
 
     [Table("FrameworkGroups")]
     [SoftKey(nameof(FrameworkGroup.GroupCode))]
+    [AuditChanges]
     public class FrameworkGroup : TreePoco<FrameworkGroup>,ITenant
     {
         [Display(Name = "_Admin.GroupCode")]

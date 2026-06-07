@@ -151,8 +151,15 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
             {
                 dc = _wtm.CreateDC();
             }
-            // IgnoreQueryFilters: file metadata lookup is tenant-agnostic by ID
-            rv = dc.Set<FileAttachment>().IgnoreQueryFilters().CheckID(id).Select(x => new FileAttachment
+            // WTM-SEC-003: when EnforceTenantFileScope is false (default), bypass the global
+            // ITenant query filter so that a file can be resolved by its GUID regardless of
+            // which tenant originally uploaded it (backward-compatible, tenant-agnostic by ID).
+            // When true, the global filter is honoured and cross-tenant file access is blocked.
+            var tenantScope = _wtm.ConfigInfo.FileUploadOptions.EnforceTenantFileScope;
+            rv = (tenantScope
+                ? dc.Set<FileAttachment>()
+                : dc.Set<FileAttachment>().IgnoreQueryFilters())
+                .CheckID(id).Select(x => new FileAttachment
             {
                 ID = x.ID,
                 ExtraInfo = x.ExtraInfo,
@@ -187,8 +194,12 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
             {
                 dc = _wtm.CreateDC();
             }
-            // IgnoreQueryFilters: file metadata lookup is tenant-agnostic by ID
-            file = dc.Set<FileAttachment>().IgnoreQueryFilters().CheckID(id)
+            // WTM-SEC-003: see GetFile for flag semantics.
+            var tenantScopeDelete = _wtm.ConfigInfo.FileUploadOptions.EnforceTenantFileScope;
+            file = (tenantScopeDelete
+                ? dc.Set<FileAttachment>()
+                : dc.Set<FileAttachment>().IgnoreQueryFilters())
+                .CheckID(id)
                 .Select(x => new FileAttachment
                 {
                     ID = x.ID,
@@ -226,8 +237,12 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
             {
                 dc = _wtm.CreateDC();
             }
-            // IgnoreQueryFilters: file metadata lookup is tenant-agnostic by ID
-            rv = dc.Set<FileAttachment>().IgnoreQueryFilters().CheckID(id).Select(x => x.FileName).FirstOrDefault();
+            // WTM-SEC-003: see GetFile for flag semantics.
+            var tenantScopeName = _wtm.ConfigInfo.FileUploadOptions.EnforceTenantFileScope;
+            rv = (tenantScopeName
+                ? dc.Set<FileAttachment>()
+                : dc.Set<FileAttachment>().IgnoreQueryFilters())
+                .CheckID(id).Select(x => x.FileName).FirstOrDefault();
             if(rv == null)
             {
                 rv = "unknown";

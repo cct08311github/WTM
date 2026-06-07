@@ -9,6 +9,7 @@ namespace WalkingTec.Mvvm.Core
     /// FunctionPrivilege
     /// </summary>
     [Table("FunctionPrivileges")]
+    [AuditChanges]
     public class FunctionPrivilege : BasePoco,ITenant
     {
         [Display(Name = "_Admin.Role")]

@@ -1380,8 +1380,21 @@ namespace WalkingTec.Mvvm.Core
             var checkCondition = SetDuplicatedCheck();
             if (checkCondition != null && checkCondition.Groups.Count > 0)
             {
-                //生成基础Query
-                // IgnoreQueryFilters: duplicate-check must see records across tenants/soft-deletes
+                // WTM-SEC-004: IgnoreQueryFilters is intentional here.
+                //
+                // We MUST keep IgnoreQueryFilters() so the duplicate check can see
+                // soft-deleted rows (IPersistPoco.IsValid == false).  Without it, a key
+                // held by a soft-deleted record would look "free" and a new record would
+                // be allowed to reuse it — causing a restore conflict.
+                //
+                // However, IgnoreQueryFilters() also bypasses the ITenant global filter,
+                // which means TenantA could silently see TenantB's records and produce a
+                // false "duplicate" error.  We fix this by re-applying the tenant predicate
+                // explicitly (below) after calling IgnoreQueryFilters(), so soft-delete
+                // visibility is preserved while cross-tenant leakage is closed.
+                //
+                // The explicit tenant WHERE clause is added further down in the loop via
+                // the same DuplicatedField<TModel> mechanism used for all other conditions.
                 var baseExp = DC!.Set<TModel>().IgnoreQueryFilters().AsQueryable();
                 var modelType = typeof(TModel);
                 ParameterExpression para = Expression.Parameter(modelType, "tm");
@@ -1412,6 +1425,41 @@ namespace WalkingTec.Mvvm.Core
                     {
                         ITenant ent = (Entity as ITenant)!;
                         ent.TenantCode = LoginUserInfo?.CurrentTenant;
+                        var f = new DuplicatedField<TModel>(x => (x as ITenant)!.TenantCode!);
+                        Expression? exp = f.GetExpression(Entity, para);
+                        if (exp != null)
+                        {
+                            conditions.Add(exp);
+                        }
+                    }
+                    // WTM-SEC-004 (continued): Re-apply tenant isolation unconditionally when
+                    // group.UseTenant == false (tenant is not part of the uniqueness key) but
+                    // multi-tenancy is enabled.  IgnoreQueryFilters() above stripped the global
+                    // ITenant filter to preserve soft-delete visibility; without this block,
+                    // TenantA's duplicate check would silently scan TenantB's rows.
+                    //
+                    // Predicate mirrors the global filter in DataContext.OnModelCreating:
+                    //   Expression.Equal(Property(pe, "TenantCode"),
+                    //                    PropertyOrField(Constant(this), "TenantCode"))
+                    // We replicate it here via the DuplicatedField<TModel> mechanism so it
+                    // is combined with the other AND conditions and evaluated by the same
+                    // LINQ provider path.
+                    //
+                    // This block is skipped when:
+                    //   - tenancy is disabled (EnableTenant == false), or
+                    //   - TModel does not implement ITenant, or
+                    //   - the caller already included TenantCode in the uniqueness fields (handled
+                    //     by the group.UseTenant == true block above), or
+                    //   - group.UseTenant == true (already handled in the block above).
+                    if (typeof(ITenant).IsAssignableFrom(typeof(TModel))
+                        && props.Any(x => x.Name.ToLower() == "tenantcode") == false
+                        && Wtm?.ConfigInfo?.EnableTenant == true
+                        && group.UseTenant == false)
+                    {
+                        // Ensure Entity.TenantCode reflects the current user's tenant.
+                        ITenant ent = (Entity as ITenant)!;
+                        ent.TenantCode = LoginUserInfo?.CurrentTenant;
+                        // Build: x => (x as ITenant).TenantCode == Entity.TenantCode
                         var f = new DuplicatedField<TModel>(x => (x as ITenant)!.TenantCode!);
                         Expression? exp = f.GetExpression(Entity, para);
                         if (exp != null)

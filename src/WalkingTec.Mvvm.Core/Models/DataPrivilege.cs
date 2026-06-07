@@ -9,6 +9,7 @@ namespace WalkingTec.Mvvm.Core
     /// DataPrivilege
     /// </summary>
     [Table("DataPrivileges")]
+    [AuditChanges]
     public class DataPrivilege : BasePoco,ITenant
     {
         [Display(Name = "_Admin.User")]

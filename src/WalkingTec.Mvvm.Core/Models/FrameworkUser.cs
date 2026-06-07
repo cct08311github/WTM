@@ -10,6 +10,7 @@ namespace WalkingTec.Mvvm.Core
     /// FrameworkUser
     /// </summary>
     [Table("FrameworkUsers")]
+    [AuditChanges]
     public  abstract class FrameworkUserBase : BasePoco,ITenant
     {
         [Display(Name = "_Admin.Account")]

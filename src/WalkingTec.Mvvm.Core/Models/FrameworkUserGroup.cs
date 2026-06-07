@@ -5,6 +5,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace WalkingTec.Mvvm.Core
 {
     [Table("FrameworkUserGroups")]
+    [AuditChanges]
     public class FrameworkUserGroup : BasePoco, ITenant
     {
         [Required]
