@@ -18,7 +18,11 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 规定在右侧
         /// </summary>
-        Right
+        Right = 1,
+        /// <summary>
+        /// Column is not fixed (default for <see cref="ListColumnAttribute"/>).
+        /// </summary>
+        None = 2,
     }
 
     /// <summary>
@@ -47,11 +51,15 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// Left
         /// </summary>
-        Left,
+        Left = 1,
         /// <summary>
         /// Right
         /// </summary>
-        Right
+        Right = 2,
+        /// <summary>
+        /// Infer alignment from column content type (default for <see cref="ListColumnAttribute"/>).
+        /// </summary>
+        Auto = 3,
     }
 
     /// <summary>
