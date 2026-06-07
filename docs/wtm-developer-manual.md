@@ -1,6 +1,8 @@
 # WTM 開發與使用手冊
 
-> **版本**：10.6.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-06-07
+> **版本**：10.7.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-06-08
+>
+> **10.7.0 重點**（商用化硬化 + CodeGen v2，epic #193）：一批 security & correctness 修復（建議升級）+ 特性驅動的代碼生成系統。安全：MVC controller 授權漏洞（`UpdateModelProperty` 改走 `DoEdit` + `CanEditProperty` hook、connstring 白名單、`Selector` 改 `[AllRights]`、`IsQuickDebug` startup guard，見 §10）、租戶隔離 + RBAC 稽核（`SetDuplicatedCheck` 租戶範圍、`FileUploadOptions.EnforceTenantFileScope`、RBAC entity `[AuditChanges]`）、Grid/TagHelper XSS 編碼、Dashboard widget 強化（method/header/Op/port allowlist、`RestWidgetDataSourceOptions.AllowedPorts`）。新增：CodeGen 特性 `[ListColumn]`/`[SearchField]`/`[FormField]`/`[ImportConfig]`（codegen + runtime 雙消費）、**regenerate-safe 兩區產生**（`*.Generated.cs` + partial），見 §16.5。**行為變更（需注意）**：`Selector` 改需驗證（`AllowUnauthenticatedSelector=true` 還原）；多租戶 dup-check 改租戶範圍。詳見 `CHANGELOG.md` `[10.7.0]`。
 >
 > **10.6.0 重點**（ETL + OLAP 深度優化，#179）：效能改善皆為內部、不改變可觀察行為；新增的調校旋鈕一律 opt-in 並預設維持舊行為。新增 ETL bulk-loader 調校（`MssqlBulkLoader` 的 `bulkCopyOptions` / `internalBatchSize`、`OracleBulkLoader` 的 `timeoutSeconds`，見 §8.18）、ETL source/schema 調校（`OracleSource.FetchRowCount`、`EtlPipelineConfig.WatermarkSqlType`、`EtlSchemaServiceFactory.CreateWithCache` 的 `CachingEtlSchemaService` 快取裝飾器，見 §8.18）、OLAP overload（`AnalysisExcelExporter.ExportToStream`、`AnalysisPivotEngine.Pivot(..., fillZero)`，見 §7.17）。修復 ETL MSSQL schema-qualified 欄位查詢（`audit.STG_x` 0 欄位問題，#184）與 scheduler 狀態變更的 `SkipCount` 競態 + `UpdateTime` 稽核（#185）。Analysis 引擎消除一次多餘 DB round-trip 並 per-request 解析策略以維持執行緒安全（#186）；`AnalysisQueryEngine.cs` 拆成 4 個 partial 檔（#190）。詳見 `CHANGELOG.md` `[10.6.0]`。
 >
@@ -3542,6 +3544,16 @@ await WtmDataSeeder.SeedAsync(
 - [`docs/dependency-management.md`](./dependency-management.md) — 套件版本政策、**NU1510 雙意義警告**、NPOI → System.Security.Cryptography.Xml security pin 與移除 PackageReference 強制 SOP（誤刪會引入 13+ 專案 high-severity 漏洞）
 - [`docs/ci-operations.md`](./ci-operations.md) — CI 工作流與漏洞掃描 gate 配置
 
+### 10.9 10.7.0 安全強化
+
+10.7.0 修補了一批授權/隔離/XSS/SSRF 缺陷（多數 additive，兩項行為變更已標註）：
+
+- **MVC controller 授權**：`UpdateModelProperty` 改走 CRUD VM 的 `DoEdit()`（套用驗證 + duplicate-check），並提供可覆寫的 `CanEditProperty(entity, propertyName)` row-level 授權 hook；`GetPagingData`/`GetExportExcel`/`GetExcelTemplate`/`Upload` 會驗證 client 傳入的 connection-string key 是否屬於 `Configs.Connections`，未知 key 一律拒絕；`Selector` endpoint 由 `[Public]` 改為 `[AllRights]`（**行為變更**：若需未驗證存取，設 `AllowUnauthenticatedSelector = true`）；`IsQuickDebug = true` 在非 Development 環境啟動時直接拋例外（它會繞過所有 RBAC）。
+- **租戶隔離 + RBAC 稽核**：`SetDuplicatedCheck` 對 `ITenant` 實體把唯一性檢查限縮到當前租戶（soft-delete 可見性不變；**行為變更**：多租戶 dup-check 不再跨租戶）；`FileUploadOptions.EnforceTenantFileScope`（opt-in，預設 `false`）對以 ID 查檔強制租戶範圍；RBAC 實體（`FrameworkUser`/`FrameworkRole`/`FunctionPrivilege`/`DataPrivilege`/`FrameworkMenu` 等）加 `[AuditChanges]`，權限變更會寫 ChangeLog。
+- **Grid/TagHelper XSS**：grid color function（`BackGroundFunc`/`ForeGroundFunc`）值以嚴格 hex/named-color allowlist 驗證並 HTML 編碼；`CheckBox`/`Radio`/`Hidden`/`Form` tag helper 與 `LayuiUIService.Make*` cell renderer 對動態值 `HtmlEncode`。Grid row-action 按鈕（framework 產生的 HTML）正常渲染，user/DB cell 資料維持跳脫（#108 guard 保留）。
+- **Dashboard widget 強化**：REST widget HTTP method 限 GET/POST allowlist；header 改用驗證式 `Add`（擋 CRLF）；dashboard filter operator 進 expression tree 前先過 allowlist；`RestWidgetDataSourceOptions.AllowedPorts`（預設 80/443/8080/8443）緩解 SSRF port 探測；widget title 長度上限。
+- **VM 工廠型別守衛**：`WtmVmFactory.CreateVM` 在呼叫任何建構式之前就拒絕非 `BaseVM` 型別。
+
 ---
 
 ## 11. 多租戶
@@ -4313,7 +4325,36 @@ public class ProductVM : BaseCRUDVM<Product>
 | Debug only | `[DebugOnly]` 標記，Release 模式不可存取 |
 | 覆蓋風險 | 重複生成會覆蓋已有檔案 — 先備份再生成 |
 
-**最佳實踐：** 用代碼生成器建立骨架，然後手動加入業務邏輯。不要重複生成已自訂過的檔案。
+**最佳實踐：** 用代碼生成器建立骨架，然後手動加入業務邏輯。自 10.7.0 起，regenerate-safe 兩區產生（見 §16.5）讓你可以安全地重複生成而不覆蓋手寫邏輯。
+
+### 16.5 特性驅動生成 + regenerate-safe（10.7.0+）
+
+10.7.0 加入一組宣告式特性，放在 Model/VM 屬性上，讓代碼生成器產出更貼近需求的骨架，**而且 runtime 也會讀取**——所以手寫的 Model 也享受同樣的預設，不必只靠生成。四個特性都在 `WalkingTec.Mvvm.Core` 命名空間，**每個預設值都重現舊行為**（不加特性 = 與舊版產出相同），純 additive。
+
+| 特性 | 套用 | 主要屬性（預設） | 消費者 |
+|------|------|------------------|--------|
+| `[ListColumn]` | 屬性 | `Width(0=auto)` / `Align(Auto)` / `Sort(true)` / `Hide(false)` / `ShowTotal(false)` / `Fixed(None)` | codegen `$headers$` + runtime `MakeGridHeader` |
+| `[SearchField]` | 屬性 | `Operator(SearchOperator.Auto: Auto/Contains/Equal/Between)` / `ShowInPanel(true)` / `DateRange(true)` / `Order` | codegen `$where$`（`Auto` = 字串→Contains、日期→Between、其餘→Equal；顯式 Operator 永遠優先；name-heuristic 須 opt-in `UseSmartSearchDefaults`） |
+| `[FormField]` | 屬性 | `ControlType(FormControlType.Auto)` / `Colspan(1)` / `Group(null)` / `Order` / `Placeholder(null)` / `ReadonlyOnEdit(false)` | codegen 表單 + runtime（Placeholder / ReadonlyOnEdit） |
+| `[ImportConfig]` | 屬性 | `DataType(ColumnDataType.Dynamic)` / `RequiredOnImport(false)` / `ColumnHeader(null)` / `DateFormat(null)` | codegen ImportVM（並自動帶入 Model 的 `[Required]`/`[StringLength]`） |
+
+新增 enum 成員：`GridColumnFixedEnum.None`、`GridColumnAlignEnum.Auto`、`SearchOperator`、`FormControlType`。
+
+```csharp
+public class Order : BasePoco
+{
+    [Display(Name = "訂單編號")]
+    [ListColumn(Width = 140, Fixed = GridColumnFixedEnum.Left)]
+    [SearchField(Operator = SearchOperator.Equal)]   // 精確比對，不再誤用 LIKE
+    public string OrderNo { get; set; }
+
+    [Display(Name = "金額")]
+    [ListColumn(Width = 120, Align = GridColumnAlignEnum.Right, ShowTotal = true)]
+    public decimal Amount { get; set; }
+}
+```
+
+**Regenerate-safe 兩區產生**：每個產出檔拆成 `*.Generated.cs`（標 `// <auto-generated/>`，每次重生都覆寫）與同名 partial `*.cs`（只在不存在時建立一次，保留手寫邏輯）。因此可以隨 Model 演進反覆重生，不會蓋掉自訂程式碼。產生的 Controller/VM stub 為 **async**，產生的測試使用 **SQLite shared-memory** fixture（取代不支援 `ExecuteUpdate`/子查詢的 EF InMemory）。
 
 ---
 

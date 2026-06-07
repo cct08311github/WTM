@@ -1,5 +1,33 @@
 # 更新日志
 
+## [10.7.0] - 2026-06-08
+
+Commercial-readiness hardening pass (epic #193, Chinese-intranet/single-tenant focus): a complete security-and-correctness batch plus a CodeGen v2 feature-attribute system. Security fixes are high-priority — upgrading is recommended. Two behavior changes are flagged under Changed.
+
+### Security
+
+- **MVC controller authorization holes fixed** (#194): `UpdateModelProperty` now routes the single-field mutation through the entity's CRUD VM `DoEdit()` (so validation + duplicate-check apply) and adds an opt-in `CanEditProperty(entity, propertyName)` hook plus a sensitive-field blocklist; `GetPagingData` / `GetExportExcel` / `GetExcelTemplate` / `Upload` validate the client-supplied connection-string key against `Configs.Connections` and reject unknown keys; the `Selector` endpoint is now `[AllRights]` instead of `[Public]` (see Changed); a startup guard throws when `IsQuickDebug = true` outside the Development environment (it bypasses all RBAC).
+- **Tenant isolation + RBAC audit** (#198): `SetDuplicatedCheck` now scopes the uniqueness query to the current tenant for `ITenant` entities (soft-delete visibility preserved); `FileUploadOptions.EnforceTenantFileScope` (opt-in, default `false`) enforces tenant scope on file-by-id lookups; `[AuditChanges]` is applied to the framework RBAC entities (`FrameworkUser`/`FrameworkRole`/`FunctionPrivilege`/`DataPrivilege`/`FrameworkMenu`/`FrameworkUserRole`/`FrameworkUserGroup`/`FrameworkGroup`) so permission changes are recorded.
+- **Grid + TagHelper XSS hardening** (#195): grid `BackGroundFunc`/`ForeGroundFunc` color values are validated against a strict hex/named-color allowlist and HTML-encoded; `CheckBox`/`Radio`/`Hidden`/`Form` tag helpers and the `LayuiUIService.Make*` cell renderers now `HtmlEncode` dynamic values.
+- **Dashboard widget hardening** (#197): REST widget HTTP method is restricted to an allowlist (GET/POST); request headers use validating `Add` (rejects CRLF injection); dashboard filter operators are validated against an allowlist before the expression tree is built; a `RestWidgetDataSourceOptions.AllowedPorts` allowlist (default 80/443/8080/8443) mitigates SSRF port-probing; widget titles are length-capped.
+- **VM factory type guard** (#201): `WtmVmFactory.CreateVM` rejects non-`BaseVM` types before invoking any constructor (previously the constructor ran before the type was rejected).
+
+### Added
+
+- **CodeGen feature-attributes** (#202, #203, #204): four additive attributes in `WalkingTec.Mvvm.Core` — `[ListColumn]` (Width/Align/Sort/Hide/ShowTotal/Fixed), `[SearchField]` (Operator/ShowInPanel/DateRange/Order), `[FormField]` (ControlType/Colspan/Group/Order/Placeholder/ReadonlyOnEdit), `[ImportConfig]` (DataType/RequiredOnImport/ColumnHeader/DateFormat). They are consumed by both the code generator (better-defaulted scaffolds) and at runtime (grid columns and form fields honor them on hand-written models too). Every default reproduces the previous behavior. New enum members `GridColumnFixedEnum.None`, `GridColumnAlignEnum.Auto`, plus `SearchOperator`/`FormControlType`.
+- **Regenerate-safe code generation** (#203): each generated artifact is split into a `*.Generated.cs` (always overwritten) and a companion partial `*.cs` (written once) so re-running the generator never overwrites hand-written logic. The generator now emits async controller/VM stubs and SQLite-shared-memory test fixtures (instead of the EF InMemory provider, which cannot translate `ExecuteUpdate`/sub-queries), and carries model `[Required]`/`[StringLength]` onto generated import VMs.
+- **Dashboard filters now apply** (#197): changing a dashboard filter re-fetches the widgets with the filter values applied (the filter bar was previously inert).
+
+### Fixed
+
+- **Grid row-action buttons render correctly again** (#195): generated `MakeButton`/`MakeDialogButton` Edit/View/Delete columns were rendering as escaped literal text on list pages; framework-generated column HTML is now rendered as markup while user/DB cell data stays HTML-escaped (the #108 stored-XSS guard is preserved).
+- **Batch operations and Excel import are transactional** (#196): `DoBatchDelete`/`DoBatchEdit` and the import save path are wrapped in a transaction (no partial commits on a mid-batch failure); a single invalid import row is reported per-row instead of failing the whole file; `DynamicSelect` no longer throws on an unknown field name.
+
+### Changed
+
+- **`Selector` endpoint now requires authentication** (#194): it changed from `[Public]` to `[AllRights]`. **Migration:** if you relied on an unauthenticated Selector (e.g. a public kiosk), set `AllowUnauthenticatedSelector = true` in configuration.
+- **Multi-tenant duplicate-check is now tenant-scoped** (#198): for `ITenant` entities the uniqueness check no longer sees other tenants' rows. Single-tenant deployments are unaffected; soft-delete visibility is unchanged.
+
 ## [10.6.0] - 2026-06-07
 
 Deep optimization of the ETL and OLAP (Analysis) modules (#179): 52 profiled opportunities, 40 adversarially confirmed. Performance improvements are internal and behavior-neutral; new tuning knobs are opt-in and default to prior behavior.
