@@ -2,7 +2,9 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System.Net;
 using System.Reflection;
 using System.Text.Encodings.Web;
+using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.TagHelpers.LayUI;
+using WalkingTec.Mvvm.TagHelpers.LayUI.Common;
 
 namespace WalkingTec.Mvvm.Core.Test.TagHelpers;
 
@@ -23,14 +25,14 @@ public class XssEncodingTests
 {
     // ── getTemplate output (stored XSS fix) ──────────────────────────────────
 
-    private static string InvokeGetTemplate(string field, string random)
+    private static string InvokeGetTemplate(string field, string random, bool hasFormat = false)
     {
         var helper = new DataTableTagHelper();
         var method = typeof(DataTableTagHelper).GetMethod(
             "getTemplate",
             BindingFlags.NonPublic | BindingFlags.Instance);
         Assert.IsNotNull(method, "getTemplate method must exist");
-        return (string)method.Invoke(helper, new object[] { field, random })!;
+        return (string)method.Invoke(helper, new object[] { field, random, hasFormat })!;
     }
 
     [TestMethod]
@@ -148,5 +150,133 @@ public class XssEncodingTests
         // Key characters for URL structure are preserved or safely encoded
         Assert.IsFalse(encoded.Contains("'"),
             "Encoded URL must not contain unescaped single quotes");
+    }
+
+    // ── grid-001: hasFormat flag — format columns vs plain data columns ──────
+
+    [TestMethod]
+    public void GetTemplate_HasFormatTrue_RendersRawFieldExpression()
+    {
+        // grid-001: when hasFormat=true (format/button column) the template must
+        // render d.<field> verbatim as HTML, NOT via ff.EscapeText.
+        // MakeButton/MakeDialogButton produce framework HTML that contains <a>/<button>;
+        // wrapping that in ff.EscapeText would double-encode the markup and show it
+        // as escaped literal text instead of a clickable button.
+        var js = InvokeGetTemplate("Actions", "abc", hasFormat: true);
+
+        StringAssert.Contains(js, "d.Actions",
+            "hasFormat=true template must contain the raw field expression d.Actions");
+        Assert.IsFalse(js.Contains("ff.EscapeText(d.Actions)"),
+            "hasFormat=true template must NOT wrap d.Actions in ff.EscapeText");
+    }
+
+    [TestMethod]
+    public void GetTemplate_HasFormatFalse_UsesEscapeText()
+    {
+        // grid-001: when hasFormat=false (plain data column) the template must
+        // route the cell value through ff.EscapeText to prevent stored XSS.
+        var js = InvokeGetTemplate("Name", "xyz", hasFormat: false);
+
+        StringAssert.Contains(js, "ff.EscapeText(d.Name)",
+            "hasFormat=false template must use ff.EscapeText to encode user data");
+    }
+
+    [TestMethod]
+    public void GetTemplate_DefaultHasFormat_UsesEscapeText()
+    {
+        // Calling without hasFormat argument defaults to false → EscapeText path
+        // (backward-compatible behaviour for plain data columns).
+        var js = InvokeGetTemplate("Score", "r1");
+
+        StringAssert.Contains(js, "ff.EscapeText(d.Score)",
+            "Default (no hasFormat) template must use ff.EscapeText");
+    }
+
+    // ── TLU-SEC-004: LayuiUIService.Make* button text encoding ───────────────
+
+    [TestMethod]
+    public void MakeDialogButton_MaliciousButtonText_IsHtmlEncoded()
+    {
+        // TLU-SEC-004: buttonText containing markup must be HTML-encoded in the output.
+        var svc = new LayuiUIService();
+        var html = svc.MakeDialogButton(
+            ButtonTypesEnum.Button,
+            "/edit/1",
+            "<script>alert('xss')</script>",
+            width: null, height: null);
+
+        Assert.IsFalse(html.Contains("<script>alert"),
+            "Raw <script> tag must not appear in MakeDialogButton output");
+        StringAssert.Contains(html, "&lt;script&gt;",
+            "MakeDialogButton must HtmlEncode the buttonText");
+    }
+
+    [TestMethod]
+    public void MakeButton_MaliciousButtonText_IsHtmlEncoded()
+    {
+        // TLU-SEC-004: MakeButton must HtmlEncode buttonText.
+        var svc = new LayuiUIService();
+        var html = svc.MakeButton(
+            ButtonTypesEnum.Button,
+            "/view/1",
+            "<img src=x onerror=alert(1)>",
+            width: null, height: null);
+
+        Assert.IsFalse(html.Contains("<img src=x"),
+            "Raw <img> payload must not appear in MakeButton output");
+        StringAssert.Contains(html, "&lt;img",
+            "MakeButton must HtmlEncode the buttonText");
+    }
+
+    [TestMethod]
+    public void MakeScriptButton_MaliciousButtonText_IsHtmlEncoded()
+    {
+        // TLU-SEC-004: MakeScriptButton must HtmlEncode buttonText.
+        var svc = new LayuiUIService();
+        var html = svc.MakeScriptButton(
+            ButtonTypesEnum.Link,
+            "<b>bold</b>");
+
+        Assert.IsFalse(html.Contains("<b>bold</b>"),
+            "Raw <b> tag must not appear in MakeScriptButton output");
+        StringAssert.Contains(html, "&lt;b&gt;bold&lt;/b&gt;",
+            "MakeScriptButton must HtmlEncode the buttonText");
+    }
+
+    [TestMethod]
+    public void MakeDialogButton_NormalButtonText_IsUnchanged()
+    {
+        // Normal text without special characters must pass through without corruption.
+        var svc = new LayuiUIService();
+        var html = svc.MakeDialogButton(
+            ButtonTypesEnum.Button,
+            "/edit/1",
+            "Edit",
+            width: null, height: null);
+
+        StringAssert.Contains(html, ">Edit<",
+            "Plain button text must appear verbatim in MakeDialogButton output");
+    }
+
+    // ── TLU-SEC-004: FormTagHelper &lg;/&rg; → WebUtility.HtmlEncode ────────
+
+    [TestMethod]
+    public void HtmlEncode_FormValidationError_ProducesValidEntities()
+    {
+        // TLU-SEC-004: the old code used &lg;/&rg; which are not valid HTML entities.
+        // The fix replaces them with WebUtility.HtmlEncode.
+        // Verify: an error message with angle brackets is encoded into &lt;/&gt;.
+        var rawError = "<b>Required</b>";
+        var encoded = WebUtility.HtmlEncode(rawError);
+
+        // Must produce proper entities, not the bogus &lg;/&rg;
+        Assert.IsFalse(encoded.Contains("&lg;"),
+            "HtmlEncode must not produce bogus &lg; entity");
+        Assert.IsFalse(encoded.Contains("&rg;"),
+            "HtmlEncode must not produce bogus &rg; entity");
+        StringAssert.Contains(encoded, "&lt;",
+            "HtmlEncode must produce valid &lt; entity for <");
+        StringAssert.Contains(encoded, "&gt;",
+            "HtmlEncode must produce valid &gt; entity for >");
     }
 }

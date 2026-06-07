@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Net;
 using System.Text;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Extensions;
@@ -27,14 +28,17 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
             }
             string funcname = $"x{buttonID.Replace("-", "")}click";
             var click = $"<script>function {funcname}(){{{innerClick};return false;}}</script>";
+            // TLU-SEC-004: HtmlEncode buttonText (HTML text node context) to prevent XSS
+            // when a button label is populated from user/DB data.
+            var encodedButtonText = WebUtility.HtmlEncode(buttonText);
             string rv = "";
             if (buttonType == ButtonTypesEnum.Link)
             {
-                rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? "color:blue;cursor:pointer"}' class='{buttonClass ?? ""}'>{buttonText}</a>";
+                rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? "color:blue;cursor:pointer"}' class='{buttonClass ?? ""}'>{encodedButtonText}</a>";
             }
             if (buttonType == ButtonTypesEnum.Button)
             {
-                rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? ""}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{buttonClass}")}'>{buttonText}</a>";
+                rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? ""}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{buttonClass}")}'>{encodedButtonText}</a>";
             }
             rv += click;
             return rv;
@@ -42,14 +46,16 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
 
         public string MakeDownloadButton(ButtonTypesEnum buttonType, Guid fileID, string? buttonText = null, string _DONOT_USE_CS = "default", string? buttonClass = null, string? style = null)
         {
+            // TLU-SEC-004: HtmlEncode buttonText in HTML text node context.
+            var encodedButtonText = WebUtility.HtmlEncode(buttonText);
             string rv = "";
             if (buttonType == ButtonTypesEnum.Link)
             {
-                rv = $"<a  style='{style ?? "color:blue;cursor:pointer"}' class='{buttonClass ?? ""}' href='/_Framework/GetFile/{fileID}?_DONOT_USE_CS={_DONOT_USE_CS}'>{buttonText}</a>";
+                rv = $"<a  style='{style ?? "color:blue;cursor:pointer"}' class='{buttonClass ?? ""}' href='/_Framework/GetFile/{fileID}?_DONOT_USE_CS={_DONOT_USE_CS}'>{encodedButtonText}</a>";
             }
             if (buttonType == ButtonTypesEnum.Button)
             {
-                rv = $"<a  style='{style ?? ""}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{buttonClass}")}' href='/_Framework/GetFile/{fileID}?_DONOT_USE_CS={_DONOT_USE_CS}'>{buttonText}</a>";
+                rv = $"<a  style='{style ?? ""}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{buttonClass}")}' href='/_Framework/GetFile/{fileID}?_DONOT_USE_CS={_DONOT_USE_CS}'>{encodedButtonText}</a>";
             }
             return rv;
         }
@@ -152,14 +158,16 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
             }
             string funcname = $"x{buttonID.Replace("-", "")}click";
             var click = $"<script>function {funcname}(){{{innerClick};return false;}}</script>";
+            // TLU-SEC-004: HtmlEncode buttonText in HTML text node context.
+            var encodedButtonText = WebUtility.HtmlEncode(buttonText);
             string rv = "";
             if (buttonType == ButtonTypesEnum.Link)
             {
-                rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? "color:blue;cursor:pointer"}' class='{buttonClass ?? ""}'>{buttonText}</a>";
+                rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? "color:blue;cursor:pointer"}' class='{buttonClass ?? ""}'>{encodedButtonText}</a>";
             }
             if (buttonType == ButtonTypesEnum.Button)
             {
-                rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? ""}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{buttonClass}")}'>{buttonText}</a>";
+                rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? ""}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{buttonClass}")}'>{encodedButtonText}</a>";
             }
             rv += click;
             return rv;
@@ -174,22 +182,24 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
             innerClick = $"layui.layer.photos({{photos: {{data: [{{src: '{url}'}}]}},anim: 5}});";
             string funcname = $"x{buttonID.Replace("-", "")}click";
             var click = $"<script>function {funcname}(){{{innerClick};return false;}}</script>";
+            // TLU-SEC-004: HtmlEncode buttonText in HTML text node context.
+            var encodedButtonText = WebUtility.HtmlEncode(buttonText);
             string rv = "";
             if (buttonType == ButtonTypesEnum.Link)
             {
-                rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? "color:blue;cursor:pointer"}' class='{buttonClass ?? ""}'>{buttonText}</a>";
+                rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? "color:blue;cursor:pointer"}' class='{buttonClass ?? ""}'>{encodedButtonText}</a>";
             }
             if (buttonType == ButtonTypesEnum.Button)
             {
-                rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? ""}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{buttonClass}")}'>{buttonText}</a>";
+                rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? ""}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{buttonClass}")}'>{encodedButtonText}</a>";
             }
             switch (buttonType)
             {
                 case ButtonTypesEnum.Button:
-                    rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? ""}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{buttonClass}")}'>{buttonText}</a>";
+                    rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? ""}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{buttonClass}")}'>{encodedButtonText}</a>";
                     break;
                 case ButtonTypesEnum.Link:
-                    rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? "color:blue;cursor:pointer"}' class='{buttonClass ?? ""}'>{buttonText}</a>";
+                    rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? "color:blue;cursor:pointer"}' class='{buttonClass ?? ""}'>{encodedButtonText}</a>";
                     break;
                 case ButtonTypesEnum.Img:
                     rv = $"<img src='{url}&width={width??50}&height={height??50}' id='{buttonID}' onclick='{funcname}()' style='{style ?? "color:blue;cursor:pointer"}' class='{buttonClass ?? ""}'/>";
@@ -209,14 +219,16 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
             }
             var innerClick = script;
             var click = $"<script>$('#{buttonID}').on('click',function(){{{innerClick};return false;}});</script>";
+            // TLU-SEC-004: HtmlEncode buttonText in HTML text node context.
+            var encodedButtonText = WebUtility.HtmlEncode(buttonText);
             string rv = "";
             if (buttonType == ButtonTypesEnum.Link)
             {
-                rv = $"<a id='{buttonID}'  style='{style ?? "color:blue;cursor:pointer"}' class='{buttonClass ?? ""}'>{buttonText}</a>";
+                rv = $"<a id='{buttonID}'  style='{style ?? "color:blue;cursor:pointer"}' class='{buttonClass ?? ""}'>{encodedButtonText}</a>";
             }
             if (buttonType == ButtonTypesEnum.Button)
             {
-                rv = $"<a id='{buttonID}' style='{style ?? ""}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{buttonClass}")}'>{buttonText}</a>";
+                rv = $"<a id='{buttonID}' style='{style ?? ""}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{buttonClass}")}'>{encodedButtonText}</a>";
             }
             rv += click;
             return rv;

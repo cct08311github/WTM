@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Net;
 using System.Text;
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.Razor.TagHelpers;
@@ -91,7 +92,9 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                                     {
                                         name = $"{Field.Name}[{count}].{pro.Name}";
                                     }
-                                    sb.Append($@"<input type=""hidden"" name=""{name}"" value=""{pro.GetValue(item)}"" class=""layui-input""/>
+                                    // TLU-SEC-003: HtmlEncode property values before interpolating
+                                    // into HTML attribute values to prevent XSS via model data.
+                                    sb.Append($@"<input type=""hidden"" name=""{name}"" value=""{WebUtility.HtmlEncode(pro.GetValue(item)?.ToString())}"" class=""layui-input""/>
 ");
                                 }
                                 count++;
@@ -101,7 +104,8 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                         {
                             foreach (var item in list)
                             {
-                                sb.Append($@"<input type=""hidden"" name=""{(string.IsNullOrEmpty(Name) ? Field.Name : Name)}"" value=""{item}"" class=""layui-input""/>
+                                // TLU-SEC-003: HtmlEncode item values before interpolating into HTML.
+                                sb.Append($@"<input type=""hidden"" name=""{(string.IsNullOrEmpty(Name) ? Field.Name : Name)}"" value=""{WebUtility.HtmlEncode(item?.ToString())}"" class=""layui-input""/>
 ");
                             }
                         }                        

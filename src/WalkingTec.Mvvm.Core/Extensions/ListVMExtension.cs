@@ -2,12 +2,80 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace WalkingTec.Mvvm.Core.Extensions
 {
     public static class ListVMExtension
     {
+        // grid-002: Strict allowlist for __bgcolor / __forecolor values injected into
+        // inline <script> CSS calls and style attributes. A DB-driven color field can
+        // carry script/CSS injection payloads (e.g. "red;}</style><script>alert(1)").
+        // Only hex colors (#RGB / #RRGGBB / #RRGGBBAA) and a fixed set of CSS named
+        // colors are permitted. Any value that does not match is dropped (returns null).
+        private static readonly Regex _hexColorRegex =
+            new Regex(@"^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$",
+                RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+        // CSS Level 4 named colors (https://www.w3.org/TR/css-color-4/#named-colors).
+        // Only ASCII alphanumeric — safe to use directly in attribute values and JS strings.
+        private static readonly HashSet<string> _namedColors = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "aliceblue","antiquewhite","aqua","aquamarine","azure","beige","bisque","black",
+            "blanchedalmond","blue","blueviolet","brown","burlywood","cadetblue","chartreuse",
+            "chocolate","coral","cornflowerblue","cornsilk","crimson","cyan","darkblue",
+            "darkcyan","darkgoldenrod","darkgray","darkgreen","darkgrey","darkkhaki",
+            "darkmagenta","darkolivegreen","darkorange","darkorchid","darkred","darksalmon",
+            "darkseagreen","darkslateblue","darkslategray","darkslategrey","darkturquoise",
+            "darkviolet","deeppink","deepskyblue","dimgray","dimgrey","dodgerblue","firebrick",
+            "floralwhite","forestgreen","fuchsia","gainsboro","ghostwhite","gold","goldenrod",
+            "gray","green","greenyellow","grey","honeydew","hotpink","indianred","indigo",
+            "ivory","khaki","lavender","lavenderblush","lawngreen","lemonchiffon","lightblue",
+            "lightcoral","lightcyan","lightgoldenrodyellow","lightgray","lightgreen","lightgrey",
+            "lightpink","lightsalmon","lightseagreen","lightskyblue","lightslategray",
+            "lightslategrey","lightsteelblue","lightyellow","lime","limegreen","linen",
+            "magenta","maroon","mediumaquamarine","mediumblue","mediumorchid","mediumpurple",
+            "mediumseagreen","mediumslateblue","mediumspringgreen","mediumturquoise",
+            "mediumvioletred","midnightblue","mintcream","mistyrose","moccasin","navajowhite",
+            "navy","oldlace","olive","olivedrab","orange","orangered","orchid","palegoldenrod",
+            "palegreen","paleturquoise","palevioletred","papayawhip","peachpuff","peru","pink",
+            "plum","powderblue","purple","rebeccapurple","red","rosybrown","royalblue",
+            "saddlebrown","salmon","sandybrown","seagreen","seashell","sienna","silver",
+            "skyblue","slateblue","slategray","slategrey","snow","springgreen","steelblue",
+            "tan","teal","thistle","tomato","turquoise","violet","wheat","white","whitesmoke",
+            "yellow","yellowgreen","transparent"
+        };
+
+        /// <summary>
+        /// Validates a color value against a strict allowlist (hex or CSS named color).
+        /// Returns the validated color string (normalized with '#' prefix if hex), or
+        /// null if the value does not match — preventing CSS/JS injection via color fields.
+        /// </summary>
+        internal static string? ValidateColor(string? color)
+        {
+            if (string.IsNullOrWhiteSpace(color))
+                return null;
+
+            var trimmed = color.Trim();
+
+            // Add '#' prefix if it looks like a bare hex string without it
+            if (!trimmed.StartsWith('#') &&
+                Regex.IsMatch(trimmed, @"^[0-9A-Fa-f]{3}$|^[0-9A-Fa-f]{6}$|^[0-9A-Fa-f]{8}$"))
+            {
+                trimmed = "#" + trimmed;
+            }
+
+            if (_hexColorRegex.IsMatch(trimmed))
+                return trimmed;
+
+            if (_namedColors.Contains(trimmed))
+                return trimmed;
+
+            // Value does not match — drop it to prevent injection
+            return null;
+        }
         /// <summary>
         /// 获取Jason格式的列表数据
         /// </summary>
@@ -320,23 +388,26 @@ namespace WalkingTec.Mvvm.Core.Extensions
             sb.Append($"\"TempIsSelected\":\"{ (isSelected == true ? "1" : "0") }\"");
             foreach (var cc in colorcolumns)
             {
+                // grid-002: validate color values against a strict allowlist (hex or CSS named color)
+                // before emitting __bgcolor/__forecolor into the JSON. A DB-driven color field could
+                // carry script/CSS injection payloads. ValidateColor drops invalid values (returns null).
                 if (string.IsNullOrEmpty(cc.Value.Item1) == false)
                 {
-                    string bg = cc.Value.Item1;
-                    if (bg.StartsWith("#") == false)
+                    var bg = ValidateColor(cc.Value.Item1);
+                    if (bg != null)
                     {
-                        bg = "#" + bg;
+                        sb.Append($",\"{cc.Key}__bgcolor\":\"{bg}\"");
                     }
-                    sb.Append($",\"{cc.Key}__bgcolor\":\"{bg}\"");
                 }
                 if (string.IsNullOrEmpty(cc.Value.Item2) == false)
                 {
-                    string fore = cc.Value.Item2;
-                    if (fore.StartsWith("#") == false)
+                    var fore = ValidateColor(cc.Value.Item2);
+                    if (fore != null)
                     {
-                        fore = "#" + fore;
+                        // HTML-encode the forecolor when used in a style attribute context
+                        // so that quote/angle-bracket payloads cannot break attribute boundaries.
+                        sb.Append($",\"{cc.Key}__forecolor\":\"{WebUtility.HtmlEncode(fore)}\"");
                     }
-                    sb.Append($",\"{cc.Key}__forecolor\":\"{fore}\"");
                 }
             }
             if (containsID == false)

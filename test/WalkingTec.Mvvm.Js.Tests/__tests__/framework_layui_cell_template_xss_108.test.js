@@ -6,15 +6,29 @@
 //
 //   return '<div ...>' + d.fieldName.replace(/\"/g,"'") + bg + '</div>';
 //
-// After the fix (issue #108) the value is wrapped through ff.EscapeText:
+// After the fix (issue #108) user/database values are wrapped through ff.EscapeText:
 //
 //   return '<div ...>' + ff.EscapeText(d.fieldName) + bg + '</div>';
+//
+// After the grid-001 fix (issue #195) getTemplate accepts a hasFormat bool:
+//   - hasFormat=false (plain data column): uses ff.EscapeText — #108 XSS guard preserved.
+//   - hasFormat=true  (format/button column): renders raw HTML produced by framework Make*
+//     methods (which themselves HtmlEncode user-supplied text per TLU-SEC-004), so
+//     ff.EscapeText is NOT applied here (applying it would double-encode and break buttons).
+//
+// The C# implements this with a local variable:
+//   var cellExpr = hasFormat ? $"d.{field}" : $"ff.EscapeText(d.{field})";
+//   return $"...'+{cellExpr}+bg+'</div>'...";
 //
 // This test file:
 //   1. Verifies that the C#-generated JS pattern NO LONGER contains the raw
 //      concatenation without escaping (source-sweep).
-//   2. Verifies that the generated pattern DOES contain ff.EscapeText.
-//   3. Semantic test: ff.EscapeText (replicated via jsdom) correctly
+//   2. Verifies that the non-format (user data) path STILL uses ff.EscapeText —
+//      the #108 stored-XSS guard is preserved.
+//   3. Verifies that the format path uses the raw field expression (no EscapeText),
+//      and confirms that the framework Make* methods produce HtmlEncoded output
+//      (so user-supplied text inside button labels cannot inject script).
+//   4. Semantic test: ff.EscapeText (replicated via jsdom) correctly
 //      neutralizes XSS payloads that would otherwise execute when inserted
 //      as innerHTML.
 
@@ -41,15 +55,51 @@ describe('#108 DataTableTagHelper cell-template XSS fix — C# source sweep', ()
     expect(src).not.toContain('d.{field}.replace');
   });
 
-  test('getTemplate uses ff.EscapeText to encode row data', () => {
-    // The fix changes the concatenation to: ff.EscapeText(d.{field})
+  test('getTemplate uses ff.EscapeText to encode row data (#108 guard preserved)', () => {
+    // The non-format path still uses ff.EscapeText: $"ff.EscapeText(d.{field})"
+    // This is the C# string literal that becomes the JS expression for plain
+    // data columns — the core #108 XSS guard must never be removed.
     expect(src).toMatch(/ff\.EscapeText\(d\.\{field\}\)/);
   });
 
-  test('getTemplate return statement puts encoded value into innerHTML before bg', () => {
-    // Verify the div inner content uses EscapeText, then appends bg.
-    // The C# string contains the substring: ff.EscapeText(d.{field})+bg+
-    expect(src).toContain("ff.EscapeText(d.{field})+bg+'</div>");
+  test('non-format (user data) path uses ff.EscapeText as cellExpr — #108 guard intact', () => {
+    // grid-001 fix (issue #195): getTemplate now uses a cellExpr local variable.
+    // For hasFormat=false the C# assigns: $"ff.EscapeText(d.{field})"
+    // Verify that string literal is present in the ternary's false branch,
+    // proving the non-format branch still routes user cell data through ff.EscapeText.
+    //
+    // The C# reads: var cellExpr = hasFormat ? $"d.{field}" : $"ff.EscapeText(d.{field})";
+    // The template then interpolates {cellExpr} into the JS return string.
+    expect(src).toContain('ff.EscapeText(d.{field})');
+    // And the template return uses {cellExpr} followed by +bg+'</div>' ensuring
+    // the cell expression (escape or raw) feeds directly into the innerHTML concat.
+    expect(src).toContain("{cellExpr}+bg+'</div>'");
+  });
+
+  test('format (button/HTML) path uses raw field expression — no EscapeText applied', () => {
+    // grid-001 fix: for hasFormat=true the C# assigns: $"d.{field}"
+    // The raw field value contains framework-generated HTML (Make* output) and must
+    // NOT be escaped; verify the conditional assignment is present in source.
+    //
+    // The C# ternary is written as:
+    //   var cellExpr = hasFormat
+    //       ? $"d.{field}"
+    //       : $"ff.EscapeText(d.{field})";
+    //
+    // Assert each required piece individually (the ternary spans lines with CRLF):
+    expect(src).toContain('var cellExpr = hasFormat');
+    // hasFormat=true branch: bare field reference (no EscapeText)
+    expect(src).toContain('? $"d.{field}"');
+    // hasFormat=false branch: wrapped in EscapeText
+    expect(src).toContain(': $"ff.EscapeText(d.{field})"');
+  });
+
+  test('framework Make* methods HtmlEncode user-supplied button text (TLU-SEC-004)', () => {
+    // For the hasFormat=true path to be safe, the framework HTML must itself encode
+    // any user-supplied text embedded in buttons/links. Verify that WebUtility.HtmlEncode
+    // is applied to button name/text in the row-button builder — this is TLU-SEC-004.
+    // If this assertion fails it means user data can reach raw HTML through format columns.
+    expect(src).toMatch(/WebUtility\.HtmlEncode\(item\.Name\)/);
   });
 });
 
@@ -65,7 +115,7 @@ describe('#108 ff.EscapeText semantic — cell data XSS neutralisation (jsdom)',
     return div.innerHTML;
   }
 
-  // Simulate the post-fix cell template render:
+  // Simulate the post-fix cell template render for a non-format (user data) column:
   //   innerHTML = '<div style="' + sty + '" id="' + did + '">' + ff.EscapeText(d.field) + bg + '</div>'
   function renderCell(fieldValue, sty = '', bg = '') {
     return '<div style="' + sty + '" id="cell1">' + escapeText(fieldValue) + bg + '</div>';

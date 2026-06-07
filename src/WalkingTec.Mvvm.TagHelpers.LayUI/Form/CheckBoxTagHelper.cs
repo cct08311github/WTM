@@ -4,6 +4,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Text.Json;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Attributes;
@@ -155,8 +156,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             {
                 var item = listItems[i];
                 var selected = item.Selected ? " checked" : " ";
+                // TLU-SEC-001: HtmlEncode item.Value and item.Text before interpolating into
+                // HTML attribute values. Without encoding, a list item whose Value or Text
+                // contains quotes or angle brackets can break attribute boundaries (XSS).
                 output.PostContent.AppendHtml($@"
-<input type=""checkbox"" name=""{Field.Name}"" value=""{item.Value}"" title=""{item.Text}"" {selected} {(Disabled ? "disabled" : string.Empty)}/>");
+<input type=""checkbox"" name=""{Field.Name}"" value=""{WebUtility.HtmlEncode(item.Value)}"" title=""{WebUtility.HtmlEncode(item.Text)}"" {selected} {(Disabled ? "disabled" : string.Empty)}/>");
             }
             output.PostElement.AppendHtml($@"
 <input type=""hidden"" name=""_DONOTUSE_{Field.Name}"" value=""1"" />

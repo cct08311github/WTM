@@ -820,8 +820,12 @@ layui.use(['element'], function() {{
                 }
 
                 // 非编辑状态且有字段名的情况下，设置template
+                // hasFormat=true means the JSON value is framework-generated HTML (buttons,
+                // checkboxes, etc.) and must be rendered verbatim. hasFormat=false means
+                // the value is plain user/database text that must be HTML-escaped by
+                // ff.EscapeText to prevent stored XSS (grid-001 regression fix).
                 if ((string.IsNullOrEmpty(ListVM.DetailGridPrix) == true && string.IsNullOrEmpty(item.Field) == false) || item.Field == "BatchError")
-                    tempCol.Templet = getTemplate(item.Field,random);
+                    tempCol.Templet = getTemplate(item.Field, random, item.HasFormat());
 
                 NeedShowTotal |= item.ShowTotal == true;
                 switch (item.ColumnType)
@@ -1112,14 +1116,25 @@ var isPost = false;
             }
         }
 
-        private string getTemplate(string field,string random)
+        private string getTemplate(string field, string random, bool hasFormat = false)
         {
-            // Issue #108: d.{field} is attacker-influenceable row data. Use ff.EscapeText
-            // (the jQuery-based HTML entity encoder already in the framework) so the value
-            // is HTML-encoded before being concatenated into the innerHTML of the cell div.
-            // Plain text still renders correctly because the browser decodes the entities;
-            // markup/script payloads are neutralised as literal characters.
-            return $@"function(d){{var sty = '';var bg = '';var did = '{field}{random}_'+d.LAY_INDEX;if(d.{field}__bgcolor != undefined) bg = ""<script>$('#""+did+""').closest('td').css('background-color','""+d.{field}__bgcolor+""');</s""+""cript>""; if(d.{field}__forecolor != undefined) sty = 'color:'+d.{field}__forecolor+';'; return '<div style=""'+sty+'"" id=""'+did+'"">'+ff.EscapeText(d.{field})+bg+'</div>';}}";
+            // grid-001 regression fix: distinguish framework HTML from user data.
+            //
+            // hasFormat=false (plain data column): d.{field} is attacker-influenceable row data.
+            //   Use ff.EscapeText (jQuery HTML-entity encoder) so the value is HTML-encoded before
+            //   being written into the cell div innerHTML. Plain text renders correctly because the
+            //   browser decodes the entities; markup/script payloads are neutralised.
+            //
+            // hasFormat=true (Format column — buttons, checkboxes, etc.): the JSON value is
+            //   framework-generated HTML produced by LayuiUIService.Make* methods. It must be
+            //   rendered verbatim as HTML. Applying ff.EscapeText here would double-encode the
+            //   markup and cause buttons/checkboxes to display as escaped literal text (the
+            //   regression reported in grid-001). The Make* methods now HTML-encode any
+            //   user-supplied text they embed (TLU-SEC-004), so this path is safe.
+            var cellExpr = hasFormat
+                ? $"d.{field}"
+                : $"ff.EscapeText(d.{field})";
+            return $@"function(d){{var sty = '';var bg = '';var did = '{field}{random}_'+d.LAY_INDEX;if(d.{field}__bgcolor != undefined) bg = ""<script>$('#""+did+""').closest('td').css('background-color','""+d.{field}__bgcolor+""');</s""+""cript>""; if(d.{field}__forecolor != undefined) sty = 'color:'+d.{field}__forecolor+';'; return '<div style=""'+sty+'"" id=""'+did+'"">'+{cellExpr}+bg+'</div>';}}";
         }
 
         /// <summary>

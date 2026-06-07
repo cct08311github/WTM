@@ -158,6 +158,31 @@ namespace WalkingTec.Mvvm.Core.Test.Extensions
     }
 
     /// <summary>
+    /// ListVM whose color functions return a CSS-injection payload.
+    /// Used to verify grid-002: malicious values are dropped by ValidateColor.
+    /// </summary>
+    public class MaliciousColorListVM : BasePagedListVM<ListExtTestItem, BaseSearcher>
+    {
+        private static readonly List<ListExtTestItem> _store = [];
+
+        public static void Reset() => _store.Clear();
+        public static void Add(ListExtTestItem item) => _store.Add(item);
+
+        public override IOrderedQueryable<ListExtTestItem> GetSearchQuery()
+            => _store.AsQueryable().OrderBy(x => x.ID);
+
+        protected override IEnumerable<IGridColumn<ListExtTestItem>> InitGridHeader()
+        {
+            return
+            [
+                this.MakeGridColumn(x => x.Name,
+                    ForeGroundFunc: _ => "red;}</style><script>alert('xss')</script>",
+                    BackGroundFunc: _ => "blue\"; alert(1);//"),
+            ];
+        }
+    }
+
+    /// <summary>
     /// ListVM exposing an enum column to cover enum display-name resolution.
     /// </summary>
     public class EnumListVM : BasePagedListVM<ListExtTestItem, BaseSearcher>
@@ -196,6 +221,7 @@ namespace WalkingTec.Mvvm.Core.Test.Extensions
         {
             ListExtTestListVM.Reset();
             ColoredListVM.Reset();
+            MaliciousColorListVM.Reset();
         }
 
         // ─── GetDataJson — empty list ────────────────────────────────────────────
@@ -670,6 +696,108 @@ namespace WalkingTec.Mvvm.Core.Test.Extensions
 
             json.Should().StartWith("{");
             json.Should().EndWith("}");
+        }
+
+        // ─── grid-002: ValidateColor — strict allowlist for __bgcolor/__forecolor ──
+
+        [TestMethod]
+        public void ValidateColor_MaliciousValue_IsDropped()
+        {
+            // grid-002: a CSS-injection payload must be rejected (returns null).
+            // Without this guard, a DB-driven color field could inject into a <script>
+            // or style attribute: "red;}</style><script>alert(1)</script>".
+            var result = ListVMExtension.ValidateColor("red;}</style><script>alert(1)</script>");
+            result.Should().BeNull(
+                "an injection payload must be rejected by ValidateColor");
+        }
+
+        [TestMethod]
+        public void ValidateColor_MaliciousValueWithQuotes_IsDropped()
+        {
+            // Another common injection form: quotes to break out of a JS string literal.
+            var result = ListVMExtension.ValidateColor("red'; alert('xss'); var x='");
+            result.Should().BeNull(
+                "a payload with quotes must be rejected by ValidateColor");
+        }
+
+        [TestMethod]
+        public void ValidateColor_ValidHexSixDigit_IsAccepted()
+        {
+            // Standard #RRGGBB hex color must pass the allowlist.
+            var result = ListVMExtension.ValidateColor("#FF0000");
+            result.Should().Be("#FF0000",
+                "a valid 6-digit hex color must be accepted");
+        }
+
+        [TestMethod]
+        public void ValidateColor_ValidHexThreeDigit_IsAccepted()
+        {
+            // Shorthand #RGB hex color must also be accepted.
+            var result = ListVMExtension.ValidateColor("#F00");
+            result.Should().Be("#F00",
+                "a valid 3-digit hex color must be accepted");
+        }
+
+        [TestMethod]
+        public void ValidateColor_HexWithoutHash_GetsHashPrefixed()
+        {
+            // A 6-digit hex without '#' should be accepted and prefixed with '#'.
+            var result = ListVMExtension.ValidateColor("FF0000");
+            result.Should().Be("#FF0000",
+                "a hex string without '#' should be auto-prefixed");
+        }
+
+        [TestMethod]
+        public void ValidateColor_CssNamedColor_IsAccepted()
+        {
+            // CSS named colors (e.g. "red", "blue") must pass the allowlist.
+            ListVMExtension.ValidateColor("red").Should().Be("red");
+            ListVMExtension.ValidateColor("blue").Should().Be("blue");
+            ListVMExtension.ValidateColor("transparent").Should().Be("transparent");
+        }
+
+        [TestMethod]
+        public void ValidateColor_CssNamedColorCaseInsensitive_IsAccepted()
+        {
+            // Named color matching must be case-insensitive.
+            ListVMExtension.ValidateColor("RED").Should().Be("RED");
+            ListVMExtension.ValidateColor("Blue").Should().Be("Blue");
+        }
+
+        [TestMethod]
+        public void ValidateColor_NullOrEmpty_ReturnsNull()
+        {
+            // Null / empty / whitespace-only input must return null without throwing.
+            ListVMExtension.ValidateColor(null).Should().BeNull();
+            ListVMExtension.ValidateColor("").Should().BeNull();
+            ListVMExtension.ValidateColor("   ").Should().BeNull();
+        }
+
+        [TestMethod]
+        public void ValidateColor_UnknownNamedColor_IsDropped()
+        {
+            // An unrecognized string that is not a hex color or CSS named color must be rejected.
+            ListVMExtension.ValidateColor("notacolor").Should().BeNull(
+                "unrecognized color name must be rejected");
+        }
+
+        [TestMethod]
+        public void GetDataJson_MaliciousColorValue_IsNotEmittedInJson()
+        {
+            // grid-002: end-to-end test — a ListVM whose color func returns a malicious
+            // value must not produce the injection payload in the JSON output.
+            MaliciousColorListVM.Reset();
+            MaliciousColorListVM.Add(new ListExtTestItem { Name = "Hack" });
+
+            var vm = new MaliciousColorListVM();
+            vm.Wtm = MockWtmContext.CreateWtmContext();
+
+            var json = vm.GetDataJson();
+
+            json.Should().NotContain("<script>",
+                "malicious color value must not appear in JSON output");
+            json.Should().NotContain("alert(",
+                "XSS payload must not appear in JSON output");
         }
     }
 }

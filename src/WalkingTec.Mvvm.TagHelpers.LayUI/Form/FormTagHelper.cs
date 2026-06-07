@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.Razor.TagHelpers;
@@ -211,7 +212,9 @@ $('#{search.SearchBtnId}').on('click', function () {{
                         {
                             firstkey = key;
                         }
-                        string temperr = error.ErrorMessage.Replace("<", "&lg;").Replace(">", "&rg;");
+                        // TLU-SEC-004: use proper HtmlEncode; the original code used bogus &lg;/&rg;
+                        // pseudo-entities that are not valid HTML and do not prevent injection.
+                        string temperr = WebUtility.HtmlEncode(error.ErrorMessage);
                         output.PostElement.AppendHtml($@"
 $(""#{Id}"").find(""button[type=submit]:first"").parent().prepend(""<div class='layui-input-block' style='text-align:left'><label style='color:red'>{temperr}</label></div>"");
 ");
