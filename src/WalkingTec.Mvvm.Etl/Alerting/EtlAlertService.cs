@@ -38,13 +38,38 @@ public class EtlAlertService : IEtlAlertService
         EtlRunLog runLog,
         CancellationToken ct = default)
     {
+        await SendCoreAsync(jobDef, runLog, messageOverride: null, ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc/>
+    public async Task SendSlaBreachAlertAsync(
+        EtlJobDefinition jobDef,
+        EtlRunLog runLog,
+        long actualElapsedMs,
+        CancellationToken ct = default)
+    {
+        var actualSec = actualElapsedMs / 1000.0;
+        var message =
+            $"[SLA Breach] ETL Job '{jobDef.Name}' exceeded the expected duration.\n" +
+            $"Expected: ≤ {jobDef.ExpectedDurationSeconds}s  " +
+            $"Actual: {actualSec:F1}s\n" +
+            $"Started: {runLog.StartedAt:u}  Finished: {runLog.FinishedAt:u}";
+        await SendCoreAsync(jobDef, runLog, messageOverride: message, ct).ConfigureAwait(false);
+    }
+
+    private async Task SendCoreAsync(
+        EtlJobDefinition jobDef,
+        EtlRunLog runLog,
+        string? messageOverride,
+        CancellationToken ct)
+    {
         var tasks = new System.Collections.Generic.List<Task>();
 
         if (!string.IsNullOrWhiteSpace(jobDef.AlertWebhookUrl))
-            tasks.Add(SendWebhookAsync(jobDef, runLog, ct));
+            tasks.Add(SendWebhookAsync(jobDef, runLog, messageOverride, ct));
 
         if (!string.IsNullOrWhiteSpace(jobDef.AlertEmail))
-            tasks.Add(SendEmailAsync(jobDef, runLog, ct));
+            tasks.Add(SendEmailAsync(jobDef, runLog, messageOverride, ct));
 
         if (tasks.Count > 0)
             await Task.WhenAll(tasks).ConfigureAwait(false);
@@ -55,11 +80,12 @@ public class EtlAlertService : IEtlAlertService
     private async Task SendWebhookAsync(
         EtlJobDefinition jobDef,
         EtlRunLog runLog,
+        string? messageOverride,
         CancellationToken ct)
     {
         var payload = new
         {
-            text = BuildAlertMessage(jobDef, runLog),
+            text = messageOverride ?? BuildAlertMessage(jobDef, runLog),
             jobName = jobDef.Name,
             jobId = jobDef.ID,
             consecutiveFailures = jobDef.ConsecutiveFailureCount,
@@ -101,6 +127,7 @@ public class EtlAlertService : IEtlAlertService
     private async Task SendEmailAsync(
         EtlJobDefinition jobDef,
         EtlRunLog runLog,
+        string? messageOverride,
         CancellationToken ct)
     {
         var smtp = _options.Value.Smtp;
@@ -112,8 +139,10 @@ public class EtlAlertService : IEtlAlertService
             return;
         }
 
-        var subject = $"[ETL Alert] Job '{jobDef.Name}' failed ({jobDef.ConsecutiveFailureCount} consecutive)";
-        var body = BuildAlertMessage(jobDef, runLog);
+        var subject = messageOverride != null
+            ? $"[ETL Alert] Job '{jobDef.Name}' SLA breach"
+            : $"[ETL Alert] Job '{jobDef.Name}' failed ({jobDef.ConsecutiveFailureCount} consecutive)";
+        var body = messageOverride ?? BuildAlertMessage(jobDef, runLog);
 
         var from = string.IsNullOrWhiteSpace(smtp.FromName)
             ? new MailAddress(smtp.FromAddress)

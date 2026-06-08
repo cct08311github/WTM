@@ -1,4 +1,5 @@
 #nullable enable
+using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Linq;
@@ -114,7 +115,8 @@ public class MssqlBulkLoader : IBulkLoader
         // Public interface path: no pre-resolved column list available,
         // so fall back to the INFORMATION_SCHEMA round-trip.
         var columns = await GetColumnsAsync(conn, stagingTableName, cancellationToken);
-        await ExecuteMergeAsync(conn, stagingTableName, targetTableName, mergeKeyColumn,
+        var keyColumns = ParseMergeKeys(mergeKeyColumn);
+        await ExecuteMergeAsync(conn, stagingTableName, targetTableName, keyColumns,
             columns, cancellationToken);
     }
 
@@ -138,22 +140,55 @@ public class MssqlBulkLoader : IBulkLoader
         await using var conn = new SqlConnection(connectionString);
         await conn.OpenAsync(cancellationToken);
 
-        await ExecuteMergeAsync(conn, stagingTableName, targetTableName, mergeKeyColumn,
+        var keyColumns = ParseMergeKeys(mergeKeyColumn);
+        await ExecuteMergeAsync(conn, stagingTableName, targetTableName, keyColumns,
             columns, cancellationToken);
+    }
+
+    /// <summary>
+    /// ETL-009: Parse a (possibly composite) merge-key string into an ordered
+    /// list of individual column names.
+    /// <para>
+    /// Examples:
+    /// <list type="bullet">
+    /// <item><c>"OrderId"</c> → <c>["OrderId"]</c> (single-key — back-compat)</item>
+    /// <item><c>"TenantId, OrderNo"</c> → <c>["TenantId", "OrderNo"]</c></item>
+    /// </list>
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<string> ParseMergeKeys(string mergeKeyColumn)
+    {
+        if (string.IsNullOrWhiteSpace(mergeKeyColumn))
+            throw new ArgumentException("mergeKeyColumn must not be null or empty.", nameof(mergeKeyColumn));
+
+        var keys = mergeKeyColumn
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(k => !string.IsNullOrEmpty(k))
+            .ToList();
+
+        if (keys.Count == 0)
+            throw new ArgumentException(
+                $"mergeKeyColumn '{mergeKeyColumn}' contains no valid column names.", nameof(mergeKeyColumn));
+
+        return keys;
     }
 
     private async Task ExecuteMergeAsync(
         SqlConnection conn,
-        string stagingTableName, string targetTableName, string mergeKeyColumn,
+        string stagingTableName, string targetTableName,
+        IReadOnlyList<string> keyColumns,
         IReadOnlyList<string> columns,
         CancellationToken cancellationToken)
     {
-        var updateCols = columns.Where(c => c != mergeKeyColumn).ToList();
+        var keySet = new HashSet<string>(keyColumns, StringComparer.OrdinalIgnoreCase);
+        var updateCols = columns.Where(c => !keySet.Contains(c)).ToList();
 
         var sb = new StringBuilder();
         sb.AppendLine($"MERGE [{targetTableName}] AS target");
         sb.AppendLine($"USING [{stagingTableName}] AS source");
-        sb.AppendLine($"ON target.[{mergeKeyColumn}] = source.[{mergeKeyColumn}]");
+        // ETL-009: build composite ON clause from all key columns (AND-joined)
+        sb.AppendLine("ON " + string.Join(" AND ",
+            keyColumns.Select(k => $"target.[{k}] = source.[{k}]")));
 
         if (updateCols.Count > 0)
         {

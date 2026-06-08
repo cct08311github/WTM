@@ -24,9 +24,23 @@ public static class ServiceCollectionExtensions
     /// <see cref="IEtlSourceRegistry"/> 並呼叫
     /// <see cref="IEtlSourceRegistry.Register"/>。
     /// </summary>
-    public static IServiceCollection AddWtmEtl(this IServiceCollection services)
+    /// <param name="services">DI container.</param>
+    /// <param name="configure">
+    /// 選填：設定 <see cref="EtlOptions"/>（例如 <see cref="EtlOptions.RunLogRetentionDays"/>）。
+    /// 未傳入時使用預設值（RunLogRetentionDays = 0，保留全部記錄）。
+    /// </param>
+    public static IServiceCollection AddWtmEtl(
+        this IServiceCollection services,
+        Action<EtlOptions>? configure = null)
     {
-        // Register the shared default registry (already contains Oracle/SqlServer/CSV/Excel).
+        // Register EtlOptions configuration (#217).
+        if (configure != null)
+            services.Configure(configure);
+        else
+            services.Configure<EtlOptions>(_ => { });
+
+        // Register the shared default source registry (#218).
+        // Already contains Oracle/SqlServer/CSV/Excel built-in sources.
         // Using the same instance as EtlSourceFactory.DefaultRegistry ensures that
         // registrations made via DI-injected IEtlSourceRegistry are also visible
         // when code calls EtlSourceFactory.CreateSource(string).

@@ -61,9 +61,15 @@ public class EtlJobDefinition : BasePoco
     [StringLength(100)]
     public string TargetTableName { get; set; } = string.Empty;
 
-    /// <summary>合併主鍵欄位（Merge 模式必填；Replace 模式忽略）</summary>
+    /// <summary>
+    /// 合併主鍵欄位（Merge 模式必填；Replace 模式忽略）。
+    /// <para>
+    /// 支援複合主鍵（ETL-009）：多個欄位以逗號分隔，例如
+    /// <c>"TenantId,OrderNo"</c>。單欄位填寫方式不變（向下相容）。
+    /// </para>
+    /// </summary>
     [Display(Name = "合併主鍵 (Merge Key)")]
-    [StringLength(100)]
+    [StringLength(500)]
     public string MergeKeyColumn { get; set; } = string.Empty;
 
     /// <summary>SQL 查詢模板</summary>
@@ -135,6 +141,16 @@ public class EtlJobDefinition : BasePoco
     public string? LastError { get; set; }
 
     // ─── 告警設定 ───
+
+    /// <summary>
+    /// SLA / expected-duration threshold in seconds (ETL-010).
+    /// When a run's elapsed time exceeds this value the scheduler raises an SLA
+    /// breach alert via <see cref="Alerting.IEtlAlertService"/> in addition to the
+    /// normal failure alert.
+    /// <para><b>Default 0 = no SLA check</b> (preserves pre-10.6 behaviour).</para>
+    /// </summary>
+    [Display(Name = "SLA 預期執行時間（秒）")]
+    public int ExpectedDurationSeconds { get; set; }
 
     /// <summary>失敗時寄送告警的 Email（多個地址以逗號分隔）</summary>
     [Display(Name = "告警 Email")]

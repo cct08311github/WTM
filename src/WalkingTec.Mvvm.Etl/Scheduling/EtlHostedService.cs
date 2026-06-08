@@ -38,6 +38,9 @@ public class EtlHostedService : IHostedService
             {
                 await _schedulerService.ResetGhostRunningJobsAsync();
                 await _schedulerService.LoadJobsFromDbAsync();
+                // ETL-014: fire-and-forget run-log retention pruning after jobs are loaded.
+                // Failures are caught inside PruneRunLogsAsync; no-op when RetentionDays == 0.
+                _ = _schedulerService.PruneRunLogsAsync(cancellationToken);
                 return;
             }
             catch (Exception) when (attempt < 3)

@@ -367,6 +367,8 @@ public class EtlPipelineExecutor
     /// Never calls EnsureStagingTable / TruncateStaging / BulkLoad / Merge /
     /// watermark commit. Iterates at most one batch so operator gets feedback
     /// quickly regardless of source size.
+    /// ETL-015: logs a structured audit entry for the source-data access so
+    /// dry-run reads are traceable like real runs.
     /// </summary>
     private async Task<EtlExecutionResult> ExecuteDryRunAsync(
         EtlPipelineConfig config,
@@ -377,6 +379,14 @@ public class EtlPipelineExecutor
         int extractedRows = 0;
         var warnings = new List<string>();
         var preview = new List<IDictionary<string, object?>>();
+
+        // ETL-015: audit log — record that a dry-run read of source data is starting.
+        _logger?.LogInformation(
+            "ETL dry-run started: Job={JobId} Name={JobName} Source={SourceCs} Query={Query} Watermark={Watermark}",
+            config.JobId, config.JobName,
+            config.SourceConnectionString,
+            config.QueryTemplate,
+            watermark.GetParameterValue()?.ToString() ?? "(none)");
 
         try
         {
@@ -450,6 +460,14 @@ public class EtlPipelineExecutor
             }
 
             sw.Stop();
+
+            // ETL-015: audit log — dry-run completed (source data access is now auditable).
+            _logger?.LogInformation(
+                "ETL dry-run completed: Job={JobId} Name={JobName} ExtractedRows={ExtractedRows} " +
+                "ElapsedMs={ElapsedMs} Warnings={WarningCount}",
+                config.JobId, config.JobName, extractedRows,
+                sw.ElapsedMilliseconds, warnings.Count);
+
             return new EtlExecutionResult
             {
                 Success = true,
@@ -466,6 +484,10 @@ public class EtlPipelineExecutor
         {
             watermark.DiscardPendingValue();
             sw.Stop();
+            // ETL-015: audit the cancellation of the dry-run source read
+            _logger?.LogWarning(
+                "ETL dry-run aborted: Job={JobId} Name={JobName} ElapsedMs={ElapsedMs}",
+                config.JobId, config.JobName, sw.ElapsedMilliseconds);
             return new EtlExecutionResult
             {
                 Success = false,
@@ -483,6 +505,10 @@ public class EtlPipelineExecutor
         {
             watermark.DiscardPendingValue();
             sw.Stop();
+            // ETL-015: audit the failure of the dry-run source read
+            _logger?.LogError(
+                "ETL dry-run failed: Job={JobId} Name={JobName} ElapsedMs={ElapsedMs} Error={Error}",
+                config.JobId, config.JobName, sw.ElapsedMilliseconds, ex.Message);
             return new EtlExecutionResult
             {
                 Success = false,

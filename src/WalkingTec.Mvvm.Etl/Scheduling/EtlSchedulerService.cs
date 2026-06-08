@@ -5,6 +5,8 @@ using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using System.Threading;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Quartz;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Etl.Models;
@@ -303,6 +305,53 @@ public class EtlSchedulerService
         // EtlQuartzJob.Execute 會優先使用此值而非重新讀取 DB 中的 LastWatermarkValue，
         // 確保即使 DB 值被再次修改，重跑仍從正確的 W0 開始。
         await TriggerNowAsync(runLog.JobId, runLog.WatermarkSnapshot);
+    }
+
+    /// <summary>
+    /// ETL-014: Prune <see cref="EtlRunLog"/> records older than the configured retention window.
+    /// <para>
+    /// No-op when <see cref="EtlOptions.RunLogRetentionDays"/> is 0 (the default),
+    /// preserving pre-10.6 "keep forever" behaviour.
+    /// </para>
+    /// <para>
+    /// Uses a single <c>ExecuteDeleteAsync</c> rather than materialising entities —
+    /// efficient for large log tables. Requires SQLite shared-memory or a real DB;
+    /// EF InMemory provider does NOT support <c>ExecuteDeleteAsync</c>.
+    /// </para>
+    /// </summary>
+    public virtual async Task PruneRunLogsAsync(CancellationToken cancellationToken = default)
+    {
+        var options = _sp.GetService<IOptions<EtlOptions>>()?.Value;
+        var retentionDays = options?.RunLogRetentionDays ?? 0;
+        if (retentionDays <= 0) return;
+
+        var cutoff = (_sp.GetService<TimeProvider>() ?? TimeProvider.System)
+            .GetUtcNow().UtcDateTime
+            .AddDays(-retentionDays);
+
+        using var scope = _sp.CreateScope();
+        var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
+
+        try
+        {
+            var deleted = await wtm.DC.Set<EtlRunLog>()
+                .Where(r => r.StartedAt < cutoff)
+                .ExecuteDeleteAsync(cancellationToken);
+
+            if (deleted > 0)
+            {
+                _sp.GetService<ILogger<EtlSchedulerService>>()
+                    ?.LogInformation(
+                        "ETL run-log retention pruning: deleted {Count} records older than {Cutoff:u} (>{RetentionDays} days)",
+                        deleted, cutoff, retentionDays);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Pruning failure must never crash the scheduler.
+            _sp.GetService<ILogger<EtlSchedulerService>>()
+                ?.LogError(ex, "ETL run-log retention pruning failed (RetentionDays={RetentionDays})", retentionDays);
+        }
     }
 
     /// <summary>判斷 Job 是否應該執行</summary>

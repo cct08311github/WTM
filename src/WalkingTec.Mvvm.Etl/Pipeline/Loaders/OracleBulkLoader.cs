@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Oracle.ManagedDataAccess.Client;
+using WalkingTec.Mvvm.Etl.Pipeline.Loaders;
 
 namespace WalkingTec.Mvvm.Etl.Pipeline.Loaders;
 
@@ -87,7 +88,8 @@ public class OracleBulkLoader : IBulkLoader
         // Public interface path: no pre-resolved column list available,
         // so fall back to the USER_TAB_COLUMNS round-trip.
         var columns = await GetColumnsAsync(conn, stagingTableName, cancellationToken);
-        await ExecuteMergeAsync(conn, stagingTableName, targetTableName, mergeKeyColumn,
+        var keyColumns = MssqlBulkLoader.ParseMergeKeys(mergeKeyColumn);
+        await ExecuteMergeAsync(conn, stagingTableName, targetTableName, keyColumns,
             columns, cancellationToken);
     }
 
@@ -111,22 +113,27 @@ public class OracleBulkLoader : IBulkLoader
         await using var conn = new OracleConnection(connectionString);
         await conn.OpenAsync(cancellationToken);
 
-        await ExecuteMergeAsync(conn, stagingTableName, targetTableName, mergeKeyColumn,
+        var keyColumns = MssqlBulkLoader.ParseMergeKeys(mergeKeyColumn);
+        await ExecuteMergeAsync(conn, stagingTableName, targetTableName, keyColumns,
             columns, cancellationToken);
     }
 
     private async Task ExecuteMergeAsync(
         OracleConnection conn,
-        string stagingTableName, string targetTableName, string mergeKeyColumn,
+        string stagingTableName, string targetTableName,
+        IReadOnlyList<string> keyColumns,
         IReadOnlyList<string> columns,
         CancellationToken cancellationToken)
     {
-        var updateCols = columns.Where(c => c != mergeKeyColumn).ToList();
+        var keySet = new HashSet<string>(keyColumns, StringComparer.OrdinalIgnoreCase);
+        var updateCols = columns.Where(c => !keySet.Contains(c)).ToList();
 
         var sb = new StringBuilder();
         sb.AppendLine($"MERGE INTO {targetTableName} t");
         sb.AppendLine($"USING {stagingTableName} s");
-        sb.AppendLine($"ON (t.{mergeKeyColumn} = s.{mergeKeyColumn})");
+        // ETL-009: composite ON clause — AND-join all key columns inside parentheses
+        sb.AppendLine("ON (" + string.Join(" AND ",
+            keyColumns.Select(k => $"t.{k} = s.{k}")) + ")");
 
         if (updateCols.Count > 0)
         {

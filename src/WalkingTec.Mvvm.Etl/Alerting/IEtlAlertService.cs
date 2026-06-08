@@ -18,4 +18,17 @@ public interface IEtlAlertService
         EtlJobDefinition jobDef,
         EtlRunLog runLog,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// 發送 SLA 違反告警（ETL-010）。
+    /// 當某次執行的實際耗時超過 <see cref="EtlJobDefinition.ExpectedDurationSeconds"/> 時呼叫。
+    /// 預設實作呼叫 <see cref="SendAlertAsync"/>（重用 Email/Webhook 通道）；
+    /// 可 override 以發送不同訊息或使用其他通道。
+    /// </summary>
+    Task SendSlaBreachAlertAsync(
+        EtlJobDefinition jobDef,
+        EtlRunLog runLog,
+        long actualElapsedMs,
+        CancellationToken ct = default)
+        => SendAlertAsync(jobDef, runLog, ct);
 }

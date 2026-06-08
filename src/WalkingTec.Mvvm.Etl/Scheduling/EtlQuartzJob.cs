@@ -255,6 +255,31 @@ public class EtlQuartzJob : WtmJob
                 }
             }
 
+            // ETL-010: SLA / duration breach alert (opt-in; default ExpectedDurationSeconds == 0 → skip)
+            var expectedSec = jobDef.ExpectedDurationSeconds;
+            if (expectedSec > 0 && runLog.ElapsedMs > expectedSec * 1000L)
+            {
+                var alertService = Sp.GetService<IEtlAlertService>();
+                if (alertService != null)
+                {
+                    try
+                    {
+                        await alertService.SendSlaBreachAlertAsync(
+                            jobDef, runLog, runLog.ElapsedMs).ConfigureAwait(false);
+                        Sp.GetService<ILogger<EtlQuartzJob>>()
+                            ?.LogWarning(
+                                "ETL SLA breach for job '{JobName}': expected ≤ {ExpectedSec}s, " +
+                                "actual {ActualMs}ms",
+                                jobDef.Name, expectedSec, runLog.ElapsedMs);
+                    }
+                    catch (Exception slaEx)
+                    {
+                        Sp.GetService<ILogger<EtlQuartzJob>>()
+                            ?.LogError(slaEx, "ETL SLA breach alert failed for job '{JobName}'", jobDef.Name);
+                    }
+                }
+            }
+
             // 清除進度
             tracker?.Remove(jobDefId);
         }
