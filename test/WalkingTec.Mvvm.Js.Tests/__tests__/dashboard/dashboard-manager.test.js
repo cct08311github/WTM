@@ -38,6 +38,9 @@ function makeEnv(overrides = {}) {
         fetch: mockFetch,
         setInterval: jest.fn(() => 999),
         clearInterval: jest.fn(),
+        // Q10: self-scheduling refresh uses setTimeout/clearTimeout
+        setTimeout: jest.fn(() => 999),
+        clearTimeout: jest.fn(),
         ...overrides,
     });
     freshCtx.window = freshCtx;
@@ -80,17 +83,19 @@ describe('WtmDashboard.DashboardManager', () => {
         expect(mockFetch).toHaveBeenCalledWith('/_dashboard/dash1/widget/w1/data');
     });
 
-    test('startRefresh sets interval', () => {
+    test('startRefresh uses self-scheduling setTimeout (Q10)', () => {
         const { wd, ctx } = makeEnv();
         wd.DashboardManager.startRefresh(60);
-        expect(ctx.setInterval).toHaveBeenCalledWith(expect.any(Function), 60000);
+        // Q10: self-scheduling refresh uses setTimeout, not setInterval
+        expect(ctx.setTimeout).toHaveBeenCalledWith(expect.any(Function), 60000);
     });
 
-    test('stopRefresh clears interval', () => {
+    test('stopRefresh clears the scheduled timeout (Q10)', () => {
         const { wd, ctx } = makeEnv();
         wd.DashboardManager.startRefresh(60);
         wd.DashboardManager.stopRefresh();
-        expect(ctx.clearInterval).toHaveBeenCalledWith(999);
+        // The timer handle returned by setTimeout(fn, 60000) is 999 (mocked)
+        expect(ctx.clearTimeout).toHaveBeenCalledWith(999);
     });
 
     // ── Q1: FilterBar values are forwarded in widget data fetch URL ───────
@@ -191,6 +196,10 @@ describe('WtmDashboard.DashboardManager', () => {
         ], mockDocW.createElement('div'));
 
         await wd.DashboardManager.init('container', 'dash1');
+
+        // Flush pending microtasks so the in-flight flag for 'w1' is cleared
+        // before we trigger a new fetch via setValue.
+        await new Promise(r => setTimeout(r, 10));
 
         // Clear previous fetch calls
         const callsBefore = mockFetch.mock.calls.length;

@@ -252,11 +252,11 @@
         formatValue: function(value, format, prefix) {
             if (value == null || isNaN(value)) return value;
             var num = Number(value);
-            
+
             if (format === 'percent') {
                 return (num * 100).toFixed(1).replace(/\.0$/, '') + '%';
             }
-            
+
             var formatted = num.toLocaleString();
             if (format === 'currency') {
                 // simple abbreviation logic
@@ -267,7 +267,7 @@
                 }
                 return (prefix || '') + formatted;
             }
-            
+
             return formatted;
         },
         calculateTrend: function(current, previous) {
@@ -298,11 +298,11 @@
     // --- Widget Renderers ---------------------------------------------------
     function renderKpi(container, data, config) {
         container.innerHTML = ''; // reset
-        
+
         var titleDiv = document.createElement('div');
         titleDiv.className = 'wtm-kpi-title';
         titleDiv.textContent = config.title || '';
-        
+
         var valueDiv = document.createElement('div');
         valueDiv.className = 'wtm-kpi-value';
         var val = (data && data.value != null) ? data.value : 0;
@@ -340,10 +340,10 @@
                 }
             }
         }
-        
+
         container.appendChild(titleDiv);
         container.appendChild(valueDiv);
-        
+
         if (data && typeof data.previousValue !== 'undefined') {
             var trend = Utils.calculateTrend(val, data.previousValue);
             var trendDiv = document.createElement('div');
@@ -385,6 +385,152 @@
         return 'bar';
     }
 
+    // --- L6: ECharts option builders for extended chart types ----------------
+    /**
+     * Build an ECharts option object for the given resolved chart type.
+     *
+     * Supported types: bar, line, pie, piehollow, gauge, funnel, radar,
+     *                  heatmap, scatter, sankey.
+     *
+     * Q2 multi-series: when allSeries has more than one element and the
+     * resolved type is bar or line, each series beyond the first is rendered
+     * with `secondaryType` (default: 'line') on a secondary Y axis (right).
+     * Single-column results render exactly as before.
+     *
+     * @param {string} resolvedType  Lower-case chart type string
+     * @param {Array}  xAxisData    Category labels from the dimension column
+     * @param {Array}  allSeries    [{name, data}] — one element per measure column
+     * @param {object} config       Widget config object from the dashboard def
+     * @returns {object} ECharts setOption-compatible option object
+     */
+    function buildChartOption(resolvedType, xAxisData, allSeries, config) {
+        var cfg = config || {};
+
+        // ── Pie / PieHollow ───────────────────────────────────────────────────
+        if (resolvedType === 'pie' || resolvedType === 'piehollow') {
+            var pieData = [];
+            var firstSeries = allSeries[0] || { name: '', data: [] };
+            for (var pi = 0; pi < xAxisData.length; pi++) {
+                pieData.push({ name: xAxisData[pi], value: firstSeries.data[pi] });
+            }
+            var pieRadius = resolvedType === 'piehollow' ? ['40%', '70%'] : '60%';
+            return {
+                tooltip: { trigger: 'item' },
+                legend: { type: 'scroll', orient: 'horizontal' },
+                series: [{ type: 'pie', radius: pieRadius, data: pieData }]
+            };
+        }
+
+        // ── Funnel ────────────────────────────────────────────────────────────
+        if (resolvedType === 'funnel') {
+            var funnelData = [];
+            var funnelSrc = allSeries[0] || { name: '', data: [] };
+            for (var fi = 0; fi < xAxisData.length; fi++) {
+                funnelData.push({ name: xAxisData[fi], value: funnelSrc.data[fi] });
+            }
+            return {
+                tooltip: { trigger: 'item' },
+                series: [{ type: 'funnel', data: funnelData }]
+            };
+        }
+
+        // ── Gauge ─────────────────────────────────────────────────────────────
+        if (resolvedType === 'gauge') {
+            var gaugeVal = (allSeries[0] && allSeries[0].data && allSeries[0].data[0] != null)
+                ? Number(allSeries[0].data[0]) : 0;
+            return {
+                series: [{
+                    type: 'gauge',
+                    data: [{ value: gaugeVal, name: (allSeries[0] && allSeries[0].name) || '' }]
+                }]
+            };
+        }
+
+        // ── Radar ─────────────────────────────────────────────────────────────
+        if (resolvedType === 'radar') {
+            var radarIndicators = xAxisData.map(function(name) { return { name: name }; });
+            var radarSeriesData = allSeries.map(function(s) {
+                return { name: s.name, value: s.data };
+            });
+            return {
+                tooltip: {},
+                radar: { indicator: radarIndicators },
+                series: [{ type: 'radar', data: radarSeriesData }]
+            };
+        }
+
+        // ── Heatmap ───────────────────────────────────────────────────────────
+        if (resolvedType === 'heatmap') {
+            var heatSeries = allSeries[0] || { data: [] };
+            return {
+                tooltip: {},
+                xAxis: { type: 'category', data: xAxisData },
+                yAxis: { type: 'category' },
+                visualMap: { calculable: true },
+                series: [{ type: 'heatmap', data: heatSeries.data }]
+            };
+        }
+
+        // ── Scatter ───────────────────────────────────────────────────────────
+        if (resolvedType === 'scatter') {
+            var scatterSeriesArr = allSeries.map(function(s) {
+                return { type: 'scatter', name: s.name, data: s.data };
+            });
+            return {
+                tooltip: { trigger: 'item' },
+                xAxis: { type: 'value' },
+                yAxis: { type: 'value' },
+                series: scatterSeriesArr
+            };
+        }
+
+        // ── Sankey ────────────────────────────────────────────────────────────
+        if (resolvedType === 'sankey') {
+            // Expects allSeries[0].raw = { nodes: [...], links: [...] }
+            var sankeyRaw = (allSeries[0] && allSeries[0].raw) || { nodes: [], links: [] };
+            return {
+                tooltip: { trigger: 'item' },
+                series: [{
+                    type: 'sankey',
+                    data: sankeyRaw.nodes,
+                    links: sankeyRaw.links,
+                    emphasis: { focus: 'adjacency' }
+                }]
+            };
+        }
+
+        // ── Bar / Line (default, with Q2 multi-series + dual-Y) ───────────────
+        // For multi-series data (columns[1..n]): series[0] goes on the primary
+        // (left) Y axis with `resolvedType`; series[1..n] go on the secondary
+        // (right) Y axis using `cfg.secondaryType` (default 'line').
+        var yAxes = [{ type: 'value' }];
+        var hasSecondary = allSeries.length > 1;
+        if (hasSecondary) {
+            yAxes.push({ type: 'value', splitLine: { show: false } });
+        }
+
+        var secondaryType = cfg.secondaryType || 'line';
+        var seriesArr = allSeries.map(function(s, idx) {
+            var sType = idx === 0 ? resolvedType : secondaryType;
+            var serObj = { name: s.name, type: sType, data: s.data };
+            if (hasSecondary && idx > 0) {
+                serObj.yAxisIndex = 1;
+            }
+            return serObj;
+        });
+
+        var option = {
+            tooltip: { trigger: 'axis' },
+            xAxis: { type: 'category', data: xAxisData },
+            yAxis: yAxes,
+            series: seriesArr
+        };
+        if (hasSecondary) {
+            option.legend = {};
+        }
+        return option;
+    }
+
     function renderChart(container, data, config) {
         if (!global.echarts) return;
         var chart = global.echarts.init(container);
@@ -393,31 +539,29 @@
         if (!data || !data.columns || !data.rows) return;
 
         var xAxisData = [];
-        var seriesData = [];
         var dimField = data.columns[0];
-        var msrField = data.columns[1];
 
         for (var i = 0; i < data.rows.length; i++) {
             xAxisData.push(data.rows[i][dimField]);
-            seriesData.push(data.rows[i][msrField]);
         }
 
+        // Q2: Collect all measure columns (columns[1..n]) as separate series.
+        // Single-column result → one series (fully backward-compatible).
+        var allSeries = [];
+        for (var ci = 1; ci < data.columns.length; ci++) {
+            var msrField = data.columns[ci];
+            var seriesData = [];
+            for (var ri = 0; ri < data.rows.length; ri++) {
+                seriesData.push(data.rows[ri][msrField]);
+            }
+            allSeries.push({ name: msrField, data: seriesData });
+        }
+
+        // Nothing to render if there are no measure columns
+        if (allSeries.length === 0) return;
+
         var resolvedType = inferChartType(config, data);
-
-        var option = {
-            xAxis: {
-                type: 'category',
-                data: xAxisData
-            },
-            yAxis: {
-                type: 'value'
-            },
-            series: [{
-                data: seriesData,
-                type: resolvedType
-            }]
-        };
-
+        var option = buildChartOption(resolvedType, xAxisData, allSeries, config);
         chart.setOption(option);
     }
 
@@ -504,7 +648,7 @@
             // Security: all dynamic text via textContent only
             var text = item.label || '';
             if (item.description) {
-                text += ' \u2014 ' + item.description;
+                text += ' — ' + item.description;
             }
             li.textContent = text;
 
@@ -539,18 +683,129 @@
         container.appendChild(iframe);
     }
 
+    // --- Q3: Static / Text / Image widget ------------------------------------
+    /**
+     * Renders static content client-side with NO server fetch.
+     * config.html   — arbitrary HTML markup (rendered via innerHTML after DOMPurify
+     *                 if available, otherwise escaped as text for safety)
+     * config.text   — plain-text content (uses textContent)
+     * config.imageUrl — image URL rendered as <img>
+     * config.title  — optional heading
+     *
+     * Priority: html > imageUrl > text
+     * Security note: config.html is sanitized with DOMPurify when available.
+     * Without DOMPurify the raw HTML is intentionally NOT injected; text
+     * fallback is used so the widget is always safe even without a sanitizer.
+     */
+    function renderStatic(container, data, config) {
+        container.innerHTML = '';
+        var cfg = config || {};
+
+        if (cfg.title) {
+            var titleDiv = document.createElement('div');
+            titleDiv.className = 'wtm-static-title';
+            titleDiv.textContent = cfg.title;
+            container.appendChild(titleDiv);
+        }
+
+        if (cfg.html) {
+            var contentDiv = document.createElement('div');
+            contentDiv.className = 'wtm-static-content';
+            // Use DOMPurify if loaded; otherwise fall back to textContent for safety
+            if (global.DOMPurify && typeof global.DOMPurify.sanitize === 'function') {
+                contentDiv.innerHTML = global.DOMPurify.sanitize(cfg.html);
+            } else {
+                contentDiv.textContent = cfg.html;
+            }
+            container.appendChild(contentDiv);
+        } else if (cfg.imageUrl) {
+            var img = document.createElement('img');
+            img.className = 'wtm-static-image';
+            img.src = cfg.imageUrl;
+            img.alt = cfg.title || '';
+            img.style.maxWidth = '100%';
+            container.appendChild(img);
+        } else if (cfg.text) {
+            var textDiv = document.createElement('div');
+            textDiv.className = 'wtm-static-text';
+            textDiv.textContent = cfg.text;
+            container.appendChild(textDiv);
+        }
+    }
+
+    // --- L7: DateRange presets -----------------------------------------------
+    /**
+     * Compute [startDate, endDate] strings (YYYY-MM-DD) for a named preset.
+     *
+     * Supported presets:
+     *   today      — current day
+     *   last7days  — past 7 calendar days (inclusive of today)
+     *   last30days — past 30 calendar days (inclusive of today)
+     *   thisMonth  — 1st day of current month → today
+     *   thisQuarter — 1st day of current quarter → today
+     *   thisYear   — 1st Jan of current year → today
+     *
+     * Returns null for unknown presets.
+     *
+     * @param {string} preset  Preset key (case-insensitive)
+     * @param {Date}   [now]   Override current date (for testing)
+     * @returns {{ start: string, end: string }|null}
+     */
+    function computeDateRangePreset(preset, now) {
+        var d = now || new Date();
+        var key = String(preset).toLowerCase().replace(/[\s_\-]/g, '');
+
+        function pad(n) { return n < 10 ? '0' + n : String(n); }
+        function fmt(dt) {
+            return dt.getFullYear() + '-' + pad(dt.getMonth() + 1) + '-' + pad(dt.getDate());
+        }
+        function addDays(dt, n) {
+            var r = new Date(dt.getTime());
+            r.setDate(r.getDate() + n);
+            return r;
+        }
+
+        var today = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+        var endStr = fmt(today);
+
+        if (key === 'today') {
+            return { start: endStr, end: endStr };
+        }
+        if (key === 'last7days') {
+            return { start: fmt(addDays(today, -6)), end: endStr };
+        }
+        if (key === 'last30days') {
+            return { start: fmt(addDays(today, -29)), end: endStr };
+        }
+        if (key === 'thismonth') {
+            var monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+            return { start: fmt(monthStart), end: endStr };
+        }
+        if (key === 'thisquarter') {
+            var q = Math.floor(today.getMonth() / 3);
+            var qStart = new Date(today.getFullYear(), q * 3, 1);
+            return { start: fmt(qStart), end: endStr };
+        }
+        if (key === 'thisyear') {
+            var yearStart = new Date(today.getFullYear(), 0, 1);
+            return { start: fmt(yearStart), end: endStr };
+        }
+        return null;
+    }
+
     var _renderers = {
         kpi: renderKpi,
         chart: renderChart,
         table: renderTable,
         progress: renderProgress,
         list: renderList,
-        embed: renderEmbed
+        embed: renderEmbed,
+        static: renderStatic
     };
 
     var WidgetRendererFactory = {
-        getRenderer: function(type) { 
-            return _renderers[type] || null; 
+        getRenderer: function(type) {
+            return _renderers[type] || null;
         }
     };
 
@@ -559,6 +814,8 @@
     var _refreshTimer = null;
     var _containerId = null;
     var _failureCounts = {};
+    // Q10: per-widget in-flight guard
+    var _widgetInFlight = {};
     var MAX_RETRIES = 3;
 
     var DashboardManager = {
@@ -570,7 +827,7 @@
                 if (def.layout) {
                     GridManager.loadLayout(def.layout);
                 }
-                
+
                 DashboardManager._renderAllWidgets(def);
 
                 if (def.links) {
@@ -591,7 +848,7 @@
                 if (console && console.error) console.error('Dashboard init failed', e);
             });
         },
-        
+
         _loadDashboard: function(id) {
             return global.fetch('/_dashboard/' + id)
                 .then(function(res) {
@@ -599,22 +856,36 @@
                     return res.json();
                 });
         },
-        
+
         _renderAllWidgets: function(def) {
             if (!def.widgets) return;
             for (var widgetId in def.widgets) {
                 if (Object.prototype.hasOwnProperty.call(def.widgets, widgetId)) {
-                    this._fetchAndRenderWidget(widgetId, def.widgets[widgetId]);
+                    // Q3: static widgets have no server fetch — render directly
+                    var wDef = def.widgets[widgetId];
+                    if (wDef.type === 'static') {
+                        var staticContainer = document.getElementById(widgetId);
+                        if (staticContainer) {
+                            renderStatic(staticContainer, null, wDef.config || {});
+                        }
+                        continue;
+                    }
+                    this._fetchAndRenderWidget(widgetId, wDef);
                 }
             }
         },
-        
+
         _fetchAndRenderWidget: function(widgetId, widgetDef) {
             var container = document.getElementById(widgetId);
             if (!container) return;
 
             // Skip if max retries exceeded
             if ((_failureCounts[widgetId] || 0) >= MAX_RETRIES) return;
+
+            // Q10: In-flight guard — skip if a fetch is already running for
+            // this widget. The next scheduled tick will run after completion.
+            if (_widgetInFlight[widgetId]) return;
+            _widgetInFlight[widgetId] = true;
 
             // Show loading state
             container.className = 'wtm-widget-loading';
@@ -637,29 +908,34 @@
             }
             var url = params.length > 0 ? baseUrl + '?' + params.join('&') : baseUrl;
 
-            global.fetch(url)
-                .then(function(res) {
-                    if (!res.ok) throw new Error('Widget data fetch failed');
-                    return res.json();
-                })
-                .then(function(data) {
-                    container.className = '';
-                    _failureCounts[widgetId] = 0;
-                    var renderer = WidgetRendererFactory.getRenderer(widgetDef.type);
-                    if (renderer) {
-                        renderer(container, data, widgetDef.config || {});
-                    } else {
-                        container.textContent = 'Unknown widget type: ' + widgetDef.type;
-                    }
-                })
-                .catch(function(e) {
-                    _failureCounts[widgetId] = (_failureCounts[widgetId] || 0) + 1;
-                    container.className = 'wtm-widget-error';
-                    container.textContent = 'Error loading widget data.';
-                    if (console && console.error) console.error(e);
-                });
+            // Capture widgetId in closure for the async callbacks
+            (function(wId, wDef) {
+                global.fetch(url)
+                    .then(function(res) {
+                        if (!res.ok) throw new Error('Widget data fetch failed');
+                        return res.json();
+                    })
+                    .then(function(data) {
+                        _widgetInFlight[wId] = false;
+                        container.className = '';
+                        _failureCounts[wId] = 0;
+                        var renderer = WidgetRendererFactory.getRenderer(wDef.type);
+                        if (renderer) {
+                            renderer(container, data, wDef.config || {});
+                        } else {
+                            container.textContent = 'Unknown widget type: ' + wDef.type;
+                        }
+                    })
+                    .catch(function(e) {
+                        _widgetInFlight[wId] = false;
+                        _failureCounts[wId] = (_failureCounts[wId] || 0) + 1;
+                        container.className = 'wtm-widget-error';
+                        container.textContent = 'Error loading widget data.';
+                        if (console && console.error) console.error(e);
+                    });
+            })(widgetId, widgetDef);
         },
-        
+
         _registerLinks: function(links) {
             for (var i = 0; i < links.length; i++) {
                 var link = links[i];
@@ -669,19 +945,25 @@
                 });
             }
         },
-        
+
+        // Q10: Self-scheduling refresh — schedule next tick only after
+        // current widget fetches complete, preventing request pile-up.
         startRefresh: function(intervalSec) {
             this.stopRefresh();
-            _refreshTimer = setInterval(function() {
-                if (_currentDashboard) {
-                    DashboardManager._renderAllWidgets(_currentDashboard);
-                }
-            }, intervalSec * 1000);
+            var ms = intervalSec * 1000;
+            (function scheduleNext() {
+                _refreshTimer = global.setTimeout(function() {
+                    if (_currentDashboard) {
+                        DashboardManager._renderAllWidgets(_currentDashboard);
+                    }
+                    scheduleNext();
+                }, ms);
+            })();
         },
-        
+
         stopRefresh: function() {
             if (_refreshTimer) {
-                clearInterval(_refreshTimer);
+                global.clearTimeout(_refreshTimer);
                 _refreshTimer = null;
             }
         },
@@ -696,6 +978,15 @@
 
         _setFailureCount: function(widgetId, count) {
             _failureCounts[widgetId] = count;
+        },
+
+        // Q10: Expose in-flight state for testing
+        _getInFlight: function(widgetId) {
+            return !!_widgetInFlight[widgetId];
+        },
+
+        _setInFlight: function(widgetId, val) {
+            _widgetInFlight[widgetId] = !!val;
         }
     };
 
@@ -827,6 +1118,73 @@
                         });
                     })(f.field);
                     wrapper.appendChild(sel);
+                } else if (f.type === 'daterange') {
+                    // L7: DateRange filter — renders a preset dropdown + optional
+                    // start/end text inputs. Preset changes compute [start, end]
+                    // and set two filter fields: `<field>_start` and `<field>_end`.
+                    var drSel = document.createElement('select');
+                    drSel.name = f.field + '_preset';
+                    var presets = [
+                        { key: 'today',       label: '今天' },
+                        { key: 'last7days',   label: '近7天' },
+                        { key: 'last30days',  label: '近30天' },
+                        { key: 'thisMonth',   label: '本月' },
+                        { key: 'thisQuarter', label: '本季' },
+                        { key: 'thisYear',    label: '本年' },
+                        { key: 'custom',      label: '自訂' }
+                    ];
+                    for (var p = 0; p < presets.length; p++) {
+                        var pOpt = document.createElement('option');
+                        pOpt.value = presets[p].key;
+                        pOpt.textContent = presets[p].label;
+                        drSel.appendChild(pOpt);
+                    }
+                    // Custom range inputs (shown only for 'custom' preset)
+                    var startInput = document.createElement('input');
+                    startInput.type = 'text';
+                    startInput.name = f.field + '_start';
+                    startInput.placeholder = 'YYYY-MM-DD';
+                    var endInput = document.createElement('input');
+                    endInput.type = 'text';
+                    endInput.name = f.field + '_end';
+                    endInput.placeholder = 'YYYY-MM-DD';
+
+                    // Initialize filter values from default preset
+                    var initPreset = (f.defaultValue && f.defaultValue !== 'custom') ? f.defaultValue : 'thisMonth';
+                    var initRange = computeDateRangePreset(initPreset);
+                    if (initRange) {
+                        _filterValues[f.field + '_start'] = initRange.start;
+                        _filterValues[f.field + '_end'] = initRange.end;
+                    }
+
+                    (function(fieldName, drSelEl, startEl, endEl) {
+                        drSelEl.addEventListener('change', function() {
+                            var selected = drSelEl.value;
+                            if (selected === 'custom') {
+                                // For custom range, wait for user to fill start/end inputs
+                                FilterBar.setValue(fieldName + '_start', startEl.value || '');
+                                FilterBar.setValue(fieldName + '_end', endEl.value || '');
+                            } else {
+                                var range = computeDateRangePreset(selected);
+                                if (range) {
+                                    startEl.value = range.start;
+                                    endEl.value = range.end;
+                                    FilterBar.setValue(fieldName + '_start', range.start);
+                                    FilterBar.setValue(fieldName + '_end', range.end);
+                                }
+                            }
+                        });
+                        startEl.addEventListener('input', function() {
+                            FilterBar.setValue(fieldName + '_start', startEl.value);
+                        });
+                        endEl.addEventListener('input', function() {
+                            FilterBar.setValue(fieldName + '_end', endEl.value);
+                        });
+                    })(f.field, drSel, startInput, endInput);
+
+                    wrapper.appendChild(drSel);
+                    wrapper.appendChild(startInput);
+                    wrapper.appendChild(endInput);
                 } else {
                     var input = document.createElement('input');
                     input.type = 'text';
@@ -887,14 +1245,16 @@
             detectBreakpoint: detectBreakpoint,
             applyBreakpointToLayout: applyBreakpointToLayout,
             BREAKPOINTS: BREAKPOINTS,
-            inferChartType: inferChartType
+            inferChartType: inferChartType,
+            buildChartOption: buildChartOption,
+            computeDateRangePreset: computeDateRangePreset
         }
     };
 
     if (typeof global.window !== "undefined") {
         global.window.WtmDashboard = api;
     }
-    
+
     // 將結果賦值給全域物件（為了解決某些環境下 global 未指向 window 的問題）
     global.WtmDashboard = api;
 

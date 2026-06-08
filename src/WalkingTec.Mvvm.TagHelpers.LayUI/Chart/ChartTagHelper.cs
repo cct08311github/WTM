@@ -10,7 +10,28 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Chart
 {
     public enum ChartThemeEnum { light, dark, vintage, chalk, essos, macarons, roma, walden, westeros, wonderland }
 
-    public enum ChartTypeEnum { Bar, Pie, Line, PieHollow, Scatter }
+    /// <summary>
+    /// Chart type enum for wt:chart tag helper.
+    /// Existing values are preserved; new L6 types are additive and opt-in.
+    /// The enum value is lowercased and passed directly to the JS renderer as
+    /// config.chartType, which buildChartOption() in framework_dashboard.js maps
+    /// to the appropriate ECharts option shape.
+    /// </summary>
+    public enum ChartTypeEnum
+    {
+        // ── Existing types (unchanged behaviour) ──────────────────────────────
+        Bar,
+        Pie,
+        Line,
+        PieHollow,
+        Scatter,
+        // ── L6 new types ──────────────────────────────────────────────────────
+        Gauge,
+        Funnel,
+        Radar,
+        Heatmap,
+        Sankey
+    }
 
     [HtmlTargetElement("wt:chart", TagStructure = TagStructure.WithoutEndTag)]
     public class ChartTagHelper : BaseElementTag
@@ -115,6 +136,9 @@ formatter: function (params) {{
                 }
             }
 
+            // Build the typeSeries fragment forwarded to the legacy ff.RefreshChart path.
+            // For new L6 types (gauge, funnel, radar, heatmap, sankey) the JS renderer
+            // (buildChartOption) builds the full option itself; we just pass the type string.
             var typeSeries = string.Empty;
             if (Type == ChartTypeEnum.PieHollow)
                 typeSeries = $"\"type\":\"pie\",\"radius\": [\"40%\", \"70%\"]";
@@ -124,8 +148,18 @@ formatter: function (params) {{
                 typeSeries += $",\"smooth\": {OpenSmooth.ToString().ToLower()}";
 
 
+            // Types that manage their own axes inside buildChartOption on the JS side
+            // do not need server-side xAxis/yAxis script fragments.
+            bool noCartesianAxes = Type == ChartTypeEnum.Pie
+                || Type == ChartTypeEnum.PieHollow
+                || Type == ChartTypeEnum.Gauge
+                || Type == ChartTypeEnum.Funnel
+                || Type == ChartTypeEnum.Radar
+                || Type == ChartTypeEnum.Heatmap
+                || Type == ChartTypeEnum.Sankey;
+
             string xAxis = "", yAxis = "";
-            if (Type != ChartTypeEnum.Pie && Type != ChartTypeEnum.PieHollow)
+            if (!noCartesianAxes)
             {
                 if (IsHorizontal == false)
                 {
