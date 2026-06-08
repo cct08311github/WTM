@@ -131,8 +131,8 @@
                 actions.appendChild(btn('預覽', '', function () {
                     window.location.href = '/_DashboardPage/Render?id=' + encodeURIComponent(item.id);
                 }));
-                actions.appendChild(btn('編輯', 'layui-btn-normal', function () {
-                    window.location.href = '/_DashboardPage/Render?id=' + encodeURIComponent(item.id) + '&edit=1';
+                actions.appendChild(btn('設計', 'layui-btn-normal', function () {
+                    window.location.href = '/_DashboardPage/Designer?id=' + encodeURIComponent(item.id);
                 }));
                 actions.appendChild(btn('刪除', 'layui-btn-danger', function () {
                     confirmDelete(item.id, item.title || '');
@@ -206,9 +206,9 @@
                 return r.ok ? r.json() : r.text().then(function (t) { throw new Error(t); });
             }).then(function (newId) {
                 if (_createLayerId) layui.layer.close(_createLayerId);
-                layui.layer.msg('建立成功，即將前往編輯頁', { time: 1500 });
+                layui.layer.msg('建立成功，即將前往設計頁', { time: 1500 });
                 setTimeout(function () {
-                    window.location.href = '/_DashboardPage/Render?id=' + encodeURIComponent(newId) + '&edit=1';
+                    window.location.href = '/_DashboardPage/Designer?id=' + encodeURIComponent(newId);
                 }, 1500);
             }).catch(function (e) {
                 layui.layer.msg('建立失敗：' + e.message);

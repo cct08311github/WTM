@@ -1,0 +1,220 @@
+@{
+    Layout = null;
+    var dashboardId = ViewBag.DashboardId as string ?? "";
+    var isNew = string.IsNullOrWhiteSpace(dashboardId);
+}
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <title>@(isNew ? "新增 Dashboard" : "編輯 Dashboard")</title>
+    <link rel="stylesheet" href="/layui/css/layui.css">
+    <link rel="stylesheet" href="/sitecss/wtm.css">
+    <link rel="stylesheet" href="/_js/lib/gridstack/gridstack.min.css">
+    <link rel="stylesheet" href="/_js/framework_dashboard.css">
+    <style>
+        body { background: #f2f2f2; margin: 0; }
+
+        /* ── Toolbar ─────────────────────────────────────────────────────── */
+        #dsd-toolbar {
+            display: flex; align-items: center; gap: 8px;
+            padding: 8px 16px; background: #fff;
+            border-bottom: 1px solid #e6e6e6; flex-wrap: wrap;
+        }
+        #dsd-toolbar .toolbar-title { font-size: 16px; font-weight: 600; color: #333; }
+        #dsd-toolbar .toolbar-spacer { flex: 1; }
+        #dsd-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+        /* ── Canvas area ─────────────────────────────────────────────────── */
+        #dsd-canvas-wrap { padding: 16px; }
+        #dsd-grid-container {
+            min-height: 320px;
+            background: #fff;
+            border: 1px dashed #bbb;
+            border-radius: 4px;
+        }
+        #dsd-grid-empty {
+            text-align: center; color: #aaa; padding: 60px 0;
+        }
+
+        /* ── Widget cell chrome ──────────────────────────────────────────── */
+        .dsd-widget-header {
+            display: flex; align-items: center; gap: 6px;
+            background: #f7f7f7; border-bottom: 1px solid #e6e6e6;
+            padding: 4px 8px; font-size: 12px;
+            cursor: move; /* drag handle is the whole header */
+        }
+        .dsd-widget-title { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .dsd-widget-type-badge {
+            background: #e6f7ff; color: #1890ff;
+            border-radius: 2px; padding: 0 4px; font-size: 11px;
+        }
+        .dsd-widget-preview-area {
+            padding: 4px; overflow: hidden;
+        }
+
+        /* ── GridStack item sizing ───────────────────────────────────────── */
+        .grid-stack-item-content { padding: 0; }
+
+        /* ── Viewport preview toolbar ────────────────────────────────────── */
+        #dsd-viewport-bar { display: flex; gap: 4px; align-items: center; }
+        #dsd-viewport-bar label { font-size: 12px; color: #666; }
+    </style>
+</head>
+<body>
+    <!-- ── Toolbar ─────────────────────────────────────────────────────────── -->
+    <div id="dsd-toolbar">
+        <span class="toolbar-title" id="dsd-page-title">@(isNew ? "新增 Dashboard" : "設計 Dashboard")</span>
+        <div class="toolbar-spacer"></div>
+
+        <!-- Dashboard metadata fields -->
+        <div id="dsd-meta">
+            <input type="text" id="dsd-db-title" class="layui-input" style="width:180px;"
+                   placeholder="Dashboard 標題" value="">
+            <input type="number" id="dsd-db-refresh" class="layui-input" style="width:90px;"
+                   placeholder="刷新(秒)" min="0" value="60">
+            <select id="dsd-db-sharing" lay-filter="dsd-db-sharing" style="width:110px;">
+                <option value="private">私人</option>
+                <option value="public">公開</option>
+                <option value="roles">角色限定</option>
+            </select>
+        </div>
+
+        <!-- Viewport preview (responsive breakpoints) -->
+        <div id="dsd-viewport-bar">
+            <label>預覽：</label>
+            <button class="layui-btn layui-btn-xs layui-btn-primary" data-bp="lg">桌面</button>
+            <button class="layui-btn layui-btn-xs layui-btn-primary" data-bp="md">平板</button>
+            <button class="layui-btn layui-btn-xs layui-btn-primary" data-bp="sm">小螢幕</button>
+            <button class="layui-btn layui-btn-xs layui-btn-primary" data-bp="xs">手機</button>
+            <button class="layui-btn layui-btn-xs" data-bp="">自動</button>
+        </div>
+
+        <button class="layui-btn layui-btn-sm" id="dsd-btn-add-widget">
+            <i class="layui-icon layui-icon-add-1"></i> 新增元件
+        </button>
+        <button class="layui-btn layui-btn-sm" id="dsd-btn-save">
+            <i class="layui-icon layui-icon-ok"></i> 儲存
+        </button>
+        <button class="layui-btn layui-btn-sm layui-btn-primary" id="dsd-btn-back">← 返回</button>
+    </div>
+
+    <!-- ── Canvas ──────────────────────────────────────────────────────────── -->
+    <div id="dsd-canvas-wrap">
+        <div id="dsd-loading" style="padding:40px;text-align:center;color:#aaa;">載入中…</div>
+        <div id="dsd-grid-container" style="display:none;">
+            <div class="grid-stack" id="dsd-grid"></div>
+        </div>
+    </div>
+
+    <script src="/jquery.min.js"></script>
+    <script src="/layui/layui.js"></script>
+    <script src="/_js/lib/gridstack/gridstack-all.min.js"></script>
+    <script src="/_js/framework_dashboard.js"></script>
+    <script src="/_js/framework_dashboard_designer.js"></script>
+    <script>
+    (function () {
+        "use strict";
+
+        var DASHBOARD_ID = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(dashboardId));
+        var IS_NEW = @Html.Raw(isNew ? "true" : "false");
+
+        // ── Init ──────────────────────────────────────────────────────────
+        WtmDesigner.init('dsd-grid', DASHBOARD_ID || null)
+            .then(function (def) {
+                document.getElementById('dsd-loading').style.display = 'none';
+                document.getElementById('dsd-grid-container').style.display = '';
+
+                if (def) {
+                    document.getElementById('dsd-db-title').value = def.title || '';
+                    document.getElementById('dsd-db-refresh').value = def.refreshInterval != null ? String(def.refreshInterval) : '60';
+                    var sharingMode = (def.sharing && def.sharing.mode) || 'private';
+                    var sharingEl = document.getElementById('dsd-db-sharing');
+                    for (var i = 0; i < sharingEl.options.length; i++) {
+                        if (sharingEl.options[i].value === sharingMode) { sharingEl.selectedIndex = i; break; }
+                    }
+                    document.getElementById('dsd-page-title').textContent = '設計 Dashboard：' + (def.title || '(無標題)');
+                } else {
+                    document.getElementById('dsd-page-title').textContent = '新增 Dashboard';
+                }
+
+                // Show empty hint if no widgets yet
+                toggleEmptyHint();
+
+                if (layui && layui.form) layui.form.render();
+            })
+            .catch(function (e) {
+                document.getElementById('dsd-loading').textContent = '載入失敗：' + e.message;
+            });
+
+        // ── Empty hint ────────────────────────────────────────────────────
+        function toggleEmptyHint() {
+            var widgets = WtmDesigner.getModel().getWidgets();
+            var empty = Object.keys(widgets).length === 0;
+            var gridEl = document.getElementById('dsd-grid');
+            if (empty) {
+                if (!document.getElementById('dsd-grid-empty')) {
+                    var hint = document.createElement('div');
+                    hint.id = 'dsd-grid-empty';
+                    hint.className = '';
+                    hint.style.cssText = 'text-align:center;color:#aaa;padding:60px 0;';
+                    hint.textContent = '尚無元件，請點擊「新增元件」開始設計。';
+                    gridEl.appendChild(hint);
+                }
+            } else {
+                var el = document.getElementById('dsd-grid-empty');
+                if (el) el.parentNode.removeChild(el);
+            }
+        }
+
+        // ── Add widget ────────────────────────────────────────────────────
+        document.getElementById('dsd-btn-add-widget').addEventListener('click', function () {
+            WtmDesigner.addWidget();
+        });
+
+        // ── Save ──────────────────────────────────────────────────────────
+        document.getElementById('dsd-btn-save').addEventListener('click', function () {
+            var title   = document.getElementById('dsd-db-title').value.trim();
+            var refresh = parseInt(document.getElementById('dsd-db-refresh').value, 10);
+            var sharing = document.getElementById('dsd-db-sharing').value;
+
+            if (!title) { layui.layer.msg('請輸入 Dashboard 標題'); return; }
+
+            WtmDesigner.save({
+                title: title,
+                refreshInterval: isNaN(refresh) ? 60 : refresh,
+                sharing: { mode: sharing, roles: null }
+            }).then(function (newId) {
+                layui.layer.msg('已儲存');
+                if (IS_NEW && newId) {
+                    // Update URL without full reload so user can keep editing
+                    var url = '/_DashboardPage/Designer?id=' + encodeURIComponent(newId);
+                    if (history && history.replaceState) { history.replaceState({}, '', url); }
+                    IS_NEW = false;
+                    document.getElementById('dsd-page-title').textContent = '設計 Dashboard：' + title;
+                }
+            }).catch(function (e) {
+                layui.layer.msg('儲存失敗：' + e.message);
+            });
+        });
+
+        // ── Back ──────────────────────────────────────────────────────────
+        document.getElementById('dsd-btn-back').addEventListener('click', function () {
+            window.location.href = '/_DashboardPage/Index';
+        });
+
+        // ── Viewport preview buttons ──────────────────────────────────────
+        document.getElementById('dsd-viewport-bar').addEventListener('click', function (e) {
+            var btn = e.target;
+            if (btn.tagName !== 'BUTTON') return;
+            var bp = btn.getAttribute('data-bp') || null;
+            if (WtmDashboard && WtmDashboard.DashboardEditor) {
+                WtmDashboard.DashboardEditor.previewViewport(bp || null);
+            }
+        });
+
+    }());
+    </script>
+</body>
+</html>

@@ -18,5 +18,13 @@ namespace WalkingTec.Mvvm.Mvc
             ViewBag.DashboardId = id;
             return View();
         }
+
+        [ActionDescription("Dashboard設計器")]
+        public IActionResult Designer(string? id = null)
+        {
+            // id is optional: null = create new, non-null = edit existing
+            ViewBag.DashboardId = id ?? "";
+            return View();
+        }
     }
 }
