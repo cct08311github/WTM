@@ -4,9 +4,11 @@ using System.Collections.Generic;
 using System.Data;
 using System.Diagnostics;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using WalkingTec.Mvvm.Etl.Governance;
 using WalkingTec.Mvvm.Etl.Models;
 using WalkingTec.Mvvm.Etl.Pipeline.Loaders;
 
@@ -39,17 +41,20 @@ public class EtlPipelineExecutor
     private readonly IBulkLoader _loader;
     private readonly IProgress<EtlProgress>? _progress;
     private readonly ILogger? _logger;
+    private readonly IEtlGovernanceStore _governance;
 
     public EtlPipelineExecutor(
         IEtlSource source,
         IBulkLoader loader,
         IProgress<EtlProgress>? progress = null,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        IEtlGovernanceStore? governanceStore = null)
     {
         _source = source;
         _loader = loader;
         _progress = progress;
         _logger = logger;
+        _governance = governanceStore ?? NullEtlGovernanceStore.Instance;
     }
 
     /// <summary>
@@ -65,6 +70,7 @@ public class EtlPipelineExecutor
             return await ExecuteDryRunAsync(config, watermark, cancellationToken).ConfigureAwait(false);
         }
 
+        var runId = Guid.NewGuid();
         var sw = Stopwatch.StartNew();
         int totalExtracted = 0;
         int totalLoaded = 0;
@@ -72,6 +78,8 @@ public class EtlPipelineExecutor
         int qualityFailedRows = 0;
         var qualityFailureSamples = new List<string>();
         var warnings = new List<string>();
+        // ETL-004: accumulated dead-letter entries (per-batch, flushed to store after each batch)
+        var deadLetterBatch = new List<EtlDeadLetterEntry>();
 
         try
         {
@@ -142,13 +150,37 @@ public class EtlPipelineExecutor
                 {
                     transformed = EtlQualityRuleEvaluator.Apply(
                         transformed, config.QualityRules, config.QualityRuleAction,
-                        out int batchFailed, out var batchSamples);
+                        out int batchFailed, out var batchSamples,
+                        captureRows: config.EnableDeadLetter,
+                        out var droppedRows);
                     qualityFailedRows += batchFailed;
                     foreach (var s in batchSamples)
                     {
                         if (qualityFailureSamples.Count >= EtlQualityRuleEvaluator.MaxFailureSamples) { break; }
                         qualityFailureSamples.Add(s);
                     }
+
+                    // ETL-004: capture failed rows for dead-letter store
+                    if (config.EnableDeadLetter && droppedRows != null && droppedRows.Count > 0)
+                    {
+                        foreach (var (row, reason) in droppedRows)
+                        {
+                            deadLetterBatch.Add(new EtlDeadLetterEntry(
+                                SerializeRow(transformed, row),
+                                reason,
+                                EtlDeadLetterSource.QualityRule));
+                        }
+                    }
+                }
+
+                // ETL-004: flush dead-letter entries for this batch to persistent store
+                if (config.EnableDeadLetter && deadLetterBatch.Count > 0)
+                {
+                    await _governance.AddDeadLetterRowsAsync(
+                        config.JobId, runId, deadLetterBatch,
+                        config.DeadLetterTenantCode, cancellationToken)
+                        .ConfigureAwait(false);
+                    deadLetterBatch.Clear();
                 }
 
                 // Capture column names from the first transformed batch (all batches share
@@ -218,10 +250,30 @@ public class EtlPipelineExecutor
             // 5. 成功 → commit watermark
             var newWatermark = watermark.CommitPendingValue();
 
+            // ETL-005: write lineage record on success
+            if (config.EnableLineage)
+            {
+                await _governance.AddLineageRecordAsync(new Models.EtlLineageRecord
+                {
+                    JobId            = config.JobId,
+                    RunId            = runId,
+                    SourceKind       = config.LineageSourceKind ?? string.Empty,
+                    TargetTable      = config.TargetTableName,
+                    ColumnMappingsJson = config.ColumnMappings != null
+                        ? JsonSerializer.Serialize(config.ColumnMappings)
+                        : null,
+                    ExtractedRows    = totalExtracted,
+                    LoadedRows       = totalLoaded,
+                    QualityFailedRows = qualityFailedRows,
+                    RecordedAt       = DateTime.UtcNow,
+                }, cancellationToken).ConfigureAwait(false);
+            }
+
             sw.Stop();
             return new EtlExecutionResult
             {
                 Success = true,
+                RunId = runId,
                 ExtractedRows = totalExtracted,
                 LoadedRows = totalLoaded,
                 ElapsedMs = sw.ElapsedMilliseconds,
@@ -240,6 +292,7 @@ public class EtlPipelineExecutor
             {
                 Success = false,
                 Aborted = true,
+                RunId = runId,
                 ExtractedRows = totalExtracted,
                 LoadedRows = totalLoaded,
                 ElapsedMs = sw.ElapsedMilliseconds,
@@ -257,6 +310,7 @@ public class EtlPipelineExecutor
             return new EtlExecutionResult
             {
                 Success = false,
+                RunId = runId,
                 ExtractedRows = totalExtracted,
                 LoadedRows = totalLoaded,
                 ElapsedMs = sw.ElapsedMilliseconds,
@@ -589,6 +643,26 @@ public class EtlPipelineExecutor
             output.Rows.Add(newRow);
         }
         return output;
+    }
+
+    /// <summary>
+    /// Serializes a <see cref="DataRow"/> to a compact JSON string (column→value dictionary).
+    /// DBNull is serialized as JSON null. Called only when dead-letter is enabled
+    /// to avoid per-row serialization overhead on the hot path.
+    /// </summary>
+    private static string SerializeRow(DataTable tableSchema, DataRow row)
+    {
+        // Serialize from the *original* table schema since `row` still belongs to
+        // the source DataTable (dropped rows are excluded from the Clone but the
+        // DataRow objects themselves retain their original table reference).
+        var cols = row.Table.Columns;
+        var dict = new Dictionary<string, object?>(cols.Count);
+        for (int i = 0; i < cols.Count; i++)
+        {
+            var v = row[i];
+            dict[cols[i].ColumnName] = v == DBNull.Value ? null : v?.ToString();
+        }
+        return JsonSerializer.Serialize(dict);
     }
 
     private static object? GetMaxValue(DataTable batch, string columnName)

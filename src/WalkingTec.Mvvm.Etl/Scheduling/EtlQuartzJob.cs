@@ -10,6 +10,7 @@ using Quartz;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Support.Quartz;
 using WalkingTec.Mvvm.Etl.Alerting;
+using WalkingTec.Mvvm.Etl.Governance;
 using WalkingTec.Mvvm.Etl.Models;
 using WalkingTec.Mvvm.Etl.Pipeline;
 
@@ -131,6 +132,9 @@ public class EtlQuartzJob : WtmJob
                 throw new InvalidOperationException($"Target connection key '{jobDef.TargetCsKey}' not found in Configs.Connections");
             var targetCs = targetCsEntry.Value ?? "";
 
+            // ETL-006: propagate tenant context to dead-letter rows
+            var tenantCode = dc.TenantCode;
+
             var config = new EtlPipelineConfig
             {
                 JobId = jobDefId,
@@ -141,7 +145,15 @@ public class EtlQuartzJob : WtmJob
                 TargetTableName = targetTable,
                 MergeKeyColumn = mergeKey,
                 BatchSize = batchSize,
-                StagingTable = new StagingTableSpec(stagingTable)
+                StagingTable = new StagingTableSpec(stagingTable),
+                // ETL-004/005: governance opt-in values; default false preserves pre-10.6 behaviour.
+                // Callers can override via EtlJobDataMap keys or by building config manually.
+                EnableDeadLetter    = context.MergedJobDataMap.ContainsKey("EnableDeadLetter")
+                                       && context.MergedJobDataMap.GetBoolean("EnableDeadLetter"),
+                DeadLetterTenantCode = tenantCode,
+                EnableLineage       = context.MergedJobDataMap.ContainsKey("EnableLineage")
+                                       && context.MergedJobDataMap.GetBoolean("EnableLineage"),
+                LineageSourceKind   = jobDef.SourceDbType.ToString(),
             };
 
             // 9. 執行 Pipeline
@@ -149,7 +161,15 @@ public class EtlQuartzJob : WtmJob
                 ? new Progress<EtlProgress>(p => tracker.Update(p))
                 : null;
 
-            var executor = new EtlPipelineExecutor(source, loader, progress);
+            // ETL-004/005: wire governance store when dead-letter or lineage is enabled.
+            // Uses the existing scoped DataContext (dc) — no separate connection needed.
+            IEtlGovernanceStore governance = (config.EnableDeadLetter || config.EnableLineage)
+                ? new DbEtlGovernanceStore(dc)
+                : NullEtlGovernanceStore.Instance;
+
+            var executor = new EtlPipelineExecutor(source, loader, progress,
+                Sp.GetService<ILogger<EtlPipelineExecutor>>(),
+                governance);
             result = await executor.ExecuteAsync(config, watermark, timeoutCts.Token);
 
             // 10. 成功 → 更新 watermark、重置連續失敗計數

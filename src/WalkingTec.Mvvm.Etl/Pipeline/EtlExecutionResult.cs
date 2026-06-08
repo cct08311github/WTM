@@ -1,4 +1,5 @@
 #nullable enable
+using System;
 using System.Collections.Generic;
 
 namespace WalkingTec.Mvvm.Etl.Pipeline;
@@ -11,6 +12,13 @@ public class EtlExecutionResult
     public bool Success { get; init; }
     public bool Aborted { get; init; }
     public int ExtractedRows { get; init; }
+
+    /// <summary>
+    /// Unique identifier for this individual run.
+    /// Matches the <see cref="Models.EtlDeadLetterRow.RunId"/> and
+    /// <see cref="Models.EtlLineageRecord.RunId"/> persisted by the governance store.
+    /// </summary>
+    public Guid RunId { get; init; } = Guid.NewGuid();
     public int LoadedRows { get; init; }
     public int ErrorRows { get; init; }
     public long ElapsedMs { get; init; }

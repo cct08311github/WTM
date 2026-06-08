@@ -8,8 +8,27 @@ namespace WalkingTec.Mvvm.Etl.Models;
 /// <summary>
 /// ETL Job 定義 — 描述一個定時資料導入任務的配置
 /// </summary>
-public class EtlJobDefinition : BasePoco
+/// <remarks>
+/// ETL-006: implements <see cref="ITenant"/> so that the DataContext global query filter
+/// scopes jobs to the current tenant when multi-tenancy is enabled.
+/// In single-tenant deployments (EnableTenant = false) the <see cref="TenantCode"/>
+/// column is nullable and the global filter is never applied — behaviour is unchanged.
+/// </remarks>
+public class EtlJobDefinition : BasePoco, ITenant
 {
+    // ─── ITenant (ETL-006) ───
+
+    /// <summary>
+    /// Tenant discriminator for multi-tenant isolation (ETL-006).
+    /// Populated automatically by <see cref="BaseCRUDVM{TModel}"/> / the DataContext
+    /// global query filter when <c>Configs.EnableTenant == true</c>.
+    /// Null in single-tenant deployments — no filter applied, behaviour unchanged.
+    /// </summary>
+    [StringLength(50)]
+    public string? TenantCode { get; set; }
+
+    // ─── Job 基本設定 ───
+
     [Display(Name = "Job 名稱")]
     [Required]
     [StringLength(100)]

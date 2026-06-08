@@ -145,6 +145,8 @@ public static class EtlDbContextExtensions
             e.ToTable("EtlJobDefinitions");
             e.HasIndex(x => x.Name).IsUnique();
             e.HasIndex(x => x.Status);
+            // ETL-006: TenantCode index for multi-tenant job isolation queries
+            e.HasIndex(x => x.TenantCode);
         });
 
         builder.Entity<EtlRunLog>(e =>
@@ -153,6 +155,25 @@ public static class EtlDbContextExtensions
             e.HasIndex(x => x.JobId);
             e.HasIndex(x => x.StartedAt);
             e.HasOne(x => x.Job).WithMany().HasForeignKey(x => x.JobId);
+        });
+
+        // ETL-004: Dead-letter / quarantine store
+        builder.Entity<EtlDeadLetterRow>(e =>
+        {
+            e.ToTable("EtlDeadLetterRows");
+            e.HasIndex(x => x.JobId);
+            e.HasIndex(x => x.RunId);
+            e.HasIndex(x => x.QuarantinedAt);
+            e.HasIndex(x => x.TenantCode);
+        });
+
+        // ETL-005: Data lineage records
+        builder.Entity<EtlLineageRecord>(e =>
+        {
+            e.ToTable("EtlLineageRecords");
+            e.HasIndex(x => x.JobId);
+            e.HasIndex(x => x.RunId);
+            e.HasIndex(x => x.RecordedAt);
         });
 
         return builder;

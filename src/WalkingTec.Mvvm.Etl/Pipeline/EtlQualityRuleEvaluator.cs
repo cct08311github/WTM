@@ -37,12 +37,43 @@ public static class EtlQualityRuleEvaluator
         EtlQualityRuleAction action,
         out int failedRows,
         out List<string> failureSamples)
+        => Apply(table, rules, action, out failedRows, out failureSamples,
+                 captureRows: false, out _);
+
+    /// <summary>
+    /// ETL-004 overload: same as <see cref="Apply(DataTable, IList{EtlQualityRule}, EtlQualityRuleAction, out int, out List{string})"/>
+    /// but additionally captures the original dropped <see cref="DataRow"/> objects and
+    /// their violation reasons when <paramref name="captureRows"/> is true,
+    /// enabling the caller to persist them to a dead-letter store.
+    /// </summary>
+    /// <param name="captureRows">
+    /// When true the original <see cref="DataRow"/> objects for dropped rows are
+    /// returned in <paramref name="droppedRows"/> (for dead-letter store).
+    /// Pass false to preserve the hot-path allocation behaviour.
+    /// </param>
+    /// <param name="droppedRows">
+    /// Populated only when <paramref name="captureRows"/> is true and action = Drop.
+    /// Each entry is (droppedRow, violationReason). Null when captureRows is false.
+    /// </param>
+    /// <exception cref="EtlQualityRuleViolationException">
+    /// <paramref name="action"/> = <see cref="EtlQualityRuleAction.Abort"/>
+    /// 且至少一筆違規時拋出。
+    /// </exception>
+    public static DataTable Apply(
+        DataTable table,
+        IList<EtlQualityRule> rules,
+        EtlQualityRuleAction action,
+        out int failedRows,
+        out List<string> failureSamples,
+        bool captureRows,
+        out List<(DataRow Row, string Reason)>? droppedRows)
     {
         if (table == null) { throw new ArgumentNullException(nameof(table)); }
         if (rules == null) { throw new ArgumentNullException(nameof(rules)); }
 
         failedRows = 0;
         failureSamples = new List<string>();
+        droppedRows = captureRows ? new List<(DataRow, string)>() : null;
         if (rules.Count == 0 || table.Rows.Count == 0)
         {
             return table;
@@ -118,6 +149,11 @@ public static class EtlQualityRuleEvaluator
             if (action == EtlQualityRuleAction.Continue)
             {
                 keepRows.Add(row); // 違規列照樣保留（audit-only）
+            }
+            else if (action == EtlQualityRuleAction.Drop && captureRows && droppedRows != null)
+            {
+                // ETL-004: capture dropped row for dead-letter store
+                droppedRows.Add((row, violation!));
             }
             // Drop → 不加入 keepRows
         }

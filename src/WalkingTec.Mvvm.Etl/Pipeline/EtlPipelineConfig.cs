@@ -129,6 +129,40 @@ public record EtlPipelineConfig
     /// </summary>
     public EtlQualityRuleAction QualityRuleAction { get; init; } = EtlQualityRuleAction.Drop;
 
+    // ─── ETL-004 Dead-letter ───
+
+    /// <summary>
+    /// ETL-004：啟用 Dead-letter 隔離區（opt-in，預設 false）。
+    /// 啟用後，品質規則判定失敗（Drop 路徑）的每筆違規列會序列化為 JSON 並
+    /// 持久化到 <see cref="Models.EtlDeadLetterRow"/> 表，供後續查閱或重跑。
+    /// 不啟用時行為與 10.5.x 完全一致（違規列靜默丟棄）。
+    /// </summary>
+    public bool EnableDeadLetter { get; init; }
+
+    /// <summary>
+    /// 執行當前 Job 的租戶代碼（供 Dead-letter 記錄使用）。
+    /// 單租戶部署為 null；多租戶由 EtlQuartzJob 從 Wtm 上下文注入。
+    /// </summary>
+    public string? DeadLetterTenantCode { get; init; }
+
+    // ─── ETL-005 Data Lineage ───
+
+    /// <summary>
+    /// ETL-005：啟用 Data Lineage 記錄（opt-in，預設 false）。
+    /// 啟用後，每次成功執行在 <see cref="Models.EtlLineageRecord"/> 表中
+    /// 寫入一筆記錄，包含來源種類、目標資料表、欄位對應 JSON 及列數統計。
+    /// </summary>
+    public bool EnableLineage { get; init; }
+
+    /// <summary>
+    /// 來源種類識別字串（供 Lineage 記錄）。
+    /// EtlQuartzJob 從 <see cref="Models.EtlJobDefinition.SourceDbType"/> 自動填入；
+    /// 直接使用 EtlPipelineExecutor 時請手動設定。
+    /// </summary>
+    public string? LineageSourceKind { get; init; }
+
+    // ─── MSSQL Watermark ───
+
     /// <summary>
     /// MSSQL watermark 參數型別（opt-in，10.6+）。
     /// 設為非 <c>null</c> 時，<see cref="MssqlSource"/> 改用明確型別的
