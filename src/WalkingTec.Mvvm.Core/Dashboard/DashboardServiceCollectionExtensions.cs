@@ -5,7 +5,12 @@ using System.Net.Sockets;
 using System.Reflection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using WalkingTec.Mvvm.Core.Analysis;
+using WalkingTec.Mvvm.Core.Dashboard.Alerting;
+using WalkingTec.Mvvm.Core.Dashboard.Snapshot;
+using WalkingTec.Mvvm.Core.Notifications;
 
 namespace WalkingTec.Mvvm.Core.Dashboard
 {
@@ -73,6 +78,93 @@ namespace WalkingTec.Mvvm.Core.Dashboard
                     "Both AnalysisVmRegistry and AnalysisQueryEngine must be registered. " +
                     "Ensure services.AddWtmContext() is called before services.AddWtmDashboard().");
             }
+
+            return services;
+        }
+
+        /// <summary>
+        /// Enables KPI threshold alerting for dashboards.
+        /// <para>
+        /// Registers <see cref="DashboardAlertHostedService"/> as a hosted service.
+        /// The service is dormant unless <see cref="DashboardAlertOptions.EvaluationIntervalSeconds"/>
+        /// is set to a positive value <strong>and</strong> at least one
+        /// <see cref="IWtmWebhookSink"/> is registered.
+        /// </para>
+        /// <example>
+        /// <code>
+        /// services.AddWtmDashboard();
+        /// services.AddWtmWebhookSink(opt => opt.AddDingTalk("https://..."));  // or any sink
+        /// services.AddWtmDashboardAlerts(opt =>
+        /// {
+        ///     opt.EvaluationIntervalSeconds = 60;
+        ///     opt.AlertCooldownSeconds = 3600;
+        /// });
+        /// </code>
+        /// </example>
+        /// </summary>
+        public static IServiceCollection AddWtmDashboardAlerts(
+            this IServiceCollection services,
+            Action<DashboardAlertOptions>? setupAction = null)
+        {
+            services.AddOptions<DashboardAlertOptions>();
+            if (setupAction != null)
+                services.Configure(setupAction);
+
+            // IWtmWebhookSink is optional — if none registered, we inject null via TryAddSingleton.
+            // The hosted service checks for null and no-ops.
+            services.TryAddSingleton<IWtmWebhookSink>(_ => null!);
+
+            services.AddSingleton<DashboardAlertHostedService>();
+            services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<DashboardAlertHostedService>());
+
+            return services;
+        }
+
+        /// <summary>
+        /// Enables scheduled dashboard snapshot/export jobs.
+        /// <para>
+        /// Registers <see cref="DashboardSnapshotHostedService"/> and the default
+        /// <see cref="DashboardSnapshotJob"/> implementation.
+        /// The service is dormant unless at least one <see cref="ScheduledDashboardJobConfig"/>
+        /// with a valid <see cref="ScheduledDashboardJobConfig.CronExpression"/> is provided.
+        /// </para>
+        /// <para>
+        /// For PDF/PNG formats, also register an <see cref="IDashboardRenderer"/>:
+        /// <code>services.AddSingleton&lt;IDashboardRenderer, MyPlaywrightRenderer&gt;();</code>
+        /// Without one, the framework registers <see cref="NotConfiguredDashboardRenderer"/>
+        /// which throws a clear error when PDF/PNG is requested.
+        /// </para>
+        /// <example>
+        /// <code>
+        /// services.AddWtmDashboard();
+        /// services.AddWtmDashboardSnapshots(opt =>
+        /// {
+        ///     opt.Jobs.Add(new ScheduledDashboardJobConfig
+        ///     {
+        ///         JobId      = "weekly-sales",
+        ///         DashboardId = "sales-overview",
+        ///         Format     = DashboardExportFormat.Excel,
+        ///         CronExpression = "0 8 * * 1"   // every Monday 08:00 UTC
+        ///     });
+        /// });
+        /// </code>
+        /// </example>
+        /// </summary>
+        public static IServiceCollection AddWtmDashboardSnapshots(
+            this IServiceCollection services,
+            Action<DashboardSnapshotOptions>? setupAction = null)
+        {
+            services.AddOptions<DashboardSnapshotOptions>();
+            if (setupAction != null)
+                services.Configure(setupAction);
+
+            // Register the no-op renderer as fallback; host can replace with a real one.
+            services.TryAddSingleton<IDashboardRenderer, NotConfiguredDashboardRenderer>();
+
+            services.TryAddSingleton<IScheduledDashboardJob, DashboardSnapshotJob>();
+
+            services.AddSingleton<DashboardSnapshotHostedService>();
+            services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<DashboardSnapshotHostedService>());
 
             return services;
         }

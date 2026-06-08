@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using WalkingTec.Mvvm.Core.Dashboard.Alerting;
 
 namespace WalkingTec.Mvvm.Core.Dashboard;
 
@@ -11,6 +12,14 @@ public class WidgetDefinition
     public string Title { get; set; } = "";
     public WidgetSourceDefinition Source { get; set; } = new();
     public Dictionary<string, object?> Config { get; set; } = new();
+
+    /// <summary>
+    /// Optional KPI threshold alert rules for this widget.
+    /// When non-empty and <see cref="DashboardAlertOptions.EvaluationIntervalSeconds"/> &gt; 0,
+    /// <see cref="DashboardAlertHostedService"/> evaluates these rules on each tick and sends
+    /// an alert via the registered sink on any breach (alert-on-transition de-duplicated).
+    /// </summary>
+    public List<WidgetThreshold>? Thresholds { get; set; }
 
     /// <summary>
     /// Optional cross-widget drill-down links.
