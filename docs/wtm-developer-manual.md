@@ -1,6 +1,8 @@
 # WTM 開發與使用手冊
 
-> **版本**：10.7.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-06-08
+> **版本**：10.8.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-06-08
+>
+> **10.8.0 重點**（Dashboard BI + ETL 功能釋出，epic #193；全 opt-in，無預設行為變更）：無代碼拖拉式 **Dashboard 設計器**（`_DashboardDesignerController` `/_dashboard-designer`，`[AllRights]` + 伺服器端租戶 + `AllowedWidgetTypes`/`FilterConfig.AllowedOps` allowlist，見 §9.13）；**DB-backed dashboard store**（`AddWtmEfDashboardStore` → `EfCoreDashboardService`，租戶範圍 + `IDashboardService.DeleteAsync(id, tenantId)`）+ 跨 widget drill-down；**KPI 阈值告警**（`AddWtmDashboardAlerts` → `WidgetThreshold`/`ThresholdEvaluator`）+ **排程快照/匯出**（`AddWtmDashboardSnapshots`，`DashboardExcelExporter` Excel + 可插拔 `IDashboardRenderer` PDF/PNG）；**共用 webhook sink**（`AddWtmWebhookSink`/`AddWtmWebhookSinks` → `IWtmWebhookSink`，钉钉/企微/飞书/Slack/Teams，SSRF-hardened，見 §10.10）；**ETL 連接器**（`EtlSourceRegistry` + `CsvEtlSource`/`ExcelEtlSource`/`PostgreSqlSource`/`MySqlEtlSource`/`RestEtlSource`，見 §8.19）+ **ETL governance**（`IEtlGovernanceStore`/`DbEtlGovernanceStore`、dead-letter/血緣/per-tenant 隔離、`AddWtmEtlAlerts`）。新增依賴 `Npgsql` 10.0.2 + `MySqlConnector` 2.4.0。詳見 `CHANGELOG.md` `[10.8.0]`。
 >
 > **10.7.0 重點**（商用化硬化 + CodeGen v2，epic #193）：一批 security & correctness 修復（建議升級）+ 特性驅動的代碼生成系統。安全：MVC controller 授權漏洞（`UpdateModelProperty` 改走 `DoEdit` + `CanEditProperty` hook、connstring 白名單、`Selector` 改 `[AllRights]`、`IsQuickDebug` startup guard，見 §10）、租戶隔離 + RBAC 稽核（`SetDuplicatedCheck` 租戶範圍、`FileUploadOptions.EnforceTenantFileScope`、RBAC entity `[AuditChanges]`）、Grid/TagHelper XSS 編碼、Dashboard widget 強化（method/header/Op/port allowlist、`RestWidgetDataSourceOptions.AllowedPorts`）。新增：CodeGen 特性 `[ListColumn]`/`[SearchField]`/`[FormField]`/`[ImportConfig]`（codegen + runtime 雙消費）、**regenerate-safe 兩區產生**（`*.Generated.cs` + partial），見 §16.5。**行為變更（需注意）**：`Selector` 改需驗證（`AllowUnauthenticatedSelector=true` 還原）；多租戶 dup-check 改租戶範圍。詳見 `CHANGELOG.md` `[10.7.0]`。
 >
@@ -2159,6 +2161,49 @@ var schemaSvc = EtlSchemaServiceFactory.CreateWithCache(DBTypeEnum.SqlServer, me
 
 > 修復（10.6.0）：MSSQL `GetColumnsAsync` 先前只用 `TABLE_NAME` 過濾，對 schema-qualified staging 表（如 `audit.STG_x`）回傳 0 欄位；現在一併過濾 `TABLE_SCHEMA`（未限定 schema → `dbo`）。Scheduler 的 `UpdateStatusAsync` / `SkipNextAsync` 改用 `ExecuteUpdateAsync`，`SkipCount` 改伺服器端遞增（消除 read-then-write 競態）並明確補 `UpdateTime` 稽核欄位。
 
+### 8.19 來源連接器 + Governance（10.8.0+，全 opt-in）
+
+10.8.0 把 ETL 從「内建幾種 loader」擴成可插拔的連接器生態，並加上生產級治理。皆 opt-in，預設行為不變。
+
+**來源連接器（`EtlSourceRegistry`，`AddWtmEtl()` 註冊）：**
+
+| 連接器 | 說明 |
+|--------|------|
+| `CsvEtlSource` | CSV 檔案來源 |
+| `ExcelEtlSource` | Excel（NPOI）來源 |
+| `PostgreSqlSource` + `PostgreSqlBulkLoader` | PostgreSQL 來源 + `COPY` + `ON CONFLICT` upsert |
+| `MySqlEtlSource` + `MySqlBulkLoader` | MySQL 來源 + `ON DUPLICATE KEY` upsert |
+| `RestEtlSource`（`RestEtlSourceConfig`）| REST/HTTP 來源，分頁 + 認證 + SSRF 強化 |
+
+```csharp
+// 註冊 registry + 内建來源
+builder.Services.AddWtmEtl();
+
+// 自訂來源可註冊進 registry
+services.AddSingleton<IEtlSource, MyCustomSource>();
+```
+
+> **行為變更**：先前 PostgreSQL/MySQL 的 bulk-load 會拋 `NotSupportedException`，現在改用 provider 原生 upsert。新增依賴 `Npgsql` 10.0.2 + `MySqlConnector` 2.4.0。
+
+**Governance（`AddWtmEtlAlerts()` + `IEtlGovernanceStore`）：**
+
+- **run-log retention / composite merge keys / SLA 告警 / dry-run audit**（#229）
+- **dead-letter quarantine**（`EtlDeadLetterRow`）：失敗列隔離保存，原始錯誤文字寫入前先 sanitize
+- **資料血緣**（`EtlLineageRecord`）：記錄 source→target 的轉換軌跡
+- **per-tenant ETL job 隔離**（`EtlJobDefinition : ITenant`，新增 `TenantCode` 欄位）
+- 持久化由 `DbEtlGovernanceStore` 提供；預設是 `NullEtlGovernanceStore`（no-op）
+- **webhook 告警卡**（`EtlAlertService`，#235）：失敗 / SLA 破壞事件可透過共用 webhook sink 推播；預設關閉（`EtlAlertOptions.EnableWebhookAlerts = false`）
+
+```csharp
+// opt-in DB governance + webhook 告警
+builder.Services.AddWtmEtlAlerts(opt =>
+{
+    opt.EnableWebhookAlerts = true;   // 預設 false
+});
+```
+
+> **Migration**：啟用 `DbEtlGovernanceStore` 或 per-tenant job 隔離會引入新的 EF Core 實體（dead-letter、lineage、`EtlJobDefinition` 含 `TenantCode`）。**啟用前需先產生並套用 EF Core migration。** 不啟用則完全不受影響。
+
 ---
 
 ## 9. Dashboard 模組
@@ -2634,6 +2679,40 @@ App_Data/dashboards/
 - **Analysis 資料來源**：所有欄位經 `AnalysisVmRegistry` 白名單驗證，無 SQL 注入風險
 - **多租戶**：Server 端強制 tenant 隔離，非同租戶的 GET/PUT/DELETE 返回 403
 - **編輯權限**：僅 owner 和 admin 可修改/刪除
+
+### 9.13 無代碼設計器 + DB store + 告警/快照（10.8.0+，全 opt-in）
+
+10.8.0 把 Dashboard 從「手寫 JSON 定義」升級成完整的低代碼 BI 子系統。所有新能力皆 opt-in，預設仍走 JSON-file store、不啟用告警/快照。
+
+**無代碼設計器（#238）：** 拖拉式設計器頁面 `/_DashboardPage/Designer`，後端 `_DashboardDesignerController`（路由 `/_dashboard-designer`）：
+
+| Method | Path | 用途 |
+|--------|------|------|
+| GET | `/vm-meta?vmType=…` | 回傳已註冊 Analysis VM 的 dimensions/measures（`AnalysisFieldScanner.ScanModel`） |
+| POST | `/preview` | 對 widget 草稿做即時資料預覽（建臨時單 widget dashboard → `GetWidgetDataAsync` → `finally` 必刪） |
+
+設計器讓使用者不寫 JSON 即可綁定 Analysis VM / REST 來源 / 靜態值，設定圖表類型、篩選、DateRange preset、KPI 阈值、跨 widget drill-down，並產出與 runtime 完全相同的 `DashboardDefinition`/`WidgetDefinition` schema。安全：兩個 endpoint 皆 `[AllRights]`；tenant 取自伺服器端 `LoginUserInfo.TenantCode`；widget 型別過 `DashboardOptions.AllowedWidgetTypes`、filter operator 過 `FilterConfig.AllowedOps` 後才打資料；前端零 user-data `innerHTML`（全 DOM-method 建構）。
+
+**DB-backed store（#234）：** `AddWtmEfDashboardStore()` 註冊 `EfCoreDashboardService`，以 EF Core 取代 JSON 檔案持久化 dashboard。所有讀/寫/刪皆租戶範圍；新增 `IDashboardService.DeleteAsync(id, tenantId)` overload 強制刪除時的租戶擁有權。並支援**跨 widget drill-down**：點某 widget 的資料點，會把其 dimension 值推進 dashboard filter bar。
+
+```csharp
+// opt-in：改用 DB store（預設仍是 JSON 檔案）
+builder.Services.AddWtmEfDashboardStore();
+```
+
+**KPI 阈值告警（#237）：** `AddWtmDashboardAlerts()` 註冊背景評估器 `DashboardAlertHostedService`，週期性以 `WidgetThreshold` 規則（`ThresholdComparisonOp` Gt/Ge/Lt/Le/Eq、`ThresholdAlertLevel`、`ThresholdEvaluator`）評估 widget measure，並透過共用 webhook sink 推播告警卡。告警在「跨越阈值」時觸發（含 cooldown 去重）、租戶感知。預設關閉（`DashboardAlertOptions.EvaluationIntervalSeconds = 0`）。
+
+**排程快照 / 匯出（#237）：** `AddWtmDashboardSnapshots()` 註冊 cron 驅動的 `DashboardSnapshotHostedService`，依排程把 dashboard 匯出成 Excel（`DashboardExcelExporter`，NPOI 多 sheet）。PDF/PNG 匯出透過可插拔的 `IDashboardRenderer` seam — framework **不綁** headless 瀏覽器；未註冊 renderer 時 `NotConfiguredDashboardRenderer` 會拋出帶指引的例外。
+
+```csharp
+// opt-in：KPI 告警 + 排程快照
+builder.Services.AddWtmDashboardAlerts(opt => opt.EvaluationIntervalSeconds = 60);
+builder.Services.AddWtmDashboardSnapshots();
+```
+
+**Widget 體驗（#228, #231）：** widget 設定前置驗證；`AnalysisWidget` 資料加 per-widget timeout 快取；圖表新增 multi-series、6 種額外圖表類型、DateRange preset、in-flight 請求防重、static-value widget 型別。
+
+> **Migration**：`AddWtmEfDashboardStore` 引入新的 dashboard EF Core 實體。**啟用前需先產生並套用 EF Core migration。** 不啟用則維持 JSON-file store 不受影響。
 
 ---
 
@@ -3554,6 +3633,15 @@ await WtmDataSeeder.SeedAsync(
 - **Dashboard widget 強化**：REST widget HTTP method 限 GET/POST allowlist；header 改用驗證式 `Add`（擋 CRLF）；dashboard filter operator 進 expression tree 前先過 allowlist；`RestWidgetDataSourceOptions.AllowedPorts`（預設 80/443/8080/8443）緩解 SSRF port 探測；widget title 長度上限。
 - **VM 工廠型別守衛**：`WtmVmFactory.CreateVM` 在呼叫任何建構式之前就拒絕非 `BaseVM` 型別。
 
+### 10.10 10.8.0 安全強化
+
+10.8.0 的 Dashboard/ETL 新功能皆內建安全防護（全 opt-in，預設不啟用）：
+
+- **Dashboard 設計器授權**：`_DashboardDesignerController` 的 `vm-meta` / `preview` 兩個 endpoint 皆 `[AllRights]`；tenant 取自伺服器端 `LoginUserInfo.TenantCode`（不可由 client 偽造）；`vm-meta` 只透過 `AnalysisVmRegistry.Resolve()` 解析（registry 白名單，非任意型別載入）；`preview` 在打資料前強制 `DashboardOptions.AllowedWidgetTypes` + `FilterConfig.AllowedOps`，臨時預覽 dashboard 蓋伺服器端 `Owner`/`TenantId` 且 `finally` 必刪（走 `DeleteAsync(id, tenantId)` 租戶範圍）。前端零 user-data `innerHTML`（DOM-method 建構）。
+- **共用 webhook sink SSRF 強化**：`IWtmWebhookSink`（钉钉/企微/飞书/Slack/Teams）的出站連線 DNS-pinned、僅 HTTPS、封鎖私有 IP / IMDS（169.254.169.254）、停用自動重導向；金鑰絕不寫入 log（钉钉採 HMAC 簽名）。
+- **REST ETL 來源 SSRF 強化**：`RestEtlSource` 沿用相同的出站防護（DNS-pin / HTTPS / 私有 IP 封鎖）。
+- **ETL governance 錯誤脫敏**：dead-letter / lineage 持久化前，原始錯誤文字經 sanitize（避免連線字串/憑證外洩進 DB）。
+
 ---
 
 ## 11. 多租戶
@@ -4429,13 +4517,17 @@ public class Order : BasePoco
 | `CookieOptions.SecurePolicy` | `"SameAsRequest"` | Cookie `Secure` flag 策略（`SameAsRequest` / `Always` / `None`；production 建議 `Always`，詳見 §10.8） |
 | `CookieOptions.Expires` | `3600` | Cookie 驗證有效期（秒） |
 | `CookieOptions.LoginPath` | `"/Login/Login"` | 未登入時重導向的登入路徑 |
+| `DashboardAlertOptions.EvaluationIntervalSeconds` | `0` | KPI 阈值告警評估間隔（秒；`0` = 關閉，10.8.0+，§9.13） |
+| `DashboardSnapshotOptions` | — | 排程快照 cron / 匯出格式（`AddWtmDashboardSnapshots`，10.8.0+） |
+| `EtlAlertOptions.EnableWebhookAlerts` | `false` | ETL 失敗/SLA webhook 告警卡開關（10.8.0+，§8.19） |
+| `WtmWebhookOptions` | — | 共用 webhook sink（钉钉/企微/飞书/Slack/Teams）provider 設定（`AddWtmWebhookSink`，10.8.0+，§10.10） |
 
 ### 17.4 version.props
 
 ```xml
 <Project>
   <PropertyGroup>
-    <VersionPrefix>10.5.5</VersionPrefix>
+    <VersionPrefix>10.8.0</VersionPrefix>
   </PropertyGroup>
 </Project>
 ```

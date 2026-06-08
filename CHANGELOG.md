@@ -1,5 +1,29 @@
 # 更新日志
 
+## [10.8.0] - 2026-06-08
+
+Dashboard BI and ETL feature release (epic #193, Chinese-intranet/single-tenant focus): a no-code dashboard designer, KPI threshold alerting with scheduled snapshots, a DB-backed dashboard store, five new ETL source connectors, ETL governance (dead-letter / lineage / per-tenant isolation), and a shared webhook notification sink. **Every new subsystem is opt-in** — no default behavior changes. New persistence stores ship with EF Core entity sets that require a migration before use (see Migration).
+
+### Added
+
+- **No-code dashboard designer** (#238): a drag-and-drop designer at `/_DashboardPage/Designer` backed by `_DashboardDesignerController` (`/_dashboard-designer`). `GET /vm-meta?vmType=…` returns the dimensions/measures of a registered Analysis VM; `POST /preview` renders a live data preview for a widget draft. The designer binds widgets to Analysis VMs (dimensions/measures), REST sources, or static values; configures chart type, filters, DateRange presets, KPI thresholds, and cross-widget drill-down — all without editing JSON — and emits exactly the same `DashboardDefinition`/`WidgetDefinition` schema the runtime already consumes. Both endpoints are `[AllRights]`; the tenant is taken server-side from `LoginUserInfo.TenantCode`; widget types are checked against `DashboardOptions.AllowedWidgetTypes` and filter operators against `FilterConfig.AllowedOps` before any data fetch; the transient preview dashboard is always deleted afterward.
+- **DB-backed dashboard store** (#234): `AddWtmEfDashboardStore()` registers `EfCoreDashboardService`, an `IDashboardService` implementation that persists dashboards via EF Core instead of JSON files. All reads/writes/deletes are tenant-scoped; a new `IDashboardService.DeleteAsync(id, tenantId)` overload enforces tenant ownership on deletion. Adds cross-widget drill-down: clicking a data point on one widget pushes its dimension value into the dashboard filter bar.
+- **KPI threshold alerts** (#237): `AddWtmDashboardAlerts()` registers a background evaluator (`DashboardAlertHostedService`) that periodically evaluates `WidgetThreshold` rules (`ThresholdComparisonOp` Gt/Ge/Lt/Le/Eq, `ThresholdAlertLevel`) against widget measures and pushes alert cards through the shared webhook sink. Alerts fire on transition (with cooldown de-duplication) and are tenant-aware. Off by default (`DashboardAlertOptions.EvaluationIntervalSeconds = 0`).
+- **Scheduled dashboard snapshots + export** (#237): `AddWtmDashboardSnapshots()` registers a cron-driven snapshot service (`DashboardSnapshotHostedService`) that exports dashboards to Excel (`DashboardExcelExporter`, multi-sheet NPOI) on a schedule. PDF/PNG export is supported through a pluggable `IDashboardRenderer` seam — the framework does **not** bundle a headless browser; `NotConfiguredDashboardRenderer` throws a helpful message until a host registers a renderer.
+- **Dashboard widget quality-of-life** (#228, #231): widget configuration is validated up front; `AnalysisWidget` data is cached with a per-widget timeout; charts gain multi-series support, six additional chart types, DateRange presets, an in-flight request guard, and a static-value widget type.
+- **Shared webhook / notification sink** (#230): `AddWtmWebhookSink()` / `AddWtmWebhookSinks()` register `IWtmWebhookSink`, a provider-agnostic sink that delivers `WebhookMessage` cards to DingTalk (with HMAC signing), WeCom, Feishu, Slack, and Microsoft Teams. SSRF-hardened: DNS-pinned connections, HTTPS-only, private-IP/IMDS blocking, redirects disabled; secrets are never logged.
+- **ETL source connectors** (#227, #232, #233): a pluggable `EtlSourceRegistry` plus five new sources — `CsvEtlSource`, `ExcelEtlSource`, `PostgreSqlSource` (with `PostgreSqlBulkLoader` using `COPY` + `ON CONFLICT` upsert), `MySqlEtlSource` (with `MySqlBulkLoader` using `ON DUPLICATE KEY`), and `RestEtlSource` (paginated, authenticated, SSRF-hardened). `AddWtmEtl()` registers the registry and built-in sources.
+- **ETL governance** (#229, #236): `AddWtmEtlAlerts()` and `IEtlGovernanceStore`/`DbEtlGovernanceStore` add run-log retention, composite merge keys, SLA alerting, dry-run audit, dead-letter quarantine (`EtlDeadLetterRow`), data lineage (`EtlLineageRecord`), and per-tenant ETL job isolation (`EtlJobDefinition : ITenant`). Raw error text is sanitized before persistence. A `NullEtlGovernanceStore` is the default no-op.
+- **ETL webhook alert cards** (#235): ETL failure and SLA-breach events can be pushed as webhook cards through the shared sink. Off by default (`EtlAlertOptions.EnableWebhookAlerts = false`).
+
+### Changed
+
+- **PostgreSQL/MySQL ETL bulk load is now supported** (#232): the bulk-load path that previously threw `NotSupportedException` for these providers now performs provider-native upserts. Adds `Npgsql` 10.0.2 and `MySqlConnector` 2.4.0 as ETL dependencies.
+
+### Migration
+
+- The DB-backed dashboard store (`AddWtmEfDashboardStore`), ETL governance store (`DbEtlGovernanceStore`), and per-tenant ETL job isolation introduce new EF Core entity sets (dashboard records, dead-letter rows, lineage records, ETL job definitions with a `TenantCode` column). **If you opt into any of these stores, generate and apply an EF Core migration before first use.** Deployments that do not enable these opt-in services are unaffected — the JSON-file dashboard store and in-memory ETL paths remain the defaults.
+
 ## [10.7.0] - 2026-06-08
 
 Commercial-readiness hardening pass (epic #193, Chinese-intranet/single-tenant focus): a complete security-and-correctness batch plus a CodeGen v2 feature-attribute system. Security fixes are high-priority — upgrading is recommended. Two behavior changes are flagged under Changed.
