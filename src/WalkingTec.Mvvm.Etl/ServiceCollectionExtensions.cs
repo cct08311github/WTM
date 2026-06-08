@@ -1,11 +1,13 @@
 #nullable enable
 using System;
+using System.Net.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using WalkingTec.Mvvm.Etl.Alerting;
 using WalkingTec.Mvvm.Etl.Dashboard;
 using WalkingTec.Mvvm.Etl.Models;
 using WalkingTec.Mvvm.Etl.Pipeline;
+using WalkingTec.Mvvm.Etl.Pipeline.Sources;
 using WalkingTec.Mvvm.Etl.Scheduling;
 
 namespace WalkingTec.Mvvm.Etl;
@@ -18,7 +20,7 @@ public static class ServiceCollectionExtensions
     /// <summary>
     /// 註冊 ETL 模組服務（排程、進度追蹤、儀表板）。
     /// 同時以 Singleton 登記 <see cref="IEtlSourceRegistry"/>，
-    /// 預先包含 Oracle、SqlServer、CSV 和 Excel 四種內建 source。
+    /// 預先包含 Oracle、SqlServer、CSV、Excel 和 <b>REST/HTTP</b> 五種內建 source。
     /// 如需告警功能，請額外呼叫 <see cref="AddWtmEtlAlerts"/>。
     /// 如需自訂 source 種類，在 <c>AddWtmEtl()</c> 之後取得
     /// <see cref="IEtlSourceRegistry"/> 並呼叫
@@ -39,12 +41,32 @@ public static class ServiceCollectionExtensions
         else
             services.Configure<EtlOptions>(_ => { });
 
+        // Register the REST/HTTP ETL source named HttpClient with SSRF-hardening:
+        //   AllowAutoRedirect=false prevents redirects bypassing the SSRF guard.
+        //   PinnedConnectAsync is the TOCTOU-safe DNS-pinning ConnectCallback.
+        services.AddHttpClient(RestEtlSource.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+            {
+                AllowAutoRedirect = false,
+                ConnectCallback   = RestEtlSource.PinnedConnectAsync,
+            });
+
         // Register the shared default source registry (#218).
         // Already contains Oracle/SqlServer/CSV/Excel built-in sources.
         // Using the same instance as EtlSourceFactory.DefaultRegistry ensures that
         // registrations made via DI-injected IEtlSourceRegistry are also visible
         // when code calls EtlSourceFactory.CreateSource(string).
-        services.AddSingleton<IEtlSourceRegistry>(EtlSourceFactory.DefaultRegistry);
+        //
+        // The RestEtlSource requires IHttpClientFactory, so its factory delegate
+        // captures the IServiceProvider and resolves it lazily on first use.
+        services.AddSingleton<IEtlSourceRegistry>(sp =>
+        {
+            var registry = EtlSourceFactory.DefaultRegistry;
+            var httpClientFactory = sp.GetRequiredService<System.Net.Http.IHttpClientFactory>();
+            registry.Register("rest",  () => new RestEtlSource(httpClientFactory));
+            registry.Register("http",  () => new RestEtlSource(httpClientFactory));
+            return registry;
+        });
 
         services.AddSingleton<EtlSchedulerService>();
         services.AddSingleton<EtlProgressTracker>();
