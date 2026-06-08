@@ -20,6 +20,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- NPOI for ExcelEtlSource (.xlsx read support) — version managed centrally in Directory.Packages.props -->
+    <PackageReference Include="NPOI" />
+    <PackageReference Include="Common.Logging" />
+    <PackageReference Include="Common.Logging.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\WalkingTec.Mvvm.Mvc\WalkingTec.Mvvm.Mvc.csproj" />
   </ItemGroup>
 </Project>

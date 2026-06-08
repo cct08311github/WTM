@@ -13,6 +13,10 @@
     <PackageReference Include="FluentAssertions" />
     <PackageReference Include="Microsoft.Data.Sqlite" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+    <!-- NPOI needed by ExcelEtlSourceTests to build .xlsx fixtures in-test -->
+    <PackageReference Include="NPOI" />
+    <PackageReference Include="Common.Logging" />
+    <PackageReference Include="Common.Logging.Core" />
     <PackageReference Include="coverlet.collector">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
