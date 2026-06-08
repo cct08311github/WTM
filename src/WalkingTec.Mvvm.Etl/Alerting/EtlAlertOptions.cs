@@ -8,6 +8,20 @@ public class EtlAlertOptions
 {
     /// <summary>SMTP 郵件設定。未設定時 Email 告警功能停用。</summary>
     public SmtpAlertOptions? Smtp { get; set; }
+
+    /// <summary>
+    /// 啟用 shared webhook sink 整合（DingTalk / WeCom / Feishu / Slack / Teams）。
+    /// <para>
+    /// 設為 <c>true</c> 且已在 DI 容器中登記 <c>IWtmWebhookSink</c>（透過
+    /// <c>AddWtmWebhookSink()</c> / <c>AddWtmWebhookSinks()</c>）時，
+    /// ETL failure 與 SLA breach 告警將格式化為 <see cref="WalkingTec.Mvvm.Core.Notifications.WebhookMessage"/>
+    /// 發送至已設定的 webhook 端點。
+    /// </para>
+    /// <para>
+    /// 預設值 <c>false</c>，不影響現有 Email / per-job webhook 行為。
+    /// </para>
+    /// </summary>
+    public bool EnableWebhookAlerts { get; set; }
 }
 
 /// <summary>SMTP 連線與寄件設定。</summary>

@@ -31,7 +31,18 @@ public static class EtlErrorSanitizer
     /// </summary>
     public static string Sanitize(Exception ex)
     {
-        var message = ex.Message;
+        return SanitizeRaw(ex.Message);
+    }
+
+    /// <summary>
+    /// Returns a sanitized, length-capped copy of the given raw string,
+    /// redacting connection string fragments.
+    /// Used by alert dispatch paths for defence-in-depth sanitization of
+    /// already-stored error messages before they leave the system via webhooks.
+    /// </summary>
+    public static string SanitizeRaw(string raw)
+    {
+        var message = raw;
         foreach (var pattern in _sensitivePatterns)
             message = pattern.Replace(message, "[redacted]");
         return message.Length > MaxLength ? message[..MaxLength] : message;

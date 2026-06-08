@@ -77,17 +77,31 @@ public static class ServiceCollectionExtensions
     }
 
     /// <summary>
-    /// 註冊 ETL 告警服務（Email + Webhook）。
-    /// 可選傳入 <paramref name="configure"/> 設定 SMTP；Webhook 不需額外設定。
+    /// 註冊 ETL 告警服務（Email + per-job Webhook + 可選 shared webhook sink）。
+    /// 可選傳入 <paramref name="configure"/> 設定 SMTP 及 <see cref="EtlAlertOptions.EnableWebhookAlerts"/>。
     /// </summary>
+    /// <remarks>
+    /// <b>Shared webhook sink 整合（opt-in）：</b>
+    /// <list type="number">
+    ///   <item>呼叫 <c>AddWtmWebhookSink()</c> 或 <c>AddWtmWebhookSinks()</c> 登記 <c>IWtmWebhookSink</c>。</item>
+    ///   <item>在 <paramref name="configure"/> 中設定 <c>opts.EnableWebhookAlerts = true</c>。</item>
+    /// </list>
+    /// 未設定時行為不變（僅 Email + per-job webhook）。
+    /// </remarks>
     /// <example>
+    /// // Email only (unchanged behaviour):
     /// builder.Services.AddWtmEtlAlerts(opts =&gt; {
-    ///     opts.Smtp = new SmtpAlertOptions {
-    ///         Host = "smtp.example.com", Port = 587,
-    ///         EnableSsl = true,
-    ///         UserName = "...", Password = "...",
-    ///         FromAddress = "etl-alert@example.com"
-    ///     };
+    ///     opts.Smtp = new SmtpAlertOptions { Host = "smtp.example.com", ... };
+    /// });
+    ///
+    /// // Email + shared webhook sink (DingTalk / Slack / Teams / etc.):
+    /// builder.Services.AddWtmWebhookSink(o =&gt; {
+    ///     o.Provider = WebhookProviderKind.Slack;
+    ///     o.Url = "https://hooks.slack.com/services/...";
+    /// });
+    /// builder.Services.AddWtmEtlAlerts(opts =&gt; {
+    ///     opts.EnableWebhookAlerts = true;
+    ///     opts.Smtp = new SmtpAlertOptions { ... }; // optional
     /// });
     /// </example>
     public static IServiceCollection AddWtmEtlAlerts(
@@ -101,7 +115,16 @@ public static class ServiceCollectionExtensions
         else
             services.Configure<EtlAlertOptions>(_ => { });
 
-        services.AddTransient<IEtlAlertService, EtlAlertService>();
+        // Register EtlAlertService with optional IWtmWebhookSink dependency.
+        // When the sink is not registered, it is resolved as null (GetService vs GetRequiredService).
+        services.AddTransient<IEtlAlertService>(sp =>
+        {
+            var httpClientFactory = sp.GetRequiredService<System.Net.Http.IHttpClientFactory>();
+            var options           = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<EtlAlertOptions>>();
+            var logger            = sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<EtlAlertService>>();
+            var webhookSink       = sp.GetService<WalkingTec.Mvvm.Core.Notifications.IWtmWebhookSink>();
+            return new EtlAlertService(httpClientFactory, options, logger, webhookSink);
+        });
 
         return services;
     }
