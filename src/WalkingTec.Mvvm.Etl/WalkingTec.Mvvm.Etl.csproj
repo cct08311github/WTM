@@ -24,6 +24,10 @@
     <PackageReference Include="NPOI" />
     <PackageReference Include="Common.Logging" />
     <PackageReference Include="Common.Logging.Core" />
+    <!-- PostgreSQL ETL source + bulk loader -->
+    <PackageReference Include="Npgsql" />
+    <!-- MySQL ETL source + bulk loader -->
+    <PackageReference Include="MySqlConnector" />
   </ItemGroup>
 
   <ItemGroup>

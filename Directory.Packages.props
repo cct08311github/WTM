@@ -51,6 +51,9 @@
 
     <!-- ===== DB Providers (independent cadence) ===== -->
     <PackageVersion Include="MySql.EntityFrameworkCore" Version="10.0.1" />
+    <PackageVersion Include="MySqlConnector" Version="2.4.0" />
+    <!-- Npgsql: must be >= 10.0.2 to satisfy Npgsql.EntityFrameworkCore.PostgreSQL 10.0.1 transitive requirement -->
+    <PackageVersion Include="Npgsql" Version="10.0.2" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
     <PackageVersion Include="Oracle.EntityFrameworkCore" Version="10.23.26100" />
 

@@ -25,21 +25,27 @@ public static class EtlSourceFactory
     private static EtlSourceRegistry BuildDefaultRegistry()
     {
         var reg = new EtlSourceRegistry();
-        reg.Register("sqlserver", () => new MssqlSource());
-        reg.Register("oracle",    () => new OracleSource());
-        reg.Register("csv",       () => new CsvEtlSource());
-        reg.Register("excel",     () => new ExcelEtlSource());
+        reg.Register("sqlserver",  () => new MssqlSource());
+        reg.Register("oracle",     () => new OracleSource());
+        reg.Register("postgresql", () => new PostgreSqlSource());
+        reg.Register("pgsql",      () => new PostgreSqlSource());
+        reg.Register("mysql",      () => new MySqlEtlSource());
+        reg.Register("csv",        () => new CsvEtlSource());
+        reg.Register("excel",      () => new ExcelEtlSource());
         return reg;
     }
 
     /// <summary>
     /// 根據 DBTypeEnum 建立對應的 IEtlSource（back-compat API）。
-    /// Oracle → <see cref="OracleSource"/>，SqlServer → <see cref="MssqlSource"/>。
+    /// Oracle → <see cref="OracleSource"/>，SqlServer → <see cref="MssqlSource"/>，
+    /// PgSql → <see cref="PostgreSqlSource"/>，MySql → <see cref="MySqlEtlSource"/>。
     /// </summary>
     public static IEtlSource CreateSource(DBTypeEnum dbType) => dbType switch
     {
         DBTypeEnum.SqlServer => DefaultRegistry.Create("sqlserver"),
         DBTypeEnum.Oracle    => DefaultRegistry.Create("oracle"),
+        DBTypeEnum.PgSql     => DefaultRegistry.Create("postgresql"),
+        DBTypeEnum.MySql     => DefaultRegistry.Create("mysql"),
         _ => throw new NotSupportedException($"ETL source not supported for {dbType}")
     };
 
@@ -53,12 +59,16 @@ public static class EtlSourceFactory
         DefaultRegistry.Create(sourceKind);
 
     /// <summary>
-    /// 根據 DBTypeEnum 建立對應的 IBulkLoader（back-compat API，未變動）。
+    /// 根據 DBTypeEnum 建立對應的 IBulkLoader（back-compat API）。
+    /// SqlServer → <see cref="MssqlBulkLoader"/>，Oracle → <see cref="OracleBulkLoader"/>，
+    /// PgSql → <see cref="PostgreSqlBulkLoader"/>，MySql → <see cref="MySqlBulkLoader"/>。
     /// </summary>
     public static IBulkLoader CreateLoader(DBTypeEnum targetDbType) => targetDbType switch
     {
         DBTypeEnum.SqlServer => new MssqlBulkLoader(),
         DBTypeEnum.Oracle    => new OracleBulkLoader(),
+        DBTypeEnum.PgSql     => new PostgreSqlBulkLoader(),
+        DBTypeEnum.MySql     => new MySqlBulkLoader(),
         _ => throw new NotSupportedException($"ETL loader not supported for {targetDbType}")
     };
 }
