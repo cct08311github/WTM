@@ -211,9 +211,90 @@ public class JsonFileDashboardService : IDashboardService
         return result;
     }
 
+    // ── Q7: Widget config validation ─────────────────────────────────────────
+
+    /// <summary>
+    /// Validates widget configs in a dashboard definition at write time.
+    /// Returns a validation error message string on failure, or null when valid.
+    /// Checks:
+    /// <list type="bullet">
+    ///   <item>Non-empty <see cref="WidgetDefinition.Type"/> (always required).</item>
+    ///   <item>When <see cref="DashboardOptions.AllowedWidgetTypes"/> is configured: type must be in the set.</item>
+    ///   <item>Non-empty <see cref="WidgetSourceDefinition.Kind"/> — must match one of the known
+    ///         <see cref="WidgetDataSourceKind"/> names or a registered data-source name.</item>
+    ///   <item>Required fields for each kind (e.g. "analysis" requires <c>ListVmType</c>).</item>
+    /// </list>
+    /// </summary>
+    private string? ValidateWidgetConfigs(DashboardDefinition dashboard)
+    {
+        if (dashboard.Widgets == null || dashboard.Widgets.Count == 0)
+            return null;
+
+        // Build the set of known kind strings from the enum + registered data sources.
+        var knownKinds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in Enum.GetNames<WidgetDataSourceKind>())
+            knownKinds.Add(name);
+        foreach (var ds in _dataSources)
+            knownKinds.Add(ds.Name);
+
+        var allowedTypes = _options.AllowedWidgetTypes;
+
+        foreach (var (widgetId, widget) in dashboard.Widgets)
+        {
+            // 1. Type must be non-empty (belt-and-suspenders alongside controller validation).
+            if (string.IsNullOrWhiteSpace(widget.Type))
+                return $"Widget '{widgetId}': 缺少必填的 Type 屬性。";
+
+            // 2. When an AllowedWidgetTypes allowlist is configured, reject unknown types.
+            if (allowedTypes is { Length: > 0 })
+            {
+                if (!Array.Exists(allowedTypes, t => string.Equals(t, widget.Type, StringComparison.OrdinalIgnoreCase)))
+                    return $"Widget '{widgetId}': chartType '{widget.Type}' 不在允許清單中。" +
+                           $"允許的類型：{string.Join(", ", allowedTypes)}.";
+            }
+
+            var src = widget.Source;
+            if (src == null) continue;
+
+            // 3. Kind must match a known data-source kind or a registered data-source name.
+            if (!string.IsNullOrWhiteSpace(src.Kind) &&
+                !string.Equals(src.Kind, "custom", StringComparison.OrdinalIgnoreCase) &&
+                !knownKinds.Contains(src.Kind))
+            {
+                return $"Widget '{widgetId}': 資料源 Kind '{src.Kind}' 不是已知的資料源類型。" +
+                       $"已知類型：{string.Join(", ", knownKinds)}.";
+            }
+
+            // 4. Kind-specific required-field checks.
+            //    "analysis" requires at least listVmType (Name or ListVmType) — prevents silently
+            //    persisting a broken analysis widget that will always fail at query time.
+            if (string.Equals(src.Kind, "analysis", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(src.Name, "analysis", StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.IsNullOrWhiteSpace(src.ListVmType))
+                    return $"Widget '{widgetId}': 資料源 Kind 為 'analysis' 時，必須指定 ListVmType。";
+            }
+
+            // "rest" requires a non-empty URL in RestOptions when provided.
+            if (string.Equals(src.Kind, "rest", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(src.Name, "rest", StringComparison.OrdinalIgnoreCase))
+            {
+                if (src.RestOptions != null && string.IsNullOrWhiteSpace(src.RestOptions.Url))
+                    return $"Widget '{widgetId}': 資料源 Kind 為 'rest' 且設有 RestOptions 時，必須指定 Url。";
+            }
+        }
+
+        return null;
+    }
+
     public async Task<string> CreateAsync(DashboardDefinition dashboard)
     {
         await EnsureInitializedAsync();
+
+        // Q7: validate widget configs at write time — reject early with a clear error message.
+        var configError = ValidateWidgetConfigs(dashboard);
+        if (configError != null)
+            throw new ArgumentException(configError, nameof(dashboard));
 
         if (string.IsNullOrEmpty(dashboard.Id))
         {
@@ -279,6 +360,11 @@ public class JsonFileDashboardService : IDashboardService
         {
             throw new ArgumentException("Dashboard ID cannot be null or empty.", nameof(dashboard));
         }
+
+        // Q7: validate widget configs at write time.
+        var configError = ValidateWidgetConfigs(dashboard);
+        if (configError != null)
+            throw new ArgumentException(configError, nameof(dashboard));
 
         dashboard.UpdatedAt = _timeProvider.GetUtcNow().UtcDateTime;
 
@@ -491,6 +577,34 @@ public class JsonFileDashboardService : IDashboardService
         {
             Parameters = parameters
         };
+
+        // Q9: per-widget timeout — prevents one slow OLAP/REST widget from starving the thread
+        // pool or hanging the whole dashboard request. When the timeout fires we return a
+        // per-widget error result instead of propagating an exception (which would blank the
+        // entire dashboard).
+        var timeoutSeconds = _options.WidgetDataTimeoutSeconds;
+        if (timeoutSeconds > 0)
+        {
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+            try
+            {
+                return await source.GetDataAsync(request, linkedCts.Token);
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
+            {
+                // The widget-level timeout fired (not the outer request cancellation).
+                _logger.LogWarning(
+                    "[Dashboard] Widget data fetch timed out after {TimeoutSeconds}s. " +
+                    "DashboardId={DashboardId} WidgetId={WidgetId}",
+                    timeoutSeconds, LogSanitizer.Sanitize(dashboardId), LogSanitizer.Sanitize(widgetId));
+
+                return new WidgetDataResult
+                {
+                    Error = $"Widget data fetch timed out after {timeoutSeconds}s."
+                };
+            }
+        }
 
         return await source.GetDataAsync(request, ct);
     }

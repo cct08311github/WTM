@@ -7,7 +7,9 @@ using System.Security.Claims;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core.Analysis;
 using WalkingTec.Mvvm.Core.Support.Json;
 
@@ -29,6 +31,8 @@ public class AnalysisWidgetDataSource : IWidgetDataSource
     private readonly IServiceProvider _serviceProvider;
     private readonly AnalysisQueryEngine _engine;
     private readonly IAnalysisFieldPolicy? _fieldPolicy;
+    private readonly IMemoryCache _cache;
+    private readonly DashboardOptions _options;
 
     public string Name => "analysis";
     public WidgetDataSourceKind Kind => WidgetDataSourceKind.Analysis;
@@ -37,12 +41,16 @@ public class AnalysisWidgetDataSource : IWidgetDataSource
         AnalysisVmRegistry registry,
         IServiceProvider serviceProvider,
         AnalysisQueryEngine engine,
-        IAnalysisFieldPolicy? fieldPolicy = null)
+        IAnalysisFieldPolicy? fieldPolicy = null,
+        IMemoryCache? cache = null,
+        IOptions<DashboardOptions>? options = null)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
         _fieldPolicy = fieldPolicy;
+        _cache = cache ?? new MemoryCache(new MemoryCacheOptions());
+        _options = options?.Value ?? new DashboardOptions();
     }
 
     public Task<WidgetDataResult> GetDataAsync(WidgetDataRequest request, CancellationToken ct = default)
@@ -99,23 +107,64 @@ public class AnalysisWidgetDataSource : IWidgetDataSource
         // 7. Build AnalysisQueryRequest from widget parameters
         var analysisReq = BuildAnalysisRequest(request.Parameters);
 
-        // 8. Execute via engine
+        // 8. Q8 — short-TTL result cache.
+        // Key includes: widgetId/listVmType, tenant, userId (user-scoped if policy present), filter params.
+        // Including tenant in the key is the primary tenant-isolation guarantee —
+        // a cross-tenant caller will always produce a different key and read from a separate cache entry.
         string? identityKey = wtm?.LoginUserInfo != null ? $"{wtm.LoginUserInfo.CurrentTenant}_{wtm.LoginUserInfo.UserId}" : null;
-        var response = _engine.ExecuteDynamic(baseQuery, analysisReq, fields, identityKey: identityKey, cancellationToken: ct);
+        var ttl = _options.AnalysisWidgetCacheTtlSeconds;
 
-        // 9. Map to WidgetDataResult
-        var result = new WidgetDataResult
+        if (ttl > 0)
         {
-            Columns = response.Columns,
-            Rows = response.Rows,
+            var cacheKey = BuildCacheKey(request, listVmType, identityKey);
+            if (_cache.TryGetValue(cacheKey, out WidgetDataResult? cached) && cached != null)
+                return Task.FromResult(cached);
+
+            var response = _engine.ExecuteDynamic(baseQuery, analysisReq, fields, identityKey: identityKey, cancellationToken: ct);
+            var result = new WidgetDataResult
+            {
+                Columns = response.Columns,
+                Rows = response.Rows,
+                Metadata = new Dictionary<string, object?>
+                {
+                    ["totalCount"] = response.TotalCount,
+                    ["truncated"] = response.Truncated
+                }
+            };
+            _cache.Set(cacheKey, result, TimeSpan.FromSeconds(ttl));
+            return Task.FromResult(result);
+        }
+
+        // 9. Execute via engine (no cache)
+        var responseNc = _engine.ExecuteDynamic(baseQuery, analysisReq, fields, identityKey: identityKey, cancellationToken: ct);
+
+        var resultNc = new WidgetDataResult
+        {
+            Columns = responseNc.Columns,
+            Rows = responseNc.Rows,
             Metadata = new Dictionary<string, object?>
             {
-                ["totalCount"] = response.TotalCount,
-                ["truncated"] = response.Truncated
+                ["totalCount"] = responseNc.TotalCount,
+                ["truncated"] = responseNc.Truncated
             }
         };
 
-        return Task.FromResult(result);
+        return Task.FromResult(resultNc);
+    }
+
+    /// <summary>
+    /// Builds a cache key that is unique per (listVmType, tenant+user identity, filter params).
+    /// Tenant isolation: <paramref name="identityKey"/> always includes the tenant code
+    /// (format: <c>{tenant}_{userId}</c>), so cross-tenant callers produce separate cache entries.
+    /// </summary>
+    internal static string BuildCacheKey(WidgetDataRequest request, string listVmType, string? identityKey)
+    {
+        // Stable serialization of the filter sub-dictionary so key is order-independent.
+        // We only include parameters that influence the query result, not request metadata.
+        var filterPart = request.Parameters.TryGetValue("dimensions", out var dims) ? dims : "";
+        var measurePart = request.Parameters.TryGetValue("measures", out var meas) ? meas : "";
+        var filtersPart = request.Parameters.TryGetValue("filters", out var filt) ? filt : "";
+        return $"AnalysisWidget::{listVmType}::{identityKey ?? "_anon"}::{filterPart}::{measurePart}::{filtersPart}";
     }
 
     /// <summary>

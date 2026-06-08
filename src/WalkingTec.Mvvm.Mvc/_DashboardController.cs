@@ -90,15 +90,24 @@ namespace WalkingTec.Mvvm.Mvc
         {
             if (dashboard == null) return BadRequest();
 
-            var widgetTypeError = ValidateWidgetTypes(dashboard);
+            var widgetTypeError = ValidateWidgetTypes(dashboard, _options);
             if (widgetTypeError != null) return BadRequest(widgetTypeError);
 
             var (userId, _) = GetUserInfo();
             dashboard.Owner = userId;
             dashboard.TenantId = GetTenantId();
 
-            var id = await _dashboardService.CreateAsync(dashboard);
-            return Ok(id);
+            try
+            {
+                var id = await _dashboardService.CreateAsync(dashboard);
+                return Ok(id);
+            }
+            catch (ArgumentException ex)
+            {
+                // Q7: service-layer widget config validation rejected the payload.
+                _logger.LogWarning(ex, "[Dashboard] Widget config validation failed on Create.");
+                return BadRequest(ex.Message);
+            }
         }
 
         [HttpPut("{id}")]
@@ -111,7 +120,7 @@ namespace WalkingTec.Mvvm.Mvc
         {
             if (dashboard == null || dashboard.Id != id) return BadRequest();
 
-            var widgetTypeError = ValidateWidgetTypes(dashboard);
+            var widgetTypeError = ValidateWidgetTypes(dashboard, _options);
             if (widgetTypeError != null) return BadRequest(widgetTypeError);
 
             var tenantId = GetTenantId();
@@ -127,7 +136,16 @@ namespace WalkingTec.Mvvm.Mvc
             dashboard.Owner = existing.Owner; // preserve owner
             dashboard.TenantId = tenantId;    // server-side tenant, prevent spoofing
 
-            await _dashboardService.UpdateAsync(dashboard);
+            try
+            {
+                await _dashboardService.UpdateAsync(dashboard);
+            }
+            catch (ArgumentException ex)
+            {
+                // Q7: service-layer widget config validation rejected the payload.
+                _logger.LogWarning(ex, "[Dashboard] Widget config validation failed on Update.");
+                return BadRequest(ex.Message);
+            }
             return Ok();
         }
 
@@ -281,13 +299,27 @@ namespace WalkingTec.Mvvm.Mvc
             return Ok(result);
         }
 
-        private static string? ValidateWidgetTypes(DashboardDefinition dashboard)
+        /// <summary>
+        /// Controller-layer widget validation (fast-fail before hitting the service).
+        /// Checks empty Type, title length, filter Op allowlist, and optionally the
+        /// AllowedWidgetTypes allowlist from <paramref name="options"/>.
+        /// </summary>
+        private static string? ValidateWidgetTypes(DashboardDefinition dashboard, DashboardOptions options)
         {
             if (dashboard.Widgets == null) return null;
+            var allowedTypes = options.AllowedWidgetTypes;
             foreach (var (wid, def) in dashboard.Widgets)
             {
                 if (string.IsNullOrWhiteSpace(def.Type))
                     return $"Widget '{wid}' 缺少必填的 Type 屬性。";
+
+                // Q7: chartType allowlist — when AllowedWidgetTypes is configured, unknown types are rejected.
+                if (allowedTypes is { Length: > 0 })
+                {
+                    if (!Array.Exists(allowedTypes, t => string.Equals(t, def.Type, StringComparison.OrdinalIgnoreCase)))
+                        return $"Widget '{wid}': chartType '{def.Type}' 不在允許清單中。" +
+                               $"允許的類型：{string.Join(", ", allowedTypes)}.";
+                }
 
                 // S2: Widget title length cap.
                 if (!string.IsNullOrEmpty(def.Title) && def.Title.Length > 200)
