@@ -563,6 +563,22 @@
         var resolvedType = inferChartType(config, data);
         var option = buildChartOption(resolvedType, xAxisData, allSeries, config);
         chart.setOption(option);
+
+        // Cross-widget drill-down: emit widgetClicked when user clicks a chart data point.
+        // Payload: { widgetId, field, value, rowData }
+        var widgetId = container.id;
+        if (widgetId) {
+            chart.on('click', function(params) {
+                var clickedField = dimField;
+                var clickedValue = params.name != null ? params.name : params.value;
+                EventBus.emit('widgetClicked', {
+                    widgetId: widgetId,
+                    field: clickedField,
+                    value: clickedValue,
+                    rowData: params.data != null ? params.data : {}
+                });
+            });
+        }
     }
 
     function renderTable(container, data, config) {
@@ -581,16 +597,36 @@
         }
         table.appendChild(headerRow);
 
-        // data rows
+        // data rows — each row is clickable for cross-widget drill-down.
+        var widgetId = container.id;
         for (var i = 0; i < data.rows.length; i++) {
-            var tr = document.createElement('tr');
-            for (var j = 0; j < data.columns.length; j++) {
-                var td = document.createElement('td');
-                var val = data.rows[i][data.columns[j]];
-                td.textContent = val != null ? String(val) : '';
-                tr.appendChild(td);
-            }
-            table.appendChild(tr);
+            (function(rowData) {
+                var tr = document.createElement('tr');
+                tr.style.cursor = 'pointer';
+                for (var j = 0; j < data.columns.length; j++) {
+                    var td = document.createElement('td');
+                    var val = rowData[data.columns[j]];
+                    td.textContent = val != null ? String(val) : '';
+                    tr.appendChild(td);
+                }
+                // Cross-widget drill-down: clicking a table row emits widgetClicked
+                // for every column in the row so that any matching DrillDownLink can
+                // pick up the correct source field.
+                if (widgetId) {
+                    tr.addEventListener('click', function() {
+                        for (var k = 0; k < data.columns.length; k++) {
+                            var colName = data.columns[k];
+                            EventBus.emit('widgetClicked', {
+                                widgetId: widgetId,
+                                field: colName,
+                                value: rowData[colName],
+                                rowData: rowData
+                            });
+                        }
+                    });
+                }
+                table.appendChild(tr);
+            })(data.rows[i]);
         }
 
         container.appendChild(table);
@@ -834,6 +870,11 @@
                     DashboardManager._registerLinks(def.links);
                 }
 
+                // Cross-widget drill-down: wire up DrillDownLink entries from widgets.
+                if (def.widgets) {
+                    DashboardManager._registerDrillDownLinks(def.widgets);
+                }
+
                 // Q1: When any filter changes, re-fetch all widgets so the new
                 // filter values are forwarded to the data sources.
                 FilterBar.onChange(function() {
@@ -940,9 +981,54 @@
             for (var i = 0; i < links.length; i++) {
                 var link = links[i];
                 EventBus.on(link.event, link.sourceWidget, function(payload) {
-                    // Logic to handle link action e.g., filter target widget
-                    // This will be expanded later
+                    // Legacy WidgetLink action handling (future expansion placeholder).
                 });
+            }
+        },
+
+        /**
+         * Cross-widget drill-down: register DrillDownLink entries from widget definitions.
+         *
+         * For each widget that has a non-empty `drillDown` array, listen for
+         * `widgetClicked` events from that widget.  When the clicked field matches
+         * a DrillDownLink's sourceField:
+         *   - If targetWidgetId is set: set the filter value via FilterBar and
+         *     re-fetch only that one target widget.
+         *   - Otherwise: set the value via FilterBar (which broadcasts onChange to
+         *     all widgets automatically).
+         *
+         * @param {object} widgets  Map of widgetId → widgetDef from the dashboard definition.
+         */
+        _registerDrillDownLinks: function(widgets) {
+            if (!widgets) return;
+            var self = this;
+            for (var sourceWidgetId in widgets) {
+                if (!Object.prototype.hasOwnProperty.call(widgets, sourceWidgetId)) continue;
+                var wDef = widgets[sourceWidgetId];
+                var links = wDef.drillDown;
+                if (!links || !links.length) continue;
+
+                // Capture the sourceWidgetId and its links in a closure.
+                (function(srcId, drillLinks) {
+                    EventBus.on('widgetClicked', srcId, function(payload) {
+                        if (!payload || payload.widgetId !== srcId) return;
+                        for (var li = 0; li < drillLinks.length; li++) {
+                            var dl = drillLinks[li];
+                            if (dl.sourceField && dl.sourceField !== payload.field) continue;
+                            // Apply the filter value.
+                            FilterBar.setValue(dl.targetFilterId, String(payload.value != null ? payload.value : ''));
+                            // If a specific target widget is named, re-fetch it directly.
+                            // FilterBar.setValue already triggers onChange (which re-fetches
+                            // all widgets) when targetWidgetId is absent.
+                            if (dl.targetWidgetId && _currentDashboard) {
+                                var targetDef = _currentDashboard.widgets && _currentDashboard.widgets[dl.targetWidgetId];
+                                if (targetDef) {
+                                    self._fetchAndRenderWidget(dl.targetWidgetId, targetDef);
+                                }
+                            }
+                        }
+                    });
+                })(sourceWidgetId, links);
             }
         },
 
@@ -1250,6 +1336,10 @@
             computeDateRangePreset: computeDateRangePreset
         }
     };
+
+    // Expose _registerDrillDownLinks on DashboardManager for testing.
+    // (Already defined as a method of DashboardManager; listed here for clarity.)
+    // Note: _registerDrillDownLinks is already accessible via api.DashboardManager.
 
     if (typeof global.window !== "undefined") {
         global.window.WtmDashboard = api;

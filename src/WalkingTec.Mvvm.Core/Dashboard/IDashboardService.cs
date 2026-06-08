@@ -14,6 +14,17 @@ public interface IDashboardService
     Task DeleteAsync(string dashboardId);
 
     /// <summary>
+    /// Tenant-aware delete overload added as a default interface member so that existing
+    /// external implementations of <see cref="IDashboardService"/> do not need to be updated.
+    /// The default body delegates to the tenant-unaware original for back-compat.
+    /// Concrete implementations (e.g. <see cref="EfCoreDashboardService"/> and
+    /// <see cref="JsonFileDashboardService"/>) override this with a real tenant-scoped lookup
+    /// so a caller cannot delete another tenant's dashboard.
+    /// </summary>
+    Task DeleteAsync(string dashboardId, string? tenantId)
+        => DeleteAsync(dashboardId);
+
+    /// <summary>
     /// Original (backward-compatible) overload. External implementers implement this method.
     /// Callers that do not need tenant-aware routing should use this overload.
     /// </summary>

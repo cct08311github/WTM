@@ -166,7 +166,9 @@ namespace WalkingTec.Mvvm.Mvc
                 return Forbid();
             }
 
-            await _dashboardService.DeleteAsync(id);
+            // BUG-FIX (Finding 3): pass authenticated tenantId so the service layer scopes the
+            // DELETE to the caller's tenant bucket (EF WHERE clause / file-system directory).
+            await _dashboardService.DeleteAsync(id, tenantId);
             return Ok();
         }
 

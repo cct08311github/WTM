@@ -3,6 +3,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Net.Sockets;
 using System.Reflection;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using WalkingTec.Mvvm.Core.Analysis;
 
@@ -72,6 +73,40 @@ namespace WalkingTec.Mvvm.Core.Dashboard
                     "Both AnalysisVmRegistry and AnalysisQueryEngine must be registered. " +
                     "Ensure services.AddWtmContext() is called before services.AddWtmDashboard().");
             }
+
+            return services;
+        }
+
+        /// <summary>
+        /// Replaces the default <see cref="JsonFileDashboardService"/> with <see cref="EfCoreDashboardService"/>
+        /// backed by <see cref="DashboardDbContext"/>.
+        /// Call this <strong>after</strong> <see cref="AddWtmDashboard"/> to swap the store.
+        /// <para>
+        /// The caller must supply an EF Core provider by configuring <paramref name="configureDb"/>
+        /// (e.g. <c>opt =&gt; opt.UseSqlite("...")</c>).
+        /// </para>
+        /// <example>
+        /// <code>
+        /// services.AddWtmDashboard();
+        /// services.AddWtmEfDashboardStore(opt =&gt; opt.UseSqlServer(connectionString));
+        /// </code>
+        /// </example>
+        /// </summary>
+        public static IServiceCollection AddWtmEfDashboardStore(
+            this IServiceCollection services,
+            Action<DbContextOptionsBuilder> configureDb)
+        {
+            if (configureDb == null) throw new ArgumentNullException(nameof(configureDb));
+
+            // Remove the JsonFile singleton registered by AddWtmDashboard.
+            var existing = services.FirstOrDefault(
+                d => d.ServiceType == typeof(IDashboardService) &&
+                     d.ImplementationType == typeof(JsonFileDashboardService));
+            if (existing != null)
+                services.Remove(existing);
+
+            services.AddDbContextFactory<DashboardDbContext>(configureDb);
+            services.AddSingleton<IDashboardService, EfCoreDashboardService>();
 
             return services;
         }

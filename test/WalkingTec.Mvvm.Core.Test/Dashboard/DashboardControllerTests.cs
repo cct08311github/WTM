@@ -436,12 +436,13 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             var existing = new DashboardDefinition { Id = "id1", Owner = "bob" };
             _service.Setup(x => x.GetAsync("id1", It.IsAny<string?>())).ReturnsAsync(existing);
             _service.Setup(x => x.CanEdit(existing, "bob", It.IsAny<string[]>())).Returns(true);
-            _service.Setup(x => x.DeleteAsync("id1")).Returns(Task.CompletedTask);
+            // BUG-FIX (Finding 3): controller now calls the tenant-aware overload.
+            _service.Setup(x => x.DeleteAsync("id1", It.IsAny<string?>())).Returns(Task.CompletedTask);
 
             var result = await _controller.Delete("id1");
 
             result.Should().BeOfType<OkResult>();
-            _service.Verify(x => x.DeleteAsync("id1"), Times.Once);
+            _service.Verify(x => x.DeleteAsync("id1", It.IsAny<string?>()), Times.Once);
         }
 
         [TestMethod]

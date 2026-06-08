@@ -418,17 +418,34 @@ public class JsonFileDashboardService : IDashboardService
         }
     }
 
-    public async Task DeleteAsync(string dashboardId)
+    public Task DeleteAsync(string dashboardId)
+        // Tenant-unaware overload: look up tenantId from the in-memory index (back-compat).
+        // Callers that need strict tenant isolation must use the tenant-aware overload.
+        => DeleteAsync(dashboardId, tenantId: _index.TryGetValue(dashboardId, out var s) ? s.TenantId : null);
+
+    // BUG-FIX (Finding 3): implement the tenant-aware DeleteAsync DIM from IDashboardService.
+    // Uses GetFilePath(id, tenantId) so deletion is scoped to the caller's tenant directory —
+    // mirroring the isolation guarantee that GetAsync and GetFilePath already provide.
+    public async Task DeleteAsync(string dashboardId, string? tenantId)
     {
         ValidatePathSegment(dashboardId, nameof(dashboardId));
+        if (!string.IsNullOrEmpty(tenantId))
+            ValidatePathSegment(tenantId, nameof(tenantId));
 
         await EnsureInitializedAsync();
 
-        string? tenantId = null;
+        // Verify the indexed record belongs to the requested tenant; if not, treat as not-found (no-op).
         if (_index.TryGetValue(dashboardId, out var summary))
         {
-            tenantId = summary.TenantId;
+            var indexedTenant = summary.TenantId;
+            var tenantsMatch = string.IsNullOrEmpty(tenantId)
+                ? string.IsNullOrEmpty(indexedTenant)
+                : string.Equals(indexedTenant, tenantId, StringComparison.OrdinalIgnoreCase);
+
+            if (!tenantsMatch)
+                return; // wrong-tenant call — idempotent no-op
         }
+
         var path = GetFilePath(dashboardId, tenantId);
         var lockObj = GetLock(dashboardId);
 
