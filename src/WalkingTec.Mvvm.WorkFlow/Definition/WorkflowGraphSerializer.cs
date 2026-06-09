@@ -1,0 +1,178 @@
+#nullable enable
+// WF-4: Canonical / deterministic JSON serializer for WorkflowGraph documents.
+//
+// Determinism contract (repo prompt-cache-stability discipline):
+//   • Object properties are emitted in sorted alphabetical order by JSON property name.
+//   • Arrays are preserved in their authored order (ordering arrays would change semantics).
+//   • No indentation — compact single-line output.
+//   • Enum values written as strings (JsonStringEnumConverter).
+//   • Null properties suppressed (WhenWritingNull) so absent optional fields do not affect
+//     the hash.
+//   • Two WorkflowGraph instances that are logically identical but constructed with
+//     different in-memory property-assignment order produce byte-identical JSON.
+//
+// Algorithm: manual property-sorted serialization via Utf8JsonWriter rather than
+// reflection, to guarantee stable output regardless of STJ version or runtime
+// property-enumeration order changes.  Uses a recursive JsonDocument / JsonElement
+// intermediary so we can sort object keys at every depth.
+//
+// This file exposes two public members:
+//   WorkflowGraphSerializer.Serialize(WorkflowGraph)  → canonical JSON string
+//   WorkflowGraphSerializer.Deserialize(string)        → WorkflowGraph
+
+using System;
+using System.Buffers;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace WalkingTec.Mvvm.WorkFlow.Definition;
+
+/// <summary>
+/// Canonical, deterministic JSON serializer for <see cref="WorkflowGraph"/> documents.
+///
+/// <para><strong>Determinism guarantee:</strong> for any two <see cref="WorkflowGraph"/>
+/// instances that represent the same logical graph, <see cref="Serialize"/> produces
+/// byte-identical output regardless of the in-memory property-assignment order or
+/// dictionary/list construction order.  This is required for the SHA-256
+/// <see cref="Models.ProcessDefinitionVersion.ContentHash"/> to be stable across
+/// serialization round-trips.</para>
+///
+/// <para><strong>Technique:</strong>
+/// <list type="number">
+///   <item>Serialize to an intermediate <see cref="JsonDocument"/> using the base
+///   STJ options (enums as strings, WhenWritingNull, no indentation).</item>
+///   <item>Walk the document recursively, writing to a <see cref="Utf8JsonWriter"/>
+///   with object keys sorted alphabetically at every level.</item>
+///   <item>Return the resulting UTF-8 bytes decoded as a string.</item>
+/// </list>
+/// Arrays are preserved in their authored order — reordering arrays would change
+/// the semantic meaning of the graph (e.g. branch evaluation order in Condition nodes).
+/// </para>
+/// </summary>
+public static class WorkflowGraphSerializer
+{
+    // ── Base STJ options (used for initial round-trip; NOT for canonical output) ──
+
+    private static readonly JsonSerializerOptions _baseOptions = new()
+    {
+        PropertyNamingPolicy = null,                  // respect JsonPropertyName attributes
+        WriteIndented = false,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        Converters = { new JsonStringEnumConverter() },
+    };
+
+    // ── Public API ─────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Serialize <paramref name="graph"/> to canonical (deterministic, key-sorted,
+    /// compact) JSON.
+    /// </summary>
+    /// <param name="graph">The graph to serialize.  Must not be null.</param>
+    /// <returns>Canonical JSON string, UTF-8 safe.</returns>
+    public static string Serialize(WorkflowGraph graph)
+    {
+        if (graph is null) throw new ArgumentNullException(nameof(graph));
+
+        // Step 1: serialize to intermediate JSON via base STJ options.
+        // This handles all the JsonPropertyName / WhenWritingNull / enum-as-string
+        // concerns correctly; the intermediate form may have unsorted keys.
+        var intermediate = JsonSerializer.Serialize(graph, _baseOptions);
+
+        // Step 2: parse into a JsonDocument and write back with sorted keys.
+        using var doc = JsonDocument.Parse(intermediate);
+        return WriteCanonical(doc.RootElement);
+    }
+
+    /// <summary>
+    /// Deserialize a canonical JSON string back to a <see cref="WorkflowGraph"/>.
+    /// </summary>
+    /// <param name="json">Canonical JSON produced by <see cref="Serialize"/>.</param>
+    /// <returns>Deserialized graph.</returns>
+    /// <exception cref="JsonException">When <paramref name="json"/> is malformed.</exception>
+    public static WorkflowGraph Deserialize(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            throw new ArgumentException("GraphJson must not be null or empty.", nameof(json));
+
+        return JsonSerializer.Deserialize<WorkflowGraph>(json, _baseOptions)
+               ?? throw new JsonException("Deserialized WorkflowGraph was null.");
+    }
+
+    // ── Canonical writer ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Recursively write a <see cref="JsonElement"/> with object keys sorted
+    /// alphabetically (ordinal) at every level.  Arrays are preserved as-is.
+    /// </summary>
+    private static string WriteCanonical(JsonElement root)
+    {
+        var buf = new ArrayBufferWriter<byte>(512);
+        using var writer = new Utf8JsonWriter(buf, new JsonWriterOptions
+        {
+            Indented = false,
+            SkipValidation = false,
+        });
+
+        WriteElement(writer, root);
+        writer.Flush();
+
+        return Encoding.UTF8.GetString(buf.WrittenSpan);
+    }
+
+    private static void WriteElement(Utf8JsonWriter writer, JsonElement element)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                // Sort properties alphabetically by JSON property name (ordinal).
+                var props = element.EnumerateObject()
+                    .OrderBy(p => p.Name, StringComparer.Ordinal)
+                    .ToList();
+                foreach (var prop in props)
+                {
+                    writer.WritePropertyName(prop.Name);
+                    WriteElement(writer, prop.Value);
+                }
+                writer.WriteEndObject();
+                break;
+
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in element.EnumerateArray())
+                    WriteElement(writer, item);
+                writer.WriteEndArray();
+                break;
+
+            case JsonValueKind.String:
+                writer.WriteStringValue(element.GetString());
+                break;
+
+            case JsonValueKind.Number:
+                // Preserve exact numeric representation.
+                writer.WriteRawValue(element.GetRawText(), skipInputValidation: false);
+                break;
+
+            case JsonValueKind.True:
+                writer.WriteBooleanValue(true);
+                break;
+
+            case JsonValueKind.False:
+                writer.WriteBooleanValue(false);
+                break;
+
+            case JsonValueKind.Null:
+                writer.WriteNullValue();
+                break;
+
+            default:
+                // Undefined / other — write raw to avoid silent data loss.
+                writer.WriteRawValue(element.GetRawText(), skipInputValidation: false);
+                break;
+        }
+    }
+}

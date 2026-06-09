@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.WorkFlow.Definition;
 using WalkingTec.Mvvm.WorkFlow.Models;
 
 namespace WalkingTec.Mvvm.WorkFlow;
@@ -55,8 +56,12 @@ public static class ServiceCollectionExtensions
             ThrowMemoryNotSupported();
         }
 
-        // 3. WF-2: Engine service registrations (IWorkflowEngine, IApproverResolver,
-        //          IRoutingEvaluator, INodeKindDispatcher) will be wired here in WF-6/7/8.
+        // 3. WF-4: Publish-flow registrations.
+        //    IProcessDefinitionPublisher — scoped (one per request, wraps the scoped IDataContext).
+        services.AddScoped<IProcessDefinitionPublisher, ProcessDefinitionPublisher>();
+
+        // 4. WF-6/7/8: IWorkflowEngine, IApproverResolver, IRoutingEvaluator,
+        //              INodeKindDispatcher will be wired here once those waves land.
 
         return services;
     }
