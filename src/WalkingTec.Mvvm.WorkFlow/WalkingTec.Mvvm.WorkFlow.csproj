@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>WalkingTec.Mvvm.WorkFlow</AssemblyName>
+    <Title>$(AssemblyName)</Title>
+    <Description>WTM WorkFlow Module - approval/workflow engine (串签/会签/或签/加签/委托/撤回/回退/条件路由/抄送/超时)</Description>
+    <IsPackable>true</IsPackable>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <Import Project="..\..\common.props" />
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="WalkingTec.Mvvm.WorkFlow.Test" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <!-- No new PackageReference needed for MVP. CPM resolves all versions; NEVER add Version= here. -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\WalkingTec.Mvvm.Mvc\WalkingTec.Mvvm.Mvc.csproj" />
+  </ItemGroup>
+</Project>
