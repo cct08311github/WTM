@@ -25,7 +25,12 @@ public enum WithdrawPolicy
 /// </summary>
 public enum AutoApproveOnMissingHandlerPolicy
 {
-    /// <summary>Auto-approve the node and log a warning (default).</summary>
+    /// <summary>
+    /// Auto-approve the node and log a warning.
+    /// <strong>OPT-IN ONLY — not the default.</strong>  Silently bypasses the approval step,
+    /// which constitutes a compliance bypass in regulated environments.
+    /// Must be documented in CHANGELOG when enabled.
+    /// </summary>
     AutoApprove,
 
     /// <summary>Escalate to the admin fallback ITCode defined in <see cref="WorkFlowOptions.AdminFallbackITCode"/>.</summary>
@@ -103,11 +108,29 @@ public sealed class WorkFlowOptions
     public WithdrawPolicy WithdrawPolicy { get; set; } = WithdrawPolicy.BeforeFinalApproval;
 
     /// <summary>
-    /// What happens when no approver can be resolved for a node.
-    /// Default: auto-approve and log a warning (avoids deadlock; conservative for multi-tenant).
+    /// What happens when no approver can be resolved for a node (e.g. empty role, unresolvable
+    /// ManagerChain, or unsupported rule type).
+    ///
+    /// <strong>DEFAULT = <see cref="AutoApproveOnMissingHandlerPolicy.FailClose"/> (safe, opt-in only to change).</strong>
+    ///
+    /// <para>With <c>FailClose</c> (default), a node whose approver cannot be resolved is
+    /// blocked and requires manual admin intervention — the instance will NOT silently advance.
+    /// This is the correct behaviour for any compliance-sensitive approval engine.</para>
+    ///
+    /// <para>Setting this to <c>AutoApprove</c> causes the node to be silently approved and
+    /// the instance to advance as if the step had been properly approved.  This is a
+    /// <strong>compliance bypass</strong> and must be documented in CHANGELOG as an explicit
+    /// opt-in decision.  Do not enable in regulated environments.</para>
+    ///
+    /// <para><c>EscalateToAdmin</c> reassigns the task to <see cref="AdminFallbackITCode"/>
+    /// when set; if <see cref="AdminFallbackITCode"/> is empty the engine <strong>fails
+    /// closed</strong> (never auto-approves).</para>
+    ///
+    /// Red-line change (WF-8): prior default was <c>AutoApprove</c> — changed to <c>FailClose</c>
+    /// to eliminate the silent-approval compliance bypass when no approver is resolvable.
     /// </summary>
     public AutoApproveOnMissingHandlerPolicy AutoApproveOnMissingHandler { get; set; }
-        = AutoApproveOnMissingHandlerPolicy.AutoApprove;
+        = AutoApproveOnMissingHandlerPolicy.FailClose;
 
     /// <summary>
     /// Admin fallback ITCode used when <see cref="AutoApproveOnMissingHandler"/> is

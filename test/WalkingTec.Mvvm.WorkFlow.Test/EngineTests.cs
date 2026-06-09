@@ -19,6 +19,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.WorkFlow.Definition;
@@ -525,7 +526,61 @@ public class EngineTests : IDisposable
 
 internal static class NodeKindDispatcher_Exposed
 {
-    public static NodeKindDispatcher Create() => new NodeKindDispatcher();
+    /// <summary>
+    /// Creates a dispatcher wired with a stub-backed ApprovalHandler.
+    /// The SequentialApprovalHandler stub (null-resolver + null-options + null-logger)
+    /// is only used in WF-6/7 engine tests that do NOT exercise Approval nodes
+    /// beyond blocking (Test 3 / Test 4 use the ApprovalHandlerStub path).
+    /// For real Sequential tests, use <see cref="CreateWithSequential"/>.
+    /// </summary>
+    public static NodeKindDispatcher Create()
+    {
+        // The WF-6/7 tests that call this helper do NOT drive Approval nodes past
+        // CanCompleteAsync; they only verify that the node blocks.  We therefore
+        // wire a minimal ApprovalHandler backed by null-stub services so that
+        // OnEnterAsync/CanCompleteAsync still work.
+        //
+        // Use FailClose policy so that when the NullApproverResolver returns NoApprover
+        // the SequentialApprovalHandler sets TotalRequired=int.MaxValue, making
+        // CanCompleteAsync return false — preserving the original "Blocked" observable
+        // behaviour expected by the WF-6/7 approval-stub tests.
+        var resolver   = new NullApproverResolver();
+        var options    = Microsoft.Extensions.Options.Options.Create(new WorkFlowOptions
+        {
+            AutoApproveOnMissingHandler = AutoApproveOnMissingHandlerPolicy.FailClose,
+        });
+        var seqLogger  = NullLogger<SequentialApprovalHandler>.Instance;
+        var seqHandler = new SequentialApprovalHandler(resolver, options, seqLogger);
+        var approval   = new ApprovalHandler(seqHandler);
+        return new NodeKindDispatcher(approval);
+    }
+
+    /// <summary>
+    /// Creates a dispatcher with a real <see cref="SequentialApprovalHandler"/> backed by
+    /// the given resolver and options.  Used by <c>SequentialTests</c>.
+    /// </summary>
+    public static NodeKindDispatcher CreateWithSequential(
+        IApproverResolver resolver,
+        WorkFlowOptions options)
+    {
+        var optionsWrapper = Microsoft.Extensions.Options.Options.Create(options);
+        var seqLogger  = NullLogger<SequentialApprovalHandler>.Instance;
+        var seqHandler = new SequentialApprovalHandler(resolver, optionsWrapper, seqLogger);
+        var approval   = new ApprovalHandler(seqHandler);
+        return new NodeKindDispatcher(approval);
+    }
+
+    // Minimal no-op resolver used for the non-Approval WF-6/7 tests.
+    private sealed class NullApproverResolver : IApproverResolver
+    {
+        public Task<ApproverResolution> ResolveAsync(
+            Microsoft.EntityFrameworkCore.DbContext db,
+            WalkingTec.Mvvm.WorkFlow.Definition.ApproverRuleDef rule,
+            NodeInstance nodeInstance,
+            string initiatorITCode,
+            CancellationToken ct = default)
+            => Task.FromResult(ApproverResolution.NoApprover("NullApproverResolver — test stub."));
+    }
 }
 
 internal static class WorkflowEngine_Exposed

@@ -1,17 +1,21 @@
 #nullable enable
-// WF-6: Built-in INodeKindHandler implementations + NodeKindDispatcher registry.
+// WF-6/WF-8: Built-in INodeKindHandler implementations + NodeKindDispatcher registry.
 //
 // MVP handlers (non-Approval):
-//   StartHandler   — pass-through (no tasks, no CC, no wait)
-//   EndHandler     — pass-through (engine advances ProcessInstance to Approved)
-//   CcHandler      — writes CcRecord rows, never blocks (spec §5.9)
+//   StartHandler     — pass-through (no tasks, no CC, no wait)
+//   EndHandler       — pass-through (engine advances ProcessInstance to Approved)
+//   CcHandler        — writes CcRecord rows, never blocks (spec §5.9)
 //   ConditionHandler — stub: takes default/first transition (real routing = WF-11)
 //
-// Approval stub:
-//   ApprovalHandler — returns Blocked; throws NotImplementedException("WF-8/9/10")
-//   from OnCompleteAsync since that path should not be reached until the mode handlers land.
+// Approval handler:
+//   ApprovalHandler  — dispatches to mode-specific sub-handler:
+//                      Sequential (WF-8) → SequentialApprovalHandler
+//                      All (WF-9)        → stub (NotImplementedException)
+//                      Any (WF-10)       → stub (NotImplementedException)
 //
 // NodeKindDispatcher is the singleton registry wired by AddWtmWorkFlow.
+// SequentialApprovalHandler is injected via DI so it has access to
+// IApproverResolver, WorkFlowOptions, and ILogger.
 
 using System;
 using System.Linq;
@@ -137,52 +141,98 @@ internal sealed class ConditionHandler : INodeKindHandler
     // WF-11: real WhitelistRoutingEvaluator selects the branch target here.
 }
 
-// ── Approval handler (stub — WF-8/9/10) ──────────────────────────────────────
+// ── Approval handler — dispatches by ApproveMode ─────────────────────────────
 
 /// <summary>
-/// Stub handler for <see cref="NodeKind.Approval"/> nodes.
+/// Top-level handler for <see cref="NodeKind.Approval"/> nodes.
 ///
-/// <para>Returns <see cref="WorkflowActionResult.Blocked"/> from
-/// <see cref="CanCompleteAsync"/> because no human has acted yet.</para>
-///
-/// <para>The full completion policies (串签 = Sequential, 会签 = All, 或签 = Any) are
-/// implemented in WF-8, WF-9, and WF-10.  <see cref="OnCompleteAsync"/> throws
-/// <see cref="NotImplementedException"/> to make the seam visible:
-/// the engine should never call <c>OnComplete</c> on an Approval node until a real
-/// handler replaces this stub.</para>
+/// <para>Dispatches to the appropriate mode sub-handler based on
+/// <see cref="NodeInstance.ApproveMode"/>:
+/// <list type="bullet">
+///   <item><see cref="ApproveMode.Sequential"/> → <see cref="SequentialApprovalHandler"/> (WF-8)</item>
+///   <item><see cref="ApproveMode.All"/> → stub returning Blocked (WF-9)</item>
+///   <item><see cref="ApproveMode.Any"/> → stub returning Blocked (WF-10)</item>
+/// </list>
+/// </para>
 /// </summary>
-internal sealed class ApprovalHandlerStub : INodeKindHandler
+internal sealed class ApprovalHandler : INodeKindHandler
 {
+    private readonly SequentialApprovalHandler _sequential;
+
+    public ApprovalHandler(SequentialApprovalHandler sequential)
+    {
+        _sequential = sequential ?? throw new ArgumentNullException(nameof(sequential));
+    }
+
     public Task OnEnterAsync(NodeHandlerContext ctx)
     {
-        // WF-8/9/10: real handler mints ApprovalTask rows here per the ApproveMode policy.
-        // Stub: no tasks created — the node remains Activated with no pending tasks.
-        return Task.CompletedTask;
+        return ResolveMode(ctx).OnEnterAsync(ctx);
     }
 
     public Task<bool> CanCompleteAsync(NodeHandlerContext ctx)
     {
-        // Approval nodes block until human action; the real policy (WF-8/9/10) decides.
-        // Stub always returns false → engine leaves the node Activated.
-        return Task.FromResult(false);
+        return ResolveMode(ctx).CanCompleteAsync(ctx);
     }
 
     public Task OnCompleteAsync(NodeHandlerContext ctx)
     {
-        // This path must not be reached while the stub is in place.
-        // If it is reached, it means the engine called OnComplete on an Approval node
-        // without a real handler — that is a programming error.
-        throw new NotImplementedException(
-            "ApprovalHandler.OnCompleteAsync is not implemented in this wave. " +
-            "Approval node completion policies (串签/会签/或签) are implemented in WF-8/9/10.");
+        return ResolveMode(ctx).OnCompleteAsync(ctx);
     }
+
+    private INodeKindHandler ResolveMode(NodeHandlerContext ctx)
+    {
+        var mode = ctx.NodeInstance.ApproveMode;
+        return mode switch
+        {
+            ApproveMode.Sequential => _sequential,
+            ApproveMode.All        => _allStub,
+            ApproveMode.Any        => _anyStub,
+            null                   => _sequential, // default to Sequential if not set
+            _ => throw new InvalidOperationException(
+                     $"Unknown ApproveMode '{mode}' for node '{ctx.NodeInstance.NodeKey}'."),
+        };
+    }
+
+    // Stubs for WF-9/WF-10 modes — return Blocked; OnCompleteAsync throws.
+    private static readonly ApprovalModeStub _allStub = new("All", "WF-9");
+    private static readonly ApprovalModeStub _anyStub = new("Any", "WF-10");
+}
+
+/// <summary>
+/// Stub for a deferred approval mode (WF-9: All, WF-10: Any).
+/// Returns Blocked; throws if OnComplete is reached (programming error).
+/// </summary>
+internal sealed class ApprovalModeStub : INodeKindHandler
+{
+    private readonly string _modeName;
+    private readonly string _waveTag;
+
+    public ApprovalModeStub(string modeName, string waveTag)
+    {
+        _modeName = modeName;
+        _waveTag = waveTag;
+    }
+
+    public Task OnEnterAsync(NodeHandlerContext ctx) => Task.CompletedTask;
+
+    public Task<bool> CanCompleteAsync(NodeHandlerContext ctx) => Task.FromResult(false);
+
+    public Task OnCompleteAsync(NodeHandlerContext ctx) =>
+        throw new NotImplementedException(
+            $"Approval mode '{_modeName}' is not yet implemented. " +
+            $"It will be added in {_waveTag}.");
 }
 
 // ── Dispatcher registry ───────────────────────────────────────────────────────
 
 /// <summary>
-/// Singleton registry mapping <see cref="NodeKind"/> to <see cref="INodeKindHandler"/>.
+/// Registry mapping <see cref="NodeKind"/> to <see cref="INodeKindHandler"/>.
 /// Registered by <see cref="ServiceCollectionExtensions.AddWtmWorkFlow"/>.
+///
+/// <para>The <see cref="ApprovalHandler"/> is NOT a static singleton because it
+/// depends on <see cref="SequentialApprovalHandler"/> which requires scoped services
+/// (IApproverResolver, WorkFlowOptions, ILogger).  The dispatcher receives the
+/// pre-built <see cref="ApprovalHandler"/> at construction time from DI.</para>
 /// </summary>
 internal sealed class NodeKindDispatcher : INodeKindDispatcher
 {
@@ -190,7 +240,13 @@ internal sealed class NodeKindDispatcher : INodeKindDispatcher
     private static readonly EndHandler       _end       = new();
     private static readonly CcHandler        _cc        = new();
     private static readonly ConditionHandler _condition = new();
-    private static readonly ApprovalHandlerStub _approval = new();
+
+    private readonly ApprovalHandler _approval;
+
+    public NodeKindDispatcher(ApprovalHandler approval)
+    {
+        _approval = approval ?? throw new ArgumentNullException(nameof(approval));
+    }
 
     public INodeKindHandler Resolve(NodeKind kind) => kind switch
     {

@@ -385,6 +385,353 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         return WorkflowActionResult.FailClosedRouting;
     }
 
+    // ── ApproveTaskAsync ──────────────────────────────────────────────────────
+
+    /// <inheritdoc/>
+    public async Task<WorkflowActionResult> ApproveTaskAsync(
+        Guid taskId,
+        string actorITCode,
+        string? comment = null,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(actorITCode))
+            throw new ArgumentException("actorITCode must not be empty.", nameof(actorITCode));
+
+        // 1. Load task (no AsNoTracking — we need fresh RowVer).
+        var task = await Db.Set<ApprovalTask>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(t => t.ID == taskId && t.IsValid == true, ct);
+
+        if (task is null)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.TaskNotActive,
+                $"ApprovalTask {taskId} not found.");
+
+        // 2. Load the owning node instance.
+        var nodeInst = await Db.Set<NodeInstance>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(n => n.ID == task.NodeInstanceId, ct);
+
+        if (nodeInst is null)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeClosed,
+                $"NodeInstance {task.NodeInstanceId} not found.");
+
+        // 3. Load the owning process instance.
+        var instance = await Db.Set<ProcessInstance>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(p => p.ID == nodeInst.InstanceId && p.IsValid == true, ct);
+
+        if (instance is null)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeClosed,
+                $"ProcessInstance for NodeInstance {nodeInst.ID} not found.");
+
+        // 4. Guard: node must be Activated.
+        if (nodeInst.State != NodeState.Activated)
+        {
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeClosed,
+                $"NodeInstance {nodeInst.ID} is in state {nodeInst.State}, not Activated.");
+        }
+
+        // 5. Early-act guard: actor must be the assignee of the current (Pending) task.
+        if (!string.Equals(task.AssigneeITCode, actorITCode, StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.TaskNotActive,
+                $"Actor '{actorITCode}' is not the assignee '{task.AssigneeITCode}' of task {taskId}. " +
+                $"Sequential pointer is at SequenceOrder {nodeInst.SequencePointer}.");
+        }
+
+        // 6. Guard: task must be Pending.
+        if (task.State != TaskState.Pending)
+        {
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.AlreadyHandled,
+                $"Task {taskId} is in state {task.State}, not Pending.");
+        }
+
+        // 7. Also guard: task.SequenceOrder must match nodeInst.SequencePointer (early-act guard).
+        if (task.SequenceOrder != nodeInst.SequencePointer)
+        {
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.TaskNotActive,
+                $"Task {taskId} SequenceOrder {task.SequenceOrder} does not match " +
+                $"node pointer {nodeInst.SequencePointer}. Early-act rejected.");
+        }
+
+        var now = DateTime.UtcNow;
+
+        // 8. CAS: claim the task as Approved.
+        var claimedRows = await GuardedTransition.ClaimApprovalTaskAsync(
+            Db, taskId,
+            expectedRowVer: task.RowVer,
+            nextState: TaskState.Approved,
+            actedAtUtc: now,
+            comment: comment,
+            ct: ct);
+
+        if (claimedRows == 0)
+        {
+            _logger.LogDebug(
+                "ApproveTaskAsync: task {TaskId} CAS returned 0 rows — already handled by concurrent actor.",
+                taskId);
+            return WorkflowActionResult.AlreadyHandled;
+        }
+
+        // 9. Write event log for the approve action.
+        await WorkflowEventLogWriter.AppendAsync(
+            Db, instance.ID, instance.TenantCode,
+            EventAction.Approve,
+            nodeKey: nodeInst.NodeKey,
+            actorITCode: actorITCode,
+            beforeState: TaskState.Pending.ToString(),
+            afterState: TaskState.Approved.ToString(),
+            reason: comment,
+            ct: ct);
+
+        // 10. Determine if there are more steps.
+        var nextPointer = nodeInst.SequencePointer + 1;
+        var totalRequired = nodeInst.TotalRequired;
+
+        if (nextPointer < totalRequired)
+        {
+            // More steps remain: advance the pointer and activate the next task.
+            // Step A: advance the SequencePointer on NodeInstance (CAS on RowVer).
+            var freshNode = await Db.Set<NodeInstance>()
+                .AsNoTracking()
+                .SingleAsync(n => n.ID == nodeInst.ID, ct);
+
+            var advanceRows = await Db.Set<NodeInstance>()
+                .Where(n => n.ID == nodeInst.ID
+                             && n.State == NodeState.Activated
+                             && n.RowVer == freshNode.RowVer
+                             && n.SequencePointer == nodeInst.SequencePointer)
+                .ExecuteUpdateAsync(
+                    s => s.SetProperty(n => n.SequencePointer, nextPointer)
+                           .SetProperty(n => n.RowVer, x => x.RowVer + 1),
+                    ct);
+
+            if (advanceRows == 0)
+            {
+                _logger.LogDebug(
+                    "ApproveTaskAsync: NodeInstance {NodeId} pointer advance CAS returned 0 — " +
+                    "concurrent actor already advanced. Instance proceeds as AlreadyHandled.",
+                    nodeInst.ID);
+                return WorkflowActionResult.AlreadyHandled;
+            }
+
+            // Step B: activate the next task.
+            var activateRows = await Db.Set<ApprovalTask>()
+                .Where(t => t.NodeInstanceId == nodeInst.ID
+                             && t.SequenceOrder == nextPointer
+                             && t.State == TaskState.NotYetActive)
+                .ExecuteUpdateAsync(
+                    s => s.SetProperty(t => t.State, TaskState.Pending),
+                    ct);
+
+            if (activateRows == 0)
+            {
+                // Check if it was already auto-approved (InitiatorAutoApprove path).
+                var nextTask = await Db.Set<ApprovalTask>()
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(t => t.NodeInstanceId == nodeInst.ID
+                                               && t.SequenceOrder == nextPointer, ct);
+
+                if (nextTask?.State == TaskState.AutoApproved)
+                {
+                    // Auto-approved step: recursively advance until a real pending step or completion.
+                    _logger.LogDebug(
+                        "ApproveTaskAsync: next task (order {Order}) is AutoApproved — continuing pointer advance.",
+                        nextPointer);
+                    // Re-read nodeInst with updated pointer and recurse via AdvanceAsync.
+                    return await AdvanceAsync(instance.ID, ct);
+                }
+
+                _logger.LogWarning(
+                    "ApproveTaskAsync: could not activate next task at order {Order} for node {NodeId}.",
+                    nextPointer, nodeInst.ID);
+            }
+
+            // Node is still active — waiting for the next approver.
+            return WorkflowActionResult.Advanced;
+        }
+        else
+        {
+            // Last step completed — advance the SequencePointer to totalRequired so that
+            // SequentialApprovalHandler.CanCompleteAsync (pointer >= totalRequired) returns true,
+            // then call AdvanceAsync to route the engine onward (to End → Approved).
+            var freshNodeLast = await Db.Set<NodeInstance>()
+                .AsNoTracking()
+                .SingleAsync(n => n.ID == nodeInst.ID, ct);
+
+            await Db.Set<NodeInstance>()
+                .Where(n => n.ID == nodeInst.ID
+                             && n.State == NodeState.Activated
+                             && n.RowVer == freshNodeLast.RowVer)
+                .ExecuteUpdateAsync(
+                    s => s.SetProperty(n => n.SequencePointer, totalRequired)
+                           .SetProperty(n => n.RowVer, x => x.RowVer + 1),
+                    ct);
+
+            return await AdvanceAsync(instance.ID, ct);
+        }
+    }
+
+    // ── RejectTaskAsync ───────────────────────────────────────────────────────
+
+    /// <inheritdoc/>
+    public async Task<WorkflowActionResult> RejectTaskAsync(
+        Guid taskId,
+        string actorITCode,
+        string? reason = null,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(actorITCode))
+            throw new ArgumentException("actorITCode must not be empty.", nameof(actorITCode));
+
+        // 1. Load task.
+        var task = await Db.Set<ApprovalTask>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(t => t.ID == taskId && t.IsValid == true, ct);
+
+        if (task is null)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.TaskNotActive,
+                $"ApprovalTask {taskId} not found.");
+
+        // 2. Load node instance.
+        var nodeInst = await Db.Set<NodeInstance>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(n => n.ID == task.NodeInstanceId, ct);
+
+        if (nodeInst is null)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeClosed,
+                $"NodeInstance {task.NodeInstanceId} not found.");
+
+        // 3. Load process instance.
+        var instance = await Db.Set<ProcessInstance>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(p => p.ID == nodeInst.InstanceId && p.IsValid == true, ct);
+
+        if (instance is null)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeClosed,
+                $"ProcessInstance for NodeInstance {nodeInst.ID} not found.");
+
+        // 4. Guard: node must be Activated.
+        if (nodeInst.State != NodeState.Activated)
+        {
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeClosed,
+                $"NodeInstance {nodeInst.ID} is in state {nodeInst.State}, not Activated.");
+        }
+
+        // 5. Early-act guard: actor must be the assignee.
+        if (!string.Equals(task.AssigneeITCode, actorITCode, StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.TaskNotActive,
+                $"Actor '{actorITCode}' is not the assignee '{task.AssigneeITCode}' of task {taskId}.");
+        }
+
+        // 6. Guard: task must be Pending.
+        if (task.State != TaskState.Pending)
+        {
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.AlreadyHandled,
+                $"Task {taskId} is in state {task.State}, not Pending.");
+        }
+
+        // 7. SequencePointer match guard.
+        if (task.SequenceOrder != nodeInst.SequencePointer)
+        {
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.TaskNotActive,
+                $"Task {taskId} SequenceOrder {task.SequenceOrder} does not match " +
+                $"node pointer {nodeInst.SequencePointer}. Early-act rejected.");
+        }
+
+        var now = DateTime.UtcNow;
+
+        // 8. CAS: claim the task as Rejected.
+        var claimedRows = await GuardedTransition.ClaimApprovalTaskAsync(
+            Db, taskId,
+            expectedRowVer: task.RowVer,
+            nextState: TaskState.Rejected,
+            actedAtUtc: now,
+            comment: reason,
+            ct: ct);
+
+        if (claimedRows == 0)
+        {
+            _logger.LogDebug(
+                "RejectTaskAsync: task {TaskId} CAS returned 0 rows — already handled by concurrent actor.",
+                taskId);
+            return WorkflowActionResult.AlreadyHandled;
+        }
+
+        // 9. Cancel remaining NotYetActive tasks on this node.
+        await Db.Set<ApprovalTask>()
+            .Where(t => t.NodeInstanceId == nodeInst.ID && t.State == TaskState.NotYetActive)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(t => t.State, TaskState.Cancelled),
+                ct);
+
+        // 10. Complete the node as CompletedRejected (CAS on node RowVer).
+        var freshNode = await Db.Set<NodeInstance>()
+            .AsNoTracking()
+            .SingleAsync(n => n.ID == nodeInst.ID, ct);
+
+        var completeRows = await GuardedTransition.CompleteNodeInstanceAsync(
+            Db, nodeInst.ID,
+            expectedRowVer: freshNode.RowVer,
+            completedState: NodeState.CompletedRejected,
+            decidedBy: actorITCode,
+            ct: ct);
+
+        if (completeRows == 0)
+        {
+            _logger.LogDebug(
+                "RejectTaskAsync: NodeInstance {NodeId} completion CAS returned 0 — concurrent actor already completed.",
+                nodeInst.ID);
+            return WorkflowActionResult.AlreadyHandled;
+        }
+
+        // 11. Write event log.
+        await WorkflowEventLogWriter.AppendAsync(
+            Db, instance.ID, instance.TenantCode,
+            EventAction.Reject,
+            nodeKey: nodeInst.NodeKey,
+            actorITCode: actorITCode,
+            beforeState: NodeState.Activated.ToString(),
+            afterState: NodeState.CompletedRejected.ToString(),
+            reason: reason,
+            ct: ct);
+
+        // 12. Apply RejectPolicy.
+        // MVP: both TerminateInstance and ReturnToInitiator mark the instance as Rejected.
+        // ReturnToInitiator full WF-12 restart is deferred.
+        var rejectPolicy = nodeInst.RejectPolicy;
+
+        // WF-12: ReturnToInitiator restart (re-route from Start) is deferred. // WF-12
+
+        // Re-read instance for current RowVer.
+        instance = await Db.Set<ProcessInstance>()
+            .AsNoTracking()
+            .SingleAsync(x => x.ID == instance.ID, ct);
+
+        var rejectRows = await GuardedTransition.AdvanceProcessInstanceAsync(
+            Db, instance.ID,
+            expectedState: InstanceState.Running,
+            expectedRowVer: instance.RowVer,
+            nextState: InstanceState.Rejected,
+            ct);
+
+        if (rejectRows == 1)
+        {
+            await WorkflowEventLogWriter.AppendAsync(
+                Db, instance.ID, instance.TenantCode,
+                EventAction.Reject,
+                nodeKey: nodeInst.NodeKey,
+                actorITCode: actorITCode,
+                beforeState: InstanceState.Running.ToString(),
+                afterState: InstanceState.Rejected.ToString(),
+                reason: $"Rejected by '{actorITCode}'. RejectPolicy={rejectPolicy}. {reason}",
+                ct: ct);
+        }
+
+        return WorkflowActionResult.Rejected;
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     /// <summary>

@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.WorkFlow.Definition;
 using WalkingTec.Mvvm.WorkFlow.Engine;
@@ -61,10 +62,18 @@ public static class ServiceCollectionExtensions
         //    IProcessDefinitionPublisher — scoped (one per request, wraps the scoped IDataContext).
         services.AddScoped<IProcessDefinitionPublisher, ProcessDefinitionPublisher>();
 
-        // 4. WF-6/7: IWorkflowEngine + INodeKindDispatcher.
-        //    IApproverResolver (WF-8) and IRoutingEvaluator (WF-11) will be added when those waves land.
+        // 4. WF-6/7: IWorkflowEngine.
         services.AddScoped<IWorkflowEngine, WorkflowEngine>();
-        services.AddSingleton<INodeKindDispatcher, NodeKindDispatcher>();
+
+        // 5. WF-8: IApproverResolver + IManagerChainProvider + Sequential handler + dispatcher.
+        //    All registered as scoped because SequentialApprovalHandler depends on
+        //    IApproverResolver and IOptions<WorkFlowOptions> (request-scoped).
+        //    IRoutingEvaluator (WF-11) will be added when that wave lands.
+        services.AddScoped<IApproverResolver, DefaultApproverResolver>();
+        services.TryAddScoped<IManagerChainProvider, DefaultManagerChainProvider>();
+        services.AddScoped<SequentialApprovalHandler>();
+        services.AddScoped<ApprovalHandler>();
+        services.AddScoped<INodeKindDispatcher, NodeKindDispatcher>();
 
         return services;
     }

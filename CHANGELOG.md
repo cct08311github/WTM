@@ -20,6 +20,10 @@ Dashboard BI and ETL feature release (epic #193, Chinese-intranet/single-tenant 
 
 - **PostgreSQL/MySQL ETL bulk load is now supported** (#232): the bulk-load path that previously threw `NotSupportedException` for these providers now performs provider-native upserts. Adds `Npgsql` 10.0.2 and `MySqlConnector` 2.4.0 as ETL dependencies.
 
+### WorkFlow (in progress — WF-8)
+
+- **`AutoApproveOnMissingHandler` now defaults to `FailClose` (safe default, #250):** when a workflow approval node's approver cannot be resolved (empty role, unresolvable ManagerChain, or unsupported rule type), the node now **fails closed** by default — the instance stays Running and requires admin intervention. The prior default was `AutoApprove`, which silently bypassed the approval step (compliance bypass). **Migration:** if you relied on the previous silent auto-approve behavior, set `AutoApproveOnMissingHandler = AutoApproveOnMissingHandlerPolicy.AutoApprove` in `WorkFlowOptions` — but note this constitutes an explicit compliance bypass and should be documented. The `EscalateToAdmin` policy also now fails closed when `AdminFallbackITCode` is not configured (prior behavior was to fall through to `AutoApprove`).
+
 ### Migration
 
 - The DB-backed dashboard store (`AddWtmEfDashboardStore`), ETL governance store (`DbEtlGovernanceStore`), and per-tenant ETL job isolation introduce new EF Core entity sets (dashboard records, dead-letter rows, lineage records, ETL job definitions with a `TenantCode` column). **If you opt into any of these stores, generate and apply an EF Core migration before first use.** Deployments that do not enable these opt-in services are unaffected — the JSON-file dashboard store and in-memory ETL paths remain the defaults.
