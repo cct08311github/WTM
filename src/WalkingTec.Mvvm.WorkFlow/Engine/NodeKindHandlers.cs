@@ -1,5 +1,5 @@
 #nullable enable
-// WF-6/WF-8: Built-in INodeKindHandler implementations + NodeKindDispatcher registry.
+// WF-6/WF-8/WF-9/WF-10: Built-in INodeKindHandler implementations + NodeKindDispatcher registry.
 //
 // MVP handlers (non-Approval):
 //   StartHandler     — pass-through (no tasks, no CC, no wait)
@@ -10,11 +10,11 @@
 // Approval handler:
 //   ApprovalHandler  — dispatches to mode-specific sub-handler:
 //                      Sequential (WF-8) → SequentialApprovalHandler
-//                      All (WF-9)        → stub (NotImplementedException)
-//                      Any (WF-10)       → stub (NotImplementedException)
+//                      All (WF-9)        → AllApprovalHandler
+//                      Any (WF-10)       → AnyApprovalHandler
 //
 // NodeKindDispatcher is the singleton registry wired by AddWtmWorkFlow.
-// SequentialApprovalHandler is injected via DI so it has access to
+// All approval sub-handlers are injected via DI so they have access to
 // IApproverResolver, WorkFlowOptions, and ILogger.
 
 using System;
@@ -150,18 +150,25 @@ internal sealed class ConditionHandler : INodeKindHandler
 /// <see cref="NodeInstance.ApproveMode"/>:
 /// <list type="bullet">
 ///   <item><see cref="ApproveMode.Sequential"/> → <see cref="SequentialApprovalHandler"/> (WF-8)</item>
-///   <item><see cref="ApproveMode.All"/> → stub returning Blocked (WF-9)</item>
-///   <item><see cref="ApproveMode.Any"/> → stub returning Blocked (WF-10)</item>
+///   <item><see cref="ApproveMode.All"/> → <see cref="AllApprovalHandler"/> (WF-9)</item>
+///   <item><see cref="ApproveMode.Any"/> → <see cref="AnyApprovalHandler"/> (WF-10)</item>
 /// </list>
 /// </para>
 /// </summary>
 internal sealed class ApprovalHandler : INodeKindHandler
 {
     private readonly SequentialApprovalHandler _sequential;
+    private readonly AllApprovalHandler _all;
+    private readonly AnyApprovalHandler _any;
 
-    public ApprovalHandler(SequentialApprovalHandler sequential)
+    public ApprovalHandler(
+        SequentialApprovalHandler sequential,
+        AllApprovalHandler all,
+        AnyApprovalHandler any)
     {
         _sequential = sequential ?? throw new ArgumentNullException(nameof(sequential));
+        _all        = all        ?? throw new ArgumentNullException(nameof(all));
+        _any        = any        ?? throw new ArgumentNullException(nameof(any));
     }
 
     public Task OnEnterAsync(NodeHandlerContext ctx)
@@ -185,42 +192,13 @@ internal sealed class ApprovalHandler : INodeKindHandler
         return mode switch
         {
             ApproveMode.Sequential => _sequential,
-            ApproveMode.All        => _allStub,
-            ApproveMode.Any        => _anyStub,
+            ApproveMode.All        => _all,
+            ApproveMode.Any        => _any,
             null                   => _sequential, // default to Sequential if not set
             _ => throw new InvalidOperationException(
                      $"Unknown ApproveMode '{mode}' for node '{ctx.NodeInstance.NodeKey}'."),
         };
     }
-
-    // Stubs for WF-9/WF-10 modes — return Blocked; OnCompleteAsync throws.
-    private static readonly ApprovalModeStub _allStub = new("All", "WF-9");
-    private static readonly ApprovalModeStub _anyStub = new("Any", "WF-10");
-}
-
-/// <summary>
-/// Stub for a deferred approval mode (WF-9: All, WF-10: Any).
-/// Returns Blocked; throws if OnComplete is reached (programming error).
-/// </summary>
-internal sealed class ApprovalModeStub : INodeKindHandler
-{
-    private readonly string _modeName;
-    private readonly string _waveTag;
-
-    public ApprovalModeStub(string modeName, string waveTag)
-    {
-        _modeName = modeName;
-        _waveTag = waveTag;
-    }
-
-    public Task OnEnterAsync(NodeHandlerContext ctx) => Task.CompletedTask;
-
-    public Task<bool> CanCompleteAsync(NodeHandlerContext ctx) => Task.FromResult(false);
-
-    public Task OnCompleteAsync(NodeHandlerContext ctx) =>
-        throw new NotImplementedException(
-            $"Approval mode '{_modeName}' is not yet implemented. " +
-            $"It will be added in {_waveTag}.");
 }
 
 // ── Dispatcher registry ───────────────────────────────────────────────────────

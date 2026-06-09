@@ -99,6 +99,7 @@ internal sealed class WfSequentialTestContext : DbContext
             e.Property(x => x.RejectedCount);
             e.Property(x => x.TotalRequired);
             e.Property(x => x.SequencePointer);
+            e.Property(x => x.ApprovePercent);
             e.Property(x => x.RejectGate);
             e.Property(x => x.RejectPolicy);
             e.Ignore(x => x.Instance);

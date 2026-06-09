@@ -94,6 +94,7 @@ internal sealed class WfEngineTestContext : DbContext
             e.Property(x => x.RejectedCount);
             e.Property(x => x.TotalRequired);
             e.Property(x => x.SequencePointer);
+            e.Property(x => x.ApprovePercent);
             e.Property(x => x.RejectGate);
             e.Property(x => x.RejectPolicy);
             e.Ignore(x => x.Instance);
@@ -550,8 +551,12 @@ internal static class NodeKindDispatcher_Exposed
             AutoApproveOnMissingHandler = AutoApproveOnMissingHandlerPolicy.FailClose,
         });
         var seqLogger  = NullLogger<SequentialApprovalHandler>.Instance;
+        var allLogger  = NullLogger<AllApprovalHandler>.Instance;
+        var anyLogger  = NullLogger<AnyApprovalHandler>.Instance;
         var seqHandler = new SequentialApprovalHandler(resolver, options, seqLogger);
-        var approval   = new ApprovalHandler(seqHandler);
+        var allHandler = new AllApprovalHandler(resolver, options, allLogger);
+        var anyHandler = new AnyApprovalHandler(resolver, options, anyLogger);
+        var approval   = new ApprovalHandler(seqHandler, allHandler, anyHandler);
         return new NodeKindDispatcher(approval);
     }
 
@@ -565,8 +570,31 @@ internal static class NodeKindDispatcher_Exposed
     {
         var optionsWrapper = Microsoft.Extensions.Options.Options.Create(options);
         var seqLogger  = NullLogger<SequentialApprovalHandler>.Instance;
+        var allLogger  = NullLogger<AllApprovalHandler>.Instance;
+        var anyLogger  = NullLogger<AnyApprovalHandler>.Instance;
         var seqHandler = new SequentialApprovalHandler(resolver, optionsWrapper, seqLogger);
-        var approval   = new ApprovalHandler(seqHandler);
+        var allHandler = new AllApprovalHandler(resolver, optionsWrapper, allLogger);
+        var anyHandler = new AnyApprovalHandler(resolver, optionsWrapper, anyLogger);
+        var approval   = new ApprovalHandler(seqHandler, allHandler, anyHandler);
+        return new NodeKindDispatcher(approval);
+    }
+
+    /// <summary>
+    /// Creates a dispatcher wired with all three handlers backed by the given resolver
+    /// and options.  Used by <c>AllAnyTests</c> for both 会签 and 或签 tests.
+    /// </summary>
+    public static NodeKindDispatcher CreateWithAllModes(
+        IApproverResolver resolver,
+        WorkFlowOptions options)
+    {
+        var optionsWrapper = Microsoft.Extensions.Options.Options.Create(options);
+        var seqLogger  = NullLogger<SequentialApprovalHandler>.Instance;
+        var allLogger  = NullLogger<AllApprovalHandler>.Instance;
+        var anyLogger  = NullLogger<AnyApprovalHandler>.Instance;
+        var seqHandler = new SequentialApprovalHandler(resolver, optionsWrapper, seqLogger);
+        var allHandler = new AllApprovalHandler(resolver, optionsWrapper, allLogger);
+        var anyHandler = new AnyApprovalHandler(resolver, optionsWrapper, anyLogger);
+        var approval   = new ApprovalHandler(seqHandler, allHandler, anyHandler);
         return new NodeKindDispatcher(approval);
     }
 

@@ -1,5 +1,13 @@
 # 更新日志
 
+## [Unreleased]
+
+### WorkFlow (in progress — WF-9/WF-10)
+
+- **`AutoApproveOnMissingHandler` now defaults to `FailClose` (safe default, #250):** when a workflow approval node's approver cannot be resolved (empty role, unresolvable ManagerChain, or unsupported rule type), the node now **fails closed** by default — the instance stays Running and requires admin intervention. The prior default was `AutoApprove`, which silently bypassed the approval step (compliance bypass). **Migration:** if you relied on the previous silent auto-approve behavior, set `AutoApproveOnMissingHandler = AutoApproveOnMissingHandlerPolicy.AutoApprove` in `WorkFlowOptions` — but note this constitutes an explicit compliance bypass and should be documented. The `EscalateToAdmin` policy also now fails closed when `AdminFallbackITCode` is not configured (prior behavior was to fall through to `AutoApprove`).
+- **会签 (All/ratio) approval mode (#251):** `ApproveMode.All` nodes mint all approver tasks as `Pending` simultaneously. The node completes when the configured fraction (`approvePercent`; `null` = 100%) of approvals is reached via a guarded CAS. Supports `RejectGate.Immediate` (first reject fails node) and `RejectGate.AfterAll` (fail only when threshold is mathematically unreachable).
+- **或签 (Any) approval mode (#252):** `ApproveMode.Any` nodes mint all approver tasks as `Pending` simultaneously. The first approver to approve wins via a guarded CAS; sibling tasks are cancelled. A single reject does not fail the node — only the last pending approver's reject triggers node failure.
+
 ## [10.8.0] - 2026-06-08
 
 Dashboard BI and ETL feature release (epic #193, Chinese-intranet/single-tenant focus): a no-code dashboard designer, KPI threshold alerting with scheduled snapshots, a DB-backed dashboard store, five new ETL source connectors, ETL governance (dead-letter / lineage / per-tenant isolation), and a shared webhook notification sink. **Every new subsystem is opt-in** — no default behavior changes. New persistence stores ship with EF Core entity sets that require a migration before use (see Migration).
@@ -19,10 +27,6 @@ Dashboard BI and ETL feature release (epic #193, Chinese-intranet/single-tenant 
 ### Changed
 
 - **PostgreSQL/MySQL ETL bulk load is now supported** (#232): the bulk-load path that previously threw `NotSupportedException` for these providers now performs provider-native upserts. Adds `Npgsql` 10.0.2 and `MySqlConnector` 2.4.0 as ETL dependencies.
-
-### WorkFlow (in progress — WF-8)
-
-- **`AutoApproveOnMissingHandler` now defaults to `FailClose` (safe default, #250):** when a workflow approval node's approver cannot be resolved (empty role, unresolvable ManagerChain, or unsupported rule type), the node now **fails closed** by default — the instance stays Running and requires admin intervention. The prior default was `AutoApprove`, which silently bypassed the approval step (compliance bypass). **Migration:** if you relied on the previous silent auto-approve behavior, set `AutoApproveOnMissingHandler = AutoApproveOnMissingHandlerPolicy.AutoApprove` in `WorkFlowOptions` — but note this constitutes an explicit compliance bypass and should be documented. The `EscalateToAdmin` policy also now fails closed when `AdminFallbackITCode` is not configured (prior behavior was to fall through to `AutoApprove`).
 
 ### Migration
 

@@ -65,13 +65,15 @@ public static class ServiceCollectionExtensions
         // 4. WF-6/7: IWorkflowEngine.
         services.AddScoped<IWorkflowEngine, WorkflowEngine>();
 
-        // 5. WF-8: IApproverResolver + IManagerChainProvider + Sequential handler + dispatcher.
-        //    All registered as scoped because SequentialApprovalHandler depends on
-        //    IApproverResolver and IOptions<WorkFlowOptions> (request-scoped).
+        // 5. WF-8/9/10: IApproverResolver + IManagerChainProvider + approval mode handlers + dispatcher.
+        //    All registered as scoped because handlers depend on IApproverResolver and
+        //    IOptions<WorkFlowOptions> (request-scoped).
         //    IRoutingEvaluator (WF-11) will be added when that wave lands.
         services.AddScoped<IApproverResolver, DefaultApproverResolver>();
         services.TryAddScoped<IManagerChainProvider, DefaultManagerChainProvider>();
-        services.AddScoped<SequentialApprovalHandler>();
+        services.AddScoped<SequentialApprovalHandler>(); // WF-8 串签
+        services.AddScoped<AllApprovalHandler>();        // WF-9 会签
+        services.AddScoped<AnyApprovalHandler>();        // WF-10 或签
         services.AddScoped<ApprovalHandler>();
         services.AddScoped<INodeKindDispatcher, NodeKindDispatcher>();
 

@@ -425,18 +425,29 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                 $"ProcessInstance for NodeInstance {nodeInst.ID} not found.");
 
         // 4. Guard: node must be Activated.
+        //    Special case: concurrent All/Any races can result in the node being completed
+        //    (CompletedApproved) and the instance Approved by a concurrent winner before
+        //    this caller even checks.  Return AlreadyHandled rather than NodeClosed so that
+        //    the caller knows the workflow completed successfully.
         if (nodeInst.State != NodeState.Activated)
         {
+            var approveModePre = nodeInst.ApproveMode ?? ApproveMode.Sequential;
+            if ((approveModePre == ApproveMode.All || approveModePre == ApproveMode.Any)
+                && nodeInst.State == NodeState.CompletedApproved
+                && instance.State == InstanceState.Approved)
+            {
+                return WorkflowActionResult.AlreadyHandled;
+            }
+
             return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeClosed,
                 $"NodeInstance {nodeInst.ID} is in state {nodeInst.State}, not Activated.");
         }
 
-        // 5. Early-act guard: actor must be the assignee of the current (Pending) task.
+        // 5. Early-act guard: actor must be the assignee of the task.
         if (!string.Equals(task.AssigneeITCode, actorITCode, StringComparison.OrdinalIgnoreCase))
         {
             return WorkflowActionResult.WithDetail(WorkflowActionCode.TaskNotActive,
-                $"Actor '{actorITCode}' is not the assignee '{task.AssigneeITCode}' of task {taskId}. " +
-                $"Sequential pointer is at SequenceOrder {nodeInst.SequencePointer}.");
+                $"Actor '{actorITCode}' is not the assignee '{task.AssigneeITCode}' of task {taskId}.");
         }
 
         // 6. Guard: task must be Pending.
@@ -446,12 +457,17 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                 $"Task {taskId} is in state {task.State}, not Pending.");
         }
 
-        // 7. Also guard: task.SequenceOrder must match nodeInst.SequencePointer (early-act guard).
-        if (task.SequenceOrder != nodeInst.SequencePointer)
+        // 7. Sequential-only guard: task.SequenceOrder must match nodeInst.SequencePointer (early-act).
+        //    All/Any modes have all tasks Pending simultaneously — skip this guard for them.
+        var approveMode = nodeInst.ApproveMode ?? ApproveMode.Sequential;
+        if (approveMode == ApproveMode.Sequential)
         {
-            return WorkflowActionResult.WithDetail(WorkflowActionCode.TaskNotActive,
-                $"Task {taskId} SequenceOrder {task.SequenceOrder} does not match " +
-                $"node pointer {nodeInst.SequencePointer}. Early-act rejected.");
+            if (task.SequenceOrder != nodeInst.SequencePointer)
+            {
+                return WorkflowActionResult.WithDetail(WorkflowActionCode.TaskNotActive,
+                    $"Task {taskId} SequenceOrder {task.SequenceOrder} does not match " +
+                    $"node pointer {nodeInst.SequencePointer}. Early-act rejected.");
+            }
         }
 
         var now = DateTime.UtcNow;
@@ -484,7 +500,49 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             reason: comment,
             ct: ct);
 
-        // 10. Determine if there are more steps.
+        // 10. Mode-specific completion logic.
+        if (approveMode == ApproveMode.All)
+        {
+            // 会签: increment advisory ApprovedCount, then check if threshold is reached.
+            // For non-final approvals (count < threshold) return Advanced immediately —
+            // AdvanceCoreAsync would only see Blocked (node not yet complete).
+            // For the final approval(s) that cross the threshold, call AdvanceAsync so that
+            // AdvanceCoreAsync performs the authoritative node-completion CAS (W1 fix, spec §7.4).
+            // Concurrent final approvers both reach this path; exactly one wins the CAS;
+            // the other gets AlreadyHandled from CompleteNodeInstanceAsync returning 0 rows.
+            await GuardedTransition.IncrementNodeApprovedCountAsync(Db, nodeInst.ID, ct);
+
+            var freshNodeAll = await Db.Set<NodeInstance>()
+                .AsNoTracking()
+                .SingleAsync(n => n.ID == nodeInst.ID, ct);
+
+            int thresholdAll = AllApprovalHandler.ComputeThreshold(
+                freshNodeAll.TotalRequired, freshNodeAll.ApprovePercent, freshNodeAll.NodeKey);
+
+            if (freshNodeAll.ApprovedCount < thresholdAll)
+            {
+                // Threshold not yet met — node is still waiting for more approvals.
+                return WorkflowActionResult.Advanced;
+            }
+
+            // Threshold met (or exceeded by concurrent racing approvers): try to complete.
+            return await AdvanceAsync(instance.ID, ct);
+        }
+
+        if (approveMode == ApproveMode.Any)
+        {
+            // 或签: first approve always crosses the threshold (Any = 1 needed).
+            // Increment advisory count, then call AdvanceAsync so AdvanceCoreAsync runs
+            // CanCompleteAsync (ApprovedCount >= 1 → true) and performs the node CAS.
+            // OnCompleteAsync cancels sibling Pending tasks.
+            // Concurrent approvers both increment and both call AdvanceAsync; the node
+            // CAS in AdvanceCoreAsync ensures exactly one caller completes the node.
+            await GuardedTransition.IncrementNodeApprovedCountAsync(Db, nodeInst.ID, ct);
+            return await AdvanceAsync(instance.ID, ct);
+        }
+
+        // Sequential path (default) ─────────────────────────────────────────────
+
         var nextPointer = nodeInst.SequencePointer + 1;
         var totalRequired = nodeInst.TotalRequired;
 
@@ -632,12 +690,16 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                 $"Task {taskId} is in state {task.State}, not Pending.");
         }
 
-        // 7. SequencePointer match guard.
-        if (task.SequenceOrder != nodeInst.SequencePointer)
+        // 7. Sequential-only guard: SequencePointer match (All/Any tasks are all Pending in parallel).
+        var rejectMode = nodeInst.ApproveMode ?? ApproveMode.Sequential;
+        if (rejectMode == ApproveMode.Sequential)
         {
-            return WorkflowActionResult.WithDetail(WorkflowActionCode.TaskNotActive,
-                $"Task {taskId} SequenceOrder {task.SequenceOrder} does not match " +
-                $"node pointer {nodeInst.SequencePointer}. Early-act rejected.");
+            if (task.SequenceOrder != nodeInst.SequencePointer)
+            {
+                return WorkflowActionResult.WithDetail(WorkflowActionCode.TaskNotActive,
+                    $"Task {taskId} SequenceOrder {task.SequenceOrder} does not match " +
+                    $"node pointer {nodeInst.SequencePointer}. Early-act rejected.");
+            }
         }
 
         var now = DateTime.UtcNow;
@@ -659,14 +721,78 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             return WorkflowActionResult.AlreadyHandled;
         }
 
-        // 9. Cancel remaining NotYetActive tasks on this node.
+        // 9. Mode-specific rejection logic.
+        if (rejectMode == ApproveMode.All)
+        {
+            // 会签: increment advisory rejected count, then evaluate RejectGate.
+            await GuardedTransition.IncrementNodeRejectedCountAsync(Db, nodeInst.ID, ct);
+            var freshNodeAll = await Db.Set<NodeInstance>()
+                .AsNoTracking()
+                .SingleAsync(n => n.ID == nodeInst.ID, ct);
+
+            bool nodeFailedAll = await AllApprovalHandler.TryCompleteRejectedAsync(
+                Db, freshNodeAll, actorITCode, _logger, ct);
+
+            if (!nodeFailedAll)
+            {
+                // Gate not met (AfterAll) or another actor already won: node continues.
+                await WorkflowEventLogWriter.AppendAsync(
+                    Db, instance.ID, instance.TenantCode,
+                    EventAction.Reject,
+                    nodeKey: nodeInst.NodeKey,
+                    actorITCode: actorITCode,
+                    beforeState: TaskState.Pending.ToString(),
+                    afterState: TaskState.Rejected.ToString(),
+                    reason: reason,
+                    ct: ct);
+                return WorkflowActionResult.Advanced;
+            }
+
+            // Node is now CompletedRejected — fall through to instance-level rejection below.
+            goto markInstanceRejected;
+        }
+
+        if (rejectMode == ApproveMode.Any)
+        {
+            // 或签: single reject does NOT fail node; only last-reject does.
+            await GuardedTransition.IncrementNodeRejectedCountAsync(Db, nodeInst.ID, ct);
+            var freshNodeAny = await Db.Set<NodeInstance>()
+                .AsNoTracking()
+                .SingleAsync(n => n.ID == nodeInst.ID, ct);
+
+            bool nodeFailedAny = await AnyApprovalHandler.TryCompleteRejectedAsync(
+                Db, freshNodeAny, actorITCode, _logger, ct);
+
+            if (!nodeFailedAny)
+            {
+                // More approvers still pending — node continues.
+                await WorkflowEventLogWriter.AppendAsync(
+                    Db, instance.ID, instance.TenantCode,
+                    EventAction.Reject,
+                    nodeKey: nodeInst.NodeKey,
+                    actorITCode: actorITCode,
+                    beforeState: TaskState.Pending.ToString(),
+                    afterState: TaskState.Rejected.ToString(),
+                    reason: reason,
+                    ct: ct);
+                return WorkflowActionResult.Advanced;
+            }
+
+            // All have rejected — fall through to instance-level rejection below.
+            goto markInstanceRejected;
+        }
+
+        // Sequential path ─────────────────────────────────────────────────────────
+
+        // Cancel remaining NotYetActive tasks on this node (Sequential-only: All/Any
+        // mint all tasks as Pending so there are no NotYetActive tasks to cancel here).
         await Db.Set<ApprovalTask>()
             .Where(t => t.NodeInstanceId == nodeInst.ID && t.State == TaskState.NotYetActive)
             .ExecuteUpdateAsync(
                 s => s.SetProperty(t => t.State, TaskState.Cancelled),
                 ct);
 
-        // 10. Complete the node as CompletedRejected (CAS on node RowVer).
+        // Complete the node as CompletedRejected (CAS on node RowVer).
         var freshNode = await Db.Set<NodeInstance>()
             .AsNoTracking()
             .SingleAsync(n => n.ID == nodeInst.ID, ct);
@@ -686,7 +812,9 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             return WorkflowActionResult.AlreadyHandled;
         }
 
-        // 11. Write event log.
+        markInstanceRejected:
+
+        // Write event log for task rejection.
         await WorkflowEventLogWriter.AppendAsync(
             Db, instance.ID, instance.TenantCode,
             EventAction.Reject,
@@ -697,12 +825,9 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             reason: reason,
             ct: ct);
 
-        // 12. Apply RejectPolicy.
-        // MVP: both TerminateInstance and ReturnToInitiator mark the instance as Rejected.
-        // ReturnToInitiator full WF-12 restart is deferred.
+        // Apply RejectPolicy: both TerminateInstance and ReturnToInitiator mark the instance Rejected.
+        // ReturnToInitiator full WF-12 restart is deferred. // WF-12
         var rejectPolicy = nodeInst.RejectPolicy;
-
-        // WF-12: ReturnToInitiator restart (re-route from Start) is deferred. // WF-12
 
         // Re-read instance for current RowVer.
         instance = await Db.Set<ProcessInstance>()
