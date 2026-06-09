@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.WorkFlow.Definition;
 using WalkingTec.Mvvm.WorkFlow.Engine;
+using WalkingTec.Mvvm.WorkFlow.Engine.Routing;
 using WalkingTec.Mvvm.WorkFlow.Models;
 
 namespace WalkingTec.Mvvm.WorkFlow;
@@ -68,7 +69,11 @@ public static class ServiceCollectionExtensions
         // 5. WF-8/9/10: IApproverResolver + IManagerChainProvider + approval mode handlers + dispatcher.
         //    All registered as scoped because handlers depend on IApproverResolver and
         //    IOptions<WorkFlowOptions> (request-scoped).
-        //    IRoutingEvaluator (WF-11) will be added when that wave lands.
+        // 5b. WF-11: IRoutingEvaluator — registered as SINGLETON because it caches compiled
+        //    Expression<Func<IDictionary,bool>> delegates by content-hash. Thread-safe via
+        //    ConcurrentDictionary. Must be singleton to share the compiled-predicate cache
+        //    across all request-scoped engine instances.
+        services.AddSingleton<IRoutingEvaluator, WhitelistRoutingEvaluator>();
         services.AddScoped<IApproverResolver, DefaultApproverResolver>();
         services.TryAddScoped<IManagerChainProvider, DefaultManagerChainProvider>();
         services.AddScoped<SequentialApprovalHandler>(); // WF-8 串签

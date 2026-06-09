@@ -1,5 +1,6 @@
 #nullable enable
 // WF-6: WorkflowEngine — token/marking engine core.
+// WF-11: Exclusive gateway routing via IRoutingEvaluator.
 //
 // Design:
 //   • StartAsync: create ProcessInstance, mint Start NodeInstance, call AdvanceAsync.
@@ -8,20 +9,24 @@
 //   • GuardedTransition is the ONLY path for state flips — never raw SaveChanges (spec §7.1).
 //   • WorkflowEventLogWriter.AppendAsync is called inside every transition.
 //   • On DbUpdateConcurrencyException: retry up to MaxRetries with fresh read (spec §7.3).
-//   • Condition node routing: MVP takes default/first outgoing transition (WF-11). // WF-11
-//   • Graph deserialization: WorkflowGraphSerializer.Deserialize cached by ContentHash. // WF-11
+//   • Condition node routing (WF-11): IRoutingEvaluator evaluates branches in order;
+//     first match wins (Exclusive); fallback to Default; no-match + no-default → fail-closed.
+//   • FormDataJson deserialized to IReadOnlyDictionary<string,object?> for in-memory evaluation.
 //
 // This file deliberately does NOT implement Approval-mode completion policies (WF-8/9/10),
-// conditional routing evaluator (WF-11), or Withdraw/Return (WF-12).
+// or Withdraw/Return (WF-12).
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.WorkFlow.Definition;
+using WalkingTec.Mvvm.WorkFlow.Engine.Routing;
 using WalkingTec.Mvvm.WorkFlow.Models;
 
 namespace WalkingTec.Mvvm.WorkFlow.Engine;
@@ -45,6 +50,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
     // in tests a DbContext can be passed directly via the internal constructor.
     private readonly DbContext _db;
     private readonly INodeKindDispatcher _dispatcher;
+    private readonly IRoutingEvaluator _routingEvaluator;
     // Stored as non-generic ILogger so that test subclasses can inject an
     // ILogger<TSubclass> without a covariance problem.  Extension methods on
     // ILogger (LogDebug/LogWarning/LogError) work identically on the base type.
@@ -59,10 +65,12 @@ internal sealed class WorkflowEngine : IWorkflowEngine
     public WorkflowEngine(
         IDataContext dc,
         INodeKindDispatcher dispatcher,
+        IRoutingEvaluator routingEvaluator,
         ILogger<WorkflowEngine> logger)
         : this(
               (DbContext)(dc ?? throw new ArgumentNullException(nameof(dc))),
               dispatcher,
+              routingEvaluator,
               (ILogger)logger)
     { }
 
@@ -73,10 +81,12 @@ internal sealed class WorkflowEngine : IWorkflowEngine
     internal WorkflowEngine(
         DbContext db,
         INodeKindDispatcher dispatcher,
+        IRoutingEvaluator routingEvaluator,
         ILogger logger)
     {
         _db = db ?? throw new ArgumentNullException(nameof(db));
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
+        _routingEvaluator = routingEvaluator ?? throw new ArgumentNullException(nameof(routingEvaluator));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -297,16 +307,41 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                 return WorkflowActionResult.Blocked;
             }
 
+            // For non-End nodes: resolve routing BEFORE completing the node so that if routing
+            // fails (null nextKey) the NodeInstance stays Activated.  That way a subsequent
+            // AdvanceAsync call can re-enter and re-return FailClosedRouting rather than seeing
+            // "no active node" and returning AlreadyHandled (spec §5.8 invariant).
+            string? nextKey = null;
+            if (nodeDef.Kind != NodeKind.End)
+            {
+                nextKey = ResolveNextNodeKey(graph, nodeDef, instance);
+                if (nextKey is null)
+                {
+                    _logger.LogError(
+                        "AdvanceCoreAsync: routing failed for '{NodeKey}' in graph '{GraphKey}'. " +
+                        "Node remains Activated (fail-closed).",
+                        activeNode.NodeKey, graph.Key);
+
+                    await WorkflowEventLogWriter.AppendAsync(
+                        Db, instance.ID, instance.TenantCode,
+                        EventAction.FailClosed,
+                        nodeKey: activeNode.NodeKey,
+                        actorITCode: null,
+                        beforeState: NodeState.Activated.ToString(),
+                        afterState: "FailClosed",
+                        reason: "No matching branch and no default target.",
+                        ct: ct);
+
+                    return WorkflowActionResult.FailClosedRouting;
+                }
+            }
+
             // OnComplete — cleanup before routing onward.
             await handler.OnCompleteAsync(ctx);
 
             // Complete the NodeInstance via CAS.
-            var targetNodeState = nodeDef.Kind == NodeKind.End
-                ? NodeState.CompletedApproved
-                : NodeState.CompletedApproved;
-
             var completeRows = await GuardedTransition.CompleteNodeInstanceAsync(
-                Db, activeNode.ID, activeNode.RowVer, targetNodeState, ct: ct);
+                Db, activeNode.ID, activeNode.RowVer, NodeState.CompletedApproved, ct: ct);
 
             if (completeRows == 0)
             {
@@ -320,7 +355,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                 nodeKey: activeNode.NodeKey,
                 actorITCode: null,
                 beforeState: NodeState.Activated.ToString(),
-                afterState: targetNodeState.ToString(),
+                afterState: NodeState.CompletedApproved.ToString(),
                 ct: ct);
 
             // End node reached → approve the instance.
@@ -353,24 +388,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                 return WorkflowActionResult.InstanceApproved;
             }
 
-            // Route to the next node(s).
-            var nextKey = ResolveNextNodeKey(graph, nodeDef, instance);
-            if (nextKey is null)
-            {
-                _logger.LogError("AdvanceCoreAsync: no outgoing transition from '{NodeKey}' in graph '{GraphKey}'. Fail-closed.", activeNode.NodeKey, graph.Key);
-
-                await WorkflowEventLogWriter.AppendAsync(
-                    Db, instance.ID, instance.TenantCode,
-                    EventAction.FailClosed,
-                    nodeKey: activeNode.NodeKey,
-                    actorITCode: null,
-                    beforeState: NodeState.Activated.ToString(),
-                    afterState: "FailClosed",
-                    reason: "No outgoing transition found.",
-                    ct: ct);
-
-                return WorkflowActionResult.FailClosedRouting;
-            }
+            // nextKey is guaranteed non-null here (checked above for non-End nodes).
 
             // Mint the next NodeInstance.
             var nextNodeDef = graph.Nodes.FirstOrDefault(n => n.NodeKey == nextKey)
@@ -890,30 +908,121 @@ internal sealed class WorkflowEngine : IWorkflowEngine
     /// <summary>
     /// Determine the next node key to route to from the completed <paramref name="nodeDef"/>.
     ///
-    /// MVP strategy:
-    ///   1. For Condition nodes: use the Default target. // WF-11 real evaluator
-    ///   2. For all other nodes: use the first outgoing transition in the transitions list.
-    ///   3. If no transition found: return null (fail-closed).
+    /// WF-11 strategy for Condition nodes (Exclusive gateway):
+    ///   1. Deserialize FormDataJson into a dictionary.
+    ///   2. Evaluate branches IN ORDER via IRoutingEvaluator — first match wins.
+    ///   3. If no branch matches, use the Default target (always present after publish validation).
+    ///   4. If no match AND no default → fail-closed (return null; caller logs + returns FailClosedRouting).
+    ///
+    /// For all other node kinds: follow the first outgoing transition in the transitions list.
     /// </summary>
-    private static string? ResolveNextNodeKey(
+    private string? ResolveNextNodeKey(
         WorkflowGraph graph,
         NodeDef nodeDef,
         ProcessInstance instance)
     {
         if (nodeDef.Kind == NodeKind.Condition)
         {
-            // WF-11: real WhitelistRoutingEvaluator evaluates branches against FormDataJson here.
-            // MVP: use the Default target (always present after publish validation).
-            if (nodeDef.Default is not null)
-                return nodeDef.Default;
-
-            // Fallback: first branch target (should not happen with valid graphs).
-            return nodeDef.Branches?.FirstOrDefault()?.Target;
+            return ResolveConditionNodeKey(graph, nodeDef, instance);
         }
 
         // For all other node kinds: follow the first matching outgoing transition.
         return graph.Transitions
             .FirstOrDefault(t => t.From == nodeDef.NodeKey)
             ?.To;
+    }
+
+    /// <summary>
+    /// Exclusive gateway routing (WF-11): evaluate branches in order against FormDataJson;
+    /// take the first matching branch; fall back to Default if none match.
+    /// Fail-closed when no match and no default.
+    /// </summary>
+    private string? ResolveConditionNodeKey(
+        WorkflowGraph graph,
+        NodeDef nodeDef,
+        ProcessInstance instance)
+    {
+        // Deserialize FormDataJson to IReadOnlyDictionary<string, object?>.
+        // An empty/null FormDataJson is treated as an empty dictionary (all fields missing → fail-closed → default).
+        IReadOnlyDictionary<string, object?> formData = DeserializeFormData(instance.FormDataJson);
+
+        // Evaluate branches in defined array order (Exclusive first-match).
+        if (nodeDef.Branches is { Count: > 0 })
+        {
+            foreach (var branch in nodeDef.Branches)
+            {
+                // Runtime re-validation (defense in depth against publish-time bypass).
+                var evalResult = _routingEvaluator.Evaluate(
+                    branch.Rule,
+                    graph.FieldWhitelist,
+                    formData);
+
+                if (evalResult.Code != RoutingEvaluationCode.Ok)
+                {
+                    // Log the security/structural violation but continue to next branch
+                    // rather than short-circuiting the whole node — fail-closed at branch level.
+                    _logger.LogWarning(
+                        "ResolveConditionNodeKey: branch evaluation error for node '{NodeKey}', " +
+                        "target '{Target}': {Code} — {Message}. Branch treated as non-matching.",
+                        nodeDef.NodeKey, branch.Target, evalResult.Code, evalResult.ErrorMessage);
+                    continue;
+                }
+
+                if (evalResult.IsMatch)
+                {
+                    _logger.LogDebug(
+                        "ResolveConditionNodeKey: node '{NodeKey}' branch matched, routing to '{Target}'.",
+                        nodeDef.NodeKey, branch.Target);
+                    return branch.Target;
+                }
+            }
+        }
+
+        // No branch matched — use the Default target.
+        if (nodeDef.Default is not null)
+        {
+            _logger.LogDebug(
+                "ResolveConditionNodeKey: node '{NodeKey}' no branch matched; routing to default '{Default}'.",
+                nodeDef.NodeKey, nodeDef.Default);
+            return nodeDef.Default;
+        }
+
+        // No match and no default — fail-closed (spec §5.8: "no match + no default impossible
+        // at runtime given publish validation; if somehow reached → FAIL CLOSED").
+        _logger.LogError(
+            "ResolveConditionNodeKey: node '{NodeKey}' in graph '{GraphKey}' has no matching branch " +
+            "and no default target. Fail-closed.",
+            nodeDef.NodeKey, graph.Key);
+        return null;
+    }
+
+    /// <summary>
+    /// Deserialize <paramref name="formDataJson"/> into a flat string-keyed dictionary.
+    /// Returns an empty dictionary for null/empty input (missing fields → fail-closed in evaluator).
+    /// Only the top-level flat object is supported for the MVP routing evaluator.
+    /// </summary>
+    private static IReadOnlyDictionary<string, object?> DeserializeFormData(string? formDataJson)
+    {
+        if (string.IsNullOrWhiteSpace(formDataJson))
+            return new Dictionary<string, object?>(StringComparer.Ordinal);
+
+        try
+        {
+            using var doc = JsonDocument.Parse(formDataJson);
+            var result = new Dictionary<string, object?>(StringComparer.Ordinal);
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                // Clone the value so the dictionary outlives the JsonDocument.
+                result[prop.Name] = prop.Value.Clone();
+            }
+            return result;
+        }
+        catch (JsonException ex)
+        {
+            // Malformed FormDataJson — return empty dict so all field lookups fail-closed.
+            // The engine will fall back to the Default branch (which publish validation guarantees exists).
+            _ = ex; // Suppress unused warning — intentional swallow here; caller handles default.
+            return new Dictionary<string, object?>(StringComparer.Ordinal);
+        }
     }
 }

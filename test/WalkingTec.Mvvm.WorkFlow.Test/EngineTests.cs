@@ -613,9 +613,22 @@ internal static class NodeKindDispatcher_Exposed
 
 internal static class WorkflowEngine_Exposed
 {
+    // Default factory: creates a WhitelistRoutingEvaluator with NullLogger.
     public static WorkflowEngine Create(
         DbContext db,
         INodeKindDispatcher dispatcher,
         Microsoft.Extensions.Logging.ILogger logger)
-        => new WorkflowEngine(db, dispatcher, logger);
+    {
+        var routingEvaluator = new WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator(
+            NullLogger<WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator>.Instance);
+        return new WorkflowEngine(db, dispatcher, routingEvaluator, logger);
+    }
+
+    // Overload for tests that want to inject a custom IRoutingEvaluator.
+    public static WorkflowEngine Create(
+        DbContext db,
+        INodeKindDispatcher dispatcher,
+        WalkingTec.Mvvm.WorkFlow.Engine.Routing.IRoutingEvaluator routingEvaluator,
+        Microsoft.Extensions.Logging.ILogger logger)
+        => new WorkflowEngine(db, dispatcher, routingEvaluator, logger);
 }

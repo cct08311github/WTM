@@ -52,6 +52,23 @@ public enum GraphValidationError
 
     /// <summary>The graph key is null or empty.</summary>
     MissingKey,
+
+    // WF-11: Routing-rule validation error codes.
+
+    /// <summary>
+    /// A routing rule in a branch references a field that is not in the graph's FieldWhitelist.
+    /// Security violation — publish must be rejected.
+    /// </summary>
+    RoutingFieldNotAllowed,
+
+    /// <summary>An In/NotIn value list in a branch rule exceeds the 100-item cap.</summary>
+    RoutingInListTooLarge,
+
+    /// <summary>A branch rule references an unknown or unsupported CLR type in the whitelist.</summary>
+    RoutingUnknownClrType,
+
+    /// <summary>A branch rule has an invalid structure (missing field, missing operator, etc.).</summary>
+    RoutingInvalidRuleStructure,
 }
 
 /// <summary>

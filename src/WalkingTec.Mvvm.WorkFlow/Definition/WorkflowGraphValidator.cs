@@ -1,5 +1,6 @@
 #nullable enable
 // WF-4: Publish-time structural validation for WorkflowGraph documents.
+// WF-11: Extended with routing-rule whitelist validation.
 //
 // Validation is fail-closed: any structural problem returns a descriptive
 // GraphValidationResult with a closed error code.  Exceptions are NOT used
@@ -15,9 +16,11 @@
 //   7. Condition branch targets exist.
 //   8. Approval nodes have approverRule.
 //   9. All non-Start nodes are reachable from Start (via transitions + branch targets).
+//  10. (WF-11) Every branch RoutingRuleDef: field in whitelist, closed operator, In cap ≤ 100.
 
 using System;
 using System.Collections.Generic;
+using WalkingTec.Mvvm.WorkFlow.Engine.Routing;
 using WalkingTec.Mvvm.WorkFlow.Models;
 
 namespace WalkingTec.Mvvm.WorkFlow.Definition;
@@ -108,6 +111,12 @@ public static class WorkflowGraphValidator
                         if (!nodeKeys.Contains(branch.Target))
                             return GraphValidationResult.Fail(GraphValidationError.DanglingBranchTarget,
                                 $"Condition node '{node.NodeKey}' branch target '{branch.Target}' does not reference an existing node.");
+
+                        // WF-11: Validate the branch routing rule against the whitelist.
+                        var routingError = ValidateRoutingRule(
+                            branch.Rule, node.NodeKey, graph.FieldWhitelist);
+                        if (routingError is not null)
+                            return routingError;
                     }
                 }
             }
@@ -186,5 +195,112 @@ public static class WorkflowGraphValidator
         }
 
         return GraphValidationResult.Success;
+    }
+
+    // ── WF-11: Routing-rule whitelist validation ───────────────────────────────
+
+    /// <summary>
+    /// Validate a <see cref="RoutingRuleDef"/> (and all sub-rules recursively) at
+    /// publish time. Returns a <see cref="GraphValidationResult"/> failure on the
+    /// first violation, or null when the rule passes all checks.
+    ///
+    /// Mirrors the runtime <see cref="Engine.Routing.WhitelistRoutingEvaluator.ValidateRule"/>
+    /// check (defense-in-depth: validate at publish AND at runtime evaluation).
+    /// </summary>
+    private static GraphValidationResult? ValidateRoutingRule(
+        RoutingRuleDef rule,
+        string nodeKey,
+        IReadOnlyList<FieldWhitelistEntry> whitelist)
+    {
+        // Composite AND
+        if (rule.And is { Count: > 0 })
+        {
+            foreach (var sub in rule.And)
+            {
+                var err = ValidateRoutingRule(sub, nodeKey, whitelist);
+                if (err is not null) return err;
+            }
+            return null;
+        }
+
+        // Composite OR
+        if (rule.Or is { Count: > 0 })
+        {
+            foreach (var sub in rule.Or)
+            {
+                var err = ValidateRoutingRule(sub, nodeKey, whitelist);
+                if (err is not null) return err;
+            }
+            return null;
+        }
+
+        // Leaf rule — must have field + operator.
+        if (string.IsNullOrWhiteSpace(rule.Field))
+            return GraphValidationResult.Fail(
+                GraphValidationError.RoutingInvalidRuleStructure,
+                $"Condition node '{nodeKey}': branch routing rule must specify a 'field'.");
+
+        if (rule.Operator is null)
+            return GraphValidationResult.Fail(
+                GraphValidationError.RoutingInvalidRuleStructure,
+                $"Condition node '{nodeKey}': branch routing rule for field '{rule.Field}' must specify an 'operator'.");
+
+        // Whitelist check — security gate.
+        bool inWhitelist = false;
+        FieldWhitelistEntry? entry = null;
+        foreach (var e in whitelist)
+        {
+            if (string.Equals(e.Field, rule.Field, StringComparison.Ordinal))
+            {
+                inWhitelist = true;
+                entry = e;
+                break;
+            }
+        }
+
+        if (!inWhitelist)
+            return GraphValidationResult.Fail(
+                GraphValidationError.RoutingFieldNotAllowed,
+                $"Condition node '{nodeKey}': branch rule references field '{rule.Field}' which is " +
+                "not in the graph FieldWhitelist. Add the field to 'fieldWhitelist' before publishing.");
+
+        // CLR type must be resolvable.
+        if (Engine.Routing.WhitelistRoutingEvaluator.ResolveClrType(entry!.ClrType) is null)
+            return GraphValidationResult.Fail(
+                GraphValidationError.RoutingUnknownClrType,
+                $"Condition node '{nodeKey}': whitelist entry for field '{entry.Field}' has " +
+                $"unknown CLR type '{entry.ClrType}'.");
+
+        // In/NotIn cap check (mirrors AnalysisQueryEngine.Filters.cs:84).
+        if (rule.Operator is FilterOperator.In or FilterOperator.NotIn)
+        {
+            int count = CountInListItems(rule.Value);
+            if (count > Engine.Routing.WhitelistRoutingEvaluator.MaxInListSize)
+                return GraphValidationResult.Fail(
+                    GraphValidationError.RoutingInListTooLarge,
+                    $"Condition node '{nodeKey}': In/NotIn list for field '{rule.Field}' " +
+                    $"has {count} items; maximum is {Engine.Routing.WhitelistRoutingEvaluator.MaxInListSize}.");
+        }
+
+        return null; // All checks pass.
+    }
+
+    private static int CountInListItems(object? value)
+    {
+        if (value is null) return 0;
+        if (value is System.Text.Json.JsonElement je && je.ValueKind == System.Text.Json.JsonValueKind.Array)
+        {
+            int c = 0;
+            foreach (var _ in je.EnumerateArray()) c++;
+            return c;
+        }
+        if (value is System.Collections.ICollection col) return col.Count;
+        if (value is System.Collections.IEnumerable en and not string)
+        {
+            int c = 0;
+            foreach (var _ in en) c++;
+            return c;
+        }
+        return 1;
     }
 }
