@@ -1,0 +1,128 @@
+#nullable enable
+namespace WalkingTec.Mvvm.WorkFlow.Models;
+
+/// <summary>Overall state of a <see cref="ProcessInstance"/>.</summary>
+public enum InstanceState
+{
+    Draft,
+    Running,
+    Approved,
+    Rejected,
+    Withdrawn,
+    Terminated,
+}
+
+/// <summary>State of a <see cref="NodeInstance"/> within a running process.</summary>
+public enum NodeState
+{
+    Pending,
+    Activated,
+    CompletedApproved,
+    CompletedRejected,
+    Skipped,
+    Returned,
+}
+
+/// <summary>State of an <see cref="ApprovalTask"/> assigned to an approver.</summary>
+public enum TaskState
+{
+    NotYetActive,
+    Pending,
+    Suspended,
+    Approved,
+    Rejected,
+    Transferred,
+    Delegated,
+    AddedPending,
+    Expired,
+    AutoApproved,
+    AutoRejected,
+    Cancelled,
+}
+
+/// <summary>Approval completion mode for an Approval node.</summary>
+public enum ApproveMode
+{
+    /// <summary>串签 — approvers act in sequence; one active task at a time.</summary>
+    Sequential,
+
+    /// <summary>会签 — all (or a configured percent) must approve.</summary>
+    All,
+
+    /// <summary>或签 — any single approver's action decides.</summary>
+    Any,
+}
+
+/// <summary>When a rejection closes the node in 会签 mode.</summary>
+public enum RejectGate
+{
+    /// <summary>First reject immediately closes the node (default).</summary>
+    Immediate,
+
+    /// <summary>Wait for all approvers to act; fail if any reject.</summary>
+    AfterAll,
+}
+
+/// <summary>What happens to the instance when a node is rejected.</summary>
+public enum RejectPolicy
+{
+    TerminateInstance,
+    ReturnToPrev,
+    ReturnToNode,
+    ReturnToInitiator,
+}
+
+/// <summary>Type of a node embedded in the process-definition graph JSON.</summary>
+public enum NodeKind
+{
+    Start,
+    Approval,
+    Condition,
+    Cc,
+    Ack,
+    Join,
+    End,
+}
+
+/// <summary>Actions recorded in <see cref="WorkflowEventLog"/>.</summary>
+public enum EventAction
+{
+    Submit,
+    Approve,
+    Reject,
+    Withdraw,
+    Return,
+    AddApprover,
+    Transfer,
+    Delegate,
+    AutoAdvance,
+    Skip,
+    Notify,
+    TimeoutFire,
+    FailClosed,
+}
+
+/// <summary>Status of a durable <see cref="WorkflowTimer"/>.</summary>
+public enum TimerStatus
+{
+    Armed,
+    Fired,
+    Cancelled,
+}
+
+/// <summary>Action executed when a <see cref="WorkflowTimer"/> fires.</summary>
+public enum TimerAction
+{
+    Remind,
+    AutoApprove,
+    AutoReject,
+    Escalate,
+}
+
+/// <summary>Trigger for a CC record to be emitted.</summary>
+public enum CcTrigger
+{
+    OnSubmit,
+    OnNode,
+    OnComplete,
+}

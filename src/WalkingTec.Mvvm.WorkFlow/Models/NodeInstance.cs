@@ -1,0 +1,96 @@
+#nullable enable
+using System;
+using System.ComponentModel.DataAnnotations;
+using WalkingTec.Mvvm.Core;
+
+namespace WalkingTec.Mvvm.WorkFlow.Models;
+
+/// <summary>
+/// Runtime materialization of one graph node within a <see cref="ProcessInstance"/>.
+/// This is the CAS target for 或签 / 会签 completion transitions.
+///
+/// <see cref="RowVer"/> is the app-incremented concurrency token used by
+/// <c>GuardedTransition</c> for node-level CAS.  See spec §7.2 and
+/// <c>ApplyWorkFlowModels</c> for per-provider mapping.
+/// </summary>
+/// <remarks>
+/// DIRECT descendant of <see cref="BasePoco"/> and <see cref="ITenant"/>.
+/// Uses <see cref="BasePoco"/> (audit-only) rather than <see cref="PersistPoco"/>
+/// because node instances are not soft-deleted — they are superseded during 回退
+/// re-entry by a controlled discard-and-recount projection (spec §5.7).
+/// </remarks>
+[AuditChanges]
+public class NodeInstance : BasePoco, ITenant
+{
+    /// <inheritdoc/>
+    [StringLength(50)]
+    public string? TenantCode { get; set; }
+
+    /// <summary>FK to the owning <see cref="ProcessInstance"/>.</summary>
+    [Required]
+    public Guid InstanceId { get; set; }
+
+    /// <summary>Navigation to the owning instance.</summary>
+    public ProcessInstance? Instance { get; set; }
+
+    /// <summary>
+    /// Unique key of this node within the graph definition
+    /// (matches a <c>nodeKey</c> in <c>GraphJson</c>).
+    /// </summary>
+    [Required]
+    [StringLength(100)]
+    public string NodeKey { get; set; } = string.Empty;
+
+    /// <summary>Kind of this node as declared in the graph definition.</summary>
+    public NodeKind NodeKind { get; set; }
+
+    /// <summary>Current FSM state of this node.</summary>
+    public NodeState State { get; set; } = NodeState.Pending;
+
+    /// <summary>
+    /// Approval mode copied from the graph definition for query speed.
+    /// Null for non-Approval node kinds.
+    /// </summary>
+    public ApproveMode? ApproveMode { get; set; }
+
+    /// <summary>
+    /// Minimum approval fraction for 比例会签 (e.g. 0.6 = 60 %).
+    /// Null means all approvers must approve (<see cref="Models.ApproveMode.All"/>).
+    /// </summary>
+    public decimal? ApprovePercent { get; set; }
+
+    /// <summary>When a rejection closes the node in 会签 mode.</summary>
+    public RejectGate RejectGate { get; set; } = RejectGate.Immediate;
+
+    /// <summary>What happens to the instance when this node is rejected.</summary>
+    public RejectPolicy RejectPolicy { get; set; } = RejectPolicy.ReturnToInitiator;
+
+    /// <summary>Running count of approvals received (advisory; completion decided by CAS).</summary>
+    public int ApprovedCount { get; set; }
+
+    /// <summary>Running count of rejections received.</summary>
+    public int RejectedCount { get; set; }
+
+    /// <summary>Total number of approvers assigned to this node.</summary>
+    public int TotalRequired { get; set; }
+
+    /// <summary>
+    /// Current sequence pointer for 串签 (Sequential) mode.
+    /// Points to the <c>SequenceOrder</c> of the currently active task.
+    /// </summary>
+    public int SequencePointer { get; set; }
+
+    /// <summary>ITCode of the approver who cast the deciding vote (or签 winner).</summary>
+    [StringLength(50)]
+    public string? DecidedBy { get; set; }
+
+    /// <summary>UTC timestamp when this node was activated.</summary>
+    public DateTime? ActivatedAt { get; set; }
+
+    /// <summary>
+    /// App-incremented concurrency token.  Not mapped as an EF concurrency token —
+    /// managed inside the WHERE clause of <c>ExecuteUpdateAsync</c> for portable
+    /// CAS across all 7 DBTypeEnum providers (spec §7.2).
+    /// </summary>
+    public uint RowVer { get; set; }
+}
