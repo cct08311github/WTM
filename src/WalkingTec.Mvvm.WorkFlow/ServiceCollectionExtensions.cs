@@ -80,6 +80,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<AllApprovalHandler>();        // WF-9 会签
         services.AddScoped<AnyApprovalHandler>();        // WF-10 或签
         services.AddScoped<ApprovalHandler>();
+        services.AddScoped<ICcTenantValidator, CcTenantValidator>(); // WF-14: FrameworkUser tenant guard
         services.AddScoped<CcHandler>();                 // WF-13 抄送 (full IApproverResolver + tenant check)
         services.AddScoped<INodeKindDispatcher, NodeKindDispatcher>();
 

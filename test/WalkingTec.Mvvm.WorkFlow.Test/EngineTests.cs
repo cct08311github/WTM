@@ -560,8 +560,10 @@ internal static class NodeKindDispatcher_Exposed
         var ccLogger      = NullLogger<CcHandler>.Instance;
         // CcHandler uses a user-type resolver so that CC nodes in tests can resolve User rules.
         // The Approval handler keeps the NullApproverResolver (FailClose → blocks as expected).
+        // AcceptAllCcTenantValidator (WF-14 stub): always returns true (FrameworkUser not in test ctx).
         var ccResolver    = new UserTypeApproverResolver();
-        var cc            = new CcHandler(ccResolver, ccLogger);
+        var ccValidator   = new AcceptAllCcTenantValidator();
+        var cc            = new CcHandler(ccResolver, ccValidator, ccLogger);
         return new NodeKindDispatcher(cc, approval);
     }
 
@@ -599,7 +601,7 @@ internal static class NodeKindDispatcher_Exposed
         var anyHandler = new AnyApprovalHandler(resolver, optionsWrapper, anyLogger);
         var approval   = new ApprovalHandler(seqHandler, allHandler, anyHandler);
         var ccLogger   = NullLogger<CcHandler>.Instance;
-        var cc         = new CcHandler(resolver, ccLogger);
+        var cc         = new CcHandler(resolver, new AcceptAllCcTenantValidator(), ccLogger);
         return new NodeKindDispatcher(cc, approval);
     }
 
@@ -620,7 +622,7 @@ internal static class NodeKindDispatcher_Exposed
         var anyHandler = new AnyApprovalHandler(resolver, optionsWrapper, anyLogger);
         var approval   = new ApprovalHandler(seqHandler, allHandler, anyHandler);
         var ccLogger   = NullLogger<CcHandler>.Instance;
-        var cc         = new CcHandler(resolver, ccLogger);
+        var cc         = new CcHandler(resolver, new AcceptAllCcTenantValidator(), ccLogger);
         return new NodeKindDispatcher(cc, approval);
     }
 
@@ -669,4 +671,22 @@ internal static class WorkflowEngine_Exposed
             NullLogger<WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator>.Instance);
         return new WorkflowEngine(db, dispatcher, routingEvaluator, options, logger);
     }
+}
+
+// ── WF-14: ICcTenantValidator test stub ───────────────────────────────────────
+
+/// <summary>
+/// Test stub that unconditionally accepts all CC recipient ITCodes.
+/// Used in engine tests where the FrameworkUser table is not in scope —
+/// the CcTenantValidator fallback behaviour (accept when table missing) is
+/// tested in dedicated WF-14 ControllerTests; engine tests just need CC to work.
+/// </summary>
+internal sealed class AcceptAllCcTenantValidator : ICcTenantValidator
+{
+    public Task<bool> IsValidTenantUserAsync(
+        DbContext db,
+        string recipientITCode,
+        string? tenantCode,
+        CancellationToken ct = default)
+        => Task.FromResult(true);
 }

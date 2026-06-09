@@ -1296,6 +1296,29 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         return null;
     }
 
+    // ── WF-14: Inbox query ────────────────────────────────────────────────────
+
+    /// <inheritdoc/>
+    public async Task<IReadOnlyList<ApprovalTask>> GetPendingTasksAsync(
+        string actorITCode,
+        string? tenantCode,
+        CancellationToken ct = default)
+    {
+        // The DataContext query filter (ITenant + IsValid) auto-scopes to tenantCode
+        // because it is registered against the correct context.
+        // We additionally filter by AssigneeITCode and State server-side.
+        var tasks = await Db.Set<ApprovalTask>()
+            .AsNoTracking()
+            .Where(t => t.AssigneeITCode == actorITCode
+                     && t.State == TaskState.Pending
+                     && t.IsValid == true)
+            .Include(t => t.NodeInstance)
+            .OrderBy(t => t.DueUtc.HasValue ? t.DueUtc.Value : DateTime.MaxValue)
+            .ToListAsync(ct);
+
+        return tasks.AsReadOnly();
+    }
+
     /// <summary>
     /// Deserialize <paramref name="formDataJson"/> into a flat string-keyed dictionary.
     /// Returns an empty dictionary for null/empty input (missing fields → fail-closed in evaluator).

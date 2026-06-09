@@ -55,20 +55,19 @@ internal sealed class EndHandler : INodeKindHandler
 // ── CC handler ────────────────────────────────────────────────────────────────
 
 /// <summary>
-/// Handler for <see cref="NodeKind.Cc"/> nodes (WF-13 full implementation).
+/// Handler for <see cref="NodeKind.Cc"/> nodes (WF-13 + WF-14 full implementation).
 ///
 /// <para>Structurally cannot block (spec §5.9): resolves recipients via
-/// <see cref="IApproverResolver"/>, applies tenant-isolation checks, writes
+/// <see cref="IApproverResolver"/>, applies tenant-isolation checks via
+/// <see cref="ICcTenantValidator"/> (WF-14: FrameworkUser lookup), writes
 /// <see cref="CcRecord"/> rows, then immediately completes.
 /// Recipients may mark-read or comment but CANNOT approve or reject.
 /// No <see cref="ApprovalTask"/> is ever created by this handler.</para>
 ///
-/// <para>Tenant isolation: a recipient whose TenantCode differs from the instance
-/// TenantCode is rejected/skipped and logged — never a cross-tenant leak.
-/// For MVP tenant check: only resolving via User/Role rules is supported; any
-/// resolved ITCode is accepted (FrameworkUser tenant validation requires a DB lookup
-/// — deferred to WF-14 controller layer). The key invariant is that the CcRecord
-/// written always carries the INSTANCE's TenantCode, never a cross-tenant code.</para>
+/// <para>Tenant isolation (WF-14): a CC recipient whose ITCode is not a valid,
+/// active user in the instance's tenant is rejected/skipped (logged) and NEVER
+/// written as a CcRecord.  This prevents cross-tenant CC leaks at the data level.
+/// The CcRecord always carries the INSTANCE's TenantCode regardless.</para>
 ///
 /// <para>Ack distinction: a Cc node is always non-blocking. A future Ack node
 /// (NodeKind.Ack — WF-16) blocks until the recipient acknowledges.
@@ -77,12 +76,17 @@ internal sealed class EndHandler : INodeKindHandler
 internal sealed class CcHandler : INodeKindHandler
 {
     private readonly IApproverResolver _resolver;
+    private readonly ICcTenantValidator _tenantValidator;
     private readonly ILogger<CcHandler> _logger;
 
-    public CcHandler(IApproverResolver resolver, ILogger<CcHandler> logger)
+    public CcHandler(
+        IApproverResolver resolver,
+        ICcTenantValidator tenantValidator,
+        ILogger<CcHandler> logger)
     {
-        _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
-        _logger   = logger   ?? throw new ArgumentNullException(nameof(logger));
+        _resolver        = resolver        ?? throw new ArgumentNullException(nameof(resolver));
+        _tenantValidator = tenantValidator ?? throw new ArgumentNullException(nameof(tenantValidator));
+        _logger          = logger          ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task OnEnterAsync(NodeHandlerContext ctx)
@@ -137,10 +141,11 @@ internal sealed class CcHandler : INodeKindHandler
         }
 
         // Tenant isolation: all CcRecords carry the instance's TenantCode.
-        // We do NOT allow cross-tenant CC writes.
+        // WF-14: each recipient ITCode is validated via ICcTenantValidator (FrameworkUser
+        // lookup) before writing. Invalid/cross-tenant recipients are skipped, never written.
         var instanceTenantCode = instance.TenantCode;
 
-        // Dedup and write one CcRecord per unique recipient.
+        // Dedup and write one CcRecord per unique, validated recipient.
         var seen = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
         int written = 0;
 
@@ -152,12 +157,18 @@ internal sealed class CcHandler : INodeKindHandler
                 continue;
             }
 
-            // Cross-tenant guard (MVP level): the CcRecord is tagged with the instance's
-            // tenant. The actual user lookup to verify recipient belongs to the tenant is
-            // deferred to WF-14 (controller RBAC layer). At the engine level we write the
-            // record with the instance's tenant code and log any anomaly.
-            // This prevents cross-tenant data leakage in the CcRecord table: a recipient
-            // in a different tenant never gets a record tagged with the wrong tenant code.
+            // WF-14: validate recipient ITCode against FrameworkUser for same-tenant.
+            // Recipients that are not valid active users in this tenant are skipped.
+            // The validator logs a warning for each rejected recipient.
+            var isValid = await _tenantValidator.IsValidTenantUserAsync(
+                ctx.Db, itCode, instanceTenantCode, ctx.CancellationToken);
+
+            if (!isValid)
+            {
+                // Logged by the validator; skip — do NOT write a cross-tenant CcRecord.
+                continue;
+            }
+
             var record = new CcRecord
             {
                 ID               = Guid.NewGuid(),

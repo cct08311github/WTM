@@ -6,6 +6,7 @@
 // DataContext directly (WTM red line: no controller-level DC access).
 
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using WalkingTec.Mvvm.WorkFlow.Models;
@@ -170,6 +171,25 @@ public interface IWorkflowEngine
         string actorITCode,
         string? reason = null,
         bool isAdmin = false,
+        CancellationToken ct = default);
+
+    // ── WF-14: Inbox query ────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns all <see cref="Models.ApprovalTask"/>s currently in
+    /// <see cref="Models.TaskState.Pending"/> state for the given actor,
+    /// scoped to the actor's tenant.
+    ///
+    /// <para>Used by the controller inbox endpoint to build the approver's to-do list
+    /// without the controller touching <c>DataContext</c> directly (WTM red line).</para>
+    /// </summary>
+    /// <param name="actorITCode">Server-side ITCode from <c>Wtm.LoginUserInfo.ITCode</c>.</param>
+    /// <param name="tenantCode">Server-side tenant from <c>Wtm.LoginUserInfo.TenantCode</c>.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>List of pending tasks ordered by <c>DueUtc</c> ascending (nulls last).</returns>
+    Task<IReadOnlyList<Models.ApprovalTask>> GetPendingTasksAsync(
+        string actorITCode,
+        string? tenantCode,
         CancellationToken ct = default);
 
     // ── WF-12: 回退发起人 (ReturnToInitiator) ────────────────────────────────
