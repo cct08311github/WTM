@@ -8,11 +8,26 @@ WTM 的套件版本管理政策、升級流程、與 .NET 10 帶來的 `NU1510` 
 
 ---
 
+## 版本號規則 (X.Y.Z)
+
+`version.props` 中的 `<VersionPrefix>` 遵循以下規則：
+
+| 欄位 | 意義 | 何時遞增 |
+|------|------|---------|
+| **X** | .NET Core 主版本 | 僅在升至下一個 .NET 主版本時（如 .NET 10 → 11）；當前固定為 `10` |
+| **Y** | 主功能升級 | 新增模組或重大新功能（例：WorkFlow 引擎 → `10.9.0`） |
+| **Z** | 次要優化 | Bug 修復、patch、小優化（例：hotfix → `10.9.1`） |
+
+**範例**：`10.9.0` = .NET 10、第 9 次主功能升級（WorkFlow 引擎）、初始釋出。  
+**注意**：X 只在 .NET 主版本升級時才動，不反映 SDK patch 版本（如 10.0.300 vs 10.0.201）。
+
+---
+
 ## 版本宣告檔分工
 
 | 檔案 | 用途 |
 |------|------|
-| `version.props` | 框架自身版本（`<VersionPrefix>10.5.1</VersionPrefix>`） — release 時 bump |
+| `version.props` | 框架自身版本（`<VersionPrefix>10.9.0</VersionPrefix>`） — release 時 bump（遵循上方 X.Y.Z 規則） |
 | `common.props` | 集中所有 src 專案的套件版本（MSBuild 變數：`MicrosoftExtensionsVersion`、`EntityFrameworkCoreVersion`、`OpenTelemetryVersion`、`SerilogAspNetCoreVersion`、`NPOIVersion`、`SystemSecurityCryptographyXmlVersion` 等 12+ 個） |
 | `test/Directory.Build.props` | 測試專案專用套件版本（MSTest、FluentAssertions、Moq 等） |
 

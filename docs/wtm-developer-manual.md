@@ -1,6 +1,8 @@
 # WTM 開發與使用手冊
 
-> **版本**：10.8.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-06-08
+> **版本**：10.9.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-06-10
+>
+> **10.9.0 重點**（簽核引擎釋出，第 4 個 NuGet 套件）：全新 `WalkingTec.Mvvm.WorkFlow` 模組 — 中文企業級審批/工作流引擎，支援**串签/会签/或签**三種審批模式、版本固定的流程定義（canonical JSON + SHA-256 ContentHash）、`GuardedTransition` CAS 原子轉換、`IApproverResolver`（Role/User/ManagerChain）、沙盒化條件路由（白名單 + fail-closed）、撤回/回退/抄送、三個 RBAC 管控控制器、`IWorkflowNotifier`（複用 `IWtmWebhookSink`，opt-in `AddWtmWorkFlowNotifications`，post-commit best-effort）、雙軌稽核（`[AuditChanges]` + append-only `WorkflowEventLog`）、ProcessDefinition Admin Grid。**安全預設**：`InitiatorAutoApprove = false`、`AutoApproveOnMissingHandler = FailClose`（#250）。消費者需呼叫 `modelBuilder.ApplyWorkFlowModels()` 並執行自己的 migration（零內建 migration，與 Etl 相同）。`DBTypeEnum.Memory` 不支援（啟動即報錯）。詳見 §18（WorkFlow 模組）及 `CHANGELOG.md` `[10.9.0]`。
 >
 > **10.8.0 重點**（Dashboard BI + ETL 功能釋出，epic #193；全 opt-in，無預設行為變更）：無代碼拖拉式 **Dashboard 設計器**（`_DashboardDesignerController` `/_dashboard-designer`，`[AllRights]` + 伺服器端租戶 + `AllowedWidgetTypes`/`FilterConfig.AllowedOps` allowlist，見 §9.13）；**DB-backed dashboard store**（`AddWtmEfDashboardStore` → `EfCoreDashboardService`，租戶範圍 + `IDashboardService.DeleteAsync(id, tenantId)`）+ 跨 widget drill-down；**KPI 阈值告警**（`AddWtmDashboardAlerts` → `WidgetThreshold`/`ThresholdEvaluator`）+ **排程快照/匯出**（`AddWtmDashboardSnapshots`，`DashboardExcelExporter` Excel + 可插拔 `IDashboardRenderer` PDF/PNG）；**共用 webhook sink**（`AddWtmWebhookSink`/`AddWtmWebhookSinks` → `IWtmWebhookSink`，钉钉/企微/飞书/Slack/Teams，SSRF-hardened，見 §10.10）；**ETL 連接器**（`EtlSourceRegistry` + `CsvEtlSource`/`ExcelEtlSource`/`PostgreSqlSource`/`MySqlEtlSource`/`RestEtlSource`，見 §8.19）+ **ETL governance**（`IEtlGovernanceStore`/`DbEtlGovernanceStore`、dead-letter/血緣/per-tenant 隔離、`AddWtmEtlAlerts`）。新增依賴 `Npgsql` 10.0.2 + `MySqlConnector` 2.4.0。詳見 `CHANGELOG.md` `[10.8.0]`。
 >
@@ -35,7 +37,8 @@ WalkingTec MVVM Framework (WTM) 是一套 ASP.NET Core 快速開發框架，以�
 15. [Integration Tests 整合測試](#15-integration-tests-整合測試)
 16. [代碼生成器](#16-代碼生成器)
 17. [配置參考](#17-配置參考)
-18. [常見問題](#18-常見問題)
+18. [WorkFlow 模組 — 審批引擎](#18-workflow-模組--審批引擎)
+19. [常見問題](#19-常見問題)
 
 ---
 
@@ -4527,12 +4530,23 @@ public class Order : BasePoco
 ```xml
 <Project>
   <PropertyGroup>
-    <VersionPrefix>10.8.0</VersionPrefix>
+    <VersionPrefix>10.9.0</VersionPrefix>
   </PropertyGroup>
 </Project>
 ```
 
 所有 NuGet 套件共用此版本號。修改此檔案後，所有 `dotnet pack` 產出的套件自動使用新版本。
+
+#### 版本號規則 (X.Y.Z)
+
+| 欄位 | 意義 | 何時遞增 |
+|------|------|---------|
+| **X** | .NET Core 主版本 | 僅在升至下一個 .NET 主版本（如 .NET 10 → 11）時遞增 |
+| **Y** | 主功能升級 | 新增模組或重大新功能時遞增（例：新增 WorkFlow 引擎 → `10.9.0`） |
+| **Z** | 次要優化 | Bug 修復、patch、小優化時遞增（例：hotfix → `10.9.1`） |
+
+**範例**：`10.9.0` = .NET 10、第 9 次主功能升級（WorkFlow 引擎）、初始釋出。  
+**注意**：`X` 不是 .NET SDK patch 版本，不會因 SDK 10.0.300 vs 10.0.201 而變動，只在主版本升級（10 → 11）時才遞增。
 
 ### 17.5 多環境配置
 
@@ -4553,7 +4567,133 @@ appsettings.Production.json   ← 生產環境覆蓋（連線字串、JWT Key）
 
 ---
 
-## 18. 常見問題
+## 18. WorkFlow 模組 — 審批引擎
+
+`WalkingTec.Mvvm.WorkFlow` 是一個可選的 NuGet 套件（`dotnet add package WalkingTec.Mvvm.WorkFlow`），為 WTM 應用程式加入中文企業級審批/工作流引擎。架構上是 `WalkingTec.Mvvm.Etl` 的平行姊妹模組，依賴 `WalkingTec.Mvvm.Mvc`。
+
+### 18.1 引擎概覽
+
+| 能力 | 說明 |
+|------|------|
+| **版本固定流程定義** | canonical JSON + SHA-256 `ContentHash`；執行中審批 FK 不可變版本，定義修改不影響進行中流程 |
+| **GuardedTransition** | 所有狀態變更走 `ExecuteUpdateAsync` 的 CAS（guard-in-WHERE），`rowsAffected == 0` → 冪等 no-op；防止雙重完成、遺失完成等競態 |
+| **三種審批模式** | 串签/会签/或签，均透過單一 `ApproveMode` enum 在通用 Approval 節點上設定 |
+| **IApproverResolver** | Role / User / ManagerChain（含循環偵測、去重、`MaxLevel` cap）；可自行實作 |
+| **沙盒條件路由** | 白名單欄位 + 封閉 operator enum，`WhitelistRoutingEvaluator`，無 Roslyn/DynamicLinq，off-whitelist → fail-closed |
+| **撤回/回退/抄送** | 撤回(WithdrawPolicy)、回退發起人(ReturnToInitiator)、抄送(CC，非阻塞) |
+| **Opt-in 通知** | `AddWtmWorkFlowNotifications()` 複用 `IWtmWebhookSink`；post-commit best-effort，通知失敗不回滾 |
+| **雙軌稽核** | `[AuditChanges]`（VM CRUD）+ append-only `WorkflowEventLog`（引擎轉換，`ExecuteUpdateAsync` bypass 了 EF change tracker） |
+| **RBAC + 多租戶** | 所有 Entity 直接繼承 `PersistPoco, ITenant`，DataContext query filter 自動套用 |
+| **零內建 migration** | 消費者自行 `ApplyWorkFlowModels()` + `dotnet ef migrations add`，與 Etl 模組相同模式 |
+
+### 18.2 三種審批模式
+
+| 模式 | `ApproveMode` | 行為 |
+|------|--------------|------|
+| **串签** | `Sequential` | 任務逐一啟動，前一位核准後才通知下一位 |
+| **会签** | `All` | 所有審批任務同時建立；`approvePercent`（預設 100%）達標時節點完成（CAS）；`RejectGate.Immediate` = 一票否決，`RejectGate.AfterAll` = 不可達才否決 |
+| **或签** | `Any` | 所有審批任務同時建立；第一位核准即 CAS 勝出，其餘任務取消；單票否決不觸發失敗，最後一張 Pending 被否決才觸發 |
+
+### 18.3 DI 註冊
+
+```csharp
+// Program.cs / Startup.cs
+
+// 必要 — 註冊引擎、審批解析器、路由評估器、完成處理器
+services.AddWtmWorkFlow(options =>
+{
+    options.WithdrawPolicy              = WithdrawPolicy.BeforeFinalApproval; // 預設
+    options.InitiatorAutoApprove        = false;                              // 預設 (安全值)
+    options.AutoApproveOnMissingHandler = AutoApproveOnMissingHandlerPolicy.FailClose; // 預設 (#250)
+    options.MaxLevel                    = 5;
+    options.MaxReturnLoops              = 3;
+});
+
+// Opt-in — 通知（需搭配 AddWtmWebhookSink）
+services.AddWtmWorkFlowNotifications();
+
+// Opt-in — webhook sink（10.8.0 引入）
+services.AddWtmWebhookSink(o => {
+    o.DingTalk.Enabled    = true;
+    o.DingTalk.WebhookUrl = Environment.GetEnvironmentVariable("DINGTALK_WEBHOOK");
+});
+```
+
+### 18.4 消費者 Migration
+
+WorkFlow 套件**零內建 migration**，需自行在應用程式的 `DataContext.OnModelCreating` 呼叫：
+
+```csharp
+protected override void OnModelCreating(ModelBuilder modelBuilder)
+{
+    base.OnModelCreating(modelBuilder);
+    modelBuilder.ApplyEtlModels();       // 若同時使用 Etl
+    modelBuilder.ApplyWorkFlowModels();  // WorkFlow 9 張資料表
+}
+```
+
+產生 migration：
+
+```bash
+dotnet ef migrations add WorkFlowInitialCreate \
+  --context DataContext \
+  --project YourApp/YourApp.csproj \
+  --startup-project YourApp/YourApp.csproj
+```
+
+建立的 9 張資料表：`Wf_ProcessDefinition`、`Wf_ProcessDefinitionVersion`、`Wf_ProcessInstance`、`Wf_NodeInstance`、`Wf_ApprovalTask`、`Wf_WorkflowEventLog`、`Wf_CcRecord`、`Wf_DelegationRule`、`Wf_WorkflowTimer`（後兩張供 Wave 4/5 使用，Sprint-1 schema 已到位，零 migration 費用）。
+
+### 18.5 API Endpoints
+
+| Controller | 路徑 | 說明 |
+|------------|------|------|
+| `ProcessDefinitionController` | `GET /api/_workflow/definitions` | 列出流程定義 |
+| | `POST /api/_workflow/definitions/{id}/publish` | 發布（驗證→規範化→hash→新版本或 no-op） |
+| | `POST /api/_workflow/definitions/validate` | 僅驗證（dry-run） |
+| | `GET /api/_workflow/definitions/{key}/versions` | 版本歷史 |
+| `WorkflowInstanceController` | `POST /api/_workflow/instances/start` | 啟動新審批實例 |
+| | `POST /api/_workflow/instances/{id}/withdraw` | 撤回 |
+| | `GET /api/_workflow/instances/{id}/timeline` | 稽核時間軸 |
+| `WorkflowTaskController` | `GET /api/_workflow/tasks/mine` | 我的待辦任務 |
+| | `POST /api/_workflow/tasks/{id}/approve` | 核准 |
+| | `POST /api/_workflow/tasks/{id}/reject` | 否決 |
+| | `POST /api/_workflow/tasks/{id}/return` | 回退發起人 |
+
+所有端點均有 `[ActionDescription]` / `FunctionPrivilege` RBAC 管控，核准資格由 `AssigneeITCode` 在 Action 層驗證。
+
+### 18.6 安全預設與注意事項
+
+- **`InitiatorAutoApprove = false`**（預設）：發起人不會因為是第一位審批人就被自動略過。若需舊行為（explicit opt-in），設 `options.InitiatorAutoApprove = true` 並記錄決策理由。
+- **`AutoApproveOnMissingHandler = FailClose`**（預設，#250）：審批人無法解析時節點 fail-closed，需管理員干預。前一隱式預設為 `AutoApprove`（靜默繞過審批，合規風險）。
+- **`DBTypeEnum.Memory` 不支援**：EF InMemory 不支援 `ExecuteUpdateAsync`，啟動時立即拋 `InvalidOperationException`。請使用 SQLite、SQL Server、PostgreSQL、MySQL、Oracle 或達夢。
+- **沙盒路由**：欄位存取採正向白名單，非白名單欄位在 publish 和 runtime 雙層 fail-closed。
+- **通知不阻塞**：所有通知在引擎 transaction commit 後發送，投遞失敗記 Error log，不回滾審批決定。
+
+### 18.7 稽核機制
+
+- `[AuditChanges]` 套用在 `ProcessDefinition`、`ProcessDefinitionVersion`、`ProcessInstance`、`NodeInstance`、`ApprovalTask`、`DelegationRule`——VM CRUD 操作透過 `ChangeLog` 自動記錄。
+- **`WorkflowEventLog`（append-only）** 是引擎狀態轉換的權威稽核來源——引擎使用 `ExecuteUpdateAsync` bypass 了 EF change tracker，`[AuditChanges]` 看不到這些操作。Timeline endpoint：`GET /api/_workflow/instances/{id}/timeline`。
+
+### 18.8 ProcessDefinition Admin Grid
+
+`ProcessDefinitionListVM` 提供租戶範圍的流程定義列表（唯讀）。在區域 Controller 使用：
+
+```csharp
+[ActionDescription("流程定義管理")]
+public class WfProcessDefinitionController : BaseController
+{
+    [ActionDescription("列表")]
+    public ActionResult Index()
+    {
+        var vm = CreateVM<ProcessDefinitionListVM>();
+        return PartialView(vm);
+    }
+}
+```
+
+---
+
+## 19. 常見問題
 
 ### Q1: FrameworkContext 測試時出現 SQLite Error 1（重複欄名）
 **原因：** `base.OnModelCreating()` 會掃描所有載入的 assembly，造成 `MajorId` 等欄位衝突。

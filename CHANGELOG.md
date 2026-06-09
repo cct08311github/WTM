@@ -1,12 +1,64 @@
 # 更新日志
 
-## [Unreleased]
+## [10.9.0] - 2026-06-10
 
-### WorkFlow (in progress — WF-9/WF-10)
+`WalkingTec.Mvvm.WorkFlow` approval engine — a new NuGet package (the 4th shipping package alongside Core / Mvc / TagHelpers.LayUI). Greenfield Chinese-corporate approval/workflow engine built as a peer sibling to `WalkingTec.Mvvm.Etl`. **Every feature is opt-in** — existing applications are completely unaffected until `AddWtmWorkFlow()` is called. This module ships **zero migrations**; consumers run their own `dotnet ef migrations add` (see Migration).
 
-- **`AutoApproveOnMissingHandler` now defaults to `FailClose` (safe default, #250):** when a workflow approval node's approver cannot be resolved (empty role, unresolvable ManagerChain, or unsupported rule type), the node now **fails closed** by default — the instance stays Running and requires admin intervention. The prior default was `AutoApprove`, which silently bypassed the approval step (compliance bypass). **Migration:** if you relied on the previous silent auto-approve behavior, set `AutoApproveOnMissingHandler = AutoApproveOnMissingHandlerPolicy.AutoApprove` in `WorkFlowOptions` — but note this constitutes an explicit compliance bypass and should be documented. The `EscalateToAdmin` policy also now fails closed when `AdminFallbackITCode` is not configured (prior behavior was to fall through to `AutoApprove`).
-- **会签 (All/ratio) approval mode (#251):** `ApproveMode.All` nodes mint all approver tasks as `Pending` simultaneously. The node completes when the configured fraction (`approvePercent`; `null` = 100%) of approvals is reached via a guarded CAS. Supports `RejectGate.Immediate` (first reject fails node) and `RejectGate.AfterAll` (fail only when threshold is mathematically unreachable).
-- **或签 (Any) approval mode (#252):** `ApproveMode.Any` nodes mint all approver tasks as `Pending` simultaneously. The first approver to approve wins via a guarded CAS; sibling tasks are cancelled. A single reject does not fail the node — only the last pending approver's reject triggers node failure.
+### Added
+
+- **`WalkingTec.Mvvm.WorkFlow` package** — a new 4th NuGet package containing the approval/workflow engine. Install with `dotnet add package WalkingTec.Mvvm.WorkFlow`. Peer sibling to `WalkingTec.Mvvm.Etl`; depends on `WalkingTec.Mvvm.Mvc`.
+
+- **Version-pinned process definitions** (#240): process graphs are stored as canonical JSON (`ProcessDefinitionVersion.GraphJson`) SHA-256 hashed into `ProcessDefinitionVersion.ContentHash`. Running instances FK the immutable version, never the mutable head — definition edits always create a new version and never affect in-flight approvals. Publishing is idempotent (republishing an identical graph is a no-op). Validation-only dry-run available at `POST /api/_workflow/definitions/validate`.
+
+- **Token/marking engine with `GuardedTransition` atomic transitions** (#240): every state-changing operation routes through a `GuardedTransition` conditional `ExecuteUpdateAsync` helper (guard-in-WHERE CAS, branch on `rowsAffected == 0` → idempotent no-op). This is the same verified pattern as `TokenService` (modeled on `TokenService.cs:95-116`). Handles all race classes: 或签 concurrent approvers, 会签 double-completion (threshold-crossing is itself a guarded CAS on `NodeInstance WHERE State == Activated`), 撤回 vs. final-approve race, and (Wave 5) timeout vs. human.
+
+- **三种审批模式 — 串签 / 会签 / 或签** (#240, #251, #252): all three modes are values of a single `ApproveMode` enum on a generic Approval node.
+  - **串签 (Sequential)**: tasks activate one-by-one in order; each approver acts before the next is notified.
+  - **会签 (All / Joint, #251)**: all approver tasks are minted `Pending` simultaneously. The node completes when the configured `approvePercent` fraction (`null` = 100%) is reached via guarded CAS. `RejectGate.Immediate` fails the node on first reject; `RejectGate.AfterAll` fails only when the threshold is mathematically unreachable.
+  - **或签 (Any-one, #252)**: all approver tasks are minted `Pending` simultaneously. The first approver to approve wins via guarded CAS; sibling tasks are cancelled. A single reject does not fail the node — only the last pending approver's reject triggers node failure.
+
+- **`IApproverResolver`** (#240): pluggable approver resolution with three built-in strategies — `Role` (all users in a WTM role), `User` (explicit ITCode list), and `ManagerChain` (recursive manager lookup with cycle detection, human-dedupe, and configurable `MaxLevel`/`MaxReturnLoops` caps). Implement `IApproverResolver` to add custom strategies.
+
+- **Sandboxed conditional routing — `WhitelistRoutingEvaluator`** (#240): Condition nodes use a **closed operator enum** (`Eq`, `Gt`, `Gte`, `Lt`, `Lte`, `Contains`, `In`, `NotEq`, `NotContains`, `NotIn`) evaluated against `FormDataJson`. Fields must be declared in the definition's `fieldWhitelist` (mirrors the Analysis Mode field whitelist). No Roslyn, no DynamicLinq, no string evaluation. Routing evaluators are compiled and cached by `ContentHash`. `In`/`NotIn` value lists are capped at 100 items. Safety enforced in two layers: publish-time validation (`RoutingValidator`) and runtime re-validation (`WhitelistRoutingEvaluator`) — an off-whitelist field access fails closed with `ROUTING_FIELD_NOT_ALLOWED`.
+
+- **撤回 (Withdraw / ReturnToInitiator)** (#240): `WithdrawPolicy` enum controls when the initiator may withdraw a running instance — `BeforeAnyAction` (strictest), `BeforeFinalApproval` (default), or `Disabled`. `ReturnToInitiator` (回退) lets an approver send an instance back to the initiator for revision. Wave 3 will add ReturnToPrev / ReturnToNode.
+
+- **抄送 (CC, non-blocking)** (#240): CC records are created in the same transaction as the approval step. CC recipients are notified via `IWtmWebhookSink` but have no approval authority and do not block the flow.
+
+- **Engine controllers** (#240): three controllers, all extending `BaseController` with `[ActionDescription]` / `FunctionPrivilege` RBAC gates on every action. Approver-eligibility is enforced at the action layer (`AssigneeITCode` match via `WorkflowActionVM`) — controllers never touch `DC` directly.
+  - `ProcessDefinitionController` — `GET /api/_workflow/definitions`, `POST /api/_workflow/definitions/{id}/publish`, `POST /api/_workflow/definitions/validate`, `GET /api/_workflow/definitions/{key}/versions`
+  - `WorkflowInstanceController` — `POST /api/_workflow/instances/start`, `POST /api/_workflow/instances/{id}/withdraw`, `GET /api/_workflow/instances/{id}/timeline`
+  - `WorkflowTaskController` — `GET /api/_workflow/tasks/mine`, `POST /api/_workflow/tasks/{id}/approve`, `POST /api/_workflow/tasks/{id}/reject`, `POST /api/_workflow/tasks/{id}/return`
+
+- **`IWorkflowNotifier` via `IWtmWebhookSink`** (#240): opt-in via `AddWtmWorkFlowNotifications()`. Reuses the shared `IWtmWebhookSink` introduced in 10.8.0 (DingTalk / WeCom / Feishu / Slack / Teams). When no sink is registered the notifier is a silent no-op. **Non-blocking guarantee:** all notifications are sent after the engine transaction commits — a delivery failure is logged at `Error` and never propagates to the engine caller; a webhook error cannot roll back an approval decision. Cards carry only instance/task identifiers, node key, actor ITCode, and decision outcome — `FormDataJson` is never included.
+
+- **Dual-audit `WorkflowEventLog`** (#240): `[AuditChanges]` on `ProcessDefinition`, `ProcessDefinitionVersion`, `ProcessInstance`, `NodeInstance`, `ApprovalTask`, and `DelegationRule` captures VM-driven CRUD writes via `ChangeLog`. The append-only `WorkflowEventLog` is the authoritative engine audit for state transitions (which use `ExecuteUpdateAsync` and bypass the EF change tracker). Timeline endpoint: `GET /api/_workflow/instances/{id}/timeline`.
+
+- **ProcessDefinition admin grid** (#240): `ProcessDefinitionListVM` provides a read-only tenant-scoped grid for browsing process definitions. Searcher fields: `Code`, `Name`, `Category`, `IsEnabled`. Grid actions: read-only detail dialog and version-history dialog. In-grid editing is intentionally absent — definitions are published via API.
+
+- **`AutoApproveOnMissingHandler` safe default — `FailClose` (#250)**: when an approval node's approver cannot be resolved (empty role, unresolvable ManagerChain, or unsupported rule type), the node fails closed by default — the instance stays `Running` and requires admin intervention. The prior implicit default was `AutoApprove` (silent compliance bypass). `EscalateToAdmin` also now fails closed when `AdminFallbackITCode` is not configured.
+
+- **会签 completion-policy dispatcher (#251)**: threshold-crossing node completion is itself a guarded CAS (`WHERE NodeInstance.State == Activated`) — count increments are advisory; exactly one CAS winner completes the node, preventing double-completion and lost-completion races.
+
+- **或签 CAS winner (#252)**: the first-approver-wins transition is a guarded CAS on `NodeInstance WHERE State == Activated`; sibling task cancellation happens only after the CAS succeeds.
+
+### Migration
+
+- **`ApplyWorkFlowModels()`** (required if using WorkFlow): call from your application's `DataContext.OnModelCreating` and run `dotnet ef migrations add WorkFlowInitialCreate` against your own context. This creates 9 tables: `Wf_ProcessDefinition`, `Wf_ProcessDefinitionVersion`, `Wf_ProcessInstance`, `Wf_NodeInstance`, `Wf_ApprovalTask`, `Wf_WorkflowEventLog`, `Wf_CcRecord`, `Wf_DelegationRule`, `Wf_WorkflowTimer`. Mirrors the `ApplyEtlModels()` pattern exactly. **WorkFlow ships zero migrations** — identical to `WalkingTec.Mvvm.Etl`.
+  ```csharp
+  protected override void OnModelCreating(ModelBuilder modelBuilder)
+  {
+      base.OnModelCreating(modelBuilder);
+      modelBuilder.ApplyEtlModels();       // if also using Etl
+      modelBuilder.ApplyWorkFlowModels();  // WorkFlow tables
+  }
+  ```
+
+- **Safe defaults** (opt-in overrides required to restore prior implicit behavior):
+  - `InitiatorAutoApprove = false` (default): the initiator is never auto-skipped as a first approver. Set `options.InitiatorAutoApprove = true` to restore prior draft behavior (explicit opt-in, constitutes a compliance bypass — document it).
+  - `AutoApproveOnMissingHandler = FailClose` (default, #250): a node with no resolvable approver fails closed. Set `AutoApproveOnMissingHandlerPolicy.AutoApprove` to restore the prior silent auto-approve — only if you can accept the compliance implications.
+
+- **`DBTypeEnum.Memory` is unsupported**: the engine throws `InvalidOperationException` at startup when EF InMemory is detected. Use SQLite, SQL Server, PostgreSQL, MySQL, Oracle, or DaMeng. (Live-provider concurrency conformance is proven on SQLite; the 7-provider conformance gate is tracked in issue #270.)
 
 ## [10.8.0] - 2026-06-08
 

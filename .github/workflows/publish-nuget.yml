@@ -57,6 +57,11 @@ jobs:
           PKG_VERSION: ${{ steps.version.outputs.version }}
         run: dotnet pack src/WalkingTec.Mvvm.Mvc/WalkingTec.Mvvm.Mvc.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION
 
+      - name: Pack WalkingTec.Mvvm.WorkFlow
+        env:
+          PKG_VERSION: ${{ steps.version.outputs.version }}
+        run: dotnet pack src/WalkingTec.Mvvm.WorkFlow/WalkingTec.Mvvm.WorkFlow.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION
+
       - name: List packages
         run: ls -lh nupkgs/
 
@@ -226,12 +231,35 @@ jobs:
             "https://api.github.com/repos/cct08311github/WTM/releases" \
             -d "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"body\":${BODY_JSON},\"draft\":false,\"prerelease\":false}"
 
+      # Re-pack from the sanitized source tree so the published nuspec contains
+      # `internal.registry.invalid` instead of the internal tailnet hostname.
+      # At this point the working tree is still on sync-to-github-tmp with
+      # common.props already rewritten by github-sanitize.sed.
+      - name: Re-pack from sanitized source for GitHub Packages
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          PKG_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p nupkgs-github
+          dotnet pack src/WalkingTec.Mvvm.Core/WalkingTec.Mvvm.Core.csproj                             -c Release -o nupkgs-github /p:Version=$PKG_VERSION
+          dotnet pack src/WalkingTec.Mvvm.TagHelpers.LayUI/WalkingTec.Mvvm.TagHelpers.LayUI.csproj -c Release -o nupkgs-github /p:Version=$PKG_VERSION
+          dotnet pack src/WalkingTec.Mvvm.Mvc/WalkingTec.Mvvm.Mvc.csproj                              -c Release -o nupkgs-github /p:Version=$PKG_VERSION
+          dotnet pack src/WalkingTec.Mvvm.WorkFlow/WalkingTec.Mvvm.WorkFlow.csproj                    -c Release -o nupkgs-github /p:Version=$PKG_VERSION
+          # Sanity-check: the internal hostname must not appear in any packed nuspec.
+          if unzip -p nupkgs-github/*.nupkg '*.nuspec' 2>/dev/null | grep -q 'mac-mini\.tailde842d'; then
+            echo "ERROR: internal hostname still present in sanitized nupkgs — aborting." >&2
+            exit 1
+          fi
+          echo "Sanitized nupkgs ready:"
+          ls -lh nupkgs-github/
+
       - name: Push NuGet packages to GitHub Packages
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_PAT: ${{ secrets.GH_MIRROR_PAT }}
         run: |
-          dotnet nuget push "nupkgs/*.nupkg" \
+          dotnet nuget push "nupkgs-github/*.nupkg" \
             --api-key "$GH_PAT" \
             --source "https://nuget.pkg.github.com/cct08311github/index.json" \
             --skip-duplicate
@@ -250,5 +278,6 @@ jobs:
           dotnet add package WalkingTec.Mvvm.Core --version "$PKG_VERSION"
           dotnet add package WalkingTec.Mvvm.Mvc --version "$PKG_VERSION"
           dotnet add package WalkingTec.Mvvm.TagHelpers.LayUI --version "$PKG_VERSION"
+          dotnet add package WalkingTec.Mvvm.WorkFlow --version "$PKG_VERSION"
           dotnet restore
           dotnet build -c Release --no-restore
