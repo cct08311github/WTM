@@ -4,7 +4,7 @@
 
 # WalkingTec.Mvvm.WorkFlow — Implementation Specification v2
 
-> Status: implementation-ready (v2 — corrected). Target framework version: **10.8.0** (next minor). Branch: `dotnet10`. Origin: Gitea.
+> Status: implementation-ready (v2 — corrected). Target framework version: **10.8.0** (next minor). Branch: `dotnet10`. Origin: internal infrastructure.
 > Every load-bearing claim below was verified against repo source (file:line cited inline).
 > v2 changes from v1: HIGH-1 DbContext/migration anchor corrected; HIGH-2 7-provider + Memory-guard + Sprint-0 concurrency spike added; MEDIUM InitiatorAutoApprove default changed false; §2.6 packaging deferred / .sync checklist added; FilterOperator order fixed; deferred modes honestly flagged; timeline 6–8 weeks.
 
@@ -197,7 +197,7 @@ public static class WorkFlowDbContextExtensions
 1. Set `IsPackable=true` in the csproj (already set in §2.1 — confirm before enabling).
 2. Add a `Pack WalkingTec.Mvvm.WorkFlow` step to `publish-nuget.yml` and `scripts/publish-to-gitea.sh`.
 3. **Update `.sync/github-sanitize.sed`** to sanitize the new assembly name and any internal references from the GitHub mirror output.
-4. **Re-run the leak gate** (`git grep -lI <marker>` for mac-mini/tailde842d/GITEA_*/.ts.net) on the sanitized commit before tagging — the auto-sync pipeline is verified end-to-end (10.6.0) but a new assembly introduces new surfaces that could carry internal hostnames in `<RepositoryUrl>` or XML doc comments.
+4. **Re-run the leak gate** (`git grep -lI <marker>` for mac-mini/internal-tailnet/GITEA_*/.ts.net) on the sanitized commit before tagging — the auto-sync pipeline is verified end-to-end (10.6.0) but a new assembly introduces new surfaces that could carry internal hostnames in `<RepositoryUrl>` or XML doc comments.
 5. Update the smoke-test step in `publish-nuget.yml` to also install `WalkingTec.Mvvm.WorkFlow`.
 
 ---
@@ -527,7 +527,7 @@ public class WorkFlowOptions
 
 **Invariant tests:** `HasQueryFilter` present on every entity (tenant-leak guard); `ProcessDefinitionVersion` has no `DoEdit` path + `ContentHash` matches `GraphJson`; routing evaluator rejects off-whitelist field + caps `In` at 100 (`AnalysisQueryEngine.Filters.cs:84`); canonical-JSON determinism; `DBTypeEnum.Memory` startup guard throws.
 
-> CI note: **Any PR touching TokenService-adjacent transition logic or controllers MUST also run `WalkingTec.Mvvm.Mvc.Tests`** (the #119/#162 lesson). Read CI logs for `Test Run Successful` rather than trusting the Gitea conclusion (#11 caveat).
+> CI note: **Any PR touching TokenService-adjacent transition logic or controllers MUST also run `WalkingTec.Mvvm.Mvc.Tests`** (the #119/#162 lesson). Read CI logs for `Test Run Successful` rather than trusting the internal infrastructure conclusion (#11 caveat).
 
 ---
 
@@ -575,7 +575,7 @@ New opt-in module entry under the active version block (append to `### Changes`)
 
 ## 12. Sprint / Wave Plan
 
-One Gitea issue per sub-issue; one branch/PR each; `Closes #N`. Waves sized so files **do not collide** → worktree-isolated Sonnet agents run in parallel. **Serialize anything touching `ServiceCollectionExtensions.cs` / `ApplyWorkFlowModels`** — those are the foundation sub-issues that land first. Single Mac-mini runner (~30-40 min/PR) → keep PRs small, 2-3 parallel max.
+One internal infrastructure issue per sub-issue; one branch/PR each; `Closes #N`. Waves sized so files **do not collide** → worktree-isolated Sonnet agents run in parallel. **Serialize anything touching `ServiceCollectionExtensions.cs` / `ApplyWorkFlowModels`** — those are the foundation sub-issues that land first. Single Mac-mini runner (~30-40 min/PR) → keep PRs small, 2-3 parallel max.
 
 ### Sprint-0 — Concurrency spike (Week 1, BLOCKING gate before any Wave-1 code)
 
