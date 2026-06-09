@@ -62,6 +62,9 @@ public sealed record WorkflowActionResult
     /// <summary>No approver could be resolved; escalated to the admin fallback.</summary>
     public static readonly WorkflowActionResult AdminFallback = new(WorkflowActionCode.AdminFallback);
 
+    /// <summary>The task was returned to the initiator; instance is now in Draft state for resubmission.</summary>
+    public static readonly WorkflowActionResult ReturnedToInitiator = new(WorkflowActionCode.ReturnedToInitiator);
+
     // ── Instance ──────────────────────────────────────────────────────────────
 
     /// <summary>The outcome code for this result.</summary>
@@ -143,4 +146,7 @@ public enum WorkflowActionCode
 
     /// <summary>Admin fallback was triggered (no approver could be resolved).</summary>
     AdminFallback,
+
+    /// <summary>Task was returned to the initiator; instance is now Draft for resubmission.</summary>
+    ReturnedToInitiator,
 }

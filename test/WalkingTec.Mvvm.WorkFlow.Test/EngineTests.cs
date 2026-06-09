@@ -553,11 +553,33 @@ internal static class NodeKindDispatcher_Exposed
         var seqLogger  = NullLogger<SequentialApprovalHandler>.Instance;
         var allLogger  = NullLogger<AllApprovalHandler>.Instance;
         var anyLogger  = NullLogger<AnyApprovalHandler>.Instance;
-        var seqHandler = new SequentialApprovalHandler(resolver, options, seqLogger);
-        var allHandler = new AllApprovalHandler(resolver, options, allLogger);
-        var anyHandler = new AnyApprovalHandler(resolver, options, anyLogger);
-        var approval   = new ApprovalHandler(seqHandler, allHandler, anyHandler);
-        return new NodeKindDispatcher(approval);
+        var seqHandler    = new SequentialApprovalHandler(resolver, options, seqLogger);
+        var allHandler    = new AllApprovalHandler(resolver, options, allLogger);
+        var anyHandler    = new AnyApprovalHandler(resolver, options, anyLogger);
+        var approval      = new ApprovalHandler(seqHandler, allHandler, anyHandler);
+        var ccLogger      = NullLogger<CcHandler>.Instance;
+        // CcHandler uses a user-type resolver so that CC nodes in tests can resolve User rules.
+        // The Approval handler keeps the NullApproverResolver (FailClose → blocks as expected).
+        var ccResolver    = new UserTypeApproverResolver();
+        var cc            = new CcHandler(ccResolver, ccLogger);
+        return new NodeKindDispatcher(cc, approval);
+    }
+
+    // Minimal resolver that handles Type="User" rules (returns Value as single approver).
+    // Used for CcHandler in WF-6/7 tests where the CC node must write a CcRecord.
+    private sealed class UserTypeApproverResolver : IApproverResolver
+    {
+        public Task<ApproverResolution> ResolveAsync(
+            Microsoft.EntityFrameworkCore.DbContext db,
+            WalkingTec.Mvvm.WorkFlow.Definition.ApproverRuleDef rule,
+            NodeInstance nodeInstance,
+            string initiatorITCode,
+            CancellationToken ct = default)
+        {
+            if (rule.Type == "User" && !string.IsNullOrWhiteSpace(rule.Value))
+                return Task.FromResult(ApproverResolution.Success(new[] { rule.Value }));
+            return Task.FromResult(ApproverResolution.NoApprover("UserTypeApproverResolver: unsupported rule."));
+        }
     }
 
     /// <summary>
@@ -576,7 +598,9 @@ internal static class NodeKindDispatcher_Exposed
         var allHandler = new AllApprovalHandler(resolver, optionsWrapper, allLogger);
         var anyHandler = new AnyApprovalHandler(resolver, optionsWrapper, anyLogger);
         var approval   = new ApprovalHandler(seqHandler, allHandler, anyHandler);
-        return new NodeKindDispatcher(approval);
+        var ccLogger   = NullLogger<CcHandler>.Instance;
+        var cc         = new CcHandler(resolver, ccLogger);
+        return new NodeKindDispatcher(cc, approval);
     }
 
     /// <summary>
@@ -595,7 +619,9 @@ internal static class NodeKindDispatcher_Exposed
         var allHandler = new AllApprovalHandler(resolver, optionsWrapper, allLogger);
         var anyHandler = new AnyApprovalHandler(resolver, optionsWrapper, anyLogger);
         var approval   = new ApprovalHandler(seqHandler, allHandler, anyHandler);
-        return new NodeKindDispatcher(approval);
+        var ccLogger   = NullLogger<CcHandler>.Instance;
+        var cc         = new CcHandler(resolver, ccLogger);
+        return new NodeKindDispatcher(cc, approval);
     }
 
     // Minimal no-op resolver used for the non-Approval WF-6/7 tests.
@@ -631,4 +657,16 @@ internal static class WorkflowEngine_Exposed
         WalkingTec.Mvvm.WorkFlow.Engine.Routing.IRoutingEvaluator routingEvaluator,
         Microsoft.Extensions.Logging.ILogger logger)
         => new WorkflowEngine(db, dispatcher, routingEvaluator, logger);
+
+    // Overload for WF-12 tests that need to override WorkFlowOptions.
+    public static WorkflowEngine CreateWithOptions(
+        DbContext db,
+        INodeKindDispatcher dispatcher,
+        WorkFlowOptions options,
+        Microsoft.Extensions.Logging.ILogger logger)
+    {
+        var routingEvaluator = new WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator(
+            NullLogger<WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator>.Instance);
+        return new WorkflowEngine(db, dispatcher, routingEvaluator, options, logger);
+    }
 }

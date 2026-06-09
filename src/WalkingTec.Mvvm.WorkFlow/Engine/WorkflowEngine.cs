@@ -1,6 +1,7 @@
 #nullable enable
 // WF-6: WorkflowEngine — token/marking engine core.
 // WF-11: Exclusive gateway routing via IRoutingEvaluator.
+// WF-12: WithdrawAsync (撤回) + ReturnToInitiatorAsync (回退发起人, MVP restart semantics).
 //
 // Design:
 //   • StartAsync: create ProcessInstance, mint Start NodeInstance, call AdvanceAsync.
@@ -13,8 +14,15 @@
 //     first match wins (Exclusive); fallback to Default; no-match + no-default → fail-closed.
 //   • FormDataJson deserialized to IReadOnlyDictionary<string,object?> for in-memory evaluation.
 //
-// This file deliberately does NOT implement Approval-mode completion policies (WF-8/9/10),
-// or Withdraw/Return (WF-12).
+// WF-12 — Withdraw:
+//   • WithdrawAsync: initiator (or admin) withdraws a Running instance.
+//   • Honors WithdrawPolicy: BeforeAnyAction (L0) / BeforeFinalApproval (L1, default) / Disabled (L2).
+//   • Instance-level CAS (T-CONC-2 race: 撤回 vs. final-approve; first wins, loser no-ops).
+//   • On success: cancels all Pending ApprovalTasks; writes WorkflowEventLog.
+//
+// WF-12 — ReturnToInitiatorAsync:
+//   • Approver returns task to initiator; instance goes to Draft (re-editable).
+//   • Full Wave-3 回退-to-arbitrary-node is deferred (// WF-16 Wave-3).
 
 using System;
 using System.Collections.Generic;
@@ -24,6 +32,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.WorkFlow.Definition;
 using WalkingTec.Mvvm.WorkFlow.Engine.Routing;
@@ -51,6 +60,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
     private readonly DbContext _db;
     private readonly INodeKindDispatcher _dispatcher;
     private readonly IRoutingEvaluator _routingEvaluator;
+    private readonly WorkFlowOptions _options;
     // Stored as non-generic ILogger so that test subclasses can inject an
     // ILogger<TSubclass> without a covariance problem.  Extension methods on
     // ILogger (LogDebug/LogWarning/LogError) work identically on the base type.
@@ -66,11 +76,13 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         IDataContext dc,
         INodeKindDispatcher dispatcher,
         IRoutingEvaluator routingEvaluator,
+        IOptions<WorkFlowOptions> options,
         ILogger<WorkflowEngine> logger)
         : this(
               (DbContext)(dc ?? throw new ArgumentNullException(nameof(dc))),
               dispatcher,
               routingEvaluator,
+              options?.Value ?? new WorkFlowOptions(),
               (ILogger)logger)
     { }
 
@@ -83,10 +95,21 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         INodeKindDispatcher dispatcher,
         IRoutingEvaluator routingEvaluator,
         ILogger logger)
+        : this(db, dispatcher, routingEvaluator, new WorkFlowOptions(), logger)
+    { }
+
+    /// <summary>Full internal constructor used by tests that need to override WorkFlowOptions.</summary>
+    internal WorkflowEngine(
+        DbContext db,
+        INodeKindDispatcher dispatcher,
+        IRoutingEvaluator routingEvaluator,
+        WorkFlowOptions options,
+        ILogger logger)
     {
         _db = db ?? throw new ArgumentNullException(nameof(db));
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _routingEvaluator = routingEvaluator ?? throw new ArgumentNullException(nameof(routingEvaluator));
+        _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -873,6 +896,283 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         }
 
         return WorkflowActionResult.Rejected;
+    }
+
+    // ── WF-12: WithdrawAsync ──────────────────────────────────────────────────
+
+    /// <inheritdoc/>
+    public async Task<WorkflowActionResult> WithdrawAsync(
+        Guid instanceId,
+        string actorITCode,
+        string? reason = null,
+        bool isAdmin = false,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(actorITCode))
+            throw new ArgumentException("actorITCode must not be empty.", nameof(actorITCode));
+
+        // 1. Load instance.
+        var instance = await Db.Set<ProcessInstance>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(x => x.ID == instanceId && x.IsValid == true, ct);
+
+        if (instance is null)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.TaskNotActive,
+                $"ProcessInstance {instanceId} not found.");
+
+        // 2. Initiator check (bypass for admin).
+        if (!isAdmin
+            && !string.Equals(instance.InitiatorITCode, actorITCode, StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NotInitiator,
+                $"Actor '{actorITCode}' is not the initiator '{instance.InitiatorITCode}' of instance {instanceId}.");
+        }
+
+        // 3. WithdrawPolicy check.
+        var policy = _options.WithdrawPolicy;
+
+        if (policy == WithdrawPolicy.Disabled)
+        {
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NotAuthorized,
+                $"Withdrawal is disabled (WithdrawPolicy={policy}).");
+        }
+
+        // 4. Current-state check: only Running instances can be withdrawn.
+        if (instance.State != InstanceState.Running)
+        {
+            // Already terminal — T-CONC-2 loser or user re-tries after completion.
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.CannotWithdrawAlreadyFinal,
+                $"Instance {instanceId} is in state {instance.State}, not Running. Cannot withdraw.");
+        }
+
+        // 5. BeforeAnyAction (L0): withdrawal only allowed while no approver has acted yet.
+        //    "Acted" = at least one ApprovalTask in a terminal state (not Pending/NotYetActive/Cancelled).
+        //    Two-step: materialize node IDs first (avoids nested subquery translation issues on SQLite).
+        if (policy == WithdrawPolicy.BeforeAnyAction)
+        {
+            var nodeIdsForPolicy = await Db.Set<NodeInstance>()
+                .Where(n => n.InstanceId == instanceId)
+                .Select(n => n.ID)
+                .ToListAsync(ct);
+
+            bool anyActed = nodeIdsForPolicy.Count > 0
+                && await Db.Set<ApprovalTask>()
+                    .AnyAsync(t => nodeIdsForPolicy.Contains(t.NodeInstanceId)
+                                    && t.State != TaskState.Pending
+                                    && t.State != TaskState.NotYetActive
+                                    && t.State != TaskState.Cancelled,
+                              ct);
+
+            if (anyActed)
+            {
+                return WorkflowActionResult.WithDetail(WorkflowActionCode.CannotWithdrawAlreadyFinal,
+                    $"Withdrawal rejected: WithdrawPolicy=BeforeAnyAction and an approver has already acted on instance {instanceId}.");
+            }
+        }
+
+        // 6. Instance-level guarded CAS (T-CONC-2): Running → Withdrawn.
+        //    If the final approver wins this race first, AdvanceProcessInstanceAsync already
+        //    flipped State to Approved (or Rejected) — our WHERE State==Running misses and
+        //    returns rows==0 → CannotWithdrawAlreadyFinal.
+        var rows = await GuardedTransition.AdvanceProcessInstanceAsync(
+            Db, instance.ID,
+            expectedState: InstanceState.Running,
+            expectedRowVer: instance.RowVer,
+            nextState: InstanceState.Withdrawn,
+            ct);
+
+        if (rows == 0)
+        {
+            _logger.LogDebug(
+                "WithdrawAsync: CAS returned 0 rows for instance {InstanceId} — " +
+                "concurrent actor already changed state. Treating as CannotWithdrawAlreadyFinal.",
+                instanceId);
+            return WorkflowActionResult.CannotWithdrawAlreadyFinal;
+        }
+
+        // 7. Cancel all Pending ApprovalTasks for this instance.
+        //    Use node-instance-filtered bulk cancel to avoid cross-instance contamination.
+        var nodeIds = await Db.Set<NodeInstance>()
+            .Where(n => n.InstanceId == instanceId)
+            .Select(n => n.ID)
+            .ToListAsync(ct);
+
+        if (nodeIds.Count > 0)
+        {
+            await Db.Set<ApprovalTask>()
+                .Where(t => nodeIds.Contains(t.NodeInstanceId)
+                             && (t.State == TaskState.Pending || t.State == TaskState.NotYetActive))
+                .ExecuteUpdateAsync(
+                    s => s.SetProperty(t => t.State, TaskState.Cancelled),
+                    ct);
+        }
+
+        // 8. Write event log.
+        await WorkflowEventLogWriter.AppendAsync(
+            Db, instance.ID, instance.TenantCode,
+            EventAction.Withdraw,
+            nodeKey: null,
+            actorITCode: actorITCode,
+            beforeState: InstanceState.Running.ToString(),
+            afterState: InstanceState.Withdrawn.ToString(),
+            reason: reason,
+            ct: ct);
+
+        _logger.LogInformation(
+            "WithdrawAsync: instance {InstanceId} withdrawn by '{ActorITCode}' (isAdmin={IsAdmin}).",
+            instanceId, actorITCode, isAdmin);
+
+        return WorkflowActionResult.Withdrawn;
+    }
+
+    // ── WF-12: ReturnToInitiatorAsync ─────────────────────────────────────────
+
+    /// <inheritdoc/>
+    public async Task<WorkflowActionResult> ReturnToInitiatorAsync(
+        Guid taskId,
+        string actorITCode,
+        string? reason = null,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(actorITCode))
+            throw new ArgumentException("actorITCode must not be empty.", nameof(actorITCode));
+
+        // 1. Load task.
+        var task = await Db.Set<ApprovalTask>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(t => t.ID == taskId && t.IsValid == true, ct);
+
+        if (task is null)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.TaskNotActive,
+                $"ApprovalTask {taskId} not found.");
+
+        // 2. Load node instance.
+        var nodeInst = await Db.Set<NodeInstance>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(n => n.ID == task.NodeInstanceId, ct);
+
+        if (nodeInst is null)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeClosed,
+                $"NodeInstance {task.NodeInstanceId} not found.");
+
+        // 3. Load process instance.
+        var instance = await Db.Set<ProcessInstance>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(p => p.ID == nodeInst.InstanceId && p.IsValid == true, ct);
+
+        if (instance is null)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeClosed,
+                $"ProcessInstance for NodeInstance {nodeInst.ID} not found.");
+
+        // 4. Guard: node must be Activated.
+        if (nodeInst.State != NodeState.Activated)
+        {
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeClosed,
+                $"NodeInstance {nodeInst.ID} is in state {nodeInst.State}, not Activated.");
+        }
+
+        // 5. Actor must be the assignee.
+        if (!string.Equals(task.AssigneeITCode, actorITCode, StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.TaskNotActive,
+                $"Actor '{actorITCode}' is not the assignee '{task.AssigneeITCode}' of task {taskId}.");
+        }
+
+        // 6. Guard: task must be Pending.
+        if (task.State != TaskState.Pending)
+        {
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.AlreadyHandled,
+                $"Task {taskId} is in state {task.State}, not Pending.");
+        }
+
+        var now = DateTime.UtcNow;
+
+        // 7. CAS: claim the trigger task as Rejected (the task that triggered the return).
+        var claimedRows = await GuardedTransition.ClaimApprovalTaskAsync(
+            Db, taskId,
+            expectedRowVer: task.RowVer,
+            nextState: TaskState.Rejected,
+            actedAtUtc: now,
+            comment: reason,
+            ct: ct);
+
+        if (claimedRows == 0)
+        {
+            _logger.LogDebug(
+                "ReturnToInitiatorAsync: task {TaskId} CAS returned 0 rows — already handled.",
+                taskId);
+            return WorkflowActionResult.AlreadyHandled;
+        }
+
+        // 8. Cancel all remaining Pending/NotYetActive tasks on this node.
+        await Db.Set<ApprovalTask>()
+            .Where(t => t.NodeInstanceId == nodeInst.ID
+                         && (t.State == TaskState.Pending || t.State == TaskState.NotYetActive)
+                         && t.ID != taskId)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(t => t.State, TaskState.Cancelled),
+                ct);
+
+        // 9. Complete node as Returned (CAS on fresh RowVer).
+        var freshNode = await Db.Set<NodeInstance>()
+            .AsNoTracking()
+            .SingleAsync(n => n.ID == nodeInst.ID, ct);
+
+        var nodeCompleteRows = await GuardedTransition.CompleteNodeInstanceAsync(
+            Db, nodeInst.ID,
+            expectedRowVer: freshNode.RowVer,
+            completedState: NodeState.Returned,
+            decidedBy: actorITCode,
+            ct: ct);
+
+        if (nodeCompleteRows == 0)
+        {
+            _logger.LogDebug(
+                "ReturnToInitiatorAsync: NodeInstance {NodeId} completion CAS returned 0 — concurrent actor already completed.",
+                nodeInst.ID);
+            return WorkflowActionResult.AlreadyHandled;
+        }
+
+        // 10. Set instance to Draft via instance-level CAS.
+        instance = await Db.Set<ProcessInstance>()
+            .AsNoTracking()
+            .SingleAsync(x => x.ID == instance.ID, ct);
+
+        var instanceRows = await GuardedTransition.AdvanceProcessInstanceAsync(
+            Db, instance.ID,
+            expectedState: InstanceState.Running,
+            expectedRowVer: instance.RowVer,
+            nextState: InstanceState.Draft,
+            ct);
+
+        if (instanceRows == 0)
+        {
+            _logger.LogWarning(
+                "ReturnToInitiatorAsync: instance {InstanceId} CAS Running→Draft returned 0 — " +
+                "concurrent actor already changed state.",
+                instance.ID);
+            // Node was completed but instance flip failed — unusual; return AlreadyHandled
+            // so the caller knows the action did not fully succeed.
+            return WorkflowActionResult.AlreadyHandled;
+        }
+
+        // 11. Write event log with Return action.
+        await WorkflowEventLogWriter.AppendAsync(
+            Db, instance.ID, instance.TenantCode,
+            EventAction.Return,
+            nodeKey: nodeInst.NodeKey,
+            actorITCode: actorITCode,
+            beforeState: InstanceState.Running.ToString(),
+            afterState: InstanceState.Draft.ToString(),
+            reason: reason,
+            ct: ct);
+
+        _logger.LogInformation(
+            "ReturnToInitiatorAsync: task {TaskId} returned to initiator by '{ActorITCode}'. Instance {InstanceId} now Draft.",
+            taskId, actorITCode, instance.ID);
+
+        // WF-16 Wave-3: ReturnToPrev / ReturnToNode are deferred.
+        return WorkflowActionResult.ReturnedToInitiator;
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

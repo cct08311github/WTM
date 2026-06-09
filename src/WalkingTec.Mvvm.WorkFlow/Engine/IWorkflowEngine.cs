@@ -108,8 +108,8 @@ public interface IWorkflowEngine
     ///   <item>Complete node as <see cref="NodeState.CompletedRejected"/>.</item>
     ///   <item>Apply <c>NodeInstance.RejectPolicy</c>:
     ///         <see cref="RejectPolicy.TerminateInstance"/> → instance Rejected (terminal);
-    ///         <see cref="RejectPolicy.ReturnToInitiator"/> → basic reject-terminates for MVP
-    ///         (full WF-12 ReturnToInitiator restart is deferred).</item>
+    ///         <see cref="RejectPolicy.ReturnToInitiator"/> → returns instance to draft/initiator state
+    ///         so the initiator can resubmit (WF-12 ReturnToInitiator).</item>
     ///   <item>Write <see cref="WorkflowEventLog"/> row.</item>
     /// </list>
     /// </para>
@@ -119,6 +119,89 @@ public interface IWorkflowEngine
     /// <param name="reason">Rejection reason (required for reject actions).</param>
     /// <param name="ct">Cancellation token.</param>
     Task<WorkflowActionResult> RejectTaskAsync(
+        Guid taskId,
+        string actorITCode,
+        string? reason = null,
+        CancellationToken ct = default);
+
+    // ── WF-12: 撤回 (Withdraw) ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Initiator (or admin) withdraws the process instance identified by
+    /// <paramref name="instanceId"/>.
+    ///
+    /// <para>Only the original initiator (<see cref="Models.ProcessInstance.InitiatorITCode"/>)
+    /// or an admin may call this.  If <paramref name="isAdmin"/> is <c>true</c> the
+    /// initiator check is bypassed.</para>
+    ///
+    /// <para>Honors <see cref="WorkFlowOptions.WithdrawPolicy"/>:
+    /// <list type="bullet">
+    ///   <item><see cref="WithdrawPolicy.BeforeAnyAction"/> (L0) — withdrawal only allowed while
+    ///         no approver has acted yet (all tasks still Pending / NotYetActive).</item>
+    ///   <item><see cref="WithdrawPolicy.BeforeFinalApproval"/> (L1, default) — withdrawal allowed
+    ///         as long as the instance has not yet reached a terminal / approved state.</item>
+    ///   <item><see cref="WithdrawPolicy.Disabled"/> (L2) — withdrawal is never allowed.</item>
+    /// </list>
+    /// </para>
+    ///
+    /// <para><strong>Instance-level guarded CAS:</strong>
+    /// <c>WHERE ProcessInstance.State == Running AND RowVer == expected</c>.
+    /// If another concurrent actor (e.g. the final approver) wins the race first,
+    /// this method returns <see cref="WorkflowActionCode.CannotWithdrawAlreadyFinal"/>
+    /// rather than throwing.  This is the T-CONC-2 race (spec §7.1.c).</para>
+    ///
+    /// <para>On success: all Pending <see cref="Models.ApprovalTask"/>s for the instance are
+    /// cancelled; a <see cref="Models.WorkflowEventLog"/> row is appended.</para>
+    /// </summary>
+    /// <param name="instanceId">PK of the <see cref="Models.ProcessInstance"/> to withdraw.</param>
+    /// <param name="actorITCode">ITCode of the actor requesting withdrawal.</param>
+    /// <param name="reason">Optional withdrawal reason for the audit log.</param>
+    /// <param name="isAdmin">When <c>true</c>, bypass the initiator check (admin override).</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>
+    /// <see cref="WorkflowActionCode.Withdrawn"/> on success;
+    /// <see cref="WorkflowActionCode.NotInitiator"/> when actor is not the initiator and not admin;
+    /// <see cref="WorkflowActionCode.CannotWithdrawAlreadyFinal"/> when the instance has already
+    ///   reached a terminal state (race lost or already final);
+    /// <see cref="WorkflowActionCode.NotAuthorized"/> when <see cref="WithdrawPolicy.Disabled"/>.
+    /// </returns>
+    Task<WorkflowActionResult> WithdrawAsync(
+        Guid instanceId,
+        string actorITCode,
+        string? reason = null,
+        bool isAdmin = false,
+        CancellationToken ct = default);
+
+    // ── WF-12: 回退发起人 (ReturnToInitiator) ────────────────────────────────
+
+    /// <summary>
+    /// Approver returns the task to the initiator so the initiator may revise and resubmit.
+    ///
+    /// <para>MVP "ReturnToInitiator" — restart semantics (spec §5.7):
+    /// <list type="number">
+    ///   <item>Load task + node + instance.</item>
+    ///   <item>Verify <paramref name="actorITCode"/> matches <c>AssigneeITCode</c>.</item>
+    ///   <item>Guarded CAS: claim task as Rejected (the task that triggered the return).</item>
+    ///   <item>Cancel all remaining Pending/NotYetActive tasks on the current node.</item>
+    ///   <item>Complete the node as <see cref="Models.NodeState.Returned"/>.</item>
+    ///   <item>Set instance to <see cref="Models.InstanceState.Draft"/> (re-editable state)
+    ///         via guarded CAS.</item>
+    ///   <item>Write <see cref="Models.WorkflowEventLog"/> with <see cref="Models.EventAction.Return"/>.</item>
+    /// </list>
+    /// </para>
+    ///
+    /// <para><strong>Resubmit:</strong> the initiator calls <see cref="StartAsync"/> with the
+    /// same <c>definitionVersionId</c> + updated <c>formDataJson</c> (a new <see cref="Models.ProcessInstance"/>
+    /// is created). The returned instance remains in Draft state and is not reused.
+    /// Full WF-16 回退-to-node / Wave-3 返回-to-prev-node are not implemented here.</para>
+    ///
+    /// <para>// WF-16 Wave-3: ReturnToPrev / ReturnToNode are deferred.</para>
+    /// </summary>
+    /// <param name="taskId">PK of the <see cref="Models.ApprovalTask"/> being returned.</param>
+    /// <param name="actorITCode">ITCode of the approver initiating the return.</param>
+    /// <param name="reason">Reason for the return (surfaced in the event log).</param>
+    /// <param name="ct">Cancellation token.</param>
+    Task<WorkflowActionResult> ReturnToInitiatorAsync(
         Guid taskId,
         string actorITCode,
         string? reason = null,
