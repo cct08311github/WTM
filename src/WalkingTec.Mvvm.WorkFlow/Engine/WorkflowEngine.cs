@@ -2,6 +2,7 @@
 // WF-6: WorkflowEngine — token/marking engine core.
 // WF-11: Exclusive gateway routing via IRoutingEvaluator.
 // WF-12: WithdrawAsync (撤回) + ReturnToInitiatorAsync (回退发起人, MVP restart semantics).
+// WF-15: IWorkflowNotifier wired post-commit — best-effort, non-blocking. Null-safe (optional DI).
 //
 // Design:
 //   • StartAsync: create ProcessInstance, mint Start NodeInstance, call AdvanceAsync.
@@ -13,6 +14,10 @@
 //   • Condition node routing (WF-11): IRoutingEvaluator evaluates branches in order;
 //     first match wins (Exclusive); fallback to Default; no-match + no-default → fail-closed.
 //   • FormDataJson deserialized to IReadOnlyDictionary<string,object?> for in-memory evaluation.
+//   • Notifications (WF-15): IWorkflowNotifier? is injected optionally.  When null the engine
+//     behaves identically to pre-WF-15 code.  When non-null, each method fires the relevant
+//     event AFTER the transaction commits so that a delivery failure can NEVER roll back an
+//     approval decision (spec §8 "post-commit, best-effort, non-blocking").
 //
 // WF-12 — Withdraw:
 //   • WithdrawAsync: initiator (or admin) withdraws a Running instance.
@@ -37,6 +42,7 @@ using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.WorkFlow.Definition;
 using WalkingTec.Mvvm.WorkFlow.Engine.Routing;
 using WalkingTec.Mvvm.WorkFlow.Models;
+using WalkingTec.Mvvm.WorkFlow.Notifications;
 
 namespace WalkingTec.Mvvm.WorkFlow.Engine;
 
@@ -65,25 +71,33 @@ internal sealed class WorkflowEngine : IWorkflowEngine
     // ILogger<TSubclass> without a covariance problem.  Extension methods on
     // ILogger (LogDebug/LogWarning/LogError) work identically on the base type.
     private readonly ILogger _logger;
+    // WF-15: optional post-commit notification seam.  Null when AddWtmWorkFlowNotifications()
+    // was not called.  Engine skips all notify calls when null — identical to pre-WF-15 behavior.
+    private readonly IWorkflowNotifier? _notifier;
 
     // Convenience alias — keeps all the engine body code readable.
     private DbContext Db => _db;
 
     /// <summary>Production constructor: DI injects <see cref="IDataContext"/> which is always a
     /// <see cref="DbContext"/> subclass at runtime.  The cast is validated at construction so any
-    /// mis-registration fails loudly at startup.</summary>
+    /// mis-registration fails loudly at startup.
+    /// <para><see cref="IWorkflowNotifier"/> is optional — injected when
+    /// <see cref="ServiceCollectionExtensions.AddWtmWorkFlowNotifications"/> was called; null otherwise.</para>
+    /// </summary>
     public WorkflowEngine(
         IDataContext dc,
         INodeKindDispatcher dispatcher,
         IRoutingEvaluator routingEvaluator,
         IOptions<WorkFlowOptions> options,
-        ILogger<WorkflowEngine> logger)
+        ILogger<WorkflowEngine> logger,
+        IWorkflowNotifier? notifier = null)
         : this(
               (DbContext)(dc ?? throw new ArgumentNullException(nameof(dc))),
               dispatcher,
               routingEvaluator,
               options?.Value ?? new WorkFlowOptions(),
-              (ILogger)logger)
+              (ILogger)logger,
+              notifier)
     { }
 
     /// <summary>Test / direct-DbContext constructor.  Internal so tests in the sibling project can
@@ -94,8 +108,9 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         DbContext db,
         INodeKindDispatcher dispatcher,
         IRoutingEvaluator routingEvaluator,
-        ILogger logger)
-        : this(db, dispatcher, routingEvaluator, new WorkFlowOptions(), logger)
+        ILogger logger,
+        IWorkflowNotifier? notifier = null)
+        : this(db, dispatcher, routingEvaluator, new WorkFlowOptions(), logger, notifier)
     { }
 
     /// <summary>Full internal constructor used by tests that need to override WorkFlowOptions.</summary>
@@ -104,13 +119,15 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         INodeKindDispatcher dispatcher,
         IRoutingEvaluator routingEvaluator,
         WorkFlowOptions options,
-        ILogger logger)
+        ILogger logger,
+        IWorkflowNotifier? notifier = null)
     {
         _db = db ?? throw new ArgumentNullException(nameof(db));
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _routingEvaluator = routingEvaluator ?? throw new ArgumentNullException(nameof(routingEvaluator));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _notifier = notifier; // null is valid — skip all notifications
     }
 
     // ── StartAsync ────────────────────────────────────────────────────────────
@@ -189,6 +206,14 @@ internal sealed class WorkflowEngine : IWorkflowEngine
 
         // Drive through pass-through nodes until blocked or completed.
         await AdvanceCoreAsync(instance, graph, ct);
+
+        // WF-15 — Notify task-assigned for the first pending task(s) created during Start.
+        // Called POST-advance (after all DB writes are committed) so a notify failure cannot
+        // affect the instance state.
+        if (_notifier is not null)
+        {
+            await NotifyFirstPendingTasksAsync(instance.ID, instance, ct);
+        }
 
         // Re-read the current state for the caller.
         var current = await Db.Set<ProcessInstance>()
@@ -541,6 +566,15 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             reason: comment,
             ct: ct);
 
+        // WF-15 — Notify approved (post-commit, best-effort).  Fires for every successful
+        // approval regardless of mode; the node/instance-completion notification fires later
+        // based on the final result of mode-specific processing below.
+        if (_notifier is not null)
+        {
+            try { await _notifier.NotifyApprovedAsync(instance, nodeInst, task, actorITCode, ct); }
+            catch (Exception ex) { _logger.LogError(ex, "WF-15 NotifyApprovedAsync failed for task {TaskId}.", taskId); }
+        }
+
         // 10. Mode-specific completion logic.
         if (approveMode == ApproveMode.All)
         {
@@ -567,7 +601,18 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             }
 
             // Threshold met (or exceeded by concurrent racing approvers): try to complete.
-            return await AdvanceAsync(instance.ID, ct);
+            var allResult = await AdvanceAsync(instance.ID, ct);
+            // WF-15 — post-advance instance completion notification (best-effort).
+            if (_notifier is not null && allResult.Code == WorkflowActionCode.InstanceApproved)
+            {
+                try
+                {
+                    var freshInst = await Db.Set<ProcessInstance>().AsNoTracking().SingleAsync(x => x.ID == instance.ID, CancellationToken.None);
+                    await _notifier.NotifyInstanceCompletedAsync(freshInst, ct);
+                }
+                catch (Exception ex) { _logger.LogError(ex, "WF-15 NotifyInstanceCompletedAsync (All) failed for instance {InstanceId}.", instance.ID); }
+            }
+            return allResult;
         }
 
         if (approveMode == ApproveMode.Any)
@@ -579,7 +624,18 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             // Concurrent approvers both increment and both call AdvanceAsync; the node
             // CAS in AdvanceCoreAsync ensures exactly one caller completes the node.
             await GuardedTransition.IncrementNodeApprovedCountAsync(Db, nodeInst.ID, ct);
-            return await AdvanceAsync(instance.ID, ct);
+            var anyResult = await AdvanceAsync(instance.ID, ct);
+            // WF-15 — post-advance instance completion notification (best-effort).
+            if (_notifier is not null && anyResult.Code == WorkflowActionCode.InstanceApproved)
+            {
+                try
+                {
+                    var freshInst = await Db.Set<ProcessInstance>().AsNoTracking().SingleAsync(x => x.ID == instance.ID, CancellationToken.None);
+                    await _notifier.NotifyInstanceCompletedAsync(freshInst, ct);
+                }
+                catch (Exception ex) { _logger.LogError(ex, "WF-15 NotifyInstanceCompletedAsync (Any) failed for instance {InstanceId}.", instance.ID); }
+            }
+            return anyResult;
         }
 
         // Sequential path (default) ─────────────────────────────────────────────
@@ -647,6 +703,25 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             }
 
             // Node is still active — waiting for the next approver.
+            // WF-15 — Notify the newly activated task assignee (post-commit, best-effort).
+            if (_notifier is not null)
+            {
+                try
+                {
+                    // Read the next-step task that was just activated for notification.
+                    var nextPendingTask = await Db.Set<ApprovalTask>()
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync(
+                            t => t.NodeInstanceId == nodeInst.ID && t.SequenceOrder == nextPointer && t.State == TaskState.Pending,
+                            ct);
+                    if (nextPendingTask is not null)
+                    {
+                        var freshNodeForNotify = await Db.Set<NodeInstance>().AsNoTracking().SingleAsync(n => n.ID == nodeInst.ID, ct);
+                        await _notifier.NotifyTaskAssignedAsync(instance, freshNodeForNotify, nextPendingTask, ct);
+                    }
+                }
+                catch (Exception ex) { _logger.LogError(ex, "WF-15 NotifyTaskAssignedAsync (Sequential mid-chain) failed for instance {InstanceId}.", instance.ID); }
+            }
             return WorkflowActionResult.Advanced;
         }
         else
@@ -667,7 +742,26 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                            .SetProperty(n => n.RowVer, x => x.RowVer + 1),
                     ct);
 
-            return await AdvanceAsync(instance.ID, ct);
+            var seqResult = await AdvanceAsync(instance.ID, ct);
+            // WF-15 — post-advance instance completion notification (best-effort).
+            if (_notifier is not null)
+            {
+                try
+                {
+                    if (seqResult.Code == WorkflowActionCode.InstanceApproved)
+                    {
+                        var freshInst = await Db.Set<ProcessInstance>().AsNoTracking().SingleAsync(x => x.ID == instance.ID, CancellationToken.None);
+                        await _notifier.NotifyInstanceCompletedAsync(freshInst, ct);
+                    }
+                    else
+                    {
+                        // Advance moved to another node — notify first pending task at next node.
+                        await NotifyFirstPendingTasksAsync(instance.ID, instance, ct);
+                    }
+                }
+                catch (Exception ex) { _logger.LogError(ex, "WF-15 post-advance notification failed for instance {InstanceId}.", instance.ID); }
+            }
+            return seqResult;
         }
     }
 
@@ -895,6 +989,13 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                 ct: ct);
         }
 
+        // WF-15 — Notify rejected (post-commit, best-effort).
+        if (_notifier is not null)
+        {
+            try { await _notifier.NotifyRejectedAsync(instance, nodeInst, task, actorITCode, reason, ct); }
+            catch (Exception ex) { _logger.LogError(ex, "WF-15 NotifyRejectedAsync failed for task {TaskId}.", taskId); }
+        }
+
         return WorkflowActionResult.Rejected;
     }
 
@@ -1021,6 +1122,15 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         _logger.LogInformation(
             "WithdrawAsync: instance {InstanceId} withdrawn by '{ActorITCode}' (isAdmin={IsAdmin}).",
             instanceId, actorITCode, isAdmin);
+
+        // WF-15 — Notify withdrawn (post-commit, best-effort).
+        if (_notifier is not null)
+        {
+            // Re-read fresh instance for notification (state is now Withdrawn).
+            var freshInst = await Db.Set<ProcessInstance>().AsNoTracking().SingleAsync(x => x.ID == instanceId, CancellationToken.None);
+            try { await _notifier.NotifyWithdrawnAsync(freshInst, actorITCode, ct); }
+            catch (Exception ex) { _logger.LogError(ex, "WF-15 NotifyWithdrawnAsync failed for instance {InstanceId}.", instanceId); }
+        }
 
         return WorkflowActionResult.Withdrawn;
     }
@@ -1171,6 +1281,15 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             "ReturnToInitiatorAsync: task {TaskId} returned to initiator by '{ActorITCode}'. Instance {InstanceId} now Draft.",
             taskId, actorITCode, instance.ID);
 
+        // WF-15 — Notify returned to initiator (post-commit, best-effort).
+        if (_notifier is not null)
+        {
+            // Re-read fresh instance (now Draft) for notification.
+            var freshInst = await Db.Set<ProcessInstance>().AsNoTracking().SingleAsync(x => x.ID == instance.ID, CancellationToken.None);
+            try { await _notifier.NotifyReturnedToInitiatorAsync(freshInst, nodeInst, task, actorITCode, reason, ct); }
+            catch (Exception ex) { _logger.LogError(ex, "WF-15 NotifyReturnedToInitiatorAsync failed for task {TaskId}.", taskId); }
+        }
+
         // WF-16 Wave-3: ReturnToPrev / ReturnToNode are deferred.
         return WorkflowActionResult.ReturnedToInitiator;
     }
@@ -1317,6 +1436,50 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             .ToListAsync(ct);
 
         return tasks.AsReadOnly();
+    }
+
+    // ── WF-15: Notify helper ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Fire <see cref="IWorkflowNotifier.NotifyTaskAssignedAsync"/> for every <see cref="TaskState.Pending"/>
+    /// <see cref="ApprovalTask"/> that currently belongs to <paramref name="instanceId"/>.
+    /// Called AFTER the engine advances (post-commit) when a new approval node becomes active.
+    /// Best-effort — all exceptions are caught and logged, never propagated.
+    /// </summary>
+    private async Task NotifyFirstPendingTasksAsync(
+        Guid instanceId,
+        ProcessInstance instance,
+        CancellationToken ct)
+    {
+        if (_notifier is null) return;
+
+        try
+        {
+            // Read the currently active node and its pending tasks.
+            var activeNodeInst = await Db.Set<NodeInstance>()
+                .AsNoTracking()
+                .Where(n => n.InstanceId == instanceId
+                             && (n.State == NodeState.Pending || n.State == NodeState.Activated))
+                .OrderBy(n => n.ID)
+                .FirstOrDefaultAsync(ct);
+
+            if (activeNodeInst is null) return;
+
+            var pendingTasks = await Db.Set<ApprovalTask>()
+                .AsNoTracking()
+                .Where(t => t.NodeInstanceId == activeNodeInst.ID && t.State == TaskState.Pending)
+                .ToListAsync(ct);
+
+            foreach (var pendingTask in pendingTasks)
+            {
+                try { await _notifier.NotifyTaskAssignedAsync(instance, activeNodeInst, pendingTask, ct); }
+                catch (Exception ex) { _logger.LogError(ex, "WF-15 NotifyTaskAssignedAsync failed for task {TaskId}.", pendingTask.ID); }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "WF-15 NotifyFirstPendingTasksAsync failed for instance {InstanceId}.", instanceId);
+        }
     }
 
     /// <summary>

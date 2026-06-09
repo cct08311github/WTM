@@ -8,6 +8,7 @@ using WalkingTec.Mvvm.WorkFlow.Definition;
 using WalkingTec.Mvvm.WorkFlow.Engine;
 using WalkingTec.Mvvm.WorkFlow.Engine.Routing;
 using WalkingTec.Mvvm.WorkFlow.Models;
+using WalkingTec.Mvvm.WorkFlow.Notifications;
 
 namespace WalkingTec.Mvvm.WorkFlow;
 
@@ -88,14 +89,26 @@ public static class ServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Opt-in. Wires an already-registered IWtmWebhookSink into the engine notifier.
-    /// Mirrors AddWtmEtlAlerts. No-op when no sink is registered.
+    /// Opt-in. Registers <see cref="IWorkflowNotifier"/> backed by the shared
+    /// <see cref="WalkingTec.Mvvm.Core.Notifications.IWtmWebhookSink"/>
+    /// (DingTalk / WeCom / Feishu / Slack / Teams).
+    ///
+    /// <para>If no <see cref="IWtmWebhookSink"/> is registered the notifier is still wired
+    /// but is a silent no-op on every event — the engine operates normally without any
+    /// notification sink configured.</para>
+    ///
+    /// <para>Notification delivery is best-effort and non-blocking: a webhook failure is
+    /// logged at <c>Error</c> level but never propagates to the engine caller and can never
+    /// roll back an approval transaction.  Call notifications AFTER the engine operation
+    /// completes so that a delivery failure cannot affect the authoritative state transition.
+    /// </para>
+    ///
+    /// <para>Mirrors <c>AddWtmEtlAlerts</c> in split / opt-in pattern.</para>
     /// </summary>
-    /// <remarks>WF-15: IWorkflowNotifier / WebhookWorkflowNotifier implemented here.</remarks>
     public static IServiceCollection AddWtmWorkFlowNotifications(
         this IServiceCollection services)
     {
-        // WF-15: services.AddScoped<IWorkflowNotifier, WebhookWorkflowNotifier>();
+        services.AddScoped<IWorkflowNotifier, WebhookWorkflowNotifier>();
         return services;
     }
 

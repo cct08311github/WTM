@@ -645,11 +645,12 @@ internal static class WorkflowEngine_Exposed
     public static WorkflowEngine Create(
         DbContext db,
         INodeKindDispatcher dispatcher,
-        Microsoft.Extensions.Logging.ILogger logger)
+        Microsoft.Extensions.Logging.ILogger logger,
+        WalkingTec.Mvvm.WorkFlow.Notifications.IWorkflowNotifier? notifier = null)
     {
         var routingEvaluator = new WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator(
             NullLogger<WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator>.Instance);
-        return new WorkflowEngine(db, dispatcher, routingEvaluator, logger);
+        return new WorkflowEngine(db, dispatcher, routingEvaluator, logger, notifier);
     }
 
     // Overload for tests that want to inject a custom IRoutingEvaluator.
@@ -657,19 +658,21 @@ internal static class WorkflowEngine_Exposed
         DbContext db,
         INodeKindDispatcher dispatcher,
         WalkingTec.Mvvm.WorkFlow.Engine.Routing.IRoutingEvaluator routingEvaluator,
-        Microsoft.Extensions.Logging.ILogger logger)
-        => new WorkflowEngine(db, dispatcher, routingEvaluator, logger);
+        Microsoft.Extensions.Logging.ILogger logger,
+        WalkingTec.Mvvm.WorkFlow.Notifications.IWorkflowNotifier? notifier = null)
+        => new WorkflowEngine(db, dispatcher, routingEvaluator, logger, notifier);
 
     // Overload for WF-12 tests that need to override WorkFlowOptions.
     public static WorkflowEngine CreateWithOptions(
         DbContext db,
         INodeKindDispatcher dispatcher,
         WorkFlowOptions options,
-        Microsoft.Extensions.Logging.ILogger logger)
+        Microsoft.Extensions.Logging.ILogger logger,
+        WalkingTec.Mvvm.WorkFlow.Notifications.IWorkflowNotifier? notifier = null)
     {
         var routingEvaluator = new WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator(
             NullLogger<WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator>.Instance);
-        return new WorkflowEngine(db, dispatcher, routingEvaluator, options, logger);
+        return new WorkflowEngine(db, dispatcher, routingEvaluator, options, logger, notifier);
     }
 }
 
