@@ -5,9 +5,18 @@
 // DBTypeEnum.Memory (EF InMemory) cannot execute ExecuteUpdateAsync — the same root
 // cause that broke Mvc.Tests in #119/#162.
 //
+// The eager BuildServiceProvider() guard was REMOVED in PR #240 because calling
+// BuildServiceProvider() at registration time throws "Cannot resolve scoped service
+// from root provider" when IDataContext is registered as Scoped (the production pattern).
+// The Memory check is now LAZY — exercised via ValidateDbType() on first engine use (WF-6).
+//
 // These tests verify:
-//   (a) AddWtmWorkFlow throws InvalidOperationException when IDataContext.DBType == Memory.
-//   (b) AddWtmWorkFlow does NOT throw for each supported relational provider.
+//   (a) AddWtmWorkFlow does NOT throw, even when IDataContext (Scoped) has DBType == Memory.
+//       The host still registers cleanly; the guard fires on first engine use instead.
+//   (b) AddWtmWorkFlow works correctly through a REAL scope-validating ServiceProvider
+//       (ValidateScopes=true) with IDataContext registered as Scoped — this is the
+//       production path and must never crash at AddWtmWorkFlow() call time.
+//   (c) ValidateDbType() helper (lazy path) throws for Memory and passes for relational.
 
 using System;
 using System.Linq;
@@ -25,97 +34,98 @@ public class MemoryGuardTests
     // ── Helper ─────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Builds a ServiceCollection that has a mock IDataContext with the specified DBTypeEnum.
-    /// Then calls AddWtmWorkFlow() and verifies the guard behaves correctly.
+    /// Builds a ServiceCollection that has a SCOPED mock IDataContext with the specified
+    /// DBTypeEnum.  This mirrors the real production registration pattern.
     /// </summary>
-    private static IServiceCollection BuildServicesWithDbType(DBTypeEnum dbType)
+    private static IServiceCollection BuildServicesWithScopedDbType(DBTypeEnum dbType)
     {
         var services = new ServiceCollection();
 
-        // Register a mock IDataContext with the specified DBTypeEnum.
+        // Register a mock IDataContext with the specified DBTypeEnum — as SCOPED,
+        // matching the production pattern.  Previously registered as Singleton, which
+        // masked the BuildServiceProvider() crash (Singleton can always be resolved from
+        // the root provider; Scoped cannot).
         var mockDc = new Mock<IDataContext>();
         mockDc.SetupProperty(x => x.DBType, dbType);
-        services.AddSingleton(mockDc.Object);
+        services.AddScoped<IDataContext>(_ => mockDc.Object);
 
         return services;
     }
 
-    // ── Memory → must throw ────────────────────────────────────────────────────
+    // ── AddWtmWorkFlow must NOT throw at registration — even for Memory ────────
 
     /// <summary>
-    /// WF-5: AddWtmWorkFlow must throw InvalidOperationException when DBTypeEnum is Memory.
+    /// PR #240 regression guard: AddWtmWorkFlow must NOT throw when IDataContext is
+    /// registered as Scoped (production pattern) and DBType is Memory.
+    /// The old eager BuildServiceProvider() path crashed every host here.
+    /// Guard is now lazy (ValidateDbType on first engine use, WF-6).
     /// </summary>
     [TestMethod]
-    public void AddWtmWorkFlow_Throws_WhenDbTypeIsMemory()
+    public void AddWtmWorkFlow_DoesNotThrow_AtRegistrationTime_EvenWithScopedMemoryContext()
     {
-        var services = BuildServicesWithDbType(DBTypeEnum.Memory);
+        var services = BuildServicesWithScopedDbType(DBTypeEnum.Memory);
 
-        var ex = Assert.ThrowsException<InvalidOperationException>(
-            () => services.AddWtmWorkFlow(),
-            "AddWtmWorkFlow must throw InvalidOperationException when DBTypeEnum.Memory is configured.");
-
-        StringAssert.Contains(ex.Message, "Memory",
-            "Exception message should mention 'Memory' so the error is actionable.");
-        StringAssert.Contains(ex.Message, "ExecuteUpdateAsync",
-            "Exception message should mention 'ExecuteUpdateAsync' to explain the root cause.");
+        // Must not throw — the Memory check is deferred to first engine use (WF-6).
+        services.AddWtmWorkFlow();
     }
 
     /// <summary>
-    /// WF-5: The error message must be actionable — tell the developer what to do next.
+    /// Exercises AddWtmWorkFlow through a REAL built ServiceProvider with scope-validation
+    /// enabled (ValidateScopes=true) — exactly the environment that crashed production.
+    /// IDataContext registered as Scoped to prove the real DI path works cleanly.
     /// </summary>
     [TestMethod]
-    public void AddWtmWorkFlow_MemoryThrow_MessageIsActionable()
+    public void AddWtmWorkFlow_WorksThroughRealScopeValidatingProvider_WithScopedDataContext()
     {
-        var services = BuildServicesWithDbType(DBTypeEnum.Memory);
+        var services = BuildServicesWithScopedDbType(DBTypeEnum.SQLite);
+        services.AddWtmWorkFlow();
 
-        var ex = Assert.ThrowsException<InvalidOperationException>(
-            () => services.AddWtmWorkFlow());
+        // Build a real provider WITH scope validation on — this is what ASP.NET Core
+        // does by default in the Development environment, and what crashed previously.
+        var provider = services.BuildServiceProvider(
+            new ServiceProviderOptions { ValidateScopes = true });
 
-        // Message must name at least one valid alternative.
-        bool mentionsRelational =
-            ex.Message.Contains("SQLite") ||
-            ex.Message.Contains("SqlServer") ||
-            ex.Message.Contains("relational");
-
-        Assert.IsTrue(mentionsRelational,
-            "Exception message must guide the developer toward a valid provider.");
+        // Resolve IDataContext inside a scope — must succeed, no DI exception.
+        using var scope = provider.CreateScope();
+        var dc = scope.ServiceProvider.GetRequiredService<IDataContext>();
+        Assert.AreEqual(DBTypeEnum.SQLite, dc.DBType,
+            "IDataContext must be resolvable inside a scope after AddWtmWorkFlow.");
     }
 
-    // ── Relational providers → must NOT throw ──────────────────────────────────
+    // ── Relational providers → AddWtmWorkFlow must NOT throw ──────────────────
 
     [TestMethod]
     public void AddWtmWorkFlow_DoesNotThrow_WhenDbTypeIsSqlServer()
     {
-        var services = BuildServicesWithDbType(DBTypeEnum.SqlServer);
-        // No exception expected.
+        var services = BuildServicesWithScopedDbType(DBTypeEnum.SqlServer);
         services.AddWtmWorkFlow();
     }
 
     [TestMethod]
     public void AddWtmWorkFlow_DoesNotThrow_WhenDbTypeIsSQLite()
     {
-        var services = BuildServicesWithDbType(DBTypeEnum.SQLite);
+        var services = BuildServicesWithScopedDbType(DBTypeEnum.SQLite);
         services.AddWtmWorkFlow();
     }
 
     [TestMethod]
     public void AddWtmWorkFlow_DoesNotThrow_WhenDbTypeIsPgSql()
     {
-        var services = BuildServicesWithDbType(DBTypeEnum.PgSql);
+        var services = BuildServicesWithScopedDbType(DBTypeEnum.PgSql);
         services.AddWtmWorkFlow();
     }
 
     [TestMethod]
     public void AddWtmWorkFlow_DoesNotThrow_WhenDbTypeIsMySql()
     {
-        var services = BuildServicesWithDbType(DBTypeEnum.MySql);
+        var services = BuildServicesWithScopedDbType(DBTypeEnum.MySql);
         services.AddWtmWorkFlow();
     }
 
     [TestMethod]
     public void AddWtmWorkFlow_DoesNotThrow_WhenDbTypeIsOracle()
     {
-        var services = BuildServicesWithDbType(DBTypeEnum.Oracle);
+        var services = BuildServicesWithScopedDbType(DBTypeEnum.Oracle);
         services.AddWtmWorkFlow();
     }
 
@@ -123,39 +133,29 @@ public class MemoryGuardTests
 
     /// <summary>
     /// When no IDataContext is registered in the container (e.g. consumer configures
-    /// DataContext after AddWtmWorkFlow), the eager guard silently skips — it cannot
-    /// inspect a non-existent registration.  The lazy guard (WF-6) fires on first use.
+    /// DataContext after AddWtmWorkFlow), AddWtmWorkFlow registers cleanly and the
+    /// Memory guard fires lazily on first engine use (WF-6).
     /// </summary>
     [TestMethod]
     public void AddWtmWorkFlow_DoesNotThrow_WhenNoDataContextRegistered()
     {
         var services = new ServiceCollection();
-        // No IDataContext registered — guard skips gracefully.
+        // No IDataContext registered — registers cleanly, guard fires later.
         services.AddWtmWorkFlow();
     }
 
-    // ── Configure action registration order when Memory throws ───────────────
+    // ── Options registration ──────────────────────────────────────────────────
 
     /// <summary>
-    /// When Memory triggers the guard, the exception is thrown AFTER the configure
-    /// action is registered (so options configuration is preserved in the container even
-    /// though AddWtmWorkFlow throws).  The configure action itself is lazily invoked
-    /// only when IOptions&lt;WorkFlowOptions&gt; is first resolved — not at registration time —
-    /// so we verify the action is registered (an IConfigureOptions service is present)
-    /// rather than checking a synchronous callback flag.
+    /// AddWtmWorkFlow must register WorkFlowOptions configure action regardless of
+    /// whether IDataContext is registered or what DBType it has.
     /// </summary>
     [TestMethod]
-    public void AddWtmWorkFlow_Memory_ThrowsAfterOptionsAreRegistered()
+    public void AddWtmWorkFlow_RegistersConfigureOptions_Unconditionally()
     {
-        var services = BuildServicesWithDbType(DBTypeEnum.Memory);
+        var services = BuildServicesWithScopedDbType(DBTypeEnum.Memory);
+        services.AddWtmWorkFlow(o => o.InitiatorAutoApprove = true);
 
-        // The guard throws, but the options configure action should have been
-        // added to the service collection before the check runs.
-        Assert.ThrowsException<InvalidOperationException>(() =>
-            services.AddWtmWorkFlow(o => o.InitiatorAutoApprove = true));
-
-        // Verify that the IConfigureOptions<WorkFlowOptions> descriptor was added
-        // (options registration happened before the guard check).
         bool hasConfigureOptions = services.Any(sd =>
             sd.ServiceType.IsGenericType &&
             sd.ServiceType.GetGenericTypeDefinition() == typeof(Microsoft.Extensions.Options.IConfigureOptions<>) &&
@@ -163,13 +163,14 @@ public class MemoryGuardTests
             sd.ServiceType.GenericTypeArguments[0] == typeof(WorkFlowOptions));
 
         Assert.IsTrue(hasConfigureOptions,
-            "WorkFlowOptions configure descriptor must be registered before the Memory guard throws.");
+            "WorkFlowOptions configure descriptor must be registered by AddWtmWorkFlow.");
     }
 
-    // ── ValidateDbTypeOnFirstUse path ─────────────────────────────────────────
+    // ── ValidateDbTypeOnFirstUse path (lazy guard, called by engine entry points) ──
 
     /// <summary>
     /// ValidateDbType() helper throws for Memory (used by the lazy guard path in WF-6).
+    /// This is the only Memory enforcement that survives PR #240.
     /// </summary>
     [TestMethod]
     public void ValidateDbType_Throws_WhenDbTypeIsMemory()
@@ -181,6 +182,8 @@ public class MemoryGuardTests
             () => ServiceCollectionExtensions.ValidateDbType(mockDc.Object));
 
         StringAssert.Contains(ex.Message, "Memory");
+        StringAssert.Contains(ex.Message, "ExecuteUpdateAsync",
+            "Exception message must explain the root cause (EF InMemory cannot translate ExecuteUpdateAsync).");
     }
 
     /// <summary>
@@ -193,6 +196,18 @@ public class MemoryGuardTests
         mockDc.SetupProperty(x => x.DBType, DBTypeEnum.SqlServer);
 
         // Should not throw.
+        ServiceCollectionExtensions.ValidateDbType(mockDc.Object);
+    }
+
+    /// <summary>
+    /// ValidateDbType() helper does NOT throw for SQLite (relational provider).
+    /// </summary>
+    [TestMethod]
+    public void ValidateDbType_DoesNotThrow_WhenDbTypeIsSQLite()
+    {
+        var mockDc = new Mock<IDataContext>();
+        mockDc.SetupProperty(x => x.DBType, DBTypeEnum.SQLite);
+
         ServiceCollectionExtensions.ValidateDbType(mockDc.Object);
     }
 }

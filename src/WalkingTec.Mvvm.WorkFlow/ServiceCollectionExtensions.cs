@@ -24,21 +24,19 @@ public static class ServiceCollectionExtensions
     /// 如需逾時排程，另呼叫 <see cref="AddWtmWorkFlowTimers"/>（WF-20）。
     ///
     /// <para><strong>WF-5 — DBTypeEnum.Memory guard:</strong>
-    /// This method resolves the registered <see cref="IDataContext"/> and throws
-    /// <see cref="InvalidOperationException"/> when <see cref="DBTypeEnum.Memory"/> is
-    /// detected.  The workflow engine requires a real relational provider because
+    /// The Memory check is performed lazily on the first engine entry point that
+    /// resolves <see cref="IDataContext"/> — see <see cref="ValidateDbType"/>.
+    /// The eager-startup check was removed (PR #240) because calling
+    /// <c>BuildServiceProvider()</c> at registration time throws
+    /// "Cannot resolve scoped service from root provider" under ASP.NET Core's
+    /// default scope-validation, crashing every host with a misleading DI error.
+    /// The lazy per-request guard (<c>ValidateDbTypeOnFirstUse</c>) provides
+    /// equivalent protection without the root-provider anti-pattern.</para>
+    ///
+    /// <para>The workflow engine requires a real relational provider because
     /// <c>ExecuteUpdateAsync</c> — the guarded-CAS primitive — is not supported by the
     /// EF InMemory provider (spec §9 invariant #8; same root cause as #119/#162).</para>
-    ///
-    /// <para>If the <see cref="IDataContext"/> is not yet registered at call time
-    /// (e.g. in a minimal host that adds contexts later), the Memory check is deferred
-    /// to the first <see cref="IDataContext"/> resolution — see
-    /// <see cref="WorkFlowOptions.ValidateDbTypeOnFirstUse"/>.</para>
     /// </summary>
-    /// <exception cref="InvalidOperationException">
-    /// Thrown at startup when the configured <see cref="DBTypeEnum"/> is
-    /// <see cref="DBTypeEnum.Memory"/>.
-    /// </exception>
     public static IServiceCollection AddWtmWorkFlow(
         this IServiceCollection services,
         Action<WorkFlowOptions>? configure = null)
@@ -49,25 +47,14 @@ public static class ServiceCollectionExtensions
         else
             services.Configure<WorkFlowOptions>(_ => { });
 
-        // 2. WF-5 — Eager DBTypeEnum.Memory guard.
-        //    Attempt to resolve IDataContext from the service collection snapshot.
-        //    If already registered, verify the provider type immediately.
-        //    If not yet registered, the guard fires lazily on first engine use (WF-6).
-        var sp = services.BuildServiceProvider();
-        var dc = sp.GetService<IDataContext>();
-        if (dc != null && dc.DBType == DBTypeEnum.Memory)
-        {
-            ThrowMemoryNotSupported();
-        }
-
-        // 3. WF-4: Publish-flow registrations.
+        // 2. WF-4: Publish-flow registrations.
         //    IProcessDefinitionPublisher — scoped (one per request, wraps the scoped IDataContext).
         services.AddScoped<IProcessDefinitionPublisher, ProcessDefinitionPublisher>();
 
-        // 4. WF-6/7: IWorkflowEngine.
+        // 3. WF-6/7: IWorkflowEngine.
         services.AddScoped<IWorkflowEngine, WorkflowEngine>();
 
-        // 5. WF-8/9/10: IApproverResolver + IManagerChainProvider + approval mode handlers + dispatcher.
+        // 4. WF-8/9/10: IApproverResolver + IManagerChainProvider + approval mode handlers + dispatcher.
         //    All registered as scoped because handlers depend on IApproverResolver and
         //    IOptions<WorkFlowOptions> (request-scoped).
         // 5b. WF-11: IRoutingEvaluator — registered as SINGLETON because it caches compiled
@@ -295,7 +282,9 @@ public static class WorkFlowDbContextExtensions
         {
             e.ToTable("Wf_WorkflowEventLog");
             // Timeline query: all events for an instance in sequence order.
-            e.HasIndex(x => new { x.InstanceId, x.Seq });
+            // Unique constraint (TenantCode, InstanceId, Seq) — DB backstop against
+            // duplicate Seq values from concurrent transitions (#240 / WF-2 engine-side fix).
+            e.HasIndex(x => new { x.TenantCode, x.InstanceId, x.Seq }).IsUnique();
             e.HasIndex(x => x.TenantCode);
 
             e.HasOne(x => x.Instance)

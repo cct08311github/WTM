@@ -1,4 +1,9 @@
 #nullable enable
+// ScaffoldSmokeTests.cs — WF-1 scaffold smoke tests.
+// PR #240: removed unused EF InMemory DbContext scaffolding (violates spec invariant #6
+// / repo rule #119/#162 — EF InMemory cannot translate ExecuteUpdateAsync and must not
+// be used in reference tests).  ApplyWorkFlowModels test now uses a bare ModelBuilder
+// without any DbContext, which is the correct contract for a pure builder extension.
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -52,30 +57,21 @@ public class ScaffoldSmokeTests
     }
 
     /// <summary>
-    /// ApplyWorkFlowModels must be callable on a ModelBuilder and must return
+    /// ApplyWorkFlowModels must be callable on a bare ModelBuilder and must return
     /// the same builder instance (fluent chain contract).
-    /// Real entity registrations will be added in WF-2.
+    ///
+    /// Note: the previous test used a <c>UseInMemoryDatabase</c> DbContext here — that was
+    /// dead scaffolding (the context was created but never used) and violated spec invariant
+    /// #6 / repo rule #119/#162 by normalizing EF InMemory in a reference test.  Removed
+    /// in PR #240; a bare ModelBuilder is sufficient and correct for this contract test.
     /// </summary>
     [TestMethod]
     public void ApplyWorkFlowModels_IsCallable_And_ReturnsBuilder()
     {
-        // Use an in-memory DbContext solely to obtain a ModelBuilder.
-        var optionsBuilder = new DbContextOptionsBuilder<TestOnlyDbContext>()
-            .UseInMemoryDatabase("WF1_Smoke_" + Guid.NewGuid());
-        using var ctx = new TestOnlyDbContext(optionsBuilder.Options);
-
-        // Obtain a ModelBuilder via the protected OnModelCreating override.
         var builder = new ModelBuilder();
         var result = builder.ApplyWorkFlowModels();
 
         Assert.IsNotNull(result, "ApplyWorkFlowModels must return a non-null ModelBuilder.");
         Assert.AreSame(builder, result, "ApplyWorkFlowModels must return the same builder instance (fluent chain).");
-    }
-
-    // Minimal DbContext just to satisfy the API; not used for data access.
-    private sealed class TestOnlyDbContext : DbContext
-    {
-        public TestOnlyDbContext(DbContextOptions<TestOnlyDbContext> options)
-            : base(options) { }
     }
 }

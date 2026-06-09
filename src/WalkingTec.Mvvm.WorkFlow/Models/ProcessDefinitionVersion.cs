@@ -21,6 +21,17 @@ namespace WalkingTec.Mvvm.WorkFlow.Models;
 /// <see cref="GraphJson"/>, <see cref="ContentHash"/>, and <see cref="VersionNo"/>
 /// carry <c>[BindNever]</c> so they cannot be overwritten by a model-binding update
 /// (mirrors the CodeGen write-root guard added in PR #123).
+///
+/// <para><strong>Delete protection (PR #240):</strong>
+/// <c>IsValid</c> is shadowed with <c>[BindNever]</c> to block model-binding from
+/// flipping it (low-risk but now guarded).  Because <c>ProcessDefinitionVersion</c>
+/// is a <c>PersistPoco</c>, <c>BaseCRUDVM.DoDelete</c> would soft-delete it by
+/// casting to <c>IPersistPoco</c> and setting <c>IsValid = false</c>, hiding the
+/// version from the <c>IsValid == true</c> query filter and orphaning any in-flight
+/// <c>ProcessInstance</c> pinned via <c>DefinitionVersionId</c> (data loss).
+/// DO NOT scaffold a delete-capable CRUD VM for this entity (read + publish only).
+/// If a delete VM is ever added, override <c>DoDelete</c>/<c>DoDeleteAsync</c>
+/// to throw <see cref="NotSupportedException"/> before that path goes live.</para>
 /// </summary>
 /// <remarks>
 /// DIRECT descendant of <see cref="PersistPoco"/> and <see cref="ITenant"/> so that
@@ -32,6 +43,17 @@ public class ProcessDefinitionVersion : PersistPoco, ITenant
     /// <inheritdoc/>
     [StringLength(50)]
     public string? TenantCode { get; set; }
+
+    /// <summary>
+    /// Shadows <c>PersistPoco.IsValid</c> to block model-binding from flipping it.
+    /// <c>ProcessDefinitionVersion</c> must never be soft-deleted — the published graph
+    /// snapshot is immutable once written, and in-flight instances depend on it via FK.
+    /// The default <c>true</c> preserves the standard <c>IsValid == true</c> query filter.
+    /// DO NOT scaffold a delete-capable VM for this entity; if one is ever added, override
+    /// <c>DoDelete</c>/<c>DoDeleteAsync</c> to throw <see cref="NotSupportedException"/>.
+    /// </summary>
+    [BindNever]
+    public new bool IsValid { get; set; } = true;
 
     /// <summary>FK to the owning <see cref="ProcessDefinition"/> head.</summary>
     [Required]

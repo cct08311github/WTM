@@ -532,15 +532,24 @@ public class ConcurrencyConformanceTests_SQLite : IDisposable
 [TestCategory("ProviderConformance")]
 public class ConcurrencyConformanceTests_LiveDb
 {
-    // Helper: skip the test with a clear message if the env var is not set.
+    // Helper: gate the stub — if env var IS set, fail loudly instead of Inconclusive so
+    // a future runner can't get a false-green from an unimplemented body (#240 / WF-3).
+    // If env var is absent, Inconclusive (skipped).
     private static string RequireConnectionString(string envVar)
     {
         var cs = Environment.GetEnvironmentVariable(envVar);
         if (string.IsNullOrWhiteSpace(cs))
+        {
             Assert.Inconclusive(
                 $"Skipped: environment variable '{envVar}' is not set. " +
                 "Set it to a real connection string to run this ProviderConformance test.");
-        return cs!;
+        }
+        // Env var IS set — live-provider conformance body not yet implemented.
+        // Fail explicitly so the CI run can't get a false-green when a provider is available.
+        Assert.Fail(
+            $"ProviderConformance body not implemented for env var '{envVar}' — tracked in #270 (WF-3). " +
+            "When WF-3 is implemented, replace this Assert.Fail with the real CAS assertion.");
+        return cs!; // unreachable; satisfies return type
     }
 
     [TestMethod]
@@ -551,7 +560,7 @@ public class ConcurrencyConformanceTests_LiveDb
         // WF-3: implement using Microsoft.EntityFrameworkCore.SqlServer provider.
         // Map RowVer with IsRowVersion() (native rowversion column) per spec §7.2.
         // Assert same CAS winner=1 / loser=0 contract as SQLite tests above.
-        Assert.Inconclusive($"T_PROV_SqlServer: live test scaffolded (cs prefix: {cs[..Math.Min(20, cs.Length)]}…); implementation deferred to WF-3 live-provider pass.");
+        _ = cs; // suppress unused-variable warning; body filled in WF-3
     }
 
     [TestMethod]
@@ -561,7 +570,7 @@ public class ConcurrencyConformanceTests_LiveDb
         var cs = RequireConnectionString("WTM_TEST_PGSQL_CS");
         // WF-3: implement using Npgsql.EntityFrameworkCore.PostgreSQL.
         // Map RowVer via UseXminAsConcurrencyToken() (shadow xmin, no extra column).
-        Assert.Inconclusive($"T_PROV_PgSql: live test scaffolded; implementation deferred to WF-3.");
+        _ = cs;
     }
 
     [TestMethod]
@@ -571,7 +580,7 @@ public class ConcurrencyConformanceTests_LiveDb
         var cs = RequireConnectionString("WTM_TEST_MYSQL_CS");
         // WF-3: implement using Pomelo.EntityFrameworkCore.MySql.
         // Map RowVer as plain uint, app-incremented in WHERE+SET per spec §7.2.
-        Assert.Inconclusive($"T_PROV_MySql: live test scaffolded; implementation deferred to WF-3.");
+        _ = cs;
     }
 
     [TestMethod]
@@ -582,7 +591,7 @@ public class ConcurrencyConformanceTests_LiveDb
         // WF-3: implement using Oracle.EntityFrameworkCore.
         // Map RowVer as plain uint, app-incremented.  Oracle fallback (SELECT...FOR UPDATE)
         // used when ExecuteUpdateAsync predicate fails to translate (spec §7.5).
-        Assert.Inconclusive($"T_PROV_Oracle: live test scaffolded; implementation deferred to WF-3.");
+        _ = cs;
     }
 
     [TestMethod]
@@ -593,6 +602,6 @@ public class ConcurrencyConformanceTests_LiveDb
         // WF-3: implement using EntityFrameworkCore.Dm (达梦).
         // Map RowVer as plain uint, app-incremented.
         // DaMeng is a primary target-market DB; conformance failure here is a ship-blocker.
-        Assert.Inconclusive($"T_PROV_DaMeng: live test scaffolded; implementation deferred to WF-3.");
+        _ = cs;
     }
 }
