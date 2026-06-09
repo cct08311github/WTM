@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.WorkFlow.Definition;
+using WalkingTec.Mvvm.WorkFlow.Engine;
 using WalkingTec.Mvvm.WorkFlow.Models;
 
 namespace WalkingTec.Mvvm.WorkFlow;
@@ -60,8 +61,10 @@ public static class ServiceCollectionExtensions
         //    IProcessDefinitionPublisher — scoped (one per request, wraps the scoped IDataContext).
         services.AddScoped<IProcessDefinitionPublisher, ProcessDefinitionPublisher>();
 
-        // 4. WF-6/7/8: IWorkflowEngine, IApproverResolver, IRoutingEvaluator,
-        //              INodeKindDispatcher will be wired here once those waves land.
+        // 4. WF-6/7: IWorkflowEngine + INodeKindDispatcher.
+        //    IApproverResolver (WF-8) and IRoutingEvaluator (WF-11) will be added when those waves land.
+        services.AddScoped<IWorkflowEngine, WorkflowEngine>();
+        services.AddSingleton<INodeKindDispatcher, NodeKindDispatcher>();
 
         return services;
     }
