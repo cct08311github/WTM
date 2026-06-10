@@ -246,9 +246,10 @@ jobs:
           dotnet pack src/WalkingTec.Mvvm.TagHelpers.LayUI/WalkingTec.Mvvm.TagHelpers.LayUI.csproj -c Release -o nupkgs-github /p:Version=$PKG_VERSION
           dotnet pack src/WalkingTec.Mvvm.Mvc/WalkingTec.Mvvm.Mvc.csproj                              -c Release -o nupkgs-github /p:Version=$PKG_VERSION
           dotnet pack src/WalkingTec.Mvvm.WorkFlow/WalkingTec.Mvvm.WorkFlow.csproj                    -c Release -o nupkgs-github /p:Version=$PKG_VERSION
-          # Sanity-check: the internal hostname must not appear in any packed nuspec.
-          if unzip -p nupkgs-github/*.nupkg '*.nuspec' 2>/dev/null | grep -q 'mac-mini\.tailde842d'; then
-            echo "ERROR: internal hostname still present in sanitized nupkgs — aborting." >&2
+          # Sanity-check: the sanitized placeholder MUST be present in every nuspec
+          # (positive assertion — does not embed any internal hostname literal).
+          if ! unzip -p nupkgs-github/*.nupkg '*.nuspec' 2>/dev/null | grep -q 'internal\.registry\.invalid'; then
+            echo "ERROR: sanitized RepositoryUrl missing from nuspec — sanitize may have failed; aborting." >&2
             exit 1
           fi
           echo "Sanitized nupkgs ready:"

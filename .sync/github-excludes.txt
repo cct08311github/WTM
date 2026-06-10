@@ -14,6 +14,10 @@ progress.md
 # Internal infrastructure docs (private registry / internal CI quirks)
 docs/ci-operations.md
 docs/gitea-packages.md
+# Internal maintainer design spec for the workflow/approval engine (§2.6 lists
+# .sync/mirror/registry release-process marker strings — not for public mirror).
+# The public-facing module doc docs/workflow.md remains on the mirror.
+docs/workflow-engine-spec.md
 # Internal-registry getting-started (NuGet source config for the private feed;
 # references the private registry + GITEA_USERNAME/PAT and links to the excluded
 # gitea-packages.md). Public users install from public package sources instead.
