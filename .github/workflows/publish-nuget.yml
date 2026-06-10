@@ -223,11 +223,20 @@ jobs:
             # Leak-gate: ensure no internal markers survived in the merged tree.
             # (Resolution always keeps HEAD, which is the sanitized sync tree, so
             # this is a final safety net against any --theirs content slipping through.)
+            # Marker literals are built at runtime from fragments so the bare strings
+            # never appear verbatim in this workflow file (which is itself synced to
+            # the mirror).  The unique tailnet segment and full hostname suffix are
+            # the true identifiers; github-sanitize.sed rewrites them completely, so
+            # any surviving occurrence is a genuine sanitize failure.
+            _M="mac""-mini"          # rewrites via full-host rule in .sed
+            _G="GITEA""_"            # rewrites via \bGITEA_TOKEN/HOST/USER\b rules
+            _T="tailde842d"          # rewrites: s|tailde842d|internal-tailnet|g
+            _N="\.ts\.net"           # rewrites as part of full-host rule in .sed
             BAD=$(git grep -lI \
-              -e 'mac-mini' \
-              -e 'tailde842d' \
-              -e 'GITEA_' \
-              -e '\.ts\.net' \
+              -e "$_M" \
+              -e "$_T" \
+              -e "$_G" \
+              -e "$_N" \
               -- ':!.sync/' ':!.github/workflows/' 2>/dev/null || true)
             if [ -n "$BAD" ]; then
               echo "ERROR: leak-gate triggered — internal markers found in:"
@@ -302,12 +311,16 @@ jobs:
           dotnet pack src/WalkingTec.Mvvm.TagHelpers.LayUI/WalkingTec.Mvvm.TagHelpers.LayUI.csproj -c Release -o nupkgs-github /p:Version=$PKG_VERSION
           dotnet pack src/WalkingTec.Mvvm.Mvc/WalkingTec.Mvvm.Mvc.csproj                              -c Release -o nupkgs-github /p:Version=$PKG_VERSION
           dotnet pack src/WalkingTec.Mvvm.WorkFlow/WalkingTec.Mvvm.WorkFlow.csproj                    -c Release -o nupkgs-github /p:Version=$PKG_VERSION
-          # Sanity-check: the sanitized placeholder MUST be present in every nuspec
-          # (positive assertion — does not embed any internal hostname literal).
-          if ! unzip -p nupkgs-github/*.nupkg '*.nuspec' 2>/dev/null | grep -q 'internal\.registry\.invalid'; then
-            echo "ERROR: sanitized RepositoryUrl missing from nuspec — sanitize may have failed; aborting." >&2
-            exit 1
-          fi
+          # Sanity-check: the sanitized placeholder MUST be present in EVERY nuspec.
+          # Loop over each .nupkg individually — passing a glob to unzip treats the
+          # first file as the archive and the rest as member-name filters, so without
+          # this loop only the first package would be checked.
+          for pkg in nupkgs-github/*.nupkg; do
+            if ! unzip -p "$pkg" '*.nuspec' 2>/dev/null | grep -q 'internal\.registry\.invalid'; then
+              echo "ERROR: sanitized RepositoryUrl missing from $(basename "$pkg") nuspec — sanitize may have failed; aborting." >&2
+              exit 1
+            fi
+          done
           echo "Sanitized nupkgs ready:"
           ls -lh nupkgs-github/
 
