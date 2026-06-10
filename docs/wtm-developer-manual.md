@@ -1,6 +1,8 @@
 # WTM 開發與使用手冊
 
-> **版本**：10.9.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-06-10
+> **版本**：10.10.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-06-10
+>
+> **10.10.0 重點**（WorkFlow Wave 3 — 回退-to-node + 平行審批閘道）：`ReturnToPrevAsync`/`ReturnToNodeAsync` 讓審批人可退回任意*支配*上游節點（非僅發起人），採 supersede-not-delete 跨度丟棄、per-instance `Generation` epoch bump、`MaxReturnLoops` cap（預設 3）、crash-recovery lease（`ReturningLeaseUtc`）、engine-owned transaction；`WorkflowEventLog.Seq` 改由 `ProcessInstance.NextSeq` 一列式 CAS 分配（移除 `MAX(Seq)+1`/SERIALIZABLE，portable，無隔離層級依賴）。新增 `NodeKind.ParallelGateway`/`InclusiveGateway` AND/OR fork、單語句 Join fire CAS（`FireJoinIfSatisfiedAsync`）、孤兒 fail-closed（`DecrementJoinExpectedAsync`）、可達性兜底確保 Join 絕不掛起；`NodeKind.Ack`（阻塞等待確認，有別於非阻塞 Cc）。schema 為 additive（5 張表新增欄位，皆有 `HasDefaultValue`）；**`NextSeq` 需 per-instance 回填為 `MAX(Seq)+1`**，否則上線後第一次事件 append 即衝突。多 token 行為僅在閘道節點觸發，既有單 token 圖完全不受影響。詳見 §18.9（Wave 3）及 `CHANGELOG.md` `[10.10.0]`。
 >
 > **10.9.0 重點**（簽核引擎釋出，第 4 個 NuGet 套件）：全新 `WalkingTec.Mvvm.WorkFlow` 模組 — 中文企業級審批/工作流引擎，支援**串签/会签/或签**三種審批模式、版本固定的流程定義（canonical JSON + SHA-256 ContentHash）、`GuardedTransition` CAS 原子轉換、`IApproverResolver`（Role/User/ManagerChain）、沙盒化條件路由（白名單 + fail-closed）、撤回/回退/抄送、三個 RBAC 管控控制器、`IWorkflowNotifier`（複用 `IWtmWebhookSink`，opt-in `AddWtmWorkFlowNotifications`，post-commit best-effort）、雙軌稽核（`[AuditChanges]` + append-only `WorkflowEventLog`）、ProcessDefinition Admin Grid。**安全預設**：`InitiatorAutoApprove = false`、`AutoApproveOnMissingHandler = FailClose`（#250）。消費者需呼叫 `modelBuilder.ApplyWorkFlowModels()` 並執行自己的 migration（零內建 migration，與 Etl 相同）。`DBTypeEnum.Memory` 不支援（啟動即報錯）。詳見 §18（WorkFlow 模組）及 `CHANGELOG.md` `[10.9.0]`。
 >
@@ -4530,7 +4532,7 @@ public class Order : BasePoco
 ```xml
 <Project>
   <PropertyGroup>
-    <VersionPrefix>10.9.0</VersionPrefix>
+    <VersionPrefix>10.10.0</VersionPrefix>
   </PropertyGroup>
 </Project>
 ```
@@ -4542,10 +4544,10 @@ public class Order : BasePoco
 | 欄位 | 意義 | 何時遞增 |
 |------|------|---------|
 | **X** | .NET Core 主版本 | 僅在升至下一個 .NET 主版本（如 .NET 10 → 11）時遞增 |
-| **Y** | 主功能升級 | 新增模組或重大新功能時遞增（例：新增 WorkFlow 引擎 → `10.9.0`） |
-| **Z** | 次要優化 | Bug 修復、patch、小優化時遞增（例：hotfix → `10.9.1`） |
+| **Y** | 主功能升級 | 新增模組或重大新功能時遞增（例：新增 WorkFlow Wave 3 → `10.10.0`） |
+| **Z** | 次要優化 | Bug 修復、patch、小優化時遞增（例：hotfix → `10.10.1`） |
 
-**範例**：`10.9.0` = .NET 10、第 9 次主功能升級（WorkFlow 引擎）、初始釋出。  
+**範例**：`10.10.0` = .NET 10、第 10 次主功能升級（WorkFlow Wave 3）、初始釋出。  
 **注意**：`X` 不是 .NET SDK patch 版本，不會因 SDK 10.0.300 vs 10.0.201 而變動，只在主版本升級（10 → 11）時才遞增。
 
 ### 17.5 多環境配置
@@ -4580,6 +4582,8 @@ appsettings.Production.json   ← 生產環境覆蓋（連線字串、JWT Key）
 | **三種審批模式** | 串签/会签/或签，均透過單一 `ApproveMode` enum 在通用 Approval 節點上設定 |
 | **IApproverResolver** | Role / User / ManagerChain（含循環偵測、去重、`MaxLevel` cap）；可自行實作 |
 | **沙盒條件路由** | 白名單欄位 + 封閉 operator enum，`WhitelistRoutingEvaluator`，無 Roslyn/DynamicLinq，off-whitelist → fail-closed |
+| **回退-to-node（Wave 3）** | `ReturnToPrevAsync`/`ReturnToNodeAsync`：退回任意支配上游節點；supersede-not-delete + Generation epoch + NextSeq CAS；見 §18.9 |
+| **平行/包容閘道（Wave 3）** | `NodeKind.ParallelGateway`（AND-fork）/`InclusiveGateway`（OR-fork）+ 單語句 Join CAS + 孤兒 fail-closed；見 §18.9 |
 | **撤回/回退/抄送** | 撤回(WithdrawPolicy)、回退發起人(ReturnToInitiator)、抄送(CC，非阻塞) |
 | **Opt-in 通知** | `AddWtmWorkFlowNotifications()` 複用 `IWtmWebhookSink`；post-commit best-effort，通知失敗不回滾 |
 | **雙軌稽核** | `[AuditChanges]`（VM CRUD）+ append-only `WorkflowEventLog`（引擎轉換，`ExecuteUpdateAsync` bypass 了 EF change tracker） |
@@ -4690,6 +4694,173 @@ public class WfProcessDefinitionController : BaseController
     }
 }
 ```
+
+### 18.9 Wave 3 — 回退-to-node + 平行/包容閘道 + Join + Ack（10.10.0+）
+
+#### 18.9.1 回退-to-node
+
+Wave 3 在原有「回退發起人」基礎上新增兩個 API：
+
+```csharp
+// 退回到最近的已完成上游 Approval 節點（自動計算支配節點）
+Task<WorkflowActionResult> ReturnToPrevAsync(
+    Guid taskId, string actorITCode, string? reason, CancellationToken ct);
+
+// 退回到指定節點（必須是 trigger 節點的支配節點）
+Task<WorkflowActionResult> ReturnToNodeAsync(
+    Guid taskId, string targetNodeKey, string actorITCode, string? reason, CancellationToken ct);
+```
+
+兩者均需在流程定義的 `rejectPolicy` 設為 `ReturnToPrev` 或 `ReturnToNode`（publish 時驗證），並在執行期驗證目標確為支配節點。回退流程採用引擎自管 transaction，透過六步驟 CAS pipeline 完成 span 超棄（supersede-not-delete）與重新實體化：
+
+| STEP | 操作 | 關鍵 CAS |
+|------|------|---------|
+| 0 | 驗證 + PIN（read-only） | — |
+| 1 | 進入 `Returning` 狀態（互斥 + epoch 遞增 + loop 計數） | `WHERE State==Running AND RowVer==@v AND Generation==@gOld AND ReturnLoops < @max` |
+| 2 | 取消跨度計時器 | 各計時器列 per-row CAS |
+| 3 | 丟棄 ApprovalTask 跨度 | `WHERE State IN (NotYetActive, Pending, ...) AND RowVer==@v` |
+| 4 | 超棄 NodeInstance 跨度（`State→Superseded`） | `WHERE State IN (Activated, Pending) AND RowVer==@v` |
+| 5 | 重新實體化目標節點（guarded mint） | `UNIQUE (TenantCode, InstanceId, NodeKey, Generation)` |
+| 6 | 追加 Return 事件 + 解鎖 + 路由 | 在同一 txn 內，`Seq` 由 `NextSeq` CAS 分配 |
+
+`MaxReturnLoops`（預設 3）耗盡時，STEP 6-FC 將實例轉為 `Terminated` 並記 `FailClosed` 事件。  
+`ReturningLeaseUtc` 用於 crash recovery：Wave-5 reaper 透過一列式 CAS 回收過期租約。
+
+**新增 enum 成員**：
+
+| Enum | 新成員 |
+|------|--------|
+| `NodeState` | `NodeState.Superseded`（終止：跨度丟棄或合入 Join） |
+| `InstanceState` | `InstanceState.Returning`（回退互斥子狀態，租約保護） |
+| `NodeKind` | `ParallelGateway`、`InclusiveGateway`（`Join`、`Ack`、`Cc`、`Condition` 已在 MVP） |
+| `WorkflowActionCode` | `AlreadyHandled`、`MaxReturnLoopsExceeded`、`JoinUnsatisfiable`、`Returned` |
+
+**新增 `GuardedTransition` 方法**（Wave 3）：`BeginReturnAsync`、`CancelTimersForReturnAsync`、`DiscardTasksForReturnAsync`、`SupersedeNodeAsync`、`MintNodeInstanceGuardedAsync`、`AllocateSeqAsync`、`ReclaimReturningLeaseAsync`（Wave 3 回退相關）；`IncrementJoinArrivedAsync`、`DecrementJoinExpectedAsync`、`FireJoinIfSatisfiedAsync`（Join 相關）。所有既有 `Activate`/`Complete`/`IncrementApproved`/`ClaimTask` predicate 均加入 `AND Generation == @g`。
+
+**出範圍限制（Wave 3）**：return target 必須*支配* trigger 節點；退回到開放平行區域內部（fork 跨越目標邊界）會在 publish 時拒絕或在執行期 `FailClosed`。
+
+#### 18.9.2 NextSeq — 取代 MAX(Seq)+1
+
+10.10.0 移除 `WorkflowEventLogWriter` 中的 `MAX(Seq)+1`/SERIALIZABLE 模式，改由 `ProcessInstance.NextSeq`（`int`, default 1）提供每實例單調序號：
+
+```sql
+-- AllocateSeqAsync（GuardedTransition）
+UPDATE Wf_ProcessInstance
+SET    NextSeq = NextSeq + 1,
+       RowVer  = RowVer + 1
+WHERE  ID == @id AND RowVer == @v
+-- 返回舊的 NextSeq 值作為本次事件的 Seq
+```
+
+兩個並行 append 競爭同一 RowVer；勝者取 Seq=k，敗者重試取 Seq=k+1。序號連續、單調、無間隙，且不依賴任何隔離層級。`WorkflowEventLog.Generation`（`int?`，nullable）僅供稽核分組，不參與 Seq 計算。
+
+#### 18.9.3 平行閘道（`NodeKind.ParallelGateway`）與包容閘道（`NodeKind.InclusiveGateway`）
+
+在流程定義 JSON 中使用新節點類型：
+
+```jsonc
+// AND-fork（ParallelGateway）— 所有分支同時啟動
+{ "nodeKey": "fork1", "kind": "ParallelGateway",
+  "outgoing": ["branch_a", "branch_b", "branch_c"],
+  "joinNodeKey": "join1"
+},
+
+// OR-fork（InclusiveGateway）— 條件為真的分支啟動
+{ "nodeKey": "fork2", "kind": "InclusiveGateway",
+  "branches": [
+    { "rule": { "field": "amount", "operator": "Gt", "value": 100000 }, "target": "cfo" },
+    { "rule": { "field": "risk",   "operator": "Eq", "value": "high" }, "target": "risk_team" }
+  ],
+  "default": "mgr",
+  "joinNodeKey": "join1"
+},
+
+// Join 節點 — 等待所有（或已到達的）分支
+{ "nodeKey": "join1", "kind": "Join" }
+```
+
+`InclusiveGateway` 在 fork 時固定 `JoinExpectedArrivals` = 實際啟動分支數，防止 OR-join 死鎖。`ParallelGateway` 的 `JoinExpectedArrivals` = 所有 outgoing 分支數。
+
+所有 fork mint 均透過 `UNIQUE (TenantCode, InstanceId, NodeKey, Generation)` 冪等保護。
+
+#### 18.9.4 Join 節點
+
+Join 完成是一個**單語句條件式 CAS**：
+
+```sql
+-- FireJoinIfSatisfiedAsync（GuardedTransition）
+UPDATE Wf_NodeInstance
+SET    State  = CompletedApproved,
+       RowVer = RowVer + 1
+WHERE  ID                == @joinId
+  AND  State             == Activated
+  AND  Generation        == @g
+  AND  JoinArrivedCount  >= JoinExpectedArrivals
+  AND  RowVer            == @v
+```
+
+`rows == 1` → 本 token 觸發 Join，接著 mint 後繼節點；`rows == 0` → 尚未滿足或其他 token 已觸發，冪等 no-op。
+
+孤兒 token fail-closed：一個分支進入終止狀態（`Superseded`、`CompletedRejected`、`FailClosedRouting`）時，於同一 txn 內呼叫 `DecrementJoinExpectedAsync`（防下溢 CAS），再嘗試 `FireJoinIfSatisfiedAsync`。可達性兜底查詢在每次 Join 評估時重新計算「仍能到達 Join 的存活 token」；若集合為空且 Join 尚未滿足，則強制 `CompletedRejected` + `EventAction.FailClosed`，確保 Join 絕不掛起。
+
+#### 18.9.5 Ack 節點（阻塞確認）
+
+`NodeKind.Ack`（已在 enum 中）現在有完整的 `AckHandler` 實作：
+
+- `AckHandler.OnEnterAsync` 建立 `ApprovalTask`（assignee = 確認人）並重用現有任務機制。
+- `CanCompleteAsync == false` 直到必要確認數達標（透過現有 `ClaimApprovalTaskAsync` 將任務 `Pending→Approved`）。
+- `AckMode ∈ {All, Any, Quorum}`，語意對應 `ApproveMode`。
+- **阻塞 token**：直到確認完成前，下游不推進。
+
+對照：`NodeKind.Cc`（已有）`CanCompleteAsync == true`，**永不阻塞 token**。
+
+Ack 任務帶有 `Generation` 戳記，回退時與跨度一起丟棄。
+
+#### 18.9.6 Migration（Wave 3 schema additive 欄位）
+
+```csharp
+// 在 DataContext.OnModelCreating 呼叫（已有則自動掃描）
+modelBuilder.ApplyWorkFlowModels();
+```
+
+```bash
+# 產生 Wave 3 migration
+dotnet ef migrations add WorkFlowWave3 \
+  --context DataContext \
+  --project YourApp/YourApp.csproj \
+  --startup-project YourApp/YourApp.csproj
+```
+
+新增的 additive 欄位（所有既有列以預設值回填，**不遺失資料**）：
+
+| 資料表 | 新欄位 | 預設 / 回填 |
+|--------|--------|------------|
+| `Wf_ProcessInstance` | `Generation uint` | 0 |
+| | `ReturnLoops uint` | 0 |
+| | `NextSeq int` | **`MAX(Seq)+1` per instance**（migration SQL 必須回填，見下） |
+| | `ReturningLeaseUtc DateTime?` | NULL |
+| `Wf_NodeInstance` | `Generation uint` | 0 |
+| | `SupersededAtGen uint?` | NULL |
+| | `ForkGroupId Guid?` | NULL |
+| | `JoinNodeKey string?` | NULL |
+| | `JoinExpectedArrivals int` | 0 |
+| | `JoinArrivedCount int` | 0 |
+| `Wf_ApprovalTask` | `Generation uint` | 0 |
+| `Wf_WorkflowTimer` | `Generation uint` | 0 |
+| `Wf_WorkflowEventLog` | `Generation int?` | NULL |
+
+> **重要**：`NextSeq` 的回填 SQL（於 migration Up() 中加入）：
+> ```sql
+> UPDATE Wf_ProcessInstance pi
+> SET    NextSeq = COALESCE((SELECT MAX(Seq) + 1 FROM Wf_WorkflowEventLog WHERE InstanceId = pi.ID), 1)
+> WHERE  NextSeq = 1;
+> ```
+> 若跳過此步驟，第一次 `AllocateSeqAsync` 呼叫將回傳 Seq=1，與已存在的事件記錄衝突。
+
+新增唯一索引（非部分索引，跨 MySQL/Oracle/DaMeng 可攜）：  
+`UNIQUE (TenantCode, InstanceId, NodeKey, Generation)` on `Wf_NodeInstance`
+
+**相容性**：多 token 行為僅在 `ParallelGateway`/`InclusiveGateway` 節點觸發。既有單 token 流程（`Start`/`Approval`/`Condition`/`End`）行為完全不變。`Generation == 0` 的既有實例透明相容——live-marking 查詢 `WHERE Generation == instance.Generation` 評估為 `0 == 0`，行為與升級前相同。
 
 ---
 

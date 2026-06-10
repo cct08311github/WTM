@@ -1,5 +1,69 @@
 # 更新日志
 
+## [10.10.0] - 2026-06-10
+
+WorkFlow Wave 3 — 回退-to-node (`ReturnToPrev`/`ReturnToNode`) and parallel/inclusive gateways with Join and Ack. Every feature is opt-in; existing single-token graphs and the serial-approve API are completely unaffected. See Migration for new additive columns.
+
+### Added
+
+- **回退-to-node — `ReturnToPrevAsync` / `ReturnToNodeAsync`** (#278): an approver can now reject back to any *dominating* upstream Approval node rather than only to the initiator. `ReturnToPrevAsync` resolves the nearest completed upstream Approval node that dominates the trigger node on the pinned graph. `ReturnToNodeAsync` accepts an explicit `targetNodeKey` validated at publish-time and runtime against the dominator set. Both funnel into a single `ExecuteReturnToNodeAsync` pipeline with:
+  - **Engine-owned transaction envelope** — the return runs inside one explicit transaction opened by the engine (previously no return path opened a transaction). Correctness does not depend on isolation level.
+  - **Supersede-not-delete** span discard (`NodeInstance.State → Superseded`, a terminal flip so no `Activated`-keyed predicate re-fires on a dead node). Superseded rows are never deleted — a late approver's CAS always finds a row and resolves cleanly to `AlreadyHandled`.
+  - **Per-instance `Generation` epoch** (`ProcessInstance.Generation uint`, default 0): bumped atomically in the STEP-1 `BeginReturnAsync` CAS together with `ReturnLoops++` and the `Returning` mutex — single-row, single-statement, no isolation-level dependency (the same proven `ConcurrencySpikeTests` shape).
+  - **`MaxReturnLoops` cap** (`WorkflowOptions.MaxReturnLoops`, default 3): when the cap is reached the instance terminates with `EventAction.FailClosed` and a `MaxReturnLoopsExceeded` result code — never an infinite bounce loop.
+  - **Crash-recovery lease** (`ProcessInstance.ReturningLeaseUtc DateTime?`): set in STEP 1 and cleared in STEP 6; Wave-5 reaper reclaims an expired lease via a single-row CAS so a crashed mid-return cannot permanently wedge an instance.
+  - **`NextSeq` instance counter** (`ProcessInstance.NextSeq int`, default 1): replaces the previous `MAX(Seq)+1` pattern (which required SERIALIZABLE and broke under concurrency). Seq is now allocated via a single-row guarded CAS on the instance row — portable, contiguous, monotonic, no isolation dependency. Re-entry never resets it; return events take the next counter value.
+  - **New `WorkflowActionCode` members**: `AlreadyHandled`, `MaxReturnLoopsExceeded`, `JoinUnsatisfiable`, `Returned`.
+  - **`NodeState.Superseded`** and **`InstanceState.Returning`** enum additions.
+  - Return target validation: non-dominating targets are rejected at publish time (`WorkflowGraphValidator`) and fail-closed at runtime. Returning into the middle of an open parallel region is out of scope for Wave 3.
+
+- **Parallel and inclusive gateways — `NodeKind.ParallelGateway` / `NodeKind.InclusiveGateway`** (#279): multi-token `AdvanceCoreAsync` with AND-fork and OR-fork semantics.
+  - **AND-fork (Parallel)**: all outgoing branch tokens are minted in one in-transaction `SaveChanges`, each stamped with `Generation`, `ForkGroupId`, and `JoinNodeKey`. Existing single-token exclusive (`Condition`) routing is unchanged.
+  - **OR-fork (Inclusive)**: mints each branch whose `TransitionDef.Condition` evaluates `true` via the existing `WhitelistRoutingEvaluator`; fail-closed if zero branches match and no default is specified. `JoinExpectedArrivals` is pinned at fork time to the count of branches actually activated — eliminates the BPMN inclusive-join deadlock.
+  - All fork mints are idempotent under retry via `UNIQUE (TenantCode, InstanceId, NodeKey, Generation)`.
+
+- **Join node** (#279): completion is a **single-statement conditional CAS** (`FireJoinIfSatisfiedAsync`: `WHERE ArrivedCount >= ExpectedArrivals AND State == Activated AND RowVer == @v`) — read and fire are never two separate statements, preventing over-fire and hang. Each arriving token increments `JoinArrivedCount` via `IncrementJoinArrivedAsync` (also a single-row CAS). Orphan-token fail-closed: a forked token reaching a non-arriving terminal state (`Superseded`, `CompletedRejected`, `FailClosedRouting`) decrements `JoinExpectedArrivals` via `DecrementJoinExpectedAsync` (underflow-protected CAS) in the same transaction, then attempts `FireJoinIfSatisfiedAsync`. A reachability backstop re-derives satisfiability from a live current-gen cohort query on each Join evaluation; if the set is empty and the Join is unsatisfiable the Join fires `CompletedRejected` + `EventAction.FailClosed` — the Join never hangs.
+
+- **Ack node (blocking acknowledgement)** (#279): `NodeKind.Ack` blocks the token until required acknowledgers claim their `ApprovalTask` rows (`AckMode ∈ {All, Any, Quorum}`, mirrors `ApproveMode`). Distinct from `NodeKind.Cc` (non-blocking, token passes immediately). Ack tasks are generation-stamped and discarded with the span on return. Explicit handler tests assert Ack holds and Cc never does.
+
+- **New `GuardedTransition` methods** (#278, #279): `BeginReturnAsync`, `CancelTimersForReturnAsync`, `DiscardTasksForReturnAsync`, `SupersedeNodeAsync`, `MintNodeInstanceGuardedAsync`, `AllocateSeqAsync`, `ReclaimReturningLeaseAsync`, `IncrementJoinArrivedAsync`, `DecrementJoinExpectedAsync`, `FireJoinIfSatisfiedAsync`. All existing `Activate`/`Complete`/`IncrementApproved`/`ClaimTask` predicates gain `AND Generation == @g`. No raw `ExecuteUpdateAsync` outside `GuardedTransition` — the single-CAS-primitive audit surface holds.
+
+- **Concurrency test matrix** (#278, #279): `ReturnToNodeTests.cs` + `ReturnConcurrencyTests.cs` (T-RET-1…8, T-MIG-1) and `ParallelGatewayTests.cs` / `JoinTests.cs` / `AckCcTests.cs` / `JoinConcurrencyTests.cs` (T-JOIN-1…6, T-ACK-1), all using SQLite shared-memory (not EF InMemory) per the repo concurrency-test pattern.
+
+### Changed
+
+- **`WorkflowEventLog.Seq` now allocated from `ProcessInstance.NextSeq`** (#278): the previous `MAX(Seq)+1 / SERIALIZABLE` pattern is removed. Seq is allocated via a single-row guarded CAS on the instance row (`AllocateSeqAsync`). Seq remains contiguous, monotonic, and gap-free per instance; concurrent appends contend on the instance `RowVer`, with the loser retrying and taking the next counter value. A nullable `WorkflowEventLog.Generation` column tags the epoch for audit grouping (never enters Seq math). Cross-instance event throughput is unaffected; within-instance ordering is the intentional serialization point.
+
+### Migration
+
+The following columns are **additive** (all have `HasDefaultValue` in `ApplyWorkFlowModels` — all existing rows backfill to safe defaults without data loss):
+
+| Table | New columns | Backfill default |
+|-------|-------------|-----------------|
+| `Wf_ProcessInstance` | `Generation (uint)`, `ReturnLoops (uint)`, `NextSeq (int)`, `ReturningLeaseUtc (DateTime?)` | 0, 0, `MAX(Seq)+1` per instance, `NULL` |
+| `Wf_NodeInstance` | `Generation (uint)`, `SupersededAtGen (uint?)`, `ForkGroupId (Guid?)`, `JoinNodeKey (string?)`, `JoinExpectedArrivals (int)`, `JoinArrivedCount (int)` | 0, NULL, NULL, NULL, 0, 0 |
+| `Wf_ApprovalTask` | `Generation (uint)` | 0 |
+| `Wf_WorkflowTimer` | `Generation (uint)` | 0 |
+| `Wf_WorkflowEventLog` | `Generation (int?)` | NULL |
+
+**`NextSeq` backfill is critical**: the migration must seed `NextSeq = (current MAX(Seq) per instance) + 1` for each existing `ProcessInstance`. A partial backfill (leaving `NextSeq = 1`) strands every running instance on the first post-upgrade event append. The provided migration template handles this via a SQL `UPDATE` before the column default is applied.
+
+**New unique index**: `UNIQUE (TenantCode, InstanceId, NodeKey, Generation)` on `Wf_NodeInstance`. Non-filtered for portability across MySQL, Oracle, and DaMeng. Superseded rows occupy slots — this is acceptable given the generation discipline.
+
+**Behavior compatibility**: multi-token behavior only triggers on `NodeKind.ParallelGateway` / `InclusiveGateway` nodes. All existing single-token graphs (using `Start`, `Approval`, `Condition`, `End`) are byte-identical in behavior. Existing `Generation == 0` instances are handled transparently — the live-marking query filters `Generation == instance.Generation`, which evaluates to `0 == 0` for legacy rows.
+
+**Return-target scope**: `ReturnToPrev`/`ReturnToNode` only accept targets that *dominate* the trigger node on the pinned graph. Non-dominating targets are rejected at publish time and fail-closed at runtime. Returning into the middle of an open parallel region (where a fork straddles the target boundary) is a Wave-3 out-of-scope case and will produce a `FailClosed` result.
+
+**`ReturnResetMode.Resume` (opt-in)**: when specified, re-materialized target nodes copy surviving decided approvals from the immediately-prior generation only, re-validating each approver still resolves under the current rule. Compliance-sensitive — document the decision if enabled.
+
+To generate the migration:
+```bash
+dotnet ef migrations add WorkFlowWave3 \
+  --context DataContext \
+  --project YourApp/YourApp.csproj \
+  --startup-project YourApp/YourApp.csproj
+```
+
 ## [10.9.0] - 2026-06-10
 
 `WalkingTec.Mvvm.WorkFlow` approval engine — a new NuGet package (the 4th shipping package alongside Core / Mvc / TagHelpers.LayUI). Greenfield Chinese-corporate approval/workflow engine built as a peer sibling to `WalkingTec.Mvvm.Etl`. **Every feature is opt-in** — existing applications are completely unaffected until `AddWtmWorkFlow()` is called. This module ships **zero migrations**; consumers run their own `dotnet ef migrations add` (see Migration).
