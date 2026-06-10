@@ -1,4 +1,4 @@
-name: Publish NuGet to Gitea Packages
+name: Publish NuGet to internal package registry
 
 on:
   workflow_dispatch:
@@ -18,7 +18,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     env:
-      PACKAGE_SOURCE: https://mac-mini.tailde842d.ts.net/api/packages/chiu0831/nuget/index.json
+      PACKAGE_SOURCE: https://internal.registry.invalid/api/packages/chiu0831/nuget/index.json
 
     steps:
       - uses: actions/checkout@v5
@@ -65,7 +65,7 @@ jobs:
       - name: List packages
         run: ls -lh nupkgs/
 
-      - name: Push to Gitea Packages
+      - name: Push to internal package registry
         run: |
           dotnet nuget push "nupkgs/*.nupkg" \
             --api-key ${{ secrets.PAT_TOKEN }} \
@@ -75,12 +75,12 @@ jobs:
       # ── GitHub mirror sync ─────────────────────────────────────────────────
       # Required secret: GH_MIRROR_PAT — a Personal Access Token for account
       # `cct08311github` with scopes: repo, workflow, write:packages, read:packages.
-      # Add it in Gitea repo Settings → Secrets → GH_MIRROR_PAT.
-      # (must NOT start with GITHUB_ — Gitea reserves that prefix)
+      # Add it in internal infrastructure repo Settings → Secrets → GH_MIRROR_PAT.
+      # (must NOT start with GITHUB_ — internal infrastructure reserves that prefix)
       #
       # These steps run only on real tag pushes (not workflow_dispatch without
       # a tag ref). If any step here fails the job exits non-zero, which means
-      # the GitHub sync failed — but the Gitea publish above has already
+      # the GitHub sync failed — but the internal infrastructure publish above has already
       # succeeded unconditionally.
       #
       # Security: all github.ref_name / steps.* values are passed through env:
@@ -97,8 +97,8 @@ jobs:
 
       # ── Apply .sync/ manifest to produce a filtered tree for GitHub ──────────
       # All three steps operate on a temporary local branch `sync-to-github-tmp`
-      # so that the Gitea working tree is never modified.  One commit bundles all
-      # manifest changes; that commit (not the raw Gitea HEAD) is what gets
+      # so that the internal infrastructure working tree is never modified.  One commit bundles all
+      # manifest changes; that commit (not the raw internal infrastructure HEAD) is what gets
       # pushed to GitHub's dotnet10 and tagged.
       # Order matches README.md: replace → exclude → sanitize.
 
@@ -171,18 +171,18 @@ jobs:
           if git push github HEAD:refs/heads/dotnet10; then
             echo "Fast-forward push succeeded."
           else
-            echo "Non-fast-forward detected; attempting merge (Gitea is authoritative — -X ours)."
+            echo "Non-fast-forward detected; attempting merge (internal infrastructure is authoritative — -X ours)."
             git fetch github dotnet10
             # -X ours resolves content conflicts but leaves modify/delete conflicts
             # unresolved (merge exits non-zero). We handle those explicitly below.
             git merge github/dotnet10 \
               -X ours \
               --allow-unrelated-histories \
-              -m "merge: sync Gitea release to GitHub (auto-resolve excludes)" \
+              -m "merge: sync release to GitHub (auto-resolve excludes)" \
               --no-edit || MERGE_EXIT=$?
 
             # Resolve any remaining modify/delete conflicts deterministically.
-            # Gitea/HEAD is authoritative: files deleted here (excluded from mirror)
+            # internal infrastructure/HEAD is authoritative: files deleted here (excluded from mirror)
             # stay deleted; files deleted on the mirror but present here stay present.
             UNMERGED=$(git ls-files -u | wc -l | tr -d ' ')
             if [ "${UNMERGED}" -gt 0 ]; then
@@ -217,7 +217,7 @@ jobs:
               fi
 
               git commit --no-edit \
-                -m "merge: sync Gitea release to GitHub (auto-resolve excludes)"
+                -m "merge: sync release to GitHub (auto-resolve excludes)"
             fi
 
             # Leak-gate: ensure no internal markers survived in the merged tree.
@@ -225,7 +225,7 @@ jobs:
             # this is a final safety net against any --theirs content slipping through.)
             BAD=$(git grep -lI \
               -e 'mac-mini' \
-              -e 'tailde842d' \
+              -e 'internal-tailnet' \
               -e 'GITEA_' \
               -e '\.ts\.net' \
               -- ':!.sync/' ':!.github/workflows/' 2>/dev/null || true)
@@ -249,7 +249,7 @@ jobs:
         run: |
           set -euo pipefail
           # Re-tag at the filtered sync commit so GitHub's tag SHA matches what
-          # GitHub has in its dotnet10 history (not the raw Gitea commit).
+          # GitHub has in its dotnet10 history (not the raw internal infrastructure commit).
           git tag -f "$TAG" HEAD
           git push github "$TAG" --force
 
@@ -321,7 +321,7 @@ jobs:
             --source "https://nuget.pkg.github.com/cct08311github/index.json" \
             --skip-duplicate
 
-      # ── Smoke test (runs after both Gitea and GitHub publish stages) ────────
+      # ── Smoke test (runs after both internal infrastructure and GitHub publish stages) ────────
 
       - name: Smoke test package install
         env:
