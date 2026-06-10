@@ -173,13 +173,69 @@ jobs:
           else
             echo "Non-fast-forward detected; attempting merge (Gitea is authoritative — -X ours)."
             git fetch github dotnet10
+            # -X ours resolves content conflicts but leaves modify/delete conflicts
+            # unresolved (merge exits non-zero). We handle those explicitly below.
             git merge github/dotnet10 \
               -X ours \
               --allow-unrelated-histories \
-              -m "merge: sync Gitea release to GitHub" \
-              --no-edit
-            # Retry after merge; still failing means a genuine conflict we
-            # cannot resolve automatically — do NOT force-push.
+              -m "merge: sync Gitea release to GitHub (auto-resolve excludes)" \
+              --no-edit || MERGE_EXIT=$?
+
+            # Resolve any remaining modify/delete conflicts deterministically.
+            # Gitea/HEAD is authoritative: files deleted here (excluded from mirror)
+            # stay deleted; files deleted on the mirror but present here stay present.
+            UNMERGED=$(git ls-files -u | wc -l | tr -d ' ')
+            if [ "${UNMERGED}" -gt 0 ]; then
+              echo "Resolving ${UNMERGED} unmerged index entries (modify/delete conflicts)."
+
+              # DU = deleted by us (HEAD deleted, mirror modified) → keep deletion.
+              git status --porcelain | awk '/^DU /{print $2}' | while IFS= read -r f; do
+                echo "  DU (excluded): removing ${f}"
+                git rm -f -- "$f"
+              done
+
+              # UD = deleted by them (mirror deleted, HEAD has it) → keep HEAD version.
+              git status --porcelain | awk '/^UD /{print $2}' | while IFS= read -r f; do
+                echo "  UD (keep HEAD): restoring ${f}"
+                git checkout --ours -- "$f"
+                git add -- "$f"
+              done
+
+              # Any remaining AA/UU content conflicts: keep ours.
+              git diff --name-only --diff-filter=U | while IFS= read -r f; do
+                echo "  UU (content): keeping HEAD for ${f}"
+                git checkout --ours -- "$f"
+                git add -- "$f"
+              done
+
+              # Verify all conflicts resolved before committing.
+              STILL_UNMERGED=$(git ls-files -u | wc -l | tr -d ' ')
+              if [ "${STILL_UNMERGED}" -gt 0 ]; then
+                echo "ERROR: ${STILL_UNMERGED} unresolved conflict(s) remain after auto-resolution:"
+                git ls-files -u | head -20
+                exit 1
+              fi
+
+              git commit --no-edit \
+                -m "merge: sync Gitea release to GitHub (auto-resolve excludes)"
+            fi
+
+            # Leak-gate: ensure no internal markers survived in the merged tree.
+            # (Resolution always keeps HEAD, which is the sanitized sync tree, so
+            # this is a final safety net against any --theirs content slipping through.)
+            BAD=$(git grep -lI \
+              -e 'mac-mini' \
+              -e 'tailde842d' \
+              -e 'GITEA_' \
+              -e '\.ts\.net' \
+              -- ':!.sync/' ':!.github/workflows/' 2>/dev/null || true)
+            if [ -n "$BAD" ]; then
+              echo "ERROR: leak-gate triggered — internal markers found in:"
+              echo "$BAD"
+              exit 1
+            fi
+
+            # Retry push after merge resolution.
             if ! git push github HEAD:refs/heads/dotnet10; then
               echo "ERROR: push to GitHub dotnet10 failed even after merge. Aborting."
               exit 1
