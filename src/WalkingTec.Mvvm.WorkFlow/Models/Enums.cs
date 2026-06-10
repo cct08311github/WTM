@@ -10,6 +10,13 @@ public enum InstanceState
     Rejected,
     Withdrawn,
     Terminated,
+
+    /// <summary>
+    /// Transient mutex sub-state entered at the STEP-1 linearization point of a 回退-to-node
+    /// operation.  The return is in progress; the instance holds a <c>ReturningLeaseUtc</c>
+    /// that a Wave-5 reaper can reclaim if the engine crashes mid-operation (Race D).
+    /// </summary>
+    Returning,
 }
 
 /// <summary>State of a <see cref="NodeInstance"/> within a running process.</summary>
@@ -21,6 +28,15 @@ public enum NodeState
     CompletedRejected,
     Skipped,
     Returned,
+
+    /// <summary>
+    /// Terminal: this node was part of a span discarded during a 回退-to-node operation.
+    /// The row is NEVER deleted — a late approver's CAS will always find it and can resolve
+    /// to AlreadyHandled instead of an FK abort.  State is terminal so the advisory
+    /// <c>IncrementNodeApprovedCountAsync</c> (WHERE State==Activated) auto-no-ops.
+    /// (Wave-3 design §1.1, §3 Race A, §4.1 token model.)
+    /// </summary>
+    Superseded,
 }
 
 /// <summary>State of an <see cref="ApprovalTask"/> assigned to an approver.</summary>

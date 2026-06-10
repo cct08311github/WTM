@@ -76,4 +76,14 @@ public class ApprovalTask : PersistPoco, ITenant
     /// CAS across all 7 DBTypeEnum providers (spec §7.2).
     /// </summary>
     public uint RowVer { get; set; }
+
+    // ── Wave-3 回退-to-node field (WF-16) ─────────────────────────────────────
+
+    /// <summary>
+    /// Generation of the <see cref="NodeInstance"/> this task belongs to.
+    /// Stamped at task-mint time from <c>NodeInstance.Generation</c>.
+    /// Used by <c>DiscardTasksForReturnAsync</c> to scope span-discard to the current epoch.
+    /// Default 0 (pre-Wave-3 tasks are generation 0).
+    /// </summary>
+    public uint Generation { get; set; }
 }

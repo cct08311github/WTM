@@ -93,4 +93,22 @@ public class NodeInstance : BasePoco, ITenant
     /// CAS across all 7 DBTypeEnum providers (spec §7.2).
     /// </summary>
     public uint RowVer { get; set; }
+
+    // ── Wave-3 回退-to-node fields (WF-16) ────────────────────────────────────
+
+    /// <summary>
+    /// Epoch this node was minted in.  Matches <c>ProcessInstance.Generation</c> at
+    /// mint time.  Live-marking queries filter <c>Generation == instance.Generation</c>
+    /// so stale-epoch tokens are excluded from all post-return processing (Race A / §4.1).
+    /// Default 0 (all pre-Wave-3 nodes are generation 0, consistent with instance default).
+    /// </summary>
+    public uint Generation { get; set; }
+
+    /// <summary>
+    /// The generation at which this node was superseded by a 回退-to-node operation.
+    /// Null for nodes that have not been superseded.
+    /// Set atomically by <c>SupersedeNodeAsync</c> in the same CAS that flips
+    /// <c>State</c> to <c>NodeState.Superseded</c> (Race A guard).
+    /// </summary>
+    public uint? SupersededAtGen { get; set; }
 }

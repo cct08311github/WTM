@@ -72,4 +72,14 @@ public class WorkflowEventLog : BasePoco, ITenant
 
     /// <summary>UTC timestamp when this event occurred.</summary>
     public DateTime OccurredUtc { get; set; }
+
+    // ── Wave-3 回退-to-node field (WF-16) ─────────────────────────────────────
+
+    /// <summary>
+    /// Generation of the <see cref="ProcessInstance"/> at the time this event was appended.
+    /// Null for pre-Wave-3 events and events written before the generation counter was introduced.
+    /// Used for audit grouping only (e.g. "show all events in generation 2") — never enters
+    /// Seq math or control-flow branching (design §3 Race B).
+    /// </summary>
+    public int? Generation { get; set; }
 }

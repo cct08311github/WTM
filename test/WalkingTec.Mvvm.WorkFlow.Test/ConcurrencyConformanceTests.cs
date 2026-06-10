@@ -42,6 +42,7 @@ internal sealed class WfTestContext : DbContext
     public DbSet<NodeInstance> NodeInstances => Set<NodeInstance>();
     public DbSet<ApprovalTask> ApprovalTasks => Set<ApprovalTask>();
     public DbSet<WorkflowTimer> WorkflowTimers => Set<WorkflowTimer>();
+    public DbSet<WorkflowEventLog> WorkflowEventLogs => Set<WorkflowEventLog>();
 
     public WfTestContext(string connectionString)
     {
@@ -70,6 +71,11 @@ internal sealed class WfTestContext : DbContext
             b.Property(x => x.IsValid);
             // Ignore navigations not relevant to CAS test.
             b.Ignore(x => x.DefinitionVersion);
+            // Wave-3 (WF-16) columns.
+            b.Property(x => x.Generation);
+            b.Property(x => x.ReturnLoops);
+            b.Property(x => x.NextSeq).HasDefaultValue(1);
+            b.Property(x => x.ReturningLeaseUtc);
         });
 
         // NodeInstance — minimal columns for CAS test.
@@ -83,6 +89,13 @@ internal sealed class WfTestContext : DbContext
             b.Property(x => x.InstanceId);
             b.Property(x => x.TenantCode).HasMaxLength(50);
             b.Ignore(x => x.Instance);
+            // Wave-3 (WF-16) columns.
+            b.Property(x => x.Generation);
+            b.Property(x => x.SupersededAtGen);
+            // Non-filtered unique index for MintNodeInstanceGuardedAsync idempotency.
+            b.HasIndex(x => new { x.TenantCode, x.InstanceId, x.NodeKey, x.Generation })
+             .IsUnique()
+             .HasDatabaseName("IX_Wf_NodeInstance_Test_TenantCode_InstanceId_NodeKey_Generation");
         });
 
         // ApprovalTask — minimal columns for CAS test.
@@ -97,6 +110,8 @@ internal sealed class WfTestContext : DbContext
             b.Property(x => x.TenantCode).HasMaxLength(50);
             b.Property(x => x.IsValid);
             b.Ignore(x => x.NodeInstance);
+            // Wave-3 (WF-16) column.
+            b.Property(x => x.Generation);
         });
 
         // WorkflowTimer — minimal columns for CAS test.
@@ -111,6 +126,29 @@ internal sealed class WfTestContext : DbContext
             b.Property(x => x.TenantCode).HasMaxLength(50);
             b.Ignore(x => x.ApprovalTask);
             b.Ignore(x => x.NodeInstance);
+            // Wave-3 (WF-16) column.
+            b.Property(x => x.Generation);
+        });
+
+        // WorkflowEventLog — minimal columns for Seq allocation test.
+        modelBuilder.Entity<WorkflowEventLog>(b =>
+        {
+            b.ToTable("Wf_WorkflowEventLog_Test");
+            b.HasKey(x => x.ID);
+            b.Property(x => x.InstanceId);
+            b.Property(x => x.Seq);
+            b.Property(x => x.ActorITCode).HasMaxLength(50);
+            b.Property(x => x.Action);
+            b.Property(x => x.NodeKey).HasMaxLength(100);
+            b.Property(x => x.BeforeState).HasMaxLength(50);
+            b.Property(x => x.AfterState).HasMaxLength(50);
+            b.Property(x => x.Reason);
+            b.Property(x => x.OccurredUtc);
+            b.Property(x => x.TenantCode).HasMaxLength(50);
+            b.Property(x => x.Generation);
+            b.Ignore(x => x.Instance);
+            // Same unique constraint as production (TenantCode, InstanceId, Seq).
+            b.HasIndex(x => new { x.TenantCode, x.InstanceId, x.Seq }).IsUnique();
         });
     }
 }

@@ -212,10 +212,7 @@ public interface IWorkflowEngine
     ///
     /// <para><strong>Resubmit:</strong> the initiator calls <see cref="StartAsync"/> with the
     /// same <c>definitionVersionId</c> + updated <c>formDataJson</c> (a new <see cref="Models.ProcessInstance"/>
-    /// is created). The returned instance remains in Draft state and is not reused.
-    /// Full WF-16 回退-to-node / Wave-3 返回-to-prev-node are not implemented here.</para>
-    ///
-    /// <para>// WF-16 Wave-3: ReturnToPrev / ReturnToNode are deferred.</para>
+    /// is created). The returned instance remains in Draft state and is not reused.</para>
     /// </summary>
     /// <param name="taskId">PK of the <see cref="Models.ApprovalTask"/> being returned.</param>
     /// <param name="actorITCode">ITCode of the approver initiating the return.</param>
@@ -223,6 +220,86 @@ public interface IWorkflowEngine
     /// <param name="ct">Cancellation token.</param>
     Task<WorkflowActionResult> ReturnToInitiatorAsync(
         Guid taskId,
+        string actorITCode,
+        string? reason = null,
+        CancellationToken ct = default);
+
+    // ── WF-16: 回退-to-node (Wave-3) ─────────────────────────────────────────
+
+    /// <summary>
+    /// Approver returns the flow to the immediately-preceding Approval node
+    /// (<c>ReturnToPrev</c> convenience wrapper over <see cref="ReturnToNodeAsync"/>).
+    ///
+    /// <para>The preceding node is the last Approval node in the transition path
+    /// that dominated the current trigger node.  If no preceding Approval node
+    /// exists the method returns <see cref="WorkflowActionCode.NoDominatorTarget"/>.</para>
+    ///
+    /// <para><strong>Wave-3 semantics (supersede-not-delete backbone):</strong>
+    /// <list type="number">
+    ///   <item>STEP-0: Load and validate trigger task + node + instance.</item>
+    ///   <item>STEP-1 (<em>linearization point</em>): <c>BeginReturnAsync</c> — instance-level
+    ///         CAS atomically sets <c>State=Returning</c>, increments <c>Generation</c>,
+    ///         increments <c>ReturnLoops</c>, stamps <c>ReturningLeaseUtc</c>.</item>
+    ///   <item>STEP-2: Cancel armed timers for every span node (Race C guard).</item>
+    ///   <item>STEP-3: Discard active tasks on span nodes (sets State=Cancelled, scoped by
+    ///         current generation).</item>
+    ///   <item>STEP-4: Supersede all span NodeInstances (CAS sets <c>State=Superseded</c> +
+    ///         <c>SupersededAtGen</c>) — Race A guard via shared RowVer.</item>
+    ///   <item>STEP-5: Mint fresh <see cref="Models.NodeInstance"/> at the target node
+    ///         (idempotent via UNIQUE constraint on TenantCode+InstanceId+NodeKey+Generation).</item>
+    ///   <item>STEP-6: Set instance <c>State=Running</c> via guarded CAS.</item>
+    ///   <item>Write <see cref="Models.WorkflowEventLog"/> with <see cref="Models.EventAction.Return"/>.</item>
+    /// </list>
+    /// </para>
+    ///
+    /// <para><strong>Race A (span-discard vs in-flight approve):</strong> supersede CAS shares
+    /// the same RowVer as the approver's CompleteNodeInstanceAsync — exactly one wins.</para>
+    ///
+    /// <para><strong>Race D (concurrent returns + MaxReturnLoops):</strong> capped by
+    /// <see cref="WorkFlowOptions.MaxReturnLoops"/>; <c>BeginReturnAsync</c> predicate
+    /// atomically enforces the cap.</para>
+    /// </summary>
+    /// <param name="taskId">PK of the trigger <see cref="Models.ApprovalTask"/>.</param>
+    /// <param name="actorITCode">ITCode of the approver initiating the return.</param>
+    /// <param name="reason">Reason for the return (surfaced in the event log).</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>
+    /// <see cref="WorkflowActionCode.Returned"/> on success;
+    /// <see cref="WorkflowActionCode.NoDominatorTarget"/> when no preceding Approval node exists;
+    /// <see cref="WorkflowActionCode.MaxReturnLoopsExceeded"/> when <see cref="WorkFlowOptions.MaxReturnLoops"/> is reached;
+    /// <see cref="WorkflowActionCode.AlreadyHandled"/> when the task/node was already acted on by a concurrent caller.
+    /// </returns>
+    Task<WorkflowActionResult> ReturnToPrevAsync(
+        Guid taskId,
+        string actorITCode,
+        string? reason = null,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Approver returns the flow to an arbitrary upstream Approval node that dominates
+    /// the current trigger node (ReturnToNode — spec §5.7 Wave-3).
+    ///
+    /// <para>The <paramref name="targetNodeKey"/> must be an Approval node whose key
+    /// appears in the dominator set of the trigger node (every path from Start to the
+    /// trigger node passes through it).  Attempting to return to a non-dominating node
+    /// returns <see cref="WorkflowActionCode.NoDominatorTarget"/>.</para>
+    ///
+    /// <para>See <see cref="ReturnToPrevAsync"/> for the full Wave-3 STEP 0-6 description.</para>
+    /// </summary>
+    /// <param name="taskId">PK of the trigger <see cref="Models.ApprovalTask"/>.</param>
+    /// <param name="targetNodeKey">NodeKey of the Approval node to return to.</param>
+    /// <param name="actorITCode">ITCode of the approver initiating the return.</param>
+    /// <param name="reason">Reason for the return (surfaced in the event log).</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>
+    /// <see cref="WorkflowActionCode.Returned"/> on success;
+    /// <see cref="WorkflowActionCode.NoDominatorTarget"/> when target is not a dominator;
+    /// <see cref="WorkflowActionCode.MaxReturnLoopsExceeded"/> when the cap is reached;
+    /// <see cref="WorkflowActionCode.AlreadyHandled"/> when the task/node was already handled.
+    /// </returns>
+    Task<WorkflowActionResult> ReturnToNodeAsync(
+        Guid taskId,
+        string targetNodeKey,
         string actorITCode,
         string? reason = null,
         CancellationToken ct = default);

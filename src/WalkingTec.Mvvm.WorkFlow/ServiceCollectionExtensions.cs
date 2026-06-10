@@ -232,6 +232,26 @@ public static class WorkFlowDbContextExtensions
             // RowVer: plain uint column, NOT an EF concurrency token.
             // The engine manages this inside WHERE clause of ExecuteUpdateAsync (spec §7.2).
             e.Property(x => x.RowVer);
+
+            // ── Wave-3 (WF-16) fields ──────────────────────────────────────────
+            // Generation: epoch counter.  Default 0 (pre-Wave-3 instances).
+            // Backfill migration note: no data migration needed — default 0 is correct for
+            // all existing rows (they were never involved in a return-to-node operation).
+            e.Property(x => x.Generation);
+
+            // ReturnLoops: guarded by BeginReturnAsync CAS; capped by MaxReturnLoops option.
+            e.Property(x => x.ReturnLoops);
+
+            // NextSeq: per-instance Seq counter.  Replaces MAX(Seq)+1 + SERIALIZABLE.
+            // Backfill guidance: run once per consumer migration:
+            //   UPDATE Wf_ProcessInstance pi
+            //   SET NextSeq = (SELECT COALESCE(MAX(Seq), 0) + 1
+            //                  FROM Wf_WorkflowEventLog WHERE InstanceId = pi.ID)
+            // This ensures existing log rows' Seq values are below the new counter.
+            e.Property(x => x.NextSeq).HasDefaultValue(1);
+
+            // ReturningLeaseUtc: crash-recovery lease for the Wave-5 reaper (WF-20 / ReclaimReturningLeaseAsync).
+            e.Property(x => x.ReturningLeaseUtc);
         });
 
         // ── NodeInstance ──────────────────────────────────────────────────────
@@ -240,6 +260,8 @@ public static class WorkFlowDbContextExtensions
             e.ToTable("Wf_NodeInstance");
             // Core query: active nodes for a given instance.
             e.HasIndex(x => new { x.InstanceId, x.State });
+            // Wave-3: generation-scoped live-marking query.
+            e.HasIndex(x => new { x.InstanceId, x.Generation, x.State });
             e.HasIndex(x => x.TenantCode);
 
             e.HasOne(x => x.Instance)
@@ -253,6 +275,22 @@ public static class WorkFlowDbContextExtensions
 
             // RowVer: plain uint column — app-incremented CAS (spec §7.2).
             e.Property(x => x.RowVer);
+
+            // ── Wave-3 (WF-16) fields ──────────────────────────────────────────
+            // Generation: epoch at mint time.  Default 0.
+            e.Property(x => x.Generation);
+
+            // SupersededAtGen: set atomically by SupersedeNodeAsync to the generation that
+            // superseded this node.  Null for active nodes.
+            e.Property(x => x.SupersededAtGen);
+
+            // Non-filtered unique index on (TenantCode, InstanceId, NodeKey, Generation):
+            // enforces idempotent re-entry minting for MintNodeInstanceGuardedAsync (STEP-5).
+            // Non-filtered (no WHERE clause) so it works across all 7 providers including
+            // Oracle / DaMeng which do not support partial/filtered unique indexes.
+            e.HasIndex(x => new { x.TenantCode, x.InstanceId, x.NodeKey, x.Generation })
+             .IsUnique()
+             .HasDatabaseName("IX_Wf_NodeInstance_TenantCode_InstanceId_NodeKey_Generation");
         });
 
         // ── ApprovalTask ──────────────────────────────────────────────────────
@@ -275,6 +313,10 @@ public static class WorkFlowDbContextExtensions
 
             // RowVer: plain uint column — app-incremented CAS (spec §7.2).
             e.Property(x => x.RowVer);
+
+            // Wave-3 (WF-16): Generation epoch, stamped at task-mint time.
+            // DiscardTasksForReturnAsync scopes its bulk-cancel to the current generation.
+            e.Property(x => x.Generation);
         });
 
         // ── WorkflowEventLog ──────────────────────────────────────────────────
@@ -299,6 +341,9 @@ public static class WorkFlowDbContextExtensions
             e.Property(x => x.BeforeState).HasMaxLength(50);
             e.Property(x => x.AfterState).HasMaxLength(50);
             e.Property(x => x.TenantCode).HasMaxLength(50);
+
+            // Wave-3 (WF-16): Generation — audit grouping only; never enters Seq math.
+            e.Property(x => x.Generation);
         });
 
         // ── CcRecord ──────────────────────────────────────────────────────────
@@ -358,6 +403,11 @@ public static class WorkFlowDbContextExtensions
 
             // RowVer: plain uint column — app-incremented CAS (spec §7.2).
             e.Property(x => x.RowVer);
+
+            // Wave-3 (WF-16): Generation epoch — gates timer-fire action against stale epochs.
+            // Default 0 (pre-Wave-3 timers are generation 0; they fire normally unless the
+            // node they cover was superseded at gen > 0, which the fire-action checks).
+            e.Property(x => x.Generation);
         });
 
         return builder;

@@ -68,4 +68,14 @@ public class WorkflowTimer : BasePoco, ITenant
     /// CAS across all 7 DBTypeEnum providers (spec §7.2).
     /// </summary>
     public uint RowVer { get; set; }
+
+    // ── Wave-3 回退-to-node field (WF-16) ─────────────────────────────────────
+
+    /// <summary>
+    /// Generation of the <see cref="NodeInstance"/> that armed this timer.
+    /// A timer-fire action gates on <c>Generation == instance.Generation</c>; if the
+    /// node has been superseded (generation mismatch) the action is a no-op (Race C).
+    /// Default 0 (pre-Wave-3 timers are generation 0).
+    /// </summary>
+    public uint Generation { get; set; }
 }

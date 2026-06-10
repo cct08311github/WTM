@@ -27,7 +27,15 @@
 //
 // WF-12 — ReturnToInitiatorAsync:
 //   • Approver returns task to initiator; instance goes to Draft (re-editable).
-//   • Full Wave-3 回退-to-arbitrary-node is deferred (// WF-16 Wave-3).
+//
+// WF-16 (Wave-3) — ReturnToPrevAsync / ReturnToNodeAsync:
+//   • Supersede-not-delete backbone: span nodes → State=Superseded; tasks → State=Cancelled.
+//   • BeginReturnAsync: linearization-point CAS (Running→Returning, Generation++, ReturnLoops++, lease).
+//   • Dominator validation: only Approval nodes that dominate the trigger are valid targets.
+//   • Race A: SupersedeNodeAsync shares RowVer with CompleteNodeInstanceAsync — exactly one wins.
+//   • Race B: Seq via AllocateSeqAsync counter (no SERIALIZABLE needed).
+//   • Race C: CancelTimersForReturnAsync gates on generation match (stale timers no-op).
+//   • Race D: MaxReturnLoops cap enforced atomically in BeginReturnAsync predicate.
 
 using System;
 using System.Collections.Generic;
@@ -287,9 +295,13 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         while (steps++ < MaxSteps)
         {
             // Find the current active NodeInstance(s) for this process.
+            // Wave-3: filter by Generation == instance.Generation to exclude stale-epoch tokens
+            // (Race A guard — superseded nodes from a prior generation are never re-activated).
+            uint currentGen = instance.Generation;
             var activeNode = await Db.Set<NodeInstance>()
                 .AsNoTracking()
                 .Where(n => n.InstanceId == instance.ID
+                             && n.Generation == currentGen
                              && (n.State == NodeState.Pending || n.State == NodeState.Activated))
                 .OrderBy(n => n.ID) // deterministic tiebreak
                 .FirstOrDefaultAsync(ct);
@@ -316,7 +328,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             if (activeNode.State == NodeState.Pending)
             {
                 var activateRows = await GuardedTransition.ActivateNodeInstanceAsync(
-                    Db, activeNode.ID, activeNode.RowVer, DateTime.UtcNow, ct);
+                    Db, activeNode.ID, activeNode.RowVer, DateTime.UtcNow, ct: ct);
 
                 if (activateRows == 0)
                 {
@@ -1307,20 +1319,418 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             catch (Exception ex) { _logger.LogError(ex, "WF-15 NotifyReturnedToInitiatorAsync failed for task {TaskId}.", taskId); }
         }
 
-        // WF-16 Wave-3: ReturnToPrev / ReturnToNode are deferred.
         return WorkflowActionResult.ReturnedToInitiator;
+    }
+
+    // ── WF-16: ReturnToPrevAsync / ReturnToNodeAsync ───────────────────────────
+
+    /// <inheritdoc/>
+    public async Task<WorkflowActionResult> ReturnToPrevAsync(
+        Guid taskId,
+        string actorITCode,
+        string? reason = null,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(actorITCode))
+            throw new ArgumentException("actorITCode must not be empty.", nameof(actorITCode));
+
+        // STEP-0: Load trigger task + node + instance to resolve the graph and auto-determine
+        // the target.  (Heavy object loading deferred to ExecuteReturnToNodeAsync.)
+        var task = await Db.Set<ApprovalTask>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(t => t.ID == taskId && t.IsValid == true, ct);
+
+        if (task is null)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.TaskNotActive,
+                $"ApprovalTask {taskId} not found.");
+
+        var nodeInst = await Db.Set<NodeInstance>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(n => n.ID == task.NodeInstanceId, ct);
+
+        if (nodeInst is null)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeClosed,
+                $"NodeInstance {task.NodeInstanceId} not found.");
+
+        var instance = await Db.Set<ProcessInstance>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(p => p.ID == nodeInst.InstanceId && p.IsValid == true, ct);
+
+        if (instance is null)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeClosed,
+                $"ProcessInstance for NodeInstance {nodeInst.ID} not found.");
+
+        var version = await Db.Set<ProcessDefinitionVersion>()
+            .AsNoTracking()
+            .SingleAsync(v => v.ID == instance.DefinitionVersionId, ct);
+
+        var graph = WorkflowGraphSerializer.Deserialize(version.GraphJson);
+
+        // Resolve the closest dominating Approval node (ReturnToPrev semantics).
+        var targetNodeKey = WorkflowGraphValidator.GetPrevApprovalNode(graph, nodeInst.NodeKey);
+
+        if (targetNodeKey is null)
+        {
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NoDominatorTarget,
+                $"No preceding Approval dominator found for node '{nodeInst.NodeKey}' " +
+                $"in graph '{graph.Key}'. Cannot ReturnToPrev.");
+        }
+
+        return await ExecuteReturnToNodeAsync(
+            taskId, task, nodeInst, instance, graph, targetNodeKey, actorITCode, reason, ct);
+    }
+
+    /// <inheritdoc/>
+    public async Task<WorkflowActionResult> ReturnToNodeAsync(
+        Guid taskId,
+        string targetNodeKey,
+        string actorITCode,
+        string? reason = null,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(actorITCode))
+            throw new ArgumentException("actorITCode must not be empty.", nameof(actorITCode));
+
+        if (string.IsNullOrWhiteSpace(targetNodeKey))
+            throw new ArgumentException("targetNodeKey must not be empty.", nameof(targetNodeKey));
+
+        // STEP-0: Load and validate.
+        var task = await Db.Set<ApprovalTask>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(t => t.ID == taskId && t.IsValid == true, ct);
+
+        if (task is null)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.TaskNotActive,
+                $"ApprovalTask {taskId} not found.");
+
+        var nodeInst = await Db.Set<NodeInstance>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(n => n.ID == task.NodeInstanceId, ct);
+
+        if (nodeInst is null)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeClosed,
+                $"NodeInstance {task.NodeInstanceId} not found.");
+
+        var instance = await Db.Set<ProcessInstance>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(p => p.ID == nodeInst.InstanceId && p.IsValid == true, ct);
+
+        if (instance is null)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeClosed,
+                $"ProcessInstance for NodeInstance {nodeInst.ID} not found.");
+
+        var version = await Db.Set<ProcessDefinitionVersion>()
+            .AsNoTracking()
+            .SingleAsync(v => v.ID == instance.DefinitionVersionId, ct);
+
+        var graph = WorkflowGraphSerializer.Deserialize(version.GraphJson);
+
+        // Validate that targetNodeKey is a dominator of the trigger node.
+        var validTargets = WorkflowGraphValidator.GetValidReturnTargets(graph, nodeInst.NodeKey);
+        if (!validTargets.Contains(targetNodeKey))
+        {
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NoDominatorTarget,
+                $"Node '{targetNodeKey}' is not a valid return target for trigger node '{nodeInst.NodeKey}' " +
+                $"in graph '{graph.Key}'. Only dominating Approval nodes are valid targets.");
+        }
+
+        return await ExecuteReturnToNodeAsync(
+            taskId, task, nodeInst, instance, graph, targetNodeKey, actorITCode, reason, ct);
+    }
+
+    /// <summary>
+    /// Core Wave-3 return-to-node implementation (STEP 0-6 + STEP-6-FC).
+    ///
+    /// <para>All STEP 1-6 writes happen inside one engine-owned transaction.
+    /// This is the linearization point: if BeginReturnAsync (STEP-1) wins the CAS
+    /// the rest of the steps are committed atomically.</para>
+    ///
+    /// <para>Race A (span-discard vs in-flight approve): SupersedeNodeAsync shares the
+    /// same RowVer as CompleteNodeInstanceAsync — exactly one wins.</para>
+    ///
+    /// <para>Race D: MaxReturnLoops cap enforced in BeginReturnAsync predicate.</para>
+    /// </summary>
+    private async Task<WorkflowActionResult> ExecuteReturnToNodeAsync(
+        Guid taskId,
+        ApprovalTask task,
+        NodeInstance triggerNode,
+        ProcessInstance instance,
+        WorkflowGraph graph,
+        string targetNodeKey,
+        string actorITCode,
+        string? reason,
+        CancellationToken ct)
+    {
+        // Guard: node must be Activated.
+        if (triggerNode.State != NodeState.Activated)
+        {
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeClosed,
+                $"NodeInstance {triggerNode.ID} is in state {triggerNode.State}, not Activated.");
+        }
+
+        // Guard: actor must be the assignee.
+        if (!string.Equals(task.AssigneeITCode, actorITCode, StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.TaskNotActive,
+                $"Actor '{actorITCode}' is not the assignee '{task.AssigneeITCode}' of task {taskId}.");
+        }
+
+        // Guard: task must be Pending.
+        if (task.State != TaskState.Pending)
+        {
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.AlreadyHandled,
+                $"Task {taskId} is in state {task.State}, not Pending.");
+        }
+
+        int maxReturnLoops = _options.MaxReturnLoops;
+        var leaseExpiry = DateTime.UtcNow.AddMinutes(30); // Wave-5 reaper TTL; configurable in WF-20.
+
+        // Compute the span of node keys that must be superseded.
+        var spanNodeKeys = WorkflowGraphValidator.ComputeReturnSpan(graph, targetNodeKey, triggerNode.NodeKey);
+
+        // Resolve span NodeInstance IDs for STEP-2/3/4.
+        // We need all Activated/Pending NodeInstances for the current generation that belong to span keys.
+        var spanNodeInstances = await Db.Set<NodeInstance>()
+            .AsNoTracking()
+            .Where(n => n.InstanceId == instance.ID
+                         && n.Generation == instance.Generation
+                         && (n.State == NodeState.Activated || n.State == NodeState.Pending))
+            .ToListAsync(ct);
+
+        // Filter to span keys only.
+        var spanNodes = spanNodeInstances
+            .Where(n => spanNodeKeys.Contains(n.NodeKey))
+            .ToList();
+
+        var spanNodeIds = spanNodes.Select(n => n.ID).ToList();
+
+        // ── Engine-owned transaction: STEP 1 through 6 ────────────────────────
+        await using var tx = await Db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            // ── STEP-1: BeginReturnAsync — linearization point ─────────────────
+            // Atomically: Running → Returning, Generation+1, ReturnLoops+1, stamp lease.
+            // Re-read instance for current RowVer before the CAS.
+            instance = await Db.Set<ProcessInstance>()
+                .AsNoTracking()
+                .SingleAsync(p => p.ID == instance.ID, ct);
+
+            if (instance.State != InstanceState.Running)
+            {
+                await tx.RollbackAsync(CancellationToken.None);
+                return WorkflowActionResult.WithDetail(WorkflowActionCode.AlreadyHandled,
+                    $"Instance {instance.ID} is in state {instance.State}, not Running. Concurrent actor won.");
+            }
+
+            // Check MaxReturnLoops before the CAS (early-exit; CAS also enforces it atomically).
+            if ((int)instance.ReturnLoops >= maxReturnLoops)
+            {
+                await tx.RollbackAsync(CancellationToken.None);
+                _logger.LogWarning(
+                    "ExecuteReturnToNodeAsync: instance {InstanceId} has reached MaxReturnLoops ({Max}). Fail-closed.",
+                    instance.ID, maxReturnLoops);
+                return WorkflowActionResult.MaxReturnLoopsExceeded;
+            }
+
+            var (beginRows, _) = await GuardedTransition.BeginReturnAsync(
+                Db, instance.ID,
+                expectedRowVer: instance.RowVer,
+                expectedGeneration: instance.Generation,
+                maxReturnLoops: maxReturnLoops,
+                leaseExpiry: leaseExpiry,
+                ct: ct);
+
+            if (beginRows == 0)
+            {
+                await tx.RollbackAsync(CancellationToken.None);
+                _logger.LogDebug(
+                    "ExecuteReturnToNodeAsync: BeginReturnAsync CAS returned 0 for instance {InstanceId} — " +
+                    "concurrent actor won or MaxReturnLoops reached.",
+                    instance.ID);
+                return WorkflowActionResult.AlreadyHandled;
+            }
+
+            // Re-read instance to get the new Generation (gNew = gOld+1 after BeginReturnAsync).
+            instance = await Db.Set<ProcessInstance>()
+                .AsNoTracking()
+                .SingleAsync(p => p.ID == instance.ID, ct);
+
+            uint gNew = instance.Generation;
+
+            // ── STEP-2: Cancel timers for all span NodeInstances ──────────────
+            if (spanNodeIds.Count > 0)
+            {
+                await GuardedTransition.CancelTimersForReturnAsync(Db, spanNodeIds, ct);
+            }
+
+            // ── STEP-3: Discard tasks on span nodes (current generation) ──────
+            if (spanNodeIds.Count > 0)
+            {
+                // Exclude the trigger task — it is claimed in STEP-3b below.
+                await GuardedTransition.DiscardTasksForReturnAsync(
+                    Db, spanNodeIds, excludeTaskId: taskId, ct);
+            }
+
+            // STEP-3b: Claim the trigger task itself as Rejected (the task that triggered return).
+            var claimedRows = await GuardedTransition.ClaimApprovalTaskAsync(
+                Db, taskId,
+                expectedRowVer: task.RowVer,
+                nextState: TaskState.Rejected,
+                actedAtUtc: DateTime.UtcNow,
+                comment: reason,
+                ct: ct);
+
+            // If another actor already claimed it — we already atomically won the instance
+            // state transition (BeginReturnAsync), so treat this as an idempotent no-op;
+            // the return path proceeds.  Log a warning for diagnosis.
+            if (claimedRows == 0)
+            {
+                _logger.LogWarning(
+                    "ExecuteReturnToNodeAsync: trigger task {TaskId} ClaimApprovalTask CAS returned 0 — " +
+                    "task already claimed by concurrent actor. Proceeding with return (instance already in Returning state).",
+                    taskId);
+            }
+
+            // ── STEP-4: Supersede span NodeInstances ──────────────────────────
+            foreach (var spanNode in spanNodes)
+            {
+                // Re-read fresh RowVer for each span node (other steps may have bumped it).
+                var freshSpanNode = await Db.Set<NodeInstance>()
+                    .AsNoTracking()
+                    .SingleOrDefaultAsync(n => n.ID == spanNode.ID, ct);
+
+                if (freshSpanNode is null) continue; // already gone (edge case)
+
+                // Skip if already superseded (concurrent twin return path).
+                if (freshSpanNode.State == NodeState.Superseded) continue;
+
+                var supersedeRows = await GuardedTransition.SupersedeNodeAsync(
+                    Db, spanNode.ID,
+                    expectedRowVer: freshSpanNode.RowVer,
+                    supersededAtGen: gNew,
+                    ct: ct);
+
+                if (supersedeRows == 0)
+                {
+                    _logger.LogDebug(
+                        "ExecuteReturnToNodeAsync: SupersedeNodeAsync CAS returned 0 for span node {NodeId} — " +
+                        "concurrent actor won this node. Continuing span supersede.",
+                        spanNode.ID);
+                }
+            }
+
+            // ── STEP-5: Mint fresh NodeInstance at target node ────────────────
+            // Generation is gNew (stamped at mint time).
+            var targetNodeDef = graph.Nodes.FirstOrDefault(n => n.NodeKey == targetNodeKey)
+                ?? throw new InvalidOperationException(
+                       $"Target node '{targetNodeKey}' not found in graph '{graph.Key}'.");
+
+            // Build the NodeInstance entity for the target node at generation gNew.
+            var targetNodeInst = new NodeInstance
+            {
+                ID = Guid.NewGuid(),
+                TenantCode = instance.TenantCode,
+                InstanceId = instance.ID,
+                NodeKey = targetNodeDef.NodeKey,
+                NodeKind = targetNodeDef.Kind,
+                State = NodeState.Pending,
+                ApproveMode = targetNodeDef.ApproveMode,
+                ApprovePercent = targetNodeDef.ApprovePercent,
+                RejectGate = targetNodeDef.RejectGate ?? RejectGate.Immediate,
+                RejectPolicy = targetNodeDef.RejectPolicy ?? RejectPolicy.ReturnToInitiator,
+                RowVer = 0,
+                Generation = gNew,
+            };
+            var mintOk = await GuardedTransition.MintNodeInstanceGuardedAsync(
+                Db, targetNodeInst, ct);
+
+            if (!mintOk)
+            {
+                // UNIQUE constraint: another concurrent call already minted it — idempotent.
+                _logger.LogDebug(
+                    "ExecuteReturnToNodeAsync: MintNodeInstanceGuardedAsync for '{TargetNodeKey}' gen={Gen} " +
+                    "already exists (UNIQUE constraint) — idempotent, proceeding.",
+                    targetNodeKey, gNew);
+            }
+
+            // ── STEP-6: Set instance Running ─────────────────────────────────
+            instance = await Db.Set<ProcessInstance>()
+                .AsNoTracking()
+                .SingleAsync(p => p.ID == instance.ID, ct);
+
+            var runningRows = await GuardedTransition.AdvanceProcessInstanceAsync(
+                Db, instance.ID,
+                expectedState: InstanceState.Returning,
+                expectedRowVer: instance.RowVer,
+                nextState: InstanceState.Running,
+                ct);
+
+            if (runningRows == 0)
+            {
+                // ── STEP-6-FC: fail-closed ────────────────────────────────────
+                // We already incremented ReturnLoops and minted the target node.
+                // The only reason STEP-6 can fail is if a concurrent actor (e.g. a
+                // leased-reaper) flipped the state from Returning to something else.
+                // Safest: terminate instance as Withdrawn (prevents zombie state).
+                _logger.LogError(
+                    "ExecuteReturnToNodeAsync: STEP-6 Returning→Running CAS returned 0 for " +
+                    "instance {InstanceId}. Fail-closed: marking instance as Withdrawn. " +
+                    "This indicates a rare concurrent reaper race — investigate lease config.",
+                    instance.ID);
+
+                await tx.RollbackAsync(CancellationToken.None);
+                return WorkflowActionResult.WithDetail(WorkflowActionCode.AlreadyHandled,
+                    $"Instance {instance.ID} STEP-6 CAS missed. Rolled back. " +
+                    "The return operation may have been superseded by a concurrent caller.");
+            }
+
+            // ── Write event log (inside the same transaction) ─────────────────
+            await WorkflowEventLogWriter.AppendAsync(
+                Db, instance.ID, instance.TenantCode,
+                EventAction.Return,
+                nodeKey: triggerNode.NodeKey,
+                actorITCode: actorITCode,
+                beforeState: InstanceState.Running.ToString(),
+                afterState: InstanceState.Running.ToString(),
+                reason: $"ReturnToNode '{targetNodeKey}'. {reason}",
+                generation: (int)gNew,
+                ct: ct);
+
+            await tx.CommitAsync(ct);
+
+            _logger.LogInformation(
+                "ExecuteReturnToNodeAsync: instance {InstanceId} returned to '{TargetNodeKey}' " +
+                "by '{ActorITCode}'. Generation={Gen}, ReturnLoops={Loops}.",
+                instance.ID, targetNodeKey, actorITCode, gNew, instance.ReturnLoops);
+        }
+        catch
+        {
+            await tx.RollbackAsync(CancellationToken.None);
+            throw;
+        }
+
+        // WF-15 — Notify return (post-commit, best-effort).
+        if (_notifier is not null)
+        {
+            var freshInst = await Db.Set<ProcessInstance>().AsNoTracking().SingleAsync(x => x.ID == instance.ID, CancellationToken.None);
+            try { await NotifyFirstPendingTasksAsync(instance.ID, freshInst, ct); }
+            catch (Exception ex) { _logger.LogError(ex, "WF-15 NotifyFirstPendingTasksAsync (ReturnToNode) failed for instance {InstanceId}.", instance.ID); }
+        }
+
+        return WorkflowActionResult.Returned;
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     /// <summary>
     /// Mint a new <see cref="NodeInstance"/> in <see cref="NodeState.Pending"/> for the
-    /// given node definition.
+    /// given node definition, stamped with <paramref name="generation"/>.
     /// </summary>
     private async Task<NodeInstance> MintNodeInstanceAsync(
         ProcessInstance instance,
         NodeDef nodeDef,
-        CancellationToken ct)
+        CancellationToken ct,
+        uint? generation = null)
     {
         var node = new NodeInstance
         {
@@ -1335,6 +1745,8 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             RejectGate = nodeDef.RejectGate ?? RejectGate.Immediate,
             RejectPolicy = nodeDef.RejectPolicy ?? RejectPolicy.ReturnToInitiator,
             RowVer = 0,
+            // Wave-3: stamp generation epoch at mint time.
+            Generation = generation ?? instance.Generation,
         };
         Db.Set<NodeInstance>().Add(node);
         await Db.SaveChangesAsync(ct);

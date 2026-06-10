@@ -18,6 +18,9 @@ docs/gitea-packages.md
 # .sync/mirror/registry release-process marker strings — not for public mirror).
 # The public-facing module doc docs/workflow.md remains on the mirror.
 docs/workflow-engine-spec.md
+# Wave-3 adversarially-verified design addendum (maintainer doc; includes race analysis
+# and skeptic-found breaks not intended for the public mirror).
+docs/workflow-wave3-design.md
 # Internal-registry getting-started (NuGet source config for the private feed;
 # references the private registry + GITEA_USERNAME/PAT and links to the excluded
 # gitea-packages.md). Public users install from public package sources instead.

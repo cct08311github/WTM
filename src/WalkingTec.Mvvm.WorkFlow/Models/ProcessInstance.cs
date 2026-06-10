@@ -64,4 +64,38 @@ public class ProcessInstance : PersistPoco, ITenant
     /// CAS across all 7 DBTypeEnum providers (spec §7.2).
     /// </summary>
     public uint RowVer { get; set; }
+
+    // ── Wave-3 回退-to-node fields (WF-16) ────────────────────────────────────
+
+    /// <summary>
+    /// Epoch counter.  Incremented atomically with <c>ReturnLoops</c> inside the
+    /// STEP-1 <c>BeginReturnAsync</c> single-row CAS (the linearization point).
+    /// Live tokens carry <c>Generation == instance.Generation</c>; superseded tokens
+    /// carry an older generation and are excluded from all live-marking queries.
+    /// Default 0 (all pre-Wave-3 instances are generation 0).
+    /// </summary>
+    public uint Generation { get; set; }
+
+    /// <summary>
+    /// Count of 回退 loops completed on this instance.  Incremented in the same
+    /// STEP-1 CAS as <c>Generation</c>.  When <c>ReturnLoops &gt;= MaxReturnLoops</c>
+    /// the CAS predicate fails and the engine terminates the instance fail-closed (Race D).
+    /// </summary>
+    public uint ReturnLoops { get; set; }
+
+    /// <summary>
+    /// Per-instance monotonic sequence counter for <c>WorkflowEventLog.Seq</c>.
+    /// Allocated via a single-row CAS in <c>AllocateSeqAsync</c> — replaces the
+    /// old <c>MAX(Seq)+1</c> pattern that collided without SERIALIZABLE isolation (Race B).
+    /// Default 1 (first append takes Seq=1; backfill must seed from existing MAX(Seq)+1).
+    /// </summary>
+    public int NextSeq { get; set; } = 1;
+
+    /// <summary>
+    /// UTC lease expiry for the <c>Returning</c> sub-state.  Set in STEP-1 and cleared
+    /// in STEP-6.  A Wave-5 reaper reclaims an expired lease via
+    /// <c>ReclaimReturningLeaseAsync</c> when the engine crashes mid-return (Race D crash
+    /// addendum).  Null when the instance is not in the <c>Returning</c> sub-state.
+    /// </summary>
+    public DateTime? ReturningLeaseUtc { get; set; }
 }

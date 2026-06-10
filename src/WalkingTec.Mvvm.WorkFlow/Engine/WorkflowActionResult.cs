@@ -65,6 +65,22 @@ public sealed record WorkflowActionResult
     /// <summary>The task was returned to the initiator; instance is now in Draft state for resubmission.</summary>
     public static readonly WorkflowActionResult ReturnedToInitiator = new(WorkflowActionCode.ReturnedToInitiator);
 
+    /// <summary>
+    /// 回退-to-node succeeded: span superseded and instance re-materialized at the target node.
+    /// </summary>
+    public static readonly WorkflowActionResult Returned = new(WorkflowActionCode.Returned);
+
+    /// <summary>
+    /// Instance terminated fail-closed because <c>ReturnLoops</c> reached <c>MaxReturnLoops</c>.
+    /// </summary>
+    public static readonly WorkflowActionResult MaxReturnLoopsExceeded = new(WorkflowActionCode.MaxReturnLoopsExceeded);
+
+    /// <summary>
+    /// The requested return target is not a dominator of the trigger node — invalid return path.
+    /// Only dominators (every path from Start passes through the target) are valid return targets.
+    /// </summary>
+    public static readonly WorkflowActionResult NoDominatorTarget = new(WorkflowActionCode.NoDominatorTarget);
+
     // ── Instance ──────────────────────────────────────────────────────────────
 
     /// <summary>The outcome code for this result.</summary>
@@ -149,4 +165,23 @@ public enum WorkflowActionCode
 
     /// <summary>Task was returned to the initiator; instance is now Draft for resubmission.</summary>
     ReturnedToInitiator,
+
+    /// <summary>
+    /// Span superseded and instance re-materialized at target node (回退-to-node success).
+    /// </summary>
+    Returned,
+
+    /// <summary>
+    /// Return was attempted but <c>ProcessInstance.ReturnLoops</c> has reached
+    /// <c>WorkFlowOptions.MaxReturnLoops</c>.  The engine terminates the instance
+    /// fail-closed rather than allowing infinite ping-pong (Race D cap, §2 STEP-6-FC).
+    /// </summary>
+    MaxReturnLoopsExceeded,
+
+    /// <summary>
+    /// The requested return target nodeKey is not in the dominator set of the trigger node.
+    /// Only Approval nodes that dominate the trigger (every forward path from Start passes
+    /// through the target) are valid return targets.  The caller must choose a different target.
+    /// </summary>
+    NoDominatorTarget,
 }
