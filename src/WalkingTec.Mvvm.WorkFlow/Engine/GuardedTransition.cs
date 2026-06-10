@@ -1,6 +1,8 @@
 #nullable enable
 // WF-7: GuardedTransition — the ONE shared CAS helper all engine state changes route through.
 // WF-16: Wave-3 — added 回退-to-node methods + Generation epoch guard on existing predicates.
+// WF-17: Wave-3 — added Join counting CAS (IncrementJoinArrivedAsync / DecrementJoinExpectedAsync /
+//                  FireJoinIfSatisfiedAsync) for parallel/inclusive gateway multi-token marking.
 //
 // Design:
 //   • Every state-changing transition in the engine MUST use this helper (spec §7.1 invariant #1).
@@ -21,6 +23,7 @@
 //   (f) Race B: Seq allocation without MAX(Seq)+1 (WF-16) → ProcessInstance AllocateSeqAsync
 //   (g) Race C: timer cancel vs timer fire during return (WF-16) → WorkflowTimer
 //   (h) Race D: concurrent returns + MaxReturnLoops cap (WF-16) → ProcessInstance BeginReturnAsync
+//   (i) T-JOIN: Join arrival counting + single-statement fire (WF-17) → NodeInstance Join CAS
 
 using System;
 using System.Collections.Generic;
@@ -321,8 +324,28 @@ public static class GuardedTransition
         NodeInstance node,
         CancellationToken ct = default)
     {
-        // The unique index (TenantCode, InstanceId, NodeKey, Generation) makes this
-        // idempotent — duplicate mint = constraint violation = safe to ignore.
+        // Check-before-insert: avoid relying solely on the unique-index constraint for
+        // idempotency because SQLite treats NULLs as distinct in unique indexes
+        // (NULL != NULL), so (null, id, key, gen) does not constrain duplicates on SQLite
+        // when TenantCode is null.  The check uses (InstanceId, NodeKey, Generation) which
+        // are all non-nullable and sufficient to detect an already-minted node.
+        //
+        // This is safe within a single-threaded drain loop (the engine processes one
+        // operation at a time within a single DbContext scope).  Concurrent callers use
+        // separate DbContext instances and continue to rely on the unique-index CAS.
+        bool alreadyMinted = await db.Set<NodeInstance>()
+            .AsNoTracking()
+            .AnyAsync(
+                n => n.InstanceId == node.InstanceId
+                  && n.NodeKey    == node.NodeKey
+                  && n.Generation == node.Generation,
+                ct);
+
+        if (alreadyMinted)
+            return false;
+
+        // The unique index (TenantCode, InstanceId, NodeKey, Generation) still provides
+        // a safety net for concurrent callers on providers where NULL is treated as equal.
         try
         {
             db.Set<NodeInstance>().Add(node);
@@ -562,6 +585,125 @@ public static class GuardedTransition
             .Where(x => x.ID == nodeInstanceId && x.State == NodeState.Activated)
             .ExecuteUpdateAsync(
                 s => s.SetProperty(x => x.RejectedCount, x => x.RejectedCount + 1),
+                ct);
+    }
+
+    // ── WF-17: Join counting CAS ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Atomically increment <see cref="NodeInstance.JoinArrivedCount"/> on the Join node
+    /// to record that one more branch has arrived (WF-17 T-JOIN race).
+    ///
+    /// <para><strong>Guard predicate:</strong>
+    /// <c>WHERE ID==@id AND State==Activated AND Generation==@g AND RowVer==@v</c>.
+    /// rows == 1 → this branch arrival is recorded; caller must then call
+    /// <see cref="FireJoinIfSatisfiedAsync"/> in the same logical step.
+    /// rows == 0 → Join is already closed (CompletedApproved/Superseded) or epoch stale —
+    /// treat as <see cref="WorkflowActionResult.AlreadyHandled"/>.</para>
+    /// </summary>
+    /// <param name="db">DbContext (caller owns the ambient transaction).</param>
+    /// <param name="joinNodeInstanceId">PK of the Join <see cref="NodeInstance"/>.</param>
+    /// <param name="expectedRowVer">RowVer read before this call; stale → CAS fails (rows==0).</param>
+    /// <param name="generation">Current process generation (epoch guard).</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>rows-affected: 1 = winner, 0 = loser.</returns>
+    public static Task<int> IncrementJoinArrivedAsync(
+        DbContext db,
+        Guid joinNodeInstanceId,
+        uint expectedRowVer,
+        uint generation,
+        CancellationToken ct = default)
+    {
+        return db.Set<NodeInstance>()
+            .Where(x => x.ID == joinNodeInstanceId
+                         && x.State == NodeState.Activated
+                         && x.Generation == generation
+                         && x.RowVer == expectedRowVer)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(x => x.JoinArrivedCount, x => x.JoinArrivedCount + 1)
+                       .SetProperty(x => x.RowVer, x => x.RowVer + 1),
+                ct);
+    }
+
+    /// <summary>
+    /// Decrement <see cref="NodeInstance.JoinExpectedArrivals"/> when a branch dies without
+    /// arriving at its paired Join (orphan fail-closed backstop, WF-17 §4.4).
+    ///
+    /// <para><strong>Guard predicate:</strong>
+    /// <c>WHERE ID==@id AND State==Activated AND Generation==@g
+    ///    AND JoinExpectedArrivals &gt; JoinArrivedCount AND RowVer==@v</c>.
+    /// The underflow guard (<c>ExpectedArrivals &gt; ArrivedCount</c>) ensures the expected
+    /// count never drops below the already-arrived count, keeping the fire condition sound.</para>
+    ///
+    /// <para>rows == 1 → expected decremented; caller must re-read and check whether
+    /// <see cref="FireJoinIfSatisfiedAsync"/> can now complete the Join.
+    /// rows == 0 → Join already closed, epoch stale, or underflow would have occurred —
+    /// all safe to treat as no-op.</para>
+    /// </summary>
+    /// <param name="db">DbContext (caller owns the ambient transaction).</param>
+    /// <param name="joinNodeInstanceId">PK of the Join <see cref="NodeInstance"/>.</param>
+    /// <param name="expectedRowVer">RowVer read before this call; stale → CAS fails (rows==0).</param>
+    /// <param name="generation">Current process generation (epoch guard).</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>rows-affected: 1 = decremented, 0 = guard rejected (safe no-op).</returns>
+    public static Task<int> DecrementJoinExpectedAsync(
+        DbContext db,
+        Guid joinNodeInstanceId,
+        uint expectedRowVer,
+        uint generation,
+        CancellationToken ct = default)
+    {
+        return db.Set<NodeInstance>()
+            .Where(x => x.ID == joinNodeInstanceId
+                         && x.State == NodeState.Activated
+                         && x.Generation == generation
+                         && x.JoinExpectedArrivals > x.JoinArrivedCount
+                         && x.RowVer == expectedRowVer)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(x => x.JoinExpectedArrivals, x => x.JoinExpectedArrivals - 1)
+                       .SetProperty(x => x.RowVer, x => x.RowVer + 1),
+                ct);
+    }
+
+    /// <summary>
+    /// Single-statement conditional CAS to fire the Join node (WF-17 §4.3).
+    ///
+    /// <para><strong>This is the key double-fire guard.</strong>  The entire "check
+    /// <c>ArrivedCount >= ExpectedArrivals</c>" and "flip State" happens inside one
+    /// <c>ExecuteUpdateAsync</c> statement.  Exactly one caller wins (rows==1);
+    /// every subsequent concurrent caller finds <c>State != Activated</c> and gets rows==0
+    /// (<see cref="WorkflowActionResult.AlreadyHandled"/>).</para>
+    ///
+    /// <para><strong>Guard predicate:</strong>
+    /// <c>WHERE ID==@id AND State==Activated AND Generation==@g
+    ///    AND JoinArrivedCount &gt;= JoinExpectedArrivals AND RowVer==@v</c>.</para>
+    ///
+    /// <para>rows == 1 → Join fired; caller mints the successor node(s) and continues the drain loop.
+    /// rows == 0 → quorum not yet met, epoch stale, or already fired — caller waits (no-op).</para>
+    /// </summary>
+    /// <param name="db">DbContext (caller owns the ambient transaction).</param>
+    /// <param name="joinNodeInstanceId">PK of the Join <see cref="NodeInstance"/>.</param>
+    /// <param name="expectedRowVer">RowVer read before this call; stale → CAS fails (rows==0).</param>
+    /// <param name="generation">Current process generation (epoch guard).</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>rows-affected: 1 = Join fired (exactly-once), 0 = quorum not met or already handled.</returns>
+    public static Task<int> FireJoinIfSatisfiedAsync(
+        DbContext db,
+        Guid joinNodeInstanceId,
+        uint expectedRowVer,
+        uint generation,
+        CancellationToken ct = default)
+    {
+        return db.Set<NodeInstance>()
+            .Where(x => x.ID == joinNodeInstanceId
+                         && x.State == NodeState.Activated
+                         && x.Generation == generation
+                         && x.JoinExpectedArrivals > 0
+                         && x.JoinArrivedCount >= x.JoinExpectedArrivals
+                         && x.RowVer == expectedRowVer)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(x => x.State, NodeState.CompletedApproved)
+                       .SetProperty(x => x.RowVer, x => x.RowVer + 1),
                 ct);
     }
 

@@ -81,6 +81,12 @@ public sealed record WorkflowActionResult
     /// </summary>
     public static readonly WorkflowActionResult NoDominatorTarget = new(WorkflowActionCode.NoDominatorTarget);
 
+    /// <summary>
+    /// A Join node became unsatisfiable (all feeding branches died without arriving) and
+    /// was fail-closed (Wave-3 §4.4 orphan fail-closed backstop).
+    /// </summary>
+    public static readonly WorkflowActionResult JoinUnsatisfiable = new(WorkflowActionCode.JoinUnsatisfiable);
+
     // ── Instance ──────────────────────────────────────────────────────────────
 
     /// <summary>The outcome code for this result.</summary>
@@ -184,4 +190,13 @@ public enum WorkflowActionCode
     /// through the target) are valid return targets.  The caller must choose a different target.
     /// </summary>
     NoDominatorTarget,
+
+    // ── WF-17 ──────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A Join node became unsatisfiable (all feeding branches died without arriving) and
+    /// was fail-closed.  The engine recorded a <c>FailClosed</c> event and the Join's
+    /// token was terminated.  (Wave-3 §4.4 orphan fail-closed backstop.)
+    /// </summary>
+    JoinUnsatisfiable,
 }

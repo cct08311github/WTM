@@ -74,6 +74,11 @@ internal sealed class WfEngineTestContext : DbContext
             e.Property(x => x.BusinessKey).HasMaxLength(200);
             e.Property(x => x.IsValid);
             e.Ignore(x => x.DefinitionVersion);
+            // Wave-3 (WF-16) columns.
+            e.Property(x => x.Generation);
+            e.Property(x => x.ReturnLoops);
+            e.Property(x => x.NextSeq).HasDefaultValue(1);
+            e.Property(x => x.ReturningLeaseUtc);
         });
 
         // NodeInstance
@@ -98,6 +103,19 @@ internal sealed class WfEngineTestContext : DbContext
             e.Property(x => x.RejectGate);
             e.Property(x => x.RejectPolicy);
             e.Ignore(x => x.Instance);
+            // Wave-3 (WF-16) columns.
+            e.Property(x => x.Generation);
+            e.Property(x => x.SupersededAtGen);
+            // WF-17: parallel/join/ack columns.
+            e.Property(x => x.ForkGroupId);
+            e.Property(x => x.JoinNodeKey).HasMaxLength(100);
+            e.Property(x => x.JoinExpectedArrivals).HasDefaultValue(0);
+            e.Property(x => x.JoinArrivedCount).HasDefaultValue(0);
+            e.Property(x => x.AckMode);
+            // Non-filtered unique index for MintNodeInstanceGuardedAsync idempotency.
+            e.HasIndex(x => new { x.TenantCode, x.InstanceId, x.NodeKey, x.Generation })
+             .IsUnique()
+             .HasDatabaseName("IX_Wf_NodeInstance_TenantCode_InstanceId_NodeKey_Generation");
         });
 
         // ApprovalTask
@@ -653,7 +671,14 @@ internal static class NodeKindDispatcher_Exposed
         var ccResolver    = new UserTypeApproverResolver();
         var ccValidator   = new AcceptAllCcTenantValidator();
         var cc            = new CcHandler(ccResolver, ccValidator, ccLogger);
-        return new NodeKindDispatcher(cc, approval);
+        // WF-17 handlers — use NullLogger stubs; not exercised by WF-6/7 tests.
+        var ack              = new AckHandler(NullLogger<AckHandler>.Instance);
+        var join             = new JoinHandler();
+        var routingEval      = new WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator(
+            NullLogger<WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator>.Instance);
+        var parallelGateway  = new ParallelGatewayHandler(NullLogger<ParallelGatewayHandler>.Instance);
+        var inclusiveGateway = new InclusiveGatewayHandler(routingEval, NullLogger<InclusiveGatewayHandler>.Instance);
+        return new NodeKindDispatcher(cc, approval, ack, join, parallelGateway, inclusiveGateway);
     }
 
     // Minimal resolver that handles Type="User" rules (returns Value as single approver).
@@ -691,7 +716,13 @@ internal static class NodeKindDispatcher_Exposed
         var approval   = new ApprovalHandler(seqHandler, allHandler, anyHandler);
         var ccLogger   = NullLogger<CcHandler>.Instance;
         var cc         = new CcHandler(resolver, new AcceptAllCcTenantValidator(), ccLogger);
-        return new NodeKindDispatcher(cc, approval);
+        var ack              = new AckHandler(NullLogger<AckHandler>.Instance);
+        var join             = new JoinHandler();
+        var routingEval      = new WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator(
+            NullLogger<WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator>.Instance);
+        var parallelGateway  = new ParallelGatewayHandler(NullLogger<ParallelGatewayHandler>.Instance);
+        var inclusiveGateway = new InclusiveGatewayHandler(routingEval, NullLogger<InclusiveGatewayHandler>.Instance);
+        return new NodeKindDispatcher(cc, approval, ack, join, parallelGateway, inclusiveGateway);
     }
 
     /// <summary>
@@ -712,7 +743,13 @@ internal static class NodeKindDispatcher_Exposed
         var approval   = new ApprovalHandler(seqHandler, allHandler, anyHandler);
         var ccLogger   = NullLogger<CcHandler>.Instance;
         var cc         = new CcHandler(resolver, new AcceptAllCcTenantValidator(), ccLogger);
-        return new NodeKindDispatcher(cc, approval);
+        var ack              = new AckHandler(NullLogger<AckHandler>.Instance);
+        var join             = new JoinHandler();
+        var routingEval      = new WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator(
+            NullLogger<WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator>.Instance);
+        var parallelGateway  = new ParallelGatewayHandler(NullLogger<ParallelGatewayHandler>.Instance);
+        var inclusiveGateway = new InclusiveGatewayHandler(routingEval, NullLogger<InclusiveGatewayHandler>.Instance);
+        return new NodeKindDispatcher(cc, approval, ack, join, parallelGateway, inclusiveGateway);
     }
 
     // Minimal no-op resolver used for the non-Approval WF-6/7 tests.

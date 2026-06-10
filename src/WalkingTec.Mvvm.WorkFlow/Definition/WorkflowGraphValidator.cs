@@ -1,6 +1,7 @@
 #nullable enable
 // WF-4: Publish-time structural validation for WorkflowGraph documents.
 // WF-11: Extended with routing-rule whitelist validation.
+// WF-17: Extended with fork↔Join pairing validation (ParallelGateway / InclusiveGateway).
 //
 // Validation is fail-closed: any structural problem returns a descriptive
 // GraphValidationResult with a closed error code.  Exceptions are NOT used
@@ -17,6 +18,9 @@
 //   8. Approval nodes have approverRule.
 //   9. All non-Start nodes are reachable from Start (via transitions + branch targets).
 //  10. (WF-11) Every branch RoutingRuleDef: field in whitelist, closed operator, In cap ≤ 100.
+//  11. (WF-17) ParallelGateway/InclusiveGateway must have joinNodeKey pointing to a Join node.
+//  12. (WF-17) InclusiveGateway transitions must each carry a condition (routing rule).
+//  13. (WF-17) Ack nodes must have AckMode specified.
 
 using System;
 using System.Collections.Generic;
@@ -124,6 +128,55 @@ public static class WorkflowGraphValidator
             if (node.Kind == NodeKind.Approval && node.ApproverRule == null)
                 return GraphValidationResult.Fail(GraphValidationError.ApprovalNodeMissingApproverRule,
                     $"Approval node '{node.NodeKey}' must have an 'approverRule'.");
+
+            // WF-17 check 11: gateway nodes must reference a valid Join node.
+            if (node.Kind is NodeKind.ParallelGateway or NodeKind.InclusiveGateway)
+            {
+                if (string.IsNullOrWhiteSpace(node.JoinNodeKey))
+                    return GraphValidationResult.Fail(GraphValidationError.GatewayMissingJoinNodeKey,
+                        $"Gateway node '{node.NodeKey}' must specify a 'joinNodeKey' pointing to a Join node.");
+
+                if (!nodeKeys.Contains(node.JoinNodeKey))
+                    return GraphValidationResult.Fail(GraphValidationError.GatewayDanglingJoinNodeKey,
+                        $"Gateway node '{node.NodeKey}' joinNodeKey '{node.JoinNodeKey}' does not reference an existing node.");
+
+                // Verify the referenced node is actually a Join node.
+                bool isJoin = false;
+                foreach (var n in graph.Nodes)
+                {
+                    if (string.Equals(n.NodeKey, node.JoinNodeKey, StringComparison.Ordinal))
+                    {
+                        if (n.Kind != NodeKind.Join)
+                            return GraphValidationResult.Fail(GraphValidationError.GatewayJoinNodeKeyNotJoinKind,
+                                $"Gateway node '{node.NodeKey}' joinNodeKey '{node.JoinNodeKey}' references a node of kind '{n.Kind}', not Join.");
+                        isJoin = true;
+                        break;
+                    }
+                }
+                if (!isJoin)
+                    return GraphValidationResult.Fail(GraphValidationError.GatewayDanglingJoinNodeKey,
+                        $"Gateway node '{node.NodeKey}' joinNodeKey '{node.JoinNodeKey}' does not reference an existing node.");
+            }
+
+            // WF-17 check 12: InclusiveGateway outgoing transitions must carry conditions.
+            if (node.Kind == NodeKind.InclusiveGateway && graph.Transitions != null)
+            {
+                foreach (var t in graph.Transitions)
+                {
+                    if (string.Equals(t.From, node.NodeKey, StringComparison.Ordinal)
+                        && t.Condition is null)
+                    {
+                        return GraphValidationResult.Fail(GraphValidationError.InclusiveGatewayTransitionMissingCondition,
+                            $"InclusiveGateway node '{node.NodeKey}': outgoing transition to '{t.To}' must have a 'condition'. " +
+                            "All InclusiveGateway branches require an explicit routing condition.");
+                    }
+                }
+            }
+
+            // WF-17 check 13: Ack nodes must specify AckMode.
+            if (node.Kind == NodeKind.Ack && node.AckMode is null)
+                return GraphValidationResult.Fail(GraphValidationError.AckNodeMissingAckMode,
+                    $"Ack node '{node.NodeKey}' must specify an 'ackMode' (All, Any, or Quorum).");
         }
 
         // 9. Reachability from Start (BFS over transitions + Condition branch targets + default).
@@ -626,6 +679,7 @@ public static class WorkflowGraphValidator
 
     /// <summary>
     /// Build a forward adjacency map (nodeKey → list of successor nodeKeys) for <paramref name="graph"/>.
+    /// Handles Condition branches/default, and WF-17 ParallelGateway/InclusiveGateway transitions.
     /// </summary>
     private static Dictionary<string, List<string>> BuildAdjacency(WorkflowGraph graph)
     {
@@ -658,6 +712,22 @@ public static class WorkflowGraphValidator
                     foreach (var b in node.Branches)
                         if (!list.Contains(b.Target))
                             list.Add(b.Target);
+            }
+            // WF-17: ParallelGateway / InclusiveGateway are structurally connected via
+            // transitions (already added above), but the JoinNodeKey is also a structural
+            // successor for dominator / reachability purposes.
+            else if (node.Kind is NodeKind.ParallelGateway or NodeKind.InclusiveGateway)
+            {
+                if (!string.IsNullOrWhiteSpace(node.JoinNodeKey))
+                {
+                    if (!adjacency.TryGetValue(node.NodeKey, out var glist))
+                        adjacency[node.NodeKey] = glist = new List<string>();
+                    // The join itself is reachable from the gateway (indirectly via branches).
+                    // Add to ensure the Join is reachable in BFS (it may not have an explicit
+                    // transition from the gateway itself — branches connect to it via their paths).
+                    if (!glist.Contains(node.JoinNodeKey))
+                        glist.Add(node.JoinNodeKey);
+                }
             }
         }
 

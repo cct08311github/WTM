@@ -539,7 +539,13 @@ public class CcTenantValidatorTests : IDisposable
             resolver, optWrapper, NullLogger<AnyApprovalHandler>.Instance);
         var approval = new ApprovalHandler(seqHandler, allHandler, anyHandler);
         var cc       = new CcHandler(resolver, validator, NullLogger<CcHandler>.Instance);
-        var dispatcher = new NodeKindDispatcher(cc, approval);
+        var ack              = new AckHandler(NullLogger<AckHandler>.Instance);
+        var join             = new JoinHandler();
+        var routingEval      = new WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator(
+            NullLogger<WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator>.Instance);
+        var parallelGateway  = new ParallelGatewayHandler(NullLogger<ParallelGatewayHandler>.Instance);
+        var inclusiveGateway = new InclusiveGatewayHandler(routingEval, NullLogger<InclusiveGatewayHandler>.Instance);
+        var dispatcher = new NodeKindDispatcher(cc, approval, ack, join, parallelGateway, inclusiveGateway);
         var engine     = WorkflowEngine_Exposed.CreateWithOptions(
             ctx, dispatcher, options, NullLogger.Instance);
         return (engine, ctx);

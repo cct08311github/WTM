@@ -56,6 +56,25 @@ public enum TaskState
     Cancelled,
 }
 
+// ── WF-17: AckMode (blocking-acknowledge completion mode) ──────────────────
+
+/// <summary>
+/// Completion mode for a <c>NodeKind.Ack</c> (blocking-acknowledge) node.
+/// Mirrors <see cref="ApproveMode"/> semantics: determines how many of the
+/// assigned acknowledgers must act before the token is released.
+/// </summary>
+public enum AckMode
+{
+    /// <summary>All assigned acknowledgers must acknowledge before the token passes.</summary>
+    All,
+
+    /// <summary>Any single acknowledger's action releases the token.</summary>
+    Any,
+
+    /// <summary>A configured quorum (proportion) must acknowledge.</summary>
+    Quorum,
+}
+
 /// <summary>Approval completion mode for an Approval node.</summary>
 public enum ApproveMode
 {
@@ -98,6 +117,24 @@ public enum NodeKind
     Ack,
     Join,
     End,
+
+    // ── WF-17: Parallel/Inclusive gateways (multi-token marking, Wave-3 §4) ──
+
+    /// <summary>
+    /// AND-fork gateway: activates ALL outgoing branch tokens simultaneously.
+    /// Paired with a downstream <see cref="Join"/> node whose
+    /// <c>JoinExpectedArrivals</c> equals the number of branches minted.
+    /// </summary>
+    ParallelGateway,
+
+    /// <summary>
+    /// OR-fork gateway: activates only the outgoing branches whose
+    /// <c>TransitionDef.Condition</c> evaluates true via
+    /// <c>WhitelistRoutingEvaluator</c>.  <c>JoinExpectedArrivals</c> on the
+    /// paired Join is pinned at fork time to the number of branches actually activated.
+    /// Fail-closed if zero branches match (same as exclusive Condition node).
+    /// </summary>
+    InclusiveGateway,
 }
 
 /// <summary>Actions recorded in <see cref="WorkflowEventLog"/>.</summary>

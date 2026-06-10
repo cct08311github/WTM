@@ -69,6 +69,34 @@ public enum GraphValidationError
 
     /// <summary>A branch rule has an invalid structure (missing field, missing operator, etc.).</summary>
     RoutingInvalidRuleStructure,
+
+    // WF-17: Parallel/Inclusive gateway + Join + Ack validation error codes.
+
+    /// <summary>
+    /// A ParallelGateway or InclusiveGateway node is missing its required <c>joinNodeKey</c> field.
+    /// </summary>
+    GatewayMissingJoinNodeKey,
+
+    /// <summary>
+    /// A gateway node's <c>joinNodeKey</c> references a nodeKey that does not exist in the graph.
+    /// </summary>
+    GatewayDanglingJoinNodeKey,
+
+    /// <summary>
+    /// A gateway node's <c>joinNodeKey</c> references a node that is not of kind Join.
+    /// </summary>
+    GatewayJoinNodeKeyNotJoinKind,
+
+    /// <summary>
+    /// An InclusiveGateway has an outgoing transition without a <c>condition</c>.
+    /// All InclusiveGateway branches must carry explicit routing conditions.
+    /// </summary>
+    InclusiveGatewayTransitionMissingCondition,
+
+    /// <summary>
+    /// An Ack node is missing its required <c>ackMode</c> (All, Any, or Quorum).
+    /// </summary>
+    AckNodeMissingAckMode,
 }
 
 /// <summary>

@@ -1,26 +1,38 @@
 #nullable enable
 // WF-6/WF-8/WF-9/WF-10/WF-13: Built-in INodeKindHandler implementations + NodeKindDispatcher registry.
+// WF-17: ParallelGatewayHandler, InclusiveGatewayHandler, JoinHandler, AckHandler.
 //
 // MVP handlers (non-Approval):
-//   StartHandler     — pass-through (no tasks, no CC, no wait)
-//   EndHandler       — pass-through (engine advances ProcessInstance to Approved)
-//   CcHandler        — writes CcRecord rows, never blocks (spec §5.9); WF-13: full tenant+permission check
-//   ConditionHandler — stub: takes default/first transition (real routing = WF-11)
+//   StartHandler            — pass-through (no tasks, no CC, no wait)
+//   EndHandler              — pass-through (engine advances ProcessInstance to Approved)
+//   CcHandler               — writes CcRecord rows, never blocks (spec §5.9); WF-13: full tenant+permission check
+//   ConditionHandler        — stub: takes default/first transition (real routing = WF-11)
 //
 // Approval handler:
-//   ApprovalHandler  — dispatches to mode-specific sub-handler:
-//                      Sequential (WF-8) → SequentialApprovalHandler
-//                      All (WF-9)        → AllApprovalHandler
-//                      Any (WF-10)       → AnyApprovalHandler
+//   ApprovalHandler         — dispatches to mode-specific sub-handler:
+//                             Sequential (WF-8) → SequentialApprovalHandler
+//                             All (WF-9)        → AllApprovalHandler
+//                             Any (WF-10)       → AnyApprovalHandler
+//
+// WF-17 handlers (parallel/inclusive gateways + Join + Ack):
+//   ParallelGatewayHandler  — AND-fork: mints ALL outgoing branch tokens, pins JoinExpectedArrivals.
+//   InclusiveGatewayHandler — OR-fork: mints matching branch tokens, pins JoinExpectedArrivals; fail-closed if 0.
+//   JoinHandler             — Join barrier: NOT a blocking node in the traditional sense.
+//                             CanCompleteAsync returns false until the Join fires via CAS.
+//   AckHandler              — Blocking-acknowledge: holds until ackMode quorum is met.
 //
 // NodeKindDispatcher is the singleton registry wired by AddWtmWorkFlow.
 // All approval sub-handlers are injected via DI so they have access to
 // IApproverResolver, WorkFlowOptions, and ILogger.
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using WalkingTec.Mvvm.WorkFlow.Definition;
+using WalkingTec.Mvvm.WorkFlow.Engine.Routing;
 using WalkingTec.Mvvm.WorkFlow.Models;
 
 namespace WalkingTec.Mvvm.WorkFlow.Engine;
@@ -279,6 +291,485 @@ internal sealed class ApprovalHandler : INodeKindHandler
     }
 }
 
+// ── WF-17: ParallelGatewayHandler ─────────────────────────────────────────────
+
+/// <summary>
+/// Handler for <see cref="NodeKind.ParallelGateway"/> (AND-fork) nodes.
+///
+/// <para><strong>OnEnterAsync:</strong> mints ALL outgoing branch tokens in one SaveChanges,
+/// stamping each with a shared <c>ForkGroupId</c> and <c>JoinNodeKey</c>.
+/// Also pins <see cref="NodeInstance.JoinExpectedArrivals"/> on the Join node to
+/// the number of branches minted (requires the Join NodeInstance to already exist).</para>
+///
+/// <para><strong>CanCompleteAsync:</strong> always returns true — gateway itself passes through;
+/// the engine drain loop will then process each branch token.</para>
+///
+/// <para>The fork mint is idempotent via the
+/// <c>UNIQUE (TenantCode, InstanceId, NodeKey, Generation)</c> index —
+/// a concurrent second mint attempt silently no-ops.</para>
+/// </summary>
+internal sealed class ParallelGatewayHandler : INodeKindHandler
+{
+    private readonly ILogger<ParallelGatewayHandler> _logger;
+
+    public ParallelGatewayHandler(ILogger<ParallelGatewayHandler> logger)
+    {
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    }
+
+    public async Task OnEnterAsync(NodeHandlerContext ctx)
+    {
+        var node     = ctx.NodeDef;
+        var instance = ctx.ProcessInstance;
+        var db       = ctx.Db;
+        var ct       = ctx.CancellationToken;
+        var now      = DateTime.UtcNow;
+
+        // Collect all outgoing transitions from this gateway.
+        var outgoing = ctx.Graph.Transitions
+            .Where(t => string.Equals(t.From, node.NodeKey, StringComparison.Ordinal))
+            .ToList();
+
+        if (outgoing.Count == 0)
+        {
+            _logger.LogWarning(
+                "ParallelGatewayHandler: gateway '{NodeKey}' has no outgoing transitions — " +
+                "no branches minted for instance {InstanceId}.",
+                node.NodeKey, instance.ID);
+            return;
+        }
+
+        // All branches in this fork share a ForkGroupId.
+        var forkGroupId = Guid.NewGuid();
+        var joinNodeKey = node.JoinNodeKey;
+
+        // Mint all branch tokens in one batch (AND-fork: ALL branches activated).
+        var branchNodeDefs = new List<NodeDef>();
+        foreach (var t in outgoing)
+        {
+            var branchDef = ctx.Graph.Nodes.FirstOrDefault(
+                n => string.Equals(n.NodeKey, t.To, StringComparison.Ordinal));
+            if (branchDef is null)
+            {
+                _logger.LogError(
+                    "ParallelGatewayHandler: transition target '{Target}' not found in graph '{GraphKey}'. Skipping.",
+                    t.To, ctx.Graph.Key);
+                continue;
+            }
+            branchNodeDefs.Add(branchDef);
+        }
+
+        foreach (var branchDef in branchNodeDefs)
+        {
+            var branchNode = new NodeInstance
+            {
+                ID                 = Guid.NewGuid(),
+                TenantCode         = instance.TenantCode,
+                InstanceId         = instance.ID,
+                NodeKey            = branchDef.NodeKey,
+                NodeKind           = branchDef.Kind,
+                State              = NodeState.Pending,
+                ApproveMode        = branchDef.ApproveMode,
+                ApprovePercent     = branchDef.ApprovePercent,
+                RejectGate         = branchDef.RejectGate ?? RejectGate.Immediate,
+                RejectPolicy       = branchDef.RejectPolicy ?? RejectPolicy.ReturnToInitiator,
+                ForkGroupId        = forkGroupId,
+                JoinNodeKey        = joinNodeKey,
+                Generation         = instance.Generation,
+                ActivatedAt        = now,
+                RowVer             = 0,
+            };
+            db.Set<NodeInstance>().Add(branchNode);
+        }
+
+        if (branchNodeDefs.Count > 0)
+        {
+            // Pre-mint the Join NodeInstance eagerly so that PinJoinExpectedArrivalsAsync
+            // (which uses ExecuteUpdateAsync) finds an existing row to update.
+            // Without this, the Join would be minted lazily by the first arriving branch
+            // AFTER the gateway OnEnter completes, and PinJoinExpectedArrivalsAsync would
+            // silently update 0 rows (Join row doesn't exist yet → JoinExpectedArrivals
+            // stays at 0 → FireJoinIfSatisfiedAsync fires on the very first arrival because
+            // 1 >= 0 is true).
+            if (!string.IsNullOrWhiteSpace(joinNodeKey))
+            {
+                var joinDef = ctx.Graph.Nodes.FirstOrDefault(
+                    n => string.Equals(n.NodeKey, joinNodeKey, StringComparison.Ordinal));
+                if (joinDef is not null)
+                {
+                    var alreadyExists = await db.Set<NodeInstance>()
+                        .AsNoTracking()
+                        .AnyAsync(
+                            n => n.InstanceId == instance.ID
+                              && n.NodeKey    == joinNodeKey
+                              && n.Generation == instance.Generation,
+                            ct);
+                    if (!alreadyExists)
+                    {
+                        db.Set<NodeInstance>().Add(new NodeInstance
+                        {
+                            ID             = Guid.NewGuid(),
+                            TenantCode     = instance.TenantCode,
+                            InstanceId     = instance.ID,
+                            NodeKey        = joinDef.NodeKey,
+                            NodeKind       = joinDef.Kind,
+                            State          = NodeState.Pending,
+                            ApproveMode    = joinDef.ApproveMode,
+                            ApprovePercent = joinDef.ApprovePercent,
+                            RejectGate     = joinDef.RejectGate ?? RejectGate.Immediate,
+                            RejectPolicy   = joinDef.RejectPolicy ?? RejectPolicy.ReturnToInitiator,
+                            Generation     = instance.Generation,
+                            RowVer         = 0,
+                        });
+                    }
+                }
+            }
+
+            await db.SaveChangesAsync(ct);
+
+            // Pin JoinExpectedArrivals on the Join NodeInstance (now guaranteed to exist).
+            if (!string.IsNullOrWhiteSpace(joinNodeKey))
+            {
+                await PinJoinExpectedArrivalsAsync(db, instance, joinNodeKey!, branchNodeDefs.Count, ct);
+            }
+
+            _logger.LogDebug(
+                "ParallelGatewayHandler: minted {Count} branch token(s) (forkGroup={ForkGroupId}) for instance {InstanceId}.",
+                branchNodeDefs.Count, forkGroupId, instance.ID);
+        }
+    }
+
+    public Task<bool> CanCompleteAsync(NodeHandlerContext ctx) => Task.FromResult(true);
+    public Task OnCompleteAsync(NodeHandlerContext ctx) => Task.CompletedTask;
+
+    /// <summary>
+    /// Sets <see cref="NodeInstance.JoinExpectedArrivals"/> on the Join node to <paramref name="count"/>.
+    /// The Join node must already exist as Pending. Uses a targeted update that is idempotent
+    /// (sets the value absolutely — safe because the fork is the only writer at mint time).
+    /// </summary>
+    internal static async Task PinJoinExpectedArrivalsAsync(
+        DbContext db,
+        ProcessInstance instance,
+        string joinNodeKey,
+        int count,
+        System.Threading.CancellationToken ct)
+    {
+        await db.Set<NodeInstance>()
+            .Where(n => n.InstanceId == instance.ID
+                         && n.NodeKey == joinNodeKey
+                         && n.Generation == instance.Generation
+                         && n.State == NodeState.Pending)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(x => x.JoinExpectedArrivals, count)
+                       .SetProperty(x => x.RowVer, x => x.RowVer + 1),
+                ct);
+    }
+}
+
+// ── WF-17: InclusiveGatewayHandler ────────────────────────────────────────────
+
+/// <summary>
+/// Handler for <see cref="NodeKind.InclusiveGateway"/> (OR-fork) nodes.
+///
+/// <para><strong>OnEnterAsync:</strong> evaluates each outgoing transition's <c>Condition</c>
+/// via <see cref="IRoutingEvaluator"/>.  Mints only the matching branch tokens.
+/// Pins <see cref="NodeInstance.JoinExpectedArrivals"/> to the number actually minted.
+/// Fail-closed: if no branches match, logs an error (the node stays Activated; the engine
+/// will return <see cref="WorkflowActionResult.FailClosedRouting"/> on the next drain step).</para>
+///
+/// <para><strong>CanCompleteAsync:</strong> returns true only if at least one branch was minted.
+/// If no branches matched (fail-closed state), returns false so the engine loops back and
+/// returns <see cref="WorkflowActionResult.FailClosedRouting"/>.</para>
+/// </summary>
+internal sealed class InclusiveGatewayHandler : INodeKindHandler
+{
+    private readonly IRoutingEvaluator _routingEvaluator;
+    private readonly ILogger<InclusiveGatewayHandler> _logger;
+
+    public InclusiveGatewayHandler(
+        IRoutingEvaluator routingEvaluator,
+        ILogger<InclusiveGatewayHandler> logger)
+    {
+        _routingEvaluator = routingEvaluator ?? throw new ArgumentNullException(nameof(routingEvaluator));
+        _logger           = logger           ?? throw new ArgumentNullException(nameof(logger));
+    }
+
+    // Tracks the number of branches minted (set in OnEnterAsync; read in CanCompleteAsync).
+    // NodeHandlerContext is re-created per call so state set in OnEnterAsync is available
+    // in CanCompleteAsync via the Db + NodeInstance queries.
+    public async Task OnEnterAsync(NodeHandlerContext ctx)
+    {
+        var node     = ctx.NodeDef;
+        var instance = ctx.ProcessInstance;
+        var db       = ctx.Db;
+        var ct       = ctx.CancellationToken;
+        var now      = DateTime.UtcNow;
+
+        // Deserialize FormDataJson for routing evaluation.
+        IReadOnlyDictionary<string, object?> formData =
+            new Dictionary<string, object?>(StringComparer.Ordinal);
+
+        if (!string.IsNullOrWhiteSpace(instance.FormDataJson))
+        {
+            try
+            {
+                var raw = System.Text.Json.JsonSerializer.Deserialize<
+                    Dictionary<string, System.Text.Json.JsonElement>>(instance.FormDataJson);
+                if (raw is not null)
+                    formData = raw.ToDictionary(
+                        kv => kv.Key,
+                        kv => (object?)kv.Value,
+                        StringComparer.Ordinal);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "InclusiveGatewayHandler: failed to parse FormDataJson for instance {InstanceId}. Using empty dict.",
+                    instance.ID);
+            }
+        }
+
+        // Evaluate each outgoing transition's condition.
+        var forkGroupId    = Guid.NewGuid();
+        var joinNodeKey    = node.JoinNodeKey;
+        var mintedBranches = new List<NodeDef>();
+
+        foreach (var t in ctx.Graph.Transitions
+                     .Where(t => string.Equals(t.From, node.NodeKey, StringComparison.Ordinal)))
+        {
+            if (t.Condition is null)
+            {
+                // Should have been caught at publish-time validation; skip defensively.
+                _logger.LogWarning(
+                    "InclusiveGatewayHandler: transition to '{To}' from '{From}' has no condition. Skipping.",
+                    t.To, node.NodeKey);
+                continue;
+            }
+
+            var evalResult = _routingEvaluator.Evaluate(
+                t.Condition, ctx.Graph.FieldWhitelist, formData);
+            bool matches = evalResult.Code == Engine.Routing.RoutingEvaluationCode.Ok
+                           && evalResult.IsMatch;
+
+            if (!matches) continue;
+
+            var branchDef = ctx.Graph.Nodes.FirstOrDefault(
+                n => string.Equals(n.NodeKey, t.To, StringComparison.Ordinal));
+            if (branchDef is null) continue;
+
+            mintedBranches.Add(branchDef);
+        }
+
+        if (mintedBranches.Count == 0)
+        {
+            // Fail-closed: no matching branches.
+            _logger.LogError(
+                "InclusiveGatewayHandler: no branches matched for gateway '{NodeKey}' in graph '{GraphKey}'. " +
+                "Instance {InstanceId} will be fail-closed.",
+                node.NodeKey, ctx.Graph.Key, instance.ID);
+            // OnEnterAsync returns without minting anything.  CanCompleteAsync will return false
+            // and the engine will return FailClosedRouting.
+            return;
+        }
+
+        foreach (var branchDef in mintedBranches)
+        {
+            var branchNode = new NodeInstance
+            {
+                ID             = Guid.NewGuid(),
+                TenantCode     = instance.TenantCode,
+                InstanceId     = instance.ID,
+                NodeKey        = branchDef.NodeKey,
+                NodeKind       = branchDef.Kind,
+                State          = NodeState.Pending,
+                ApproveMode    = branchDef.ApproveMode,
+                ApprovePercent = branchDef.ApprovePercent,
+                RejectGate     = branchDef.RejectGate ?? RejectGate.Immediate,
+                RejectPolicy   = branchDef.RejectPolicy ?? RejectPolicy.ReturnToInitiator,
+                ForkGroupId    = forkGroupId,
+                JoinNodeKey    = joinNodeKey,
+                Generation     = instance.Generation,
+                ActivatedAt    = now,
+                RowVer         = 0,
+            };
+            db.Set<NodeInstance>().Add(branchNode);
+        }
+
+        // Pre-mint the Join NodeInstance eagerly (same reason as ParallelGatewayHandler —
+        // PinJoinExpectedArrivalsAsync needs an existing Pending row to update).
+        if (!string.IsNullOrWhiteSpace(joinNodeKey))
+        {
+            var joinDef = ctx.Graph.Nodes.FirstOrDefault(
+                n => string.Equals(n.NodeKey, joinNodeKey, StringComparison.Ordinal));
+            if (joinDef is not null)
+            {
+                var alreadyExists = await db.Set<NodeInstance>()
+                    .AsNoTracking()
+                    .AnyAsync(
+                        n => n.InstanceId == instance.ID
+                          && n.NodeKey    == joinNodeKey
+                          && n.Generation == instance.Generation,
+                        ct);
+                if (!alreadyExists)
+                {
+                    db.Set<NodeInstance>().Add(new NodeInstance
+                    {
+                        ID             = Guid.NewGuid(),
+                        TenantCode     = instance.TenantCode,
+                        InstanceId     = instance.ID,
+                        NodeKey        = joinDef.NodeKey,
+                        NodeKind       = joinDef.Kind,
+                        State          = NodeState.Pending,
+                        ApproveMode    = joinDef.ApproveMode,
+                        ApprovePercent = joinDef.ApprovePercent,
+                        RejectGate     = joinDef.RejectGate ?? RejectGate.Immediate,
+                        RejectPolicy   = joinDef.RejectPolicy ?? RejectPolicy.ReturnToInitiator,
+                        Generation     = instance.Generation,
+                        RowVer         = 0,
+                    });
+                }
+            }
+        }
+
+        await db.SaveChangesAsync(ct);
+
+        if (!string.IsNullOrWhiteSpace(joinNodeKey))
+        {
+            await ParallelGatewayHandler.PinJoinExpectedArrivalsAsync(
+                db, instance, joinNodeKey!, mintedBranches.Count, ct);
+        }
+
+        _logger.LogDebug(
+            "InclusiveGatewayHandler: minted {Count} branch token(s) (forkGroup={ForkGroupId}) for instance {InstanceId}.",
+            mintedBranches.Count, forkGroupId, instance.ID);
+    }
+
+    public async Task<bool> CanCompleteAsync(NodeHandlerContext ctx)
+    {
+        // Check if any branch tokens were minted for this gateway's forkGroup.
+        // If none exist (fail-closed), return false so the engine returns FailClosedRouting.
+        var nodeInst = ctx.NodeInstance;
+        var hasBranches = await ctx.Db.Set<NodeInstance>()
+            .AsNoTracking()
+            .AnyAsync(
+                n => n.InstanceId == nodeInst.InstanceId
+                  && n.Generation == nodeInst.Generation
+                  && n.State != NodeState.Superseded
+                  && n.NodeKey != nodeInst.NodeKey
+                  && n.JoinNodeKey == ctx.NodeDef.JoinNodeKey,
+                ctx.CancellationToken);
+        return hasBranches;
+    }
+
+    public Task OnCompleteAsync(NodeHandlerContext ctx) => Task.CompletedTask;
+}
+
+// ── WF-17: JoinHandler ────────────────────────────────────────────────────────
+
+/// <summary>
+/// Handler for <see cref="NodeKind.Join"/> nodes.
+///
+/// <para>A Join node is a barrier: it waits until all its expected branch arrivals
+/// have been recorded by <c>IncrementJoinArrivedAsync</c> (called by the engine
+/// drain loop when a branch node completes and routes to the Join).</para>
+///
+/// <para><strong>CanCompleteAsync:</strong> the Join node can complete only when
+/// <c>JoinArrivedCount &gt;= JoinExpectedArrivals</c>.  The actual state flip
+/// (<see cref="NodeState.CompletedApproved"/>) is performed atomically by
+/// <c>FireJoinIfSatisfiedAsync</c> in the engine drain loop — not here.</para>
+///
+/// <para><strong>OnEnterAsync:</strong> no-op — the Join is activated by the engine;
+/// it does not mint tasks or CC records.</para>
+/// </summary>
+internal sealed class JoinHandler : INodeKindHandler
+{
+    public Task OnEnterAsync(NodeHandlerContext ctx) => Task.CompletedTask;
+
+    public async Task<bool> CanCompleteAsync(NodeHandlerContext ctx)
+    {
+        // Re-read the Join NodeInstance to get the freshest counters.
+        var ni = await ctx.Db.Set<NodeInstance>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                n => n.ID == ctx.NodeInstance.ID,
+                ctx.CancellationToken);
+
+        if (ni is null) return false;
+
+        // Already fired (by a concurrent caller via FireJoinIfSatisfiedAsync CAS)?
+        if (ni.State == NodeState.CompletedApproved) return true;
+
+        // Quorum check: all expected branch arrivals must have arrived.
+        return ni.JoinArrivedCount >= ni.JoinExpectedArrivals
+            && ni.JoinExpectedArrivals > 0;
+    }
+
+    public Task OnCompleteAsync(NodeHandlerContext ctx) => Task.CompletedTask;
+}
+
+// ── WF-17: AckHandler ─────────────────────────────────────────────────────────
+
+/// <summary>
+/// Handler for <see cref="NodeKind.Ack"/> (blocking-acknowledge) nodes.
+///
+/// <para>An Ack node holds the token until the configured quorum of acknowledgers
+/// have acted.  This is structurally identical to an Approval node in blocking semantics,
+/// but acknowledgers CANNOT reject — they can only acknowledge.</para>
+///
+/// <para><strong>CanCompleteAsync:</strong> checks whether the ack quorum is met
+/// based on <see cref="NodeInstance.AckMode"/>:
+/// <list type="bullet">
+///   <item><see cref="AckMode.Any"/> — true as soon as <c>ApprovedCount &gt;= 1</c>.</item>
+///   <item><see cref="AckMode.All"/> — true when <c>ApprovedCount &gt;= TotalRequired</c>.</item>
+///   <item><see cref="AckMode.Quorum"/> — true when <c>ApprovedCount &gt;= ApprovePercent * TotalRequired</c>.</item>
+/// </list>
+/// </para>
+///
+/// <para><strong>OnEnterAsync:</strong> no-op for now (acknowledger tasks are minted by
+/// the engine in a future wave; currently the Ack node is a structured barrier that can
+/// be completed via <c>ApproveTaskAsync</c> with acknowledge semantics).</para>
+/// </summary>
+internal sealed class AckHandler : INodeKindHandler
+{
+    private readonly ILogger<AckHandler> _logger;
+
+    public AckHandler(ILogger<AckHandler> logger)
+    {
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    }
+
+    public Task OnEnterAsync(NodeHandlerContext ctx) => Task.CompletedTask;
+
+    public Task<bool> CanCompleteAsync(NodeHandlerContext ctx)
+    {
+        var ni      = ctx.NodeInstance;
+        var ackMode = ni.AckMode ?? AckMode.All;
+
+        bool complete = ackMode switch
+        {
+            AckMode.Any    => ni.ApprovedCount >= 1,
+            AckMode.All    => ni.TotalRequired > 0 && ni.ApprovedCount >= ni.TotalRequired,
+            AckMode.Quorum => ni.TotalRequired > 0
+                              && ni.ApprovePercent.HasValue
+                              && ni.ApprovedCount >= (int)Math.Ceiling(
+                                     (double)(ni.ApprovePercent.Value * ni.TotalRequired)),
+            _ => false,
+        };
+
+        if (!complete)
+        {
+            _logger.LogDebug(
+                "AckHandler: Ack node '{NodeKey}' not yet complete " +
+                "(mode={AckMode}, approved={Approved}, total={Total}).",
+                ni.NodeKey, ackMode, ni.ApprovedCount, ni.TotalRequired);
+        }
+
+        return Task.FromResult(complete);
+    }
+
+    public Task OnCompleteAsync(NodeHandlerContext ctx) => Task.CompletedTask;
+}
+
 // ── Dispatcher registry ───────────────────────────────────────────────────────
 
 /// <summary>
@@ -295,24 +786,40 @@ internal sealed class NodeKindDispatcher : INodeKindDispatcher
     private static readonly EndHandler       _end       = new();
     private static readonly ConditionHandler _condition = new();
 
-    private readonly CcHandler       _cc;
-    private readonly ApprovalHandler _approval;
+    private readonly CcHandler               _cc;
+    private readonly ApprovalHandler         _approval;
+    private readonly AckHandler              _ack;
+    private readonly JoinHandler             _join;
+    private readonly ParallelGatewayHandler  _parallelGateway;
+    private readonly InclusiveGatewayHandler _inclusiveGateway;
 
-    public NodeKindDispatcher(CcHandler cc, ApprovalHandler approval)
+    public NodeKindDispatcher(
+        CcHandler cc,
+        ApprovalHandler approval,
+        AckHandler ack,
+        JoinHandler join,
+        ParallelGatewayHandler parallelGateway,
+        InclusiveGatewayHandler inclusiveGateway)
     {
-        _cc       = cc       ?? throw new ArgumentNullException(nameof(cc));
-        _approval = approval ?? throw new ArgumentNullException(nameof(approval));
+        _cc               = cc               ?? throw new ArgumentNullException(nameof(cc));
+        _approval         = approval         ?? throw new ArgumentNullException(nameof(approval));
+        _ack              = ack              ?? throw new ArgumentNullException(nameof(ack));
+        _join             = join             ?? throw new ArgumentNullException(nameof(join));
+        _parallelGateway  = parallelGateway  ?? throw new ArgumentNullException(nameof(parallelGateway));
+        _inclusiveGateway = inclusiveGateway ?? throw new ArgumentNullException(nameof(inclusiveGateway));
     }
 
     public INodeKindHandler Resolve(NodeKind kind) => kind switch
     {
-        NodeKind.Start     => _start,
-        NodeKind.End       => _end,
-        NodeKind.Cc        => _cc,
-        NodeKind.Condition => _condition,
-        NodeKind.Approval  => _approval,
-        // WF-16: Ack handler
-        // WF-17: Join handler
+        NodeKind.Start              => _start,
+        NodeKind.End                => _end,
+        NodeKind.Cc                 => _cc,
+        NodeKind.Condition          => _condition,
+        NodeKind.Approval           => _approval,
+        NodeKind.Ack                => _ack,              // WF-17: blocking-acknowledge
+        NodeKind.Join               => _join,             // WF-17: Join barrier
+        NodeKind.ParallelGateway    => _parallelGateway,  // WF-17: AND-fork
+        NodeKind.InclusiveGateway   => _inclusiveGateway, // WF-17: OR-fork
         _ => throw new InvalidOperationException(
                  $"No INodeKindHandler registered for NodeKind.{kind}. " +
                  $"Ensure the handler is registered in AddWtmWorkFlow."),

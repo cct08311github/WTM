@@ -194,6 +194,28 @@ public sealed class NodeDef
     [JsonPropertyName("default")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Default { get; set; }
+
+    // ── WF-17: Parallel/Inclusive gateway + Join + Ack fields ────────────────
+
+    /// <summary>
+    /// The nodeKey of the Join node that this gateway's branch tokens will converge into.
+    /// Required for <see cref="NodeKind.ParallelGateway"/> and
+    /// <see cref="NodeKind.InclusiveGateway"/> nodes.
+    /// Must reference an existing <see cref="NodeKind.Join"/> node in the graph.
+    /// </summary>
+    [JsonPropertyName("joinNodeKey")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? JoinNodeKey { get; set; }
+
+    /// <summary>
+    /// Completion mode for <see cref="NodeKind.Ack"/> (blocking-acknowledge) nodes.
+    /// Mirrors <see cref="ApproveMode"/> semantics for Ack nodes.
+    /// Null for non-Ack node kinds.
+    /// </summary>
+    [JsonPropertyName("ackMode")]
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public Models.AckMode? AckMode { get; set; }
 }
 
 // ── Approver rule ─────────────────────────────────────────────────────────────

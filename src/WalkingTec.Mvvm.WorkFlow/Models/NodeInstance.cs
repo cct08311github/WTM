@@ -111,4 +111,43 @@ public class NodeInstance : BasePoco, ITenant
     /// <c>State</c> to <c>NodeState.Superseded</c> (Race A guard).
     /// </summary>
     public uint? SupersededAtGen { get; set; }
+
+    // ── Wave-3 WF-17: Parallel/Inclusive gateway + Join fields ───────────────
+
+    /// <summary>
+    /// Identifies the fork group this token belongs to.
+    /// Set on ALL branch tokens minted from a <see cref="NodeKind.ParallelGateway"/> or
+    /// <see cref="NodeKind.InclusiveGateway"/> fork; null for tokens not in a fork group.
+    /// All tokens with the same <c>ForkGroupId</c> share the same paired Join.
+    /// </summary>
+    public Guid? ForkGroupId { get; set; }
+
+    /// <summary>
+    /// The <see cref="NodeKey"/> of the Join node that this token is expected to converge into.
+    /// Set on branch tokens at fork time; null for tokens not inside a fork/Join region.
+    /// </summary>
+    [StringLength(100)]
+    public string? JoinNodeKey { get; set; }
+
+    /// <summary>
+    /// For <see cref="NodeKind.Join"/> nodes: the number of branch arrivals expected before
+    /// the Join can fire.  Pinned at fork time to the number of branch tokens actually activated
+    /// (AND-fork: all N; OR-fork: N matching branches, 1 ≤ N ≤ total).
+    /// Default 0 for non-Join nodes.
+    /// </summary>
+    public int JoinExpectedArrivals { get; set; }
+
+    /// <summary>
+    /// For <see cref="NodeKind.Join"/> nodes: the number of branch arrivals received so far.
+    /// Incremented atomically by <c>GuardedTransition.IncrementJoinArrivedAsync</c>.
+    /// Default 0 for non-Join nodes.
+    /// </summary>
+    public int JoinArrivedCount { get; set; }
+
+    /// <summary>
+    /// For <see cref="NodeKind.Ack"/> nodes: the completion mode for the blocking-acknowledge
+    /// barrier.  Mirrors <see cref="ApproveMode"/> semantics but for acknowledge actions.
+    /// Null for non-Ack node kinds.
+    /// </summary>
+    public Models.AckMode? AckMode { get; set; }
 }

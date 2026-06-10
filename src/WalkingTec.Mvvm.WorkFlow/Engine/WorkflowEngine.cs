@@ -276,10 +276,18 @@ internal sealed class WorkflowEngine : IWorkflowEngine
     // ── Core advance loop ─────────────────────────────────────────────────────
 
     /// <summary>
-    /// Drive the token forward through all pass-through nodes until the engine hits an
-    /// Approval node that blocks (CanComplete == false) or reaches the End node.
+    /// Drive all active tokens forward through pass-through nodes until every token
+    /// is either blocked (Approval/Ack node waiting for human action), waiting at a Join
+    /// barrier, or the instance completes/fails.
     ///
-    /// <para>All writes happen inside one logical transaction per call.  The
+    /// <para><strong>WF-17 multi-token drain loop:</strong> each iteration reads ALL active
+    /// current-gen NodeInstances (Pending OR Activated, Generation == instance.Generation,
+    /// State != Superseded) ordered by ID for deterministic processing.  Each token is
+    /// advanced independently.  Gateway fork handlers (ParallelGateway / InclusiveGateway)
+    /// mint branch tokens during <c>OnEnterAsync</c>; subsequent iterations pick them up.
+    /// Join nodes are held until <c>FireJoinIfSatisfiedAsync</c> succeeds.</para>
+    ///
+    /// <para>All writes happen inside one logical call.  The
     /// <see cref="GuardedTransition"/> CAS on every NodeInstance state flip ensures
     /// concurrent calls do not double-advance.</para>
     /// </summary>
@@ -289,140 +297,277 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         CancellationToken ct)
     {
         // Safety: loop guard prevents infinite cycles (malformed graphs).
-        const int MaxSteps = 100;
+        const int MaxSteps = 200;
         int steps = 0;
 
         while (steps++ < MaxSteps)
         {
-            // Find the current active NodeInstance(s) for this process.
-            // Wave-3: filter by Generation == instance.Generation to exclude stale-epoch tokens
-            // (Race A guard — superseded nodes from a prior generation are never re-activated).
+            // WF-17: load ALL active current-gen tokens (not just the first one).
+            // This is the core multi-token marking change from WF-16.
             uint currentGen = instance.Generation;
-            var activeNode = await Db.Set<NodeInstance>()
+            var activeNodes = await Db.Set<NodeInstance>()
                 .AsNoTracking()
                 .Where(n => n.InstanceId == instance.ID
                              && n.Generation == currentGen
                              && (n.State == NodeState.Pending || n.State == NodeState.Activated))
-                .OrderBy(n => n.ID) // deterministic tiebreak
-                .FirstOrDefaultAsync(ct);
+                .OrderBy(n => n.ID) // deterministic processing order
+                .ToListAsync(ct);
 
-            if (activeNode is null)
+            if (activeNodes.Count == 0)
             {
-                // No active nodes — check if the instance is already final.
+                // No active tokens — check if the instance is already final.
                 var fresh = await Db.Set<ProcessInstance>()
                     .AsNoTracking()
                     .SingleAsync(x => x.ID == instance.ID, ct);
                 if (fresh.State == InstanceState.Approved || fresh.State == InstanceState.Rejected)
                     return WorkflowActionResult.InstanceApproved;
 
-                _logger.LogWarning("AdvanceCoreAsync: no active node for running instance {InstanceId}. Possible data inconsistency.", instance.ID);
+                _logger.LogWarning(
+                    "AdvanceCoreAsync: no active tokens for running instance {InstanceId}. Possible data inconsistency.",
+                    instance.ID);
                 return WorkflowActionResult.AlreadyHandled;
             }
 
-            // Locate the NodeDef in the graph.
-            var nodeDef = graph.Nodes.FirstOrDefault(n => n.NodeKey == activeNode.NodeKey)
-                ?? throw new InvalidOperationException(
-                       $"NodeKey '{activeNode.NodeKey}' not found in graph '{graph.Key}'.");
+            // Process each active token.  Track whether any token made progress or is blocked.
+            bool anyProgress   = false;
+            bool anyBlocked    = false;
+            WorkflowActionResult? failResult = null;
 
-            // Activate the node if it is still Pending.
-            if (activeNode.State == NodeState.Pending)
+            foreach (var activeNode in activeNodes)
             {
-                var activateRows = await GuardedTransition.ActivateNodeInstanceAsync(
-                    Db, activeNode.ID, activeNode.RowVer, DateTime.UtcNow, ct: ct);
+                var tokenResult = await AdvanceTokenAsync(activeNode, instance, graph, ct);
 
-                if (activateRows == 0)
-                {
-                    // Another concurrent caller activated it — re-read and continue.
-                    _logger.LogDebug("AdvanceCoreAsync: NodeInstance {NodeId} already activated by concurrent caller.", activeNode.ID);
-                    activeNode = await Db.Set<NodeInstance>()
-                        .AsNoTracking()
-                        .SingleAsync(n => n.ID == activeNode.ID, ct);
-                }
-                else
-                {
-                    // Re-read post-activation RowVer.
-                    activeNode = await Db.Set<NodeInstance>()
-                        .AsNoTracking()
-                        .SingleAsync(n => n.ID == activeNode.ID, ct);
+                // Re-read instance after each token step (state may have changed).
+                instance = await Db.Set<ProcessInstance>()
+                    .AsNoTracking()
+                    .SingleAsync(x => x.ID == instance.ID, ct);
 
-                    await WorkflowEventLogWriter.AppendAsync(
-                        Db, instance.ID, instance.TenantCode,
-                        EventAction.AutoAdvance,
-                        nodeKey: activeNode.NodeKey,
-                        actorITCode: null,
-                        beforeState: NodeState.Pending.ToString(),
-                        afterState: NodeState.Activated.ToString(),
-                        ct: ct);
+                switch (tokenResult.Code)
+                {
+                    case WorkflowActionCode.InstanceApproved:
+                        return tokenResult;
+
+                    case WorkflowActionCode.FailClosedRouting:
+                    case WorkflowActionCode.JoinUnsatisfiable:
+                        failResult = tokenResult;
+                        break;
+
+                    case WorkflowActionCode.Blocked:
+                        anyBlocked = true;
+                        break;
+
+                    case WorkflowActionCode.NodeCompleted:
+                    case WorkflowActionCode.Advanced:
+                        anyProgress = true;
+                        break;
+
+                    case WorkflowActionCode.AlreadyHandled:
+                        // Concurrent loser — not an error; drain loop will see updated state next pass.
+                        anyProgress = true;
+                        break;
+
+                    default:
+                        // Propagate unexpected results.
+                        failResult = tokenResult;
+                        break;
                 }
             }
 
-            var handler = _dispatcher.Resolve(activeNode.NodeKind);
+            // If any token hit a hard failure, return it.
+            if (failResult is not null)
+                return failResult;
 
-            // Re-read instance for fresh state (may have been updated by concurrent caller).
-            instance = await Db.Set<ProcessInstance>()
-                .AsNoTracking()
-                .SingleAsync(x => x.ID == instance.ID, ct);
-
-            var ctx = new NodeHandlerContext
-            {
-                NodeDef = nodeDef,
-                NodeInstance = activeNode,
-                ProcessInstance = instance,
-                Graph = graph,
-                Db = Db,
-                CancellationToken = ct,
-            };
-
-            // OnEnter — mint tasks/CC records.
-            await handler.OnEnterAsync(ctx);
-
-            // Check completion.
-            bool canComplete = await handler.CanCompleteAsync(ctx);
-            if (!canComplete)
-            {
-                // Blocked — waiting for human action (Approval node).
+            // If all tokens are blocked and none made progress → wait for human.
+            if (!anyProgress && anyBlocked)
                 return WorkflowActionResult.Blocked;
-            }
 
-            // For non-End nodes: resolve routing BEFORE completing the node so that if routing
-            // fails (null nextKey) the NodeInstance stays Activated.  That way a subsequent
-            // AdvanceAsync call can re-enter and re-return FailClosedRouting rather than seeing
-            // "no active node" and returning AlreadyHandled (spec §5.8 invariant).
-            string? nextKey = null;
-            if (nodeDef.Kind != NodeKind.End)
+            // If no progress was made and nothing is blocked, the drain loop is stuck.
+            // This guards against edge cases where tokens are in an unresolvable state.
+            if (!anyProgress && !anyBlocked)
             {
-                nextKey = ResolveNextNodeKey(graph, nodeDef, instance);
-                if (nextKey is null)
-                {
-                    _logger.LogError(
-                        "AdvanceCoreAsync: routing failed for '{NodeKey}' in graph '{GraphKey}'. " +
-                        "Node remains Activated (fail-closed).",
-                        activeNode.NodeKey, graph.Key);
-
-                    await WorkflowEventLogWriter.AppendAsync(
-                        Db, instance.ID, instance.TenantCode,
-                        EventAction.FailClosed,
-                        nodeKey: activeNode.NodeKey,
-                        actorITCode: null,
-                        beforeState: NodeState.Activated.ToString(),
-                        afterState: "FailClosed",
-                        reason: "No matching branch and no default target.",
-                        ct: ct);
-
-                    return WorkflowActionResult.FailClosedRouting;
-                }
+                _logger.LogWarning(
+                    "AdvanceCoreAsync: no progress and no blocked tokens for instance {InstanceId}. " +
+                    "Active token count={Count}. Returning AlreadyHandled.",
+                    instance.ID, activeNodes.Count);
+                return WorkflowActionResult.AlreadyHandled;
             }
 
-            // OnComplete — cleanup before routing onward.
-            await handler.OnCompleteAsync(ctx);
+            // Progress was made — loop again to pick up newly minted tokens.
+        }
 
-            // Complete the NodeInstance via CAS.
+        _logger.LogError(
+            "AdvanceCoreAsync: exceeded MaxSteps ({Max}) for instance {InstanceId}. Possible cycle in graph.",
+            MaxSteps, instance.ID);
+        return WorkflowActionResult.FailClosedRouting;
+    }
+
+    /// <summary>
+    /// Advance a single token (NodeInstance) one step.
+    ///
+    /// <para>Returns <see cref="WorkflowActionResult.NodeCompleted"/> when the token completed
+    /// and the next token was minted.  Returns <see cref="WorkflowActionResult.Blocked"/> when
+    /// the token requires human action.  Returns <see cref="WorkflowActionResult.InstanceApproved"/>
+    /// when the End node was reached.  Returns <see cref="WorkflowActionResult.AlreadyHandled"/>
+    /// for concurrent-loser no-ops.</para>
+    ///
+    /// <para><strong>WF-17 Join routing:</strong> when a branch token completes and its
+    /// successor is a Join node, this method calls <c>IncrementJoinArrivedAsync</c> to record
+    /// the arrival, then <c>FireJoinIfSatisfiedAsync</c> to attempt the fire CAS.
+    /// Only the single winner that fires the Join proceeds to mint the Join's successor.</para>
+    /// </summary>
+    private async Task<WorkflowActionResult> AdvanceTokenAsync(
+        NodeInstance activeNode,
+        ProcessInstance instance,
+        WorkflowGraph graph,
+        CancellationToken ct)
+    {
+        // Locate the NodeDef in the graph.
+        var nodeDef = graph.Nodes.FirstOrDefault(n => n.NodeKey == activeNode.NodeKey)
+            ?? throw new InvalidOperationException(
+                   $"NodeKey '{activeNode.NodeKey}' not found in graph '{graph.Key}'.");
+
+        // Activate the node if it is still Pending.
+        if (activeNode.State == NodeState.Pending)
+        {
+            var activateRows = await GuardedTransition.ActivateNodeInstanceAsync(
+                Db, activeNode.ID, activeNode.RowVer, DateTime.UtcNow,
+                generation: instance.Generation, ct: ct);
+
+            if (activateRows == 0)
+            {
+                // Another concurrent caller activated it — re-read and continue.
+                _logger.LogDebug(
+                    "AdvanceTokenAsync: NodeInstance {NodeId} already activated by concurrent caller.",
+                    activeNode.ID);
+                activeNode = await Db.Set<NodeInstance>()
+                    .AsNoTracking()
+                    .SingleAsync(n => n.ID == activeNode.ID, ct);
+
+                if (activeNode.State == NodeState.Superseded)
+                    return WorkflowActionResult.AlreadyHandled;
+            }
+            else
+            {
+                // Re-read post-activation RowVer.
+                activeNode = await Db.Set<NodeInstance>()
+                    .AsNoTracking()
+                    .SingleAsync(n => n.ID == activeNode.ID, ct);
+
+                await WorkflowEventLogWriter.AppendAsync(
+                    Db, instance.ID, instance.TenantCode,
+                    EventAction.AutoAdvance,
+                    nodeKey: activeNode.NodeKey,
+                    actorITCode: null,
+                    beforeState: NodeState.Pending.ToString(),
+                    afterState: NodeState.Activated.ToString(),
+                    ct: ct);
+            }
+        }
+
+        var handler = _dispatcher.Resolve(activeNode.NodeKind);
+
+        var ctx = new NodeHandlerContext
+        {
+            NodeDef          = nodeDef,
+            NodeInstance     = activeNode,
+            ProcessInstance  = instance,
+            Graph            = graph,
+            Db               = Db,
+            CancellationToken = ct,
+        };
+
+        // OnEnter — mint tasks/CC records/branch tokens.
+        await handler.OnEnterAsync(ctx);
+
+        // Check completion.
+        bool canComplete = await handler.CanCompleteAsync(ctx);
+        if (!canComplete)
+        {
+            // Blocked — waiting for human action, or Join not yet satisfied, or IG fail-closed.
+            if (activeNode.NodeKind is NodeKind.ParallelGateway or NodeKind.InclusiveGateway)
+            {
+                // InclusiveGateway with no matching branches — fail-closed.
+                _logger.LogError(
+                    "AdvanceTokenAsync: InclusiveGateway '{NodeKey}' in graph '{GraphKey}' could not complete " +
+                    "(no branches matched). Fail-closed for instance {InstanceId}.",
+                    activeNode.NodeKey, graph.Key, instance.ID);
+                await WorkflowEventLogWriter.AppendAsync(
+                    Db, instance.ID, instance.TenantCode,
+                    EventAction.FailClosed,
+                    nodeKey: activeNode.NodeKey,
+                    actorITCode: null,
+                    beforeState: NodeState.Activated.ToString(),
+                    afterState: "FailClosed",
+                    reason: "InclusiveGateway: no outgoing branches matched.",
+                    ct: ct);
+                return WorkflowActionResult.FailClosedRouting;
+            }
+
+            // Join or Approval/Ack — return Blocked; drain loop will continue with other tokens.
+            return WorkflowActionResult.Blocked;
+        }
+
+        // For non-End, non-gateway nodes: resolve routing BEFORE completing the node.
+        // Gateway nodes (ParallelGateway/InclusiveGateway) do NOT use ResolveNextNodeKey
+        // because they fork into multiple branches (handled in OnEnterAsync).
+        // Join nodes route to a single successor normally.
+        string? nextKey = null;
+        bool isGatewayFork = nodeDef.Kind is NodeKind.ParallelGateway or NodeKind.InclusiveGateway;
+
+        if (nodeDef.Kind != NodeKind.End && !isGatewayFork)
+        {
+            nextKey = ResolveNextNodeKey(graph, nodeDef, instance);
+            if (nextKey is null)
+            {
+                _logger.LogError(
+                    "AdvanceTokenAsync: routing failed for '{NodeKey}' in graph '{GraphKey}'. " +
+                    "Node remains Activated (fail-closed).",
+                    activeNode.NodeKey, graph.Key);
+
+                await WorkflowEventLogWriter.AppendAsync(
+                    Db, instance.ID, instance.TenantCode,
+                    EventAction.FailClosed,
+                    nodeKey: activeNode.NodeKey,
+                    actorITCode: null,
+                    beforeState: NodeState.Activated.ToString(),
+                    afterState: "FailClosed",
+                    reason: "No matching branch and no default target.",
+                    ct: ct);
+
+                return WorkflowActionResult.FailClosedRouting;
+            }
+        }
+
+        // OnComplete — cleanup before routing onward.
+        await handler.OnCompleteAsync(ctx);
+
+        // ── WF-17: Join routing ──────────────────────────────────────────────
+        // When the next node is a Join, use the dedicated CAS methods instead of
+        // a standard CompletedApproved + MintNodeInstance chain.
+        if (!isGatewayFork && nextKey is not null)
+        {
+            var nextDef = graph.Nodes.FirstOrDefault(
+                n => string.Equals(n.NodeKey, nextKey, StringComparison.Ordinal));
+
+            if (nextDef?.Kind == NodeKind.Join)
+            {
+                return await AdvanceBranchIntoJoinAsync(
+                    activeNode, instance, graph, nextKey, ct);
+            }
+        }
+
+        // Complete the NodeInstance via CAS (for non-gateway, non-Join-routing tokens).
+        if (!isGatewayFork)
+        {
             var completeRows = await GuardedTransition.CompleteNodeInstanceAsync(
-                Db, activeNode.ID, activeNode.RowVer, NodeState.CompletedApproved, ct: ct);
+                Db, activeNode.ID, activeNode.RowVer, NodeState.CompletedApproved,
+                generation: instance.Generation, ct: ct);
 
             if (completeRows == 0)
             {
-                _logger.LogDebug("AdvanceCoreAsync: NodeInstance {NodeId} already completed by concurrent caller.", activeNode.ID);
+                _logger.LogDebug(
+                    "AdvanceTokenAsync: NodeInstance {NodeId} already completed by concurrent caller.",
+                    activeNode.ID);
                 return WorkflowActionResult.AlreadyHandled;
             }
 
@@ -434,50 +579,339 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                 beforeState: NodeState.Activated.ToString(),
                 afterState: NodeState.CompletedApproved.ToString(),
                 ct: ct);
+        }
+        else
+        {
+            // Gateway fork: branches were already minted in OnEnterAsync.
+            // Complete the gateway node itself.
+            var completeRows = await GuardedTransition.CompleteNodeInstanceAsync(
+                Db, activeNode.ID, activeNode.RowVer, NodeState.CompletedApproved,
+                generation: instance.Generation, ct: ct);
 
-            // End node reached → approve the instance.
-            if (nodeDef.Kind == NodeKind.End)
+            if (completeRows == 0)
+                return WorkflowActionResult.AlreadyHandled;
+
+            await WorkflowEventLogWriter.AppendAsync(
+                Db, instance.ID, instance.TenantCode,
+                EventAction.AutoAdvance,
+                nodeKey: activeNode.NodeKey,
+                actorITCode: null,
+                beforeState: NodeState.Activated.ToString(),
+                afterState: NodeState.CompletedApproved.ToString(),
+                ct: ct);
+
+            // Branches are now Pending — the outer drain loop will pick them up.
+            return WorkflowActionResult.NodeCompleted;
+        }
+
+        // End node reached → approve the instance.
+        if (nodeDef.Kind == NodeKind.End)
+        {
+            // Re-read instance for current RowVer.
+            instance = await Db.Set<ProcessInstance>()
+                .AsNoTracking()
+                .SingleAsync(x => x.ID == instance.ID, ct);
+
+            var approveRows = await GuardedTransition.AdvanceProcessInstanceAsync(
+                Db, instance.ID,
+                expectedState: InstanceState.Running,
+                expectedRowVer: instance.RowVer,
+                nextState: InstanceState.Approved,
+                ct);
+
+            if (approveRows == 1)
             {
-                // Re-read instance for current RowVer.
-                instance = await Db.Set<ProcessInstance>()
-                    .AsNoTracking()
-                    .SingleAsync(x => x.ID == instance.ID, ct);
-
-                var approveRows = await GuardedTransition.AdvanceProcessInstanceAsync(
-                    Db, instance.ID,
-                    expectedState: InstanceState.Running,
-                    expectedRowVer: instance.RowVer,
-                    nextState: InstanceState.Approved,
-                    ct);
-
-                if (approveRows == 1)
-                {
-                    await WorkflowEventLogWriter.AppendAsync(
-                        Db, instance.ID, instance.TenantCode,
-                        EventAction.AutoAdvance,
-                        nodeKey: activeNode.NodeKey,
-                        actorITCode: null,
-                        beforeState: InstanceState.Running.ToString(),
-                        afterState: InstanceState.Approved.ToString(),
-                        ct: ct);
-                }
-
-                return WorkflowActionResult.InstanceApproved;
+                await WorkflowEventLogWriter.AppendAsync(
+                    Db, instance.ID, instance.TenantCode,
+                    EventAction.AutoAdvance,
+                    nodeKey: activeNode.NodeKey,
+                    actorITCode: null,
+                    beforeState: InstanceState.Running.ToString(),
+                    afterState: InstanceState.Approved.ToString(),
+                    ct: ct);
             }
 
-            // nextKey is guaranteed non-null here (checked above for non-End nodes).
+            return WorkflowActionResult.InstanceApproved;
+        }
 
-            // Mint the next NodeInstance.
-            var nextNodeDef = graph.Nodes.FirstOrDefault(n => n.NodeKey == nextKey)
+        // Mint the next NodeInstance for non-gateway, non-End, non-Join-routing tokens.
+        if (nextKey is not null)
+        {
+            var nextNodeDef = graph.Nodes.FirstOrDefault(
+                n => string.Equals(n.NodeKey, nextKey, StringComparison.Ordinal))
                 ?? throw new InvalidOperationException(
                        $"NextKey '{nextKey}' not found as a node in graph '{graph.Key}'.");
 
             await MintNodeInstanceAsync(instance, nextNodeDef, ct);
-            // Loop: next iteration will pick up the newly minted Pending node.
         }
 
-        _logger.LogError("AdvanceCoreAsync: exceeded MaxSteps ({Max}) for instance {InstanceId}. Possible cycle in graph.", MaxSteps, instance.ID);
-        return WorkflowActionResult.FailClosedRouting;
+        return WorkflowActionResult.NodeCompleted;
+    }
+
+    /// <summary>
+    /// Handle a branch token completing and routing into a Join node (WF-17 §4.3).
+    ///
+    /// <para>Protocol:
+    /// <list type="number">
+    ///   <item>Ensure the Join NodeInstance exists (mint if needed — idempotent via unique index).</item>
+    ///   <item>Complete this branch token via CAS (<c>CompletedApproved</c>).</item>
+    ///   <item>Activate the Join node if still Pending.</item>
+    ///   <item>Re-read Join for fresh RowVer.</item>
+    ///   <item>Call <c>IncrementJoinArrivedAsync</c> — record this arrival.</item>
+    ///   <item>Call <c>FireJoinIfSatisfiedAsync</c> — exactly-once CAS fire.</item>
+    ///   <item>If fire won (rows==1): mint the Join's successor node and return <c>NodeCompleted</c>.</item>
+    ///   <item>If fire lost (rows==0): another branch already fired the Join OR quorum not yet met.
+    ///        Check for the orphan fail-closed backstop (§4.4). Return <c>Advanced</c>.</item>
+    /// </list>
+    /// </para>
+    /// </summary>
+    private async Task<WorkflowActionResult> AdvanceBranchIntoJoinAsync(
+        NodeInstance branchNode,
+        ProcessInstance instance,
+        WorkflowGraph graph,
+        string joinNodeKey,
+        CancellationToken ct)
+    {
+        var joinDef = graph.Nodes.First(n => string.Equals(n.NodeKey, joinNodeKey, StringComparison.Ordinal));
+
+        // 1. Ensure the Join NodeInstance exists (gateway handler mints it; idempotent).
+        await GuardedTransition.MintNodeInstanceGuardedAsync(
+            Db, instance, joinDef, instance.Generation, ct);
+
+        // 2. Complete the branch token.
+        var branchCompleteRows = await GuardedTransition.CompleteNodeInstanceAsync(
+            Db, branchNode.ID, branchNode.RowVer, NodeState.CompletedApproved,
+            generation: instance.Generation, ct: ct);
+
+        if (branchCompleteRows == 0)
+        {
+            _logger.LogDebug(
+                "AdvanceBranchIntoJoinAsync: branch {BranchId} already completed by concurrent caller.",
+                branchNode.ID);
+            return WorkflowActionResult.AlreadyHandled;
+        }
+
+        await WorkflowEventLogWriter.AppendAsync(
+            Db, instance.ID, instance.TenantCode,
+            EventAction.AutoAdvance,
+            nodeKey: branchNode.NodeKey,
+            actorITCode: null,
+            beforeState: NodeState.Activated.ToString(),
+            afterState: NodeState.CompletedApproved.ToString(),
+            ct: ct);
+
+        // 3. Activate the Join node if still Pending.
+        var joinNode = await Db.Set<NodeInstance>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                n => n.InstanceId == instance.ID
+                  && n.NodeKey == joinNodeKey
+                  && n.Generation == instance.Generation,
+                ct);
+
+        if (joinNode is null)
+        {
+            _logger.LogError(
+                "AdvanceBranchIntoJoinAsync: Join node '{JoinKey}' not found for instance {InstanceId}. " +
+                "Possible mint failure.",
+                joinNodeKey, instance.ID);
+            return WorkflowActionResult.FailClosedRouting;
+        }
+
+        if (joinNode.State == NodeState.CompletedApproved)
+        {
+            // Another branch already fired the Join and the successor is already minted.
+            // This branch is a late arriver — it already recorded its completion above.
+            return WorkflowActionResult.Advanced;
+        }
+
+        if (joinNode.State == NodeState.Pending)
+        {
+            var activateJoinRows = await GuardedTransition.ActivateNodeInstanceAsync(
+                Db, joinNode.ID, joinNode.RowVer, DateTime.UtcNow,
+                generation: instance.Generation, ct: ct);
+
+            // Re-read (another caller may have activated it first — that is fine).
+            joinNode = await Db.Set<NodeInstance>()
+                .AsNoTracking()
+                .SingleAsync(n => n.ID == joinNode.ID, ct);
+
+            if (activateJoinRows == 1)
+            {
+                await WorkflowEventLogWriter.AppendAsync(
+                    Db, instance.ID, instance.TenantCode,
+                    EventAction.AutoAdvance,
+                    nodeKey: joinNodeKey,
+                    actorITCode: null,
+                    beforeState: NodeState.Pending.ToString(),
+                    afterState: NodeState.Activated.ToString(),
+                    ct: ct);
+            }
+        }
+
+        if (joinNode.State != NodeState.Activated)
+        {
+            // Join already completed (e.g. concurrent branch fired it just now).
+            return WorkflowActionResult.Advanced;
+        }
+
+        // 4. Increment arrival count.
+        var incrRows = await GuardedTransition.IncrementJoinArrivedAsync(
+            Db, joinNode.ID, joinNode.RowVer, instance.Generation, ct);
+
+        if (incrRows == 0)
+        {
+            // Join CAS lost — re-read for updated RowVer and try fire.
+            joinNode = await Db.Set<NodeInstance>()
+                .AsNoTracking()
+                .SingleAsync(n => n.ID == joinNode.ID, ct);
+        }
+        else
+        {
+            // Re-read post-increment RowVer.
+            joinNode = await Db.Set<NodeInstance>()
+                .AsNoTracking()
+                .SingleAsync(n => n.ID == joinNode.ID, ct);
+        }
+
+        // 5. Try to fire the Join (single-statement CAS — exactly-once).
+        var fireRows = await GuardedTransition.FireJoinIfSatisfiedAsync(
+            Db, joinNode.ID, joinNode.RowVer, instance.Generation, ct);
+
+        if (fireRows == 0)
+        {
+            // Quorum not yet met OR concurrent loser (another branch fired it first).
+            // Check for orphan fail-closed (§4.4): are there still live branches that haven't arrived?
+            await CheckJoinOrphanAsync(joinNode, instance, ct);
+            return WorkflowActionResult.Advanced;
+        }
+
+        // 6. Join fired — mint the Join's successor.
+        await WorkflowEventLogWriter.AppendAsync(
+            Db, instance.ID, instance.TenantCode,
+            EventAction.AutoAdvance,
+            nodeKey: joinNodeKey,
+            actorITCode: null,
+            beforeState: NodeState.Activated.ToString(),
+            afterState: NodeState.CompletedApproved.ToString(),
+            ct: ct);
+
+        var joinSuccessorKey = graph.Transitions
+            .FirstOrDefault(t => string.Equals(t.From, joinNodeKey, StringComparison.Ordinal))
+            ?.To;
+
+        if (joinSuccessorKey is null)
+        {
+            _logger.LogError(
+                "AdvanceBranchIntoJoinAsync: Join '{JoinKey}' has no outgoing transition. Fail-closed.",
+                joinNodeKey);
+            return WorkflowActionResult.FailClosedRouting;
+        }
+
+        var successorDef = graph.Nodes.FirstOrDefault(
+            n => string.Equals(n.NodeKey, joinSuccessorKey, StringComparison.Ordinal))
+            ?? throw new InvalidOperationException(
+                   $"Join successor '{joinSuccessorKey}' not found in graph '{graph.Key}'.");
+
+        await MintNodeInstanceAsync(instance, successorDef, ct);
+        return WorkflowActionResult.NodeCompleted;
+    }
+
+    /// <summary>
+    /// Orphan fail-closed backstop (WF-17 §4.4).
+    ///
+    /// <para>When <c>FireJoinIfSatisfiedAsync</c> returns 0 (quorum not yet met), check
+    /// whether all remaining expected arrivals are from dead branches (Superseded or
+    /// CompletedRejected but never arrived).  If so, decrement expected and attempt
+    /// another fire — eventually making the Join satisfiable with the arrivals that did arrive.</para>
+    ///
+    /// <para>A branch is "dead non-arriving" when: its NodeInstance is in a terminal
+    /// state (CompletedRejected / Superseded) AND it has NOT yet been counted as an
+    /// arrival (i.e., the Join's JoinArrivedCount does not include it).  Detecting
+    /// this exactly requires the live-cohort query: count Pending/Activated branch tokens
+    /// in the same ForkGroup that point to this Join.</para>
+    ///
+    /// <para>If live branch count + arrived count &gt;= expected, the Join is still satisfiable
+    /// and we wait.  If live + arrived &lt; expected, some branches died without arriving →
+    /// decrement expected and log a JoinUnsatisfiable warning if it reaches 0.</para>
+    /// </summary>
+    private async Task CheckJoinOrphanAsync(
+        NodeInstance joinNode,
+        ProcessInstance instance,
+        CancellationToken ct)
+    {
+        // Re-read for freshest counts.
+        joinNode = await Db.Set<NodeInstance>()
+            .AsNoTracking()
+            .SingleAsync(n => n.ID == joinNode.ID, ct);
+
+        if (joinNode.State != NodeState.Activated) return;
+
+        // Count live branch tokens still in flight (Pending or Activated, same generation,
+        // JoinNodeKey == this join, not including the join node itself).
+        int liveBranches = await Db.Set<NodeInstance>()
+            .AsNoTracking()
+            .CountAsync(
+                n => n.InstanceId == instance.ID
+                  && n.Generation == instance.Generation
+                  && n.JoinNodeKey == joinNode.NodeKey
+                  && (n.State == NodeState.Pending || n.State == NodeState.Activated),
+                ct);
+
+        // If liveBranches + arrivedCount >= expectedArrivals, the Join is still satisfiable.
+        if (liveBranches + joinNode.JoinArrivedCount >= joinNode.JoinExpectedArrivals)
+            return;
+
+        // Dead non-arriving branches detected — decrement expected count.
+        int deadNonArriving = joinNode.JoinExpectedArrivals - liveBranches - joinNode.JoinArrivedCount;
+        _logger.LogWarning(
+            "CheckJoinOrphanAsync: Join '{JoinKey}' (instance {InstanceId}) has {Dead} dead non-arriving " +
+            "branch(es). Decrementing JoinExpectedArrivals by {DeadCount} to prevent permanent block.",
+            joinNode.NodeKey, instance.ID, deadNonArriving, deadNonArriving);
+
+        for (int i = 0; i < deadNonArriving; i++)
+        {
+            // Re-read before each decrement to get the latest RowVer.
+            joinNode = await Db.Set<NodeInstance>()
+                .AsNoTracking()
+                .SingleAsync(n => n.ID == joinNode.ID, ct);
+
+            if (joinNode.State != NodeState.Activated) return;
+
+            await GuardedTransition.DecrementJoinExpectedAsync(
+                Db, joinNode.ID, joinNode.RowVer, instance.Generation, ct);
+        }
+
+        // After decrement(s), re-read and attempt final fire.
+        joinNode = await Db.Set<NodeInstance>()
+            .AsNoTracking()
+            .SingleAsync(n => n.ID == joinNode.ID, ct);
+
+        if (joinNode.State != NodeState.Activated) return;
+
+        if (joinNode.JoinExpectedArrivals <= 0)
+        {
+            // Join is unsatisfiable — fail-closed.
+            _logger.LogError(
+                "CheckJoinOrphanAsync: Join '{JoinKey}' for instance {InstanceId} is unsatisfiable " +
+                "(JoinExpectedArrivals={Expected}, JoinArrivedCount={Arrived}). Fail-closing Join.",
+                joinNode.NodeKey, instance.ID, joinNode.JoinExpectedArrivals, joinNode.JoinArrivedCount);
+
+            await GuardedTransition.CompleteNodeInstanceAsync(
+                Db, joinNode.ID, joinNode.RowVer,
+                NodeState.CompletedRejected,
+                generation: instance.Generation, ct: ct);
+
+            await WorkflowEventLogWriter.AppendAsync(
+                Db, instance.ID, instance.TenantCode,
+                EventAction.FailClosed,
+                nodeKey: joinNode.NodeKey,
+                actorITCode: null,
+                beforeState: NodeState.Activated.ToString(),
+                afterState: NodeState.CompletedRejected.ToString(),
+                reason: "Join unsatisfiable: all feeding branches died without arriving.",
+                ct: ct);
+        }
     }
 
     // ── ApproveTaskAsync ──────────────────────────────────────────────────────
@@ -1747,6 +2181,8 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             RowVer = 0,
             // Wave-3: stamp generation epoch at mint time.
             Generation = generation ?? instance.Generation,
+            // WF-17: stamp AckMode for Ack nodes.
+            AckMode = nodeDef.AckMode,
         };
         Db.Set<NodeInstance>().Add(node);
         await Db.SaveChangesAsync(ct);

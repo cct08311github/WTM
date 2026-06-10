@@ -70,6 +70,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ApprovalHandler>();
         services.AddScoped<ICcTenantValidator, CcTenantValidator>(); // WF-14: FrameworkUser tenant guard
         services.AddScoped<CcHandler>();                 // WF-13 抄送 (full IApproverResolver + tenant check)
+        services.AddScoped<AckHandler>();                // WF-17 blocking-acknowledge
+        services.AddScoped<JoinHandler>();               // WF-17 Join barrier
+        services.AddScoped<ParallelGatewayHandler>();    // WF-17 AND-fork
+        services.AddScoped<InclusiveGatewayHandler>();   // WF-17 OR-fork
         services.AddScoped<INodeKindDispatcher, NodeKindDispatcher>();
 
         return services;
@@ -283,6 +287,26 @@ public static class WorkFlowDbContextExtensions
             // SupersededAtGen: set atomically by SupersedeNodeAsync to the generation that
             // superseded this node.  Null for active nodes.
             e.Property(x => x.SupersededAtGen);
+
+            // ── Wave-3 (WF-17) fields ──────────────────────────────────────────
+            // ForkGroupId: identifies the fork group for parallel/inclusive branch tokens.
+            // Null for nodes not inside a fork/Join region.
+            e.Property(x => x.ForkGroupId);
+
+            // JoinNodeKey: the Join node this branch token is expected to converge into.
+            // Null for tokens not inside a fork/Join region.
+            e.Property(x => x.JoinNodeKey).HasMaxLength(100);
+
+            // JoinExpectedArrivals: pinned at fork time to the number of branch tokens minted.
+            // Default 0 for non-Join nodes.
+            e.Property(x => x.JoinExpectedArrivals).HasDefaultValue(0);
+
+            // JoinArrivedCount: incremented atomically by IncrementJoinArrivedAsync.
+            // Default 0 for non-Join nodes.
+            e.Property(x => x.JoinArrivedCount).HasDefaultValue(0);
+
+            // AckMode: completion mode for Ack nodes. Null for non-Ack nodes.
+            e.Property(x => x.AckMode);
 
             // Non-filtered unique index on (TenantCode, InstanceId, NodeKey, Generation):
             // enforces idempotent re-entry minting for MintNodeInstanceGuardedAsync (STEP-5).
