@@ -130,6 +130,9 @@ internal sealed class WfEngineTestContext : DbContext
             e.Property(x => x.OccurredUtc);
             e.Property(x => x.TenantCode).HasMaxLength(50);
             e.Ignore(x => x.Instance);
+            // Mirror the production UNIQUE index (#240 / #269) so tests enforce the same
+            // constraint and prove concurrent AppendAsync cannot produce duplicate Seq.
+            e.HasIndex(x => new { x.TenantCode, x.InstanceId, x.Seq }).IsUnique();
         });
 
         // CcRecord
@@ -516,6 +519,92 @@ public class EngineTests : IDisposable
             Assert.IsTrue(
                 approved + handled == 2,
                 $"Round {round}: expected 2 results totaling approved+handled, got: [{results[0].Code},{results[1].Code}]");
+        }
+    }
+
+    // ── Test 5: Concurrent AppendAsync → Seq uniqueness (#269 regression) ─────────
+
+    /// <summary>
+    /// #269 regression guard: two concurrent engine transitions on the same instance must
+    /// produce WorkflowEventLog rows with unique, contiguous Seq values — no duplicate Seq
+    /// and no UNIQUE index constraint violation.
+    ///
+    /// The bug: before #269 fix, AppendAsync computed MAX(Seq)+1 outside a serializable
+    /// transaction; two concurrent callers could read the same MAX and then both try to
+    /// insert Seq N+1, triggering the UNIQUE index on (TenantCode, InstanceId, Seq).
+    ///
+    /// The fix: AppendAsync wraps MAX+INSERT in a serializable transaction so the DB
+    /// serializes the two callers — each sees the other's already-inserted row and computes
+    /// a distinct next Seq.
+    ///
+    /// Test strategy: start a trivial Start → End instance, then fire two concurrent
+    /// AppendAsync calls on the same instance.  Both must succeed (no exception), and the
+    /// resulting Seq values must be 1 and 2 (unique + contiguous).
+    /// </summary>
+    [TestMethod]
+    public async Task ConcurrentAppendAsync_ProducesUniqueSeq_NoConstraintViolation()
+    {
+        const int Rounds = 20;
+
+        for (int round = 0; round < Rounds; round++)
+        {
+            var instanceId = Guid.NewGuid();
+
+            // Seed a ProcessInstance row so AppendAsync FK is satisfied.
+            await using var seed = MakeContext();
+            seed.Set<ProcessInstance>().Add(new ProcessInstance
+            {
+                ID = instanceId,
+                State = InstanceState.Running,
+                RowVer = 0,
+                InitiatorITCode = "tester",
+                DefinitionVersionId = Guid.NewGuid(),
+                IsValid = true,
+            });
+            await seed.SaveChangesAsync();
+
+            var barrier = new SemaphoreSlim(0, 2);
+
+            // Two concurrent AppendAsync calls on the SAME instanceId.
+            Task MakeConcurrentAppend(EventAction action)
+            {
+                return Task.Run(async () =>
+                {
+                    await barrier.WaitAsync();
+                    await using var db = MakeContext();
+                    await WorkflowEventLogWriter.AppendAsync(
+                        db,
+                        instanceId,
+                        tenantCode: null,
+                        action: action,
+                        nodeKey: "start",
+                        actorITCode: "actor",
+                        beforeState: "Draft",
+                        afterState: "Running");
+                });
+            }
+
+            var t1 = MakeConcurrentAppend(EventAction.Submit);
+            var t2 = MakeConcurrentAppend(EventAction.AutoAdvance);
+            barrier.Release(2);
+
+            // Both must complete without exception (no UNIQUE index violation).
+            await Task.WhenAll(t1, t2);
+
+            // Verify: exactly 2 rows, Seq values are 1 and 2 (unique + contiguous from 1).
+            await using var verify = MakeContext();
+            var seqs = await verify.Set<WorkflowEventLog>()
+                .Where(e => e.InstanceId == instanceId)
+                .Select(e => e.Seq)
+                .OrderBy(s => s)
+                .ToListAsync();
+
+            Assert.AreEqual(2, seqs.Count,
+                $"Round {round}: expected 2 event log rows, got {seqs.Count}");
+            Assert.AreEqual(1, seqs[0],
+                $"Round {round}: expected first Seq = 1, got {seqs[0]}");
+            Assert.AreEqual(2, seqs[1],
+                $"Round {round}: expected second Seq = 2, got {seqs[1]}");
         }
     }
 }

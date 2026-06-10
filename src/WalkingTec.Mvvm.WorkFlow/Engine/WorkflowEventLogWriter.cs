@@ -5,20 +5,25 @@
 //   • Every engine transition calls AppendAsync inside the same transaction as the
 //     ExecuteUpdateAsync CAS — this IS the authoritative audit because ExecuteUpdateAsync
 //     bypasses the EF change-tracker and [AuditChanges] does not see those writes (spec §8.4).
-//   • Monotonic Seq per instance: computed as MAX(Seq)+1 within the same transaction.
-//     Using MAX ensures monotonicity even after concurrent appends (two concurrent appends
-//     in the same millisecond each read the pre-insert MAX and then insert; the UNIQUE index
-//     on (InstanceId, Seq) catches duplicates if they collide — in practice a single
-//     DbContext transaction serializes appends within one AdvanceAsync call).
+//   • Monotonic Seq per instance: computed as MAX(Seq)+1 within an explicit serializable
+//     transaction that wraps the MAX read and the INSERT atomically.  This prevents two
+//     concurrent transitions on the same instance from reading the same MAX before either
+//     has inserted — which would produce duplicate Seq values and violate the UNIQUE index
+//     on (TenantCode, InstanceId, Seq) added in #240 (#269 fix).
+//   • If the DbContext already has an active ambient transaction (e.g. the caller wrapped
+//     the CAS + AppendAsync together), we participate in it and do NOT start a new one,
+//     so the serialisation guarantee is inherited from the outer transaction.
 //   • Seq starts at 1 (no events before Submit → Seq 1 = Submit).
 //   • OccurredUtc is always UTC, sourced from DateTime.UtcNow (WF-6 uses UtcNow directly;
 //     proper Wtm.TimeProvider injection is WF-14 when the engine gets IWtm* services).
 
 using System;
+using System.Data;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using WalkingTec.Mvvm.WorkFlow.Models;
 
 namespace WalkingTec.Mvvm.WorkFlow.Engine;
@@ -32,22 +37,24 @@ namespace WalkingTec.Mvvm.WorkFlow.Engine;
 /// <c>[AuditChanges]</c> does NOT capture them (spec §8.4).  Every transition MUST
 /// call <see cref="AppendAsync"/> inside the same transaction.</para>
 ///
-/// <para><strong>Monotonic Seq:</strong>
-/// Computed as <c>MAX(Seq) + 1</c> over all existing events for the same instance.
-/// Starting value is 1 (no log rows → next = 1).  Within a single
-/// <c>DbContext</c> transaction the appends are serialized, so Seq is guaranteed
-/// to be unique and monotonically increasing per instance.</para>
+/// <para><strong>Monotonic Seq — race-safe (#269):</strong>
+/// The MAX(Seq)+1 read and the INSERT are wrapped in an explicit serializable
+/// transaction (or participate in an existing ambient transaction).  Under
+/// serializable isolation two concurrent callers cannot both read the same MAX
+/// before either has inserted — the DB serializes them, so each caller sees the
+/// other's newly inserted row and computes a distinct next value.
+/// Starting value is 1 (no log rows → next = 1).</para>
 /// </summary>
 public static class WorkflowEventLogWriter
 {
     /// <summary>
     /// Append an immutable event row for the given instance.
     ///
-    /// Must be called within the same transaction as the corresponding
-    /// <c>GuardedTransition</c> CAS to guarantee the audit is atomic with the
-    /// state change.
+    /// Safe under concurrent transitions on the same instance: the MAX(Seq)+1
+    /// computation and the INSERT are wrapped in a serializable transaction to
+    /// prevent duplicate Seq values (#269).
     /// </summary>
-    /// <param name="db">The DbContext owning the current transaction.</param>
+    /// <param name="db">The DbContext owning the current (or ambient) transaction.</param>
     /// <param name="instanceId">The FK to <see cref="ProcessInstance"/>.</param>
     /// <param name="tenantCode">Tenant isolation code (copied from the instance).</param>
     /// <param name="action">The action being recorded.</param>
@@ -69,29 +76,54 @@ public static class WorkflowEventLogWriter
         string? reason = null,
         CancellationToken ct = default)
     {
-        // Compute the next monotonic Seq in the same transaction context.
-        // MAX returns null when there are no rows (first event); default to 0 so next = 1.
-        var maxSeq = await db.Set<WorkflowEventLog>()
-            .Where(e => e.InstanceId == instanceId)
-            .MaxAsync(e => (int?)e.Seq, ct)
-            ?? 0;
+        // Use an ambient transaction if one is already open (caller wrapped both CAS + AppendAsync
+        // together), otherwise begin a new serializable transaction so that the MAX read and the
+        // INSERT are atomic — preventing duplicate Seq when two concurrent transitions race on the
+        // same instance (#269 / spec §8.4 race-safe audit requirement).
+        bool ownsTransaction = db.Database.CurrentTransaction is null;
+        IDbContextTransaction? tx = ownsTransaction
+            ? await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct)
+            : null;
 
-        var logEntry = new WorkflowEventLog
+        try
         {
-            ID = Guid.NewGuid(),
-            TenantCode = tenantCode,
-            InstanceId = instanceId,
-            Seq = maxSeq + 1,
-            ActorITCode = actorITCode,
-            Action = action,
-            NodeKey = nodeKey,
-            BeforeState = beforeState,
-            AfterState = afterState,
-            Reason = reason,
-            OccurredUtc = DateTime.UtcNow,
-        };
+            // Compute the next monotonic Seq within the serialized transaction window.
+            // MAX returns null when there are no rows (first event); default to 0 so next = 1.
+            var maxSeq = await db.Set<WorkflowEventLog>()
+                .Where(e => e.InstanceId == instanceId)
+                .MaxAsync(e => (int?)e.Seq, ct)
+                ?? 0;
 
-        db.Set<WorkflowEventLog>().Add(logEntry);
-        await db.SaveChangesAsync(ct);
+            var logEntry = new WorkflowEventLog
+            {
+                ID = Guid.NewGuid(),
+                TenantCode = tenantCode,
+                InstanceId = instanceId,
+                Seq = maxSeq + 1,
+                ActorITCode = actorITCode,
+                Action = action,
+                NodeKey = nodeKey,
+                BeforeState = beforeState,
+                AfterState = afterState,
+                Reason = reason,
+                OccurredUtc = DateTime.UtcNow,
+            };
+
+            db.Set<WorkflowEventLog>().Add(logEntry);
+            await db.SaveChangesAsync(ct);
+
+            if (ownsTransaction)
+                await tx!.CommitAsync(ct);
+        }
+        catch when (ownsTransaction && tx is not null)
+        {
+            await tx.RollbackAsync(CancellationToken.None);
+            throw;
+        }
+        finally
+        {
+            if (ownsTransaction)
+                tx?.Dispose();
+        }
     }
 }

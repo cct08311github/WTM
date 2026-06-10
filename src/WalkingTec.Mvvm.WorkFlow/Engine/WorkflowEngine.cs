@@ -64,6 +64,10 @@ internal sealed class WorkflowEngine : IWorkflowEngine
     // In production the DI-injected IDataContext is always a DbContext subclass (spec §7.1 invariant);
     // in tests a DbContext can be passed directly via the internal constructor.
     private readonly DbContext _db;
+    // _dc is the original IDataContext; used by ValidateDbTypeOnFirstUse (#271).
+    // Null when the engine is constructed via the internal DbContext-only constructor (test path) —
+    // in that case ValidateDbType is skipped (tests always use SQLite, never Memory).
+    private readonly IDataContext? _dc;
     private readonly INodeKindDispatcher _dispatcher;
     private readonly IRoutingEvaluator _routingEvaluator;
     private readonly WorkFlowOptions _options;
@@ -91,19 +95,23 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         IOptions<WorkFlowOptions> options,
         ILogger<WorkflowEngine> logger,
         IWorkflowNotifier? notifier = null)
-        : this(
-              (DbContext)(dc ?? throw new ArgumentNullException(nameof(dc))),
-              dispatcher,
-              routingEvaluator,
-              options?.Value ?? new WorkFlowOptions(),
-              (ILogger)logger,
-              notifier)
-    { }
+    {
+        if (dc is null) throw new ArgumentNullException(nameof(dc));
+        _dc = dc;
+        _db = (DbContext)dc;
+        _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
+        _routingEvaluator = routingEvaluator ?? throw new ArgumentNullException(nameof(routingEvaluator));
+        _options = options?.Value ?? new WorkFlowOptions();
+        _logger = (ILogger)(logger ?? throw new ArgumentNullException(nameof(logger)));
+        _notifier = notifier;
+    }
 
     /// <summary>Test / direct-DbContext constructor.  Internal so tests in the sibling project can
     /// use it; production code always goes through the <see cref="IDataContext"/> overload.
     /// Accepts the non-generic <see cref="ILogger"/> base so that subclass-typed
-    /// <c>NullLogger&lt;TSubclass&gt;</c> instances satisfy the parameter without a cast.</summary>
+    /// <c>NullLogger&lt;TSubclass&gt;</c> instances satisfy the parameter without a cast.
+    /// <para><c>_dc</c> is null in this path — <see cref="WorkFlowOptions.ValidateDbTypeOnFirstUse"/>
+    /// is skipped (tests always supply a real SQLite DbContext, never EF InMemory).</para></summary>
     internal WorkflowEngine(
         DbContext db,
         INodeKindDispatcher dispatcher,
@@ -123,6 +131,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         IWorkflowNotifier? notifier = null)
     {
         _db = db ?? throw new ArgumentNullException(nameof(db));
+        _dc = null; // No IDataContext in the direct-DbContext test path — ValidateDbTypeOnFirstUse skipped.
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _routingEvaluator = routingEvaluator ?? throw new ArgumentNullException(nameof(routingEvaluator));
         _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -144,6 +153,14 @@ internal sealed class WorkflowEngine : IWorkflowEngine
     {
         if (string.IsNullOrWhiteSpace(initiatorITCode))
             throw new ArgumentException("initiatorITCode must not be empty.", nameof(initiatorITCode));
+
+        // WF-5 lazy guard (#271): validate that the DataContext is not EF InMemory on first use.
+        // The eager check at AddWtmWorkFlow() was removed in PR #240 (BuildServiceProvider root-provider
+        // crash under scope validation).  This lazy guard fires once per engine call and is the
+        // primary enforcement path when ValidateDbTypeOnFirstUse = true.
+        // Skipped when _dc is null (internal test path uses a real SQLite DbContext directly).
+        if (_options.ValidateDbTypeOnFirstUse && _dc is not null)
+            ServiceCollectionExtensions.ValidateDbType(_dc);
 
         // Load the pinned definition version (immutable; FK enforced by invariant §1.3).
         var version = await Db.Set<ProcessDefinitionVersion>()

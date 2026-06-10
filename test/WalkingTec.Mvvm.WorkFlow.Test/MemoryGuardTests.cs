@@ -17,14 +17,30 @@
 //       (ValidateScopes=true) with IDataContext registered as Scoped — this is the
 //       production path and must never crash at AddWtmWorkFlow() call time.
 //   (c) ValidateDbType() helper (lazy path) throws for Memory and passes for relational.
+//   (d) [#271] Integration: WorkflowEngine.StartAsync respects ValidateDbTypeOnFirstUse=true —
+//       throws InvalidOperationException("Memory") when IDataContext.DBType==Memory, and
+//       proceeds past the guard (to the next engine check) when DBType==SQLite.
 
 using System;
+using System.Data;
+using System.Data.Common;
 using System.Linq;
+using System.Linq.Expressions;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.WorkFlow.Engine;
+using WalkingTec.Mvvm.WorkFlow.Models;
 
 namespace WalkingTec.Mvvm.WorkFlow.Test;
 
@@ -209,5 +225,175 @@ public class MemoryGuardTests
         mockDc.SetupProperty(x => x.DBType, DBTypeEnum.SQLite);
 
         ServiceCollectionExtensions.ValidateDbType(mockDc.Object);
+    }
+}
+
+// ── #271 integration test helpers and test class ──────────────────────────────
+
+/// <summary>
+/// Minimal DbContext subclass that ALSO implements IDataContext so it can be passed
+/// to the production WorkflowEngine constructor (which casts IDataContext → DbContext).
+/// Only DBType is meaningful; all other IDataContext members throw NotImplementedException.
+/// Used exclusively by <see cref="ValidateDbTypeOnFirstUseIntegrationTests"/>.
+/// </summary>
+internal sealed class MinimalIDataContextDbContext : DbContext, IDataContext
+{
+    private readonly string _connStr;
+
+    public MinimalIDataContextDbContext(string connStr, DBTypeEnum dbType)
+    {
+        _connStr = connStr;
+        DBType = dbType;
+    }
+
+    protected override void OnConfiguring(DbContextOptionsBuilder b) =>
+        b.UseSqlite($"DataSource={_connStr}?mode=memory&cache=shared");
+
+    protected override void OnModelCreating(ModelBuilder m)
+    {
+        m.Entity<ProcessDefinitionVersion>(e =>
+        {
+            e.ToTable("Wf_PDV_Guard");
+            e.HasKey(x => x.ID);
+            e.Property(x => x.GraphJson).IsRequired();
+            e.Property(x => x.ContentHash).HasMaxLength(64).IsRequired();
+            e.Property(x => x.DefinitionId);
+            e.Property(x => x.VersionNo);
+            e.Property(x => x.TenantCode).HasMaxLength(50);
+            e.Property(x => x.IsValid);
+            e.Ignore(x => x.Definition);
+        });
+    }
+
+    // ── IDataContext ───────────────────────────────────────────────────────────
+    public DBTypeEnum DBType { get; set; }
+    public bool IsFake { get; set; }
+    public bool IsDebug { get; set; }
+    public string? CurrentUserCode { get; set; }
+    public string? TenantCode { get; } = null;
+    public string CSName { get; set; } = string.Empty;
+
+    // All remaining members throw — they are never called because the guard fires first
+    // (Memory path) or the test catches the first downstream exception (SQLite path).
+    public void AddEntity<T>(T entity) where T : TopBasePoco => throw new NotImplementedException();
+    public void UpdateEntity<T>(T entity) where T : TopBasePoco => throw new NotImplementedException();
+    public void UpdateProperty<T>(T entity, Expression<Func<T, object>> fieldExp) where T : TopBasePoco => throw new NotImplementedException();
+    public void UpdateProperty<T>(T entity, string fieldName) where T : TopBasePoco => throw new NotImplementedException();
+    public void DeleteEntity<T>(T entity) where T : TopBasePoco => throw new NotImplementedException();
+    public void CascadeDelete<T>(T entity) where T : TreePoco => throw new NotImplementedException();
+    public Task<bool> DataInit(object? AllModel, bool IsSpa) => throw new NotImplementedException();
+    public void EnsureCreate() { }
+    public IDataContext CreateNew() => throw new NotImplementedException();
+    public IDataContext ReCreate(ILoggerFactory? _logger = null) => throw new NotImplementedException();
+    public DataTable RunSP(string command, params object[] paras) => throw new NotImplementedException();
+    public IEnumerable<TElement> RunSP<TElement>(string command, params object[] paras) => throw new NotImplementedException();
+    public DataTable RunSQL(string command, params object[] paras) => throw new NotImplementedException();
+    public IEnumerable<TElement> RunSQL<TElement>(string sql, params object[] paras) => throw new NotImplementedException();
+    public DataTable Run(string sql, CommandType commandType, params object[] paras) => throw new NotImplementedException();
+    public IEnumerable<TElement> Run<TElement>(string sql, CommandType commandType, params object[] paras) => throw new NotImplementedException();
+    public object CreateCommandParameter(string name, object value, ParameterDirection dir) => throw new NotImplementedException();
+    public void SetLoggerFactory(ILoggerFactory factory) { }
+    public void SetTenantCode(string? tc) { }
+}
+
+/// <summary>
+/// #271 integration tests: prove WorkflowEngine.StartAsync actually invokes
+/// the lazy ValidateDbTypeOnFirstUse guard when wired (#271 fix).
+/// </summary>
+[TestClass]
+public class ValidateDbTypeOnFirstUseIntegrationTests : IDisposable
+{
+    private readonly string _dbName = $"WfGuard_{Guid.NewGuid():N}";
+    private SqliteConnection _keepAlive = null!;
+
+    [TestInitialize]
+    public void Setup()
+    {
+        _keepAlive = new SqliteConnection($"DataSource={_dbName}?mode=memory&cache=shared");
+        _keepAlive.Open();
+        // Ensure the minimal table exists (SQLite path only — Memory path throws before any DB access).
+        using var ctx = new MinimalIDataContextDbContext(_dbName, DBTypeEnum.SQLite);
+        ctx.Database.EnsureCreated();
+    }
+
+    [TestCleanup]
+    public void Cleanup()
+    {
+        _keepAlive?.Close();
+        _keepAlive?.Dispose();
+    }
+
+    public void Dispose() => Cleanup();
+
+    /// <summary>
+    /// #271 — with ValidateDbTypeOnFirstUse=true and DBTypeEnum.Memory, StartAsync must
+    /// throw InvalidOperationException containing "Memory" and "ExecuteUpdateAsync"
+    /// BEFORE attempting any DB operation.
+    /// This proves the lazy guard is actually wired into the engine entry point (not dead code).
+    /// </summary>
+    [TestMethod]
+    public async Task StartAsync_WithMemoryDbType_Throws_WhenValidateDbTypeOnFirstUse()
+    {
+        // DBTypeEnum.Memory — guard must fire immediately.
+        await using var dc = new MinimalIDataContextDbContext(_dbName, DBTypeEnum.Memory);
+
+        var dispatcher = NodeKindDispatcher_Exposed.Create();
+        var routingEvaluator = new WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator(
+            NullLogger<WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator>.Instance);
+        var options = new WorkFlowOptions { ValidateDbTypeOnFirstUse = true };
+
+        // Production constructor — _dc is set, ValidateDbType will be called.
+        var engine = new WorkflowEngine(
+            dc,
+            dispatcher,
+            routingEvaluator,
+            Microsoft.Extensions.Options.Options.Create(options),
+            NullLogger<WorkflowEngine>.Instance);
+
+        var ex = await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+            () => engine.StartAsync(Guid.NewGuid(), null, "initiator", null));
+
+        StringAssert.Contains(ex.Message, "Memory",
+            "Exception message must mention 'Memory'.");
+        StringAssert.Contains(ex.Message, "ExecuteUpdateAsync",
+            "Exception message must explain the root cause (EF InMemory cannot translate ExecuteUpdateAsync).");
+    }
+
+    /// <summary>
+    /// #271 — with ValidateDbTypeOnFirstUse=true and a relational provider (SQLite),
+    /// StartAsync must NOT throw the Memory guard exception.
+    /// It will throw for a different reason (no matching ProcessDefinitionVersion) —
+    /// proving the guard passed and the engine proceeded to normal DB logic.
+    /// </summary>
+    [TestMethod]
+    public async Task StartAsync_WithSQLiteDbType_DoesNotThrowMemoryGuard_WhenValidateDbTypeOnFirstUse()
+    {
+        await using var dc = new MinimalIDataContextDbContext(_dbName, DBTypeEnum.SQLite);
+
+        var dispatcher = NodeKindDispatcher_Exposed.Create();
+        var routingEvaluator = new WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator(
+            NullLogger<WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator>.Instance);
+        var options = new WorkFlowOptions { ValidateDbTypeOnFirstUse = true };
+
+        var engine = new WorkflowEngine(
+            dc,
+            dispatcher,
+            routingEvaluator,
+            Microsoft.Extensions.Options.Options.Create(options),
+            NullLogger<WorkflowEngine>.Instance);
+
+        // Must NOT throw the Memory guard exception.
+        // Will throw "ProcessDefinitionVersion not found" (expected — no seed data).
+        var ex = await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+            () => engine.StartAsync(Guid.NewGuid(), null, "initiator", null));
+
+        // Explicitly confirm it is NOT the Memory guard message.
+        StringAssert.DoesNotMatch(ex.Message,
+            new System.Text.RegularExpressions.Regex("Memory"),
+            "Exception must NOT be the Memory guard — the guard should have passed for SQLite.");
+
+        // The real exception should mention the missing version.
+        StringAssert.Contains(ex.Message, "ProcessDefinitionVersion",
+            "Exception must be the 'version not found' engine error, not the Memory guard.");
     }
 }
