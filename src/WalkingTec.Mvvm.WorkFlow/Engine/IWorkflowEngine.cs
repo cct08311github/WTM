@@ -275,6 +275,74 @@ public interface IWorkflowEngine
         string? reason = null,
         CancellationToken ct = default);
 
+    // ── WF-18: 加签 (add-approver, pre/post) ─────────────────────────────────
+
+    /// <summary>
+    /// Current approver injects one or more additional approvers into the active node
+    /// (加签 — add-approver, Wave-4 WF-18).
+    ///
+    /// <para><strong>Supported modes:</strong>
+    /// <list type="bullet">
+    ///   <item><see cref="Models.ApproveMode.Sequential"/> (<em>串签</em>) —
+    ///     new tasks are inserted Before or After the current active pointer position
+    ///     (see <paramref name="position"/>).  The existing tasks are re-sequenced so
+    ///     there are no gaps or duplicates in <c>SequenceOrder</c>.</item>
+    ///   <item><see cref="Models.ApproveMode.All"/> (<em>会签</em>) —
+    ///     new tasks are added as parallel inboxes; <c>TotalRequired</c> is incremented
+    ///     and the node threshold re-evaluated atomically via the
+    ///     <c>ApproverSetEpoch</c> CAS guard (FIX-A/B).</item>
+    ///   <item><see cref="Models.ApproveMode.Any"/> (<em>或签</em>) —
+    ///     <c>position</c> is ignored; new tasks are added in parallel;
+    ///     the first-to-approve rule is unchanged.</item>
+    /// </list>
+    /// </para>
+    ///
+    /// <para><strong>Guards:</strong>
+    /// <list type="bullet">
+    ///   <item>RBAC: <paramref name="actorITCode"/> must own an active
+    ///     <see cref="Models.TaskState.Pending"/> task on the target node.</item>
+    ///   <item>Depth cap: injected tasks get <c>AddDepth = sourceTask.AddDepth + 1</c>.
+    ///     If that would exceed <see cref="WorkFlowOptions.MaxAddDepth"/> the method
+    ///     returns <see cref="WorkflowActionCode.MaxAddDepthExceeded"/>.</item>
+    ///   <item>Node state: if the node has already left
+    ///     <see cref="Models.NodeState.Activated"/> the method returns
+    ///     <see cref="WorkflowActionCode.NodeAlreadyDecided"/>.</item>
+    ///   <item>CAS: <c>AddApproversToNodeAsync</c> asserts
+    ///     <c>ApproverSetEpoch</c> + <c>RowVer</c> in one atomic UPDATE so that
+    ///     concurrent 加签 requests cannot double-inflate <c>TotalRequired</c>.</item>
+    /// </list>
+    /// </para>
+    ///
+    /// <para><strong>Transaction boundary:</strong> the guarded UPDATE on NodeInstance
+    /// and all k task INSERTs happen inside one explicit transaction; a crash between
+    /// them is impossible.</para>
+    ///
+    /// <para><strong>Event log:</strong> one <see cref="Models.WorkflowEventLog"/> row
+    /// with <see cref="Models.EventAction.AddApprover"/> is appended on success.</para>
+    /// </summary>
+    /// <param name="taskId">PK of the requesting actor's active <see cref="Models.ApprovalTask"/>.</param>
+    /// <param name="actorITCode">Server-side ITCode of the requesting actor (RBAC guard).</param>
+    /// <param name="newApproverITCodes">ITCodes of the approvers to inject (deduped; must be non-empty).</param>
+    /// <param name="position">
+    ///   Before or After the current pointer (Sequential mode only; ignored for All/Any).
+    /// </param>
+    /// <param name="reason">Optional reason for the 加签 action (surfaced in the event log).</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>
+    /// <see cref="WorkflowActionCode.Advanced"/> on success (tasks injected, node still active);
+    /// <see cref="WorkflowActionCode.MaxAddDepthExceeded"/> when the depth cap would be exceeded;
+    /// <see cref="WorkflowActionCode.NodeAlreadyDecided"/> when the node is no longer Activated;
+    /// <see cref="WorkflowActionCode.NotAuthorized"/> when <paramref name="actorITCode"/> has no active task on the node;
+    /// <see cref="WorkflowActionCode.AlreadyHandled"/> when a concurrent actor won the epoch CAS.
+    /// </returns>
+    Task<WorkflowActionResult> AddApproverAsync(
+        Guid taskId,
+        string actorITCode,
+        IReadOnlyList<string> newApproverITCodes,
+        Models.AddPosition position = Models.AddPosition.After,
+        string? reason = null,
+        CancellationToken ct = default);
+
     /// <summary>
     /// Approver returns the flow to an arbitrary upstream Approval node that dominates
     /// the current trigger node (ReturnToNode — spec §5.7 Wave-3).

@@ -308,6 +308,13 @@ public static class WorkFlowDbContextExtensions
             // AckMode: completion mode for Ack nodes. Null for non-Ack nodes.
             e.Property(x => x.AckMode);
 
+            // ── Wave-4 (WF-18) fields ──────────────────────────────────────────
+            // ApproverSetEpoch: node-local epoch co-incremented with TotalRequired in every
+            // approver-set mutation (加签, AtAction revoke, 转办 reassign).  Asserted in the
+            // completion CAS predicate alongside RowVer (R1 keystone FIX-A/B).
+            // Default 0 for all pre-Wave-4 rows; no index needed (PK reads only).
+            e.Property(x => x.ApproverSetEpoch).HasDefaultValue(0u);
+
             // Non-filtered unique index on (TenantCode, InstanceId, NodeKey, Generation):
             // enforces idempotent re-entry minting for MintNodeInstanceGuardedAsync (STEP-5).
             // Non-filtered (no WHERE clause) so it works across all 7 providers including
@@ -341,6 +348,20 @@ public static class WorkFlowDbContextExtensions
             // Wave-3 (WF-16): Generation epoch, stamped at task-mint time.
             // DiscardTasksForReturnAsync scopes its bulk-cancel to the current generation.
             e.Property(x => x.Generation);
+
+            // ── Wave-4 (WF-18) fields ──────────────────────────────────────────
+            // AddDepth: 加签 chain depth.  Base tasks = 0; injected tasks = sourceTask.AddDepth+1.
+            // O(1) MaxAddDepth check — no chain walk.  Default 0 for all pre-Wave-4 rows.
+            e.Property(x => x.AddDepth).HasDefaultValue(0);
+
+            // UNIQUE index on (NodeInstanceId, AssigneeITCode, Generation): FIX-G guard.
+            // Prevents concurrent double-加签 from inserting duplicate rows for the same
+            // approver in the same node epoch.  The unique constraint is the DB-level
+            // backstop; the CAS on ApproverSetEpoch+RowVer is the first line of defence.
+            // Non-filtered (no WHERE clause) to work across all 7 DB providers.
+            e.HasIndex(x => new { x.NodeInstanceId, x.AssigneeITCode, x.Generation })
+             .IsUnique()
+             .HasDatabaseName("IX_Wf_ApprovalTask_Node_Assignee_Gen");
         });
 
         // ── WorkflowEventLog ──────────────────────────────────────────────────

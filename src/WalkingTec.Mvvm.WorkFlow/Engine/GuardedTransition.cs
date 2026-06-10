@@ -24,6 +24,7 @@
 //   (g) Race C: timer cancel vs timer fire during return (WF-16) → WorkflowTimer
 //   (h) Race D: concurrent returns + MaxReturnLoops cap (WF-16) → ProcessInstance BeginReturnAsync
 //   (i) T-JOIN: Join arrival counting + single-statement fire (WF-17) → NodeInstance Join CAS
+//   (j) R1: 加签-onto-in-flight-会签 threshold-recompute (WF-18) → ApproverSetEpoch co-increment + completion CAS binding
 
 using System;
 using System.Collections.Generic;
@@ -485,6 +486,15 @@ public static class GuardedTransition
     ///
     /// <para>WF-16: when <paramref name="generation"/> is non-null, the predicate gains
     /// <c>AND Generation == @g</c> so a stale-epoch approve no-ops after a 回退 bump.</para>
+    ///
+    /// <para>WF-18 (FIX-A/B): when <paramref name="expectedApproverSetEpoch"/> is non-null,
+    /// the predicate gains <c>AND ApproverSetEpoch == @e</c> so that a concurrent 加签
+    /// that bumped the epoch (and therefore changed <c>TotalRequired</c>) invalidates any
+    /// in-flight completion that evaluated the threshold against the pre-加签 snapshot.
+    /// The deciding approver re-reads the updated threshold and only completes if still met.
+    /// Passing null preserves the byte-identical pre-Wave-4 predicate for callers that
+    /// do not participate in the epoch (same discipline as the optional <paramref name="generation"/>
+    /// parameter introduced in Wave-3).</para>
     /// </summary>
     public static Task<int> CompleteNodeInstanceAsync(
         DbContext db,
@@ -493,8 +503,40 @@ public static class GuardedTransition
         NodeState completedState,
         string? decidedBy = null,
         uint? generation = null,
+        uint? expectedApproverSetEpoch = null,
         CancellationToken ct = default)
     {
+        if (generation.HasValue && expectedApproverSetEpoch.HasValue)
+        {
+            var gen = generation.Value;
+            var epoch = expectedApproverSetEpoch.Value;
+            if (decidedBy is not null)
+            {
+                return db.Set<NodeInstance>()
+                    .Where(x => x.ID == nodeInstanceId
+                                 && x.State == NodeState.Activated
+                                 && x.RowVer == expectedRowVer
+                                 && x.Generation == gen
+                                 && x.ApproverSetEpoch == epoch)
+                    .ExecuteUpdateAsync(
+                        s => s.SetProperty(x => x.State, completedState)
+                               .SetProperty(x => x.DecidedBy, decidedBy)
+                               .SetProperty(x => x.RowVer, x => x.RowVer + 1),
+                        ct);
+            }
+
+            return db.Set<NodeInstance>()
+                .Where(x => x.ID == nodeInstanceId
+                             && x.State == NodeState.Activated
+                             && x.RowVer == expectedRowVer
+                             && x.Generation == gen
+                             && x.ApproverSetEpoch == epoch)
+                .ExecuteUpdateAsync(
+                    s => s.SetProperty(x => x.State, completedState)
+                           .SetProperty(x => x.RowVer, x => x.RowVer + 1),
+                    ct);
+        }
+
         if (generation.HasValue)
         {
             var gen = generation.Value;
@@ -703,6 +745,91 @@ public static class GuardedTransition
                          && x.RowVer == expectedRowVer)
             .ExecuteUpdateAsync(
                 s => s.SetProperty(x => x.State, NodeState.CompletedApproved)
+                       .SetProperty(x => x.RowVer, x => x.RowVer + 1),
+                ct);
+    }
+
+    // ── WF-18: 加签 ApproverSet mutations ────────────────────────────────────────
+
+    /// <summary>
+    /// Atomically expand the approver set for an <see cref="NodeState.Activated"/> node
+    /// by <paramref name="delta"/> tasks (WF-18 R1 keystone — FIX-A/B).
+    ///
+    /// <para><strong>Single-statement CAS:</strong>
+    /// <c>WHERE ID==@id AND State==Activated AND Generation==@g
+    ///    AND ApproverSetEpoch==@expectedEpoch AND RowVer==@v</c><br/>
+    /// <c>SET TotalRequired+=@delta, ApproverSetEpoch+=1, RowVer+=1</c>.</para>
+    ///
+    /// <para>The TotalRequired bump and the epoch bump are co-atomic: if a concurrent
+    /// completion CAS asserts the old epoch it will no-op (rows==0) and the deciding
+    /// approver re-reads the updated TotalRequired before retrying.  The epoch also
+    /// prevents double-加签 from inflating TotalRequired twice for the same logical
+    /// operation (FIX-G: combined with UNIQUE index on NodeInstanceId+AssigneeITCode+Generation).</para>
+    ///
+    /// <para>rows == 1 → this caller won; proceed to INSERT the k new tasks.
+    /// rows == 0 → node already closed or stale epoch — return
+    /// <see cref="WorkflowActionResult.NodeAlreadyDecided"/> or
+    /// <see cref="WorkflowActionResult.AlreadyHandled"/> accordingly.</para>
+    /// </summary>
+    /// <param name="db">DbContext (caller owns the explicit transaction).</param>
+    /// <param name="nodeInstanceId">PK of the target <see cref="NodeInstance"/>.</param>
+    /// <param name="expectedRowVer">RowVer read before this call; stale → CAS fails.</param>
+    /// <param name="generation">Current process generation (epoch guard — must match node.Generation).</param>
+    /// <param name="expectedApproverSetEpoch">ApproverSetEpoch read before this call; stale → CAS fails.</param>
+    /// <param name="delta">Number of new tasks being injected (must be ≥ 1).</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>rows-affected: 1 = CAS won, 0 = node closed or epoch stale.</returns>
+    public static Task<int> AddApproversToNodeAsync(
+        DbContext db,
+        Guid nodeInstanceId,
+        uint expectedRowVer,
+        uint generation,
+        uint expectedApproverSetEpoch,
+        int delta,
+        CancellationToken ct = default)
+    {
+        return db.Set<NodeInstance>()
+            .Where(x => x.ID == nodeInstanceId
+                         && x.State == NodeState.Activated
+                         && x.Generation == generation
+                         && x.ApproverSetEpoch == expectedApproverSetEpoch
+                         && x.RowVer == expectedRowVer)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(x => x.TotalRequired, x => x.TotalRequired + delta)
+                       .SetProperty(x => x.ApproverSetEpoch, x => x.ApproverSetEpoch + 1)
+                       .SetProperty(x => x.RowVer, x => x.RowVer + 1),
+                ct);
+    }
+
+    /// <summary>
+    /// Bump <see cref="NodeInstance.ApproverSetEpoch"/> (and <see cref="NodeInstance.RowVer"/>)
+    /// without changing <c>TotalRequired</c>.
+    ///
+    /// <para>Used for non-count approver-set mutations that still need to invalidate
+    /// in-flight completion CAS — e.g. AtAction revoke, 转办 mid-flight reassign.
+    /// The guard predicate is <c>State==Activated AND RowVer==@v</c> so the bump
+    /// no-ops if the node is already closed.</para>
+    ///
+    /// <para>rows == 1 → epoch bumped, any in-flight completion CAS with the old epoch
+    /// will now return rows==0.  rows == 0 → node already closed (safe no-op).</para>
+    /// </summary>
+    /// <param name="db">DbContext (caller owns the explicit transaction).</param>
+    /// <param name="nodeInstanceId">PK of the target <see cref="NodeInstance"/>.</param>
+    /// <param name="expectedRowVer">RowVer read before this call; stale → CAS fails.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>rows-affected: 1 = bumped, 0 = node closed or RowVer stale.</returns>
+    public static Task<int> AdvanceNodeApproverSetEpochAsync(
+        DbContext db,
+        Guid nodeInstanceId,
+        uint expectedRowVer,
+        CancellationToken ct = default)
+    {
+        return db.Set<NodeInstance>()
+            .Where(x => x.ID == nodeInstanceId
+                         && x.State == NodeState.Activated
+                         && x.RowVer == expectedRowVer)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(x => x.ApproverSetEpoch, x => x.ApproverSetEpoch + 1)
                        .SetProperty(x => x.RowVer, x => x.RowVer + 1),
                 ct);
     }

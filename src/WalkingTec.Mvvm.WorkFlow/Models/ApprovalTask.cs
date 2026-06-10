@@ -86,4 +86,13 @@ public class ApprovalTask : PersistPoco, ITenant
     /// Default 0 (pre-Wave-3 tasks are generation 0).
     /// </summary>
     public uint Generation { get; set; }
+
+    // ── Wave-4 WF-18: 加签 (add-approver) fields ─────────────────────────────
+
+    /// <summary>
+    /// 加签 chain depth.  Base resolver tasks are 0; a task injected by 加签 is
+    /// <c>sourceTask.AddDepth + 1</c>.  Enforced &lt;= <see cref="WorkFlowOptions.MaxAddDepth"/> (O(1) — no chain walk).
+    /// Default 0 for all pre-Wave-4 tasks.
+    /// </summary>
+    public int AddDepth { get; set; }
 }

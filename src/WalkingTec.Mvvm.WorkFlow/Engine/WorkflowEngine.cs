@@ -1114,11 +1114,15 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                 .AsNoTracking()
                 .SingleAsync(n => n.ID == nodeInst.ID, ct);
 
+            // WF-18 FIX-F: assert ApproverSetEpoch alongside RowVer so a concurrent Before-加签
+            // that inserts a task ahead of nextPointer invalidates this pointer advance (rows→0).
+            // The approver re-reads freshNode (fresh epoch) and retries.
             var advanceRows = await Db.Set<NodeInstance>()
                 .Where(n => n.ID == nodeInst.ID
                              && n.State == NodeState.Activated
                              && n.RowVer == freshNode.RowVer
-                             && n.SequencePointer == nodeInst.SequencePointer)
+                             && n.SequencePointer == nodeInst.SequencePointer
+                             && n.ApproverSetEpoch == freshNode.ApproverSetEpoch)
                 .ExecuteUpdateAsync(
                     s => s.SetProperty(n => n.SequencePointer, nextPointer)
                            .SetProperty(n => n.RowVer, x => x.RowVer + 1),
@@ -1196,10 +1200,14 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                 .AsNoTracking()
                 .SingleAsync(n => n.ID == nodeInst.ID, ct);
 
+            // WF-18 FIX-F: assert ApproverSetEpoch on the final pointer advance too —
+            // guards against a concurrent After-加签 that extends the chain after the
+            // last task was approved but before the pointer is advanced to completion.
             await Db.Set<NodeInstance>()
                 .Where(n => n.ID == nodeInst.ID
                              && n.State == NodeState.Activated
-                             && n.RowVer == freshNodeLast.RowVer)
+                             && n.RowVer == freshNodeLast.RowVer
+                             && n.ApproverSetEpoch == freshNodeLast.ApproverSetEpoch)
                 .ExecuteUpdateAsync(
                     s => s.SetProperty(n => n.SequencePointer, totalRequired)
                            .SetProperty(n => n.RowVer, x => x.RowVer + 1),
@@ -2301,6 +2309,250 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             .ToListAsync(ct);
 
         return tasks.AsReadOnly();
+    }
+
+    // ── WF-18: AddApproverAsync (加签) ──────────────────────────────────────────
+
+    /// <inheritdoc/>
+    public async Task<WorkflowActionResult> AddApproverAsync(
+        Guid taskId,
+        string actorITCode,
+        IReadOnlyList<string> newApproverITCodes,
+        AddPosition position = AddPosition.After,
+        string? reason = null,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(actorITCode))
+            throw new ArgumentException("actorITCode must not be empty.", nameof(actorITCode));
+        if (newApproverITCodes is null || newApproverITCodes.Count == 0)
+            throw new ArgumentException("newApproverITCodes must not be empty.", nameof(newApproverITCodes));
+
+        // 1. Load the actor's task (RBAC guard: actor must have an active Pending task on the node).
+        var task = await Db.Set<ApprovalTask>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(t => t.ID == taskId && t.IsValid == true, ct);
+
+        if (task is null)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.TaskNotActive,
+                $"ApprovalTask {taskId} not found.");
+
+        if (task.AssigneeITCode != actorITCode)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NotAuthorized,
+                $"Actor '{actorITCode}' is not the assignee of task {taskId}.");
+
+        if (task.State != TaskState.Pending)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.TaskNotActive,
+                $"Task {taskId} is in state {task.State}, not Pending.");
+
+        // 2. Load node instance.
+        var nodeInst = await Db.Set<NodeInstance>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(n => n.ID == task.NodeInstanceId, ct);
+
+        if (nodeInst is null)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeClosed,
+                $"NodeInstance {task.NodeInstanceId} not found.");
+
+        if (nodeInst.State != NodeState.Activated)
+        {
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeAlreadyDecided,
+                $"NodeInstance {nodeInst.ID} is in state {nodeInst.State}, not Activated.");
+        }
+
+        // 3. Load process instance for tenant isolation and event log.
+        var instance = await Db.Set<ProcessInstance>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(p => p.ID == nodeInst.InstanceId, ct);
+
+        if (instance is null)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeClosed,
+                $"ProcessInstance {nodeInst.InstanceId} not found.");
+
+        // 4. AddDepth guard (O(1) — no chain walk needed; AddDepth stamped at inject time).
+        int newDepth = task.AddDepth + 1;
+        if (newDepth > _options.MaxAddDepth)
+        {
+            _logger.LogWarning(
+                "AddApproverAsync: MaxAddDepth ({Max}) would be exceeded for task {TaskId} " +
+                "(sourceTask.AddDepth={Depth}).",
+                _options.MaxAddDepth, taskId, task.AddDepth);
+            return WorkflowActionResult.MaxAddDepthExceeded;
+        }
+
+        // 5. Deduplicate and validate new approver ITCodes.
+        // Exclude the actor themselves and any already-assigned approver at this generation.
+        var existingITCodes = await Db.Set<ApprovalTask>()
+            .AsNoTracking()
+            .Where(t => t.NodeInstanceId == nodeInst.ID
+                         && t.Generation == nodeInst.Generation
+                         && (t.State == TaskState.Pending
+                             || t.State == TaskState.NotYetActive
+                             || t.State == TaskState.AddedPending))
+            .Select(t => t.AssigneeITCode)
+            .ToListAsync(ct);
+
+        var existingSet = new HashSet<string>(existingITCodes, StringComparer.OrdinalIgnoreCase);
+        var toInject = newApproverITCodes
+            .Where(c => !string.IsNullOrWhiteSpace(c))
+            .Select(c => c.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(c => !existingSet.Contains(c))
+            .ToList();
+
+        if (toInject.Count == 0)
+        {
+            // All requested approvers are already on the node — treat as already handled.
+            _logger.LogDebug(
+                "AddApproverAsync: all requested approvers are already on node {NodeId}. No-op.",
+                nodeInst.ID);
+            return WorkflowActionResult.AlreadyHandled;
+        }
+
+        int delta = toInject.Count;
+
+        // 6. Engine-owned explicit transaction: guarded UPDATE + k INSERT + event log.
+        await using var tx = await Db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            // Re-read fresh node snapshot inside the transaction for current RowVer + ApproverSetEpoch.
+            nodeInst = await Db.Set<NodeInstance>()
+                .AsNoTracking()
+                .SingleOrDefaultAsync(n => n.ID == nodeInst.ID, ct)
+                ?? nodeInst; // keep stale as fallback (CAS will fail safely below)
+
+            if (nodeInst.State != NodeState.Activated)
+            {
+                await tx.RollbackAsync(CancellationToken.None);
+                return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeAlreadyDecided,
+                    $"NodeInstance {nodeInst.ID} left Activated state before transaction started.");
+            }
+
+            // 6a. Guarded UPDATE: TotalRequired+=delta, ApproverSetEpoch+=1, RowVer+=1.
+            // Atomically binds the threshold bump to the epoch guard (FIX-A/B, FIX-G).
+            var casRows = await GuardedTransition.AddApproversToNodeAsync(
+                Db,
+                nodeInst.ID,
+                expectedRowVer: nodeInst.RowVer,
+                generation: nodeInst.Generation,
+                expectedApproverSetEpoch: nodeInst.ApproverSetEpoch,
+                delta: delta,
+                ct: ct);
+
+            if (casRows == 0)
+            {
+                await tx.RollbackAsync(CancellationToken.None);
+                _logger.LogDebug(
+                    "AddApproverAsync: AddApproversToNodeAsync CAS returned 0 for node {NodeId} — " +
+                    "concurrent actor already modified the approver set.",
+                    nodeInst.ID);
+                return WorkflowActionResult.AlreadyHandled;
+            }
+
+            // 6b. Insert k new tasks.
+            // Sequential mode: compute insertion point based on position.
+            // All/Any mode: position ignored; tasks are parallel inboxes.
+            var approveMode = nodeInst.ApproveMode ?? ApproveMode.Sequential;
+
+            int insertionOrder;
+            if (approveMode == ApproveMode.Sequential)
+            {
+                // Re-read current TotalRequired before the bump (original value = newTotal - delta).
+                int originalTotal = nodeInst.TotalRequired; // snapshot before CAS updated it
+
+                if (position == AddPosition.Before)
+                {
+                    // Insert before current pointer: shift existing tasks >= pointer up by delta.
+                    int pointer = task.SequenceOrder; // pointer == task's order == current active
+                    await Db.Set<ApprovalTask>()
+                        .Where(t => t.NodeInstanceId == nodeInst.ID
+                                     && t.Generation == nodeInst.Generation
+                                     && t.SequenceOrder >= pointer
+                                     && (t.State == TaskState.Pending
+                                         || t.State == TaskState.NotYetActive
+                                         || t.State == TaskState.AddedPending))
+                        .ExecuteUpdateAsync(
+                            s => s.SetProperty(t => t.SequenceOrder, t => t.SequenceOrder + delta),
+                            ct);
+
+                    insertionOrder = pointer;
+                }
+                else // After
+                {
+                    // Insert after current pointer: shift tasks > pointer up by delta.
+                    int pointer = task.SequenceOrder;
+                    await Db.Set<ApprovalTask>()
+                        .Where(t => t.NodeInstanceId == nodeInst.ID
+                                     && t.Generation == nodeInst.Generation
+                                     && t.SequenceOrder > pointer
+                                     && (t.State == TaskState.Pending
+                                         || t.State == TaskState.NotYetActive
+                                         || t.State == TaskState.AddedPending))
+                        .ExecuteUpdateAsync(
+                            s => s.SetProperty(t => t.SequenceOrder, t => t.SequenceOrder + delta),
+                            ct);
+
+                    insertionOrder = pointer + 1;
+                }
+            }
+            else
+            {
+                // All/Any: append in parallel (SequenceOrder for non-Sequential is unused for ordering,
+                // but we still assign monotonically increasing values for uniqueness).
+                insertionOrder = nodeInst.TotalRequired; // append at end (pre-bump value)
+            }
+
+            var now = DateTime.UtcNow;
+            var newTasks = new List<ApprovalTask>(delta);
+            for (int i = 0; i < delta; i++)
+            {
+                newTasks.Add(new ApprovalTask
+                {
+                    ID              = Guid.NewGuid(),
+                    TenantCode      = instance.TenantCode,
+                    NodeInstanceId  = nodeInst.ID,
+                    AssigneeITCode  = toInject[i],
+                    State           = TaskState.AddedPending,
+                    SequenceOrder   = insertionOrder + i,
+                    AddDepth        = newDepth,
+                    AddedByITCode   = actorITCode,
+                    IsRuntimeInjected = true,
+                    Generation      = nodeInst.Generation,
+                    RowVer          = 0,
+                    IsValid         = true,
+                });
+            }
+
+            Db.Set<ApprovalTask>().AddRange(newTasks);
+            await Db.SaveChangesAsync(ct);
+
+            // 6c. Append event log row.
+            var addedCodes = string.Join(",", toInject);
+            await WorkflowEventLogWriter.AppendAsync(
+                Db, instance.ID, instance.TenantCode,
+                EventAction.AddApprover,
+                nodeKey: nodeInst.NodeKey,
+                actorITCode: actorITCode,
+                beforeState: nodeInst.State.ToString(),
+                afterState: nodeInst.State.ToString(),
+                reason: reason is not null
+                    ? $"[加签:{position}→{addedCodes}] {reason}"
+                    : $"加签:{position}→{addedCodes}",
+                ct: ct);
+
+            await tx.CommitAsync(ct);
+        }
+        catch
+        {
+            await tx.RollbackAsync(CancellationToken.None);
+            throw;
+        }
+
+        _logger.LogInformation(
+            "AddApproverAsync: injected {Count} task(s) ({ITCodes}) onto node '{NodeKey}' " +
+            "(id={NodeId}, position={Position}, depth={Depth}).",
+            delta, string.Join(",", toInject), nodeInst.NodeKey, nodeInst.ID, position, newDepth);
+
+        return WorkflowActionResult.Advanced;
     }
 
     // ── WF-15: Notify helper ─────────────────────────────────────────────────

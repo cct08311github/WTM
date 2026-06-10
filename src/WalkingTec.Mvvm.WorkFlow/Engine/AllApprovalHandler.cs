@@ -179,6 +179,11 @@ internal sealed class AllApprovalHandler : INodeKindHandler
     /// returns <c>true</c>.  If two concurrent approvers both see the count at threshold,
     /// only one wins the CAS; the other's <c>CompleteNodeInstanceAsync</c> returns 0 rows
     /// (→ <see cref="WorkflowActionCode.AlreadyHandled"/>).</para>
+    ///
+    /// <para>WF-18 (FIX-A/B): the fresh snapshot is returned via <paramref name="freshNode"/>
+    /// so that callers can thread <see cref="NodeInstance.ApproverSetEpoch"/> into the
+    /// subsequent completion CAS predicate.  This ensures that a concurrent 加签 that
+    /// bumped the epoch between this read and the CAS will be detected (rows==0).</para>
     /// </summary>
     public async Task<bool> CanCompleteAsync(NodeHandlerContext ctx)
     {
@@ -194,6 +199,25 @@ internal sealed class AllApprovalHandler : INodeKindHandler
 
         int threshold = ComputeThreshold(fresh.TotalRequired, fresh.ApprovePercent, fresh.NodeKey);
         return fresh.ApprovedCount >= threshold;
+    }
+
+    /// <summary>
+    /// Re-read the node and return the latest snapshot (WF-18 FIX-A/B helper).
+    ///
+    /// <para>The engine calls this variant when it needs the fresh
+    /// <see cref="NodeInstance.ApproverSetEpoch"/> for the completion CAS after having
+    /// incremented the advisory approval count.  The separate re-read is intentional:
+    /// the count increment was already committed so this snapshot captures both the
+    /// new count and the current epoch.</para>
+    /// </summary>
+    internal static Task<NodeInstance?> ReadFreshNodeAsync(
+        DbContext db,
+        Guid nodeInstanceId,
+        System.Threading.CancellationToken ct)
+    {
+        return db.Set<NodeInstance>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(n => n.ID == nodeInstanceId, ct)!;
     }
 
     // ── OnCompleteAsync ───────────────────────────────────────────────────────
@@ -214,6 +238,12 @@ internal sealed class AllApprovalHandler : INodeKindHandler
     /// <para>Returns <c>true</c> if this caller won the CAS and completed the node.
     /// Returns <c>false</c> if the count has not yet reached the threshold, or if
     /// another concurrent caller already won the CAS (rows == 0).</para>
+    ///
+    /// <para>WF-18 (FIX-A/B): <paramref name="freshNode"/> must be the post-increment
+    /// re-read so that its <see cref="NodeInstance.ApproverSetEpoch"/> is current.
+    /// The epoch is folded into the completion CAS predicate alongside RowVer — a
+    /// concurrent 加签 that bumped the epoch invalidates this in-flight completion,
+    /// causing rows==0 so the caller can re-read and re-evaluate the threshold.</para>
     /// </summary>
     internal static async Task<bool> TryCompleteApprovedAsync(
         DbContext db,
@@ -227,11 +257,15 @@ internal sealed class AllApprovalHandler : INodeKindHandler
             return false; // advisory count not yet at threshold; wait
 
         // Advisory count says we might be the threshold-crosser; attempt the CAS.
+        // WF-18 FIX-A/B: assert ApproverSetEpoch so a concurrent 加签 that bumped
+        // TotalRequired invalidates this in-flight completion (rows→0).
         var rows = await GuardedTransition.CompleteNodeInstanceAsync(
             db,
             freshNode.ID,
             freshNode.RowVer,
             NodeState.CompletedApproved,
+            generation: freshNode.Generation,
+            expectedApproverSetEpoch: freshNode.ApproverSetEpoch,
             ct: ct);
 
         if (rows == 1)
@@ -303,12 +337,16 @@ internal sealed class AllApprovalHandler : INodeKindHandler
         }
 
         // Attempt the rejection CAS.
+        // WF-18 FIX-A/B: assert Generation + ApproverSetEpoch so a concurrent
+        // 加签 (or return) that changed the approver set invalidates this CAS.
         var rows = await GuardedTransition.CompleteNodeInstanceAsync(
             db,
             freshNode.ID,
             freshNode.RowVer,
             NodeState.CompletedRejected,
             decidedBy: actorITCode,
+            generation: freshNode.Generation,
+            expectedApproverSetEpoch: freshNode.ApproverSetEpoch,
             ct: ct);
 
         if (rows == 1)

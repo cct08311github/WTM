@@ -150,4 +150,23 @@ public class NodeInstance : BasePoco, ITenant
     /// Null for non-Ack node kinds.
     /// </summary>
     public Models.AckMode? AckMode { get; set; }
+
+    // ── Wave-4 WF-18: 加签 (add-approver) epoch ───────────────────────────────
+
+    /// <summary>
+    /// Node-local epoch that is bumped in the same atomic statement as every approver-set
+    /// mutation (加签 insert, AtAction revoke, 转办 mid-flight reassign).
+    ///
+    /// <para><strong>R1 keystone (FIX-A/B):</strong> folded into the completion CAS predicate
+    /// alongside <c>RowVer</c>.  Because <c>TotalRequired</c> and <c>ApproverSetEpoch</c>
+    /// are always co-incremented and both asserted at flip time, the threshold basis and the
+    /// completion guard travel together — a concurrent 加签 that arrives between the
+    /// threshold-met decision and the CAS flip will be detected and the deciding approver
+    /// re-reads the updated threshold.  See §4 R1 and §2 of the Wave-4 design addendum.</para>
+    ///
+    /// <para>Distinct from <see cref="Generation"/> (Wave-3 cross-node 回退 supersession):
+    /// this epoch is node-local and scoped to approver-set changes within a single activation.
+    /// Default 0.  No index needed — reads always go through the PK row.</para>
+    /// </summary>
+    public uint ApproverSetEpoch { get; set; }
 }

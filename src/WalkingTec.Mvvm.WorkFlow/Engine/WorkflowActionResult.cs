@@ -87,6 +87,19 @@ public sealed record WorkflowActionResult
     /// </summary>
     public static readonly WorkflowActionResult JoinUnsatisfiable = new(WorkflowActionCode.JoinUnsatisfiable);
 
+    // ── WF-18 Wave-4: 加签 ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// 加签 rejected: chain depth has reached <see cref="WorkFlowOptions.MaxAddDepth"/>.
+    /// </summary>
+    public static readonly WorkflowActionResult MaxAddDepthExceeded = new(WorkflowActionCode.MaxAddDepthExceeded);
+
+    /// <summary>
+    /// 加签 rejected: the node has already left <see cref="NodeState.Activated"/>
+    /// (completed, rejected, or superseded).  No task was inserted.
+    /// </summary>
+    public static readonly WorkflowActionResult NodeAlreadyDecided = new(WorkflowActionCode.NodeAlreadyDecided);
+
     // ── Instance ──────────────────────────────────────────────────────────────
 
     /// <summary>The outcome code for this result.</summary>
@@ -199,4 +212,18 @@ public enum WorkflowActionCode
     /// token was terminated.  (Wave-3 §4.4 orphan fail-closed backstop.)
     /// </summary>
     JoinUnsatisfiable,
+
+    // ── WF-18 Wave-4: 加签 (add-approver) ─────────────────────────────────────
+
+    /// <summary>
+    /// 加签 was rejected because the 加签 chain depth has reached
+    /// <see cref="WorkFlowOptions.MaxAddDepth"/>.  No CAS was attempted; no task was inserted.
+    /// </summary>
+    MaxAddDepthExceeded,
+
+    /// <summary>
+    /// 加签 was rejected because the node has already left <see cref="NodeState.Activated"/>
+    /// (completed, rejected, or superseded).  Tasks are never inserted into a decided node.
+    /// </summary>
+    NodeAlreadyDecided,
 }

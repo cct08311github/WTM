@@ -137,6 +137,27 @@ public enum NodeKind
     InclusiveGateway,
 }
 
+// ── WF-18: 加签 insertion position ─────────────────────────────────────────
+
+/// <summary>
+/// Position at which a 加签 (add-approver) task is injected relative to the
+/// current active task in a <see cref="ApproveMode.Sequential"/> node.
+/// </summary>
+public enum AddPosition
+{
+    /// <summary>
+    /// Insert before the current active task (pre-sign): the injected approver(s)
+    /// must act before the current approver's turn is reached again.
+    /// </summary>
+    Before,
+
+    /// <summary>
+    /// Insert after the current active task (post-sign): the injected approver(s)
+    /// act immediately after the current approver completes.
+    /// </summary>
+    After,
+}
+
 /// <summary>Actions recorded in <see cref="WorkflowEventLog"/>.</summary>
 public enum EventAction
 {
