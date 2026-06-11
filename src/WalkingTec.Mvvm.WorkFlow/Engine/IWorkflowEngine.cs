@@ -344,6 +344,58 @@ public interface IWorkflowEngine
         CancellationToken ct = default);
 
     /// <summary>
+    /// Mid-flight delegation (转办/委托-now): atomically reassigns an existing Pending
+    /// <see cref="Models.ApprovalTask"/> from its current holder to a new delegatee via a
+    /// single-statement CAS guard (design §3 path B, §4 FIX-C, WF-19).
+    ///
+    /// <para><strong>1-for-1 slot transfer:</strong> <c>TotalRequired</c> on the node is
+    /// NEVER modified.  The delegatee steps into exactly the principal's slot; vote count
+    /// is structurally unchanged.</para>
+    ///
+    /// <para><strong>Collision guard:</strong> if the delegatee already holds an active
+    /// (<see cref="Models.TaskState.Pending"/>, <see cref="Models.TaskState.AddedPending"/>,
+    /// or <see cref="Models.TaskState.NotYetActive"/>) task on the same node and generation,
+    /// the reassignment is refused with
+    /// <see cref="WorkflowActionCode.DelegateAlreadyParticipant"/> — mid-flight merge of
+    /// two active slots would break the vote count invariant.</para>
+    ///
+    /// <para><strong>Generation guard:</strong> if the task's
+    /// <see cref="Models.ApprovalTask.Generation"/> has been superseded (e.g. after a
+    /// 回退 span-discard), the CAS returns rows==0 and the method returns
+    /// <see cref="WorkflowActionCode.AlreadyHandled"/> — no zombie reassignment.</para>
+    ///
+    /// <para><strong>Standing rules:</strong> this entry is explicit 转办/委托-now only.
+    /// Standing DelegationRules affect the next activation path; no retro-mint is performed
+    /// here.</para>
+    ///
+    /// <para><strong>Event log:</strong> one <see cref="Models.WorkflowEventLog"/> row with
+    /// <see cref="Models.EventAction.Delegate"/> is appended on every attempt that reaches
+    /// the CAS (success or collision).</para>
+    /// </summary>
+    /// <param name="taskId">PK of the actor's active <see cref="Models.ApprovalTask"/> to reassign.</param>
+    /// <param name="actorITCode">Server-side ITCode of the principal (RBAC guard: must equal task.AssigneeITCode).</param>
+    /// <param name="delegateeITCode">ITCode of the new assignee after reassignment.</param>
+    /// <param name="delegationRuleId">Optional FK-by-value to a DelegationRule for provenance tracking.</param>
+    /// <param name="reason">Optional reason surfaced in the event log.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>
+    /// <see cref="WorkflowActionCode.Advanced"/> on success (slot reassigned, node epoch bumped);
+    /// <see cref="WorkflowActionCode.DelegateAlreadyParticipant"/> when delegatee already has an active slot;
+    /// <see cref="WorkflowActionCode.TaskNotActive"/> when the task is not found or not Pending;
+    /// <see cref="WorkflowActionCode.NotAuthorized"/> when <paramref name="actorITCode"/> is not the assignee;
+    /// <see cref="WorkflowActionCode.NodeClosed"/> when the node or process instance is not found;
+    /// <see cref="WorkflowActionCode.NodeAlreadyDecided"/> when the node left Activated state;
+    /// <see cref="WorkflowActionCode.AlreadyHandled"/> when a concurrent CAS beat this call (rows==0).
+    /// </returns>
+    Task<WorkflowActionResult> DelegateTaskAsync(
+        Guid taskId,
+        string actorITCode,
+        string delegateeITCode,
+        Guid? delegationRuleId = null,
+        string? reason = null,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Approver returns the flow to an arbitrary upstream Approval node that dominates
     /// the current trigger node (ReturnToNode — spec §5.7 Wave-3).
     ///
@@ -368,6 +420,43 @@ public interface IWorkflowEngine
     Task<WorkflowActionResult> ReturnToNodeAsync(
         Guid taskId,
         string targetNodeKey,
+        string actorITCode,
+        string? reason = null,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Admin revocation: reverts all open Pending <see cref="Models.ApprovalTask"/> rows
+    /// produced by <paramref name="delegationRuleId"/> back to their original principals
+    /// (1-for-1 slot reassignment — <c>TotalRequired</c> NEVER changes).
+    ///
+    /// <para><strong>Relationship to <see cref="Models.DelegationRule.IsValid"/>:</strong>
+    /// Flipping <c>DelegationRule.IsValid = false</c> alone affects future activations only
+    /// (standing delegation affects the next node activation, not nodes already activated).
+    /// This method is the in-flight revocation path.</para>
+    ///
+    /// <para><strong>Idempotent:</strong> tasks that were already claimed, cancelled, or
+    /// superseded since the snapshot are reported as <see cref="GuardedTransition.RevokeSingleTaskResult.NotPending"/>
+    /// — not an error.  Partial success (some tasks reverted, some already handled) is valid.</para>
+    ///
+    /// <para><strong>RBAC:</strong> caller must hold the admin role before invoking this method.</para>
+    ///
+    /// <para><strong>Epoch bump:</strong> each successfully reverted task causes its owning node's
+    /// <c>ApproverSetEpoch</c> to be bumped so any in-flight completion re-reads the updated
+    /// eligible-actor set.</para>
+    ///
+    /// <para><strong>Event log:</strong> one <see cref="Models.WorkflowEventLog"/> row per
+    /// successfully revoked task (action = <see cref="Models.EventAction.Delegate"/>).</para>
+    /// </summary>
+    /// <param name="delegationRuleId">PK of the <see cref="Models.DelegationRule"/> to revoke.</param>
+    /// <param name="actorITCode">ITCode of the admin performing the revocation (RBAC + audit).</param>
+    /// <param name="reason">Optional reason surfaced in the event log.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>
+    /// Count of tasks successfully reverted (rows==1 CAS); 0 if no tasks were affected.
+    /// Partial success (some tasks already handled) does NOT produce an error result.
+    /// </returns>
+    Task<int> RevokeDelegationAsync(
+        Guid delegationRuleId,
         string actorITCode,
         string? reason = null,
         CancellationToken ct = default);

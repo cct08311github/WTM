@@ -3,6 +3,8 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.WorkFlow.Definition;
 using WalkingTec.Mvvm.WorkFlow.Engine;
@@ -62,8 +64,26 @@ public static class ServiceCollectionExtensions
         //    ConcurrentDictionary. Must be singleton to share the compiled-predicate cache
         //    across all request-scoped engine instances.
         services.AddSingleton<IRoutingEvaluator, WhitelistRoutingEvaluator>();
-        services.AddScoped<IApproverResolver, DefaultApproverResolver>();
         services.TryAddScoped<IManagerChainProvider, DefaultManagerChainProvider>();
+
+        // WF-19: IApproverResolver is decorated with DelegationResolvingDecorator.
+        //
+        // Pattern: register DefaultApproverResolver as a concrete scoped service (the "inner"),
+        // then register IApproverResolver via a factory delegate that wraps the inner with the
+        // decorator.  This avoids BuildServiceProvider() (which would crash under ASP.NET Core's
+        // scope-validation), and correctly handles consumer-registered custom resolvers: if the
+        // consumer replaces IApproverResolver via AddScoped<IApproverResolver, CustomResolver>()
+        // AFTER calling AddWtmWorkFlow(), the factory here is overridden and the decorator is NOT
+        // applied to the custom resolver.  That is intentional — consumers who want delegation on
+        // a custom resolver can chain their own decorator.  The default resolver always gets it.
+        //
+        // The factory receives the scoped IServiceProvider — safe, no root-provider access.
+        services.AddScoped<DefaultApproverResolver>();
+        services.AddScoped<IApproverResolver>(sp =>
+            new DelegationResolvingDecorator(
+                sp.GetRequiredService<DefaultApproverResolver>(),
+                sp.GetRequiredService<IOptions<WorkFlowOptions>>(),
+                sp.GetRequiredService<ILogger<DelegationResolvingDecorator>>()));
         services.AddScoped<SequentialApprovalHandler>(); // WF-8 串签
         services.AddScoped<AllApprovalHandler>();        // WF-9 会签
         services.AddScoped<AnyApprovalHandler>();        // WF-10 或签
@@ -308,6 +328,12 @@ public static class WorkFlowDbContextExtensions
             // AckMode: completion mode for Ack nodes. Null for non-Ack nodes.
             e.Property(x => x.AckMode);
 
+            // ── Wave-4 (WF-19) fields ──────────────────────────────────────────
+            // DefinitionCode: stamped at mint time from WorkflowGraph.Key.
+            // Used by DelegationResolvingDecorator to scope-filter DelegationRules without
+            // an extra JOIN.  Null for pre-Wave-4 rows (treated as global scope by decorator).
+            e.Property(x => x.DefinitionCode).HasMaxLength(100);
+
             // ── Wave-4 (WF-18) fields ──────────────────────────────────────────
             // ApproverSetEpoch: node-local epoch co-incremented with TotalRequired in every
             // approver-set mutation (加签, AtAction revoke, 转办 reassign).  Asserted in the
@@ -362,6 +388,21 @@ public static class WorkFlowDbContextExtensions
             e.HasIndex(x => new { x.NodeInstanceId, x.AssigneeITCode, x.Generation })
              .IsUnique()
              .HasDatabaseName("IX_Wf_ApprovalTask_Node_Assignee_Gen");
+
+            // ── Wave-4 (WF-19) fields ──────────────────────────────────────────
+            // DelegationRuleId: FK-by-value to the DelegationRule that produced this slot.
+            // Null for non-delegated tasks.
+            e.Property(x => x.DelegationRuleId);
+
+            // DelegationExpiresUtc: snapshot of DelegationRule.EndUtc at mint/reassign time.
+            // Null = no window constraint.  Participates in the AtAction claim CAS predicate.
+            // Backfill note: no data migration needed — null is the correct default for all
+            // pre-Wave-4 rows (they are not subject to a delegation window).
+            e.Property(x => x.DelegationExpiresUtc);
+
+            // WindowVerifiedUtc: audit-only timestamp (AtAction mode).  NEVER in any CAS
+            // predicate.  Null for AtAssignment and not-yet-claimed tasks.
+            e.Property(x => x.WindowVerifiedUtc);
         });
 
         // ── WorkflowEventLog ──────────────────────────────────────────────────
@@ -408,12 +449,18 @@ public static class WorkFlowDbContextExtensions
             e.Property(x => x.TenantCode).HasMaxLength(50);
         });
 
-        // ── DelegationRule (WF-19 stub) ───────────────────────────────────────
+        // ── DelegationRule (WF-19) ────────────────────────────────────────────
         builder.Entity<DelegationRule>(e =>
         {
             e.ToTable("Wf_DelegationRule");
-            e.HasIndex(x => new { x.TenantCode, x.PrincipalITCode, x.EndUtc });
-            e.HasIndex(x => x.DelegateeITCode);
+
+            // Chain-resolution lookup index: (TenantCode, PrincipalITCode, IsValid, StartUtc, EndUtc).
+            // DelegationResolvingDecorator queries by tenant + principal + IsValid + date window.
+            // Non-filtered to work across all 7 providers (MySQL/Oracle lack filtered indexes).
+            e.HasIndex(x => new { x.TenantCode, x.PrincipalITCode, x.EndUtc })
+             .HasDatabaseName("IX_Wf_DelegationRule_Principal_Lookup");
+            e.HasIndex(x => x.DelegateeITCode)
+             .HasDatabaseName("IX_Wf_DelegationRule_Delegatee");
 
             e.Property(x => x.PrincipalITCode).HasMaxLength(50).IsRequired();
             e.Property(x => x.DelegateeITCode).HasMaxLength(50).IsRequired();

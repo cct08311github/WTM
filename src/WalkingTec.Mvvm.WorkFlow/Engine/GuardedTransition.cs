@@ -834,6 +834,73 @@ public static class GuardedTransition
                 ct);
     }
 
+    // ── WF-19: 委托 mid-flight task reassignment ─────────────────────────────────
+
+    /// <summary>
+    /// Atomically reassign an existing <see cref="ApprovalTask"/> from the current holder
+    /// (<paramref name="principalITCode"/>) to a new delegatee (mid-flight 转办/委托-now;
+    /// design §3 path B, FIX-C).
+    ///
+    /// <para><strong>Single-statement CAS:</strong>
+    /// <c>WHERE ID==@taskId AND State==Pending AND RowVer==@v AND Generation==@g</c><br/>
+    /// <c>SET AssigneeITCode=@delegatee, DelegatedFromITCode=@principal,
+    ///    DelegationRuleId=@ruleId, DelegationExpiresUtc=@ruleEndUtc, RowVer+=1</c>.</para>
+    ///
+    /// <para><strong>TotalRequired invariant:</strong> this CAS never touches TotalRequired.
+    /// It is a 1-for-1 slot transfer — the vote count is structurally unchanged (FIX-C).</para>
+    ///
+    /// <para>rows == 1 → <paramref name="delegateeITCode"/> now owns the slot; the original
+    /// holder (<paramref name="principalITCode"/>) can no longer act on this task.  The caller
+    /// must then bump the node's <c>ApproverSetEpoch</c> via
+    /// <see cref="AdvanceNodeApproverSetEpochAsync"/> so any in-flight completion CAS
+    /// re-evaluates against the updated eligible-actor set.</para>
+    ///
+    /// <para>rows == 0 → the task is no longer Pending (principal already acted) or the
+    /// Generation guard rejected a stale-epoch reassign after a 回退 span-discard.
+    /// Treat as <see cref="WorkflowActionResult.AlreadyHandled"/> — the delegation
+    /// harmlessly did not apply.</para>
+    /// </summary>
+    /// <param name="db">DbContext (caller owns the explicit transaction).</param>
+    /// <param name="taskId">PK of the <see cref="ApprovalTask"/> being reassigned.</param>
+    /// <param name="expectedRowVer">RowVer read before this call; stale → CAS fails.</param>
+    /// <param name="generation">Generation of the task's node; stale after 回退 → CAS fails (T-DEL-12).</param>
+    /// <param name="delegateeITCode">ITCode of the new assignee.</param>
+    /// <param name="principalITCode">ITCode of the original holder; stamped as DelegatedFromITCode.</param>
+    /// <param name="delegationRuleId">FK-by-value to the triggering DelegationRule (provenance).</param>
+    /// <param name="delegationExpiresUtc">Snapshot of rule EndUtc for AtAction window checks; null = no window.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>rows-affected: 1 = CAS won (slot reassigned), 0 = task not Pending or epoch stale.</returns>
+    public static Task<int> ReassignTaskAssigneeAsync(
+        DbContext db,
+        Guid taskId,
+        uint expectedRowVer,
+        uint generation,
+        string delegateeITCode,
+        string principalITCode,
+        Guid? delegationRuleId,
+        DateTime? delegationExpiresUtc,
+        CancellationToken ct = default)
+    {
+        // FIX-1: add AssigneeITCode==principalITCode to the predicate to close the TOCTOU
+        // hijack window: if a concurrent actor already reassigned the slot (bumping RowVer),
+        // the fresh RowVer re-read inside the engine tx would otherwise pass the CAS even though
+        // the slot now belongs to someone else.  Binding the current owner in the WHERE clause
+        // ensures the CAS is a no-op (rows==0) when the assignee has changed.
+        return db.Set<ApprovalTask>()
+            .Where(x => x.ID == taskId
+                         && x.State == TaskState.Pending
+                         && x.RowVer == expectedRowVer
+                         && x.Generation == generation
+                         && x.AssigneeITCode == principalITCode)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(x => x.AssigneeITCode, delegateeITCode)
+                       .SetProperty(x => x.DelegatedFromITCode, principalITCode)
+                       .SetProperty(x => x.DelegationRuleId, delegationRuleId)
+                       .SetProperty(x => x.DelegationExpiresUtc, delegationExpiresUtc)
+                       .SetProperty(x => x.RowVer, x => x.RowVer + 1),
+                ct);
+    }
+
     // ── ApprovalTask transitions ───────────────────────────────────────────────
 
     /// <summary>
@@ -883,6 +950,213 @@ public static class GuardedTransition
                        .SetProperty(x => x.Comment, comment)
                        .SetProperty(x => x.RowVer, x => x.RowVer + 1),
                 ct);
+    }
+
+    // ── WF-19 #284.4: ClaimDelegatedTaskAsync (AtAction window check folded into CAS) ──────
+
+    /// <summary>
+    /// AtAction variant of <see cref="ClaimApprovalTaskAsync"/> that additionally enforces the
+    /// delegation window in the same atomic UPDATE predicate (FIX-D, design §4 R3).
+    ///
+    /// <para><strong>Predicate:</strong>
+    /// <c>WHERE ID==@id AND State==Pending AND RowVer==@v AND Generation==@g
+    ///    AND (DelegationExpiresUtc IS NULL OR @now &lt;= DelegationExpiresUtc)</c></para>
+    ///
+    /// <para><c>@now</c> is app-supplied and bound once (never SQL <c>CURRENT_TIMESTAMP</c>).</para>
+    ///
+    /// <para>rows==0 is ambiguous: either the task was already handled by a concurrent actor,
+    /// or the delegation window expired.  The caller must disambiguate with a follow-up
+    /// no-side-effect read:
+    /// <list type="bullet">
+    ///   <item>State==Pending AND @now &gt; DelegationExpiresUtc → <see cref="WorkflowActionCode.DelegationExpired"/>
+    ///     (task intentionally stays Pending; audit shows real reason).</item>
+    ///   <item>Otherwise → <see cref="WorkflowActionCode.AlreadyHandled"/> (concurrently acted).</item>
+    /// </list></para>
+    ///
+    /// <para><strong>DO NOT modify the existing <see cref="ClaimApprovalTaskAsync"/> predicate</strong>
+    /// — that would break the byte-identical pre-Wave-4 hot path for AtAssignment tasks.</para>
+    /// </summary>
+    /// <param name="db">DbContext; no explicit transaction required (single-statement CAS).</param>
+    /// <param name="taskId">PK of the task to claim.</param>
+    /// <param name="expectedRowVer">RowVer read before this call; stale → rows==0.</param>
+    /// <param name="nextState">Approved or Rejected.</param>
+    /// <param name="actedAtUtc">App-supplied timestamp (bound once; never SQL CURRENT_TIMESTAMP).</param>
+    /// <param name="comment">Optional approver comment.</param>
+    /// <param name="generation">Process generation (Wave-3 stale-span guard).</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>rows-affected: 1 = claimed, 0 = already handled or window expired.</returns>
+    public static Task<int> ClaimDelegatedTaskAsync(
+        DbContext db,
+        Guid taskId,
+        uint expectedRowVer,
+        TaskState nextState,
+        DateTime actedAtUtc,
+        string? comment = null,
+        uint? generation = null,
+        CancellationToken ct = default)
+    {
+        // FIX-D: window check AND state flip in one statement — no TOCTOU gap.
+        // The @now bound is actedAtUtc (caller supplies it once).
+        var now = actedAtUtc;
+
+        if (generation.HasValue)
+        {
+            var gen = generation.Value;
+            return db.Set<ApprovalTask>()
+                .Where(x => x.ID == taskId
+                             && x.State == TaskState.Pending
+                             && x.RowVer == expectedRowVer
+                             && x.Generation == gen
+                             && (x.DelegationExpiresUtc == null || now <= x.DelegationExpiresUtc))
+                .ExecuteUpdateAsync(
+                    s => s.SetProperty(x => x.State, nextState)
+                           .SetProperty(x => x.ActedAtUtc, actedAtUtc)
+                           .SetProperty(x => x.Comment, comment)
+                           .SetProperty(x => x.RowVer, x => x.RowVer + 1),
+                    ct);
+        }
+
+        return db.Set<ApprovalTask>()
+            .Where(x => x.ID == taskId
+                         && x.State == TaskState.Pending
+                         && x.RowVer == expectedRowVer
+                         && (x.DelegationExpiresUtc == null || now <= x.DelegationExpiresUtc))
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(x => x.State, nextState)
+                       .SetProperty(x => x.ActedAtUtc, actedAtUtc)
+                       .SetProperty(x => x.Comment, comment)
+                       .SetProperty(x => x.RowVer, x => x.RowVer + 1),
+                ct);
+    }
+
+    // ── WF-19 #284.5: RevokeDelegatedTasksAsync (admin revocation sweep) ─────────
+
+    /// <summary>
+    /// Sweep result for a single task row during revocation.
+    /// </summary>
+    public enum RevokeSingleTaskResult
+    {
+        /// <summary>CAS succeeded — task reverted to principal.</summary>
+        Revoked,
+        /// <summary>CAS returned rows==0 — task was no longer Pending or Generation changed.</summary>
+        NotPending,
+        /// <summary>The task had no DelegationRuleId matching the requested rule (not applicable).</summary>
+        NotDelegated,
+    }
+
+    /// <summary>
+    /// Per-task outcome reported by <see cref="RevokeDelegatedTasksAsync"/>.
+    /// </summary>
+    public sealed record RevokeDelegatedTaskOutcome(
+        Guid TaskId,
+        RevokeSingleTaskResult Result);
+
+    /// <summary>
+    /// Admin revocation sweep: for every open Pending <see cref="ApprovalTask"/> produced by
+    /// <paramref name="delegationRuleId"/>, atomically reverts the slot to the original principal
+    /// (1-for-1 slot reassignment — <c>TotalRequired</c> NEVER changes).
+    ///
+    /// <para><strong>Per-row CAS:</strong>
+    /// <c>WHERE ID==@taskId AND State==Pending AND RowVer==@v AND Generation==@g</c>
+    /// <c>SET AssigneeITCode=DelegatedFromITCode, DelegatedFromITCode=NULL,
+    ///    DelegationRuleId=NULL, DelegationExpiresUtc=NULL, RowVer+=1</c>.
+    /// Each row uses its own <c>(RowVer, Generation)</c> snapshot — partial success is valid
+    /// and reported per task.</para>
+    ///
+    /// <para><strong>Idempotent:</strong> rows==0 (already acted or generation changed) is
+    /// treated as <see cref="RevokeSingleTaskResult.NotPending"/> — not an error.</para>
+    ///
+    /// <para><strong>Epoch bump:</strong> every node whose task was successfully revoked has its
+    /// <c>ApproverSetEpoch</c> bumped via <see cref="AdvanceNodeApproverSetEpochAsync"/> so any
+    /// in-flight completion CAS re-reads the updated eligible-actor set.  The epoch bump is
+    /// best-effort: rows==0 there (node completed concurrently) is safe and logged at Debug.</para>
+    ///
+    /// <para><strong>RBAC:</strong> caller (engine method) is responsible for admin-level
+    /// authorization before calling this method.</para>
+    ///
+    /// <para><strong>Event log:</strong> the engine method appends a
+    /// <see cref="Models.EventAction.Delegate"/> row per task inside the same DB session;
+    /// this method does NOT write event log rows (single-responsibility).</para>
+    /// </summary>
+    /// <param name="db">DbContext; caller does NOT need an explicit transaction (per-row CAS).</param>
+    /// <param name="delegationRuleId">FK-by-value of the rule whose delegations are being revoked.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Sequence of per-task outcomes; callers should collect and report partial success.</returns>
+    public static async IAsyncEnumerable<RevokeDelegatedTaskOutcome> RevokeDelegatedTasksAsync(
+        DbContext db,
+        Guid delegationRuleId,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        // 1. Read all active tasks (Pending | NotYetActive | AddedPending) for this rule in one
+        //    query (snapshot; no explicit transaction).  NotYetActive = Sequential tasks minted
+        //    but not yet reached; AddedPending = tasks added by 加签.  All must be reverted so
+        //    that no stale delegated slot fires when the workflow advances.
+        //    Each row is then CAS'd individually — partial success is valid.
+        var candidates = await db.Set<ApprovalTask>()
+            .AsNoTracking()
+            .Where(t => t.DelegationRuleId == delegationRuleId
+                         && (t.State == TaskState.Pending
+                             || t.State == TaskState.NotYetActive
+                             || t.State == TaskState.AddedPending)
+                         && t.IsValid == true)
+            .Select(t => new { t.ID, t.RowVer, t.Generation, t.DelegatedFromITCode, t.NodeInstanceId, t.State })
+            .ToListAsync(ct);
+
+        foreach (var row in candidates)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            // Guard: task must have a principal to revert to.
+            if (string.IsNullOrWhiteSpace(row.DelegatedFromITCode))
+            {
+                yield return new RevokeDelegatedTaskOutcome(row.ID, RevokeSingleTaskResult.NotDelegated);
+                continue;
+            }
+
+            var principal = row.DelegatedFromITCode!;
+
+            // 2. Per-row single-statement CAS: revert slot to principal.
+            //    Clears DelegationRuleId + DelegationExpiresUtc (no longer delegated).
+            //    DelegatedFromITCode cleared (task is back to a native slot).
+            //    State predicate uses the snapshot state (Pending | NotYetActive | AddedPending)
+            //    so concurrent activations or completes that changed the state cause rows==0
+            //    which is a safe no-op (the task already moved out of scope).
+            int rows = await db.Set<ApprovalTask>()
+                .Where(t => t.ID == row.ID
+                             && t.State == row.State
+                             && t.RowVer == row.RowVer
+                             && t.Generation == row.Generation)
+                .ExecuteUpdateAsync(
+                    s => s.SetProperty(t => t.AssigneeITCode, principal)
+                           .SetProperty(t => t.DelegatedFromITCode, (string?)null)
+                           .SetProperty(t => t.DelegationRuleId, (Guid?)null)
+                           .SetProperty(t => t.DelegationExpiresUtc, (DateTime?)null)
+                           .SetProperty(t => t.RowVer, t => t.RowVer + 1),
+                    ct);
+
+            if (rows == 0)
+            {
+                // Concurrent claim or supersede beat us — task already moved; not an error.
+                yield return new RevokeDelegatedTaskOutcome(row.ID, RevokeSingleTaskResult.NotPending);
+                continue;
+            }
+
+            // 3. Bump the owning node's ApproverSetEpoch so any in-flight completion re-reads.
+            //    Re-read node RowVer fresh after the task CAS.
+            var nodeSnap = await db.Set<NodeInstance>()
+                .AsNoTracking()
+                .Where(n => n.ID == row.NodeInstanceId && n.State == NodeState.Activated)
+                .Select(n => new { n.ID, n.RowVer })
+                .FirstOrDefaultAsync(ct);
+
+            if (nodeSnap is not null)
+            {
+                // Best-effort epoch bump — rows==0 (node completed concurrently) is safe.
+                await AdvanceNodeApproverSetEpochAsync(db, nodeSnap.ID, nodeSnap.RowVer, ct);
+            }
+
+            yield return new RevokeDelegatedTaskOutcome(row.ID, RevokeSingleTaskResult.Revoked);
+        }
     }
 
     // ── Helper: map rows-affected to WorkflowActionResult ─────────────────────

@@ -120,21 +120,42 @@ internal sealed class AnyApprovalHandler : INodeKindHandler
                 s => s.SetProperty(n => n.TotalRequired, total),
                 ct);
 
+        // FIX-4: read delegation provenance from the decorator (if active).
+        // Cast is safe — when no decorator is registered the cast returns null and provenance
+        // fields stay null (backward-compatible: pre-Wave-4 tasks have no delegation info).
+        var delegationCtx = _resolver as IDelegationContextProvider;
+        var provenance    = delegationCtx?.LastResolutionProvenance;
+
         var now   = DateTime.UtcNow;
         var tasks = new List<ApprovalTask>(total);
 
         for (int i = 0; i < total; i++)
         {
+            var assignee = approvers[i];
+
+            // FIX-4 AtAssignment provenance: stamp if this slot was produced by a delegation rule.
+            DelegationProvenance? prov = null;
+            provenance?.TryGetValue(assignee, out prov);
+
             tasks.Add(new ApprovalTask
             {
-                ID             = Guid.NewGuid(),
-                TenantCode     = instance.TenantCode,
-                NodeInstanceId = nodeInst.ID,
-                AssigneeITCode = approvers[i],
-                State          = TaskState.Pending,
-                SequenceOrder  = i,
-                RowVer         = 0,
-                IsValid        = true,
+                ID                   = Guid.NewGuid(),
+                TenantCode           = instance.TenantCode,
+                NodeInstanceId       = nodeInst.ID,
+                AssigneeITCode       = assignee,
+                State                = TaskState.Pending,
+                SequenceOrder        = i,
+                RowVer               = 0,
+                IsValid              = true,
+                // FIX-4: Generation must match nodeInst.Generation so that post-回退 stale CAS
+                // (Generation < gNew) is correctly blocked by IX_Wf_ApprovalTask_Node_Assignee_Gen.
+                Generation           = nodeInst.Generation,
+                // Delegation provenance (null when task is not delegated).
+                DelegatedFromITCode  = prov?.OriginalPrincipalITCode != assignee
+                                           ? prov?.OriginalPrincipalITCode
+                                           : null,
+                DelegationRuleId     = prov?.RuleId,
+                DelegationExpiresUtc = prov?.RuleEndUtc,
             });
         }
 
@@ -355,6 +376,10 @@ internal sealed class AnyApprovalHandler : INodeKindHandler
                     Comment        = $"Admin fallback: {detail}",
                     RowVer         = 0,
                     IsValid        = true,
+                    // FIX-4: Generation must match nodeInst.Generation so that post-回退 stale CAS
+                    // (Generation < gNew) is correctly blocked by IX_Wf_ApprovalTask_Node_Assignee_Gen.
+                    Generation     = nodeInst.Generation,
+                    // Admin-fallback tasks are never delegated; leave provenance fields null.
                 };
                 db.Set<ApprovalTask>().Add(adminTask);
 

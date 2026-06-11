@@ -299,7 +299,101 @@ Race classes handled:
 
 ---
 
-## 12. Related Documentation
+## 12. 委托/转交 (Delegation) — Wave 4
+
+### What is a DelegationRule?
+
+A `DelegationRule` grants one principal (delegator) the ability to transfer approval authority to a delegate for a bounded time window. It is a **standing rule** — it affects the next node activation that resolves the delegator as an approver, not in-flight tasks that were already minted before the rule was created.
+
+```
+Wf_DelegationRule
+  DelegatorITCode   VARCHAR  -- the approver granting authority
+  DelegateITCode    VARCHAR  -- the person receiving authority
+  StartsUtc         DATETIME -- inclusive window start (app-supplied, never DB GETDATE())
+  ExpiresUtc        DATETIME -- inclusive window end; NULL = no expiry
+  IsEnabled         BIT      -- soft on/off without deletion
+```
+
+When the `DelegationResolvingDecorator` resolves approvers for a node, any delegator whose `DelegationRule` is active at mint time is replaced by the delegate. The resulting `ApprovalTask` records `DelegatedFromITCode` (the original principal) and `DelegationRuleId` for provenance.
+
+### Authority Freezing — `DelegationWindowMode`
+
+| Mode | When window is checked | Frozen at |
+|---|---|---|
+| `AtAssignment` (default) | Only at mint time | Authority is frozen the moment the task is created |
+| `AtAction` (opt-in) | At mint **and** again at claim time | Window re-checked on every approve/reject |
+
+```csharp
+services.AddWtmWorkFlow(options =>
+{
+    // default — authority frozen at mint; expired rule does not revoke in-flight tasks
+    options.DelegationWindowMode = DelegationWindowMode.AtAssignment;
+
+    // opt-in — window re-checked at claim; expired tasks remain Pending until manually cleared
+    // Recommended only when paired with Wave-5 AddWtmWorkFlowTimers (not yet shipped)
+    // options.DelegationWindowMode = DelegationWindowMode.AtAction;
+});
+```
+
+**AtAssignment** (default): once a task is created, the delegate's authority is permanent regardless of whether the rule window later expires. This is the low-surprise default — revocation requires an explicit admin call to `RevokeDelegationAsync`.
+
+**AtAction**: the `ClaimDelegatedTaskAsync` CAS adds `AND (DelegationExpiresUtc IS NULL OR @now <= DelegationExpiresUtc)` to the guard predicate. There is no TOCTOU gap — the window check and the state flip happen in the same atomic `ExecuteUpdateAsync`. If the window has expired the engine returns `WorkflowActionResult.DelegationExpired` (a distinct closed-union result code, not `AlreadyHandled`). Without Wave-5 timeout reaper, expired AtAction tasks remain Pending indefinitely and require either manual reassignment or `RevokeDelegationAsync`.
+
+### Hop Cap and Cycle Prevention
+
+- `MaxDelegationHops` (default 3): the decorator refuses to create a chain longer than this. A `DelegationHopsExceeded` result is returned.
+- **Cycle detection**: if the target delegate is also a delegator whose chain would loop back to any member of the current chain, the entire node minting fails closed (`DelegationCycle`). Partial activation is never written.
+- **转办 collision refusal**: if the delegate is already a direct participant in the same node (has a Pending task), the delegation is refused (`DelegateAlreadyParticipant`).
+
+### Revoking Delegation — `RevokeDelegationAsync`
+
+An admin or the delegator can revoke all in-flight delegated tasks for a given rule:
+
+```csharp
+// Revokes all Pending tasks minted under delegationRuleId.
+// Each revoked task is atomically reverted to the original principal (DelegatedFromITCode).
+// Returns the count of successfully revoked tasks.
+int revoked = await engine.RevokeDelegationAsync(
+    delegationRuleId: ruleId,
+    actorITCode: adminITCode,
+    reason: "Rule expired — manual sweep",
+    ct: cancellationToken);
+```
+
+Internally `RevokeDelegationAsync` iterates `GuardedTransition.RevokeDelegatedTasksAsync`, an `IAsyncEnumerable<RevokeDelegatedTaskOutcome>` that performs per-task CAS operations:
+
+```
+For each Pending task under delegationRuleId:
+  CAS: WHERE ID == taskId AND State == Pending AND RowVer == @v AND Generation == @g
+  SET: AssigneeITCode ← DelegatedFromITCode, clear delegation fields, RowVer += 1
+  → Revoked     (rows == 1: task reverted to principal)
+  → NotPending  (rows == 0: another actor acted concurrently — idempotent no-op)
+  → NotDelegated (DelegatedFromITCode was blank — not a delegation task, skipped)
+  Best-effort: bump ApproverSetEpoch on the owning NodeInstance
+```
+
+Each revoked task writes a `WorkflowEventLog` entry (`EventAction.Delegate`, detail `[委托撤销 rule=<id>]`). The event log write is best-effort — revocation itself succeeds even if the audit row fails.
+
+### Mid-Flight Invariant
+
+Delegation **never changes `TotalRequired`** on an in-flight node. It is always a 1-for-1 task reassignment: one Pending task flips its `AssigneeITCode` from delegator → delegate (via `ReassignTaskAssigneeAsync` CAS at activation time). Approval quorum counts are unaffected.
+
+### Race Handling
+
+| Race | Outcome |
+|---|---|
+| Concurrent approve vs. expired AtAction window | CAS miss → `DelegationExpired` (disambiguated by re-read after miss) |
+| Concurrent revoke vs. claim | Exactly one wins (CAS); loser returns `NotPending` or `AlreadyHandled` |
+| Concurrent revoke vs. revoke | Both are CAS — first writer wins per task; second gets `NotPending` |
+| AtAction approve exactly at boundary | `@now == DelegationExpiresUtc` is inclusive — task is claimed (see T-DEL-08) |
+
+### Startup Warnings
+
+When `DelegationWindowMode == AtAction` the engine logs a `LogWarning` at startup reminding operators to pair it with Wave-5 `AddWtmWorkFlowTimers`. This is a compliance-relevant configuration.
+
+---
+
+## 13. Related Documentation
 
 - [Analysis Mode](/analysis-mode) — field whitelist pattern reused by the routing evaluator
 - [Lookup Cache](/lookup-cache) — caching patterns available to approver resolvers

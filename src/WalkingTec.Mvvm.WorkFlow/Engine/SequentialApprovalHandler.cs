@@ -123,6 +123,10 @@ internal sealed class SequentialApprovalHandler : INodeKindHandler
         var pointer = nodeInst.SequencePointer; // typically 0 on fresh activation
         var now = DateTime.UtcNow;
 
+        // WF-19: read delegation provenance from the decorator (if active).
+        var delegationCtx = _resolver as IDelegationContextProvider;
+        var provenance    = delegationCtx?.LastResolutionProvenance;
+
         var tasks = new List<ApprovalTask>(approvers.Count);
 
         for (int i = 0; i < approvers.Count; i++)
@@ -138,18 +142,29 @@ internal sealed class SequentialApprovalHandler : INodeKindHandler
                 ? TaskState.AutoApproved
                 : (i == pointer ? TaskState.Pending : TaskState.NotYetActive);
 
+            // WF-19 AtAssignment provenance: stamp if this slot was produced by a delegation rule.
+            DelegationProvenance? prov = null;
+            provenance?.TryGetValue(assignee, out prov);
+
             var task = new ApprovalTask
             {
-                ID = Guid.NewGuid(),
-                TenantCode = instance.TenantCode,
-                NodeInstanceId = nodeInst.ID,
-                AssigneeITCode = assignee,
-                State = state,
-                SequenceOrder = i,
-                ActedAtUtc = autoApprove ? now : null,
-                Comment = autoApprove ? "Auto-approved: initiator is the approver." : null,
-                RowVer = 0,
-                IsValid = true,
+                ID                   = Guid.NewGuid(),
+                TenantCode           = instance.TenantCode,
+                NodeInstanceId       = nodeInst.ID,
+                AssigneeITCode       = assignee,
+                State                = state,
+                SequenceOrder        = i,
+                ActedAtUtc           = autoApprove ? now : null,
+                Comment              = autoApprove ? "Auto-approved: initiator is the approver." : null,
+                RowVer               = 0,
+                IsValid              = true,
+                Generation           = nodeInst.Generation,
+                // Delegation provenance (null when task is not delegated).
+                DelegatedFromITCode  = prov?.OriginalPrincipalITCode != assignee
+                                           ? prov?.OriginalPrincipalITCode
+                                           : null,
+                DelegationRuleId     = prov?.RuleId,
+                DelegationExpiresUtc = prov?.RuleEndUtc,
             };
             tasks.Add(task);
 

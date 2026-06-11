@@ -135,6 +135,12 @@ internal sealed class AllApprovalHandler : INodeKindHandler
         // Compute threshold early to detect impossible configurations at mint time.
         int threshold = ComputeThreshold(total, nodeInst.ApprovePercent, nodeDef.NodeKey);
 
+        // WF-19: read delegation provenance from the decorator (if active).
+        // Cast is safe — when no decorator is registered the cast returns null and provenance
+        // fields stay null (backward-compatible: pre-Wave-4 tasks have no delegation info).
+        var delegationCtx = _resolver as IDelegationContextProvider;
+        var provenance    = delegationCtx?.LastResolutionProvenance;
+
         // Write TotalRequired to NodeInstance.
         await db.Set<NodeInstance>()
             .Where(n => n.ID == nodeInst.ID)
@@ -147,16 +153,29 @@ internal sealed class AllApprovalHandler : INodeKindHandler
 
         for (int i = 0; i < total; i++)
         {
+            var assignee = approvers[i];
+
+            // WF-19 AtAssignment provenance: stamp if this slot was produced by a delegation rule.
+            DelegationProvenance? prov = null;
+            provenance?.TryGetValue(assignee, out prov);
+
             tasks.Add(new ApprovalTask
             {
-                ID             = Guid.NewGuid(),
-                TenantCode     = instance.TenantCode,
-                NodeInstanceId = nodeInst.ID,
-                AssigneeITCode = approvers[i],
-                State          = TaskState.Pending,
-                SequenceOrder  = i,
-                RowVer         = 0,
-                IsValid        = true,
+                ID                   = Guid.NewGuid(),
+                TenantCode           = instance.TenantCode,
+                NodeInstanceId       = nodeInst.ID,
+                AssigneeITCode       = assignee,
+                State                = TaskState.Pending,
+                SequenceOrder        = i,
+                RowVer               = 0,
+                IsValid              = true,
+                Generation           = nodeInst.Generation,
+                // Delegation provenance (null when task is not delegated).
+                DelegatedFromITCode  = prov?.OriginalPrincipalITCode != assignee
+                                           ? prov?.OriginalPrincipalITCode
+                                           : null,
+                DelegationRuleId     = prov?.RuleId,
+                DelegationExpiresUtc = prov?.RuleEndUtc,
             });
         }
 

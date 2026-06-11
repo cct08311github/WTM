@@ -112,6 +112,39 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         _options = options?.Value ?? new WorkFlowOptions();
         _logger = (ILogger)(logger ?? throw new ArgumentNullException(nameof(logger)));
         _notifier = notifier;
+
+        // WF-19 FIX-8: AtAction mode uses a nullable-DateTime WHERE clause inside
+        // ClaimDelegatedTaskAsync's ExecuteUpdateAsync.  Oracle and DaMeng EF Core providers
+        // do not reliably translate nullable DateTime comparisons in bulk-update predicates
+        // (RETURNING-clause semantics differ; DaMeng provider has incomplete nullable support).
+        // Fail fast at construction so the misconfiguration is caught during DI warm-up
+        // rather than silently firing incorrect SQL at runtime.
+        if (_options.DelegationWindowMode == DelegationWindowMode.AtAction
+            && dc is not null
+            && (dc.DBType == DBTypeEnum.Oracle || dc.DBType == DBTypeEnum.DaMeng))
+        {
+            throw new InvalidOperationException(
+                $"DelegationWindowMode.AtAction is not supported with DBTypeEnum.{dc.DBType}. " +
+                "Oracle and DaMeng EF Core providers do not reliably translate the nullable " +
+                "DateTime comparison used by ClaimDelegatedTaskAsync's ExecuteUpdateAsync predicate. " +
+                "Use DelegationWindowMode.AtAssignment (the default) for Oracle and DaMeng deployments, " +
+                "or switch to a supported provider (SQLite, SqlServer, PgSql, MySql).");
+        }
+
+        // WF-19 #284.5: startup warning — AtAction mode is compliance-relevant and recommended
+        // to be paired with the Wave-5 timeout reaper (AddWtmWorkFlowTimers), which is not yet
+        // shipped.  Log once per engine instance (scoped → once per request) at Warning so it
+        // appears in application logs during first use.  NO BuildServiceProvider() here.
+        if (_options.DelegationWindowMode == DelegationWindowMode.AtAction)
+        {
+            _logger.LogWarning(
+                "WorkflowEngine: DelegationWindowMode is set to AtAction (opt-in, non-default). " +
+                "AtAction re-checks the delegation window at claim time; it is recommended to be " +
+                "paired with the Wave-5 timeout reaper (AddWtmWorkFlowTimers, not yet shipped). " +
+                "Without the reaper, expired-window tasks remain Pending indefinitely and require " +
+                "manual reassignment or RevokeDelegationAsync. " +
+                "This is a compliance-relevant configuration — document it in CHANGELOG.");
+        }
     }
 
     /// <summary>Test / direct-DbContext constructor.  Internal so tests in the sibling project can
@@ -226,7 +259,9 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             ct: ct);
 
         // Mint the Start NodeInstance (Pending → engine will activate it in AdvanceAsync).
-        var startNode = await MintNodeInstanceAsync(instance, startNodeDef, ct);
+        // WF-19: stamp DefinitionCode from graph.Key for delegation scope filtering.
+        var startNode = await MintNodeInstanceAsync(instance, startNodeDef, ct,
+            definitionCode: graph.Key);
         _ = startNode; // used implicitly by AdvanceAsync below
 
         // Drive through pass-through nodes until blocked or completed.
@@ -642,7 +677,8 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                 ?? throw new InvalidOperationException(
                        $"NextKey '{nextKey}' not found as a node in graph '{graph.Key}'.");
 
-            await MintNodeInstanceAsync(instance, nextNodeDef, ct);
+            // WF-19: pass graph.Key so delegation scope filtering works on the minted node.
+            await MintNodeInstanceAsync(instance, nextNodeDef, ct, definitionCode: graph.Key);
         }
 
         return WorkflowActionResult.NodeCompleted;
@@ -813,7 +849,8 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             ?? throw new InvalidOperationException(
                    $"Join successor '{joinSuccessorKey}' not found in graph '{graph.Key}'.");
 
-        await MintNodeInstanceAsync(instance, successorDef, ct);
+        // WF-19: pass graph.Key so delegation scope filtering works on the minted Join successor.
+        await MintNodeInstanceAsync(instance, successorDef, ct, definitionCode: graph.Key);
         return WorkflowActionResult.NodeCompleted;
     }
 
@@ -1002,20 +1039,79 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         var now = DateTime.UtcNow;
 
         // 8. CAS: claim the task as Approved.
-        var claimedRows = await GuardedTransition.ClaimApprovalTaskAsync(
-            Db, taskId,
-            expectedRowVer: task.RowVer,
-            nextState: TaskState.Approved,
-            actedAtUtc: now,
-            comment: comment,
-            ct: ct);
+        //    WF-19 #284.4 — AtAction routing:
+        //    When DelegationWindowMode==AtAction AND the task has a delegation window, route
+        //    through ClaimDelegatedTaskAsync which folds the window into the CAS predicate.
+        //    This is the ONLY code path that should use ClaimDelegatedTaskAsync — do NOT touch
+        //    any other claim site (RejectTaskAsync, ReturnToPrevAsync, etc.) for AtAction.
+        int claimedRows;
+        bool isAtActionDelegated = _options.DelegationWindowMode == DelegationWindowMode.AtAction
+                                   && task.DelegationExpiresUtc.HasValue;
 
-        if (claimedRows == 0)
+        if (isAtActionDelegated)
         {
-            _logger.LogDebug(
-                "ApproveTaskAsync: task {TaskId} CAS returned 0 rows — already handled by concurrent actor.",
-                taskId);
-            return WorkflowActionResult.AlreadyHandled;
+            // AtAction path: window check + state flip are atomic (FIX-D).
+            claimedRows = await GuardedTransition.ClaimDelegatedTaskAsync(
+                Db, taskId,
+                expectedRowVer: task.RowVer,
+                nextState: TaskState.Approved,
+                actedAtUtc: now,
+                comment: comment,
+                ct: ct);
+
+            if (claimedRows == 0)
+            {
+                // Disambiguate: expired window vs. already handled by concurrent actor.
+                // Follow-up no-side-effect read to check why (design §4 R3).
+                var freshTask = await Db.Set<ApprovalTask>()
+                    .AsNoTracking()
+                    .Select(t => new { t.ID, t.State, t.DelegationExpiresUtc })
+                    .SingleOrDefaultAsync(t => t.ID == taskId, ct);
+
+                if (freshTask is not null
+                    && freshTask.State == TaskState.Pending
+                    && freshTask.DelegationExpiresUtc.HasValue
+                    && now > freshTask.DelegationExpiresUtc.Value)
+                {
+                    _logger.LogWarning(
+                        "ApproveTaskAsync: task {TaskId} AtAction window expired at {Expiry} (now={Now}). " +
+                        "Task stays Pending; manual reassignment or revoke required.",
+                        taskId, freshTask.DelegationExpiresUtc.Value, now);
+                    return WorkflowActionResult.DelegationExpired;
+                }
+
+                _logger.LogDebug(
+                    "ApproveTaskAsync: task {TaskId} AtAction CAS returned 0 rows — already handled by concurrent actor.",
+                    taskId);
+                return WorkflowActionResult.AlreadyHandled;
+            }
+
+            // AtAction claim succeeded — stamp WindowVerifiedUtc for audit (non-guarded, audit-only).
+            // The spec says this field is NEVER used in any predicate; a separate non-guarded update is acceptable.
+            await Db.Set<ApprovalTask>()
+                .Where(t => t.ID == taskId)
+                .ExecuteUpdateAsync(
+                    s => s.SetProperty(t => t.WindowVerifiedUtc, now),
+                    ct);
+        }
+        else
+        {
+            // Standard path (AtAssignment default or no delegation window) — byte-identical to pre-Wave-4.
+            claimedRows = await GuardedTransition.ClaimApprovalTaskAsync(
+                Db, taskId,
+                expectedRowVer: task.RowVer,
+                nextState: TaskState.Approved,
+                actedAtUtc: now,
+                comment: comment,
+                ct: ct);
+
+            if (claimedRows == 0)
+            {
+                _logger.LogDebug(
+                    "ApproveTaskAsync: task {TaskId} CAS returned 0 rows — already handled by concurrent actor.",
+                    taskId);
+                return WorkflowActionResult.AlreadyHandled;
+            }
         }
 
         // 9. Write event log for the approve action.
@@ -1311,20 +1407,75 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         var now = DateTime.UtcNow;
 
         // 8. CAS: claim the task as Rejected.
-        var claimedRows = await GuardedTransition.ClaimApprovalTaskAsync(
-            Db, taskId,
-            expectedRowVer: task.RowVer,
-            nextState: TaskState.Rejected,
-            actedAtUtc: now,
-            comment: reason,
-            ct: ct);
+        // FIX-3: AtAction window applies to ALL actions by the delegatee, not just Approve.
+        // Under AtAction, an expired delegatee must NOT be able to reject (which in 会签 can
+        // complete-reject the node) — the delegation window is the delegatee's authority to act.
+        // Mirror the ApproveTaskAsync AtAction routing pattern exactly.
+        int claimedRows;
+        bool isAtActionDelegatedReject = _options.DelegationWindowMode == DelegationWindowMode.AtAction
+                                         && task.DelegationExpiresUtc.HasValue;
 
-        if (claimedRows == 0)
+        if (isAtActionDelegatedReject)
         {
-            _logger.LogDebug(
-                "RejectTaskAsync: task {TaskId} CAS returned 0 rows — already handled by concurrent actor.",
-                taskId);
-            return WorkflowActionResult.AlreadyHandled;
+            // AtAction path: window check + state flip are atomic (same as Approve).
+            claimedRows = await GuardedTransition.ClaimDelegatedTaskAsync(
+                Db, taskId,
+                expectedRowVer: task.RowVer,
+                nextState: TaskState.Rejected,
+                actedAtUtc: now,
+                comment: reason,
+                ct: ct);
+
+            if (claimedRows == 0)
+            {
+                var freshTask = await Db.Set<ApprovalTask>()
+                    .AsNoTracking()
+                    .Select(t => new { t.ID, t.State, t.DelegationExpiresUtc })
+                    .SingleOrDefaultAsync(t => t.ID == taskId, ct);
+
+                if (freshTask is not null
+                    && freshTask.State == TaskState.Pending
+                    && freshTask.DelegationExpiresUtc.HasValue
+                    && now > freshTask.DelegationExpiresUtc.Value)
+                {
+                    _logger.LogWarning(
+                        "RejectTaskAsync: task {TaskId} AtAction window expired at {Expiry} (now={Now}). " +
+                        "Task stays Pending; manual reassignment or revoke required.",
+                        taskId, freshTask.DelegationExpiresUtc.Value, now);
+                    return WorkflowActionResult.DelegationExpired;
+                }
+
+                _logger.LogDebug(
+                    "RejectTaskAsync: task {TaskId} AtAction CAS returned 0 rows — already handled by concurrent actor.",
+                    taskId);
+                return WorkflowActionResult.AlreadyHandled;
+            }
+
+            // AtAction claim succeeded — stamp WindowVerifiedUtc for audit (non-guarded, audit-only).
+            await Db.Set<ApprovalTask>()
+                .Where(t => t.ID == taskId)
+                .ExecuteUpdateAsync(
+                    s => s.SetProperty(t => t.WindowVerifiedUtc, now),
+                    ct);
+        }
+        else
+        {
+            // Standard path (AtAssignment default or no delegation window) — byte-identical to pre-Wave-4.
+            claimedRows = await GuardedTransition.ClaimApprovalTaskAsync(
+                Db, taskId,
+                expectedRowVer: task.RowVer,
+                nextState: TaskState.Rejected,
+                actedAtUtc: now,
+                comment: reason,
+                ct: ct);
+
+            if (claimedRows == 0)
+            {
+                _logger.LogDebug(
+                    "RejectTaskAsync: task {TaskId} CAS returned 0 rows — already handled by concurrent actor.",
+                    taskId);
+                return WorkflowActionResult.AlreadyHandled;
+            }
         }
 
         // 9. Mode-specific rejection logic.
@@ -1669,20 +1820,75 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         var now = DateTime.UtcNow;
 
         // 7. CAS: claim the trigger task as Rejected (the task that triggered the return).
-        var claimedRows = await GuardedTransition.ClaimApprovalTaskAsync(
-            Db, taskId,
-            expectedRowVer: task.RowVer,
-            nextState: TaskState.Rejected,
-            actedAtUtc: now,
-            comment: reason,
-            ct: ct);
+        // FIX-3: AtAction window applies to ALL actions by the delegatee, not just Approve.
+        // Under AtAction, an expired delegatee must NOT be able to trigger a return-to-initiator —
+        // the delegation window is the delegatee's authority to act.
+        // Mirror the ApproveTaskAsync AtAction routing pattern exactly.
+        int claimedRows;
+        bool isAtActionDelegatedReturn = _options.DelegationWindowMode == DelegationWindowMode.AtAction
+                                         && task.DelegationExpiresUtc.HasValue;
 
-        if (claimedRows == 0)
+        if (isAtActionDelegatedReturn)
         {
-            _logger.LogDebug(
-                "ReturnToInitiatorAsync: task {TaskId} CAS returned 0 rows — already handled.",
-                taskId);
-            return WorkflowActionResult.AlreadyHandled;
+            // AtAction path: window check + state flip are atomic (same as Approve).
+            claimedRows = await GuardedTransition.ClaimDelegatedTaskAsync(
+                Db, taskId,
+                expectedRowVer: task.RowVer,
+                nextState: TaskState.Rejected,
+                actedAtUtc: now,
+                comment: reason,
+                ct: ct);
+
+            if (claimedRows == 0)
+            {
+                var freshTask = await Db.Set<ApprovalTask>()
+                    .AsNoTracking()
+                    .Select(t => new { t.ID, t.State, t.DelegationExpiresUtc })
+                    .SingleOrDefaultAsync(t => t.ID == taskId, ct);
+
+                if (freshTask is not null
+                    && freshTask.State == TaskState.Pending
+                    && freshTask.DelegationExpiresUtc.HasValue
+                    && now > freshTask.DelegationExpiresUtc.Value)
+                {
+                    _logger.LogWarning(
+                        "ReturnToInitiatorAsync: task {TaskId} AtAction window expired at {Expiry} (now={Now}). " +
+                        "Task stays Pending; manual reassignment or revoke required.",
+                        taskId, freshTask.DelegationExpiresUtc.Value, now);
+                    return WorkflowActionResult.DelegationExpired;
+                }
+
+                _logger.LogDebug(
+                    "ReturnToInitiatorAsync: task {TaskId} AtAction CAS returned 0 rows — already handled by concurrent actor.",
+                    taskId);
+                return WorkflowActionResult.AlreadyHandled;
+            }
+
+            // AtAction claim succeeded — stamp WindowVerifiedUtc for audit (non-guarded, audit-only).
+            await Db.Set<ApprovalTask>()
+                .Where(t => t.ID == taskId)
+                .ExecuteUpdateAsync(
+                    s => s.SetProperty(t => t.WindowVerifiedUtc, now),
+                    ct);
+        }
+        else
+        {
+            // Standard path (AtAssignment default or no delegation window) — byte-identical to pre-Wave-4.
+            claimedRows = await GuardedTransition.ClaimApprovalTaskAsync(
+                Db, taskId,
+                expectedRowVer: task.RowVer,
+                nextState: TaskState.Rejected,
+                actedAtUtc: now,
+                comment: reason,
+                ct: ct);
+
+            if (claimedRows == 0)
+            {
+                _logger.LogDebug(
+                    "ReturnToInitiatorAsync: task {TaskId} CAS returned 0 rows — already handled.",
+                    taskId);
+                return WorkflowActionResult.AlreadyHandled;
+            }
         }
 
         // 8. Cancel all remaining Pending/NotYetActive tasks on this node.
@@ -2014,23 +2220,85 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             }
 
             // STEP-3b: Claim the trigger task itself as Rejected (the task that triggered return).
-            var claimedRows = await GuardedTransition.ClaimApprovalTaskAsync(
-                Db, taskId,
-                expectedRowVer: task.RowVer,
-                nextState: TaskState.Rejected,
-                actedAtUtc: DateTime.UtcNow,
-                comment: reason,
-                ct: ct);
+            // FIX-3: AtAction window applies to ALL actions by the delegatee, not just Approve.
+            // Under AtAction, route through ClaimDelegatedTaskAsync so that the window check and
+            // state flip are atomic.  If the window has expired, we still proceed with the return
+            // (BeginReturnAsync already won the linearization point), but we log the anomaly and
+            // stamp WindowVerifiedUtc only on success.
+            var stepNow = DateTime.UtcNow;
+            bool isAtActionDelegatedStep3b = _options.DelegationWindowMode == DelegationWindowMode.AtAction
+                                             && task.DelegationExpiresUtc.HasValue;
+            int claimedRows;
 
-            // If another actor already claimed it — we already atomically won the instance
-            // state transition (BeginReturnAsync), so treat this as an idempotent no-op;
-            // the return path proceeds.  Log a warning for diagnosis.
-            if (claimedRows == 0)
+            if (isAtActionDelegatedStep3b)
             {
-                _logger.LogWarning(
-                    "ExecuteReturnToNodeAsync: trigger task {TaskId} ClaimApprovalTask CAS returned 0 — " +
-                    "task already claimed by concurrent actor. Proceeding with return (instance already in Returning state).",
-                    taskId);
+                claimedRows = await GuardedTransition.ClaimDelegatedTaskAsync(
+                    Db, taskId,
+                    expectedRowVer: task.RowVer,
+                    nextState: TaskState.Rejected,
+                    actedAtUtc: stepNow,
+                    comment: reason,
+                    ct: ct);
+
+                // If CAS returned 0, the delegation window check in ClaimDelegatedTaskAsync folded
+                // out the predicate (expired) or a concurrent actor already claimed it.
+                // Either way, BeginReturnAsync already won the instance transition — the return proceeds.
+                if (claimedRows == 0)
+                {
+                    var freshTask3b = await Db.Set<ApprovalTask>()
+                        .AsNoTracking()
+                        .Select(t => new { t.ID, t.State, t.DelegationExpiresUtc })
+                        .SingleOrDefaultAsync(t => t.ID == taskId, ct);
+
+                    if (freshTask3b is not null
+                        && freshTask3b.State == TaskState.Pending
+                        && freshTask3b.DelegationExpiresUtc.HasValue
+                        && stepNow > freshTask3b.DelegationExpiresUtc.Value)
+                    {
+                        _logger.LogWarning(
+                            "ExecuteReturnToNodeAsync: STEP-3b trigger task {TaskId} AtAction window expired at {Expiry} " +
+                            "(now={Now}). Return proceeding (instance already in Returning state); task left Pending for revoke sweep.",
+                            taskId, freshTask3b.DelegationExpiresUtc.Value, stepNow);
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "ExecuteReturnToNodeAsync: STEP-3b trigger task {TaskId} AtAction CAS returned 0 — " +
+                            "task already claimed by concurrent actor. Proceeding with return (instance already in Returning state).",
+                            taskId);
+                    }
+                }
+                else
+                {
+                    // AtAction claim succeeded — stamp WindowVerifiedUtc for audit (non-guarded, audit-only).
+                    await Db.Set<ApprovalTask>()
+                        .Where(t => t.ID == taskId)
+                        .ExecuteUpdateAsync(
+                            s => s.SetProperty(t => t.WindowVerifiedUtc, stepNow),
+                            ct);
+                }
+            }
+            else
+            {
+                // Standard path (AtAssignment default or no delegation window) — byte-identical to pre-Wave-4.
+                claimedRows = await GuardedTransition.ClaimApprovalTaskAsync(
+                    Db, taskId,
+                    expectedRowVer: task.RowVer,
+                    nextState: TaskState.Rejected,
+                    actedAtUtc: stepNow,
+                    comment: reason,
+                    ct: ct);
+
+                // If another actor already claimed it — we already atomically won the instance
+                // state transition (BeginReturnAsync), so treat this as an idempotent no-op;
+                // the return path proceeds.  Log a warning for diagnosis.
+                if (claimedRows == 0)
+                {
+                    _logger.LogWarning(
+                        "ExecuteReturnToNodeAsync: trigger task {TaskId} ClaimApprovalTask CAS returned 0 — " +
+                        "task already claimed by concurrent actor. Proceeding with return (instance already in Returning state).",
+                        taskId);
+                }
             }
 
             // ── STEP-4: Supersede span NodeInstances ──────────────────────────
@@ -2082,6 +2350,11 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                 RejectPolicy = targetNodeDef.RejectPolicy ?? RejectPolicy.ReturnToInitiator,
                 RowVer = 0,
                 Generation = gNew,
+                // FIX-5: DefinitionCode must be carried from the graph key so that
+                // DelegationResolvingDecorator can scope-filter DelegationRules to this
+                // node after a 回退 (return-to-node).  Without it, scope-restricted rules
+                // created for this node would be invisible to the post-回退 resolver call.
+                DefinitionCode = graph.Key,
             };
             var mintOk = await GuardedTransition.MintNodeInstanceGuardedAsync(
                 Db, targetNodeInst, ct);
@@ -2172,7 +2445,8 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         ProcessInstance instance,
         NodeDef nodeDef,
         CancellationToken ct,
-        uint? generation = null)
+        uint? generation = null,
+        string? definitionCode = null)
     {
         var node = new NodeInstance
         {
@@ -2191,6 +2465,8 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             Generation = generation ?? instance.Generation,
             // WF-17: stamp AckMode for Ack nodes.
             AckMode = nodeDef.AckMode,
+            // WF-19: stamp DefinitionCode for delegation scope filtering.
+            DefinitionCode = definitionCode,
         };
         Db.Set<NodeInstance>().Add(node);
         await Db.SaveChangesAsync(ct);
@@ -2553,6 +2829,332 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             delta, string.Join(",", toInject), nodeInst.NodeKey, nodeInst.ID, position, newDepth);
 
         return WorkflowActionResult.Advanced;
+    }
+
+    // ── WF-19: DelegateTaskAsync (mid-flight 转办/委托-now) ──────────────────
+
+    /// <inheritdoc/>
+    public async Task<WorkflowActionResult> DelegateTaskAsync(
+        Guid taskId,
+        string actorITCode,
+        string delegateeITCode,
+        Guid? delegationRuleId = null,
+        string? reason = null,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(actorITCode))
+            throw new ArgumentException("actorITCode must not be empty.", nameof(actorITCode));
+        if (string.IsNullOrWhiteSpace(delegateeITCode))
+            throw new ArgumentException("delegateeITCode must not be empty.", nameof(delegateeITCode));
+
+        // 1. Load the actor's task (RBAC guard: actor must be the current Pending assignee).
+        var task = await Db.Set<ApprovalTask>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(t => t.ID == taskId && t.IsValid == true, ct);
+
+        if (task is null)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.TaskNotActive,
+                $"ApprovalTask {taskId} not found.");
+
+        if (task.AssigneeITCode != actorITCode)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NotAuthorized,
+                $"Actor '{actorITCode}' is not the assignee of task {taskId}.");
+
+        if (task.State != TaskState.Pending)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.TaskNotActive,
+                $"Task {taskId} is in state {task.State}, not Pending.");
+
+        // 2. Load node instance.
+        var nodeInst = await Db.Set<NodeInstance>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(n => n.ID == task.NodeInstanceId, ct);
+
+        if (nodeInst is null)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeClosed,
+                $"NodeInstance {task.NodeInstanceId} not found.");
+
+        if (nodeInst.State != NodeState.Activated)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeAlreadyDecided,
+                $"NodeInstance {nodeInst.ID} is in state {nodeInst.State}, not Activated.");
+
+        // 3. Load process instance for tenant isolation and event log.
+        var instance = await Db.Set<ProcessInstance>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(p => p.ID == nodeInst.InstanceId, ct);
+
+        if (instance is null)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeClosed,
+                $"ProcessInstance {nodeInst.InstanceId} not found.");
+
+        // 4. Collision guard (pre-check): delegatee already holds ANY slot on this node generation.
+        // FIX-2: widen from active-only (Pending/AddedPending/NotYetActive) to ANY state.
+        // Rationale: the UNIQUE index IX_Wf_ApprovalTask_Node_Assignee_Gen is non-filtered.
+        // If the delegatee already VOTED (Approved/Rejected) in this generation and we attempt
+        // to reassign their slot to them again, the CAS would collide with the voted row and
+        // surface a raw DbUpdateException (HTTP 500) instead of a clean DelegateAlreadyParticipant.
+        // Semantically, a human who already voted MUST NOT regain a Pending slot (one human =
+        // one slot = one vote per generation).  Widen the pre-check to catch this early.
+        var alreadyParticipant = await Db.Set<ApprovalTask>()
+            .AsNoTracking()
+            .AnyAsync(t => t.NodeInstanceId == nodeInst.ID
+                            && t.Generation == nodeInst.Generation
+                            && t.AssigneeITCode == delegateeITCode, ct);
+
+        if (alreadyParticipant)
+        {
+            _logger.LogWarning(
+                "DelegateTaskAsync: delegatee '{Delegatee}' already has an active slot on node {NodeId}. " +
+                "Refusing mid-flight merge; TotalRequired unchanged.",
+                delegateeITCode, nodeInst.ID);
+
+            // Log the refused attempt inside its own transaction (append-only, best-effort).
+            await WorkflowEventLogWriter.AppendAsync(
+                Db, instance.ID, instance.TenantCode,
+                EventAction.Delegate,
+                nodeKey: nodeInst.NodeKey,
+                actorITCode: actorITCode,
+                beforeState: nodeInst.State.ToString(),
+                afterState: nodeInst.State.ToString(),
+                reason: $"[委托拒绝: delegatee already an approver] delegate→{delegateeITCode}",
+                ct: ct);
+
+            return WorkflowActionResult.DelegateAlreadyParticipant;
+        }
+
+        // 5. Engine-owned explicit transaction: guarded ReassignTaskAssigneeAsync + epoch bump + event log.
+        await using var tx = await Db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            // Re-read fresh task snapshot inside the transaction to get current RowVer.
+            task = await Db.Set<ApprovalTask>()
+                .AsNoTracking()
+                .SingleOrDefaultAsync(t => t.ID == taskId && t.IsValid == true, ct)
+                ?? task; // keep stale as CAS-will-fail-safely fallback
+
+            if (task.State != TaskState.Pending)
+            {
+                await tx.RollbackAsync(CancellationToken.None);
+                return WorkflowActionResult.WithDetail(WorkflowActionCode.TaskNotActive,
+                    $"Task {taskId} is no longer Pending inside transaction.");
+            }
+
+            // FIX-1b: re-verify assignee inside the transaction.
+            // After the initial RBAC check, a concurrent actor may have reassigned this slot
+            // (bumping RowVer).  The ReassignTaskAssigneeAsync CAS now also guards on
+            // AssigneeITCode==actorITCode (FIX-1 in GuardedTransition), but returning
+            // NotAuthorized here gives a clearer diagnostic than a silent rows==0 → AlreadyHandled.
+            if (!string.Equals(task.AssigneeITCode, actorITCode, StringComparison.OrdinalIgnoreCase))
+            {
+                await tx.RollbackAsync(CancellationToken.None);
+                _logger.LogWarning(
+                    "DelegateTaskAsync: task {TaskId} assignee changed to '{NewAssignee}' inside " +
+                    "transaction (was '{Actor}'). Concurrent reassign won; returning NotAuthorized.",
+                    taskId, task.AssigneeITCode, actorITCode);
+                return WorkflowActionResult.WithDetail(WorkflowActionCode.NotAuthorized,
+                    $"Task {taskId} was reassigned to '{task.AssigneeITCode}' by a concurrent actor; " +
+                    $"'{actorITCode}' is no longer the assignee.");
+            }
+
+            // Re-read node inside transaction for current RowVer + ApproverSetEpoch.
+            nodeInst = await Db.Set<NodeInstance>()
+                .AsNoTracking()
+                .SingleOrDefaultAsync(n => n.ID == nodeInst.ID, ct)
+                ?? nodeInst;
+
+            if (nodeInst.State != NodeState.Activated)
+            {
+                await tx.RollbackAsync(CancellationToken.None);
+                return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeAlreadyDecided,
+                    $"NodeInstance {nodeInst.ID} left Activated state before transaction.");
+            }
+
+            // 5a. Single-statement CAS: reassign slot (FIX-C — TotalRequired NOT touched).
+            // FIX-6: pass nodeInst.Generation (the in-tx node snapshot), NOT task.Generation.
+            // task.Generation is the freshly re-read task row's value — comparing the row to
+            // itself is a tautology that can never reject.  nodeInst.Generation is the
+            // generation on the node; if a concurrent 回退 bumped the instance generation
+            // between our pre-tx check and this CAS, nodeInst.Generation > task.Generation
+            // and the predicate correctly rejects (rows==0 → AlreadyHandled).
+            // Note: DiscardTasksForReturnAsync sets task.State = Cancelled (not Generation) as
+            // the fence against stale-span tasks; State==Pending is the primary real fence —
+            // the generation guard is a belt-and-suspenders epoch check here.
+            var casRows = await GuardedTransition.ReassignTaskAssigneeAsync(
+                Db,
+                taskId: taskId,
+                expectedRowVer: task.RowVer,
+                generation: nodeInst.Generation,
+                delegateeITCode: delegateeITCode,
+                principalITCode: actorITCode,
+                delegationRuleId: delegationRuleId,
+                delegationExpiresUtc: null, // explicit 转办-now; no window expiry
+                ct: ct);
+
+            if (casRows == 0)
+            {
+                await tx.RollbackAsync(CancellationToken.None);
+                _logger.LogDebug(
+                    "DelegateTaskAsync: ReassignTaskAssigneeAsync CAS returned 0 for task {TaskId} — " +
+                    "concurrent actor already acted on this task.",
+                    taskId);
+                return WorkflowActionResult.AlreadyHandled;
+            }
+
+            // FIX-2 note: the unique index IX_Wf_ApprovalTask_Node_Assignee_Gen is non-filtered.
+            // The pre-check above now covers voted (Approved/Rejected) delegatees, so the CAS
+            // reaching here should never collide with a voted row.  However, between the pre-check
+            // and the CAS a second concurrent delegate call could race to the same delegatee.
+            // The catch block below handles the DbUpdateException from that narrow window.
+
+            // 5b. Bump node ApproverSetEpoch so in-flight completion CAS re-evaluates eligible actors.
+            // Re-read node RowVer after the task CAS to avoid stale-RowVer rejection here.
+            var nodeInstFresh = await Db.Set<NodeInstance>()
+                .AsNoTracking()
+                .SingleOrDefaultAsync(n => n.ID == nodeInst.ID, ct);
+
+            if (nodeInstFresh is not null)
+            {
+                await GuardedTransition.AdvanceNodeApproverSetEpochAsync(
+                    Db,
+                    nodeInst.ID,
+                    expectedRowVer: nodeInstFresh.RowVer,
+                    ct: ct);
+                // Epoch bump uses its own guard — rows==0 is benign (completion CAS already committed).
+            }
+
+            // 5c. Append event log row (inside the transaction; AppendAsync participates in ambient tx).
+            var delegateDetail = reason is not null
+                ? $"[委托→{delegateeITCode}] {reason}"
+                : $"委托→{delegateeITCode}";
+
+            await WorkflowEventLogWriter.AppendAsync(
+                Db, instance.ID, instance.TenantCode,
+                EventAction.Delegate,
+                nodeKey: nodeInst.NodeKey,
+                actorITCode: actorITCode,
+                beforeState: nodeInst.State.ToString(),
+                afterState: nodeInst.State.ToString(),
+                reason: delegateDetail,
+                generation: (int)nodeInst.Generation,
+                ct: ct);
+
+            await tx.CommitAsync(ct);
+        }
+        catch (Microsoft.EntityFrameworkCore.DbUpdateException)
+        {
+            // FIX-2: race-safe backstop.
+            // A second concurrent DelegateTaskAsync call between our pre-check and the CAS could
+            // attempt to assign the same delegatee on the same (NodeInstanceId, Generation) pair,
+            // colliding with the UNIQUE index IX_Wf_ApprovalTask_Node_Assignee_Gen.
+            // Roll back and surface DelegateAlreadyParticipant instead of a raw HTTP 500.
+            await tx.RollbackAsync(CancellationToken.None);
+            _logger.LogWarning(
+                "DelegateTaskAsync: unique-index collision on task {TaskId} → delegatee '{Delegatee}' " +
+                "already has a row on (NodeInstanceId={NodeId}, Generation={Gen}). " +
+                "Concurrent delegate call won; returning DelegateAlreadyParticipant.",
+                taskId, delegateeITCode, task.NodeInstanceId, task.Generation);
+            return WorkflowActionResult.DelegateAlreadyParticipant;
+        }
+        catch
+        {
+            await tx.RollbackAsync(CancellationToken.None);
+            throw;
+        }
+
+        _logger.LogInformation(
+            "DelegateTaskAsync: task {TaskId} reassigned from '{Principal}' to '{Delegatee}' " +
+            "on node '{NodeKey}' (id={NodeId}).",
+            taskId, actorITCode, delegateeITCode, nodeInst.NodeKey, nodeInst.ID);
+
+        return WorkflowActionResult.Advanced;
+    }
+
+    // ── WF-19 #284.5: RevokeDelegationAsync (admin revocation sweep) ─────────
+
+    /// <inheritdoc/>
+    public async Task<int> RevokeDelegationAsync(
+        Guid delegationRuleId,
+        string actorITCode,
+        string? reason = null,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(actorITCode))
+            throw new ArgumentException("actorITCode must not be empty.", nameof(actorITCode));
+
+        // RBAC guard: caller has already validated admin-level access before calling this.
+        // The engine enforces parameter integrity only.
+
+        int revokedCount = 0;
+        var outcomeBuffer = new System.Collections.Generic.List<GuardedTransition.RevokeDelegatedTaskOutcome>();
+
+        // Collect revocation outcomes from the sweep (IAsyncEnumerable — one iteration).
+        await foreach (var outcome in GuardedTransition.RevokeDelegatedTasksAsync(Db, delegationRuleId, ct))
+        {
+            outcomeBuffer.Add(outcome);
+            if (outcome.Result == GuardedTransition.RevokeSingleTaskResult.Revoked)
+                revokedCount++;
+        }
+
+        // Write event log rows for each successfully revoked task.
+        // Append inside the same DbContext session (no explicit transaction — each event-log
+        // append is idempotent and best-effort; partial failure is logged at Warning).
+        foreach (var outcome in outcomeBuffer)
+        {
+            if (outcome.Result != GuardedTransition.RevokeSingleTaskResult.Revoked)
+                continue;
+
+            // Minimal event-log data: load instance id + tenant from the task (no join needed
+            // because WorkflowEventLogWriter.AppendAsync takes instanceId directly).
+            // We read the task here because it was already mutated — we only need NodeInstanceId
+            // to find the ProcessInstance for the event log's instanceId field.
+            var taskSnap = await Db.Set<ApprovalTask>()
+                .AsNoTracking()
+                .Where(t => t.ID == outcome.TaskId)
+                .Select(t => new { t.NodeInstanceId, t.TenantCode })
+                .FirstOrDefaultAsync(ct);
+
+            if (taskSnap is null) continue;
+
+            var nodeSnap = await Db.Set<NodeInstance>()
+                .AsNoTracking()
+                .Where(n => n.ID == taskSnap.NodeInstanceId)
+                .Select(n => new { n.InstanceId, n.NodeKey, n.State, n.Generation })
+                .FirstOrDefaultAsync(ct);
+
+            if (nodeSnap is null) continue;
+
+            var revokeDetail = reason is not null
+                ? $"[委托撤销 rule={delegationRuleId}] {reason}"
+                : $"[委托撤销 rule={delegationRuleId}]";
+
+            try
+            {
+                await WorkflowEventLogWriter.AppendAsync(
+                    Db, nodeSnap.InstanceId, taskSnap.TenantCode,
+                    EventAction.Delegate,
+                    nodeKey: nodeSnap.NodeKey,
+                    actorITCode: actorITCode,
+                    beforeState: nodeSnap.State.ToString(),
+                    afterState: nodeSnap.State.ToString(),
+                    reason: revokeDetail,
+                    generation: (int)nodeSnap.Generation,
+                    ct: ct);
+            }
+            catch (Exception ex)
+            {
+                // Best-effort audit log — do not fail the revocation on log failure.
+                _logger.LogWarning(ex,
+                    "RevokeDelegationAsync: event log append failed for task {TaskId} " +
+                    "(rule={RuleId}). Revocation itself was successful.",
+                    outcome.TaskId, delegationRuleId);
+            }
+        }
+
+        _logger.LogInformation(
+            "RevokeDelegationAsync: rule {RuleId} revoked {Count} task(s) (actor='{Actor}', " +
+            "total swept={Total}).",
+            delegationRuleId, revokedCount, actorITCode, outcomeBuffer.Count);
+
+        return revokedCount;
     }
 
     // ── WF-15: Notify helper ─────────────────────────────────────────────────

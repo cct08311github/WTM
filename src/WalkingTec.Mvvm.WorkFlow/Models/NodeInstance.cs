@@ -151,6 +151,21 @@ public class NodeInstance : BasePoco, ITenant
     /// </summary>
     public Models.AckMode? AckMode { get; set; }
 
+    // ── Wave-4 WF-19: delegation scope context ────────────────────────────────
+
+    /// <summary>
+    /// The <see cref="Definition.WorkflowGraph.Key"/> of the owning process definition.
+    /// Stamped at mint time so the <c>DelegationResolvingDecorator</c> can apply scope-scoped
+    /// <see cref="DelegationRule"/> filtering without an extra JOIN to
+    /// <c>ProcessInstance → ProcessDefinitionVersion</c>.
+    ///
+    /// <para>Null for pre-Wave-4 node instances (no data migration needed — null is treated as
+    /// "match only global rules (ScopeDefinitionCode == null)" by the decorator, which is the
+    /// correct behaviour for single-tenant deployments without scope-restricted delegation).</para>
+    /// </summary>
+    [StringLength(100)]
+    public string? DefinitionCode { get; set; }
+
     // ── Wave-4 WF-18: 加签 (add-approver) epoch ───────────────────────────────
 
     /// <summary>

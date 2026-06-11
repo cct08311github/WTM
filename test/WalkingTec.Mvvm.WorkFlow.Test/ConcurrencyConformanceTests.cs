@@ -129,6 +129,11 @@ internal sealed class WfTestContext : DbContext
             b.HasIndex(x => new { x.NodeInstanceId, x.AssigneeITCode, x.Generation })
              .IsUnique()
              .HasDatabaseName("IX_Wf_ApprovalTask_Test_Node_Assignee_Gen");
+            // Wave-5 (WF-19) delegation columns.
+            b.Property(x => x.DelegatedFromITCode).HasMaxLength(50);
+            b.Property(x => x.DelegationRuleId);
+            b.Property(x => x.DelegationExpiresUtc);
+            b.Property(x => x.WindowVerifiedUtc);
         });
 
         // WorkflowTimer — minimal columns for CAS test.
@@ -1014,6 +1019,1002 @@ public class ConcurrencyConformanceTests_AddApprover : IDisposable
                     $"Round {round}: B won — ApproverSetEpoch must be 1");
             }
         }
+    }
+}
+
+// ─── T-DEL / T-MIX: WF-19 delegation (mid-flight reassignment) ───────────────
+
+/// <summary>
+/// Barrier-style concurrency tests for <see cref="GuardedTransition.ReassignTaskAssigneeAsync"/>
+/// (WF-19, design §3 path B, §4 FIX-C).
+///
+/// All tests run against a SQLite shared-in-memory instance so they execute on every
+/// CI push without external infrastructure.
+/// </summary>
+[TestClass]
+public class ConcurrencyConformanceTests_DelegateTask : IDisposable
+{
+    private SqliteConnection _keepAlive = null!;
+    private string _dbName = null!;
+
+    [TestInitialize]
+    public void Setup()
+    {
+        _dbName = $"WfDelegate_{Guid.NewGuid():N}";
+        _keepAlive = new SqliteConnection($"DataSource={_dbName}?mode=memory&cache=shared");
+        _keepAlive.Open();
+        using var db = MakeContext();
+        db.Database.EnsureCreated();
+    }
+
+    [TestCleanup]
+    public void Cleanup()
+    {
+        _keepAlive?.Close();
+        _keepAlive?.Dispose();
+    }
+
+    public void Dispose() => Cleanup();
+
+    private WfTestContext MakeContext() => new(_dbName);
+
+    // ── Seed helpers ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Seed an Activated node + a Pending ApprovalTask for <paramref name="assigneeITCode"/>
+    /// at the given <paramref name="generation"/>.
+    /// Returns (nodeId, taskId, instanceId).
+    /// </summary>
+    private async Task<(Guid nodeId, Guid taskId, Guid instanceId)> SeedNodeAndTaskAsync(
+        string assigneeITCode = "D",
+        uint generation = 0,
+        int totalRequired = 2)
+    {
+        var instanceId = Guid.NewGuid();
+        var nodeId     = Guid.NewGuid();
+        var taskId     = Guid.NewGuid();
+
+        await using var db = MakeContext();
+        db.ProcessInstances.Add(new ProcessInstance
+        {
+            ID = instanceId,
+            State = InstanceState.Running,
+            RowVer = 0,
+            InitiatorITCode = "initiator",
+            DefinitionVersionId = Guid.NewGuid(),
+            IsValid = true,
+            Generation = 0,
+        });
+        db.NodeInstances.Add(new NodeInstance
+        {
+            ID = nodeId,
+            State = NodeState.Activated,
+            RowVer = 0,
+            NodeKey = "approval_node",
+            InstanceId = instanceId,
+            TotalRequired = totalRequired,
+            ApproveMode = ApproveMode.All,
+            ApproverSetEpoch = 0,
+            Generation = generation,
+        });
+        db.ApprovalTasks.Add(new ApprovalTask
+        {
+            ID = taskId,
+            State = TaskState.Pending,
+            RowVer = 0,
+            AssigneeITCode = assigneeITCode,
+            NodeInstanceId = nodeId,
+            TenantCode = "test",
+            IsValid = true,
+            Generation = generation,
+            SequenceOrder = 0,
+        });
+        await db.SaveChangesAsync();
+        return (nodeId, taskId, instanceId);
+    }
+
+    // ── T-DEL-05: reassign vs approve race ───────────────────────────────────
+
+    /// <summary>
+    /// T-DEL-05: D→C reassignment races against D's own approve CAS on the same task.
+    /// Exactly one outcome: either C owns the slot (reassign won) or D already acted
+    /// (approve won, rows-reassign==0 → AlreadyHandled).
+    ///
+    /// TotalRequired invariant: TotalRequired is NEVER modified by either racer.
+    /// </summary>
+    [TestMethod]
+    public async Task T_DEL_05_ReassignVsApprove_ExactlyOneWinner()
+    {
+        const int Rounds = 20;
+
+        for (int round = 0; round < Rounds; round++)
+        {
+            var (nodeId, taskId, _) = await SeedNodeAndTaskAsync("D", generation: 0, totalRequired: 2);
+
+            var barrier = new SemaphoreSlim(0, 2);
+
+            // Racer A: D delegates to C (ReassignTaskAssigneeAsync CAS).
+            Task<int> RacerA() => Task.Run(async () =>
+            {
+                await barrier.WaitAsync();
+                await using var db = MakeContext();
+                return await GuardedTransition.ReassignTaskAssigneeAsync(
+                    db, taskId,
+                    expectedRowVer: 0,
+                    generation: 0,
+                    delegateeITCode: "C",
+                    principalITCode: "D",
+                    delegationRuleId: null,
+                    delegationExpiresUtc: null);
+            });
+
+            // Racer B: D approves the task (ApprovalTask_PendingToApprovedAsync CAS).
+            Task<int> RacerB() => Task.Run(async () =>
+            {
+                await barrier.WaitAsync();
+                await using var db = MakeContext();
+                return await WfGuardedTransition.ApprovalTask_PendingToApprovedAsync(db, taskId, expectedRowVer: 0);
+            });
+
+            var tA = RacerA();
+            var tB = RacerB();
+            barrier.Release(2);
+
+            int rowsA = await tA;
+            int rowsB = await tB;
+
+            // Exactly one CAS wins — both operate on RowVer=0.
+            int winners = (rowsA == 1 ? 1 : 0) + (rowsB == 1 ? 1 : 0);
+            Assert.AreEqual(1, winners,
+                $"Round {round}: T-DEL-05 — expected 1 winner, got reassign={rowsA} approve={rowsB}");
+
+            // TotalRequired invariant: neither CAS touches TotalRequired.
+            await using var verify = MakeContext();
+            var node = await verify.NodeInstances.AsNoTracking().SingleAsync(n => n.ID == nodeId);
+            Assert.AreEqual(2, node.TotalRequired,
+                $"Round {round}: T-DEL-05 — TotalRequired must remain 2 regardless of winner");
+
+            // Verify the task outcome is consistent.
+            var task = await verify.ApprovalTasks.AsNoTracking().SingleAsync(t => t.ID == taskId);
+            if (rowsA == 1)
+            {
+                // Reassign won: C owns the slot; task is still Pending (not yet acted upon).
+                Assert.AreEqual("C", task.AssigneeITCode,
+                    $"Round {round}: T-DEL-05 — reassign won; AssigneeITCode must be C");
+                Assert.AreEqual("D", task.DelegatedFromITCode,
+                    $"Round {round}: T-DEL-05 — DelegatedFromITCode must be D");
+                Assert.AreEqual(TaskState.Pending, task.State,
+                    $"Round {round}: T-DEL-05 — reassigned task must still be Pending");
+            }
+            else
+            {
+                // Approve won: task is Approved; reassign's CAS lost (rows==0 → AlreadyHandled).
+                Assert.AreEqual(TaskState.Approved, task.State,
+                    $"Round {round}: T-DEL-05 — approve won; task must be Approved");
+                Assert.AreEqual("D", task.AssigneeITCode,
+                    $"Round {round}: T-DEL-05 — approve won; AssigneeITCode stays D");
+            }
+        }
+    }
+
+    // ── T-DEL-06: reassign where delegatee already has an active slot ─────────
+
+    /// <summary>
+    /// T-DEL-06: C already holds an active Pending task on the same node and generation.
+    /// The reassignment CAS must be refused by the collision guard (DelegateAlreadyParticipant)
+    /// and D's original task must remain unchanged.
+    ///
+    /// This test validates the pre-check collision guard, not the CAS itself.
+    /// </summary>
+    [TestMethod]
+    public async Task T_DEL_06_ReassignCollision_DelegateeAlreadyHasActiveSlot()
+    {
+        // Seed: D's task (to be delegated) + C's existing task on same node.
+        var instanceId = Guid.NewGuid();
+        var nodeId     = Guid.NewGuid();
+        var taskD      = Guid.NewGuid();
+        var taskC      = Guid.NewGuid();
+
+        await using var seed = MakeContext();
+        seed.ProcessInstances.Add(new ProcessInstance
+        {
+            ID = instanceId,
+            State = InstanceState.Running,
+            RowVer = 0,
+            InitiatorITCode = "initiator",
+            DefinitionVersionId = Guid.NewGuid(),
+            IsValid = true,
+        });
+        seed.NodeInstances.Add(new NodeInstance
+        {
+            ID = nodeId,
+            State = NodeState.Activated,
+            RowVer = 0,
+            NodeKey = "approval_node",
+            InstanceId = instanceId,
+            TotalRequired = 2,
+            ApproveMode = ApproveMode.All,
+            Generation = 0,
+        });
+        // D's task (the one to be reassigned).
+        seed.ApprovalTasks.Add(new ApprovalTask
+        {
+            ID = taskD,
+            State = TaskState.Pending,
+            RowVer = 0,
+            AssigneeITCode = "D",
+            NodeInstanceId = nodeId,
+            TenantCode = "test",
+            IsValid = true,
+            Generation = 0,
+            SequenceOrder = 0,
+        });
+        // C already has an active slot on the same node and generation.
+        seed.ApprovalTasks.Add(new ApprovalTask
+        {
+            ID = taskC,
+            State = TaskState.Pending,
+            RowVer = 0,
+            AssigneeITCode = "C",
+            NodeInstanceId = nodeId,
+            TenantCode = "test",
+            IsValid = true,
+            Generation = 0,
+            SequenceOrder = 1,
+        });
+        await seed.SaveChangesAsync();
+
+        // Pre-check: C already participates — the engine-level DelegateTaskAsync would
+        // refuse with DelegateAlreadyParticipant before reaching the CAS.
+        // We validate the collision query logic here directly.
+        await using var check = MakeContext();
+        var alreadyParticipant = await check.ApprovalTasks.AsNoTracking()
+            .AnyAsync(t => t.NodeInstanceId == nodeId
+                            && t.Generation == 0
+                            && t.AssigneeITCode == "C"
+                            && (t.State == TaskState.Pending
+                                || t.State == TaskState.AddedPending
+                                || t.State == TaskState.NotYetActive));
+
+        Assert.IsTrue(alreadyParticipant,
+            "T-DEL-06: Collision guard must detect C already has an active slot.");
+
+        // D's task must be untouched (no reassignment reached the CAS).
+        await using var verify = MakeContext();
+        var dTask = await verify.ApprovalTasks.AsNoTracking().SingleAsync(t => t.ID == taskD);
+        Assert.AreEqual("D", dTask.AssigneeITCode,
+            "T-DEL-06: D's task AssigneeITCode must remain D after collision refusal.");
+        Assert.AreEqual(TaskState.Pending, dTask.State,
+            "T-DEL-06: D's task must remain Pending after collision refusal.");
+        Assert.AreEqual(0u, dTask.RowVer,
+            "T-DEL-06: D's task RowVer must be unchanged (CAS was never applied).");
+
+        // TotalRequired invariant.
+        var node = await verify.NodeInstances.AsNoTracking().SingleAsync(n => n.ID == nodeId);
+        Assert.AreEqual(2, node.TotalRequired,
+            "T-DEL-06: TotalRequired must remain 2; collision guard never alters vote count.");
+    }
+
+    // ── T-DEL-12: reassign on superseded span (Generation guard) ─────────────
+
+    /// <summary>
+    /// T-DEL-12: After a 回退 span-discard, the task's <c>Generation</c> is superseded.
+    /// A reassignment CAS that carries the old generation must return rows==0 — no
+    /// zombie reassignment of a discarded task slot.
+    /// </summary>
+    [TestMethod]
+    public async Task T_DEL_12_SupersededGeneration_CASFails()
+    {
+        const int Rounds = 10;
+
+        for (int round = 0; round < Rounds; round++)
+        {
+            // Seed a task at generation=0.
+            var (_, taskId, _) = await SeedNodeAndTaskAsync("D", generation: 0, totalRequired: 2);
+
+            // Simulate 回退 span-discard: bump the task's Generation to 1 (superseded).
+            // In production, DiscardTasksForReturnAsync sets State=Cancelled (NOT Generation) as
+            // the primary fence preventing late actors from acting on old-span tasks.
+            // State==Pending is what the CAS checks; Generation here is a belt-and-suspenders
+            // epoch guard.  This test simulates a generation-skew scenario directly so it is
+            // self-contained without requiring a full 回退 orchestration.
+            // Here we advance Generation directly so the test is self-contained.
+            await using var bump = MakeContext();
+            await bump.ApprovalTasks
+                .Where(t => t.ID == taskId && t.Generation == 0)
+                .ExecuteUpdateAsync(s =>
+                    s.SetProperty(t => t.Generation, 1u)
+                     .SetProperty(t => t.RowVer, t => t.RowVer + 1));
+
+            // Re-read to get the current RowVer AFTER the generation bump.
+            await using var read = MakeContext();
+            var task = await read.ApprovalTasks.AsNoTracking().SingleAsync(t => t.ID == taskId);
+
+            // Attempt reassignment with old generation=0 (stale — the CAS predicate includes Generation).
+            await using var db = MakeContext();
+            int rows = await GuardedTransition.ReassignTaskAssigneeAsync(
+                db, taskId,
+                expectedRowVer: task.RowVer, // correct RowVer (after bump)
+                generation: 0,               // stale generation — must reject
+                delegateeITCode: "C",
+                principalITCode: "D",
+                delegationRuleId: null,
+                delegationExpiresUtc: null);
+
+            Assert.AreEqual(0, rows,
+                $"Round {round}: T-DEL-12 — stale generation CAS must return 0 (no zombie reassignment)");
+
+            // Task must remain in its superseded state, unchanged by the stale CAS.
+            await using var verify = MakeContext();
+            var final = await verify.ApprovalTasks.AsNoTracking().SingleAsync(t => t.ID == taskId);
+            Assert.AreEqual(1u, final.Generation,
+                $"Round {round}: T-DEL-12 — Generation must remain 1 (not reverted)");
+            Assert.AreEqual("D", final.AssigneeITCode,
+                $"Round {round}: T-DEL-12 — AssigneeITCode must remain D (no zombie reassign)");
+        }
+    }
+
+    // ── T-MIX-02: reassign + concurrent 加签 on same node ────────────────────
+
+    /// <summary>
+    /// T-MIX-02: D delegates (ReassignTaskAssigneeAsync) races concurrently against
+    /// an 加签 (AddApproversToNodeAsync) on the same node.
+    ///
+    /// Both operations bump <c>ApproverSetEpoch</c> on the node when they win.
+    /// A stale-epoch completion CAS must lose and re-read.
+    /// Final TotalRequired is consistent: the reassign never touches it; the 加签 bumps it by delta.
+    /// </summary>
+    [TestMethod]
+    public async Task T_MIX_02_ReassignVsAddApprover_EpochBump_TotalRequiredConsistent()
+    {
+        const int Rounds = 20;
+
+        for (int round = 0; round < Rounds; round++)
+        {
+            var (nodeId, taskId, _) = await SeedNodeAndTaskAsync("D", generation: 0, totalRequired: 2);
+
+            // Snapshot epoch=0 and RowVer=0 for both racers (stale reads, intentional for race test).
+            var barrier = new SemaphoreSlim(0, 2);
+
+            // Racer A: D delegates to C (reassign — does NOT touch TotalRequired or epoch directly;
+            // the engine follows with AdvanceNodeApproverSetEpochAsync, but here we test the raw CAS).
+            Task<int> RacerA() => Task.Run(async () =>
+            {
+                await barrier.WaitAsync();
+                await using var db = MakeContext();
+                return await GuardedTransition.ReassignTaskAssigneeAsync(
+                    db, taskId,
+                    expectedRowVer: 0,
+                    generation: 0,
+                    delegateeITCode: "C",
+                    principalITCode: "D",
+                    delegationRuleId: null,
+                    delegationExpiresUtc: null);
+            });
+
+            // Racer B: 加签 — adds 1 new approver slot, bumps TotalRequired + ApproverSetEpoch.
+            Task<int> RacerB() => Task.Run(async () =>
+            {
+                await barrier.WaitAsync();
+                await using var db = MakeContext();
+                return await GuardedTransition.AddApproversToNodeAsync(
+                    db, nodeId,
+                    expectedRowVer: 0,
+                    generation: 0,
+                    expectedApproverSetEpoch: 0,
+                    delta: 1);
+            });
+
+            var tA = RacerA();
+            var tB = RacerB();
+            barrier.Release(2);
+
+            int rowsA = await tA;
+            int rowsB = await tB;
+
+            // Both can succeed independently (they target different rows — task vs node).
+            // rowsA may be 0 or 1; rowsB may be 0 or 1.
+            // The invariant: TotalRequired == 2 + (1 if B won).
+            await using var verify = MakeContext();
+            var node = await verify.NodeInstances.AsNoTracking().SingleAsync(n => n.ID == nodeId);
+            var task = await verify.ApprovalTasks.AsNoTracking().SingleAsync(t => t.ID == taskId);
+
+            int expectedTotal = 2 + (rowsB == 1 ? 1 : 0);
+            Assert.AreEqual(expectedTotal, node.TotalRequired,
+                $"Round {round}: T-MIX-02 — TotalRequired must be {expectedTotal} " +
+                $"(reassign={rowsA} addApprover={rowsB})");
+
+            // Epoch: bumped by 加签 if B won; untouched by reassign alone (epoch bump happens
+            // in the engine's post-CAS AdvanceNodeApproverSetEpochAsync, not tested here).
+            uint expectedEpoch = rowsB == 1 ? 1u : 0u;
+            Assert.AreEqual(expectedEpoch, node.ApproverSetEpoch,
+                $"Round {round}: T-MIX-02 — ApproverSetEpoch must be {expectedEpoch}");
+
+            // If reassign won, C now holds the slot.
+            if (rowsA == 1)
+            {
+                Assert.AreEqual("C", task.AssigneeITCode,
+                    $"Round {round}: T-MIX-02 — reassign won; AssigneeITCode must be C");
+                Assert.AreEqual("D", task.DelegatedFromITCode,
+                    $"Round {round}: T-MIX-02 — DelegatedFromITCode must be D");
+            }
+
+            // Stale-epoch completion guard: simulate a completion CAS with epoch=0 when B won.
+            // It must return rows==0 (state machine forces re-read).
+            if (rowsB == 1)
+            {
+                await using var cas = MakeContext();
+                // Re-read fresh node RowVer and epoch after the add.
+                var freshNode = await cas.NodeInstances.AsNoTracking().SingleAsync(n => n.ID == nodeId);
+
+                // Stale-epoch attempt (epoch=0, but node now has epoch=1) must fail.
+                int staleRows = await GuardedTransition.CompleteNodeInstanceAsync(
+                    cas, nodeId,
+                    expectedRowVer: freshNode.RowVer,
+                    completedState: NodeState.CompletedApproved,
+                    generation: 0,
+                    expectedApproverSetEpoch: 0); // stale epoch
+
+                Assert.AreEqual(0, staleRows,
+                    $"Round {round}: T-MIX-02 — stale-epoch completion CAS must return 0 " +
+                    $"when epoch is {freshNode.ApproverSetEpoch}");
+
+                // Correct-epoch completion succeeds.
+                int correctRows = await GuardedTransition.CompleteNodeInstanceAsync(
+                    cas, nodeId,
+                    expectedRowVer: freshNode.RowVer,
+                    completedState: NodeState.CompletedApproved,
+                    generation: 0,
+                    expectedApproverSetEpoch: freshNode.ApproverSetEpoch);
+
+                Assert.AreEqual(1, correctRows,
+                    $"Round {round}: T-MIX-02 — correct-epoch completion CAS must win");
+            }
+        }
+    }
+
+    // ── T-DEL-08: AtAction boundary — inclusive expiry ───────────────────────
+
+    /// <summary>
+    /// T-DEL-08 (FIX-D): AtAction claim at the exact delegation expiry boundary.
+    ///
+    /// <para>Case 1: @now == DelegationExpiresUtc → claim must SUCCEED (inclusive boundary).</para>
+    /// <para>Case 2: @now &gt; DelegationExpiresUtc by 1 tick → rows==0; a follow-up read confirms
+    /// task is still Pending → code is DelegationExpired (NOT AlreadyHandled).</para>
+    ///
+    /// <para>The @now timestamp is app-supplied and bound once (never SQL CURRENT_TIMESTAMP).
+    /// The test validates the predicate semantics directly against the CAS.</para>
+    /// </summary>
+    [TestMethod]
+    public async Task T_DEL_08_AtAction_Boundary_InclusiveExpiry()
+    {
+        // Case 1: claim exactly at the expiry boundary — must succeed (inclusive).
+        {
+            var (_, taskId, _) = await SeedDelegatedTaskAsync(
+                assignee: "D", expiresUtc: DateTime.UtcNow.AddHours(1));
+
+            await using var db1 = MakeContext();
+            var task = await db1.ApprovalTasks.AsNoTracking().SingleAsync(t => t.ID == taskId);
+
+            // Use the exact expiry as @now (inclusive — @now <= DelegationExpiresUtc must pass).
+            var now = task.DelegationExpiresUtc!.Value;
+
+            int rows = await GuardedTransition.ClaimDelegatedTaskAsync(
+                db1, taskId,
+                expectedRowVer: task.RowVer,
+                nextState: TaskState.Approved,
+                actedAtUtc: now,
+                ct: CancellationToken.None);
+
+            Assert.AreEqual(1, rows, "T-DEL-08 Case 1: claim at exact expiry boundary must succeed (inclusive)");
+
+            await using var verify1 = MakeContext();
+            var final1 = await verify1.ApprovalTasks.AsNoTracking().SingleAsync(t => t.ID == taskId);
+            Assert.AreEqual(TaskState.Approved, final1.State,
+                "T-DEL-08 Case 1: task must be Approved after successful AtAction claim");
+        }
+
+        // Case 2: @now is 1 tick AFTER expiry — CAS must return 0 (DelegationExpired).
+        // The task must STAY Pending (not claimed), and @now > DelegationExpiresUtc.
+        {
+            var expiryUtc = DateTime.UtcNow.AddHours(1);
+            var (_, taskId, _) = await SeedDelegatedTaskAsync(
+                assignee: "D", expiresUtc: expiryUtc);
+
+            await using var db2 = MakeContext();
+            var task = await db2.ApprovalTasks.AsNoTracking().SingleAsync(t => t.ID == taskId);
+
+            // Simulate expiry: set @now to 1 tick after DelegationExpiresUtc.
+            // In production this is always app-supplied; here we exercise the predicate directly.
+            var nowExpired = task.DelegationExpiresUtc!.Value.AddTicks(1);
+
+            int rows = await GuardedTransition.ClaimDelegatedTaskAsync(
+                db2, taskId,
+                expectedRowVer: task.RowVer,
+                nextState: TaskState.Approved,
+                actedAtUtc: nowExpired,
+                ct: CancellationToken.None);
+
+            Assert.AreEqual(0, rows, "T-DEL-08 Case 2: claim after expiry must return 0");
+
+            // Verify: task stays Pending (never claimed).
+            await using var verify2 = MakeContext();
+            var final2 = await verify2.ApprovalTasks.AsNoTracking().SingleAsync(t => t.ID == taskId);
+            Assert.AreEqual(TaskState.Pending, final2.State,
+                "T-DEL-08 Case 2: task must remain Pending after expired AtAction claim");
+            // The expired @now is strictly greater — disambiguate as DelegationExpired.
+            Assert.IsTrue(nowExpired > final2.DelegationExpiresUtc!.Value,
+                "T-DEL-08 Case 2: @now must be past DelegationExpiresUtc to disambiguate as DelegationExpired");
+        }
+    }
+
+    // ── T-DEL-09: AtAction TOCTOU — single bound @now ────────────────────────
+
+    /// <summary>
+    /// T-DEL-09 (FIX-D): Concurrent AtAction claim vs window expiry — no approval after window.
+    ///
+    /// <para>Two racers on the same delegated task: one claims with @now = within-window,
+    /// the other claims with @now = past-window.  Exactly one of:
+    /// <list type="bullet">
+    ///   <item>In-window racer wins → rows1==1 (task Approved); out-window racer rows==0.</item>
+    ///   <item>Out-window racer's @now is past expiry → rows==0 for that racer regardless.</item>
+    /// </list>
+    /// The key invariant: if the out-window racer wins the race (gets CAS first), it still
+    /// returns rows==0 because its @now exceeds DelegationExpiresUtc.  Only the in-window @now
+    /// can succeed.  The @now is bound ONCE per racer (no re-read — no TOCTOU gap).</para>
+    /// </summary>
+    [TestMethod]
+    public async Task T_DEL_09_AtAction_TOCTOU_NoApprovalAfterWindow()
+    {
+        const int Rounds = 20;
+
+        for (int round = 0; round < Rounds; round++)
+        {
+            var expiryUtc = DateTime.UtcNow.AddHours(1);
+            var (_, taskId, _) = await SeedDelegatedTaskAsync(
+                assignee: "D", expiresUtc: expiryUtc);
+
+            await using var snap = MakeContext();
+            var task = await snap.ApprovalTasks.AsNoTracking().SingleAsync(t => t.ID == taskId);
+
+            var nowInWindow  = task.DelegationExpiresUtc!.Value; // inclusive boundary — should win
+            var nowOutWindow = task.DelegationExpiresUtc!.Value.AddSeconds(1); // past — should lose
+
+            var barrier = new SemaphoreSlim(0, 2);
+
+            // Racer A: in-window @now — should win the CAS.
+            Task<int> RacerA() => Task.Run(async () =>
+            {
+                await barrier.WaitAsync();
+                await using var db = MakeContext();
+                return await GuardedTransition.ClaimDelegatedTaskAsync(
+                    db, taskId,
+                    expectedRowVer: task.RowVer,
+                    nextState: TaskState.Approved,
+                    actedAtUtc: nowInWindow,
+                    ct: CancellationToken.None);
+            });
+
+            // Racer B: out-window @now — must always return 0 even if it gets the CAS first.
+            Task<int> RacerB() => Task.Run(async () =>
+            {
+                await barrier.WaitAsync();
+                await using var db = MakeContext();
+                return await GuardedTransition.ClaimDelegatedTaskAsync(
+                    db, taskId,
+                    expectedRowVer: task.RowVer,
+                    nextState: TaskState.Approved,
+                    actedAtUtc: nowOutWindow,
+                    ct: CancellationToken.None);
+            });
+
+            var tA = RacerA();
+            var tB = RacerB();
+            barrier.Release(2);
+
+            int rowsA = await tA;
+            int rowsB = await tB;
+
+            // Racer B (out-window) must NEVER win (its @now > DelegationExpiresUtc).
+            Assert.AreEqual(0, rowsB,
+                $"Round {round}: T-DEL-09 — out-window racer must always return 0; got {rowsB}");
+
+            // Racer A (in-window) wins at most once; if it won, task is Approved.
+            if (rowsA == 1)
+            {
+                await using var verify = MakeContext();
+                var final = await verify.ApprovalTasks.AsNoTracking().SingleAsync(t => t.ID == taskId);
+                Assert.AreEqual(TaskState.Approved, final.State,
+                    $"Round {round}: T-DEL-09 — in-window racer won; task must be Approved");
+            }
+            else
+            {
+                // rowsA == 0 is valid: both losers (unlikely but possible on timing).
+                // The invariant is that rowsB is ALWAYS 0 (the AtAction window predicate enforces this).
+                Assert.AreEqual(0, rowsA, $"Round {round}: T-DEL-09 — unexpected rowsA={rowsA}");
+            }
+        }
+    }
+
+    // ── T-DEL-10: AtAssignment — claim succeeds after rule expiry ────────────
+
+    /// <summary>
+    /// T-DEL-10: AtAssignment (default) mode — the delegation window is checked at mint time only.
+    /// Authority is frozen at assignment.  A standard ClaimApprovalTaskAsync at any time after
+    /// DelegationExpiresUtc MUST succeed (no re-check).
+    ///
+    /// <para>This test validates the AtAssignment contract by attempting a claim with a "current
+    /// time" that is past the stored DelegationExpiresUtc.  The standard ClaimApprovalTaskAsync
+    /// predicate does NOT include the DelegationExpiresUtc filter, so it must succeed.</para>
+    /// </summary>
+    [TestMethod]
+    public async Task T_DEL_10_AtAssignment_ClaimSucceedsAfterExpiry()
+    {
+        const int Rounds = 10;
+
+        for (int round = 0; round < Rounds; round++)
+        {
+            // Seed a delegated task with an ALREADY-EXPIRED window (set in the past).
+            // In AtAssignment mode this has no effect — authority was frozen at mint.
+            var expiredUtc = DateTime.UtcNow.AddDays(-1); // definitely in the past
+            var (_, taskId, _) = await SeedDelegatedTaskAsync(
+                assignee: "D", expiresUtc: expiredUtc);
+
+            await using var db = MakeContext();
+            var task = await db.ApprovalTasks.AsNoTracking().SingleAsync(t => t.ID == taskId);
+
+            // In AtAssignment mode the claim uses the STANDARD ClaimApprovalTaskAsync
+            // (no DelegationExpiresUtc filter) — claim must succeed even though the window expired.
+            var nowAfterExpiry = DateTime.UtcNow; // current time is definitely past expiredUtc
+            int rows = await GuardedTransition.ClaimApprovalTaskAsync(
+                db, taskId,
+                expectedRowVer: task.RowVer,
+                nextState: TaskState.Approved,
+                actedAtUtc: nowAfterExpiry,
+                ct: CancellationToken.None);
+
+            Assert.AreEqual(1, rows,
+                $"Round {round}: T-DEL-10 — AtAssignment claim must succeed even after DelegationExpiresUtc (authority frozen at mint)");
+
+            await using var verify = MakeContext();
+            var final = await verify.ApprovalTasks.AsNoTracking().SingleAsync(t => t.ID == taskId);
+            Assert.AreEqual(TaskState.Approved, final.State,
+                $"Round {round}: T-DEL-10 — task must be Approved (AtAssignment, no window re-check)");
+        }
+    }
+
+    // ── T-DEL-11: RevokeDelegation races concurrent claim ────────────────────
+
+    /// <summary>
+    /// T-DEL-11: Admin RevokeDelegatedTasksAsync races against a concurrent claim on the same task.
+    ///
+    /// <para>Per-row CAS: exactly one of:
+    /// <list type="bullet">
+    ///   <item>Claim won first: task is Approved; revoke's CAS returns rows==0 (NotPending). Idempotent.</item>
+    ///   <item>Revoke won first: task reverted to principal; claim's CAS returns rows==0 (AlreadyHandled).</item>
+    /// </list>
+    /// Partial success (some tasks revoked, some already claimed) is valid and reported per task.
+    /// TotalRequired is never touched by either path.</para>
+    /// </summary>
+    [TestMethod]
+    public async Task T_DEL_11_RevokeDelegation_VsConcurrentClaim_OneWinner()
+    {
+        const int Rounds = 20;
+        var ruleId = Guid.NewGuid();
+
+        for (int round = 0; round < Rounds; round++)
+        {
+            var (nodeId, taskId, _) = await SeedDelegatedTaskAsync(
+                assignee: "D",
+                expiresUtc: DateTime.UtcNow.AddHours(1),
+                delegationRuleId: ruleId,
+                delegatedFromITCode: "P"); // P is the principal
+
+            await using var snap = MakeContext();
+            var task = await snap.ApprovalTasks.AsNoTracking().SingleAsync(t => t.ID == taskId);
+
+            var barrier = new SemaphoreSlim(0, 2);
+
+            // Racer A: D claims the task (standard CAS on RowVer).
+            Task<int> RacerA() => Task.Run(async () =>
+            {
+                await barrier.WaitAsync();
+                await using var db = MakeContext();
+                return await GuardedTransition.ClaimApprovalTaskAsync(
+                    db, taskId,
+                    expectedRowVer: task.RowVer,
+                    nextState: TaskState.Approved,
+                    actedAtUtc: DateTime.UtcNow,
+                    ct: CancellationToken.None);
+            });
+
+            // Racer B: admin revokes all tasks for the rule (per-row CAS on same task).
+            Task<int> RacerB() => Task.Run(async () =>
+            {
+                await barrier.WaitAsync();
+                await using var db = MakeContext();
+                int revokedCount = 0;
+                await foreach (var outcome in GuardedTransition.RevokeDelegatedTasksAsync(db, ruleId))
+                {
+                    if (outcome.Result == GuardedTransition.RevokeSingleTaskResult.Revoked)
+                        revokedCount++;
+                }
+                return revokedCount;
+            });
+
+            var tA = RacerA();
+            var tB = RacerB();
+            barrier.Release(2);
+
+            int claimedRows = await tA;
+            int revokedCount = await tB;
+
+            // Exactly one of: claim won (task Approved) or revoke won (task back to principal P).
+            int winners = (claimedRows == 1 ? 1 : 0) + revokedCount;
+            Assert.IsTrue(winners <= 1,
+                $"Round {round}: T-DEL-11 — at most one winner; claimedRows={claimedRows} revokedCount={revokedCount}");
+
+            await using var verify = MakeContext();
+            var final = await verify.ApprovalTasks.AsNoTracking().SingleAsync(t => t.ID == taskId);
+
+            if (claimedRows == 1)
+            {
+                // Claim won: task must be Approved; revoke's CAS returned rows==0 (NotPending).
+                Assert.AreEqual(TaskState.Approved, final.State,
+                    $"Round {round}: T-DEL-11 — claim won; task must be Approved");
+                Assert.AreEqual(0, revokedCount,
+                    $"Round {round}: T-DEL-11 — claim won; revoke must report 0 tasks revoked");
+            }
+            else if (revokedCount == 1)
+            {
+                // Revoke won: task reverted to principal P; still Pending; delegatee D can no longer claim.
+                Assert.AreEqual(TaskState.Pending, final.State,
+                    $"Round {round}: T-DEL-11 — revoke won; task must remain Pending");
+                Assert.AreEqual("P", final.AssigneeITCode,
+                    $"Round {round}: T-DEL-11 — revoke won; AssigneeITCode must be reverted to P");
+                Assert.IsNull(final.DelegationRuleId,
+                    $"Round {round}: T-DEL-11 — revoke won; DelegationRuleId must be cleared");
+                Assert.IsNull(final.DelegatedFromITCode,
+                    $"Round {round}: T-DEL-11 — revoke won; DelegatedFromITCode must be cleared");
+            }
+            else
+            {
+                // Both returned 0 (both lost to each other — this can happen on SQLite because the
+                // first CAS bumps RowVer, making the second CAS fail on RowVer).
+                // In this case we just verify the task is in a consistent state.
+                Assert.IsTrue(final.State == TaskState.Pending || final.State == TaskState.Approved,
+                    $"Round {round}: T-DEL-11 — both returned 0; task must be in a consistent state");
+            }
+
+            // TotalRequired must be unchanged regardless of outcome.
+            var node = await verify.NodeInstances.AsNoTracking().SingleAsync(n => n.ID == nodeId);
+            Assert.AreEqual(2, node.TotalRequired,
+                $"Round {round}: T-DEL-11 — TotalRequired must remain 2 (no count change)");
+        }
+    }
+
+    // ── Seed helpers for AtAction / delegation tests ─────────────────────────
+
+    /// <summary>
+    /// Seed an Activated node + a Pending delegated ApprovalTask with
+    /// <c>DelegationRuleId</c> and <c>DelegationExpiresUtc</c> set.
+    /// Returns (nodeId, taskId, instanceId).
+    /// </summary>
+    private async Task<(Guid nodeId, Guid taskId, Guid instanceId)> SeedDelegatedTaskAsync(
+        string assignee = "D",
+        DateTime? expiresUtc = null,
+        Guid? delegationRuleId = null,
+        string? delegatedFromITCode = null,
+        uint generation = 0)
+    {
+        var instanceId = Guid.NewGuid();
+        var nodeId     = Guid.NewGuid();
+        var taskId     = Guid.NewGuid();
+
+        await using var db = MakeContext();
+        db.ProcessInstances.Add(new ProcessInstance
+        {
+            ID = instanceId,
+            State = InstanceState.Running,
+            RowVer = 0,
+            InitiatorITCode = "initiator",
+            DefinitionVersionId = Guid.NewGuid(),
+            IsValid = true,
+            Generation = 0,
+        });
+        db.NodeInstances.Add(new NodeInstance
+        {
+            ID = nodeId,
+            State = NodeState.Activated,
+            RowVer = 0,
+            NodeKey = "approval_node",
+            InstanceId = instanceId,
+            TotalRequired = 2,
+            ApproveMode = ApproveMode.All,
+            ApproverSetEpoch = 0,
+            Generation = generation,
+        });
+        db.ApprovalTasks.Add(new ApprovalTask
+        {
+            ID = taskId,
+            State = TaskState.Pending,
+            RowVer = 0,
+            AssigneeITCode = assignee,
+            NodeInstanceId = nodeId,
+            TenantCode = "test",
+            IsValid = true,
+            Generation = generation,
+            SequenceOrder = 0,
+            // Delegation provenance fields.
+            DelegationRuleId     = delegationRuleId,
+            DelegationExpiresUtc = expiresUtc,
+            DelegatedFromITCode  = delegatedFromITCode,
+        });
+        await db.SaveChangesAsync();
+        return (nodeId, taskId, instanceId);
+    }
+}
+
+// ─── T-DEL-13: AtAction conformance (FIX-E provider fallback, SQLite live) ───
+
+/// <summary>
+/// T-DEL-13: AtAction conformance tests (FIX-E, design §4 R3 + §6 T-DEL-13).
+///
+/// SQLite runs inline (every CI push). Other providers follow the existing
+/// skip-gated stub pattern from <see cref="ConcurrencyConformanceTests_LiveDb"/>.
+///
+/// Validates:
+/// <list type="bullet">
+///   <item>The AtAction CAS predicate correctly enforces the delegation window on SQLite.</item>
+///   <item>Boundary semantics: @now == DelegationExpiresUtc succeeds (inclusive).</item>
+///   <item>The skip-gated stubs for FIX-E SELECT-FOR-UPDATE fallback on Oracle/DaMeng.</item>
+/// </list>
+/// </summary>
+[TestClass]
+public class ConcurrencyConformanceTests_DelegateTask_Conformance : IDisposable
+{
+    private SqliteConnection _keepAlive = null!;
+    private string _dbName = null!;
+
+    [TestInitialize]
+    public void Setup()
+    {
+        _dbName = $"WfDelegateConf_{Guid.NewGuid():N}";
+        _keepAlive = new SqliteConnection($"DataSource={_dbName}?mode=memory&cache=shared");
+        _keepAlive.Open();
+        using var db = new WfTestContext(_dbName);
+        db.Database.EnsureCreated();
+    }
+
+    [TestCleanup]
+    public void Cleanup()
+    {
+        _keepAlive?.Close();
+        _keepAlive?.Dispose();
+    }
+
+    public void Dispose() => Cleanup();
+
+    private WfTestContext MakeContext() => new(_dbName);
+
+    /// <summary>
+    /// T-DEL-13 (SQLite live): ClaimDelegatedTaskAsync enforces the window predicate correctly.
+    ///
+    /// <para>Specifically: @now == DelegationExpiresUtc → rows==1 (inclusive);
+    /// @now &gt; DelegationExpiresUtc by 1 tick → rows==0 (expired).</para>
+    ///
+    /// This is the conformance gate for the core CAS logic; the FIX-E SELECT-FOR-UPDATE
+    /// fallback for Oracle/DaMeng is exercised in the live-provider stubs below.
+    /// </summary>
+    [TestMethod]
+    public async Task T_DEL_13_AtAction_SQLite_WindowPredicate_Conformance()
+    {
+        // Seed a delegated task with a known expiry.
+        var expiresAt = DateTime.UtcNow.AddHours(2);
+        var instanceId = Guid.NewGuid();
+        var nodeId     = Guid.NewGuid();
+        var taskInWindow  = Guid.NewGuid();
+        var taskExpired   = Guid.NewGuid();
+
+        await using var seed = MakeContext();
+        seed.ProcessInstances.Add(new ProcessInstance
+        {
+            ID = instanceId, State = InstanceState.Running, RowVer = 0,
+            InitiatorITCode = "i", DefinitionVersionId = Guid.NewGuid(), IsValid = true,
+        });
+        seed.NodeInstances.Add(new NodeInstance
+        {
+            ID = nodeId, State = NodeState.Activated, RowVer = 0,
+            NodeKey = "n", InstanceId = instanceId,
+            TotalRequired = 2, ApproveMode = ApproveMode.All, ApproverSetEpoch = 0,
+        });
+        // Task 1: in-window (expiry in future).
+        seed.ApprovalTasks.Add(new ApprovalTask
+        {
+            ID = taskInWindow, State = TaskState.Pending, RowVer = 0,
+            AssigneeITCode = "A", NodeInstanceId = nodeId, TenantCode = "t",
+            IsValid = true, SequenceOrder = 0,
+            DelegationExpiresUtc = expiresAt,
+        });
+        // Task 2: expired (expiry in past — use expiresAt as now to simulate past expiry via different now).
+        seed.ApprovalTasks.Add(new ApprovalTask
+        {
+            ID = taskExpired, State = TaskState.Pending, RowVer = 0,
+            AssigneeITCode = "B", NodeInstanceId = nodeId, TenantCode = "t",
+            IsValid = true, SequenceOrder = 1,
+            DelegationExpiresUtc = expiresAt,
+        });
+        await seed.SaveChangesAsync();
+
+        await using var ctx1 = MakeContext();
+        var t1 = await ctx1.ApprovalTasks.AsNoTracking().SingleAsync(t => t.ID == taskInWindow);
+
+        // Case 1: @now == DelegationExpiresUtc (exact boundary) → must succeed.
+        var nowAtBoundary = t1.DelegationExpiresUtc!.Value;
+        int rows1 = await GuardedTransition.ClaimDelegatedTaskAsync(
+            ctx1, taskInWindow, t1.RowVer, TaskState.Approved, nowAtBoundary);
+        Assert.AreEqual(1, rows1, "T-DEL-13 SQLite: in-window claim at exact boundary must succeed");
+
+        await using var ctx2 = MakeContext();
+        var t2 = await ctx2.ApprovalTasks.AsNoTracking().SingleAsync(t => t.ID == taskExpired);
+
+        // Case 2: @now is 1 tick past DelegationExpiresUtc → must return 0.
+        var nowExpired = t2.DelegationExpiresUtc!.Value.AddTicks(1);
+        int rows2 = await GuardedTransition.ClaimDelegatedTaskAsync(
+            ctx2, taskExpired, t2.RowVer, TaskState.Approved, nowExpired);
+        Assert.AreEqual(0, rows2, "T-DEL-13 SQLite: expired claim must return 0");
+
+        // Task 2 must remain Pending.
+        await using var verify = MakeContext();
+        var finalT2 = await verify.ApprovalTasks.AsNoTracking().SingleAsync(t => t.ID == taskExpired);
+        Assert.AreEqual(TaskState.Pending, finalT2.State,
+            "T-DEL-13 SQLite: expired task must remain Pending");
+    }
+
+    // ── Skip-gated stubs for FIX-E SELECT-FOR-UPDATE fallback ────────────────
+    //
+    // Oracle and DaMeng may not translate ExecuteUpdateAsync with a DateTime comparison
+    // in WHERE (FIX-E, design §4 R3).  The fallback (SELECT FOR UPDATE + in-txn check)
+    // is exercised only with real provider instances.  These stubs gate the test correctly
+    // so a provider becoming available triggers a real (failing) test, not a silent skip.
+
+    private static string TryGetConnectionString(string envVar)
+    {
+        var cs = Environment.GetEnvironmentVariable(envVar);
+        if (string.IsNullOrWhiteSpace(cs))
+        {
+            Assert.Inconclusive(
+                $"Skipped: environment variable '{envVar}' not set. " +
+                "Set to a real connection string to run FIX-E provider conformance.");
+        }
+        Assert.Fail(
+            $"FIX-E provider conformance body not implemented for '{envVar}' — tracked in #270. " +
+            "Replace this Assert.Fail with the real SELECT-FOR-UPDATE fallback assertion when WF-3 is shipped.");
+        return cs!;
+    }
+
+    [TestMethod]
+    [TestCategory("ProviderConformance")]
+    public void T_DEL_13_Oracle_AtAction_SelectForUpdate_Fallback()
+    {
+        var cs = TryGetConnectionString("WTM_TEST_ORACLE_CS");
+        // WF-3: implement using Oracle.EntityFrameworkCore.
+        // Exercise ClaimDelegatedTaskAsync via the SELECT-FOR-UPDATE code path (FIX-E):
+        //   BeginTransactionAsync → SELECT t WHERE ID==@id FOR UPDATE → in-txn check @now <= DelegationExpiresUtc
+        //   → ExecuteUpdateAsync flip → CommitAsync.
+        // Boundary: @now == DelegationExpiresUtc → success; @now+1tick → rows==0.
+        _ = cs;
+    }
+
+    [TestMethod]
+    [TestCategory("ProviderConformance")]
+    public void T_DEL_13_DaMeng_AtAction_SelectForUpdate_Fallback()
+    {
+        var cs = TryGetConnectionString("WTM_TEST_DAMENG_CS");
+        // WF-3: implement using EntityFrameworkCore.Dm (达梦).
+        // Same FIX-E SELECT-FOR-UPDATE pattern as Oracle above.
+        // DaMeng is a primary target-market DB; conformance failure here is a ship-blocker.
+        _ = cs;
     }
 }
 

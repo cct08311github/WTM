@@ -95,4 +95,36 @@ public class ApprovalTask : PersistPoco, ITenant
     /// Default 0 for all pre-Wave-4 tasks.
     /// </summary>
     public int AddDepth { get; set; }
+
+    // ── Wave-4 WF-19: 委托 (delegation) fields ───────────────────────────────
+
+    /// <summary>
+    /// FK-by-value to the <see cref="DelegationRule"/> that produced this assignment.
+    /// Null for tasks that were not produced by a delegation rule.
+    /// Used for provenance, audit, and (in AtAction mode) expiry re-check via
+    /// <see cref="DelegationExpiresUtc"/>.
+    /// </summary>
+    public Guid? DelegationRuleId { get; set; }
+
+    /// <summary>
+    /// Snapshot of <c>DelegationRule.EndUtc</c> at the time of task mint or mid-flight
+    /// reassignment (AtAssignment semantics: authority is frozen at the time the task is
+    /// minted, no re-check at claim time).
+    ///
+    /// <para>In <see cref="DelegationWindowMode.AtAction"/> mode this value is folded into
+    /// the claim CAS predicate (<c>@now &lt;= DelegationExpiresUtc</c>) so the window
+    /// check and the state flip are atomic.  <c>@now</c> is always app-supplied — never SQL
+    /// <c>CURRENT_TIMESTAMP</c> (spec FIX-D, cross-provider portability).</para>
+    ///
+    /// <para>Null means no window constraint (un-delegated task, or delegation without
+    /// expiry configured).</para>
+    /// </summary>
+    public DateTime? DelegationExpiresUtc { get; set; }
+
+    /// <summary>
+    /// Audit/forensics timestamp: when was the delegation window last verified at claim
+    /// time (AtAction mode only).  <strong>Never used in any CAS predicate</strong> —
+    /// strictly an audit trail field.  Null for AtAssignment tasks or tasks not yet claimed.
+    /// </summary>
+    public DateTime? WindowVerifiedUtc { get; set; }
 }

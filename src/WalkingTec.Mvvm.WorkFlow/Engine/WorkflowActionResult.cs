@@ -100,6 +100,35 @@ public sealed record WorkflowActionResult
     /// </summary>
     public static readonly WorkflowActionResult NodeAlreadyDecided = new(WorkflowActionCode.NodeAlreadyDecided);
 
+    // ── WF-19 Wave-4: 委托 (delegation) ────────────────────────────────────────
+
+    /// <summary>
+    /// The delegation window has expired at action time
+    /// (<see cref="DelegationWindowMode.AtAction"/> mode only).
+    /// The claim was rejected; the task stays Pending for manual reassignment.
+    /// Distinct from <see cref="WorkflowActionCode.AlreadyHandled"/> so that UI/audit can show the real reason.
+    /// </summary>
+    public static readonly WorkflowActionResult DelegationExpired = new(WorkflowActionCode.DelegationExpired);
+
+    /// <summary>
+    /// The transitive delegation chain exceeded <see cref="WorkFlowOptions.MaxDelegationHops"/>.
+    /// Resolution stopped at the last successfully resolved principal.  Logged at Warning.
+    /// </summary>
+    public static readonly WorkflowActionResult DelegationHopsExceeded = new(WorkflowActionCode.DelegationHopsExceeded);
+
+    /// <summary>
+    /// A delegation cycle was detected (A→B→A or A→A self-delegation).
+    /// Resolution routes to <see cref="WorkFlowOptions.AdminFallbackITCode"/> when set;
+    /// otherwise the node blocks via the FailClose policy.
+    /// </summary>
+    public static readonly WorkflowActionResult DelegationCycle = new(WorkflowActionCode.DelegationCycle);
+
+    /// <summary>
+    /// Mid-flight reassignment refused: the delegatee already holds an active task on this
+    /// node.  <c>TotalRequired</c> is invariant — mid-flight merge is never permitted.
+    /// </summary>
+    public static readonly WorkflowActionResult DelegateAlreadyParticipant = new(WorkflowActionCode.DelegateAlreadyParticipant);
+
     // ── Instance ──────────────────────────────────────────────────────────────
 
     /// <summary>The outcome code for this result.</summary>
@@ -226,4 +255,38 @@ public enum WorkflowActionCode
     /// (completed, rejected, or superseded).  Tasks are never inserted into a decided node.
     /// </summary>
     NodeAlreadyDecided,
+
+    // ── WF-19 Wave-4: 委托 (delegation) ──────────────────────────────────────
+
+    /// <summary>
+    /// The delegation window has expired at claim time
+    /// (<see cref="DelegationWindowMode.AtAction"/> mode only).
+    /// The claim CAS returned zero rows because <c>@now &gt; DelegationExpiresUtc</c>.
+    /// The task stays Pending; the node is NOT auto-approved.
+    /// Callers should show a user-visible "delegation window expired" message and
+    /// trigger manual reassignment.
+    /// </summary>
+    DelegationExpired,
+
+    /// <summary>
+    /// Transitive delegation chain exceeded <see cref="WorkFlowOptions.MaxDelegationHops"/>.
+    /// Resolution stopped at the last successfully resolved delegatee; the hop cap prevents
+    /// infinite chains.  Logged at Warning level.
+    /// </summary>
+    DelegationHopsExceeded,
+
+    /// <summary>
+    /// A delegation cycle was detected during transitive resolution (A→B→A, or A→A
+    /// self-delegation).  Resolution routes to the admin fallback when configured; otherwise
+    /// the node blocks via the FailClose policy.  Fail-closed — never fail-open.
+    /// </summary>
+    DelegationCycle,
+
+    /// <summary>
+    /// Mid-flight task reassignment refused because the intended delegatee already holds an
+    /// active (Pending) task on the same node.  <c>TotalRequired</c> is invariant; merging
+    /// two slots mid-flight is never permitted.  The original task remains Pending and
+    /// the original holder may still act.
+    /// </summary>
+    DelegateAlreadyParticipant,
 }
