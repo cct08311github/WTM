@@ -3,6 +3,7 @@
 // WF-11: Extended with routing-rule whitelist validation.
 // WF-17: Extended with fork↔Join pairing validation (ParallelGateway / InclusiveGateway).
 // WF-20: Extended with TimeoutDef validation (NEW graph publishes only).
+// #296: Extended with nodeKey shape (InvalidNodeKey) + uniqueness (DuplicateNodeKey) checks.
 //
 // Validation is fail-closed: any structural problem returns a descriptive
 // GraphValidationResult with a closed error code.  Exceptions are NOT used
@@ -28,6 +29,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using System.Xml;
 using WalkingTec.Mvvm.WorkFlow.Engine.Routing;
 using WalkingTec.Mvvm.WorkFlow.Models;
@@ -43,6 +45,13 @@ namespace WalkingTec.Mvvm.WorkFlow.Definition;
 /// </summary>
 public static class WorkflowGraphValidator
 {
+    // Security (#296 — nodeKey shape gate):
+    // Allowed: Unicode letters (\p{L}), Unicode digits (\p{N}), underscore, hyphen, dot.
+    // 1–64 characters.  CJK characters match \p{L} so remain usable (e.g. 審批節點一).
+    // Brackets, parens, angle brackets, whitespace, and other Markdown-significant chars
+    // are explicitly excluded; they cannot appear in nodeKeys at publish time.
+    private static readonly Regex NodeKeyPattern =
+        new(@"^[\p{L}\p{N}_\-\.]{1,64}$", RegexOptions.Compiled, TimeSpan.FromSeconds(1));
     /// <summary>
     /// Validate <paramref name="graph"/> and return the first detected error.
     /// Returns <see cref="GraphValidationResult.Success"/> when all checks pass.
@@ -70,13 +79,25 @@ public static class WorkflowGraphValidator
                 "The graph must contain at least one node.");
 
         // Build a nodeKey set for O(1) existence checks.
+        // Security (#296): also validate nodeKey shape and uniqueness here.
         var nodeKeys = new HashSet<string>(StringComparer.Ordinal);
         int startCount = 0;
         int endCount = 0;
 
         foreach (var node in graph.Nodes)
         {
-            nodeKeys.Add(node.NodeKey);
+            // (#296) Check 14a: nodeKey must match the safe-identifier pattern.
+            if (!NodeKeyPattern.IsMatch(node.NodeKey))
+                return GraphValidationResult.Fail(GraphValidationError.InvalidNodeKey,
+                    $"nodeKey '{node.NodeKey}' is invalid. NodeKeys must match ^[\\p{{L}}\\p{{N}}_\\-\\.]{{{1,64}}}$ " +
+                    "(Unicode letters/digits, underscore, hyphen, dot; 1–64 chars). " +
+                    "Markdown-significant characters ([ ] ( ) < > * _ ~ ` # |) are not permitted.");
+
+            // (#296) Check 14b: duplicate nodeKeys are an authoring error.
+            if (!nodeKeys.Add(node.NodeKey))
+                return GraphValidationResult.Fail(GraphValidationError.DuplicateNodeKey,
+                    $"Duplicate nodeKey '{node.NodeKey}' found. Each node must have a unique nodeKey.");
+
             if (node.Kind == NodeKind.Start) startCount++;
             if (node.Kind == NodeKind.End)   endCount++;
         }

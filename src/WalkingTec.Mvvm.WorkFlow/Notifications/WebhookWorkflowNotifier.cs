@@ -1,6 +1,13 @@
 #nullable enable
+// Security fix (#296): escape all graph/user-authored strings before they reach card bodies.
+// EscapeMarkdown() neutralises [ ] ( ) * _ ~ ` # < > | and strips CR/LF → space so that
+// a hostile nodeKey such as `[click](http://evil)` cannot render a phishing link in any
+// supported webhook sink (DingTalk / WeCom / Feishu / Slack / Teams all parse Markdown).
+// Framework-constant strings (Title, Chinese UI labels) are NOT escaped.
+
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -27,11 +34,26 @@ namespace WalkingTec.Mvvm.WorkFlow.Notifications;
 ///
 /// <para><strong>No PII / form data in cards:</strong> cards carry only process/instance/
 /// task identifiers, node key, actor ITCode, and decision outcome — never form field values.</para>
+///
+/// <para><strong>Security:</strong> every graph/user-authored string interpolated into
+/// card body text is passed through <see cref="EscapeMarkdown"/> before it reaches the
+/// sink, preventing injection of Markdown links or formatting from hostile nodeKey values.
+/// See issue #296.</para>
 /// </summary>
 public sealed class WebhookWorkflowNotifier : IWorkflowNotifier
 {
     private readonly IWtmWebhookSink? _sink;
     private readonly ILogger<WebhookWorkflowNotifier> _logger;
+
+    // Matches Markdown special characters that can be used to construct links or
+    // formatting in DingTalk/WeCom/Feishu/Slack/Teams card bodies.
+    // Angle brackets are matched individually (< and >) for HTML-tag neutralisation.
+    private static readonly Regex MarkdownSpecialChars =
+        new(@"[\[\]()\\*_~`#<>|]", RegexOptions.Compiled, TimeSpan.FromSeconds(1));
+
+    // CR/LF stripper — collapse to a single space to prevent line-break injection.
+    private static readonly Regex NewlineChars =
+        new(@"[\r\n]+", RegexOptions.Compiled, TimeSpan.FromSeconds(1));
 
     /// <summary>
     /// Production constructor.  <paramref name="sink"/> is optional — DI resolves it as
@@ -54,10 +76,13 @@ public sealed class WebhookWorkflowNotifier : IWorkflowNotifier
     {
         if (_sink is null) return Task.CompletedTask;
 
+        var nodeKey  = EscapeMarkdown(nodeInstance.NodeKey);
+        var assignee = EscapeMarkdown(task.AssigneeITCode);
+
         var message = new WebhookMessage
         {
             Title = "[WorkFlow] 審批任務待辦",
-            Body  = $"流程 **{instance.ID}** 節點 `{nodeInstance.NodeKey}` 已指派審批任務給 `{task.AssigneeITCode}`。",
+            Body  = $"流程 **{instance.ID}** 節點 `{nodeKey}` 已指派審批任務給 `{assignee}`。",
             Level = WebhookLevel.Info,
             Fields = BuildInstanceFields(instance, nodeInstance, extraKey: "Assignee", extraVal: task.AssigneeITCode),
         };
@@ -75,10 +100,13 @@ public sealed class WebhookWorkflowNotifier : IWorkflowNotifier
     {
         if (_sink is null) return Task.CompletedTask;
 
+        var nodeKey = EscapeMarkdown(nodeInstance.NodeKey);
+        var actor   = EscapeMarkdown(actorITCode);
+
         var message = new WebhookMessage
         {
             Title = "[WorkFlow] 審批通過",
-            Body  = $"流程 **{instance.ID}** 節點 `{nodeInstance.NodeKey}` 已由 `{actorITCode}` 審批通過。",
+            Body  = $"流程 **{instance.ID}** 節點 `{nodeKey}` 已由 `{actor}` 審批通過。",
             Level = WebhookLevel.Info,
             Fields = BuildInstanceFields(instance, nodeInstance, extraKey: "Actor", extraVal: actorITCode),
         };
@@ -97,17 +125,21 @@ public sealed class WebhookWorkflowNotifier : IWorkflowNotifier
     {
         if (_sink is null) return Task.CompletedTask;
 
+        var nodeKey       = EscapeMarkdown(nodeInstance.NodeKey);
+        var actor         = EscapeMarkdown(actorITCode);
+
         var fields = BuildInstanceFields(instance, nodeInstance, extraKey: "Actor", extraVal: actorITCode);
         if (!string.IsNullOrWhiteSpace(reason))
         {
-            var list = new List<KeyValuePair<string, string>>(fields) { new("Reason", reason) };
+            // reason goes into Fields value (plain text, not Markdown body) — escape for safety.
+            var list = new List<KeyValuePair<string, string>>(fields) { new("Reason", EscapeMarkdown(reason)) };
             fields = list;
         }
 
         var message = new WebhookMessage
         {
             Title = "[WorkFlow] 審批拒絕",
-            Body  = $"流程 **{instance.ID}** 節點 `{nodeInstance.NodeKey}` 已由 `{actorITCode}` 拒絕。",
+            Body  = $"流程 **{instance.ID}** 節點 `{nodeKey}` 已由 `{actor}` 拒絕。",
             Level = WebhookLevel.Warning,
             Fields = fields,
         };
@@ -130,7 +162,7 @@ public sealed class WebhookWorkflowNotifier : IWorkflowNotifier
             Fields = new List<KeyValuePair<string, string>>
             {
                 new("InstanceId",    instance.ID.ToString()),
-                new("Initiator",     instance.InitiatorITCode),
+                new("Initiator",     EscapeMarkdown(instance.InitiatorITCode)),
                 new("BusinessType",  instance.BusinessType ?? "—"),
                 new("BusinessKey",   instance.BusinessKey  ?? "—"),
                 new("FinalState",    instance.State.ToString()),
@@ -148,15 +180,17 @@ public sealed class WebhookWorkflowNotifier : IWorkflowNotifier
     {
         if (_sink is null) return Task.CompletedTask;
 
+        var actor = EscapeMarkdown(actorITCode);
+
         var message = new WebhookMessage
         {
             Title = "[WorkFlow] 流程已撤回",
-            Body  = $"流程 **{instance.ID}** 已由發起人 `{actorITCode}` 撤回。",
+            Body  = $"流程 **{instance.ID}** 已由發起人 `{actor}` 撤回。",
             Level = WebhookLevel.Warning,
             Fields = new List<KeyValuePair<string, string>>
             {
                 new("InstanceId",    instance.ID.ToString()),
-                new("Initiator",     instance.InitiatorITCode),
+                new("Initiator",     EscapeMarkdown(instance.InitiatorITCode)),
                 new("WithdrawnBy",   actorITCode),
                 new("BusinessType",  instance.BusinessType ?? "—"),
                 new("BusinessKey",   instance.BusinessKey  ?? "—"),
@@ -177,17 +211,20 @@ public sealed class WebhookWorkflowNotifier : IWorkflowNotifier
     {
         if (_sink is null) return Task.CompletedTask;
 
+        var nodeKey = EscapeMarkdown(nodeInstance.NodeKey);
+        var actor   = EscapeMarkdown(actorITCode);
+
         var fields = BuildInstanceFields(instance, nodeInstance, extraKey: "ReturnedBy", extraVal: actorITCode);
         if (!string.IsNullOrWhiteSpace(reason))
         {
-            var list = new List<KeyValuePair<string, string>>(fields) { new("Reason", reason) };
+            var list = new List<KeyValuePair<string, string>>(fields) { new("Reason", EscapeMarkdown(reason)) };
             fields = list;
         }
 
         var message = new WebhookMessage
         {
             Title = "[WorkFlow] 退回發起人",
-            Body  = $"流程 **{instance.ID}** 節點 `{nodeInstance.NodeKey}` 由 `{actorITCode}` 退回發起人，需補充資料後重新提交。",
+            Body  = $"流程 **{instance.ID}** 節點 `{nodeKey}` 由 `{actor}` 退回發起人，需補充資料後重新提交。",
             Level = WebhookLevel.Warning,
             Fields = fields,
         };
@@ -206,15 +243,17 @@ public sealed class WebhookWorkflowNotifier : IWorkflowNotifier
     {
         if (_sink is null) return Task.CompletedTask;
 
+        var nodeKey = EscapeMarkdown(nodeInstance.NodeKey);
+
         var message = new WebhookMessage
         {
             Title = "[WorkFlow] 超時催辦提醒",
-            Body  = $"流程 **{instance.ID}** 節點 `{nodeInstance.NodeKey}` 催辦提醒（第 {remindCount + 1} 次）。",
+            Body  = $"流程 **{instance.ID}** 節點 `{nodeKey}` 催辦提醒（第 {remindCount + 1} 次）。",
             Level = WebhookLevel.Warning,
             Fields = new List<KeyValuePair<string, string>>
             {
                 new("InstanceId",    instance.ID.ToString()),
-                new("Initiator",     instance.InitiatorITCode),
+                new("Initiator",     EscapeMarkdown(instance.InitiatorITCode)),
                 new("NodeKey",       nodeInstance.NodeKey),
                 new("ApproveMode",   (nodeInstance.ApproveMode ?? ApproveMode.Sequential).ToString()),
                 new("BusinessType",  instance.BusinessType ?? "—"),
@@ -236,15 +275,19 @@ public sealed class WebhookWorkflowNotifier : IWorkflowNotifier
     {
         if (_sink is null) return Task.CompletedTask;
 
+        var nodeKey      = EscapeMarkdown(nodeInstance.NodeKey);
+        var oldAssignee  = EscapeMarkdown(oldAssigneeITCode);
+        var newAssignee  = EscapeMarkdown(newAssigneeITCode);
+
         var message = new WebhookMessage
         {
             Title = "[WorkFlow] 超時升級 — 任務已轉移",
-            Body  = $"流程 **{instance.ID}** 節點 `{nodeInstance.NodeKey}` 因超時已將任務從 `{oldAssigneeITCode}` 升級轉移至 `{newAssigneeITCode}`。",
+            Body  = $"流程 **{instance.ID}** 節點 `{nodeKey}` 因超時已將任務從 `{oldAssignee}` 升級轉移至 `{newAssignee}`。",
             Level = WebhookLevel.Warning,
             Fields = new List<KeyValuePair<string, string>>
             {
                 new("InstanceId",       instance.ID.ToString()),
-                new("Initiator",        instance.InitiatorITCode),
+                new("Initiator",        EscapeMarkdown(instance.InitiatorITCode)),
                 new("NodeKey",          nodeInstance.NodeKey),
                 new("ApproveMode",      (nodeInstance.ApproveMode ?? ApproveMode.Sequential).ToString()),
                 new("BusinessType",     instance.BusinessType ?? "—"),
@@ -267,15 +310,20 @@ public sealed class WebhookWorkflowNotifier : IWorkflowNotifier
     {
         if (_sink is null) return Task.CompletedTask;
 
+        var nodeKey  = EscapeMarkdown(nodeInstance.NodeKey);
+        var assignee = EscapeMarkdown(task.AssigneeITCode);
+        // outcome is a framework-controlled enum string (AutoApproved/AutoRejected) — not graph-authored.
+        var outcomeLabel = outcome == "AutoApproved" ? "通過" : "拒絕";
+
         var message = new WebhookMessage
         {
-            Title = $"[WorkFlow] 超時自動{(outcome == "AutoApproved" ? "通過" : "拒絕")}",
-            Body  = $"流程 **{instance.ID}** 節點 `{nodeInstance.NodeKey}` 因超時已代 `{task.AssigneeITCode}` 執行自動{(outcome == "AutoApproved" ? "通過" : "拒絕")}。",
+            Title = $"[WorkFlow] 超時自動{outcomeLabel}",
+            Body  = $"流程 **{instance.ID}** 節點 `{nodeKey}` 因超時已代 `{assignee}` 執行自動{outcomeLabel}。",
             Level = WebhookLevel.Warning,
             Fields = new List<KeyValuePair<string, string>>
             {
                 new("InstanceId",    instance.ID.ToString()),
-                new("Initiator",     instance.InitiatorITCode),
+                new("Initiator",     EscapeMarkdown(instance.InitiatorITCode)),
                 new("NodeKey",       nodeInstance.NodeKey),
                 new("ApproveMode",   (nodeInstance.ApproveMode ?? ApproveMode.Sequential).ToString()),
                 new("BusinessType",  instance.BusinessType ?? "—"),
@@ -328,7 +376,7 @@ public sealed class WebhookWorkflowNotifier : IWorkflowNotifier
         var fields = new List<KeyValuePair<string, string>>
         {
             new("InstanceId",    instance.ID.ToString()),
-            new("Initiator",     instance.InitiatorITCode),
+            new("Initiator",     EscapeMarkdown(instance.InitiatorITCode)),
             new("NodeKey",       nodeInstance.NodeKey),
             new("ApproveMode",   (nodeInstance.ApproveMode ?? ApproveMode.Sequential).ToString()),
             new("BusinessType",  instance.BusinessType ?? "—"),
@@ -339,5 +387,30 @@ public sealed class WebhookWorkflowNotifier : IWorkflowNotifier
             fields.Add(new(extraKey, extraVal));
 
         return fields;
+    }
+
+    /// <summary>
+    /// Neutralise Markdown special characters in a graph/user-authored string so that
+    /// the value cannot render as a link, bold, italic, code-span, heading, or HTML tag
+    /// in any supported webhook sink card renderer.
+    ///
+    /// <para>Escaped characters: <c>[ ] ( ) \ * _ ~ ` # &lt; &gt; |</c>
+    /// CR/LF sequences are collapsed to a single space to prevent line-break injection.</para>
+    ///
+    /// <para>CJK characters, digits, and Latin letters are left intact so that CJK
+    /// node keys (e.g. <c>審批節點一</c>) remain readable.</para>
+    ///
+    /// <para>Call this helper on EVERY graph/user-authored string before it appears
+    /// in a card body interpolation.  Framework-constant strings (Title field,
+    /// Chinese UI labels baked into source code) do NOT need escaping.</para>
+    /// </summary>
+    internal static string EscapeMarkdown(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return string.Empty;
+
+        // Collapse CR/LF to space first.
+        var s = NewlineChars.Replace(value, " ");
+        // Backslash-escape each Markdown special character.
+        return MarkdownSpecialChars.Replace(s, m => @"\" + m.Value);
     }
 }

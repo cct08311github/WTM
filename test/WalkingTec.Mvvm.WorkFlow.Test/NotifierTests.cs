@@ -1029,3 +1029,322 @@ internal static class WfNotifierGraphs
         });
 }
 
+// ── Security tests: EscapeMarkdown helper (#296) ─────────────────────────────
+//
+// Verifies that:
+//   S1. A hostile nodeKey containing `[x](http://evil)` is escaped so no raw `[` or `(`
+//       reaches the card body — the card renders the escaped text, not a hyperlink.
+//   S2. A hostile nodeKey containing `<a href=x>` is escaped — no raw `<` or `>`.
+//   S3. A CJK nodeKey (e.g. 審批節點一) passes through unchanged and readable.
+//   S4. All six notification methods route nodeKey through EscapeMarkdown before
+//       the string reaches the WebhookMessage.Body.
+//   S5. EscapeMarkdown escapes every Markdown special character individually.
+//   S6. EscapeMarkdown strips CR/LF to space.
+//   S7. EscapeMarkdown returns empty string for null/empty input.
+
+[TestClass]
+public class NotifierEscapeMarkdownTests
+{
+    // ── S5. Helper: every special character is escaped ───────────────────────
+
+    [TestMethod]
+    public void EscapeMarkdown_EscapesAllMarkdownSpecialChars()
+    {
+        // Arrange — all Markdown-significant chars that must be neutralised.
+        const string input = @"[ ] ( ) \ * _ ~ ` # < > |";
+
+        // Act
+        var result = WebhookWorkflowNotifier.EscapeMarkdown(input);
+
+        // Assert — every special char must be backslash-escaped; CJK/letters untouched.
+        result.Should().Contain(@"\[").And.Contain(@"\]");
+        result.Should().Contain(@"\(").And.Contain(@"\)");
+        result.Should().Contain(@"\\");
+        result.Should().Contain(@"\*");
+        result.Should().Contain(@"\_");
+        result.Should().Contain(@"\~");
+        result.Should().Contain(@"\`");
+        result.Should().Contain(@"\#");
+        result.Should().Contain(@"\<").And.Contain(@"\>");
+        result.Should().Contain(@"\|");
+
+        // The raw characters must not appear unescaped (preceded by non-backslash) in the result.
+        result.Should().NotMatchRegex(@"(?<!\\)\[");
+        result.Should().NotMatchRegex(@"(?<!\\)\(");
+        result.Should().NotMatchRegex(@"(?<!\\)<");
+    }
+
+    // ── S6. CR/LF collapsed to space ─────────────────────────────────────────
+
+    [TestMethod]
+    public void EscapeMarkdown_CollapsesNewlinesToSpace()
+    {
+        var result = WebhookWorkflowNotifier.EscapeMarkdown("line1\r\nline2\nline3");
+        result.Should().Be("line1 line2 line3");
+    }
+
+    // ── S7. Null/empty returns empty string ───────────────────────────────────
+
+    [TestMethod]
+    public void EscapeMarkdown_NullOrEmpty_ReturnsEmptyString()
+    {
+        WebhookWorkflowNotifier.EscapeMarkdown(null).Should().Be(string.Empty);
+        WebhookWorkflowNotifier.EscapeMarkdown(string.Empty).Should().Be(string.Empty);
+    }
+
+    // ── S3. CJK nodeKey passes through unchanged ──────────────────────────────
+
+    [TestMethod]
+    public void EscapeMarkdown_CjkNodeKey_PassesThroughReadable()
+    {
+        const string cjkKey = "審批節點一";
+        var result = WebhookWorkflowNotifier.EscapeMarkdown(cjkKey);
+        result.Should().Be(cjkKey, "CJK characters do not need escaping");
+    }
+
+    // ── S1. Hostile nodeKey `[x](http://evil)` is neutralised in card body ────
+
+    [TestMethod]
+    public async Task NotifyApprovedAsync_HostileMarkdownLinkNodeKey_IsEscapedInBody()
+    {
+        // Arrange — nodeKey crafted to render as a Markdown link.
+        const string hostileKey = "[重新登入](http://evil.intra/sso)";
+
+        var sinkMock = new Mock<IWtmWebhookSink>();
+        WebhookMessage? captured = null;
+        sinkMock
+            .Setup(s => s.SendAsync(It.IsAny<WebhookMessage>(), It.IsAny<CancellationToken>()))
+            .Callback<WebhookMessage, CancellationToken>((m, _) => captured = m)
+            .Returns(Task.CompletedTask);
+
+        var notifier = new WebhookWorkflowNotifier(NullLogger<WebhookWorkflowNotifier>.Instance, sinkMock.Object);
+        var instance = NotifierTestHelpers.MakeInstance();
+        var node     = NotifierTestHelpers.MakeNode(instance.ID, nodeKey: hostileKey);
+        var task     = NotifierTestHelpers.MakeTask(node.ID);
+
+        // Act
+        await notifier.NotifyApprovedAsync(instance, node, task, "actor");
+
+        // Assert — the body must not contain the raw `[` that opens a Markdown link.
+        captured.Should().NotBeNull();
+        captured!.Body.Should().NotMatchRegex(@"(?<!\\)\[",
+            "raw unescaped `[` in the body would allow a Markdown phishing link to render");
+        captured.Body.Should().NotMatchRegex(@"(?<!\\)\(",
+            "raw unescaped `(` in the body would allow a Markdown link URL to render");
+        // The escaped text should still be present (content preserved, just neutralised).
+        captured.Body.Should().Contain(@"\[重新登入\]");
+    }
+
+    // ── S2. Hostile nodeKey with angle brackets is neutralised ────────────────
+
+    [TestMethod]
+    public async Task NotifyTaskAssignedAsync_HtmlAngleBracketNodeKey_IsEscapedInBody()
+    {
+        const string hostileKey = "<a href=x>click</a>";
+
+        var sinkMock = new Mock<IWtmWebhookSink>();
+        WebhookMessage? captured = null;
+        sinkMock
+            .Setup(s => s.SendAsync(It.IsAny<WebhookMessage>(), It.IsAny<CancellationToken>()))
+            .Callback<WebhookMessage, CancellationToken>((m, _) => captured = m)
+            .Returns(Task.CompletedTask);
+
+        var notifier = new WebhookWorkflowNotifier(NullLogger<WebhookWorkflowNotifier>.Instance, sinkMock.Object);
+        var instance = NotifierTestHelpers.MakeInstance();
+        var node     = NotifierTestHelpers.MakeNode(instance.ID, nodeKey: hostileKey);
+        var task     = NotifierTestHelpers.MakeTask(node.ID);
+
+        await notifier.NotifyTaskAssignedAsync(instance, node, task);
+
+        captured.Should().NotBeNull();
+        captured!.Body.Should().NotMatchRegex(@"(?<!\\)<",
+            "raw unescaped `<` allows HTML tag injection in sinks that render HTML");
+        captured.Body.Should().Contain(@"\<a href");
+    }
+
+    // ── S4. All six methods route nodeKey through EscapeMarkdown ─────────────
+
+    [DataTestMethod]
+    [DataRow("NotifyRejected")]
+    [DataRow("NotifyReturnedToInitiator")]
+    public async Task AllNotifyMethods_EscapeNodeKeyInBody(string method)
+    {
+        const string hostileKey = "[evil](http://phish)";
+
+        var sinkMock = new Mock<IWtmWebhookSink>();
+        WebhookMessage? captured = null;
+        sinkMock
+            .Setup(s => s.SendAsync(It.IsAny<WebhookMessage>(), It.IsAny<CancellationToken>()))
+            .Callback<WebhookMessage, CancellationToken>((m, _) => captured = m)
+            .Returns(Task.CompletedTask);
+
+        var notifier = new WebhookWorkflowNotifier(NullLogger<WebhookWorkflowNotifier>.Instance, sinkMock.Object);
+        var instance = NotifierTestHelpers.MakeInstance();
+        var node     = NotifierTestHelpers.MakeNode(instance.ID, nodeKey: hostileKey);
+        var task     = NotifierTestHelpers.MakeTask(node.ID);
+
+        if (method == "NotifyRejected")
+            await notifier.NotifyRejectedAsync(instance, node, task, "actor", "reason");
+        else
+            await notifier.NotifyReturnedToInitiatorAsync(instance, node, task, "actor", "reason");
+
+        captured.Should().NotBeNull();
+        captured!.Body.Should().NotMatchRegex(@"(?<!\\)\[",
+            $"{method}: raw `[` in body must be escaped");
+    }
+}
+
+// ── Security tests: GraphValidationError.InvalidNodeKey / DuplicateNodeKey (#296) ──
+//
+// Verifies that:
+//   V1. A nodeKey containing Markdown link syntax `[x](http://evil)` is rejected
+//       with InvalidNodeKey at publish time.
+//   V2. A nodeKey containing angle brackets `<a href=x>` is rejected with InvalidNodeKey.
+//   V3. A CJK nodeKey such as `審批節點一` is ACCEPTED (Unicode letters match \p{L}).
+//   V4. A plain ASCII identifier `approval_step-1.check` is accepted.
+//   V5. Duplicate nodeKeys are rejected with DuplicateNodeKey.
+//   V6. An existing valid graph with clean ASCII nodeKeys still passes (regression).
+
+[TestClass]
+public class GraphValidatorNodeKeySecurityTests
+{
+    // Helper: build a minimal two-node (Start → Approval → End) graph with custom nodeKeys.
+    private static WorkflowGraph MinimalGraph(string startKey, string approvalKey, string endKey,
+        string approverValue = "user1") =>
+        new()
+        {
+            Key = "SecurityTestGraph",
+            Name = "Security Test",
+            Nodes = new List<NodeDef>
+            {
+                new() { NodeKey = startKey,    Kind = NodeKind.Start },
+                new() { NodeKey = approvalKey, Kind = NodeKind.Approval,
+                        ApproveMode  = ApproveMode.Sequential,
+                        ApproverRule = new ApproverRuleDef { Type = "User", Value = approverValue } },
+                new() { NodeKey = endKey,      Kind = NodeKind.End },
+            },
+            Transitions = new List<TransitionDef>
+            {
+                new() { From = startKey,    To = approvalKey },
+                new() { From = approvalKey, To = endKey      },
+            },
+        };
+
+    // ── V1. Markdown link injection in nodeKey → InvalidNodeKey ───────────────
+
+    [TestMethod]
+    public void Validate_HostileMarkdownLinkNodeKey_ReturnsInvalidNodeKey()
+    {
+        var graph = MinimalGraph("start", "[重新登入](http://evil.intra/sso)", "end");
+
+        var result = WorkflowGraphValidator.Validate(graph);
+
+        result.IsValid.Should().BeFalse();
+        result.Error.Should().Be(GraphValidationError.InvalidNodeKey,
+            "nodeKey containing Markdown link brackets must be rejected at publish time");
+        result.ErrorMessage.Should().Contain("[重新登入]");
+    }
+
+    // ── V2. HTML angle bracket injection in nodeKey → InvalidNodeKey ──────────
+
+    [TestMethod]
+    public void Validate_HtmlAngleBracketNodeKey_ReturnsInvalidNodeKey()
+    {
+        var graph = MinimalGraph("start", "<script>", "end");
+
+        var result = WorkflowGraphValidator.Validate(graph);
+
+        result.IsValid.Should().BeFalse();
+        result.Error.Should().Be(GraphValidationError.InvalidNodeKey,
+            "nodeKey containing angle brackets must be rejected at publish time");
+    }
+
+    // ── V3. CJK nodeKey is ACCEPTED ───────────────────────────────────────────
+
+    [TestMethod]
+    public void Validate_CjkNodeKey_IsAccepted()
+    {
+        var graph = MinimalGraph("start", "審批節點一", "end");
+
+        var result = WorkflowGraphValidator.Validate(graph);
+
+        result.IsValid.Should().BeTrue(
+            "CJK nodeKey '審批節點一' matches \\p{L} and must be accepted per maintainer CJK-FRIENDLY rule");
+    }
+
+    // ── V4. ASCII identifier with underscore/hyphen/dot is accepted ───────────
+
+    [TestMethod]
+    public void Validate_AsciiIdentifierWithUnderscoreHyphenDot_IsAccepted()
+    {
+        var graph = MinimalGraph("start", "approval_step-1.check", "end");
+
+        var result = WorkflowGraphValidator.Validate(graph);
+
+        result.IsValid.Should().BeTrue(
+            "nodeKey 'approval_step-1.check' is a valid safe identifier");
+    }
+
+    // ── V5. Duplicate nodeKeys → DuplicateNodeKey ────────────────────────────
+
+    [TestMethod]
+    public void Validate_DuplicateNodeKey_ReturnsDuplicateNodeKey()
+    {
+        // Manually build a graph where two nodes share the same nodeKey.
+        var graph = new WorkflowGraph
+        {
+            Key = "DupKeyTest",
+            Name = "DupKeyTest",
+            Nodes = new List<NodeDef>
+            {
+                new() { NodeKey = "start",     Kind = NodeKind.Start },
+                new() { NodeKey = "approval1", Kind = NodeKind.Approval,
+                        ApproveMode  = ApproveMode.Sequential,
+                        ApproverRule = new ApproverRuleDef { Type = "User", Value = "u1" } },
+                // Duplicate — same key as above.
+                new() { NodeKey = "approval1", Kind = NodeKind.Approval,
+                        ApproveMode  = ApproveMode.Sequential,
+                        ApproverRule = new ApproverRuleDef { Type = "User", Value = "u2" } },
+                new() { NodeKey = "end",       Kind = NodeKind.End },
+            },
+            Transitions = new List<TransitionDef>
+            {
+                new() { From = "start",     To = "approval1" },
+                new() { From = "approval1", To = "end"       },
+            },
+        };
+
+        var result = WorkflowGraphValidator.Validate(graph);
+
+        result.IsValid.Should().BeFalse();
+        result.Error.Should().Be(GraphValidationError.DuplicateNodeKey,
+            "duplicate nodeKey 'approval1' must be a publish-time error");
+        result.ErrorMessage.Should().Contain("approval1");
+    }
+
+    // ── V6. Existing valid graph still passes (regression) ───────────────────
+
+    [TestMethod]
+    public void Validate_ExistingValidGraph_StillPasses()
+    {
+        var graph = MinimalGraph("start", "approval1", "end");
+
+        var result = WorkflowGraphValidator.Validate(graph);
+
+        result.IsValid.Should().BeTrue("a valid graph with clean ASCII nodeKeys must still pass after #296");
+    }
+
+    // ── V7. Nodekey with whitespace → InvalidNodeKey ──────────────────────────
+
+    [TestMethod]
+    public void Validate_NodeKeyWithWhitespace_ReturnsInvalidNodeKey()
+    {
+        var graph = MinimalGraph("start", "approval node 1", "end");
+
+        var result = WorkflowGraphValidator.Validate(graph);
+
+        result.IsValid.Should().BeFalse();
+        result.Error.Should().Be(GraphValidationError.InvalidNodeKey,
+            "nodeKey with embedded whitespace must be rejected");
+    }
+}

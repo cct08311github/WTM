@@ -141,6 +141,30 @@ public enum GraphValidationError
     /// Auto-actions must be explicitly opted-in via options before they may be published.
     /// </summary>
     TimeoutAutoActionGateOff,
+
+    // Security (#296): nodeKey shape + uniqueness enforcement.
+
+    /// <summary>
+    /// A nodeKey does not match the allowed identifier pattern
+    /// <c>^[\p{L}\p{N}_\-\.]{1,64}$</c>.
+    ///
+    /// <para>NodeKeys must be safe identifiers: Unicode letters/digits, underscore,
+    /// hyphen, and dot only; 1–64 characters.  Brackets, parentheses, angle brackets,
+    /// whitespace, and other Markdown/HTML-significant characters are not permitted,
+    /// preventing injection of Markdown links into notification card bodies.</para>
+    ///
+    /// <para>CJK characters are permitted because they match <c>\p{L}</c>.</para>
+    /// </summary>
+    InvalidNodeKey,
+
+    /// <summary>
+    /// Two or more nodes share the same <c>nodeKey</c> value.
+    ///
+    /// <para>The validator previously silently resolved duplicate keys via HashSet
+    /// last-wins semantics; duplicate keys are now a publish-time error because they
+    /// indicate a graph authoring mistake that can cause unpredictable engine behaviour.</para>
+    /// </summary>
+    DuplicateNodeKey,
 }
 
 /// <summary>
