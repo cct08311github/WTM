@@ -1,5 +1,81 @@
 # 更新日志
 
+## [10.11.0] - 2026-06-12
+
+WorkFlow Wave 4 + 5 — **加签 (add-approver)**, **委托/转交 (delegation)**, and **超时/催办 (timeout + remind)** for the `WalkingTec.Mvvm.WorkFlow` approval engine. All three features are fully opt-in — hosts that do not call the new registration methods or author `TimeoutDef` in their graph are byte-identical to 10.10.0. See Migration for additive nullable columns added to `Wf_ApprovalTask` and `Wf_NodeInstance`; **no new migration delta for `Wf_WorkflowTimer`** (schema was already in place).
+
+Compliance defaults are enforced loudly: `AllowTimerAutoAction` defaults to **`false`** (auto-approve/auto-reject via timer requires explicit opt-in); `DelegationWindowMode` defaults to **`AtAssignment`** (authority frozen at task-mint; `AtAction` re-check is opt-in and is **startup-blocked on Oracle/DaMeng** until #270 live-provider conformance lands). Any change from these defaults must be documented in CHANGELOG.
+
+### Added
+
+- **加签 (add-approver) — `AddApproverAsync`** (#285): an active approver may inject additional approvers `Before` or `After` their own position in the chain. Works across all three approval modes (串签 / 会签 / 或签):
+  - **会签 (All/ratio):** injected tasks are immediately `Pending`; `TotalRequired` is bumped atomically in the same `ExecuteUpdateAsync` that increments `ApproverSetEpoch` — a newly injected approver must act before the node can complete.
+  - **串签 (Sequential):** `Before` inserts at the actor's sequence position (`AddedPending` state — activates when the pointer reaches it); `After` inserts immediately after.
+  - **或签 (Any):** widens the candidate set; epoch bump linearizes concurrent approve+加签 races.
+  - **`ApproverSetEpoch`** (new `uint` column on `Wf_NodeInstance`, default 0): incremented by every approver-set mutation; added to the completion CAS predicate — closes the threshold-recompute race window between a 加签 and an in-flight completion.
+  - **`MaxAddDepth`** cap (`WorkFlowOptions.MaxAddDepth`, default 3): prevents unbounded injection chains. `ApprovalTask.AddDepth` (new additive column) tracks depth per task; O(1) check, no chain walk.
+  - **`AddPosition` enum**: `Before` | `After`.
+  - Injected tasks carry `Generation`, are discarded with the span on 回退, and flow through the existing delegation resolution step (standing rules are honoured for injected approvers).
+  - New `WorkflowActionCode` members: `MaxAddDepthExceeded`, `NodeAlreadyDecided`.
+  - Concurrency test: `ConcurrencyConformanceTests.cs` covering racing 加签 vs. completion in both orderings.
+
+- **委托/转交 (delegation) — `DelegateTaskAsync` / `RevokeDelegationAsync` / `DelegationResolvingDecorator`** (#284, #286):
+  - **Standing delegation (resolution-time substitution):** a `DelegationRule` (`PrincipalITCode`, `DelegateeITCode`, `ScopeDefinitionCode`, `StartUtc`, `EndUtc`) is applied by `DelegationResolvingDecorator : IApproverResolver` at node-entry before Activation. The decorator replaces the principal with the terminal delegatee in the resolved set — substitution, never an addition; `TotalRequired` is written once, pre-Activation, with zero concurrency.
+  - **Transitive chains** (hop cap + cycle detection): up to `MaxDelegationHops` (default 3) per-chain, with an explicit `HashSet<string>` visited-set. A cycle (A→B→A) or cap breach routes to `AdminFallbackITCode`; if that is empty the engine **fail-closes** (never fail-open).
+  - **Mid-flight delegation — `DelegateTaskAsync`**: an approver explicitly transfers their active `Pending` slot to a delegatee via a **single-statement CAS** on the task row (`AssigneeITCode` flip + `RowVer` + `Generation` guard). `TotalRequired` is never touched (1-for-1 slot transfer). A delegatee already holding an active task on the node is refused with `DelegateAlreadyParticipant`.
+  - **`DelegationWindowMode`** (default `AtAssignment`, opt-in `AtAction`): `AtAssignment` (default) freezes the delegation window at task-mint (`DelegationExpiresUtc` denormalized on the task row) — authority is frozen at assignment time. `AtAction` re-checks at claim via the CAS predicate; **blocked at startup on Oracle/DaMeng** (ctor guard, pending #270).
+  - **`RevokeDelegationAsync`**: admin bulk-reverts all `Pending` tasks produced by a given `DelegationRuleId` back to their original principals (1-for-1 CAS; `TotalRequired` never moves; idempotent).
+  - New additive columns on `Wf_ApprovalTask`: `DelegationRuleId (Guid?)`, `DelegationExpiresUtc (DateTime?)`, `WindowVerifiedUtc (DateTime?)`. New additive column on `Wf_NodeInstance`: `ApproverSetEpoch (uint)`. New additive column on `Wf_ApprovalTask`: `AddDepth (int)`.
+  - New `WorkflowActionCode` members: `DelegationExpired`, `DelegationHopsExceeded`, `DelegationCycle`, `DelegateAlreadyParticipant`.
+  - `DelegationTests.cs`: 60+ cases covering standing rules, transitive chains, cycle detection, mid-flight reassign, collision, revoke, AtAction window, and return-span discard.
+
+- **超时/催办 (timeout + remind + escalate) — `AddWtmWorkFlowTimers()`** (#287, #291): opt-in background service for timeout-driven actions. Call `services.AddWtmWorkFlowTimers()` in addition to `AddWtmWorkFlow()` to enable:
+  - **`WorkflowTimerHostedService`**: single-instance background reaper; poll interval `WorkFlowOptions.TimerPollInterval` (default 1 min); per-tick `CreateScope`; per-timer try/catch (poisoned timer never blocks the batch); 3-attempt startup retry; **throws out of `ExecuteAsync` on `DBTypeEnum.Memory`** (fail-fast per spec invariant #8).
+  - **Arm sites**: node-scoped timer (`ApprovalTaskId = NULL`) armed after `ActivateNodeInstanceAsync` for All/Any nodes; per-active-step task-scoped timer armed at activation and at each sequential pointer-advance. `NotYetActive`/`AddedPending` tasks never have running timers (structural).
+  - **Remind (催办)**: default-safe. In-transaction next-link INSERT with deterministic idempotency key (`tmo:{n|t}:{id}:{gen}:{k}`) and hard cap `min(MaxReminders ?? MaxRemindersDefault(3), MaxRemindersHardCap(10))`.
+  - **Escalate**: task-scoped timers only — reassigns the step via `EscalateTaskAssigneeAsync` (same assignee-bound CAS as WF-19). Collision pre-check (delegatee already a participant) downgrades to notify-only + `FailClosed` event. Node-scoped timers (All/Any): notify-only (quorum-reassign deferred).
+  - **AutoApprove / AutoReject**: doubly gated — graph must author the action AND `AllowTimerAutoAction` must be `true` (default **`false`**). Fire-time authoritative: gate-off produces Remind downgrade + `FailClosed` event regardless of graph intent. Per-task CAS reuses the existing `ClaimApprovalTaskAsync` predicate; the same post-claim continuation as the human path runs post-commit.
+  - **Multi-host deduplication**: `FireTimerAsync` CAS (`Status==Armed AND RowVer==@v`) is the mutex; exactly one host wins per timer per tick.
+  - **`IBusinessCalendar` seam** + `PassThroughBusinessCalendar` default: `businessCalendar:true` graphs with auto/escalate actions and only pass-through registered are **rejected at publish time**; Remind arms with wall-clock math + `LogWarning`.
+  - **AtAction expired-delegation sweep (reaper phase 3)**: reverts expired AtAction-mode delegated tasks to their principal when `DelegationExpiredSweep == RevertToPrincipal` (default). Doubly opt-in intersection (`AddWtmWorkFlowTimers` + `DelegationWindowMode == AtAction`).
+  - **Returning-lease reclaim (reaper phase 2)**: `ReclaimReturningLeaseByRowVerAsync` — RowVer-pinned portable reclaim, no `DateTime` in UPDATE WHERE (Oracle/DaMeng safe). `ReturningLeaseTtl` option (default 30 min).
+  - **New `WorkFlowOptions` options**: `AllowTimerAutoAction` (default `false`), `ReturningLeaseTtl` (default 30 min), `TimerBatchSize` (default 100), `MaxRemindersDefault` (default 3), `MaxRemindersHardCap` (default 10), `DelegationExpiredSweep` (default `RevertToPrincipal`).
+  - **New `EventAction` enum members** (append-only): `TimeoutRemind`, `TimeoutEscalate`, `DelegationExpiredReverted`.
+  - **`IWorkflowNotifier` +3 default interface methods** (DIM, no-op defaults): `NotifyTimeoutRemindAsync`, `NotifyTimeoutEscalatedAsync`, `NotifyTimeoutAutoActionedAsync`. `WebhookWorkflowNotifier` overrides all three; every DIM has a verified call site.
+  - **`TimeoutDef.EscalateTo` graph field** (additive-nullable `string?`): target ITCode for escalate-reassign; falls back to `AdminFallbackITCode` if empty.
+  - **Zero new migration columns for `Wf_WorkflowTimer`**: the timer table schema was already in place (Sprint-1); `EventAction` +3 append-only members require no schema change.
+  - `DefinitionCode` additive column on `Wf_NodeInstance` (delegation scope filtering at resolution time; also read by timer arm sites).
+  - Timer test matrix: 22 scenarios (`T-TMO-01…22`) in `TimerArmCancelTests.cs` and `TimerReaperTests.cs` using SQLite shared-in-memory (WF-0 barrier pattern).
+
+### Fixed
+
+- **`WorkflowEngine` AtAction guard on Oracle/DaMeng** (#286): `DelegationWindowMode.AtAction` is now blocked at `AddWtmWorkFlow()` ctor time on `DbType ∈ {Oracle, DaMeng}` with a clear `NotSupportedException` referencing issue #270. Previously the mode could be set silently and would fail at runtime with a translation error.
+
+### Migration
+
+The following columns are **additive** (`HasDefaultValue` in `ApplyWorkFlowModels`; existing rows backfill to safe defaults without data loss):
+
+| Table | New columns | Backfill default |
+|-------|-------------|-----------------|
+| `Wf_NodeInstance` | `ApproverSetEpoch (uint)` | 0 |
+| | `DefinitionCode (string?)` | NULL |
+| `Wf_ApprovalTask` | `DelegationRuleId (Guid?)` | NULL |
+| | `DelegationExpiresUtc (DateTime?)` | NULL |
+| | `WindowVerifiedUtc (DateTime?)` | NULL |
+| | `AddDepth (int)` | 0 |
+
+**`Wf_WorkflowTimer` is unchanged** — no new columns in this wave (timer table was already present from Sprint-1).
+
+To generate the migration (append to your existing migration series):
+```bash
+dotnet ef migrations add WorkFlowWave45 \
+  --context DataContext \
+  --project YourApp/YourApp.csproj \
+  --startup-project YourApp/YourApp.csproj
+```
+
+**Behavior compatibility**: existing graphs (without `TimeoutDef`) are unaffected — timers are never armed for them. Standing delegation rules only apply at next node-activation; in-flight instances are untouched until an explicit `DelegateTaskAsync` call. The `ApproverSetEpoch` column defaults to 0 — pre-Wave-4 completion CAS callers that do not pass `expectedApproverSetEpoch` continue to use the pre-existing predicate (backward-compatible nullable parameter discipline, matching how Wave-3 added `Generation`).
+
 ## [10.10.0] - 2026-06-10
 
 WorkFlow Wave 3 — 回退-to-node (`ReturnToPrev`/`ReturnToNode`) and parallel/inclusive gateways with Join and Ack. Every feature is opt-in; existing single-token graphs and the serial-approve API are completely unaffected. See Migration for new additive columns.

@@ -1,6 +1,8 @@
 # WTM 開發與使用手冊
 
-> **版本**：10.10.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-06-10
+> **版本**：10.11.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-06-12
+>
+> **10.11.0 重點**（WorkFlow Wave 4+5 — 加签 / 委托 / 超时）：`AddApproverAsync`（加签）讓活躍審批人可在自己的位置前後注入新審批人，透過 `ApproverSetEpoch` CAS 關閉與並發完成的競態；`DelegateTaskAsync`（委托，中途轉辦）透過單語句 CAS 1-for-1 轉讓任務槽，`TotalRequired` 不變；`DelegationResolvingDecorator` 在節點進入前做可遞移替代（hop cap=3，明確 `visited` 集偵測循環，cycle→fail-closed）；`RevokeDelegationAsync` 管理員批量撤回委托；`AddWtmWorkFlowTimers()`（opt-in）啟用背景排程：Remind 催辦鏈、Escalate 分配升級、`AllowTimerAutoAction=false`（預設 fail-closed）保護自動審批/拒絕。`DelegationWindowMode` 預設 `AtAssignment`（授權在 mint 時凍結）；`AtAction` 需顯式 opt-in，且在 Oracle/DaMeng 啟動時阻擋（#270）。schema additive：`Wf_NodeInstance.ApproverSetEpoch` + `Wf_ApprovalTask.{DelegationRuleId, DelegationExpiresUtc, WindowVerifiedUtc, AddDepth}`，`Wf_WorkflowTimer` 無變動。詳見 §18.10（Wave 4 加签）、§18.11（Wave 5 委托）、§18.12（Wave 5 超时）及 `CHANGELOG.md` `[10.11.0]`。
 >
 > **10.10.0 重點**（WorkFlow Wave 3 — 回退-to-node + 平行審批閘道）：`ReturnToPrevAsync`/`ReturnToNodeAsync` 讓審批人可退回任意*支配*上游節點（非僅發起人），採 supersede-not-delete 跨度丟棄、per-instance `Generation` epoch bump、`MaxReturnLoops` cap（預設 3）、crash-recovery lease（`ReturningLeaseUtc`）、engine-owned transaction；`WorkflowEventLog.Seq` 改由 `ProcessInstance.NextSeq` 一列式 CAS 分配（移除 `MAX(Seq)+1`/SERIALIZABLE，portable，無隔離層級依賴）。新增 `NodeKind.ParallelGateway`/`InclusiveGateway` AND/OR fork、單語句 Join fire CAS（`FireJoinIfSatisfiedAsync`）、孤兒 fail-closed（`DecrementJoinExpectedAsync`）、可達性兜底確保 Join 絕不掛起；`NodeKind.Ack`（阻塞等待確認，有別於非阻塞 Cc）。schema 為 additive（5 張表新增欄位，皆有 `HasDefaultValue`）；**`NextSeq` 需 per-instance 回填為 `MAX(Seq)+1`**，否則上線後第一次事件 append 即衝突。多 token 行為僅在閘道節點觸發，既有單 token 圖完全不受影響。詳見 §18.9（Wave 3）及 `CHANGELOG.md` `[10.10.0]`。
 >
@@ -4532,7 +4534,7 @@ public class Order : BasePoco
 ```xml
 <Project>
   <PropertyGroup>
-    <VersionPrefix>10.10.0</VersionPrefix>
+    <VersionPrefix>10.11.0</VersionPrefix>
   </PropertyGroup>
 </Project>
 ```
@@ -4544,10 +4546,10 @@ public class Order : BasePoco
 | 欄位 | 意義 | 何時遞增 |
 |------|------|---------|
 | **X** | .NET Core 主版本 | 僅在升至下一個 .NET 主版本（如 .NET 10 → 11）時遞增 |
-| **Y** | 主功能升級 | 新增模組或重大新功能時遞增（例：新增 WorkFlow Wave 3 → `10.10.0`） |
-| **Z** | 次要優化 | Bug 修復、patch、小優化時遞增（例：hotfix → `10.10.1`） |
+| **Y** | 主功能升級 | 新增模組或重大新功能時遞增（例：新增 WorkFlow Wave 4+5 → `10.11.0`） |
+| **Z** | 次要優化 | Bug 修復、patch、小優化時遞增（例：hotfix → `10.11.1`） |
 
-**範例**：`10.10.0` = .NET 10、第 10 次主功能升級（WorkFlow Wave 3）、初始釋出。  
+**範例**：`10.11.0` = .NET 10、第 11 次主功能升級（WorkFlow Wave 4+5 加签/委托/超时）、初始釋出。  
 **注意**：`X` 不是 .NET SDK patch 版本，不會因 SDK 10.0.300 vs 10.0.201 而變動，只在主版本升級（10 → 11）時才遞增。
 
 ### 17.5 多環境配置
@@ -4584,6 +4586,9 @@ appsettings.Production.json   ← 生產環境覆蓋（連線字串、JWT Key）
 | **沙盒條件路由** | 白名單欄位 + 封閉 operator enum，`WhitelistRoutingEvaluator`，無 Roslyn/DynamicLinq，off-whitelist → fail-closed |
 | **回退-to-node（Wave 3）** | `ReturnToPrevAsync`/`ReturnToNodeAsync`：退回任意支配上游節點；supersede-not-delete + Generation epoch + NextSeq CAS；見 §18.9 |
 | **平行/包容閘道（Wave 3）** | `NodeKind.ParallelGateway`（AND-fork）/`InclusiveGateway`（OR-fork）+ 單語句 Join CAS + 孤兒 fail-closed；見 §18.9 |
+| **加签（Wave 4）** | `AddApproverAsync`：活躍審批人注入額外審批人（`Before`/`After`），`ApproverSetEpoch` CAS 關閉並発完成競態；見 §18.10 |
+| **委托/转交（Wave 4）** | `DelegateTaskAsync`（中途轉辦，單語句 CAS）、`DelegationResolvingDecorator`（節點進入前替代，遞移 + 循環偵測）、`RevokeDelegationAsync`；見 §18.11 |
+| **超时/催辦（Wave 5）** | `AddWtmWorkFlowTimers()`：Remind 催辦、Escalate 升級、AutoApprove/AutoReject（`AllowTimerAutoAction=false` 預設 fail-closed）、`IBusinessCalendar` seam；見 §18.12 |
 | **撤回/回退/抄送** | 撤回(WithdrawPolicy)、回退發起人(ReturnToInitiator)、抄送(CC，非阻塞) |
 | **Opt-in 通知** | `AddWtmWorkFlowNotifications()` 複用 `IWtmWebhookSink`；post-commit best-effort，通知失敗不回滾 |
 | **雙軌稽核** | `[AuditChanges]`（VM CRUD）+ append-only `WorkflowEventLog`（引擎轉換，`ExecuteUpdateAsync` bypass 了 EF change tracker） |
@@ -4861,6 +4866,229 @@ dotnet ef migrations add WorkFlowWave3 \
 `UNIQUE (TenantCode, InstanceId, NodeKey, Generation)` on `Wf_NodeInstance`
 
 **相容性**：多 token 行為僅在 `ParallelGateway`/`InclusiveGateway` 節點觸發。既有單 token 流程（`Start`/`Approval`/`Condition`/`End`）行為完全不變。`Generation == 0` 的既有實例透明相容——live-marking 查詢 `WHERE Generation == instance.Generation` 評估為 `0 == 0`，行為與升級前相同。
+
+---
+
+### 18.10 Wave 4 — 加签 (add-approver)（10.11.0+）
+
+**加签**讓一個活躍審批人可以在自己的審批位置前或後注入額外的審批人，無需修改流程定義。
+
+#### 18.10.1 API
+
+```csharp
+Task<WorkflowActionResult> AddApproverAsync(
+    Guid taskId,                          // 操作者自己的 Pending 任務 PK
+    string actorITCode,                   // server-side RBAC 核驗
+    IReadOnlyList<string> newApproverITCodes,
+    AddPosition position = AddPosition.After,   // Before | After
+    string? reason = null,
+    CancellationToken ct = default);
+```
+
+`AddPosition.Before` 插入操作者序號之前；`AddPosition.After` 插入之後。
+
+#### 18.10.2 各審批模式行為
+
+| 審批模式 | Before | After |
+|---------|--------|-------|
+| 会签 (All/ratio) | 立即 `Pending`；`TotalRequired += delta` | 同左 |
+| 串签 (Sequential) | 插入為 `AddedPending`（指標推進時才 Activate） | 插入為 `AddedPending`，序號為操作者 +1 |
+| 或签 (Any) | 拓寬候選集；epoch bump 序列化並發決定 | 同左 |
+
+#### 18.10.3 `ApproverSetEpoch` CAS 保護
+
+`Wf_NodeInstance` 新增 `ApproverSetEpoch (uint, default 0)`。每次加签在同一個 `ExecuteUpdateAsync` 中同時遞增 `TotalRequired` 與 `ApproverSetEpoch`（並更新 `RowVer`）。完成 CAS（`CompleteNodeInstanceAsync`）在 predicate 中加入 `AND ApproverSetEpoch == @e`，確保：
+
+- 若加签先提交 → 完成 CAS epoch 過期 → rows==0 → 引擎重新讀取新 `TotalRequired`，待新審批人也完成才繼續。
+- 若完成先提交 → 節點已離開 `Activated` → 加签 CAS `WHERE State==Activated` → rows==0 → `NodeAlreadyDecided`，任務不插入。
+
+此機制與 Wave-3 用 `Generation` 保護的設計完全對稱（GuardedTransition.cs 中的可選參數模式）。
+
+#### 18.10.4 MaxAddDepth 防止無限鏈
+
+`WorkFlowOptions.MaxAddDepth`（預設 3）。每個任務有 `ApprovalTask.AddDepth (int, default 0)`：原始審批人為 0，注入任務為 `sourceTask.AddDepth + 1`。超過上限 → `WorkflowActionCode.MaxAddDepthExceeded`（O(1)，不需遍歷鏈）。
+
+#### 18.10.5 回退時自動清除
+
+注入任務攜帶 `Generation`。回退時 `DiscardTasksForReturnAsync` 按 Generation 批次取消所有 `AddedPending` 和範圍任務（**零新代碼**）。重新進入節點時以新 `Generation` mint 全新的原始審批人集合。
+
+#### 18.10.6 Migration（Wave 4 additive 欄位）
+
+```bash
+dotnet ef migrations add WorkFlowWave45 \
+  --context DataContext \
+  --project YourApp/YourApp.csproj \
+  --startup-project YourApp/YourApp.csproj
+```
+
+| 資料表 | 新欄位 | 預設 |
+|--------|--------|------|
+| `Wf_NodeInstance` | `ApproverSetEpoch uint` | 0 |
+| `Wf_ApprovalTask` | `AddDepth int` | 0 |
+
+---
+
+### 18.11 Wave 4 — 委托/转交 (delegation)（10.11.0+）
+
+**委托**允許審批人將自己的審批任務轉讓給他人，或設定站立規則使未來任務自動轉派。
+
+#### 18.11.1 兩條路徑
+
+**路徑 A：節點進入前替代（standing delegation，零并发）**
+
+`DelegationResolvingDecorator` 在 `IApproverResolver.ResolveAsync` 後、節點 `Activated` 前，將每個原始審批人替換為活躍 `DelegationRule`（`IsValid==true AND now ∈ [StartUtc,EndUtc]`）的最終受委人。替代是 1-for-1 的：`TotalRequired` 在 mint 事務中一次性寫入，無並發問題。
+
+可遞移鏈（最多 `MaxDelegationHops = 3`，預設）：
+```
+ResolveTransitive(P):
+  visited = { P };  cur = P;  hops = 0
+  loop:
+    rule = activeRuleFor(cur)  // 活躍規則：IsValid + 時間窗
+    if rule == null: return cur
+    next = rule.DelegateeITCode
+    if visited.Contains(next): log; return AdminFallback(cur)  // 循環 → fail-closed
+    if ++hops > MaxDelegationHops: log; return cur             // 達上限 → 停在最後解析處
+    visited.Add(next); cur = next
+```
+
+若 `AdminFallbackITCode` 為空，引擎 **fail-closes**（從不 fail-open）。
+
+**路徑 B：中途轉辦（mid-flight，`DelegateTaskAsync`）**
+
+```csharp
+Task<WorkflowActionResult> DelegateTaskAsync(
+    Guid taskId,          // 操作者自己的 Pending 任務 PK
+    string actorITCode,   // 必須等於 task.AssigneeITCode
+    string delegateeITCode,
+    Guid? delegationRuleId = null,
+    string? reason = null,
+    CancellationToken ct = default);
+```
+
+單語句 CAS 將 `AssigneeITCode` 從委托人轉為受委人：
+
+```sql
+UPDATE Wf_ApprovalTask
+   SET AssigneeITCode = @delegatee, DelegatedFromITCode = @actor,
+       DelegationRuleId = @ruleId, DelegationExpiresUtc = @expiry,
+       ApproverSetEpoch = @nodeEpochStamp, RowVer = RowVer + 1
+ WHERE ID = @taskId AND State = Pending
+   AND RowVer = @expectedRowVer AND Generation = @g
+```
+
+`TotalRequired` **從不變動**（1-for-1）。若受委人已在同節點持有活躍任務 → `DelegateAlreadyParticipant`（拒絕，維護 vote-count 不變量）。
+
+#### 18.11.2 `DelegationWindowMode`
+
+| 模式 | 行為 | 適用場景 |
+|------|------|---------|
+| `AtAssignment`（預設）| 規則時間窗在任務 mint 時評估一次，凍結至 `DelegationExpiresUtc` | 合規優先；授權在指定時刻確定 |
+| `AtAction`（opt-in）| 每次操作時重新核驗時間窗（含入 CAS predicate） | 嚴格實時控制；**Oracle/DaMeng 啟動時阻擋，等待 #270** |
+
+> **重要**：更改 `DelegationWindowMode` 的預設值需在 `CHANGELOG.md` 記錄，因為這會靜默改變審批授權語義。
+
+#### 18.11.3 RevokeDelegationAsync（管理員撤回）
+
+```csharp
+Task<int> RevokeDelegationAsync(
+    Guid delegationRuleId,
+    string actorITCode,   // 需持有管理員角色
+    string? reason = null,
+    CancellationToken ct = default);
+// 回傳：成功撤回的任務數（rows==1 CAS 次數）
+```
+
+批量將所有由 `delegationRuleId` 產生的 `Pending` 任務回歸原始審批人（1-for-1 CAS；`TotalRequired` 不變；冪等）。`DelegationRule.IsValid = false` 只影響未來激活，不影響進行中任務——此方法是進行中任務的撤回路徑。
+
+#### 18.11.4 Migration（Wave 4 delegation 欄位）
+
+| 資料表 | 新欄位 | 預設 |
+|--------|--------|------|
+| `Wf_ApprovalTask` | `DelegationRuleId Guid?` | NULL |
+| | `DelegationExpiresUtc DateTime?` | NULL |
+| | `WindowVerifiedUtc DateTime?` | NULL |
+| `Wf_NodeInstance` | `DefinitionCode string?` | NULL |
+
+（與 §18.10.6 的 migration 合併在同一個 `WorkFlowWave45` 指令）
+
+---
+
+### 18.12 Wave 5 — 超时/催辦 (timeout + remind)（10.11.0+）
+
+**超时功能**需額外呼叫 `AddWtmWorkFlowTimers()`（不呼叫則行為與 10.10.0 完全相同）。
+
+#### 18.12.1 DI 註冊
+
+```csharp
+services.AddWtmWorkFlow(options =>
+{
+    // AllowTimerAutoAction = false（預設，必須明確 opt-in 才能自動審批/拒絕）
+    options.AllowTimerAutoAction = false;  // 顯式確認
+    options.TimerBatchSize = 100;
+    options.MaxRemindersDefault = 3;
+    options.MaxRemindersHardCap = 10;
+    options.ReturningLeaseTtl = TimeSpan.FromMinutes(30);
+    // options.BusinessCalendarId = "myCalendar";  // 需實作 IBusinessCalendar
+});
+
+// Timeout 排程（opt-in）
+services.AddWtmWorkFlowTimers();
+
+// 若需自訂業務曆（例：排除週末/節假日）
+services.AddSingleton<IBusinessCalendar, MyCompanyCalendar>();
+```
+
+#### 18.12.2 流程定義中的 `TimeoutDef`
+
+```json
+{
+  "nodeKey": "dept-approval",
+  "kind": "Approval",
+  "approveMode": "All",
+  "approvers": [...],
+  "timeout": {
+    "duration": "PT48H",          // ISO-8601 duration
+    "action": "Remind",           // Remind | Escalate | AutoApprove | AutoReject
+    "remindEveryHours": 8,        // 催辦間隔（Remind 鏈）
+    "maxReminders": 6,            // 最多幾次（受 MaxRemindersHardCap=10 限制）
+    "escalateTo": "manager001"    // Escalate 目標 ITCode（可選，否則用 AdminFallbackITCode）
+  }
+}
+```
+
+#### 18.12.3 Action 語義
+
+| `action` | 說明 | 合規預設 |
+|----------|------|---------|
+| `Remind` | 在事務中原子插入下一個催辦連結，post-commit 通知現有 Pending 審批人 | 預設安全，無需額外 opt-in |
+| `Escalate` | 任務型計時器：透過 `EscalateTaskAssigneeAsync` 單語句 CAS 轉派給 `EscalateTo`/`AdminFallbackITCode`；受委人已是參與者 → 降級為 notify-only；節點型計時器：僅通知 | 合理預設 |
+| `AutoApprove` | 計時器到期時自動審批 | **需 `AllowTimerAutoAction = true`**（預設 false），否則降級為 Remind + FailClosed 事件 |
+| `AutoReject` | 計時器到期時自動拒絕 | 同上 |
+
+> **合規警告**：`AllowTimerAutoAction = true` 允許系統繞過人工審批。此設定屬**合規敏感**選項，必須在 CHANGELOG 中明確記錄並由業務負責人簽核。
+
+#### 18.12.4 多主機安全
+
+`FireTimerAsync` CAS（`WHERE Status==Armed AND RowVer==@v`）是多主機去重的互斥鎖——只有一台主機的 rows==1，其餘 rows==0 後直接跳過，不產生副作用。
+
+#### 18.12.5 `IBusinessCalendar` 整合
+
+```csharp
+public interface IBusinessCalendar
+{
+    DateTime AddBusinessTime(DateTime from, TimeSpan duration, string? calendarId);
+}
+```
+
+預設 `PassThroughBusinessCalendar` 直接加上 wall-clock duration。若流程定義指定 `businessCalendar: true` 且只有 pass-through 已註冊：
+- `Remind`：以 wall-clock 計算 + `LogWarning`（早觸發，但催辦無害）
+- `AutoApprove/AutoReject/Escalate`：**在 publish 時拒絕此組合**（fire-time 自動繞過是合規謊言）
+
+#### 18.12.6 Migration（Wave 5 — 零新欄位）
+
+`Wf_WorkflowTimer` 表在 Sprint-1（10.9.0）時 schema 已就位，Wave 5 **不增加任何新欄位**。`EventAction` 新增 3 個成員（`TimeoutRemind`、`TimeoutEscalate`、`DelegationExpiredReverted`）為 enum append-only，不需 schema 變更。
+
+無需額外執行 `dotnet ef migrations add`（與 §18.10.6 合併在同一個 `WorkFlowWave45` migration 即可）。
 
 ---
 
