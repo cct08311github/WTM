@@ -2,6 +2,7 @@
 // WF-4: Publish-time structural validation for WorkflowGraph documents.
 // WF-11: Extended with routing-rule whitelist validation.
 // WF-17: Extended with fork↔Join pairing validation (ParallelGateway / InclusiveGateway).
+// WF-20: Extended with TimeoutDef validation (NEW graph publishes only).
 //
 // Validation is fail-closed: any structural problem returns a descriptive
 // GraphValidationResult with a closed error code.  Exceptions are NOT used
@@ -21,11 +22,17 @@
 //  11. (WF-17) ParallelGateway/InclusiveGateway must have joinNodeKey pointing to a Join node.
 //  12. (WF-17) InclusiveGateway transitions must each carry a condition (routing rule).
 //  13. (WF-17) Ack nodes must have AckMode specified.
+//  14. (WF-20) TimeoutDef rules: valid Duration, RemindEveryHours, MaxReminders, EscalateTo,
+//              Approval-only node restriction, businessCalendar+auto-action reject,
+//              AllowTimerAutoAction gate.
 
 using System;
 using System.Collections.Generic;
+using System.Xml;
 using WalkingTec.Mvvm.WorkFlow.Engine.Routing;
 using WalkingTec.Mvvm.WorkFlow.Models;
+// WF-20: WorkFlowOptions needed for AllowTimerAutoAction gate in Validate().
+using WalkingTec.Mvvm.WorkFlow;
 
 namespace WalkingTec.Mvvm.WorkFlow.Definition;
 
@@ -39,8 +46,16 @@ public static class WorkflowGraphValidator
     /// <summary>
     /// Validate <paramref name="graph"/> and return the first detected error.
     /// Returns <see cref="GraphValidationResult.Success"/> when all checks pass.
+    ///
+    /// <param name="graph">The graph to validate.</param>
+    /// <param name="options">
+    /// Optional runtime options.  When non-null, TimeoutDef auto-action check 14g
+    /// (<see cref="GraphValidationError.TimeoutAutoActionGateOff"/>) is enforced.
+    /// When null the gate check is skipped (backward-compatible for existing call sites
+    /// that do not have options available at publish time).
+    /// </param>
     /// </summary>
-    public static GraphValidationResult Validate(WorkflowGraph graph)
+    public static GraphValidationResult Validate(WorkflowGraph graph, WorkFlowOptions? options = null)
     {
         if (graph is null) throw new ArgumentNullException(nameof(graph));
 
@@ -177,6 +192,69 @@ public static class WorkflowGraphValidator
             if (node.Kind == NodeKind.Ack && node.AckMode is null)
                 return GraphValidationResult.Fail(GraphValidationError.AckNodeMissingAckMode,
                     $"Ack node '{node.NodeKey}' must specify an 'ackMode' (All, Any, or Quorum).");
+
+            // WF-20 checks 14a-g: TimeoutDef rules (NEW graph publishes only).
+            if (node.Timeout is not null)
+            {
+                var td = node.Timeout;
+
+                // 14a: Timeout only on Approval nodes (the only nodes that mint tasks).
+                if (node.Kind != NodeKind.Approval)
+                    return GraphValidationResult.Fail(GraphValidationError.TimeoutOnNonApprovalNode,
+                        $"Node '{node.NodeKey}' (kind={node.Kind}) has a 'timeout' block, but timeout is only " +
+                        "supported on Approval nodes.  Remove the timeout block or change the node kind.");
+
+                // 14b: Duration must be a valid ISO-8601 duration string > 0.
+                if (string.IsNullOrWhiteSpace(td.Duration))
+                    return GraphValidationResult.Fail(GraphValidationError.TimeoutInvalidDuration,
+                        $"Timeout on node '{node.NodeKey}': 'duration' is required and must be a positive ISO-8601 duration (e.g. 'PT2H', 'P1D').");
+
+                TimeSpan parsedDuration;
+                try
+                {
+                    parsedDuration = XmlConvert.ToTimeSpan(td.Duration);
+                }
+                catch (FormatException)
+                {
+                    return GraphValidationResult.Fail(GraphValidationError.TimeoutInvalidDuration,
+                        $"Timeout on node '{node.NodeKey}': 'duration' value '{td.Duration}' is not a valid ISO-8601 duration string.");
+                }
+                if (parsedDuration <= TimeSpan.Zero)
+                    return GraphValidationResult.Fail(GraphValidationError.TimeoutInvalidDuration,
+                        $"Timeout on node '{node.NodeKey}': 'duration' must be positive (got '{td.Duration}' = {parsedDuration}).");
+
+                // 14c: RemindEveryHours, when present, must be > 0.
+                if (td.RemindEveryHours.HasValue && td.RemindEveryHours.Value <= 0)
+                    return GraphValidationResult.Fail(GraphValidationError.TimeoutInvalidRemindEveryHours,
+                        $"Timeout on node '{node.NodeKey}': 'remindEveryHours' must be greater than 0 (got {td.RemindEveryHours.Value}).");
+
+                // 14d: MaxReminders, when present, must be >= 1.
+                if (td.MaxReminders.HasValue && td.MaxReminders.Value < 1)
+                    return GraphValidationResult.Fail(GraphValidationError.TimeoutInvalidMaxReminders,
+                        $"Timeout on node '{node.NodeKey}': 'maxReminders' must be at least 1 (got {td.MaxReminders.Value}).");
+
+                // 14e: EscalateTo, when present, must not be whitespace.
+                if (td.EscalateTo is not null && string.IsNullOrWhiteSpace(td.EscalateTo))
+                    return GraphValidationResult.Fail(GraphValidationError.TimeoutInvalidEscalateTo,
+                        $"Timeout on node '{node.NodeKey}': 'escalateTo' is present but is whitespace. " +
+                        "Provide a valid ITCode or remove the field to fall back to AdminFallbackITCode.");
+
+                // 14f: businessCalendar:true + auto-action = publish-time reject (§0 verdict S2 fail-closed).
+                bool isAutoAction = td.Action is TimerAction.AutoApprove or TimerAction.AutoReject or TimerAction.Escalate;
+                if (td.BusinessCalendar && isAutoAction)
+                    return GraphValidationResult.Fail(GraphValidationError.TimeoutAutoActionWithBusinessCalendar,
+                        $"Timeout on node '{node.NodeKey}': combining 'businessCalendar: true' with " +
+                        $"'action: {td.Action}' is not allowed at publish time. Auto-actions with a business calendar " +
+                        "may fire earlier than the authored deadline on non-business days (compliance risk). " +
+                        "Use 'action: remind' with businessCalendar, or disable businessCalendar for auto-actions.");
+
+                // 14g: AllowTimerAutoAction gate (when options is provided).
+                if (options is not null && !options.AllowTimerAutoAction && isAutoAction)
+                    return GraphValidationResult.Fail(GraphValidationError.TimeoutAutoActionGateOff,
+                        $"Timeout on node '{node.NodeKey}': 'action: {td.Action}' requires " +
+                        "'WorkFlowOptions.AllowTimerAutoAction = true'. Set the option before publishing graphs " +
+                        "with auto-approval or escalation timeouts.");
+            }
         }
 
         // 9. Reachability from Start (BFS over transitions + Condition branch targets + default).

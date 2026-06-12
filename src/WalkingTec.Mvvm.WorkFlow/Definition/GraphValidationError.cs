@@ -97,6 +97,50 @@ public enum GraphValidationError
     /// An Ack node is missing its required <c>ackMode</c> (All, Any, or Quorum).
     /// </summary>
     AckNodeMissingAckMode,
+
+    // WF-20: TimeoutDef validation error codes (NEW graph publishes only).
+
+    /// <summary>
+    /// A <c>timeout.duration</c> value does not parse as ISO-8601 duration, or is zero/negative.
+    /// </summary>
+    TimeoutInvalidDuration,
+
+    /// <summary>
+    /// A <c>timeout.remindEveryHours</c> value is present but is &lt;= 0.
+    /// </summary>
+    TimeoutInvalidRemindEveryHours,
+
+    /// <summary>
+    /// A <c>timeout.maxReminders</c> value is present but is &lt; 1.
+    /// </summary>
+    TimeoutInvalidMaxReminders,
+
+    /// <summary>
+    /// A <c>timeout.escalateTo</c> value is present but is whitespace.
+    /// </summary>
+    TimeoutInvalidEscalateTo,
+
+    /// <summary>
+    /// A <c>timeout</c> block was found on a node kind that never mints tasks
+    /// (Start, End, Condition, Cc, ParallelGateway, InclusiveGateway, Join, Ack).
+    /// Timeouts are only meaningful on Approval nodes.
+    /// </summary>
+    TimeoutOnNonApprovalNode,
+
+    /// <summary>
+    /// A <c>timeout</c> block uses <c>businessCalendar: true</c> with
+    /// <c>action ∈ {AutoApprove, AutoReject, Escalate}</c>.
+    /// Auto-actions combined with the business-calendar flag are rejected at publish
+    /// (the fail-closed arming rule from §0 verdict S2).
+    /// </summary>
+    TimeoutAutoActionWithBusinessCalendar,
+
+    /// <summary>
+    /// A <c>timeout</c> block specifies <c>action ∈ {AutoApprove, AutoReject, Escalate}</c>
+    /// while <see cref="WorkFlowOptions.AllowTimerAutoAction"/> is <c>false</c> (the default).
+    /// Auto-actions must be explicitly opted-in via options before they may be published.
+    /// </summary>
+    TimeoutAutoActionGateOff,
 }
 
 /// <summary>

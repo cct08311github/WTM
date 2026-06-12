@@ -73,4 +73,59 @@ public interface IWorkflowNotifier
         string actorITCode,
         string? reason,
         CancellationToken ct = default);
+
+    // ── WF-20.3: Timeout-wave notifier DIMs (default interface methods) ──────
+
+    /// <summary>
+    /// Called post-commit when a 催办 (Remind) timer fires and notifies current
+    /// Pending assignees.  Re-gated: only called when the node is still Activated
+    /// with the same generation.
+    ///
+    /// <para>Card content: process/instance/node identifiers and RemindCount only.
+    /// NEVER form data or PII.</para>
+    ///
+    /// <para>Default implementation: no-op (<see cref="Task.CompletedTask"/>).
+    /// Override in a concrete notifier to deliver actual notifications.</para>
+    /// </summary>
+    virtual Task NotifyTimeoutRemindAsync(
+        ProcessInstance instance,
+        NodeInstance nodeInstance,
+        int remindCount,
+        CancellationToken ct = default) => Task.CompletedTask;
+
+    /// <summary>
+    /// Called post-commit when a timeout Escalate timer fires and reassigns a task
+    /// to the escalation target.
+    ///
+    /// <para>Card content: process/instance/node identifiers, old and new assignee
+    /// ITCodes.  NEVER form data or PII.</para>
+    ///
+    /// <para>Default implementation: no-op (<see cref="Task.CompletedTask"/>).
+    /// Override in a concrete notifier to deliver actual notifications.
+    /// Call site implemented in WF-20.5.</para>
+    /// </summary>
+    virtual Task NotifyTimeoutEscalatedAsync(
+        ProcessInstance instance,
+        NodeInstance nodeInstance,
+        string oldAssigneeITCode,
+        string newAssigneeITCode,
+        CancellationToken ct = default) => Task.CompletedTask;
+
+    /// <summary>
+    /// Called post-commit when a timeout AutoApprove or AutoReject fires and
+    /// acts on a task on behalf of an assignee.
+    ///
+    /// <para>Card content: process/instance/task identifiers, outcome (AutoApproved
+    /// or AutoRejected), and assignee ITCode.  NEVER form data or PII.</para>
+    ///
+    /// <para>Default implementation: no-op (<see cref="Task.CompletedTask"/>).
+    /// Override in a concrete notifier to deliver actual notifications.
+    /// Call site implemented in WF-20.4.</para>
+    /// </summary>
+    virtual Task NotifyTimeoutAutoActionedAsync(
+        ProcessInstance instance,
+        NodeInstance nodeInstance,
+        ApprovalTask task,
+        string outcome,
+        CancellationToken ct = default) => Task.CompletedTask;
 }

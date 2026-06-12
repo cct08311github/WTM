@@ -15,12 +15,16 @@
 // EF's SaveChangesAsync within a BeginTransactionAsync block is the correct WTM pattern;
 // the unique index on (TenantCode, DefinitionId, VersionNo) in ApplyWorkFlowModels
 // acts as a DB-level backstop should two transactions slip through.
+//
+// FIX-B2: IOptions<WorkFlowOptions> is now injected so WorkflowGraphValidator.Validate
+// can enforce the AllowTimerAutoAction gate (check 14g) at publish time.
 
 using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.WorkFlow.Models;
 
@@ -33,11 +37,19 @@ namespace WalkingTec.Mvvm.WorkFlow.Definition;
 public sealed class ProcessDefinitionPublisher : IProcessDefinitionPublisher
 {
     private readonly IDataContext _dc;
+    private readonly WorkFlowOptions? _options;
 
-    /// <summary>Inject the scoped <see cref="IDataContext"/>.</summary>
-    public ProcessDefinitionPublisher(IDataContext dc)
+    /// <summary>Inject the scoped <see cref="IDataContext"/> and optional <see cref="WorkFlowOptions"/>.</summary>
+    /// <param name="dc">EF DataContext (required).</param>
+    /// <param name="options">
+    /// WorkFlow runtime options.  When present, publish-time validation enforces the
+    /// <c>AllowTimerAutoAction</c> gate (check 14g of <see cref="WorkflowGraphValidator"/>).
+    /// When absent (e.g. from a test or legacy DI setup), the gate check is skipped.
+    /// </param>
+    public ProcessDefinitionPublisher(IDataContext dc, IOptions<WorkFlowOptions>? options = null)
     {
         _dc = dc ?? throw new ArgumentNullException(nameof(dc));
+        _options = options?.Value;
     }
 
     /// <inheritdoc/>
@@ -53,7 +65,8 @@ public sealed class ProcessDefinitionPublisher : IProcessDefinitionPublisher
             throw new ArgumentNullException(nameof(graph));
 
         // ── Step 1: structural validation (fail-closed, Result not exception) ──
-        var validation = WorkflowGraphValidator.Validate(graph);
+        // FIX-B2: pass options so check 14g (AllowTimerAutoAction gate) is enforced at publish time.
+        var validation = WorkflowGraphValidator.Validate(graph, _options);
         if (!validation.IsValid)
             return PublishResult.Invalid(validation.Error, validation.ErrorMessage!);
 

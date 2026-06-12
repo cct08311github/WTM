@@ -124,14 +124,39 @@ public static class ServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Opt-in (Timeout wave). Adds the durable timer poller modeled on EtlHostedService.
+    /// Opt-in (Timeout wave). Adds the durable timer poller modeled on <c>EtlHostedService</c>.
+    ///
+    /// <para>Registers:</para>
+    /// <list type="bullet">
+    ///   <item><see cref="IBusinessCalendar"/> → <see cref="PassThroughBusinessCalendar"/> (default;
+    ///     consumer overrides by calling <c>services.AddSingleton&lt;IBusinessCalendar, CustomImpl&gt;()</c>
+    ///     AFTER this call — TryAdd means consumer registration wins).</item>
+    ///   <item>Internal <c>WorkflowTimerExecutor</c> (scoped — one per tick scope).</item>
+    ///   <item><see cref="WorkflowTimerHostedService"/> (BackgroundService singleton).</item>
+    /// </list>
+    ///
+    /// <para><strong>Memory fail-fast:</strong> <c>WorkflowTimerHostedService</c> calls
+    /// <see cref="ValidateDbType"/> unconditionally on first startup scope; Memory throws and
+    /// .NET's default <c>BackgroundServiceExceptionBehavior.StopHost</c> terminates the host
+    /// immediately (spec §9 invariant #8).</para>
+    ///
+    /// <para><strong>ITimeoutActionRegistry design-doc sketch was dropped</strong> (Wave-5 §0 verdict A):
+    /// a closed <c>switch</c> on <c>TimerAction</c> inside the internal executor is used instead.
+    /// An open extension point over engine-internal race surfaces is a correctness liability;
+    /// it can be added additively later.</para>
     /// </summary>
-    /// <remarks>WF-20: WorkflowTimerHostedService + ITimeoutActionRegistry registered here.</remarks>
     public static IServiceCollection AddWtmWorkFlowTimers(
         this IServiceCollection services)
     {
-        // WF-20: services.AddSingleton<ITimeoutActionRegistry, TimeoutActionRegistry>();
-        //         services.AddHostedService<WorkflowTimerHostedService>();
+        // IBusinessCalendar: TryAdd so consumer override after this call wins.
+        services.TryAddSingleton<IBusinessCalendar, PassThroughBusinessCalendar>();
+
+        // WorkflowTimerExecutor: scoped — one per tick scope.
+        services.AddScoped<WorkflowTimerExecutor>();
+
+        // WorkflowTimerHostedService: BackgroundService; unconditionally validates DBType on first scope.
+        services.AddHostedService<WorkflowTimerHostedService>();
+
         return services;
     }
 

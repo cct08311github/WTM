@@ -60,6 +60,25 @@ public enum DelegationWindowMode
     AtAction,
 }
 
+// ── WF-20: Timeout-wave option enums ──────────────────────────────────────────
+
+/// <summary>
+/// Controls how expired AtAction-mode delegation tasks are handled by the reaper sweep.
+/// Only reachable when both <c>AddWtmWorkFlowTimers()</c> is called and
+/// <c>DelegationWindowMode == AtAction</c> (doubly opt-in).
+/// </summary>
+public enum DelegationExpiredSweep
+{
+    /// <summary>Sweep disabled — expired AtAction tasks are left as-is.</summary>
+    Off,
+
+    /// <summary>
+    /// Revert expired delegated tasks back to the original principal (default).
+    /// This narrows authority back to the accountable approver — fail-safe behaviour.
+    /// </summary>
+    RevertToPrincipal,
+}
+
 /// <summary>
 /// What happens to accumulated approvals on a node when it is re-entered after 回退.
 /// </summary>
@@ -186,6 +205,67 @@ public sealed class WorkFlowOptions
     /// Default: 1 minute.
     /// </summary>
     public TimeSpan TimerPollInterval { get; set; } = TimeSpan.FromMinutes(1);
+
+    // ── WF-20: Timeout-wave options (all additive, all opt-in defaults) ──────────
+
+    /// <summary>
+    /// When <c>true</c>, the timer reaper is permitted to auto-approve or auto-reject
+    /// tasks when the timer fires with <c>Action == AutoApprove|AutoReject</c>.
+    ///
+    /// <strong>DEFAULT = FALSE (fail-closed, opt-in only).</strong>
+    /// Auto-actions bypass human approval — a compliance risk.  Must be explicitly opted
+    /// into and documented in CHANGELOG.
+    ///
+    /// Fire-time authoritative: even if a graph is published with an auto-action node,
+    /// the reaper downgrades to Remind + FailClosed event when this gate is off.
+    /// </summary>
+    public bool AllowTimerAutoAction { get; set; } = false;
+
+    /// <summary>
+    /// TTL for the <c>Returning</c> sub-state lease used by the reaper to reclaim
+    /// crash-abandoned return-to-node operations (WF-16 Race D crash addendum).
+    ///
+    /// <para>When a <c>BeginReturnAsync</c> operation crashes before completing STEP-6
+    /// (clearing the lease), the reaper phase-2 reclaims the instance via
+    /// <c>ReclaimReturningLeaseByRowVerAsync</c> after this TTL elapses.</para>
+    ///
+    /// Default: 30 minutes (replaces the formerly hardcoded constant — zero behaviour change).
+    /// </summary>
+    public TimeSpan ReturningLeaseTtl { get; set; } = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// Maximum number of timers processed in a single reaper poll tick.
+    /// Limits batch size to prevent long-running ticks.
+    /// Default: 100.
+    /// </summary>
+    public int TimerBatchSize { get; set; } = 100;
+
+    /// <summary>
+    /// Default number of 催办 reminders sent per timeout chain when
+    /// <c>TimeoutDef.MaxReminders</c> is not set in the graph.
+    /// Default: 3.
+    /// </summary>
+    public int MaxRemindersDefault { get; set; } = 3;
+
+    /// <summary>
+    /// Hard cap on the number of reminders per timeout chain.
+    /// <c>min(MaxReminders ?? MaxRemindersDefault, MaxRemindersHardCap)</c> is applied
+    /// at arm time.  Cannot be exceeded even if MaxReminders is set higher in the graph.
+    /// Default: 10.
+    /// </summary>
+    public int MaxRemindersHardCap { get; set; } = 10;
+
+    /// <summary>
+    /// Controls how expired AtAction-mode delegation tasks are handled by the reaper sweep.
+    /// Default: <see cref="DelegationExpiredSweep.RevertToPrincipal"/> (fail-safe — reverts
+    /// authority back to the accountable approver).
+    ///
+    /// Only reachable in the doubly-opt-in intersection:
+    /// <c>AddWtmWorkFlowTimers()</c> called AND <c>DelegationWindowMode == AtAction</c>.
+    /// AtAction is ctor-blocked on Oracle/DaMeng — those providers are structurally unreachable.
+    /// </summary>
+    public DelegationExpiredSweep DelegationExpiredSweep { get; set; }
+        = DelegationExpiredSweep.RevertToPrincipal;
 
     /// <summary>
     /// When <c>true</c>, the DBTypeEnum.Memory guard fires lazily on first

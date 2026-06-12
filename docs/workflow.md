@@ -21,7 +21,7 @@
 |---|---|
 | Wave 3 | 回退-to-arbitrary-node (ReturnToPrev / ReturnToNode); Inclusive gateway + Join node |
 | Wave 4 | 加签 (add approver at runtime); 委托/转交 (delegation) |
-| Wave 5 | 超时 (timeout / durable timer) |
+| Wave 5 | 超时 (timeout / durable timer) — **shipped in WF-20** |
 | Wave 6 | Low-code visual designer |
 
 ---
@@ -41,7 +41,7 @@ All modes are values of the `ApproveMode` enum on a single Approval node. Three 
 | 7 | **回退** | ✅ ReturnToInitiator (MVP) | Approver sends instance back to initiator for revision; Wave 3 adds ReturnToPrev / ReturnToNode. |
 | 8 | **条件路由** | ✅ Exclusive (MVP) | Condition node with ordered branches and a mandatory default; whitelist-validated, Expression-Tree evaluated. |
 | 9 | **抄送** | ✅ MVP | Non-blocking CC records created in the same transaction; recipients notified via `IWtmWebhookSink`. |
-| 10 | **超时** | Wave 5 | Durable `WorkflowTimer`; schema present from Sprint 1. Actions: Remind / AutoApprove / AutoReject / Escalate. |
+| 10 | **超时** | ✅ Wave 5 | Durable `WorkflowTimer`. Actions: Remind / AutoApprove / AutoReject / Escalate. Call `AddWtmWorkFlowTimers()`. |
 
 ---
 
@@ -177,8 +177,9 @@ services.AddWtmWebhookSink(o => {
     o.DingTalk.WebhookUrl = Environment.GetEnvironmentVariable("DINGTALK_WEBHOOK");
 });
 
-// Opt-in Wave 5 — durable timeout poller (not yet implemented).
-// services.AddWtmWorkFlowTimers();
+// Opt-in Wave 5 — durable timeout poller (shipped in WF-20).
+// Registers WorkflowTimerHostedService, WorkflowTimerExecutor, and IBusinessCalendar.
+services.AddWtmWorkFlowTimers();
 ```
 
 ### `InitiatorAutoApprove = false` (default — migration note)
@@ -393,7 +394,75 @@ When `DelegationWindowMode == AtAction` the engine logs a `LogWarning` at startu
 
 ---
 
-## 13. Related Documentation
+## 13. 超时 (Timeout) — Wave 5
+
+Shipped in **WF-20**. Enabled via `services.AddWtmWorkFlowTimers()` in `Program.cs`.
+
+### Timer lifecycle
+
+```
+ARM      → WorkflowTimer row created with Status=Armed, FireAtUtc, Action, Generation
+FIRE     → FireTimerAsync CAS: WHERE Status==Armed AND RowVer==@v → Status=Fired (multi-host mutex)
+ACTION   → in-txn: state transitions, event rows, next-link INSERT (for Remind chain)
+RETIRE   → orphan timers (instance no longer Running, generation mismatch) → Fired silently
+CANCEL   → CancelTimersForNodeAsync / CancelTimerForTaskAsync (bulk, Status-only)
+```
+
+### Timer actions
+
+| Action | Behavior |
+|---|---|
+| `Remind` | In-txn next-link INSERT (chain continues up to `min(MaxReminders, 10)`); `TimeoutRemind` event; post-commit `NotifyTimeoutRemindAsync`. One-shot when `RemindEveryHours == null`. |
+| `AutoApprove` | Double-gated (`AllowTimerAutoAction=true` + concrete `WorkflowEngine`). In-txn bounded DRAIN: claims all Pending tasks via `SystemActTaskAsync`. Gate off → loud Remind downgrade + `FailClosed` event. |
+| `AutoReject` | Same double-gate + drain as `AutoApprove`; routes through handlers (Any-unanimity, All-RejectGate preserved). |
+| `Escalate` | Task-scoped: assignee-bound CAS (`EscalateTaskAssigneeAsync`) + collision pre-check + epoch bump + `TimeoutEscalate` event + Remind re-arm on new assignee. Both targets empty → `FailClosed` + Remind downgrade. Node-scoped: notify-only. |
+
+### Compliance gates
+
+| Gate | Default | Effect when off |
+|---|---|---|
+| `AllowTimerAutoAction` | `false` | AutoApprove/AutoReject downgrade to Remind + `FailClosed` event logged |
+| `AdminFallbackITCode` | `null` | Escalate fail-closed when `TimeoutDef.EscalateTo` also absent |
+| `DelegationExpiredSweep` | `RevertToPrincipal` | AtAction sweep reverts to principal; set to `Off` to disable |
+
+### AtAction expired-delegation sweep (phase 3)
+
+Doubly opt-in: `AddWtmWorkFlowTimers()` + `DelegationWindowMode == AtAction`.
+
+Each reaper tick:
+1. SELECT expired delegated Pending tasks (expiry evaluated client-side — no DateTime in UPDATE WHERE).
+2. Per-row CAS: `AssigneeITCode = DelegatedFromITCode`, clear delegation fields, bump RowVer.
+3. Epoch bump (`AdvanceNodeApproverSetEpochAsync`) on the owning node.
+4. Append `DelegationExpiredReverted` event (actor = NULL, system sweep).
+5. Notify principal via `NotifyTaskAssignedAsync`.
+
+Concurrent human claim wins cleanly (rows==0 is a safe no-op; partial success is valid).
+
+### Options
+
+```csharp
+services.AddWtmWorkFlow(opts =>
+{
+    opts.AllowTimerAutoAction   = true;              // default false — compliance gate
+    opts.AdminFallbackITCode    = "admin@corp.com";  // escalation fallback target
+    opts.TimerBatchSize         = 100;               // candidate SELECTs per tick
+    opts.MaxRemindersDefault    = 3;                 // per-timer cap when MaxReminders is null
+    opts.MaxRemindersHardCap    = 10;                // absolute ceiling
+    opts.TimerPollInterval      = TimeSpan.FromMinutes(1);
+    opts.DelegationExpiredSweep = DelegationExpiredSweep.RevertToPrincipal; // default
+});
+```
+
+### Ops notes
+
+- Timers survive host restarts — the fire CAS is idempotent across ticks and hosts.
+- A poisoned timer (throws during fire) stays Armed and is retried on the next tick. The rest of the batch is unaffected.
+- Orphan timers (instance finished or generation changed) retire themselves silently via GATE-0.
+- `EF InMemory` is unsupported — the guarded CAS primitives use `ExecuteUpdateAsync`.
+
+---
+
+## 14. Related Documentation
 
 - [Analysis Mode](/analysis-mode) — field whitelist pattern reused by the routing evaluator
 - [Lookup Cache](/lookup-cache) — caching patterns available to approver resolvers

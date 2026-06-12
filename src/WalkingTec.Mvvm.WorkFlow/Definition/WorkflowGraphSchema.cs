@@ -310,6 +310,18 @@ public sealed class TimeoutDef
     [JsonPropertyName("maxReminders")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? MaxReminders { get; set; }
+
+    /// <summary>
+    /// WF-20 Wave-5 (additive-nullable): ITCode to escalate the task to when the
+    /// timer fires with <see cref="Models.TimerAction.Escalate"/> and the task is
+    /// task-scoped (Sequential mode).  When null, falls back to
+    /// <see cref="WorkFlowOptions.AdminFallbackITCode"/>; if both are empty the
+    /// escalation fails closed with a <see cref="Models.EventAction.FailClosed"/> event.
+    /// Ignored for node-scoped (All/Any) timers — those escalate to notify-only.
+    /// </summary>
+    [JsonPropertyName("escalateTo")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? EscalateTo { get; set; }
 }
 
 // ── Condition branch ──────────────────────────────────────────────────────────

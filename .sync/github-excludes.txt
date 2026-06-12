@@ -45,3 +45,4 @@ docs/archive/
 # Their CONTENT is copied over the canonical filename during sync;
 # the *.github.* file itself is then removed before push.
 README.github.md
+docs/workflow-wave5-design.md

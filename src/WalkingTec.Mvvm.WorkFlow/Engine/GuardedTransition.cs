@@ -1029,6 +1029,193 @@ public static class GuardedTransition
                 ct);
     }
 
+    // ── WF-20: Timer CAS primitives ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Claim a <see cref="WorkflowTimer"/> from <see cref="TimerStatus.Armed"/> → <see cref="TimerStatus.Fired"/>.
+    ///
+    /// <para><strong>This is the multi-host mutex.</strong>  Only one poller wins rows==1;
+    /// every other poller that holds the same snapshot loses rows==0 (no side-effects).
+    /// Lock-order: acquire WorkflowTimer row FIRST in any timer-path transaction
+    /// (before ApprovalTask / NodeInstance / ProcessInstance).</para>
+    ///
+    /// <para>Predicate: <c>WHERE ID==@t AND Status==Armed AND RowVer==@v</c>
+    /// SET <c>Status=Fired, RowVer+=1</c>.</para>
+    ///
+    /// <para>rows == 1 → this host won; proceed to action-decision CAS(es) in the same transaction.
+    /// rows == 0 → timer was already fired or cancelled by another host → no-op, rollback.</para>
+    /// </summary>
+    /// <param name="db">DbContext with an active transaction (caller-owned).</param>
+    /// <param name="timerId">PK of the timer to fire.</param>
+    /// <param name="expectedRowVer">RowVer read in the candidate SELECT (stale → CAS fails).</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>rows-affected: 1 = this host won, 0 = another host won or timer cancelled.</returns>
+    public static Task<int> FireTimerAsync(
+        DbContext db,
+        Guid timerId,
+        uint expectedRowVer,
+        CancellationToken ct = default)
+    {
+        return db.Set<WorkflowTimer>()
+            .Where(t => t.ID == timerId
+                         && t.Status == TimerStatus.Armed
+                         && t.RowVer == expectedRowVer)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(t => t.Status, TimerStatus.Fired)
+                       .SetProperty(t => t.RowVer, t => t.RowVer + 1),
+                ct);
+    }
+
+    /// <summary>
+    /// Bulk-cancel all <see cref="TimerStatus.Armed"/> timers for a given node instance
+    /// (hygiene cancel on node completion / auto-complete / instance-terminal events).
+    ///
+    /// <para>Uses Status-only bulk update — consistent with the shipped <see cref="CancelTimersForReturnAsync"/>.
+    /// A poller that already fired a timer for this node gets CAS rows==0 (no-op); its subsequent
+    /// node action is generation-gated and no-ops safely (Race C closed).</para>
+    ///
+    /// <para>Predicate: <c>WHERE NodeInstanceId==@n AND Status==Armed</c>
+    /// SET <c>Status=Cancelled, RowVer+=1</c>.</para>
+    /// </summary>
+    /// <param name="db">DbContext with an active transaction (caller-owned).</param>
+    /// <param name="nodeInstanceId">PK of the <see cref="NodeInstance"/> whose timers are cancelled.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Total rows cancelled (0 is valid when no timers are armed).</returns>
+    public static Task<int> CancelTimersForNodeAsync(
+        DbContext db,
+        Guid nodeInstanceId,
+        CancellationToken ct = default)
+    {
+        return db.Set<WorkflowTimer>()
+            .Where(t => t.NodeInstanceId == nodeInstanceId
+                         && t.Status == TimerStatus.Armed)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(t => t.Status, TimerStatus.Cancelled)
+                       .SetProperty(t => t.RowVer, t => t.RowVer + 1),
+                ct);
+    }
+
+    /// <summary>
+    /// Cancel the <see cref="TimerStatus.Armed"/> timer for a specific <see cref="ApprovalTask"/>
+    /// (Sequential step claim/advance hygiene cancel).
+    ///
+    /// <para>Predicate: <c>WHERE ApprovalTaskId==@task AND Status==Armed</c>
+    /// SET <c>Status=Cancelled, RowVer+=1</c>.
+    /// rows == 0 is a valid no-op (timer already fired or the task had no timer).</para>
+    /// </summary>
+    /// <param name="db">DbContext with an active transaction (caller-owned).</param>
+    /// <param name="approvalTaskId">PK of the <see cref="ApprovalTask"/> whose timer is cancelled.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>rows-affected: 1 = cancelled, 0 = already fired/cancelled (safe no-op).</returns>
+    public static Task<int> CancelTimerForTaskAsync(
+        DbContext db,
+        Guid approvalTaskId,
+        CancellationToken ct = default)
+    {
+        return db.Set<WorkflowTimer>()
+            .Where(t => t.ApprovalTaskId == approvalTaskId
+                         && t.Status == TimerStatus.Armed)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(t => t.Status, TimerStatus.Cancelled)
+                       .SetProperty(t => t.RowVer, t => t.RowVer + 1),
+                ct);
+    }
+
+    /// <summary>
+    /// Wave-5 reaper phase-2: reclaim an expired <c>Returning</c> lease without a DateTime
+    /// in the UPDATE WHERE clause (portable across all 7 providers including Oracle/DaMeng).
+    ///
+    /// <para>The caller pre-filters candidates client-side on the RowVer-pinned snapshot
+    /// (<c>ReturningLeaseUtc &lt; @now</c> evaluated in C# on the SELECT result) so the UPDATE
+    /// predicate never sees a nullable-DateTime comparison — the exact hazard class that
+    /// WF-19 FIX-8 hard-blocked for AtAction on Oracle/DaMeng.</para>
+    ///
+    /// <para><strong>Predicate:</strong>
+    /// <c>WHERE ID==@i AND State==Returning AND RowVer==@v</c>
+    /// SET <c>State=Running, ReturningLeaseUtc=NULL, RowVer+=1</c>.</para>
+    ///
+    /// <para>The original (dead) engine owner's later commit fails its own RowVer guard.
+    /// The shipped nullable-DateTime variant (<see cref="ReclaimReturningLeaseAsync"/>)
+    /// is left untouched and unused — this portable variant supersedes it for reaper use.</para>
+    /// </summary>
+    /// <param name="db">DbContext; no explicit transaction required (single-statement CAS).</param>
+    /// <param name="instanceId">PK of the <see cref="ProcessInstance"/>.</param>
+    /// <param name="expectedRowVer">RowVer from the candidate SELECT snapshot (stale → rows==0).</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>rows-affected: 1 = lease reclaimed, 0 = another host beat us (safe no-op).</returns>
+    public static Task<int> ReclaimReturningLeaseByRowVerAsync(
+        DbContext db,
+        Guid instanceId,
+        uint expectedRowVer,
+        CancellationToken ct = default)
+    {
+        // No DateTime in UPDATE WHERE — expiry was evaluated client-side on the RowVer-pinned
+        // snapshot before this method is called. RowVer alone is the correctness guard.
+        return db.Set<ProcessInstance>()
+            .Where(x => x.ID == instanceId
+                         && x.State == InstanceState.Returning
+                         && x.RowVer == expectedRowVer)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(x => x.State, InstanceState.Running)
+                       .SetProperty(x => x.ReturningLeaseUtc, (DateTime?)null)
+                       .SetProperty(x => x.RowVer, x => x.RowVer + 1),
+                ct);
+    }
+
+    // ── WF-20: Escalate task CAS (task-scoped escalation only) ───────────────
+
+    /// <summary>
+    /// Atomically reassign an <see cref="ApprovalTask"/> from <paramref name="currentAssignee"/>
+    /// to <paramref name="targetITCode"/> for timeout escalation (WF-19 FIX-1 discipline).
+    ///
+    /// <para><strong>Predicate:</strong>
+    /// <c>WHERE ID==@task AND State==Pending AND RowVer==@v AND Generation==@g
+    ///    AND AssigneeITCode==@current</c>
+    /// SET <c>AssigneeITCode=@target, RowVer+=1</c>.</para>
+    ///
+    /// <para>The <c>AssigneeITCode==@current</c> guard closes the TOCTOU hijack window
+    /// (WF-19 FIX-1): if a concurrent actor already reassigned the slot, rows==0.</para>
+    ///
+    /// <para>rows == 1 → escalation succeeded; caller re-arms follow-up timer + epoch bump.
+    /// rows == 0 → task no longer Pending, generation stale, or already reassigned —
+    /// treat as collision → downgrade to notify-only.</para>
+    /// </summary>
+    /// <param name="db">DbContext with an active transaction (caller-owned).</param>
+    /// <param name="taskId">PK of the task to escalate.</param>
+    /// <param name="expectedRowVer">RowVer from the pre-check snapshot.</param>
+    /// <param name="generation">Task generation (stale-span guard).</param>
+    /// <param name="currentAssignee">Current assignee — must match to win CAS.</param>
+    /// <param name="targetITCode">New assignee after escalation.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>rows-affected: 1 = escalated, 0 = lost race (downgrade to notify-only).</returns>
+    public static Task<int> EscalateTaskAssigneeAsync(
+        DbContext db,
+        Guid taskId,
+        uint expectedRowVer,
+        uint generation,
+        string currentAssignee,
+        string targetITCode,
+        CancellationToken ct = default)
+    {
+        // FIX-B5e: also clear delegation fields in the same single-statement CAS so that
+        // a task that was delegated and then escalated does not retain stale delegation metadata.
+        // DelegatedFromITCode / DelegationRuleId / DelegationExpiresUtc must all be null after
+        // escalation — the task is now owned by the escalation target, not a delegate.
+        return db.Set<ApprovalTask>()
+            .Where(t => t.ID == taskId
+                         && t.State == TaskState.Pending
+                         && t.RowVer == expectedRowVer
+                         && t.Generation == generation
+                         && t.AssigneeITCode == currentAssignee)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(t => t.AssigneeITCode, targetITCode)
+                       .SetProperty(t => t.DelegatedFromITCode, (string?)null)
+                       .SetProperty(t => t.DelegationRuleId, (Guid?)null)
+                       .SetProperty(t => t.DelegationExpiresUtc, (DateTime?)null)
+                       .SetProperty(t => t.RowVer, t => t.RowVer + 1),
+                ct);
+    }
+
     // ── WF-19 #284.5: RevokeDelegatedTasksAsync (admin revocation sweep) ─────────
 
     /// <summary>

@@ -164,6 +164,28 @@ internal sealed class WfSequentialTestContext : DbContext
             e.Property(x => x.RoleCode).HasMaxLength(50).IsRequired();
             e.Property(x => x.TenantCode).HasMaxLength(50);
         });
+
+        // WorkflowTimer — WF-20 stub; needed by CancelTimersForNodeAsync/CancelTimerForTaskAsync.
+        m.Entity<WorkflowTimer>(e =>
+        {
+            e.ToTable("Wf_WorkflowTimer");
+            e.HasKey(x => x.ID);
+            e.Property(x => x.Status);
+            e.Property(x => x.RowVer);
+            e.Property(x => x.IdempotencyKey).HasMaxLength(100).IsRequired();
+            e.Property(x => x.NodeInstanceId);
+            e.Property(x => x.ApprovalTaskId);
+            e.Property(x => x.TenantCode).HasMaxLength(50);
+            e.Property(x => x.FireAtUtc);
+            e.Property(x => x.Action);
+            e.Property(x => x.RemindCount);
+            e.Property(x => x.Generation);
+            e.Ignore(x => x.ApprovalTask);
+            e.Ignore(x => x.NodeInstance);
+            e.HasIndex(x => x.IdempotencyKey)
+             .IsUnique()
+             .HasDatabaseName("IX_Wf_WorkflowTimer_IdempotencyKey");
+        });
     }
 }
 

@@ -166,6 +166,29 @@ internal sealed class WfEngineTestContext : DbContext
             e.Property(x => x.TenantCode).HasMaxLength(50);
             e.Ignore(x => x.Instance);
         });
+
+        // WorkflowTimer — WF-20 stub; needed by CancelTimersForNodeAsync/CancelTimerForTaskAsync.
+        m.Entity<WorkflowTimer>(e =>
+        {
+            e.ToTable("Wf_WorkflowTimer");
+            e.HasKey(x => x.ID);
+            e.Property(x => x.Status);
+            e.Property(x => x.RowVer);
+            e.Property(x => x.IdempotencyKey).HasMaxLength(100).IsRequired();
+            e.Property(x => x.NodeInstanceId);
+            e.Property(x => x.ApprovalTaskId);
+            e.Property(x => x.TenantCode).HasMaxLength(50);
+            e.Property(x => x.FireAtUtc);
+            e.Property(x => x.Action);
+            e.Property(x => x.RemindCount);
+            e.Property(x => x.Generation);
+            e.Ignore(x => x.ApprovalTask);
+            e.Ignore(x => x.NodeInstance);
+            // Unique index mirrors production schema for idempotent arm.
+            e.HasIndex(x => x.IdempotencyKey)
+             .IsUnique()
+             .HasDatabaseName("IX_Wf_WorkflowTimer_IdempotencyKey");
+        });
     }
 }
 
@@ -799,6 +822,20 @@ internal static class WorkflowEngine_Exposed
         var routingEvaluator = new WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator(
             NullLogger<WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator>.Instance);
         return new WorkflowEngine(db, dispatcher, routingEvaluator, options, logger, notifier);
+    }
+
+    // Overload for WF-20.2 tests that inject an IBusinessCalendar for arm-site testing.
+    public static WorkflowEngine CreateWithCalendar(
+        DbContext db,
+        INodeKindDispatcher dispatcher,
+        WorkFlowOptions options,
+        WalkingTec.Mvvm.WorkFlow.Engine.IBusinessCalendar businessCalendar,
+        Microsoft.Extensions.Logging.ILogger logger,
+        WalkingTec.Mvvm.WorkFlow.Notifications.IWorkflowNotifier? notifier = null)
+    {
+        var routingEvaluator = new WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator(
+            NullLogger<WalkingTec.Mvvm.WorkFlow.Engine.Routing.WhitelistRoutingEvaluator>.Instance);
+        return new WorkflowEngine(db, dispatcher, routingEvaluator, options, logger, notifier, businessCalendar);
     }
 }
 

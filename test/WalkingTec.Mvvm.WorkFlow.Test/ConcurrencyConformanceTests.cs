@@ -104,6 +104,15 @@ internal sealed class WfTestContext : DbContext
              .HasDatabaseName("IX_Wf_NodeInstance_Test_TenantCode_InstanceId_NodeKey_Generation");
             // Wave-4 (WF-18) column.
             b.Property(x => x.ApproverSetEpoch).HasDefaultValue(0u);
+            // Wave-5 (WF-20.4) columns needed by SystemActTaskAsync / ExecuteApproveCompletionAsync.
+            b.Property(x => x.SequencePointer).HasDefaultValue(0);
+            b.Property(x => x.ApprovedCount).HasDefaultValue(0);
+            b.Property(x => x.RejectedCount).HasDefaultValue(0);
+            b.Property(x => x.RejectPolicy);
+            b.Property(x => x.RejectGate);
+            b.Property(x => x.NodeKind);
+            b.Property(x => x.DecidedBy).HasMaxLength(50);
+            b.Property(x => x.ActivatedAt);
         });
 
         // ApprovalTask — minimal columns for CAS test.
@@ -134,6 +143,9 @@ internal sealed class WfTestContext : DbContext
             b.Property(x => x.DelegationRuleId);
             b.Property(x => x.DelegationExpiresUtc);
             b.Property(x => x.WindowVerifiedUtc);
+            // Wave-5 (WF-20.4) columns needed by ClaimApprovalTaskAsync.
+            b.Property(x => x.Comment);
+            b.Property(x => x.ActedAtUtc);
         });
 
         // WorkflowTimer — minimal columns for CAS test.
@@ -145,11 +157,20 @@ internal sealed class WfTestContext : DbContext
             b.Property(x => x.RowVer);
             b.Property(x => x.IdempotencyKey).HasMaxLength(100).IsRequired();
             b.Property(x => x.NodeInstanceId);
+            b.Property(x => x.ApprovalTaskId);
+            b.Property(x => x.FireAtUtc);
+            b.Property(x => x.Action);
+            b.Property(x => x.RemindCount).HasDefaultValue(0);
             b.Property(x => x.TenantCode).HasMaxLength(50);
             b.Ignore(x => x.ApprovalTask);
             b.Ignore(x => x.NodeInstance);
             // Wave-3 (WF-16) column.
             b.Property(x => x.Generation);
+            // FIX-A3: RemindEveryHours and MaxReminders removed from WorkflowTimer (schema-delta-zero).
+            // These values are re-read from the version-pinned immutable graph at fire time.
+            // Unique index for idempotent arm.
+            b.HasIndex(x => x.IdempotencyKey).IsUnique()
+             .HasDatabaseName("IX_Wf_WorkflowTimer_Test_IdempotencyKey");
         });
 
         // WorkflowEventLog — minimal columns for Seq allocation test.
@@ -169,6 +190,8 @@ internal sealed class WfTestContext : DbContext
             b.Property(x => x.TenantCode).HasMaxLength(50);
             b.Property(x => x.Generation);
             b.Ignore(x => x.Instance);
+            // Wave-5 (WF-20.4) column — OnBehalfOf for system auto-actions.
+            b.Property(x => x.OnBehalfOfITCode).HasMaxLength(50);
             // Same unique constraint as production (TenantCode, InstanceId, Seq).
             b.HasIndex(x => new { x.TenantCode, x.InstanceId, x.Seq }).IsUnique();
         });

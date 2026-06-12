@@ -21,6 +21,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Mvc;
 using WalkingTec.Mvvm.WorkFlow.Definition;
@@ -52,13 +53,17 @@ public class WorkflowDefinitionController : BaseController
 {
     private readonly IProcessDefinitionPublisher _publisher;
     private readonly ILogger<WorkflowDefinitionController> _logger;
+    // FIX-B2: options injected so Validate endpoint can enforce AllowTimerAutoAction gate (check 14g).
+    private readonly WorkFlowOptions? _options;
 
     public WorkflowDefinitionController(
         IProcessDefinitionPublisher publisher,
-        ILogger<WorkflowDefinitionController>? logger = null)
+        ILogger<WorkflowDefinitionController>? logger = null,
+        IOptions<WorkFlowOptions>? options = null)
     {
         _publisher = publisher ?? throw new ArgumentNullException(nameof(publisher));
         _logger = logger ?? NullLogger<WorkflowDefinitionController>.Instance;
+        _options = options?.Value;
     }
 
     // ── POST /api/_workflow/definitions/{code}/publish ─────────────────────────
@@ -151,7 +156,8 @@ public class WorkflowDefinitionController : BaseController
         if (graph == null)
             return BadRequest(new ValidateResponseDto(false, "Request body is required."));
 
-        var result = WorkflowGraphValidator.Validate(graph);
+        // FIX-B2: pass runtime options so check 14g (AllowTimerAutoAction gate) is enforced here.
+        var result = WorkflowGraphValidator.Validate(graph, _options);
         if (result.IsValid)
             return Ok(new ValidateResponseDto(true, null));
 

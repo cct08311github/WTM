@@ -86,6 +86,9 @@ internal sealed class WorkflowEngine : IWorkflowEngine
     // WF-15: optional post-commit notification seam.  Null when AddWtmWorkFlowNotifications()
     // was not called.  Engine skips all notify calls when null — identical to pre-WF-15 behavior.
     private readonly IWorkflowNotifier? _notifier;
+    // WF-20.2: business-calendar seam.  Null when AddWtmWorkFlowTimers() was not called.
+    // When null the arm helpers skip all timer arming (no timer rows) — fully opt-in.
+    private readonly IBusinessCalendar? _businessCalendar;
 
     // Convenience alias — keeps all the engine body code readable.
     private DbContext Db => _db;
@@ -102,7 +105,8 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         IRoutingEvaluator routingEvaluator,
         IOptions<WorkFlowOptions> options,
         ILogger<WorkflowEngine> logger,
-        IWorkflowNotifier? notifier = null)
+        IWorkflowNotifier? notifier = null,
+        IBusinessCalendar? businessCalendar = null)
     {
         if (dc is null) throw new ArgumentNullException(nameof(dc));
         _dc = dc;
@@ -112,6 +116,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         _options = options?.Value ?? new WorkFlowOptions();
         _logger = (ILogger)(logger ?? throw new ArgumentNullException(nameof(logger)));
         _notifier = notifier;
+        _businessCalendar = businessCalendar; // null → timer arming skipped (opt-in via AddWtmWorkFlowTimers)
 
         // WF-19 FIX-8: AtAction mode uses a nullable-DateTime WHERE clause inside
         // ClaimDelegatedTaskAsync's ExecuteUpdateAsync.  Oracle and DaMeng EF Core providers
@@ -132,15 +137,17 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         }
 
         // WF-19 #284.5: startup warning — AtAction mode is compliance-relevant and recommended
-        // to be paired with the Wave-5 timeout reaper (AddWtmWorkFlowTimers), which is not yet
-        // shipped.  Log once per engine instance (scoped → once per request) at Warning so it
+        // to be paired with the Wave-5 timeout reaper (shipped in WF-20.5).
+        // Log once per engine instance (scoped → once per request) at Warning so it
         // appears in application logs during first use.  NO BuildServiceProvider() here.
         if (_options.DelegationWindowMode == DelegationWindowMode.AtAction)
         {
             _logger.LogWarning(
                 "WorkflowEngine: DelegationWindowMode is set to AtAction (opt-in, non-default). " +
-                "AtAction re-checks the delegation window at claim time; it is recommended to be " +
-                "paired with the Wave-5 timeout reaper (AddWtmWorkFlowTimers, not yet shipped). " +
+                "AtAction re-checks the delegation window at claim time. " +
+                "To automatically revert expired delegations, call AddWtmWorkFlowTimers() and set " +
+                "DelegationExpiredSweep=RevertToPrincipal (default) — the reaper phase-3 sweep handles " +
+                "expired AtAction tasks each tick. " +
                 "Without the reaper, expired-window tasks remain Pending indefinitely and require " +
                 "manual reassignment or RevokeDelegationAsync. " +
                 "This is a compliance-relevant configuration — document it in CHANGELOG.");
@@ -169,7 +176,8 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         IRoutingEvaluator routingEvaluator,
         WorkFlowOptions options,
         ILogger logger,
-        IWorkflowNotifier? notifier = null)
+        IWorkflowNotifier? notifier = null,
+        IBusinessCalendar? businessCalendar = null)
     {
         _db = db ?? throw new ArgumentNullException(nameof(db));
         _dc = null; // No IDataContext in the direct-DbContext test path — ValidateDbTypeOnFirstUse skipped.
@@ -178,6 +186,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _notifier = notifier; // null is valid — skip all notifications
+        _businessCalendar = businessCalendar; // null → timer arming skipped in arm helpers
     }
 
     // ── StartAsync ────────────────────────────────────────────────────────────
@@ -514,6 +523,31 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         // OnEnter — mint tasks/CC records/branch tokens.
         await handler.OnEnterAsync(ctx);
 
+        // WF-20.2: arm timeout timer(s) for Approval nodes after tasks are minted.
+        if (activeNode.NodeKind == NodeKind.Approval && nodeDef.Timeout is not null)
+        {
+            var now20 = DateTime.UtcNow;
+            var approveMode = nodeDef.ApproveMode ?? ApproveMode.Sequential;
+            if (approveMode == ApproveMode.Sequential)
+            {
+                // Sequential: arm task-scoped timer for the first active step (SequenceOrder==0, Pending).
+                var step0Task = await Db.Set<ApprovalTask>()
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(
+                        t => t.NodeInstanceId == activeNode.ID
+                             && t.SequenceOrder == 0
+                             && t.State == TaskState.Pending,
+                        ct);
+                if (step0Task is not null)
+                    await ArmTaskTimerIfConfiguredAsync(step0Task, activeNode, nodeDef, now20, ct);
+            }
+            else
+            {
+                // All/Any: arm one node-scoped timer (covers all tasks in this node-generation).
+                await ArmNodeTimerIfConfiguredAsync(activeNode, nodeDef, now20, ct);
+            }
+        }
+
         // Check completion.
         bool canComplete = await handler.CanCompleteAsync(ctx);
         if (!canComplete)
@@ -606,6 +640,9 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                 return WorkflowActionResult.AlreadyHandled;
             }
 
+            // WF-20.2: cancel any Armed timers on this node (auto-complete hygiene).
+            await GuardedTransition.CancelTimersForNodeAsync(Db, activeNode.ID, ct);
+
             await WorkflowEventLogWriter.AppendAsync(
                 Db, instance.ID, instance.TenantCode,
                 EventAction.AutoAdvance,
@@ -656,6 +693,14 @@ internal sealed class WorkflowEngine : IWorkflowEngine
 
             if (approveRows == 1)
             {
+                // WF-20.2: instance-wide timer cancel on terminal Approved state.
+                var allNodeIds = await Db.Set<NodeInstance>()
+                    .Where(n => n.InstanceId == instance.ID)
+                    .Select(n => n.ID)
+                    .ToListAsync(ct);
+                foreach (var nid in allNodeIds)
+                    await GuardedTransition.CancelTimersForNodeAsync(Db, nid, ct);
+
                 await WorkflowEventLogWriter.AppendAsync(
                     Db, instance.ID, instance.TenantCode,
                     EventAction.AutoAdvance,
@@ -1134,7 +1179,24 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             catch (Exception ex) { _logger.LogError(ex, "WF-15 NotifyApprovedAsync failed for task {TaskId}.", taskId); }
         }
 
-        // 10. Mode-specific completion logic.
+        // 10. Mode-specific completion logic — shared with SystemContinueTaskAsync (WF-20.4).
+        return await ExecuteApproveCompletionAsync(task.ID, nodeInst, instance, approveMode, ct);
+    }
+
+    // ── WF-20.4: shared approve post-claim completion helper ──────────────────
+
+    /// <summary>
+    /// Mode-specific completion logic run after the ApprovalTask CAS claim succeeds for
+    /// either a human approve or a system AutoApprove.  Human path is byte-identical to
+    /// the pre-WF-20.4 code (locked by the event-sequence snapshot test).
+    /// </summary>
+    private async Task<WorkflowActionResult> ExecuteApproveCompletionAsync(
+        Guid claimedTaskId,
+        NodeInstance nodeInst,
+        ProcessInstance instance,
+        ApproveMode approveMode,
+        CancellationToken ct)
+    {
         if (approveMode == ApproveMode.All)
         {
             // 会签: increment advisory ApprovedCount, then check if threshold is reached.
@@ -1227,17 +1289,21 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             if (advanceRows == 0)
             {
                 _logger.LogDebug(
-                    "ApproveTaskAsync: NodeInstance {NodeId} pointer advance CAS returned 0 — " +
+                    "ExecuteApproveCompletionAsync: NodeInstance {NodeId} pointer advance CAS returned 0 — " +
                     "concurrent actor already advanced. Instance proceeds as AlreadyHandled.",
                     nodeInst.ID);
                 return WorkflowActionResult.AlreadyHandled;
             }
 
             // Step B: activate the next task.
+            // FIX-B5a: also match AddedPending (injected steps from WF-18 AddApproverAsync).
+            // Injected steps are inserted with State=AddedPending so they are not skipped by
+            // the normal NotYetActive→Pending pointer advance (design §2). When the preceding
+            // step completes and the pointer reaches their slot, they must be activated here.
             var activateRows = await Db.Set<ApprovalTask>()
                 .Where(t => t.NodeInstanceId == nodeInst.ID
                              && t.SequenceOrder == nextPointer
-                             && t.State == TaskState.NotYetActive)
+                             && (t.State == TaskState.NotYetActive || t.State == TaskState.AddedPending))
                 .ExecuteUpdateAsync(
                     s => s.SetProperty(t => t.State, TaskState.Pending),
                     ct);
@@ -1254,18 +1320,45 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                 {
                     // Auto-approved step: recursively advance until a real pending step or completion.
                     _logger.LogDebug(
-                        "ApproveTaskAsync: next task (order {Order}) is AutoApproved — continuing pointer advance.",
+                        "ExecuteApproveCompletionAsync: next task (order {Order}) is AutoApproved — continuing pointer advance.",
                         nextPointer);
                     // Re-read nodeInst with updated pointer and recurse via AdvanceAsync.
                     return await AdvanceAsync(instance.ID, ct);
                 }
 
                 _logger.LogWarning(
-                    "ApproveTaskAsync: could not activate next task at order {Order} for node {NodeId}.",
+                    "ExecuteApproveCompletionAsync: could not activate next task at order {Order} for node {NodeId}.",
                     nextPointer, nodeInst.ID);
             }
 
             // Node is still active — waiting for the next approver.
+
+            // WF-20.2: Step B timer cancel/re-arm.
+            // Cancel the completing step's task timer (hygiene — always safe, no-op when no timer exists).
+            await GuardedTransition.CancelTimerForTaskAsync(Db, claimedTaskId, ct);
+            // Arm the next step's timer only when the business-calendar seam is present (opt-in).
+            if (_businessCalendar is not null)
+            {
+                var stepBNodeDef = await LoadNodeDefAsync(instance.DefinitionVersionId, nodeInst.NodeKey, ct);
+                if (stepBNodeDef?.Timeout is not null)
+                {
+                    var nextPendingForArm = await Db.Set<ApprovalTask>()
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync(
+                            t => t.NodeInstanceId == nodeInst.ID
+                                 && t.SequenceOrder == nextPointer
+                                 && t.State == TaskState.Pending,
+                            ct);
+                    if (nextPendingForArm is not null)
+                    {
+                        var freshNodeForArm = await Db.Set<NodeInstance>()
+                            .AsNoTracking().SingleAsync(n => n.ID == nodeInst.ID, ct);
+                        await ArmTaskTimerIfConfiguredAsync(
+                            nextPendingForArm, freshNodeForArm, stepBNodeDef, DateTime.UtcNow, ct);
+                    }
+                }
+            }
+
             // WF-15 — Notify the newly activated task assignee (post-commit, best-effort).
             if (_notifier is not null)
             {
@@ -1478,7 +1571,34 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             }
         }
 
-        // 9. Mode-specific rejection logic.
+        // 9. Mode-specific rejection logic — shared with SystemContinueTaskAsync (WF-20.4).
+        return await ExecuteRejectCompletionAsync(task.ID, nodeInst, instance, task, actorITCode, reason, rejectMode, writeNodeCompletionEvent: true, ct);
+    }
+
+    // ── WF-20.4: shared reject post-claim completion helper ───────────────────
+
+    /// <summary>
+    /// Mode-specific completion logic run after the ApprovalTask CAS claim succeeds for
+    /// either a human reject or a system AutoReject.  Human path is byte-identical to
+    /// the pre-WF-20.4 code (locked by the event-sequence snapshot test).
+    ///
+    /// <para><paramref name="writeNodeCompletionEvent"/> is <c>true</c> on the human path
+    /// (writes the node-completion Reject event) and <c>false</c> on the system path
+    /// where a <c>TimeoutFire</c> event was already written per claimed task.</para>
+    /// </summary>
+    private async Task<WorkflowActionResult> ExecuteRejectCompletionAsync(
+        Guid claimedTaskId,
+        NodeInstance nodeInst,
+        ProcessInstance instance,
+        ApprovalTask task,
+        string? actorITCode,
+        string? reason,
+        ApproveMode rejectMode,
+        bool writeNodeCompletionEvent,
+        CancellationToken ct)
+    {
+        bool nodeFailed;
+
         if (rejectMode == ApproveMode.All)
         {
             // 会签: increment advisory rejected count, then evaluate RejectGate.
@@ -1487,29 +1607,29 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                 .AsNoTracking()
                 .SingleAsync(n => n.ID == nodeInst.ID, ct);
 
-            bool nodeFailedAll = await AllApprovalHandler.TryCompleteRejectedAsync(
-                Db, freshNodeAll, actorITCode, _logger, ct);
+            nodeFailed = await AllApprovalHandler.TryCompleteRejectedAsync(
+                Db, freshNodeAll, actorITCode ?? string.Empty, _logger, ct);
 
-            if (!nodeFailedAll)
+            if (!nodeFailed)
             {
                 // Gate not met (AfterAll) or another actor already won: node continues.
-                await WorkflowEventLogWriter.AppendAsync(
-                    Db, instance.ID, instance.TenantCode,
-                    EventAction.Reject,
-                    nodeKey: nodeInst.NodeKey,
-                    actorITCode: actorITCode,
-                    beforeState: TaskState.Pending.ToString(),
-                    afterState: TaskState.Rejected.ToString(),
-                    reason: reason,
-                    ct: ct);
+                if (writeNodeCompletionEvent)
+                {
+                    await WorkflowEventLogWriter.AppendAsync(
+                        Db, instance.ID, instance.TenantCode,
+                        EventAction.Reject,
+                        nodeKey: nodeInst.NodeKey,
+                        actorITCode: actorITCode,
+                        beforeState: TaskState.Pending.ToString(),
+                        afterState: TaskState.Rejected.ToString(),
+                        reason: reason,
+                        ct: ct);
+                }
                 return WorkflowActionResult.Advanced;
             }
-
-            // Node is now CompletedRejected — fall through to instance-level rejection below.
-            goto markInstanceRejected;
+            // Node is now CompletedRejected — fall through to instance-level rejection.
         }
-
-        if (rejectMode == ApproveMode.Any)
+        else if (rejectMode == ApproveMode.Any)
         {
             // 或签: single reject does NOT fail node; only last-reject does.
             await GuardedTransition.IncrementNodeRejectedCountAsync(Db, nodeInst.ID, ct);
@@ -1517,70 +1637,81 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                 .AsNoTracking()
                 .SingleAsync(n => n.ID == nodeInst.ID, ct);
 
-            bool nodeFailedAny = await AnyApprovalHandler.TryCompleteRejectedAsync(
-                Db, freshNodeAny, actorITCode, _logger, ct);
+            nodeFailed = await AnyApprovalHandler.TryCompleteRejectedAsync(
+                Db, freshNodeAny, actorITCode ?? string.Empty, _logger, ct);
 
-            if (!nodeFailedAny)
+            if (!nodeFailed)
             {
                 // More approvers still pending — node continues.
-                await WorkflowEventLogWriter.AppendAsync(
-                    Db, instance.ID, instance.TenantCode,
-                    EventAction.Reject,
-                    nodeKey: nodeInst.NodeKey,
-                    actorITCode: actorITCode,
-                    beforeState: TaskState.Pending.ToString(),
-                    afterState: TaskState.Rejected.ToString(),
-                    reason: reason,
-                    ct: ct);
+                if (writeNodeCompletionEvent)
+                {
+                    await WorkflowEventLogWriter.AppendAsync(
+                        Db, instance.ID, instance.TenantCode,
+                        EventAction.Reject,
+                        nodeKey: nodeInst.NodeKey,
+                        actorITCode: actorITCode,
+                        beforeState: TaskState.Pending.ToString(),
+                        afterState: TaskState.Rejected.ToString(),
+                        reason: reason,
+                        ct: ct);
+                }
                 return WorkflowActionResult.Advanced;
             }
-
-            // All have rejected — fall through to instance-level rejection below.
-            goto markInstanceRejected;
+            // All have rejected — fall through to instance-level rejection.
         }
-
-        // Sequential path ─────────────────────────────────────────────────────────
-
-        // Cancel remaining NotYetActive tasks on this node (Sequential-only: All/Any
-        // mint all tasks as Pending so there are no NotYetActive tasks to cancel here).
-        await Db.Set<ApprovalTask>()
-            .Where(t => t.NodeInstanceId == nodeInst.ID && t.State == TaskState.NotYetActive)
-            .ExecuteUpdateAsync(
-                s => s.SetProperty(t => t.State, TaskState.Cancelled),
-                ct);
-
-        // Complete the node as CompletedRejected (CAS on node RowVer).
-        var freshNode = await Db.Set<NodeInstance>()
-            .AsNoTracking()
-            .SingleAsync(n => n.ID == nodeInst.ID, ct);
-
-        var completeRows = await GuardedTransition.CompleteNodeInstanceAsync(
-            Db, nodeInst.ID,
-            expectedRowVer: freshNode.RowVer,
-            completedState: NodeState.CompletedRejected,
-            decidedBy: actorITCode,
-            ct: ct);
-
-        if (completeRows == 0)
+        else
         {
-            _logger.LogDebug(
-                "RejectTaskAsync: NodeInstance {NodeId} completion CAS returned 0 — concurrent actor already completed.",
-                nodeInst.ID);
-            return WorkflowActionResult.AlreadyHandled;
+            // Sequential path ─────────────────────────────────────────────────────
+
+            // Cancel remaining NotYetActive tasks on this node (Sequential-only: All/Any
+            // mint all tasks as Pending so there are no NotYetActive tasks to cancel here).
+            await Db.Set<ApprovalTask>()
+                .Where(t => t.NodeInstanceId == nodeInst.ID && t.State == TaskState.NotYetActive)
+                .ExecuteUpdateAsync(
+                    s => s.SetProperty(t => t.State, TaskState.Cancelled),
+                    ct);
+
+            // WF-20.2: cancel task timer for the rejecting step + node-scoped hygiene (Sequential reject).
+            await GuardedTransition.CancelTimerForTaskAsync(Db, claimedTaskId, ct);
+            await GuardedTransition.CancelTimersForNodeAsync(Db, nodeInst.ID, ct);
+
+            // Complete the node as CompletedRejected (CAS on node RowVer).
+            var freshNode = await Db.Set<NodeInstance>()
+                .AsNoTracking()
+                .SingleAsync(n => n.ID == nodeInst.ID, ct);
+
+            var completeRows = await GuardedTransition.CompleteNodeInstanceAsync(
+                Db, nodeInst.ID,
+                expectedRowVer: freshNode.RowVer,
+                completedState: NodeState.CompletedRejected,
+                decidedBy: actorITCode,
+                ct: ct);
+
+            if (completeRows == 0)
+            {
+                _logger.LogDebug(
+                    "ExecuteRejectCompletionAsync: NodeInstance {NodeId} completion CAS returned 0 — concurrent actor already completed.",
+                    nodeInst.ID);
+                return WorkflowActionResult.AlreadyHandled;
+            }
+            nodeFailed = true;
         }
 
-        markInstanceRejected:
+        // ── Node is CompletedRejected — instance-level rejection ─────────────────
 
-        // Write event log for task rejection.
-        await WorkflowEventLogWriter.AppendAsync(
-            Db, instance.ID, instance.TenantCode,
-            EventAction.Reject,
-            nodeKey: nodeInst.NodeKey,
-            actorITCode: actorITCode,
-            beforeState: NodeState.Activated.ToString(),
-            afterState: NodeState.CompletedRejected.ToString(),
-            reason: reason,
-            ct: ct);
+        if (writeNodeCompletionEvent)
+        {
+            // Write event log for node completion via rejection.
+            await WorkflowEventLogWriter.AppendAsync(
+                Db, instance.ID, instance.TenantCode,
+                EventAction.Reject,
+                nodeKey: nodeInst.NodeKey,
+                actorITCode: actorITCode,
+                beforeState: NodeState.Activated.ToString(),
+                afterState: NodeState.CompletedRejected.ToString(),
+                reason: reason,
+                ct: ct);
+        }
 
         // Apply RejectPolicy: both TerminateInstance and ReturnToInitiator mark the instance Rejected.
         // ReturnToInitiator full WF-12 restart is deferred. // WF-12
@@ -1600,6 +1731,14 @@ internal sealed class WorkflowEngine : IWorkflowEngine
 
         if (rejectRows == 1)
         {
+            // WF-20.2: instance-wide timer cancel on terminal Rejected state.
+            var rejectedNodeIds = await Db.Set<NodeInstance>()
+                .Where(n => n.InstanceId == instance.ID)
+                .Select(n => n.ID)
+                .ToListAsync(ct);
+            foreach (var nid in rejectedNodeIds)
+                await GuardedTransition.CancelTimersForNodeAsync(Db, nid, ct);
+
             await WorkflowEventLogWriter.AppendAsync(
                 Db, instance.ID, instance.TenantCode,
                 EventAction.Reject,
@@ -1614,11 +1753,199 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         // WF-15 — Notify rejected (post-commit, best-effort).
         if (_notifier is not null)
         {
-            try { await _notifier.NotifyRejectedAsync(instance, nodeInst, task, actorITCode, reason, ct); }
-            catch (Exception ex) { _logger.LogError(ex, "WF-15 NotifyRejectedAsync failed for task {TaskId}.", taskId); }
+            try { await _notifier.NotifyRejectedAsync(instance, nodeInst, task, actorITCode ?? string.Empty, reason, ct); }
+            catch (Exception ex) { _logger.LogError(ex, "WF-15 NotifyRejectedAsync failed for task {TaskId}.", task.ID); }
         }
 
         return WorkflowActionResult.Rejected;
+    }
+
+    // ── WF-20.4: SystemClaimTaskAsync / SystemContinueTaskAsync ──────────────────
+    //
+    // FIX-C: split the original monolithic auto-action into two seams so the
+    // per-timer fire transaction contains ONLY the claims + event rows (fast, bounded,
+    // no HTTP, no long lock spans), and the continuation (AdvanceAsync recursion, timer
+    // re-arm, WF-15 notifier calls) runs POST-COMMIT.
+    //
+    // Lock-order rule (§0 invariant, new for every timer-path transaction):
+    //   WorkflowTimer → ApprovalTask → NodeInstance → ProcessInstance(Seq)
+    // Inside the fire txn, task-claim CASes (ApprovalTask writes) come before the Seq
+    // counter increment (ProcessInstance write) — this matches the Wave-4 DelegateTaskAsync
+    // order (task → node-epoch → instance-Seq) and avoids ABBA deadlock with that path.
+
+    /// <summary>
+    /// Context returned by <see cref="SystemClaimTaskAsync"/> when the claim CAS succeeds.
+    /// Carries the snapshots needed by <see cref="SystemContinueTaskAsync"/> to drive the
+    /// post-commit continuation without re-reading (already locked by the committed claim).
+    /// </summary>
+    internal sealed record SystemClaimContext(
+        Guid TaskId,
+        string AssigneeITCode,
+        TaskState NextState,
+        ApproveMode ApproveMode,
+        NodeInstance NodeInst,
+        ProcessInstance Instance);
+
+    /// <summary>
+    /// IN-TXN part of the system auto-action: claims the task via the byte-identical
+    /// <see cref="GuardedTransition.ClaimApprovalTaskAsync"/> predicate
+    /// (State==Pending + RowVer + Generation==timerGeneration) and appends the
+    /// <c>TimeoutFire</c> event row.
+    ///
+    /// <para>MUST be called inside an open transaction.  The caller (WorkflowTimerExecutor)
+    /// commits the transaction AFTER all per-drain-iteration claims are complete, then
+    /// calls <see cref="SystemContinueTaskAsync"/> post-commit per claimed task.</para>
+    ///
+    /// <para>Lock-order: ApprovalTask (this CAS) → ProcessInstance (Seq counter).
+    /// WorkflowTimer is already held by the executor's outer fire CAS (first in order §0).</para>
+    /// </summary>
+    /// <returns>
+    /// <c>null</c> when rows==0 (human or concurrent auto-action won — claim lost; no event written).
+    /// Otherwise a <see cref="SystemClaimContext"/> that must be passed to
+    /// <see cref="SystemContinueTaskAsync"/> after the transaction commits.
+    /// </returns>
+    internal async Task<SystemClaimContext?> SystemClaimTaskAsync(
+        Guid taskId,
+        uint taskRowVer,
+        TaskState nextState,
+        uint timerGeneration,
+        string assigneeITCode,
+        DateTime now,
+        NodeInstance nodeInst,
+        ProcessInstance instance,
+        CancellationToken ct)
+    {
+        // CAS: claim the task as AutoApproved or AutoRejected.
+        // Predicate is byte-identical to the human standard path: State==Pending + RowVer + Generation.
+        // (No AtAction delegation window — system actors bypass delegation semantics by design.)
+        var comment = nextState == TaskState.AutoApproved
+            ? "timeout:auto-approve"
+            : "timeout:auto-reject";
+
+        var claimedRows = await GuardedTransition.ClaimApprovalTaskAsync(
+            Db, taskId,
+            expectedRowVer: taskRowVer,
+            nextState: nextState,
+            actedAtUtc: now,
+            comment: comment,
+            generation: timerGeneration,
+            ct: ct);
+
+        if (claimedRows == 0)
+        {
+            // Human actor (or concurrent auto-action) already claimed this task — silent no-op.
+            _logger.LogDebug(
+                "SystemClaimTaskAsync: task {TaskId} CAS returned 0 rows — already handled (human or concurrent auto-action won).",
+                taskId);
+            return null;
+        }
+
+        // Write TimeoutFire event: ActorITCode=NULL (system), OnBehalfOf=assignee.
+        // One row per claimed task (design §5 §6 R6 "no double-count").
+        // Lock-order §0: ApprovalTask claim (above) → ProcessInstance Seq (here) — matches Wave-4 delegate order.
+        var seqResult = await AllocateSeqWithRetryAsync(Db, instance.ID, instance.RowVer, ct);
+        if (seqResult.rows == 1)
+        {
+            Db.Set<WorkflowEventLog>().Add(new WorkflowEventLog
+            {
+                ID               = Guid.NewGuid(),
+                TenantCode       = instance.TenantCode,
+                InstanceId       = instance.ID,
+                Seq              = seqResult.seq,
+                Action           = EventAction.TimeoutFire,
+                NodeKey          = nodeInst.NodeKey,
+                ActorITCode      = null,            // system action (no human actor)
+                OnBehalfOfITCode = assigneeITCode,  // the assignee on whose behalf the system acts
+                BeforeState      = TaskState.Pending.ToString(),
+                AfterState       = nextState.ToString(),
+                Reason           = comment,
+                Generation       = (int?)timerGeneration,
+                OccurredUtc      = now,
+            });
+            await Db.SaveChangesAsync(ct);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "SystemClaimTaskAsync: Seq allocation failed for instance {InstanceId} (task {TaskId}) — " +
+                "TimeoutFire event not appended (audit gap, not a correctness issue).",
+                instance.ID, taskId);
+        }
+
+        var approveMode = nodeInst.ApproveMode ?? ApproveMode.Sequential;
+        return new SystemClaimContext(taskId, assigneeITCode, nextState, approveMode, nodeInst, instance);
+    }
+
+    /// <summary>
+    /// POST-COMMIT continuation for a successful <see cref="SystemClaimTaskAsync"/> claim.
+    /// Runs the same post-claim completion logic as the human approve/reject path
+    /// (increment → handler TryComplete → CompleteNodeInstanceAsync → AdvanceAsync recursion).
+    ///
+    /// <para>MUST be called after the fire transaction has been committed.
+    /// A failure here does NOT undo the committed claim — the tasks are already in
+    /// AutoApproved/AutoRejected state.  The caller wraps each invocation in a per-task
+    /// try/catch + LogError so one continuation failure never blocks the rest of the batch
+    /// (documented crash-profile limitation: an Activated node with zero Pending tasks
+    /// can be re-driven by a future reaper phase).</para>
+    ///
+    /// <para>writeNodeCompletionEvent=false: the TimeoutFire event written by
+    /// <see cref="SystemClaimTaskAsync"/> IS the per-task audit record; per-task Reject
+    /// events in non-final All/Any paths would double-count.</para>
+    /// </summary>
+    internal async Task<WorkflowActionResult> SystemContinueTaskAsync(
+        SystemClaimContext ctx,
+        CancellationToken ct)
+    {
+        if (ctx.NextState == TaskState.AutoApproved)
+        {
+            return await ExecuteApproveCompletionAsync(ctx.TaskId, ctx.NodeInst, ctx.Instance, ctx.ApproveMode, ct);
+        }
+        else
+        {
+            // AutoReject: routes through handlers — Any-unanimity and All-RejectGate respected.
+            return await ExecuteRejectCompletionAsync(
+                ctx.TaskId, ctx.NodeInst, ctx.Instance,
+                new ApprovalTask { ID = ctx.TaskId, AssigneeITCode = ctx.AssigneeITCode },
+                actorITCode: null,
+                reason: ctx.NextState == TaskState.AutoRejected ? "timeout:auto-reject" : "timeout:auto-approve",
+                rejectMode: ctx.ApproveMode,
+                writeNodeCompletionEvent: false,
+                ct: ct);
+        }
+    }
+
+    // ── WF-20.4: AllocateSeqWithRetryAsync (engine-side claim helper) ───────────
+
+    /// <summary>
+    /// Retry-wrapped <see cref="GuardedTransition.AllocateSeqAsync"/> for use inside the
+    /// engine transaction (mirrors the executor helper — both share the same retry pattern).
+    /// </summary>
+    private static async Task<(int rows, int seq)> AllocateSeqWithRetryAsync(
+        DbContext db,
+        Guid instanceId,
+        uint instanceRowVer,
+        CancellationToken ct,
+        int maxRetries = 5)
+    {
+        var rowVer = instanceRowVer;
+        for (int attempt = 0; attempt < maxRetries; attempt++)
+        {
+            var result = await GuardedTransition.AllocateSeqAsync(db, instanceId, rowVer, ct);
+            if (result.rows == 1)
+                return result;
+
+            var fresh = await db.Set<ProcessInstance>()
+                .AsNoTracking()
+                .Where(i => i.ID == instanceId)
+                .Select(i => new { i.RowVer })
+                .FirstOrDefaultAsync(ct);
+
+            if (fresh == null)
+                return (0, 0);
+
+            rowVer = fresh.RowVer;
+        }
+        return (0, 0);
     }
 
     // ── WF-12: WithdrawAsync ──────────────────────────────────────────────────
@@ -1728,6 +2055,10 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                 .ExecuteUpdateAsync(
                     s => s.SetProperty(t => t.State, TaskState.Cancelled),
                     ct);
+
+            // WF-20.2: instance-wide timer cancel on Withdrawn (§6 R4 spec §5.6 gap close).
+            foreach (var nid in nodeIds)
+                await GuardedTransition.CancelTimersForNodeAsync(Db, nid, ct);
         }
 
         // 8. Write event log.
@@ -1899,6 +2230,9 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             .ExecuteUpdateAsync(
                 s => s.SetProperty(t => t.State, TaskState.Cancelled),
                 ct);
+
+        // WF-20.2: cancel all Armed timers for this node (ReturnToInitiator closes the node).
+        await GuardedTransition.CancelTimersForNodeAsync(Db, nodeInst.ID, ct);
 
         // 9. Complete node as Returned (CAS on fresh RowVer).
         var freshNode = await Db.Set<NodeInstance>()
@@ -2131,7 +2465,8 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         }
 
         int maxReturnLoops = _options.MaxReturnLoops;
-        var leaseExpiry = DateTime.UtcNow.AddMinutes(30); // Wave-5 reaper TTL; configurable in WF-20.
+        // WF-20.2: use configurable ReturningLeaseTtl (default 30 min) — zero behavior change.
+        var leaseExpiry = DateTime.UtcNow.Add(_options.ReturningLeaseTtl);
 
         // Compute the span of node keys that must be superseded.
         var spanNodeKeys = WorkflowGraphValidator.ComputeReturnSpan(graph, targetNodeKey, triggerNode.NodeKey);
@@ -3199,6 +3534,221 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         {
             _logger.LogError(ex, "WF-15 NotifyFirstPendingTasksAsync failed for instance {InstanceId}.", instanceId);
         }
+    }
+
+    // ── WF-20.2: Timer arm helpers ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Arm a node-scoped timer for an All/Any Approval node immediately after the
+    /// <c>ActivateNodeInstanceAsync</c> winner site.
+    ///
+    /// <para>Skips silently when:
+    /// <list type="bullet">
+    ///   <item><see cref="_businessCalendar"/> is null (AddWtmWorkFlowTimers not called).</item>
+    ///   <item><see cref="Definition.TimeoutDef"/> is absent on the node.</item>
+    ///   <item>BusinessCalendar:true + pass-through + dangerous auto-action (§0 S2 fail-closed).</item>
+    /// </list>
+    /// </para>
+    ///
+    /// <para>IdempotencyKey: <c>tmo:n:{NodeInstanceId:N}:{Generation}:0</c>.
+    /// Unique-key violations are caught and swallowed (idempotent — concurrent double-activation loses gracefully).</para>
+    /// </summary>
+    private async Task ArmNodeTimerIfConfiguredAsync(
+        NodeInstance nodeInst,
+        Definition.NodeDef nodeDef,
+        DateTime now,
+        CancellationToken ct)
+    {
+        if (_businessCalendar is null) return;
+        var td = nodeDef.Timeout;
+        if (td is null) return;
+
+        bool isAutoAction = td.Action is TimerAction.AutoApprove or TimerAction.AutoReject or TimerAction.Escalate;
+
+        // §0 S2 arm-time severity: pass-through calendar + auto-action → skip + warn.
+        if (td.BusinessCalendar && _businessCalendar.IsPassThrough && isAutoAction)
+        {
+            _logger.LogWarning(
+                "ArmNodeTimer: node '{NodeKey}' timeout action={Action} + businessCalendar:true " +
+                "but only PassThroughBusinessCalendar is registered. Skipping arm (fail-closed on weekends). " +
+                "Register a real IBusinessCalendar to enable this action.",
+                nodeDef.NodeKey, td.Action);
+            return;
+        }
+
+        var fireAt = _businessCalendar.AddBusinessTime(now, td.Duration, _options.BusinessCalendarId);
+        // Deterministic idempotency key: tmo:n:{nodeId:N}:{generation}:0
+        var key = $"tmo:n:{nodeInst.ID:N}:{nodeInst.Generation}:0";
+
+        // FIX-B5d: stamp DueUtc on all Pending tasks covered by this node-scoped timer.
+        // Design §0 table: "set ApprovalTask.DueUtc = activation + duration at the SAME site
+        // that arms the covering timer" (task-scoped ArmTaskTimerIfConfiguredAsync already does
+        // this; node-scoped was missing the stamp until this fix).
+        await Db.Set<ApprovalTask>()
+            .Where(t => t.NodeInstanceId == nodeInst.ID
+                         && t.State == TaskState.Pending
+                         && t.Generation == nodeInst.Generation)
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.DueUtc, fireAt), ct);
+
+        var timer = new WorkflowTimer
+        {
+            ID              = Guid.NewGuid(),
+            TenantCode      = nodeInst.TenantCode,
+            NodeInstanceId  = nodeInst.ID,
+            ApprovalTaskId  = null, // node-scoped: no task FK
+            FireAtUtc       = fireAt,
+            Action          = td.Action,
+            IdempotencyKey  = key,
+            Status          = TimerStatus.Armed,
+            RemindCount     = 0,
+            Generation      = nodeInst.Generation,
+            RowVer          = 0,
+        };
+
+        try
+        {
+            Db.Set<WorkflowTimer>().Add(timer);
+            await Db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException dbEx) when (IsUniqueConstraintViolation(dbEx))
+        {
+            // Idempotent: concurrent activation already inserted this key → detach and continue.
+            Db.Entry(timer).State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+            _logger.LogDebug(
+                "ArmNodeTimer: unique-key collision for key '{Key}' (concurrent activation) — no-op.",
+                key);
+        }
+    }
+
+    /// <summary>
+    /// Arm a task-scoped timer for a Sequential step that just became Pending.
+    ///
+    /// <para>Stamps <see cref="ApprovalTask.DueUtc"/> on the task at the same site (derived output).</para>
+    ///
+    /// <para>IdempotencyKey: <c>tmo:t:{TaskId:N}:0</c>.
+    /// Unique-key violations are caught and swallowed (idempotent).</para>
+    /// </summary>
+    private async Task ArmTaskTimerIfConfiguredAsync(
+        ApprovalTask task,
+        NodeInstance nodeInst,
+        Definition.NodeDef nodeDef,
+        DateTime now,
+        CancellationToken ct)
+    {
+        if (_businessCalendar is null) return;
+        var td = nodeDef.Timeout;
+        if (td is null) return;
+
+        bool isAutoAction = td.Action is TimerAction.AutoApprove or TimerAction.AutoReject or TimerAction.Escalate;
+
+        // §0 S2 arm-time severity: pass-through calendar + auto-action → skip + warn.
+        if (td.BusinessCalendar && _businessCalendar.IsPassThrough && isAutoAction)
+        {
+            _logger.LogWarning(
+                "ArmTaskTimer: node '{NodeKey}' task {TaskId} timeout action={Action} + businessCalendar:true " +
+                "but only PassThroughBusinessCalendar is registered. Skipping arm (fail-closed on weekends).",
+                nodeDef.NodeKey, task.ID, td.Action);
+            return;
+        }
+
+        var fireAt = _businessCalendar.AddBusinessTime(now, td.Duration, _options.BusinessCalendarId);
+        // Deterministic idempotency key: tmo:t:{taskId:N}:0
+        var key = $"tmo:t:{task.ID:N}:0";
+
+        // Stamp DueUtc on the task (derived output, not a timer predicate).
+        await Db.Set<ApprovalTask>()
+            .Where(t => t.ID == task.ID)
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.DueUtc, fireAt), ct);
+
+        var timer = new WorkflowTimer
+        {
+            ID              = Guid.NewGuid(),
+            TenantCode      = nodeInst.TenantCode,
+            NodeInstanceId  = nodeInst.ID,
+            ApprovalTaskId  = task.ID,
+            FireAtUtc       = fireAt,
+            Action          = td.Action,
+            IdempotencyKey  = key,
+            Status          = TimerStatus.Armed,
+            RemindCount     = 0,
+            Generation      = nodeInst.Generation,
+            RowVer          = 0,
+        };
+
+        try
+        {
+            Db.Set<WorkflowTimer>().Add(timer);
+            await Db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException dbEx) when (IsUniqueConstraintViolation(dbEx))
+        {
+            Db.Entry(timer).State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+            _logger.LogDebug(
+                "ArmTaskTimer: unique-key collision for key '{Key}' (concurrent step activation) — no-op.",
+                key);
+        }
+    }
+
+    /// <summary>
+    /// Heuristic: detect unique-constraint violations from <see cref="DbUpdateException"/>.
+    /// Used to implement the idempotent arm pattern (duplicate key = safe no-op).
+    ///
+    /// <para><strong>PostgreSQL note:</strong> on PostgreSQL, a unique-constraint violation
+    /// (error code 23505) ABORTS the enclosing transaction — the catch path here rolls back
+    /// the whole fire transaction and the timer retries on the next tick.  That is the correct
+    /// behavior: the unique index on IdempotencyKey guarantees exactly-once arm;
+    /// the retry sees <see cref="TimerStatus.Fired"/> from the winning host and exits cleanly
+    /// (GATE-0 generation-mismatch or LostRace CAS).</para>
+    ///
+    /// <para>FIX-B5f: narrowed heuristic — require constraint-name markers (IX_, UniqueConstraint)
+    /// or well-known duplicate-key phrases rather than matching the bare word "UNIQUE" which can
+    /// appear in unrelated error messages (e.g. "unique" in a column description).</para>
+    /// </summary>
+    private static bool IsUniqueConstraintViolation(DbUpdateException ex)
+    {
+        // EF Core wraps the provider-specific exception — check both levels.
+        var inner = ex.InnerException?.Message ?? ex.Message;
+
+        // FIX-B5f: require constraint-name marker (IX_ prefix from ApplyWorkFlowModels conventions)
+        // or well-known duplicate-key phrases to avoid false positives on generic messages
+        // that happen to contain the word "unique".
+        return inner.Contains("IX_", StringComparison.OrdinalIgnoreCase)         // index name prefix (all providers)
+            || inner.Contains("unique constraint", StringComparison.OrdinalIgnoreCase) // SQLite / PostgreSQL
+            || inner.Contains("UNIQUE constraint failed", StringComparison.OrdinalIgnoreCase) // SQLite
+            || inner.Contains("duplicate key", StringComparison.OrdinalIgnoreCase)    // SQL Server / PostgreSQL
+            || inner.Contains("Duplicate entry", StringComparison.OrdinalIgnoreCase)  // MySQL / MariaDB
+            || inner.Contains("unique index", StringComparison.OrdinalIgnoreCase)     // Oracle / DaMeng
+            || inner.Contains("23505", StringComparison.Ordinal)                      // PostgreSQL SQLSTATE
+            || inner.Contains("ORA-00001", StringComparison.OrdinalIgnoreCase);       // Oracle unique violation
+    }
+
+    /// <summary>
+    /// Load the <see cref="Definition.NodeDef"/> for <paramref name="nodeKey"/> from the
+    /// published graph stored in <paramref name="definitionVersionId"/>.
+    ///
+    /// <para>Used by WF-20.2 Step B re-arm in <c>ApproveTaskAsync</c> — the arm site needs
+    /// the TimeoutDef of the node whose next sequential step just became Pending, but
+    /// <c>ApproveTaskAsync</c> does not have the graph loaded at that call site.
+    /// This helper loads and deserializes on demand; callers must gate on
+    /// <see cref="_businessCalendar"/> being non-null to avoid the I/O cost in tests.</para>
+    ///
+    /// <para>Returns <c>null</c> when the version row or the nodeKey cannot be found
+    /// (fail-closed: caller skips re-arm rather than throwing).</para>
+    /// </summary>
+    private async Task<Definition.NodeDef?> LoadNodeDefAsync(
+        Guid definitionVersionId,
+        string nodeKey,
+        CancellationToken ct)
+    {
+        var version = await Db.Set<ProcessDefinitionVersion>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(v => v.ID == definitionVersionId, ct);
+
+        if (version is null) return null;
+
+        var graph = WorkflowGraphSerializer.Deserialize(version.GraphJson);
+        return graph.Nodes.FirstOrDefault(n =>
+            string.Equals(n.NodeKey, nodeKey, StringComparison.Ordinal));
     }
 
     /// <summary>

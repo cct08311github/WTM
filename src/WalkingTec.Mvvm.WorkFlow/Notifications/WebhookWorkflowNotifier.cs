@@ -195,6 +195,99 @@ public sealed class WebhookWorkflowNotifier : IWorkflowNotifier
         return SendSafeAsync(message, "NotifyReturnedToInitiator", instance.ID, ct);
     }
 
+    // ── WF-20.3: Timeout-wave notifier overrides ─────────────────────────────
+
+    /// <inheritdoc/>
+    public Task NotifyTimeoutRemindAsync(
+        ProcessInstance instance,
+        NodeInstance nodeInstance,
+        int remindCount,
+        CancellationToken ct = default)
+    {
+        if (_sink is null) return Task.CompletedTask;
+
+        var message = new WebhookMessage
+        {
+            Title = "[WorkFlow] 超時催辦提醒",
+            Body  = $"流程 **{instance.ID}** 節點 `{nodeInstance.NodeKey}` 催辦提醒（第 {remindCount + 1} 次）。",
+            Level = WebhookLevel.Warning,
+            Fields = new List<KeyValuePair<string, string>>
+            {
+                new("InstanceId",    instance.ID.ToString()),
+                new("Initiator",     instance.InitiatorITCode),
+                new("NodeKey",       nodeInstance.NodeKey),
+                new("ApproveMode",   (nodeInstance.ApproveMode ?? ApproveMode.Sequential).ToString()),
+                new("BusinessType",  instance.BusinessType ?? "—"),
+                new("BusinessKey",   instance.BusinessKey  ?? "—"),
+                new("RemindCount",   (remindCount + 1).ToString()),
+            },
+        };
+
+        return SendSafeAsync(message, "NotifyTimeoutRemind", instance.ID, ct);
+    }
+
+    /// <inheritdoc/>
+    public Task NotifyTimeoutEscalatedAsync(
+        ProcessInstance instance,
+        NodeInstance nodeInstance,
+        string oldAssigneeITCode,
+        string newAssigneeITCode,
+        CancellationToken ct = default)
+    {
+        if (_sink is null) return Task.CompletedTask;
+
+        var message = new WebhookMessage
+        {
+            Title = "[WorkFlow] 超時升級 — 任務已轉移",
+            Body  = $"流程 **{instance.ID}** 節點 `{nodeInstance.NodeKey}` 因超時已將任務從 `{oldAssigneeITCode}` 升級轉移至 `{newAssigneeITCode}`。",
+            Level = WebhookLevel.Warning,
+            Fields = new List<KeyValuePair<string, string>>
+            {
+                new("InstanceId",       instance.ID.ToString()),
+                new("Initiator",        instance.InitiatorITCode),
+                new("NodeKey",          nodeInstance.NodeKey),
+                new("ApproveMode",      (nodeInstance.ApproveMode ?? ApproveMode.Sequential).ToString()),
+                new("BusinessType",     instance.BusinessType ?? "—"),
+                new("BusinessKey",      instance.BusinessKey  ?? "—"),
+                new("OldAssignee",      oldAssigneeITCode),
+                new("NewAssignee",      newAssigneeITCode),
+            },
+        };
+
+        return SendSafeAsync(message, "NotifyTimeoutEscalated", instance.ID, ct);
+    }
+
+    /// <inheritdoc/>
+    public Task NotifyTimeoutAutoActionedAsync(
+        ProcessInstance instance,
+        NodeInstance nodeInstance,
+        ApprovalTask task,
+        string outcome,
+        CancellationToken ct = default)
+    {
+        if (_sink is null) return Task.CompletedTask;
+
+        var message = new WebhookMessage
+        {
+            Title = $"[WorkFlow] 超時自動{(outcome == "AutoApproved" ? "通過" : "拒絕")}",
+            Body  = $"流程 **{instance.ID}** 節點 `{nodeInstance.NodeKey}` 因超時已代 `{task.AssigneeITCode}` 執行自動{(outcome == "AutoApproved" ? "通過" : "拒絕")}。",
+            Level = WebhookLevel.Warning,
+            Fields = new List<KeyValuePair<string, string>>
+            {
+                new("InstanceId",    instance.ID.ToString()),
+                new("Initiator",     instance.InitiatorITCode),
+                new("NodeKey",       nodeInstance.NodeKey),
+                new("ApproveMode",   (nodeInstance.ApproveMode ?? ApproveMode.Sequential).ToString()),
+                new("BusinessType",  instance.BusinessType ?? "—"),
+                new("BusinessKey",   instance.BusinessKey  ?? "—"),
+                new("Assignee",      task.AssigneeITCode),
+                new("Outcome",       outcome),
+            },
+        };
+
+        return SendSafeAsync(message, "NotifyTimeoutAutoActioned", instance.ID, ct);
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────────────
 
     /// <summary>

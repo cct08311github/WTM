@@ -78,4 +78,12 @@ public class WorkflowTimer : BasePoco, ITenant
     /// Default 0 (pre-Wave-3 timers are generation 0).
     /// </summary>
     public uint Generation { get; set; }
+
+    // ── Wave-5 Remind-chain design note (WF-20 FIX-A3) ──────────────────────
+    // RemindEveryHours and MaxReminders are intentionally NOT stored on this row.
+    // Keeping them here would violate the design §7 'ZERO schema/migration delta' promise —
+    // upgraders would hit a missing-column SELECT crash on the reaper's candidate query.
+    // At fire time the executor re-reads these values from the version-pinned immutable
+    // graph (ProcessDefinitionVersion.GraphJson → NodeDef.Timeout) via LoadTimerNodeDefAsync.
+    // EscalateTo is also read from the graph, not carried on the row.
 }

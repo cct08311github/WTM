@@ -174,6 +174,26 @@ public enum EventAction
     Notify,
     TimeoutFire,
     FailClosed,
+
+    // ── WF-20 Wave-5: Timeout actions (appended at end — enum append-only rule) ──
+
+    /// <summary>
+    /// Timer reminder fired — a 催办 notification was sent to pending assignees.
+    /// ActorITCode is NULL (system action).
+    /// </summary>
+    TimeoutRemind,
+
+    /// <summary>
+    /// Timeout escalation fired — the task was reassigned to the escalation target.
+    /// ActorITCode is NULL; OnBehalfOfITCode carries the original assignee.
+    /// </summary>
+    TimeoutEscalate,
+
+    /// <summary>
+    /// An AtAction-mode delegation was reverted to the principal by the reaper sweep
+    /// because the delegation window expired.  ActorITCode is NULL (system action).
+    /// </summary>
+    DelegationExpiredReverted,
 }
 
 /// <summary>Status of a durable <see cref="WorkflowTimer"/>.</summary>
