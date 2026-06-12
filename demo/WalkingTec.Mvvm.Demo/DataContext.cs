@@ -12,6 +12,7 @@ using WalkingTec.Mvvm.Demo.Models._Admin;
 using WalkingTec.Mvvm.Demo.Models.Virus;
 using WalkingTec.Mvvm.Demo.Models.ECommerce;
 using WalkingTec.Mvvm.Etl;
+using WalkingTec.Mvvm.WorkFlow; // FIX-B2: ApplyWorkFlowModels extension
 
 namespace WalkingTec.Mvvm.Demo
 {
@@ -347,6 +348,8 @@ namespace WalkingTec.Mvvm.Demo
         {
             base.OnModelCreating(modelBuilder);
             modelBuilder.ApplyEtlModels();
+            // FIX-B2: register WorkFlow models so the designer store can use this DB context.
+            modelBuilder.ApplyWorkFlowModels();
         }
     }
 

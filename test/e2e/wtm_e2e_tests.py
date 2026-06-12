@@ -1753,6 +1753,191 @@ async def tc_30_import_flow(page, **_):
     print("[TC-30] PASS -- 匯入功能流程截圖完成")
 
 
+# ─── TC-31: WorkFlow 設計器完整創作流程 (T-DSN-18 e2e smoke) ─────────────────
+
+async def tc_31_workflow_designer_smoke(page, **_):
+    """
+    TC-31: T-DSN-18 — WorkFlow 設計器完整創作流程 e2e smoke
+    admin 開啟設計器 → 建立流程頭 → 表單編輯 Start→Approval(串签)→End →
+    校验 → 发布 v1 → 再次發布未變更 → IdempotentNoOp toast → 查看版本歷程 v1
+
+    Mac-mini 單 runner flake SOP 適用：
+      - 讀 log 確認 FAIL: 0 而非依賴 exit code
+      - 若 /_workflow-designer 回 404（設計器未啟用），SKIP 並標記
+    """
+    import time
+
+    tc_num = 31
+    BASE = BASE_URL
+
+    print(f"[TC-{tc_num:02d}] 開始執行 WorkFlow 設計器 smoke...")
+
+    # Step 0: 登入
+    await login(page, BASE)
+    await page.screenshot(path=sc(tc_num, "00-logged-in"))
+
+    # Step 1: 確認設計器頁面可存取（AddWtmWorkFlowDesigner 已啟用）
+    # FIX-B2: 404 is now a FAIL (not a skip). The demo host has AddWtmWorkFlowDesigner()
+    # registered; if the designer returns 404, the startup config is broken and the test
+    # must FAIL to surface the regression immediately.
+    resp = await page.goto(f"{BASE}/_workflow-designer")
+    await page.wait_for_load_state("networkidle", timeout=TIMEOUT)
+    status = resp.status if resp else 0
+    assert status != 404, (
+        f"[TC-{tc_num:02d}] FAIL — 設計器頁面返回 404。"
+        "Demo host 必須啟用 AddWtmWorkFlowDesigner() + UseWtmWorkFlowDesigner() (FIX-B2)."
+    )
+    if status == 403:
+        print(f"[TC-{tc_num:02d}] SKIP — 設計器 RBAC 未授權 (403)，需配置 FunctionPrivilege")
+        return
+    await page.screenshot(path=sc(tc_num, "01-designer-page"))
+    print(f"[TC-{tc_num:02d}] 設計器頁面 HTTP {status}")
+
+    # Step 2: 確認 bootstrap API 回傳正常
+    bootstrap_resp = await page.evaluate("""
+        async () => {
+            const r = await fetch('/api/_workflow/designer/bootstrap');
+            return { status: r.status, ok: r.ok };
+        }
+    """)
+    print(f"[TC-{tc_num:02d}] bootstrap API: {bootstrap_resp}")
+    assert bootstrap_resp.get('ok'), f"bootstrap API 失敗: {bootstrap_resp}"
+
+    # Step 3: 建立流程頭（透過 API，避免 layui layer 操作複雜度）
+    test_code = f"TC31_SMOKE_{int(time.time()) % 100000}"
+    # FIX-B3a: bootstrap returns {"requestToken":"..."} (camelCase via [JsonPropertyName]).
+    # Earlier code read d.antiforgeryToken (wrong field), so xsrf_token was always null
+    # → CreateDefinition POST had no X-WTM-WF-XSRF header → [WfDesignerAntiforgery] 400.
+    xsrf_resp = await page.evaluate("""
+        async () => {
+            const r = await fetch('/api/_workflow/designer/bootstrap');
+            if (!r.ok) return null;
+            const d = await r.json();
+            return d.requestToken || null;
+        }
+    """)
+    xsrf_token = xsrf_resp  # may be null if bootstrap doesn't embed token
+    create_payload = {"code": test_code, "name": "TC31 Smoke Test", "category": "E2E"}
+    create_headers = {"Content-Type": "application/json"}
+    if xsrf_token:
+        create_headers["X-WTM-WF-XSRF"] = xsrf_token
+    create_resp = await page.evaluate(f"""
+        async () => {{
+            const r = await fetch('/api/_workflow/designer/definitions', {{
+                method: 'POST',
+                headers: {json.dumps(create_headers)},
+                body: JSON.stringify({json.dumps(create_payload)})
+            }});
+            return {{ status: r.status, ok: r.ok }};
+        }}
+    """)
+    print(f"[TC-{tc_num:02d}] 建立流程頭: {create_resp}")
+    # 409 = code already exists (prev run), acceptable.
+    assert create_resp.get('status') in (200, 201, 409), \
+        f"建立流程頭失敗: {create_resp}"
+
+    # Step 4: Publish v1 — 最小合法 graph (raw body)
+    # NOTE: "key" must equal test_code (WorkflowGraph.Key = ProcessDefinition.Code).
+    min_graph = json.dumps({
+        "schemaVersion": 1,
+        "key": test_code,
+        "nodes": [
+            {"nodeKey": "Start", "kind": "Start",    "name": "开始"},
+            {"nodeKey": "Appr",  "kind": "Approval", "name": "审批",
+             "approveMode": "Sequential",
+             "approverRule": {"type": "User", "value": "admin"}},
+            {"nodeKey": "End",   "kind": "End",      "name": "结束"}
+        ],
+        "transitions": [
+            {"from": "Start", "to": "Appr"},
+            {"from": "Appr",  "to": "End"}
+        ]
+    })
+    publish_headers = {"Content-Type": "application/json"}
+    if xsrf_token:
+        publish_headers["X-WTM-WF-XSRF"] = xsrf_token
+    pub_resp = await page.evaluate(f"""
+        async () => {{
+            const r = await fetch('/api/_workflow/designer/definitions/{test_code}/publish', {{
+                method: 'POST',
+                headers: {json.dumps(publish_headers)},
+                body: {json.dumps(min_graph)}
+            }});
+            let body = null;
+            try {{ body = await r.json(); }} catch (e) {{}}
+            // FIX-B4: capture raw text on non-2xx for diagnosability
+            if (!r.ok && body === null) {{
+                try {{ body = await r.text(); }} catch (_) {{}}
+            }}
+            return {{ status: r.status, ok: r.ok, body: body }};
+        }}
+    """)
+    print(f"[TC-{tc_num:02d}] 發布 v1: {pub_resp}")
+    assert pub_resp.get('ok'), f"發布 v1 失敗 (status={pub_resp.get('status')}): {pub_resp.get('body')}"
+    # FIX-B5: API returns PascalCase JSON ("Outcome") — check both casings for robustness.
+    _pub_body = pub_resp.get('body') or {}
+    _pub_outcome = _pub_body.get('Outcome') or _pub_body.get('outcome')
+    assert _pub_outcome in ('Published', 'IdempotentNoOp'), \
+        f"非預期 outcome: {pub_resp}"
+    await page.screenshot(path=sc(tc_num, "04-published-v1"))
+
+    # Step 5: 再次發布完全相同內容 → 應得 IdempotentNoOp
+    pub2_resp = await page.evaluate(f"""
+        async () => {{
+            const r = await fetch('/api/_workflow/designer/definitions/{test_code}/publish', {{
+                method: 'POST',
+                headers: {json.dumps(publish_headers)},
+                body: {json.dumps(min_graph)}
+            }});
+            let body = null;
+            try {{ body = await r.json(); }} catch (e) {{}}
+            // FIX-B4: capture raw text on non-2xx for diagnosability
+            if (!r.ok && body === null) {{
+                try {{ body = await r.text(); }} catch (_) {{}}
+            }}
+            return {{ status: r.status, ok: r.ok, body: body }};
+        }}
+    """)
+    print(f"[TC-{tc_num:02d}] 再次發布 (NoOp): {pub2_resp}")
+    assert pub2_resp.get('ok'), f"再次發布失敗 (status={pub2_resp.get('status')}): {pub2_resp.get('body')}"
+    # FIX-B5: API returns PascalCase JSON ("Outcome") — check both casings for robustness.
+    _pub2_body = pub2_resp.get('body') or {}
+    _pub2_outcome = _pub2_body.get('Outcome') or _pub2_body.get('outcome')
+    assert _pub2_outcome == 'IdempotentNoOp', \
+        f"預期 IdempotentNoOp，實際得: {pub2_resp}"
+
+    # Step 6: 查看版本歷程 → 確認 v1 存在
+    versions_resp = await page.evaluate(f"""
+        async () => {{
+            const r = await fetch('/api/_workflow/designer/definitions/{test_code}/versions');
+            if (!r.ok) return null;
+            return await r.json();
+        }}
+    """)
+    print(f"[TC-{tc_num:02d}] 版本歷程: {versions_resp}")
+    assert versions_resp is not None, "版本歷程 API 失敗"
+    # FIX-B5: API returns PascalCase JSON — accept "Versions", "items", "data", or bare list.
+    if isinstance(versions_resp, list):
+        versions = versions_resp
+    else:
+        versions = (versions_resp.get('Versions') or versions_resp.get('versions') or
+                    versions_resp.get('items') or versions_resp.get('data') or [])
+    assert len(versions) >= 1, f"應有至少 1 個版本，實際: {len(versions)}"
+    # FIX-B5: API returns "IsCurrent" (PascalCase), not "isCurrent".
+    current = next((v for v in versions if v.get('IsCurrent') or v.get('isCurrent')), None)
+    assert current is not None, "找不到 IsCurrent=true 的版本"
+    # FIX-B5: VersionNo may be returned as int or string; "1" == 1 fails, so coerce to int.
+    actual_version_no = int(current.get('VersionNo') or current.get('versionNo') or 0)
+    assert actual_version_no == 1, f"當前版本應為 v1，實際: {actual_version_no}"
+
+    # Step 7: 重新開啟設計器頁面，帶 code 參數
+    await page.goto(f"{BASE}/_workflow-designer?code={test_code}")
+    await page.wait_for_load_state("networkidle", timeout=TIMEOUT)
+    await page.screenshot(path=sc(tc_num, "07-designer-with-code"))
+
+    print(f"[TC-{tc_num:02d}] PASS -- WorkFlow 設計器 smoke 完成 (code={test_code})")
+
+
 # ─── 錯誤處理輔助函式 ────────────────────────────────────────────────────────
 
 async def _screenshot_on_failure(page, tc_num, label):
@@ -1843,6 +2028,7 @@ TC_REGISTRY = {
     28: ("角色管理 + 權限設定", tc_28_role_management, "P2"),
     29: ("ETL 管理頁面", tc_29_etl_management, "P2"),
     30: ("匯入功能流程", tc_30_import_flow, "P2"),
+    31: ("WorkFlow 設計器 smoke (T-DSN-18)", tc_31_workflow_designer_smoke, "P2"),
 }
 
 

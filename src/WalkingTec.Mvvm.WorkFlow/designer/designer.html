@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <title>工作流设计器</title>
+    <!-- Consumer wwwroot prerequisites (layui + jquery) -->
+    <link rel="stylesheet" href="/layui/css/layui.css">
+    <!-- Designer CSS (embedded asset) -->
+    <link rel="stylesheet" href="/_workflow_designer/assets/framework_workflow_designer.css">
+</head>
+<body>
+    <!-- ── Loading indicator ──────────────────────────────────────────────────── -->
+    <div id="wfd-loading" style="padding:60px;text-align:center;color:#aaa;">载入中…</div>
+
+    <!-- ── Error banner (hidden until shown) ─────────────────────────────────── -->
+    <div id="wfd-error" style="display:none;padding:16px;background:#fff1f0;
+         border:1px solid #ffa39e;color:#cf1322;margin:16px;">
+    </div>
+
+    <!-- ── Main shell (hidden until bootstrap completes) ─────────────────────── -->
+    <div id="wfd-shell" style="display:none;">
+
+        <!-- Toolbar -->
+        <div id="wfd-toolbar" style="display:flex;align-items:center;gap:8px;
+             padding:8px 16px;background:#fff;border-bottom:1px solid #e6e6e6;flex-wrap:wrap;">
+            <span id="wfd-toolbar-title" style="font-size:16px;font-weight:600;color:#333;">
+                工作流设计器
+            </span>
+            <div style="flex:1;"></div>
+            <div id="wfd-toolbar-actions"></div>
+        </div>
+
+        <!-- Definition list panel -->
+        <div id="wfd-list-panel" style="padding:16px;">
+        </div>
+
+        <!-- Edit panel (hidden when in list view) -->
+        <div id="wfd-edit-panel" style="display:none;">
+            <!-- Tab bar -->
+            <div id="wfd-tab-bar" style="display:flex;gap:0;border-bottom:1px solid #e6e6e6;
+                 background:#fafafa;padding:0 16px;">
+            </div>
+            <!-- Form view -->
+            <div id="wfd-form-view" style="padding:16px;"></div>
+            <!-- Source view -->
+            <div id="wfd-source-view" style="display:none;padding:16px;"></div>
+            <!-- SVG view -->
+            <div id="wfd-svg-view" style="display:none;padding:16px;overflow:auto;"></div>
+        </div>
+
+    </div><!-- #wfd-shell -->
+
+    <!-- ── Consumer prerequisites: layui + jquery from wwwroot ───────────────── -->
+    <script src="/jquery.min.js"></script>
+    <script src="/layui/layui.js"></script>
+
+    <!-- ── Designer modules (embedded assets, WF-21.5/6/7) ─────────────────── -->
+    <script src="/_workflow_designer/assets/framework_workflow_designer_core.js" type="module"></script>
+    <script src="/_workflow_designer/assets/framework_workflow_designer_forms.js" type="module"></script>
+    <script src="/_workflow_designer/assets/framework_workflow_designer_view.js" type="module"></script>
+    <!-- Boot/orchestration module (FIX-A3, WF-21 hardening) -->
+    <script src="/_workflow_designer/assets/framework_workflow_designer_boot.js" type="module"></script>
+    <!-- Zero inline scripts — boot config arrives via URLSearchParams + GET bootstrap -->
+</body>
+</html>

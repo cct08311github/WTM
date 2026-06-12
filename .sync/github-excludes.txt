@@ -46,3 +46,6 @@ docs/archive/
 # the *.github.* file itself is then removed before push.
 README.github.md
 docs/workflow-wave5-design.md
+# Wave-6 adversarially-verified design addendum (低代码 designer; includes race analysis,
+# skeptic-found breaks, and injection constructions — not for public mirror).
+docs/workflow-wave6-design.md

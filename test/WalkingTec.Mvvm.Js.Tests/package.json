@@ -22,7 +22,11 @@
     ],
     "collectCoverageFrom": [
       "src/WalkingTec.Mvvm.Mvc/framework_layui.js",
-      "src/WalkingTec.Mvvm.Mvc/framework_analysis.js"
+      "src/WalkingTec.Mvvm.Mvc/framework_analysis.js",
+      "src/WalkingTec.Mvvm.WorkFlow/designer/framework_workflow_designer_core.js",
+      "src/WalkingTec.Mvvm.WorkFlow/designer/framework_workflow_designer_forms.js",
+      "src/WalkingTec.Mvvm.WorkFlow/designer/framework_workflow_designer_view.js",
+      "src/WalkingTec.Mvvm.WorkFlow/designer/framework_workflow_designer_boot.js"
     ]
   }
 }

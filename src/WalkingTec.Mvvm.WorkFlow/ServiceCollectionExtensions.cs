@@ -1,15 +1,22 @@
 #nullable enable
 using System;
+using System.Reflection;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Core.Services;
 using WalkingTec.Mvvm.WorkFlow.Definition;
 using WalkingTec.Mvvm.WorkFlow.Engine;
 using WalkingTec.Mvvm.WorkFlow.Engine.Routing;
 using WalkingTec.Mvvm.WorkFlow.Models;
+using WalkingTec.Mvvm.WorkFlow.Controllers;
 using WalkingTec.Mvvm.WorkFlow.Notifications;
 
 namespace WalkingTec.Mvvm.WorkFlow;
@@ -50,8 +57,19 @@ public static class ServiceCollectionExtensions
             services.Configure<WorkFlowOptions>(_ => { });
 
         // 2. WF-4: Publish-flow registrations.
-        //    IProcessDefinitionPublisher — scoped (one per request, wraps the scoped IDataContext).
-        services.AddScoped<IProcessDefinitionPublisher, ProcessDefinitionPublisher>();
+        //    IProcessDefinitionPublisher — scoped (one per request).
+        //    WTM's IDataContext in DI is always NullContext (the real DC is created transiently via
+        //    WTMContext.DC).  Use IWtmDataContextFactory when available (production + AddWtmContext
+        //    called); fall back to IDataContext for test setups that register a real context directly.
+        services.AddScoped<IProcessDefinitionPublisher>(sp =>
+        {
+            var factory = sp.GetService<IWtmDataContextFactory>();
+            var options = sp.GetService<IOptions<WorkFlowOptions>>();
+            if (factory != null)
+                return new ProcessDefinitionPublisher(factory, options);
+            var dc = sp.GetRequiredService<IDataContext>();
+            return new ProcessDefinitionPublisher(dc, options);
+        });
 
         // 3. WF-6/7: IWorkflowEngine.
         services.AddScoped<IWorkflowEngine, WorkflowEngine>();
@@ -158,6 +176,129 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<WorkflowTimerHostedService>();
 
         return services;
+    }
+
+    // ── WF-21.2/3: Designer catalog service + antiforgery ────────────────────
+
+    /// <summary>
+    /// Opt-in. Registers designer catalog services: <see cref="IWorkflowDefinitionStore"/>,
+    /// the ASP.NET Core <c>IAntiforgery</c> service (header: <c>X-WTM-WF-XSRF</c>), and
+    /// <see cref="WorkFlowOptions.Designer"/> sub-options (WF-21.3).
+    ///
+    /// <para>Follows the <c>AddWtmWorkFlowNotifications</c> / <c>AddWtmWorkFlowTimers</c>
+    /// opt-in family pattern — calling <see cref="AddWtmWorkFlow"/> alone changes nothing
+    /// for hosts that do not call this method.</para>
+    ///
+    /// <para><strong>Antiforgery:</strong> calls <c>services.AddAntiforgery()</c> with
+    /// <c>HeaderName = "X-WTM-WF-XSRF"</c>.  If the host has already called
+    /// <c>AddAntiforgery()</c>, the <c>Configure</c> callback here simply amends the options.
+    /// The global WTM antiforgery configuration is NOT broken — this is the first,
+    /// designer-scoped registration (spec §4 / T-DSN-8).
+    /// The designer bootstrap endpoint (<c>GET /_workflow/designer/bootstrap</c>)
+    /// issues the token cookie; JS reads it and sends the header on mutating calls.</para>
+    ///
+    /// <para>No <c>BuildServiceProvider()</c> anywhere (10.9.0 startup-crash lesson).</para>
+    /// </summary>
+    public static IServiceCollection AddWtmWorkFlowDesigner(
+        this IServiceCollection services,
+        Action<DesignerOptions>? configureDesigner = null)
+    {
+        // IWorkflowDefinitionStore: scoped (one per request).
+        //    WTM's IDataContext in DI is always NullContext (the real DC is created transiently via
+        //    WTMContext.DC).  Use IWtmDataContextFactory when available (production + AddWtmContext
+        //    called); fall back to IDataContext for test setups that register a real context directly.
+        services.AddScoped<IWorkflowDefinitionStore>(sp =>
+        {
+            var factory = sp.GetService<IWtmDataContextFactory>();
+            if (factory != null)
+                return new WorkflowDefinitionStore(factory);
+            var dc = sp.GetRequiredService<IDataContext>();
+            return new WorkflowDefinitionStore(dc);
+        });
+
+        // WF-21.3 / FIX-B3c: Register ASP.NET Core antiforgery configured to read the request token
+        // from the designer's own header name (X-WTM-WF-XSRF).
+        //
+        // FIX-B3c root cause: the previous approach (FIX-B3b) injected the designer token into
+        // "X-XSRF-TOKEN" before calling IAntiforgery.ValidateRequestAsync(), assuming "X-XSRF-TOKEN"
+        // is the ASP.NET Core default HeaderName.  It is NOT — the framework default is
+        // "RequestVerificationToken".  ValidateRequestAsync() reads from HeaderName, not from
+        // "X-XSRF-TOKEN", so the injected token was never found → 400 on every mutating call.
+        //
+        // Correct approach: configure AntiforgeryOptions.HeaderName = "X-WTM-WF-XSRF" so
+        // ValidateRequestAsync() reads the token directly from the designer header.
+        // AddAntiforgery() is idempotent; Configure<AntiforgeryOptions>() merges into whatever
+        // the host already registered.  If a host explicitly configured a different HeaderName
+        // before calling AddWtmWorkFlowDesigner(), this Configure() call will override it — that
+        // trade-off is intentional and acceptable for the designer feature.  Any host that needs
+        // to keep a custom HeaderName for its own pipeline should configure antiforgery AFTER
+        // calling AddWtmWorkFlowDesigner().
+        services.AddAntiforgery();
+        services.Configure<Microsoft.AspNetCore.Antiforgery.AntiforgeryOptions>(o =>
+            o.HeaderName = Controllers.DesignerHeaderNames.Xsrf);
+
+        // WF-21.3: Apply designer sub-options if provided.
+        if (configureDesigner != null)
+            services.Configure<WorkFlowOptions>(o => configureDesigner(o.Designer));
+
+        return services;
+    }
+
+    // ── WF-21.4: Designer static-file seam ───────────────────────────────────
+
+    /// <summary>
+    /// Opt-in. Adds the static-file middleware seam that serves the embedded designer
+    /// assets (CSS + JS modules) from the <c>WalkingTec.Mvvm.WorkFlow</c> assembly.
+    ///
+    /// <para>Registers a second <see cref="StaticFileOptions"/> instance at
+    /// <c>/_workflow_designer/assets</c> backed by an
+    /// <see cref="EmbeddedFileProvider"/> pointing at the WorkFlow assembly.
+    /// This does NOT modify the existing <c>UseWtmStaticFiles()</c> provider at
+    /// <c>/_js</c> — all existing Mvc framework assets are unaffected.</para>
+    ///
+    /// <para><strong>Asset URLs served by this seam (spec §8):</strong>
+    /// <list type="bullet">
+    ///   <item><c>/_workflow_designer/assets/framework_workflow_designer.css</c></item>
+    ///   <item><c>/_workflow_designer/assets/framework_workflow_designer_core.js</c></item>
+    ///   <item><c>/_workflow_designer/assets/framework_workflow_designer_forms.js</c></item>
+    ///   <item><c>/_workflow_designer/assets/framework_workflow_designer_view.js</c></item>
+    /// </list>
+    /// Note: the request path uses an underscore (<c>/_workflow_designer</c>), not a hyphen,
+    /// because <see cref="EmbeddedFileProvider"/> mangles hyphens in resource paths.</para>
+    ///
+    /// <para><strong>ETag / caching:</strong> the <see cref="StaticFileOptions"/> here uses
+    /// framework defaults (ETag based on last-write, conditional-get).  Consumers who need
+    /// aggressive caching should add <c>ResponseCachingMiddleware</c> or a CDN layer on top
+    /// — this method does NOT mutate <c>WtmETagOptions</c> or any global static-file default.</para>
+    ///
+    /// <para>Call after <c>UseWtmStaticFiles()</c> and before <c>UseEndpoints()</c>.</para>
+    /// </summary>
+    public static IApplicationBuilder UseWtmWorkFlowDesigner(this IApplicationBuilder app)
+    {
+        // EmbeddedFileProvider with the WorkFlow assembly + base namespace.
+        // Files under designer\ are accessible as if served from /_workflow_designer/assets/.
+        // The base namespace matches the assembly name so the provider resolves:
+        //   designer\framework_workflow_designer.css
+        //   → WalkingTec.Mvvm.WorkFlow.designer.framework_workflow_designer.css
+        var assembly = typeof(WorkflowDesignerPageController).Assembly;
+
+        // Content-type provider with explicit JS module MIME type so browsers do not
+        // reject type="module" scripts with a wrong MIME type.
+        var contentTypeProvider = new FileExtensionContentTypeProvider();
+        contentTypeProvider.Mappings[".js"] = "application/javascript";
+        contentTypeProvider.Mappings[".css"] = "text/css";
+        contentTypeProvider.Mappings[".html"] = "text/html; charset=utf-8";
+
+        app.UseStaticFiles(new StaticFileOptions
+        {
+            RequestPath = new PathString("/_workflow_designer/assets"),
+            FileProvider = new EmbeddedFileProvider(
+                assembly,
+                "WalkingTec.Mvvm.WorkFlow.designer"),
+            ContentTypeProvider = contentTypeProvider
+        });
+
+        return app;
     }
 
     /// <summary>
@@ -491,6 +632,41 @@ public static class WorkFlowDbContextExtensions
             e.Property(x => x.DelegateeITCode).HasMaxLength(50).IsRequired();
             e.Property(x => x.ScopeDefinitionCode).HasMaxLength(100);
             e.Property(x => x.TenantCode).HasMaxLength(50);
+        });
+
+        // ── ProcessDefinitionDraft (WF-21.3) ─────────────────────────────────────
+        //
+        // Consumer migration note:
+        //   One new table added: Wf_ProcessDefinitionDraft.
+        //   Generate a migration in your consumer project:
+        //     dotnet ef migrations add WorkFlow_AddDraftStore ...
+        //
+        //   This table stores in-progress (draft) edits of workflow definitions.
+        //   The engine never reads this table; it is deleted atomically by
+        //   ProcessDefinitionPublisher.PublishRawAsync when a draft is published.
+        builder.Entity<ProcessDefinitionDraft>(e =>
+        {
+            e.ToTable("Wf_ProcessDefinitionDraft");
+
+            // One draft per (TenantCode, DefinitionId) — unique index.
+            // Non-filtered (no WHERE clause) to work across all 7 providers.
+            e.HasIndex(x => new { x.TenantCode, x.DefinitionId })
+             .IsUnique()
+             .HasDatabaseName("IX_Wf_ProcessDefinitionDraft_Tenant_Definition");
+
+            e.HasOne(x => x.Definition)
+                .WithMany()
+                .HasForeignKey(x => x.DefinitionId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            e.Property(x => x.TenantCode).HasMaxLength(50);
+            e.Property(x => x.GraphJson).IsRequired();
+            e.Property(x => x.BaseContentHash).HasMaxLength(64);
+            e.Property(x => x.LastSavedBy).HasMaxLength(50);
+
+            // RowVersion: plain uint column — app-incremented CAS (spec §7.2 / WF-2/3 pattern).
+            // NOT an EF concurrency token; managed entirely by the application.
+            e.Property(x => x.RowVersion);
         });
 
         // ── WorkflowTimer (WF-20 stub) ────────────────────────────────────────

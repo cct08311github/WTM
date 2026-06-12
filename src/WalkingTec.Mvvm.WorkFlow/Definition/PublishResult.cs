@@ -1,5 +1,6 @@
 #nullable enable
 // WF-4: Closed result type for the publish flow.
+// WF-21.1: Appended BaseVersionChanged outcome for designer raw-path CAS.
 //
 // Uses a Result<T, E> / closed-union outcome (repo convention) so callers
 // can branch on the specific outcome code without catching exceptions.
@@ -27,6 +28,19 @@ public enum PublishOutcome
 
     /// <summary>The ProcessDefinition with the supplied key was not found.</summary>
     DefinitionNotFound,
+
+    // WF-21.1: Designer raw-path CAS outcome (appended, closed-union discipline).
+
+    /// <summary>
+    /// The supplied <c>expectedBaseContentHash</c> does not match the current version's
+    /// <c>ContentHash</c>, indicating that another publish occurred between the edit
+    /// session and this publish attempt.  HTTP mapping: 409 Conflict.
+    ///
+    /// <para>This outcome is NEVER returned when the content hash of the incoming
+    /// document matches the current version — an idempotent no-op short-circuits
+    /// before the CAS check.</para>
+    /// </summary>
+    BaseVersionChanged,
 }
 
 /// <summary>
@@ -83,4 +97,31 @@ public sealed record PublishResult(
         new(PublishOutcome.DefinitionNotFound, null, 0, null,
             GraphValidationError.None,
             $"ProcessDefinition with code '{definitionCode}' was not found (or is soft-deleted).");
+
+    // WF-21.1: Factory methods for the designer raw-path outcomes.
+
+    /// <summary>
+    /// Create a BaseVersionChanged (CAS conflict) result.
+    /// The expected hash was supplied and does not match the current version.
+    /// HTTP mapping: 409 Conflict.
+    /// </summary>
+    /// <param name="currentContentHash">
+    /// The actual current version's ContentHash (for diagnostic / client use).
+    /// </param>
+    public static PublishResult CasConflict(string currentContentHash) =>
+        new(PublishOutcome.BaseVersionChanged, null, 0, currentContentHash,
+            GraphValidationError.None,
+            "The base version has changed since this edit session began. " +
+            "Reload the latest version and re-apply your changes.");
+
+    /// <summary>
+    /// Create a ValidationFailed result for an unsupported schemaVersion.
+    /// Used by the designer raw-path when <c>schemaVersion != 1</c>.
+    /// </summary>
+    /// <param name="schemaVersion">The unsupported schema version encountered.</param>
+    public static PublishResult SchemaVersionUnsupported(int schemaVersion) =>
+        new(PublishOutcome.ValidationFailed, null, 0, null,
+            GraphValidationError.None,
+            $"schemaVersion {schemaVersion} is not supported by the designer. " +
+            "Only schemaVersion 1 documents may be published through the designer endpoint.");
 }

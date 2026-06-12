@@ -204,11 +204,35 @@ All controllers extend `BaseController` with `[ActionDescription]` / `FunctionPr
 
 | Controller | Key Endpoints |
 |---|---|
-| `ProcessDefinitionController` | `GET /api/_workflow/definitions` · `POST /api/_workflow/definitions/{id}/publish` · `POST /api/_workflow/definitions/validate` · `GET /api/_workflow/definitions/{key}/versions` |
+| `ProcessDefinitionController` | `GET /api/_workflow/definitions/{code}` · `POST /api/_workflow/definitions/{code}/publish` · `POST /api/_workflow/definitions/validate` · `GET /api/_workflow/definitions/{code}/versions` |
 | `WorkflowInstanceController` | `POST /api/_workflow/instances/start` · `POST /api/_workflow/instances/{id}/withdraw` · `GET /api/_workflow/instances/{id}/timeline` |
 | `WorkflowTaskController` | `GET /api/_workflow/tasks/mine` · `POST /api/_workflow/tasks/{id}/approve` · `POST /api/_workflow/tasks/{id}/reject` · `POST /api/_workflow/tasks/{id}/return` |
 
 Approver-eligibility is enforced at the controller action layer (`AssigneeITCode` match) via `WorkflowActionVM` — controllers never touch `DC` directly.
+
+### 6.1 Designer API (`AddWtmWorkFlowDesigner()` opt-in)
+
+The low-code designer (`/_workflow-designer`) adds a separate `WorkflowDesignerController`
+at `api/_workflow/designer`. These endpoints are **additive** — existing `ProcessDefinitionController`
+endpoints are byte-identical.
+
+| Endpoint | Method | Notes |
+|---|---|---|
+| `api/_workflow/designer/bootstrap` | GET | Antiforgery token, current user display, options echo |
+| `api/_workflow/designer/definitions` | GET | Paged head list with has-draft flag (tenant-filtered) |
+| `api/_workflow/designer/definitions` | POST | Create head `{code,name,category}`; 409 on duplicate |
+| `api/_workflow/designer/definitions/{code}` | PUT | Update head metadata (Name/Category/IsEnabled) |
+| `api/_workflow/designer/definitions/{code}/graph` | GET | Current version GraphJson (verbatim) + draft info |
+| `api/_workflow/designer/definitions/{code}/versions` | GET | Version history list |
+| `api/_workflow/designer/versions/{id}/graph` | GET | Verbatim GraphJson of one immutable version |
+| `api/_workflow/designer/definitions/{code}/draft` | GET / PUT / DELETE | Draft CRUD with If-Match concurrency; raw body |
+| `api/_workflow/designer/definitions/{code}/publish` | POST | Raw body; `X-WTM-Expected-Hash` CAS; antiforgery |
+| `api/_workflow/designer/validate` | POST | Raw body → typed validate (options overload); additive `nodeKey` in response |
+
+All mutating endpoints (`PUT`, `POST`, `DELETE`) require the `X-WTM-WF-XSRF` antiforgery
+header (token issued by `GET bootstrap`). Raw graph endpoints skip the typed binding pipeline
+(preserving unknown fields and exact number literals) — see [Workflow Designer](/workflow-designer)
+for the fidelity contract and LTGT bypass rationale.
 
 ---
 
@@ -464,6 +488,7 @@ services.AddWtmWorkFlow(opts =>
 
 ## 14. Related Documentation
 
+- [Workflow Designer](/workflow-designer) — low-code visual designer authoring guide, RBAC setup, fidelity contract
 - [Analysis Mode](/analysis-mode) — field whitelist pattern reused by the routing evaluator
 - [Lookup Cache](/lookup-cache) — caching patterns available to approver resolvers
 - [Production Readiness](/production-readiness) — scorecard and security checklist

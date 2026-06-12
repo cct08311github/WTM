@@ -58,26 +58,25 @@ public class ProcessDefinitionListVM : BasePagedListVM<ProcessDefinition, Proces
     {
         return new List<GridAction>
         {
-            // View definition detail (read-only).
+            // Open definition in the visual designer (replaces dead _WfProcessDefinition Details link).
+            // Dead-link fix: _WfProcessDefinition controller does not exist anywhere in the codebase.
+            // Repointed at /_workflow-designer per WF-21.7 / design §0 / CHANGELOG.
             new GridAction
             {
-                Name             = "查看",
-                IconCls          = "layui-icon layui-icon-search",
-                ControllerName   = "_WfProcessDefinition",
-                ActionName       = "Details",
-                ParameterType    = GridActionParameterTypesEnum.SingleId,
+                Name             = "设计器",
+                IconCls          = "layui-icon layui-icon-edit",
                 ShowInRow        = true,
                 HideOnToolBar    = true,
-                ShowDialog       = true,
+                OnClickFunc      = @"function(ids,data){var code=data&&data.Code?data.Code:'';if(code){window.open('/_workflow-designer?code='+encodeURIComponent(code),'_blank');}}",
             },
-            // View published version history.
+            // View version history in designer (replaces dead _WfProcessDefinition Versions link).
             new GridAction
             {
-                Name             = "版本歷程",
+                Name             = "版本历程",
                 IconCls          = "layui-icon layui-icon-list",
                 ShowInRow        = true,
                 HideOnToolBar    = true,
-                OnClickFunc      = @"function(ids,data){var id=ids&&ids.length>0?ids[0]:'';ff.OpenDialog('/_WfProcessDefinition/Versions?definitionId='+id,null,'版本歷程',800,null,undefined,false);}",
+                OnClickFunc      = @"function(ids,data){var code=data&&data.Code?data.Code:'';if(code){window.open('/_workflow-designer?code='+encodeURIComponent(code)+'#versions','_blank');}}",
             },
         };
     }

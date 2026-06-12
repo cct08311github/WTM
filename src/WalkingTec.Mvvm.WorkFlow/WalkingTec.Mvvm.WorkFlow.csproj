@@ -23,4 +23,14 @@
   <ItemGroup>
     <ProjectReference Include="..\WalkingTec.Mvvm.Mvc\WalkingTec.Mvvm.Mvc.csproj" />
   </ItemGroup>
+
+  <!-- WF-21.4: Designer embedded assets.
+       Wildcard include prevents the per-file omission that caused the #238/#297 latent 404.
+       All files under designer\ become embedded resources; resource names follow the
+       EmbeddedFileProvider convention: dots replace directory separators in the manifest name
+       (e.g. designer\designer.html → WalkingTec.Mvvm.WorkFlow.designer.designer.html).
+       T-DSN-16 asserts manifest presence + TestServer 200 for every referenced URL. -->
+  <ItemGroup>
+    <EmbeddedResource Include="designer\**" />
+  </ItemGroup>
 </Project>

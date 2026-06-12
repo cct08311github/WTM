@@ -24,6 +24,8 @@
     <ProjectReference Include="..\..\src\WalkingTec.Mvvm.Mvc\WalkingTec.Mvvm.Mvc.csproj" />
     <ProjectReference Include="..\..\src\WalkingTec.Mvvm.TagHelpers.LayUI\WalkingTec.Mvvm.TagHelpers.LayUI.csproj" />
     <ProjectReference Include="..\..\src\WalkingTec.Mvvm.Etl\WalkingTec.Mvvm.Etl.csproj" />
+    <!-- FIX-B2: enable designer in the e2e demo host so TC-31 / T-DSN-18 actually run. -->
+    <ProjectReference Include="..\..\src\WalkingTec.Mvvm.WorkFlow\WalkingTec.Mvvm.WorkFlow.csproj" />
   </ItemGroup>
 
 

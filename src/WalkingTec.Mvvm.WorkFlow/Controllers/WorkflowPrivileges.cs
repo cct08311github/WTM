@@ -1,5 +1,6 @@
 #nullable enable
 // WF-14: Closed set of workflow FunctionPrivilege URL constants.
+// WF-21.2: Designer URL constants added (DesignerBase, DesignerPage).
 //
 // These match the controller/action URL patterns that the WTM PrivilegeFilter
 // uses to gate access via Wtm.IsAccessable(url).
@@ -45,4 +46,24 @@ public static class WorkflowPrivileges
 
     /// <summary>Reject an approval task.</summary>
     public const string TaskReject        = "/api/_workflow/tasks/{id}/reject";
+
+    // ── WF-21.2: Designer operations ─────────────────────────────────────────
+
+    /// <summary>
+    /// URL prefix for the designer API controller (<c>WorkflowDesignerController</c>).
+    ///
+    /// <para>Register this as a <c>FunctionPrivilege</c> to grant access to all designer
+    /// API actions (list, create, metadata, graph fetch, draft, publish).
+    /// This is deliberately stricter than <c>[AllRights]</c> — design and publish
+    /// operations are privileged and must be explicitly granted to specific roles.</para>
+    /// </summary>
+    public const string DesignerBase      = "/api/_workflow/designer";
+
+    /// <summary>
+    /// URL for the designer page controller (<c>WorkflowDesignerPageController</c>).
+    ///
+    /// <para>Register this as a <c>FunctionPrivilege</c> to allow access to the
+    /// low-code designer HTML page at <c>/_workflow-designer</c>.</para>
+    /// </summary>
+    public const string DesignerPage      = "/_workflow-designer";
 }

@@ -276,4 +276,34 @@ public sealed class WorkFlowOptions
     /// Default: false (eager check at DI registration time).
     /// </summary>
     public bool ValidateDbTypeOnFirstUse { get; set; } = false;
+
+    // ── WF-21.3: Low-code designer sub-options ────────────────────────────────
+
+    /// <summary>
+    /// Sub-options for the low-code workflow designer (WF-21).
+    /// Only relevant when <see cref="ServiceCollectionExtensions.AddWtmWorkFlowDesigner"/> is called.
+    /// </summary>
+    public DesignerOptions Designer { get; set; } = new();
+}
+
+/// <summary>
+/// Options for the low-code workflow designer surface (WF-21.3).
+///
+/// <para>Registered as a nested class under <see cref="WorkFlowOptions"/> so it follows
+/// the same <c>IOptions&lt;WorkFlowOptions&gt;</c> binding chain — no extra Options
+/// registration call is needed.</para>
+/// </summary>
+public sealed class DesignerOptions
+{
+    /// <summary>
+    /// Maximum allowed graph document size in bytes for the raw PUT draft and
+    /// POST publish endpoints.
+    ///
+    /// <para>Bodies larger than this value are rejected with 413 Request Entity Too Large
+    /// before any deserialization occurs.</para>
+    ///
+    /// <para>Default: 1,048,576 bytes (1 MiB).
+    /// Adjust downward in regulated environments where graph documents must remain small.</para>
+    /// </summary>
+    public int MaxGraphBytes { get; set; } = 1_048_576; // 1 MiB
 }

@@ -45,9 +45,10 @@ internal sealed class WfTenantTestDataContext : EmptyContext
     public WfTenantTestDataContext(string cs, DBTypeEnum dbtype)
         : base(cs, dbtype) { }
 
-    // Explicit DbSet<T> for all 9 WorkFlow entities — required for filter wiring.
+    // Explicit DbSet<T> for all 10 WorkFlow entities — required for filter wiring.
     public DbSet<ProcessDefinition>        ProcessDefinitions        { get; set; } = null!;
     public DbSet<ProcessDefinitionVersion> ProcessDefinitionVersions { get; set; } = null!;
+    public DbSet<ProcessDefinitionDraft>   ProcessDefinitionDrafts   { get; set; } = null!;
     public DbSet<ProcessInstance>          ProcessInstances          { get; set; } = null!;
     public DbSet<NodeInstance>             NodeInstances             { get; set; } = null!;
     public DbSet<ApprovalTask>             ApprovalTasks             { get; set; } = null!;
@@ -187,16 +188,16 @@ public class TenantFilterInvariantTests : IDisposable
     /// <summary>
     /// Sanity check: reflection finds exactly the expected count of ITenant entities in the
     /// WorkFlow assembly.  If this number changes, update this assertion and document the reason.
-    /// Current expected: 9 (ProcessDefinition, ProcessDefinitionVersion, ProcessInstance,
-    /// NodeInstance, ApprovalTask, WorkflowEventLog, CcRecord, DelegationRule, WorkflowTimer).
+    /// Current expected: 10 (ProcessDefinition, ProcessDefinitionVersion, ProcessDefinitionDraft,
+    /// ProcessInstance, NodeInstance, ApprovalTask, WorkflowEventLog, CcRecord, DelegationRule, WorkflowTimer).
     /// </summary>
     [TestMethod]
     public void WorkFlowITenantEntityCount_MatchesExpected()
     {
         var entityTypes = WfTenantTestDataContext.GetWorkFlowITenantTypes();
 
-        Assert.AreEqual(9, entityTypes.Count,
-            $"Expected 9 ITenant WorkFlow entities; found {entityTypes.Count}. " +
+        Assert.AreEqual(10, entityTypes.Count,
+            $"Expected 10 ITenant WorkFlow entities; found {entityTypes.Count}. " +
             $"Types: [{string.Join(", ", entityTypes.Select(t => t.Name))}]. " +
             "If a new entity was added, update this assertion and ensure DbSet<T> is declared " +
             "in WfTenantTestDataContext and the tenant filter is applied in its OnModelCreating.");

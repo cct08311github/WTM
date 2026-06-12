@@ -1,5 +1,6 @@
 #nullable enable
 // WF-14: Request and response DTOs for WorkFlow controllers.
+// WF-21.2: Designer catalog DTOs (IWorkflowDefinitionStore results + WorkflowDesignerController).
 //
 // Design rules:
 //   • Actor identity (ITCode, TenantCode) is NEVER in any request DTO.
@@ -28,10 +29,16 @@ public sealed record PublishResponseDto(
     string? Outcome,
     string? Error);
 
-/// <summary>Response body for the validate endpoint.</summary>
+/// <summary>
+/// Response body for the validate endpoint.
+/// WF-21.3: Additive optional <c>NodeKey</c> field on the response DTO (spec §3.1 / T-DSN-7),
+/// lets the UI focus the offending node/form. Null when validation passes or when the error
+/// is not node-specific.
+/// </summary>
 public sealed record ValidateResponseDto(
     bool IsValid,
-    string? Error);
+    string? Error,
+    string? NodeKey = null);
 
 // ── Instance requests ─────────────────────────────────────────────────────────
 
@@ -154,3 +161,198 @@ public sealed record TaskInboxItem(
     string AssigneeITCode,
     DateTime? DueUtc,
     string? Comment);
+
+// ── WF-21.2: Designer catalog DTOs ───────────────────────────────────────────
+
+// ── Closed outcome enums ──────────────────────────────────────────────────────
+
+/// <summary>Closed outcome codes for definition head creation.</summary>
+public enum CreateDefinitionOutcome
+{
+    /// <summary>A new definition head was inserted.</summary>
+    Created,
+
+    /// <summary>A definition with the same code already exists in this tenant.</summary>
+    DuplicateCode,
+}
+
+// ── Store result types ────────────────────────────────────────────────────────
+
+/// <summary>One row in the paged definition list.</summary>
+public sealed record DefinitionListItem(
+    Guid Id,
+    string Code,
+    string Name,
+    string? Category,
+    bool IsEnabled,
+    int CurrentVersionNo,
+    bool HasDraft);
+
+/// <summary>Paged result from <c>IWorkflowDefinitionStore.ListDefinitionsAsync</c>.</summary>
+public sealed record DefinitionListResult(
+    IReadOnlyList<DefinitionListItem> Items,
+    int TotalCount,
+    int Page,
+    int PageSize);
+
+/// <summary>Result from <c>IWorkflowDefinitionStore.CreateDefinitionAsync</c>.</summary>
+/// <param name="Outcome">The specific create outcome.</param>
+/// <param name="Id">The newly created definition's PK; <c>null</c> on non-success.</param>
+/// <param name="Code">The code that was created; <c>null</c> on non-success.</param>
+public sealed record CreateDefinitionResult(
+    CreateDefinitionOutcome Outcome,
+    Guid? Id,
+    string? Code);
+
+/// <summary>
+/// Envelope returned by <c>GET /api/_workflow/designer/definitions/{code}/graph</c>.
+///
+/// <para><c>GraphJson</c> is the verbatim stored string — string escaping is byte-faithful
+/// on <c>JSON.parse</c>; never re-serialized through the typed model.
+/// Null when the definition has no published version yet.</para>
+/// </summary>
+public sealed record DefinitionGraphEnvelope(
+    string? GraphJson,
+    Guid? VersionId,
+    int VersionNo,
+    string? ContentHash,
+    int? SchemaVersion,
+    DateTime? PublishedAt,
+    string? PublishedBy,
+    DraftInfo? Draft);
+
+/// <summary>Stub draft info (always null until WF-21.3 introduces <c>ProcessDefinitionDraft</c>).</summary>
+public sealed record DraftInfo(
+    string? GraphJson,
+    string? RowVer,
+    string? LastSavedBy,
+    DateTime? LastSavedAt,
+    string? BaseContentHash);
+
+/// <summary>One item in the version history list.</summary>
+public sealed record VersionHistoryItem(
+    Guid VersionId,
+    int VersionNo,
+    string ContentHash,
+    int SchemaVersion,
+    DateTime? PublishedAt,
+    string? PublishedBy,
+    bool IsCurrent);
+
+/// <summary>Ordered version history result.</summary>
+public sealed record VersionHistoryResult(
+    IReadOnlyList<VersionHistoryItem> Versions);
+
+/// <summary>Envelope for a single immutable version's GraphJson.</summary>
+public sealed record VersionGraphEnvelope(
+    Guid VersionId,
+    int VersionNo,
+    string GraphJson,
+    string ContentHash,
+    int SchemaVersion,
+    DateTime? PublishedAt,
+    string? PublishedBy);
+
+// ── WF-21.3: Draft CRUD outcome enums and result types ───────────────────────
+
+/// <summary>Closed outcome codes for draft save operations.</summary>
+public enum SaveDraftOutcome
+{
+    /// <summary>The draft was saved (created or updated) successfully.</summary>
+    Saved,
+
+    /// <summary>The definition was not found in the current tenant scope.</summary>
+    DefinitionNotFound,
+
+    /// <summary>
+    /// Concurrency conflict: either the draft already exists (on create)
+    /// or the RowVersion does not match (on update), or the row is gone after publish.
+    /// HTTP mapping: 409 Conflict.
+    /// </summary>
+    Conflict,
+}
+
+/// <summary>Result from <c>IWorkflowDefinitionStore.SaveDraftAsync</c>.</summary>
+/// <param name="Outcome">The specific save outcome.</param>
+/// <param name="NewRowVersion">
+/// The new <c>RowVersion</c> value after a successful save; <c>0</c> on non-success.
+/// Must be echoed back to the client as an ETag so the next PUT can supply a fresh If-Match.
+/// </param>
+public sealed record SaveDraftResult(SaveDraftOutcome Outcome, uint NewRowVersion);
+
+// ── Request DTOs ──────────────────────────────────────────────────────────────
+
+/// <summary>
+/// Request body for <c>POST /api/_workflow/designer/definitions</c> (create head).
+///
+/// <para>Code must match <c>^[A-Za-z0-9_\-\.]{1,64}$</c> (validated by the controller).
+/// Duplicate code within a tenant → 409.</para>
+///
+/// <para>Anti-spoofing: <c>TenantCode</c> and <c>CreatedBy</c> are <c>[BindNever]</c> —
+/// always set server-side from <c>Wtm.LoginUserInfo</c>.</para>
+/// </summary>
+public sealed class CreateDefinitionRequest
+{
+    /// <summary>Unique business code for the workflow definition.</summary>
+    [Required]
+    [StringLength(64)]
+    public string Code { get; set; } = string.Empty;
+
+    /// <summary>Human-readable display name.</summary>
+    [Required]
+    [StringLength(200)]
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>Optional grouping category.</summary>
+    [StringLength(100)]
+    public string? Category { get; set; }
+
+    // ── Server-set fields (NEVER bound from the request body) ─────────────────
+
+    /// <summary>Tenant code — always server-set, never client-supplied.</summary>
+    [BindNever]
+    public string? TenantCode { get; set; }
+
+    /// <summary>Creator ITCode — always server-set, never client-supplied.</summary>
+    [BindNever]
+    public string? CreatedBy { get; set; }
+}
+
+/// <summary>
+/// Request body for <c>PUT /api/_workflow/designer/definitions/{code}</c> (metadata update).
+///
+/// <para>Only Name, Category, and IsEnabled are mutable after creation.
+/// Code and TenantCode are immutable once set.</para>
+/// </summary>
+public sealed class UpdateDefinitionMetadataRequest
+{
+    /// <summary>Updated human-readable display name.</summary>
+    [StringLength(200)]
+    public string? Name { get; set; }
+
+    /// <summary>Updated category (null = clear category).</summary>
+    [StringLength(100)]
+    public string? Category { get; set; }
+
+    /// <summary>Updated enabled state.</summary>
+    public bool? IsEnabled { get; set; }
+}
+
+// ── HTTP response DTOs ────────────────────────────────────────────────────────
+
+/// <summary>Response body for <c>POST /api/_workflow/designer/definitions</c>.</summary>
+public sealed record CreateDefinitionResponseDto(
+    bool Success,
+    Guid? Id,
+    string? Code,
+    string? Error);
+
+/// <summary>
+/// Response body for <c>GET /api/_workflow/designer/definitions</c>.
+/// Wraps the paged result with an outer envelope for the client.
+/// </summary>
+public sealed record DefinitionListResponseDto(
+    IReadOnlyList<DefinitionListItem> Items,
+    int TotalCount,
+    int Page,
+    int PageSize);

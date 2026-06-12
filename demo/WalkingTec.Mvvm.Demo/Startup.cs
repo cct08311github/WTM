@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Mvc;
 using WalkingTec.Mvvm.Mvc.Helper;
 using WalkingTec.Mvvm.Core.Dashboard;
 using WalkingTec.Mvvm.Etl;
+using WalkingTec.Mvvm.WorkFlow; // FIX-B2
 using System.Reflection;
 using System;
 namespace WalkingTec.Mvvm.Demo
@@ -59,6 +60,10 @@ namespace WalkingTec.Mvvm.Demo
 
             services.AddWtmEtl();
 
+            // FIX-B2: enable workflow engine + designer so TC-31 / T-DSN-18 actually run.
+            services.AddWtmWorkFlow();
+            services.AddWtmWorkFlowDesigner();
+
             services.AddWtmContext(ConfigRoot, (options) => {
                 options.DataPrivileges = DataPrivilegeSettings();
                 options.CsSelector = CSSelector;
@@ -86,6 +91,8 @@ namespace WalkingTec.Mvvm.Demo
             app.UseSession();
             app.UseWtmSwagger();
             app.UseWtm();
+            // FIX-B2: serve the embedded designer page at /_workflow-designer.
+            app.UseWtmWorkFlowDesigner();
             app.UseEndpoints(endpoints =>
             {
                 endpoints.MapControllerRoute(

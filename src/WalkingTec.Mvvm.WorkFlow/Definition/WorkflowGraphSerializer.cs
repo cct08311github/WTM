@@ -1,5 +1,6 @@
 #nullable enable
 // WF-4: Canonical / deterministic JSON serializer for WorkflowGraph documents.
+// WF-21.1: Additive Canonicalize(string) seam for the raw-bytes designer path.
 //
 // Determinism contract (repo prompt-cache-stability discipline):
 //   • Object properties are emitted in sorted alphabetical order by JSON property name.
@@ -16,9 +17,17 @@
 // property-enumeration order changes.  Uses a recursive JsonDocument / JsonElement
 // intermediary so we can sort object keys at every depth.
 //
-// This file exposes two public members:
-//   WorkflowGraphSerializer.Serialize(WorkflowGraph)  → canonical JSON string
-//   WorkflowGraphSerializer.Deserialize(string)        → WorkflowGraph
+// This file exposes three public members:
+//   WorkflowGraphSerializer.Serialize(WorkflowGraph)   → canonical JSON string (typed path)
+//   WorkflowGraphSerializer.Deserialize(string)         → WorkflowGraph
+//   WorkflowGraphSerializer.Canonicalize(string json)  → canonical JSON string (raw path, WF-21.1)
+//
+// Fidelity contract for Canonicalize:
+//   • Unknown fields survive: the raw-document walk does not go through the typed model.
+//   • Exact number literals survive: numbers are emitted via WriteRawValue(GetRawText()).
+//   • String escape forms are normalized (WriteStringValue re-encodes) — equal values hash
+//     equally, which is the correct semantic (the typed path already normalizes this way).
+//   • Canonicalize(Serialize(graph)) == Serialize(graph) for any known-field-only document.
 
 using System;
 using System.Buffers;
@@ -100,6 +109,41 @@ public static class WorkflowGraphSerializer
 
         return JsonSerializer.Deserialize<WorkflowGraph>(json, _baseOptions)
                ?? throw new JsonException("Deserialized WorkflowGraph was null.");
+    }
+
+    // ── WF-21.1: Canonicalize seam (raw-bytes designer path) ─────────────────
+
+    /// <summary>
+    /// Canonicalize an arbitrary JSON string: sort object keys at every depth,
+    /// preserve exact number literals and unknown fields, normalize string escape forms.
+    /// This is the fidelity keystone for the raw-bytes designer path (§2.2 spec).
+    ///
+    /// <para><strong>Fidelity contract:</strong>
+    /// <list type="bullet">
+    ///   <item>Unknown fields (not in the typed schema) survive unchanged.</item>
+    ///   <item>Number literals are preserved verbatim (e.g. <c>0.50</c>, <c>1E2</c>,
+    ///         <c>9007199254740993</c>).</item>
+    ///   <item>String escape forms are normalized — equal values hash equally.</item>
+    ///   <item>For documents containing only known fields:
+    ///         <c>Canonicalize(raw) == Serialize(Deserialize(raw))</c>.</item>
+    /// </list>
+    /// </para>
+    /// </summary>
+    /// <param name="rawJson">
+    /// A valid JSON object string.  Must not be null or empty.
+    /// </param>
+    /// <returns>Canonical (key-sorted, compact) JSON string.</returns>
+    /// <exception cref="ArgumentException">When <paramref name="rawJson"/> is null or whitespace.</exception>
+    /// <exception cref="JsonException">When <paramref name="rawJson"/> is not valid JSON.</exception>
+    public static string Canonicalize(string rawJson)
+    {
+        if (string.IsNullOrWhiteSpace(rawJson))
+            throw new ArgumentException("rawJson must not be null or empty.", nameof(rawJson));
+
+        // Parse — validates well-formedness and builds a JsonElement tree that
+        // carries exact number GetRawText() values.
+        using var doc = JsonDocument.Parse(rawJson);
+        return WriteCanonical(doc.RootElement);
     }
 
     // ── Canonical writer ───────────────────────────────────────────────────────
