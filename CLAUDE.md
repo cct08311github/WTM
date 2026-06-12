@@ -8,7 +8,7 @@ All detailed rules live in `.claude/rules/` — this file is the entry point.
 Personal fork of WalkingTec MVVM Framework (WTM), taken over 2026-03.
 Goal: **stable, modernized, actively-evolved** .NET rapid-development framework.
 Current phase: **Feature growth on solid ground** — security audit cleared (10.2.0), Clean Architecture (10.1.0), and 10.4.0/10.5.0 added 20+ opt-in middleware + BI extensions; now iterating on observability, BI, and ETL.
-Active branch: `dotnet10`. Origin: Gitea (`mac-mini.tailde842d.ts.net/chiu0831/WTM.git`) — sole authoritative remote. NuGet publishes go to Gitea's NuGet registry (`/api/packages/chiu0831/nuget`). GitHub is no longer used (mirror removed 2026-05-13, Issue #1).
+Active branch: `dotnet10`. Origin: Gitea (`mac-mini.tailde842d.ts.net/chiu0831/WTM.git`) — sole authoritative remote. NuGet publishes go to Gitea's NuGet registry (`/api/packages/chiu0831/nuget`). The same `dotnet10` branch is also published to a sanitized public GitHub mirror (`github.com/cct08311github/WTM`), synced daily from Gitea since 2026-05-23 via the `.sync/` mechanism (see `.sync/README.md`, the authoritative description), so external users can install via GitHub Packages. The `/sync-dependabot` and `/sync-github-security` slash commands serve that mirror's maintenance — Gitea is always the source of truth and we never merge on GitHub directly.
 
 ## Decision Priorities (in order)
 
@@ -68,6 +68,8 @@ Detail + workaround SOP → `docs/ci-operations.md`. Tracking: Issue #11.
 - `/wtm-manual-update` — Updates `docs/wtm-developer-manual.md` for the version
 - `/wtm-test` — Runs the full .NET + JS test suite with summary
 - `/wtm-nullable-scan` — Identifies files needing nullable annotation
+- `/sync-dependabot` — Validates Dependabot PRs opened on the GitHub mirror and ports them to Gitea (never merged on GitHub directly)
+- `/sync-github-security` — Triages GitHub mirror Security tab alerts (Dependabot CVEs / CodeQL / secrets) and ports fixes to Gitea
 
 ## Key Files
 
