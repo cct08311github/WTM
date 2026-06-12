@@ -22,6 +22,8 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     env:
+      # PEP 668: allow pip into the disposable runner container's system Python when setup-python degrades (issue #292)
+      PIP_BREAK_SYSTEM_PACKAGES: "1"
       WTM_E2E_BASE_URL: http://localhost:52837
       WTM_E2E_HEADLESS: "true"
       WTM_E2E_TIMEOUT: "20000"
