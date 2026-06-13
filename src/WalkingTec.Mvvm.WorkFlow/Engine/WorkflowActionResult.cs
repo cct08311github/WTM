@@ -129,6 +129,14 @@ public sealed record WorkflowActionResult
     /// </summary>
     public static readonly WorkflowActionResult DelegateAlreadyParticipant = new(WorkflowActionCode.DelegateAlreadyParticipant);
 
+    // ── #290 backstop ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The Delegate/AddApprover transaction was a deadlock victim on every retry attempt.
+    /// The operation was NOT committed; the caller should surface a transient-error message.
+    /// </summary>
+    public static readonly WorkflowActionResult DeadlockRetryExhausted = new(WorkflowActionCode.DeadlockRetryExhausted);
+
     // ── Instance ──────────────────────────────────────────────────────────────
 
     /// <summary>The outcome code for this result.</summary>
@@ -289,4 +297,19 @@ public enum WorkflowActionCode
     /// the original holder may still act.
     /// </summary>
     DelegateAlreadyParticipant,
+
+    // ── #290 backstop: deadlock-victim retry ──────────────────────────────────
+
+    /// <summary>
+    /// The Delegate or AddApprover transaction was a deadlock victim on every retry attempt
+    /// (<see cref="WorkFlowOptions.DeadlockRetryAttempts"/>).  The operation was NOT committed.
+    /// The caller should surface a transient-error message and ask the user to retry.
+    ///
+    /// <para>This code is NOT in <see cref="WorkflowActionResult.IsSuccess"/> or
+    /// <see cref="WorkflowActionResult.IsAlreadyHandled"/>.</para>
+    ///
+    /// <para>On SQLite (the unit-test substrate) the deadlock classifier never matches
+    /// (SQLite has no multi-writer deadlock), so this code is never returned in tests.</para>
+    /// </summary>
+    DeadlockRetryExhausted,
 }

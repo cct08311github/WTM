@@ -2423,9 +2423,26 @@ internal sealed class WorkflowEngine : IWorkflowEngine
     /// <summary>
     /// Core Wave-3 return-to-node implementation (STEP 0-6 + STEP-6-FC).
     ///
-    /// <para>All STEP 1-6 writes happen inside one engine-owned transaction.
-    /// This is the linearization point: if BeginReturnAsync (STEP-1) wins the CAS
-    /// the rest of the steps are committed atomically.</para>
+    /// <para><strong>#290 primary fix (Proposal B) — split STEP-1 into its own committed
+    /// transaction.</strong>  The original code held <c>ProcessInstance</c> from STEP-1
+    /// through STEP-6, making the return the sole multi-row transaction that acquired the
+    /// instance FIRST.  Every other multi-row transaction (Delegate, AddApprover, reaper-
+    /// escalate) acquires the instance LAST (via the Seq counter in AllocateSeqAsync).
+    /// That ordering inversion was the root cause of three ABBA deadlock cycles.</para>
+    ///
+    /// <para>Fix: STEP-1 (<c>BeginReturnAsync</c>, the Running→Returning CAS) is committed
+    /// in its own transaction (<c>txA</c>).  After txA commits, the instance write-lock is
+    /// released before touching any timer/task/node rows.  STEP-2..6 run in a fresh
+    /// transaction (<c>txB</c>) whose held-lock order is:
+    /// <c>WorkflowTimer → ApprovalTask → NodeInstance → ProcessInstance(Seq)</c> —
+    /// the wave-5 §0 canonical order, matching Delegate, AddApprover, and reaper-escalate.</para>
+    ///
+    /// <para>Non-atomic boundary: txA-commit leaves State=Returning+lease durable.  A
+    /// failing txB is handled by the widened catch below — it attempts a prompt
+    /// compensating Returning→Running roll-forward via
+    /// <c>ReclaimReturningLeaseByRowVerAsync</c>.  If compensation itself fails, the Wave-5
+    /// lease reaper (<c>ReclaimExpiredLeasesAsync</c>) recovers the stuck instance at lease
+    /// expiry.  No new recovery machinery is introduced.</para>
     ///
     /// <para>Race A (span-discard vs in-flight approve): SupersedeNodeAsync shares the
     /// same RowVer as CompleteNodeInstanceAsync — exactly one wins.</para>
@@ -2487,66 +2504,92 @@ internal sealed class WorkflowEngine : IWorkflowEngine
 
         var spanNodeIds = spanNodes.Select(n => n.ID).ToList();
 
-        // ── Engine-owned transaction: STEP 1 through 6 ────────────────────────
-        await using var tx = await Db.Database.BeginTransactionAsync(ct);
+        // ── #290 primary fix: txA — STEP-1 only (single-row CAS, never an ABBA party) ──
+        // Commit the linearization point (Running→Returning) in its own transaction so the
+        // ProcessInstance write-lock is released BEFORE any timer/task/node rows are touched.
+        // After txA commits, State=Returning + Generation=gNew + lease are all durable.
+        uint gNew;
+        await using (var txA = await Db.Database.BeginTransactionAsync(ct))
+        {
+            try
+            {
+                // ── STEP-1: BeginReturnAsync — linearization point ─────────────────
+                // Atomically: Running → Returning, Generation+1, ReturnLoops+1, stamp lease.
+                // Re-read instance for current RowVer before the CAS.
+                instance = await Db.Set<ProcessInstance>()
+                    .AsNoTracking()
+                    .SingleAsync(p => p.ID == instance.ID, ct);
+
+                if (instance.State != InstanceState.Running)
+                {
+                    await txA.RollbackAsync(CancellationToken.None);
+                    return WorkflowActionResult.WithDetail(WorkflowActionCode.AlreadyHandled,
+                        $"Instance {instance.ID} is in state {instance.State}, not Running. Concurrent actor won.");
+                }
+
+                // Check MaxReturnLoops before the CAS (early-exit; CAS also enforces it atomically).
+                if ((int)instance.ReturnLoops >= maxReturnLoops)
+                {
+                    await txA.RollbackAsync(CancellationToken.None);
+                    _logger.LogWarning(
+                        "ExecuteReturnToNodeAsync: instance {InstanceId} has reached MaxReturnLoops ({Max}). Fail-closed.",
+                        instance.ID, maxReturnLoops);
+                    return WorkflowActionResult.MaxReturnLoopsExceeded;
+                }
+
+                var (beginRows, _) = await GuardedTransition.BeginReturnAsync(
+                    Db, instance.ID,
+                    expectedRowVer: instance.RowVer,
+                    expectedGeneration: instance.Generation,
+                    maxReturnLoops: maxReturnLoops,
+                    leaseExpiry: leaseExpiry,
+                    ct: ct);
+
+                if (beginRows == 0)
+                {
+                    await txA.RollbackAsync(CancellationToken.None);
+                    _logger.LogDebug(
+                        "ExecuteReturnToNodeAsync: BeginReturnAsync CAS returned 0 for instance {InstanceId} — " +
+                        "concurrent actor won or MaxReturnLoops reached.",
+                        instance.ID);
+                    return WorkflowActionResult.AlreadyHandled;
+                }
+
+                // Re-read instance to get the new Generation (gNew = gOld+1 after BeginReturnAsync).
+                instance = await Db.Set<ProcessInstance>()
+                    .AsNoTracking()
+                    .SingleAsync(p => p.ID == instance.ID, ct);
+
+                gNew = instance.Generation;
+
+                // ── txA COMMIT ── State=Returning + gNew + lease are now durable.
+                // ProcessInstance write-lock released here — txB acquires it LAST (canonical order).
+                await txA.CommitAsync(ct);
+            }
+            catch
+            {
+                await txA.RollbackAsync(CancellationToken.None);
+                throw;
+            }
+        }
+
+        // ── txB — STEP-2 through STEP-6 (canonical lock order: Timer → Task → Node → Instance) ──
+        // txB re-acquires ProcessInstance only at STEP-6 + AllocateSeq (instance LAST).
+        // A failed txB leaves the instance in Returning with the lease stamped by txA.
+        // The widened catch below attempts a prompt compensating Returning→Running flip;
+        // if that also fails, the Wave-5 lease reaper recovers it at lease expiry.
+        await using var txB = await Db.Database.BeginTransactionAsync(ct);
         try
         {
-            // ── STEP-1: BeginReturnAsync — linearization point ─────────────────
-            // Atomically: Running → Returning, Generation+1, ReturnLoops+1, stamp lease.
-            // Re-read instance for current RowVer before the CAS.
-            instance = await Db.Set<ProcessInstance>()
-                .AsNoTracking()
-                .SingleAsync(p => p.ID == instance.ID, ct);
-
-            if (instance.State != InstanceState.Running)
-            {
-                await tx.RollbackAsync(CancellationToken.None);
-                return WorkflowActionResult.WithDetail(WorkflowActionCode.AlreadyHandled,
-                    $"Instance {instance.ID} is in state {instance.State}, not Running. Concurrent actor won.");
-            }
-
-            // Check MaxReturnLoops before the CAS (early-exit; CAS also enforces it atomically).
-            if ((int)instance.ReturnLoops >= maxReturnLoops)
-            {
-                await tx.RollbackAsync(CancellationToken.None);
-                _logger.LogWarning(
-                    "ExecuteReturnToNodeAsync: instance {InstanceId} has reached MaxReturnLoops ({Max}). Fail-closed.",
-                    instance.ID, maxReturnLoops);
-                return WorkflowActionResult.MaxReturnLoopsExceeded;
-            }
-
-            var (beginRows, _) = await GuardedTransition.BeginReturnAsync(
-                Db, instance.ID,
-                expectedRowVer: instance.RowVer,
-                expectedGeneration: instance.Generation,
-                maxReturnLoops: maxReturnLoops,
-                leaseExpiry: leaseExpiry,
-                ct: ct);
-
-            if (beginRows == 0)
-            {
-                await tx.RollbackAsync(CancellationToken.None);
-                _logger.LogDebug(
-                    "ExecuteReturnToNodeAsync: BeginReturnAsync CAS returned 0 for instance {InstanceId} — " +
-                    "concurrent actor won or MaxReturnLoops reached.",
-                    instance.ID);
-                return WorkflowActionResult.AlreadyHandled;
-            }
-
-            // Re-read instance to get the new Generation (gNew = gOld+1 after BeginReturnAsync).
-            instance = await Db.Set<ProcessInstance>()
-                .AsNoTracking()
-                .SingleAsync(p => p.ID == instance.ID, ct);
-
-            uint gNew = instance.Generation;
-
             // ── STEP-2: Cancel timers for all span NodeInstances ──────────────
+            // First lock acquired in txB: WorkflowTimer (canonical order position 1).
             if (spanNodeIds.Count > 0)
             {
                 await GuardedTransition.CancelTimersForReturnAsync(Db, spanNodeIds, ct);
             }
 
             // ── STEP-3: Discard tasks on span nodes (current generation) ──────
+            // Second lock order: ApprovalTask (canonical order position 2).
             if (spanNodeIds.Count > 0)
             {
                 // Exclude the trigger task — it is claimed in STEP-3b below.
@@ -2558,7 +2601,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             // FIX-3: AtAction window applies to ALL actions by the delegatee, not just Approve.
             // Under AtAction, route through ClaimDelegatedTaskAsync so that the window check and
             // state flip are atomic.  If the window has expired, we still proceed with the return
-            // (BeginReturnAsync already won the linearization point), but we log the anomaly and
+            // (BeginReturnAsync already won the linearization point in txA), but we log the anomaly and
             // stamp WindowVerifiedUtc only on success.
             var stepNow = DateTime.UtcNow;
             bool isAtActionDelegatedStep3b = _options.DelegationWindowMode == DelegationWindowMode.AtAction
@@ -2577,7 +2620,8 @@ internal sealed class WorkflowEngine : IWorkflowEngine
 
                 // If CAS returned 0, the delegation window check in ClaimDelegatedTaskAsync folded
                 // out the predicate (expired) or a concurrent actor already claimed it.
-                // Either way, BeginReturnAsync already won the instance transition — the return proceeds.
+                // Either way, BeginReturnAsync already won the instance transition (txA committed) —
+                // the return proceeds.
                 if (claimedRows == 0)
                 {
                     var freshTask3b = await Db.Set<ApprovalTask>()
@@ -2625,7 +2669,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                     ct: ct);
 
                 // If another actor already claimed it — we already atomically won the instance
-                // state transition (BeginReturnAsync), so treat this as an idempotent no-op;
+                // state transition (BeginReturnAsync in txA), so treat this as an idempotent no-op;
                 // the return path proceeds.  Log a warning for diagnosis.
                 if (claimedRows == 0)
                 {
@@ -2637,6 +2681,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             }
 
             // ── STEP-4: Supersede span NodeInstances ──────────────────────────
+            // Third lock order: NodeInstance (canonical order position 3).
             foreach (var spanNode in spanNodes)
             {
                 // Re-read fresh RowVer for each span node (other steps may have bumped it).
@@ -2665,7 +2710,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             }
 
             // ── STEP-5: Mint fresh NodeInstance at target node ────────────────
-            // Generation is gNew (stamped at mint time).
+            // Generation is gNew (stamped at mint time, durable since txA committed).
             var targetNodeDef = graph.Nodes.FirstOrDefault(n => n.NodeKey == targetNodeKey)
                 ?? throw new InvalidOperationException(
                        $"Target node '{targetNodeKey}' not found in graph '{graph.Key}'.");
@@ -2704,6 +2749,8 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             }
 
             // ── STEP-6: Set instance Running ─────────────────────────────────
+            // Fourth (last) lock order: ProcessInstance (canonical order position 4).
+            // This is the canonical "instance LAST" acquisition — matching Delegate/AddApprover/reaper.
             instance = await Db.Set<ProcessInstance>()
                 .AsNoTracking()
                 .SingleAsync(p => p.ID == instance.ID, ct);
@@ -2718,23 +2765,49 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             if (runningRows == 0)
             {
                 // ── STEP-6-FC: fail-closed ────────────────────────────────────
-                // We already incremented ReturnLoops and minted the target node.
-                // The only reason STEP-6 can fail is if a concurrent actor (e.g. a
-                // leased-reaper) flipped the state from Returning to something else.
-                // Safest: terminate instance as Withdrawn (prevents zombie state).
+                // We already incremented ReturnLoops (txA) and minted the target node.
+                // The only reason STEP-6 can fail is if the lease reaper (or a concurrent
+                // caller) already changed the instance state from Returning.
+                // Roll back txB and attempt the same compensating Returning→Running flip
+                // we use in the catch block, so the instance is not left stranded in
+                // Returning waiting for lease expiry (#290 FIX-4b).
                 _logger.LogError(
                     "ExecuteReturnToNodeAsync: STEP-6 Returning→Running CAS returned 0 for " +
-                    "instance {InstanceId}. Fail-closed: marking instance as Withdrawn. " +
+                    "instance {InstanceId}. txA already committed (State=Returning). Rolled back txB. " +
                     "This indicates a rare concurrent reaper race — investigate lease config.",
                     instance.ID);
 
-                await tx.RollbackAsync(CancellationToken.None);
+                await txB.RollbackAsync(CancellationToken.None);
+
+                // #290 FIX-4b: proactive Returning→Running flip on the STEP-6-FC path.
+                // Mirrors the compensation in the catch block — prevents the instance from
+                // relying solely on the Wave-5 lease reaper when STEP-6 returns 0 rows
+                // (possible if a concurrent reaper or actor already reclaimed the lease).
+                try
+                {
+                    var freshInstFc = await Db.Set<ProcessInstance>().AsNoTracking()
+                        .SingleAsync(p => p.ID == instance.ID, CancellationToken.None);
+                    if (freshInstFc.State == InstanceState.Returning)
+                    {
+                        await GuardedTransition.ReclaimReturningLeaseByRowVerAsync(
+                            Db, freshInstFc.ID, freshInstFc.RowVer, CancellationToken.None);
+                    }
+                }
+                catch (Exception fcCompEx)
+                {
+                    _logger.LogError(fcCompEx,
+                        "ExecuteReturnToNodeAsync: STEP-6-FC compensating Returning→Running failed " +
+                        "for instance {InstanceId}; deferring to Returning-lease reaper.", instance.ID);
+                }
+
                 return WorkflowActionResult.WithDetail(WorkflowActionCode.AlreadyHandled,
-                    $"Instance {instance.ID} STEP-6 CAS missed. Rolled back. " +
+                    $"Instance {instance.ID} STEP-6 CAS missed (txB rolled back). " +
                     "The return operation may have been superseded by a concurrent caller.");
             }
 
-            // ── Write event log (inside the same transaction) ─────────────────
+            // ── Write event log (inside txB, after STEP-6) ───────────────────
+            // AppendAsync calls AllocateSeqAsync → ExecuteUpdate on ProcessInstance row —
+            // this is the only Seq bump in the entire return operation (txA writes none).
             await WorkflowEventLogWriter.AppendAsync(
                 Db, instance.ID, instance.TenantCode,
                 EventAction.Return,
@@ -2746,7 +2819,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                 generation: (int)gNew,
                 ct: ct);
 
-            await tx.CommitAsync(ct);
+            await txB.CommitAsync(ct);
 
             _logger.LogInformation(
                 "ExecuteReturnToNodeAsync: instance {InstanceId} returned to '{TargetNodeKey}' " +
@@ -2755,7 +2828,31 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         }
         catch
         {
-            await tx.RollbackAsync(CancellationToken.None);
+            await txB.RollbackAsync(CancellationToken.None);
+
+            // txA already durably committed State=Returning + lease.  A failed txB leaves the
+            // instance in Returning with no in-flight engine owner.  Roll it forward to Running
+            // promptly (idempotent), instead of waiting for lease expiry.
+            try
+            {
+                var freshInst = await Db.Set<ProcessInstance>().AsNoTracking()
+                    .SingleAsync(p => p.ID == instance.ID, CancellationToken.None);
+                if (freshInst.State == InstanceState.Returning)
+                {
+                    // ReclaimReturningLeaseByRowVerAsync: portable Returning→Running CAS (no DateTime
+                    // in WHERE). rows==0 is benign — the Wave-5 reaper already reclaimed it.
+                    await GuardedTransition.ReclaimReturningLeaseByRowVerAsync(
+                        Db, freshInst.ID, freshInst.RowVer, CancellationToken.None);
+                }
+            }
+            catch (Exception compEx)
+            {
+                // Compensation is best-effort.  If it fails, the Wave-5 reaper
+                // (ReclaimExpiredLeasesAsync) flips it back to Running at lease expiry.
+                _logger.LogError(compEx,
+                    "ExecuteReturnToNodeAsync: compensating Returning→Running roll-forward failed for " +
+                    "instance {InstanceId}; deferring to Returning-lease reaper.", instance.ID);
+            }
             throw;
         }
 
@@ -3022,148 +3119,155 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         int delta = toInject.Count;
 
         // 6. Engine-owned explicit transaction: guarded UPDATE + k INSERT + event log.
-        await using var tx = await Db.Database.BeginTransactionAsync(ct);
-        try
+        // #290 backstop (C): wrapped in RunWithDeadlockRetryAsync to backstop the residual
+        // Delegate-vs-AddApprover (Node,Task) cycle until WF-290.2 unifies lock order.
+        // On SQLite (unit tests) the classifier never fires — transparent pass-through.
+        var addResult = await RunWithDeadlockRetryAsync(async innerCt =>
         {
-            // Re-read fresh node snapshot inside the transaction for current RowVer + ApproverSetEpoch.
-            nodeInst = await Db.Set<NodeInstance>()
-                .AsNoTracking()
-                .SingleOrDefaultAsync(n => n.ID == nodeInst.ID, ct)
-                ?? nodeInst; // keep stale as fallback (CAS will fail safely below)
+            await using var tx = await Db.Database.BeginTransactionAsync(innerCt);
+            try
+            {
+                // Re-read fresh node snapshot inside the transaction for current RowVer + ApproverSetEpoch.
+                var freshNode = await Db.Set<NodeInstance>()
+                    .AsNoTracking()
+                    .SingleOrDefaultAsync(n => n.ID == nodeInst.ID, innerCt)
+                    ?? nodeInst; // keep stale as fallback (CAS will fail safely below)
 
-            if (nodeInst.State != NodeState.Activated)
+                if (freshNode.State != NodeState.Activated)
+                {
+                    await tx.RollbackAsync(CancellationToken.None);
+                    return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeAlreadyDecided,
+                        $"NodeInstance {freshNode.ID} left Activated state before transaction started.");
+                }
+
+                // 6a. Guarded UPDATE: TotalRequired+=delta, ApproverSetEpoch+=1, RowVer+=1.
+                // Atomically binds the threshold bump to the epoch guard (FIX-A/B, FIX-G).
+                var casRows = await GuardedTransition.AddApproversToNodeAsync(
+                    Db,
+                    freshNode.ID,
+                    expectedRowVer: freshNode.RowVer,
+                    generation: freshNode.Generation,
+                    expectedApproverSetEpoch: freshNode.ApproverSetEpoch,
+                    delta: delta,
+                    ct: innerCt);
+
+                if (casRows == 0)
+                {
+                    await tx.RollbackAsync(CancellationToken.None);
+                    _logger.LogDebug(
+                        "AddApproverAsync: AddApproversToNodeAsync CAS returned 0 for node {NodeId} — " +
+                        "concurrent actor already modified the approver set.",
+                        freshNode.ID);
+                    return WorkflowActionResult.AlreadyHandled;
+                }
+
+                // 6b. Insert k new tasks.
+                // Sequential mode: compute insertion point based on position.
+                // All/Any mode: position ignored; tasks are parallel inboxes.
+                var approveMode = freshNode.ApproveMode ?? ApproveMode.Sequential;
+
+                int insertionOrder;
+                if (approveMode == ApproveMode.Sequential)
+                {
+                    if (position == AddPosition.Before)
+                    {
+                        // Insert before current pointer: shift existing tasks >= pointer up by delta.
+                        int pointer = task.SequenceOrder; // pointer == task's order == current active
+                        await Db.Set<ApprovalTask>()
+                            .Where(t => t.NodeInstanceId == freshNode.ID
+                                         && t.Generation == freshNode.Generation
+                                         && t.SequenceOrder >= pointer
+                                         && (t.State == TaskState.Pending
+                                             || t.State == TaskState.NotYetActive
+                                             || t.State == TaskState.AddedPending))
+                            .ExecuteUpdateAsync(
+                                s => s.SetProperty(t => t.SequenceOrder, t => t.SequenceOrder + delta),
+                                innerCt);
+
+                        insertionOrder = pointer;
+                    }
+                    else // After
+                    {
+                        // Insert after current pointer: shift tasks > pointer up by delta.
+                        int pointer = task.SequenceOrder;
+                        await Db.Set<ApprovalTask>()
+                            .Where(t => t.NodeInstanceId == freshNode.ID
+                                         && t.Generation == freshNode.Generation
+                                         && t.SequenceOrder > pointer
+                                         && (t.State == TaskState.Pending
+                                             || t.State == TaskState.NotYetActive
+                                             || t.State == TaskState.AddedPending))
+                            .ExecuteUpdateAsync(
+                                s => s.SetProperty(t => t.SequenceOrder, t => t.SequenceOrder + delta),
+                                innerCt);
+
+                        insertionOrder = pointer + 1;
+                    }
+                }
+                else
+                {
+                    // All/Any: append in parallel (SequenceOrder for non-Sequential is unused for ordering,
+                    // but we still assign monotonically increasing values for uniqueness).
+                    insertionOrder = freshNode.TotalRequired; // append at end (pre-bump value)
+                }
+
+                var now = DateTime.UtcNow;
+                var newTasks = new List<ApprovalTask>(delta);
+                for (int i = 0; i < delta; i++)
+                {
+                    newTasks.Add(new ApprovalTask
+                    {
+                        ID              = Guid.NewGuid(),
+                        TenantCode      = instance.TenantCode,
+                        NodeInstanceId  = freshNode.ID,
+                        AssigneeITCode  = toInject[i],
+                        State           = TaskState.AddedPending,
+                        SequenceOrder   = insertionOrder + i,
+                        AddDepth        = newDepth,
+                        AddedByITCode   = actorITCode,
+                        IsRuntimeInjected = true,
+                        Generation      = freshNode.Generation,
+                        RowVer          = 0,
+                        IsValid         = true,
+                    });
+                }
+
+                Db.Set<ApprovalTask>().AddRange(newTasks);
+                await Db.SaveChangesAsync(innerCt);
+
+                // 6c. Append event log row.
+                var addedCodes = string.Join(",", toInject);
+                await WorkflowEventLogWriter.AppendAsync(
+                    Db, instance.ID, instance.TenantCode,
+                    EventAction.AddApprover,
+                    nodeKey: freshNode.NodeKey,
+                    actorITCode: actorITCode,
+                    beforeState: freshNode.State.ToString(),
+                    afterState: freshNode.State.ToString(),
+                    reason: reason is not null
+                        ? $"[加签:{position}→{addedCodes}] {reason}"
+                        : $"加签:{position}→{addedCodes}",
+                    ct: innerCt);
+
+                await tx.CommitAsync(innerCt);
+                return WorkflowActionResult.Advanced;
+            }
+            catch
             {
                 await tx.RollbackAsync(CancellationToken.None);
-                return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeAlreadyDecided,
-                    $"NodeInstance {nodeInst.ID} left Activated state before transaction started.");
+                throw;
             }
+        }, ct);
 
-            // 6a. Guarded UPDATE: TotalRequired+=delta, ApproverSetEpoch+=1, RowVer+=1.
-            // Atomically binds the threshold bump to the epoch guard (FIX-A/B, FIX-G).
-            var casRows = await GuardedTransition.AddApproversToNodeAsync(
-                Db,
-                nodeInst.ID,
-                expectedRowVer: nodeInst.RowVer,
-                generation: nodeInst.Generation,
-                expectedApproverSetEpoch: nodeInst.ApproverSetEpoch,
-                delta: delta,
-                ct: ct);
-
-            if (casRows == 0)
-            {
-                await tx.RollbackAsync(CancellationToken.None);
-                _logger.LogDebug(
-                    "AddApproverAsync: AddApproversToNodeAsync CAS returned 0 for node {NodeId} — " +
-                    "concurrent actor already modified the approver set.",
-                    nodeInst.ID);
-                return WorkflowActionResult.AlreadyHandled;
-            }
-
-            // 6b. Insert k new tasks.
-            // Sequential mode: compute insertion point based on position.
-            // All/Any mode: position ignored; tasks are parallel inboxes.
-            var approveMode = nodeInst.ApproveMode ?? ApproveMode.Sequential;
-
-            int insertionOrder;
-            if (approveMode == ApproveMode.Sequential)
-            {
-                // Re-read current TotalRequired before the bump (original value = newTotal - delta).
-                int originalTotal = nodeInst.TotalRequired; // snapshot before CAS updated it
-
-                if (position == AddPosition.Before)
-                {
-                    // Insert before current pointer: shift existing tasks >= pointer up by delta.
-                    int pointer = task.SequenceOrder; // pointer == task's order == current active
-                    await Db.Set<ApprovalTask>()
-                        .Where(t => t.NodeInstanceId == nodeInst.ID
-                                     && t.Generation == nodeInst.Generation
-                                     && t.SequenceOrder >= pointer
-                                     && (t.State == TaskState.Pending
-                                         || t.State == TaskState.NotYetActive
-                                         || t.State == TaskState.AddedPending))
-                        .ExecuteUpdateAsync(
-                            s => s.SetProperty(t => t.SequenceOrder, t => t.SequenceOrder + delta),
-                            ct);
-
-                    insertionOrder = pointer;
-                }
-                else // After
-                {
-                    // Insert after current pointer: shift tasks > pointer up by delta.
-                    int pointer = task.SequenceOrder;
-                    await Db.Set<ApprovalTask>()
-                        .Where(t => t.NodeInstanceId == nodeInst.ID
-                                     && t.Generation == nodeInst.Generation
-                                     && t.SequenceOrder > pointer
-                                     && (t.State == TaskState.Pending
-                                         || t.State == TaskState.NotYetActive
-                                         || t.State == TaskState.AddedPending))
-                        .ExecuteUpdateAsync(
-                            s => s.SetProperty(t => t.SequenceOrder, t => t.SequenceOrder + delta),
-                            ct);
-
-                    insertionOrder = pointer + 1;
-                }
-            }
-            else
-            {
-                // All/Any: append in parallel (SequenceOrder for non-Sequential is unused for ordering,
-                // but we still assign monotonically increasing values for uniqueness).
-                insertionOrder = nodeInst.TotalRequired; // append at end (pre-bump value)
-            }
-
-            var now = DateTime.UtcNow;
-            var newTasks = new List<ApprovalTask>(delta);
-            for (int i = 0; i < delta; i++)
-            {
-                newTasks.Add(new ApprovalTask
-                {
-                    ID              = Guid.NewGuid(),
-                    TenantCode      = instance.TenantCode,
-                    NodeInstanceId  = nodeInst.ID,
-                    AssigneeITCode  = toInject[i],
-                    State           = TaskState.AddedPending,
-                    SequenceOrder   = insertionOrder + i,
-                    AddDepth        = newDepth,
-                    AddedByITCode   = actorITCode,
-                    IsRuntimeInjected = true,
-                    Generation      = nodeInst.Generation,
-                    RowVer          = 0,
-                    IsValid         = true,
-                });
-            }
-
-            Db.Set<ApprovalTask>().AddRange(newTasks);
-            await Db.SaveChangesAsync(ct);
-
-            // 6c. Append event log row.
-            var addedCodes = string.Join(",", toInject);
-            await WorkflowEventLogWriter.AppendAsync(
-                Db, instance.ID, instance.TenantCode,
-                EventAction.AddApprover,
-                nodeKey: nodeInst.NodeKey,
-                actorITCode: actorITCode,
-                beforeState: nodeInst.State.ToString(),
-                afterState: nodeInst.State.ToString(),
-                reason: reason is not null
-                    ? $"[加签:{position}→{addedCodes}] {reason}"
-                    : $"加签:{position}→{addedCodes}",
-                ct: ct);
-
-            await tx.CommitAsync(ct);
-        }
-        catch
+        if (addResult.Code == WorkflowActionCode.Advanced)
         {
-            await tx.RollbackAsync(CancellationToken.None);
-            throw;
+            _logger.LogInformation(
+                "AddApproverAsync: injected {Count} task(s) ({ITCodes}) onto node '{NodeKey}' " +
+                "(id={NodeId}, position={Position}, depth={Depth}).",
+                delta, string.Join(",", toInject), nodeInst.NodeKey, nodeInst.ID, position, newDepth);
         }
 
-        _logger.LogInformation(
-            "AddApproverAsync: injected {Count} task(s) ({ITCodes}) onto node '{NodeKey}' " +
-            "(id={NodeId}, position={Position}, depth={Depth}).",
-            delta, string.Join(",", toInject), nodeInst.NodeKey, nodeInst.ID, position, newDepth);
-
-        return WorkflowActionResult.Advanced;
+        return addResult;
     }
 
     // ── WF-19: DelegateTaskAsync (mid-flight 转办/委托-now) ──────────────────
@@ -3257,150 +3361,158 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         }
 
         // 5. Engine-owned explicit transaction: guarded ReassignTaskAssigneeAsync + epoch bump + event log.
-        await using var tx = await Db.Database.BeginTransactionAsync(ct);
-        try
+        // #290 backstop (C): wrapped in RunWithDeadlockRetryAsync to backstop the residual
+        // Delegate-vs-AddApprover (Node,Task) cycle until WF-290.2 unifies lock order.
+        // On SQLite (unit tests) the classifier never fires — transparent pass-through.
+        // Capture locals for the lambda (task/nodeInst are already captured by ref in the lambda).
+        var delegateResult = await RunWithDeadlockRetryAsync(async innerCt =>
         {
-            // Re-read fresh task snapshot inside the transaction to get current RowVer.
-            task = await Db.Set<ApprovalTask>()
-                .AsNoTracking()
-                .SingleOrDefaultAsync(t => t.ID == taskId && t.IsValid == true, ct)
-                ?? task; // keep stale as CAS-will-fail-safely fallback
-
-            if (task.State != TaskState.Pending)
+            await using var tx = await Db.Database.BeginTransactionAsync(innerCt);
+            try
             {
-                await tx.RollbackAsync(CancellationToken.None);
-                return WorkflowActionResult.WithDetail(WorkflowActionCode.TaskNotActive,
-                    $"Task {taskId} is no longer Pending inside transaction.");
+                // Re-read fresh task snapshot inside the transaction to get current RowVer.
+                var freshTask = await Db.Set<ApprovalTask>()
+                    .AsNoTracking()
+                    .SingleOrDefaultAsync(t => t.ID == taskId && t.IsValid == true, innerCt)
+                    ?? task; // keep stale as CAS-will-fail-safely fallback
+
+                if (freshTask.State != TaskState.Pending)
+                {
+                    await tx.RollbackAsync(CancellationToken.None);
+                    return WorkflowActionResult.WithDetail(WorkflowActionCode.TaskNotActive,
+                        $"Task {taskId} is no longer Pending inside transaction.");
+                }
+
+                // FIX-1b: re-verify assignee inside the transaction.
+                // After the initial RBAC check, a concurrent actor may have reassigned this slot
+                // (bumping RowVer).  The ReassignTaskAssigneeAsync CAS now also guards on
+                // AssigneeITCode==actorITCode (FIX-1 in GuardedTransition), but returning
+                // NotAuthorized here gives a clearer diagnostic than a silent rows==0 → AlreadyHandled.
+                if (!string.Equals(freshTask.AssigneeITCode, actorITCode, StringComparison.OrdinalIgnoreCase))
+                {
+                    await tx.RollbackAsync(CancellationToken.None);
+                    _logger.LogWarning(
+                        "DelegateTaskAsync: task {TaskId} assignee changed to '{NewAssignee}' inside " +
+                        "transaction (was '{Actor}'). Concurrent reassign won; returning NotAuthorized.",
+                        taskId, freshTask.AssigneeITCode, actorITCode);
+                    return WorkflowActionResult.WithDetail(WorkflowActionCode.NotAuthorized,
+                        $"Task {taskId} was reassigned to '{freshTask.AssigneeITCode}' by a concurrent actor; " +
+                        $"'{actorITCode}' is no longer the assignee.");
+                }
+
+                // Re-read node inside transaction for current RowVer + ApproverSetEpoch.
+                var freshNode = await Db.Set<NodeInstance>()
+                    .AsNoTracking()
+                    .SingleOrDefaultAsync(n => n.ID == nodeInst.ID, innerCt)
+                    ?? nodeInst;
+
+                if (freshNode.State != NodeState.Activated)
+                {
+                    await tx.RollbackAsync(CancellationToken.None);
+                    return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeAlreadyDecided,
+                        $"NodeInstance {freshNode.ID} left Activated state before transaction.");
+                }
+
+                // 5a. Single-statement CAS: reassign slot (FIX-C — TotalRequired NOT touched).
+                // FIX-6: pass freshNode.Generation (the in-tx node snapshot), NOT task.Generation.
+                // freshNode.Generation is the generation on the node; if a concurrent 回退 bumped
+                // the instance generation between our pre-tx check and this CAS,
+                // freshNode.Generation > task.Generation and the predicate correctly rejects.
+                var casRows = await GuardedTransition.ReassignTaskAssigneeAsync(
+                    Db,
+                    taskId: taskId,
+                    expectedRowVer: freshTask.RowVer,
+                    generation: freshNode.Generation,
+                    delegateeITCode: delegateeITCode,
+                    principalITCode: actorITCode,
+                    delegationRuleId: delegationRuleId,
+                    delegationExpiresUtc: null, // explicit 转办-now; no window expiry
+                    ct: innerCt);
+
+                if (casRows == 0)
+                {
+                    await tx.RollbackAsync(CancellationToken.None);
+                    _logger.LogDebug(
+                        "DelegateTaskAsync: ReassignTaskAssigneeAsync CAS returned 0 for task {TaskId} — " +
+                        "concurrent actor already acted on this task.",
+                        taskId);
+                    return WorkflowActionResult.AlreadyHandled;
+                }
+
+                // FIX-2 note: the unique index IX_Wf_ApprovalTask_Node_Assignee_Gen is non-filtered.
+                // The pre-check above now covers voted (Approved/Rejected) delegatees, so the CAS
+                // reaching here should never collide with a voted row.  However, between the pre-check
+                // and the CAS a second concurrent delegate call could race to the same delegatee.
+                // The catch block below handles the DbUpdateException from that narrow window.
+
+                // 5b. Bump node ApproverSetEpoch so in-flight completion CAS re-evaluates eligible actors.
+                // Re-read node RowVer after the task CAS to avoid stale-RowVer rejection here.
+                var nodeInstFresh = await Db.Set<NodeInstance>()
+                    .AsNoTracking()
+                    .SingleOrDefaultAsync(n => n.ID == freshNode.ID, innerCt);
+
+                if (nodeInstFresh is not null)
+                {
+                    await GuardedTransition.AdvanceNodeApproverSetEpochAsync(
+                        Db,
+                        freshNode.ID,
+                        expectedRowVer: nodeInstFresh.RowVer,
+                        ct: innerCt);
+                    // Epoch bump uses its own guard — rows==0 is benign (completion CAS already committed).
+                }
+
+                // 5c. Append event log row (inside the transaction; AppendAsync participates in ambient tx).
+                var delegateDetail = reason is not null
+                    ? $"[委托→{delegateeITCode}] {reason}"
+                    : $"委托→{delegateeITCode}";
+
+                await WorkflowEventLogWriter.AppendAsync(
+                    Db, instance.ID, instance.TenantCode,
+                    EventAction.Delegate,
+                    nodeKey: freshNode.NodeKey,
+                    actorITCode: actorITCode,
+                    beforeState: freshNode.State.ToString(),
+                    afterState: freshNode.State.ToString(),
+                    reason: delegateDetail,
+                    generation: (int)freshNode.Generation,
+                    ct: innerCt);
+
+                await tx.CommitAsync(innerCt);
+                return WorkflowActionResult.Advanced;
             }
-
-            // FIX-1b: re-verify assignee inside the transaction.
-            // After the initial RBAC check, a concurrent actor may have reassigned this slot
-            // (bumping RowVer).  The ReassignTaskAssigneeAsync CAS now also guards on
-            // AssigneeITCode==actorITCode (FIX-1 in GuardedTransition), but returning
-            // NotAuthorized here gives a clearer diagnostic than a silent rows==0 → AlreadyHandled.
-            if (!string.Equals(task.AssigneeITCode, actorITCode, StringComparison.OrdinalIgnoreCase))
+            catch (Microsoft.EntityFrameworkCore.DbUpdateException dbEx)
+                when (!WorkflowDeadlockClassifier.IsDeadlockVictim(dbEx))
             {
+                // FIX-2: race-safe backstop for UNIQUE-index collision (not a deadlock).
+                // A second concurrent DelegateTaskAsync call between our pre-check and the CAS could
+                // attempt to assign the same delegatee on the same (NodeInstanceId, Generation) pair,
+                // colliding with the UNIQUE index IX_Wf_ApprovalTask_Node_Assignee_Gen.
+                // Roll back and surface DelegateAlreadyParticipant instead of a raw HTTP 500.
+                // Deadlock DbUpdateException is let through to the retry envelope above.
                 await tx.RollbackAsync(CancellationToken.None);
                 _logger.LogWarning(
-                    "DelegateTaskAsync: task {TaskId} assignee changed to '{NewAssignee}' inside " +
-                    "transaction (was '{Actor}'). Concurrent reassign won; returning NotAuthorized.",
-                    taskId, task.AssigneeITCode, actorITCode);
-                return WorkflowActionResult.WithDetail(WorkflowActionCode.NotAuthorized,
-                    $"Task {taskId} was reassigned to '{task.AssigneeITCode}' by a concurrent actor; " +
-                    $"'{actorITCode}' is no longer the assignee.");
+                    "DelegateTaskAsync: unique-index collision on task {TaskId} → delegatee '{Delegatee}' " +
+                    "already has a row on (NodeInstanceId={NodeId}, Generation={Gen}). " +
+                    "Concurrent delegate call won; returning DelegateAlreadyParticipant.",
+                    taskId, delegateeITCode, task.NodeInstanceId, task.Generation);
+                return WorkflowActionResult.DelegateAlreadyParticipant;
             }
-
-            // Re-read node inside transaction for current RowVer + ApproverSetEpoch.
-            nodeInst = await Db.Set<NodeInstance>()
-                .AsNoTracking()
-                .SingleOrDefaultAsync(n => n.ID == nodeInst.ID, ct)
-                ?? nodeInst;
-
-            if (nodeInst.State != NodeState.Activated)
+            catch
             {
                 await tx.RollbackAsync(CancellationToken.None);
-                return WorkflowActionResult.WithDetail(WorkflowActionCode.NodeAlreadyDecided,
-                    $"NodeInstance {nodeInst.ID} left Activated state before transaction.");
+                throw;
             }
+        }, ct);
 
-            // 5a. Single-statement CAS: reassign slot (FIX-C — TotalRequired NOT touched).
-            // FIX-6: pass nodeInst.Generation (the in-tx node snapshot), NOT task.Generation.
-            // task.Generation is the freshly re-read task row's value — comparing the row to
-            // itself is a tautology that can never reject.  nodeInst.Generation is the
-            // generation on the node; if a concurrent 回退 bumped the instance generation
-            // between our pre-tx check and this CAS, nodeInst.Generation > task.Generation
-            // and the predicate correctly rejects (rows==0 → AlreadyHandled).
-            // Note: DiscardTasksForReturnAsync sets task.State = Cancelled (not Generation) as
-            // the fence against stale-span tasks; State==Pending is the primary real fence —
-            // the generation guard is a belt-and-suspenders epoch check here.
-            var casRows = await GuardedTransition.ReassignTaskAssigneeAsync(
-                Db,
-                taskId: taskId,
-                expectedRowVer: task.RowVer,
-                generation: nodeInst.Generation,
-                delegateeITCode: delegateeITCode,
-                principalITCode: actorITCode,
-                delegationRuleId: delegationRuleId,
-                delegationExpiresUtc: null, // explicit 转办-now; no window expiry
-                ct: ct);
-
-            if (casRows == 0)
-            {
-                await tx.RollbackAsync(CancellationToken.None);
-                _logger.LogDebug(
-                    "DelegateTaskAsync: ReassignTaskAssigneeAsync CAS returned 0 for task {TaskId} — " +
-                    "concurrent actor already acted on this task.",
-                    taskId);
-                return WorkflowActionResult.AlreadyHandled;
-            }
-
-            // FIX-2 note: the unique index IX_Wf_ApprovalTask_Node_Assignee_Gen is non-filtered.
-            // The pre-check above now covers voted (Approved/Rejected) delegatees, so the CAS
-            // reaching here should never collide with a voted row.  However, between the pre-check
-            // and the CAS a second concurrent delegate call could race to the same delegatee.
-            // The catch block below handles the DbUpdateException from that narrow window.
-
-            // 5b. Bump node ApproverSetEpoch so in-flight completion CAS re-evaluates eligible actors.
-            // Re-read node RowVer after the task CAS to avoid stale-RowVer rejection here.
-            var nodeInstFresh = await Db.Set<NodeInstance>()
-                .AsNoTracking()
-                .SingleOrDefaultAsync(n => n.ID == nodeInst.ID, ct);
-
-            if (nodeInstFresh is not null)
-            {
-                await GuardedTransition.AdvanceNodeApproverSetEpochAsync(
-                    Db,
-                    nodeInst.ID,
-                    expectedRowVer: nodeInstFresh.RowVer,
-                    ct: ct);
-                // Epoch bump uses its own guard — rows==0 is benign (completion CAS already committed).
-            }
-
-            // 5c. Append event log row (inside the transaction; AppendAsync participates in ambient tx).
-            var delegateDetail = reason is not null
-                ? $"[委托→{delegateeITCode}] {reason}"
-                : $"委托→{delegateeITCode}";
-
-            await WorkflowEventLogWriter.AppendAsync(
-                Db, instance.ID, instance.TenantCode,
-                EventAction.Delegate,
-                nodeKey: nodeInst.NodeKey,
-                actorITCode: actorITCode,
-                beforeState: nodeInst.State.ToString(),
-                afterState: nodeInst.State.ToString(),
-                reason: delegateDetail,
-                generation: (int)nodeInst.Generation,
-                ct: ct);
-
-            await tx.CommitAsync(ct);
-        }
-        catch (Microsoft.EntityFrameworkCore.DbUpdateException)
+        if (delegateResult.Code == WorkflowActionCode.Advanced)
         {
-            // FIX-2: race-safe backstop.
-            // A second concurrent DelegateTaskAsync call between our pre-check and the CAS could
-            // attempt to assign the same delegatee on the same (NodeInstanceId, Generation) pair,
-            // colliding with the UNIQUE index IX_Wf_ApprovalTask_Node_Assignee_Gen.
-            // Roll back and surface DelegateAlreadyParticipant instead of a raw HTTP 500.
-            await tx.RollbackAsync(CancellationToken.None);
-            _logger.LogWarning(
-                "DelegateTaskAsync: unique-index collision on task {TaskId} → delegatee '{Delegatee}' " +
-                "already has a row on (NodeInstanceId={NodeId}, Generation={Gen}). " +
-                "Concurrent delegate call won; returning DelegateAlreadyParticipant.",
-                taskId, delegateeITCode, task.NodeInstanceId, task.Generation);
-            return WorkflowActionResult.DelegateAlreadyParticipant;
-        }
-        catch
-        {
-            await tx.RollbackAsync(CancellationToken.None);
-            throw;
+            _logger.LogInformation(
+                "DelegateTaskAsync: task {TaskId} reassigned from '{Principal}' to '{Delegatee}' " +
+                "on node '{NodeKey}' (id={NodeId}).",
+                taskId, actorITCode, delegateeITCode, nodeInst.NodeKey, nodeInst.ID);
         }
 
-        _logger.LogInformation(
-            "DelegateTaskAsync: task {TaskId} reassigned from '{Principal}' to '{Delegatee}' " +
-            "on node '{NodeKey}' (id={NodeId}).",
-            taskId, actorITCode, delegateeITCode, nodeInst.NodeKey, nodeInst.ID);
-
-        return WorkflowActionResult.Advanced;
+        return delegateResult;
     }
 
     // ── WF-19 #284.5: RevokeDelegationAsync (admin revocation sweep) ─────────
@@ -3749,6 +3861,86 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         var graph = WorkflowGraphSerializer.Deserialize(version.GraphJson);
         return graph.Nodes.FirstOrDefault(n =>
             string.Equals(n.NodeKey, nodeKey, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// #290 backstop (C): run <paramref name="body"/> inside a bounded jittered-backoff retry
+    /// envelope scoped ONLY to <see cref="DelegateTaskAsync"/> and <see cref="AddApproverAsync"/>.
+    ///
+    /// <para>When <paramref name="body"/> throws an exception that
+    /// <see cref="WorkflowDeadlockClassifier.IsDeadlockVictim"/> classifies as a provider
+    /// deadlock victim, the whole body (which is a complete <c>BeginTransaction..Commit</c>
+    /// unit) is retried up to <see cref="WorkFlowOptions.DeadlockRetryAttempts"/> times with
+    /// jittered exponential backoff.  Because the body is an entire atomic transaction, a
+    /// victim-abort guarantees rollback; NextSeq/Generation/lease are all undone before replay,
+    /// making each retry provably idempotent.</para>
+    ///
+    /// <para>On SQLite (the unit-test substrate) the classifier never fires — SQLite has no
+    /// multi-writer deadlock — so this method is a transparent single-pass pass-through in tests.
+    /// All existing T-DEL-* / T-ADD-* / T-MIX-* suites remain byte-identical.</para>
+    ///
+    /// <para>NOT applied to the return transaction (fixed structurally by the STEP-1 split) and
+    /// NOT applied to the reaper (it already self-heals via Armed re-fire).</para>
+    /// </summary>
+    // internal (not private) so that WorkFlow.Test can drive it directly
+    // via InternalsVisibleTo without reflection.  This is a test seam only —
+    // production callers always go through DelegateTaskAsync/AddApproverAsync.
+    internal async Task<WorkflowActionResult> RunWithDeadlockRetryAsync(
+        Func<CancellationToken, Task<WorkflowActionResult>> body,
+        CancellationToken ct)
+    {
+        int maxAttempts = Math.Max(1, _options.DeadlockRetryAttempts);
+        var baseDelay = _options.DeadlockRetryBaseDelay;
+
+        for (int attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            // #290 FIX-1: Clear the EF change-tracker before each attempt.
+            // EF moves Added→Unchanged only on a SUCCESSFUL SaveChanges.  When a deadlock
+            // victim throws DURING SaveChanges, the prior attempt's Added entities (k new
+            // ApprovalTask rows + WorkflowEventLog row) stay in Added state.  Without this
+            // Clear(), the retry body creates fresh entities AND re-inserts the stale Added
+            // ones → duplicate rows, colliding on IX_Wf_ApprovalTask_Node_Assignee_Gen,
+            // double TotalRequired bump, corrupted 会签/串签 quorum.
+            // DB-side rollback does NOT revert in-memory Added entities — this Clear() is
+            // the only mechanism that makes retry-idempotency hold end-to-end.
+            // The body re-reads/re-builds everything each attempt (AsNoTracking reads inside
+            // the txn body), so clearing here discards only stale tracked state.
+            Db.ChangeTracker.Clear();
+            try
+            {
+                return await body(ct);
+            }
+            catch (Exception ex) when (WorkflowDeadlockClassifier.IsDeadlockVictim(ex)
+                                        && attempt < maxAttempts)
+            {
+                // Deadlock victim on a known provider — back off and retry the whole txn body.
+                // The exception guarantees the txn was rolled back; replay is idempotent.
+                var delay = TimeSpan.FromMilliseconds(
+                    baseDelay.TotalMilliseconds * attempt
+                    + Random.Shared.NextDouble() * baseDelay.TotalMilliseconds);
+
+                _logger.LogWarning(
+                    "RunWithDeadlockRetryAsync: deadlock victim on attempt {Attempt}/{Max}. " +
+                    "Retrying after {DelayMs:F0} ms. Exception: {ExMessage}",
+                    attempt, maxAttempts, delay.TotalMilliseconds, ex.Message);
+
+                await Task.Delay(delay, ct);
+            }
+            catch (Exception ex) when (WorkflowDeadlockClassifier.IsDeadlockVictim(ex)
+                                        && attempt >= maxAttempts)
+            {
+                // Exhausted all retry attempts — return a closed result code instead of
+                // propagating the raw provider exception.
+                _logger.LogError(ex,
+                    "RunWithDeadlockRetryAsync: deadlock retry exhausted after {Max} attempts. " +
+                    "Returning DeadlockRetryExhausted.",
+                    maxAttempts);
+                return WorkflowActionResult.DeadlockRetryExhausted;
+            }
+        }
+
+        // Unreachable — the loop always returns or throws.
+        throw new InvalidOperationException("RunWithDeadlockRetryAsync: unexpected fall-through.");
     }
 
     /// <summary>

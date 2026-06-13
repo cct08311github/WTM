@@ -49,3 +49,6 @@ docs/workflow-wave5-design.md
 # Wave-6 adversarially-verified design addendum (低代码 designer; includes race analysis,
 # skeptic-found breaks, and injection constructions — not for public mirror).
 docs/workflow-wave6-design.md
+# #290 ABBA deadlock fix design (return-txn lock-order; includes deadlock-cycle
+# constructions and skeptic-found breaks — maintainer doc, not for public mirror).
+docs/workflow-abba-fix-design.md

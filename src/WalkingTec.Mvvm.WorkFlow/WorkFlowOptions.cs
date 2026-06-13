@@ -277,6 +277,31 @@ public sealed class WorkFlowOptions
     /// </summary>
     public bool ValidateDbTypeOnFirstUse { get; set; } = false;
 
+    // ── #290 backstop: deadlock-victim retry (Delegate/AddApprover only) ─────
+
+    /// <summary>
+    /// Maximum number of times <see cref="IWorkflowEngine.DelegateTaskAsync"/> or
+    /// <see cref="IWorkflowEngine.AddApproverAsync"/> will retry after being chosen
+    /// as a deadlock victim on a server DB provider.
+    ///
+    /// <para>Default: 3.  On SQLite (unit tests) the deadlock classifier never fires,
+    /// so this option has zero observable effect in tests.</para>
+    ///
+    /// <para>The return-to-node transaction is NOT retried — it is fixed structurally
+    /// by the STEP-1 split (#290 primary fix).  This retry is a defence-in-depth backstop
+    /// for the residual Delegate-vs-AddApprover <c>(Node, Task)</c> cycle until WF-290.2
+    /// unifies their lock order.</para>
+    /// </summary>
+    public int DeadlockRetryAttempts { get; set; } = 3;
+
+    /// <summary>
+    /// Base delay for the jittered-backoff deadlock retry in <see cref="DelegateTaskAsync"/>
+    /// and <see cref="AddApproverAsync"/>.  Actual delay = <c>BaseDelay * attempt ± jitter</c>.
+    ///
+    /// Default: 20 ms.
+    /// </summary>
+    public TimeSpan DeadlockRetryBaseDelay { get; set; } = TimeSpan.FromMilliseconds(20);
+
     // ── WF-21.3: Low-code designer sub-options ────────────────────────────────
 
     /// <summary>
