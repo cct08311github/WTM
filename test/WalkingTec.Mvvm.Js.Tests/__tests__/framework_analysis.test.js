@@ -329,6 +329,27 @@ describe('wtmAnalysis.checkDependencies', () => {
         wa.checkDependencies(panel);
         expect(panel.appendChild).toHaveBeenCalled();
     });
+
+    // #298 — no CDN URLs emitted; local /_js/ paths used instead
+    test('#298 framework_analysis.js source contains no cdn.jsdelivr.net references', () => {
+        const source = fs.readFileSync(
+            path.resolve(__dirname, '../../../src/WalkingTec.Mvvm.Mvc/framework_analysis.js'),
+            'utf8'
+        );
+        expect(source).not.toContain('cdn.jsdelivr.net');
+    });
+
+    test('#298 checkDependencies emits local /_js/ paths, not CDN URLs', () => {
+        const { wa } = makeEnv(); // no echarts, no Sortable
+        const panel = makeDepPanel();
+        wa.checkDependencies(panel);
+        const warn = panel.getWarning();
+        // Collect all textContent from warning children (the hint snippets are plain text)
+        const texts = warn.children.map(c => c.textContent || '').join(' ');
+        expect(texts).not.toContain('cdn.jsdelivr.net');
+        expect(texts).toContain('/_js/echarts.common.min.js');
+        expect(texts).toContain('/_js/lib/sortablejs/sortable.min.js');
+    });
 });
 
 // 產生假的已勾選 checkbox mock（供 query/exportData 使用）

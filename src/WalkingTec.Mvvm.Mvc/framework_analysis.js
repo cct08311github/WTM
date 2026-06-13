@@ -355,11 +355,11 @@
         var missing = [];
         if (typeof window.echarts === 'undefined') {
             missing.push(_i18n('dep.echarts') +
-                '<script src="https://cdn.jsdelivr.net/npm/echarts@5"></script>');
+                '<script src="/_js/echarts.common.min.js"></script>');
         }
         if (!Sortable) {
             missing.push(_i18n('dep.sortable') +
-                '<script src="https://cdn.jsdelivr.net/npm/sortablejs@1"></script>');
+                '<script src="/_js/lib/sortablejs/sortable.min.js"></script>');
         }
         if (missing.length === 0) return;
 

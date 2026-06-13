@@ -37,6 +37,7 @@
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
     <EmbeddedResource Include="dompurify.js" />
+    <EmbeddedResource Include="echarts.common.min.js" />
     <EmbeddedResource Include="framework_layui.js" />
     <EmbeddedResource Include="framework_analysis.js" />
     <EmbeddedResource Include="framework_analysis.css" />
