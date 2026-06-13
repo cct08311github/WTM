@@ -1,5 +1,15 @@
 # 更新日志
 
+## [10.12.1] - 2026-06-13
+
+Patch release — correctness and quality fixes to the `WalkingTec.Mvvm.WorkFlow` engine. No new opt-in surface, no schema change, and no behavior change for hosts that do not call the affected code paths.
+
+### Fixed
+
+- **#290 — resolve ABBA deadlock between 回退 (return-to-node) and 委托/加签 (delegate/add-approver) on server DB providers** (PR #311): `ExecuteReturnToNodeAsync` now acquires `ProcessInstance` last, matching the canonical lock order (`WorkflowTimer → ApprovalTask → NodeInstance → ProcessInstance(Seq)`). The fix commits the `Running→Returning` linearization point (STEP-1) in its own transaction (txA) before touching timer/task/node rows (txB), closing the Delegate-vs-Return, AddApprover-vs-Return, and reaper-escalate-vs-Return cycles. A compensating roll-forward in the txB catch block makes crash recovery prompt instead of lease-expiry-delayed. Additive opt-in deadlock-victim retry envelope (`WorkFlowOptions.DeadlockRetryAttempts`, default 3; `WorkFlowOptions.DeadlockRetryBaseDelay`, default 20 ms) backstops the residual delegate-vs-add-approver cycle (tracked as WF-290.2) until lock-order unification lands. `Db.ChangeTracker.Clear()` is called between retry attempts to prevent stale EF tracked-entity duplication. No behavior change on SQLite; no isolation-level dependency; Returning-lease crash recovery unchanged. Note: full deadlock-free proof on server providers (SqlServer/PgSql/MySql/Oracle/DaMeng) is deferred to #270 (live-provider conformance, hardware pending); the retry backstop makes any real deadlock harmless via idempotent retry.
+- **#299 — `WorkflowGraphValidator` rejects unsupported `schemaVersion` on new publishes** (PR #309): graphs with `schemaVersion < 1` or `> CurrentSchemaVersion` are now rejected at publish time with `GraphValidationError.SchemaVersionUnsupported`. The `CurrentSchemaVersion` constant is introduced for use by designer and validator alike. Existing published versions and in-flight instances are unaffected.
+- **#307 — widen concurrency loser-outcome assertions to accept `NodeClosed`** (PR #308): test-only CI stability fix; production behavior unchanged.
+
 ## [10.12.0] - 2026-06-13
 
 WorkFlow Wave 6 — **低代码设计器 (WF-21)** for the `WalkingTec.Mvvm.WorkFlow` approval engine, plus security hardening (#296) and an embedded-resource fix (#297). All new authoring surface is fully opt-in — hosts that do not call `AddWtmWorkFlowDesigner()` / `UseWtmWorkFlowDesigner()` are byte-identical to 10.11.0. The security fixes (#296, #297) ship unconditionally and harden already-published graphs as well as new ones.

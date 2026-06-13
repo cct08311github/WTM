@@ -1,8 +1,10 @@
 # WTM 開發與使用手冊
 
-> **版本**：10.12.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-06-13
+> **版本**：10.12.1 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-06-13
 >
 > **10.12.0 重點**（WorkFlow Wave 6 — 低代码设计器 + 安全強化）：`AddWtmWorkFlowDesigner()` + `UseWtmWorkFlowDesigner()`（opt-in）啟用 `/_workflow-designer` 低代碼視覺設計器；eval-free、no-CDN、三個嵌入式 IIFE 模組（表單視圖 / 源碼視圖 / SVG 圖形視圖，9 種 NodeKind 全覆蓋）；原始位元組保真（`WtmJsonRaw` 無損數字 codec；unknown fields 存活；no-op 儲存 ContentHash 不變 → `IdempotentNoOp`）；伺服器端草稿（`ProcessDefinitionDraft` **新表，需 migration**，RowVersion If-Match 並發保護，publish 在同一 transaction 刪草稿）；Publish CAS（`expectedBaseContentHash`，伺服器事務內比對，並發衝突 → HTTP 409 `BaseVersionChanged`）；設計器範圍 Antiforgery（`X-WTM-WF-XSRF`，不觸碰全局設定）；URL-RBAC（`WorkflowPrivileges.DesignerPage/DesignerBase`，嚴於 `[AllRights]`）。#296 安全修復：`WebhookWorkflowNotifier` escape-at-sink（已發布流程圖同樣受保護，無需重發布）+ `InvalidNodeKey`/`DuplicateNodeKey` 驗證器（新 publish 時 fail-close）。#297 修復 `framework_dashboard_designer.js` 未列為 EmbeddedResource → 404。詳見 §18.13（Wave 6 設計器）、§18.14（安全修復）及 `CHANGELOG.md` `[10.12.0]`。
+>
+> **10.12.1 重點**（patch — WorkFlow 引擎並發修復）：#290 修復回退交易 ABBA 死鎖（`ProcessInstance` 改為最後取得，符合 `WorkflowTimer → ApprovalTask → NodeInstance → ProcessInstance` 標準鎖序）+ 加入 Delegate/AddApprover 死鎖受害者重試兜底（`WorkFlowOptions.DeadlockRetryAttempts`，預設 3）；#299 `WorkflowGraphValidator` 拒絕不支援的 `schemaVersion`（`GraphValidationError.SchemaVersionUnsupported`）；#307 測試穩定性（並發斷言接受 `NodeClosed`）。**零 schema 變更；零新 API 曲面。** 詳見 `CHANGELOG.md` `[10.12.1]`。
 >
 > **10.11.0 重點**（WorkFlow Wave 4+5 — 加签 / 委托 / 超时）：`AddApproverAsync`（加签）讓活躍審批人可在自己的位置前後注入新審批人，透過 `ApproverSetEpoch` CAS 關閉與並發完成的競態；`DelegateTaskAsync`（委托，中途轉辦）透過單語句 CAS 1-for-1 轉讓任務槽，`TotalRequired` 不變；`DelegationResolvingDecorator` 在節點進入前做可遞移替代（hop cap=3，明確 `visited` 集偵測循環，cycle→fail-closed）；`RevokeDelegationAsync` 管理員批量撤回委托；`AddWtmWorkFlowTimers()`（opt-in）啟用背景排程：Remind 催辦鏈、Escalate 分配升級、`AllowTimerAutoAction=false`（預設 fail-closed）保護自動審批/拒絕。`DelegationWindowMode` 預設 `AtAssignment`（授權在 mint 時凍結）；`AtAction` 需顯式 opt-in，且在 Oracle/DaMeng 啟動時阻擋（#270）。schema additive：`Wf_NodeInstance.ApproverSetEpoch` + `Wf_ApprovalTask.{DelegationRuleId, DelegationExpiresUtc, WindowVerifiedUtc, AddDepth}`，`Wf_WorkflowTimer` 無變動。詳見 §18.10（Wave 4 加签）、§18.11（Wave 5 委托）、§18.12（Wave 5 超时）及 `CHANGELOG.md` `[10.11.0]`。
 >
@@ -4536,7 +4538,7 @@ public class Order : BasePoco
 ```xml
 <Project>
   <PropertyGroup>
-    <VersionPrefix>10.11.0</VersionPrefix>
+    <VersionPrefix>10.12.1</VersionPrefix>
   </PropertyGroup>
 </Project>
 ```
