@@ -648,7 +648,8 @@ public class AllAnyTests : IDisposable
 
     /// <summary>
     /// 或签 T-CONC-1: two approvers each race to approve their own task.
-    /// The one who wins the node CAS returns InstanceApproved; the other gets AlreadyHandled.
+    /// Exactly one must win (InstanceApproved); the other must be a clean loser
+    /// (AlreadyHandled, NodeClosed, NodeAlreadyDecided, or TaskNotActive — see #307).
     /// Node must reach CompletedApproved exactly once.
     /// </summary>
     [TestMethod]
@@ -713,12 +714,16 @@ public class AllAnyTests : IDisposable
             var results = await Task.WhenAll(race1, race2);
 
             int approved = results.Count(r => r.Code == WorkflowActionCode.InstanceApproved);
-            int handled  = results.Count(r => r.Code == WorkflowActionCode.AlreadyHandled);
+            // #307: widen loser set — NodeClosed is a valid race-loser code when the winner
+            // drives the node/instance to approved+closed before the concurrent loser's CAS
+            // guard runs.  AlreadyHandled, NodeAlreadyDecided, and TaskNotActive are also
+            // legitimate "I lost the race / already decided" outcomes.
+            int loser = results.Count(r => IsLegitimateLoserOutcome(r.Code));
 
-            Assert.IsTrue(approved >= 1,
-                $"Round {round}: at least one must return InstanceApproved, got [{results[0].Code},{results[1].Code}].");
-            Assert.IsTrue(approved + handled == 2,
-                $"Round {round}: results must be InstanceApproved+AlreadyHandled or 2×InstanceApproved, " +
+            Assert.AreEqual(1, approved,
+                $"Round {round}: exactly one must return InstanceApproved, got [{results[0].Code},{results[1].Code}].");
+            Assert.AreEqual(1, loser,
+                $"Round {round}: exactly one must be a clean loser (AlreadyHandled/NodeClosed/NodeAlreadyDecided/TaskNotActive), " +
                 $"got [{results[0].Code},{results[1].Code}].");
 
             // Node completed exactly once.
@@ -731,6 +736,18 @@ public class AllAnyTests : IDisposable
                 $"Round {round}: exactly one CompletedApproved NodeInstance must exist.");
         }
     }
+
+    /// <summary>
+    /// Returns true when <paramref name="code"/> is a legitimate concurrent-loser outcome
+    /// for an approval race: the actor lost the CAS and performed no state change.
+    /// (#307: NodeClosed is equally valid as AlreadyHandled when the winner closes the
+    /// node/instance before the loser's guard checks run.)
+    /// </summary>
+    private static bool IsLegitimateLoserOutcome(WorkflowActionCode code) =>
+        code is WorkflowActionCode.AlreadyHandled
+             or WorkflowActionCode.NodeClosed
+             or WorkflowActionCode.NodeAlreadyDecided
+             or WorkflowActionCode.TaskNotActive;
 
     // ── Any-3: reject behaviour ───────────────────────────────────────────────────
 
