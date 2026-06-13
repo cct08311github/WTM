@@ -784,11 +784,8 @@ public class WorkflowDesignerController : BaseController
         if (graph is null)
             return (false, "Graph document is null or not a JSON object.", null);
 
-        // schemaVersion gate (T-DSN-12): reject unsupported schema versions.
-        if (graph.SchemaVersion != 1)
-            return (false, $"Unsupported schemaVersion '{graph.SchemaVersion}'. Only schemaVersion 1 is supported.", null);
-
-        // Structural validation.
+        // Structural validation (includes schemaVersion gate via GraphValidationError.SchemaVersionUnsupported —
+        // #299: the local schemaVersion check was removed here; the global validator now owns it).
         var validation = Definition.WorkflowGraphValidator.Validate(graph);
         if (!validation.IsValid)
         {

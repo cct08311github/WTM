@@ -116,12 +116,16 @@ public sealed record PublishResult(
 
     /// <summary>
     /// Create a ValidationFailed result for an unsupported schemaVersion.
-    /// Used by the designer raw-path when <c>schemaVersion != 1</c>.
+    ///
+    /// <para>#299: The global validator now raises
+    /// <see cref="GraphValidationError.SchemaVersionUnsupported"/> via
+    /// <see cref="WorkflowGraphValidator.Validate"/>; this factory method routes to the
+    /// same outcome for call sites that need a pre-validation shortcut.</para>
     /// </summary>
     /// <param name="schemaVersion">The unsupported schema version encountered.</param>
     public static PublishResult SchemaVersionUnsupported(int schemaVersion) =>
         new(PublishOutcome.ValidationFailed, null, 0, null,
-            GraphValidationError.None,
-            $"schemaVersion {schemaVersion} is not supported by the designer. " +
-            "Only schemaVersion 1 documents may be published through the designer endpoint.");
+            GraphValidationError.SchemaVersionUnsupported,
+            $"schemaVersion {schemaVersion} is not supported. " +
+            $"Only schemaVersion 1–{WorkflowGraphSchema.CurrentSchemaVersion} may be published.");
 }

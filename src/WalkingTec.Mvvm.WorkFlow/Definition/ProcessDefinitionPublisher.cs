@@ -1,9 +1,11 @@
 #nullable enable
 // WF-4: Concrete publish-flow implementation.
 // WF-21.1: Additive PublishRawAsync for the designer raw-bytes path (CAS + canonical-raw persistence).
+// #299: SchemaVersion gate moved into WorkflowGraphValidator.Validate() (global typed-path gate).
 //
 // Publish flow (typed path — PublishAsync, unchanged):
 //   1. Structural validation (fail-closed; return ValidationFailed result — NOT exception).
+//      Now includes schemaVersion gate via GraphValidationError.SchemaVersionUnsupported.
 //   2. Canonical serialization (deterministic key-sorted JSON).
 //   3. SHA-256 ContentHash computation.
 //   4. Idempotent hash check: if hash == current version hash → IdempotentNoOp.
@@ -14,7 +16,8 @@
 //   1. WorkflowGraphSerializer.Canonicalize(rawJson) — unknown fields + exact numbers survive.
 //   2. SHA-256 ContentHash from canonical bytes.
 //   3. Typed Deserialize for validation only (WorkflowGraphValidator.Validate).
-//   4. Designer gate: schemaVersion != 1 → ValidationFailed (SchemaVersionUnsupported).
+//   4. Structural validation via WorkflowGraphValidator.Validate (includes schemaVersion gate).
+//      Local step-4 designer gate removed (#299 — validator now owns the check, no duplicate).
 //   5. Same idempotent hash check as typed path.
 //   6. CAS check: expectedBaseContentHash non-null + mismatch → BaseVersionChanged (409).
 //   7. INSERT version storing CANONICAL RAW BYTES (not typed re-serialization), repoint head,
@@ -230,11 +233,11 @@ public sealed class ProcessDefinitionPublisher : IProcessDefinitionPublisher, ID
                 $"Canonical JSON could not be deserialized for validation: {ex.Message}");
         }
 
-        // ── Step 4: Designer gate — schemaVersion != 1 is unsupported ────────
-        if (graphForValidation.SchemaVersion != 1)
-            return PublishResult.SchemaVersionUnsupported(graphForValidation.SchemaVersion);
-
-        // ── Step 5: Structural validation (fail-closed) ───────────────────────
+        // ── Step 4: Structural validation (includes schemaVersion gate, fail-closed) ─
+        // #299: The local schemaVersion-only gate was removed; WorkflowGraphValidator.Validate
+        // now returns GraphValidationError.SchemaVersionUnsupported when schemaVersion is out
+        // of range.  No double-reporting — the validator runs once and covers both typed and
+        // raw paths through this shared code.
         var validation = WorkflowGraphValidator.Validate(graphForValidation, _options);
         if (!validation.IsValid)
             return PublishResult.Invalid(validation.Error, validation.ErrorMessage!);

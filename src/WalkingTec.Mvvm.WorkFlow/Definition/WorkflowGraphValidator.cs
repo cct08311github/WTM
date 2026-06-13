@@ -4,12 +4,14 @@
 // WF-17: Extended with fork↔Join pairing validation (ParallelGateway / InclusiveGateway).
 // WF-20: Extended with TimeoutDef validation (NEW graph publishes only).
 // #296: Extended with nodeKey shape (InvalidNodeKey) + uniqueness (DuplicateNodeKey) checks.
+// #299: Extended with global schemaVersion gate (SchemaVersionUnsupported, NEW publishes only).
 //
 // Validation is fail-closed: any structural problem returns a descriptive
 // GraphValidationResult with a closed error code.  Exceptions are NOT used
 // for user-authored validation failures (repo Result-style convention).
 //
 // Checks performed (§4 / §6 spec requirements):
+//   0. (#299) schemaVersion in [1, WorkflowGraphSchema.CurrentSchemaVersion]; fail-closed for <1 or >current.
 //   1. Graph key present.
 //   2. Nodes list non-empty.
 //   3. Exactly one Start node.
@@ -67,6 +69,13 @@ public static class WorkflowGraphValidator
     public static GraphValidationResult Validate(WorkflowGraph graph, WorkFlowOptions? options = null)
     {
         if (graph is null) throw new ArgumentNullException(nameof(graph));
+
+        // 0. (#299) schemaVersion gate: reject <1 or >CurrentSchemaVersion for NEW publishes.
+        // Existing stored versions are immutable and are not re-validated by this path.
+        if (graph.SchemaVersion < 1 || graph.SchemaVersion > WorkflowGraphSchema.CurrentSchemaVersion)
+            return GraphValidationResult.Fail(GraphValidationError.SchemaVersionUnsupported,
+                $"schemaVersion {graph.SchemaVersion} is not supported. " +
+                $"Only schemaVersion 1–{WorkflowGraphSchema.CurrentSchemaVersion} may be published.");
 
         // 1. Graph key must be present.
         if (string.IsNullOrWhiteSpace(graph.Key))

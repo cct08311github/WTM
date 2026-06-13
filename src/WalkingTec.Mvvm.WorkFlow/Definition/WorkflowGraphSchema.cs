@@ -22,6 +22,24 @@ using WalkingTec.Mvvm.WorkFlow.Models;
 
 namespace WalkingTec.Mvvm.WorkFlow.Definition;
 
+// ── Schema version constant ───────────────────────────────────────────────────
+
+/// <summary>
+/// Schema version constants for <see cref="WorkflowGraph"/> documents.
+/// </summary>
+public static class WorkflowGraphSchema
+{
+    /// <summary>
+    /// The only schema version currently supported for publish and validation.
+    /// <see cref="WorkflowGraph.SchemaVersion"/> defaults to this value.
+    ///
+    /// <para>Graphs with <c>schemaVersion</c> outside [1, <see cref="CurrentSchemaVersion"/>]
+    /// are rejected at publish and validate time with
+    /// <see cref="GraphValidationError.SchemaVersionUnsupported"/>.</para>
+    /// </summary>
+    public const int CurrentSchemaVersion = 1;
+}
+
 // ── Top-level document ────────────────────────────────────────────────────────
 
 /// <summary>
@@ -38,9 +56,10 @@ public sealed class WorkflowGraph
     /// <summary>
     /// Published contract version.  Sprint-1 = 1.
     /// Bump ONLY for backward-incompatible changes (additive fields do not bump).
+    /// Defaults to <see cref="WorkflowGraphSchema.CurrentSchemaVersion"/>.
     /// </summary>
     [JsonPropertyName("schemaVersion")]
-    public int SchemaVersion { get; set; } = 1;
+    public int SchemaVersion { get; set; } = WorkflowGraphSchema.CurrentSchemaVersion;
 
     /// <summary>
     /// Unique business key that matches <see cref="Models.ProcessDefinition.Code"/>.

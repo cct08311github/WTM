@@ -165,6 +165,22 @@ public enum GraphValidationError
     /// indicate a graph authoring mistake that can cause unpredictable engine behaviour.</para>
     /// </summary>
     DuplicateNodeKey,
+
+    // #299: Global schemaVersion gate (behavior change for NEW publishes — existing versions are immutable).
+
+    /// <summary>
+    /// The graph's <c>schemaVersion</c> is outside the range supported by the current engine.
+    ///
+    /// <para>Only versions in the range <c>[1, <see cref="WorkflowGraphSchema.CurrentSchemaVersion"/>]</c>
+    /// are accepted.  Graphs with <c>schemaVersion &lt; 1</c> or
+    /// <c>schemaVersion &gt; <see cref="WorkflowGraphSchema.CurrentSchemaVersion"/></c>
+    /// are rejected at publish and validate time so the engine cannot silently
+    /// execute an unsupported document under v1 semantics.</para>
+    ///
+    /// <para>This check applies to NEW publishes only — published versions are immutable
+    /// and their stored <c>SchemaVersion</c> column is not re-validated by the engine.</para>
+    /// </summary>
+    SchemaVersionUnsupported,
 }
 
 /// <summary>
