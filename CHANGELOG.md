@@ -1,5 +1,57 @@
 # 更新日志
 
+## [10.12.0] - 2026-06-13
+
+WorkFlow Wave 6 — **低代码设计器 (WF-21)** for the `WalkingTec.Mvvm.WorkFlow` approval engine, plus security hardening (#296) and an embedded-resource fix (#297). All new authoring surface is fully opt-in — hosts that do not call `AddWtmWorkFlowDesigner()` / `UseWtmWorkFlowDesigner()` are byte-identical to 10.11.0. The security fixes (#296, #297) ship unconditionally and harden already-published graphs as well as new ones.
+
+Compliance defaults are enforced loudly everywhere they touch the new surface: designer endpoints return 404 (not 500) when the designer is not registered; `schemaVersion != 1` graphs are rejected at publish time with a closed error code; antiforgery is required on every mutating designer endpoint; all graph-authored strings are escaped at the notifier sink regardless of publication date.
+
+### Added
+
+- **WF-21 低代码工作流设计器 — `AddWtmWorkFlowDesigner()` + `UseWtmWorkFlowDesigner()`** (#300, #303): opt-in visual designer at `/_workflow-designer` for authoring and publishing `ProcessDefinition` graphs without writing raw JSON. Key properties:
+  - **Eval-free, no-CDN, embedded assets**: three hand-written IIFE modules (`framework_workflow_designer_core.js`, `framework_workflow_designer_forms.js`, `framework_workflow_designer_view.js`) served from the WorkFlow assembly's embedded resources; no `eval` / `new Function`, no third-party CDN. `'unsafe-eval'` is not required.
+  - **Three views**: **表单视图** (per-NodeKind property panels for all 9 node kinds, built as DOM nodes — no `innerHTML`; transitions table with per-edge condition editor; field-whitelist editor); **源码视图** (raw-JSON textarea with validate / pretty-print); **图形视图** (read-only SVG auto-layout diagram, BFS rank-from-Start, `createElementNS` + `textContent` only).
+  - **Raw-bytes fidelity**: graph documents travel on a raw-body path that bypasses typed MVC binding (unknown fields survive; exact number literals survive via `WtmJsonRaw` lossless-number codec). Byte-identical no-op saves produce the same `ContentHash` → `IdempotentNoOp` (T-DSN-1 mandatory).
+  - **Server drafts** (`ProcessDefinitionDraft` — **new table**, consumer migration required): one draft per `(TenantCode, DefinitionId)`; If-Match / If-None-Match RowVersion concurrency; draft deleted in-transaction on publish; post-publish resurrection guard (`If-Match` under an already-published head never creates on miss).
+  - **Publish CAS** (`expectedBaseContentHash` in `X-WTM-WF-Expected-Hash` header): server validates inside the existing publish transaction — mismatch → HTTP 409 `BaseVersionChanged`; concurrent edits cannot silently supersede each other. Byte-identical content short-circuits to `IdempotentNoOp` regardless.
+  - **`IProcessDefinitionPublisher.PublishRawAsync`** (Default Interface Method — third-party implementations compiled against 10.11 load without modification; the DIM throws `NotSupportedException` at call time if not overridden).
+  - **RBAC**: URL-RBAC via `PrivilegeFilter` + `WorkflowPrivileges.DesignerPage` / `WorkflowPrivileges.DesignerBase` constants; deliberately stricter than `[AllRights]` — design/publish is a privileged operation.
+  - **Antiforgery**: designer-scoped `IAntiforgery` (cookie + `X-WTM-WF-XSRF` double-submit); token issued by `GET bootstrap`; required on all mutating endpoints (`PUT draft`, `DELETE draft`, `POST publish`, `POST definitions`, `PUT definitions/{code}`); global `AntiforgeryOptions.HeaderName` is NOT modified.
+  - **`schemaVersion` gate**: designer endpoints reject `schemaVersion != 1` with HTTP 400 `SchemaVersionUnsupported`; client form panel shows a locked banner and falls back to source + SVG views only.
+  - **Dead-link repair**: `ProcessDefinitionListVM` grid actions (Details / Versions) now point at the designer page (previously linked to a nonexistent controller endpoint → 404).
+  - **Head creation** (`POST /api/_workflow/designer/definitions`): closes the gap where `POST {code}/publish` would 404 on an unknown definition code; code pattern `^[A-Za-z0-9_\-\.]{1,64}$`; duplicate-in-tenant → 409.
+  - Designer endpoints 404 (not 500) when `AddWtmWorkFlowDesigner()` has not been called.
+  - Structural guard: embedded-asset manifest test + TestServer 200 test on every designer asset (prevents the class of bug fixed by #297).
+
+- **SEC #296 — nodeKey charset whitelist and duplicate-key validator checks** (#296, #302): two additive `WorkflowGraphValidator` checks that fail-close NEW publishes:
+  - `InvalidNodeKey`: rejects node keys that do not match `^[\p{L}\p{N}_\-\.]{1,64}$` (CJK-friendly — `\p{L}` matches 中文; blocks markdown-link injection characters such as `[](){}` at publish time).
+  - `DuplicateNodeKey`: rejects graphs where two or more nodes share the same `nodeKey`.
+  - **Affects new publishes only** — existing published versions and in-flight instances are unaffected (matching the Wave 5 precedent for publish-time-only validation).
+
+### Fixed
+
+- **SEC #296 — escape graph-authored strings at notifier sink** (#296, #302): `WebhookWorkflowNotifier` now escapes all graph-authored and user-authored strings (node keys, node names, approver display names, comment snippets) at the point they are interpolated into webhook card markdown. Previously, a published graph with a crafted `nodeKey` such as `[重新登入](http://evil)` could inject markdown links into 钉钉/企微/飞书/Slack/Teams notification cards. **The escape-at-sink fix hardens all cards, including those generated from already-published graphs — no re-publish required.**
+- **#297 — `framework_dashboard_designer.js` missing from embedded resources → shipped 404** (#297, #301): the file was present in `src/WalkingTec.Mvvm.Mvc` but not listed as `EmbeddedResource` in the project file, causing a 404 on the dashboard designer page. Fixed with a one-line project file addition. A loop regression test now asserts HTTP 200 on every declared designer asset to prevent recurrence.
+- **#298 — `framework_analysis` export emitted CDN `<script>` tags** (#298, #305): the Analysis panel dependency-hint banner showed `cdn.jsdelivr.net` snippets, conflicting with the no-CDN intranet deployment constraint. The hint now points at local `/_js/` framework asset paths (sortablejs was already vendored; `echarts.common.min.js` was present in the repo and is now declared as an `EmbeddedResource` — no new third-party dependency). Display-only change; no actual script loading was affected.
+
+### Migration
+
+**New table `Wf_ProcessDefinitionDraft`** (owned by `WalkingTec.Mvvm.WorkFlow`): required only when `AddWtmWorkFlowDesigner()` is called. The entity is registered by `ApplyWorkFlowModels()` — run your EF Core migration to create the table:
+
+```bash
+dotnet ef migrations add AddWorkFlowDesigner \
+  --context DataContext \
+  --project YourApp/YourApp.csproj \
+  --startup-project YourApp/YourApp.csproj
+dotnet ef database update
+```
+
+Schema: `DefinitionId` (FK → `ProcessDefinition`), `GraphJson` (text), `BaseContentHash` (nullable string), `RowVersion`, `LastSavedBy`, `LastSavedAt`. One draft per `(TenantCode, DefinitionId)`.
+
+**No other schema delta**: `Wf_WorkflowTimer`, `Wf_NodeInstance`, `Wf_ApprovalTask`, `Wf_ProcessInstance`, `Wf_WorkflowEventLog`, and `ProcessDefinition`/`ProcessDefinitionVersion` are all unchanged.
+
+**Validator tightening** (`InvalidNodeKey` / `DuplicateNodeKey`) affects **new publishes only**. Existing published versions remain readable and in-flight instances continue running without interruption. Graphs with existing node keys that violate the charset rule will be rejected on next publish — review and update those keys before republishing.
+
 ## [10.11.0] - 2026-06-12
 
 WorkFlow Wave 4 + 5 — **加签 (add-approver)**, **委托/转交 (delegation)**, and **超时/催办 (timeout + remind)** for the `WalkingTec.Mvvm.WorkFlow` approval engine. All three features are fully opt-in — hosts that do not call the new registration methods or author `TimeoutDef` in their graph are byte-identical to 10.10.0. See Migration for additive nullable columns added to `Wf_ApprovalTask` and `Wf_NodeInstance`; **no new migration delta for `Wf_WorkflowTimer`** (schema was already in place).

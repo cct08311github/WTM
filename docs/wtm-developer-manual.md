@@ -1,6 +1,8 @@
 # WTM 開發與使用手冊
 
-> **版本**：10.11.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-06-12
+> **版本**：10.12.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-06-13
+>
+> **10.12.0 重點**（WorkFlow Wave 6 — 低代码设计器 + 安全強化）：`AddWtmWorkFlowDesigner()` + `UseWtmWorkFlowDesigner()`（opt-in）啟用 `/_workflow-designer` 低代碼視覺設計器；eval-free、no-CDN、三個嵌入式 IIFE 模組（表單視圖 / 源碼視圖 / SVG 圖形視圖，9 種 NodeKind 全覆蓋）；原始位元組保真（`WtmJsonRaw` 無損數字 codec；unknown fields 存活；no-op 儲存 ContentHash 不變 → `IdempotentNoOp`）；伺服器端草稿（`ProcessDefinitionDraft` **新表，需 migration**，RowVersion If-Match 並發保護，publish 在同一 transaction 刪草稿）；Publish CAS（`expectedBaseContentHash`，伺服器事務內比對，並發衝突 → HTTP 409 `BaseVersionChanged`）；設計器範圍 Antiforgery（`X-WTM-WF-XSRF`，不觸碰全局設定）；URL-RBAC（`WorkflowPrivileges.DesignerPage/DesignerBase`，嚴於 `[AllRights]`）。#296 安全修復：`WebhookWorkflowNotifier` escape-at-sink（已發布流程圖同樣受保護，無需重發布）+ `InvalidNodeKey`/`DuplicateNodeKey` 驗證器（新 publish 時 fail-close）。#297 修復 `framework_dashboard_designer.js` 未列為 EmbeddedResource → 404。詳見 §18.13（Wave 6 設計器）、§18.14（安全修復）及 `CHANGELOG.md` `[10.12.0]`。
 >
 > **10.11.0 重點**（WorkFlow Wave 4+5 — 加签 / 委托 / 超时）：`AddApproverAsync`（加签）讓活躍審批人可在自己的位置前後注入新審批人，透過 `ApproverSetEpoch` CAS 關閉與並發完成的競態；`DelegateTaskAsync`（委托，中途轉辦）透過單語句 CAS 1-for-1 轉讓任務槽，`TotalRequired` 不變；`DelegationResolvingDecorator` 在節點進入前做可遞移替代（hop cap=3，明確 `visited` 集偵測循環，cycle→fail-closed）；`RevokeDelegationAsync` 管理員批量撤回委托；`AddWtmWorkFlowTimers()`（opt-in）啟用背景排程：Remind 催辦鏈、Escalate 分配升級、`AllowTimerAutoAction=false`（預設 fail-closed）保護自動審批/拒絕。`DelegationWindowMode` 預設 `AtAssignment`（授權在 mint 時凍結）；`AtAction` 需顯式 opt-in，且在 Oracle/DaMeng 啟動時阻擋（#270）。schema additive：`Wf_NodeInstance.ApproverSetEpoch` + `Wf_ApprovalTask.{DelegationRuleId, DelegationExpiresUtc, WindowVerifiedUtc, AddDepth}`，`Wf_WorkflowTimer` 無變動。詳見 §18.10（Wave 4 加签）、§18.11（Wave 5 委托）、§18.12（Wave 5 超时）及 `CHANGELOG.md` `[10.11.0]`。
 >
@@ -4589,6 +4591,7 @@ appsettings.Production.json   ← 生產環境覆蓋（連線字串、JWT Key）
 | **加签（Wave 4）** | `AddApproverAsync`：活躍審批人注入額外審批人（`Before`/`After`），`ApproverSetEpoch` CAS 關閉並発完成競態；見 §18.10 |
 | **委托/转交（Wave 4）** | `DelegateTaskAsync`（中途轉辦，單語句 CAS）、`DelegationResolvingDecorator`（節點進入前替代，遞移 + 循環偵測）、`RevokeDelegationAsync`；見 §18.11 |
 | **超时/催辦（Wave 5）** | `AddWtmWorkFlowTimers()`：Remind 催辦、Escalate 升級、AutoApprove/AutoReject（`AllowTimerAutoAction=false` 預設 fail-closed）、`IBusinessCalendar` seam；見 §18.12 |
+| **低代码設計器（Wave 6）** | `AddWtmWorkFlowDesigner()` + `UseWtmWorkFlowDesigner()`（opt-in）：`/_workflow-designer`，eval-free IIFE 模組，原始位元組保真，伺服器端草稿，Publish CAS，Antiforgery；見 §18.13 |
 | **撤回/回退/抄送** | 撤回(WithdrawPolicy)、回退發起人(ReturnToInitiator)、抄送(CC，非阻塞) |
 | **Opt-in 通知** | `AddWtmWorkFlowNotifications()` 複用 `IWtmWebhookSink`；post-commit best-effort，通知失敗不回滾 |
 | **雙軌稽核** | `[AuditChanges]`（VM CRUD）+ append-only `WorkflowEventLog`（引擎轉換，`ExecuteUpdateAsync` bypass 了 EF change tracker） |
@@ -5089,6 +5092,133 @@ public interface IBusinessCalendar
 `Wf_WorkflowTimer` 表在 Sprint-1（10.9.0）時 schema 已就位，Wave 5 **不增加任何新欄位**。`EventAction` 新增 3 個成員（`TimeoutRemind`、`TimeoutEscalate`、`DelegationExpiredReverted`）為 enum append-only，不需 schema 變更。
 
 無需額外執行 `dotnet ef migrations add`（與 §18.10.6 合併在同一個 `WorkFlowWave45` migration 即可）。
+
+### 18.13 Wave 6 — 低代码工作流设计器（10.12.0+）
+
+低代碼設計器讓您在瀏覽器中直接創作和發布 `ProcessDefinition` 流程圖，無需手寫 JSON。
+
+#### 18.13.1 DI 註冊
+
+```csharp
+// Program.cs（或 Startup.cs）
+builder.Services.AddWtmWorkFlow(opts => { /* ... */ });
+builder.Services.AddWtmWorkFlowDesigner();   // opt-in；未呼叫則行為完全不變
+
+// Middleware pipeline
+app.UseWtmContext();
+app.UseWtmWorkFlowDesigner();   // 掛載 /_workflow_designer/assets/* 靜態檔案路徑
+```
+
+未呼叫 `AddWtmWorkFlowDesigner()` 時，所有設計器 API 端點返回 HTTP 404（非 500），不影響其他功能。
+
+#### 18.13.2 RBAC 設定
+
+設計器頁面及所有 API 端點均受 URL-RBAC 保護（`PrivilegeFilter`）。在管理員角色設定中註冊兩個 privilege 常數：
+
+```csharp
+new FunctionPrivilege { MenuName = "工作流设计器", Url = WorkflowPrivileges.DesignerPage },
+new FunctionPrivilege { MenuName = "工作流设计器 API", Url = WorkflowPrivileges.DesignerBase },
+```
+
+`[AllRights]` 被刻意排除 — 設計/發布是特權操作。只有同時擁有兩個 privilege 的角色才能開啟設計器。
+
+#### 18.13.3 Migration（必需）
+
+呼叫 `AddWtmWorkFlowDesigner()` 後，`ApplyWorkFlowModels()` 會額外註冊 `ProcessDefinitionDraft` 實體。請執行消費者 migration：
+
+```bash
+dotnet ef migrations add AddWorkFlowDesigner \
+  --context DataContext \
+  --project YourApp/YourApp.csproj \
+  --startup-project YourApp/YourApp.csproj
+dotnet ef database update
+```
+
+新表 `Wf_DefinitionDraft`：`DefinitionId`（FK → `ProcessDefinition`）、`GraphJson`（text）、`BaseContentHash`（nullable）、`RowVersion`、`LastSavedBy`、`LastSavedAt`。每 `(TenantCode, DefinitionId)` 一筆草稿。
+
+#### 18.13.4 開啟設計器
+
+瀏覽 `/_workflow-designer`（可帶 `?code=<definitionCode>` 直接開啟特定流程）。頁面是靜態嵌入式 HTML，零 inline script；所有 JS 模組從 WorkFlow assembly embedded resources 提供，無需 CDN。
+
+#### 18.13.5 三個視圖
+
+| 視圖 | 說明 |
+|------|------|
+| **表單視圖** | 9 種 NodeKind 屬性面板，Transition 表格含 per-edge 條件編輯器，fieldWhitelist 編輯器。所有內容透過 DOM 元素構建（`document.createElement` + `textContent`），無 `innerHTML`，無 eval。 |
+| **源碼視圖** | 原始 JSON textarea，含語法驗證與格式化。複雜 payload 的完整 escape hatch。 |
+| **圖形視圖** | 唯讀 SVG 自動佈局（BFS rank-from-Start），`createElementNS` + `textContent` only，切換 tab 時更新。 |
+
+#### 18.13.6 草稿與發布流程
+
+1. **新建流程**：點擊「新建流程」，輸入 Code（`^[A-Za-z0-9_\-\.]{1,64}$`）、名稱、分類。
+2. **編輯**：在表單視圖設定各節點屬性，或在源碼視圖直接編輯 JSON。
+3. **保存草稿**：「保存草稿」呼叫 `PUT /api/_workflow/designer/definitions/{code}/draft`（If-Match / If-None-Match RowVersion 並發保護）。草稿存儲在伺服器（每個租戶/定義一筆）。
+4. **校驗**：「校驗」呼叫 `POST /api/_workflow/designer/validate`，錯誤回應包含可選的 `nodeKey` 定位問題節點。
+5. **發布**：「发布」確認後呼叫 `POST /api/_workflow/designer/definitions/{code}/publish`（帶 `X-WTM-WF-Expected-Hash` CAS header）。結果：
+   - `IdempotentNoOp`：位元組相同，無新版本。
+   - `Published`：創建不可變的新 `ProcessDefinitionVersion`，草稿在同一 transaction 中刪除。
+   - HTTP 409 `BaseVersionChanged`：他人在此期間已發布 → 顯示衝突面板，重新載入後在源碼視圖合併。
+
+#### 18.13.7 原始位元組保真合約
+
+- **未修改的儲存**：payload 為原始位元組字串 → 位元組相同 → `ContentHash` 相同 → `IdempotentNoOp`（T-DSN-1）。
+- **已修改的儲存**：`WtmJsonRaw.stringify(tree)` — 未觸碰的數字保留原始字面量（`9007199254740993` 不會變成 `9007199254740992`）；未觸碰的 unknown fields 存活；已編輯的已知欄位帶入使用者輸入。
+- **Condition branch 更新**：merge-not-regen — 僅更新使用者實際修改的 `(from,to)` TransitionDef，不重建出邊列表，不破壞 unknown fields 或合法的 `condition` payload。
+- **`schemaVersion != 1`**：表單視圖鎖定（banner 提示），源碼視圖和 SVG 視圖仍可用；伺服器端 publish 拒絕（HTTP 400 `SchemaVersionUnsupported`）。
+
+#### 18.13.8 `WorkFlowOptions.Designer` 選項
+
+| 選項 | 預設 | 說明 |
+|------|------|------|
+| `MaxGraphBytes` | 1 MiB | 設計器端點接受的最大 GraphJson 位元組數 |
+
+#### 18.13.9 消費者 wwwroot 要求
+
+設計器頁面從您應用的 `wwwroot` 載入 LayUI 和 jQuery（與 WTM admin shell 相同的路徑要求，框架本身不提供）：
+
+```
+wwwroot/
+  jquery.min.js
+  layui/
+    css/layui.css
+    layui.js
+```
+
+---
+
+### 18.14 Wave 6 — 安全修復（10.12.0+）
+
+#### 18.14.1 #296 — Webhook 通知字串 Escape-at-sink
+
+`WebhookWorkflowNotifier` 現在在插值進 webhook card markdown 前，對所有流程圖創作和使用者創作的字串（node key、node name、審批人顯示名、評論摘要）進行 escape。
+
+**受影響範圍**：钉钉、企微、飞书、Slack、Teams 通知卡片。
+
+**重要**：此修復保護的是**所有卡片**，包含由已發布流程圖產生的卡片 — 無需重新發布流程圖即可受到保護。
+
+```csharp
+// 框架內部（無需消費者修改）
+// 在 WebhookWorkflowNotifier 的所有插值點：
+var escapedNodeName = MarkdownEscape(nodeInstance.NodeName);
+var escapedComment = MarkdownEscape(task.Comment?.Substring(0, Math.Min(50, task.Comment.Length)));
+```
+
+#### 18.14.2 #296 — nodeKey 字符集白名單與重複檢查
+
+`WorkflowGraphValidator` 新增兩個在 publish 時 fail-close 的驗證規則：
+
+| 規則 | 描述 | 錯誤碼 |
+|------|------|--------|
+| `InvalidNodeKey` | nodeKey 必須匹配 `^\p{L}\p{N}_\-\.\p{L}\p{N}]{0,63}$`（CJK 友好；阻止注入字符） | `InvalidNodeKey` |
+| `DuplicateNodeKey` | 同一圖中不得有兩個節點共享相同 `nodeKey` | `DuplicateNodeKey` |
+
+這些驗證僅影響**新發布**。現有的已發布版本和進行中的流程實例不受影響。若現有 nodeKey 包含違規字符，下次發布時會被拒絕 — 請在重新發布前審查並更新這些 nodeKey。
+
+#### 18.14.3 #297 — Dashboard 設計器 JS 資產 404 修復
+
+`framework_dashboard_designer.js` 已加入 `src/WalkingTec.Mvvm.Mvc` 的 `EmbeddedResource` 清單，修復 Dashboard 設計器頁面（`/_dashboard-designer`）的 404 錯誤。新增迴歸測試在每個設計器資產上斷言 HTTP 200，防止此類問題復發。
+
+---
 
 ---
 
