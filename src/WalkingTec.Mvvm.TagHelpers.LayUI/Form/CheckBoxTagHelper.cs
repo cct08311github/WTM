@@ -5,6 +5,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Attributes;
@@ -93,7 +94,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     });
 
                 }
-                output.PostElement.AppendHtml($"<script>ff.LoadComboItems('checkbox','{ItemUrl}','{Id}','{Field.Name}',{JsonSerializer.Serialize(values)},undefined,{Disabled.ToString().ToLower()})</script>");
+                output.PostElement.AppendHtml($"<script>ff.LoadComboItems('checkbox','{JavaScriptEncoder.Default.Encode(ItemUrl)}','{Id}','{Field.Name}',{JsonSerializer.Serialize(values)},undefined,{Disabled.ToString().ToLower()})</script>");
             }
             else
             {

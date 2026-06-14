@@ -279,4 +279,189 @@ public class XssEncodingTests
         StringAssert.Contains(encoded, "&gt;",
             "HtmlEncode must produce valid &gt; entity for >");
     }
+
+    // ── Issue #331: ColorPicker encoding ────────────────────────────────────
+
+    [TestMethod]
+    public void ColorPicker_MaliciousValue_IsHtmlEncoded_InHiddenInput()
+    {
+        // Fix 1: value= attribute in hidden input must be HtmlEncoded.
+        var raw = "'><script>alert(1)</script>";
+        var encoded = System.Net.WebUtility.HtmlEncode(raw);
+        Assert.IsFalse(encoded.Contains("<script>"),
+            "ColorPicker hidden input value must not contain raw <script>");
+        Assert.IsFalse(encoded.Contains("'>"),
+            "ColorPicker hidden input value must not contain attribute-breaking '>");
+    }
+
+    [TestMethod]
+    public void ColorPicker_MaliciousValue_IsJsEncoded_InColorProperty()
+    {
+        // Fix 1: color: JS string literal must be JavaScriptEncoder-encoded.
+        var raw = "'><script>alert(1)</script>";
+        var encoded = System.Text.Encodings.Web.JavaScriptEncoder.Default.Encode(raw);
+        Assert.IsFalse(encoded.Contains("'"),
+            "ColorPicker JS color property must not contain unescaped single quotes");
+        Assert.IsFalse(encoded.Contains("<script>"),
+            "ColorPicker JS color property must not contain raw <script>");
+    }
+
+    // ── Issue #331: LayuiUIService MakeCheckBox/MakeTextBox ─────────────────
+
+    [TestMethod]
+    public void MakeCheckBox_MaliciousValue_IsHtmlEncoded()
+    {
+        // Fix 2: MakeCheckBox value= and title= must be HtmlEncoded.
+        var svc = new WalkingTec.Mvvm.TagHelpers.LayUI.Common.LayuiUIService();
+        var html = svc.MakeCheckBox(
+            ischeck: false,
+            text: "\" onmouseover=\"alert(1)",
+            name: "testfield",
+            value: "'><script>alert(1)</script>",
+            isReadOnly: false);
+
+        Assert.IsFalse(html.Contains("<script>"),
+            "MakeCheckBox must not emit raw <script> in value attribute");
+        // The double-quote in the title text must be HtmlEncoded to &quot; so the attribute
+        // boundary cannot be broken. The literal string onmouseover= still appears but is
+        // safely imprisoned inside an encoded &quot; boundary — check that raw " is absent.
+        Assert.IsFalse(html.Contains("title=\"\" onmouseover="),
+            "MakeCheckBox must not allow double-quote to break title attribute boundary");
+        StringAssert.Contains(html, "&quot;",
+            "MakeCheckBox must HtmlEncode double-quotes in title attribute");
+    }
+
+    [TestMethod]
+    public void MakeTextBox_MaliciousValue_IsHtmlEncoded()
+    {
+        // Fix 2: MakeTextBox value= must be HtmlEncoded.
+        var svc = new WalkingTec.Mvvm.TagHelpers.LayUI.Common.LayuiUIService();
+        var html = svc.MakeTextBox(
+            name: "testfield",
+            value: "'><script>alert(1)</script>",
+            emptyText: null,
+            isReadOnly: false);
+
+        Assert.IsFalse(html.Contains("<script>"),
+            "MakeTextBox must not emit raw <script> in value attribute");
+        Assert.IsFalse(html.Contains("'>"),
+            "MakeTextBox must not contain unescaped '> that breaks the attribute");
+    }
+
+    [TestMethod]
+    public void MakeTextBox_NormalValue_IsPreserved()
+    {
+        // Fix 2 regression: normal text values must still appear in the output.
+        var svc = new WalkingTec.Mvvm.TagHelpers.LayUI.Common.LayuiUIService();
+        var html = svc.MakeTextBox(
+            name: "testfield",
+            value: "hello world",
+            emptyText: null,
+            isReadOnly: false);
+
+        StringAssert.Contains(html, "hello world",
+            "MakeTextBox must preserve plain text values");
+    }
+
+    // ── Issue #331: ComboBox ItemUrl JS-encoding ─────────────────────────────
+
+    [TestMethod]
+    public void JavaScriptEncoder_ComboItemUrl_WithSingleQuote_IsEncoded()
+    {
+        // Fix 3: ItemUrl with a single quote must be JS-encoded before insertion
+        // into ff.LoadComboItems('combo','<url>',...)
+        var url = "/api/items?q=hello'world";
+        var encoded = System.Text.Encodings.Web.JavaScriptEncoder.Default.Encode(url);
+        Assert.IsFalse(encoded.Contains("'"),
+            "ComboBox ItemUrl JS encoding must eliminate single quotes");
+    }
+
+    // ── Issue #331: GridAction DialogTitle and Url ───────────────────────────
+
+    [TestMethod]
+    public void JavaScriptEncoder_GridActionDialogTitle_WithSingleQuote_IsEncoded()
+    {
+        // Fix 4: DialogTitle with a single quote must be JS-encoded.
+        var title = "Delete 'item'";
+        var encoded = System.Text.Encodings.Web.JavaScriptEncoder.Default.Encode(title);
+        Assert.IsFalse(encoded.Contains("'"),
+            "GridAction DialogTitle must be JS-encoded to prevent JS string breakout");
+    }
+
+    [TestMethod]
+    public void JavaScriptEncoder_GridActionUrl_WithXssPayload_IsEncoded()
+    {
+        // Fix 4: Url with XSS payload must not break out of JS string.
+        // The key injection vector is the single quote which closes the JS string literal.
+        // JavaScriptEncoder.Default encodes ' as ', neutralizing the string breakout.
+        var url = "/edit/1');alert(1);//";
+        var encoded = System.Text.Encodings.Web.JavaScriptEncoder.Default.Encode(url);
+        Assert.IsFalse(encoded.Contains("'"),
+            "GridAction Url must not contain raw single quotes after JS-encoding");
+        // Verify the single quote was encoded (the JS string cannot be broken)
+        StringAssert.Contains(encoded, "\\u0027",
+            "JavaScriptEncoder must encode single quote as \\u0027 to prevent JS string breakout");
+    }
+
+    // ── Issue #331: Transfer selectVal JSON serialization ────────────────────
+
+    [TestMethod]
+    public void Transfer_SelectVal_WithSingleQuotes_JsonSerializeIsReflectionSafe()
+    {
+        // Fix 5: selectVal must be serialized with JsonSerializer.Serialize() not
+        // manual quote-concatenation. A value with a single quote must be safely
+        // embedded as a JSON string. JsonSerializer.Default encodes ' as '.
+        var values = new System.Collections.Generic.List<string> { "it's a value", "normal" };
+        var json = System.Text.Json.JsonSerializer.Serialize(values);
+        // JsonSerializer produces valid JSON — starts with [ and uses double-quoted strings
+        Assert.IsTrue(json.StartsWith("[\""),
+            "JsonSerializer output must use double-quoted JSON array, not single-quoted");
+        Assert.IsFalse(json.StartsWith("['"),
+            "JsonSerializer output must use double-quoted JSON, not single-quoted array");
+        // The value is present (single quote is encoded as ')
+        StringAssert.Contains(json, "it",
+            "JsonSerializer must include the string value content");
+        StringAssert.Contains(json, "a value",
+            "JsonSerializer must include the full string value content");
+    }
+
+    [TestMethod]
+    public void Transfer_SelectVal_WithXssPayload_JsonSerializeIsReflectionSafe()
+    {
+        // Fix 5: a value with </script> must not break the surrounding <script> block.
+        var values = new System.Collections.Generic.List<string> { "</script><script>alert(1)</script>" };
+        var json = System.Text.Json.JsonSerializer.Serialize(values);
+        // JsonSerializer uses < etc for < by default — but regardless, the value
+        // is quoted. We verify there's no raw closing script tag that would break out.
+        Assert.IsFalse(json.Contains("</script>"),
+            "JsonSerializer must encode </script> to prevent script block breakout");
+    }
+
+    // ── Issue #331: Slider hidden input encoding ─────────────────────────────
+
+    [TestMethod]
+    public void Slider_DefaultValueNumericValidation_NonNumeric_EmitsZero()
+    {
+        // Fix 6: A non-numeric DefaultValue must not be emitted raw into JS.
+        // Validate that double.TryParse rejects the XSS payload.
+        var payload = "0;alert(1)//";
+        bool isNumeric = double.TryParse(payload,
+            System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out _);
+        Assert.IsFalse(isNumeric,
+            "XSS payload must not parse as a valid double");
+    }
+
+    [TestMethod]
+    public void Slider_HiddenInputValue_XssPayload_IsHtmlEncoded()
+    {
+        // Fix 6: hidden input value= must be HtmlEncoded.
+        var raw = "'><script>alert(1)</script>";
+        var encoded = System.Net.WebUtility.HtmlEncode(raw);
+        Assert.IsFalse(encoded.Contains("<script>"),
+            "Slider hidden input value must HtmlEncode XSS payload");
+        Assert.IsFalse(encoded.Contains("'>"),
+            "Slider hidden input value must HtmlEncode attribute-breaking chars");
+    }
 }

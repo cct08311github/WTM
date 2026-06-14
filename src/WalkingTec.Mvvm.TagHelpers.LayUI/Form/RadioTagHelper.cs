@@ -4,6 +4,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Extensions;
@@ -73,7 +74,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
             if (string.IsNullOrEmpty(ItemUrl) == false)
             {
-                output.PostElement.AppendHtml($"<script>ff.LoadComboItems('radio','{ItemUrl}','{Id}','{Field.Name}',{JsonSerializer.Serialize(values)})</script>");
+                output.PostElement.AppendHtml($"<script>ff.LoadComboItems('radio','{JavaScriptEncoder.Default.Encode(ItemUrl)}','{Id}','{Field.Name}',{JsonSerializer.Serialize(values)})</script>");
             }
             else
             {

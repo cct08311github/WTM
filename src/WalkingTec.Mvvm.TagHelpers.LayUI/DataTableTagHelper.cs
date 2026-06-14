@@ -360,6 +360,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             typeof(IEnumerable<ComboSelectListItem>)
         };
 
+        /// <summary>
+        /// JS-encodes a string for safe interpolation into a JS string literal.
+        /// </summary>
+        private static string JsEnc(string? s) => JavaScriptEncoder.Default.Encode(s ?? "");
+
         private void CalcChildCol(List<List<LayuiColumn>> layuiCols, List<IGridColumn<TopBasePoco>> rawCols, int maxDepth, int depth)
         {
             List<LayuiColumn> tempCols = [];
@@ -660,7 +665,7 @@ layui.use(['table'], function(){{
     }}
 {Id}defaultfilter = {{}};
 {Id}filterback = {{}};
-{Id}url = '{Url}';
+{Id}url = '{JsEnc(Url)}';
 $.extend(true,{Id}defaultfilter ,{Id}option);
     {(EnableHeaderFilter ? $"wtmHeaderFilter.init('{Id}');" : "")}
     {TableJSVar} = table.render({Id}option);
@@ -670,7 +675,7 @@ $.extend(true,{Id}defaultfilter ,{Id}option);
 setTimeout(function(){{
     var tempwhere = {{}};
     $.extend(tempwhere,{Id}defaultfilter.where);
-    table.reload('{Id}',{{url:'{Url}',where: $.extend(tempwhere,ff.GetSearchFormData('{SearchPanelId}','{fieldPre}')),}});
+    table.reload('{Id}',{{url:'{JsEnc(Url)}',where: $.extend(tempwhere,ff.GetSearchFormData('{SearchPanelId}','{fieldPre}')),}});
 }},100);
 " : $@"
         var {Id}optionempty =  Object.assign({{}}, {Id}option);
@@ -1058,11 +1063,11 @@ case '{item.Area + item.ControllerName + item.ActionName + item.QueryString}':{{
                             }
                             if (item.IsRedirect == true)
                             {
-                                actionScript = $"ff.LoadPage(tempUrl,{item.IsRedirect.ToString().ToLower()},'{item.DialogTitle ?? ""}',isPost===true&&ids!==null&&ids!==undefined?{{'Ids':ids}}:undefined);";
+                                actionScript = $"ff.LoadPage(tempUrl,{item.IsRedirect.ToString().ToLower()},'{JsEnc(item.DialogTitle)}',isPost===true&&ids!==null&&ids!==undefined?{{'Ids':ids}}:undefined);";
                             }
                             else
                             {
-                                actionScript = $"ff.OpenDialog(tempUrl,'{Guid.NewGuid().ToNoSplitString()}','{item.DialogTitle}',{width},{height},isPost===true&&ids!==null&&ids!==undefined?{{'Ids':ids}}:undefined,{item.Max.ToString().ToLower()});";
+                                actionScript = $"ff.OpenDialog(tempUrl,'{Guid.NewGuid().ToNoSplitString()}','{JsEnc(item.DialogTitle)}',{width},{height},isPost===true&&ids!==null&&ids!==undefined?{{'Ids':ids}}:undefined,{item.Max.ToString().ToLower()});";
                             }
                         }
                         else
@@ -1075,7 +1080,7 @@ case '{item.Area + item.ControllerName + item.ActionName + item.QueryString}':{{
                             {
                                 if (item.IsRedirect == true)
                                 {
-                                    actionScript = $"ff.LoadPage(tempUrl,false,'{item.DialogTitle ?? ""}',isPost===true&&ids!==null&&ids!==undefined?{{'Ids':ids}}:undefined);";
+                                    actionScript = $"ff.LoadPage(tempUrl,false,'{JsEnc(item.DialogTitle)}',isPost===true&&ids!==null&&ids!==undefined?{{'Ids':ids}}:undefined);";
                                 }
                                 else
                                 {

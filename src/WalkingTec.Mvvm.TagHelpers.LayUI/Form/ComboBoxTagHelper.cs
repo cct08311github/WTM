@@ -260,7 +260,7 @@ var {Id} = xmSelect.render({{
     {(string.IsNullOrEmpty(RemoteUrl) ? "" : $@"
     remoteSearch: true,
     remoteMethod: function(val, cb) {{
-        $.get('{RemoteUrl}', {{ q: val }}, function(data) {{
+        $.get('{JavaScriptEncoder.Default.Encode(RemoteUrl)}', {{ q: val }}, function(data) {{
             cb(ff.getComboItems(data.Data, []));
         }});
     }},
@@ -314,7 +314,7 @@ var {Id} = xmSelect.render({{
     on:function(data){{
         {((LinkField != null || string.IsNullOrEmpty(LinkId) == false)?@$"
             if ({(string.IsNullOrEmpty(ChangeFunc)?"true":FormatFuncName(ChangeFunc))} != false) {{
-                var u = ""{(TriggerUrl??"")}"";
+                var u = ""{JavaScriptEncoder.Default.Encode(TriggerUrl??"")}"";
                 if (u.indexOf(""?"") == -1) {{
                     u += ""?t="" + new Date().getTime();
                 }}
@@ -328,7 +328,7 @@ var {Id} = xmSelect.render({{
 }});
      {Id}defaultvalues = {JsonSerializer.Serialize(selectVal)};
         {(selectVal?.Count>0 && (LinkField != null || string.IsNullOrEmpty(LinkId) == false) ? @$"
-                var {Id}u = ""{(TriggerUrl ?? "")}"";
+                var {Id}u = ""{JavaScriptEncoder.Default.Encode(TriggerUrl ?? "")}"";
                 if ({Id}u.indexOf(""?"") == -1) {{
                     {Id}u += ""?t="" + new Date().getTime();
                 }}

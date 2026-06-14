@@ -64,24 +64,24 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
         {
             var disable = isReadOnly ? " disabled='' class='layui-disabled'" : " ";
             var selected = ischeck ? " checked" : " ";
-            return $@"<input lay-skin='primary' type='checkbox' name='{name ?? ""}' id='{(name == null ? "" : Utils.GetIdByName(name))}' value='{value ?? ""}' title='{text ?? ""}' {selected} {disable}/>";
+            return $@"<input lay-skin='primary' type='checkbox' name='{WebUtility.HtmlEncode(name ?? "")}' id='{(name == null ? "" : Utils.GetIdByName(name))}' value='{WebUtility.HtmlEncode(value ?? "")}' title='{WebUtility.HtmlEncode(text ?? "")}' {selected} {disable}/>";
         }
 
         public string MakeRadio(bool ischeck, string? text = null, string? name = null, string? value = null, bool isReadOnly = false)
         {
             var selected = ischeck ? " checked" : " ";
             var disable = isReadOnly ? " disabled='' class='layui-disabled'" : " ";
-            return $@"<input lay-skin='primary' type='radio' name='{name ?? ""}' id='{(name == null ? "" : Utils.GetIdByName(name))}' value='{value ?? ""}' title='{text ?? ""}' {selected} {disable}/>";
+            return $@"<input lay-skin='primary' type='radio' name='{WebUtility.HtmlEncode(name ?? "")}' id='{(name == null ? "" : Utils.GetIdByName(name))}' value='{WebUtility.HtmlEncode(value ?? "")}' title='{WebUtility.HtmlEncode(text ?? "")}' {selected} {disable}/>";
         }
 
         public string MakeCombo(string? name = null, List<ComboSelectListItem>? value = null, string? selectedValue = null, string? emptyText = null, bool isReadOnly = false)
         {
             var disable = isReadOnly ? " disabled='' class='layui-disabled'" : " ";
-            string rv = $"<select name='{name}' id='{(name == null ? "" : Utils.GetIdByName(name))}' class='layui-input' style='height:28px'   {disable} lay-ignore>";
+            string rv = $"<select name='{WebUtility.HtmlEncode(name ?? "")}' id='{(name == null ? "" : Utils.GetIdByName(name))}' class='layui-input' style='height:28px'   {disable} lay-ignore>";
             if (string.IsNullOrEmpty(emptyText) == false)
             {
                 rv += $@"
-<option value=''>{emptyText}</option>";
+<option value=''>{WebUtility.HtmlEncode(emptyText)}</option>";
             }
             if (value != null)
             {
@@ -90,13 +90,13 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
                     if (item.Value.ToString().ToLower() == selectedValue?.ToLower())
                     {
                         rv += $@"
-<option value='{item.Value}' selected>{item.Text}</option>";
+<option value='{WebUtility.HtmlEncode(item.Value?.ToString() ?? "")}' selected>{WebUtility.HtmlEncode(item.Text ?? "")}</option>";
 
                     }
                     else
                     {
                         rv += $@"
-<option value='{item.Value}'>{item.Text}</option>";
+<option value='{WebUtility.HtmlEncode(item.Value?.ToString() ?? "")}'>{WebUtility.HtmlEncode(item.Text ?? "")}</option>";
                     }
                 }
             }
@@ -109,7 +109,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
         public string MakeTextBox(string? name = null, string? value = null, string? emptyText = null, bool isReadOnly = false)
         {
             var disable = isReadOnly ? " disabled='' class='layui-disabled'" : " ";
-            return $@"<input class='layui-input' style='height:28px'  name='{name ?? ""}' id='{(name == null ? "" : Utils.GetIdByName(name))}' value='{value ?? ""}' {disable} />";
+            return $@"<input class='layui-input' style='height:28px'  name='{WebUtility.HtmlEncode(name ?? "")}' id='{(name == null ? "" : Utils.GetIdByName(name))}' value='{WebUtility.HtmlEncode(value ?? "")}' {disable} />";
         }
 
         public string MakeDateTime(string? name = null, string? value = null, string? emptyText = null, bool isReadOnly = false, DateTimeTypeEnum? dateType = DateTimeTypeEnum.DateTime)
@@ -126,7 +126,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
                     value = "";
                 }
             }
-            return $@"<input class='layui-input' style='height:28px'  name='{name ?? ""}' id='{id}' value='{value ?? ""}' {disable}  onclick='ff.SetGridCellDate(""{id}"",""{effectiveDateType}"")'/>";
+            return $@"<input class='layui-input' style='height:28px'  name='{WebUtility.HtmlEncode(name ?? "")}' id='{id}' value='{WebUtility.HtmlEncode(value ?? "")}' {disable}  onclick='ff.SetGridCellDate(""{id}"",""{effectiveDateType}"")'/>";
         }
 
 

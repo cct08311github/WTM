@@ -1,5 +1,7 @@
 using System;
 using System.Linq;
+using System.Net;
+using System.Text.Encodings.Web;
 
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.Razor.TagHelpers;
@@ -147,16 +149,45 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 }
             }
 
+            // Numeric-validate DefaultValue before JS emission to prevent JS injection.
+            string safeDefaultValue = "";
+            if (DefaultValue != null)
+            {
+                if (double.TryParse(DefaultValue, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out _))
+                {
+                    safeDefaultValue = DefaultValue;
+                }
+                else if (DefaultValue.StartsWith('[') && DefaultValue.EndsWith(']'))
+                {
+                    // Range slider: [n,n] — validate both parts
+                    var inner = DefaultValue.TrimStart('[').TrimEnd(']').Replace(" ", "");
+                    var parts = inner.Split(',');
+                    if (parts.Length == 2 &&
+                        double.TryParse(parts[0], System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out _) &&
+                        double.TryParse(parts[1], System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out _))
+                    {
+                        safeDefaultValue = DefaultValue;
+                    }
+                    else
+                    {
+                        safeDefaultValue = "0";
+                    }
+                }
+                else
+                {
+                    safeDefaultValue = "0";
+                }
+            }
             var content = $@"
-<input type='hidden' name='{Field.Name}' value='{value0}' class='layui-input'>
-{(Field1 == null ? string.Empty : $"<input type='hidden' name='{Field1.Name}' value='{value1}' class='layui-input'>")}
+<input type='hidden' name='{WebUtility.HtmlEncode(Field.Name)}' value='{WebUtility.HtmlEncode(value0 ?? "")}' class='layui-input'>
+{(Field1 == null ? string.Empty : $"<input type='hidden' name='{WebUtility.HtmlEncode(Field1.Name)}' value='{WebUtility.HtmlEncode(value1 ?? "")}' class='layui-input'>")}
 <script>
 layui.use(['slider'],function(){{
   var $ = layui.$;
   var _id = '{_idPrefix}{Id}';
   var slider = layui.slider;
   function defaultFunc(value,sliderIns) {{
-    {(range ? $"$('input[name=\"{Field.Name}\"]').val(value[0]);$('input[name=\"{Field1.Name}\"]').val(value[1]);" : $"$('input[name=\"{Field.Name}\"]').val(value);")}
+    {(range ? $"$('input[name=\"{JavaScriptEncoder.Default.Encode(Field.Name)}\"]').val(value[0]);$('input[name=\"{JavaScriptEncoder.Default.Encode(Field1!.Name)}\"]').val(value[1]);" : $"$('input[name=\"{JavaScriptEncoder.Default.Encode(Field.Name)}\"]').val(value);")}
   }}
   var sliderIns = slider.render({{
     elem: '#'+_id
@@ -164,7 +195,7 @@ layui.use(['slider'],function(){{
     {(Min == null ? string.Empty : $",min:{Min.Value}")}
     {(Max == null ? string.Empty : $",max:{Max.Value}")}
     {(!range ? string.Empty : $",range:true")}
-    {(DefaultValue == null ? string.Empty : $",value:{DefaultValue}")}
+    {(string.IsNullOrEmpty(safeDefaultValue) ? string.Empty : $",value:{safeDefaultValue}")}
     ,step:{Step}
     {(!Disabled ? string.Empty : ",disabled:true")}
     ,showstep:{ShowStep.ToString().ToLower()}

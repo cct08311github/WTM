@@ -147,13 +147,13 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             }
             if(selectVal.Count > 0)
             {
-                DefaultValue = $"[{string.Join(",", selectVal.Select(x => "'" + x + "'"))}]";
+                DefaultValue = JsonSerializer.Serialize(selectVal);
             }
             else
             {
                 if(string.IsNullOrEmpty(DefaultValue) == false)
                 {
-                    DefaultValue = $"[{string.Join(",", DefaultValue.Split(",").Select(x => "'" + x + "'"))}]";
+                    DefaultValue = JsonSerializer.Serialize(DefaultValue.Split(",").Select(x => x.Trim()).ToArray());
                 }
             }
             if (string.IsNullOrEmpty(ItemUrl) == false)

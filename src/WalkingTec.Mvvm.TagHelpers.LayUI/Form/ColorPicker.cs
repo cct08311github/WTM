@@ -1,4 +1,6 @@
 using System.Linq;
+using System.Net;
+using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.Razor.TagHelpers;
 using WalkingTec.Mvvm.Core.Extensions;
@@ -65,14 +67,16 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 requiredtext = $" lay-verify=\"required\" lay-reqText=\"{THProgram._localizer["Validate.{0}required", Field?.Metadata?.DisplayName ?? Field?.Metadata?.Name]}\"";
             }
 
+            var encodedVal = WebUtility.HtmlEncode(val ?? "");
+            var jsEncodedVal = JavaScriptEncoder.Default.Encode(val ?? "");
             var content = $@"
-<input type='hidden' id='{Id}' name='{Field.Name}' value='{val}' {requiredtext}/>
+<input type='hidden' id='{Id}' name='{Field.Name}' value='{encodedVal}' {requiredtext}/>
 <script>
 layui.use('colorpicker', function(){{
   var colorpicker = layui.colorpicker;
   colorpicker.render({{
     elem: '#cp_{Id}'
-    ,color:'{val}'
+    ,color:'{jsEncodedVal}'
     ,alpha : {EnableAlpha.ToString().ToLower()}
     ,format: '{(EnableAlpha==true? "rgb":"hex")}'
     ,predefine: {(PredefinedColors == null ? "false" : "true")}

@@ -4,7 +4,8 @@
 
 ### Security
 
-- **#332 — `framework_layui.js` XSS / open-redirect / code-exec hardening** (PR TBD): seven client-side security fixes to the LayUI framework JavaScript:
+- LayUI server-side XSS/encoding hardening (#331): HtmlEncode dynamic values in ColorPicker, LayuiUIService makers (MakeCheckBox/MakeRadio/MakeTextBox/MakeCombo/MakeDateTime); JavaScriptEncoder for ItemUrl/RemoteUrl/TriggerUrl in ComboBox/Radio/CheckBox; GridAction DialogTitle+Url JS encoding; Transfer selectVal via JsonSerializer; Slider DefaultValue numeric validation + field name JS encoding.
+- **#332 — `framework_layui.js` XSS / open-redirect / code-exec hardening** (PR #341): seven client-side security fixes to the LayUI framework JavaScript:
   - **Reflected XSS (HIGH)**: `layer.alert(request.responseText)` / `layer.alert(xhr.responseText)` in PostForm, BgRequest, OpenDialog, and OpenDialog2 error handlers now wrap server error bodies with `ff.EscapeText(...)`. Raw server HTML is no longer concatenated into layui's innerHTML-based alert dialog.
   - **Stored XSS (HIGH)**: `ChainChange` and `LoadComboItems` checkbox/radio rendering replaced string-concatenated `<input>` markup with `ff._makeInput(type, name, value, title, checked, disabled)` — a new DOM-API helper that sets attributes via property assignment. `item.Value` / `item.Text` cannot break out of attribute context.
   - **Open redirect**: `OpenDialog` error handler now validates the server `Location` response header before `window.location` assignment — rejects absolute URLs, protocol-relative `//`, `javascript:`, and `data:` with `console.warn`, mirroring the `DispatchAction` redirect guard (#804).
