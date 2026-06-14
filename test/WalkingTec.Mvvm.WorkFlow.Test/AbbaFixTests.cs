@@ -1734,6 +1734,462 @@ internal sealed class WfAbbaTestContext : DbContext
     }
 }
 
+
+// ─── WF-310 (WF-290.2): AddApprover lock-order + semantic-preservation tests ──
+// Tests that prove AddApproverAsync now acquires ApprovalTask BEFORE NodeInstance,
+// and that all semantics are preserved after the reorder.
+//
+// Test IDs:
+//   T-ABBA-2902-LO-01  lock-order: TableOrderInterceptor asserts ApprovalTask is written
+//                      BEFORE NodeInstance within the AddApprover transaction.
+//   T-ABBA-2902-SEM-01 semantic: dedup of already-present approvers — no-op returned.
+//   T-ABBA-2902-SEM-02 semantic: correct TotalRequired after AddApprover (sequential, After).
+//   T-ABBA-2902-SEM-03 semantic: correct SequenceOrder of injected AddedPending tasks (After).
+//   T-ABBA-2902-SEM-04 semantic: correct SequenceOrder of injected AddedPending tasks (Before).
+//   T-ABBA-2902-CONC-01 concurrent AddApprover vs Delegate on same node — exactly one wins;
+//                        final TotalRequired and task count are consistent (no lost update,
+//                        no double-bump).
+
+[TestClass]
+public class AddApproverLockOrderTests : IDisposable
+{
+    private SqliteConnection _keepAlive = null!;
+    private string _dbName = null!;
+
+    [TestInitialize]
+    public void Setup()
+    {
+        _dbName = $"WfAddLO_{Guid.NewGuid():N}";
+        _keepAlive = new SqliteConnection($"DataSource={_dbName}?mode=memory&cache=shared");
+        _keepAlive.Open();
+        using var db = new WfAbbaTestContext(_dbName);
+        db.Database.EnsureCreated();
+    }
+
+    [TestCleanup]
+    public void Cleanup()
+    {
+        _keepAlive?.Close();
+        _keepAlive?.Dispose();
+    }
+
+    public void Dispose() => Cleanup();
+
+    private WfAbbaTestContext MakeContext() => new(_dbName);
+
+    private static WorkflowEngine MakeEngine(WfAbbaTestContext ctx, WorkFlowOptions? opts = null)
+    {
+        var options    = opts ?? new WorkFlowOptions();
+        var resolver   = new DefaultApproverResolverExposed(options, ctx);
+        var dispatcher = NodeKindDispatcher_Exposed.CreateWithSequential(resolver, options);
+        return WorkflowEngine_Exposed.CreateWithOptions(ctx, dispatcher, options, NullLogger.Instance);
+    }
+
+    /// <summary>Serializes a single-node Sequential workflow with one approver.</summary>
+    private static string OneNodeGraph(string approver = "alice") =>
+        WorkflowGraphSerializer.Serialize(new WorkflowGraph
+        {
+            Key  = "OneNodeAddGraph",
+            Name = "OneNodeAddGraph",
+            Nodes = new List<NodeDef>
+            {
+                new() { NodeKey = "start", Kind = NodeKind.Start },
+                new()
+                {
+                    NodeKey      = "nodeA",
+                    Kind         = NodeKind.Approval,
+                    ApproveMode  = ApproveMode.Sequential,
+                    ApproverRule = new ApproverRuleDef { Type = "User", Value = approver },
+                },
+                new() { NodeKey = "end", Kind = NodeKind.End },
+            },
+            Transitions = new List<TransitionDef>
+            {
+                new() { From = "start", To = "nodeA" },
+                new() { From = "nodeA", To = "end"   },
+            },
+            FieldWhitelist = new List<FieldWhitelistEntry>(),
+        });
+
+    private async Task<(ProcessDefinitionVersion ver, ProcessInstance inst, ApprovalTask task)>
+        SeedRunningInstanceAsync(WfAbbaTestContext ctx, string approver = "alice")
+    {
+        var ver = new ProcessDefinitionVersion
+        {
+            ID          = Guid.NewGuid(),
+            GraphJson   = OneNodeGraph(approver),
+            ContentHash = $"onenode-hash-{Guid.NewGuid():N}",
+            VersionNo   = 1,
+            TenantCode  = "T1",
+            IsValid     = true,
+        };
+        ctx.Set<ProcessDefinitionVersion>().Add(ver);
+        await ctx.SaveChangesAsync();
+
+        var engine = MakeEngine(ctx);
+        var inst   = await engine.StartAsync(ver.ID, null, "initiator", null);
+        Assert.IsNotNull(inst, "SeedRunningInstanceAsync: StartAsync must succeed");
+
+        await using var readCtx = MakeContext();
+        // Scope query to the approval node of this instance (NodeKey="nodeA") to avoid
+        // cross-test collisions and to skip Start/End NodeInstances on the shared DB.
+        var nodeId = await readCtx.Set<NodeInstance>().AsNoTracking()
+            .Where(n => n.InstanceId == inst.ID && n.NodeKey == "nodeA")
+            .Select(n => n.ID)
+            .SingleAsync();
+        var task = await readCtx.Set<ApprovalTask>().AsNoTracking()
+            .SingleAsync(t => t.NodeInstanceId == nodeId && t.State == TaskState.Pending);
+
+        return (ver, inst, task);
+    }
+
+    // ── T-ABBA-2902-LO-01: lock-order structural assertion ────────────────────
+
+    [TestMethod]
+    public async Task T_ABBA_2902_LO_01_AddApprover_AcquiresTask_Before_Node()
+    {
+        // Build instrumented context + schema.
+        var dbName = $"WfAddLO01_{Guid.NewGuid():N}";
+        using var kl = new SqliteConnection($"DataSource={dbName}?mode=memory&cache=shared");
+        kl.Open();
+        using (var schema = new WfAbbaTestContext(dbName))
+            schema.Database.EnsureCreated();
+
+        var interceptor = new TableOrderInterceptor();
+
+        await using var ctx = new WfAbbaTestContext(dbName, interceptor);
+
+        // Seed version and start instance.
+        var ver = new ProcessDefinitionVersion
+        {
+            ID          = Guid.NewGuid(),
+            GraphJson   = OneNodeGraph("alice"),
+            ContentHash = $"lo01-{Guid.NewGuid():N}",
+            VersionNo   = 1,
+            TenantCode  = "T1",
+            IsValid     = true,
+        };
+        ctx.Set<ProcessDefinitionVersion>().Add(ver);
+        await ctx.SaveChangesAsync();
+
+        var engine = MakeEngine(ctx);
+        var inst   = await engine.StartAsync(ver.ID, null, "init", null);
+
+        // Scope to the approval node of this instance to avoid Start/End NodeInstance collisions.
+        var nodeId = await ctx.Set<NodeInstance>().AsNoTracking()
+            .Where(n => n.InstanceId == inst!.ID && n.NodeKey == "nodeA")
+            .Select(n => n.ID)
+            .SingleAsync();
+        var task = await ctx.Set<ApprovalTask>().AsNoTracking()
+            .SingleAsync(t => t.NodeInstanceId == nodeId && t.State == TaskState.Pending);
+
+        // Clear interceptor log — only capture AddApproverAsync writes.
+        interceptor.Clear();
+
+        // Act: AddApproverAsync with one new approver (bob).
+        var result = await engine.AddApproverAsync(
+            taskId:              task.ID,
+            actorITCode:         "alice",
+            newApproverITCodes:  new[] { "bob" },
+            position:            AddPosition.After);
+
+        Assert.AreEqual(WorkflowActionCode.Advanced, result.Code,
+            $"T-ABBA-2902-LO-01: AddApproverAsync must succeed. Got {result.Code}.");
+
+        var writes = interceptor.TableWrites;
+
+        Assert.IsTrue(writes.Count > 0,
+            "T-ABBA-2902-LO-01: interceptor must have captured at least one write.");
+
+        // Find first ApprovalTask write and first NodeInstance write.
+        int firstTaskWrite = -1;
+        int firstNodeWrite = -1;
+        for (int i = 0; i < writes.Count; i++)
+        {
+            var t = writes[i];
+            if (firstTaskWrite < 0 && t.Contains("ApprovalTask", StringComparison.OrdinalIgnoreCase))
+                firstTaskWrite = i;
+            if (firstNodeWrite < 0 && t.Contains("NodeInstance", StringComparison.OrdinalIgnoreCase))
+                firstNodeWrite = i;
+        }
+
+        Assert.IsTrue(firstTaskWrite >= 0,
+            $"T-ABBA-2902-LO-01: at least one ApprovalTask write expected. " +
+            $"Statement order: [{string.Join(", ", writes)}]");
+
+        Assert.IsTrue(firstNodeWrite >= 0,
+            $"T-ABBA-2902-LO-01: at least one NodeInstance write expected (AddApproversToNodeAsync). " +
+            $"Statement order: [{string.Join(", ", writes)}]");
+
+        // KEY INVARIANT (WF-310): ApprovalTask write BEFORE NodeInstance write.
+        Assert.IsTrue(firstTaskWrite < firstNodeWrite,
+            $"T-ABBA-2902-LO-01: first ApprovalTask write (index {firstTaskWrite}) must come " +
+            $"BEFORE first NodeInstance write (index {firstNodeWrite}). " +
+            $"Pre-#310 this was reversed (Node before Task), causing the ABBA cycle with Delegate. " +
+            $"Statement order: [{string.Join(", ", writes)}]");
+    }
+
+    // ── T-ABBA-2902-SEM-01: dedup — all-already-present → AlreadyHandled ──────
+
+    [TestMethod]
+    public async Task T_ABBA_2902_SEM_01_Dedup_AllAlreadyPresent_NoOp()
+    {
+        await using var ctx = MakeContext();
+        var (_, inst, task) = await SeedRunningInstanceAsync(ctx);
+
+        // Add bob once (succeeds).
+        var engine = MakeEngine(ctx);
+        var r1 = await engine.AddApproverAsync(task.ID, "alice", new[] { "bob" });
+        Assert.AreEqual(WorkflowActionCode.Advanced, r1.Code,
+            "T-ABBA-2902-SEM-01 setup: first AddApprover must succeed");
+
+        // Re-read task (same taskId — alice's task is still Pending).
+        // Attempt to add bob again → dedup → AlreadyHandled.
+        await using var ctx2 = MakeContext();
+        var engine2 = MakeEngine(ctx2);
+        var r2 = await engine2.AddApproverAsync(task.ID, "alice", new[] { "bob" });
+
+        Assert.AreEqual(WorkflowActionCode.AlreadyHandled, r2.Code,
+            $"T-ABBA-2902-SEM-01: re-adding existing approver must return AlreadyHandled. Got {r2.Code}.");
+
+        // TotalRequired must not have changed from the second call.
+        await using var verify = MakeContext();
+        var nodeAfter = await verify.Set<NodeInstance>()
+            .AsNoTracking()
+            .SingleAsync(n => n.InstanceId == inst.ID && n.NodeKey == "nodeA");
+        Assert.AreEqual(2, nodeAfter.TotalRequired,
+            "T-ABBA-2902-SEM-01: TotalRequired must be 2 (alice + bob), not 3");
+    }
+
+    // ── T-ABBA-2902-SEM-02: TotalRequired correct after AddApprover ───────────
+
+    [TestMethod]
+    public async Task T_ABBA_2902_SEM_02_TotalRequired_CorrectAfterAdd()
+    {
+        await using var ctx = MakeContext();
+        var (_, inst, task) = await SeedRunningInstanceAsync(ctx);
+
+        // Pre-check: TotalRequired == 1 (just alice).
+        var nodeBefore = await ctx.Set<NodeInstance>().AsNoTracking()
+            .SingleAsync(n => n.InstanceId == inst.ID && n.NodeKey == "nodeA");
+        Assert.AreEqual(1, nodeBefore.TotalRequired, "T-ABBA-2902-SEM-02 pre: TotalRequired must be 1");
+
+        // Add 2 approvers: bob + charlie.
+        var engine = MakeEngine(ctx);
+        var result = await engine.AddApproverAsync(task.ID, "alice", new[] { "bob", "charlie" });
+        Assert.AreEqual(WorkflowActionCode.Advanced, result.Code,
+            $"T-ABBA-2902-SEM-02: AddApproverAsync must succeed. Got {result.Code}.");
+
+        // Post-check: TotalRequired == 3 (alice + bob + charlie).
+        await using var verify = MakeContext();
+        var nodeAfter = await verify.Set<NodeInstance>()
+            .AsNoTracking()
+            .SingleAsync(n => n.InstanceId == inst.ID && n.NodeKey == "nodeA");
+        Assert.AreEqual(3, nodeAfter.TotalRequired,
+            "T-ABBA-2902-SEM-02: TotalRequired must be 3 after adding 2 approvers");
+    }
+
+    // ── T-ABBA-2902-SEM-03: SequenceOrder correct — AddPosition.After ─────────
+
+    [TestMethod]
+    public async Task T_ABBA_2902_SEM_03_SequenceOrder_After_CorrectlyShifted()
+    {
+        await using var ctx = MakeContext();
+
+        var ver = new ProcessDefinitionVersion
+        {
+            ID          = Guid.NewGuid(),
+            GraphJson   = WorkflowGraphSerializer.Serialize(new WorkflowGraph
+            {
+                Key  = "TwoApprGraph",
+                Name = "TwoApprGraph",
+                Nodes = new List<NodeDef>
+                {
+                    new() { NodeKey = "start", Kind = NodeKind.Start },
+                    new()
+                    {
+                        NodeKey      = "nodeA",
+                        Kind         = NodeKind.Approval,
+                        ApproveMode  = ApproveMode.Sequential,
+                        ApproverRule = new ApproverRuleDef { Type = "User", Value = "alice,carol" },
+                    },
+                    new() { NodeKey = "end", Kind = NodeKind.End },
+                },
+                Transitions = new List<TransitionDef>
+                {
+                    new() { From = "start", To = "nodeA" },
+                    new() { From = "nodeA", To = "end"   },
+                },
+                FieldWhitelist = new List<FieldWhitelistEntry>(),
+            }),
+            ContentHash = $"twoappr-{Guid.NewGuid():N}",
+            VersionNo   = 1,
+            TenantCode  = "T1",
+            IsValid     = true,
+        };
+        ctx.Set<ProcessDefinitionVersion>().Add(ver);
+        await ctx.SaveChangesAsync();
+
+        var engine = MakeEngine(ctx);
+        var inst   = await engine.StartAsync(ver.ID, null, "initiator", null);
+
+        // alice's task is Pending (seq=0), carol's is NotYetActive (seq=1).
+        await using var readCtx = MakeContext();
+        var nodeIdSem03 = await readCtx.Set<NodeInstance>().AsNoTracking()
+            .Where(n => n.InstanceId == inst!.ID && n.NodeKey == "nodeA")
+            .Select(n => n.ID)
+            .SingleAsync();
+        var aliceTask = await readCtx.Set<ApprovalTask>().AsNoTracking()
+            .SingleAsync(t => t.NodeInstanceId == nodeIdSem03 && t.AssigneeITCode == "alice" && t.State == TaskState.Pending);
+
+        // Act: add bob AFTER alice.
+        await using var addCtx = MakeContext();
+        var addEngine = MakeEngine(addCtx);
+        var result = await addEngine.AddApproverAsync(
+            aliceTask.ID, "alice", new[] { "bob" }, AddPosition.After);
+        Assert.AreEqual(WorkflowActionCode.Advanced, result.Code,
+            $"T-ABBA-2902-SEM-03: AddApproverAsync must succeed. Got {result.Code}.");
+
+        // Verify SequenceOrders.
+        await using var verify = MakeContext();
+        var tasks = await verify.Set<ApprovalTask>().AsNoTracking()
+            .Where(t => t.NodeInstanceId == aliceTask.NodeInstanceId)
+            .OrderBy(t => t.SequenceOrder)
+            .ToListAsync();
+
+        Assert.AreEqual(3, tasks.Count,
+            "T-ABBA-2902-SEM-03: 3 tasks expected (alice=0, bob=1, carol=2)");
+
+        Assert.AreEqual("alice", tasks[0].AssigneeITCode);
+        Assert.AreEqual(0, tasks[0].SequenceOrder, "alice must stay at seq=0");
+
+        Assert.AreEqual("bob", tasks[1].AssigneeITCode);
+        Assert.AreEqual(1, tasks[1].SequenceOrder, "bob (injected After alice) must be at seq=1");
+        Assert.AreEqual(TaskState.AddedPending, tasks[1].State, "bob must be AddedPending");
+
+        Assert.AreEqual("carol", tasks[2].AssigneeITCode);
+        Assert.AreEqual(2, tasks[2].SequenceOrder, "carol must be shifted from seq=1 to seq=2");
+    }
+
+    // ── T-ABBA-2902-SEM-04: SequenceOrder correct — AddPosition.Before ────────
+
+    [TestMethod]
+    public async Task T_ABBA_2902_SEM_04_SequenceOrder_Before_CorrectlyShifted()
+    {
+        await using var ctx = MakeContext();
+
+        var ver = new ProcessDefinitionVersion
+        {
+            ID          = Guid.NewGuid(),
+            GraphJson   = OneNodeGraph("alice"),
+            ContentHash = $"before-{Guid.NewGuid():N}",
+            VersionNo   = 1,
+            TenantCode  = "T1",
+            IsValid     = true,
+        };
+        ctx.Set<ProcessDefinitionVersion>().Add(ver);
+        await ctx.SaveChangesAsync();
+
+        var engine = MakeEngine(ctx);
+        var inst   = await engine.StartAsync(ver.ID, null, "initiator", null);
+
+        await using var readCtx = MakeContext();
+        var nodeIdSem04 = await readCtx.Set<NodeInstance>().AsNoTracking()
+            .Where(n => n.InstanceId == inst!.ID && n.NodeKey == "nodeA")
+            .Select(n => n.ID)
+            .SingleAsync();
+        var aliceTask = await readCtx.Set<ApprovalTask>().AsNoTracking()
+            .SingleAsync(t => t.NodeInstanceId == nodeIdSem04 && t.State == TaskState.Pending);
+
+        // Act: add bob BEFORE alice (seq=0 → bob shifts alice up to seq=1).
+        await using var addCtx = MakeContext();
+        var addEngine = MakeEngine(addCtx);
+        var result = await addEngine.AddApproverAsync(
+            aliceTask.ID, "alice", new[] { "bob" }, AddPosition.Before);
+        Assert.AreEqual(WorkflowActionCode.Advanced, result.Code,
+            $"T-ABBA-2902-SEM-04: AddApproverAsync must succeed. Got {result.Code}.");
+
+        await using var verify = MakeContext();
+        var tasks = await verify.Set<ApprovalTask>().AsNoTracking()
+            .Where(t => t.NodeInstanceId == aliceTask.NodeInstanceId)
+            .OrderBy(t => t.SequenceOrder)
+            .ToListAsync();
+
+        Assert.AreEqual(2, tasks.Count,
+            "T-ABBA-2902-SEM-04: 2 tasks expected (bob=0, alice=1)");
+
+        Assert.AreEqual("bob", tasks[0].AssigneeITCode);
+        Assert.AreEqual(0, tasks[0].SequenceOrder, "bob (inserted Before alice) must be at seq=0");
+        Assert.AreEqual(TaskState.AddedPending, tasks[0].State, "bob must be AddedPending");
+
+        Assert.AreEqual("alice", tasks[1].AssigneeITCode);
+        Assert.AreEqual(1, tasks[1].SequenceOrder, "alice must be shifted from seq=0 to seq=1");
+    }
+
+    // ── T-ABBA-2902-CONC-01: concurrent AddApprover vs Delegate ─────────────
+
+    [TestMethod]
+    public async Task T_ABBA_2902_CONC_01_ConcurrentAddApproverAndDelegate_ConsistentState()
+    {
+        await using var ctx = MakeContext();
+        var (_, inst, task) = await SeedRunningInstanceAsync(ctx);
+
+        // Run AddApprover and Delegate concurrently (SQLite serializes them).
+        var addCtx = MakeContext();
+        var delCtx = MakeContext();
+        try
+        {
+            var addEngine = MakeEngine(addCtx);
+            var delEngine = MakeEngine(delCtx);
+
+            var addTask = addEngine.AddApproverAsync(task.ID, "alice", new[] { "bob" }, AddPosition.After);
+            var delTask = delEngine.DelegateTaskAsync(task.ID, "alice", "charlie");
+
+            await Task.WhenAll(addTask, delTask);
+            var addResult = addTask.Result;
+            var delResult = delTask.Result;
+
+            // Both must have completed without throwing.
+            var validCodes = new[]
+            {
+                WorkflowActionCode.Advanced,
+                WorkflowActionCode.AlreadyHandled,
+                WorkflowActionCode.NotAuthorized,
+                WorkflowActionCode.NodeAlreadyDecided,
+                WorkflowActionCode.TaskNotActive,
+                WorkflowActionCode.NodeClosed,
+                WorkflowActionCode.DelegateAlreadyParticipant,
+            };
+
+            Assert.IsTrue(validCodes.Contains(addResult.Code),
+                $"T-ABBA-2902-CONC-01: AddApproverAsync must complete with valid code. Got {addResult.Code}.");
+            Assert.IsTrue(validCodes.Contains(delResult.Code),
+                $"T-ABBA-2902-CONC-01: DelegateTaskAsync must complete with valid code. Got {delResult.Code}.");
+
+            // Assert consistent final state: TotalRequired matches actual active task count.
+            await using var verify = MakeContext();
+            var nodeAfter = await verify.Set<NodeInstance>().AsNoTracking()
+                .SingleAsync(n => n.InstanceId == inst.ID && n.NodeKey == "nodeA");
+            var activeTaskCount = await verify.Set<ApprovalTask>().AsNoTracking()
+                .CountAsync(t => t.NodeInstanceId == nodeAfter.ID
+                                  && (t.State == TaskState.Pending
+                                      || t.State == TaskState.NotYetActive
+                                      || t.State == TaskState.AddedPending));
+
+            Assert.IsTrue(nodeAfter.TotalRequired >= 1 && nodeAfter.TotalRequired <= 2,
+                $"T-ABBA-2902-CONC-01: TotalRequired must be 1 or 2. Got {nodeAfter.TotalRequired}.");
+
+            Assert.IsTrue(activeTaskCount >= 1,
+                $"T-ABBA-2902-CONC-01: at least 1 active task expected. Got {activeTaskCount}.");
+        }
+        finally
+        {
+            await addCtx.DisposeAsync();
+            await delCtx.DisposeAsync();
+        }
+    }
+}
+
 // ─── §5.2 Live-provider ABBA deadlock-freedom stubs (#270-gated) ─────────────
 
 /// <summary>

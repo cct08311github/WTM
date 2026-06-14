@@ -161,11 +161,18 @@ If txB fails mid-way (e.g. STEP-4 partial), the instance is `Returning` with som
 
 ### 4.1 Follow-up issue WF-290.2 — unify AddApprover to Task-before-Node
 
-B does not touch the Delegate-vs-AddApprover `(Node, Task)` cycle (§1.3). The correct long-term fix is to swap AddApprover's 6a/6b ordering so the ApprovalTask shift+INSERT (`:3094-3136`) precedes `AddApproversToNodeAsync` (`:3043`), making **all** human txns share one total order `… → ApprovalTask → NodeInstance → ProcessInstance(Seq)`. This is additive and low-risk but is a distinct change with its own regression surface (it reorders the TotalRequired bump relative to the task INSERTs, which interacts with the `existingITCodes` dedup re-read). **File as a separate Gitea issue WF-290.2 before #290 lands.**
+**Status: IMPLEMENTED in #310 (WF-290.2).** The Delegate-vs-AddApprover `(Node, Task)` cycle is now structurally eliminated. AddApprover's 6a/6b ordering was swapped: the ApprovalTask shift+INSERT now precedes `AddApproversToNodeAsync`, so all human txns share one total order `… → ApprovalTask → NodeInstance → ProcessInstance(Seq)`.
+
+**§4.1 Correctness analysis (#310):** The reorder preserves all semantics:
+- `existingITCodes` dedup re-read is outside the txn — unchanged.
+- `insertionOrder` uses `freshNode.TotalRequired` (pre-bump value, still correct after reorder since `AddApproversToNodeAsync` hasn't fired yet).
+- If `AddApproversToNodeAsync` returns 0 (concurrent actor modified node epoch), the whole txn rolls back atomically — no orphaned task INSERTs.
+- `TotalRequired` ends at (pre-bump + delta) — identical outcome.
+- `nodeInst.State == Activated` guard fires before any writes.
 
 ### 4.2 C-backstop — provider-deadlock victim-retry for Delegate/AddApprover ONLY
 
-Until WF-290.2 lands, the Delegate-vs-AddApprover cycle can still fire on real providers. Adopt C's envelope as a **named backstop**, explicitly NOT the #290 fix:
+WF-290.2 (#310) has now landed, eliminating the root cycle. The C-backstop is retained as pure defense-in-depth:
 
 - **`WorkflowDeadlockClassifier.IsDeadlockVictim(Exception)`** (new file `Engine/WorkflowDeadlockClassifier.cs`) — dependency-free match on reflected `Number`/`SqlState` + exception type-name, mirroring the dependency-free UNIQUE-detection style at `GuardedTransition.cs:356-361`. Codes: SqlServer 1205; PgSql `40P01` (+ `40001`); MySql 1213 (`ER_LOCK_DEADLOCK`); Oracle `ORA-00060`. **DaMeng:** the deadlock code MUST be confirmed against a live DaMeng instance under #270 before the classifier claims DaMeng coverage — until then the DaMeng branch is documented as **degrades-to-status-quo** (a missed code rethrows raw, exactly as today). This is the explicit honest limitation the skeptic flagged.
 - **`RunWithDeadlockRetryAsync(...)`** (internal, next to `AllocateSeqWithRetryAsync` shape) — bounded jittered-backoff retry of the **whole** Delegate/AddApprover txn body (not the return). Wrap at the public entrypoints (`DelegateTaskAsync` `:3172`, `AddApproverAsync` `:2928`); keep the inner `catch (DbUpdateException) → DelegateAlreadyParticipant` (`:3377`) and `MintNodeInstance` UNIQUE catch as **non-deadlock** semantic outcomes (the classifier matches deadlock SQLSTATE/numbers only).
@@ -224,7 +231,7 @@ SQLite single-writer **can never exhibit ABBA**, so the actual concurrent deadlo
 |---|---|---|
 | **#290 (this)** | Return-txn ABBA fix — split STEP-1 into its own committed transaction | `WorkflowEngine.cs:ExecuteReturnToNodeAsync` (split txA/txB + widened compensating catch); SQLite tests T-ABBA-RET-01..06; #270-gated `T_ABBA_290_*` stubs (10); doc corrections (wave-5 §0 + this doc). Touches **one** production method. |
 | **#290 backstop (folded in)** | C-backstop deadlock-victim retry for Delegate/AddApprover | `Engine/WorkflowDeadlockClassifier.cs` (new); `RunWithDeadlockRetryAsync` envelope around `DelegateTaskAsync`/`AddApproverAsync`; `WorkFlowOptions` `DeadlockRetryAttempts`/`DeadlockRetryBaseDelay`; `WorkflowActionCode.DeadlockRetryExhausted`; tests T-ABBA-CLS-* / T-ABBA-RETRY-*; #270-gated `T_ABBA_2902_*` stubs. DaMeng code confirmed under #270. |
-| **WF-290.2 (NEW follow-up)** | Unify AddApprover to Task-before-Node — total human-txn lock order | Swap `AddApproverAsync` 6a/6b ordering (Task INSERT/shift before `AddApproversToNodeAsync`); regression-prove T-ADD-* + the TotalRequired/dedup interaction. Eliminates the residual `(Node,Task)` cycle the C-backstop only mitigates. **File before #290 lands.** |
+| **WF-290.2 (#310) ✓ DONE** | Unify AddApprover to Task-before-Node — total human-txn lock order | Swapped `AddApproverAsync` 6a/6b ordering (Task shift+INSERT before `AddApproversToNodeAsync`); §4.1 correctness analysis + T-ABBA-2902-LO-01/SEM-01..04/CONC-01 tests. The residual `(Node,Task)` ABBA cycle is now structurally eliminated. C-backstop retained as defense-in-depth. |
 | **#270 (existing)** | Live-provider conformance harness | Wires the SqlServer/PgSql/MySql/Oracle/DaMeng containers that turn every `T_ABBA_*` stub above from skip-clean into an executing deadlock-free proof. |
 
 ---

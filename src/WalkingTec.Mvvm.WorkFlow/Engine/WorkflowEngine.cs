@@ -3119,8 +3119,11 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         int delta = toInject.Count;
 
         // 6. Engine-owned explicit transaction: guarded UPDATE + k INSERT + event log.
-        // #290 backstop (C): wrapped in RunWithDeadlockRetryAsync to backstop the residual
-        // Delegate-vs-AddApprover (Node,Task) cycle until WF-290.2 unifies lock order.
+        // #310 (WF-290.2): AddApproverAsync now acquires ApprovalTask (shift+INSERT) BEFORE
+        // NodeInstance (AddApproversToNodeAsync), matching DelegateTaskAsync's Task→Node order.
+        // All human multi-row txns now share one total lock order: ApprovalTask → NodeInstance
+        // → ProcessInstance(Seq). The C-backstop (RunWithDeadlockRetryAsync) is retained as
+        // pure defense-in-depth; the (Node,Task) ABBA cycle is now structurally eliminated.
         // On SQLite (unit tests) the classifier never fires — transparent pass-through.
         var addResult = await RunWithDeadlockRetryAsync(async innerCt =>
         {
@@ -3140,28 +3143,13 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                         $"NodeInstance {freshNode.ID} left Activated state before transaction started.");
                 }
 
-                // 6a. Guarded UPDATE: TotalRequired+=delta, ApproverSetEpoch+=1, RowVer+=1.
-                // Atomically binds the threshold bump to the epoch guard (FIX-A/B, FIX-G).
-                var casRows = await GuardedTransition.AddApproversToNodeAsync(
-                    Db,
-                    freshNode.ID,
-                    expectedRowVer: freshNode.RowVer,
-                    generation: freshNode.Generation,
-                    expectedApproverSetEpoch: freshNode.ApproverSetEpoch,
-                    delta: delta,
-                    ct: innerCt);
+                // #310 (WF-290.2): ApprovalTask writes (shift UPDATE + INSERT) now come BEFORE
+                // the NodeInstance CAS (AddApproversToNodeAsync), matching DelegateTaskAsync's
+                // Task→Node lock order. This eliminates the (Node,Task) ABBA deadlock cycle.
+                // If the NodeInstance CAS fails (casRows==0), the whole txn rolls back atomically —
+                // no orphaned task INSERTs escape.
 
-                if (casRows == 0)
-                {
-                    await tx.RollbackAsync(CancellationToken.None);
-                    _logger.LogDebug(
-                        "AddApproverAsync: AddApproversToNodeAsync CAS returned 0 for node {NodeId} — " +
-                        "concurrent actor already modified the approver set.",
-                        freshNode.ID);
-                    return WorkflowActionResult.AlreadyHandled;
-                }
-
-                // 6b. Insert k new tasks.
+                // 6a. Insert k new tasks (moved before NodeInstance CAS per WF-310 lock-order fix).
                 // Sequential mode: compute insertion point based on position.
                 // All/Any mode: position ignored; tasks are parallel inboxes.
                 var approveMode = freshNode.ApproveMode ?? ApproveMode.Sequential;
@@ -3208,6 +3196,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                 {
                     // All/Any: append in parallel (SequenceOrder for non-Sequential is unused for ordering,
                     // but we still assign monotonically increasing values for uniqueness).
+                    // freshNode.TotalRequired is the PRE-BUMP value (AddApproversToNodeAsync not yet called).
                     insertionOrder = freshNode.TotalRequired; // append at end (pre-bump value)
                 }
 
@@ -3234,6 +3223,28 @@ internal sealed class WorkflowEngine : IWorkflowEngine
 
                 Db.Set<ApprovalTask>().AddRange(newTasks);
                 await Db.SaveChangesAsync(innerCt);
+
+                // 6b. Guarded UPDATE: TotalRequired+=delta, ApproverSetEpoch+=1, RowVer+=1.
+                // Atomically binds the threshold bump to the epoch guard (FIX-A/B, FIX-G).
+                // Comes AFTER task writes per WF-310 lock-order fix (Task→Node).
+                var casRows = await GuardedTransition.AddApproversToNodeAsync(
+                    Db,
+                    freshNode.ID,
+                    expectedRowVer: freshNode.RowVer,
+                    generation: freshNode.Generation,
+                    expectedApproverSetEpoch: freshNode.ApproverSetEpoch,
+                    delta: delta,
+                    ct: innerCt);
+
+                if (casRows == 0)
+                {
+                    await tx.RollbackAsync(CancellationToken.None);
+                    _logger.LogDebug(
+                        "AddApproverAsync: AddApproversToNodeAsync CAS returned 0 for node {NodeId} — " +
+                        "concurrent actor already modified the approver set.",
+                        freshNode.ID);
+                    return WorkflowActionResult.AlreadyHandled;
+                }
 
                 // 6c. Append event log row.
                 var addedCodes = string.Join(",", toInject);
@@ -3361,9 +3372,10 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         }
 
         // 5. Engine-owned explicit transaction: guarded ReassignTaskAssigneeAsync + epoch bump + event log.
-        // #290 backstop (C): wrapped in RunWithDeadlockRetryAsync to backstop the residual
-        // Delegate-vs-AddApprover (Node,Task) cycle until WF-290.2 unifies lock order.
-        // On SQLite (unit tests) the classifier never fires — transparent pass-through.
+        // C-backstop (defense-in-depth): DelegateTaskAsync is wrapped in RunWithDeadlockRetryAsync.
+        // #310 (WF-290.2) eliminated the Delegate-vs-AddApprover (Node,Task) ABBA cycle by
+        // unifying AddApprover to Task-before-Node lock order. The retry envelope is retained
+        // as belt-and-suspenders. On SQLite (unit tests) the classifier never fires.
         // Capture locals for the lambda (task/nodeInst are already captured by ref in the lambda).
         var delegateResult = await RunWithDeadlockRetryAsync(async innerCt =>
         {
