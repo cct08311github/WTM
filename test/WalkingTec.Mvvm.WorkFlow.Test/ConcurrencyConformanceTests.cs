@@ -2069,76 +2069,49 @@ public class ConcurrencyConformanceTests_DelegateTask_Conformance : IDisposable
 [TestCategory("ProviderConformance")]
 public class ConcurrencyConformanceTests_LiveDb
 {
-    // Helper: gate the stub — if env var IS set, fail loudly instead of Inconclusive so
-    // a future runner can't get a false-green from an unimplemented body (#240 / WF-3).
-    // If env var is absent, Inconclusive (skipped).
-    private static string RequireConnectionString(string envVar)
-    {
-        var cs = Environment.GetEnvironmentVariable(envVar);
-        if (string.IsNullOrWhiteSpace(cs))
-        {
-            Assert.Inconclusive(
-                $"Skipped: environment variable '{envVar}' is not set. " +
-                "Set it to a real connection string to run this ProviderConformance test.");
-        }
-        // Env var IS set — live-provider conformance body not yet implemented.
-        // Fail explicitly so the CI run can't get a false-green when a provider is available.
-        Assert.Fail(
-            $"ProviderConformance body not implemented for env var '{envVar}' — tracked in #270 (WF-3). " +
-            "When WF-3 is implemented, replace this Assert.Fail with the real CAS assertion.");
-        return cs!; // unreachable; satisfies return type
-    }
-
+    /// <summary>
+    /// T_PROV (SQL Server): guarded-CAS conformance check.
+    /// Gate: set <c>WTM_WF_LIVE_PROVIDERS=1</c> and <c>WTM_WF_CONN_SQLSERVER</c> to run.
+    /// </summary>
     [TestMethod]
     [TestCategory("ProviderConformance")]
-    public void T_PROV_SqlServer_NodeInstance_CAS_ExactlyOneWinner()
-    {
-        var cs = RequireConnectionString("WTM_TEST_SQLSERVER_CS");
-        // WF-3: implement using Microsoft.EntityFrameworkCore.SqlServer provider.
-        // Map RowVer with IsRowVersion() (native rowversion column) per spec §7.2.
-        // Assert same CAS winner=1 / loser=0 contract as SQLite tests above.
-        _ = cs; // suppress unused-variable warning; body filled in WF-3
-    }
+    public async Task T_PROV_SqlServer_NodeInstance_CAS_ExactlyOneWinner()
+        => await ProviderConformanceHelper.RunSqlServerAsync();
 
+    /// <summary>
+    /// T_PROV (PostgreSQL): guarded-CAS conformance check.
+    /// Gate: set <c>WTM_WF_LIVE_PROVIDERS=1</c> and <c>WTM_WF_CONN_POSTGRES</c> to run.
+    /// </summary>
     [TestMethod]
     [TestCategory("ProviderConformance")]
-    public void T_PROV_PgSql_NodeInstance_CAS_ExactlyOneWinner()
-    {
-        var cs = RequireConnectionString("WTM_TEST_PGSQL_CS");
-        // WF-3: implement using Npgsql.EntityFrameworkCore.PostgreSQL.
-        // Map RowVer via UseXminAsConcurrencyToken() (shadow xmin, no extra column).
-        _ = cs;
-    }
+    public async Task T_PROV_PgSql_NodeInstance_CAS_ExactlyOneWinner()
+        => await ProviderConformanceHelper.RunPostgresAsync();
 
+    /// <summary>
+    /// T_PROV (MySQL): guarded-CAS conformance check.
+    /// Gate: set <c>WTM_WF_LIVE_PROVIDERS=1</c> and <c>WTM_WF_CONN_MYSQL</c> to run.
+    /// </summary>
     [TestMethod]
     [TestCategory("ProviderConformance")]
-    public void T_PROV_MySql_NodeInstance_CAS_ExactlyOneWinner()
-    {
-        var cs = RequireConnectionString("WTM_TEST_MYSQL_CS");
-        // WF-3: implement using Pomelo.EntityFrameworkCore.MySql.
-        // Map RowVer as plain uint, app-incremented in WHERE+SET per spec §7.2.
-        _ = cs;
-    }
+    public async Task T_PROV_MySql_NodeInstance_CAS_ExactlyOneWinner()
+        => await ProviderConformanceHelper.RunMySqlAsync();
 
+    /// <summary>
+    /// T_PROV (Oracle): guarded-CAS conformance check.
+    /// Gate: set <c>WTM_WF_LIVE_PROVIDERS=1</c> and <c>WTM_WF_CONN_ORACLE</c> to run.
+    /// </summary>
     [TestMethod]
     [TestCategory("ProviderConformance")]
-    public void T_PROV_Oracle_NodeInstance_CAS_ExactlyOneWinner()
-    {
-        var cs = RequireConnectionString("WTM_TEST_ORACLE_CS");
-        // WF-3: implement using Oracle.EntityFrameworkCore.
-        // Map RowVer as plain uint, app-incremented.  Oracle fallback (SELECT...FOR UPDATE)
-        // used when ExecuteUpdateAsync predicate fails to translate (spec §7.5).
-        _ = cs;
-    }
+    public async Task T_PROV_Oracle_NodeInstance_CAS_ExactlyOneWinner()
+        => await ProviderConformanceHelper.RunOracleAsync();
 
+    /// <summary>
+    /// T_PROV (DaMeng 达梦): guarded-CAS conformance check.
+    /// Gate: set <c>WTM_WF_LIVE_PROVIDERS=1</c> and <c>WTM_WF_CONN_DAMENG</c> to run.
+    /// DaMeng is a primary target-market DB; conformance failure here is a ship-blocker.
+    /// </summary>
     [TestMethod]
     [TestCategory("ProviderConformance")]
-    public void T_PROV_DaMeng_NodeInstance_CAS_ExactlyOneWinner()
-    {
-        var cs = RequireConnectionString("WTM_TEST_DAMENG_CS");
-        // WF-3: implement using EntityFrameworkCore.Dm (达梦).
-        // Map RowVer as plain uint, app-incremented.
-        // DaMeng is a primary target-market DB; conformance failure here is a ship-blocker.
-        _ = cs;
-    }
+    public async Task T_PROV_DaMeng_NodeInstance_CAS_ExactlyOneWinner()
+        => await ProviderConformanceHelper.RunDaMengAsync();
 }
