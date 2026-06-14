@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.Razor.TagHelpers;
 using Microsoft.Extensions.Options;
 using System;
+using System.Collections.Concurrent;
 using System.Linq;
 using System.Reflection;
 using WalkingTec.Mvvm.Core;
@@ -12,6 +13,8 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 {
     public abstract class BaseFieldTag : BaseElementTag
     {
+        private static readonly ConcurrentDictionary<System.Reflection.MemberInfo, FormFieldAttribute?> _formFieldAttrCache = new();
+
         /// <summary>
         /// Static UI options, initialized at startup via <see cref="SetUIOptions"/>.
         /// Defaults to LayUI-compatible values for zero-config backwards compatibility.
@@ -92,7 +95,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             // Disabled=true before the readonly/disabled HTML attribute is emitted below.
             // This block is purely additive: absent attribute → zero change.
             var _formFieldPro = Field?.Metadata.ContainerType.GetSingleProperty(Field?.Metadata.PropertyName);
-            FormFieldAttribute? _formFieldAttr = _formFieldPro?.GetCustomAttribute<FormFieldAttribute>();
+            FormFieldAttribute? _formFieldAttr = _formFieldPro == null ? null : _formFieldAttrCache.GetOrAdd(_formFieldPro, static mi => mi.GetCustomAttribute<FormFieldAttribute>());
             if (_formFieldAttr != null)
             {
                 // ReadonlyOnEdit — flip Disabled only when not already set by the Razor author.

@@ -15,6 +15,10 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     public class TreeContainerTagHelper : BaseElementTag
     {
         protected const string REQUIRED_ATTR_NAME = "items";
+
+        private static readonly Regex _regStripSearcherPrefix = new Regex(@".*?Searcher\.", RegexOptions.Compiled);
+        private static readonly Regex _regSearchButtonId = new Regex(@"id=""(.*?)"" IsSearchButton", RegexOptions.Compiled);
+        private static readonly Regex _regGridOptionVar = new Regex(@"(.*?)option = \{", RegexOptions.Compiled);
         public ModelExpression Items { get; set; }
         /// <summary>
         /// 加载页面之前执行
@@ -47,13 +51,13 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
         private string GetFirstNodeUrl(IEnumerable<TreeSelectListItem> nodes)
         {
-            if (nodes == null || nodes.Count() == 0)
+            if (nodes == null || !nodes.Any())
             {
                 return string.Empty;
             }
 
             var node = nodes.FirstOrDefault();
-            if (node.Children != null && node.Children.Count() > 0)
+            if (node.Children != null && node.Children.Any())
             {
                 return GetFirstNodeUrl(node.Children);
             }
@@ -79,15 +83,14 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 var inside = await output.GetChildContentAsync();
                 var insideContent = inside.GetContent();
                 var idfieldname = IdField?.Name ?? "notsetid";
-                idfieldname = Regex.Replace(idfieldname, ".*?Searcher\\.", "");
+                idfieldname = _regStripSearcherPrefix.Replace(idfieldname, "");
                 var levelfieldname = LevelField?.Name ?? "notsetlevel";
-                levelfieldname = Regex.Replace(levelfieldname, ".*?Searcher\\.", "");
+                levelfieldname = _regStripSearcherPrefix.Replace(levelfieldname, "");
 
                 string cusmtomclick = $"top{Id}selected.{idfieldname}=data.data.id;top{Id}selected.{levelfieldname}=data.data.level;";
                 if (string.IsNullOrEmpty(ClickFunc))
                 {
-                    Regex r3 = new Regex("id=\"(.*?)\" IsSearchButton");
-                    var m3 = r3.Match(insideContent);
+                    var m3 = _regSearchButtonId.Match(insideContent);
                     if (m3.Success)
                     {
                         cusmtomclick += $@"
@@ -96,12 +99,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     }
                     else
                     {
-                        Regex r = new Regex("(.*?)option = {");
-                        var m = r.Match(insideContent);
+                        var m = _regGridOptionVar.Match(insideContent);
                         if (m.Success)
                         {
                             var gridid = m.Groups[1].Value.Trim();
-                            Regex r2 = new Regex($"(.*?) = table.render\\({gridid}option\\);");
+                            Regex r2 = new Regex($"(.*?) = table.render\\({gridid}option\\)", RegexOptions.Compiled);
                             var m2 = r2.Match(insideContent);
                             if (m2.Success)
                             {
@@ -226,10 +228,10 @@ layui.use(['tree'],function(){{
                     Checked = s.Selected
                     //Children = new List<LayuiTreeItem>()
                 };
-                if (s.Children != null && s.Children.Count() > 0)
+                if (s.Children != null && s.Children.Any())
                 {
                     news.Children = GetLayuiTree(s.Children, level + 1);
-                    if (news.Children.Where(x => x.Checked == true || x.Expand == true).Count() > 0)
+                    if (news.Children.Any(x => x.Checked == true || x.Expand == true))
                     {
                         news.Expand = true;
                     }

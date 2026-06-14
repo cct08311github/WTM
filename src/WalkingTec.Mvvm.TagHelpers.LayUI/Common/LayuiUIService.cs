@@ -8,7 +8,7 @@ using WalkingTec.Mvvm.Core.Extensions;
 
 namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
 {
-    public class LayuiUIService : IUIService
+    public sealed class LayuiUIService : IUIService
     {
         public string MakeDialogButton(ButtonTypesEnum buttonType, string url, string buttonText, int? width, int? height, string? title = null, string? buttonID = null, bool showDialog = true, bool resizable = true, bool max = false, string? buttonClass = null,string? style=null)
         {
@@ -77,33 +77,34 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
         public string MakeCombo(string? name = null, List<ComboSelectListItem>? value = null, string? selectedValue = null, string? emptyText = null, bool isReadOnly = false)
         {
             var disable = isReadOnly ? " disabled='' class='layui-disabled'" : " ";
-            string rv = $"<select name='{WebUtility.HtmlEncode(name ?? "")}' id='{(name == null ? "" : Utils.GetIdByName(name))}' class='layui-input' style='height:28px'   {disable} lay-ignore>";
+            var sb = new StringBuilder();
+            sb.Append($"<select name='{WebUtility.HtmlEncode(name ?? "")}' id='{(name == null ? "" : Utils.GetIdByName(name))}' class='layui-input' style='height:28px'   {disable} lay-ignore>");
             if (string.IsNullOrEmpty(emptyText) == false)
             {
-                rv += $@"
-<option value=''>{WebUtility.HtmlEncode(emptyText)}</option>";
+                sb.Append($@"
+<option value=''>{WebUtility.HtmlEncode(emptyText)}</option>");
             }
             if (value != null)
             {
                 foreach (var item in value)
                 {
-                    if (item.Value.ToString().ToLower() == selectedValue?.ToLower())
+                    if (string.Equals(item.Value?.ToString(), selectedValue, StringComparison.OrdinalIgnoreCase))
                     {
-                        rv += $@"
-<option value='{WebUtility.HtmlEncode(item.Value?.ToString() ?? "")}' selected>{WebUtility.HtmlEncode(item.Text ?? "")}</option>";
+                        sb.Append($@"
+<option value='{WebUtility.HtmlEncode(item.Value?.ToString() ?? "")}' selected>{WebUtility.HtmlEncode(item.Text ?? "")}</option>");
 
                     }
                     else
                     {
-                        rv += $@"
-<option value='{WebUtility.HtmlEncode(item.Value?.ToString() ?? "")}'>{WebUtility.HtmlEncode(item.Text ?? "")}</option>";
+                        sb.Append($@"
+<option value='{WebUtility.HtmlEncode(item.Value?.ToString() ?? "")}'>{WebUtility.HtmlEncode(item.Text ?? "")}</option>");
                     }
                 }
             }
-            rv += $@"
+            sb.Append($@"
 </select>
-";
-            return rv;
+");
+            return sb.ToString();
         }
 
         public string MakeTextBox(string? name = null, string? value = null, string? emptyText = null, bool isReadOnly = false)

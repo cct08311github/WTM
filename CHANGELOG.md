@@ -24,6 +24,25 @@
 
 - **#270 — env-var-gated live-provider CAS conformance harness** (`ProviderConformanceHelper`): the `T_PROV_*` tests in `ConcurrencyConformanceTests_LiveDb` are no longer unconditional stubs. When `WTM_WF_LIVE_PROVIDERS` is not set the tests remain `Inconclusive` (CI-safe, default behavior unchanged). When `WTM_WF_LIVE_PROVIDERS=1` is set, the harness activates: missing per-provider connection string (`WTM_WF_CONN_SQLSERVER`, `WTM_WF_CONN_POSTGRES`, `WTM_WF_CONN_MYSQL`, `WTM_WF_CONN_ORACLE`, `WTM_WF_CONN_DAMENG`) → `Assert.Fail` with a clear message; missing driver assembly → `Assert.Fail`; unreachable host → `Assert.Fail`; reachable host → real guarded-CAS concurrent-race check (5 rounds, 2 concurrent UPDATEs, asserts exactly 1 winner + 1 loser and final RowVer=1). Nightly CI containers and DaMeng deadlock-code confirmation remain deferred to a follow-up infrastructure issue.
 
+### Improved
+
+- **LayUI TagHelpers perf/allocation** (#334): cache-once optimizations to reduce per-request allocations in the hot TagHelper render path:
+  - `DataTableTagHelper`: `JsonSerializerOptions` promoted to `private static readonly` (avoids per-render allocation, item 1)
+  - `DataTableTagHelper`: `fieldPre` result memoized in a nullable backing field — computed once per tag, not per access (item 13)
+  - `DataTableTagHelper`: `generateColHeader` replaced 3 Where/ToArray passes with a single-pass partition into 3 pre-allocated lists — O(n) instead of O(3n), fewer allocations (item 6)
+  - `DataTableTagHelper`: `prop.GetValue(ListVM.Searcher)` second call replaced with the already-computed `listvalue` local (item 9)
+  - `TransferTagHelper`: `JsonSerializerOptions` promoted to `private static readonly` (item 2)
+  - `BaseFieldTag`: `FormFieldAttribute` reflection lookup cached in a `ConcurrentDictionary<MemberInfo, FormFieldAttribute?>` — hot path on forms with many fields (item 3)
+  - `SelectorTagHelper`: 4 per-render `Regex` instantiations replaced with `private static readonly` compiled fields; two identical patterns collapsed to one shared field (item 4)
+  - `SelectorTagHelper`: `GetSingleProperty(TextBind.PropertyName)` hoisted outside the entity loop — constant per render (item 11)
+  - `TreeContainerTagHelper`: 2 constant `Regex.Replace` calls promoted to compiled static fields; r3/r patterns likewise; runtime-gridid pattern uses `RegexOptions.Compiled` (item 5)
+  - `TreeTagHelper` + `TreeContainerTagHelper`: `.Count()>0` replaced with `.Any()` / `.Any(predicate)` (item 12)
+  - `LayuiUIService.MakeCombo`: replaced `rv +=` string concatenation in option loop with `StringBuilder`; `.ToLower()` comparisons replaced with `string.Equals(..., OrdinalIgnoreCase)` (item 7)
+  - `MultiUploadTagHelper`: manual JSON array build replaced with `JsonSerializer.Serialize(...)` (item 8)
+  - `DisplayTagHelper`: LINQ closure replaced with pre-computed local string to reduce closure allocation (item 14)
+  - `LayuiUIService`: marked `sealed` — no subclasses exist, enables JIT devirtualization (item 15)
+  - Items 10 and 16 skipped: item 10 (td background via script→style) would change visible rendering; item 16 (hasButtonGroup/NeedShowTotal instance state) requires large god-method restructuring, tracked for separate refactor.
+
 ### Fixed
 
 - **LayUI TagHelpers** (Issue #333): 11 functional defects

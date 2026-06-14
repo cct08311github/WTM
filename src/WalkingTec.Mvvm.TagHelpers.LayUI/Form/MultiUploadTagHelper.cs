@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json;
 using Microsoft.AspNetCore.Razor.TagHelpers;
 using WalkingTec.Mvvm.Core;
 using System.Linq;
@@ -161,16 +162,8 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             output.PreElement.SetHtmlContent($@"
 <div id='{Id}label'></div>
 ");
-            string initselected = "[";
-            foreach (var fileId in idstring.Split('|', StringSplitOptions.RemoveEmptyEntries))
-            {
-                initselected += $"\"{fileId}\",";
-            }
-            if (initselected.EndsWith(","))
-            {
-                initselected = initselected.Substring(0, initselected.Length - 1);
-            }
-            initselected += "]";
+            var initselected = JsonSerializer.Serialize(
+                idstring.Split('|', StringSplitOptions.RemoveEmptyEntries));
             var requiredtext = "";
             if (Field.Metadata.IsRequired)
             {

@@ -17,6 +17,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     {
         private const string REQUIRED_ATTR_NAMES = "field";
 
+        private static readonly JsonSerializerOptions _camelCaseOptions = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        };
+
         /// <summary>
         /// 左侧穿梭框上方标题
         /// </summary>
@@ -206,7 +211,7 @@ layui.use(['transfer'],function(){{
   var transferIns = transfer.render({{
     elem: '#'+_id
     ,title:{title}
-    ,data:{JsonSerializer.Serialize(data,new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase})}
+    ,data:{JsonSerializer.Serialize(data,_camelCaseOptions)}
     {(string.IsNullOrEmpty(DefaultValue) ? string.Empty : $",value:defaultVal")}
     ,id:'{Id}'
     ,text:{{none:'{NonePlaceholder}',searchNone:'{SearchNonePlaceholder}'}}

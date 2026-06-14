@@ -21,6 +21,12 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         private static readonly string _jsVersion =
             typeof(DataTableTagHelper).Assembly.GetName().Version?.ToString() ?? "0";
 
+        private static readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+            Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+        };
+
         #region const
         protected const string REQUIRED_ATTR_NAME = "vm";
 
@@ -104,10 +110,15 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             }
         }
 
+        private string? _fieldPreCache;
         protected string fieldPre
         {
             get
             {
+                if (_fieldPreCache != null)
+                {
+                    return _fieldPreCache;
+                }
                 string rv = "";
                 if (string.IsNullOrEmpty(Vm?.Name) == false)
                 {
@@ -128,6 +139,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 {
                     rv = rv.Replace(".Searcher", "").Replace("Searcher", "");
                 }
+                _fieldPreCache = rv;
                 return rv;
             }
         }
@@ -493,11 +505,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                                 {
                                     if (IsInSelector == true)
                                     {
-                                        where[$"Searcher.{prop.Name}"] = prop.GetValue(ListVM.Searcher);
+                                        where[$"Searcher.{prop.Name}"] = listvalue;
                                     }
                                     else
                                     {
-                                        where[$"{prop.Name}"] = prop.GetValue(ListVM.Searcher);
+                                        where[$"{prop.Name}"] = listvalue;
                                     }
                                 }
                             }
@@ -606,9 +618,6 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 var vmQualifiedName1 = VMType.AssemblyQualifiedName;
                 vmName = vmQualifiedName1.Substring(0, vmQualifiedName1.LastIndexOf(", Version=", StringComparison.CurrentCulture));
             }
-            var joption = new JsonSerializerOptions();
-            joption.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
-            joption.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
             output.PostElement.AppendHtml($@"
 <script>
 var {Id}option = null;
@@ -651,7 +660,7 @@ layui.use(['table'], function(){{
         : string.Empty)}
     {(!Width.HasValue ? string.Empty : $",width: {Width.Value}")}
     {(!Height.HasValue ? string.Empty : (Height.Value >= 0 ? $",height: {Height.Value}" : $",height: 'full{Height.Value}'"))}
-    ,cols:{JsonSerializer.Serialize(layuiCols, joption).Replace("\"_raw_", "").Replace("_raw_\"", "").Replace("\\r\\n","").Replace("\\\"","\"")}
+    ,cols:{JsonSerializer.Serialize(layuiCols, _jsonOptions).Replace("\"_raw_", "").Replace("_raw_\"", "").Replace("\\r\\n","").Replace("\\\"","\"")}
     {(!Skin.HasValue ? string.Empty : $",skin: '{Skin.Value.ToString().ToLower()}'")}
     {(Even.HasValue && !Even.Value ? $",even: false" : string.Empty)}
     {(!Size.HasValue ? string.Empty : $",size: '{Size.Value.ToString().ToLower()}'")}
@@ -779,15 +788,19 @@ layui.use(['element'], function() {{
             int maxDepth, int depth
         )
         {
-            var temp = rawCols.Where(x => x.Fixed == GridColumnFixedEnum.Left).ToArray();
-            generateColHeaderCore(temp, nextCols, tempCols, maxDepth,depth);
-
-            temp = rawCols.Where(x => x.Fixed == null).ToArray();
-            generateColHeaderCore(temp, nextCols, tempCols, maxDepth, depth);
-
-            temp = rawCols.Where(x => x.Fixed == GridColumnFixedEnum.Right).ToArray();
-            generateColHeaderCore(temp, nextCols, tempCols, maxDepth, depth);
-
+            // Single-pass partition into Left / unset / Right to avoid three O(n) Where scans.
+            var leftCols = new List<IGridColumn<TopBasePoco>>();
+            var midCols  = new List<IGridColumn<TopBasePoco>>();
+            var rightCols = new List<IGridColumn<TopBasePoco>>();
+            foreach (var col in rawCols)
+            {
+                if (col.Fixed == GridColumnFixedEnum.Left)        leftCols.Add(col);
+                else if (col.Fixed == GridColumnFixedEnum.Right)  rightCols.Add(col);
+                else                                              midCols.Add(col);
+            }
+            generateColHeaderCore(leftCols,  nextCols, tempCols, maxDepth, depth);
+            generateColHeaderCore(midCols,   nextCols, tempCols, maxDepth, depth);
+            generateColHeaderCore(rightCols, nextCols, tempCols, maxDepth, depth);
         }
 
         private void generateColHeaderCore(

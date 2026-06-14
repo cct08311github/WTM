@@ -289,10 +289,10 @@ var {Id} = xmSelect.render({{
                 {
                     news.Checked = true;
                 }
-                if (s.Children != null && s.Children.Count() > 0)
+                if (s.Children != null && s.Children.Any())
                 {
                     news.Children = GetLayuiTree(s.Children, values);
-                    if(news.Children.Where(x=>x.Checked == true || x.Expand == true).Count() > 0)
+                    if(news.Children.Any(x=>x.Checked == true || x.Expand == true))
                     {
                         news.Expand = true;
                     }

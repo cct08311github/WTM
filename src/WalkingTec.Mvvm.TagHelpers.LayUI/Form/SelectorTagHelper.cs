@@ -19,6 +19,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
     {
         private new const string REQUIRED_ATTR_NAME = "field,list-vm,text-bind";
 
+        private static readonly Regex _regParasKeyValue = new Regex(@"(\s*)\S*?=\S*?(\s*)", RegexOptions.Compiled);
+        private static readonly Regex _regColDivStart = new Regex(@"^<div\s+class=""layui-col-md[0-9]+"">", RegexOptions.Compiled);
+        private static readonly Regex _regColDivEnd = new Regex(@"</div>$", RegexOptions.Compiled);
+        private static readonly Regex _regSearcherName = new Regex(@"(name="")((_DONOTUSE_)?[0-9a-zA-z]{0,}[.]?)(Searcher[.][0-9a-zA-z]{0,}"")", RegexOptions.Compiled | RegexOptions.Multiline | RegexOptions.IgnoreCase);
+
         /// <summary>
         /// EmptyText
         /// </summary>
@@ -183,7 +188,6 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
                 if (!string.IsNullOrEmpty(Paras))
                 {
                     var p = Paras.Split(',');
-                    Regex r = new Regex("(\\s*)\\S*?=\\S*?(\\s*)");
                     foreach (var item in p)
                     {
                         var s = Regex.Split(item, "=");
@@ -195,9 +199,13 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
                 }
 
                 var entityList = listVM.GetEntityList().ToList();
+                var textBindPropertyName = TextBind?.Metadata.PropertyName;
+                System.Reflection.PropertyInfo? textBindPropInfo = entityList.Count > 0
+                    ? entityList[0].GetType().GetSingleProperty(textBindPropertyName)
+                    : null;
                 foreach (var item in entityList)
                 {
-                    value.Add(item.GetType().GetSingleProperty(TextBind?.Metadata.PropertyName)?.GetValue(item).ToString());
+                    value.Add((textBindPropInfo ?? item.GetType().GetSingleProperty(textBindPropertyName))?.GetValue(item)?.ToString());
                 }
             }
 
@@ -261,14 +269,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
 
                 #region 移除因 RowTagHelper 生成的外层 div 即 <div class="layui-col-xs6"></div>
 
-                var regStart = new Regex(@"^<div\s+class=""layui-col-md[0-9]+"">");
-                var regEnd = new Regex("</div>$");
-                content = regStart.Replace(content, string.Empty);
-                content = regEnd.Replace(content, string.Empty);
+                content = _regColDivStart.Replace(content, string.Empty);
+                content = _regColDivEnd.Replace(content, string.Empty);
 
                 #endregion
-                var reg = new Regex("(name=\")(_DONOTUSE_)?([0-9a-zA-z]{0,}[.]?)(Searcher[.]?[0-9a-zA-z]{0,}\")", RegexOptions.Multiline | RegexOptions.IgnoreCase);
-                content = reg.Replace(content, "$1$2$4");
+                content = _regSearcherName.Replace(content, "$1$2$4");
                 //reg = new Regex("(name=\")([0-9a-zA-z]{0,}[.]?)(Searcher[.]?[0-9a-zA-z]{0,}\")", RegexOptions.Multiline | RegexOptions.IgnoreCase);
                 //content = reg.Replace(content, "$1$3");
                 content = content.Replace("<script>", "$$script$$").Replace("</script>", "$$#script$$");
@@ -330,7 +335,6 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
                 if (!string.IsNullOrEmpty(Paras))
                 {
                     var p = Paras.Split(',');
-                    Regex r = new Regex("(\\s*)\\S*?=\\S*?(\\s*)");
                     foreach (var item in p)
                     {
                         var s = Regex.Split(item, "=");
