@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.Razor.TagHelpers;
 using Microsoft.Extensions.Options;
+using System;
 using System.Linq;
 using System.Reflection;
 using WalkingTec.Mvvm.Core;
@@ -131,6 +132,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 layfilter = output.Attributes["lay-filter"].Value.ToString();
             }
 
+            if (Field == null)
+            {
+                throw new InvalidOperationException(
+                    $"The 'field' attribute is required on <{GetType().Name.Replace("TagHelper", string.Empty).ToLower()}>. Ensure the field= attribute is set.");
+            }
             if (!(this is DisplayTagHelper) && ((Field.Metadata.IsRequired && Field.Name.Contains("[-1]")==false) || Required == true))
             {
                 requiredDot = UIConfig.RequiredMarkerHtml;

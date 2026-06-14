@@ -387,6 +387,12 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 Loading = true;
             }
 
+            if (ListVM == null)
+            {
+                throw new InvalidOperationException(
+                    $"DataTableTagHelper requires a ListVM but none was provided. Check that the 'vm' attribute on <wt:table> resolves to a non-null IBasePagedListVM.");
+            }
+
             // Pre-compute fixed-field sets for O(1) lookup in generateColHeaderCore.
             _fixedLeftFieldSet = ParseFieldSet(FixedLeftFields);
             _fixedRightFieldSet = ParseFieldSet(FixedRightFields);
@@ -454,21 +460,22 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     Limits = list.OrderBy(x => x).ToArray();
                 }
             }
+            var where = new Dictionary<string, object>();
             if (UseLocalData) // 不需要分页
             {
                 ListVM.NeedPage = false;
             }
             else
             {
-                if (Filter == null) Filter = new Dictionary<string, object>();
-                Filter.Add("_DONOT_USE_VMNAME", vmQualifiedName);
-                Filter.Add("_DONOT_USE_CS", ListVM.CurrentCS);
-                Filter.Add("SearcherMode", ListVM.SearcherMode);
-                Filter.Add("SelectorValueField", ListVM.SelectorValueField);
-                Filter.Add("ViewDivId", ListVM.ViewDivId);
+                where = Filter == null ? new Dictionary<string, object>() : new Dictionary<string, object>(Filter);
+                where["_DONOT_USE_VMNAME"] = vmQualifiedName;
+                where["_DONOT_USE_CS"] = ListVM.CurrentCS;
+                where["SearcherMode"] = ListVM.SearcherMode;
+                where["SelectorValueField"] = ListVM.SelectorValueField;
+                where["ViewDivId"] = ListVM.ViewDivId;
                 if (ListVM.Ids != null && ListVM.Ids.Count > 0)
                 {
-                    Filter.Add("Ids", ListVM.Ids);
+                    where["Ids"] = ListVM.Ids;
                 }
                 // 为首次加载添加Searcher查询参数
                 if (ListVM.Searcher != null)
@@ -481,16 +488,16 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                         {
                             if (prop.PropertyType.IsGenericType == false || (prop.PropertyType.GenericTypeArguments[0] != typeof(ComboSelectListItem) && prop.PropertyType.GenericTypeArguments[0] != typeof(TreeSelectListItem)))
                             {
-                                var listvalue = prop.GetValue(ListVM.Searcher);                                
+                                var listvalue = prop.GetValue(ListVM.Searcher);
                                 if (listvalue != null)
                                 {
                                     if (IsInSelector == true)
                                     {
-                                        Filter.Add($"Searcher.{prop.Name}", prop.GetValue(ListVM.Searcher));
+                                        where[$"Searcher.{prop.Name}"] = prop.GetValue(ListVM.Searcher);
                                     }
                                     else
                                     {
-                                        Filter.Add($"{prop.Name}", prop.GetValue(ListVM.Searcher));
+                                        where[$"{prop.Name}"] = prop.GetValue(ListVM.Searcher);
                                     }
                                 }
                             }
@@ -624,7 +631,7 @@ layui.use(['table'], function(){{
     {righttoolbar}
     {(!NeedShowTotal ? string.Empty : ",totalRow:true")}
     ,headers: {{layuisearch: 'true'}}
-    {(Filter == null || Filter.Count == 0 ? string.Empty : $",where: {JsonSerializer.Serialize(Filter)}")}
+    {(where.Count == 0 ? string.Empty : $",where: {JsonSerializer.Serialize(where)}")}
     {(Method == null ? ",method:'post'" : $",method: '{Method.Value.ToString().ToLower()}'")}
     {(Loading ?? true ? string.Empty : ",loading:false")}
     {(page ? $@",page:{{
@@ -726,7 +733,7 @@ setTimeout(function(){{
                             $(document).click(function(event) {{
                             var _con2 = $("".downpanel"");
                             if (!_con2.is (event.target) && (_con2.has(event.target).length === 0)) {{
-                            _con2.removeClass(""layui -form-selected"");
+                            _con2.removeClass(""layui-form-selected"");
                             }}
                             }});
                             }},500);</script>");

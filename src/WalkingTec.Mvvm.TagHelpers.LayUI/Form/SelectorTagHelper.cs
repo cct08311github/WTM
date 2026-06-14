@@ -221,7 +221,8 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
                         val = Field.Model.ToString();
                     }
                 }
-                output.Content.AppendHtml(string.Join(",", value));
+                var displayText = value.Count > 0 ? string.Join(",", value) : val;
+                output.Content.AppendHtml(displayText);
 
                 base.Process(context, output);
             }

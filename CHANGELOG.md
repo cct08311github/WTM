@@ -24,6 +24,21 @@
 
 - **#270 — env-var-gated live-provider CAS conformance harness** (`ProviderConformanceHelper`): the `T_PROV_*` tests in `ConcurrencyConformanceTests_LiveDb` are no longer unconditional stubs. When `WTM_WF_LIVE_PROVIDERS` is not set the tests remain `Inconclusive` (CI-safe, default behavior unchanged). When `WTM_WF_LIVE_PROVIDERS=1` is set, the harness activates: missing per-provider connection string (`WTM_WF_CONN_SQLSERVER`, `WTM_WF_CONN_POSTGRES`, `WTM_WF_CONN_MYSQL`, `WTM_WF_CONN_ORACLE`, `WTM_WF_CONN_DAMENG`) → `Assert.Fail` with a clear message; missing driver assembly → `Assert.Fail`; unreachable host → `Assert.Fail`; reachable host → real guarded-CAS concurrent-race check (5 rounds, 2 concurrent UPDATEs, asserts exactly 1 winner + 1 loser and final RowVer=1). Nightly CI containers and DaMeng deadlock-code confirmation remain deferred to a follow-up infrastructure issue.
 
+### Fixed
+
+- **LayUI TagHelpers** (Issue #333): 11 functional defects
+  - `SwitchTagHelper`: local `Checked` variable now seeded from the public property — fixes `checked="true"` being ignored when model is null
+  - `SliderTagHelper`: guard on `arr.Length` before indexing — prevents `IndexOutOfRangeException` for single-element (`[5]`) and empty (`[]`) bracket `DefaultValue`
+  - `DataTableTagHelper`: caller-supplied `Filter` dictionary is no longer mutated — prevents `ArgumentException` on re-render; internal `where` dict is used instead
+  - `DataTableTagHelper`: `ListVM == null` now throws `InvalidOperationException` with descriptive message instead of opaque NRE
+  - `DataTableTagHelper`: `removeClass("layui-form-selected")` — removed stray space that made the call a no-op
+  - `BaseFieldTag`: early null guard on `Field` — throws `InvalidOperationException` with clear message when `field=` attribute is missing
+  - `RadioTagHelper` / `CheckBoxTagHelper`: `item.Value` null guard in `SetSelected()` — prevents NRE when a list item has a null `Value`
+  - `UEditorTagHelper`: persisted model value now wins over `DefaultValue` (previously inverted)
+  - `SelectorTagHelper`: display mode now falls back to computed enum display name when the entity text list is empty
+  - `clearSelector` (JS): container selector now uses `id` parameter variable, not literal `"id"` string — fixes silent no-op for named selectors
+  - `GetNonSelections` (JS): removed stray `invalidNum++` reference — prevents `ReferenceError` under strict mode when the table cache contains Array-constructor rows
+
 ## [10.12.1] - 2026-06-13
 
 Patch release — correctness and quality fixes to the `WalkingTec.Mvvm.WorkFlow` engine. No new opt-in surface, no schema change, and no behavior change for hosts that do not call the affected code paths.

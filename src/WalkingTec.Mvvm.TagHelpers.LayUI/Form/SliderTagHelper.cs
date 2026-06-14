@@ -140,8 +140,15 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 {
                     var tmp = DefaultValue.TrimStart('[').TrimEnd(']').Replace(" ", string.Empty);
                     var arr = tmp.Split(",", StringSplitOptions.RemoveEmptyEntries).OrderBy(x => x).ToArray();
-                    value0 = arr[0];
-                    value1 = arr[1];
+                    if (Field1 != null && arr.Length >= 2)
+                    {
+                        value0 = arr[0];
+                        value1 = arr[1];
+                    }
+                    else if (arr.Length >= 1)
+                    {
+                        value0 = arr[0];
+                    }
                 }
                 else
                 {

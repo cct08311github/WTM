@@ -66,7 +66,9 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
                 vm.ConfigInfo.UEditorOptions.SnapscreenActionName = url;
                 vm.ConfigInfo.UEditorOptions.VideoActionName = url;
             }
-            var contentValue = DefaultValue?.ToString() ?? Field?.Model?.ToString() ?? "";
+            var contentValue = string.IsNullOrEmpty(Field?.Model?.ToString())
+                ? (DefaultValue ?? "")
+                : Field.Model.ToString();
             var encodedContent = JavaScriptEncoder.Default.Encode(contentValue);
             output.PostElement.AppendHtml($@"
 <script>

@@ -274,14 +274,13 @@ window.ff = {
 
     GetNonSelections: function (gridId) {
         var table = layui.table
-            , nums = 0 
+            , nums = 0
             , ids = [] // 未选中id
             , data = table.cache[gridId] || [];
         //计算未选中个数
         layui.each(data, function (i, item) {
             if (item.constructor === Array) {
-                invalidNum++; //无效数据，或已删除的
-                return;
+                return; //无效数据，或已删除的
             }
             if (!item[table.config.checkName]) {
                 nums++;
@@ -1501,7 +1500,7 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
     clearSelector: function (id) {
         $("#" + id).val("");
         $("#" + id + "_Display").val("");
-        var vals = $('#' + "id" + '_Container input[type=hidden]');
+        var vals = $('#' + id + '_Container input[type=hidden]');
         for (var i = 0; i < vals.length; i++) {
             vals[i].remove();
         }

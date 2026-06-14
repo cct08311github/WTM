@@ -164,7 +164,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 {
                     if (textAndValue == true)
                     {
-                        if (item.Value.ToString().ToLower() == (item2 as ComboSelectListItem).Value.ToString().ToLower())
+                        if (item.Value?.ToString().ToLower() == (item2 as ComboSelectListItem).Value?.ToString().ToLower())
                         {
                             item.Selected = true;
                             break;
@@ -176,7 +176,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     }
                     else
                     {
-                        if (item.Value.ToString().ToLower() == item2?.ToString().ToLower())
+                        if (item.Value?.ToString().ToLower() == item2?.ToString().ToLower())
                         {
                             item.Selected = true;
                             break;
