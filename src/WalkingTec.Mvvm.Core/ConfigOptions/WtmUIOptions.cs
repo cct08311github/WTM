@@ -90,6 +90,19 @@ namespace WalkingTec.Mvvm.Core.ConfigOptions
         /// <summary>Whether to add aria-required="true" to required form fields.</summary>
         public bool EnableAriaRequired { get; set; } = true;
 
+        /// <summary>
+        /// When true, BaseFieldTag inspects DataAnnotation attributes on the bound property
+        /// and appends matching lay-verify tokens automatically. Author-supplied lay-verify
+        /// values are NEVER overwritten — tokens are only appended. Default false.
+        /// </summary>
+        public bool EnableAutoVerify { get; set; } = false;
+
+        /// <summary>
+        /// When true, BaseFieldTag emits ARIA attributes (aria-label, aria-describedby,
+        /// aria-invalid) for WCAG 2.1 SC 1.3.1 / 4.1.2 compliance. Default false.
+        /// </summary>
+        public bool EnableAria { get; set; } = false;
+
         #endregion
     }
 }

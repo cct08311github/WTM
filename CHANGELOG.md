@@ -23,6 +23,8 @@
 ### Added
 
 - **#270 — env-var-gated live-provider CAS conformance harness** (`ProviderConformanceHelper`): the `T_PROV_*` tests in `ConcurrencyConformanceTests_LiveDb` are no longer unconditional stubs. When `WTM_WF_LIVE_PROVIDERS` is not set the tests remain `Inconclusive` (CI-safe, default behavior unchanged). When `WTM_WF_LIVE_PROVIDERS=1` is set, the harness activates: missing per-provider connection string (`WTM_WF_CONN_SQLSERVER`, `WTM_WF_CONN_POSTGRES`, `WTM_WF_CONN_MYSQL`, `WTM_WF_CONN_ORACLE`, `WTM_WF_CONN_DAMENG`) → `Assert.Fail` with a clear message; missing driver assembly → `Assert.Fail`; unreachable host → `Assert.Fail`; reachable host → real guarded-CAS concurrent-race check (5 rounds, 2 concurrent UPDATEs, asserts exactly 1 winner + 1 loser and final RowVer=1). Nightly CI containers and DaMeng deadlock-code confirmation remain deferred to a follow-up infrastructure issue.
+- (opt-in) `EnableAutoVerify`: projects DataAnnotations to LayUI `lay-verify` tokens automatically in `BaseFieldTag` (see `WtmUIOptions.EnableAutoVerify`)
+- (opt-in) `EnableAria`: emits ARIA attributes (`aria-label`, `aria-describedby`, `aria-invalid`) for WCAG 2.1 SC 1.3.1 / 4.1.2 compliance in `BaseFieldTag` (see `WtmUIOptions.EnableAria`)
 
 ### Improved
 

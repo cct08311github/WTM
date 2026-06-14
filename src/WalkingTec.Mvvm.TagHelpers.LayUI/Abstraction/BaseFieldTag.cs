@@ -3,7 +3,9 @@ using Microsoft.AspNetCore.Razor.TagHelpers;
 using Microsoft.Extensions.Options;
 using System;
 using System.Collections.Concurrent;
+using System.ComponentModel.DataAnnotations;
 using System.Linq;
+using System.Net;
 using System.Reflection;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.ConfigOptions;
@@ -249,6 +251,125 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
             }
 
+
+            // ── Feature 1: EnableAutoVerify — lay-verify auto-projection ─────────────
+            if (UIConfig.EnableAutoVerify && !(this is DisplayTagHelper) && _formFieldPro != null)
+            {
+                // Collect tokens already on the element (e.g. "required" set above)
+                var existingVerify = output.Attributes.TryGetAttribute("lay-verify", out var lvAttr)
+                    ? (lvAttr.Value?.ToString() ?? string.Empty)
+                    : string.Empty;
+                var tokens = new System.Collections.Generic.HashSet<string>(
+                    existingVerify.Split(new[] { ',', ' ' }, System.StringSplitOptions.RemoveEmptyEntries),
+                    StringComparer.OrdinalIgnoreCase);
+
+                var propAttrs = _formFieldPro.GetCustomAttributes(inherit: true);
+
+                foreach (var attr in propAttrs)
+                {
+                    if (attr is RequiredAttribute && !tokens.Contains("required"))
+                        tokens.Add("required");
+                    else if (attr is EmailAddressAttribute && !tokens.Contains("email"))
+                        tokens.Add("email");
+                    else if (attr is UrlAttribute && !tokens.Contains("url"))
+                        tokens.Add("url");
+                    else if (attr is PhoneAttribute && !tokens.Contains("phone"))
+                    {
+                        tokens.Add("phone");
+                        var phoneErr = WebUtility.HtmlEncode("Invalid phone number");
+                        var phoneScriptClean = "<script>" +
+                            "if(typeof layui!=='undefined'){layui.use('form',function(){var f=layui.form;f.verify({phone:[/^[+]?[\\d\\s\\-().]{7,20}$/," +
+                            "'" + phoneErr + "']});});}" +
+                            "</script>";
+                        output.PostElement.AppendHtml(phoneScriptClean);
+                    }
+                    else if (attr is RegularExpressionAttribute rxAttr && !string.IsNullOrEmpty(rxAttr.Pattern))
+                    {
+                        var ruleName = "wtmrx_" + Id;
+                        if (!tokens.Contains(ruleName))
+                        {
+                            tokens.Add(ruleName);
+                            var errMsg = WebUtility.HtmlEncode(
+                                !string.IsNullOrEmpty(rxAttr.ErrorMessage) ? rxAttr.ErrorMessage : "Invalid format");
+                            var escapedPattern = rxAttr.Pattern.Replace("\\", "\\\\").Replace("'", "\\'");
+                            var rxScript = $"<script>" +
+                                $"if(typeof layui!=='undefined'){{layui.use('form',function(){{var f=layui.form;" +
+                                $"f.verify({{'{ruleName}':[/{escapedPattern}/,'{errMsg}']}});}});}}" +
+                                $"</script>";
+                            output.PostElement.AppendHtml(rxScript);
+                        }
+                    }
+                    else if (attr is StringLengthAttribute slAttr)
+                    {
+                        if (slAttr.MaximumLength > 0)
+                            output.Attributes.SetAttribute("maxlength", slAttr.MaximumLength.ToString());
+                        if (slAttr.MinimumLength > 0)
+                            output.Attributes.SetAttribute("minlength", slAttr.MinimumLength.ToString());
+                    }
+                    else if (attr is MaxLengthAttribute maxAttr && maxAttr.Length > 0)
+                    {
+                        output.Attributes.SetAttribute("maxlength", maxAttr.Length.ToString());
+                    }
+                    else if (attr is MinLengthAttribute minAttr && minAttr.Length > 0)
+                    {
+                        output.Attributes.SetAttribute("minlength", minAttr.Length.ToString());
+                    }
+                }
+
+                // Numeric type → append "number" token
+                var propType = _formFieldPro.PropertyType;
+                var underlyingType = Nullable.GetUnderlyingType(propType) ?? propType;
+                if (underlyingType == typeof(int) || underlyingType == typeof(long) ||
+                    underlyingType == typeof(decimal) || underlyingType == typeof(double) ||
+                    underlyingType == typeof(float) || underlyingType == typeof(uint) ||
+                    underlyingType == typeof(short) || underlyingType == typeof(ushort) ||
+                    underlyingType == typeof(ulong))
+                {
+                    if (!tokens.Contains("number"))
+                        tokens.Add("number");
+                }
+
+                // Write updated lay-verify if we have tokens
+                if (tokens.Count > 0)
+                {
+                    var verifyValue = string.Join(",", tokens);
+                    if (output.Attributes.ContainsName("lay-verify"))
+                        output.Attributes.SetAttribute("lay-verify", verifyValue);
+                    else
+                        output.Attributes.Add("lay-verify", verifyValue);
+                }
+            }
+            // ── end Feature 1 ────────────────────────────────────────────────────────
+
+            // ── Feature 2: EnableAria — ARIA wiring ──────────────────────────────────
+            if (UIConfig.EnableAria)
+            {
+                // aria-label: when HideLabel=true, the visible label is not in the DOM.
+                // Emit aria-label so screen readers can identify the field.
+                if (HideLabel == true && !string.IsNullOrEmpty(LabelText))
+                {
+                    output.Attributes.SetAttribute("aria-label", WebUtility.HtmlEncode(LabelText));
+                }
+
+                // aria-describedby + hint id: give the hint element a stable id
+                // and link the input to it so screen readers announce the hint.
+                if (!string.IsNullOrEmpty(PaddingText))
+                {
+                    var hintId = Id + "_hint";
+                    output.Attributes.SetAttribute("aria-describedby", hintId);
+                    // Rebuild the hint div in postHtml to include the id attribute.
+                    postHtml = postHtml.Replace(
+                        $"<div class=\"layui-form-mid layui-word-aux\">{PaddingText}</div>",
+                        $"<div class=\"layui-form-mid layui-word-aux\" id=\"{WebUtility.HtmlEncode(hintId)}\">{PaddingText}</div>");
+                }
+
+                // aria-invalid: default false; client JS (lay-verify) flips to true on validation failure.
+                if (!output.Attributes.ContainsName("aria-invalid"))
+                {
+                    output.Attributes.SetAttribute("aria-invalid", "false");
+                }
+            }
+            // ── end Feature 2 ────────────────────────────────────────────────────────
 
             output.PreElement.SetHtmlContent(preHtml + output.PreElement.GetContent());
             output.PostElement.AppendHtml(postHtml);
