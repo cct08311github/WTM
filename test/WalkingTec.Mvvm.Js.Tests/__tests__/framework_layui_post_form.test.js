@@ -24,15 +24,28 @@ function makeEnv() {
     let capturedAjax = null;
 
     function jqMock(sel) {
-        return {
+        // Support the $('<div/>').text(s).html() idiom used by ff.EscapeText.
+        // jsdom is available (jest-environment-jsdom), so delegate to real DOM.
+        var _el = (typeof document !== 'undefined' && sel && typeof sel === 'string' && sel.indexOf('<') === 0)
+            ? document.createElement('div')
+            : null;
+        var obj = {
             find:      () => ({ length: 0 }),
             attr:      () => undefined,
             parents:   () => ({ length: 0 }),
             serialize: () => '',
-            html:      () => '',
+            html:      function (v) {
+                if (v !== undefined && _el) { _el.innerHTML = v; return obj; }
+                return _el ? _el.innerHTML : '';
+            },
+            text:      function (v) {
+                if (v !== undefined && _el) { _el.textContent = String(v); return obj; }
+                return _el ? _el.textContent : '';
+            },
             parent:    () => ({ html: () => {} }),
             length:    0,
         };
+        return obj;
     }
     jqMock.ajax    = function (opts) { capturedAjax = opts; };
     jqMock.cookie  = function () { return ''; };

@@ -70,6 +70,22 @@ window.ff = {
         return $('<div/>').text(String(s)).html();
     },
 
+    // Issue #332: DOM-safe input element builder for ChainChange and
+    // LoadComboItems. Replaces string concatenation that allowed item.Value
+    // and item.Text to break out of attribute contexts (stored XSS; server
+    // half is #331). Attributes are set via setAttribute / property assignment,
+    // never via innerHTML.
+    _makeInput: function (type, name, value, title, checked, disabled) {
+        var el = document.createElement('input');
+        el.type = type;
+        el.name = name;
+        el.value = value !== undefined && value !== null ? String(value) : '';
+        el.title = title !== undefined && title !== null ? String(title) : '';
+        if (checked) { el.checked = true; }
+        if (disabled) { el.disabled = true; }
+        return el;
+    },
+
     // Issue #789 Phase 3C: CSP-safe JSON action dispatcher. The server returns
     // a WtmActionResult payload (X-WTM-Action: application/json header set) and
     // this function walks the whitelisted action types. Unknown action types
@@ -472,7 +488,9 @@ window.ff = {
             error: function (request) {
                 layer.close(index);
                 if (request.responseText !== undefined && request.responseText !== '') {
-                    layer.alert(request.responseText);
+                    // Issue #332: wrap server error text with EscapeText to prevent
+                    // XSS via HTML-injected responseText (layer.alert parses HTML).
+                    layer.alert(ff.EscapeText(request.responseText));
                 } else {
                     layer.alert(ff.DONOTUSE_Text_SubmitFailed);
                 }
@@ -529,7 +547,9 @@ window.ff = {
             error: function (request) {
                 layer.close(index);
                 if (request.responseText !== undefined && request.responseText !== "") {
-                    layer.alert(request.responseText);
+                    // Issue #332: wrap server error text with EscapeText to prevent
+                    // XSS via HTML-injected responseText (layer.alert parses HTML).
+                    layer.alert(ff.EscapeText(request.responseText));
                 }
                 else {
                     layer.alert(ff.DONOTUSE_Text_LoadFailed);
@@ -595,12 +615,25 @@ window.ff = {
                 layer.close(index);
                 let location = xhr.getResponseHeader("Location");
                 if (location) {
-                    window.location = location;
+                    // Issue #332: validate Location header shape before redirect —
+                    // reject absolute URLs, protocol-relative (//), javascript:, data:.
+                    // Mirrors DispatchAction 'redirect' guard (Issue #804).
+                    var _loc = location;
+                    if ((_loc.charAt(0) === '/' && _loc.charAt(1) !== '/') ||
+                        _loc.charAt(0) === '#' || _loc.charAt(0) === '?') {
+                        window.location = _loc;
+                        return false;
+                    }
+                    if (typeof console !== 'undefined' && console.warn) {
+                        console.warn('[WTM] OpenDialog redirect blocked: non-relative Location header', _loc);
+                    }
                     return false;
                 }
                 ff.SetCookie("windowids", owid);
                 if (xhr.responseText !== undefined && xhr.responseText !== "") {
-                    layer.alert(xhr.responseText);
+                    // Issue #332: wrap server error text with EscapeText to prevent
+                    // XSS via HTML-injected responseText (layer.alert parses HTML).
+                    layer.alert(ff.EscapeText(xhr.responseText));
                 }
                 else {
                     layer.alert(ff.DONOTUSE_Text_LoadFailed);
@@ -732,30 +765,45 @@ window.ff = {
                 layer.close(index);
                 ff.SetCookie("windowids", owid);
                 if (request.responseText !== undefined && request.responseText !== "") {
-                    layer.alert(request.responseText);
+                    // Issue #332: wrap server error text with EscapeText to prevent
+                    // XSS via HTML-injected responseText (layer.alert parses HTML).
+                    layer.alert(ff.EscapeText(request.responseText));
                 }
                 else {
                     layer.alert(ff.DONOTUSE_Text_LoadFailed);
                 }
             },
             success: function (str) {
-                var regGridId = /<\s{0,}table\s+.*\s+id\s{0,}=\s{0,}"(.*)"\s+lay-filter="\1"\s{0,}.*?>\s{0,}<\s{0,}\/\s{0,}table\s{0,}>/im;
                 var regGridVar = /wtVar_(.*)\s{0,}=\s{0,}table.render\([a-zA-Z0-9_]{1,}option\)/im;
-                if ($(tempId).length > 0 && regGridId.test(str) && regGridVar.test(str)) {
-                    // 获取gridId
-                    var gridId = regGridId.exec(str)[1];
-                    var gridVar = 'wtVar_' + regGridVar.exec(str)[1];
-                    var template = $(tempId)[0].innerHTML;
-                    template = template.replace(/[$]{2}script[$]{2}/img, "<script>").replace(/[$]{2}#script[$]{2}/img, "</script>");
-                    //get old gridid
-                    try {
-                        var oldgridid = /table[.]reload\('(.*)',\s{0,}{/img.exec(template)[1];
-                        //替换gridId
-                        template = template.replace(new RegExp(oldgridid, "gim"), gridId);
+                // Issue #332: sanitize the server response via DOMPurify BEFORE
+                // extracting the grid-id or inserting into the DOM (stored XSS guard).
+                // The $$script$$/$$#script$$ escape tokens in the tempId template are
+                // rehydrated AFTER sanitization (they live in local DOM, not the server
+                // response, so they are trusted content).
+                var safeStr = ff.SafeHtml(str);
+                if ($(tempId).length > 0 && regGridVar.test(str)) {
+                    // Issue #332: replace brittle regex grid-id extraction with safe
+                    // DOM query. Parse a throwaway element, find the table with a
+                    // lay-filter attribute, and read its id.
+                    var _tmpDiv = document.createElement('div');
+                    _tmpDiv.innerHTML = safeStr;
+                    var _gridTable = _tmpDiv.querySelector('table[lay-filter]');
+                    var gridId = _gridTable ? _gridTable.id : null;
+                    var gridVar = gridId ? ('wtVar_' + regGridVar.exec(str)[1]) : null;
+                    if (gridId) {
+                        var template = $(tempId)[0].innerHTML;
+                        template = template.replace(/[$]{2}script[$]{2}/img, "<script>").replace(/[$]{2}#script[$]{2}/img, "<\/script>");
+                        //get old gridid
+                        try {
+                            var oldgridid = /table[.]reload\('(.*)',\s{0,}{/img.exec(template)[1];
+                            //替换gridId
+                            template = template.replace(new RegExp(oldgridid, "gim"), gridId);
+                        }
+                        catch (e) { }
+                        safeStr = safeStr.replace('$$SearchPanel$$', template);
                     }
-                    catch (e) { }
-                    str = str.replace('$$SearchPanel$$', template);
                 }
+                str = safeStr;
                 layer.close(index);
                 var area = 'auto';
                 if (width !== undefined && width !== null && height !== undefined && height !== null) {
@@ -928,21 +976,13 @@ window.ff = {
                             item = data.Data[i];
                             if (usedefaultvalue == true) {
                                 var df = [];
-                                df = window[comboid + "defaultvalues"]; 
-                                if (df.indexOf(item.Value) > -1) {
-                                    target.append("<input type='checkbox'  name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "' checked />");
-                                }
-                                else {
-                                    target.append("<input type='checkbox' name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "'  />");
-                                }
+                                df = window[comboid + "defaultvalues"];
+                                // Issue #332: use ff._makeInput (DOM API) instead of HTML
+                                // string concat to safely set name/value/title attributes.
+                                target.append(ff._makeInput('checkbox', targetname, item.Value, item.Text, df.indexOf(item.Value) > -1, false));
                            }
                             else {
-                                if (item.Selected === true) {
-                                    target.append("<input type='checkbox'  name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "' checked />");
-                                }
-                                else {
-                                    target.append("<input type='checkbox' name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "'  />");
-                                }
+                                target.append(ff._makeInput('checkbox', targetname, item.Value, item.Text, item.Selected === true, false));
                             }
                         }
                         form.render('checkbox', targetfilter);
@@ -953,20 +993,12 @@ window.ff = {
                             if (usedefaultvalue == true) {
                                 var df = [];
                                 df = window[comboid + "defaultvalues"];
-                                if (df.indexOf(item.Value) > -1) {
-                                    target.append("<input type='radio'  name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "' checked />");
-                                }
-                                else {
-                                    target.append("<input type='radio' name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "'  />");
-                                }
+                                // Issue #332: use ff._makeInput (DOM API) instead of HTML
+                                // string concat to safely set name/value/title attributes.
+                                target.append(ff._makeInput('radio', targetname, item.Value, item.Text, df.indexOf(item.Value) > -1, false));
                            }
                             else {
-                                if (item.Selected === true) {
-                                    target.append("<input type='radio'  name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "' checked />");
-                                }
-                                else {
-                                    target.append("<input type='radio' name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "'  />");
-                                }
+                                target.append(ff._makeInput('radio', targetname, item.Value, item.Text, item.Selected === true, false));
                             }
                         }
                         form.render('radio', targetfilter);
@@ -974,7 +1006,8 @@ window.ff = {
 
                 }
                 else {
-                    layer.alert(ff.DONOTUSE_Text_FailedLoadData);
+                    // Issue #332: layer is not in scope here; use layui.layer.
+                    layui.layer.alert(ff.DONOTUSE_Text_FailedLoadData);
                 }
             });
         }
@@ -1013,28 +1046,21 @@ window.ff = {
                    target[0].innerHTML = "";
                    for (i = 0; i < data.Data.length; i++) {
                        item = data.Data[i];
-                       var che = "";
-                       var dis = "";
-                       if (item.Selected === true || svals.indexOf(item.Value) > -1) {
-                           che = " checked ";
-                       }
-                       if (disabled==true) {
-                           dis = " disabled ";
-                       }
-                       target.append("<input type='checkbox'  name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "'" + che + dis+"/>");
-
+                       var isChecked = item.Selected === true || svals.indexOf(item.Value) > -1;
+                       var isDisabled = disabled == true;
+                       // Issue #332: use ff._makeInput (DOM API) instead of HTML
+                       // string concat to safely set name/value/title attributes.
+                       target.append(ff._makeInput('checkbox', targetname, item.Value, item.Text, isChecked, isDisabled));
                    }
                    layui.form.render('checkbox', targetfilter + "div");
                }
                if (controltype === "radio") {
                    for (i = 0; i < data.Data.length; i++) {
                        item = data.Data[i];
-                       if (item.Selected === true || svals.indexOf(item.Value) > -1) {
-                           target.append("<input type='radio'  name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "' checked />");
-                       }
-                       else {
-                           target.append("<input type='radio' name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "'  />");
-                       }
+                       var isChecked = item.Selected === true || svals.indexOf(item.Value) > -1;
+                       // Issue #332: use ff._makeInput (DOM API) instead of HTML
+                       // string concat to safely set name/value/title attributes.
+                       target.append(ff._makeInput('radio', targetname, item.Value, item.Text, isChecked, false));
                    }
                    layui.form.render('radio', targetfilter + "div");
                }
@@ -1042,7 +1068,8 @@ window.ff = {
            }
 
             else {
-                layer.alert(ff.DONOTUSE_Text_FailedLoadData);
+                // Issue #332: layer is not in scope here; use layui.layer.
+                layui.layer.alert(ff.DONOTUSE_Text_FailedLoadData);
             }
         });
 
@@ -1273,15 +1300,23 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
 },
 
     Download: function (url, ids) {
-        var form = $('<form method="POST" action="' + url + '">');
+        // Issue #332: build POST form via DOM API to avoid HTML injection through
+        // url and ids parameters. Mirrors DownloadExcelOrPdf DOM anchor pattern.
+        var form = document.createElement('form');
+        form.method = 'POST';
+        form.action = url;
         if (ids !== undefined && ids !== null) {
             for (var i = 0; i < ids.length; i++) {
-                form.append($('<input type="hidden" name="Ids" value="' + ids[i] + '">'));
+                var inp = document.createElement('input');
+                inp.type = 'hidden';
+                inp.name = 'Ids';
+                inp.value = ids[i] !== undefined && ids[i] !== null ? String(ids[i]) : '';
+                form.appendChild(inp);
             }
         }
-        $('body').append(form);
+        document.body.appendChild(form);
         form.submit();
-        form.remove();
+        document.body.removeChild(form);
     },
 
     RefreshChart: function (chartid,chartpre) {
@@ -1309,7 +1344,15 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
                     (function () {
                         var _chart = window[chartid + 'Chart'];
                         if (_chart && typeof _chart.setOption === 'function') {
-                            _chart.setOption({dataset: JSON.parse(data.dataset), series: JSONfns.parse(data.series)}, {replaceMerge: 'series'});
+                            // Issue #332: JSONfns.parse (which executes function literals in
+                            // JSON) replaced with safe JSON.parse for the default path.
+                            // Function-typed series remain possible via the explicit opt-in
+                            // registry: set window[chartid + 'ChartSeriesParser'] to a
+                            // trusted function before calling RefreshChart. See CHANGELOG.md.
+                            var _seriesParser = typeof window[chartid + 'ChartSeriesParser'] === 'function'
+                                ? window[chartid + 'ChartSeriesParser']
+                                : JSON.parse;
+                            _chart.setOption({dataset: JSON.parse(data.dataset), series: _seriesParser(data.series)}, {replaceMerge: 'series'});
                         }
                     })();
                     if (window[chartid + 'ChartLegend'] == 'true') {

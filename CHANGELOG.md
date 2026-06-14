@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Security
+
+- **#332 — `framework_layui.js` XSS / open-redirect / code-exec hardening** (PR TBD): seven client-side security fixes to the LayUI framework JavaScript:
+  - **Reflected XSS (HIGH)**: `layer.alert(request.responseText)` / `layer.alert(xhr.responseText)` in PostForm, BgRequest, OpenDialog, and OpenDialog2 error handlers now wrap server error bodies with `ff.EscapeText(...)`. Raw server HTML is no longer concatenated into layui's innerHTML-based alert dialog.
+  - **Stored XSS (HIGH)**: `ChainChange` and `LoadComboItems` checkbox/radio rendering replaced string-concatenated `<input>` markup with `ff._makeInput(type, name, value, title, checked, disabled)` — a new DOM-API helper that sets attributes via property assignment. `item.Value` / `item.Text` cannot break out of attribute context.
+  - **Open redirect**: `OpenDialog` error handler now validates the server `Location` response header before `window.location` assignment — rejects absolute URLs, protocol-relative `//`, `javascript:`, and `data:` with `console.warn`, mirroring the `DispatchAction` redirect guard (#804).
+  - **Stored XSS in OpenDialog2 (HIGH)**: AJAX response is now passed through `ff.SafeHtml(str)` (DOMPurify) before the `$$SearchPanel$$` replacement. Grid-id extraction replaced brittle full-document regex with `document.createElement` + `querySelector('table[lay-filter]')` on the sanitized subtree. The `$$script$$` / `$$#script$$` rehydration path is unchanged — it operates on the trusted local `tempId` template, not the server response.
+  - **HTML injection in `ff.Download`**: form and hidden inputs now built via `document.createElement` / property assignment instead of `$('<form … action="' + url + '">')` string concatenation.
+  - **Arbitrary code execution in `RefreshChart` (code-exec)**: `JSONfns.parse(data.series)` (which deserialized function literals) replaced with `JSON.parse` as the safe default. Function-typed series remain possible via an explicit opt-in: set `window[chartId + 'ChartSeriesParser']` to a trusted parser function before calling `RefreshChart`.
+  - **Low: `layui.layer` scope bug in error branches** — stray `layer.alert(...)` calls in `ChainChange` and `LoadComboItems` error branches (where `layer` is not in scope) corrected to `layui.layer.alert(...)`.
+
+### Changed
+
+- **`OpenDialog2` content sanitization behavior** (migration note): server HTML responses to `OpenDialog2` AJAX calls are now sanitized via DOMPurify before display. Content that was previously rendered raw — including `<script>` tags, inline event handlers (`onerror`, `onload`, `onclick`, etc.), and `<style>` blocks — will be stripped. Legitimate grid-init scripts should be delivered via the `$$script$$` / `$$#script$$` token mechanism in the search-panel template (unchanged behavior). If a page previously relied on raw `<script>` tags in the server response to `OpenDialog2`, migrate to `X-WTM-Action: application/json` (FFResultJson) or the `$$script$$` rehydrate path.
+
+- **`RefreshChart` function-series opt-in** (migration note): `JSONfns.parse` is no longer called by default in `RefreshChart`. The default parser is now `JSON.parse`, which does not support function literals in JSON. If your chart series definitions include function-typed properties (e.g., custom `formatter` callbacks serialized as strings), register a trusted parser before rendering: `window['myChartChartSeriesParser'] = JSONfns.parse;` (or your own safe deserializer). Setting this registry key is a deliberate opt-in; apps that do not set it get the safer `JSON.parse` behavior automatically.
+
 ### Added
 
 - **#270 — env-var-gated live-provider CAS conformance harness** (`ProviderConformanceHelper`): the `T_PROV_*` tests in `ConcurrencyConformanceTests_LiveDb` are no longer unconditional stubs. When `WTM_WF_LIVE_PROVIDERS` is not set the tests remain `Inconclusive` (CI-safe, default behavior unchanged). When `WTM_WF_LIVE_PROVIDERS=1` is set, the harness activates: missing per-provider connection string (`WTM_WF_CONN_SQLSERVER`, `WTM_WF_CONN_POSTGRES`, `WTM_WF_CONN_MYSQL`, `WTM_WF_CONN_ORACLE`, `WTM_WF_CONN_DAMENG`) → `Assert.Fail` with a clear message; missing driver assembly → `Assert.Fail`; unreachable host → `Assert.Fail`; reachable host → real guarded-CAS concurrent-race check (5 rounds, 2 concurrent UPDATEs, asserts exactly 1 winner + 1 loser and final RowVer=1). Nightly CI containers and DaMeng deadlock-code confirmation remain deferred to a follow-up infrastructure issue.
