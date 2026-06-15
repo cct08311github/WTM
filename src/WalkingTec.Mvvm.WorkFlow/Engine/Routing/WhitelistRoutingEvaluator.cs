@@ -65,7 +65,7 @@ public sealed class WhitelistRoutingEvaluator : IRoutingEvaluator
             return validationError;
 
         // Get or compile the predicate.
-        var hash = ComputeRuleHash(rule);
+        var hash = ComputeRuleHash(rule, whitelist);
         var predicate = _cache.GetOrAdd(hash, _ => CompileRule(rule, whitelist));
 
         // Evaluate fail-closed: any exception in the predicate → no-match.
@@ -460,20 +460,44 @@ public sealed class WhitelistRoutingEvaluator : IRoutingEvaluator
     // ── Rule content-hash ─────────────────────────────────────────────────────
 
     /// <summary>
-    /// Compute a deterministic SHA-256 hash of the rule's JSON representation.
-    /// Used as the cache key for compiled predicates.
+    /// Compute a deterministic SHA-256 hash of the rule's JSON representation
+    /// AND the FieldWhitelist field→clrType mapping.
+    ///
+    /// Two workflow graphs that share byte-identical rule JSON but declare the
+    /// same field with a different clrType (e.g. System.Decimal vs System.String)
+    /// must produce distinct cache keys so each graph's compiled predicate applies
+    /// the correct type coercion.  Whitelist entries are sorted by field name
+    /// (InvariantCulture) before hashing to ensure determinism regardless of
+    /// declaration order.  See Issue #323.
     /// </summary>
-    private static string ComputeRuleHash(RoutingRuleDef rule)
+    internal static string ComputeRuleHash(
+        RoutingRuleDef rule,
+        IReadOnlyList<FieldWhitelistEntry> whitelist)
     {
-        // Serialize with sorted keys (same deterministic approach as WorkflowGraphSerializer).
-        var json = JsonSerializer.Serialize(rule, new JsonSerializerOptions
+        var opts = new JsonSerializerOptions
         {
             WriteIndented = false,
             DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
             Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() },
-        });
+        };
 
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(json));
+        // Serialize the rule (field/operator/value).
+        var ruleJson = JsonSerializer.Serialize(rule, opts);
+
+        // Build a deterministic representation of the whitelist: sort by field name
+        // (InvariantCulture — same discipline used by WorkflowGraphSerializer) then
+        // concatenate as "field:clrType" pairs separated by "|".
+        var whitelistPart = string.Join(
+            "|",
+            whitelist
+                .OrderBy(e => e.Field, StringComparer.InvariantCulture)
+                .Select(e => $"{e.Field}:{e.ClrType}"));
+
+        // Hash: rule JSON + NUL separator + whitelist part.
+        // The NUL byte prevents cross-boundary collisions between the two segments.
+        var input = $"{ruleJson}\0{whitelistPart}";
+
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(input));
         return Convert.ToHexString(bytes);
     }
 }

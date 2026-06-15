@@ -518,6 +518,118 @@ public class WhitelistRoutingEvaluatorTests
                 $"Iteration {i}: expected IsMatch={shouldMatch} for amount={amount}.");
         }
     }
+
+    // ── Test 12: Cache key includes whitelist clrType (Issue #323 regression) ──
+    //
+    // Two workflow graphs with byte-identical rule JSON but a different clrType
+    // for the same field must produce DISTINCT cache keys and evaluate correctly.
+    //
+    // Scenario: rule is   field="amount", operator=Gt, value=10000
+    //   Graph A: amount declared as System.Decimal  → 15000m (decimal) > 10000 ✓
+    //   Graph B: amount declared as System.String   → "abc"  (string)  > 10000 ✗
+    //                                                 (coercion fails → false)
+    //
+    // Before the fix, Graph B would have reused Graph A's compiled predicate
+    // (keyed only on the rule JSON), so it would coerce "abc" as decimal — which
+    // also fails, but for the WRONG reason and with unpredictable results when
+    // String comparison semantics are involved.  The test below proves each graph
+    // gets the correct, independent result.
+
+    [TestMethod]
+    public void ComputeRuleHash_DifferentClrType_SameRuleJson_ProducesDistinctHashes()
+    {
+        // Identical rule JSON, different whitelist clrType.
+        var rule = RoutingTestHelpers.Leaf("amount", FilterOperator.Gt, 10000m);
+
+        var whitelistDecimal = RoutingTestHelpers.Whitelist(("amount", "System.Decimal"));
+        var whitelistString  = RoutingTestHelpers.Whitelist(("amount", "System.String"));
+
+        var hashDecimal = WhitelistRoutingEvaluator.ComputeRuleHash(rule, whitelistDecimal);
+        var hashString  = WhitelistRoutingEvaluator.ComputeRuleHash(rule, whitelistString);
+
+        Assert.AreNotEqual(hashDecimal, hashString,
+            "Same rule JSON with different whitelist clrType must produce distinct cache keys (Issue #323).");
+    }
+
+    [TestMethod]
+    public void ComputeRuleHash_SameRuleAndWhitelist_ProducesDeterministicHash()
+    {
+        // Same inputs must always produce the same hash.
+        var rule      = RoutingTestHelpers.Leaf("amount", FilterOperator.Gt, 10000m);
+        var whitelist = RoutingTestHelpers.Whitelist(("amount", "System.Decimal"));
+
+        var hash1 = WhitelistRoutingEvaluator.ComputeRuleHash(rule, whitelist);
+        var hash2 = WhitelistRoutingEvaluator.ComputeRuleHash(rule, whitelist);
+
+        Assert.AreEqual(hash1, hash2,
+            "ComputeRuleHash must be deterministic for identical inputs.");
+    }
+
+    [TestMethod]
+    public void Evaluate_IdenticalRuleJson_DifferentClrType_AppliesCorrectCoercions()
+    {
+        // Regression test for Issue #323: two evaluators share a singleton cache;
+        // Graph A (Decimal) correctly matches 15000m > 10000;
+        // Graph B (String) cannot coerce "abc" to decimal — must fail-closed (no match).
+        // With the old bug, Graph B would silently reuse Graph A's predicate.
+        var sut = MakeEvaluator();
+
+        // Identical rule JSON.
+        var ruleA = RoutingTestHelpers.Leaf("amount", FilterOperator.Gt, 10000m);
+        var ruleB = RoutingTestHelpers.Leaf("amount", FilterOperator.Gt, 10000m);
+
+        // Different clrType for the same field name.
+        var whitelistDecimal = RoutingTestHelpers.Whitelist(("amount", "System.Decimal"));
+        var whitelistString  = RoutingTestHelpers.Whitelist(("amount", "System.String"));
+
+        // Graph A: decimal field, value 15000m → Gt 10000 → should MATCH.
+        var resultA = sut.Evaluate(
+            ruleA, whitelistDecimal,
+            RoutingTestHelpers.FormData(("amount", 15000m)));
+
+        // Graph B: string field, value "abc" → Gt 10000 (string coercion of 10000m → "10000")
+        // String comparison "abc" > "10000" is true lexicographically, BUT
+        // more importantly this must NOT reuse Graph A's decimal predicate.
+        // With System.String the coercion of rule-value 10000m to string is "10000",
+        // and "abc" > "10000" lexicographically is true — so the result differs
+        // from a bad-coercion false.  The key assertion is that both evaluate
+        // independently (not that they produce the same boolean).
+        var resultB = sut.Evaluate(
+            ruleB, whitelistString,
+            RoutingTestHelpers.FormData(("amount", "abc")));
+
+        // Graph A must match (decimal comparison succeeds).
+        Assert.IsTrue(resultA.IsMatch,
+            "Graph A (System.Decimal, value=15000m): 15000 > 10000 should MATCH.");
+
+        // Graph B evaluates string comparison independently.
+        // "abc" > "10000" (string) = true (lexicographic).
+        // The critical point is this evaluation ran with string semantics, not decimal.
+        // We assert the code is Ok (not a coercion error from the wrong predicate).
+        Assert.AreEqual(RoutingEvaluationCode.Ok, resultB.Code,
+            "Graph B (System.String) must evaluate without error code (independent predicate).");
+
+        // Now test with a value that unambiguously differs under the two coercions:
+        // "500" as decimal vs "500" as string against threshold 10000.
+        //   Decimal: 500 > 10000 → FALSE
+        //   String:  "500" > "10000" → TRUE (lexicographic: '5' > '1')
+        var ruleC = RoutingTestHelpers.Leaf("amount", FilterOperator.Gt, 10000m);
+        var ruleD = RoutingTestHelpers.Leaf("amount", FilterOperator.Gt, 10000m);
+
+        var resultC = sut.Evaluate(
+            ruleC, whitelistDecimal,
+            RoutingTestHelpers.FormData(("amount", 500m)));
+
+        var resultD = sut.Evaluate(
+            ruleD, whitelistString,
+            RoutingTestHelpers.FormData(("amount", "500")));
+
+        Assert.IsFalse(resultC.IsMatch,
+            "Graph C (System.Decimal, value=500m): 500 > 10000 must NOT match.");
+        Assert.IsTrue(resultD.IsMatch,
+            "Graph D (System.String, value='500'): '500' > '10000' lexicographically MUST match " +
+            "(proves Graph D uses string semantics, not decimal semantics from Graph C's cached predicate).");
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
