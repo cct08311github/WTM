@@ -313,6 +313,19 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         public bool EnableAnalysis { get; set; }
 
         /// <summary>
+        /// When true, adds a client-side CSV export button to the right toolbar.
+        /// Exports only currently loaded rows. For full server export use the Excel endpoint.
+        /// Opt-in; default false.
+        /// </summary>
+        public bool EnableClientExport { get; set; }
+
+        /// <summary>
+        /// File name (without extension) for the client CSV download.
+        /// Defaults to the table Id when not set.
+        /// </summary>
+        public string? ExportFileName { get; set; }
+
+        /// <summary>
         /// 搜尋面板初始展開狀態（true = 展開，false = 收起）。
         /// 未設定時沿用 SearchPanelTagHelper 的 expanded 屬性或全域設定。
         /// </summary>
@@ -392,6 +405,18 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             }
         }
 
+        /// <summary>
+        /// Builds the layui defaultToolbar array string. Public static for unit-test access.
+        /// </summary>
+        public static string BuildDefaultToolbar(bool needFilter, bool needPrint, bool enableClientExport)
+        {
+            var entries = new System.Collections.Generic.List<string>(3);
+            if (needFilter)         entries.Add("'filter'");
+            if (needPrint)          entries.Add("'print'");
+            if (enableClientExport) entries.Add("'exports'");
+            return $",defaultToolbar: [{string.Join(", ", entries)}]";
+        }
+
         public override void Process(TagHelperContext context, TagHelperOutput output)
         {
             if (Loading == null)
@@ -437,26 +462,22 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     NeedShowFilter = config?.UIOptions.DataTable.ShowFilter;
                 }
             }
-            var righttoolbar = ",defaultToolbar: []";
-            int lefttoolbarmergin = -120;
-            if(NeedShowFilter == true && NeedShowPrint == true)
+            var righttoolbar = BuildDefaultToolbar(
+                NeedShowFilter == true,
+                NeedShowPrint == true,
+                EnableClientExport);
+
+            int iconCount = 0;
+            if (NeedShowFilter == true) iconCount++;
+            if (NeedShowPrint == true)  iconCount++;
+            if (EnableClientExport)     iconCount++;
+            int lefttoolbarmergin = iconCount switch
             {
-                righttoolbar = ",defaultToolbar: ['filter', 'print']";
-                lefttoolbarmergin = -45;
-            }
-            else
-            {
-                if(NeedShowFilter == true)
-                {
-                    righttoolbar = ",defaultToolbar: ['filter']";
-                    lefttoolbarmergin = -80;
-                }
-                if (NeedShowPrint == true)
-                {
-                    righttoolbar = ",defaultToolbar: ['print']";
-                    lefttoolbarmergin = -80;
-                }
-            }
+                0 => -120,
+                1 => -80,
+                2 => -45,
+                _ => -45
+            };
 
             if (Limit == null)
             {
@@ -608,7 +629,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
             #region DataTable
             var toolbardef = "";
-            if(toolBarBtnStrBuilder.Length > 0 || NeedShowFilter == true || NeedShowPrint == true)
+            if(toolBarBtnStrBuilder.Length > 0 || NeedShowFilter == true || NeedShowPrint == true || EnableClientExport)
             {
                 toolbardef = $" ,toolbar: '#{ToolBarId}2'";
             }
@@ -714,6 +735,9 @@ setTimeout(function(){{
     where: w
     }});
   }});
+  {(EnableClientExport ? $@"table.on('exportData({Id})', function(obj){{
+    obj.filename = '{JsEnc(ExportFileName ?? Id)}';
+  }});" : "")}
 }})
 </script>
 <script type=""text / html"" id=""{ToolBarId}2"" >

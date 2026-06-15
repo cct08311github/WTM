@@ -104,5 +104,15 @@ namespace WalkingTec.Mvvm.Core.ConfigOptions
         public bool EnableAria { get; set; } = false;
 
         #endregion
+
+        #region Dark Mode / Theme
+
+        /// <summary>
+        /// Optional CSS class name to add to &lt;body&gt; for dark/custom themes (e.g. "layui-bg-black").
+        /// Empty string = off (default). When non-empty, wtmTheme.init() picks it up on page load.
+        /// </summary>
+        public string DefaultThemeClass { get; set; } = string.Empty;
+
+        #endregion
     }
 }

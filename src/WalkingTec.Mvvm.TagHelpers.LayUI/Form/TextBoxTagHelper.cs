@@ -63,6 +63,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 output.Attributes.Add("value", Field?.Model?.ToString());
             }
             output.Attributes.Add("placeholder", placeHolder);
+            var maxLenVal = GetMaxLength();
+            if (maxLenVal.HasValue)
+            {
+                output.Attributes.Add("maxlength", maxLenVal.Value.ToString());
+            }
             output.Attributes.Add("class", "layui-input");
             if (string.IsNullOrEmpty(SearchUrl) == false)
             {
@@ -83,6 +88,23 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             }
 
             base.Process(context, output);
+        }
+
+        private int? GetMaxLength()
+        {
+            var validators = Field?.ModelExplorer?.Metadata?.ValidatorMetadata;
+            if (validators == null) return null;
+            foreach (var v in validators)
+            {
+                if (v is System.ComponentModel.DataAnnotations.StringLengthAttribute sl && sl.MaximumLength > 0)
+                    return sl.MaximumLength;
+            }
+            foreach (var v in validators)
+            {
+                if (v is System.ComponentModel.DataAnnotations.MaxLengthAttribute ml && ml.Length > 0)
+                    return ml.Length;
+            }
+            return null;
         }
     }
 

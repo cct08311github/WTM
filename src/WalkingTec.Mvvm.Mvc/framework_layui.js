@@ -2016,6 +2016,64 @@ var wtmPermFilter = (function () {
 }());
 window.wtmPermFilter = wtmPermFilter;
 
+var wtmTheme = (function () {
+    var STORAGE_KEY = 'wtm_theme_class';
+
+    function _currentClass() {
+        return localStorage.getItem(STORAGE_KEY) || '';
+    }
+
+    function _apply(cls) {
+        var prev = localStorage.getItem(STORAGE_KEY);
+        if (prev) { document.body.classList.remove(prev); }
+        if (cls) {
+            document.body.classList.add(cls);
+            localStorage.setItem(STORAGE_KEY, cls);
+        } else {
+            localStorage.removeItem(STORAGE_KEY);
+        }
+    }
+
+    function toggle(cls) {
+        if (document.body.classList.contains(cls)) {
+            _apply('');
+        } else {
+            _apply(cls);
+        }
+    }
+
+    function init(defaultCls) {
+        var stored = _currentClass();
+        var cls = stored || defaultCls || '';
+        if (cls) { document.body.classList.add(cls); }
+    }
+
+    return {
+        init:           init,
+        toggle:         toggle,
+        _apply:         _apply,
+        _currentClass:  _currentClass,
+        _storageKey:    function () { return STORAGE_KEY; },
+    };
+}());
+window.wtmTheme = wtmTheme;
+
+var wtmCounter = (function () {
+    function init(fieldId, counterId, maxLen) {
+        var field = document.getElementById(fieldId);
+        var counter = document.getElementById(counterId);
+        if (!field || !counter) return;
+        function update() {
+            var len = (field.value || '').length;
+            counter.textContent = len + '/' + maxLen;
+        }
+        field.addEventListener('input', update);
+        update();
+    }
+    return { init: init };
+}());
+window.wtmCounter = wtmCounter;
+
 $.ajax({
     url: '/_framework/GetScriptLanguage',
     type: 'GET',
