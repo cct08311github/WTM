@@ -494,6 +494,11 @@ public static class WorkFlowDbContextExtensions
             // AckMode: completion mode for Ack nodes. Null for non-Ack nodes.
             e.Property(x => x.AckMode);
 
+            // C16 fix: map ApprovePercent with explicit precision so ratio quorum
+            // thresholds are not truncated under decimal(18,2) on SqlServer/MySQL/Oracle.
+            // Precision (5,4) stores values like 0.6667 accurately (e.g. ceil(n*0.6667)).
+            e.Property(x => x.ApprovePercent).HasPrecision(5, 4);
+
             // ── Wave-4 (WF-19) fields ──────────────────────────────────────────
             // DefinitionCode: stamped at mint time from WorkflowGraph.Key.
             // Used by DelegationResolvingDecorator to scope-filter DelegationRules without

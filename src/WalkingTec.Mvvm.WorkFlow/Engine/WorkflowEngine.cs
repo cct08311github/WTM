@@ -317,6 +317,45 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         return await AdvanceCoreAsync(instance, graph, ct);
     }
 
+    // ── AdvanceWithActorAsync (private, C10 fix) ─────────────────────────────
+
+    /// <summary>
+    /// Internal variant of <see cref="AdvanceAsync"/> that threads the approving actor's
+    /// ITCode into <see cref="AdvanceCoreAsync"/> so <see cref="AdvanceTokenAsync"/> can
+    /// stamp <c>DecidedBy</c> on the NodeInstance when it completes as CompletedApproved.
+    ///
+    /// <para>Only called from <see cref="ExecuteApproveCompletionAsync"/> for All/Any modes
+    /// (C10 fix). The Sequential path already sets <c>DecidedBy</c> directly via
+    /// <see cref="ExecuteRejectCompletionAsync"/>-equivalent CAS.</para>
+    /// </summary>
+    private async Task<WorkflowActionResult> AdvanceWithActorAsync(
+        ProcessInstance instanceSnapshot,
+        CancellationToken ct,
+        string? actingApproverITCode)
+    {
+        // Re-read the instance from DB (identical to the check in AdvanceAsync) so that
+        // concurrent callers that race here after the IncrementNodeApprovedCountAsync CAS
+        // see the fresh state — e.g. the concurrent loser sees Approved and returns
+        // AlreadyHandled instead of double-advancing.  Using the stale snapshot would allow
+        // both concurrent winners through the state guard before either commits (C10 fix §concurrency).
+        var instance = await Db.Set<ProcessInstance>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(x => x.ID == instanceSnapshot.ID && x.IsValid == true, ct)
+            ?? throw new InvalidOperationException($"ProcessInstance {instanceSnapshot.ID} not found.");
+
+        if (instance.State != InstanceState.Running)
+            return WorkflowActionResult.WithDetail(WorkflowActionCode.AlreadyHandled,
+                $"Instance {instance.ID} is in state {instance.State}, not Running.");
+
+        var version = await Db.Set<ProcessDefinitionVersion>()
+            .AsNoTracking()
+            .SingleAsync(v => v.ID == instance.DefinitionVersionId, ct);
+
+        var graph = WorkflowGraphSerializer.Deserialize(version.GraphJson);
+
+        return await AdvanceCoreAsync(instance, graph, ct, actingApproverITCode);
+    }
+
     // ── Core advance loop ─────────────────────────────────────────────────────
 
     /// <summary>
@@ -338,7 +377,8 @@ internal sealed class WorkflowEngine : IWorkflowEngine
     private async Task<WorkflowActionResult> AdvanceCoreAsync(
         ProcessInstance instance,
         WorkflowGraph graph,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? actingApproverITCode = null)
     {
         // Safety: loop guard prevents infinite cycles (malformed graphs).
         const int MaxSteps = 200;
@@ -379,7 +419,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
 
             foreach (var activeNode in activeNodes)
             {
-                var tokenResult = await AdvanceTokenAsync(activeNode, instance, graph, ct);
+                var tokenResult = await AdvanceTokenAsync(activeNode, instance, graph, ct, actingApproverITCode);
 
                 // Re-read instance after each token step (state may have changed).
                 instance = await Db.Set<ProcessInstance>()
@@ -463,7 +503,8 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         NodeInstance activeNode,
         ProcessInstance instance,
         WorkflowGraph graph,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? actingApproverITCode = null)
     {
         // Locate the NodeDef in the graph.
         var nodeDef = graph.Nodes.FirstOrDefault(n => n.NodeKey == activeNode.NodeKey)
@@ -628,8 +669,14 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         // Complete the NodeInstance via CAS (for non-gateway, non-Join-routing tokens).
         if (!isGatewayFork)
         {
+            // C10 fix: for Approval nodes completing as CompletedApproved, stamp the actor
+            // who triggered the advance (threaded from ApproveTaskAsync via ExecuteApproveCompletionAsync
+            // → AdvanceWithActorAsync → AdvanceCoreAsync). Gateway forks and non-Approval nodes
+            // pass null (actingApproverITCode is null for auto-advance paths).
+            var decidedByForApproval = nodeDef.Kind == NodeKind.Approval ? actingApproverITCode : null;
             var completeRows = await GuardedTransition.CompleteNodeInstanceAsync(
                 Db, activeNode.ID, activeNode.RowVer, NodeState.CompletedApproved,
+                decidedBy: decidedByForApproval,
                 generation: instance.Generation, ct: ct);
 
             if (completeRows == 0)
@@ -1180,7 +1227,8 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         }
 
         // 10. Mode-specific completion logic — shared with SystemContinueTaskAsync (WF-20.4).
-        return await ExecuteApproveCompletionAsync(task.ID, nodeInst, instance, approveMode, ct);
+        // C10 fix: pass actorITCode so All/Any completion can stamp DecidedBy on NodeInstance.
+        return await ExecuteApproveCompletionAsync(task.ID, nodeInst, instance, approveMode, ct, actorITCode);
     }
 
     // ── WF-20.4: shared approve post-claim completion helper ──────────────────
@@ -1195,7 +1243,8 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         NodeInstance nodeInst,
         ProcessInstance instance,
         ApproveMode approveMode,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? actorITCode = null)
     {
         if (approveMode == ApproveMode.All)
         {
@@ -1222,7 +1271,8 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             }
 
             // Threshold met (or exceeded by concurrent racing approvers): try to complete.
-            var allResult = await AdvanceAsync(instance.ID, ct);
+            // C10 fix: pass actorITCode so AdvanceCoreAsync can stamp DecidedBy on the node.
+            var allResult = await AdvanceWithActorAsync(instance, ct, actorITCode);
             // WF-15 — post-advance instance completion notification (best-effort).
             if (_notifier is not null && allResult.Code == WorkflowActionCode.InstanceApproved)
             {
@@ -1245,7 +1295,8 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             // Concurrent approvers both increment and both call AdvanceAsync; the node
             // CAS in AdvanceCoreAsync ensures exactly one caller completes the node.
             await GuardedTransition.IncrementNodeApprovedCountAsync(Db, nodeInst.ID, ct);
-            var anyResult = await AdvanceAsync(instance.ID, ct);
+            // C10 fix: pass actorITCode so AdvanceCoreAsync can stamp DecidedBy on the node.
+            var anyResult = await AdvanceWithActorAsync(instance, ct, actorITCode);
             // WF-15 — post-advance instance completion notification (best-effort).
             if (_notifier is not null && anyResult.Code == WorkflowActionCode.InstanceApproved)
             {
@@ -1663,10 +1714,13 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         {
             // Sequential path ─────────────────────────────────────────────────────
 
-            // Cancel remaining NotYetActive tasks on this node (Sequential-only: All/Any
-            // mint all tasks as Pending so there are no NotYetActive tasks to cancel here).
+            // Cancel remaining NotYetActive and AddedPending tasks on this node.
+            // AddedPending (加签-injected tasks not yet reached by the SequencePointer)
+            // must also be cancelled; omitting them leaves them as un-actionable dangling
+            // rows on a CompletedRejected node (C11 fix).
             await Db.Set<ApprovalTask>()
-                .Where(t => t.NodeInstanceId == nodeInst.ID && t.State == TaskState.NotYetActive)
+                .Where(t => t.NodeInstanceId == nodeInst.ID
+                             && (t.State == TaskState.NotYetActive || t.State == TaskState.AddedPending))
                 .ExecuteUpdateAsync(
                     s => s.SetProperty(t => t.State, TaskState.Cancelled),
                     ct);
