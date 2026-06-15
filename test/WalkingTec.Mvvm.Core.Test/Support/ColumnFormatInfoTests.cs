@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using FluentAssertions;
+using Microsoft.Extensions.Localization;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
 
@@ -13,6 +14,21 @@ namespace WalkingTec.Mvvm.Core.Test.Support
     [TestClass]
     public class ColumnFormatInfoTests
     {
+        private IStringLocalizer? _savedLocalizer;
+
+        [TestInitialize]
+        public void TestInitialize()
+        {
+            _savedLocalizer = CoreProgram._localizer;
+            CoreProgram._localizer = null;
+        }
+
+        [TestCleanup]
+        public void TestCleanup()
+        {
+            CoreProgram._localizer = _savedLocalizer;
+        }
+
         // ── DTO property-bag ─────────────────────────────────────────────────────
 
         [TestMethod]
