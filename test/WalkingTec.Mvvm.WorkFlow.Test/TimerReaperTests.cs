@@ -2267,6 +2267,277 @@ public class TimerReaperTests : IDisposable
         Assert.IsFalse(calendar.IsPassThrough,
             "Consumer calendar registered after AddWtmWorkFlowTimers must win via AddSingleton override.");
     }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // T-325: Multi-tenant regression — Issue #325 fix verification.
+    // These tests use the PRODUCTION IDataContext constructor path (_dc != null)
+    // so that IDataContext.HasQueryFilter is exercised.  The test DataContext is
+    // WfTenantTestDataContext (declared in TenantFilterInvariantTests.cs), which
+    // applies the same TenantCode == this.TenantCode query filter that production
+    // DataContext does.  WfTestContext (test path) has no query filters, so it
+    // cannot demonstrate the bug.
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// T-325-1: Phase-2 Returning-lease reclaim correctly sets tenant context on the
+    /// IDataContext before the CAS write so the HasQueryFilter (TenantCode == this.TenantCode)
+    /// matches the non-default tenant's row.
+    ///
+    /// Scenario: a ProcessInstance with TenantCode="T1" is in State=Returning with an
+    /// expired ReturningLeaseUtc.  The executor is created with a WfTenantTestDataContext
+    /// whose TenantCode starts as null (background reaper scope).  Without the fix in
+    /// WorkflowTimerExecutor.ReclaimExpiredLeasesAsync, SetTenantCode("T1") is never called
+    /// → the HasQueryFilter sees TenantCode IS NULL → ExecuteUpdateAsync matches 0 rows →
+    /// the instance stays in Returning state.  With the fix, SetTenantCode("T1") is called
+    /// → filter resolves to TenantCode=="T1" → 1 row updated → State==Running.
+    /// </summary>
+    [TestMethod]
+    public async Task T_325_1_Phase2_ReclaimExpiredLease_NonDefaultTenant_Reclaimed()
+    {
+        // ── Arrange ──────────────────────────────────────────────────────────
+        // Use a fresh, dedicated SQLite shared-in-memory database (NOT _dbName,
+        // which was created by WfTestContext and has different table names).
+        var localDbName = $"WfT325P2_{Guid.NewGuid():N}";
+        var cs = $"DataSource={localDbName}?mode=memory&cache=shared";
+
+        await using var keepAlive = new SqliteConnection(cs);
+        keepAlive.Open();
+
+        // Create schema using WfTenantTestDataContext (production table names).
+        await using (var setup = new WfTenantTestDataContext(cs, DBTypeEnum.SQLite))
+        {
+            await setup.Database.EnsureCreatedAsync();
+        }
+
+        var instanceId  = Guid.NewGuid();
+        var defId       = Guid.NewGuid();
+        var defVerId    = Guid.NewGuid();
+
+        // Seed: parent rows first (FK chain: ProcessDefinition → ProcessDefinitionVersion
+        //       → ProcessInstance).  SQLite enforces FK constraints when the schema is
+        //       created via ApplyWorkFlowModels().
+        await using (var seed = new WfTenantTestDataContext(cs, DBTypeEnum.SQLite))
+        {
+            seed.Set<ProcessDefinition>().Add(new ProcessDefinition
+            {
+                ID         = defId,
+                Code       = "DEF_T325_P2",
+                Name       = "T325-Phase2 Definition",
+                IsEnabled  = true,
+                IsValid    = true,
+                TenantCode = "T1",
+            });
+            await seed.SaveChangesAsync();
+
+            seed.Set<ProcessDefinitionVersion>().Add(new ProcessDefinitionVersion
+            {
+                ID           = defVerId,
+                DefinitionId = defId,
+                VersionNo    = 1,
+                GraphJson    = "{}",
+                ContentHash  = "test",
+                IsValid      = true,
+                TenantCode   = "T1",
+            });
+            await seed.SaveChangesAsync();
+
+            seed.Set<ProcessInstance>().Add(new ProcessInstance
+            {
+                ID                  = instanceId,
+                State               = InstanceState.Returning,
+                RowVer              = 0,
+                InitiatorITCode     = "alice",
+                DefinitionVersionId = defVerId,
+                IsValid             = true,
+                Generation          = 0,
+                TenantCode          = "T1",
+                ReturningLeaseUtc   = DateTime.UtcNow.AddHours(-1), // expired
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        // ── Act ──────────────────────────────────────────────────────────────
+        // Create the executor via the PRODUCTION IDataContext constructor
+        // with TenantCode=null (background reaper scope — no tenant set initially).
+        // Cast to IDataContext explicitly to disambiguate from the DbContext overload.
+        await using var executorDc = new WfTenantTestDataContext(cs, DBTypeEnum.SQLite);
+        var executor = new WorkflowTimerExecutor(
+            (IDataContext)executorDc,
+            Options.Create(new WorkFlowOptions()),
+            NullLogger<WorkflowTimerExecutor>.Instance);
+
+        await executor.RunTickAsync(DateTime.UtcNow, CancellationToken.None);
+
+        // ── Assert ───────────────────────────────────────────────────────────
+        // Verify: the lease was reclaimed → State should be Running.
+        // Use IgnoreQueryFilters() to see the row regardless of TenantCode.
+        await using var verify = new WfTenantTestDataContext(cs, DBTypeEnum.SQLite);
+        var inst = await verify.Set<ProcessInstance>()
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .Where(i => i.ID == instanceId)
+            .Select(i => new { i.State, i.TenantCode })
+            .FirstOrDefaultAsync();
+
+        Assert.IsNotNull(inst, "ProcessInstance must still exist after reclaim");
+        Assert.AreEqual(InstanceState.Running, inst.State,
+            "Phase-2 fix (Issue #325): SetTenantCode must be called before CAS so the " +
+            "HasQueryFilter matches TenantCode='T1' and the row is updated to Running.");
+        Assert.AreEqual("T1", inst.TenantCode,
+            "TenantCode must be preserved unchanged after reclaim.");
+    }
+
+    /// <summary>
+    /// T-325-2: Phase-3 AtAction delegation sweep correctly sets tenant context on the
+    /// IDataContext before the CAS write so the HasQueryFilter (TenantCode == this.TenantCode)
+    /// matches the non-default tenant's row.
+    ///
+    /// Scenario: an ApprovalTask with TenantCode="T1", State=Pending, with an expired
+    /// delegation (DelegationExpiresUtc in the past, DelegatedFromITCode="alice",
+    /// AssigneeITCode="carol") is in the database.  The executor is created with a
+    /// WfTenantTestDataContext whose TenantCode starts as null.  Without the fix in
+    /// SweepExpiredAtActionDelegationsAsync, SetTenantCode("T1") is never called →
+    /// the HasQueryFilter sees TenantCode IS NULL → ExecuteUpdateAsync matches 0 rows →
+    /// the task stays delegated.  With the fix, SetTenantCode("T1") is called → filter
+    /// resolves to TenantCode=="T1" → 1 row updated → AssigneeITCode reverted to "alice".
+    /// </summary>
+    [TestMethod]
+    public async Task T_325_2_Phase3_AtActionSweep_ExpiredDelegation_NonDefaultTenant_Reverted()
+    {
+        // ── Arrange ──────────────────────────────────────────────────────────
+        var localDbName = $"WfT325P3_{Guid.NewGuid():N}";
+        var cs = $"DataSource={localDbName}?mode=memory&cache=shared";
+
+        await using var keepAlive = new SqliteConnection(cs);
+        keepAlive.Open();
+
+        await using (var setup = new WfTenantTestDataContext(cs, DBTypeEnum.SQLite))
+        {
+            await setup.Database.EnsureCreatedAsync();
+        }
+
+        var instanceId = Guid.NewGuid();
+        var nodeId     = Guid.NewGuid();
+        var taskId     = Guid.NewGuid();
+        var ruleId     = Guid.NewGuid();
+        var defId2     = Guid.NewGuid();
+        var defVerId2  = Guid.NewGuid();
+
+        await using (var seed = new WfTenantTestDataContext(cs, DBTypeEnum.SQLite))
+        {
+            // Seed parent rows first to satisfy FK constraints (production schema).
+            seed.Set<ProcessDefinition>().Add(new ProcessDefinition
+            {
+                ID         = defId2,
+                Code       = "DEF_T325_P3",
+                Name       = "T325-Phase3 Definition",
+                IsEnabled  = true,
+                IsValid    = true,
+                TenantCode = "T1",
+            });
+            await seed.SaveChangesAsync();
+
+            seed.Set<ProcessDefinitionVersion>().Add(new ProcessDefinitionVersion
+            {
+                ID           = defVerId2,
+                DefinitionId = defId2,
+                VersionNo    = 1,
+                GraphJson    = "{}",
+                ContentHash  = "test",
+                IsValid      = true,
+                TenantCode   = "T1",
+            });
+            await seed.SaveChangesAsync();
+
+            seed.Set<ProcessInstance>().Add(new ProcessInstance
+            {
+                ID                  = instanceId,
+                State               = InstanceState.Running,
+                RowVer              = 0,
+                InitiatorITCode     = "alice",
+                DefinitionVersionId = defVerId2,
+                IsValid             = true,
+                Generation          = 0,
+                TenantCode          = "T1",
+            });
+            seed.Set<NodeInstance>().Add(new NodeInstance
+            {
+                ID           = nodeId,
+                State        = NodeState.Activated,
+                RowVer       = 0,
+                NodeKey      = "approval",
+                InstanceId   = instanceId,
+                TenantCode   = "T1",
+                TotalRequired = 1,
+                ApproveMode  = ApproveMode.Any,
+                Generation   = 0,
+            });
+            seed.Set<ApprovalTask>().Add(new ApprovalTask
+            {
+                ID                  = taskId,
+                State               = TaskState.Pending,
+                RowVer              = 0,
+                Generation          = 0,
+                NodeInstanceId      = nodeId,
+                AssigneeITCode      = "carol",
+                DelegatedFromITCode = "alice",
+                DelegationRuleId    = ruleId,
+                DelegationExpiresUtc = DateTime.UtcNow.AddHours(-1), // expired
+                TenantCode          = "T1",
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        // ── Act ──────────────────────────────────────────────────────────────
+        var opts = new WorkFlowOptions
+        {
+            DelegationWindowMode   = DelegationWindowMode.AtAction,
+            DelegationExpiredSweep = DelegationExpiredSweep.RevertToPrincipal,
+        };
+
+        // Cast to IDataContext explicitly to disambiguate from the DbContext overload.
+        await using var executorDc = new WfTenantTestDataContext(cs, DBTypeEnum.SQLite);
+        var executor = new WorkflowTimerExecutor(
+            (IDataContext)executorDc,
+            Options.Create(opts),
+            NullLogger<WorkflowTimerExecutor>.Instance);
+
+        await executor.RunTickAsync(DateTime.UtcNow, CancellationToken.None);
+
+        // ── Assert ───────────────────────────────────────────────────────────
+        await using var verify = new WfTenantTestDataContext(cs, DBTypeEnum.SQLite);
+
+        var task = await verify.Set<ApprovalTask>()
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .Where(t => t.ID == taskId)
+            .Select(t => new { t.AssigneeITCode, t.DelegationRuleId, t.DelegatedFromITCode, t.TenantCode })
+            .FirstOrDefaultAsync();
+
+        Assert.IsNotNull(task, "ApprovalTask must still exist after sweep");
+        Assert.AreEqual("alice", task.AssigneeITCode,
+            "Phase-3 fix (Issue #325): AssigneeITCode must be reverted to the principal 'alice'.");
+        Assert.IsNull(task.DelegationRuleId,
+            "Phase-3 fix (Issue #325): DelegationRuleId must be cleared after revert.");
+        Assert.IsNull(task.DelegatedFromITCode,
+            "Phase-3 fix (Issue #325): DelegatedFromITCode must be cleared after revert.");
+        Assert.AreEqual("T1", task.TenantCode,
+            "TenantCode must be preserved unchanged after revert.");
+
+        // A DelegationExpiredReverted event must have been written with TenantCode="T1".
+        var eventLog = await verify.Set<WorkflowEventLog>()
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .Where(e => e.InstanceId == instanceId
+                         && e.Action == EventAction.DelegationExpiredReverted)
+            .Select(e => new { e.TenantCode, e.Action })
+            .FirstOrDefaultAsync();
+
+        Assert.IsNotNull(eventLog,
+            "Phase-3 fix (Issue #325): a DelegationExpiredReverted event must be written.");
+        Assert.AreEqual("T1", eventLog.TenantCode,
+            "Phase-3 fix (Issue #325): the event log entry must carry TenantCode='T1'.");
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

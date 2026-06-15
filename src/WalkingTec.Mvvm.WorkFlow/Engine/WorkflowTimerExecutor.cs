@@ -1081,12 +1081,27 @@ internal sealed class WorkflowTimerExecutor
             .Where(i => i.State == InstanceState.Returning
                          && i.ReturningLeaseUtc != null
                          && i.ReturningLeaseUtc < now)
-            .Select(i => new { i.ID, i.RowVer })
+            .Select(i => new { i.ID, i.RowVer, i.TenantCode })
             .ToListAsync(ct);
 
         foreach (var inst in expiredLeases)
         {
             ct.ThrowIfCancellationRequested();
+
+            // FIX #325: Set the scoped IDataContext's TenantCode to the current instance's
+            // TenantCode before the CAS write so EF's HasQueryFilter (TenantCode == this.TenantCode)
+            // matches the correct tenant's row. The candidate SELECT uses IgnoreQueryFilters()
+            // (cross-tenant sweep) so all expired leases are found regardless of tenant; but
+            // ReclaimReturningLeaseByRowVerAsync's ExecuteUpdateAsync goes through the query filter
+            // and therefore needs the tenant set. PK+RowVer CAS ensures no cross-tenant write.
+            // Test path: _dc is null (WfTestContext has no ITenant filters) — no action needed.
+            string? previousTenantCode = null;
+            if (_dc is not null)
+            {
+                previousTenantCode = _dc.TenantCode;
+                _dc.SetTenantCode(inst.TenantCode);
+            }
+
             try
             {
                 // ReclaimReturningLeaseByRowVerAsync: NO DateTime in UPDATE WHERE (portable).
@@ -1107,6 +1122,13 @@ internal sealed class WorkflowTimerExecutor
                 _logger.LogError(ex,
                     "Lease reclaim failed for ProcessInstance {InstanceId} — will retry next tick",
                     inst.ID);
+            }
+            finally
+            {
+                // Restore tenant context so the next row (or any subsequent scope use) does not
+                // inherit this instance's tenant. Belt-and-suspenders: PK+RowVer CAS is the real guard.
+                if (_dc is not null)
+                    _dc.SetTenantCode(previousTenantCode);
             }
         }
     }
@@ -1554,17 +1576,32 @@ internal sealed class WorkflowTimerExecutor
         {
             ct.ThrowIfCancellationRequested();
 
-            if (string.IsNullOrWhiteSpace(row.DelegatedFromITCode))
+            // FIX #325: Set the scoped IDataContext's TenantCode to the current task's
+            // TenantCode before the CAS write so EF's HasQueryFilter (TenantCode == this.TenantCode)
+            // matches the correct tenant's row. The candidate SELECT uses IgnoreQueryFilters()
+            // (cross-tenant sweep) so all expired delegations are found regardless of tenant; but
+            // the ExecuteUpdateAsync CAS writes go through the query filter and therefore need the
+            // tenant set on the context. PK+RowVer CAS ensures no cross-tenant write is possible.
+            // Test path: _dc is null (WfTestContext has no ITenant filters) — no action needed.
+            string? previousTenantCode = null;
+            if (_dc is not null)
             {
-                // Defensive: DelegatedFromITCode is null/empty — skip (principal unknown).
-                _logger.LogWarning(
-                    "AtAction sweep: task {TaskId} has expired delegation but null DelegatedFromITCode — skipping",
-                    row.ID);
-                continue;
+                previousTenantCode = _dc.TenantCode;
+                _dc.SetTenantCode(row.TenantCode);
             }
 
             try
             {
+                if (string.IsNullOrWhiteSpace(row.DelegatedFromITCode))
+                {
+                    // Defensive: DelegatedFromITCode is null/empty — skip (principal unknown).
+                    // continue inside try still executes the finally block (C# spec §13.11).
+                    _logger.LogWarning(
+                        "AtAction sweep: task {TaskId} has expired delegation but null DelegatedFromITCode — skipping",
+                        row.ID);
+                    continue;
+                }
+
                 string principal = row.DelegatedFromITCode!;
 
                 // Per-row CAS: revert to principal, clear delegation fields, bump RowVer.
@@ -1698,6 +1735,13 @@ internal sealed class WorkflowTimerExecutor
                 _logger.LogError(ex,
                     "AtAction sweep: failed for task {TaskId} — will retry next tick",
                     row.ID);
+            }
+            finally
+            {
+                // Restore tenant context for next iteration.
+                // Belt-and-suspenders: PK+RowVer CAS is the real cross-tenant guard.
+                if (_dc is not null)
+                    _dc.SetTenantCode(previousTenantCode);
             }
         }
     }
