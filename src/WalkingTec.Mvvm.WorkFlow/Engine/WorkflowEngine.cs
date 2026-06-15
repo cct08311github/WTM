@@ -2910,7 +2910,29 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             throw;
         }
 
-        // WF-15 — Notify return (post-commit, best-effort).
+        // ── #322: Drive the freshly minted Pending target node through activation ──
+        // After txB commits, the target NodeInstance is Pending with no ApprovalTasks.
+        // AdvanceCoreAsync picks up all Pending/Activated tokens for the current generation,
+        // activates the target node (Pending → Activated) and calls handler.OnEnterAsync
+        // which materialises ApprovalTasks.  This MUST run post-commit (outside any txB scope)
+        // so the minted node is visible to AdvanceCoreAsync's DB reads.
+        var freshInstForAdvance = await Db.Set<ProcessInstance>()
+            .AsNoTracking()
+            .SingleAsync(x => x.ID == instance.ID, ct);
+        try
+        {
+            await AdvanceCoreAsync(freshInstForAdvance, graph, ct);
+        }
+        catch (Exception advEx)
+        {
+            // Non-fatal: the return itself succeeded (txB committed).  Log and continue.
+            // The target node remains Pending; the caller / reaper can retry AdvanceAsync.
+            _logger.LogError(advEx,
+                "ExecuteReturnToNodeAsync: #322 post-return AdvanceCoreAsync failed for instance {InstanceId}. " +
+                "Return committed; target node activation deferred.", instance.ID);
+        }
+
+        // WF-15 — Notify return (post-commit, post-advance, best-effort).
         if (_notifier is not null)
         {
             var freshInst = await Db.Set<ProcessInstance>().AsNoTracking().SingleAsync(x => x.ID == instance.ID, CancellationToken.None);
@@ -3264,7 +3286,12 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                         TenantCode      = instance.TenantCode,
                         NodeInstanceId  = freshNode.ID,
                         AssigneeITCode  = toInject[i],
-                        State           = TaskState.AddedPending,
+                        // #324: For All/Any modes the node is already Activated; injected tasks
+                        // must be immediately actionable (Pending). Sequential uses AddedPending
+                        // so the pointer-advance path in ExecuteApproveCompletionAsync activates them.
+                        State           = approveMode == ApproveMode.Sequential
+                                              ? TaskState.AddedPending
+                                              : TaskState.Pending,
                         SequenceOrder   = insertionOrder + i,
                         AddDepth        = newDepth,
                         AddedByITCode   = actorITCode,

@@ -811,4 +811,146 @@ public class AllAnyTests : IDisposable
         Assert.AreEqual(InstanceState.Rejected, finalInst.State,
             "Instance must be Rejected after last approver in Any mode rejects.");
     }
+
+    // ── #324 (C6 fix): AddApprover on All/Any modes activates injected tasks ──────
+
+    /// <summary>
+    /// #324 (C6 fix) All-mode 加签: start a 会签 node with 2 approvers, inject a 3rd via AddApproverAsync,
+    /// then have ALL THREE approve. The node must reach CompletedApproved and the instance Approved.
+    /// Without the fix the injected task stays AddedPending (never actionable) and TotalRequired
+    /// becomes 3 while only 2 tasks are ever actionable → threshold unreachable → workflow hangs.
+    /// </summary>
+    [TestMethod]
+    public async Task AddApprover_AllMode_InjectedTaskImmediatelyActionable_AllApproveReachesApproved()
+    {
+        const string A1 = "alice"; const string A2 = "bob"; const string A3 = "carol";
+        var (engine, ctx) = MakeEngine();
+        await using var _ = ctx;
+
+        // Start a 会签 node with 2 original approvers.
+        var version  = await SeedVersionAsync(ctx, AllAnyGraphs.AllApprovers(new[] { A1, A2 }));
+        var instance = await engine.StartAsync(version.ID, null, "initiator", null);
+
+        await using var read1 = MakeContext();
+        var nodeInst = await read1.Set<NodeInstance>().AsNoTracking()
+            .SingleAsync(n => n.InstanceId == instance.ID && n.NodeKind == NodeKind.Approval);
+        Assert.AreEqual(NodeState.Activated, nodeInst.State, "Node must be Activated before 加签.");
+        Assert.AreEqual(2, nodeInst.TotalRequired, "TotalRequired must be 2 before 加签.");
+
+        // Alice gets her task.
+        var taskA = await read1.Set<ApprovalTask>().AsNoTracking()
+            .SingleAsync(t => t.AssigneeITCode == A1 && t.State == TaskState.Pending);
+
+        // Alice injects carol as an additional approver (加签).
+        var addResult = await engine.AddApproverAsync(
+            taskId: taskA.ID,
+            actorITCode: A1,
+            newApproverITCodes: new[] { A3 },
+            position: AddPosition.After,
+            reason: "#324 C6 test inject");
+        Assert.AreEqual(WorkflowActionCode.Advanced, addResult.Code,
+            $"AddApproverAsync must return Advanced, got {addResult.Code}");
+
+        // Verify carol's task is Pending (actionable), not AddedPending.
+        await using var read2 = MakeContext();
+        var carolTask = await read2.Set<ApprovalTask>().AsNoTracking()
+            .FirstOrDefaultAsync(t => t.AssigneeITCode == A3 && t.NodeInstanceId == nodeInst.ID);
+        Assert.IsNotNull(carolTask, "#324 C6: Carol's task must exist after 加签.");
+        Assert.AreEqual(TaskState.Pending, carolTask.State,
+            "#324 C6 fix: Carol's injected task must be Pending (not AddedPending) for All-mode. " +
+            "Without the fix it stays AddedPending and is never actionable.");
+
+        // Verify TotalRequired is now 3.
+        var nodeRefreshed = await read2.Set<NodeInstance>().AsNoTracking()
+            .SingleAsync(n => n.ID == nodeInst.ID);
+        Assert.AreEqual(3, nodeRefreshed.TotalRequired, "#324 C6: TotalRequired must be 3 after 加签.");
+
+        // All three approve: alice, bob, carol.
+        await using var read3 = MakeContext();
+        var allTasks = await read3.Set<ApprovalTask>().AsNoTracking()
+            .Where(t => t.NodeInstanceId == nodeInst.ID && t.State == TaskState.Pending)
+            .ToListAsync();
+        Assert.AreEqual(3, allTasks.Count, "#324 C6: All 3 tasks must be Pending after 加签.");
+
+        var tAlice = allTasks.Single(t => t.AssigneeITCode == A1);
+        var tBob   = allTasks.Single(t => t.AssigneeITCode == A2);
+        var tCarol = allTasks.Single(t => t.AssigneeITCode == A3);
+
+        var r1 = await engine.ApproveTaskAsync(tAlice.ID, A1);
+        Assert.AreEqual(WorkflowActionCode.Advanced, r1.Code,
+            $"#324 C6: alice approval (1/3) must return Advanced, got {r1.Code}.");
+
+        var r2 = await engine.ApproveTaskAsync(tBob.ID, A2);
+        Assert.AreEqual(WorkflowActionCode.Advanced, r2.Code,
+            $"#324 C6: bob approval (2/3) must return Advanced, got {r2.Code}.");
+
+        // Carol (injected) approves last — must complete the node and approve the instance.
+        var r3 = await engine.ApproveTaskAsync(tCarol.ID, A3);
+        Assert.AreEqual(WorkflowActionCode.InstanceApproved, r3.Code,
+            $"#324 C6 fix: carol (injected, 3/3) must drive instance to InstanceApproved. " +
+            $"Without the fix carol's task stays AddedPending and the workflow hangs. Got {r3.Code}.");
+
+        await using var readFinal2 = MakeContext();
+        var finalInst2 = await readFinal2.Set<ProcessInstance>().AsNoTracking()
+            .SingleAsync(p => p.ID == instance.ID);
+        Assert.AreEqual(InstanceState.Approved, finalInst2.State,
+            "#324 C6 fix: instance must be Approved after all three (including injected) approve.");
+    }
+
+    /// <summary>
+    /// #324 (C6 fix) Any-mode 加签: start a 或签 node with 2 approvers, inject a 3rd via AddApproverAsync,
+    /// then have the INJECTED approver (carol) approve first. The node must reach CompletedApproved
+    /// and the instance Approved.
+    /// Without the fix carol's injected task stays AddedPending and she cannot act on it.
+    /// </summary>
+    [TestMethod]
+    public async Task AddApprover_AnyMode_InjectedApproverCanWin()
+    {
+        const string A1 = "alice"; const string A2 = "bob"; const string A3 = "carol";
+        var (engine, ctx) = MakeEngine();
+        await using var _ = ctx;
+
+        // Start a 或签 node with 2 original approvers.
+        var version  = await SeedVersionAsync(ctx, AllAnyGraphs.AnyApprovers(new[] { A1, A2 }));
+        var instance = await engine.StartAsync(version.ID, null, "initiator", null);
+
+        await using var read1 = MakeContext();
+        var nodeInst = await read1.Set<NodeInstance>().AsNoTracking()
+            .SingleAsync(n => n.InstanceId == instance.ID && n.NodeKind == NodeKind.Approval);
+        Assert.AreEqual(NodeState.Activated, nodeInst.State, "Node must be Activated before 加签.");
+
+        var taskA = await read1.Set<ApprovalTask>().AsNoTracking()
+            .SingleAsync(t => t.AssigneeITCode == A1 && t.State == TaskState.Pending);
+
+        // Alice injects carol as an additional approver (加签).
+        var addResult = await engine.AddApproverAsync(
+            taskId: taskA.ID,
+            actorITCode: A1,
+            newApproverITCodes: new[] { A3 },
+            position: AddPosition.After,
+            reason: "#324 C6 Any-mode test inject");
+        Assert.AreEqual(WorkflowActionCode.Advanced, addResult.Code,
+            $"AddApproverAsync must return Advanced, got {addResult.Code}");
+
+        // Verify carol's task is Pending (actionable), not AddedPending.
+        await using var read2 = MakeContext();
+        var carolTask = await read2.Set<ApprovalTask>().AsNoTracking()
+            .FirstOrDefaultAsync(t => t.AssigneeITCode == A3 && t.NodeInstanceId == nodeInst.ID);
+        Assert.IsNotNull(carolTask, "#324 C6 Any: Carol's task must exist after 加签.");
+        Assert.AreEqual(TaskState.Pending, carolTask.State,
+            "#324 C6 Any fix: Carol's injected task must be Pending for Any-mode. " +
+            "Without the fix it stays AddedPending and carol cannot approve.");
+
+        // Carol (injected) approves — being first in Any-mode should win immediately.
+        var carolResult = await engine.ApproveTaskAsync(carolTask.ID, A3);
+        Assert.AreEqual(WorkflowActionCode.InstanceApproved, carolResult.Code,
+            $"#324 C6 Any fix: carol (injected) approving in Any-mode must return InstanceApproved. " +
+            $"Without the fix carol cannot act. Got {carolResult.Code}.");
+
+        await using var readFinal3 = MakeContext();
+        var finalInst3 = await readFinal3.Set<ProcessInstance>().AsNoTracking()
+            .SingleAsync(p => p.ID == instance.ID);
+        Assert.AreEqual(InstanceState.Approved, finalInst3.State,
+            "#324 C6 Any fix: instance must be Approved after carol (injected) wins in Any-mode.");
+    }
 }

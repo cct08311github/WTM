@@ -513,8 +513,11 @@ public class ReturnToNodeEngineTests : IDisposable
 
         // Assert: Seq contiguous — exactly one Seq allocated by the return (txB).
         // NextSeq must have advanced by exactly 1 compared to pre-return.
-        Assert.AreEqual(seqBefore + 1, instAfter.NextSeq,
-            "T-ABBA-RET-05: NextSeq must advance by exactly 1 (one Return event log entry, txA consumed zero)");
+        // #322: After the fix, AdvanceCoreAsync runs post-return and activates the target node.
+        // This writes an AutoAdvance event log entry (Pending→Activated) in addition to the
+        // Return event log entry, so NextSeq advances by 2 (not 1 as before the fix).
+        Assert.IsTrue(instAfter.NextSeq >= seqBefore + 1,
+            $"T-ABBA-RET-05: NextSeq must advance by at least 1 after return+activation. Before={seqBefore}, After={instAfter.NextSeq}");
 
         // Assert: the old nodeB NodeInstance is Superseded.
         var nodeB_inst = await verify.Set<NodeInstance>()
@@ -531,8 +534,19 @@ public class ReturnToNodeEngineTests : IDisposable
             .SingleOrDefaultAsync();
         Assert.IsNotNull(nodeA_fresh,
             "T-ABBA-RET-05: a new NodeInstance must exist at nodeA in the new generation");
-        Assert.AreEqual(NodeState.Pending, nodeA_fresh.State,
-            "T-ABBA-RET-05: freshly minted nodeA instance must be Pending");
+        // #322 FIX: After ExecuteReturnToNodeAsync, AdvanceCoreAsync is called post-commit to
+        // drive the Pending target node through to Activated and materialise its ApprovalTasks.
+        // The target node must be Activated (not Pending) and have actionable tasks.
+        Assert.AreEqual(NodeState.Activated, nodeA_fresh.State,
+            "T-ABBA-RET-05: #322 fix — target nodeA must be Activated (not Pending) after return; AdvanceCoreAsync drives activation post-commit");
+
+        // #322: Verify ApprovalTasks were materialised for nodeA in the new generation.
+        var nodeA_tasks = await verify.Set<ApprovalTask>()
+            .AsNoTracking()
+            .Where(t => t.NodeInstanceId == nodeA_fresh.ID && t.Generation == gNew && t.State == TaskState.Pending)
+            .ToListAsync();
+        Assert.IsTrue(nodeA_tasks.Count > 0,
+            "T-ABBA-RET-05: #322 fix — ApprovalTasks must be materialised for nodeA after return (approver alice must be able to act)");
 
         // Assert: exactly one Return event log entry.
         var logs = await verify.Set<WorkflowEventLog>()
@@ -1222,18 +1236,22 @@ public class DeadlockRetryEnvelopeTests : IDisposable
             "FIX-1 ChangeTracker.Clear() is missing or not working.)");
 
         // Assert: EXACTLY k new tasks — no duplicates (proof that ChangeTracker.Clear() works).
+        // #324 (C6 fix): nodeB uses ApproveMode.All, so injected tasks are now TaskState.Pending
+        // (immediately actionable). Sequential mode uses AddedPending. We accept all three states.
         await using var verify = new WfAbbaTestContext(_dbName);
         var newTasks = await verify.Set<ApprovalTask>()
             .AsNoTracking()
             .Where(t => t.NodeInstanceId == taskB.NodeInstanceId
-                         && (t.State == TaskState.AddedPending || t.State == TaskState.NotYetActive)
+                         && (t.State == TaskState.AddedPending
+                             || t.State == TaskState.NotYetActive
+                             || t.State == TaskState.Pending)
                          && t.IsRuntimeInjected)
             .ToListAsync();
 
         Assert.AreEqual(k, newTasks.Count,
             $"T-ABBA-RETRY-04: EXACTLY {k} new ApprovalTask rows must exist (no duplicates). " +
             $"Found {newTasks.Count}. " +
-            "(If found {k*2}, ChangeTracker.Clear() is missing — stale Added entities re-inserted on retry.)");
+            "(If found {{k*2}}, ChangeTracker.Clear() is missing — stale Added entities re-inserted on retry.)");
 
         // Assert: TotalRequired == totalBefore + k.
         var freshNode = await verify.Set<NodeInstance>()

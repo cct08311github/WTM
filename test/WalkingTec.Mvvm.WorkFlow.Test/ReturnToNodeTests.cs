@@ -461,4 +461,162 @@ public class ReturnToNodeTests : IDisposable
             FieldWhitelist = new List<FieldWhitelistEntry>(),
         };
     }
+
+    // ── #322 (C4 fix) real-engine helpers ────────────────────────────────────
+
+    /// <summary>
+    /// Creates a full <see cref="IWorkflowEngine"/> backed by a <see cref="WfSequentialTestContext"/>
+    /// so we can run <see cref="IWorkflowEngine.ReturnToNodeAsync"/> end-to-end.
+    /// (ReturnToNodeTests normally only exercises <see cref="GuardedTransition"/> directly;
+    /// the C4 fix tests need the real engine.)
+    /// </summary>
+    private IWorkflowEngine MakeRealEngine(WfSequentialTestContext ctx)
+    {
+        var options    = new WorkFlowOptions();
+        var resolver   = new DefaultApproverResolverExposed(options, ctx);
+        var dispatcher = NodeKindDispatcher_Exposed.CreateWithAllModes(resolver, options);
+        return WorkflowEngine_Exposed.Create(ctx, dispatcher, NullLogger.Instance);
+    }
+
+    // ── #322: ReturnToNode activates target node and materialises tasks ─────────
+
+    /// <summary>
+    /// #322 (C4 fix): After ReturnToNodeAsync, the target node must be Activated
+    /// (not left as Pending) and its ApprovalTasks must be materialised so an approver
+    /// can act on it.  Without the fix, the target node stays Pending forever with no
+    /// tasks and the workflow hangs.
+    /// </summary>
+    [TestMethod]
+    public async Task ReturnToNode_TargetNodeActivatedWithTasks_AfterReturn()
+    {
+        // Use WfSequentialTestContext (has ProcessDefinitionVersion) via a shared-memory SQLite DB.
+        var rtcDbName = $"WfRetC4_{Guid.NewGuid():N}";
+        using var rtcKeepAlive = new SqliteConnection($"DataSource={rtcDbName}?mode=memory&cache=shared");
+        rtcKeepAlive.Open();
+
+        WfSequentialTestContext MakeRtcContext() => new(rtcDbName);
+
+        await using (var initCtx = MakeRtcContext())
+        {
+            await initCtx.Database.EnsureCreatedAsync();
+        }
+
+        // Graph: Start → approval_a (alice, Sequential) → approval_b (bob, Sequential) → End
+        var graphJson = WorkflowGraphSerializer.Serialize(new WorkflowGraph
+        {
+            Key  = "RetC4Graph",
+            Name = "RetC4Graph",
+            Nodes = new List<NodeDef>
+            {
+                new() { NodeKey = "start",      Kind = NodeKind.Start },
+                new()
+                {
+                    NodeKey      = "approval_a",
+                    Kind         = NodeKind.Approval,
+                    ApproveMode  = ApproveMode.Sequential,
+                    ApproverRule = new ApproverRuleDef { Type = "User", Value = "alice" },
+                },
+                new()
+                {
+                    NodeKey      = "approval_b",
+                    Kind         = NodeKind.Approval,
+                    ApproveMode  = ApproveMode.Sequential,
+                    ApproverRule = new ApproverRuleDef { Type = "User", Value = "bob" },
+                },
+                new() { NodeKey = "end", Kind = NodeKind.End },
+            },
+            Transitions = new List<TransitionDef>
+            {
+                new() { From = "start",      To = "approval_a" },
+                new() { From = "approval_a", To = "approval_b" },
+                new() { From = "approval_b", To = "end"        },
+            },
+            FieldWhitelist = new List<FieldWhitelistEntry>(),
+        });
+
+        await using var ctx = MakeRtcContext();
+        var version = new ProcessDefinitionVersion
+        {
+            ID            = Guid.NewGuid(),
+            DefinitionId  = Guid.NewGuid(),
+            VersionNo     = 1,
+            SchemaVersion = 1,
+            GraphJson     = graphJson,
+            ContentHash   = "retc4-" + Guid.NewGuid().ToString("N"),
+            PublishedAt   = DateTime.UtcNow,
+            PublishedBy   = "test",
+            TenantCode    = null,
+            IsValid       = true,
+        };
+        ctx.Set<ProcessDefinitionVersion>().Add(version);
+        await ctx.SaveChangesAsync();
+
+        var engine = MakeRealEngine(ctx);
+
+        // Start instance — alice gets approval_a task.
+        var instance = await engine.StartAsync(version.ID, null, "initiator", null);
+        Assert.IsNotNull(instance);
+
+        // Alice approves approval_a → bob gets approval_b.
+        await using var readCtx1 = MakeRtcContext();
+        var taskA = await readCtx1.Set<ApprovalTask>().AsNoTracking()
+            .SingleAsync(t => t.State == TaskState.Pending);
+        Assert.AreEqual("alice", taskA.AssigneeITCode);
+
+        var r1 = await engine.ApproveTaskAsync(taskA.ID, "alice");
+        Assert.IsTrue(r1.Code is WorkflowActionCode.Blocked or WorkflowActionCode.Advanced,
+            $"Expected Blocked or Advanced after alice approves approval_a, got {r1.Code}");
+
+        // Bob now has a pending task at approval_b.
+        await using var readCtx2 = MakeRtcContext();
+        var taskB = await readCtx2.Set<ApprovalTask>().AsNoTracking()
+            .SingleAsync(t => t.State == TaskState.Pending);
+        Assert.AreEqual("bob", taskB.AssigneeITCode);
+
+        // Act: Bob returns workflow to approval_a.
+        var returnResult = await engine.ReturnToNodeAsync(
+            taskId: taskB.ID,
+            targetNodeKey: "approval_a",
+            actorITCode: "bob",
+            reason: "#322 C4 test return");
+
+        Assert.AreEqual(WorkflowActionCode.Returned, returnResult.Code,
+            $"ReturnToNodeAsync must succeed, got {returnResult.Code}");
+
+        // Assert: target node approval_a must be Activated (NOT Pending) in new generation.
+        await using var verifyCtx = MakeRtcContext();
+        var freshInst = await verifyCtx.Set<ProcessInstance>().AsNoTracking()
+            .SingleAsync(p => p.ID == instance.ID);
+        uint gNew = freshInst.Generation;
+
+        var nodeA_fresh = await verifyCtx.Set<NodeInstance>().AsNoTracking()
+            .Where(n => n.InstanceId == instance.ID && n.NodeKey == "approval_a" && n.Generation == gNew)
+            .SingleOrDefaultAsync();
+
+        Assert.IsNotNull(nodeA_fresh,
+            "#322: A fresh NodeInstance must exist at approval_a in the new generation after return.");
+        Assert.AreEqual(NodeState.Activated, nodeA_fresh.State,
+            "#322 C4 fix: target node approval_a must be Activated after return (not Pending). " +
+            "Without the fix the node stays Pending forever and the workflow hangs.");
+
+        // Assert: ApprovalTasks must be materialised for approval_a so alice can act.
+        var tasksForA = await verifyCtx.Set<ApprovalTask>().AsNoTracking()
+            .Where(t => t.NodeInstanceId == nodeA_fresh.ID
+                        && t.Generation == gNew
+                        && t.State == TaskState.Pending)
+            .ToListAsync();
+        Assert.IsTrue(tasksForA.Count > 0,
+            "#322 C4 fix: ApprovalTasks must be materialised for approval_a after return. " +
+            "Without the fix no tasks exist and nobody can act.");
+
+        // Assert: alice has an actionable task in the new generation.
+        var aliceTask = tasksForA.FirstOrDefault(t => t.AssigneeITCode == "alice");
+        Assert.IsNotNull(aliceTask,
+            "#322 C4 fix: alice must have an actionable Pending task at approval_a after return.");
+
+        // Act: Prove alice can actually approve from approval_a again (workflow not hung).
+        var r2 = await engine.ApproveTaskAsync(aliceTask.ID, "alice");
+        Assert.IsTrue(r2.Code is WorkflowActionCode.Blocked or WorkflowActionCode.Advanced or WorkflowActionCode.InstanceApproved,
+            $"#322 C4 fix: alice must be able to act on the returned node, got {r2.Code}.");
+    }
 }
