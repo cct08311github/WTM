@@ -353,14 +353,17 @@ public static class GuardedTransition
             await db.SaveChangesAsync(ct);
             return true;
         }
-        catch (DbUpdateException ex) when (ex.InnerException?.Message
-            .Contains("UNIQUE", StringComparison.OrdinalIgnoreCase) == true
-            || ex.InnerException?.Message
-            .Contains("unique", StringComparison.OrdinalIgnoreCase) == true
-            || ex.InnerException?.Message
-            .Contains("constraint", StringComparison.OrdinalIgnoreCase) == true)
+        catch (DbUpdateException ex) when (
+            ex.InnerException?.Message.Contains("unique", StringComparison.OrdinalIgnoreCase) == true
+            || ex.InnerException?.Message.Contains("duplicate", StringComparison.OrdinalIgnoreCase) == true)
         {
-            // Idempotent: another concurrent caller already minted this node.
+            // Idempotent no-op: another concurrent caller already minted this node.
+            // The catch-when filter is intentionally NARROW: it matches ONLY UNIQUE / duplicate-key
+            // violations (SQLite "UNIQUE constraint failed", SQL Server "duplicate key", PostgreSQL
+            // "duplicate key value violates unique constraint", MySQL "Duplicate entry", Oracle "unique
+            // constraint").  FK violations ("FOREIGN KEY constraint"), NOT NULL violations
+            // ("NOT NULL constraint failed"), and CHECK violations ("CHECK constraint") do NOT contain
+            // "unique" or "duplicate" and will propagate as real errors.
             // Detach the conflicting entity so the context stays clean.
             var entry = db.Entry(node);
             if (entry.State != Microsoft.EntityFrameworkCore.EntityState.Detached)

@@ -38,6 +38,7 @@ namespace WalkingTec.Mvvm.WorkFlow.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/_workflow/instances")]
+[ActionDescription("WorkflowInstance")]
 public class WorkflowInstanceController : BaseController
 {
     private readonly IWorkflowEngine _engine;
@@ -237,6 +238,7 @@ public class WorkflowInstanceController : BaseController
     /// </summary>
     [HttpGet("{id:guid}/timeline")]
     [AllRights]
+    [ActionDescription("Timeline")]
     [ProducesResponseType(typeof(object), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

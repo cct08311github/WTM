@@ -43,6 +43,7 @@ namespace WalkingTec.Mvvm.WorkFlow.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/_workflow/tasks")]
+[ActionDescription("WorkflowTask")]
 public class WorkflowTaskController : BaseController
 {
     private readonly IWorkflowEngine _engine;
@@ -69,6 +70,7 @@ public class WorkflowTaskController : BaseController
     /// </summary>
     [HttpGet("mine")]
     [AllRights]
+    [ActionDescription("Inbox")]
     [ProducesResponseType(typeof(TaskInboxItem[]), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Inbox(CancellationToken ct = default)

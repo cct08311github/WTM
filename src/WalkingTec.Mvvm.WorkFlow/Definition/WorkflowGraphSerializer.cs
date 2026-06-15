@@ -134,15 +134,23 @@ public static class WorkflowGraphSerializer
     /// </param>
     /// <returns>Canonical (key-sorted, compact) JSON string.</returns>
     /// <exception cref="ArgumentException">When <paramref name="rawJson"/> is null or whitespace.</exception>
-    /// <exception cref="JsonException">When <paramref name="rawJson"/> is not valid JSON.</exception>
+    /// <exception cref="JsonException">When <paramref name="rawJson"/> is not valid JSON, or when it contains duplicate JSON property names.</exception>
     public static string Canonicalize(string rawJson)
     {
         if (string.IsNullOrWhiteSpace(rawJson))
             throw new ArgumentException("rawJson must not be null or empty.", nameof(rawJson));
 
-        // Parse — validates well-formedness and builds a JsonElement tree that
-        // carries exact number GetRawText() values.
-        using var doc = JsonDocument.Parse(rawJson);
+        // Parse — validates well-formedness, exact number literal fidelity, and
+        // rejects duplicate property names (AllowDuplicateProperties=false).
+        // Duplicate keys are ambiguous and non-canonical: two JSON objects that differ only
+        // in which duplicate copy "wins" would otherwise produce the same hash, enabling
+        // malicious or buggy graphs to carry shadowed keys that survive round-trips.
+        // A JsonException is thrown on parse if duplicates are detected; callers
+        // (PublishRawAsync, ValidateRaw) map it to ValidationFailed / BadRequest.
+        using var doc = JsonDocument.Parse(rawJson, new JsonDocumentOptions
+        {
+            AllowDuplicateProperties = false,
+        });
         return WriteCanonical(doc.RootElement);
     }
 

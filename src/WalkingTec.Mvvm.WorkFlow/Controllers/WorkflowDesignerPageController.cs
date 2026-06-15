@@ -33,6 +33,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
+using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.WorkFlow.Definition;
 
 namespace WalkingTec.Mvvm.WorkFlow.Controllers;
@@ -60,6 +61,7 @@ namespace WalkingTec.Mvvm.WorkFlow.Controllers;
 /// controller from causing 500 activation errors in non-opted-in consumer hosts.</para>
 /// </summary>
 [Route("/_workflow-designer")]
+[ActionDescription("WorkflowDesignerPage")]
 public class WorkflowDesignerPageController : Mvc.BaseController
 {
     // Manifest resource name for the embedded designer HTML page.
@@ -96,6 +98,7 @@ public class WorkflowDesignerPageController : Mvc.BaseController
     /// (homepage hijack).</para>
     /// </summary>
     [HttpGet("")]
+    [ActionDescription("Index")]
     public async Task<IActionResult> Index()
     {
         // FIX-A2: Non-opted-in hosts get 404, never 500.

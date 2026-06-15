@@ -46,6 +46,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Mvc;
 using WalkingTec.Mvvm.WorkFlow.Definition;
 using WalkingTec.Mvvm.WorkFlow.ViewModels;
@@ -143,6 +144,7 @@ internal sealed class WfDesignerAntiforgeryAttribute : Attribute, IAsyncActionFi
 /// </summary>
 [ApiController]
 [Route("api/_workflow/designer")]
+[ActionDescription("WorkflowDesigner")]
 public class WorkflowDesignerController : BaseController
 {
     // Definition code must be safe as a URL path segment and a DB key.
@@ -187,6 +189,7 @@ public class WorkflowDesignerController : BaseController
     /// <para>GET is idempotent — no antiforgery check required here.</para>
     /// </summary>
     [HttpGet("bootstrap")]
+    [ActionDescription("Bootstrap")]
     [ProducesResponseType(typeof(BootstrapResponseDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
@@ -216,6 +219,7 @@ public class WorkflowDesignerController : BaseController
     /// <param name="pageSize">Items per page (default: 20; max 200).</param>
     /// <param name="ct">Cancellation token.</param>
     [HttpGet("definitions")]
+    [ActionDescription("ListDefinitions")]
     [ProducesResponseType(typeof(DefinitionListResponseDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
@@ -304,6 +308,7 @@ public class WorkflowDesignerController : BaseController
     /// </summary>
     [HttpPut("definitions/{code}")]
     [WfDesignerAntiforgery]
+    [ActionDescription("UpdateDefinitionMetadata")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -340,6 +345,7 @@ public class WorkflowDesignerController : BaseController
     /// version yet, <c>GraphJson</c> is <c>null</c>.</para>
     /// </summary>
     [HttpGet("definitions/{code}/graph")]
+    [ActionDescription("GetCurrentGraph")]
     [ProducesResponseType(typeof(DefinitionGraphEnvelope), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
@@ -360,6 +366,7 @@ public class WorkflowDesignerController : BaseController
     /// Return the complete version history for a definition, newest first.
     /// </summary>
     [HttpGet("definitions/{code}/versions")]
+    [ActionDescription("GetVersionHistory")]
     [ProducesResponseType(typeof(VersionHistoryResult), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
@@ -382,6 +389,7 @@ public class WorkflowDesignerController : BaseController
     /// <para>Cross-tenant ID access behaves as 404 (DataContext tenant filter applied).</para>
     /// </summary>
     [HttpGet("versions/{id:guid}/graph")]
+    [ActionDescription("GetVersionGraph")]
     [ProducesResponseType(typeof(VersionGraphEnvelope), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
@@ -406,6 +414,7 @@ public class WorkflowDesignerController : BaseController
     /// <c>Draft</c> field (from <see cref="GetCurrentGraph"/>).</para>
     /// </summary>
     [HttpGet("definitions/{code}/draft")]
+    [ActionDescription("GetDraft")]
     [ProducesResponseType(typeof(DraftInfo), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
@@ -444,6 +453,7 @@ public class WorkflowDesignerController : BaseController
     /// </summary>
     [HttpPut("definitions/{code}/draft")]
     [WfDesignerAntiforgery]
+    [ActionDescription("SaveDraft")]
     [ProducesResponseType(typeof(SaveDraftResponseDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -545,6 +555,7 @@ public class WorkflowDesignerController : BaseController
     /// </summary>
     [HttpDelete("definitions/{code}/draft")]
     [WfDesignerAntiforgery]
+    [ActionDescription("DeleteDraft")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]

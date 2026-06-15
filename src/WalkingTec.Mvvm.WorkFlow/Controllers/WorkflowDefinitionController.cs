@@ -49,6 +49,7 @@ namespace WalkingTec.Mvvm.WorkFlow.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/_workflow/definitions")]
+[ActionDescription("WorkflowDefinition")]
 public class WorkflowDefinitionController : BaseController
 {
     private readonly IProcessDefinitionPublisher _publisher;
