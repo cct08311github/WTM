@@ -351,6 +351,66 @@ namespace WalkingTec.Mvvm.Core.Test.Services
 
         #endregion
 
+        #region PrivilegeFilter — attribute-route URL normalization
+
+        [TestMethod]
+        public void PrivilegeFilter_AttributeRoute_ConstraintStripped_ProducesMenuFormUrl()
+        {
+            var pattern = @"\{(\w+)(?::[^}{]+)?(?:\?)?\}";
+            var replacement = "{$1}";
+
+            System.Text.RegularExpressions.Regex.Replace("{id:guid}", pattern, replacement)
+                .Should().Be("{id}", "guid constraint should be stripped from route parameter");
+
+            System.Text.RegularExpressions.Regex.Replace(
+                    "api/_workflow/definitions/{code}/publish", pattern, replacement)
+                .Should().Be("api/_workflow/definitions/{code}/publish",
+                    "a parameter with no constraint should be left unchanged");
+
+            System.Text.RegularExpressions.Regex.Replace("{id:guid}/approve", pattern, replacement)
+                .Should().Be("{id}/approve",
+                    "guid constraint should be stripped even when followed by a path segment");
+        }
+
+        [TestMethod]
+        public void WtmAuthorizationService_WorkflowPublishUrl_WithoutPrivilege_ReturnsFalse()
+        {
+            // Prove that when BaseUrl resolves to the template URL, RBAC correctly
+            // denies a user who has no matching function privilege for that URL.
+            var menuId = Guid.NewGuid();
+            var gd = MakeGlobalData(new List<SimpleMenu>
+            {
+                new SimpleMenu { ID = menuId, Url = "/api/_workflow/definitions/{code}/publish" }
+            });
+            var config = new Configs { IsQuickDebug = false };
+            var user = new LoginUserInfo
+            {
+                ITCode = "regular_user",
+                FunctionPrivileges = new List<SimpleFunctionPri>
+                {
+                    // Different menu ID → no privilege match for the workflow publish URL
+                    new SimpleFunctionPri { MenuItemId = Guid.NewGuid(), Allowed = true }
+                }
+            };
+
+            _service.IsAccessable("/api/_workflow/definitions/{code}/publish", user, config, gd)
+                .Should().BeFalse("a user without privilege for this URL must be denied");
+        }
+
+        [TestMethod]
+        public void WtmAuthorizationService_EmptyUrl_FailsOpen_BaselineBehavior()
+        {
+            // This is the existing behavior. PrivilegeFilter must not reach this path
+            // for gated authenticated actions.
+            var config = new Configs { IsQuickDebug = false };
+            var gd = MakeGlobalData();
+
+            _service.IsAccessable("", null, config, gd)
+                .Should().BeTrue("empty URL currently returns true — the defense-in-depth guard in PrivilegeFilter prevents reaching this code path for authenticated gated actions");
+        }
+
+        #endregion
+
         #region Helpers
 
         private static GlobalData MakeGlobalData(List<SimpleMenu>? menus = null)

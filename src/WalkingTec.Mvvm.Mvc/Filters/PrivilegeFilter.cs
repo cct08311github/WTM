@@ -69,17 +69,43 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                 }
             }
 
+            // Fallback for attribute-routed actions where GetPathByAction cannot resolve
+            // parameterised routes (e.g. {id:guid}, {code}) and returns null.
+            // Derive the URL from the attribute route template so that RBAC can match it.
+            if (u == null && ad.AttributeRouteInfo?.Template != null)
+            {
+                var template = ad.AttributeRouteInfo.Template;
+                // Strip route constraints and optional markers so "{id:guid}" → "{id}", "{code?}" → "{code}"
+                template = System.Text.RegularExpressions.Regex.Replace(
+                    template,
+                    @"\{(\w+)(?::[^}{]+)?(?:\?)?\}",
+                    "{$1}");
+                u = template.StartsWith("/") ? template : "/" + template;
+            }
+
             controller.Wtm.BaseUrl = u + context.HttpContext.Request.QueryString.ToUriComponent();
-
-
-            //如果是QuickDebug模式，或者Action或Controller上有AllRightsAttribute标记都不需要判断权限
-            //如果用户登录信息为空，也不需要判断权限，BaseController中会对没有登录的用户做其他处理
 
             var isPublic = ad.MethodInfo.IsDefined(typeof(PublicAttribute), false) || ad.ControllerTypeInfo.IsDefined(typeof(PublicAttribute), false);
             if (!isPublic)
                 isPublic = ad.MethodInfo.IsDefined(typeof(AllowAnonymousAttribute), false) || ad.ControllerTypeInfo.IsDefined(typeof(AllowAnonymousAttribute), false);
 
             var isAllRights = ad.MethodInfo.IsDefined(typeof(AllRightsAttribute), false) || ad.ControllerTypeInfo.IsDefined(typeof(AllRightsAttribute), false);
+
+            // Security: if the action is gated (not public, not AllRights, user IS authenticated)
+            // and the URL is still unresolvable, deny access rather than failing open.
+            // This is a defense-in-depth guard — the primary fix is the template fallback above.
+            if ((u == null || u.Length == 0)
+                && !isPublic
+                && !isAllRights
+                && controller.Wtm.LoginUserInfo != null)
+            {
+                context.Result = new ForbidResult();
+                return;
+            }
+
+            //如果是QuickDebug模式，或者Action或Controller上有AllRightsAttribute标记都不需要判断权限
+            //如果用户登录信息为空，也不需要判断权限，BaseController中会对没有登录的用户做其他处理
+
             var isDebug = ad.MethodInfo.IsDefined(typeof(DebugOnlyAttribute), false) || ad.ControllerTypeInfo.IsDefined(typeof(DebugOnlyAttribute), false);
             var isHostOnly = ad.MethodInfo.IsDefined(typeof(MainTenantOnlyAttribute), false) || ad.ControllerTypeInfo.IsDefined(typeof(MainTenantOnlyAttribute), false);
             if (controller.Wtm.ConfigInfo.IsFilePublic == true)
