@@ -731,31 +731,55 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                 .AsNoTracking()
                 .SingleAsync(x => x.ID == instance.ID, ct);
 
-            var approveRows = await GuardedTransition.AdvanceProcessInstanceAsync(
-                Db, instance.ID,
-                expectedState: InstanceState.Running,
-                expectedRowVer: instance.RowVer,
-                nextState: InstanceState.Approved,
-                ct);
+            // C3 (#321): wrap state-change + audit row in one transaction so they are atomic.
+            // Timer cancels (WF-20.2) are intentionally outside the transaction — they are
+            // best-effort hygiene; Armed timers whose node is in a terminal generation will
+            // fire-and-no-op (gen-gated CAS) without harming correctness.
+            // Lock-order: this transaction touches ProcessInstance only (no Task/Node writes),
+            // so it is ordering-neutral and cannot participate in an ABBA cycle.
+            int approveRows;
+            await using (var txC3Approve = await Db.Database.BeginTransactionAsync(ct))
+            {
+                try
+                {
+                    approveRows = await GuardedTransition.AdvanceProcessInstanceAsync(
+                        Db, instance.ID,
+                        expectedState: InstanceState.Running,
+                        expectedRowVer: instance.RowVer,
+                        nextState: InstanceState.Approved,
+                        ct);
+
+                    if (approveRows == 1)
+                    {
+                        // AppendAsync enlists in the ambient txC3Approve (db.Database.CurrentTransaction is not null).
+                        await WorkflowEventLogWriter.AppendAsync(
+                            Db, instance.ID, instance.TenantCode,
+                            EventAction.AutoAdvance,
+                            nodeKey: activeNode.NodeKey,
+                            actorITCode: null,
+                            beforeState: InstanceState.Running.ToString(),
+                            afterState: InstanceState.Approved.ToString(),
+                            ct: ct);
+                    }
+
+                    await txC3Approve.CommitAsync(ct);
+                }
+                catch
+                {
+                    await txC3Approve.RollbackAsync(CancellationToken.None);
+                    throw;
+                }
+            }
 
             if (approveRows == 1)
             {
-                // WF-20.2: instance-wide timer cancel on terminal Approved state.
+                // WF-20.2: instance-wide timer cancel on terminal Approved state (best-effort, post-commit).
                 var allNodeIds = await Db.Set<NodeInstance>()
                     .Where(n => n.InstanceId == instance.ID)
                     .Select(n => n.ID)
                     .ToListAsync(ct);
                 foreach (var nid in allNodeIds)
                     await GuardedTransition.CancelTimersForNodeAsync(Db, nid, ct);
-
-                await WorkflowEventLogWriter.AppendAsync(
-                    Db, instance.ID, instance.TenantCode,
-                    EventAction.AutoAdvance,
-                    nodeKey: activeNode.NodeKey,
-                    actorITCode: null,
-                    beforeState: InstanceState.Running.ToString(),
-                    afterState: InstanceState.Approved.ToString(),
-                    ct: ct);
             }
 
             return WorkflowActionResult.InstanceApproved;
@@ -1776,32 +1800,53 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             .AsNoTracking()
             .SingleAsync(x => x.ID == instance.ID, ct);
 
-        var rejectRows = await GuardedTransition.AdvanceProcessInstanceAsync(
-            Db, instance.ID,
-            expectedState: InstanceState.Running,
-            expectedRowVer: instance.RowVer,
-            nextState: InstanceState.Rejected,
-            ct);
+        // C3 (#321): wrap state-change + audit row in one transaction so they are atomic.
+        // Timer cancels (WF-20.2) are intentionally outside the transaction — best-effort hygiene.
+        // Lock-order: touches ProcessInstance only (no Task/Node writes) → ordering-neutral.
+        int rejectRows;
+        await using (var txC3Reject = await Db.Database.BeginTransactionAsync(ct))
+        {
+            try
+            {
+                rejectRows = await GuardedTransition.AdvanceProcessInstanceAsync(
+                    Db, instance.ID,
+                    expectedState: InstanceState.Running,
+                    expectedRowVer: instance.RowVer,
+                    nextState: InstanceState.Rejected,
+                    ct);
+
+                if (rejectRows == 1)
+                {
+                    // AppendAsync enlists in the ambient txC3Reject (db.Database.CurrentTransaction is not null).
+                    await WorkflowEventLogWriter.AppendAsync(
+                        Db, instance.ID, instance.TenantCode,
+                        EventAction.Reject,
+                        nodeKey: nodeInst.NodeKey,
+                        actorITCode: actorITCode,
+                        beforeState: InstanceState.Running.ToString(),
+                        afterState: InstanceState.Rejected.ToString(),
+                        reason: $"Rejected by '{actorITCode}'. RejectPolicy={rejectPolicy}. {reason}",
+                        ct: ct);
+                }
+
+                await txC3Reject.CommitAsync(ct);
+            }
+            catch
+            {
+                await txC3Reject.RollbackAsync(CancellationToken.None);
+                throw;
+            }
+        }
 
         if (rejectRows == 1)
         {
-            // WF-20.2: instance-wide timer cancel on terminal Rejected state.
+            // WF-20.2: instance-wide timer cancel on terminal Rejected state (best-effort, post-commit).
             var rejectedNodeIds = await Db.Set<NodeInstance>()
                 .Where(n => n.InstanceId == instance.ID)
                 .Select(n => n.ID)
                 .ToListAsync(ct);
             foreach (var nid in rejectedNodeIds)
                 await GuardedTransition.CancelTimersForNodeAsync(Db, nid, ct);
-
-            await WorkflowEventLogWriter.AppendAsync(
-                Db, instance.ID, instance.TenantCode,
-                EventAction.Reject,
-                nodeKey: nodeInst.NodeKey,
-                actorITCode: actorITCode,
-                beforeState: InstanceState.Running.ToString(),
-                afterState: InstanceState.Rejected.ToString(),
-                reason: $"Rejected by '{actorITCode}'. RejectPolicy={rejectPolicy}. {reason}",
-                ct: ct);
         }
 
         // WF-15 — Notify rejected (post-commit, best-effort).
