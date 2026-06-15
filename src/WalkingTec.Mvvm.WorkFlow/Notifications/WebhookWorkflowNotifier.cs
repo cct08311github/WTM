@@ -163,8 +163,9 @@ public sealed class WebhookWorkflowNotifier : IWorkflowNotifier
             {
                 new("InstanceId",    instance.ID.ToString()),
                 new("Initiator",     EscapeMarkdown(instance.InitiatorITCode)),
-                new("BusinessType",  instance.BusinessType ?? "—"),
-                new("BusinessKey",   instance.BusinessKey  ?? "—"),
+                // BusinessType/BusinessKey are user-authored metadata — escape for safety.
+                new("BusinessType",  string.IsNullOrEmpty(instance.BusinessType) ? "—" : EscapeMarkdown(instance.BusinessType)),
+                new("BusinessKey",   string.IsNullOrEmpty(instance.BusinessKey)  ? "—" : EscapeMarkdown(instance.BusinessKey)),
                 new("FinalState",    instance.State.ToString()),
             },
         };
@@ -191,9 +192,10 @@ public sealed class WebhookWorkflowNotifier : IWorkflowNotifier
             {
                 new("InstanceId",    instance.ID.ToString()),
                 new("Initiator",     EscapeMarkdown(instance.InitiatorITCode)),
-                new("WithdrawnBy",   actorITCode),
-                new("BusinessType",  instance.BusinessType ?? "—"),
-                new("BusinessKey",   instance.BusinessKey  ?? "—"),
+                new("WithdrawnBy",   actor),
+                // BusinessType/BusinessKey are user-authored metadata — escape for safety.
+                new("BusinessType",  string.IsNullOrEmpty(instance.BusinessType) ? "—" : EscapeMarkdown(instance.BusinessType)),
+                new("BusinessKey",   string.IsNullOrEmpty(instance.BusinessKey)  ? "—" : EscapeMarkdown(instance.BusinessKey)),
             },
         };
 
@@ -254,10 +256,11 @@ public sealed class WebhookWorkflowNotifier : IWorkflowNotifier
             {
                 new("InstanceId",    instance.ID.ToString()),
                 new("Initiator",     EscapeMarkdown(instance.InitiatorITCode)),
-                new("NodeKey",       nodeInstance.NodeKey),
+                new("NodeKey",       nodeKey),
                 new("ApproveMode",   (nodeInstance.ApproveMode ?? ApproveMode.Sequential).ToString()),
-                new("BusinessType",  instance.BusinessType ?? "—"),
-                new("BusinessKey",   instance.BusinessKey  ?? "—"),
+                // BusinessType/BusinessKey are user-authored metadata — escape for safety.
+                new("BusinessType",  string.IsNullOrEmpty(instance.BusinessType) ? "—" : EscapeMarkdown(instance.BusinessType)),
+                new("BusinessKey",   string.IsNullOrEmpty(instance.BusinessKey)  ? "—" : EscapeMarkdown(instance.BusinessKey)),
                 new("RemindCount",   (remindCount + 1).ToString()),
             },
         };
@@ -288,12 +291,13 @@ public sealed class WebhookWorkflowNotifier : IWorkflowNotifier
             {
                 new("InstanceId",       instance.ID.ToString()),
                 new("Initiator",        EscapeMarkdown(instance.InitiatorITCode)),
-                new("NodeKey",          nodeInstance.NodeKey),
+                new("NodeKey",          nodeKey),
                 new("ApproveMode",      (nodeInstance.ApproveMode ?? ApproveMode.Sequential).ToString()),
-                new("BusinessType",     instance.BusinessType ?? "—"),
-                new("BusinessKey",      instance.BusinessKey  ?? "—"),
-                new("OldAssignee",      oldAssigneeITCode),
-                new("NewAssignee",      newAssigneeITCode),
+                // BusinessType/BusinessKey are user-authored metadata — escape for safety.
+                new("BusinessType",     string.IsNullOrEmpty(instance.BusinessType) ? "—" : EscapeMarkdown(instance.BusinessType)),
+                new("BusinessKey",      string.IsNullOrEmpty(instance.BusinessKey)  ? "—" : EscapeMarkdown(instance.BusinessKey)),
+                new("OldAssignee",      oldAssignee),
+                new("NewAssignee",      newAssignee),
             },
         };
 
@@ -324,11 +328,12 @@ public sealed class WebhookWorkflowNotifier : IWorkflowNotifier
             {
                 new("InstanceId",    instance.ID.ToString()),
                 new("Initiator",     EscapeMarkdown(instance.InitiatorITCode)),
-                new("NodeKey",       nodeInstance.NodeKey),
+                new("NodeKey",       nodeKey),
                 new("ApproveMode",   (nodeInstance.ApproveMode ?? ApproveMode.Sequential).ToString()),
-                new("BusinessType",  instance.BusinessType ?? "—"),
-                new("BusinessKey",   instance.BusinessKey  ?? "—"),
-                new("Assignee",      task.AssigneeITCode),
+                // BusinessType/BusinessKey are user-authored metadata — escape for safety.
+                new("BusinessType",  string.IsNullOrEmpty(instance.BusinessType) ? "—" : EscapeMarkdown(instance.BusinessType)),
+                new("BusinessKey",   string.IsNullOrEmpty(instance.BusinessKey)  ? "—" : EscapeMarkdown(instance.BusinessKey)),
+                new("Assignee",      assignee),
                 new("Outcome",       outcome),
             },
         };
@@ -377,14 +382,15 @@ public sealed class WebhookWorkflowNotifier : IWorkflowNotifier
         {
             new("InstanceId",    instance.ID.ToString()),
             new("Initiator",     EscapeMarkdown(instance.InitiatorITCode)),
-            new("NodeKey",       nodeInstance.NodeKey),
+            new("NodeKey",       EscapeMarkdown(nodeInstance.NodeKey)),
             new("ApproveMode",   (nodeInstance.ApproveMode ?? ApproveMode.Sequential).ToString()),
-            new("BusinessType",  instance.BusinessType ?? "—"),
-            new("BusinessKey",   instance.BusinessKey  ?? "—"),
+            // BusinessType/BusinessKey are user-authored metadata — escape for safety.
+            new("BusinessType",  string.IsNullOrEmpty(instance.BusinessType) ? "—" : EscapeMarkdown(instance.BusinessType)),
+            new("BusinessKey",   string.IsNullOrEmpty(instance.BusinessKey)  ? "—" : EscapeMarkdown(instance.BusinessKey)),
         };
 
         if (extraKey is not null && extraVal is not null)
-            fields.Add(new(extraKey, extraVal));
+            fields.Add(new(extraKey, EscapeMarkdown(extraVal)));
 
         return fields;
     }

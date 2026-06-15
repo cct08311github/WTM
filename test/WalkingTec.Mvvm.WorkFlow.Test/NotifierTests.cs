@@ -1348,3 +1348,187 @@ public class GraphValidatorNodeKeySecurityTests
             "nodeKey with embedded whitespace must be rejected");
     }
 }
+
+// ── Security tests: Fields values escape (#296 follow-up) ──────────────────────
+//
+// Verifies that user/graph-authored strings are escaped in WebhookMessage.Fields values,
+// not just in Body — preventing Markdown/phishing-link injection via webhook card fields.
+//
+// Tests:
+//   F1. NotifyTaskAssignedAsync: hostile ITCode in Assignee and Initiator Fields is escaped.
+//   F2. NotifyApprovedAsync: hostile actor ITCode is escaped in both Body and Actor Field.
+//   F3. NotifyTaskAssignedAsync: benign ITCode passes through unchanged (no over-escaping).
+//   F4. NotifyWithdrawnAsync: hostile actor ITCode is escaped in WithdrawnBy Field.
+//   F5. NotifyTimeoutEscalatedAsync: hostile ITCodes are escaped in OldAssignee/NewAssignee Fields.
+
+[TestClass]
+public class NotifierFieldsEscapeTests
+{
+    private static (WebhookWorkflowNotifier notifier, Mock<IWtmWebhookSink> sinkMock) MakeNotifier()
+    {
+        var sinkMock = new Mock<IWtmWebhookSink>();
+        var notifier = new WebhookWorkflowNotifier(NullLogger<WebhookWorkflowNotifier>.Instance, sinkMock.Object);
+        return (notifier, sinkMock);
+    }
+
+    private static WebhookMessage CaptureMessage(Mock<IWtmWebhookSink> sinkMock)
+    {
+        WebhookMessage? captured = null;
+        sinkMock
+            .Setup(s => s.SendAsync(It.IsAny<WebhookMessage>(), It.IsAny<CancellationToken>()))
+            .Callback<WebhookMessage, CancellationToken>((m, _) => captured = m)
+            .Returns(Task.CompletedTask);
+        return captured!;
+    }
+
+    // ── F1. Hostile ITCode in Assignee and Initiator Fields is escaped ───────────
+
+    [TestMethod]
+    public async Task NotifyTaskAssignedAsync_HostileITCode_IsEscapedInFields()
+    {
+        const string hostileITCode = "[click here](https://evil.example)";
+
+        var (notifier, sinkMock) = MakeNotifier();
+        WebhookMessage? captured = null;
+        sinkMock
+            .Setup(s => s.SendAsync(It.IsAny<WebhookMessage>(), It.IsAny<CancellationToken>()))
+            .Callback<WebhookMessage, CancellationToken>((m, _) => captured = m)
+            .Returns(Task.CompletedTask);
+
+        var instance = NotifierTestHelpers.MakeInstance(initiator: hostileITCode);
+        var node     = NotifierTestHelpers.MakeNode(instance.ID);
+        var task     = NotifierTestHelpers.MakeTask(node.ID, assignee: hostileITCode);
+
+        await notifier.NotifyTaskAssignedAsync(instance, node, task);
+
+        captured.Should().NotBeNull();
+
+        var assigneeField  = captured!.Fields.FirstOrDefault(f => f.Key == "Assignee");
+        var initiatorField = captured.Fields.FirstOrDefault(f => f.Key == "Initiator");
+
+        assigneeField.Value.Should().NotMatchRegex(@"(?<!\\)\]\(",
+            "Assignee Field must not contain unescaped `](` — it would render as a Markdown link");
+        initiatorField.Value.Should().NotMatchRegex(@"(?<!\\)\]\(",
+            "Initiator Field must not contain unescaped `](` — it would render as a Markdown link");
+    }
+
+    // ── F2. Hostile actor ITCode is escaped in both Body and Actor Field ─────────
+
+    [TestMethod]
+    public async Task NotifyApprovedAsync_HostileITCode_IsEscapedInBothBodyAndFields()
+    {
+        const string hostileActor = "[x](https://evil.example)|backtick`";
+
+        var (notifier, sinkMock) = MakeNotifier();
+        WebhookMessage? captured = null;
+        sinkMock
+            .Setup(s => s.SendAsync(It.IsAny<WebhookMessage>(), It.IsAny<CancellationToken>()))
+            .Callback<WebhookMessage, CancellationToken>((m, _) => captured = m)
+            .Returns(Task.CompletedTask);
+
+        var instance = NotifierTestHelpers.MakeInstance();
+        var node     = NotifierTestHelpers.MakeNode(instance.ID);
+        var task     = NotifierTestHelpers.MakeTask(node.ID);
+
+        await notifier.NotifyApprovedAsync(instance, node, task, hostileActor);
+
+        captured.Should().NotBeNull();
+
+        // Body must not contain an unescaped Markdown link `](`.
+        // Note: the body template uses backtick code-spans around nodeKey/actor — those
+        // framework-controlled backtick delimiters are expected and are NOT checked here.
+        captured!.Body.Should().NotMatchRegex(@"(?<!\\)\]\(",
+            "Body must not contain unescaped `](` (Markdown link)");
+
+        // Actor Field must also be escaped (Fields values have no surrounding backtick delimiters).
+        var actorField = captured.Fields.FirstOrDefault(f => f.Key == "Actor");
+        actorField.Value.Should().NotMatchRegex(@"(?<!\\)\]\(",
+            "Actor Field must not contain unescaped `](` (Markdown link)");
+        actorField.Value.Should().NotMatchRegex(@"(?<!\\)\`",
+            "Actor Field must not contain unescaped backtick");
+    }
+
+    // ── F3. Benign ITCode passes through unchanged ────────────────────────────────
+
+    [TestMethod]
+    public async Task NotifyTaskAssignedAsync_BenignITCode_PassesThroughUnchanged()
+    {
+        var (notifier, sinkMock) = MakeNotifier();
+        WebhookMessage? captured = null;
+        sinkMock
+            .Setup(s => s.SendAsync(It.IsAny<WebhookMessage>(), It.IsAny<CancellationToken>()))
+            .Callback<WebhookMessage, CancellationToken>((m, _) => captured = m)
+            .Returns(Task.CompletedTask);
+
+        var instance = NotifierTestHelpers.MakeInstance(initiator: "user1");
+        var node     = NotifierTestHelpers.MakeNode(instance.ID);
+        var task     = NotifierTestHelpers.MakeTask(node.ID, assignee: "admin");
+
+        await notifier.NotifyTaskAssignedAsync(instance, node, task);
+
+        captured.Should().NotBeNull();
+
+        var assigneeField  = captured!.Fields.FirstOrDefault(f => f.Key == "Assignee");
+        var initiatorField = captured.Fields.FirstOrDefault(f => f.Key == "Initiator");
+
+        assigneeField.Value.Should().Be("admin",
+            "benign ITCode with no Markdown special chars must pass through unchanged");
+        initiatorField.Value.Should().Be("user1",
+            "benign ITCode with no Markdown special chars must pass through unchanged");
+    }
+
+    // ── F4. Hostile actor ITCode is escaped in WithdrawnBy Field ─────────────────
+
+    [TestMethod]
+    public async Task NotifyWithdrawnAsync_HostileActorITCode_IsEscapedInFields()
+    {
+        const string hostileActor = "[x](https://evil.example)";
+
+        var (notifier, sinkMock) = MakeNotifier();
+        WebhookMessage? captured = null;
+        sinkMock
+            .Setup(s => s.SendAsync(It.IsAny<WebhookMessage>(), It.IsAny<CancellationToken>()))
+            .Callback<WebhookMessage, CancellationToken>((m, _) => captured = m)
+            .Returns(Task.CompletedTask);
+
+        var instance = NotifierTestHelpers.MakeInstance();
+        await notifier.NotifyWithdrawnAsync(instance, hostileActor);
+
+        captured.Should().NotBeNull();
+
+        var withdrawnByField = captured!.Fields.FirstOrDefault(f => f.Key == "WithdrawnBy");
+        withdrawnByField.Value.Should().NotMatchRegex(@"(?<!\\)\[",
+            "WithdrawnBy Field must not contain unescaped `[` — it would allow a Markdown link to render");
+    }
+
+    // ── F5. Hostile ITCodes are escaped in OldAssignee/NewAssignee Fields ─────────
+
+    [TestMethod]
+    public async Task NotifyTimeoutEscalatedAsync_HostileITCodes_AreEscapedInFields()
+    {
+        const string oldAssignee = "[old](https://evil.example)";
+        const string newAssignee = "[new](https://evil.example)";
+
+        var (notifier, sinkMock) = MakeNotifier();
+        WebhookMessage? captured = null;
+        sinkMock
+            .Setup(s => s.SendAsync(It.IsAny<WebhookMessage>(), It.IsAny<CancellationToken>()))
+            .Callback<WebhookMessage, CancellationToken>((m, _) => captured = m)
+            .Returns(Task.CompletedTask);
+
+        var instance = NotifierTestHelpers.MakeInstance();
+        var node     = NotifierTestHelpers.MakeNode(instance.ID);
+
+        await notifier.NotifyTimeoutEscalatedAsync(instance, node, oldAssignee, newAssignee);
+
+        captured.Should().NotBeNull();
+
+        var oldAssigneeField = captured!.Fields.FirstOrDefault(f => f.Key == "OldAssignee");
+        var newAssigneeField = captured.Fields.FirstOrDefault(f => f.Key == "NewAssignee");
+
+        oldAssigneeField.Value.Should().NotMatchRegex(@"(?<!\\)\[",
+            "OldAssignee Field must not contain unescaped `[` — it would allow a Markdown link to render");
+        newAssigneeField.Value.Should().NotMatchRegex(@"(?<!\\)\[",
+            "NewAssignee Field must not contain unescaped `[` — it would allow a Markdown link to render");
+    }
+}
