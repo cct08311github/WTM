@@ -1604,6 +1604,66 @@ internal sealed class WorkflowTimerExecutor
 
                 string principal = row.DelegatedFromITCode!;
 
+                // C13 (#327): collision pre-check — mirrors escalate-path (lines ~1308-1346) to kill infinite
+                // per-tick retry when the principal was added (加签'd) onto the same node. If principal already
+                // holds ANY task row on (NodeInstanceId, Generation), skip the flip and emit a FailClosed audit
+                // event for operator visibility. Do NOT revert — leave the expired delegated slot as-is.
+                bool hasCollision = await db.Set<ApprovalTask>()
+                    .IgnoreQueryFilters() // justified: cross-tenant system sweep; all writes are PK+RowVer CAS
+                    .AsNoTracking()
+                    .AnyAsync(t => t.NodeInstanceId == row.NodeInstanceId
+                                    && t.Generation == row.Generation
+                                    && t.AssigneeITCode == principal, ct);
+
+                if (hasCollision)
+                {
+                    _logger.LogInformation(
+                        "AtAction sweep: principal {Principal} already has a task row on node {NodeId} gen {Gen} " +
+                        "— collision detected, leaving expired delegated slot, notify-only",
+                        principal, row.NodeInstanceId, (uint)row.Generation);
+
+                    var nodeForInstColl = await db.Set<NodeInstance>()
+                        .IgnoreQueryFilters()
+                        .AsNoTracking()
+                        .Where(n => n.ID == row.NodeInstanceId)
+                        .Select(n => new { n.InstanceId })
+                        .FirstOrDefaultAsync(ct);
+
+                    if (nodeForInstColl is not null)
+                    {
+                        var instSnapColl = await db.Set<ProcessInstance>()
+                            .IgnoreQueryFilters()
+                            .AsNoTracking()
+                            .Where(i => i.ID == nodeForInstColl.InstanceId)
+                            .Select(i => new { i.ID, i.RowVer, i.TenantCode })
+                            .FirstOrDefaultAsync(ct);
+
+                        if (instSnapColl is not null)
+                        {
+                            var seqColl = await AllocateSeqWithRetryAsync(db, instSnapColl.ID, instSnapColl.RowVer, ct);
+                            if (seqColl.rows == 1)
+                            {
+                                db.Set<WorkflowEventLog>().Add(new WorkflowEventLog
+                                {
+                                    ID          = Guid.NewGuid(),
+                                    TenantCode  = instSnapColl.TenantCode,
+                                    InstanceId  = instSnapColl.ID,
+                                    Seq         = seqColl.seq,
+                                    Action      = EventAction.FailClosed,
+                                    NodeKey     = null,
+                                    ActorITCode = null,
+                                    Generation  = (int?)(uint)row.Generation,
+                                    Reason      = "delegation-expiry revert: principal already participant — collision notify-only",
+                                    OccurredUtc = now,
+                                });
+                                await db.SaveChangesAsync(ct);
+                            }
+                        }
+                    }
+
+                    continue;
+                }
+
                 // Per-row CAS: revert to principal, clear delegation fields, bump RowVer.
                 // Concurrent human claim → rows==0 → safe no-op (partial success valid).
                 int revertRows = await db.Set<ApprovalTask>()

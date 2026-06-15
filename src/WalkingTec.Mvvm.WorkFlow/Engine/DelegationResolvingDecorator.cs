@@ -205,17 +205,18 @@ internal sealed class DelegationResolvingDecorator : IApproverResolver, IDelegat
             }
 
             // Dedupe: if terminal delegatee already in set (because it's a direct approver or
-            // another chain resolved to the same person), keep one slot, union provenance.
+            // another chain resolved to the same person), keep one slot.
+            // C14 (#327): direct-always-wins — if the INCOMING chain is direct (ruleId is null),
+            // overwrite any existing delegated entry; if the INCOMING chain is delegated, do NOT
+            // overwrite a direct existing entry. This makes provenance order-independent.
             if (!finalSet.Add(terminalApprover))
             {
-                // Already present — union provenance (keep first delegation chain's provenance
-                // if both are delegated; prefer the direct-approver entry if present).
-                if (provenanceMap.TryGetValue(terminalApprover, out var existing) &&
-                    existing.RuleId is null && ruleId is not null)
+                if (ruleId is null)
                 {
-                    // Promote to delegated provenance only if the existing slot had no rule.
-                    provenanceMap[terminalApprover] = new DelegationProvenance(baseApprover, ruleId, ruleEndUtc);
+                    // Incoming is direct: direct always wins — overwrite any existing delegated entry.
+                    provenanceMap[terminalApprover] = new DelegationProvenance(baseApprover, null, null);
                 }
+                // else incoming is delegated: keep the existing entry (direct or first-chain delegation).
                 _logger.LogDebug(
                     "DelegationResolvingDecorator: dedupe — '{Terminal}' already in set (base='{Base}'). " +
                     "Keeping one slot.", terminalApprover, baseApprover);
