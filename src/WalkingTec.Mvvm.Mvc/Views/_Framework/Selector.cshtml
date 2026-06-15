@@ -15,7 +15,7 @@
         selected = @(tempvar);
         @if (ViewBag.SubmitFunc != null)
         {
-            @(ViewBag.SubmitFunc.ToString())<Text>(selected);</Text>;
+            @Html.Raw(ViewBag.SubmitFunc.ToString() + "(selected);")
         }
       if (selected.length > 0) {
         if (!multiSel && selected.length > 1) {
