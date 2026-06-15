@@ -9,8 +9,8 @@
 
             <BootstrapInput @bind-Value="@SearchModel.VirtusName"  />
             <BootstrapInput @bind-Value="@SearchModel.VirtusCode"  />
-            <Select @bind-Value="@SearchModel.VirtusType"  PlaceHolder="@WtmBlazor.Localizer["Sys.All"]"/>
-            <MultiSelect @bind-Value="@SearchModel.SelectedPatientsIDs" Items="@AllPatients" PlaceHolder="@WtmBlazor.Localizer["Sys.All"]"/>
+            <Select @bind-Value="@SearchModel.VirtusType"  PlaceHolder="@(WtmBlazor.Localizer["Sys.All"])"/>
+            <MultiSelect @bind-Value="@SearchModel.SelectedPatientsIDs" Items="@AllPatients" PlaceHolder="@(WtmBlazor.Localizer["Sys.All"])"/>
         </Row>
     </ValidateForm>
 </WTSearchPanel>
@@ -28,41 +28,25 @@
         <TableColumn @bind-Field="@context.PatientName_view"  />
     </TableColumns>
     <TableToolbarTemplate>
-        @if (IsAccessable("/api/Virus/Add"))
-        {
-            <TableToolbarButton TItem="Virus_View" Color="Color.Primary" Icon="fa fa-fw fa-plus" Text="@WtmBlazor.Localizer["Sys.Create"]" OnClickCallback="OnCreateClick" />
-        }
-        @if (IsAccessable("/api/Virus/BatchDelete"))
-        {
-            <TableToolbarPopConfirmButton TItem="Virus_View" Color="Color.Primary"
-                                          Icon="fa fa-fw fa-trash" Text="@WtmBlazor.Localizer["Sys.BatchDelete"]"
-                                          OnConfirm="@OnBatchDeleteClick" Content="@WtmBlazor.Localizer["Sys.BatchDeleteConfirm"]" CloseButtonText="@WtmBlazor.Localizer["Sys.Close"]"
-                                          ConfirmButtonText="@WtmBlazor.Localizer["Sys.BatchDelete"]" ConfirmButtonColor="Color.Danger" />
-        }
+        <TableToolbarButton TItem="Virus_View" Color="Color.Primary" Icon="fa fa-fw fa-plus" Text="@(WtmBlazor.Localizer["Sys.Create"])" OnClickCallback="OnCreateClick"  Visible="@(IsAccessable("/api/Virus/Add"))" />
+        <TableToolbarPopConfirmButton TItem="Virus_View" Color="Color.Primary" Icon="fa fa-fw fa-trash" Text="@(WtmBlazor.Localizer["Sys.BatchDelete"])" OnConfirm="@OnBatchDeleteClick" Content="@(WtmBlazor.Localizer["Sys.BatchDeleteConfirm"])" CloseButtonText="@(WtmBlazor.Localizer["Sys.Close"])" ConfirmButtonText="@(WtmBlazor.Localizer["Sys.BatchDelete"])" ConfirmButtonColor="Color.Danger"  Visible="@(IsAccessable("/api/Virus/BatchDelete"))" />
         
-        @if (IsAccessable("/api/Virus/Import"))
-        {
-            <TableToolbarButton TItem="Virus_View" Color="Color.Primary" Icon="fa fa-fw fa-upload" Text="@WtmBlazor.Localizer["Sys.Import"]" OnClickCallback="@OnImportClick" />
-        }
-        @if (IsAccessable("/api/Virus/ExportExcel"))
-        {
-            <TableToolbarButton TItem="Virus_View" Color="Color.Primary" Icon="fa fa-fw fa-download" Text="@WtmBlazor.Localizer["Sys.Export"]" OnClickCallback="@OnExportClick" IsAsync="true" />
-        }
+        <TableToolbarButton TItem="Virus_View" Color="Color.Primary" Icon="fa fa-fw fa-upload" Text="@(WtmBlazor.Localizer["Sys.Import"])" OnClickCallback="@OnImportClick"  Visible="@(IsAccessable("/api/Virus/Import"))" />
+        <TableToolbarButton TItem="Virus_View" Color="Color.Primary" Icon="fa fa-fw fa-download" Text="@(WtmBlazor.Localizer["Sys.Export"])" OnClickCallback="@OnExportClick" IsAsync="true"  Visible="@(IsAccessable("/api/Virus/ExportExcel"))" />
     </TableToolbarTemplate>
     <RowButtonTemplate>
         <div style="padding-right:10px;">
             @if (IsAccessable("/api/Virus/Edit"))
             {
-                <TableCellButton Size="Size.ExtraSmall" Color="Color.Success" Icon="fa fa-edit" Text="@WtmBlazor.Localizer["Sys.Edit"]" OnClick="() => OnEditClick(context)" />
+                <TableCellButton Size="Size.ExtraSmall" Color="Color.Success" Icon="fa fa-edit" Text="@(WtmBlazor.Localizer["Sys.Edit"])" OnClick="() => OnEditClick(context)" />
             }
             @if (IsAccessable("/api/Virus/{id}"))
             {
-                <TableCellButton Size="Size.ExtraSmall" Color="Color.Info" Icon="fa fa-info" Text="@WtmBlazor.Localizer["Sys.Details"]" OnClick="()=>OnDetailsClick(context)" />
+                <TableCellButton Size="Size.ExtraSmall" Color="Color.Info" Icon="fa fa-info" Text="@(WtmBlazor.Localizer["Sys.Details"])" OnClick="()=>OnDetailsClick(context)" />
             }
             @if (IsAccessable("/api/Virus/BatchDelete"))
             {
-                <PopConfirmButton Icon="fa fa-trash" Text="@WtmBlazor.Localizer["Sys.Delete"]" OnConfirm="() => OnDeleteClick(context)" Color="Color.Danger" Size="Size.ExtraSmall"
-                                  Content="@WtmBlazor.Localizer["Sys.DeleteConfirm"]" CloseButtonText="@WtmBlazor.Localizer["Sys.Close"]" ConfirmButtonText="@WtmBlazor.Localizer["Sys.Delete"]" ConfirmButtonColor="Color.Danger" />
+                <PopConfirmButton Icon="fa fa-trash" Text="@(WtmBlazor.Localizer["Sys.Delete"])" OnConfirm="() => OnDeleteClick(context)" Color="Color.Danger" Size="Size.ExtraSmall" Content="@(WtmBlazor.Localizer["Sys.DeleteConfirm"])" CloseButtonText="@(WtmBlazor.Localizer["Sys.Close"])" ConfirmButtonText="@(WtmBlazor.Localizer["Sys.Delete"])" ConfirmButtonColor="Color.Danger" />
             }
         </div>
     </RowButtonTemplate>

@@ -11,13 +11,13 @@
             <BootstrapInput @bind-Value="@SearchModel.Password"  />
             <BootstrapInput @bind-Value="@SearchModel.Email"  />
             <BootstrapInput @bind-Value="@SearchModel.Name"  />
-            <Select @bind-Value="@SearchModel.Sex"  PlaceHolder="@WtmBlazor.Localizer["Sys.All"]"/>
+            <Select @bind-Value="@SearchModel.Sex"  PlaceHolder="@(WtmBlazor.Localizer["Sys.All"])"/>
             <BootstrapInput @bind-Value="@SearchModel.CellPhone"  />
             <BootstrapInput @bind-Value="@SearchModel.Address"  />
             <BootstrapInput @bind-Value="@SearchModel.ZipCode"  />
-            <Select @bind-Value="@SearchModel.IsValid" Items="@WtmBlazor.GlobalSelectItems.SearcherBoolItems" PlaceHolder="@WtmBlazor.Localizer["Sys.All"]"/>
+            <Select @bind-Value="@SearchModel.IsValid" Items="@WtmBlazor.GlobalSelectItems.SearcherBoolItems" PlaceHolder="@(WtmBlazor.Localizer["Sys.All"])"/>
             <WTDateRange @bind-Value="@SearchModel.EnRollDate"  />
-            <MultiSelect @bind-Value="@SearchModel.SelectedStudentMajorIDs" Items="@AllMajors" PlaceHolder="@WtmBlazor.Localizer["Sys.All"]"/>
+            <MultiSelect @bind-Value="@SearchModel.SelectedStudentMajorIDs" Items="@AllMajors" PlaceHolder="@(WtmBlazor.Localizer["Sys.All"])"/>
         </Row>
     </ValidateForm>
 </WTSearchPanel>
@@ -47,41 +47,25 @@
         <TableColumn @bind-Field="@context.MajorName_view"  />
     </TableColumns>
     <TableToolbarTemplate>
-        @if (IsAccessable("/api/Student/add"))
-        {
-            <TableToolbarButton TItem="Student_View" Color="Color.Primary" Icon="fa fa-fw fa-plus" Text="@WtmBlazor.Localizer["Sys.Create"]" OnClickCallback="OnCreateClick" />
-        }
-        @if (IsAccessable("/api/Student/BatchDelete"))
-        {
-            <TableToolbarPopConfirmButton TItem="Student_View" Color="Color.Primary"
-                                          Icon="fa fa-fw fa-trash" Text="@WtmBlazor.Localizer["Sys.BatchDelete"]"
-                                          OnConfirm="@OnBatchDeleteClick" Content="@WtmBlazor.Localizer["Sys.BatchDeleteConfirm"]" CloseButtonText="@WtmBlazor.Localizer["Sys.Close"]"
-                                          ConfirmButtonText="@WtmBlazor.Localizer["Sys.BatchDelete"]" ConfirmButtonColor="Color.Danger" />
-        }
+        <TableToolbarButton TItem="Student_View" Color="Color.Primary" Icon="fa fa-fw fa-plus" Text="@(WtmBlazor.Localizer["Sys.Create"])" OnClickCallback="OnCreateClick"  Visible="@(IsAccessable("/api/Student/add"))" />
+        <TableToolbarPopConfirmButton TItem="Student_View" Color="Color.Primary" Icon="fa fa-fw fa-trash" Text="@(WtmBlazor.Localizer["Sys.BatchDelete"])" OnConfirm="@OnBatchDeleteClick" Content="@(WtmBlazor.Localizer["Sys.BatchDeleteConfirm"])" CloseButtonText="@(WtmBlazor.Localizer["Sys.Close"])" ConfirmButtonText="@(WtmBlazor.Localizer["Sys.BatchDelete"])" ConfirmButtonColor="Color.Danger"  Visible="@(IsAccessable("/api/Student/BatchDelete"))" />
         
-        @if (IsAccessable("/api/Student/Import"))
-        {
-            <TableToolbarButton TItem="Student_View" Color="Color.Primary" Icon="fa fa-fw fa-upload" Text="@WtmBlazor.Localizer["Sys.Import"]" OnClickCallback="@OnImportClick" />
-        }
-        @if (IsAccessable("/api/Student/ExportExcel"))
-        {
-            <TableToolbarButton TItem="Student_View" Color="Color.Primary" Icon="fa fa-fw fa-download" Text="@WtmBlazor.Localizer["Sys.Export"]" OnClickCallback="@OnExportClick" IsAsync="true" />
-        }
+        <TableToolbarButton TItem="Student_View" Color="Color.Primary" Icon="fa fa-fw fa-upload" Text="@(WtmBlazor.Localizer["Sys.Import"])" OnClickCallback="@OnImportClick"  Visible="@(IsAccessable("/api/Student/Import"))" />
+        <TableToolbarButton TItem="Student_View" Color="Color.Primary" Icon="fa fa-fw fa-download" Text="@(WtmBlazor.Localizer["Sys.Export"])" OnClickCallback="@OnExportClick" IsAsync="true"  Visible="@(IsAccessable("/api/Student/ExportExcel"))" />
     </TableToolbarTemplate>
     <RowButtonTemplate>
         <div style="padding-right:10px;">
             @if (IsAccessable("/api/Student/Edit"))
             {
-                <TableCellButton Size="Size.ExtraSmall" Color="Color.Success" Icon="fa fa-edit" Text="@WtmBlazor.Localizer["Sys.Edit"]" OnClick="() => OnEditClick(context)" />
+                <TableCellButton Size="Size.ExtraSmall" Color="Color.Success" Icon="fa fa-edit" Text="@(WtmBlazor.Localizer["Sys.Edit"])" OnClick="() => OnEditClick(context)" />
             }
             @if (IsAccessable("/api/Student/{id}"))
             {
-                <TableCellButton Size="Size.ExtraSmall" Color="Color.Info" Icon="fa fa-info" Text="@WtmBlazor.Localizer["Sys.Details"]" OnClick="()=>OnDetailsClick(context)" />
+                <TableCellButton Size="Size.ExtraSmall" Color="Color.Info" Icon="fa fa-info" Text="@(WtmBlazor.Localizer["Sys.Details"])" OnClick="()=>OnDetailsClick(context)" />
             }
             @if (IsAccessable("/api/Student/BatchDelete"))
             {
-                <PopConfirmButton Icon="fa fa-trash" Text="@WtmBlazor.Localizer["Sys.Delete"]" OnConfirm="() => OnDeleteClick(context)" Color="Color.Danger" Size="Size.ExtraSmall"
-                                  Content="@WtmBlazor.Localizer["Sys.DeleteConfirm"]" CloseButtonText="@WtmBlazor.Localizer["Sys.Close"]" ConfirmButtonText="@WtmBlazor.Localizer["Sys.Delete"]" ConfirmButtonColor="Color.Danger" />
+                <PopConfirmButton Icon="fa fa-trash" Text="@(WtmBlazor.Localizer["Sys.Delete"])" OnConfirm="() => OnDeleteClick(context)" Color="Color.Danger" Size="Size.ExtraSmall" Content="@(WtmBlazor.Localizer["Sys.DeleteConfirm"])" CloseButtonText="@(WtmBlazor.Localizer["Sys.Close"])" ConfirmButtonText="@(WtmBlazor.Localizer["Sys.Delete"])" ConfirmButtonColor="Color.Danger" />
             }
         </div>
     </RowButtonTemplate>

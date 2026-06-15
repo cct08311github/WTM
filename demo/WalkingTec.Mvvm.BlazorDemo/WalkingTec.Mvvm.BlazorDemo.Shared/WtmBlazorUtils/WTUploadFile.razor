@@ -9,11 +9,7 @@
 @typeparam TValue
 
 <div>
-    @if (dlist != null)
-    {
-        <ButtonUpload @ref="uploader" Value="Value" ValueExpression="ValueExpression" ValueChanged="ValueChanged" Accept="*/*" IsSingle="!IsMultiple" ShowProgress="true" OnChange="@OnAvatarUpload"
-                      OnDelete="@OnAvatarDelete" DisplayText="@LabelText" DefaultFileList="@dlist" IsDisabled="@IsDisabled" ShowDownloadButton=true OnDownload="OnDownload"></ButtonUpload>
-    }
+    <ButtonUpload @ref="uploader" Value="Value" ValueExpression="ValueExpression" ValueChanged="ValueChanged" Accept="*/*" IsSingle="!IsMultiple" ShowProgress="true" OnChange="@OnAvatarUpload" OnDelete="@OnAvatarDelete" DisplayText="@LabelText" DefaultFileList="@dlist" IsDisabled="@IsDisabled" ShowDownloadButton=true OnDownload="OnDownload"></ButtonUpload>
 </div>
 @code{
 
@@ -50,7 +46,7 @@
     public string LabelText { get; set; } = null;
 
     private Dictionary<string, string> files { get; set; } = new Dictionary<string, string>();
-    private List<UploadFile> dlist = null;
+    private List<UploadFile> dlist = new List<UploadFile>();
     private ButtonUpload<TValue> uploader { get; set; }
     private bool FileSet { get; set; } = false;
 

@@ -27,39 +27,23 @@
 
         </TableColumns>
         <TableToolbarTemplate>
-            @if (IsAccessable("/api/_FrameworkTenant/Add"))
-            {
-                <TableToolbarButton TItem="FrameworkTenant_View" Color="Color.Primary" Icon="fa fa-fw fa-plus" Text="@WtmBlazor.Localizer["Sys.Create"]" OnClickCallback="OnCreateClick" />
-            }
-            @if (IsAccessable("/api/_FrameworkTenant/BatchDelete"))
-            {
-                <TableToolbarPopConfirmButton TItem="FrameworkTenant_View" Color="Color.Danger"
-                                      Icon="fa fa-fw fa-trash" Text="@WtmBlazor.Localizer["Sys.Delete"]"
-                                      OnConfirm="@OnBatchDeleteClick" Content="@WtmBlazor.Localizer["Sys.BatchDeleteConfirm"]" CloseButtonText="@WtmBlazor.Localizer["Sys.Close"]"
-                                      ConfirmButtonText="@WtmBlazor.Localizer["Sys.BatchDelete"]" ConfirmButtonColor="Color.Danger" />
-            }
-            @if (IsAccessable("/api/_FrameworkTenant/Import"))
-            {
-                <TableToolbarButton TItem="FrameworkTenant_View" Color="Color.Primary" Icon="fa fa-fw fa-upload" Text="@WtmBlazor.Localizer["Sys.Import"]" OnClickCallback="@OnImportClick" />
-            }
-            @if (IsAccessable("/api/_FrameworkTenant/ExportExcel"))
-            {
-                <TableToolbarButton TItem="FrameworkTenant_View" Color="Color.Primary" Icon="fa fa-fw fa-download" Text="@WtmBlazor.Localizer["Sys.Export"]" OnClickCallback="@OnExportClick" IsAsync="true" />
-            }
+            <TableToolbarButton TItem="FrameworkTenant_View" Color="Color.Primary" Icon="fa fa-fw fa-plus" Text="@(WtmBlazor.Localizer["Sys.Create"])" OnClickCallback="OnCreateClick"  Visible="@(IsAccessable("/api/_FrameworkTenant/Add"))" />
+            <TableToolbarPopConfirmButton TItem="FrameworkTenant_View" Color="Color.Danger" Icon="fa fa-fw fa-trash" Text="@(WtmBlazor.Localizer["Sys.Delete"])" OnConfirm="@OnBatchDeleteClick" Content="@(WtmBlazor.Localizer["Sys.BatchDeleteConfirm"])" CloseButtonText="@(WtmBlazor.Localizer["Sys.Close"])" ConfirmButtonText="@(WtmBlazor.Localizer["Sys.BatchDelete"])" ConfirmButtonColor="Color.Danger"  Visible="@(IsAccessable("/api/_FrameworkTenant/BatchDelete"))" />
+            <TableToolbarButton TItem="FrameworkTenant_View" Color="Color.Primary" Icon="fa fa-fw fa-upload" Text="@(WtmBlazor.Localizer["Sys.Import"])" OnClickCallback="@OnImportClick"  Visible="@(IsAccessable("/api/_FrameworkTenant/Import"))" />
+            <TableToolbarButton TItem="FrameworkTenant_View" Color="Color.Primary" Icon="fa fa-fw fa-download" Text="@(WtmBlazor.Localizer["Sys.Export"])" OnClickCallback="@OnExportClick" IsAsync="true"  Visible="@(IsAccessable("/api/_FrameworkTenant/ExportExcel"))" />
         </TableToolbarTemplate>
         <RowButtonTemplate>
             @if (IsAccessable("/api/_FrameworkTenant/Edit"))
             {
-                <TableCellButton Size="Size.ExtraSmall" Color="Color.Success" Icon="fa fa-edit" Text="@WtmBlazor.Localizer["Sys.Edit"]" OnClick="() => OnEditClick(context)" />
+                <TableCellButton Size="Size.ExtraSmall" Color="Color.Success" Icon="fa fa-edit" Text="@(WtmBlazor.Localizer["Sys.Edit"])" OnClick="() => OnEditClick(context)" />
             }
             @if (IsAccessable("/api/_FrameworkTenant/{id}"))
             {
-                <TableCellButton Size="Size.ExtraSmall" Color="Color.Info" Icon="fa fa-info" Text="@WtmBlazor.Localizer["Sys.Details"]" OnClick="() => OnDetailsClick(context)" />
+                <TableCellButton Size="Size.ExtraSmall" Color="Color.Info" Icon="fa fa-info" Text="@(WtmBlazor.Localizer["Sys.Details"])" OnClick="() => OnDetailsClick(context)" />
             }
             @if (IsAccessable("/api/_FrameworkTenant/BatchDelete"))
             {
-                <PopConfirmButton Icon="fa fa-trash" Text="@WtmBlazor.Localizer["Sys.Delete"]" OnConfirm="() => OnDeleteClick(context)" Color="Color.Danger" Size="Size.ExtraSmall"
-                          Content="@WtmBlazor.Localizer["Sys.DeleteConfirm"]" CloseButtonText="@WtmBlazor.Localizer["Sys.Close"]" ConfirmButtonText="@WtmBlazor.Localizer["Sys.Delete"]" ConfirmButtonColor="Color.Danger" />
+                <PopConfirmButton Icon="fa fa-trash" Text="@(WtmBlazor.Localizer["Sys.Delete"])" OnConfirm="() => OnDeleteClick(context)" Color="Color.Danger" Size="Size.ExtraSmall" Content="@(WtmBlazor.Localizer["Sys.DeleteConfirm"])" CloseButtonText="@(WtmBlazor.Localizer["Sys.Close"])" ConfirmButtonText="@(WtmBlazor.Localizer["Sys.Delete"])" ConfirmButtonColor="Color.Danger" />
             }
         </RowButtonTemplate>
     </Table>

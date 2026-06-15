@@ -18,18 +18,17 @@
       </wt:selector>
     </wt:row>
 
-    <script>
-            IsAllChange@(i)({ value: '@Model.DpLists[i].IsAll.ToString().ToLower()' });
-            function IsAllChange@(i)(data) {
-                if (data.value == 'true' || data.value == '') {
-                    $('#selector@(i)').css('display', 'none');
-                }
-                else {
-                    $('#selector@(i)').css('display', 'block');
-                }
-            }
-
-    </script>
+    @:<script>
+    @:    IsAllChange@(i)({ value: '@Model.DpLists[i].IsAll.ToString().ToLower()' });
+    @:    function IsAllChange@(i)(data) {
+    @:        if (data.value == 'true' || data.value == '') {
+    @:            $('#selector@(i)').css('display', 'none');
+    @:        }
+    @:        else {
+    @:            $('#selector@(i)').css('display', 'block');
+    @:        }
+    @:    }
+    @:</script>
   }
 
   <wt:hidden field="GroupCode" />

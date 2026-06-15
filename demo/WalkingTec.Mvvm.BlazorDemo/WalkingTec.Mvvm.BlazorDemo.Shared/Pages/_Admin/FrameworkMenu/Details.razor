@@ -9,13 +9,13 @@
     </Row>
     @if (Model.Entity.IsInside != false)
     {
-<Row ItemsPerRow="ItemsPerRow.Two" RowType="RowType.Normal">
-    <Display @bind-Value="@Model.SelectedModule" Lookup="@AllModels"   ShowLabel="true"/>
-    <div></div>
-    <Row ColSpan="2">
-        <Display @bind-Value="@Model.SelectedActionIDs" Lookup="@AllActions"  ShowLabel="true"/>
-    </Row>
-</Row>
+        <Row ItemsPerRow="ItemsPerRow.Two" RowType="RowType.Normal">
+            <Display @bind-Value="@Model.SelectedModule" Lookup="@AllModels"   ShowLabel="true"/>
+            <div></div>
+            <Row ColSpan="2">
+                <Display @bind-Value="@Model.SelectedActionIDs" Lookup="@AllActions"  ShowLabel="true"/>
+            </Row>
+        </Row>
     }
     else
     {

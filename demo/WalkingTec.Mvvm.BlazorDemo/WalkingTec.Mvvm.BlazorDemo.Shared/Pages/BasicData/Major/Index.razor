@@ -8,8 +8,8 @@
         <Row ItemsPerRow="ItemsPerRow.Three" RowType="RowType.Inline">
 
             <BootstrapInput @bind-Value="@SearchModel.MajorCode"  />
-            <Select @bind-Value="@SearchModel.SchoolId" Items="@AllSchools" PlaceHolder="@WtmBlazor.Localizer["Sys.All"]"/>
-            <MultiSelect @bind-Value="@SearchModel.SelectedStudentMajorsIDs" Items="@AllStudents" PlaceHolder="@WtmBlazor.Localizer["Sys.All"]"/>
+            <Select @bind-Value="@SearchModel.SchoolId" Items="@AllSchools" PlaceHolder="@(WtmBlazor.Localizer["Sys.All"])"/>
+            <MultiSelect @bind-Value="@SearchModel.SelectedStudentMajorsIDs" Items="@AllStudents" PlaceHolder="@(WtmBlazor.Localizer["Sys.All"])"/>
         </Row>
     </ValidateForm>
 </WTSearchPanel>
@@ -28,45 +28,26 @@
         <TableColumn @bind-Field="@context.Name_view"  />
     </TableColumns>
     <TableToolbarTemplate>
-        @if (IsAccessable("/api/Major/add"))
-        {
-            <TableToolbarButton TItem="Major_View" Color="Color.Primary" Icon="fa fa-fw fa-plus" Text="@WtmBlazor.Localizer["Sys.Create"]" OnClickCallback="OnCreateClick" />
-        }
-        @if (IsAccessable("/api/Major/BatchEdit"))
-        {
-            <TableToolbarButton TItem="Major_View" Color="Color.Primary" Icon="fa fa-fw fa-plus" Text="@WtmBlazor.Localizer["Sys.BatchEdit"]" OnClickCallback="OnBatchEditClick" />
-        }
-        @if (IsAccessable("/api/Major/BatchDelete"))
-        {
-            <TableToolbarPopConfirmButton TItem="Major_View" Color="Color.Primary"
-                                          Icon="fa fa-fw fa-trash" Text="@WtmBlazor.Localizer["Sys.BatchDelete"]"
-                                          OnConfirm="@OnBatchDeleteClick" Content="@WtmBlazor.Localizer["Sys.BatchDeleteConfirm"]" CloseButtonText="@WtmBlazor.Localizer["Sys.Close"]"
-                                          ConfirmButtonText="@WtmBlazor.Localizer["Sys.BatchDelete"]" ConfirmButtonColor="Color.Danger" />
-        }
+        <TableToolbarButton TItem="Major_View" Color="Color.Primary" Icon="fa fa-fw fa-plus" Text="@(WtmBlazor.Localizer["Sys.Create"])" OnClickCallback="OnCreateClick"  Visible="@(IsAccessable("/api/Major/add"))" />
+        <TableToolbarButton TItem="Major_View" Color="Color.Primary" Icon="fa fa-fw fa-plus" Text="@(WtmBlazor.Localizer["Sys.BatchEdit"])" OnClickCallback="OnBatchEditClick"  Visible="@(IsAccessable("/api/Major/BatchEdit"))" />
+        <TableToolbarPopConfirmButton TItem="Major_View" Color="Color.Primary" Icon="fa fa-fw fa-trash" Text="@(WtmBlazor.Localizer["Sys.BatchDelete"])" OnConfirm="@OnBatchDeleteClick" Content="@(WtmBlazor.Localizer["Sys.BatchDeleteConfirm"])" CloseButtonText="@(WtmBlazor.Localizer["Sys.Close"])" ConfirmButtonText="@(WtmBlazor.Localizer["Sys.BatchDelete"])" ConfirmButtonColor="Color.Danger"  Visible="@(IsAccessable("/api/Major/BatchDelete"))" />
 
-        @if (IsAccessable("/api/Major/Import"))
-        {
-            <TableToolbarButton TItem="Major_View" Color="Color.Primary" Icon="fa fa-fw fa-upload" Text="@WtmBlazor.Localizer["Sys.Import"]" OnClickCallback="@OnImportClick" />
-        }
-        @if (IsAccessable("/api/Major/ExportExcel"))
-        {
-            <TableToolbarButton TItem="Major_View" Color="Color.Primary" Icon="fa fa-fw fa-download" Text="@WtmBlazor.Localizer["Sys.Export"]" OnClickCallback="@OnExportClick" IsAsync="true" />
-        }
+        <TableToolbarButton TItem="Major_View" Color="Color.Primary" Icon="fa fa-fw fa-upload" Text="@(WtmBlazor.Localizer["Sys.Import"])" OnClickCallback="@OnImportClick"  Visible="@(IsAccessable("/api/Major/Import"))" />
+        <TableToolbarButton TItem="Major_View" Color="Color.Primary" Icon="fa fa-fw fa-download" Text="@(WtmBlazor.Localizer["Sys.Export"])" OnClickCallback="@OnExportClick" IsAsync="true"  Visible="@(IsAccessable("/api/Major/ExportExcel"))" />
     </TableToolbarTemplate>
     <RowButtonTemplate>
         <div style="padding-right:10px;">
             @if (IsAccessable("/api/Major/Edit"))
             {
-                <TableCellButton Size="Size.ExtraSmall" Color="Color.Success" Icon="fa fa-edit" Text="@WtmBlazor.Localizer["Sys.Edit"]" OnClick="() => OnEditClick(context)" />
+                <TableCellButton Size="Size.ExtraSmall" Color="Color.Success" Icon="fa fa-edit" Text="@(WtmBlazor.Localizer["Sys.Edit"])" OnClick="() => OnEditClick(context)" />
             }
             @if (IsAccessable("/api/Major/{id}"))
             {
-                <TableCellButton Size="Size.ExtraSmall" Color="Color.Info" Icon="fa fa-info" Text="@WtmBlazor.Localizer["Sys.Details"]" OnClick="()=>OnDetailsClick(context)" />
+                <TableCellButton Size="Size.ExtraSmall" Color="Color.Info" Icon="fa fa-info" Text="@(WtmBlazor.Localizer["Sys.Details"])" OnClick="()=>OnDetailsClick(context)" />
             }
             @if (IsAccessable("/api/Major/BatchDelete"))
             {
-                <PopConfirmButton Icon="fa fa-trash" Text="@WtmBlazor.Localizer["Sys.Delete"]" OnConfirm="() => OnDeleteClick(context)" Color="Color.Danger" Size="Size.ExtraSmall"
-                                  Content="@WtmBlazor.Localizer["Sys.DeleteConfirm"]" CloseButtonText="@WtmBlazor.Localizer["Sys.Close"]" ConfirmButtonText="@WtmBlazor.Localizer["Sys.Delete"]" ConfirmButtonColor="Color.Danger" />
+                <PopConfirmButton Icon="fa fa-trash" Text="@(WtmBlazor.Localizer["Sys.Delete"])" OnConfirm="() => OnDeleteClick(context)" Color="Color.Danger" Size="Size.ExtraSmall" Content="@(WtmBlazor.Localizer["Sys.DeleteConfirm"])" CloseButtonText="@(WtmBlazor.Localizer["Sys.Close"])" ConfirmButtonText="@(WtmBlazor.Localizer["Sys.Delete"])" ConfirmButtonColor="Color.Danger" />
             }
         </div>
     </RowButtonTemplate>

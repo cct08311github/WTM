@@ -3,8 +3,7 @@
 @inherits BasePage
 @attribute [ActionDescription("MenuKey.UserManagement", "WalkingTec.Mvvm.Admin.Api,FrameworkUser")]
 
-@if ( UserInfo.Attributes["IsMainHost"].ToString() == "False")
-{
+<div hidden="@(!IsSubHost)">
     <WTSearchPanel OnSearch="@DoSearch">
         <ValidateForm Model="@SearchModel">
             <Row ItemsPerRow="ItemsPerRow.Three" RowType="RowType.Inline">
@@ -32,56 +31,40 @@
             <TableColumn @bind-Field="@context.IsValid" ComponentType="@typeof(Switch)" />
         </TableColumns>
         <TableToolbarTemplate>
-            @if (IsAccessable("/api/_frameworkuser/Add"))
-            {
-                <TableToolbarButton TItem="FrameworkUser_View" Color="Color.Primary" Icon="fa fa-fw fa-plus" Text="@WtmBlazor.Localizer["Sys.Create"]" OnClickCallback="OnCreateClick" />
-            }
-            @if (IsAccessable("/api/_frameworkuser/BatchDelete"))
-            {
-                <TableToolbarPopConfirmButton TItem="FrameworkUser_View" Color="Color.Danger"
-                                          Icon="fa fa-fw fa-trash" Text="@WtmBlazor.Localizer["Sys.Delete"]"
-                                          OnConfirm="@OnBatchDeleteClick" Content="@WtmBlazor.Localizer["Sys.BatchDeleteConfirm"]" CloseButtonText="@WtmBlazor.Localizer["Sys.Close"]"
-                                          ConfirmButtonText="@WtmBlazor.Localizer["Sys.BatchDelete"]" ConfirmButtonColor="Color.Danger" />
-            }
-
-            @if (IsAccessable("/api/_frameworkuser/Import"))
-            {
-                <TableToolbarButton TItem="FrameworkUser_View" Color="Color.Primary" Icon="fa fa-fw fa-upload" Text="@WtmBlazor.Localizer["Sys.Import"]" OnClickCallback="@OnImportClick" />
-            }
-            @if (IsAccessable("/api/_frameworkuser/ExportExcel"))
-            {
-                <TableToolbarButton TItem="FrameworkUser_View" Color="Color.Primary" Icon="fa fa-fw fa-download" Text="@WtmBlazor.Localizer["Sys.Export"]" OnClickCallback="@OnExportClick" IsAsync="true" />
-            }
+            <TableToolbarButton TItem="FrameworkUser_View" Color="Color.Primary" Icon="fa fa-fw fa-plus" Text="@(WtmBlazor.Localizer["Sys.Create"])" OnClickCallback="OnCreateClick" Visible="@(IsAccessable("/api/_frameworkuser/Add"))" />
+            <TableToolbarPopConfirmButton TItem="FrameworkUser_View" Color="Color.Danger" Icon="fa fa-fw fa-trash" Text="@(WtmBlazor.Localizer["Sys.Delete"])" OnConfirm="@OnBatchDeleteClick" Content="@(WtmBlazor.Localizer["Sys.BatchDeleteConfirm"])" CloseButtonText="@(WtmBlazor.Localizer["Sys.Close"])" ConfirmButtonText="@(WtmBlazor.Localizer["Sys.BatchDelete"])" ConfirmButtonColor="Color.Danger" Visible="@(IsAccessable("/api/_frameworkuser/BatchDelete"))" />
+            <TableToolbarButton TItem="FrameworkUser_View" Color="Color.Primary" Icon="fa fa-fw fa-upload" Text="@(WtmBlazor.Localizer["Sys.Import"])" OnClickCallback="@OnImportClick" Visible="@(IsAccessable("/api/_frameworkuser/Import"))" />
+            <TableToolbarButton TItem="FrameworkUser_View" Color="Color.Primary" Icon="fa fa-fw fa-download" Text="@(WtmBlazor.Localizer["Sys.Export"])" OnClickCallback="@OnExportClick" IsAsync="true" Visible="@(IsAccessable("/api/_frameworkuser/ExportExcel"))" />
         </TableToolbarTemplate>
         <RowButtonTemplate>
             @if (IsAccessable("/api/_frameworkuser/Edit"))
             {
-                <TableCellButton Size="Size.ExtraSmall" Color="Color.Success" Icon="fa fa-edit" Text="@WtmBlazor.Localizer["Sys.Edit"]" OnClick="() => OnEditClick(context)" />
+                <TableCellButton Size="Size.ExtraSmall" Color="Color.Success" Icon="fa fa-edit" Text="@(WtmBlazor.Localizer["Sys.Edit"])" OnClick="() => OnEditClick(context)" />
             }
             @if (IsAccessable("/api/_frameworkuser/{id}"))
             {
-                <TableCellButton Size="Size.ExtraSmall" Color="Color.Info" Icon="fa fa-info" Text="@WtmBlazor.Localizer["Sys.Details"]" OnClick="()=>OnDetailsClick(context)" />
+                <TableCellButton Size="Size.ExtraSmall" Color="Color.Info" Icon="fa fa-info" Text="@(WtmBlazor.Localizer["Sys.Details"])" OnClick="()=>OnDetailsClick(context)" />
             }
             @if (IsAccessable("/api/_frameworkuser/BatchDelete"))
             {
-                <PopConfirmButton Icon="fa fa-trash" Text="@WtmBlazor.Localizer["Sys.Delete"]" OnConfirm="() => OnDeleteClick(context)" Color="Color.Danger" Size="Size.ExtraSmall"
-                                  Content="@WtmBlazor.Localizer["Sys.DeleteConfirm"]" CloseButtonText="@WtmBlazor.Localizer["Sys.Close"]" ConfirmButtonText="@WtmBlazor.Localizer["Sys.Delete"]" ConfirmButtonColor="Color.Danger" />
+                <PopConfirmButton Icon="fa fa-trash" Text="@(WtmBlazor.Localizer["Sys.Delete"])" OnConfirm="() => OnDeleteClick(context)" Color="Color.Danger" Size="Size.ExtraSmall" Content="@(WtmBlazor.Localizer["Sys.DeleteConfirm"])" CloseButtonText="@(WtmBlazor.Localizer["Sys.Close"])" ConfirmButtonText="@(WtmBlazor.Localizer["Sys.Delete"])" ConfirmButtonColor="Color.Danger" />
             }
             @if (IsAccessable("/api/_frameworkuser/password"))
             {
-                <TableCellButton Size="Size.ExtraSmall" Color="Color.Warning" Icon="fa fa-key" Text="@WtmBlazor.Localizer["Login.ChangePassword"]" OnClick="() => OnPasswordClick(context)" />
+                <TableCellButton Size="Size.ExtraSmall" Color="Color.Warning" Icon="fa fa-key" Text="@(WtmBlazor.Localizer["Login.ChangePassword"])" OnClick="() => OnPasswordClick(context)" />
             }
         </RowButtonTemplate>
     </Table>
-}
-else
-{
-    <div>@WtmBlazor.Localizer["_Admin.HasMainHost"]</div>
-}
+</div>
+<div hidden="@IsSubHost">
+    <div>@(WtmBlazor.Localizer["_Admin.HasMainHost"])</div>
+</div>
 @code{
 
     private FrameworkUserSearcher SearchModel = new FrameworkUserSearcher();
     private Table<FrameworkUser_View> dataTable;
+
+    private bool IsSubHost => UserInfo.Attributes["IsMainHost"].ToString() == "False";
 
     private async Task<QueryData<FrameworkUser_View>> OnSearch(QueryPageOptions opts)
     {
