@@ -887,150 +887,206 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         string joinNodeKey,
         CancellationToken ct)
     {
-        var joinDef = graph.Nodes.First(n => string.Equals(n.NodeKey, joinNodeKey, StringComparison.Ordinal));
+        // Track whether CheckJoinOrphanAsync should run post-commit (invariant #6: outside tx).
+        NodeInstance? postCommitOrphanCheck = null;
 
-        // 1. Ensure the Join NodeInstance exists (gateway handler mints it; idempotent).
-        await GuardedTransition.MintNodeInstanceGuardedAsync(
-            Db, instance, joinDef, instance.Generation, ct);
-
-        // 2. Complete the branch token.
-        var branchCompleteRows = await GuardedTransition.CompleteNodeInstanceAsync(
-            Db, branchNode.ID, branchNode.RowVer, NodeState.CompletedApproved,
-            generation: instance.Generation, ct: ct);
-
-        if (branchCompleteRows == 0)
+        var result = await RunWithDeadlockRetryAsync(async innerCt =>
         {
-            _logger.LogDebug(
-                "AdvanceBranchIntoJoinAsync: branch {BranchId} already completed by concurrent caller.",
-                branchNode.ID);
-            return WorkflowActionResult.AlreadyHandled;
-        }
+            postCommitOrphanCheck = null; // reset on each deadlock retry
 
-        await WorkflowEventLogWriter.AppendAsync(
-            Db, instance.ID, instance.TenantCode,
-            EventAction.AutoAdvance,
-            nodeKey: branchNode.NodeKey,
-            actorITCode: null,
-            beforeState: NodeState.Activated.ToString(),
-            afterState: NodeState.CompletedApproved.ToString(),
-            ct: ct);
+            var joinDef = graph.Nodes.First(n => string.Equals(n.NodeKey, joinNodeKey, StringComparison.Ordinal));
 
-        // 3. Activate the Join node if still Pending.
-        var joinNode = await Db.Set<NodeInstance>()
-            .AsNoTracking()
-            .SingleOrDefaultAsync(
-                n => n.InstanceId == instance.ID
-                  && n.NodeKey == joinNodeKey
-                  && n.Generation == instance.Generation,
-                ct);
-
-        if (joinNode is null)
-        {
-            _logger.LogError(
-                "AdvanceBranchIntoJoinAsync: Join node '{JoinKey}' not found for instance {InstanceId}. " +
-                "Possible mint failure.",
-                joinNodeKey, instance.ID);
-            return WorkflowActionResult.FailClosedRouting;
-        }
-
-        if (joinNode.State == NodeState.CompletedApproved)
-        {
-            // Another branch already fired the Join and the successor is already minted.
-            // This branch is a late arriver — it already recorded its completion above.
-            return WorkflowActionResult.Advanced;
-        }
-
-        if (joinNode.State == NodeState.Pending)
-        {
-            var activateJoinRows = await GuardedTransition.ActivateNodeInstanceAsync(
-                Db, joinNode.ID, joinNode.RowVer, DateTime.UtcNow,
-                generation: instance.Generation, ct: ct);
-
-            // Re-read (another caller may have activated it first — that is fine).
-            joinNode = await Db.Set<NodeInstance>()
-                .AsNoTracking()
-                .SingleAsync(n => n.ID == joinNode.ID, ct);
-
-            if (activateJoinRows == 1)
+            IDbContextTransaction? ownedTx = null;
+            if (Db.Database.CurrentTransaction is null)
+                ownedTx = await Db.Database.BeginTransactionAsync(innerCt);
+            try
             {
+                // [1] Mint join node (idempotent, in tx).
+                await GuardedTransition.MintNodeInstanceGuardedAsync(
+                    Db, instance, joinDef, instance.Generation, innerCt);
+
+                // [2] STATE FLIP: Complete branch token (CAS) — before any appends.
+                var branchCompleteRows = await GuardedTransition.CompleteNodeInstanceAsync(
+                    Db, branchNode.ID, branchNode.RowVer, NodeState.CompletedApproved,
+                    generation: instance.Generation, ct: innerCt);
+
+                if (branchCompleteRows == 0)
+                {
+                    _logger.LogDebug(
+                        "AdvanceBranchIntoJoinAsync: branch {BranchId} already completed by concurrent caller.",
+                        branchNode.ID);
+                    // Not committed — finally disposes = auto-rollback.
+                    return WorkflowActionResult.AlreadyHandled;
+                }
+
+                // [3] Re-read join node for current state and RowVer.
+                var joinNode = await Db.Set<NodeInstance>()
+                    .AsNoTracking()
+                    .SingleOrDefaultAsync(
+                        n => n.InstanceId == instance.ID
+                          && n.NodeKey == joinNodeKey
+                          && n.Generation == instance.Generation,
+                        innerCt);
+
+                if (joinNode is null)
+                {
+                    _logger.LogError(
+                        "AdvanceBranchIntoJoinAsync: Join node '{JoinKey}' not found for instance {InstanceId}. " +
+                        "Possible mint failure.",
+                        joinNodeKey, instance.ID);
+                    return WorkflowActionResult.FailClosedRouting;
+                }
+
+                if (joinNode.State == NodeState.CompletedApproved)
+                {
+                    // Another branch already fired. Commit branch completion + log, return Advanced.
+                    await WorkflowEventLogWriter.AppendAsync(
+                        Db, instance.ID, instance.TenantCode,
+                        EventAction.AutoAdvance,
+                        nodeKey: branchNode.NodeKey,
+                        actorITCode: null,
+                        beforeState: NodeState.Activated.ToString(),
+                        afterState: NodeState.CompletedApproved.ToString(),
+                        ct: innerCt);
+                    if (ownedTx is not null) await ownedTx.CommitAsync(innerCt);
+                    return WorkflowActionResult.Advanced;
+                }
+
+                // Track whether we activated the join (for log ordering).
+                bool activatedJoin = false;
+
+                // [5] STATE FLIP: Activate join if Pending.
+                if (joinNode.State == NodeState.Pending)
+                {
+                    var activateJoinRows = await GuardedTransition.ActivateNodeInstanceAsync(
+                        Db, joinNode.ID, joinNode.RowVer, DateTime.UtcNow,
+                        generation: instance.Generation, ct: innerCt);
+
+                    if (activateJoinRows == 1)
+                        activatedJoin = true;
+
+                    // [6] Re-read after activate attempt (another caller may have activated it first).
+                    joinNode = await Db.Set<NodeInstance>()
+                        .AsNoTracking()
+                        .SingleAsync(n => n.ID == joinNode.ID, innerCt);
+                }
+
+                if (joinNode.State != NodeState.Activated)
+                {
+                    // Join already in terminal state (e.g. concurrent branch fired it just now).
+                    // Commit branch completion + log as durable.
+                    await WorkflowEventLogWriter.AppendAsync(
+                        Db, instance.ID, instance.TenantCode,
+                        EventAction.AutoAdvance,
+                        nodeKey: branchNode.NodeKey,
+                        actorITCode: null,
+                        beforeState: NodeState.Activated.ToString(),
+                        afterState: NodeState.CompletedApproved.ToString(),
+                        ct: innerCt);
+                    if (ownedTx is not null) await ownedTx.CommitAsync(innerCt);
+                    return WorkflowActionResult.Advanced;
+                }
+
+                // [7] STATE FLIP: Increment arrival count (CAS).
+                await GuardedTransition.IncrementJoinArrivedAsync(
+                    Db, joinNode.ID, joinNode.RowVer, instance.Generation, innerCt);
+
+                // Re-read post-increment for fresh RowVer (whether CAS won or lost).
+                // Inside ambient tx: read-committed sees own writes on SQL Server; SQLite identical.
+                joinNode = await Db.Set<NodeInstance>()
+                    .AsNoTracking()
+                    .SingleAsync(n => n.ID == joinNode.ID, innerCt);
+
+                // [9] STATE FLIP: Try to fire the Join (exactly-once CAS).
+                var fireRows = await GuardedTransition.FireJoinIfSatisfiedAsync(
+                    Db, joinNode.ID, joinNode.RowVer, instance.Generation, innerCt);
+
+                // ── ALL STATE FLIPS DONE. Now AppendAsync. ─────────────────────────────────
+
+                // Append: branch complete log.
+                await WorkflowEventLogWriter.AppendAsync(
+                    Db, instance.ID, instance.TenantCode,
+                    EventAction.AutoAdvance,
+                    nodeKey: branchNode.NodeKey,
+                    actorITCode: null,
+                    beforeState: NodeState.Activated.ToString(),
+                    afterState: NodeState.CompletedApproved.ToString(),
+                    ct: innerCt);
+
+                // Append: join activate log (only if we won the activation CAS).
+                if (activatedJoin)
+                {
+                    await WorkflowEventLogWriter.AppendAsync(
+                        Db, instance.ID, instance.TenantCode,
+                        EventAction.AutoAdvance,
+                        nodeKey: joinNodeKey,
+                        actorITCode: null,
+                        beforeState: NodeState.Pending.ToString(),
+                        afterState: NodeState.Activated.ToString(),
+                        ct: innerCt);
+                }
+
+                if (fireRows == 0)
+                {
+                    // Quorum not yet met OR concurrent loser (another branch fired it first).
+                    // Commit branch arrival/completion as durable.
+                    if (ownedTx is not null) await ownedTx.CommitAsync(innerCt);
+                    // Schedule post-commit orphan check (invariant #6: decrement loop OUTSIDE tx).
+                    postCommitOrphanCheck = joinNode;
+                    return WorkflowActionResult.Advanced;
+                }
+
+                // Join fired — append fire log, then mint successor (inside same tx — W5 fix:
+                // fire CAS and successor mint are atomic, eliminating the fired-but-no-successor gap).
                 await WorkflowEventLogWriter.AppendAsync(
                     Db, instance.ID, instance.TenantCode,
                     EventAction.AutoAdvance,
                     nodeKey: joinNodeKey,
                     actorITCode: null,
-                    beforeState: NodeState.Pending.ToString(),
-                    afterState: NodeState.Activated.ToString(),
-                    ct: ct);
+                    beforeState: NodeState.Activated.ToString(),
+                    afterState: NodeState.CompletedApproved.ToString(),
+                    ct: innerCt);
+
+                var joinSuccessorKey = graph.Transitions
+                    .FirstOrDefault(t => string.Equals(t.From, joinNodeKey, StringComparison.Ordinal))
+                    ?.To;
+
+                if (joinSuccessorKey is null)
+                {
+                    _logger.LogError(
+                        "AdvanceBranchIntoJoinAsync: Join '{JoinKey}' has no outgoing transition. Fail-closed.",
+                        joinNodeKey);
+                    return WorkflowActionResult.FailClosedRouting;
+                }
+
+                var successorDef = graph.Nodes.FirstOrDefault(
+                    n => string.Equals(n.NodeKey, joinSuccessorKey, StringComparison.Ordinal))
+                    ?? throw new InvalidOperationException(
+                           $"Join successor '{joinSuccessorKey}' not found in graph '{graph.Key}'.");
+
+                // WF-19: pass graph.Key so delegation scope filtering works on the minted Join successor.
+                // Mint INSIDE tx — atomic with FireJoinIfSatisfiedAsync (W5 fix).
+                await MintNodeInstanceAsync(instance, successorDef, innerCt, definitionCode: graph.Key);
+
+                if (ownedTx is not null) await ownedTx.CommitAsync(innerCt);
+                return WorkflowActionResult.NodeCompleted;
             }
-        }
+            catch
+            {
+                if (ownedTx is not null) await ownedTx.RollbackAsync(CancellationToken.None);
+                throw;
+            }
+            finally
+            {
+                if (ownedTx is not null) await ownedTx.DisposeAsync();
+            }
+        }, ct);
 
-        if (joinNode.State != NodeState.Activated)
-        {
-            // Join already completed (e.g. concurrent branch fired it just now).
-            return WorkflowActionResult.Advanced;
-        }
+        // Post-commit: check for orphaned branches OUTSIDE the tx (design invariant #6).
+        if (postCommitOrphanCheck is not null)
+            await CheckJoinOrphanAsync(postCommitOrphanCheck, instance, ct);
 
-        // 4. Increment arrival count.
-        var incrRows = await GuardedTransition.IncrementJoinArrivedAsync(
-            Db, joinNode.ID, joinNode.RowVer, instance.Generation, ct);
-
-        if (incrRows == 0)
-        {
-            // Join CAS lost — re-read for updated RowVer and try fire.
-            joinNode = await Db.Set<NodeInstance>()
-                .AsNoTracking()
-                .SingleAsync(n => n.ID == joinNode.ID, ct);
-        }
-        else
-        {
-            // Re-read post-increment RowVer.
-            joinNode = await Db.Set<NodeInstance>()
-                .AsNoTracking()
-                .SingleAsync(n => n.ID == joinNode.ID, ct);
-        }
-
-        // 5. Try to fire the Join (single-statement CAS — exactly-once).
-        var fireRows = await GuardedTransition.FireJoinIfSatisfiedAsync(
-            Db, joinNode.ID, joinNode.RowVer, instance.Generation, ct);
-
-        if (fireRows == 0)
-        {
-            // Quorum not yet met OR concurrent loser (another branch fired it first).
-            // Check for orphan fail-closed (§4.4): are there still live branches that haven't arrived?
-            await CheckJoinOrphanAsync(joinNode, instance, ct);
-            return WorkflowActionResult.Advanced;
-        }
-
-        // 6. Join fired — mint the Join's successor.
-        await WorkflowEventLogWriter.AppendAsync(
-            Db, instance.ID, instance.TenantCode,
-            EventAction.AutoAdvance,
-            nodeKey: joinNodeKey,
-            actorITCode: null,
-            beforeState: NodeState.Activated.ToString(),
-            afterState: NodeState.CompletedApproved.ToString(),
-            ct: ct);
-
-        var joinSuccessorKey = graph.Transitions
-            .FirstOrDefault(t => string.Equals(t.From, joinNodeKey, StringComparison.Ordinal))
-            ?.To;
-
-        if (joinSuccessorKey is null)
-        {
-            _logger.LogError(
-                "AdvanceBranchIntoJoinAsync: Join '{JoinKey}' has no outgoing transition. Fail-closed.",
-                joinNodeKey);
-            return WorkflowActionResult.FailClosedRouting;
-        }
-
-        var successorDef = graph.Nodes.FirstOrDefault(
-            n => string.Equals(n.NodeKey, joinSuccessorKey, StringComparison.Ordinal))
-            ?? throw new InvalidOperationException(
-                   $"Join successor '{joinSuccessorKey}' not found in graph '{graph.Key}'.");
-
-        // WF-19: pass graph.Key so delegation scope filtering works on the minted Join successor.
-        await MintNodeInstanceAsync(instance, successorDef, ct, definitionCode: graph.Key);
-        return WorkflowActionResult.NodeCompleted;
+        return result;
     }
 
     /// <summary>
