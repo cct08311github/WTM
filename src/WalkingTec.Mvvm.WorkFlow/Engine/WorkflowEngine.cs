@@ -44,6 +44,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core;
@@ -1292,16 +1293,62 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             }
         }
 
-        // 9. Write event log for the approve action.
-        await WorkflowEventLogWriter.AppendAsync(
-            Db, instance.ID, instance.TenantCode,
-            EventAction.Approve,
-            nodeKey: nodeInst.NodeKey,
-            actorITCode: actorITCode,
-            beforeState: TaskState.Pending.ToString(),
-            afterState: TaskState.Approved.ToString(),
-            reason: comment,
-            ct: ct);
+        // 9. T5 fix (W-ALL-CLAIM-TO-INCREMENT): for All/Any modes, wrap the claim +
+        //    IncrementNodeApprovedCount + Approve event in ONE transaction so a crash cannot
+        //    leave the task Approved with the advisory count un-incremented (threshold strand).
+        //    The tx COMMITS here, before AdvanceWithActorAsync, so no nested Begin is possible
+        //    through the drain. Sequential mode is unchanged (no increment, no tx wrapper needed).
+        //    Nested-tx guard: if an ambient tx exists (e.g. AutoApprove recursion), enlist;
+        //    otherwise open+own+commit — mirroring WorkflowEventLogWriter.cs:99.
+        if (approveMode == ApproveMode.All || approveMode == ApproveMode.Any)
+        {
+            bool ownsTx = Db.Database.CurrentTransaction is null;
+            IDbContextTransaction? claimTx = ownsTx
+                ? await Db.Database.BeginTransactionAsync(ct)
+                : null;
+            try
+            {
+                // Increment advisory count (Task→Node canonical order; claim already committed above).
+                await GuardedTransition.IncrementNodeApprovedCountAsync(Db, nodeInst.ID, ct);
+
+                // Approve event enlists in the ambient tx (WorkflowEventLogWriter nested-tx guard).
+                await WorkflowEventLogWriter.AppendAsync(
+                    Db, instance.ID, instance.TenantCode,
+                    EventAction.Approve,
+                    nodeKey: nodeInst.NodeKey,
+                    actorITCode: actorITCode,
+                    beforeState: TaskState.Pending.ToString(),
+                    afterState: TaskState.Approved.ToString(),
+                    reason: comment,
+                    ct: ct);
+
+                if (ownsTx)
+                    await claimTx!.CommitAsync(ct);
+            }
+            catch when (ownsTx && claimTx is not null)
+            {
+                await claimTx.RollbackAsync(CancellationToken.None);
+                throw;
+            }
+            finally
+            {
+                if (ownsTx)
+                    claimTx?.Dispose();
+            }
+        }
+        else
+        {
+            // Sequential: write Approve event standalone (unchanged pre-T5 behaviour).
+            await WorkflowEventLogWriter.AppendAsync(
+                Db, instance.ID, instance.TenantCode,
+                EventAction.Approve,
+                nodeKey: nodeInst.NodeKey,
+                actorITCode: actorITCode,
+                beforeState: TaskState.Pending.ToString(),
+                afterState: TaskState.Approved.ToString(),
+                reason: comment,
+                ct: ct);
+        }
 
         // WF-15 — Notify approved (post-commit, best-effort).  Fires for every successful
         // approval regardless of mode; the node/instance-completion notification fires later
@@ -1314,7 +1361,11 @@ internal sealed class WorkflowEngine : IWorkflowEngine
 
         // 10. Mode-specific completion logic — shared with SystemContinueTaskAsync (WF-20.4).
         // C10 fix: pass actorITCode so All/Any completion can stamp DecidedBy on NodeInstance.
-        return await ExecuteApproveCompletionAsync(task.ID, nodeInst, instance, approveMode, ct, actorITCode);
+        // T5 fix: pass incrementAlreadyDone=true for All/Any (increment is already committed above);
+        //         the system path (SystemContinueTaskAsync) always passes default false.
+        return await ExecuteApproveCompletionAsync(
+            task.ID, nodeInst, instance, approveMode, ct, actorITCode,
+            incrementAlreadyDone: approveMode == ApproveMode.All || approveMode == ApproveMode.Any);
     }
 
     // ── WF-20.4: shared approve post-claim completion helper ──────────────────
@@ -1330,7 +1381,8 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         ProcessInstance instance,
         ApproveMode approveMode,
         CancellationToken ct,
-        string? actorITCode = null)
+        string? actorITCode = null,
+        bool incrementAlreadyDone = false)
     {
         if (approveMode == ApproveMode.All)
         {
@@ -1341,7 +1393,13 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             // AdvanceCoreAsync performs the authoritative node-completion CAS (W1 fix, spec §7.4).
             // Concurrent final approvers both reach this path; exactly one wins the CAS;
             // the other gets AlreadyHandled from CompleteNodeInstanceAsync returning 0 rows.
-            await GuardedTransition.IncrementNodeApprovedCountAsync(Db, nodeInst.ID, ct);
+            // T5 (W-ALL-CLAIM-TO-INCREMENT): when called from the human path (ApproveTaskAsync),
+            // the increment was already committed atomically with the claim CAS and the Approve
+            // event (see claim+increment tx in ApproveTaskAsync). Skip here to avoid double-count.
+            // System/timeout path (SystemContinueTaskAsync, incrementAlreadyDone=false): still
+            // increments here as before (post-commit, no ambient tx).
+            if (!incrementAlreadyDone)
+                await GuardedTransition.IncrementNodeApprovedCountAsync(Db, nodeInst.ID, ct);
 
             var freshNodeAll = await Db.Set<NodeInstance>()
                 .AsNoTracking()
@@ -1380,7 +1438,9 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             // OnCompleteAsync cancels sibling Pending tasks.
             // Concurrent approvers both increment and both call AdvanceAsync; the node
             // CAS in AdvanceCoreAsync ensures exactly one caller completes the node.
-            await GuardedTransition.IncrementNodeApprovedCountAsync(Db, nodeInst.ID, ct);
+            // T5 (W-ALL-CLAIM-TO-INCREMENT): see All branch comment above.
+            if (!incrementAlreadyDone)
+                await GuardedTransition.IncrementNodeApprovedCountAsync(Db, nodeInst.ID, ct);
             // C10 fix: pass actorITCode so AdvanceCoreAsync can stamp DecidedBy on the node.
             var anyResult = await AdvanceWithActorAsync(instance, ct, actorITCode);
             // WF-15 — post-advance instance completion notification (best-effort).
