@@ -2471,49 +2471,85 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             }
         }
 
-        // 8. Cancel all remaining Pending/NotYetActive tasks on this node.
-        await Db.Set<ApprovalTask>()
-            .Where(t => t.NodeInstanceId == nodeInst.ID
-                         && (t.State == TaskState.Pending || t.State == TaskState.NotYetActive)
-                         && t.ID != taskId)
-            .ExecuteUpdateAsync(
-                s => s.SetProperty(t => t.State, TaskState.Cancelled),
-                ct);
-
-        // WF-20.2: cancel all Armed timers for this node (ReturnToInitiator closes the node).
-        await GuardedTransition.CancelTimersForNodeAsync(Db, nodeInst.ID, ct);
-
-        // 9. Complete node as Returned (CAS on fresh RowVer).
-        var freshNode = await Db.Set<NodeInstance>()
-            .AsNoTracking()
-            .SingleAsync(n => n.ID == nodeInst.ID, ct);
-
-        var nodeCompleteRows = await GuardedTransition.CompleteNodeInstanceAsync(
-            Db, nodeInst.ID,
-            expectedRowVer: freshNode.RowVer,
-            completedState: NodeState.Returned,
-            decidedBy: actorITCode,
-            ct: ct);
-
-        if (nodeCompleteRows == 0)
+        // T7 (#320 PR D): wrap {sibling-cancel → CompleteNode → instance re-read → instance-flip CAS → event Append}
+        // in one canonical-order (Task→Node→Instance) transaction. A crash between node completion and
+        // instance flip can no longer strand a terminal node on a Running instance, and sibling cancellation
+        // is now atomic with node completion so a rollback reverts both.
+        // Timer cancels (WF-20.2) and WF-15 notifier run post-commit, best-effort.
+        // Lock-order: Task (sibling cancel, step 8) → Node (CompleteNode, step 9) → Instance (AdvanceProcessInstance, step 11).
+        int nodeCompleteRows;
+        int instanceRows = 0;
+        await using (var txReturn = await Db.Database.BeginTransactionAsync(ct))
         {
-            _logger.LogDebug(
-                "ReturnToInitiatorAsync: NodeInstance {NodeId} completion CAS returned 0 — concurrent actor already completed.",
-                nodeInst.ID);
-            return WorkflowActionResult.AlreadyHandled;
+            try
+            {
+                // 8. Cancel all remaining Pending/NotYetActive tasks on this node (first write, inside tx).
+                await Db.Set<ApprovalTask>()
+                    .Where(t => t.NodeInstanceId == nodeInst.ID
+                                 && (t.State == TaskState.Pending || t.State == TaskState.NotYetActive)
+                                 && t.ID != taskId)
+                    .ExecuteUpdateAsync(
+                        s => s.SetProperty(t => t.State, TaskState.Cancelled),
+                        ct);
+
+                // 9. Complete node as Returned (CAS on fresh RowVer).
+                var freshNode = await Db.Set<NodeInstance>()
+                    .AsNoTracking()
+                    .SingleAsync(n => n.ID == nodeInst.ID, ct);
+
+                nodeCompleteRows = await GuardedTransition.CompleteNodeInstanceAsync(
+                    Db, nodeInst.ID,
+                    expectedRowVer: freshNode.RowVer,
+                    completedState: NodeState.Returned,
+                    decidedBy: actorITCode,
+                    ct: ct);
+
+                if (nodeCompleteRows == 0)
+                {
+                    _logger.LogDebug(
+                        "ReturnToInitiatorAsync: NodeInstance {NodeId} completion CAS returned 0 — concurrent actor already completed.",
+                        nodeInst.ID);
+                    await txReturn.RollbackAsync(CancellationToken.None);
+                    return WorkflowActionResult.AlreadyHandled;
+                }
+
+                // 10. Re-read instance for fresh RowVer (no AllocateSeq has bumped it yet — safe).
+                //     The CAS must be immediately after this re-read with no Append between.
+                instance = await Db.Set<ProcessInstance>()
+                    .AsNoTracking()
+                    .SingleAsync(x => x.ID == instance.ID, ct);
+
+                // 11. Flip instance Running→Draft (CAS — immediately after re-read).
+                instanceRows = await GuardedTransition.AdvanceProcessInstanceAsync(
+                    Db, instance.ID,
+                    expectedState: InstanceState.Running,
+                    expectedRowVer: instance.RowVer,
+                    nextState: InstanceState.Draft,
+                    ct);
+
+                if (instanceRows == 1)
+                {
+                    // 12. Write the Return event (enlists in ambient txReturn).
+                    // AppendAsync enlists in the ambient txReturn (db.Database.CurrentTransaction is not null).
+                    await WorkflowEventLogWriter.AppendAsync(
+                        Db, instance.ID, instance.TenantCode,
+                        EventAction.Return,
+                        nodeKey: nodeInst.NodeKey,
+                        actorITCode: actorITCode,
+                        beforeState: InstanceState.Running.ToString(),
+                        afterState: InstanceState.Draft.ToString(),
+                        reason: reason,
+                        ct: ct);
+                }
+
+                await txReturn.CommitAsync(ct);
+            }
+            catch
+            {
+                await txReturn.RollbackAsync(CancellationToken.None);
+                throw;
+            }
         }
-
-        // 10. Set instance to Draft via instance-level CAS.
-        instance = await Db.Set<ProcessInstance>()
-            .AsNoTracking()
-            .SingleAsync(x => x.ID == instance.ID, ct);
-
-        var instanceRows = await GuardedTransition.AdvanceProcessInstanceAsync(
-            Db, instance.ID,
-            expectedState: InstanceState.Running,
-            expectedRowVer: instance.RowVer,
-            nextState: InstanceState.Draft,
-            ct);
 
         if (instanceRows == 0)
         {
@@ -2521,30 +2557,20 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                 "ReturnToInitiatorAsync: instance {InstanceId} CAS Running→Draft returned 0 — " +
                 "concurrent actor already changed state.",
                 instance.ID);
-            // Node was completed but instance flip failed — unusual; return AlreadyHandled
-            // so the caller knows the action did not fully succeed.
+            // Node was completed but instance flip failed — rolled back; return AlreadyHandled.
             return WorkflowActionResult.AlreadyHandled;
         }
-
-        // 11. Write event log with Return action.
-        await WorkflowEventLogWriter.AppendAsync(
-            Db, instance.ID, instance.TenantCode,
-            EventAction.Return,
-            nodeKey: nodeInst.NodeKey,
-            actorITCode: actorITCode,
-            beforeState: InstanceState.Running.ToString(),
-            afterState: InstanceState.Draft.ToString(),
-            reason: reason,
-            ct: ct);
 
         _logger.LogInformation(
             "ReturnToInitiatorAsync: task {TaskId} returned to initiator by '{ActorITCode}'. Instance {InstanceId} now Draft.",
             taskId, actorITCode, instance.ID);
 
+        // WF-20.2: cancel all Armed timers for this node (post-commit, best-effort).
+        await GuardedTransition.CancelTimersForNodeAsync(Db, nodeInst.ID, ct);
+
         // WF-15 — Notify returned to initiator (post-commit, best-effort).
         if (_notifier is not null)
         {
-            // Re-read fresh instance (now Draft) for notification.
             var freshInst = await Db.Set<ProcessInstance>().AsNoTracking().SingleAsync(x => x.ID == instance.ID, CancellationToken.None);
             try { await _notifier.NotifyReturnedToInitiatorAsync(freshInst, nodeInst, task, actorITCode, reason, ct); }
             catch (Exception ex) { _logger.LogError(ex, "WF-15 NotifyReturnedToInitiatorAsync failed for task {TaskId}.", taskId); }
