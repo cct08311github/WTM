@@ -1722,6 +1722,12 @@ internal sealed class WorkflowEngine : IWorkflowEngine
     /// <para><paramref name="writeNodeCompletionEvent"/> is <c>true</c> on the human path
     /// (writes the node-completion Reject event) and <c>false</c> on the system path
     /// where a <c>TimeoutFire</c> event was already written per claimed task.</para>
+    ///
+    /// <para>Issue #320 PR B: for the failing path (nodeFailed==true) each mode wraps
+    /// node-completion writes AND the instance-flip in ONE transaction in canonical
+    /// Task→Node→Instance order, eliminating the gap between NodeState.CompletedRejected
+    /// and InstanceState.Rejected that could strand an instance if the process crashed
+    /// between the two separate commits.</para>
     /// </summary>
     private async Task<WorkflowActionResult> ExecuteRejectCompletionAsync(
         Guid claimedTaskId,
@@ -1734,37 +1740,55 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         bool writeNodeCompletionEvent,
         CancellationToken ct)
     {
-        bool nodeFailed;
-
         if (rejectMode == ApproveMode.All)
         {
-            // 会签: increment advisory rejected count, then evaluate RejectGate.
+            // 会签: increment advisory rejected count STANDALONE (must survive non-failing returns).
             await GuardedTransition.IncrementNodeRejectedCountAsync(Db, nodeInst.ID, ct);
             var freshNodeAll = await Db.Set<NodeInstance>()
                 .AsNoTracking()
                 .SingleAsync(n => n.ID == nodeInst.ID, ct);
 
-            nodeFailed = await AllApprovalHandler.TryCompleteRejectedAsync(
-                Db, freshNodeAll, actorITCode ?? string.Empty, _logger, ct);
-
-            if (!nodeFailed)
+            // Open one transaction for the failing path.
+            // TryCompleteRejectedAsync is called INSIDE the tx: if it returns false (gate not met
+            // or CAS lost), we rollback the tx (reverting any task cancels it may have written).
+            await using (var txRejectAll = await Db.Database.BeginTransactionAsync(ct))
             {
-                // Gate not met (AfterAll) or another actor already won: node continues.
-                if (writeNodeCompletionEvent)
+                try
                 {
-                    await WorkflowEventLogWriter.AppendAsync(
-                        Db, instance.ID, instance.TenantCode,
-                        EventAction.Reject,
-                        nodeKey: nodeInst.NodeKey,
-                        actorITCode: actorITCode,
-                        beforeState: TaskState.Pending.ToString(),
-                        afterState: TaskState.Rejected.ToString(),
-                        reason: reason,
-                        ct: ct);
+                    var nodeFailed = await AllApprovalHandler.TryCompleteRejectedAsync(
+                        Db, freshNodeAll, actorITCode ?? string.Empty, _logger, ct);
+
+                    if (!nodeFailed)
+                    {
+                        // Gate not met (AfterAll) or CAS lost: rollback (nothing harmful committed).
+                        await txRejectAll.RollbackAsync(CancellationToken.None);
+
+                        // Write standalone Reject event (node continues, not failing).
+                        if (writeNodeCompletionEvent)
+                        {
+                            await WorkflowEventLogWriter.AppendAsync(
+                                Db, instance.ID, instance.TenantCode,
+                                EventAction.Reject,
+                                nodeKey: nodeInst.NodeKey,
+                                actorITCode: actorITCode,
+                                beforeState: TaskState.Pending.ToString(),
+                                afterState: TaskState.Rejected.ToString(),
+                                reason: reason,
+                                ct: ct);
+                        }
+                        return WorkflowActionResult.Advanced;
+                    }
+
+                    // Node is now CompletedRejected inside this tx — continue to instance flip.
+                    return await CompleteInstanceRejectionInTxAsync(
+                        txRejectAll, nodeInst, instance, task, actorITCode, reason, writeNodeCompletionEvent, ct);
                 }
-                return WorkflowActionResult.Advanced;
+                catch
+                {
+                    await txRejectAll.RollbackAsync(CancellationToken.None);
+                    throw;
+                }
             }
-            // Node is now CompletedRejected — fall through to instance-level rejection.
         }
         else if (rejectMode == ApproveMode.Any)
         {
@@ -1774,74 +1798,128 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                 .AsNoTracking()
                 .SingleAsync(n => n.ID == nodeInst.ID, ct);
 
-            nodeFailed = await AnyApprovalHandler.TryCompleteRejectedAsync(
-                Db, freshNodeAny, actorITCode ?? string.Empty, _logger, ct);
-
-            if (!nodeFailed)
+            await using (var txRejectAny = await Db.Database.BeginTransactionAsync(ct))
             {
-                // More approvers still pending — node continues.
-                if (writeNodeCompletionEvent)
+                try
                 {
-                    await WorkflowEventLogWriter.AppendAsync(
-                        Db, instance.ID, instance.TenantCode,
-                        EventAction.Reject,
-                        nodeKey: nodeInst.NodeKey,
-                        actorITCode: actorITCode,
-                        beforeState: TaskState.Pending.ToString(),
-                        afterState: TaskState.Rejected.ToString(),
-                        reason: reason,
-                        ct: ct);
+                    var nodeFailed = await AnyApprovalHandler.TryCompleteRejectedAsync(
+                        Db, freshNodeAny, actorITCode ?? string.Empty, _logger, ct);
+
+                    if (!nodeFailed)
+                    {
+                        // More approvers still pending — rollback and let node continue.
+                        await txRejectAny.RollbackAsync(CancellationToken.None);
+
+                        if (writeNodeCompletionEvent)
+                        {
+                            await WorkflowEventLogWriter.AppendAsync(
+                                Db, instance.ID, instance.TenantCode,
+                                EventAction.Reject,
+                                nodeKey: nodeInst.NodeKey,
+                                actorITCode: actorITCode,
+                                beforeState: TaskState.Pending.ToString(),
+                                afterState: TaskState.Rejected.ToString(),
+                                reason: reason,
+                                ct: ct);
+                        }
+                        return WorkflowActionResult.Advanced;
+                    }
+
+                    // All have rejected — continue in same tx to instance flip.
+                    return await CompleteInstanceRejectionInTxAsync(
+                        txRejectAny, nodeInst, instance, task, actorITCode, reason, writeNodeCompletionEvent, ct);
                 }
-                return WorkflowActionResult.Advanced;
+                catch
+                {
+                    await txRejectAny.RollbackAsync(CancellationToken.None);
+                    throw;
+                }
             }
-            // All have rejected — fall through to instance-level rejection.
         }
         else
         {
             // Sequential path ─────────────────────────────────────────────────────
+            // Canonical order inside the tx: Task cancels → Node CAS → Instance flip.
 
-            // Cancel remaining NotYetActive and AddedPending tasks on this node.
-            // AddedPending (加签-injected tasks not yet reached by the SequencePointer)
-            // must also be cancelled; omitting them leaves them as un-actionable dangling
-            // rows on a CompletedRejected node (C11 fix).
-            await Db.Set<ApprovalTask>()
-                .Where(t => t.NodeInstanceId == nodeInst.ID
-                             && (t.State == TaskState.NotYetActive || t.State == TaskState.AddedPending))
-                .ExecuteUpdateAsync(
-                    s => s.SetProperty(t => t.State, TaskState.Cancelled),
-                    ct);
-
-            // WF-20.2: cancel task timer for the rejecting step + node-scoped hygiene (Sequential reject).
-            await GuardedTransition.CancelTimerForTaskAsync(Db, claimedTaskId, ct);
-            await GuardedTransition.CancelTimersForNodeAsync(Db, nodeInst.ID, ct);
-
-            // Complete the node as CompletedRejected (CAS on node RowVer).
-            var freshNode = await Db.Set<NodeInstance>()
-                .AsNoTracking()
-                .SingleAsync(n => n.ID == nodeInst.ID, ct);
-
-            var completeRows = await GuardedTransition.CompleteNodeInstanceAsync(
-                Db, nodeInst.ID,
-                expectedRowVer: freshNode.RowVer,
-                completedState: NodeState.CompletedRejected,
-                decidedBy: actorITCode,
-                ct: ct);
-
-            if (completeRows == 0)
+            await using (var txRejectSeq = await Db.Database.BeginTransactionAsync(ct))
             {
-                _logger.LogDebug(
-                    "ExecuteRejectCompletionAsync: NodeInstance {NodeId} completion CAS returned 0 — concurrent actor already completed.",
-                    nodeInst.ID);
-                return WorkflowActionResult.AlreadyHandled;
+                try
+                {
+                    // Cancel remaining NotYetActive and AddedPending tasks (Task write FIRST).
+                    // AddedPending (加签-injected tasks not yet reached by the SequencePointer)
+                    // must also be cancelled; omitting them leaves un-actionable dangling
+                    // rows on a CompletedRejected node (C11 fix).
+                    await Db.Set<ApprovalTask>()
+                        .Where(t => t.NodeInstanceId == nodeInst.ID
+                                     && (t.State == TaskState.NotYetActive || t.State == TaskState.AddedPending))
+                        .ExecuteUpdateAsync(
+                            s => s.SetProperty(t => t.State, TaskState.Cancelled),
+                            ct);
+
+                    // Complete the node as CompletedRejected (Node write SECOND, CAS on RowVer).
+                    var freshNode = await Db.Set<NodeInstance>()
+                        .AsNoTracking()
+                        .SingleAsync(n => n.ID == nodeInst.ID, ct);
+
+                    var completeRows = await GuardedTransition.CompleteNodeInstanceAsync(
+                        Db, nodeInst.ID,
+                        expectedRowVer: freshNode.RowVer,
+                        completedState: NodeState.CompletedRejected,
+                        decidedBy: actorITCode,
+                        ct: ct);
+
+                    if (completeRows == 0)
+                    {
+                        _logger.LogDebug(
+                            "ExecuteRejectCompletionAsync: NodeInstance {NodeId} completion CAS returned 0 — concurrent actor already completed.",
+                            nodeInst.ID);
+                        await txRejectSeq.RollbackAsync(CancellationToken.None);
+                        return WorkflowActionResult.AlreadyHandled;
+                    }
+
+                    // Node is CompletedRejected — continue in same tx to instance flip.
+                    return await CompleteInstanceRejectionInTxAsync(
+                        txRejectSeq, nodeInst, instance, task, actorITCode, reason, writeNodeCompletionEvent, ct);
+                }
+                catch
+                {
+                    await txRejectSeq.RollbackAsync(CancellationToken.None);
+                    throw;
+                }
             }
-            nodeFailed = true;
         }
+    }
 
-        // ── Node is CompletedRejected — instance-level rejection ─────────────────
+    /// <summary>
+    /// Shared instance-rejection block: runs INSIDE an open transaction (<paramref name="tx"/>).
+    /// Writes the node-completion event (when <paramref name="writeNodeCompletionEvent"/> is
+    /// <c>true</c>), re-reads the instance for a fresh <c>RowVer</c>, flips
+    /// <c>Running→Rejected</c> via CAS, writes the instance-reject event, commits, then
+    /// runs post-commit timer cancels and the WF-15 notifier.
+    ///
+    /// <para>Canonical write order inside the tx: Node-completion Append → Instance CAS →
+    /// Instance Append → Commit.  The instance re-read sits immediately before the CAS with
+    /// no Append between them (avoids stale <c>RowVer</c> from NextSeq bump).</para>
+    ///
+    /// <para>Lock-order (§0 / Issue #320 PR B): Task→Node→Instance — all task and node
+    /// writes are already in-flight inside the same transaction before this method is
+    /// called.</para>
+    /// </summary>
+    private async Task<WorkflowActionResult> CompleteInstanceRejectionInTxAsync(
+        Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction tx,
+        NodeInstance nodeInst,
+        ProcessInstance instance,
+        ApprovalTask task,
+        string? actorITCode,
+        string? reason,
+        bool writeNodeCompletionEvent,
+        CancellationToken ct)
+    {
+        var rejectPolicy = nodeInst.RejectPolicy;
 
+        // Write node-completion Reject event (inside tx — rolled back if instance CAS fails).
         if (writeNodeCompletionEvent)
         {
-            // Write event log for node completion via rejection.
             await WorkflowEventLogWriter.AppendAsync(
                 Db, instance.ID, instance.TenantCode,
                 EventAction.Reject,
@@ -1853,63 +1931,53 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                 ct: ct);
         }
 
-        // Apply RejectPolicy: both TerminateInstance and ReturnToInitiator mark the instance Rejected.
-        // ReturnToInitiator full WF-12 restart is deferred. // WF-12
-        var rejectPolicy = nodeInst.RejectPolicy;
-
-        // Re-read instance for current RowVer.
+        // Re-read instance for fresh RowVer immediately before the CAS.
+        // NO AppendAsync between this re-read and the CAS (NextSeq bump would make RowVer stale).
         instance = await Db.Set<ProcessInstance>()
             .AsNoTracking()
             .SingleAsync(x => x.ID == instance.ID, ct);
 
-        // C3 (#321): wrap state-change + audit row in one transaction so they are atomic.
-        // Timer cancels (WF-20.2) are intentionally outside the transaction — best-effort hygiene.
-        // Lock-order: touches ProcessInstance only (no Task/Node writes) → ordering-neutral.
-        int rejectRows;
-        await using (var txC3Reject = await Db.Database.BeginTransactionAsync(ct))
+        // Instance Running→Rejected CAS (Instance write — LAST in canonical Task→Node→Instance order).
+        var rejectRows = await GuardedTransition.AdvanceProcessInstanceAsync(
+            Db, instance.ID,
+            expectedState: InstanceState.Running,
+            expectedRowVer: instance.RowVer,
+            nextState: InstanceState.Rejected,
+            ct);
+
+        if (rejectRows == 0)
         {
-            try
-            {
-                rejectRows = await GuardedTransition.AdvanceProcessInstanceAsync(
-                    Db, instance.ID,
-                    expectedState: InstanceState.Running,
-                    expectedRowVer: instance.RowVer,
-                    nextState: InstanceState.Rejected,
-                    ct);
-
-                if (rejectRows == 1)
-                {
-                    // AppendAsync enlists in the ambient txC3Reject (db.Database.CurrentTransaction is not null).
-                    await WorkflowEventLogWriter.AppendAsync(
-                        Db, instance.ID, instance.TenantCode,
-                        EventAction.Reject,
-                        nodeKey: nodeInst.NodeKey,
-                        actorITCode: actorITCode,
-                        beforeState: InstanceState.Running.ToString(),
-                        afterState: InstanceState.Rejected.ToString(),
-                        reason: $"Rejected by '{actorITCode}'. RejectPolicy={rejectPolicy}. {reason}",
-                        ct: ct);
-                }
-
-                await txC3Reject.CommitAsync(ct);
-            }
-            catch
-            {
-                await txC3Reject.RollbackAsync(CancellationToken.None);
-                throw;
-            }
+            // CAS lost — another actor already flipped the instance.
+            await tx.RollbackAsync(CancellationToken.None);
+            return WorkflowActionResult.AlreadyHandled;
         }
 
-        if (rejectRows == 1)
-        {
-            // WF-20.2: instance-wide timer cancel on terminal Rejected state (best-effort, post-commit).
-            var rejectedNodeIds = await Db.Set<NodeInstance>()
-                .Where(n => n.InstanceId == instance.ID)
-                .Select(n => n.ID)
-                .ToListAsync(ct);
-            foreach (var nid in rejectedNodeIds)
-                await GuardedTransition.CancelTimersForNodeAsync(Db, nid, ct);
-        }
+        // Write instance-reject event (inside tx).
+        await WorkflowEventLogWriter.AppendAsync(
+            Db, instance.ID, instance.TenantCode,
+            EventAction.Reject,
+            nodeKey: nodeInst.NodeKey,
+            actorITCode: actorITCode,
+            beforeState: InstanceState.Running.ToString(),
+            afterState: InstanceState.Rejected.ToString(),
+            reason: $"Rejected by '{actorITCode}'. RejectPolicy={rejectPolicy}. {reason}",
+            ct: ct);
+
+        // Commit the transaction (Task cancels + Node CAS + events + Instance CAS all atomic).
+        await tx.CommitAsync(ct);
+
+        // ── Post-commit: timer cancels (WF-20.2) ─────────────────────────────────
+        // WF-20.2: cancel task timer for the rejecting step (Sequential) + instance-wide hygiene.
+        // For Sequential path: also cancel task-specific timer for the rejecting step.
+        await GuardedTransition.CancelTimerForTaskAsync(Db, task.ID, ct);
+
+        // Instance-wide timer cancel on terminal Rejected state (best-effort, post-commit).
+        var rejectedNodeIds = await Db.Set<NodeInstance>()
+            .Where(n => n.InstanceId == instance.ID)
+            .Select(n => n.ID)
+            .ToListAsync(ct);
+        foreach (var nid in rejectedNodeIds)
+            await GuardedTransition.CancelTimersForNodeAsync(Db, nid, ct);
 
         // WF-15 — Notify rejected (post-commit, best-effort).
         if (_notifier is not null)

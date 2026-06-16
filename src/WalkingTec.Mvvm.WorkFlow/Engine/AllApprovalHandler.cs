@@ -309,7 +309,12 @@ internal sealed class AllApprovalHandler : INodeKindHandler
     /// and attempts the rejection CAS when appropriate.
     ///
     /// <para>Returns <c>true</c> if this caller won the rejection CAS.
-    /// Returns <c>false</c> otherwise (gate not met, or another caller already won).</para>
+    /// Returns <c>false</c> otherwise (gate not met, or CAS lost to a concurrent actor).</para>
+    ///
+    /// <para>Canonical lock-order (§0 / Issue #320 PR B): remaining Pending tasks are
+    /// cancelled (Task write) BEFORE the node-completion CAS (Node write).
+    /// MUST be called inside the engine reject transaction; a false return (CAS lost after
+    /// cancel) relies on the caller rolling back both the task cancels and the CAS attempt.</para>
     /// </summary>
     internal static async Task<bool> TryCompleteRejectedAsync(
         DbContext db,
@@ -355,6 +360,16 @@ internal sealed class AllApprovalHandler : INodeKindHandler
             return false;
         }
 
+        // Canonical Task-before-Node order (lock-order §0 / Issue #320 PR B).
+        // Cancel remaining Pending tasks FIRST (Task write), then attempt the node CAS (Node write).
+        // The caller wraps this call in a transaction and rolls back on false, reverting
+        // any task cancels if the CAS is lost to a concurrent actor.
+        await db.Set<ApprovalTask>()
+            .Where(t => t.NodeInstanceId == freshNode.ID && t.State == TaskState.Pending)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(t => t.State, TaskState.Cancelled),
+                ct);
+
         // Attempt the rejection CAS.
         // WF-18 FIX-A/B: assert Generation + ApproverSetEpoch so a concurrent
         // 加签 (or return) that changed the approver set invalidates this CAS.
@@ -370,13 +385,6 @@ internal sealed class AllApprovalHandler : INodeKindHandler
 
         if (rows == 1)
         {
-            // Cancel all remaining Pending tasks.
-            await db.Set<ApprovalTask>()
-                .Where(t => t.NodeInstanceId == freshNode.ID && t.State == TaskState.Pending)
-                .ExecuteUpdateAsync(
-                    s => s.SetProperty(t => t.State, TaskState.Cancelled),
-                    ct);
-
             logger.LogInformation(
                 "AllApprovalHandler: node '{NodeKey}' (id={NodeId}) completed as Rejected " +
                 "(RejectGate={Gate}, actor='{Actor}').",
@@ -385,7 +393,7 @@ internal sealed class AllApprovalHandler : INodeKindHandler
         }
 
         logger.LogDebug(
-            "AllApprovalHandler.TryCompleteRejected: node {NodeId} rejection CAS returned 0 — concurrent actor already completed.",
+            "AllApprovalHandler.TryCompleteRejected: node {NodeId} rejection CAS returned 0 — concurrent actor already completed (caller will rollback).",
             freshNode.ID);
         return false;
     }
