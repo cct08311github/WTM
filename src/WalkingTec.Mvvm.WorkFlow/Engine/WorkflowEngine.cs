@@ -674,30 +674,168 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             // → AdvanceWithActorAsync → AdvanceCoreAsync). Gateway forks and non-Approval nodes
             // pass null (actingApproverITCode is null for auto-advance paths).
             var decidedByForApproval = nodeDef.Kind == NodeKind.Approval ? actingApproverITCode : null;
-            var completeRows = await GuardedTransition.CompleteNodeInstanceAsync(
-                Db, activeNode.ID, activeNode.RowVer, NodeState.CompletedApproved,
-                decidedBy: decidedByForApproval,
-                generation: instance.Generation, ct: ct);
 
-            if (completeRows == 0)
+            // End node reached → approve the instance (T2 txAdvanceApproveEnd, #320 W2).
+            if (nodeDef.Kind == NodeKind.End)
             {
-                _logger.LogDebug(
-                    "AdvanceTokenAsync: NodeInstance {NodeId} already completed by concurrent caller.",
-                    activeNode.ID);
-                return WorkflowActionResult.AlreadyHandled;
+                // #320 PR A — T2 txAdvanceApproveEnd: widen txC3Approve upward to include
+                // CompleteNode(End) so that a crash between CompleteNode and
+                // AdvanceProcessInstance cannot strand a CompletedApproved End node on
+                // a still-Running instance.
+                //
+                // Lock-order: NodeInstance (write) → ProcessInstance (write) — canonical.
+                // AppendAsync calls come AFTER the AdvanceProcessInstance CAS (not before)
+                // because AllocateSeqAsync bumps ProcessInstance.RowVer; any Append before
+                // the CAS would make the captured RowVer stale → CAS returns 0 → happy-path
+                // strand (stale-RowVer regression — do NOT reintroduce).
+                //
+                // Timer cancels are best-effort post-commit — Armed timers whose node is in
+                // a terminal generation will fire-and-no-op (gen-gated CAS) without harming
+                // correctness.
+                await using (var txAdvanceApproveEnd = await Db.Database.BeginTransactionAsync(ct))
+                {
+                    try
+                    {
+                        // Step 1: complete the End NodeInstance (CAS guard closes W2 window a).
+                        var completeRows = await GuardedTransition.CompleteNodeInstanceAsync(
+                            Db, activeNode.ID, activeNode.RowVer, NodeState.CompletedApproved,
+                            decidedBy: decidedByForApproval,
+                            generation: instance.Generation, ct: ct);
+
+                        if (completeRows == 0)
+                        {
+                            await txAdvanceApproveEnd.RollbackAsync(CancellationToken.None);
+                            _logger.LogDebug(
+                                "AdvanceTokenAsync: NodeInstance {NodeId} (End) already completed by concurrent caller.",
+                                activeNode.ID);
+                            return WorkflowActionResult.AlreadyHandled;
+                        }
+
+                        // Step 2: re-read instance for fresh RowVer BEFORE any AppendAsync.
+                        // AppendAsync calls AllocateSeqAsync which bumps RowVer; reading AFTER
+                        // would yield a stale value → AdvanceProcessInstanceAsync CAS returns 0.
+                        instance = await Db.Set<ProcessInstance>()
+                            .AsNoTracking()
+                            .SingleAsync(x => x.ID == instance.ID, ct);
+
+                        // Step 3: advance instance Running → Approved (CAS guard closes W2 window b).
+                        var approveRows = await GuardedTransition.AdvanceProcessInstanceAsync(
+                            Db, instance.ID,
+                            expectedState: InstanceState.Running,
+                            expectedRowVer: instance.RowVer,
+                            nextState: InstanceState.Approved,
+                            ct);
+
+                        if (approveRows != 1)
+                        {
+                            await txAdvanceApproveEnd.RollbackAsync(CancellationToken.None);
+                            _logger.LogDebug(
+                                "AdvanceTokenAsync: ProcessInstance {InstanceId} state-flip lost to concurrent caller.",
+                                instance.ID);
+                            return WorkflowActionResult.AlreadyHandled;
+                        }
+
+                        // Steps 4 & 5: audit appends — enlisting in ambient txAdvanceApproveEnd.
+                        // Node-level event: End node Activated → CompletedApproved.
+                        await WorkflowEventLogWriter.AppendAsync(
+                            Db, instance.ID, instance.TenantCode,
+                            EventAction.AutoAdvance,
+                            nodeKey: activeNode.NodeKey,
+                            actorITCode: null,
+                            beforeState: NodeState.Activated.ToString(),
+                            afterState: NodeState.CompletedApproved.ToString(),
+                            ct: ct);
+
+                        // Instance-level event: Running → Approved.
+                        await WorkflowEventLogWriter.AppendAsync(
+                            Db, instance.ID, instance.TenantCode,
+                            EventAction.AutoAdvance,
+                            nodeKey: activeNode.NodeKey,
+                            actorITCode: null,
+                            beforeState: InstanceState.Running.ToString(),
+                            afterState: InstanceState.Approved.ToString(),
+                            ct: ct);
+
+                        await txAdvanceApproveEnd.CommitAsync(ct);
+                    }
+                    catch
+                    {
+                        await txAdvanceApproveEnd.RollbackAsync(CancellationToken.None);
+                        throw;
+                    }
+                }
+
+                // WF-20.2: instance-wide timer cancel — best-effort post-commit.
+                var allNodeIds = await Db.Set<NodeInstance>()
+                    .Where(n => n.InstanceId == instance.ID)
+                    .Select(n => n.ID)
+                    .ToListAsync(ct);
+                foreach (var nid in allNodeIds)
+                    await GuardedTransition.CancelTimersForNodeAsync(Db, nid, ct);
+
+                return WorkflowActionResult.InstanceApproved;
             }
 
-            // WF-20.2: cancel any Armed timers on this node (auto-complete hygiene).
+            // Non-End node: T1 txAdvanceComplete (#320 W1).
+            // Wraps CompleteNode(source) + MintNode(successor) + Append in one atomic transaction
+            // so a crash between CompleteNode and MintNode cannot strand a CompletedApproved source
+            // node with no successor minted.
+            //
+            // Lock-order: NodeInstance (write) only — ProcessInstance is untouched here
+            // (Seq bump via AllocateSeqAsync is safe; it bumps RowVer on the same row the
+            // AdvanceProcessInstance CAS in T2 will later read with a fresh re-read).
+            await using (var txAdvanceComplete = await Db.Database.BeginTransactionAsync(ct))
+            {
+                try
+                {
+                    var completeRows = await GuardedTransition.CompleteNodeInstanceAsync(
+                        Db, activeNode.ID, activeNode.RowVer, NodeState.CompletedApproved,
+                        decidedBy: decidedByForApproval,
+                        generation: instance.Generation, ct: ct);
+
+                    if (completeRows == 0)
+                    {
+                        await txAdvanceComplete.RollbackAsync(CancellationToken.None);
+                        _logger.LogDebug(
+                            "AdvanceTokenAsync: NodeInstance {NodeId} already completed by concurrent caller.",
+                            activeNode.ID);
+                        return WorkflowActionResult.AlreadyHandled;
+                    }
+
+                    // Mint the successor node inside the same transaction (closes W1 crash window).
+                    if (nextKey is not null)
+                    {
+                        var nextNodeDef = graph.Nodes.FirstOrDefault(
+                            n => string.Equals(n.NodeKey, nextKey, StringComparison.Ordinal))
+                            ?? throw new InvalidOperationException(
+                                   $"NextKey '{nextKey}' not found as a node in graph '{graph.Key}'.");
+
+                        // WF-19: pass graph.Key so delegation scope filtering works on the minted node.
+                        await MintNodeInstanceAsync(instance, nextNodeDef, ct, definitionCode: graph.Key);
+                    }
+
+                    await WorkflowEventLogWriter.AppendAsync(
+                        Db, instance.ID, instance.TenantCode,
+                        EventAction.AutoAdvance,
+                        nodeKey: activeNode.NodeKey,
+                        actorITCode: null,
+                        beforeState: NodeState.Activated.ToString(),
+                        afterState: NodeState.CompletedApproved.ToString(),
+                        ct: ct);
+
+                    await txAdvanceComplete.CommitAsync(ct);
+                }
+                catch
+                {
+                    await txAdvanceComplete.RollbackAsync(CancellationToken.None);
+                    throw;
+                }
+            }
+
+            // WF-20.2: cancel any Armed timers on this node — best-effort, post-commit.
             await GuardedTransition.CancelTimersForNodeAsync(Db, activeNode.ID, ct);
 
-            await WorkflowEventLogWriter.AppendAsync(
-                Db, instance.ID, instance.TenantCode,
-                EventAction.AutoAdvance,
-                nodeKey: activeNode.NodeKey,
-                actorITCode: null,
-                beforeState: NodeState.Activated.ToString(),
-                afterState: NodeState.CompletedApproved.ToString(),
-                ct: ct);
+            return WorkflowActionResult.NodeCompleted;
         }
         else
         {
@@ -722,82 +860,6 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             // Branches are now Pending — the outer drain loop will pick them up.
             return WorkflowActionResult.NodeCompleted;
         }
-
-        // End node reached → approve the instance.
-        if (nodeDef.Kind == NodeKind.End)
-        {
-            // Re-read instance for current RowVer.
-            instance = await Db.Set<ProcessInstance>()
-                .AsNoTracking()
-                .SingleAsync(x => x.ID == instance.ID, ct);
-
-            // C3 (#321): wrap state-change + audit row in one transaction so they are atomic.
-            // Timer cancels (WF-20.2) are intentionally outside the transaction — they are
-            // best-effort hygiene; Armed timers whose node is in a terminal generation will
-            // fire-and-no-op (gen-gated CAS) without harming correctness.
-            // Lock-order: this transaction touches ProcessInstance only (no Task/Node writes),
-            // so it is ordering-neutral and cannot participate in an ABBA cycle.
-            int approveRows;
-            await using (var txC3Approve = await Db.Database.BeginTransactionAsync(ct))
-            {
-                try
-                {
-                    approveRows = await GuardedTransition.AdvanceProcessInstanceAsync(
-                        Db, instance.ID,
-                        expectedState: InstanceState.Running,
-                        expectedRowVer: instance.RowVer,
-                        nextState: InstanceState.Approved,
-                        ct);
-
-                    if (approveRows == 1)
-                    {
-                        // AppendAsync enlists in the ambient txC3Approve (db.Database.CurrentTransaction is not null).
-                        await WorkflowEventLogWriter.AppendAsync(
-                            Db, instance.ID, instance.TenantCode,
-                            EventAction.AutoAdvance,
-                            nodeKey: activeNode.NodeKey,
-                            actorITCode: null,
-                            beforeState: InstanceState.Running.ToString(),
-                            afterState: InstanceState.Approved.ToString(),
-                            ct: ct);
-                    }
-
-                    await txC3Approve.CommitAsync(ct);
-                }
-                catch
-                {
-                    await txC3Approve.RollbackAsync(CancellationToken.None);
-                    throw;
-                }
-            }
-
-            if (approveRows == 1)
-            {
-                // WF-20.2: instance-wide timer cancel on terminal Approved state (best-effort, post-commit).
-                var allNodeIds = await Db.Set<NodeInstance>()
-                    .Where(n => n.InstanceId == instance.ID)
-                    .Select(n => n.ID)
-                    .ToListAsync(ct);
-                foreach (var nid in allNodeIds)
-                    await GuardedTransition.CancelTimersForNodeAsync(Db, nid, ct);
-            }
-
-            return WorkflowActionResult.InstanceApproved;
-        }
-
-        // Mint the next NodeInstance for non-gateway, non-End, non-Join-routing tokens.
-        if (nextKey is not null)
-        {
-            var nextNodeDef = graph.Nodes.FirstOrDefault(
-                n => string.Equals(n.NodeKey, nextKey, StringComparison.Ordinal))
-                ?? throw new InvalidOperationException(
-                       $"NextKey '{nextKey}' not found as a node in graph '{graph.Key}'.");
-
-            // WF-19: pass graph.Key so delegation scope filtering works on the minted node.
-            await MintNodeInstanceAsync(instance, nextNodeDef, ct, definitionCode: graph.Key);
-        }
-
-        return WorkflowActionResult.NodeCompleted;
     }
 
     /// <summary>
