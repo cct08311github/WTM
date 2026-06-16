@@ -1,5 +1,11 @@
 # 更新日志
 
+## [Unreleased]
+
+### Fixed
+
+- **WorkFlow #373 — residual permanent-strand window on Sequential approve/reject (follow-up to #320).** The v10.12.2 #320 fix wrapped the intra-transaction advance windows, but on the human **Sequential** approve and reject paths the task-claim CAS still committed *standalone, outside* the advance transaction. A crash / cancel / connection-drop between the claim commit and the advance commit left the instance permanently stranded — a terminal-state task at the `SequencePointer`, the `NodeInstance` still `Activated`, the `ProcessInstance` still `Running`, and zero actionable `Pending` tasks — with no recovery path (retried action → `AlreadyHandled`; next assignee → guard-rejected; `AdvanceAsync` → `Blocked`; the timer reaper only reclaims `Returning` instances). The Sequential human approve (mid-chain + last-step) and reject claim CAS now execute as the **first write inside the same transaction** as the next-task activation + pointer-advance (approve) or sibling-cancel + node-completion + instance-flip (reject), so claim and advance share fate: any crash before commit rolls the whole step back to a clean, re-drivable state. Canonical **Task-before-Node** lock order is preserved (a strict `{ApprovalTask, NodeInstance[, ProcessInstance last]}` set, so it cannot reintroduce the #290/#311 ABBA deadlock), the transactions are wrapped in the established `RunWithDeadlockRetryAsync` envelope, and the audit `WorkflowEventLog` append stays outside the transaction (post-commit). No change to happy-path behaviour, the All/Any approval modes, or the timer/system auto-approve path. The remaining timer/system-claim and other-entry-point windows are tracked as follow-ups (#359 / #360). Adds 8 WorkFlow regression tests including fault-injected crash-window rollback proofs and a Task-before-Node lock-order structural assertion.
+
 ## [10.12.2] - 2026-06-16
 
 ### Security

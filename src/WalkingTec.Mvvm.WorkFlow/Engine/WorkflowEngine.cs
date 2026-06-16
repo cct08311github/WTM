@@ -1273,6 +1273,127 @@ internal sealed class WorkflowEngine : IWorkflowEngine
 
         var now = DateTime.UtcNow;
 
+        // 8+10. Sequential mode: atomic claim + pointer-advance in ONE transaction (WF-373).
+        //        All/Any mode: standalone claim CAS below (unchanged pre-WF-373 path).
+        if (approveMode == ApproveMode.Sequential)
+        {
+            // WF-373: claim + mid-chain pointer-advance are now ONE atomic unit.
+            var (atomicResult, atomicExtra) = await ExecuteSequentialApproveAtomicAsync(
+                taskId,
+                nextTaskState: TaskState.Approved,
+                isAtActionDelegated: _options.DelegationWindowMode == DelegationWindowMode.AtAction && task.DelegationExpiresUtc.HasValue,
+                now: now,
+                comment: comment,
+                nodeInst: nodeInst,
+                instance: instance,
+                ct: ct);
+
+            if (atomicResult.Code == WorkflowActionCode.DeadlockRetryExhausted)
+                return atomicResult;
+
+            if (atomicResult.IsAlreadyHandled)
+                return atomicResult;
+
+            // Atomic helper committed — write Approve event post-commit (standalone).
+            await WorkflowEventLogWriter.AppendAsync(
+                Db, instance.ID, instance.TenantCode,
+                EventAction.Approve,
+                nodeKey: nodeInst.NodeKey,
+                actorITCode: actorITCode,
+                beforeState: TaskState.Pending.ToString(),
+                afterState: TaskState.Approved.ToString(),
+                reason: comment,
+                ct: ct);
+
+            // WF-15 — Notify approved (post-commit, best-effort).
+            if (_notifier is not null)
+            {
+                try { await _notifier.NotifyApprovedAsync(instance, nodeInst, task, actorITCode, ct); }
+                catch (Exception ex) { _logger.LogError(ex, "WF-15 NotifyApprovedAsync (Sequential WF-373) failed for task {TaskId}.", taskId); }
+            }
+
+            if (atomicExtra.IsLastStep)
+            {
+                // Last step committed — call AdvanceAsync to route the engine onward.
+                var seqResult = await AdvanceAsync(instance.ID, ct);
+                // WF-15 — post-advance instance completion notification (best-effort).
+                if (_notifier is not null)
+                {
+                    try
+                    {
+                        if (seqResult.Code == WorkflowActionCode.InstanceApproved)
+                        {
+                            var freshInst = await Db.Set<ProcessInstance>().AsNoTracking().SingleAsync(x => x.ID == instance.ID, CancellationToken.None);
+                            await _notifier.NotifyInstanceCompletedAsync(freshInst, ct);
+                        }
+                        else
+                        {
+                            await NotifyFirstPendingTasksAsync(instance.ID, instance, ct);
+                        }
+                    }
+                    catch (Exception ex) { _logger.LogError(ex, "WF-15 post-advance notification (Sequential WF-373) failed for instance {InstanceId}.", instance.ID); }
+                }
+                return seqResult;
+            }
+            else
+            {
+                // Mid-chain: pointer advanced, next step activated (or AutoApproved).
+
+                // WF-20.2: cancel completing step's task timer; re-arm next step if configured.
+                await GuardedTransition.CancelTimerForTaskAsync(Db, taskId, ct);
+                if (_businessCalendar is not null)
+                {
+                    var freshNodeForPointer = await Db.Set<NodeInstance>()
+                        .AsNoTracking()
+                        .SingleAsync(n => n.ID == nodeInst.ID, ct);
+                    var nextPointer = freshNodeForPointer.SequencePointer;
+                    var stepBNodeDef = await LoadNodeDefAsync(instance.DefinitionVersionId, nodeInst.NodeKey, ct);
+                    if (stepBNodeDef?.Timeout is not null)
+                    {
+                        var nextPendingForArm = await Db.Set<ApprovalTask>()
+                            .AsNoTracking()
+                            .FirstOrDefaultAsync(
+                                t => t.NodeInstanceId == nodeInst.ID
+                                     && t.SequenceOrder == nextPointer
+                                     && t.State == TaskState.Pending,
+                                ct);
+                        if (nextPendingForArm is not null)
+                        {
+                            await ArmTaskTimerIfConfiguredAsync(
+                                nextPendingForArm, freshNodeForPointer, stepBNodeDef, DateTime.UtcNow, ct);
+                        }
+                    }
+                }
+
+                if (atomicExtra.NextIsAutoApproved)
+                {
+                    // Auto-approved step: recursively advance until a real pending step or completion.
+                    return await AdvanceAsync(instance.ID, ct);
+                }
+
+                // WF-15 — Notify the newly activated task assignee (post-commit, best-effort).
+                if (_notifier is not null)
+                {
+                    try
+                    {
+                        var freshNodeForNotify = await Db.Set<NodeInstance>()
+                            .AsNoTracking()
+                            .SingleAsync(n => n.ID == nodeInst.ID, ct);
+                        var nextPointerForNotify = freshNodeForNotify.SequencePointer;
+                        var nextPendingTask = await Db.Set<ApprovalTask>()
+                            .AsNoTracking()
+                            .FirstOrDefaultAsync(
+                                t => t.NodeInstanceId == nodeInst.ID && t.SequenceOrder == nextPointerForNotify && t.State == TaskState.Pending,
+                                ct);
+                        if (nextPendingTask is not null)
+                            await _notifier.NotifyTaskAssignedAsync(instance, freshNodeForNotify, nextPendingTask, ct);
+                    }
+                    catch (Exception ex) { _logger.LogError(ex, "WF-15 NotifyTaskAssignedAsync (Sequential WF-373) failed for instance {InstanceId}.", instance.ID); }
+                }
+                return WorkflowActionResult.Advanced;
+            }
+        }
+
         // 8. CAS: claim the task as Approved.
         //    WF-19 #284.4 — AtAction routing:
         //    When DelegationWindowMode==AtAction AND the task has a delegation window, route
@@ -1422,6 +1543,241 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         return await ExecuteApproveCompletionAsync(
             task.ID, nodeInst, instance, approveMode, ct, actorITCode,
             incrementAlreadyDone: approveMode == ApproveMode.All || approveMode == ApproveMode.Any);
+    }
+
+    // ── WF-373: Sequential approve atomic helper (claim + pointer-advance in one tx) ──
+
+    /// <summary>
+    /// Atomic helper for the Sequential approve path: claim the task AND advance the
+    /// SequencePointer in ONE transaction, eliminating the crash window between a
+    /// standalone claim CAS and the separate pointer-advance tx (WF-373).
+    /// </summary>
+    private async Task<(WorkflowActionResult result, SequentialAtomicExtra extra)>
+        ExecuteSequentialApproveAtomicAsync(
+            Guid taskId,
+            TaskState nextTaskState,
+            bool isAtActionDelegated,
+            DateTime now,
+            string? comment,
+            NodeInstance nodeInst,
+            ProcessInstance instance,
+            CancellationToken ct)
+    {
+        var defaultExtra = new SequentialAtomicExtra(IsLastStep: false, NextIsAutoApproved: false);
+
+        return await RunWithDeadlockRetryAsync(async innerCt =>
+        {
+            if (Db.Database.CurrentTransaction is not null)
+                throw new InvalidOperationException(
+                    "WF-373 atomic helper must not be nested inside an ambient transaction.");
+
+            await using var tx = await Db.Database.BeginTransactionAsync(innerCt);
+            try
+            {
+
+            // Re-read task inside tx for idempotent re-entry guard.
+            var freshTask = await Db.Set<ApprovalTask>()
+                .AsNoTracking()
+                .SingleOrDefaultAsync(t => t.ID == taskId, innerCt);
+
+            if (freshTask is null || freshTask.State != TaskState.Pending)
+            {
+                _logger.LogDebug(
+                    "ExecuteSequentialApproveAtomicAsync: task {TaskId} re-read state={State} (expected Pending) — AlreadyHandled.",
+                    taskId, freshTask?.State);
+                await tx.RollbackAsync(CancellationToken.None);
+                return (WorkflowActionResult.AlreadyHandled, defaultExtra);
+            }
+
+            // Step 0 — CLAIM (ApprovalTask write, INSIDE the tx — this is the key fix).
+            int claimedRows;
+            if (isAtActionDelegated)
+            {
+                claimedRows = await GuardedTransition.ClaimDelegatedTaskAsync(
+                    Db, taskId,
+                    expectedRowVer: freshTask.RowVer,
+                    nextState: nextTaskState,
+                    actedAtUtc: now,
+                    comment: comment,
+                    ct: innerCt);
+            }
+            else
+            {
+                claimedRows = await GuardedTransition.ClaimApprovalTaskAsync(
+                    Db, taskId,
+                    expectedRowVer: freshTask.RowVer,
+                    nextState: nextTaskState,
+                    actedAtUtc: now,
+                    comment: comment,
+                    ct: innerCt);
+            }
+
+            if (claimedRows == 0)
+            {
+                _logger.LogDebug(
+                    "ExecuteSequentialApproveAtomicAsync: task {TaskId} claim CAS returned 0 — AlreadyHandled.",
+                    taskId);
+                await tx.RollbackAsync(CancellationToken.None);
+                return (WorkflowActionResult.AlreadyHandled, defaultExtra);
+            }
+
+            // HIGH-2: stamp WindowVerifiedUtc for AtAction claims (audit parity with All/Any path).
+            // Non-guarded audit-only update; mirrors the post-claim stamp in ApproveTaskAsync ~1447-1451.
+            // Task-before-Node order: this is still an ApprovalTask write, before any NodeInstance write.
+            if (isAtActionDelegated)
+            {
+                await Db.Set<ApprovalTask>()
+                    .Where(t => t.ID == taskId)
+                    .ExecuteUpdateAsync(
+                        s => s.SetProperty(t => t.WindowVerifiedUtc, now),
+                        innerCt);
+            }
+
+            // Read the node's current pointer state (inside tx).
+            var freshNodeForPointer = await Db.Set<NodeInstance>()
+                .AsNoTracking()
+                .SingleAsync(n => n.ID == nodeInst.ID, innerCt);
+
+            if (freshNodeForPointer.State != NodeState.Activated)
+            {
+                _logger.LogDebug(
+                    "ExecuteSequentialApproveAtomicAsync: NodeInstance {NodeId} state={State} (expected Activated) — AlreadyHandled.",
+                    nodeInst.ID, freshNodeForPointer.State);
+                await tx.RollbackAsync(CancellationToken.None);
+                return (WorkflowActionResult.AlreadyHandled, defaultExtra);
+            }
+
+            var nextPointer = freshNodeForPointer.SequencePointer + 1;
+            var totalRequired = freshNodeForPointer.TotalRequired;
+
+            if (nextPointer < totalRequired)
+            {
+                // Mid-chain: more steps remain.
+
+                // Step 1 — ApprovalTask write (Task-before-Node lock order).
+                var activateRows = await Db.Set<ApprovalTask>()
+                    .Where(t => t.NodeInstanceId == nodeInst.ID
+                                 && t.SequenceOrder == nextPointer
+                                 && (t.State == TaskState.NotYetActive || t.State == TaskState.AddedPending))
+                    .ExecuteUpdateAsync(
+                        s => s.SetProperty(t => t.State, TaskState.Pending),
+                        innerCt);
+
+                // Re-read node to get fresh RowVer for the CAS (inside tx).
+                var freshNodeForCas = await Db.Set<NodeInstance>()
+                    .AsNoTracking()
+                    .SingleAsync(n => n.ID == nodeInst.ID, innerCt);
+
+                if (freshNodeForCas.State != NodeState.Activated)
+                {
+                    _logger.LogDebug(
+                        "ExecuteSequentialApproveAtomicAsync: NodeInstance {NodeId} became {State} before pointer advance — AlreadyHandled.",
+                        nodeInst.ID, freshNodeForCas.State);
+                    await tx.RollbackAsync(CancellationToken.None);
+                    return (WorkflowActionResult.AlreadyHandled, defaultExtra);
+                }
+
+                // Step 2 — NodeInstance pointer CAS (AFTER the task write — Task-before-Node order).
+                // WF-18 FIX-F: carry ApproverSetEpoch guard VERBATIM.
+                var advanceRows = await Db.Set<NodeInstance>()
+                    .Where(n => n.ID == nodeInst.ID
+                                 && n.State == NodeState.Activated
+                                 && n.RowVer == freshNodeForCas.RowVer
+                                 && n.SequencePointer == freshNodeForCas.SequencePointer
+                                 && n.ApproverSetEpoch == freshNodeForCas.ApproverSetEpoch)
+                    .ExecuteUpdateAsync(
+                        s => s.SetProperty(n => n.SequencePointer, nextPointer)
+                               .SetProperty(n => n.RowVer, x => x.RowVer + 1),
+                        innerCt);
+
+                if (advanceRows == 0)
+                {
+                    _logger.LogDebug(
+                        "ExecuteSequentialApproveAtomicAsync: NodeInstance {NodeId} pointer advance CAS returned 0 — AlreadyHandled.",
+                        nodeInst.ID);
+                    await tx.RollbackAsync(CancellationToken.None);
+                    return (WorkflowActionResult.AlreadyHandled, defaultExtra);
+                }
+
+                // Check for AutoApproved mid-chain.
+                bool nextIsAutoApproved = false;
+                if (activateRows == 0)
+                {
+                    var nextTask = await Db.Set<ApprovalTask>()
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync(t => t.NodeInstanceId == nodeInst.ID
+                                                   && t.SequenceOrder == nextPointer, innerCt);
+
+                    if (nextTask?.State == TaskState.AutoApproved)
+                    {
+                        nextIsAutoApproved = true;
+                        _logger.LogDebug(
+                            "ExecuteSequentialApproveAtomicAsync: next task (order {Order}) is AutoApproved — will recurse post-commit.",
+                            nextPointer);
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "ExecuteSequentialApproveAtomicAsync: could not activate next task at order {Order} for node {NodeId}.",
+                            nextPointer, nodeInst.ID);
+                    }
+                    // DO NOT roll back — the pointer advance MUST commit.
+                }
+
+                await tx.CommitAsync(innerCt);
+                return (WorkflowActionResult.Advanced,
+                        new SequentialAtomicExtra(IsLastStep: false, NextIsAutoApproved: nextIsAutoApproved));
+            }
+            else
+            {
+                // Last step: advance pointer to totalRequired so CanCompleteAsync returns true.
+
+                // Re-read for fresh RowVer (inside tx).
+                var freshNodeLast = await Db.Set<NodeInstance>()
+                    .AsNoTracking()
+                    .SingleAsync(n => n.ID == nodeInst.ID, innerCt);
+
+                if (freshNodeLast.State != NodeState.Activated)
+                {
+                    _logger.LogDebug(
+                        "ExecuteSequentialApproveAtomicAsync: NodeInstance {NodeId} became {State} before last-step pointer CAS — AlreadyHandled.",
+                        nodeInst.ID, freshNodeLast.State);
+                    await tx.RollbackAsync(CancellationToken.None);
+                    return (WorkflowActionResult.AlreadyHandled, defaultExtra);
+                }
+
+                // WF-18 FIX-F: ApproverSetEpoch guard VERBATIM.
+                var advanceRows = await Db.Set<NodeInstance>()
+                    .Where(n => n.ID == nodeInst.ID
+                                 && n.State == NodeState.Activated
+                                 && n.RowVer == freshNodeLast.RowVer
+                                 && n.ApproverSetEpoch == freshNodeLast.ApproverSetEpoch)
+                    .ExecuteUpdateAsync(
+                        s => s.SetProperty(n => n.SequencePointer, totalRequired)
+                               .SetProperty(n => n.RowVer, x => x.RowVer + 1),
+                        innerCt);
+
+                if (advanceRows == 0)
+                {
+                    _logger.LogDebug(
+                        "ExecuteSequentialApproveAtomicAsync: NodeInstance {NodeId} last-step pointer CAS returned 0 — AlreadyHandled.",
+                        nodeInst.ID);
+                    await tx.RollbackAsync(CancellationToken.None);
+                    return (WorkflowActionResult.AlreadyHandled, defaultExtra);
+                }
+
+                await tx.CommitAsync(innerCt);
+                return (WorkflowActionResult.Advanced,
+                        new SequentialAtomicExtra(IsLastStep: true, NextIsAutoApproved: false));
+            }
+
+            } // end try
+            catch
+            {
+                await tx.RollbackAsync(CancellationToken.None);
+                throw;
+            }
+        }, defaultExtra, ct);
     }
 
     // ── WF-20.4: shared approve post-claim completion helper ──────────────────
@@ -1772,6 +2128,52 @@ internal sealed class WorkflowEngine : IWorkflowEngine
 
         var now = DateTime.UtcNow;
 
+        // 8+9. Sequential mode: atomic claim + node/instance rejection in ONE transaction (WF-373).
+        //      All/Any mode: standalone claim CAS below (unchanged pre-WF-373 path).
+        if (rejectMode == ApproveMode.Sequential)
+        {
+            bool isAtActionDelegatedSeqReject = _options.DelegationWindowMode == DelegationWindowMode.AtAction
+                                                && task.DelegationExpiresUtc.HasValue;
+            var seqRejectResult = await ExecuteSequentialRejectAtomicAsync(
+                taskId,
+                isAtActionDelegated: isAtActionDelegatedSeqReject,
+                now: now,
+                reason: reason,
+                nodeInst: nodeInst,
+                instance: instance,
+                task: task,
+                actorITCode: actorITCode,
+                ct: ct);
+
+            if (seqRejectResult.Code == WorkflowActionCode.DeadlockRetryExhausted)
+                return seqRejectResult;
+
+            // AtAction disambiguate: if the atomic helper returns AlreadyHandled and we
+            // were in AtAction mode, check if the real reason is DelegationExpired.
+            // Mirrors the original standalone-CAS disambiguation in the All/Any path below.
+            if (seqRejectResult.IsAlreadyHandled && isAtActionDelegatedSeqReject)
+            {
+                var freshForExpiry = await Db.Set<ApprovalTask>()
+                    .AsNoTracking()
+                    .Select(t => new { t.ID, t.State, t.DelegationExpiresUtc })
+                    .SingleOrDefaultAsync(t => t.ID == taskId, ct);
+
+                if (freshForExpiry is not null
+                    && freshForExpiry.State == TaskState.Pending
+                    && freshForExpiry.DelegationExpiresUtc.HasValue
+                    && now > freshForExpiry.DelegationExpiresUtc.Value)
+                {
+                    _logger.LogWarning(
+                        "RejectTaskAsync (Sequential WF-373): task {TaskId} AtAction window expired at {Expiry} (now={Now}). " +
+                        "Task stays Pending; manual reassignment or revoke required.",
+                        taskId, freshForExpiry.DelegationExpiresUtc.Value, now);
+                    return WorkflowActionResult.DelegationExpired;
+                }
+            }
+
+            return seqRejectResult;
+        }
+
         // 8. CAS: claim the task as Rejected.
         // FIX-3: AtAction window applies to ALL actions by the delegatee, not just Approve.
         // Under AtAction, an expired delegatee must NOT be able to reject (which in 会签 can
@@ -1846,6 +2248,136 @@ internal sealed class WorkflowEngine : IWorkflowEngine
 
         // 9. Mode-specific rejection logic — shared with SystemContinueTaskAsync (WF-20.4).
         return await ExecuteRejectCompletionAsync(task.ID, nodeInst, instance, task, actorITCode, reason, rejectMode, writeNodeCompletionEvent: true, ct);
+    }
+
+    // ── WF-373: Sequential reject atomic helper (claim + node completion in one tx) ──
+
+    /// <summary>
+    /// Atomic helper for the Sequential reject path: claim the task AND complete the
+    /// node/instance rejection in ONE transaction (WF-373).
+    /// </summary>
+    private async Task<WorkflowActionResult> ExecuteSequentialRejectAtomicAsync(
+        Guid taskId,
+        bool isAtActionDelegated,
+        DateTime now,
+        string? reason,
+        NodeInstance nodeInst,
+        ProcessInstance instance,
+        ApprovalTask task,
+        string? actorITCode,
+        CancellationToken ct)
+    {
+        return await RunWithDeadlockRetryAsync(async innerCt =>
+        {
+            if (Db.Database.CurrentTransaction is not null)
+                throw new InvalidOperationException(
+                    "WF-373 atomic reject helper must not be nested inside an ambient transaction.");
+
+            await using var tx = await Db.Database.BeginTransactionAsync(innerCt);
+            try
+            {
+
+            // Re-read task inside tx for idempotent re-entry guard.
+            var freshTask = await Db.Set<ApprovalTask>()
+                .AsNoTracking()
+                .SingleOrDefaultAsync(t => t.ID == taskId, innerCt);
+
+            if (freshTask is null || freshTask.State != TaskState.Pending)
+            {
+                _logger.LogDebug(
+                    "ExecuteSequentialRejectAtomicAsync: task {TaskId} re-read state={State} (expected Pending) — AlreadyHandled.",
+                    taskId, freshTask?.State);
+                await tx.RollbackAsync(CancellationToken.None);
+                return WorkflowActionResult.AlreadyHandled;
+            }
+
+            // Step 0 — CLAIM (ApprovalTask write INSIDE the tx — this is the key WF-373 fix).
+            int claimedRows;
+            if (isAtActionDelegated)
+            {
+                claimedRows = await GuardedTransition.ClaimDelegatedTaskAsync(
+                    Db, taskId,
+                    expectedRowVer: freshTask.RowVer,
+                    nextState: TaskState.Rejected,
+                    actedAtUtc: now,
+                    comment: reason,
+                    ct: innerCt);
+            }
+            else
+            {
+                claimedRows = await GuardedTransition.ClaimApprovalTaskAsync(
+                    Db, taskId,
+                    expectedRowVer: freshTask.RowVer,
+                    nextState: TaskState.Rejected,
+                    actedAtUtc: now,
+                    comment: reason,
+                    ct: innerCt);
+            }
+
+            if (claimedRows == 0)
+            {
+                _logger.LogDebug(
+                    "ExecuteSequentialRejectAtomicAsync: task {TaskId} claim CAS returned 0 — AlreadyHandled.",
+                    taskId);
+                await tx.RollbackAsync(CancellationToken.None);
+                return WorkflowActionResult.AlreadyHandled;
+            }
+
+            // HIGH-2: stamp WindowVerifiedUtc for AtAction claims (audit parity with All/Any path).
+            // Non-guarded audit-only update; mirrors the post-claim stamp in RejectTaskAsync ~2194-2199.
+            // Task-before-Node order: still an ApprovalTask write, before cancel and node-completion writes.
+            if (isAtActionDelegated)
+            {
+                await Db.Set<ApprovalTask>()
+                    .Where(t => t.ID == taskId)
+                    .ExecuteUpdateAsync(
+                        s => s.SetProperty(t => t.WindowVerifiedUtc, now),
+                        innerCt);
+            }
+
+            // Cancel remaining NotYetActive and AddedPending tasks (Task write — canonical order).
+            await Db.Set<ApprovalTask>()
+                .Where(t => t.NodeInstanceId == nodeInst.ID
+                             && (t.State == TaskState.NotYetActive || t.State == TaskState.AddedPending))
+                .ExecuteUpdateAsync(
+                    s => s.SetProperty(t => t.State, TaskState.Cancelled),
+                    innerCt);
+
+            // Complete the node as CompletedRejected (Node write, CAS on RowVer).
+            var freshNode = await Db.Set<NodeInstance>()
+                .AsNoTracking()
+                .SingleAsync(n => n.ID == nodeInst.ID, innerCt);
+
+            var completeRows = await GuardedTransition.CompleteNodeInstanceAsync(
+                Db, nodeInst.ID,
+                expectedRowVer: freshNode.RowVer,
+                completedState: NodeState.CompletedRejected,
+                decidedBy: actorITCode,
+                ct: innerCt);
+
+            if (completeRows == 0)
+            {
+                _logger.LogDebug(
+                    "ExecuteSequentialRejectAtomicAsync: NodeInstance {NodeId} completion CAS returned 0 — AlreadyHandled.",
+                    nodeInst.ID);
+                await tx.RollbackAsync(CancellationToken.None);
+                return WorkflowActionResult.AlreadyHandled;
+            }
+
+            // Node is CompletedRejected — continue in same tx to instance flip.
+            // MEDIUM-3: pass freshTask (the in-tx re-read snapshot) rather than the stale outer `task`.
+            // freshTask is AsNoTracking and carries task.ID which is all CompleteInstanceRejectionInTxAsync
+            // needs for timer cancel and notify; using freshTask avoids any stale pre-tx field values.
+            return await CompleteInstanceRejectionInTxAsync(
+                tx, nodeInst, instance, freshTask, actorITCode, reason, writeNodeCompletionEvent: true, innerCt);
+
+            } // end try
+            catch
+            {
+                await tx.RollbackAsync(CancellationToken.None);
+                throw;
+            }
+        }, ct);
     }
 
     // ── WF-20.4: shared reject post-claim completion helper ───────────────────
@@ -4371,6 +4903,58 @@ internal sealed class WorkflowEngine : IWorkflowEngine
 
         // Unreachable — the loop always returns or throws.
         throw new InvalidOperationException("RunWithDeadlockRetryAsync: unexpected fall-through.");
+    }
+
+    private sealed record SequentialAtomicExtra(bool IsLastStep, bool NextIsAutoApproved);
+
+    /// <summary>
+    /// Generic overload of <see cref="RunWithDeadlockRetryAsync"/> that allows the body
+    /// to return an arbitrary result alongside the <see cref="WorkflowActionResult"/>.
+    /// Used by the Sequential atomic helpers (WF-373) to carry post-commit signals
+    /// (NextIsAutoApproved, IsLastStep) back to the caller without a post-commit re-read.
+    /// </summary>
+    internal async Task<(WorkflowActionResult result, T extra)> RunWithDeadlockRetryAsync<T>(
+        Func<CancellationToken, Task<(WorkflowActionResult result, T extra)>> body,
+        T defaultExtra,
+        CancellationToken ct)
+    {
+        int maxAttempts = Math.Max(1, _options.DeadlockRetryAttempts);
+        var baseDelay = _options.DeadlockRetryBaseDelay;
+
+        for (int attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            // See the scalar RunWithDeadlockRetryAsync overload for why ChangeTracker.Clear() is required before each retry.
+            Db.ChangeTracker.Clear();
+            try
+            {
+                return await body(ct);
+            }
+            catch (Exception ex) when (WorkflowDeadlockClassifier.IsDeadlockVictim(ex)
+                                        && attempt < maxAttempts)
+            {
+                var delay = TimeSpan.FromMilliseconds(
+                    baseDelay.TotalMilliseconds * attempt
+                    + Random.Shared.NextDouble() * baseDelay.TotalMilliseconds);
+
+                _logger.LogWarning(
+                    "RunWithDeadlockRetryAsync<T>: deadlock victim on attempt {Attempt}/{Max}. " +
+                    "Retrying after {DelayMs:F0} ms. Exception: {ExMessage}",
+                    attempt, maxAttempts, delay.TotalMilliseconds, ex.Message);
+
+                await Task.Delay(delay, ct);
+            }
+            catch (Exception ex) when (WorkflowDeadlockClassifier.IsDeadlockVictim(ex)
+                                        && attempt >= maxAttempts)
+            {
+                _logger.LogError(ex,
+                    "RunWithDeadlockRetryAsync<T>: deadlock retry exhausted after {Max} attempts. " +
+                    "Returning DeadlockRetryExhausted.",
+                    maxAttempts);
+                return (WorkflowActionResult.DeadlockRetryExhausted, defaultExtra);
+            }
+        }
+
+        throw new InvalidOperationException("RunWithDeadlockRetryAsync<T>: unexpected fall-through.");
     }
 
     /// <summary>
