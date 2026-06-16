@@ -1,6 +1,6 @@
 # 更新日志
 
-## [Unreleased]
+## [10.12.2] - 2026-06-16
 
 ### Security
 
@@ -13,6 +13,9 @@
   - **HTML injection in `ff.Download`**: form and hidden inputs now built via `document.createElement` / property assignment instead of `$('<form … action="' + url + '">')` string concatenation.
   - **Arbitrary code execution in `RefreshChart` (code-exec)**: `JSONfns.parse(data.series)` (which deserialized function literals) replaced with `JSON.parse` as the safe default. Function-typed series remain possible via an explicit opt-in: set `window[chartId + 'ChartSeriesParser']` to a trusted parser function before calling `RefreshChart`.
   - **Low: `layui.layer` scope bug in error branches** — stray `layer.alert(...)` calls in `ChainChange` and `LoadComboItems` error branches (where `layer` is not in scope) corrected to `layui.layer.alert(...)`.
+
+- **WorkFlow URL-RBAC fail-open (P0, #319, PR #329)** — `PrivilegeFilter` computed an empty `BaseUrl` for attribute routes whose required parameter is not `id` (`{code}`, `{id:guid}`): `GetPathByAction` returned null and `IsAccessable("")` failed OPEN, so any authenticated tenant user could publish workflow graphs, save/delete drafts, and change definition metadata without the workflow privilege. The gate URL is now derived from the action's attribute-route template (route constraints stripped) so it matches the registered `WorkflowPrivileges` menu and fails CLOSED via `FindMenu`; a defense-in-depth guard denies any gated, authenticated action whose URL is unresolvable. **Migration:** the WorkFlow definition/designer write endpoints now correctly require the workflow privilege — register the `WorkflowPrivileges` menus and grant them to the appropriate roles for those endpoints to be accessible.
+- **WorkFlow webhook notifier escaping** (#326, PR #339): user/graph-authored strings (ITCodes, node keys, business keys) placed into `WebhookMessage.Fields` values are now escaped before reaching the Markdown card sink — completes the #296 hardening and closes a phishing-link / Markdown-injection vector into Slack/DingTalk/WeCom/Feishu/Teams cards.
 
 ### Changed
 
@@ -63,6 +66,22 @@
   - `SelectorTagHelper`: display mode now falls back to computed enum display name when the entity text list is empty
   - `clearSelector` (JS): container selector now uses `id` parameter variable, not literal `"id"` string — fixes silent no-op for named selectors
   - `GetNonSelections` (JS): removed stray `invalidNum++` reference — prevents `ReferenceError` under strict mode when the table cache contains Array-constructor rows
+- **WorkFlow 回退-to-node no longer strands the workflow** (#322, PR #344): the returned-to node is driven through activation so it reaches `Activated` and its `ApprovalTask` rows are materialized (previously it sat `Pending` with no tasks — the workflow hung).
+- **WorkFlow 加签 onto 会签/或签** (#324, PR #344): runtime-injected approvers on `All`/`Any` nodes are now created `Pending` (immediately actionable) instead of `AddedPending`, so the node's threshold stays reachable.
+- **WorkFlow timer reaper multi-tenant** (#325, PR #343): lease-reclaim (Phase-2) and AtAction delegation sweep (Phase-3) set per-tenant `DataContext` context before their tenant-filtered guarded-CAS writes, so they no longer silently no-op for non-default tenants.
+- **WorkFlow routing predicate cache key** (#323, PR #340): now includes the field whitelist `clrType`, preventing byte-identical rule JSON across graphs/tenants from reusing the wrong type coercion.
+- **WorkFlow terminal Approve/Reject audit atomicity** (#321, PR #345): `End→Approved` / `Running→Rejected` state change and its authoritative `WorkflowEventLog` row now commit in one transaction (ordering-neutral).
+- **WorkFlow #320 — complete transaction-boundary hardening** (P0 data-corruption; PRs #365 #366 #368 #369 #370 #371): the approve/reject/advance happy-paths previously committed node-completion, successor-mint, pointer-advance, task-activation and instance-flip as SEPARATE auto-committed statements (spec §7.3 violation) — a crash/cancel/connection-drop between commits could permanently strand an instance (Running with an Activated node and zero actionable tasks). Every such window is now wrapped in a single canonical-lock-order (Timer→Task→Node→Instance) transaction, each verified deadlock-safe against the #290 ABBA fix and adversarially reviewed:
+  - **#365** advance — complete-source+mint-successor (W1) and End-complete+instance-Approved (W2) atomic;
+  - **#366** reject (Sequential/会签/或签) — task-cancels+node-Rejected+instance-Rejected atomic; advisory `RejectedCount` kept standalone so non-failing rejects survive;
+  - **#368** Sequential mid-chain — pointer-advance+next-task-activation atomic (the canonical #320 stranding case);
+  - **#369** ReturnToInitiator — cancel+node-Returned+instance-Draft atomic;
+  - **#370** parallel-Join — branch-arrival+fire+successor-mint atomic, exactly-once fire preserved, orphan-decrement loop moved post-commit;
+  - **#371** 会签/或签 — claim+advisory-increment atomic (committed before the downstream drain → no nested transaction).
+  State-flip CAS runs before the audit `AppendAsync` (avoids a stale-RowVer self-strand); timers/notifications stay post-commit. 23 new crash-window/atomicity regression tests. **Migration:** none — the success-path behaviour is unchanged; only crash-atomicity improves. Remaining entry-point wraps (`StartAsync` #357, `WithdrawAsync` #358) and the timer/system auto-action path (#359) are tracked as follow-ups; the pre-existing Sequential mid-chain AutoApprove latent hang is #361.
+- **WorkFlow correctness/quality** (#327, PRs #352 #354): `NodeInstance.ApprovePercent` mapped `HasPrecision(5,4)` (prevents ratio-quorum truncation on SqlServer/MySQL/Oracle); `All`/`Any` approval completion stamps `NodeInstance.DecidedBy`; Sequential reject cancels 加签 `AddedPending` tasks; guarded node-mint catch narrowed to UNIQUE/duplicate-key only (FK/NOT NULL/CHECK now surface); publish rejects duplicate JSON property names; WorkFlow controllers carry `[ActionDescription]` so their privileges register in the catalog (completes #319's RBAC).
+- **WorkFlow audit MED batch 3** (#327, PR #356): C13 — AtAction `RevertToPrincipal` now pre-checks the `(NodeInstanceId, AssigneeITCode, Generation)` unique index before reverting, ending an infinite per-tick reaper retry loop when the principal was already 加签'd onto the node; C14 — delegation provenance now makes a direct approver win over a delegated chain regardless of resolution order (audit-accuracy; code now matches its comment).
+- **.NET 10 Razor build fixes** (#362 PR #363; #364 PR #367): `Selector.cshtml` and the demo views used capital `<Text>` / unclosed tags that the stricter .NET 10 Razor SDK rejects (RZ1021/RZ1026/CS1525) — this broke the Mvc project + `dotnet pack` release path (#362) and the full-solution build (#364). Rewritten to `@Html.Raw` / lowercase `<text>` / self-closing tags; rendered output unchanged. `dotnet build WalkingTec.Mvvm.sln` is green again.
 
 ## [10.12.1] - 2026-06-13
 
