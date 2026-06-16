@@ -930,21 +930,21 @@ regression tests across the six PRs);
 
 ## [10.5.1] - 2026-05-13
 
-Infra-only release. All NuGet publish and CI now run on Gitea; GitHub
+Infra-only release. All NuGet publish and CI now run on internal infrastructure; GitHub
 (github-archive mirror, nuget.pkg.github.com, GitHub Actions Marketplace)
 is fully retired. No source code changes — same binaries as 10.5.0.
 
 ### Changed
 
 - **NuGet publish target** moved from `nuget.pkg.github.com/cct08311github/`
-  to Gitea NuGet registry (`/api/packages/chiu0831/nuget`).
-- **CI workflows** continue to live in `.github/workflows/` (Gitea Actions
+  to internal NuGet registry (`/api/packages/chiu0831/nuget`).
+- **CI workflows** continue to live in `.github/workflows/` (internal CI
   reads this path natively); the publish secret is now `PAT_TOKEN`.
 - **`common.props`** `RepositoryUrl` / `PackageProjectUrl` now point to the
-  Gitea repo URL.
+  internal infrastructure repo URL.
 - **`scripts/release-github-package.sh`** renamed to
   `scripts/release-gitea-package.sh`; internals rewritten from `gh` CLI to
-  `curl` against the Gitea API.
+  `curl` against the internal infrastructure API.
 - **`e2e-test.yml`** dropped the `mikepenz/action-junit-report` step
   (GitHub Marketplace-only action). E2E artifacts continue to upload via
   `actions/upload-artifact`.
@@ -952,13 +952,13 @@ is fully retired. No source code changes — same binaries as 10.5.0.
 ### Added
 
 - **`scripts/publish-to-gitea.sh`** — local manual publish fallback used
-  when the Gitea Actions runner is unavailable. Supports `--suffix
-  <pre-release>` and `--dry-run`. Token sourced from the `GITEA_TOKEN`
-  environment variable or `~/.gitea-token`.
+  when the internal CI runner is unavailable. Supports `--suffix
+  <pre-release>` and `--dry-run`. Token sourced from the `REGISTRY_TOKEN`
+  environment variable or `.local-token-file`.
 
 ### Security
 
-- `scripts/publish-to-gitea.sh` masks the Gitea token in `--dry-run`
+- `scripts/publish-to-gitea.sh` masks the internal infrastructure token in `--dry-run`
   output (`<prefix>***`) instead of echoing the full secret. Real
   execution still passes the full token to `dotnet nuget push`.
 
