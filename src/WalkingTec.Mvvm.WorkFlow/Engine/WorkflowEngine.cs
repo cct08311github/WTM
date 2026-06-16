@@ -1403,51 +1403,71 @@ internal sealed class WorkflowEngine : IWorkflowEngine
 
         if (nextPointer < totalRequired)
         {
-            // More steps remain: advance the pointer and activate the next task.
-            // Step A: advance the SequencePointer on NodeInstance (CAS on RowVer).
+            // More steps remain: atomically activate the next task AND advance the pointer.
+            // txSeqApproveMidChain (#320 PR C): wrap both writes in one transaction.
+            // Canonical Task→Node order so a pointer-CAS loss rolls back the activate too —
+            // no half-activated state (W-SEQ-MIDCHAIN permanent-strand window eliminated).
             var freshNode = await Db.Set<NodeInstance>()
                 .AsNoTracking()
                 .SingleAsync(n => n.ID == nodeInst.ID, ct);
 
-            // WF-18 FIX-F: assert ApproverSetEpoch alongside RowVer so a concurrent Before-加签
-            // that inserts a task ahead of nextPointer invalidates this pointer advance (rows→0).
-            // The approver re-reads freshNode (fresh epoch) and retries.
-            var advanceRows = await Db.Set<NodeInstance>()
-                .Where(n => n.ID == nodeInst.ID
-                             && n.State == NodeState.Activated
-                             && n.RowVer == freshNode.RowVer
-                             && n.SequencePointer == nodeInst.SequencePointer
-                             && n.ApproverSetEpoch == freshNode.ApproverSetEpoch)
-                .ExecuteUpdateAsync(
-                    s => s.SetProperty(n => n.SequencePointer, nextPointer)
-                           .SetProperty(n => n.RowVer, x => x.RowVer + 1),
-                    ct);
-
-            if (advanceRows == 0)
+            int activateRows;
+            await using (var txSeqApproveMidChain = await Db.Database.BeginTransactionAsync(ct))
             {
-                _logger.LogDebug(
-                    "ExecuteApproveCompletionAsync: NodeInstance {NodeId} pointer advance CAS returned 0 — " +
-                    "concurrent actor already advanced. Instance proceeds as AlreadyHandled.",
-                    nodeInst.ID);
-                return WorkflowActionResult.AlreadyHandled;
+                try
+                {
+                    // Step B first (Task): activate the next-step task.
+                    // FIX-B5a: also match AddedPending (injected steps from WF-18 AddApproverAsync).
+                    activateRows = await Db.Set<ApprovalTask>()
+                        .Where(t => t.NodeInstanceId == nodeInst.ID
+                                     && t.SequenceOrder == nextPointer
+                                     && (t.State == TaskState.NotYetActive || t.State == TaskState.AddedPending))
+                        .ExecuteUpdateAsync(
+                            s => s.SetProperty(t => t.State, TaskState.Pending),
+                            ct);
+
+                    // Step A second (Node): advance the SequencePointer CAS.
+                    // WF-18 FIX-F: assert ApproverSetEpoch alongside RowVer so a concurrent Before-加签
+                    // that inserts a task ahead of nextPointer invalidates this pointer advance (rows→0).
+                    var advanceRows = await Db.Set<NodeInstance>()
+                        .Where(n => n.ID == nodeInst.ID
+                                     && n.State == NodeState.Activated
+                                     && n.RowVer == freshNode.RowVer
+                                     && n.SequencePointer == nodeInst.SequencePointer
+                                     && n.ApproverSetEpoch == freshNode.ApproverSetEpoch)
+                        .ExecuteUpdateAsync(
+                            s => s.SetProperty(n => n.SequencePointer, nextPointer)
+                                   .SetProperty(n => n.RowVer, x => x.RowVer + 1),
+                            ct);
+
+                    if (advanceRows == 0)
+                    {
+                        // Concurrent actor already advanced the pointer (or epoch changed).
+                        // Roll back the activate — no orphan Pending task at nextPointer.
+                        await txSeqApproveMidChain.RollbackAsync(CancellationToken.None);
+                        _logger.LogDebug(
+                            "ExecuteApproveCompletionAsync: NodeInstance {NodeId} pointer advance CAS returned 0 — " +
+                            "concurrent actor already advanced. Instance proceeds as AlreadyHandled.",
+                            nodeInst.ID);
+                        return WorkflowActionResult.AlreadyHandled;
+                    }
+
+                    await txSeqApproveMidChain.CommitAsync(ct);
+                }
+                catch
+                {
+                    await txSeqApproveMidChain.RollbackAsync(CancellationToken.None);
+                    throw;
+                }
             }
 
-            // Step B: activate the next task.
-            // FIX-B5a: also match AddedPending (injected steps from WF-18 AddApproverAsync).
-            // Injected steps are inserted with State=AddedPending so they are not skipped by
-            // the normal NotYetActive→Pending pointer advance (design §2). When the preceding
-            // step completes and the pointer reaches their slot, they must be activated here.
-            var activateRows = await Db.Set<ApprovalTask>()
-                .Where(t => t.NodeInstanceId == nodeInst.ID
-                             && t.SequenceOrder == nextPointer
-                             && (t.State == TaskState.NotYetActive || t.State == TaskState.AddedPending))
-                .ExecuteUpdateAsync(
-                    s => s.SetProperty(t => t.State, TaskState.Pending),
-                    ct);
+            // Post-commit: AutoApprove disambiguation, timers, notify — all best-effort, outside tx.
 
             if (activateRows == 0)
             {
                 // Check if it was already auto-approved (InitiatorAutoApprove path).
+                // The activate CAS matches only NotYetActive/AddedPending, so AutoApproved
+                // tasks naturally yield activateRows==0 — the disambiguation still fires.
                 var nextTask = await Db.Set<ApprovalTask>()
                     .AsNoTracking()
                     .FirstOrDefaultAsync(t => t.NodeInstanceId == nodeInst.ID
