@@ -396,8 +396,14 @@ namespace WalkingTec.Mvvm.Core
 
                         if (excelPropety.DataType == ColumnDataType.Text)
                         {
-                            ICell cell = row.GetCell(i);
-                            value = GetCellFormulaValue(XE, cell, value);
+                            // Fix #14 (#381): For Text columns read the literal string
+                            // as-is — do NOT evaluate formulas, which would silently
+                            // corrupt user data like "=1+1" → "2".
+                            ICell? textCell = row.GetCell(i);
+                            if (textCell != null && textCell.CellType == CellType.String)
+                            {
+                                value = textCell.StringCellValue;
+                            }
                         }
 
                         if (excelPropety.DataType == ColumnDataType.Dynamic)
@@ -1578,7 +1584,11 @@ namespace WalkingTec.Mvvm.Core
                 {
                     if (e.Index > 0)
                     {
-                        var c = sheet.GetRow((int)(e.Index - 1)).CreateCell(columnCount);
+                        var rowIdx = (int)(e.Index - 1);
+                        if (rowIdx < 0) continue;
+                        // Fix #11 (#381): NPOI returns null for physically-absent rows.
+                        var errRow = sheet.GetRow(rowIdx) ?? sheet.CreateRow(rowIdx);
+                        var c = errRow.CreateCell(columnCount);
                         c.CellStyle = errorStyle;
                         c.SetCellValue(e.Message ?? string.Empty);
                     }

@@ -169,15 +169,23 @@ namespace WalkingTec.Mvvm.Core
                         object? index = 0;
                         if (mexp.Arguments[0] is MemberExpression mex4)
                         {
-                            var obj = ((mex4.Expression as ConstantExpression)!).Value;
+                            // Fix #12 (#381): null-forgiving cast can throw NRE when
+                            // the indexer argument is a property/field not from a closure.
+                            var ce = mex4.Expression as ConstantExpression;
+                            if (ce == null) break;
+                            var obj = ce.Value;
                             index = obj?.GetType().GetField(mex4.Member.Name)?.GetValue(obj);
                         }
                         else if (mexp.Arguments[0] is ConstantExpression cex1)
                         {
                             index = cex1.Value;
                         }
-                        rv = (mexp.Object as MemberExpression)!.Member.Name + "[" + index + "]." + rv;
-                        me = mexp.Object as MemberExpression;
+                        // Fix #12 (#381): null-forgiving cast can throw NRE when
+                        // Object is not a MemberExpression (e.g. method-call indexer).
+                        var mo = mexp.Object as MemberExpression;
+                        if (mo == null) break;
+                        rv = mo.Member.Name + "[" + index + "]." + rv;
+                        me = mo;
                     }
                 }
                 else

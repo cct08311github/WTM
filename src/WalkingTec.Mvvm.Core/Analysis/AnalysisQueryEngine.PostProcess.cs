@@ -357,8 +357,10 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         // Comparing against null aggregate — only NotEq
                         // is meaningful (and it's true since v is decimal,
                         // raw is null). For all other operators reject.
-                        if (f.Operator != FilterOperator.NotEq) { keep = false; }
-                        break;
+                        // Fix #10 (#381): break only when rejecting; continue so
+                        // subsequent HAVING filters are still evaluated.
+                        if (f.Operator != FilterOperator.NotEq) { keep = false; break; }
+                        continue;
                     }
                     if (!TryAsDecimal(raw, out var rowDec))
                     {
