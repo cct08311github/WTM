@@ -645,13 +645,16 @@ namespace WalkingTec.Mvvm.Mvc
                 }
                 else
                 {
+                    // Security: reflect-any-origin must NOT be combined with AllowCredentials
+                    // (browsers block credentialed cross-origin requests unless an explicit origin
+                    // is listed). Use CorsOptions.Policy with an explicit Domain list to enable
+                    // credentialed CORS.
                     options.AddPolicy("_donotusedefault",
                         builder =>
                         {
                             builder.SetIsOriginAllowed((a) => true)
                                                 .AllowAnyHeader()
                                                 .AllowAnyMethod()
-                                                .AllowCredentials()
                                                 .WithExposedHeaders("Content-Disposition");
                         });
                 }
@@ -965,7 +968,13 @@ namespace WalkingTec.Mvvm.Mvc
                     tenants = [];
                     if (configs?.EnableTenant == true)
                     {
-                        using (var dc = configs.Connections.Where(x => x.Key.ToLower() == "default").FirstOrDefault().CreateDC())
+                        var csDefault = configs.Connections.FirstOrDefault(x => string.Equals(x.Key, "default", StringComparison.OrdinalIgnoreCase));
+                        if (csDefault == null)
+                        {
+                            Core.CoreProgram.GetLogger("FrameworkServiceExtension")?.LogWarning("EnableTenant is true but no 'default' connection is configured; tenant list will be empty.");
+                        }
+                        else
+                        using (var dc = csDefault.CreateDC())
                         {
                             var cusTenantType = gd.GetPocoTypesAssignableFrom<FrameworkTenant>().FirstOrDefault();
                             if (cusTenantType != null)

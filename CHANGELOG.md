@@ -1,5 +1,19 @@
 # 更新日志
 
+## [Unreleased]
+
+### Security
+
+- **CORS reflect-any-origin + credentials removed from the `_donotusedefault` fallback (#377):** the fallback policy combined `SetIsOriginAllowed(_ => true)` with `AllowCredentials()` — a configuration browsers reject per the CORS spec and a credential-exposure footgun. `AllowCredentials()` is now only applied on the explicit-policy path (`CorsOptions.Policy` with a `Domain` list).
+
+### Changed
+
+- **CORS migration (#377):** callers that relied on wildcard-origin **credentialed** CORS via the fallback (no `CorsOptions.Policy` configured) must migrate to an explicit `CorsOptions.Policy` entry with a `Domain` allowlist (see `AddWtmCrossDomain`). The explicit-policy path retains `AllowCredentials()`. Non-credentialed wildcard CORS is unaffected.
+
+### Fixed
+
+- **Multi-tenant cache-miss NRE (#377):** `SetTenantGetFunc` no longer throws when no `default`-keyed connection is configured (null-guarded, OrdinalIgnoreCase).
+
 ## [10.12.3] - 2026-06-16
 
 ### Fixed
