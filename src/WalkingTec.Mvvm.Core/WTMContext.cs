@@ -360,63 +360,157 @@ namespace WalkingTec.Mvvm.Core
 
         /// <summary>
         /// Pre-resolves <see cref="LoginUserInfo"/> asynchronously for the current
-        /// authenticated HTTP request. Call this from middleware (after
-        /// <c>UseAuthentication</c>) so that the subsequent synchronous
-        /// <see cref="LoginUserInfo"/> getter on the hot path finds
-        /// <c>_loginUserInfo</c> already populated and does not need to
-        /// block a ThreadPool thread via <c>GetAwaiter().GetResult()</c>.
+        /// HTTP request. Call this from middleware (after <c>UseAuthentication</c>)
+        /// so that the subsequent synchronous <see cref="LoginUserInfo"/> getter on
+        /// the hot path finds <c>_loginUserInfo</c> already populated and does not
+        /// need to block a ThreadPool thread via <c>GetAwaiter().GetResult()</c>.
         ///
-        /// This method mirrors <strong>only</strong> the authenticated-user branch
-        /// of <see cref="LoginUserInfo"/> getter (the branch guarded by
-        /// <c>_loginUserInfo == null &amp;&amp; HttpContext?.User?.Identity?.IsAuthenticated == true</c>).
-        /// The <c>_remotetoken</c> branch and all other fallbacks remain handled
-        /// lazily by the sync getter — they are not touched here.
-        ///
-        /// The method is a no-op when:
-        /// <list type="bullet">
-        ///   <item><c>_loginUserInfo</c> is already set.</item>
-        ///   <item>The request is not authenticated.</item>
+        /// This method mirrors both identity-bearing branches of the sync
+        /// <see cref="LoginUserInfo"/> getter:
+        /// <list type="number">
+        ///   <item>
+        ///     <term>Authenticated-user branch</term>
+        ///     <description>
+        ///       Guarded by <c>HttpContext?.User?.Identity?.IsAuthenticated == true</c>.
+        ///       Extracts Subject/TenantCode claims, checks cache, and on miss calls
+        ///       <c>await ReloadUserAsync</c> instead of the blocking <c>ReloadUser</c>.
+        ///     </description>
+        ///   </item>
+        ///   <item>
+        ///     <term>Remote-token branch</term>
+        ///     <description>
+        ///       Guarded by a <c>_remotetoken</c> query parameter being present.
+        ///       Eliminates the <c>ReloadUser(...).GetAwaiter().GetResult()</c> call
+        ///       that previously caused ThreadPool starvation when the
+        ///       <c>HasMainHost == true</c> sub-case performed a blocking HTTP
+        ///       <c>CallAPI("mainhost", ...)</c>. Both sub-cases now use
+        ///       <c>await ReloadUserAsync</c> instead.
+        ///     </description>
+        ///   </item>
         /// </list>
+        ///
+        /// The method is a no-op when <c>_loginUserInfo</c> is already set.
         /// </summary>
         public async Task EnsureLoginUserInfoAsync()
         {
-            // Only pre-resolve the authenticated-user branch — mirrors the first
-            // if-block in the LoginUserInfo getter exactly.
-            if (_loginUserInfo != null || HttpContext?.User?.Identity?.IsAuthenticated != true)
+            // Short-circuit: already resolved (covers both branches below).
+            if (_loginUserInfo != null)
             {
                 return;
             }
 
-            var userIdStr = HttpContext.User.Claims
-                .Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject)
-                .Select(x => x.Value)
-                .FirstOrDefault();
-            var tenant = HttpContext.User.Claims
-                .Where(x => x.Type == AuthConstants.JwtClaimTypes.TenantCode)
-                .Select(x => x.Value)
-                .FirstOrDefault();
-            string? usercode = userIdStr;
-
-            // Cache key must be identical to the one built in the sync getter
-            // so that the getter hits the cache on its first access.
-            var cacheKey = $"{GlobalConstants.CacheKey.UserInfo}:{userIdStr + "$`$" + tenant}";
-            _loginUserInfo = Cache?.Get<LoginUserInfo>(cacheKey);
-
-            if (_loginUserInfo == null)
+            // ── Branch 1: standard JWT-authenticated request ─────────────────────
+            // Mirrors the first if-block in the sync LoginUserInfo getter exactly.
+            if (HttpContext?.User?.Identity?.IsAuthenticated == true)
             {
-                try
-                {
-                    _loginUserInfo = await ReloadUserAsync(usercode).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("WTMContext")
-                        ?.LogWarning(ex, "EnsureLoginUserInfoAsync: failed to reload user info for usercode '{UserCode}'", usercode);
-                }
+                var userIdStr = HttpContext.User.Claims
+                    .Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject)
+                    .Select(x => x.Value)
+                    .FirstOrDefault();
+                var tenant = HttpContext.User.Claims
+                    .Where(x => x.Type == AuthConstants.JwtClaimTypes.TenantCode)
+                    .Select(x => x.Value)
+                    .FirstOrDefault();
+                string? usercode = userIdStr;
 
-                if (_loginUserInfo != null)
+                // Cache key must be identical to the one built in the sync getter
+                // so that the getter hits the cache on its first access.
+                var cacheKey = $"{GlobalConstants.CacheKey.UserInfo}:{userIdStr + "$`$" + tenant}";
+                _loginUserInfo = Cache?.Get<LoginUserInfo>(cacheKey);
+
+                if (_loginUserInfo == null)
                 {
-                    Cache?.Add(cacheKey, _loginUserInfo);
+                    try
+                    {
+                        _loginUserInfo = await ReloadUserAsync(usercode).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("WTMContext")
+                            ?.LogWarning(ex, "EnsureLoginUserInfoAsync: failed to reload user info for usercode '{UserCode}'", usercode);
+                    }
+
+                    if (_loginUserInfo != null)
+                    {
+                        Cache?.Add(cacheKey, _loginUserInfo);
+                    }
+                }
+            }
+
+            // ── Branch 2: _remotetoken query-parameter request ───────────────────
+            // Mirrors the second if-block in the sync LoginUserInfo getter exactly,
+            // but replaces the blocking ReloadUser() calls with async equivalents
+            // to eliminate ThreadPool starvation under load.
+            if (_loginUserInfo == null && HttpContext?.Request.Query.Any(x => x.Key == "_remotetoken") == true)
+            {
+                var remoteToken = HttpContext?.Request.Query["_remotetoken"][0];
+                if (ConfigInfo?.HasMainHost == false)
+                {
+                    // Validate JWT signature — never trust an unverified token (#765)
+                    var jwtOpts = ConfigInfo.JwtOptions;
+                    var handler = new JwtSecurityTokenHandler();
+                    var validationParams = new TokenValidationParameters
+                    {
+                        ValidateIssuerSigningKey = true,
+                        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOpts.SecurityKey)),
+                        ValidateIssuer = true,
+                        ValidIssuer = jwtOpts.Issuer,
+                        ValidateAudience = true,
+                        ValidAudience = jwtOpts.Audience,
+                        ValidateLifetime = true,
+                    };
+
+                    try
+                    {
+                        var principal = handler.ValidateToken(remoteToken, validationParams, out _);
+                        var userIdStr = principal.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject).Select(x => x.Value).FirstOrDefault();
+                        var tenant = principal.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.TenantCode).Select(x => x.Value).FirstOrDefault();
+                        string? usercode = userIdStr;
+                        var cacheKey = $"{GlobalConstants.CacheKey.UserInfo}:{userIdStr + "$`$" + tenant}";
+                        _loginUserInfo = Cache?.Get<LoginUserInfo>(cacheKey);
+                        if (_loginUserInfo == null)
+                        {
+                            _loginUserInfo = await ReloadUserAsync(usercode).ConfigureAwait(false);
+                            if (_loginUserInfo != null)
+                            {
+                                Cache?.Add(cacheKey, _loginUserInfo);
+                            }
+                            else
+                            {
+                                return;
+                            }
+                        }
+                    }
+                    catch (SecurityTokenException)
+                    {
+                        // Signature validation failed — reject the token
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("WTMContext")?.LogWarning(ex, "EnsureLoginUserInfoAsync: JWT token validation failed unexpectedly (non-signature error)");
+                        return;
+                    }
+                }
+                else if (string.IsNullOrEmpty(remoteToken) == false)
+                {
+                    try
+                    {
+                        _loginUserInfo = await ReloadUserAsync("null").ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("WTMContext")?.LogWarning(ex, "EnsureLoginUserInfoAsync: failed to reload user info via remote token");
+                    }
+                    if (_loginUserInfo != null)
+                    {
+                        var cacheKey = $"{GlobalConstants.CacheKey.UserInfo}:{_loginUserInfo.ITCode + "$`$" + _loginUserInfo.TenantCode}";
+                        Cache?.Add(cacheKey, _loginUserInfo);
+                    }
+                    else
+                    {
+                        return;
+                    }
                 }
             }
         }
@@ -733,6 +827,10 @@ namespace WalkingTec.Mvvm.Core
                 }
                 if (ct != null)
                 {
+                    // Dispose any DataContext that was lazily created by the DC property
+                    // getter above (e.g. via DC!.TenantCode) before overwriting _dc to
+                    // prevent a resource leak (#9 / Issue #378).
+                    (_dc as IDisposable)?.Dispose();
                     _dc = ct.CreateDC(this);
                 }
                 if (HttpContext?.User?.Identity?.IsAuthenticated == true)

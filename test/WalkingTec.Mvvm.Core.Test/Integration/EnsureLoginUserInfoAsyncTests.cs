@@ -376,5 +376,193 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
             // Assert
             result.Should().BeNull("when DC is null and ReloadUserFunc is null, ReloadUserAsync returns null");
         }
+
+        // ─── Remote-token helper (unauthenticated ctx with _remotetoken param) ──
+
+        /// <summary>
+        /// Build an unauthenticated HttpContext mock that carries a <c>_remotetoken</c>
+        /// query parameter. Used to exercise Branch 2 of
+        /// <see cref="WTMContext.EnsureLoginUserInfoAsync"/>.
+        /// </summary>
+        private static HttpContext MakeRemoteTokenHttpContext(string remoteToken)
+        {
+            var identity = new ClaimsIdentity(); // IsAuthenticated = false
+            var principal = new ClaimsPrincipal(identity);
+
+            // Build a query collection that contains the _remotetoken key.
+            var queryValues = new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>
+            {
+                { "_remotetoken", new Microsoft.Extensions.Primitives.StringValues(remoteToken) }
+            };
+            var mockQuery = new Mock<IQueryCollection>();
+            mockQuery.Setup(q => q.GetEnumerator())
+                     .Returns(queryValues.GetEnumerator());
+            mockQuery.Setup(q => q[It.IsAny<string>()])
+                     .Returns((string key) => queryValues.ContainsKey(key) ? queryValues[key] : Microsoft.Extensions.Primitives.StringValues.Empty);
+
+            var mockRequest = new Mock<HttpRequest>();
+            mockRequest.Setup(r => r.Cookies).Returns(new MockCookie());
+            mockRequest.Setup(r => r.Query).Returns(mockQuery.Object);
+
+            var mockCtx = new Mock<HttpContext>();
+            mockCtx.Setup(c => c.Request).Returns(mockRequest.Object);
+            mockCtx.Setup(c => c.User).Returns(principal);
+
+            var mockSp = new Mock<IServiceProvider>();
+            mockSp.Setup(s => s.GetService(typeof(ILoggerFactory)))
+                  .Returns(new LoggerFactory());
+            mockCtx.Setup(c => c.RequestServices).Returns(mockSp.Object);
+
+            return mockCtx.Object;
+        }
+
+        /// <summary>
+        /// Build a <see cref="WTMContext"/> whose <see cref="WTMContext.ConfigInfo"/>
+        /// is populated from the supplied <see cref="Configs"/> instance.
+        /// All other setup is identical to <see cref="MakeWtmContext"/>.
+        /// </summary>
+        private static (WTMContext wtm, IDistributedCache cache) MakeWtmContextWithConfig(
+            HttpContext httpContext,
+            Configs configs)
+        {
+            IDistributedCache cache = new MemoryDistributedCache(
+                Options.Create(new MemoryDistributedCacheOptions()));
+            var res = new ResourceManagerStringLocalizerFactory(
+                Options.Create(new LocalizationOptions { ResourcesPath = "Resources" }),
+                new Microsoft.Extensions.Logging.LoggerFactory());
+
+            var gd = new GlobalData();
+            gd.AllAccessUrls = new List<string>();
+            gd.AllAssembly = new List<System.Reflection.Assembly>();
+            gd.AllModule = new List<SimpleModule>();
+            gd.SetTenantGetFunc(() => new List<FrameworkTenant>());
+
+            var mockSp = new Mock<IServiceProvider>();
+            mockSp.Setup(s => s.GetService(typeof(IDistributedCache))).Returns(cache);
+            mockSp.Setup(s => s.GetService(typeof(ILoggerFactory))).Returns(new LoggerFactory());
+
+            // Wire up an IOptionsMonitor<Configs> that returns our custom Configs.
+            var mockMonitor = new Mock<IOptionsMonitor<Configs>>();
+            mockMonitor.Setup(m => m.CurrentValue).Returns(configs);
+
+            var httpa = new HttpContextAccessor { HttpContext = httpContext };
+
+            var wtm = new WTMContext(mockMonitor.Object, gd, httpa, new DefaultUIService(), null,
+                new NullContext(), res, cache: cache);
+            wtm.MSD = new BasicMSD();
+
+            return (wtm, cache);
+        }
+
+        // ─── Branch 2: _remotetoken + HasMainHost==true ────────────────────────
+
+        [TestMethod]
+        public async Task EnsureLoginUserInfoAsync_RemoteToken_HasMainHostTrue_PopulatesLoginUserInfo()
+        {
+            // Arrange: unauthenticated request that carries a _remotetoken query param.
+            // ConfigInfo.HasMainHost == true → the sub-host path runs, which calls
+            // ReloadUserAsync("null"). We stub that via ReloadUserFunc.
+            const string remoteToken = "sometoken";
+            var httpCtx = MakeRemoteTokenHttpContext(remoteToken);
+
+            // Create a Configs with a "mainhost" domain so that HasMainHost == true.
+            var configs = new Configs
+            {
+                Domains = new Dictionary<string, WalkingTec.Mvvm.Core.ConfigOptions.Domain>
+                {
+                    {
+                        "mainhost",
+                        new WalkingTec.Mvvm.Core.ConfigOptions.Domain { Address = "https://main.example.com" }
+                    }
+                }
+            };
+
+            var (wtm, _) = MakeWtmContextWithConfig(httpCtx, configs);
+
+            var stubbedUser = new LoginUserInfo { ITCode = "remoteuser", TenantCode = "rt1" };
+            int reloadCount = 0;
+
+            WTMContext.ReloadUserFunc = (_, code) =>
+            {
+                reloadCount++;
+                // The HasMainHost==true branch always calls ReloadUser("null")
+                return code == "null" ? stubbedUser : null!;
+            };
+
+            try
+            {
+                // Act
+                await wtm.EnsureLoginUserInfoAsync();
+
+                // Assert: _loginUserInfo is populated via the async remote-token path.
+                reloadCount.Should().Be(1, "EnsureLoginUserInfoAsync must call ReloadUserAsync(\"null\") exactly once");
+                wtm.LoginUserInfo.Should().NotBeNull();
+                wtm.LoginUserInfo!.ITCode.Should().Be("remoteuser",
+                    "the user returned by ReloadUserFunc must be stored in _loginUserInfo");
+
+                // Verify the sync getter returns the pre-resolved instance WITHOUT
+                // triggering another reload.
+                int countAfterEnsure = reloadCount;
+                var viaGetter = wtm.LoginUserInfo;
+                reloadCount.Should().Be(countAfterEnsure,
+                    "sync getter must not re-invoke ReloadUser after EnsureLoginUserInfoAsync has run");
+                viaGetter.Should().BeSameAs(wtm.LoginUserInfo);
+            }
+            finally
+            {
+                WTMContext.ReloadUserFunc = null;
+            }
+        }
+
+        // ─── Branch 2: already resolved → no-op ───────────────────────────────
+
+        [TestMethod]
+        public async Task EnsureLoginUserInfoAsync_RemoteToken_AlreadyResolved_IsNoOp()
+        {
+            // Arrange: first call populates _loginUserInfo via ReloadUserFunc.
+            const string remoteToken = "sometoken";
+            var httpCtx = MakeRemoteTokenHttpContext(remoteToken);
+
+            var configs = new Configs
+            {
+                Domains = new Dictionary<string, WalkingTec.Mvvm.Core.ConfigOptions.Domain>
+                {
+                    {
+                        "mainhost",
+                        new WalkingTec.Mvvm.Core.ConfigOptions.Domain { Address = "https://main.example.com" }
+                    }
+                }
+            };
+
+            var (wtm, _) = MakeWtmContextWithConfig(httpCtx, configs);
+
+            var stubbedUser = new LoginUserInfo { ITCode = "remoteuser2" };
+            int reloadCount = 0;
+
+            WTMContext.ReloadUserFunc = (_, _) =>
+            {
+                reloadCount++;
+                return stubbedUser;
+            };
+
+            try
+            {
+                // First call — should resolve via ReloadUserFunc.
+                await wtm.EnsureLoginUserInfoAsync();
+                reloadCount.Should().Be(1, "first call must invoke ReloadUserFunc once");
+
+                // Second call — must be a no-op.
+                await wtm.EnsureLoginUserInfoAsync();
+                reloadCount.Should().Be(1,
+                    "second call must be a no-op when _loginUserInfo is already set");
+
+                wtm.LoginUserInfo.Should().BeSameAs(stubbedUser,
+                    "the resolved instance must remain unchanged after the no-op second call");
+            }
+            finally
+            {
+                WTMContext.ReloadUserFunc = null;
+            }
+        }
     }
 }
