@@ -8,6 +8,8 @@ using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json.Serialization;
+using System.Threading;
+using System.Threading.Tasks;
 using WalkingTec.Mvvm.Core.Extensions;
 using WalkingTec.Mvvm.Core.Models;
 using WalkingTec.Mvvm.Core.Support.FileHandlers;
@@ -302,6 +304,177 @@ namespace WalkingTec.Mvvm.Core
 
 
         /// <summary>
+        /// 批量删除异步版本，语义与 <see cref="DoBatchDelete"/> 完全相同。
+        /// EVM-002：所有行删除 + SaveChangesAsync 包裹在单一事务中，任一行失败则回滚整批。
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>true代表成功，false代表失败</returns>
+        public virtual async Task<bool> DoBatchDeleteAsync(CancellationToken cancellationToken = default)
+        {
+            bool rv = true;
+            List<string> idsData = [.. Ids!];
+            var modelType = typeof(TModel);
+            var pros = modelType.GetAllProperties();
+            List<Guid> fileids = [];
+            List<PropertyInfo> fa = [.. pros.Where(x => x.PropertyType == typeof(FileAttachment) || typeof(TopBasePoco).IsAssignableFrom(x.PropertyType))];
+            var isPersist = typeof(IPersistPoco).IsAssignableFrom(modelType);
+            var isBasePoco = typeof(IBasePoco).IsAssignableFrom(modelType);
+            var query = DC!.Set<TModel>().AsQueryable();
+            List<PropertyInfo> fas = [.. pros.Where(x => typeof(IEnumerable<ISubFile>).IsAssignableFrom(x.PropertyType))];
+            foreach (var f in fas)
+            {
+                query = query.Include(f.Name);
+            }
+            query = query.AsNoTracking().CheckIDs([.. idsData.Select(x => (string?)x)]);
+            List<TModel> entityList = [.. query];
+            var entityById = entityList.ToDictionary(e => e.GetID().ToString()!);
+
+            // EVM-002: wrap the entire delete loop + SaveChangesAsync in a single transaction
+            // so a mid-batch failure never leaves partial state committed in the database.
+            var tx = await DC!.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+            await using (tx.ConfigureAwait(false))
+            {
+                foreach (string idsDataItem in idsData)
+                {
+                    if (!entityById.TryGetValue(idsDataItem, out var foundEntity))
+                        continue;
+
+                    string? checkErro = null;
+                    if (CheckIfCanDelete(idsDataItem, out checkErro) == false)
+                    {
+                        lock (_errorMessageLock)
+                        {
+                            ErrorMessage.TryAdd(idsDataItem, checkErro!);
+                        }
+                        rv = false;
+                        break;
+                    }
+                    try
+                    {
+                        var Entity = foundEntity;
+                        if (isPersist)
+                        {
+                            (Entity as IPersistPoco)!.IsValid = false;
+                            DC!.UpdateProperty(Entity, "IsValid");
+                            if (isBasePoco)
+                            {
+                                (Entity as IBasePoco)!.UpdateTime = Wtm!.TimeProvider.GetLocalNow().DateTime;
+                                (Entity as IBasePoco)!.UpdateBy = LoginUserInfo?.ITCode;
+                                DC!.UpdateProperty(Entity, "UpdateTime");
+                                DC!.UpdateProperty(Entity, "UpdateBy");
+                            }
+                        }
+                        else
+                        {
+                            foreach (var f in fa)
+                            {
+                                if (f.PropertyType == typeof(FileAttachment))
+                                {
+                                    string fidfield = DC!.GetFKName2(modelType, f.Name);
+                                    var fidpro = pros.Where(x => x.Name == fidfield).FirstOrDefault();
+                                    var idresult = fidpro?.GetValue(Entity);
+                                    if (idresult != null)
+                                    {
+                                        Guid fid = Guid.Empty;
+                                        if (Guid.TryParse(idresult.ToString(), out fid) == true)
+                                        {
+                                            fileids.Add(fid);
+                                        }
+                                    }
+                                }
+                                f.SetValue(Entity, null);
+                            }
+
+                            foreach (var f in fas)
+                            {
+                                var subs = f.GetValue(Entity) as IEnumerable<ISubFile>;
+                                if (subs != null)
+                                {
+                                    foreach (var sub in subs)
+                                    {
+                                        fileids.Add(sub.FileId);
+                                    }
+                                    f.SetValue(Entity, null);
+                                }
+                            }
+                            if (typeof(TModel) != typeof(FileAttachment))
+                            {
+                                foreach (var pro in pros)
+                                {
+                                    if (pro.PropertyType.GetTypeInfo().IsSubclassOf(typeof(TopBasePoco)))
+                                    {
+                                        pro.SetValue(Entity, null);
+                                    }
+                                }
+                            }
+                            DC!.DeleteEntity(Entity);
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        SetExceptionMessage(e, idsDataItem);
+                        rv = false;
+                    }
+                }
+
+                if (rv == true)
+                {
+                    try
+                    {
+                        await DC!.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                        await tx.CommitAsync(cancellationToken).ConfigureAwait(false);
+                        var fp = Wtm!.ServiceProvider.GetRequiredService<WtmFileProvider>();
+                        foreach (var item in fileids)
+                        {
+                            fp.DeleteFile(item.ToString(), DC!.ReCreate());
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        try { await tx.RollbackAsync(cancellationToken).ConfigureAwait(false); } catch { /* swallow nested-tx rethrow */ }
+                        SetExceptionMessage(e, null);
+                        rv = false;
+                    }
+                }
+                else
+                {
+                    try { await tx.RollbackAsync(cancellationToken).ConfigureAwait(false); } catch { /* swallow nested-tx rethrow */ }
+                }
+            }
+
+            if (rv == false)
+            {
+                lock (_errorMessageLock)
+                {
+                    if (ErrorMessage.Count > 0)
+                    {
+                        var fallback = (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.Rollback"] : null) ?? "";
+                        foreach (var id in idsData)
+                        {
+                            ErrorMessage.TryAdd(id, fallback);
+                        }
+                    }
+                }
+                ListVM?.DoSearch();
+                if (ListVM != null)
+                {
+                    Dictionary<string, string> errorSnapshot;
+                    lock (_errorMessageLock)
+                    {
+                        errorSnapshot = new Dictionary<string, string>(ErrorMessage);
+                    }
+                    foreach (var item in ListVM.GetEntityList())
+                    {
+                        item.BatchError = errorSnapshot.Where(x => x.Key == item.GetID().ToString()).Select(x => x.Value).FirstOrDefault();
+                    }
+                }
+                MSD?.AddModelError("", CoreProgram._localizer?["Sys.DataCannotDelete"]?.Value ?? "");
+            }
+            return rv;
+        }
+
+
+        /// <summary>
         /// 批量修改，默认对Ids中包含的数据进行修改，子类如果有特殊判断应重载本函数
         /// </summary>
         /// <returns>true代表成功，false代表失败</returns>
@@ -436,6 +609,155 @@ namespace WalkingTec.Mvvm.Core
             }
 
             //如果有错误，输出错误信息
+            if (rv == false)
+            {
+                lock (_errorMessageLock)
+                {
+                    if (ErrorMessage.Count > 0)
+                    {
+                        var fallback = (CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.Rollback"] : null) ?? "";
+                        foreach (var id in idsData)
+                        {
+                            ErrorMessage.TryAdd(id, fallback);
+                        }
+                    }
+                }
+                RefreshErrorList();
+            }
+            return rv;
+        }
+
+        /// <summary>
+        /// 批量修改异步版本，语义与 <see cref="DoBatchEdit"/> 完全相同。
+        /// EVM-002：所有行修改 + SaveChangesAsync 包裹在单一事务中，任一行验证失败则回滚整批。
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>true代表成功，false代表失败</returns>
+        public virtual async Task<bool> DoBatchEditAsync(CancellationToken cancellationToken = default)
+        {
+            var pros = LinkedVM!.GetType().GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly);
+            bool rv = true;
+            List<string> idsData = [.. Ids!];
+            string currentvmname = this.GetType().Name;
+            Type? vmtype = null;
+            if (currentvmname.ToLower().Contains("apibatchvm"))
+            {
+                vmtype = this.GetType().Assembly.GetExportedTypes().Where(x => x.IsSubclassOf(typeof(BaseCRUDVM<TModel>)) && x.Name.ToLower().Contains("apivm") == true).FirstOrDefault();
+            }
+            else
+            {
+                vmtype = this.GetType().Assembly.GetExportedTypes().Where(x => x.IsSubclassOf(typeof(BaseCRUDVM<TModel>)) && x.Name.ToLower().Contains("apivm") == false).FirstOrDefault();
+            }
+            IBaseCRUDVM<TModel>? vm = null;
+            if (vmtype != null)
+            {
+                vm = vmtype.GetConstructor(System.Type.EmptyTypes)?.Invoke(null) as IBaseCRUDVM<TModel>;
+                vm?.CopyContext(this);
+            }
+
+            // EVM-002: wrap all per-row entity updates + SaveChangesAsync in a single transaction
+            // so a validation error or SaveChangesAsync failure rolls back the entire batch atomically.
+            var tx = await DC!.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+            await using (tx.ConfigureAwait(false))
+            {
+                for (int i = 0; i < idsData.Count; i++)
+                {
+                    try
+                    {
+                        TModel entity = new TModel();
+                        entity.SetID(idsData[i]);
+                        foreach (var pro in pros)
+                        {
+                            var proToSet = entity.GetType().GetSingleProperty(pro.Name);
+                            var val = FC.ContainsKey("LinkedVM." + pro.Name) ? FC["LinkedVM." + pro.Name] : null;
+                            if (val == null && FC.ContainsKey("LinkedVM." + pro.Name + "[]"))
+                            {
+                                val = FC["LinkedVM." + pro.Name + "[]"];
+                            }
+                            var valuetoset = pro.GetValue(LinkedVM);
+                            if (proToSet != null && val != null && valuetoset != null)
+                            {
+                                var hasvalue = true;
+                                if (val is StringValues sv && StringValues.IsNullOrEmpty(sv) == true)
+                                {
+                                    hasvalue = false;
+                                }
+                                if (hasvalue)
+                                {
+                                    proToSet.SetValue(entity, valuetoset);
+                                    DC!.UpdateProperty(entity, proToSet.Name);
+                                }
+                            }
+                        }
+
+                        if (vm != null)
+                        {
+                            vm.SetEntity(entity);
+                            vm.Validate();
+                            var errors = vm.MSD;
+                            if (errors != null && errors.Count > 0)
+                            {
+                                var error = "";
+                                foreach (var key in errors.Keys)
+                                {
+                                    if (errors[key].Count > 0)
+                                    {
+                                        error += errors[key].Select(x => x.ErrorMessage).ToSepratedString();
+                                    }
+                                }
+                                if (error != "")
+                                {
+                                    lock (_errorMessageLock)
+                                    {
+                                        ErrorMessage.TryAdd(idsData[i], error);
+                                    }
+                                    rv = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if (typeof(IBasePoco).IsAssignableFrom(typeof(TModel)))
+                        {
+                            IBasePoco ent = (entity as IBasePoco)!;
+                            if (ent.UpdateTime == null)
+                            {
+                                ent.UpdateTime = Wtm!.TimeProvider.GetLocalNow().DateTime;
+                                DC!.UpdateProperty(entity, nameof(ent.UpdateTime));
+                            }
+                            if (string.IsNullOrEmpty(ent.UpdateBy))
+                            {
+                                ent.UpdateBy = LoginUserInfo?.ITCode;
+                                DC!.UpdateProperty(entity, nameof(ent.UpdateBy));
+                            }
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        SetExceptionMessage(e, idsData[i]);
+                        rv = false;
+                    }
+                }
+
+                if (rv == true)
+                {
+                    try
+                    {
+                        await DC!.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                        await tx.CommitAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (Exception e)
+                    {
+                        try { await tx.RollbackAsync(cancellationToken).ConfigureAwait(false); } catch { /* swallow nested-tx rethrow */ }
+                        SetExceptionMessage(e, null);
+                        rv = false;
+                    }
+                }
+                else
+                {
+                    try { await tx.RollbackAsync(cancellationToken).ConfigureAwait(false); } catch { /* swallow nested-tx rethrow */ }
+                }
+            }
+
             if (rv == false)
             {
                 lock (_errorMessageLock)

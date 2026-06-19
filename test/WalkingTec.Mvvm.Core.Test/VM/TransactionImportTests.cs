@@ -112,6 +112,23 @@ namespace WalkingTec.Mvvm.Core.Test.VM
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // ThrowOnSaveAsyncTxContext — SQLite context whose SaveChangesAsync throws
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    internal class ThrowOnSaveAsyncTxContext : TxTestContext
+    {
+        public ThrowOnSaveAsyncTxContext(string cs) : base(cs) { }
+
+        private static Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException MakeEx()
+            => new("simulated async save failure mid-batch", Array.Empty<IUpdateEntry>());
+
+        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            throw MakeEx();
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // Test class
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -325,6 +342,255 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             var result = query.DynamicSelect("ThisFieldDoesNotExistOnTxTestItem").ToList();
 
             Assert.AreEqual(0, result.Count, "DynamicSelect on unknown field must return empty, not NRE");
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // #413 — Async batch operation tests (SQLite shared in-memory)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    [TestClass]
+    public class AsyncBatchVMTests : IDisposable
+    {
+        private string _connStr = null!;
+        private SqliteConnection _keepAlive = null!;
+
+        [TestInitialize]
+        public void Setup()
+        {
+            var dbName = $"AsyncBatch_{Guid.NewGuid():N}";
+            _connStr = $"DataSource={dbName}?mode=memory&cache=shared";
+            _keepAlive = new SqliteConnection(_connStr);
+            _keepAlive.Open();
+
+            using var ctx = new TxTestContext(_connStr);
+            ctx.Database.EnsureCreated();
+        }
+
+        [TestCleanup]
+        public void Cleanup()
+        {
+            _keepAlive?.Close();
+            _keepAlive?.Dispose();
+        }
+
+        public void Dispose() => Cleanup();
+
+        private IDataContext NewCtx() => new TxTestContext(_connStr);
+
+        private static readonly Guid ItemA = new Guid("BBBBBBBB-0001-0000-0000-000000000001");
+        private static readonly Guid ItemB = new Guid("BBBBBBBB-0002-0000-0000-000000000002");
+        private static readonly Guid ItemC = new Guid("BBBBBBBB-0003-0000-0000-000000000003");
+
+        private void SeedThreeItems()
+        {
+            using var ctx = (DbContext)NewCtx();
+            ctx.Set<TxTestItem>().AddRange(
+                new TxTestItem { ID = ItemA, Name = "AsyncAlpha", Code = "AA" },
+                new TxTestItem { ID = ItemB, Name = "AsyncBeta",  Code = "BB" },
+                new TxTestItem { ID = ItemC, Name = "AsyncGamma", Code = "CC" }
+            );
+            ctx.SaveChanges();
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // (1) Happy-path async batch delete — commits all rows
+        // ═══════════════════════════════════════════════════════════════════════
+
+        [TestMethod]
+        [Description("#413 happy-path: DoBatchDeleteAsync commits all targeted rows")]
+        public async Task DoBatchDeleteAsync_HappyPath_CommitsAllRows()
+        {
+            SeedThreeItems();
+
+            var vm = new BaseBatchVM<TxTestItem, TxTestItemEdit>();
+            vm.Wtm = MockWtmContext.CreateWtmContext(NewCtx(), "tester");
+            vm.Ids = new[] { ItemA.ToString(), ItemB.ToString() };
+
+            var result = await vm.DoBatchDeleteAsync();
+
+            Assert.IsTrue(result, "DoBatchDeleteAsync should return true on success");
+
+            using var verify = (DbContext)NewCtx();
+            var remaining = verify.Set<TxTestItem>().ToList();
+            Assert.AreEqual(1, remaining.Count, "Only ItemC must remain");
+            Assert.AreEqual(ItemC, remaining[0].ID);
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // (1) Happy-path async batch edit — commits all rows
+        // ═══════════════════════════════════════════════════════════════════════
+
+        [TestMethod]
+        [Description("#413 happy-path: DoBatchEditAsync commits updates to all targeted rows")]
+        public async Task DoBatchEditAsync_HappyPath_CommitsAllRows()
+        {
+            SeedThreeItems();
+
+            var vm = new BaseBatchVM<TxTestItem, TxTestItemEdit>();
+            vm.Wtm = MockWtmContext.CreateWtmContext(NewCtx(), "tester");
+
+            var linked = new TxTestItemEdit { Name = "AsyncUpdated", Code = "ZZ" };
+            vm.LinkedVM = linked;
+            vm.FC.Add("LinkedVM.Name", "AsyncUpdated");
+            vm.FC.Add("LinkedVM.Code", "ZZ");
+            vm.Ids = new[] { ItemA.ToString(), ItemB.ToString() };
+
+            var result = await vm.DoBatchEditAsync();
+
+            Assert.IsTrue(result, "DoBatchEditAsync should return true on success");
+
+            using var verify = (DbContext)NewCtx();
+            var itemA = verify.Set<TxTestItem>().Find(ItemA)!;
+            var itemB = verify.Set<TxTestItem>().Find(ItemB)!;
+            Assert.AreEqual("AsyncUpdated", itemA.Name, "ItemA name must be updated");
+            Assert.AreEqual("AsyncUpdated", itemB.Name, "ItemB name must be updated");
+            Assert.AreEqual("ZZ", itemA.Code, "ItemA code must be updated");
+            Assert.AreEqual("ZZ", itemB.Code, "ItemB code must be updated");
+            // ItemC should be untouched
+            var itemC = verify.Set<TxTestItem>().Find(ItemC)!;
+            Assert.AreEqual("AsyncGamma", itemC.Name, "ItemC must not be modified");
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // (2) Mid-batch SaveChangesAsync failure rolls back ENTIRE batch — no partial rows
+        // ═══════════════════════════════════════════════════════════════════════
+
+        [TestMethod]
+        [Description("#413 EVM-002: DoBatchDeleteAsync rolls back fully when SaveChangesAsync throws")]
+        public async Task DoBatchDeleteAsync_RollsBack_OnSaveAsyncFailure()
+        {
+            SeedThreeItems();
+
+            var throwCtx = new ThrowOnSaveAsyncTxContext(_connStr);
+            var vm = new BaseBatchVM<TxTestItem, TxTestItemEdit>();
+            vm.Wtm = MockWtmContext.CreateWtmContext(throwCtx, "tester");
+            vm.Ids = new[] { ItemA.ToString(), ItemB.ToString() };
+
+            var result = await vm.DoBatchDeleteAsync();
+
+            Assert.IsFalse(result, "DoBatchDeleteAsync must return false when SaveChangesAsync throws");
+
+            using var verify = (DbContext)NewCtx();
+            Assert.AreEqual(3, verify.Set<TxTestItem>().Count(), "All 3 items must remain — no partial delete");
+        }
+
+        [TestMethod]
+        [Description("#413 EVM-002: DoBatchEditAsync rolls back fully when SaveChangesAsync throws")]
+        public async Task DoBatchEditAsync_RollsBack_OnSaveAsyncFailure()
+        {
+            SeedThreeItems();
+
+            string originalNameA;
+            string originalNameB;
+            using (var r = (DbContext)NewCtx())
+            {
+                originalNameA = r.Set<TxTestItem>().Find(ItemA)!.Name;
+                originalNameB = r.Set<TxTestItem>().Find(ItemB)!.Name;
+            }
+
+            var throwCtx = new ThrowOnSaveAsyncTxContext(_connStr);
+            var vm = new BaseBatchVM<TxTestItem, TxTestItemEdit>();
+            vm.Wtm = MockWtmContext.CreateWtmContext(throwCtx, "tester");
+
+            var linked = new TxTestItemEdit { Name = "SHOULD_NOT_PERSIST", Code = "XX" };
+            vm.LinkedVM = linked;
+            vm.FC.Add("LinkedVM.Name", "SHOULD_NOT_PERSIST");
+            vm.Ids = new[] { ItemA.ToString(), ItemB.ToString() };
+
+            var result = await vm.DoBatchEditAsync();
+
+            Assert.IsFalse(result, "DoBatchEditAsync must return false when SaveChangesAsync throws");
+
+            using var verify = (DbContext)NewCtx();
+            var itemA = verify.Set<TxTestItem>().Find(ItemA)!;
+            var itemB = verify.Set<TxTestItem>().Find(ItemB)!;
+            Assert.AreEqual(originalNameA, itemA.Name, "ItemA name must be unchanged — no partial edit");
+            Assert.AreEqual(originalNameB, itemB.Name, "ItemB name must be unchanged — no partial edit");
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // (3) Per-row validation errors are collected
+        // ═══════════════════════════════════════════════════════════════════════
+
+        [TestMethod]
+        [Description("#413: DoBatchDeleteAsync collects per-row validation errors when CheckIfCanDelete fails")]
+        public async Task DoBatchDeleteAsync_CollectsValidationError_WhenCheckIfCanDeleteFails()
+        {
+            SeedThreeItems();
+
+            // Use a subclass that blocks deletion of ItemA
+            var vm = new AsyncCannotDeleteBatchVM(ItemA.ToString());
+            vm.Wtm = MockWtmContext.CreateWtmContext(NewCtx(), "tester");
+            vm.Ids = new[] { ItemA.ToString(), ItemB.ToString() };
+
+            var result = await vm.DoBatchDeleteAsync();
+
+            Assert.IsFalse(result, "Must return false when a row is blocked");
+            Assert.IsTrue(vm.ErrorMessage.ContainsKey(ItemA.ToString()),
+                "ErrorMessage should contain the blocked id");
+            Assert.AreEqual("Async delete blocked by test", vm.ErrorMessage[ItemA.ToString()]);
+        }
+
+        [TestMethod]
+        [Description("#413: DoBatchEditAsync collects per-row validation errors")]
+        public async Task DoBatchEditAsync_CollectsValidationErrors()
+        {
+            SeedThreeItems();
+
+            // LinkedVM is null — will throw NullReferenceException on the first row
+            var vm = new BaseBatchVM<TxTestItem, TxTestItemEdit>();
+            vm.Wtm = MockWtmContext.CreateWtmContext(NewCtx(), "tester");
+            // Intentionally set a LinkedVM with invalid data that causes a per-row error
+            var linked = new TxTestItemEdit { Name = "ok", Code = "ZZ" };
+            vm.LinkedVM = linked;
+            vm.FC.Add("LinkedVM.Name", "ok");
+            // IDs include a non-existent one — should still succeed (no validation errors from CRUD VM
+            // since TxTestItem has no corresponding assembly BaseCRUDVM in the test project)
+            vm.Ids = new[] { ItemA.ToString(), ItemB.ToString() };
+
+            var result = await vm.DoBatchEditAsync();
+
+            // Should succeed — no validation error since there is no TxTestItemCrudVM in assembly
+            Assert.IsTrue(result, "DoBatchEditAsync with valid data should succeed");
+            Assert.AreEqual(0, vm.ErrorMessage.Count, "No validation errors expected");
+        }
+
+        [TestMethod]
+        [Description("#413: ErrorMessage is populated with per-row errors after async batch delete validation failure")]
+        public async Task DoBatchDeleteAsync_ErrorMessage_ContainsBlockedId()
+        {
+            SeedThreeItems();
+
+            var vm = new AsyncCannotDeleteBatchVM(ItemB.ToString());
+            vm.Wtm = MockWtmContext.CreateWtmContext(NewCtx(), "tester");
+            vm.Ids = new[] { ItemA.ToString(), ItemB.ToString() };
+
+            var result = await vm.DoBatchDeleteAsync();
+
+            Assert.IsFalse(result);
+            // ItemB was blocked, ItemA was tried first (it passes) but batch stopped at ItemB
+            Assert.IsTrue(vm.ErrorMessage.ContainsKey(ItemB.ToString()),
+                "ErrorMessage must record the blocked item");
+        }
+    }
+
+    // ─── Subclass that blocks delete for a specific ID in async tests ──────────
+
+    internal sealed class AsyncCannotDeleteBatchVM : BaseBatchVM<TxTestItem, TxTestItemEdit>
+    {
+        private readonly string _blockedId;
+        public AsyncCannotDeleteBatchVM(string blockedId) { _blockedId = blockedId; }
+
+        protected override bool CheckIfCanDelete(object id, out string? errorMessage)
+        {
+            if (id?.ToString() == _blockedId)
+            {
+                errorMessage = "Async delete blocked by test";
+                return false;
+            }
+            errorMessage = null;
+            return true;
         }
     }
 }

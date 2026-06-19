@@ -1234,6 +1234,29 @@ where S : struct
                 return FakeNestedTransaction.DefaultTransaction;
             return self.Database.CurrentTransaction == null ? self.Database.BeginTransaction(isolationLevel) : FakeNestedTransaction.DefaultTransaction;
         }
+
+        /// <summary>
+        /// 开始一个异步事务，当使用同一IDataContext时，嵌套的两个事务不会引起冲突。
+        /// 对于InMemory provider返回FakeNestedTransaction（no-op事务）；
+        /// 否则若已有活跃事务则返回FakeNestedTransaction，否则开启新事务。
+        /// </summary>
+        /// <param name="self">DataContext</param>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>可用的事务实例</returns>
+        public static async Task<Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction> BeginTransactionAsync(
+            this IDataContext self,
+            CancellationToken cancellationToken = default)
+        {
+            if (self == null)
+                throw new ArgumentNullException(nameof(self));
+            if (self.Database == null)
+                throw new ArgumentNullException(nameof(self.Database));
+            if (@"Microsoft.EntityFrameworkCore.InMemory".Equals(self.Database.ProviderName, StringComparison.OrdinalIgnoreCase))
+                return FakeNestedTransaction.DefaultTransaction;
+            if (self.Database.CurrentTransaction != null)
+                return FakeNestedTransaction.DefaultTransaction;
+            return await self.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     public static class DbCommandExtension
@@ -1264,19 +1287,16 @@ where S : struct
         }
 
         public Task CommitAsync(CancellationToken cancellationToken = default)
-        {
-            throw new NotImplementedException();
-        }
+            => Task.CompletedTask;
 
         public Task RollbackAsync(CancellationToken cancellationToken = default)
         {
-            throw new NotImplementedException();
+            Rollback(); // throws TransactionInDoubtException for nested-tx, consistent with sync path
+            return Task.CompletedTask;
         }
 
         public ValueTask DisposeAsync()
-        {
-            throw new NotImplementedException();
-        }
+            => ValueTask.CompletedTask;
 
         public Guid TransactionId => Guid.Empty;
     }
