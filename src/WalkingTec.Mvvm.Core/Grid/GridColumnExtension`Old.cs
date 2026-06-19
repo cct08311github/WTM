@@ -133,6 +133,19 @@ namespace WalkingTec.Mvvm.Core
             return self;
         }
         /// <summary>
+        /// Sets the format callback for the column AND marks its output as plain text
+        /// that must be HTML-encoded before rendering.  Use this instead of
+        /// <see cref="SetFormat{T}(GridColumn{T}, ColumnFormatCallBack{T}?)"/> when your
+        /// callback returns a display value derived from untrusted or user-supplied data,
+        /// to prevent stored XSS vulnerabilities.
+        /// </summary>
+        public static GridColumn<T> SetFormatEncode<T>(this GridColumn<T> self, ColumnFormatCallBack<T>? format) where T : TopBasePoco
+        {
+            self.Format = format;
+            self.EncodeFormat = true;
+            return self;
+        }
+        /// <summary>
         /// 计算列值的表达式
         /// </summary>
         /// <typeparam name="T"></typeparam>

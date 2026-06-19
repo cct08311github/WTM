@@ -386,6 +386,15 @@ namespace WalkingTec.Mvvm.Core
         }
 
         /// <summary>
+        /// When true, the output of the <see cref="Format"/> callback is treated as
+        /// plain text and will be HTML-encoded before rendering in the grid cell.
+        /// Set this when your <c>SetFormat</c> callback returns a display value derived
+        /// from untrusted/user-supplied data to prevent stored XSS.
+        /// Defaults to <c>false</c> (verbatim rendering, preserving existing behaviour).
+        /// </summary>
+        public bool EncodeFormat { get; set; } = false;
+
+        /// <summary>
         /// 获取单元格要输出的内容
         /// </summary>
         /// <param name="source">源数据</param>

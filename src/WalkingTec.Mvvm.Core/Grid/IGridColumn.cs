@@ -231,6 +231,15 @@ namespace WalkingTec.Mvvm.Core
         /// <returns>背景色</returns>
         string GetBackGroundColor(object source);
         bool HasFormat();
+
+        /// <summary>
+        /// When true, the output of the <see cref="Format"/> callback is treated as
+        /// plain text and will be HTML-encoded before rendering in the grid cell.
+        /// Set this when your <c>SetFormat</c> callback returns a display value derived
+        /// from untrusted/user-supplied data to prevent stored XSS.
+        /// Defaults to <c>false</c> (verbatim rendering, preserving existing behaviour).
+        /// </summary>
+        bool EncodeFormat { get; set; }
         #endregion
     }
 

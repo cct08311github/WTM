@@ -25,14 +25,14 @@ public class XssEncodingTests
 {
     // ── getTemplate output (stored XSS fix) ──────────────────────────────────
 
-    private static string InvokeGetTemplate(string field, string random, bool hasFormat = false)
+    private static string InvokeGetTemplate(string field, string random, bool hasFormat = false, bool encodeFormat = false)
     {
         var helper = new DataTableTagHelper();
         var method = typeof(DataTableTagHelper).GetMethod(
             "getTemplate",
             BindingFlags.NonPublic | BindingFlags.Instance);
         Assert.IsNotNull(method, "getTemplate method must exist");
-        return (string)method.Invoke(helper, new object[] { field, random, hasFormat })!;
+        return (string)method.Invoke(helper, new object[] { field, random, hasFormat, encodeFormat })!;
     }
 
     [TestMethod]
@@ -435,6 +435,55 @@ public class XssEncodingTests
         // is quoted. We verify there's no raw closing script tag that would break out.
         Assert.IsFalse(json.Contains("</script>"),
             "JsonSerializer must encode </script> to prevent script block breakout");
+    }
+
+    // ── Issue #387: EncodeFormat / SetFormatEncode opt-in flag ───────────────
+
+    [TestMethod]
+    public void SetFormat_Default_CellExprIsVerbatim()
+    {
+        // Arrange — a column with SetFormat but EncodeFormat left at default (false)
+        var col = new GridColumn<WalkingTec.Mvvm.Core.Test.Student>();
+        col.SetFormat((entity, dc) => "<b>html</b>");
+        // Assert — HasFormat true, EncodeFormat false → verbatim path expected
+        Assert.IsTrue(col.HasFormat());
+        Assert.IsFalse(col.EncodeFormat);
+    }
+
+    [TestMethod]
+    public void SetFormatEncode_Flag_CellExprIsEscaped()
+    {
+        // Arrange — a column with SetFormatEncode, flag must be set
+        var col = new GridColumn<WalkingTec.Mvvm.Core.Test.Student>();
+        col.SetFormatEncode((entity, dc) => entity.LoginName);
+        // Assert — HasFormat true, EncodeFormat true → escaped path expected
+        Assert.IsTrue(col.HasFormat());
+        Assert.IsTrue(col.EncodeFormat);
+    }
+
+    // ── Issue #387: getTemplate encodeFormat path (via reflection) ───────────
+
+    [TestMethod]
+    public void GetTemplate_HasFormatTrue_EncodeFormatTrue_UsesEscapeText()
+    {
+        // Issue #387: when hasFormat=true AND encodeFormat=true the template must
+        // route the value through ff.EscapeText (plain-text encode path).
+        var js = InvokeGetTemplate("UserName", "r2", hasFormat: true, encodeFormat: true);
+
+        StringAssert.Contains(js, "ff.EscapeText(d.UserName)",
+            "hasFormat=true encodeFormat=true must use ff.EscapeText");
+    }
+
+    [TestMethod]
+    public void GetTemplate_HasFormatTrue_EncodeFormatFalse_RendersVerbatim()
+    {
+        // Default behaviour preserved: hasFormat=true encodeFormat=false → verbatim.
+        var js = InvokeGetTemplate("Actions", "r3", hasFormat: true, encodeFormat: false);
+
+        StringAssert.Contains(js, "d.Actions",
+            "hasFormat=true encodeFormat=false must render d.Actions verbatim");
+        Assert.IsFalse(js.Contains("ff.EscapeText(d.Actions)"),
+            "hasFormat=true encodeFormat=false must NOT wrap in ff.EscapeText");
     }
 
     // ── Issue #331: Slider hidden input encoding ─────────────────────────────
