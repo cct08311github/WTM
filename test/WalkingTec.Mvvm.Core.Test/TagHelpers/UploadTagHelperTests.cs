@@ -154,4 +154,11 @@ public class UploadTagHelperTests
         Assert.IsTrue(postHtml.Contains("FileField"),
             "PostElement hidden input must reference the field name");
     }
+
+    [TestCleanup]
+    public void Cleanup()
+    {
+        THProgram._localizer = null!;
+        CoreProgram._localizer = null!;
+    }
 }

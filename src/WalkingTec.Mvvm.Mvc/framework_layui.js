@@ -1,6 +1,6 @@
 
 /*eslint eqeqeq: ["error", "smart"]*/
-DONOTUSE_TABLAYID = undefined;
+var DONOTUSE_TABLAYID = undefined;
 
 // ── Mobile responsive: allow horizontal scroll on narrow viewports ──────────
 // LayUI sets overflow-x:hidden on .layui-table-box which silently truncates
@@ -15,25 +15,20 @@ if (typeof document !== 'undefined' && document.head) {
         '}';
     document.head.appendChild(_wtmMobileStyle);
 }
-if (typeof String.prototype.startsWith != 'function') {
-    String.prototype.startsWith = function (prefix) {
-        return this.slice(0, prefix.length) === prefix;
-    };
-}
-if (typeof Array.prototype.removeByID != 'function') {
-    Array.prototype.removeByID = function (val) {
-        var index = -1;
-        for (var i = 0; i < this.length; i++) {
-            if (this[i].ID == val.ID) {
-                index = i;
-                break;
-            }
+// #353: plain helper instead of prototype mutation
+function removeByID(arr, id) {
+    var index = -1;
+    for (var i = 0; i < arr.length; i++) {
+        if (arr[i].ID == id.ID) {
+            index = i;
+            break;
         }
-        if (index > -1) {
-            this.splice(index, 1);
-        }
-    };
+    }
+    if (index > -1) {
+        arr.splice(index, 1);
+    }
 }
+if (typeof window !== 'undefined') { window.removeByID = removeByID; }
 
 window.ff = {
     DONOTUSE_Text_LoadFailed: "",
@@ -343,7 +338,7 @@ window.ff = {
         var layer = layui.layer;
         var index = layer.load(2);
         url = decodeURIComponent(url);
-        furl = url;
+        var furl = url;
         var re = /(\/_framework\/outside\?url=)(.*?)$/ig;
         url = url.replace(re, function (match, p1, p2) {
             return p1 + encodeURIComponent(p2);
@@ -640,7 +635,7 @@ window.ff = {
             },
             success: function (str, textStatus, request) {
                 layer.close(index);
-                max = true;
+                var max = true;
                 var wtmActionHdr = request.getResponseHeader('X-WTM-Action');
                 if (wtmActionHdr === 'application/json') {
                     // Issue #789 Phase 3C: CSP-safe JSON action dispatch.
@@ -1665,7 +1660,7 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
         for (var i = 0; i < hidAreas.length; i++) {
             var hiddenAreas = $('#' + formId + hidAreas[i]);
             if (hiddenAreas && hiddenAreas.length > 0) {
-                for (j = 0; j < hiddenAreas.length; j++) {
+                for (var j = 0; j < hiddenAreas.length; j++) {
                     hiddenAreas[j].remove();
                 }
             }
@@ -1819,7 +1814,16 @@ var wtmHeaderFilter = (function () {
         });
     }
 
-    return { init: init, refresh: refresh };
+    // #353: teardown — clear per-grid filter state and debounce timers
+    function destroy(gridId) {
+        if (_debounce[gridId]) {
+            clearTimeout(_debounce[gridId]);
+            delete _debounce[gridId];
+        }
+        delete _filters[gridId];
+    }
+
+    return { init: init, refresh: refresh, destroy: destroy };
 }());
 window.wtmHeaderFilter = wtmHeaderFilter;
 

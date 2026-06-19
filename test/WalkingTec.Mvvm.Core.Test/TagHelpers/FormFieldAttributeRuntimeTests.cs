@@ -150,4 +150,10 @@ public class FormFieldAttributeRuntimeTests
             string.IsNullOrEmpty(placeholderValue),
             "absent [FormField] must not inject a placeholder (regression guard)");
     }
+
+    [TestCleanup]
+    public void Cleanup()
+    {
+        THProgram._localizer = null!;
+    }
 }

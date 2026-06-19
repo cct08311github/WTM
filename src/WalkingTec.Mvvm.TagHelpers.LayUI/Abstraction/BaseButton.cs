@@ -1,5 +1,4 @@
 using Microsoft.AspNetCore.Razor.TagHelpers;
-using Microsoft.Extensions.Logging.Abstractions;
 using System;
 using WalkingTec.Mvvm.Core.Extensions;
 
@@ -73,7 +72,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                             break;
                     }
                 }
-                if(Disabled == true)
+                if (Disabled == true)
                 {
                     Theme = ButtonThemeEnum.Disabled;
                     output.Attributes.SetAttribute(new TagHelperAttribute("disabled"));
@@ -119,14 +118,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 {
                     Click = $"layer.confirm('{ConfirmTxt}', {{icon: 3, title:'{THProgram._localizer["Sys.Info"]}'}}, function(index){{ {Click};layer.close(index); }})";
                 }
-                //if (this is SubmitButtonTagHelper)
-                //{
-                //    onclick = Click+";return true;";
-                //}
-                //else
-                //{
                 onclick = Click + ";return false;";
-                //}
             }
 
             output.PostElement.AppendHtml($@"

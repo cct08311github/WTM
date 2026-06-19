@@ -175,4 +175,11 @@ public class SliderTagHelperTests
         Assert.IsTrue(part0Ok, "First part '0' must parse as double");
         Assert.IsFalse(part1Ok, "'abc' must not parse as double");
     }
+
+    [TestCleanup]
+    public void Cleanup()
+    {
+        THProgram._localizer = null!;
+        CoreProgram._localizer = null!;
+    }
 }

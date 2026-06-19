@@ -1,22 +1,22 @@
 // Tests for pure functions in framework_layui.js
 // ff is loaded into global scope via setup.js
 
-describe('Array.prototype.removeByID', () => {
+describe('removeByID', () => {
   test('removes item matching by ID', () => {
     const arr = [{ ID: 1 }, { ID: 2 }, { ID: 3 }];
-    arr.removeByID({ ID: 2 });
+    removeByID(arr, { ID: 2 });
     expect(arr).toEqual([{ ID: 1 }, { ID: 3 }]);
   });
 
   test('no-op when ID not found', () => {
     const arr = [{ ID: 1 }, { ID: 2 }];
-    arr.removeByID({ ID: 99 });
+    removeByID(arr, { ID: 99 });
     expect(arr).toEqual([{ ID: 1 }, { ID: 2 }]);
   });
 
   test('removes only first matching item', () => {
     const arr = [{ ID: 1 }, { ID: 1 }, { ID: 2 }];
-    arr.removeByID({ ID: 1 });
+    removeByID(arr, { ID: 1 });
     expect(arr).toHaveLength(2);
   });
 });

@@ -137,4 +137,11 @@ public class RichTextBoxTagHelperTests
         Assert.IsTrue(contentHtml.Contains("placeholder"),
             "Null model must fall back to DefaultValue");
     }
+
+    [TestCleanup]
+    public void Cleanup()
+    {
+        THProgram._localizer = null!;
+        CoreProgram._localizer = null!;
+    }
 }

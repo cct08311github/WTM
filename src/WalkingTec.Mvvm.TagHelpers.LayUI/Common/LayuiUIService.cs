@@ -186,14 +186,6 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
             // TLU-SEC-004: HtmlEncode buttonText in HTML text node context.
             var encodedButtonText = WebUtility.HtmlEncode(buttonText);
             string rv = "";
-            if (buttonType == ButtonTypesEnum.Link)
-            {
-                rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? "color:blue;cursor:pointer"}' class='{buttonClass ?? ""}'>{encodedButtonText}</a>";
-            }
-            if (buttonType == ButtonTypesEnum.Button)
-            {
-                rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? ""}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{buttonClass}")}'>{encodedButtonText}</a>";
-            }
             switch (buttonType)
             {
                 case ButtonTypesEnum.Button:

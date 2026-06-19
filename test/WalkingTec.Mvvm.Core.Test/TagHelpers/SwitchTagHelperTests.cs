@@ -125,4 +125,11 @@ public class SwitchTagHelperTests
         Assert.AreEqual("yes", output.Attributes["value"].Value?.ToString(),
             "Explicit Value must be used when set");
     }
+
+    [TestCleanup]
+    public void Cleanup()
+    {
+        THProgram._localizer = null!;
+        CoreProgram._localizer = null!;
+    }
 }

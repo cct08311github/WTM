@@ -146,4 +146,10 @@ public class DateTimeTagHelperTests
         Assert.IsTrue(output.Attributes.ContainsName("placeholder"), "Output attributes must contain placeholder");
         Assert.AreEqual("Custom Range Placeholder", output.Attributes["placeholder"].Value, "Placeholder attribute must match RangePlaceholder");
     }
+
+    [TestCleanup]
+    public void Cleanup()
+    {
+        THProgram._localizer = null!;
+    }
 }

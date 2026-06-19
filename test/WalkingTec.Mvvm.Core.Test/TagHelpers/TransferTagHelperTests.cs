@@ -160,4 +160,11 @@ public class TransferTagHelperTests
         Assert.IsTrue(postHtml.Contains("_DONOTUSE_StringField"),
             "PostElement must contain _DONOTUSE_{FieldName} hidden input");
     }
+
+    [TestCleanup]
+    public void Cleanup()
+    {
+        THProgram._localizer = null!;
+        CoreProgram._localizer = null!;
+    }
 }
