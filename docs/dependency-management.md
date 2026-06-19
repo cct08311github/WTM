@@ -86,7 +86,7 @@ WTM 的套件版本管理政策、升級流程、與 .NET 10 帶來的 `NU1510` 
 warning，因為 NPOI transitive 8.0.2 不再被覆蓋。release 直接失格。
 ```
 
-完整 post-mortem：[Issue #13](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/issues/13)、[PR #14](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/pulls/14)、[Issue #15](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/issues/15)。
+完整 post-mortem：[Issue #13](https://internal.registry.invalid/chiu0831/WTM/issues/13)、[PR #14](https://internal.registry.invalid/chiu0831/WTM/pulls/14)、[Issue #15](https://internal.registry.invalid/chiu0831/WTM/issues/15)。
 
 ### NU1510 vs NU1903 取捨
 
@@ -96,7 +96,7 @@ warning，因為 NPOI transitive 8.0.2 不再被覆蓋。release 直接失格。
 2. **不可修補的 NU1903（`first_patched: None`，上游尚無修補）= 已追蹤的例外** — 不是靜默容忍：必須有 tracking issue + 文件記錄（本檔 + CHANGELOG known-issues），且上游一釋出修補就立即 bump
 3. **NU1510（informational）= P3 噪音**，可接受
 
-這個 repo 接受 NU1510 噪音換取零漏洞 — 直到 NPOI 上游升 Crypto.Xml dep（追蹤於 [Issue #15](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/issues/15)）。
+這個 repo 接受 NU1510 噪音換取零漏洞 — 直到 NPOI 上游升 Crypto.Xml dep（追蹤於 [Issue #15](https://internal.registry.invalid/chiu0831/WTM/issues/15)）。
 
 ### SQLitePCLRaw `e_sqlite3` — 不可修補的 NU1903（追蹤於 Issue #393）
 
@@ -171,7 +171,7 @@ NPOI（Excel 匯入/匯出）是 WTM 對外部相依的單一最大來源。當�
 - NPOI 自己升 Crypto.Xml 到 10.0.x → 可移除 pin（最理想）
 - 業務確需 NPOI 2.8.0 才有的新功能 → 升 NPOI 但**保留** pin，並評估 SkiaSharp native binary 對 Docker image / cross-platform 的影響
 
-否則保持現狀。追蹤於 [Issue #15](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/issues/15)。
+否則保持現狀。追蹤於 [Issue #15](https://internal.registry.invalid/chiu0831/WTM/issues/15)。
 
 ---
 
