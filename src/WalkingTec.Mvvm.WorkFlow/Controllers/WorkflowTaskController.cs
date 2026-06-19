@@ -1,5 +1,6 @@
 #nullable enable
 // WF-14: WorkflowTaskController
+// WF-406: AddApprover / Delegate / ReturnToPrev / ReturnToNode / RevokeDelegation endpoints.
 //
 // HTTP surface for approval-task inbox and approver actions (approve / reject / return).
 //
@@ -13,6 +14,9 @@
 //   4. No controller-level DataContext access (WTM red line).
 //   5. RBAC: PrivilegeFilter URL-based gate applies (no [AllRights] on mutating actions).
 //      Inbox ([AllRights]) is accessible to any authenticated user.
+//   6. revoke-delegation is admin-only: caller must hold the WorkflowAdmin privilege
+//      (checked via Wtm.IsAccessable(WorkflowPrivileges.WorkflowAdmin)).
+//      Non-admin requests are rejected with 403 Forbidden.
 
 using System;
 using System.Linq;
@@ -194,6 +198,235 @@ public class WorkflowTaskController : BaseController
         return MapEngineResult(result);
     }
 
+    // ── POST /api/_workflow/tasks/{id}/add-approver (WF-406 / WF-18) ──────────
+
+    /// <summary>
+    /// Current approver injects additional approvers into the active node (加签 — WF-18).
+    ///
+    /// <para>Actor ITCode SERVER-SIDE.  Engine validates that the actor owns a
+    /// Pending task on the node and checks depth/state guards before inserting.</para>
+    ///
+    /// <para>Result codes:
+    /// <list type="bullet">
+    ///   <item>200 OK — Advanced (tasks injected).</item>
+    ///   <item>400 Bad Request — NewApproverITCodes is empty.</item>
+    ///   <item>403 Forbidden — NotAuthorized (actor has no active task on the node).</item>
+    ///   <item>409 Conflict — NodeAlreadyDecided / MaxAddDepthExceeded / AlreadyHandled.</item>
+    /// </list>
+    /// </para>
+    /// </summary>
+    [HttpPost("{id:guid}/add-approver")]
+    [ProducesResponseType(typeof(WorkflowActionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(WorkflowActionResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(WorkflowActionResponse), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(WorkflowActionResponse), StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> AddApprover(
+        Guid id,
+        [FromBody] AddApproverRequest? request,
+        CancellationToken ct = default)
+    {
+        if (request == null || request.NewApproverITCodes == null || request.NewApproverITCodes.Count == 0)
+        {
+            return BadRequest(new WorkflowActionResponse(
+                false, "BadRequest", "NewApproverITCodes must contain at least one ITCode."));
+        }
+
+        // Actor ALWAYS server-side — never from the request body.
+        var actorITCode = Wtm?.LoginUserInfo?.ITCode ?? string.Empty;
+
+        _logger.LogInformation(
+            "[WorkflowTask] AddApprover requested. TaskId={TaskId} Actor={Actor} Count={Count} Position={Position}",
+            id, actorITCode, request.NewApproverITCodes.Count, request.Position);
+
+        var result = await _engine.AddApproverAsync(
+            id, actorITCode, request.NewApproverITCodes, request.Position, request.Reason, ct);
+        return MapEngineResult(result);
+    }
+
+    // ── POST /api/_workflow/tasks/{id}/delegate (WF-406 / WF-19) ─────────────
+
+    /// <summary>
+    /// Mid-flight delegation (转办/委托-now): reassigns the actor's pending task to a delegatee.
+    ///
+    /// <para>Actor ITCode SERVER-SIDE.  Engine validates actor == AssigneeITCode via CAS.</para>
+    ///
+    /// <para>Result codes:
+    /// <list type="bullet">
+    ///   <item>200 OK — Advanced (slot reassigned).</item>
+    ///   <item>400 Bad Request — DelegateeITCode is empty.</item>
+    ///   <item>403 Forbidden — NotAuthorized (actor is not the assignee).</item>
+    ///   <item>409 Conflict — DelegateAlreadyParticipant / TaskNotActive / NodeClosed / NodeAlreadyDecided / AlreadyHandled.</item>
+    /// </list>
+    /// </para>
+    /// </summary>
+    [HttpPost("{id:guid}/delegate")]
+    [ProducesResponseType(typeof(WorkflowActionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(WorkflowActionResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(WorkflowActionResponse), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(WorkflowActionResponse), StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> Delegate(
+        Guid id,
+        [FromBody] DelegateRequest? request,
+        CancellationToken ct = default)
+    {
+        if (request == null || string.IsNullOrWhiteSpace(request.DelegateeITCode))
+        {
+            return BadRequest(new WorkflowActionResponse(
+                false, "BadRequest", "DelegateeITCode is required."));
+        }
+
+        // Actor ALWAYS server-side.
+        var actorITCode = Wtm?.LoginUserInfo?.ITCode ?? string.Empty;
+
+        _logger.LogInformation(
+            "[WorkflowTask] Delegate requested. TaskId={TaskId} Actor={Actor} Delegatee={Delegatee}",
+            id, actorITCode, request.DelegateeITCode);
+
+        var result = await _engine.DelegateTaskAsync(
+            id, actorITCode, request.DelegateeITCode, request.DelegationRuleId, request.Reason, ct);
+        return MapEngineResult(result);
+    }
+
+    // ── POST /api/_workflow/tasks/{id}/return-to-prev (WF-406 / WF-16) ────────
+
+    /// <summary>
+    /// Return the flow to the immediately-preceding Approval node (ReturnToPrev — WF-16).
+    ///
+    /// <para>Actor ITCode SERVER-SIDE.  Engine validates actor == AssigneeITCode.
+    /// If no preceding Approval node exists, returns 404 (NoDominatorTarget).</para>
+    ///
+    /// <para>Result codes:
+    /// <list type="bullet">
+    ///   <item>200 OK — Returned (span superseded, flow materialized at previous node).</item>
+    ///   <item>403 Forbidden — NotAuthorized.</item>
+    ///   <item>404 Not Found — NoDominatorTarget (no preceding Approval node).</item>
+    ///   <item>409 Conflict — MaxReturnLoopsExceeded / AlreadyHandled / TaskNotActive / NodeClosed.</item>
+    /// </list>
+    /// </para>
+    /// </summary>
+    [HttpPost("{id:guid}/return-to-prev")]
+    [ProducesResponseType(typeof(WorkflowActionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(WorkflowActionResponse), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(WorkflowActionResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(WorkflowActionResponse), StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> ReturnToPrev(
+        Guid id,
+        [FromBody] ReturnToInitiatorRequest? request,
+        CancellationToken ct = default)
+    {
+        // Actor ALWAYS server-side.
+        var actorITCode = Wtm?.LoginUserInfo?.ITCode ?? string.Empty;
+        var reason      = request?.Reason;
+
+        _logger.LogInformation(
+            "[WorkflowTask] ReturnToPrev requested. TaskId={TaskId} Actor={Actor}",
+            id, actorITCode);
+
+        var result = await _engine.ReturnToPrevAsync(id, actorITCode, reason, ct);
+        return MapEngineResult(result);
+    }
+
+    // ── POST /api/_workflow/tasks/{id}/return-to-node (WF-406 / WF-16) ────────
+
+    /// <summary>
+    /// Return the flow to an arbitrary upstream Approval node (ReturnToNode — WF-16).
+    ///
+    /// <para>Actor ITCode SERVER-SIDE.  <paramref name="id"/> is the trigger task's ID.
+    /// <c>TargetNodeKey</c> must identify an Approval node that dominates the trigger node.</para>
+    ///
+    /// <para>Result codes:
+    /// <list type="bullet">
+    ///   <item>200 OK — Returned.</item>
+    ///   <item>400 Bad Request — TargetNodeKey is empty.</item>
+    ///   <item>403 Forbidden — NotAuthorized.</item>
+    ///   <item>404 Not Found — NoDominatorTarget (target is not a dominator).</item>
+    ///   <item>409 Conflict — MaxReturnLoopsExceeded / AlreadyHandled / TaskNotActive / NodeClosed.</item>
+    /// </list>
+    /// </para>
+    /// </summary>
+    [HttpPost("{id:guid}/return-to-node")]
+    [ProducesResponseType(typeof(WorkflowActionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(WorkflowActionResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(WorkflowActionResponse), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(WorkflowActionResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(WorkflowActionResponse), StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> ReturnToNode(
+        Guid id,
+        [FromBody] ReturnToNodeRequest? request,
+        CancellationToken ct = default)
+    {
+        if (request == null || string.IsNullOrWhiteSpace(request.TargetNodeKey))
+        {
+            return BadRequest(new WorkflowActionResponse(
+                false, "BadRequest", "TargetNodeKey is required."));
+        }
+
+        // Actor ALWAYS server-side.
+        var actorITCode = Wtm?.LoginUserInfo?.ITCode ?? string.Empty;
+
+        _logger.LogInformation(
+            "[WorkflowTask] ReturnToNode requested. TaskId={TaskId} Actor={Actor} Target={Target}",
+            id, actorITCode, request.TargetNodeKey);
+
+        var result = await _engine.ReturnToNodeAsync(id, request.TargetNodeKey, actorITCode, request.Reason, ct);
+        return MapEngineResult(result);
+    }
+
+    // ── POST /api/_workflow/revoke-delegation/{delegationRuleId} (WF-406 / WF-19, admin) ──
+
+    /// <summary>
+    /// Admin revocation: reverts all open Pending tasks produced by the given delegation rule
+    /// back to their original principals (admin-only, WF-19).
+    ///
+    /// <para><strong>Authorization:</strong>
+    /// The caller must hold the <see cref="WorkflowPrivileges.WorkflowAdmin"/> privilege.
+    /// A non-admin caller receives 403 Forbidden before the engine is invoked.</para>
+    ///
+    /// <para>The actor ITCode comes SERVER-SIDE from <c>Wtm.LoginUserInfo</c>.</para>
+    ///
+    /// <para>Result codes:
+    /// <list type="bullet">
+    ///   <item>200 OK — Revoked, with the count of tasks reverted in the response body.</item>
+    ///   <item>403 Forbidden — Caller lacks the WorkflowAdmin privilege.</item>
+    /// </list>
+    /// </para>
+    /// </summary>
+    [HttpPost("revoke-delegation/{delegationRuleId:guid}")]
+    [ProducesResponseType(typeof(object), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> RevokeDelegation(
+        Guid delegationRuleId,
+        [FromBody] RevokeDelegationRequest? request,
+        CancellationToken ct = default)
+    {
+        // Admin-only gate: check the WorkflowAdmin privilege server-side.
+        // A client cannot self-escalate — the privilege check is done here, not in the engine.
+        var isAdmin = Wtm?.IsAccessable(WorkflowPrivileges.WorkflowAdmin) == true;
+        if (!isAdmin)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new WorkflowActionResponse(false, "NotAuthorized",
+                    "The WorkflowAdmin privilege is required to revoke delegation rules."));
+        }
+
+        // Actor ALWAYS server-side.
+        var actorITCode = Wtm?.LoginUserInfo?.ITCode ?? string.Empty;
+        var reason      = request?.Reason;
+
+        _logger.LogInformation(
+            "[WorkflowTask] RevokeDelegation requested. DelegationRuleId={RuleId} Actor={Actor}",
+            delegationRuleId, actorITCode);
+
+        var count = await _engine.RevokeDelegationAsync(delegationRuleId, actorITCode, reason, ct);
+
+        return Ok(new { revoked = count });
+    }
+
     // ── Helpers ────────────────────────────────────────────────────────────────
 
     private IActionResult MapEngineResult(WorkflowActionResult result)
@@ -205,7 +438,8 @@ public class WorkflowTaskController : BaseController
             or WorkflowActionCode.InstanceApproved
             or WorkflowActionCode.Rejected
             or WorkflowActionCode.Withdrawn
-            or WorkflowActionCode.ReturnedToInitiator =>
+            or WorkflowActionCode.ReturnedToInitiator
+            or WorkflowActionCode.Returned =>           // WF-406: 回退-to-node / ReturnToPrev success
                 Ok(new WorkflowActionResponse(true, result.Code.ToString(), result.Detail)),
 
             // Idempotent concurrent loser — the client's intent was fulfilled by a concurrent actor.
@@ -214,16 +448,21 @@ public class WorkflowTaskController : BaseController
 
             // Race: task pointer moved or node already closed — the actor was not the active approver.
             WorkflowActionCode.TaskNotActive
-            or WorkflowActionCode.NodeClosed =>
+            or WorkflowActionCode.NodeClosed
+            or WorkflowActionCode.NodeAlreadyDecided     // WF-406: 加签 to a decided node
+            or WorkflowActionCode.MaxAddDepthExceeded    // WF-406: 加签 depth cap exceeded
+            or WorkflowActionCode.MaxReturnLoopsExceeded // WF-406: return loop cap exceeded
+            or WorkflowActionCode.DelegateAlreadyParticipant // WF-406: delegate collision
+            or WorkflowActionCode.CannotWithdrawAlreadyFinal =>
                 Conflict(new WorkflowActionResponse(false, result.Code.ToString(), result.Detail)),
+
+            WorkflowActionCode.NoDominatorTarget =>      // WF-406: no valid return target
+                NotFound(new WorkflowActionResponse(false, result.Code.ToString(), result.Detail)),
 
             WorkflowActionCode.NotInitiator
             or WorkflowActionCode.NotAuthorized =>
                 StatusCode(StatusCodes.Status403Forbidden,
                     new WorkflowActionResponse(false, result.Code.ToString(), result.Detail)),
-
-            WorkflowActionCode.CannotWithdrawAlreadyFinal =>
-                Conflict(new WorkflowActionResponse(false, result.Code.ToString(), result.Detail)),
 
             WorkflowActionCode.FailClosedRouting =>
                 StatusCode(StatusCodes.Status500InternalServerError,

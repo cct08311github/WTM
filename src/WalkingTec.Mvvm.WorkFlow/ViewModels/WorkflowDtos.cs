@@ -162,6 +162,111 @@ public sealed record TaskInboxItem(
     DateTime? DueUtc,
     string? Comment);
 
+// ── Task action request DTOs (WF-406) ─────────────────────────────────────────
+
+/// <summary>
+/// Request body for <c>POST /api/_workflow/tasks/{id}/add-approver</c> (加签 — WF-18).
+///
+/// <para><strong>Anti-spoofing:</strong>
+/// Actor ITCode is always extracted server-side from <c>Wtm.LoginUserInfo</c>.
+/// No client-supplied actor field is accepted.</para>
+/// </summary>
+public sealed class AddApproverRequest
+{
+    /// <summary>
+    /// ITCodes of the approvers to inject (must be non-empty).
+    /// The engine deduplicates the list before insertion.
+    /// </summary>
+    [Required]
+    public List<string> NewApproverITCodes { get; set; } = new();
+
+    /// <summary>
+    /// Insertion position relative to the current sequential pointer
+    /// (Sequential mode only; ignored for All/Any node modes).
+    /// Defaults to <see cref="AddPosition.After"/>.
+    /// </summary>
+    public AddPosition Position { get; set; } = AddPosition.After;
+
+    /// <summary>Optional reason for the 加签 action (stored in the event log).</summary>
+    [StringLength(500)]
+    public string? Reason { get; set; }
+
+    // ── Server-set fields ─────────────────────────────────────────────────────
+
+    /// <summary>Actor ITCode — always server-set, never client-supplied.</summary>
+    [BindNever]
+    public string? ActorITCode { get; set; }
+}
+
+/// <summary>
+/// Request body for <c>POST /api/_workflow/tasks/{id}/delegate</c> (转办/委托-now — WF-19).
+///
+/// <para>Mid-flight delegation: atomically reassigns the actor's pending task to a new delegatee.</para>
+/// </summary>
+public sealed class DelegateRequest
+{
+    /// <summary>
+    /// ITCode of the new assignee after reassignment (required).
+    /// Must not be empty.
+    /// </summary>
+    [Required]
+    [StringLength(200)]
+    public string DelegateeITCode { get; set; } = string.Empty;
+
+    /// <summary>Optional FK to a <c>DelegationRule</c> for provenance tracking.</summary>
+    public Guid? DelegationRuleId { get; set; }
+
+    /// <summary>Optional reason surfaced in the event log.</summary>
+    [StringLength(500)]
+    public string? Reason { get; set; }
+
+    // ── Server-set fields ─────────────────────────────────────────────────────
+
+    /// <summary>Actor ITCode — always server-set, never client-supplied.</summary>
+    [BindNever]
+    public string? ActorITCode { get; set; }
+}
+
+/// <summary>
+/// Request body for <c>POST /api/_workflow/tasks/{id}/return-to-node</c> (WF-16).
+///
+/// <para>Approver returns the flow to an arbitrary upstream Approval node
+/// that dominates the current trigger node.</para>
+/// </summary>
+public sealed class ReturnToNodeRequest
+{
+    /// <summary>
+    /// NodeKey of the target Approval node to return to (required).
+    /// Must be a dominator of the trigger node in the process graph.
+    /// </summary>
+    [Required]
+    [StringLength(200)]
+    public string TargetNodeKey { get; set; } = string.Empty;
+
+    /// <summary>Optional reason for the return (stored in the event log).</summary>
+    [StringLength(500)]
+    public string? Reason { get; set; }
+
+    // ── Server-set fields ─────────────────────────────────────────────────────
+
+    /// <summary>Actor ITCode — always server-set, never client-supplied.</summary>
+    [BindNever]
+    public string? ActorITCode { get; set; }
+}
+
+/// <summary>
+/// Optional request body for <c>POST /api/_workflow/revoke-delegation/{delegationRuleId}</c> (admin).
+///
+/// <para>Admin-only: reverts open Pending tasks produced by the given delegation rule
+/// back to their original principals.</para>
+/// </summary>
+public sealed class RevokeDelegationRequest
+{
+    /// <summary>Optional reason for the revocation (stored in the event log).</summary>
+    [StringLength(500)]
+    public string? Reason { get; set; }
+}
+
 // ── WF-21.2: Designer catalog DTOs ───────────────────────────────────────────
 
 // ── Closed outcome enums ──────────────────────────────────────────────────────

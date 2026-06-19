@@ -47,6 +47,29 @@ public static class WorkflowPrivileges
     /// <summary>Reject an approval task.</summary>
     public const string TaskReject        = "/api/_workflow/tasks/{id}/reject";
 
+    // ── WF-406: additional task operations ───────────────────────────────────
+
+    /// <summary>Return the task to the initiator (approver-initiated 回退).</summary>
+    public const string TaskReturnToInitiator = "/api/_workflow/tasks/{id}/return-to-initiator";
+
+    /// <summary>Add approver(s) to the active node (加签 — WF-18).</summary>
+    public const string TaskAddApprover   = "/api/_workflow/tasks/{id}/add-approver";
+
+    /// <summary>Mid-flight delegation of a task to another user (转办/委托-now — WF-19).</summary>
+    public const string TaskDelegate      = "/api/_workflow/tasks/{id}/delegate";
+
+    /// <summary>Return the flow to the immediately preceding Approval node (WF-16).</summary>
+    public const string TaskReturnToPrev  = "/api/_workflow/tasks/{id}/return-to-prev";
+
+    /// <summary>Return the flow to an arbitrary upstream Approval node (WF-16).</summary>
+    public const string TaskReturnToNode  = "/api/_workflow/tasks/{id}/return-to-node";
+
+    /// <summary>
+    /// Admin revocation of a delegation rule (reverts in-flight tasks to their original principals).
+    /// Requires <see cref="WorkflowAdmin"/> privilege.
+    /// </summary>
+    public const string TaskRevokeDelegation = "/api/_workflow/tasks/revoke-delegation/{delegationRuleId}";
+
     // ── WF-21.2: Designer operations ─────────────────────────────────────────
 
     /// <summary>
