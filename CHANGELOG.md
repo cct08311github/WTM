@@ -1,5 +1,41 @@
 # 更新日志
 
+## [10.12.5] - 2026-06-19
+
+WorkFlow engine transaction-safety campaign completed (the #320 follow-up cluster) + LayUI audit epic (#330) closed. All fixes adversarially verified; no behaviour change for correct usage.
+
+### Security
+
+- **LayUI grid `SetFormat` columns — opt-in HTML-encoding (stored-XSS hardening) (#387):** custom `SetFormat` cell renderers emitted `d.{field}` unencoded. A new opt-in `EncodeFormat` column flag (`SetFormatEncode<T>()`) wraps the formatted value in `ff.EscapeText(...)`. Default behaviour is unchanged (opt-in); enable per-column where the formatted field carries user-controlled data.
+
+### Fixed
+
+- **WorkFlow `StartAsync` not transaction-wrapped (#357):** the initial claim + first-node activation now share one transaction, so a crash mid-start can no longer strand a `Running` instance with no active node. Idempotent replay re-reads inside the tx; CAS-loser returns `AlreadyHandled`.
+- **WorkFlow `WithdrawAsync` lock-order inversion + non-atomic (#358):** withdraw now acquires `{ApprovalTask, NodeInstance}` before `ProcessInstance` under one transaction (canonical Task→Node→Instance order), removing a deadlock vector against the advance path and closing its partial-commit window.
+- **WorkFlow mid-chain `AutoApprove` latent hang (#361):** each loop iteration's node-activate + pointer-CAS is wrapped per-iteration (rollback-on-CAS-loss → no orphan-Pending node); the loop bound is clamped to `MaxSteps = 200` so the `int.MaxValue` FailClose sentinel for `TotalRequired` cannot produce an effectively unbounded loop.
+- **WorkFlow Any-mode concurrent-approval double instance-completion (#401):** `AdvanceCoreAsync`'s "no active tokens" drain-loop branch returned `InstanceApproved` to a concurrent **loser** (and on a `Rejected` instance) without winning any CAS, so two concurrent approvers in an Any (或签) node could both report `InstanceApproved`. It now returns `AlreadyHandled`; the genuine completer still returns `InstanceApproved` via the token-processing path. Controllers map both codes to `200 OK` and the completion notifier gates on `InstanceApproved`, so the loser's duplicate notification is correctly suppressed. Fixes an intermittent CI flake (`Any_TCONC1`); adds a regression test.
+
+### Added
+
+- **WorkFlow standing strand-reaper (#359):** `WorkflowTimerExecutor.RunTickAsync` gains a 4th, **default-ON** phase that re-drives `Running` Sequential nodes stranded by the timer/system auto-approve path (task at `SequencePointer` is `AutoApproved`/`AutoRejected` while `SequencePointer < TotalRequired`). This is the durable recovery backstop for the residual partial-commit window the batched timer-claim model cannot make per-task-atomic. Re-drives through the audited `SystemContinueTaskAsync` (RowVer + ApproverSetEpoch + SequencePointer CAS), is idempotent, tenant-scoped, deadlock-safe (Task→Node→Instance), and skips healthy/in-flight nodes. **Opt-out** via `WorkFlowOptions.StrandReaperBatchSize = 0` (default `50`). Also hardens the last-step pointer-advance CAS in `ExecuteApproveCompletionAsync` with the `SequencePointer` guard the mid-chain CAS already carried (consistency under concurrent re-drive). Adds SQLite crash + concurrent-tick idempotency tests.
+
+### Changed
+
+- **`WorkFlowOptions.StrandReaperBatchSize` (new, default 50):** controls the per-tick strand-reaper batch size; set to `0` to disable Phase-4. The reaper only acts on already-stranded instances, so normal workflow behaviour is unchanged.
+
+### Refactored
+
+- **LayUI `DataTableTagHelper.Process` god-method decomposed (#348):** split into four focused builders (`BuildWhereFilter` / `BuildColumns` / `BuildToolbarButtons` / `BuildTableOptionsScript`); eliminated two hidden instance-field mutations (`hasButtonGroup` → `ref` parameter; `NeedShowTotal` → returned + OR-combined). Behaviour-preserving (adversarially reviewed); #387's `encodeFormat` parameter preserved.
+
+### Improved
+
+- **LayUI maintainability tail (#353):** `framework_layui.js` implicit-global/teardown cleanup, `Abstraction` dead-code removal, and source-level test-isolation hygiene (no behaviour change).
+
+### Notes
+
+- Closes the #320/#357/#358/#361/#369/#373/#401/#359 WorkFlow transaction-safety campaign and the #330 LayUI audit epic.
+- The `SQLitePCLRaw.lib.e_sqlite3` 2.1.11 `NU1903` (#393) remains a tracked, no-upstream-fix exception (see [10.12.4] Known Issues); unchanged by this release.
+
 ## [10.12.4] - 2026-06-19
 
 Stability audit (adversarially verified): 17 confirmed defects across Core / Mvc / Etl / Analysis, fixed in 7 PRs (#383–#390, issues #376–#382). No CRITICAL; no behaviour change for correct usage except the two migration notes below.
