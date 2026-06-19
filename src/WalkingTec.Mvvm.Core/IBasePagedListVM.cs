@@ -3,6 +3,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace WalkingTec.Mvvm.Core
 {
@@ -129,6 +131,12 @@ namespace WalkingTec.Mvvm.Core
         /// DoSearch
         /// </summary>
         void DoSearch();
+
+        /// <summary>
+        /// DoSearchAsync — identical result to <see cref="DoSearch"/> but materializes
+        /// via EF Core async APIs (<c>CountAsync</c> / <c>ToListAsync</c>).
+        /// </summary>
+        Task DoSearchAsync(CancellationToken ct = default);
         /// <summary>
         /// CopyContext
         /// </summary>

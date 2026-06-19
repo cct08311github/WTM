@@ -12,6 +12,8 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -773,6 +775,121 @@ namespace WalkingTec.Mvvm.Core
             AfterDoSearcher();
         }
 
+
+        /// <summary>
+        /// 进行搜索（异步版本）。与 <see cref="DoSearch"/> 产生完全相同的结果，
+        /// 但使用 EF Core 的 <c>CountAsync</c> / <c>ToListAsync</c> 在数据库层执行异步 I/O。
+        /// 查询构建逻辑（GetSearchQuery、ReplaceWhere、SortInfo、分页）与同步版本完全共享，
+        /// 仅数据库物化操作变为异步。
+        /// </summary>
+        /// <remarks>
+        /// 当 <see cref="GetSearchCommand"/> 返回非 null 的 <see cref="DbCommand"/> 时，
+        /// 此方法回退到同步的 <see cref="ProcessCommand"/> 路径（存储过程暂不支持异步路径）。
+        /// </remarks>
+        /// <param name="ct">取消令牌。</param>
+        public virtual async Task DoSearchAsync(CancellationToken ct = default)
+        {
+            var cmd = GetSearchCommand();
+            if (cmd == null)
+            {
+                IOrderedQueryable<TModel>? query = null;
+                // Mirror the SearcherMode switch from DoSearch exactly.
+                switch (SearcherMode)
+                {
+                    case ListVMSearchModeEnum.Search:
+                        query = GetSearchQuery();
+                        break;
+                    case ListVMSearchModeEnum.Export:
+                        query = GetExportQuery();
+                        break;
+                    case ListVMSearchModeEnum.Batch:
+                        query = GetBatchQuery();
+                        break;
+                    case ListVMSearchModeEnum.MasterDetail:
+                        query = GetMasterDetailsQuery();
+                        break;
+                    case ListVMSearchModeEnum.CheckExport:
+                        query = GetCheckedExportQuery();
+                        break;
+                    case ListVMSearchModeEnum.Selector:
+                        query = GetSelectorQuery();
+                        break;
+                    default:
+                        query = GetSearchQuery();
+                        break;
+                }
+                if (query != null)
+                {
+                    // Apply ReplaceWhere if set.
+                    if (ReplaceWhere != null)
+                    {
+                        var mod = new WhereReplaceModifier<TModel>((ReplaceWhere as Expression<Func<TModel, bool>>)!);
+                        var newExp = mod.Modify(query.Expression);
+                        query = query.Provider.CreateQuery<TModel>(newExp) as IOrderedQueryable<TModel>;
+                    }
+                    // Apply custom sort if set.
+                    if (Searcher.SortInfo != null)
+                    {
+                        var mod = new OrderReplaceModifier(Searcher.SortInfo);
+                        var newExp = mod.Modify(query!.Expression);
+                        query = query.Provider.CreateQuery<TModel>(newExp) as IOrderedQueryable<TModel>;
+                    }
+                    if (PassSearch == false)
+                    {
+                        if (NeedPage && Searcher.Limit != -1)
+                        {
+                            // Async count — keeps the thread free during I/O.
+                            var count = await query!.CountAsync(ct).ConfigureAwait(false);
+                            if (count < 0)
+                            {
+                                count = 0;
+                            }
+                            if (Searcher.Limit == 0)
+                            {
+                                Searcher.Limit = ConfigInfo?.UIOptions.DataTable.RPP ?? 20;
+                            }
+                            Searcher.Count = count;
+                            Searcher.PageCount = (int)Math.Ceiling((1.0 * Searcher.Count / Searcher.Limit));
+                            if (Searcher.Page <= 0)
+                            {
+                                Searcher.Page = 1;
+                            }
+                            if (Searcher.PageCount > 0 && Searcher.Page > Searcher.PageCount)
+                            {
+                                Searcher.Page = Searcher.PageCount;
+                            }
+                            // Async materialization.
+                            EntityList = await query!
+                                .Skip((Searcher.Page - 1) * Searcher.Limit)
+                                .Take(Searcher.Limit)
+                                .AsNoTracking()
+                                .ToListAsync(ct)
+                                .ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            EntityList = await query!.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+                            Searcher.Count = EntityList.Count;
+                            Searcher.Limit = EntityList.Count;
+                            Searcher.PageCount = 1;
+                            Searcher.Page = 1;
+                        }
+                    }
+                    else
+                    {
+                        EntityList = await query!.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+                    }
+                }
+            }
+            else
+            {
+                // DbCommand path (stored procedures) does not have an async variant here;
+                // fall back to the synchronous processor.
+                ProcessCommand(cmd);
+            }
+            IsSearched = true;
+            AfterDoSearcher();
+        }
 
         private void ProcessCommand(DbCommand cmd)
         {
