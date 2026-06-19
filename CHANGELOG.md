@@ -1,18 +1,38 @@
 # 更新日志
 
-## [Unreleased]
+## [10.12.4] - 2026-06-19
+
+Stability audit (adversarially verified): 17 confirmed defects across Core / Mvc / Etl / Analysis, fixed in 7 PRs (#383–#390, issues #376–#382). No CRITICAL; no behaviour change for correct usage except the two migration notes below.
 
 ### Security
 
 - **CORS reflect-any-origin + credentials removed from the `_donotusedefault` fallback (#377):** the fallback policy combined `SetIsOriginAllowed(_ => true)` with `AllowCredentials()` — a configuration browsers reject per the CORS spec and a credential-exposure footgun. `AllowCredentials()` is now only applied on the explicit-policy path (`CorsOptions.Policy` with a `Domain` list).
+- **ETL dry-run no longer logs the source connection string / DB password (#376):** `EtlPipelineExecutor.ExecuteDryRunAsync` removed the raw `SourceConnectionString` Serilog parameter; `QueryTemplate` and the catch-block `ex.Message` are now passed through `EtlErrorSanitizer`.
+- **REST source next-link scheme re-validation (#376):** `RestEtlSource` NextLink pagination cursors are re-checked for scheme on every page, rejecting HTTPS→HTTP downgrades that would leak `Authorization`/secret headers (complements the existing DNS-pin / private-IP block).
+- **Analysis saved-query tenant isolation (#380):** `AnalysisSavedQuery` is now `ITenant`; `ListSavedQueries`/`GetSavedQuery`/`DeleteSavedQuery` enforce tenant scope (cross-tenant returns `Forbid()`/404), closing a shared-DB cross-tenant leak of public saved-query definitions and owner ITCode.
 
 ### Changed
 
 - **CORS migration (#377):** callers that relied on wildcard-origin **credentialed** CORS via the fallback (no `CorsOptions.Policy` configured) must migrate to an explicit `CorsOptions.Policy` entry with a `Domain` allowlist (see `AddWtmCrossDomain`). The explicit-policy path retains `AllowCredentials()`. Non-credentialed wildcard CORS is unaffected.
+- **Excel import — Text-column formula evaluation removed (#381):** imported Text cells beginning with `=` are no longer evaluated as formulas (e.g. `=1+1` is preserved as the literal `=1+1` instead of being silently stored as `2`). If you relied on import-time formula evaluation, pre-compute the values before import.
+
+### Migration
+
+- **`AnalysisSavedQuery` schema (#380):** a new nullable `TenantCode NVARCHAR(50) NULL` column is added. New deployments are handled automatically by `EnsureCreated`. Existing **multi-tenant** deployments managed by explicit EF migrations must add it: `ALTER TABLE AnalysisSavedQueries ADD TenantCode NVARCHAR(50) NULL`. Nullable → backward-compatible; single-tenant deployments are unaffected.
 
 ### Fixed
 
-- **Multi-tenant cache-miss NRE (#377):** `SetTenantGetFunc` no longer throws when no `default`-keyed connection is configured (null-guarded, OrdinalIgnoreCase).
+- **Multi-tenant cache-miss NRE (#377):** `SetTenantGetFunc` no longer throws (HTTP 500 on every tenant-resolving request after cache expiry) when no `default`-keyed connection is configured (null-guarded, OrdinalIgnoreCase).
+- **WTMContext `_remotetoken` sync-over-async (#378):** `EnsureLoginUserInfoAsync` now pre-resolves the `_remotetoken` SSO branch asynchronously, eliminating a ThreadPool-starvation window where the synchronous `LoginUserInfo` getter blocked the request thread for remote-token deployments.
+- **Orphaned DbContext leak (#378):** `DoLoginAsync` disposes the default `DataContext` created during tenant resolution before replacing it.
+- **MSSQL bulk-loader schema-qualified staging (#376):** schema-qualified staging/target names are per-part quoted (`[schema].[table]`) across all DDL/DML + `SqlBulkCopy.DestinationTableName`, fixing a bug where MERGE read an empty staging table.
+- **`_FrameworkController` unguarded dereferences (#379):** `Error()` no longer NREs on direct anonymous access (returns 400); `GetExportExcel` returns 400 for unresolvable VM names instead of an unhandled 500.
+- **PivotExport unbounded-filter DoS (#380):** `PivotExport` now enforces the `MaxFilterClauses` cap like the other analysis endpoints, preventing a process-fatal `StackOverflowException` from a crafted oversized filter list.
+- **Analysis HAVING null-aggregate filter (#381):** a null aggregate matching a `NotEq` HAVING filter no longer skips subsequent HAVING filters (AND semantics restored; `TotalCount`/grand-total no longer inflated).
+- **Excel import error-report NRE (#381):** `GetErrorJson` no longer NREs on uploads containing physical row gaps.
+- **`PropertyHelper` indexer NRE (#381):** `GetPropertyName` no longer NREs on property-indexed / nested-indexer lambdas on the grid/sort hot path.
+- **Query-filter root-type detection (#382):** global tenant / soft-delete query filters are applied on the EF metadata root, so a multi-level concrete inheritance hierarchy (`Child : ConcreteParent : BasePoco`) is correctly filtered (previously the leaf could escape the tenant/soft-delete filter).
+- **Sync `DoDelete` robustness (#382):** uses an idempotent form-context assignment and wraps `SaveChanges` in `DbUpdateException` handling, matching `DoDeleteAsync`.
 
 ## [10.12.3] - 2026-06-16
 
