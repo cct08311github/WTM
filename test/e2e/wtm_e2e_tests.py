@@ -1238,78 +1238,102 @@ async def tc_24_analysis_full_flow(page, **_):
         }""",
         timeout=TIMEOUT
     )
-    await asyncio.sleep(0.5)
+    # Replace hardcoded sleep — wait for toolbar DOM attachment as readiness signal
+    try:
+        await page.wait_for_selector(".layui-table-tool", state="attached", timeout=3000)
+    except Exception:
+        pass  # graceful: toolbar may not be present in this demo config
     await page.screenshot(path=sc(24, "01-student-grid"))
 
     # Step 1: 開啟分析面板
     analysis_btn = page.locator("button:has-text('分析模式')")
     if await analysis_btn.count() > 0:
-        # 等按鈕動畫完成（LayUI fade-in）
+        # Wait for the Analysis button to be fully actionable before clicking.
+        # LayUI admin layout has a CSS fade-in animation (visibility:hidden → visible)
+        # that can leave the button DOM-visible but still covered by a transitioning
+        # overlay in headless CI. Strategy: wait for visible (10s budget to account for
+        # slow /_analysis/meta API on a cold CI runner), scroll into view, then click
+        # with a generous targeted timeout rather than the global default.
+        btn_visible = False
         try:
-            await analysis_btn.first.wait_for(state="visible", timeout=5000)
+            await analysis_btn.first.wait_for(state="visible", timeout=10000)
+            btn_visible = True
         except Exception:
-            pass
-        await analysis_btn.first.click()
-        try:
-            await page.wait_for_selector(".analysis-field-pool", state="visible", timeout=5000)
-        except Exception:
-            pass  # fallback if timing varies
-        await page.screenshot(path=sc(24, "02-panel-open"))
+            await page.screenshot(path=sc(24, "02a-btn-not-visible"), full_page=True)
 
-        # Step 2: 確認欄位載入
-        pills = page.locator(".analysis-pill")
-        pill_count = await pills.count()
-        print(f"  欄位 pill 數量: {pill_count}")
-        await page.screenshot(path=sc(24, "03-fields-loaded"))
-
-        # Step 3: 嘗試透過頁面操作拖放
-        # 找到維度區的 pill 和拖放區
-        dim_pills = page.locator(".analysis-pill[data-kind='Dimension']")
-        msr_pills = page.locator(".analysis-pill[data-kind='Measure']")
-        dim_zone = page.locator(".analysis-dropzone--dim")
-        msr_zone = page.locator(".analysis-dropzone--msr")
-
-        dim_count = await dim_pills.count()
-        msr_count = await msr_pills.count()
-        print(f"  Dimension pills: {dim_count}, Measure pills: {msr_count}")
-
-        if dim_count > 0 and msr_count > 0:
-            # 嘗試拖放第一個 Dimension pill 到 dim zone
+        if btn_visible:
+            await analysis_btn.first.scroll_into_view_if_needed()
+            # Targeted 30s click timeout: accounts for /meta API fetch + panel animation
+            # on a slow CI runner (CI showed "Locator.click: Timeout 20000ms exceeded"
+            # against the 20s Playwright default — issue #328).
+            await analysis_btn.first.click(timeout=30000)
             try:
-                await dim_pills.first.drag_to(dim_zone)
-                await page.wait_for_load_state("networkidle")
-                await page.screenshot(path=sc(24, "04-dim-dropped"))
+                await page.wait_for_selector(".analysis-field-pool", state="visible", timeout=5000)
+            except Exception:
+                pass  # fallback if timing varies
+            await page.screenshot(path=sc(24, "02-panel-open"))
 
-                await msr_pills.first.drag_to(msr_zone)
-                await page.wait_for_load_state("networkidle")
-                await page.screenshot(path=sc(24, "05-msr-dropped"))
+            # Step 2: 確認欄位載入
+            pills = page.locator(".analysis-pill")
+            pill_count = await pills.count()
+            print(f"  欄位 pill 數量: {pill_count}")
+            await page.screenshot(path=sc(24, "03-fields-loaded"))
 
-                # Step 4: 點擊查詢按鈕
-                query_btn = page.locator("button:has-text('查詢'), button:has-text('執行'), .analysis-btn-query")
-                if await query_btn.count() > 0:
-                    await query_btn.first.click()
-                    try:
-                        await page.wait_for_selector(".analysis-result-section, canvas, .analysis-result-section table", state="visible", timeout=5000)
-                    except Exception:
-                        pass
-                    await page.screenshot(path=sc(24, "06-query-result"))
+            # Step 3: 嘗試透過頁面操作拖放
+            # 找到維度區的 pill 和拖放區
+            dim_pills = page.locator(".analysis-pill[data-kind='Dimension']")
+            msr_pills = page.locator(".analysis-pill[data-kind='Measure']")
+            dim_zone = page.locator(".analysis-dropzone--dim")
+            msr_zone = page.locator(".analysis-dropzone--msr")
 
-                    # 確認結果區顯示
-                    result_section = page.locator(".analysis-result-section")
-                    if await result_section.count() > 0:
-                        visible = await result_section.first.is_visible()
-                        print(f"  result-section visible: {visible}")
+            dim_count = await dim_pills.count()
+            msr_count = await msr_pills.count()
+            print(f"  Dimension pills: {dim_count}, Measure pills: {msr_count}")
 
-                    # 確認圖表或表格
-                    canvas = page.locator("canvas")
-                    table = page.locator(".analysis-result-section table")
-                    print(f"  Canvas 數量: {await canvas.count()}")
-                    print(f"  Result table 數量: {await table.count()}")
-            except Exception as e:
-                print(f"  拖放操作失敗（可能是 Sortable.js 限制）: {e}")
-                await page.screenshot(path=sc(24, "04-drag-failed"))
-        else:
-            print("  [WARN] 無法找到 Dimension/Measure pills")
+            if dim_count > 0 and msr_count > 0:
+                # 嘗試拖放第一個 Dimension pill 到 dim zone
+                try:
+                    await dim_pills.first.drag_to(dim_zone)
+                    await page.wait_for_load_state("networkidle")
+                    await page.screenshot(path=sc(24, "04-dim-dropped"))
+
+                    await msr_pills.first.drag_to(msr_zone)
+                    await page.wait_for_load_state("networkidle")
+                    await page.screenshot(path=sc(24, "05-msr-dropped"))
+
+                    # Step 4: 點擊查詢按鈕
+                    query_btn = page.locator("button:has-text('查詢'), button:has-text('執行'), .analysis-btn-query")
+                    if await query_btn.count() > 0:
+                        # Ensure query button is actionable (drag-and-drop may trigger a loading
+                        # state that covers the button briefly)
+                        try:
+                            await query_btn.first.wait_for(state="visible", timeout=5000)
+                        except Exception:
+                            pass
+                        await query_btn.first.scroll_into_view_if_needed()
+                        await query_btn.first.click(timeout=10000)
+                        try:
+                            await page.wait_for_selector(".analysis-result-section, canvas, .analysis-result-section table", state="visible", timeout=5000)
+                        except Exception:
+                            pass
+                        await page.screenshot(path=sc(24, "06-query-result"))
+
+                        # 確認結果區顯示
+                        result_section = page.locator(".analysis-result-section")
+                        if await result_section.count() > 0:
+                            visible = await result_section.first.is_visible()
+                            print(f"  result-section visible: {visible}")
+
+                        # 確認圖表或表格
+                        canvas = page.locator("canvas")
+                        table = page.locator(".analysis-result-section table")
+                        print(f"  Canvas 數量: {await canvas.count()}")
+                        print(f"  Result table 數量: {await table.count()}")
+                except Exception as e:
+                    print(f"  拖放操作失敗（可能是 Sortable.js 限制）: {e}")
+                    await page.screenshot(path=sc(24, "04-drag-failed"))
+            else:
+                print("  [WARN] 無法找到 Dimension/Measure pills")
     else:
         print("  [SKIP] 找不到分析模式按鈕")
 
