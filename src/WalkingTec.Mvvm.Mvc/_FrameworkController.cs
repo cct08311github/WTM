@@ -355,10 +355,27 @@ namespace WalkingTec.Mvvm.Mvc
                     qs.Add(item.Key, item.Value);
                 }
             }
-            var instanceType = Type.GetType(_DONOT_USE_VMNAME);
-
             Wtm.CurrentCS =  _DONOT_USE_CS;
-            var listVM = Wtm.CreateVM(_DONOT_USE_VMNAME) as IBasePagedListVM<TopBasePoco, ISearcher>;
+            // MVC-013: CreateVM throws ArgumentException for unresolvable/unregistered VM names
+            // (and the `as` cast returns null for valid VMs that aren't IBasePagedListVM).
+            // Wrap both failure modes so they produce a clean 400 instead of an unhandled 500.
+            IBasePagedListVM<TopBasePoco, ISearcher>? listVM;
+            Type? instanceType;
+            try
+            {
+                var rawVm = Wtm.CreateVM(_DONOT_USE_VMNAME);
+                listVM = rawVm as IBasePagedListVM<TopBasePoco, ISearcher>;
+                // MVC-011: derive filename from the created VM instance — Type.GetType fails
+                // for unqualified names so always prefer the instance type when available.
+                instanceType = rawVm?.GetType() ?? Type.GetType(_DONOT_USE_VMNAME);
+            }
+            catch (ArgumentException)
+            {
+                return BadRequest(MvcProgram._localizer?["Sys.InvalidVM"] ?? "Invalid Vm Name");
+            }
+
+            if (listVM == null)
+                return BadRequest(MvcProgram._localizer?["Sys.InvalidVM"] ?? "Invalid Vm Name");
 
             listVM.FC = qs;
             if (listVM is IBasePagedListVM<TopBasePoco, ISearcher>)
@@ -377,7 +394,8 @@ namespace WalkingTec.Mvvm.Mvc
                 var now = Wtm.TimeProvider.GetLocalNow().DateTime;
                 HttpContext.Response.Cookies.Append("DONOTUSEDOWNLOADING", "0", new Microsoft.AspNetCore.Http.CookieOptions() { Path = "/", Expires = now.AddDays(2), SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Lax, Secure = Request.IsHttps });
 
-                return File(data, "application/vnd.ms-excel", $"Export_{instanceType.Name}_{now.ToString("yyyy-MM-dd")}.xls");
+                var typeName = instanceType?.Name ?? _DONOT_USE_VMNAME ?? "Export";
+                return File(data, "application/vnd.ms-excel", $"Export_{typeName}_{now.ToString("yyyy-MM-dd")}.xls");
             }
             else
             {
@@ -416,6 +434,9 @@ namespace WalkingTec.Mvvm.Mvc
         public IActionResult Error()
         {
             var ex = HttpContext.Features.Get<IExceptionHandlerPathFeature>();
+            // MVC-012: guard against null feature (e.g. calling /error directly with no exception context)
+            if (ex == null)
+                return BadRequest(MvcProgram._localizer?["Sys.Error"] ?? "An error occurred while processing your request.");
             ActionLog log = new ActionLog();
             log.LogType = ActionLogTypesEnum.Exception;
             log.ActionTime = Wtm.TimeProvider.GetLocalNow().DateTime;
@@ -423,7 +444,7 @@ namespace WalkingTec.Mvvm.Mvc
 
             // MVC-002: EF dynamic-query exceptions have null TargetSite — guard to
             // prevent a double-fault that would mask the original error in the log.
-            var targetSite = ex?.Error?.TargetSite;
+            var targetSite = ex.Error?.TargetSite;
             var declaringType = targetSite?.DeclaringType;
 
             var controllerDes = declaringType?.GetCustomAttributes(typeof(ActionDescriptionAttribute), false).Cast<ActionDescriptionAttribute>().FirstOrDefault();
@@ -437,8 +458,8 @@ namespace WalkingTec.Mvvm.Mvc
                 log.ActionName += "[P]";
             }
             log.ActionUrl = ex.Path;
-            log.IP = HttpContext.Connection.RemoteIpAddress.ToString();
-            log.Remark = ex.Error.ToString();
+            log.IP = HttpContext.Connection.RemoteIpAddress?.ToString() ?? string.Empty;
+            log.Remark = ex.Error?.ToString() ?? string.Empty;
             if (string.IsNullOrEmpty(log.Remark) == false && log.Remark.Length > 2000)
             {
                 log.Remark = log.Remark.Substring(0, 2000);
@@ -465,7 +486,7 @@ namespace WalkingTec.Mvvm.Mvc
                  remoteIp.Equals(System.Net.IPAddress.IPv6Loopback));
             if (ConfigInfo.IsQuickDebug == true && isLocalhost)
             {
-                rv = ex.Error.ToString().Replace(Environment.NewLine, "<br />");
+                rv = (ex.Error?.ToString() ?? string.Empty).Replace(Environment.NewLine, "<br />");
             }
             else
             {
