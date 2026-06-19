@@ -2,6 +2,7 @@
 // ETL-015: Dry-run audit-logging tests
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -168,6 +169,35 @@ public class DryRunAuditLoggingTests
         logger.HasWarningContaining("dry-run").Should().BeFalse();
     }
 
+    // ─── security: connection string must not appear in log (Issue #376) ───
+
+    [TestMethod]
+    public async Task DryRun_start_log_must_not_contain_connection_string_value()
+    {
+        var (source, loader, logger) = CreateComponents();
+        source.SetData(TestHelpers.GenerateOrderData(3));
+
+        // Use a connection string that contains a Password= fragment — this is what
+        // must never reach the log sink (Issue #376).
+        const string sensitiveCs = "Server=db.internal;Database=orders;User Id=sa;Password=S3cr3t!";
+        var config = TestHelpers.CreateTestConfig() with
+        {
+            IsDryRun = true,
+            SourceConnectionString = sensitiveCs,
+        };
+        var executor = new EtlPipelineExecutor(source, loader, logger: logger);
+        await executor.ExecuteAsync(config, FullLoad());
+
+        // The plaintext password must not appear in any log entry.
+        var allMessages = string.Join("\n", logger.AllMessages());
+        allMessages.Should().NotContain("Password=",
+            "the connection string (including its Password= fragment) must never be logged");
+        allMessages.Should().NotContain("S3cr3t!",
+            "the actual password value must not appear in any log entry");
+        allMessages.Should().NotContain(sensitiveCs,
+            "the full connection string must not appear in any log entry");
+    }
+
     // ─── ad-hoc source helpers ───────────────────────────────────────────────
 
     private sealed class ThrowingSource : IEtlSource
@@ -256,4 +286,7 @@ internal sealed class CapturingLogger : ILogger
         _entries.Exists(e =>
             e.Level == LogLevel.Error &&
             e.Message.Contains(text, StringComparison.OrdinalIgnoreCase));
+
+    public IEnumerable<string> AllMessages() =>
+        _entries.Select(e => e.Message);
 }

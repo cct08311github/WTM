@@ -722,3 +722,82 @@ public class RestEtlSourceTests
         src3.Should().BeOfType<RestEtlSource>();
     }
 }
+
+/// <summary>
+/// Issue #376: next-link scheme re-validation — prevents HTTPS→HTTP downgrade
+/// that would expose Authorization headers when following server-supplied cursors.
+/// </summary>
+[TestClass]
+public class RestEtlSourceNextLinkSchemeTests
+{
+    private static string MakeConfig(string firstUrl, string recordsPath = "items",
+        string nextLinkField = "next", bool allowHttp = false)
+    {
+        return RestTestHelper.Config(
+            firstUrl,
+            recordsPath: recordsPath,
+            strategy: RestPaginationStrategy.NextLink,
+            nextLinkField: nextLinkField,
+            allowHttp: allowHttp);
+    }
+
+    [TestMethod]
+    public async Task NextLink_http_cursor_is_rejected_when_AllowHttp_is_false()
+    {
+        var handler = new MockHttpMessageHandler();
+        // First page: valid HTTPS, provides an http:// next-link cursor.
+        // AllowHttp=false means the http:// downgrade must be rejected.
+        handler.SetResponse("https://api.example.com/orders",
+            """{"next":"http://api.example.com/orders?page=2","items":[{"id":1}]}""");
+
+        var source = RestTestHelper.MockSource(handler);
+        var config = MakeConfig("https://api.example.com/orders", allowHttp: false);
+
+        var act = async () =>
+        {
+            await foreach (var _ in source.ExtractBatchesAsync(config, "", null, 100))
+            { }
+        };
+
+        await act.Should().ThrowAsync<InvalidOperationException>(
+            "an http:// next-link must be rejected when AllowHttp=false to prevent " +
+            "HTTPS→HTTP downgrade that leaks Authorization headers");
+    }
+
+    [TestMethod]
+    public async Task NextLink_https_cursor_is_accepted()
+    {
+        var handler = new MockHttpMessageHandler();
+        handler.SetResponse("https://api.example.com/orders",
+            """{"next":"https://api.example.com/orders?page=2","items":[{"id":1}]}""");
+        handler.SetResponse("https://api.example.com/orders?page=2",
+            """{"items":[{"id":2}]}""");  // no next → stops
+
+        var source = RestTestHelper.MockSource(handler);
+        var config = MakeConfig("https://api.example.com/orders");
+
+        var rows = await RestTestHelper.CollectAllRowsAsync(source, config);
+
+        rows.Should().HaveCount(2, "both pages should be fetched when next-link is https://");
+    }
+
+    [TestMethod]
+    public async Task NextLink_relative_cursor_is_rejected()
+    {
+        var handler = new MockHttpMessageHandler();
+        handler.SetResponse("https://api.example.com/orders",
+            """{"next":"/orders?page=2","items":[{"id":1}]}""");
+
+        var source = RestTestHelper.MockSource(handler);
+        var config = MakeConfig("https://api.example.com/orders");
+
+        var act = async () =>
+        {
+            await foreach (var _ in source.ExtractBatchesAsync(config, "", null, 100))
+            { }
+        };
+
+        await act.Should().ThrowAsync<InvalidOperationException>(
+            "a relative next-link must be rejected to prevent open-redirect attacks");
+    }
+}

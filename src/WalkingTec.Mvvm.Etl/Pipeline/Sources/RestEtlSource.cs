@@ -178,6 +178,11 @@ public sealed class RestEtlSource : IEtlSource
                 ? ExtractNextLink(root, config.NextLinkField)
                 : null;
 
+            // Issue #376: re-validate next-link scheme on every follow-on page to prevent
+            // HTTPS→HTTP downgrade that would expose Authorization headers in plaintext.
+            if (nextCursor is not null)
+                ValidateNextLinkScheme(nextCursor, config.AllowHttp);
+
             // Navigate to the records array.
             var recordsNode = recordsPath is null
                 ? root
@@ -521,6 +526,40 @@ public sealed class RestEtlSource : IEtlSource
                 return null; // path miss
         }
         return node;
+    }
+
+    /// <summary>
+    /// Validates that a server-supplied next-link cursor URL is safe to follow.
+    /// Rejects non-absolute, non-http(s), and http:// cursors unless AllowHttp is set.
+    /// The authoritative private-IP / DNS-pin block still runs in PinnedConnectAsync.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when the next-link URL is relative, uses a disallowed scheme, or
+    /// is an HTTP downgrade when AllowHttp is false.
+    /// </exception>
+    private static void ValidateNextLinkScheme(string nextLink, bool allowHttp)
+    {
+        if (!Uri.TryCreate(nextLink, UriKind.Absolute, out var uri))
+            throw new InvalidOperationException(
+                $"RestEtlSource: next-link cursor is not an absolute URI: '{nextLink}'. " +
+                "Only absolute https:// (or http:// when AllowHttp=true) next-links are permitted.");
+
+        if (uri.Scheme == Uri.UriSchemeHttps)
+            return; // always permitted
+
+        if (uri.Scheme == Uri.UriSchemeHttp)
+        {
+            if (!allowHttp)
+                throw new InvalidOperationException(
+                    $"RestEtlSource: next-link cursor uses http:// which is rejected by default " +
+                    $"(AllowHttp=false). Set AllowHttp=true to permit plain-HTTP pagination " +
+                    $"(for internal/trusted endpoints only). Next-link: '{nextLink}'");
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"RestEtlSource: next-link cursor uses an unsupported scheme '{uri.Scheme}'. " +
+            $"Only http and https are supported. Next-link: '{nextLink}'");
     }
 
     private static string? ExtractNextLink(JsonNode? root, string nextLinkField)

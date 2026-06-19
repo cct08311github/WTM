@@ -90,7 +90,7 @@ public class MssqlBulkLoader : IBulkLoader
         // which preserves pre-10.6 row-lock behaviour).
         using var bulkCopy = new SqlBulkCopy(conn, BulkCopyOptions, externalTransaction: null)
         {
-            DestinationTableName = stagingTableName,
+            DestinationTableName = QuoteQualified(stagingTableName),
             // InternalBatchSize == 0 → use full count, matching pre-10.6 behaviour.
             BatchSize = InternalBatchSize > 0 ? InternalBatchSize : batch.Rows.Count,
             BulkCopyTimeout = TimeoutSeconds
@@ -184,8 +184,8 @@ public class MssqlBulkLoader : IBulkLoader
         var updateCols = columns.Where(c => !keySet.Contains(c)).ToList();
 
         var sb = new StringBuilder();
-        sb.AppendLine($"MERGE [{targetTableName}] AS target");
-        sb.AppendLine($"USING [{stagingTableName}] AS source");
+        sb.AppendLine($"MERGE {QuoteQualified(targetTableName)} AS target");
+        sb.AppendLine($"USING {QuoteQualified(stagingTableName)} AS source");
         // ETL-009: build composite ON clause from all key columns (AND-joined)
         sb.AppendLine("ON " + string.Join(" AND ",
             keyColumns.Select(k => $"target.[{k}] = source.[{k}]")));
@@ -243,8 +243,8 @@ public class MssqlBulkLoader : IBulkLoader
         {
             // 1. DELETE matching rows (or whole table if no WHERE)
             var deleteSql = string.IsNullOrWhiteSpace(whereClause)
-                ? $"DELETE FROM [{targetTableName}]"
-                : $"DELETE FROM [{targetTableName}] WHERE {whereClause}";
+                ? $"DELETE FROM {QuoteQualified(targetTableName)}"
+                : $"DELETE FROM {QuoteQualified(targetTableName)} WHERE {whereClause}";
             await using (var del = conn.CreateCommand())
             {
                 del.Transaction = tran;
@@ -256,8 +256,8 @@ public class MssqlBulkLoader : IBulkLoader
             // 2. INSERT FROM staging
             var colList = string.Join(", ", columns.Select(c => $"[{c}]"));
             var insertSql =
-                $"INSERT INTO [{targetTableName}] ({colList}) " +
-                $"SELECT {colList} FROM [{stagingTableName}]";
+                $"INSERT INTO {QuoteQualified(targetTableName)} ({colList}) " +
+                $"SELECT {colList} FROM {QuoteQualified(stagingTableName)}";
             await using (var ins = conn.CreateCommand())
             {
                 ins.Transaction = tran;
@@ -315,6 +315,17 @@ public class MssqlBulkLoader : IBulkLoader
         return ("dbo", stagingTableName);
     }
 
+    /// <summary>
+    /// Returns a properly bracket-quoted, schema-qualified table identifier for use in
+    /// T-SQL DDL/DML. Each part is quoted independently so schema-qualified names like
+    /// "audit.STG_Orders" produce "[audit].[STG_Orders]" rather than "[audit.STG_Orders]".
+    /// </summary>
+    public static string QuoteQualified(string tableName)
+    {
+        var (schema, table) = ParseSchemaAndTable(tableName);
+        return $"[{schema}].[{table}]";
+    }
+
     public async Task TruncateStagingAsync(
         string connectionString, string stagingTableName,
         CancellationToken cancellationToken = default)
@@ -322,7 +333,7 @@ public class MssqlBulkLoader : IBulkLoader
         await using var conn = new SqlConnection(connectionString);
         await conn.OpenAsync(cancellationToken);
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = $"TRUNCATE TABLE [{stagingTableName}]";
+        cmd.CommandText = $"TRUNCATE TABLE {QuoteQualified(stagingTableName)}";
         // Apply timeout when explicitly set (opt-in; 0 = no limit as before).
         cmd.CommandTimeout = TimeoutSeconds;
         await cmd.ExecuteNonQueryAsync(cancellationToken);
@@ -354,7 +365,7 @@ public class MssqlBulkLoader : IBulkLoader
         if (!exists)
         {
             var sb = new StringBuilder();
-            sb.AppendLine($"CREATE TABLE [{stagingTableName}] (");
+            sb.AppendLine($"CREATE TABLE {QuoteQualified(stagingTableName)} (");
             sb.AppendLine(string.Join(",\n",
                 spec.Columns.Select(c => $"  [{c.Name}] {c.SqlType}")));
             sb.AppendLine(")");

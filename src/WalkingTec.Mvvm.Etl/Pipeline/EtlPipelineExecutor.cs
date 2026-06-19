@@ -435,11 +435,12 @@ public class EtlPipelineExecutor
         var preview = new List<IDictionary<string, object?>>();
 
         // ETL-015: audit log — record that a dry-run read of source data is starting.
+        // ETL-015: source connection string is intentionally omitted to
+        // prevent DB passwords from reaching the log sink (Issue #376).
         _logger?.LogInformation(
-            "ETL dry-run started: Job={JobId} Name={JobName} Source={SourceCs} Query={Query} Watermark={Watermark}",
+            "ETL dry-run started: Job={JobId} Name={JobName} Query={Query} Watermark={Watermark}",
             config.JobId, config.JobName,
-            config.SourceConnectionString,
-            config.QueryTemplate,
+            EtlErrorSanitizer.SanitizeRaw(config.QueryTemplate),
             watermark.GetParameterValue()?.ToString() ?? "(none)");
 
         try
@@ -562,7 +563,7 @@ public class EtlPipelineExecutor
             // ETL-015: audit the failure of the dry-run source read
             _logger?.LogError(
                 "ETL dry-run failed: Job={JobId} Name={JobName} ElapsedMs={ElapsedMs} Error={Error}",
-                config.JobId, config.JobName, sw.ElapsedMilliseconds, ex.Message);
+                config.JobId, config.JobName, sw.ElapsedMilliseconds, EtlErrorSanitizer.SanitizeRaw(ex.Message));
             return new EtlExecutionResult
             {
                 Success = false,

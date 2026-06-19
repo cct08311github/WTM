@@ -95,4 +95,27 @@ public class MssqlBulkLoaderSchemaTests
         Assert.AreEqual("etl", schema);
         Assert.AreEqual("STG_Sales", table);
     }
+
+    // ─── QuoteQualified: schema-qualified name produces per-part brackets ─
+
+    [TestMethod]
+    public void QuoteQualified_plain_name_uses_dbo_schema()
+    {
+        var result = MssqlBulkLoader.QuoteQualified("STG_Orders");
+        Assert.AreEqual("[dbo].[STG_Orders]", result);
+    }
+
+    [TestMethod]
+    public void QuoteQualified_schema_qualified_name_brackets_each_part()
+    {
+        var result = MssqlBulkLoader.QuoteQualified("audit.STG_Orders");
+        Assert.AreEqual("[audit].[STG_Orders]", result);
+    }
+
+    [TestMethod]
+    public void QuoteQualified_already_bracketed_name_strips_then_re_brackets_correctly()
+    {
+        var result = MssqlBulkLoader.QuoteQualified("[audit].[STG_Orders]");
+        Assert.AreEqual("[audit].[STG_Orders]", result);
+    }
 }
