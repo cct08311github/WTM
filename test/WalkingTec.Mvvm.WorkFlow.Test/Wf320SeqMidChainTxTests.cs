@@ -206,15 +206,17 @@ public class Wf320SeqMidChainTxTests : IDisposable
     /// Setup: 3-step Sequential where step 1 is manually set to AutoApproved before step 0 is approved,
     /// and step 2 remains NotYetActive. Approving step 0 must:
     ///   (a) commit the transaction (pointer→1, activate-rows==0 for step-1)
-    ///   (b) post-commit: detect step-1 is AutoApproved → call AdvanceAsync
-    ///   (c) AdvanceAsync returns Blocked (pointer=1 &lt; 3=TotalRequired; step-2 is NotYetActive, not Pending)
+    ///   (b) post-commit: detect step-1 is AutoApproved → call AdvanceAsync (the #361 bounded loop)
+    ///   (c) #361 bounded loop: pointer=1, step-1 is AutoApproved → advance pointer to 2, activate step-2 → Pending
     ///
-    /// The key invariant: the pointer IS advanced to 1 (transaction committed), step-1 stays
-    /// AutoApproved (not re-activated to Pending), and the instance stays Running (waiting for
-    /// step-2 which was NOT activated — i.e., the AutoApprove disambiguation correctly did NOT
-    /// activate step-1 while still advancing the pointer).
+    /// Post-#361 invariants:
+    ///   - pointer advances to 2 (the #361 loop drained the AutoApproved slot at pointer=1)
+    ///   - step-1 stays AutoApproved (the activate CAS correctly skipped it)
+    ///   - step-2 is Pending (the #361 bounded loop activated it)
+    ///   - instance stays Running
+    ///   - result.Code is NOT AlreadyHandled
     ///
-    /// This proves the post-commit disambiguation code path fires correctly after the Task→Node reorder.
+    /// This proves the post-commit #361 bounded-loop code path fires correctly after the Task→Node reorder.
     /// </summary>
     [TestMethod]
     public async Task SeqMidChain_InitiatorAutoApprove_Disambiguation_StillFires_AfterReorder()
@@ -247,13 +249,13 @@ public class Wf320SeqMidChainTxTests : IDisposable
         Assert.AreEqual(TaskState.Pending, task0.State);
 
         // Approve step 0.
-        // With the new atomic transaction:
+        // With the new atomic transaction + #361 bounded loop:
         //   - activateRows == 0 (step-1 is AutoApproved, not NotYetActive/AddedPending → CAS misses)
         //   - advanceRows == 1 (pointer CAS succeeds → pointer→1)
         //   - commit succeeds
-        //   - post-commit: activateRows==0 → read nextTask(order=1) → State==AutoApproved → AdvanceAsync
-        //   - AdvanceAsync: pointer=1, TotalRequired=3 → CanCompleteAsync=false (1 < 3) → Blocked
-        //   - engine returns WorkflowActionResult for the AdvanceAsync call
+        //   - post-commit: activateRows==0 → read nextTask(order=1) → State==AutoApproved → #361 bounded loop fires
+        //   - #361 bounded loop: detects step-1 AutoApproved → advances pointer to 2, activates step-2 (→ Pending)
+        //   - engine returns WorkflowActionResult reflecting the #361 loop outcome
         var result = await engine.ApproveTaskAsync(task0.ID, A1, "step 0 ok");
 
         // The key invariant: engine must NOT return AlreadyHandled — the transaction committed,
@@ -261,13 +263,14 @@ public class Wf320SeqMidChainTxTests : IDisposable
         Assert.AreNotEqual(WorkflowActionCode.AlreadyHandled, result.Code,
             "AutoApprove disambiguation must fire — engine must not treat step 0 as AlreadyHandled.");
 
-        // Verify the pointer DID advance to 1 (the transaction committed).
+        // Verify the pointer advanced to 2: txn committed (→1) then the #361 bounded loop drained
+        // the AutoApproved slot at pointer=1 and advanced to pointer=2.
         await using var readAfter = MakeContext();
         var nodeAfter = await readAfter.Set<NodeInstance>()
             .AsNoTracking()
             .SingleAsync(n => n.ID == nodeInst.ID);
-        Assert.AreEqual(1, nodeAfter.SequencePointer,
-            "Pointer must have advanced to 1 — the txSeqApproveMidChain transaction committed.");
+        Assert.AreEqual(2, nodeAfter.SequencePointer,
+            "Pointer must have advanced to 2 — #361 bounded loop drained the AutoApproved slot at pointer=1.");
 
         // Step-1 must still be AutoApproved (the activate CAS correctly skipped it).
         var step1After = await readAfter.Set<ApprovalTask>()
@@ -276,20 +279,20 @@ public class Wf320SeqMidChainTxTests : IDisposable
         Assert.AreEqual(TaskState.AutoApproved, step1After.State,
             "Step-1 must remain AutoApproved — the activate CAS only targets NotYetActive/AddedPending.");
 
-        // Step-2 must still be NotYetActive (the disambiguation did not activate it — that
-        // only happens when step-1's approval drives the mid-chain forward for step-2).
+        // Step-2 must be Pending — the #361 bounded loop activated it after draining the
+        // AutoApproved step-1 slot and advancing the pointer to 2.
         var step2After = await readAfter.Set<ApprovalTask>()
             .AsNoTracking()
             .SingleAsync(t => t.NodeInstanceId == nodeInst.ID && t.SequenceOrder == 2);
-        Assert.AreEqual(TaskState.NotYetActive, step2After.State,
-            "Step-2 must remain NotYetActive — the disambiguation AdvanceAsync call returned Blocked (pointer 1 < 3).");
+        Assert.AreEqual(TaskState.Pending, step2After.State,
+            "Step-2 must be Pending — the #361 bounded loop activated it after advancing past the AutoApproved slot.");
 
-        // Instance is still Running — waiting for step-2 (which was not activated yet).
+        // Instance is still Running — step-2 is now Pending, waiting for approval.
         var instanceAfter = await readAfter.Set<ProcessInstance>()
             .AsNoTracking()
             .SingleAsync(p => p.ID == instance.ID);
         Assert.AreEqual(InstanceState.Running, instanceAfter.State,
-            "Instance must still be Running — step-2 NotYetActive task needs to be driven forward.");
+            "Instance must still be Running — step-2 Pending task needs to be approved.");
     }
 
     // ── Test 3: Atomicity invariant — CAS-loser leaves no half-activated state ───

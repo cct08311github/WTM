@@ -244,35 +244,77 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         Db.Set<ProcessInstance>().Add(instance);
         await Db.SaveChangesAsync(ct);
 
-        // Transition Draft → Running via GuardedTransition (spec §7.1 — every flip goes through it).
-        var rows = await GuardedTransition.AdvanceProcessInstanceAsync(
-            Db, instance.ID,
-            expectedState: InstanceState.Draft,
-            expectedRowVer: 0,
-            nextState: InstanceState.Running,
-            ct);
+        // #357: Atomic start handoff — mint Start NodeInstance + flip Draft→Running in ONE transaction.
+        // Lock order: NodeInstance (mint, Step 1) → ProcessInstance (flip, Step 2 — LAST) — canonical.
+        // Crash invariant: if the process dies before commit the instance stays Draft with no node
+        // (valid, non-stranded resting state — a Draft with no node can be safely re-driven or GC'd).
+        // AppendAsync (Step 3) runs inside the same tx AFTER the state flip because it only bumps
+        // ProcessInstance.NextSeq (not State); this does not conflict with the flip CAS.
+        if (Db.Database.CurrentTransaction is not null)
+            throw new InvalidOperationException(
+                "StartAsync: unexpected ambient transaction at start-handoff (#357).");
 
-        if (rows == 0)
+        bool startTxWon = false;
+        await using (var txStart = await Db.Database.BeginTransactionAsync(ct))
         {
-            // Should not happen on a brand-new instance; treat as unexpected.
-            _logger.LogWarning("StartAsync: GuardedTransition Draft→Running returned 0 rows for {InstanceId}. Possible race on new instance.", instance.ID);
+            try
+            {
+                // Step 1 (NodeInstance — FIRST): mint Start node inside tx.
+                // WF-19: stamp DefinitionCode from graph.Key for delegation scope filtering.
+                await MintNodeInstanceAsync(instance, startNodeDef, ct, definitionCode: graph.Key);
+
+                // Step 2 (ProcessInstance — LAST): flip Draft → Running.
+                var startRows = await GuardedTransition.AdvanceProcessInstanceAsync(
+                    Db, instance.ID,
+                    expectedState: InstanceState.Draft,
+                    expectedRowVer: 0,
+                    nextState: InstanceState.Running,
+                    ct);
+
+                if (startRows == 0)
+                {
+                    // Should not happen on a brand-new single-caller instance;
+                    // CAS returned 0 — concurrent race (treat as AlreadyHandled).
+                    await txStart.RollbackAsync(CancellationToken.None);
+                    _logger.LogWarning(
+                        "StartAsync: GuardedTransition Draft→Running returned 0 rows for {InstanceId}. Possible race on new instance.",
+                        instance.ID);
+                }
+                else
+                {
+                    // Step 3 (Audit): Submit event append AFTER both NodeInstance + ProcessInstance writes.
+                    // AppendAsync only bumps ProcessInstance.NextSeq, not State — safe inside the same tx.
+                    await WorkflowEventLogWriter.AppendAsync(
+                        Db, instance.ID, tenantCode,
+                        EventAction.Submit,
+                        nodeKey: startNodeDef.NodeKey,
+                        actorITCode: initiatorITCode,
+                        beforeState: InstanceState.Draft.ToString(),
+                        afterState: InstanceState.Running.ToString(),
+                        ct: ct);
+
+                    await txStart.CommitAsync(ct);
+                    startTxWon = true;
+                }
+            }
+            catch
+            {
+                await txStart.RollbackAsync(CancellationToken.None);
+                throw;
+            }
         }
 
-        // Append Submit event.
-        await WorkflowEventLogWriter.AppendAsync(
-            Db, instance.ID, tenantCode,
-            EventAction.Submit,
-            nodeKey: startNodeDef.NodeKey,
-            actorITCode: initiatorITCode,
-            beforeState: InstanceState.Draft.ToString(),
-            afterState: InstanceState.Running.ToString(),
-            ct: ct);
+        // Re-read instance post-commit for AdvanceCoreAsync (fresh RowVer).
+        instance = await Db.Set<ProcessInstance>()
+            .AsNoTracking()
+            .SingleAsync(x => x.ID == instance.ID, ct);
 
-        // Mint the Start NodeInstance (Pending → engine will activate it in AdvanceAsync).
-        // WF-19: stamp DefinitionCode from graph.Key for delegation scope filtering.
-        var startNode = await MintNodeInstanceAsync(instance, startNodeDef, ct,
-            definitionCode: graph.Key);
-        _ = startNode; // used implicitly by AdvanceAsync below
+        if (!startTxWon)
+        {
+            // The start-tx CAS was a concurrent loser — only valid on new instances if something
+            // is very wrong. Return the current instance state without driving further.
+            return instance;
+        }
 
         // Drive through pass-through nodes until blocked or completed.
         await AdvanceCoreAsync(instance, graph, ct);
@@ -1367,7 +1409,125 @@ internal sealed class WorkflowEngine : IWorkflowEngine
 
                 if (atomicExtra.NextIsAutoApproved)
                 {
-                    // Auto-approved step: recursively advance until a real pending step or completion.
+                    // #361: bounded loop — advance pointer past consecutive mid-chain AutoApproved slots.
+                    // The atomic helper advanced the pointer to an AutoApproved position; we must keep
+                    // consuming AutoApproved slots until the pointer reaches a Pending task or the last step.
+                    // Each iteration: if the current-pointer task is AutoApproved, the two writes (Step 1
+                    // activate-next-task + Step 2 pointer CAS) run inside a per-iteration BeginTransactionAsync
+                    // block (mirrors txSeqApproveMidChain pattern in ExecuteApproveCompletionAsync). If the
+                    // CAS returns 0 rows, the tx is rolled back so the activate does not leave an orphan-Pending
+                    // task at nextPtr. Bounded to MaxSteps=200 to prevent livelock on malformed data or
+                    // TotalRequired holding an int.MaxValue "FailClose" sentinel.
+                    const int MaxSteps = 200;
+                    var freshNodeFor361 = await Db.Set<NodeInstance>()
+                        .AsNoTracking()
+                        .SingleAsync(n => n.ID == nodeInst.ID, ct);
+                    int boundFor361 = Math.Min(Math.Max(freshNodeFor361.TotalRequired, 1), MaxSteps);
+
+                    for (int iter361 = 0; iter361 < boundFor361; iter361++)
+                    {
+                        var freshNodeLoop = await Db.Set<NodeInstance>()
+                            .AsNoTracking()
+                            .SingleAsync(n => n.ID == nodeInst.ID, ct);
+
+                        if (freshNodeLoop.SequencePointer >= freshNodeLoop.TotalRequired)
+                        {
+                            // Pointer reached the end — all steps done. Let AdvanceCoreAsync route onward.
+                            return await AdvanceAsync(instance.ID, ct);
+                        }
+
+                        var loopTask = await Db.Set<ApprovalTask>()
+                            .AsNoTracking()
+                            .FirstOrDefaultAsync(
+                                t => t.NodeInstanceId == freshNodeLoop.ID
+                                     && t.SequenceOrder == freshNodeLoop.SequencePointer,
+                                ct);
+
+                        if (loopTask is null)
+                        {
+                            _logger.LogWarning(
+                                "#361: no task found at SequencePointer {Ptr} for node {NodeId}. Breaking loop.",
+                                freshNodeLoop.SequencePointer, freshNodeLoop.ID);
+                            break;
+                        }
+
+                        if (loopTask.State == TaskState.Pending)
+                        {
+                            // Real approver task is Pending — Blocked is the correct result.
+                            return WorkflowActionResult.Blocked;
+                        }
+
+                        if (loopTask.State != TaskState.AutoApproved)
+                        {
+                            _logger.LogWarning(
+                                "#361: unexpected task state {State} at SequencePointer {Ptr} for node {NodeId}.",
+                                loopTask.State, freshNodeLoop.SequencePointer, freshNodeLoop.ID);
+                            break;
+                        }
+
+                        // Task is AutoApproved — activate the next task and advance the pointer by 1.
+                        // Both writes run inside a per-iteration tx (mirrors txSeqApproveMidChain pattern).
+                        // If the pointer CAS loses, the tx rolls back the activate → no orphan-Pending task.
+                        var nextPtr361 = freshNodeLoop.SequencePointer + 1;
+                        bool isLastStep361 = nextPtr361 >= freshNodeLoop.TotalRequired;
+
+                        await using (var tx361 = await Db.Database.BeginTransactionAsync(ct))
+                        {
+                            try
+                            {
+                                // Step 1 (Task FIRST — canonical order): activate next task.
+                                if (!isLastStep361)
+                                {
+                                    await Db.Set<ApprovalTask>()
+                                        .Where(t => t.NodeInstanceId == freshNodeLoop.ID
+                                                     && t.SequenceOrder == nextPtr361
+                                                     && (t.State == TaskState.NotYetActive || t.State == TaskState.AddedPending))
+                                        .ExecuteUpdateAsync(
+                                            s => s.SetProperty(t => t.State, TaskState.Pending),
+                                            ct);
+                                }
+
+                                // Step 2 (Node SECOND): CAS pointer advance.
+                                var advRows361 = await Db.Set<NodeInstance>()
+                                    .Where(n => n.ID == freshNodeLoop.ID
+                                                 && n.State == NodeState.Activated
+                                                 && n.RowVer == freshNodeLoop.RowVer
+                                                 && n.SequencePointer == freshNodeLoop.SequencePointer
+                                                 && n.ApproverSetEpoch == freshNodeLoop.ApproverSetEpoch)
+                                    .ExecuteUpdateAsync(
+                                        s => s.SetProperty(n => n.SequencePointer, nextPtr361)
+                                               .SetProperty(n => n.RowVer, x => x.RowVer + 1),
+                                        ct);
+
+                                if (advRows361 == 0)
+                                {
+                                    // CAS lost — roll back the activate (no orphan-Pending task).
+                                    await tx361.RollbackAsync(CancellationToken.None);
+                                    _logger.LogDebug(
+                                        "#361: pointer CAS returned 0 for node {NodeId} at AutoApproved step {Ptr} — rolling back activate, returning AlreadyHandled.",
+                                        freshNodeLoop.ID, freshNodeLoop.SequencePointer);
+                                    return WorkflowActionResult.AlreadyHandled;
+                                }
+
+                                await tx361.CommitAsync(ct);
+                            }
+                            catch
+                            {
+                                await tx361.RollbackAsync(CancellationToken.None);
+                                throw;
+                            }
+                        }
+
+                        if (isLastStep361)
+                        {
+                            // All steps done — call AdvanceAsync to complete the node and route onward.
+                            return await AdvanceAsync(instance.ID, ct);
+                        }
+
+                        // Pointer advanced — loop again to check if the new position is also AutoApproved.
+                    }
+
+                    // Loop exhausted without finding a Pending task or last step — call AdvanceAsync as fallback.
                     return await AdvanceAsync(instance.ID, ct);
                 }
 
@@ -2917,57 +3077,104 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             }
         }
 
-        // 6. Instance-level guarded CAS (T-CONC-2): Running → Withdrawn.
-        //    If the final approver wins this race first, AdvanceProcessInstanceAsync already
-        //    flipped State to Approved (or Rejected) — our WHERE State==Running misses and
-        //    returns rows==0 → CannotWithdrawAlreadyFinal.
-        var rows = await GuardedTransition.AdvanceProcessInstanceAsync(
-            Db, instance.ID,
-            expectedState: InstanceState.Running,
-            expectedRowVer: instance.RowVer,
-            nextState: InstanceState.Withdrawn,
-            ct);
+        // 6-7 (reordered per #358): atomic Withdraw — Task cancels BEFORE ProcessInstance flip.
+        // Original order was: ProcessInstance flip → Task cancel (violated canonical Task→Node→ProcessInstance order).
+        // #358 fix: (1) reorder to canonical — cancel Tasks FIRST, flip ProcessInstance LAST;
+        //           (2) wrap in RunWithDeadlockRetryAsync + explicit tx so a crash mid-sequence rolls back fully.
+        // CAS-loser (rows==0 on ProcessInstance flip): the instance was concurrently finalized —
+        // return CannotWithdrawAlreadyFinal immediately (not retried; idempotent re-read on replay).
+        if (Db.Database.CurrentTransaction is not null)
+            throw new InvalidOperationException(
+                "WithdrawAsync: unexpected ambient transaction (#358).");
 
-        if (rows == 0)
+        var withdrawResult = await RunWithDeadlockRetryAsync(async innerCt =>
         {
-            _logger.LogDebug(
-                "WithdrawAsync: CAS returned 0 rows for instance {InstanceId} — " +
-                "concurrent actor already changed state. Treating as CannotWithdrawAlreadyFinal.",
-                instanceId);
-            return WorkflowActionResult.CannotWithdrawAlreadyFinal;
-        }
+            await using var txWithdraw = await Db.Database.BeginTransactionAsync(innerCt);
+            try
+            {
+                // Re-read fresh instance snapshot inside the tx (idempotent on deadlock retry).
+                var freshInst = await Db.Set<ProcessInstance>()
+                    .AsNoTracking()
+                    .SingleOrDefaultAsync(x => x.ID == instanceId && x.IsValid == true, innerCt);
 
-        // 7. Cancel all Pending ApprovalTasks for this instance.
-        //    Use node-instance-filtered bulk cancel to avoid cross-instance contamination.
-        var nodeIds = await Db.Set<NodeInstance>()
+                if (freshInst is null || freshInst.State != InstanceState.Running)
+                {
+                    await txWithdraw.RollbackAsync(CancellationToken.None);
+                    _logger.LogDebug(
+                        "WithdrawAsync: re-read state={State} (expected Running) for {InstanceId} — CannotWithdrawAlreadyFinal.",
+                        freshInst?.State, instanceId);
+                    return WorkflowActionResult.CannotWithdrawAlreadyFinal;
+                }
+
+                // Step 1 (ApprovalTask — FIRST): cancel all Pending/NotYetActive tasks.
+                // Two-step: fetch node IDs then bulk-cancel tasks (avoids correlated subquery issues on SQLite).
+                var nodeIdsForWithdraw = await Db.Set<NodeInstance>()
+                    .Where(n => n.InstanceId == instanceId)
+                    .Select(n => n.ID)
+                    .ToListAsync(innerCt);
+
+                if (nodeIdsForWithdraw.Count > 0)
+                {
+                    await Db.Set<ApprovalTask>()
+                        .Where(t => nodeIdsForWithdraw.Contains(t.NodeInstanceId)
+                                     && (t.State == TaskState.Pending || t.State == TaskState.NotYetActive))
+                        .ExecuteUpdateAsync(
+                            s => s.SetProperty(t => t.State, TaskState.Cancelled),
+                            innerCt);
+                }
+
+                // Step 2 (ProcessInstance — LAST): CAS flip Running → Withdrawn.
+                // T-CONC-2: if the final approver won the race first (Approved/Rejected), this returns 0.
+                var withdrawRows = await GuardedTransition.AdvanceProcessInstanceAsync(
+                    Db, instanceId,
+                    expectedState: InstanceState.Running,
+                    expectedRowVer: freshInst.RowVer,
+                    nextState: InstanceState.Withdrawn,
+                    innerCt);
+
+                if (withdrawRows == 0)
+                {
+                    // CAS loser — concurrent actor finalized the instance; return without retry.
+                    await txWithdraw.RollbackAsync(CancellationToken.None);
+                    _logger.LogDebug(
+                        "WithdrawAsync: CAS returned 0 rows for instance {InstanceId} — " +
+                        "concurrent actor already changed state. Treating as CannotWithdrawAlreadyFinal.",
+                        instanceId);
+                    return WorkflowActionResult.CannotWithdrawAlreadyFinal;
+                }
+
+                // Step 3 (Audit): event log AFTER both Task + ProcessInstance writes.
+                await WorkflowEventLogWriter.AppendAsync(
+                    Db, instanceId, freshInst.TenantCode,
+                    EventAction.Withdraw,
+                    nodeKey: null,
+                    actorITCode: actorITCode,
+                    beforeState: InstanceState.Running.ToString(),
+                    afterState: InstanceState.Withdrawn.ToString(),
+                    reason: reason,
+                    ct: innerCt);
+
+                await txWithdraw.CommitAsync(innerCt);
+                return WorkflowActionResult.Withdrawn;
+            }
+            catch
+            {
+                await txWithdraw.RollbackAsync(CancellationToken.None);
+                throw;
+            }
+        }, ct);
+
+        if (withdrawResult.Code != WorkflowActionCode.Withdrawn)
+            return withdrawResult;
+
+        // Post-commit: timer cancels are best-effort (Armed timers fire-and-no-op on gen-gated CAS).
+        // WF-20.2: instance-wide timer cancel on Withdrawn (§6 R4 spec §5.6 gap close).
+        var nodeIdsPostCommit = await Db.Set<NodeInstance>()
             .Where(n => n.InstanceId == instanceId)
             .Select(n => n.ID)
             .ToListAsync(ct);
-
-        if (nodeIds.Count > 0)
-        {
-            await Db.Set<ApprovalTask>()
-                .Where(t => nodeIds.Contains(t.NodeInstanceId)
-                             && (t.State == TaskState.Pending || t.State == TaskState.NotYetActive))
-                .ExecuteUpdateAsync(
-                    s => s.SetProperty(t => t.State, TaskState.Cancelled),
-                    ct);
-
-            // WF-20.2: instance-wide timer cancel on Withdrawn (§6 R4 spec §5.6 gap close).
-            foreach (var nid in nodeIds)
-                await GuardedTransition.CancelTimersForNodeAsync(Db, nid, ct);
-        }
-
-        // 8. Write event log.
-        await WorkflowEventLogWriter.AppendAsync(
-            Db, instance.ID, instance.TenantCode,
-            EventAction.Withdraw,
-            nodeKey: null,
-            actorITCode: actorITCode,
-            beforeState: InstanceState.Running.ToString(),
-            afterState: InstanceState.Withdrawn.ToString(),
-            reason: reason,
-            ct: ct);
+        foreach (var nid in nodeIdsPostCommit)
+            await GuardedTransition.CancelTimersForNodeAsync(Db, nid, ct);
 
         _logger.LogInformation(
             "WithdrawAsync: instance {InstanceId} withdrawn by '{ActorITCode}' (isAdmin={IsAdmin}).",
