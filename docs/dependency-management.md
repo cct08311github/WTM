@@ -92,10 +92,21 @@ warning，因為 NPOI transitive 8.0.2 不再被覆蓋。release 直接失格。
 
 對 production 而言，優先順序是：
 
-1. **NU1903（vulnerable）= P0**，絕不容忍
-2. **NU1510（informational）= P3 噪音**，可接受
+1. **可修補的 NU1903（有 patched 版本）= P0**，絕不容忍 — release 前必 pin/bump
+2. **不可修補的 NU1903（`first_patched: None`，上游尚無修補）= 已追蹤的例外** — 不是靜默容忍：必須有 tracking issue + 文件記錄（本檔 + CHANGELOG known-issues），且上游一釋出修補就立即 bump
+3. **NU1510（informational）= P3 噪音**，可接受
 
 這個 repo 接受 NU1510 噪音換取零漏洞 — 直到 NPOI 上游升 Crypto.Xml dep（追蹤於 [Issue #15](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/issues/15)）。
+
+### SQLitePCLRaw `e_sqlite3` — 不可修補的 NU1903（追蹤於 Issue #393）
+
+`SQLitePCLRaw.lib.e_sqlite3` 2.1.11（GHSA-2m69-gcr7-jv3q，HIGH — bundled SQLite 引擎）經
+`Microsoft.EntityFrameworkCore.Sqlite` → `Microsoft.Data.Sqlite.Core` → `SQLitePCLRaw.bundle_e_sqlite3`
+傳遞進 production `Core`/`Mvc`/`WorkFlow`/`LayUI`/`Etl`。與 Crypto.Xml 不同，**目前無法用 override 修復**：
+advisory 範圍 `<= 2.1.11`、`first_patched: None`，2.1.11 已是最新發佈版，最新的 EF Core Sqlite（10.0.9）
+仍解析到 2.1.11 — **沒有版本可 pin/bump**。處置：track #393，SQLitePCLRaw（或 EF Core Sqlite 一旦
+帶上修補後的 bundle）一釋出修補版就立即 bump。在那之前不 NoWarn、不換 native provider（除非另行決策）。
+實際暴露面僅限「使用 SQLite provider 且開啟不可信 `.db` / 執行不可信 SQL」的應用。
 
 ---
 

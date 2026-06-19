@@ -4,6 +4,10 @@
 
 Stability audit (adversarially verified): 17 confirmed defects across Core / Mvc / Etl / Analysis, fixed in 7 PRs (#383–#390, issues #376–#382). No CRITICAL; no behaviour change for correct usage except the two migration notes below.
 
+### Known Issues
+
+- **`SQLitePCLRaw.lib.e_sqlite3` 2.1.11 — `NU1903` (GHSA-2m69-gcr7-jv3q, HIGH), no upstream fix available (#393).** The bundled SQLite native engine carries a HIGH-severity advisory; it is pulled transitively into every project via `Microsoft.EntityFrameworkCore.Sqlite` (the WTM SQLite DB provider). The advisory's affected range is `<= 2.1.11` with `first_patched: None` — 2.1.11 is the latest published and the newest EF Core Sqlite (10.0.9) still resolves it, so **there is no version to pin or bump to yet**. This is **not** introduced by this release (present since the SQLite provider was added; the advisory is newly disclosed) and is distinct from the project's *fixable*-NU1903 release gate. **Exposure** is limited to applications that use the SQLite provider **and** open untrusted `.db` files or execute untrusted SQL; deployments on SQL Server / PostgreSQL / MySQL / Oracle resolve the transitive but never exercise the engine. **Action:** tracked in #393; `SQLitePCLRaw` will be bumped the moment a patched bundle ships. Applications that do not use SQLite can ignore the warning or exclude the transitive.
+
 ### Security
 
 - **CORS reflect-any-origin + credentials removed from the `_donotusedefault` fallback (#377):** the fallback policy combined `SetIsOriginAllowed(_ => true)` with `AllowCredentials()` — a configuration browsers reject per the CORS spec and a credential-exposure footgun. `AllowCredentials()` is now only applied on the explicit-policy path (`CorsOptions.Policy` with a `Domain` list).
