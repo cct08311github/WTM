@@ -16,6 +16,7 @@ using WalkingTec.Mvvm.Core.Analysis;
 using WalkingTec.Mvvm.Mvc;
 using WalkingTec.Mvvm.Test.Mock;
 using WalkingTec.Mvvm.Core.Support.Json;
+using Microsoft.EntityFrameworkCore;
 
 namespace WalkingTec.Mvvm.Core.Test.Analysis
 {
@@ -2640,6 +2641,113 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
 
             var query = controller.Wtm.DC.Set<AnalysisSavedQuery>().FirstOrDefault(q => q.ID == id);
             Assert.IsNotNull(query, "查詢不應被刪除");
+        }
+
+        // ─── #380 Fix 5: AnalysisSavedQuery tenant isolation ─────────────────
+
+        [TestMethod]
+        public void Fix5_SaveQuery_stamps_TenantCode_from_LoginUserInfo()
+        {
+            var controller = CreateController();
+            controller.Wtm.LoginUserInfo.ITCode = "user1";
+            controller.Wtm.LoginUserInfo.TenantCode = "TENANT_A";
+
+            var req = new SaveQueryRequest
+            {
+                Name = "Tenant Stamped Query",
+                IsPublic = false,
+                Config = new AnalysisQueryRequest
+                {
+                    ListVmType = typeof(SaleRecordListVM).FullName,
+                    Dimensions = new List<string> { "Region" },
+                    Measures = new List<MeasureRequest> { new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum } }
+                }
+            };
+
+            controller.SaveQuery(req);
+
+            var saved = controller.Wtm.DC.Set<AnalysisSavedQuery>().FirstOrDefault();
+            Assert.IsNotNull(saved, "SaveQuery should create a record");
+            Assert.AreEqual("TENANT_A", saved.TenantCode,
+                "TenantCode should be stamped from LoginUserInfo.CurrentTenant");
+        }
+
+        [TestMethod]
+        public void Fix5_ListSavedQueries_cross_tenant_isolation()
+        {
+            // Arrange: seed two public queries — one for TENANT_A, one for TENANT_B
+            var controller = CreateController();
+            var vmType = typeof(SaleRecordListVM).FullName;
+            var configJson = "{}";
+
+            controller.Wtm.DC.Set<AnalysisSavedQuery>().AddRange(
+                new AnalysisSavedQuery { Name = "TenantA_Query", ListVmType = vmType, OwnerCode = "userA", TenantCode = "TENANT_A", IsPublic = true, ConfigJson = configJson },
+                new AnalysisSavedQuery { Name = "TenantB_Query", ListVmType = vmType, OwnerCode = "userB", TenantCode = "TENANT_B", IsPublic = true, ConfigJson = configJson }
+            );
+            controller.Wtm.DC.SaveChanges();
+
+            // Act: query as TENANT_A user
+            controller.Wtm.LoginUserInfo.ITCode = "userA";
+            controller.Wtm.LoginUserInfo.TenantCode = "TENANT_A";
+
+            var result = controller.ListSavedQueries(vmType) as OkObjectResult;
+            Assert.IsNotNull(result);
+            var list = (result.Value as IEnumerable<SavedQuerySummaryDto>)?.ToList();
+            Assert.IsNotNull(list);
+
+            // Assert: only TENANT_A's query is visible
+            Assert.IsTrue(list.Any(x => x.Name == "TenantA_Query"), "Tenant A should see its own query");
+            Assert.IsFalse(list.Any(x => x.Name == "TenantB_Query"), "Tenant A must NOT see Tenant B's query");
+        }
+
+        [TestMethod]
+        public void Fix5_GetSavedQuery_cross_tenant_returns_403()
+        {
+            // Arrange: create a query belonging to TENANT_B
+            var controller = CreateController();
+            var vmType = typeof(SaleRecordListVM).FullName;
+
+            var id = Guid.NewGuid();
+            controller.Wtm.DC.Set<AnalysisSavedQuery>().Add(
+                new AnalysisSavedQuery { ID = id, Name = "TenantB_Query", ListVmType = vmType, OwnerCode = "userB", TenantCode = "TENANT_B", IsPublic = true, ConfigJson = "{}" }
+            );
+            controller.Wtm.DC.SaveChanges();
+
+            // Act: access as TENANT_A user — should be forbidden even though IsPublic=true
+            controller.Wtm.LoginUserInfo.ITCode = "userA";
+            controller.Wtm.LoginUserInfo.TenantCode = "TENANT_A";
+
+            var result = controller.GetSavedQuery(id);
+            Assert.IsInstanceOfType(result, typeof(ForbidResult),
+                "Cross-tenant GetSavedQuery must return 403 even for public queries");
+        }
+
+        [TestMethod]
+        public async Task Fix5_DeleteSavedQuery_cross_tenant_does_not_delete_and_returns_404()
+        {
+            // Arrange: a query owned by userA in TENANT_B
+            var controller = CreateController();
+            var vmType = typeof(SaleRecordListVM).FullName;
+
+            var id = Guid.NewGuid();
+            controller.Wtm.DC.Set<AnalysisSavedQuery>().Add(
+                new AnalysisSavedQuery { ID = id, Name = "TenantB_Query", ListVmType = vmType, OwnerCode = "userA", TenantCode = "TENANT_B", IsPublic = false, ConfigJson = "{}" }
+            );
+            controller.Wtm.DC.SaveChanges();
+
+            // Act: same owner ITCode but different tenant attempts delete
+            controller.Wtm.LoginUserInfo.ITCode = "userA";
+            controller.Wtm.LoginUserInfo.TenantCode = "TENANT_A";
+
+            var result = await controller.DeleteSavedQuery(id);
+
+            // Assert: the row is NOT deleted, and the response is 404 (not 403) so the
+            // cross-tenant caller cannot probe that the record exists in another tenant.
+            Assert.IsInstanceOfType(result, typeof(NotFoundResult),
+                "Cross-tenant delete must return 404, not leak existence via 403");
+
+            var stillExists = controller.Wtm.DC.Set<AnalysisSavedQuery>().IgnoreQueryFilters().Any(q => q.ID == id);
+            Assert.IsTrue(stillExists, "Cross-tenant delete must NOT remove the row");
         }
     }
 }

@@ -297,6 +297,11 @@ result = await _engine.ExecuteDynamicAsync(ctx!.BaseQuery, req, ctx.Fields, iden
             if (req.Measures.Count == 0)  return BadRequest(new ProblemDetails { Title = "至少需要選取 1 個度量指標。", Status = 400 });
             if (req.Measures.Count > 3)   return BadRequest(new ProblemDetails { Title = "最多選取 3 個度量。", Status = 400 });
 
+            // M2: reject oversized filter/sort clause lists
+            if (req.Filters?.Count > MaxFilterClauses)        return BadRequest(new ProblemDetails { Title = $"Filters must not exceed {MaxFilterClauses} clauses.", Status = 400 });
+            if (req.HavingFilters?.Count > MaxFilterClauses)  return BadRequest(new ProblemDetails { Title = $"HavingFilters must not exceed {MaxFilterClauses} clauses.", Status = 400 });
+            if (req.Sort?.Count > MaxFilterClauses)           return BadRequest(new ProblemDetails { Title = $"Sort must not exceed {MaxFilterClauses} clauses.", Status = 400 });
+
             var errorResult = TryPrepareContext(req, out var ctx);
             if (errorResult != null) return errorResult;
 
@@ -366,8 +371,10 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
 
             var userCode = Wtm?.LoginUserInfo?.ITCode ?? string.Empty;
 
+            var currentTenant = Wtm?.LoginUserInfo?.CurrentTenant;
             var rows = Wtm!.DC.Set<AnalysisSavedQuery>()
-                .Where(q => q.ListVmType == listVmType && (q.OwnerCode == userCode || q.IsPublic))
+                // Issue #380: belt-and-suspenders tenant scope (global filter is primary; explicit predicate is defence-in-depth)
+                .Where(q => q.TenantCode == currentTenant && q.ListVmType == listVmType && (q.OwnerCode == userCode || q.IsPublic))
                 .OrderByDescending(q => q.CreateTime)
                 .Select(q => new SavedQuerySummaryDto
                 {
@@ -420,6 +427,8 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
                 ConfigJson = configJson,
                 OwnerCode  = userCode,
                 IsPublic   = req.IsPublic,
+                // Issue #380: stamp tenant so the DataContext global filter applies at read time.
+                TenantCode = Wtm!.LoginUserInfo?.CurrentTenant,
                 CreateTime = Wtm!.TimeProvider.GetLocalNow().DateTime,
                 CreateBy   = userCode
             };
@@ -448,6 +457,9 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
             if (entity == null) return NotFound();
 
             var userCode = Wtm.LoginUserInfo?.ITCode ?? string.Empty;
+            var currentTenant = Wtm.LoginUserInfo?.CurrentTenant;
+            // Issue #380: belt-and-suspenders cross-tenant guard (global filter is primary).
+            if (entity.TenantCode != currentTenant) return Forbid();
             if (!entity.IsPublic && entity.OwnerCode != userCode) return Forbid();
 
             AnalysisQueryRequest? config;
@@ -475,10 +487,12 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
         public async Task<IActionResult> DeleteSavedQuery(Guid id)
         {
             var userCode = Wtm!.LoginUserInfo?.ITCode ?? string.Empty;
+            var currentTenant = Wtm.LoginUserInfo?.CurrentTenant;
 
-            // Single SQL DELETE WHERE — eliminates Load + Remove + SaveChanges round-trip
+            // Single SQL DELETE WHERE — eliminates Load + Remove + SaveChanges round-trip.
+            // Issue #380: belt-and-suspenders tenant scope on the delete predicate.
             var deleted = await Wtm.DC.Set<AnalysisSavedQuery>()
-                .Where(q => q.ID == id && q.OwnerCode == userCode)
+                .Where(q => q.TenantCode == currentTenant && q.ID == id && q.OwnerCode == userCode)
                 .ExecuteDeleteAsync();
 
             if (deleted > 0)
@@ -487,9 +501,12 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
                 return NoContent();
             }
 
-            // Distinguish 404 (not found) vs 403 (not owner)
+            // Distinguish 404 (not found) vs 403 (not owner).
+            // Issue #380: the existence probe is tenant-scoped so a cross-tenant caller
+            // cannot distinguish "exists in another tenant" (would be 404) from "not owner",
+            // closing the IDOR existence-probe vector.
             var exists = await Wtm.DC.Set<AnalysisSavedQuery>()
-                .AnyAsync(q => q.ID == id);
+                .AnyAsync(q => q.TenantCode == currentTenant && q.ID == id);
             return exists ? Forbid() : NotFound();
         }
 

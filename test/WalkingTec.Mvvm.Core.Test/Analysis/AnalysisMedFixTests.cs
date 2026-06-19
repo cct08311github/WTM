@@ -488,6 +488,59 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 "Identity-less requests must not share a cache entry; second call must see new data");
             Assert.AreNotSame(r1, r2, "Different object instances expected (no cache hit)");
         }
+
+        // ─── #380 Fix 6: PivotExport filter caps ─────────────────────────────
+
+        private static AnalysisPivotRequest MakePivotReq() =>
+            new AnalysisPivotRequest
+            {
+                ListVmType     = typeof(SaleRecordListVM).FullName!,
+                Dimensions     = new List<string> { "Region" },
+                Measures       = new List<MeasureRequest> { new MeasureRequest { Field = "Amount", Func = AggregateFunc.Sum } },
+                PivotDimension = "Category"
+            };
+
+        [TestMethod]
+        public async Task Fix6_PivotExport_over_50_filters_returns_400()
+        {
+            var ctrl = CreateController();
+            var req  = MakePivotReq();
+            req.Filters = Enumerable.Range(0, 51)
+                .Select(i => new FilterCondition { Field = "Region", Operator = FilterOperator.Eq, Value = $"R{i}" })
+                .ToList();
+
+            var result = await ctrl.PivotExport(req);
+            Assert.IsInstanceOfType(result, typeof(BadRequestObjectResult),
+                "PivotExport: 51 filter clauses should return 400");
+        }
+
+        [TestMethod]
+        public async Task Fix6_PivotExport_over_50_havingFilters_returns_400()
+        {
+            var ctrl = CreateController();
+            var req  = MakePivotReq();
+            req.HavingFilters = Enumerable.Range(0, 51)
+                .Select(i => new HavingFilter { Field = "Amount_Sum", Operator = FilterOperator.Gt, Value = i.ToString() })
+                .ToList();
+
+            var result = await ctrl.PivotExport(req);
+            Assert.IsInstanceOfType(result, typeof(BadRequestObjectResult),
+                "PivotExport: 51 having-filter clauses should return 400");
+        }
+
+        [TestMethod]
+        public async Task Fix6_PivotExport_over_50_sort_returns_400()
+        {
+            var ctrl = CreateController();
+            var req  = MakePivotReq();
+            req.Sort = Enumerable.Range(0, 51)
+                .Select(_ => new SortSpec { Field = "Amount_Sum", Descending = false })
+                .ToList();
+
+            var result = await ctrl.PivotExport(req);
+            Assert.IsInstanceOfType(result, typeof(BadRequestObjectResult),
+                "PivotExport: 51 sort clauses should return 400");
+        }
     }
 
     // ─── Supporting types for M29 test (must be at namespace scope for EF) ────────

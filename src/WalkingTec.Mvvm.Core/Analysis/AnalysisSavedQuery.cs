@@ -6,8 +6,24 @@ namespace WalkingTec.Mvvm.Core.Analysis
     /// <summary>
     /// 儲存的 Analysis 查詢設定（維度、度量、篩選條件），支援 private/public 共享。
     /// </summary>
-    public class AnalysisSavedQuery : BasePoco
+    /// <remarks>
+    /// Issue #380: implements <see cref="ITenant"/> so that the DataContext global query filter
+    /// scopes saved queries to the current tenant when multi-tenancy is enabled.
+    /// In single-tenant deployments (EnableTenant = false) the <see cref="TenantCode"/>
+    /// column is nullable and the global filter is never applied — behaviour is unchanged.
+    /// </remarks>
+    public class AnalysisSavedQuery : BasePoco, ITenant
     {
+        // ─── ITenant (Issue #380) ───
+
+        /// <summary>
+        /// Tenant discriminator for multi-tenant isolation (Issue #380).
+        /// Stamped from <c>Wtm.LoginUserInfo.CurrentTenant</c> on creation.
+        /// Null in single-tenant deployments — no filter applied, behaviour unchanged.
+        /// </summary>
+        [StringLength(50)]
+        public string? TenantCode { get; set; }
+
         [Required]
         [StringLength(100, ErrorMessage = "Validate.{0}stringmax{1}")]
         public string Name { get; set; } = string.Empty;
