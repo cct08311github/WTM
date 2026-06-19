@@ -302,6 +302,18 @@ public sealed class WorkFlowOptions
     /// </summary>
     public TimeSpan DeadlockRetryBaseDelay { get; set; } = TimeSpan.FromMilliseconds(20);
 
+    // ── WF-359: Phase-4 strand-reaper ────────────────────────────────────────
+
+    /// <summary>
+    /// Maximum number of stranded Sequential approval nodes the Phase-4 strand-reaper
+    /// processes per timer tick (Issue #359).
+    /// <para>The reaper re-drives nodes where a system auto-approve claim committed but
+    /// the post-commit SequencePointer advance was lost (crash window between
+    /// <c>SystemClaimTaskAsync</c> commit and <c>SystemContinueTaskAsync</c> post-commit).</para>
+    /// <para>Default: 50.  Set to 0 to disable the strand reaper.</para>
+    /// </summary>
+    public int StrandReaperBatchSize { get; set; } = 50;
+
     // ── WF-21.3: Low-code designer sub-options ────────────────────────────────
 
     /// <summary>

@@ -2187,11 +2187,15 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             // WF-18 FIX-F: assert ApproverSetEpoch on the final pointer advance too —
             // guards against a concurrent After-加签 that extends the chain after the
             // last task was approved but before the pointer is advanced to completion.
+            // D2: also guard on SequencePointer — a concurrent loser whose pointer already
+            // moved must fail this CAS (rows==0 → AlreadyHandled) instead of advancing
+            // a step early. Mirrors the mid-chain CAS guard (see txSeqApproveMidChain above).
             await Db.Set<NodeInstance>()
                 .Where(n => n.ID == nodeInst.ID
                              && n.State == NodeState.Activated
                              && n.RowVer == freshNodeLast.RowVer
-                             && n.ApproverSetEpoch == freshNodeLast.ApproverSetEpoch)
+                             && n.ApproverSetEpoch == freshNodeLast.ApproverSetEpoch
+                             && n.SequencePointer == nodeInst.SequencePointer)
                 .ExecuteUpdateAsync(
                     s => s.SetProperty(n => n.SequencePointer, totalRequired)
                            .SetProperty(n => n.RowVer, x => x.RowVer + 1),
@@ -2949,7 +2953,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
     /// AutoApproved/AutoRejected state.  The caller wraps each invocation in a per-task
     /// try/catch + LogError so one continuation failure never blocks the rest of the batch
     /// (documented crash-profile limitation: an Activated node with zero Pending tasks
-    /// can be re-driven by a future reaper phase).</para>
+    /// is re-driven by Phase-4 (ReDriveStrandedSequentialNodesAsync)).</para>
     ///
     /// <para>writeNodeCompletionEvent=false: the TimeoutFire event written by
     /// <see cref="SystemClaimTaskAsync"/> IS the per-task audit record; per-task Reject

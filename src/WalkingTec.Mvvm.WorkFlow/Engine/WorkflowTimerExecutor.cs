@@ -123,6 +123,12 @@ internal sealed class WorkflowTimerExecutor
         // Phase-3: AtAction expired-delegation sweep (WF-20.5).
         // Gated: DelegationWindowMode==AtAction AND DelegationExpiredSweep==RevertToPrincipal.
         await SweepExpiredAtActionDelegationsAsync(now, ct);
+
+        // Phase-4: Strand-reaper — re-drive Sequential nodes where the SequencePointer advance was
+        // lost (crash between system auto-approve claim commit and the post-commit continuation).
+        // Re-drive entry: WorkflowEngine.SystemContinueTaskAsync (RowVer CAS-guarded, idempotent).
+        // Default-ON (batch size 50); disabled by setting WorkFlowOptions.StrandReaperBatchSize = 0.
+        await ReDriveStrandedSequentialNodesAsync(now, ct);
     }
 
     // ── Phase-1: fire due timers ───────────────────────────────────────────────
@@ -392,7 +398,9 @@ internal sealed class WorkflowTimerExecutor
             //
             // Per-task try/catch + LogError: a continuation failure MUST NOT undo the committed
             // claims (tasks are already AutoApproved/AutoRejected — the SLA action is recorded).
-            // A future reaper phase can re-drive "Activated node with zero Pending tasks".
+            // Phase-4 (ReDriveStrandedSequentialNodesAsync) is the recovery backstop for this window.
+            // It detects: Running instance + Activated Sequential node + terminal task at SequencePointer
+            // + SequencePointer not yet advanced → re-drives via AdvanceAsync.
             // This is the documented crash-profile limitation (design §6 R3 Known limitation).
             if (autoContinuationContexts is { Count: > 0 } && concreteEngineForContinuation is not null)
             {
@@ -406,7 +414,8 @@ internal sealed class WorkflowTimerExecutor
                     {
                         // Continuation failure: task is already committed (AutoApproved/AutoRejected).
                         // Log and continue — node may stay at Activated with zero Pending tasks;
-                        // a future reaper can re-drive it (documented Known limitation §6 R3).
+                        // Phase-4 (ReDriveStrandedSequentialNodesAsync) re-drives it next tick
+                        // (documented crash-profile limitation §6 R3).
                         _logger.LogError(contEx,
                             "FIX-C: SystemContinueTaskAsync failed for task {TaskId} (node {NodeId}) — " +
                             "claim is committed; continuation failure logged and suppressed. " +
@@ -1800,6 +1809,199 @@ internal sealed class WorkflowTimerExecutor
             {
                 // Restore tenant context for next iteration.
                 // Belt-and-suspenders: PK+RowVer CAS is the real cross-tenant guard.
+                if (_dc is not null)
+                    _dc.SetTenantCode(previousTenantCode);
+            }
+        }
+    }
+
+    // ── Phase-4: Strand-reaper (Issue #359) ──────────────────────────────────
+
+    /// <summary>
+    /// Phase-4 strand-reaper: re-drives Sequential approval nodes where the SequencePointer
+    /// was never advanced after a system auto-approve claim committed (crash window between
+    /// <see cref="WorkflowEngine.SystemClaimTaskAsync"/> commit and
+    /// <see cref="WorkflowEngine.SystemContinueTaskAsync"/> post-commit).
+    ///
+    /// <para><strong>Strand signature:</strong> ProcessInstance Running + NodeInstance Activated +
+    /// ApproveMode==Sequential + task at SequenceOrder==SequencePointer is terminal
+    /// (AutoApproved/AutoRejected) + SequencePointer &lt; TotalRequired.</para>
+    ///
+    /// <para><strong>Re-drive entry:</strong> <see cref="WorkflowEngine.SystemContinueTaskAsync"/>
+    /// — the same post-commit continuation the timer normally calls after a successful claim.
+    /// SystemContinueTaskAsync calls ExecuteApproveCompletionAsync which re-reads NodeInstance
+    /// fresh and atomically advances SequencePointer + activates the next task (or completes
+    /// the node) via RowVer-guarded CAS transactions.  Two concurrent timer hosts both calling
+    /// this on the same strand produce exactly one advance and one AlreadyHandled no-op (pointer
+    /// CAS returns 0 for the loser).</para>
+    ///
+    /// <para><strong>Concrete engine required:</strong> SystemContinueTaskAsync is on
+    /// <see cref="WorkflowEngine"/> (internal); when a custom IWorkflowEngine is registered,
+    /// the cast fails → <c>null</c> → reaper gate off for that host (documented limitation).</para>
+    ///
+    /// <para><strong>Idempotent:</strong> calling this twice on the same strand is safe because
+    /// ExecuteApproveCompletionAsync uses RowVer-guarded pointer-advance CAS — the second call
+    /// finds pointer already advanced → pointer CAS returns 0 → AlreadyHandled → no-op.
+    /// Disabled when <see cref="WorkFlowOptions.StrandReaperBatchSize"/> == 0.</para>
+    ///
+    /// <para><strong>Lock order:</strong> no explicit locks acquired here; SystemContinueTaskAsync
+    /// internally follows Task → Node → Instance order (canonical engine order) via
+    /// GuardedTransition.</para>
+    /// </summary>
+    private async Task ReDriveStrandedSequentialNodesAsync(DateTime now, CancellationToken ct)
+    {
+        // Gate: disabled when batch size is 0.
+        if (_options.StrandReaperBatchSize <= 0)
+            return;
+
+        // Gate: concrete WorkflowEngine required for SystemContinueTaskAsync (internal method).
+        // Custom IWorkflowEngine registrations that aren't WorkflowEngine → null → gate off.
+        var concreteEngine = _engine as WorkflowEngine;
+        if (concreteEngine is null)
+            return;
+
+        var db = GetDb();
+
+        // ── Step 1: Candidate SELECT (cross-tenant) ───────────────────────────────
+        // Activated Sequential nodes with pointer < total (potential strands).
+        // IgnoreQueryFilters: cross-tenant system sweep — all re-drives go through
+        // SystemContinueTaskAsync which uses RowVer-guarded CAS writes.
+        // No cross-tenant write is possible: each write is pinned to the node's own rows.
+        // TenantCode projected so we can set _dc.TenantCode before calling the engine.
+        var activatedSeqNodes = await db.Set<NodeInstance>()
+            .IgnoreQueryFilters() // justified: cross-tenant system reaper sweep; all re-drives are RowVer CAS-guarded via SystemContinueTaskAsync
+            .AsNoTracking()
+            .Where(n => n.State == NodeState.Activated
+                         && n.ApproveMode == ApproveMode.Sequential
+                         && n.SequencePointer < n.TotalRequired)
+            .Select(n => new { n.ID, n.RowVer, n.InstanceId, n.TenantCode, n.SequencePointer })
+            .Take(_options.StrandReaperBatchSize)
+            .ToListAsync(ct);
+
+        if (activatedSeqNodes.Count == 0)
+            return;
+
+        // ── Step 2: Filter to Running instances ───────────────────────────────────
+        // Only re-drive nodes whose owning instance is still Running.
+        // A two-step materialize approach avoids complex correlated subqueries
+        // that may not translate cleanly across all supported providers (SQLite/Oracle/DaMeng).
+        var instanceIds = activatedSeqNodes.Select(n => n.InstanceId).Distinct().ToList();
+        var runningInstanceIds = await db.Set<ProcessInstance>()
+            .IgnoreQueryFilters() // cross-tenant system sweep (same justification)
+            .AsNoTracking()
+            .Where(i => instanceIds.Contains(i.ID) && i.State == InstanceState.Running)
+            .Select(i => i.ID)
+            .ToListAsync(ct);
+
+        if (runningInstanceIds.Count == 0)
+            return;
+
+        var runningSet = new HashSet<Guid>(runningInstanceIds);
+
+        // ── Step 3: Per-candidate strand-check and re-drive ───────────────────────
+        foreach (var node in activatedSeqNodes)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            if (!runningSet.Contains(node.InstanceId))
+                continue; // instance not Running — skip
+
+            // ── Strand-check: find the terminal task at SequencePointer ───────────
+            // Idempotent: if the pointer was already advanced by another host (task at
+            // pointer is no longer AutoApproved/AutoRejected), AnyAsync returns false → skip.
+            var terminalTask = await db.Set<ApprovalTask>()
+                .IgnoreQueryFilters() // cross-tenant system sweep
+                .AsNoTracking()
+                .Where(t => t.NodeInstanceId == node.ID
+                             && t.SequenceOrder == node.SequencePointer
+                             && (t.State == TaskState.AutoApproved
+                                 || t.State == TaskState.AutoRejected))
+                .Select(t => new { t.ID, t.State, t.AssigneeITCode })
+                .FirstOrDefaultAsync(ct);
+
+            if (terminalTask is null)
+                continue; // not a strand — task at pointer is still Pending (healthy) or pointer already advanced
+
+            // ── Read full entity rows needed by SystemContinueTaskAsync ───────────
+            // SystemContinueTaskAsync takes NodeInstance + ProcessInstance (full entities).
+            // Re-reads are fresh; concurrent pointer advance on another host is safe because
+            // ExecuteApproveCompletionAsync uses a RowVer-guarded CAS internally.
+            var fullNode = await db.Set<NodeInstance>()
+                .IgnoreQueryFilters() // cross-tenant system sweep
+                .AsNoTracking()
+                .SingleOrDefaultAsync(n => n.ID == node.ID, ct);
+
+            // D1: re-validate the strand still holds at the SAME pointer we scanned.
+            // A concurrent host (or normal actor) may have advanced the pointer between the
+            // batch scan and this fresh read — if so, this is no longer our strand: skip it.
+            if (fullNode is null
+                || fullNode.State != NodeState.Activated
+                || fullNode.SequencePointer != node.SequencePointer
+                || fullNode.SequencePointer >= fullNode.TotalRequired)
+            {
+                continue;
+            }
+
+            var fullInstance = await db.Set<ProcessInstance>()
+                .IgnoreQueryFilters() // cross-tenant system sweep
+                .AsNoTracking()
+                .SingleOrDefaultAsync(i => i.ID == node.InstanceId, ct);
+
+            if (fullInstance is null || fullInstance.State != InstanceState.Running)
+                continue; // instance no longer Running — safe skip
+
+            // ── This node matches the strand signature — re-drive via SystemContinueTaskAsync ──
+            // Tenant-scoped: set _dc.TenantCode before calling the engine so that
+            // any downstream HasQueryFilter scoped writes resolve to the correct tenant.
+            // Test path: _dc is null → no tenant setup needed.
+            string? previousTenantCode = null;
+            if (_dc is not null)
+            {
+                previousTenantCode = _dc.TenantCode;
+                _dc.SetTenantCode(node.TenantCode);
+            }
+
+            try
+            {
+                // Re-drive: SystemContinueTaskAsync calls ExecuteApproveCompletionAsync (Sequential path)
+                // which re-reads NodeInstance fresh and atomically advances SequencePointer + activates
+                // the next task (or completes the node if pointer+1 >= TotalRequired).
+                //
+                // CAS-safety: ExecuteApproveCompletionAsync wraps pointer advance in a RowVer-guarded
+                // transaction.  If another host or normal flow already advanced the pointer, the pointer
+                // CAS returns 0 rows → AlreadyHandled → safe no-op.  No double-advance is possible.
+                var ctx = new WorkflowEngine.SystemClaimContext(
+                    TaskId:       terminalTask.ID,
+                    AssigneeITCode: terminalTask.AssigneeITCode ?? string.Empty,
+                    NextState:    terminalTask.State,
+                    ApproveMode:  ApproveMode.Sequential,
+                    NodeInst:     fullNode,
+                    Instance:     fullInstance);
+
+                var result = await concreteEngine.SystemContinueTaskAsync(ctx, ct);
+
+                if (result.Code == WorkflowActionCode.Advanced
+                    || result.Code == WorkflowActionCode.InstanceApproved
+                    || result.Code == WorkflowActionCode.Rejected)
+                {
+                    _logger.LogInformation(
+                        "Phase-4 strand-reaper: re-drove stranded Sequential node {NodeId} (instance {InstanceId}, " +
+                        "pointer {Pointer}) — result={Result}",
+                        node.ID, node.InstanceId, node.SequencePointer, result.Code);
+                }
+                // AlreadyHandled (another host won the CAS), Blocked (next step human), etc. are safe no-ops.
+            }
+            catch (Exception ex)
+            {
+                // Per-candidate try/catch: one bad candidate never blocks the rest.
+                // The strand stays in place and will be retried on the next tick.
+                _logger.LogError(ex,
+                    "Phase-4 strand-reaper: re-drive failed for node {NodeId} (instance {InstanceId}) — will retry next tick",
+                    node.ID, node.InstanceId);
+            }
+            finally
+            {
+                // Restore tenant context for the next candidate. Belt-and-suspenders.
                 if (_dc is not null)
                     _dc.SetTenantCode(previousTenantCode);
             }
