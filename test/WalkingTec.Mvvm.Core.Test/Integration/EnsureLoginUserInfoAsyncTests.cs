@@ -1,7 +1,9 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Text;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
@@ -11,6 +13,7 @@ using Microsoft.Extensions.Primitives;
 using Microsoft.Extensions.Localization;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Tokens;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
 using WalkingTec.Mvvm.Core;
@@ -507,6 +510,160 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
                 reloadCount.Should().Be(countAfterEnsure,
                     "sync getter must not re-invoke ReloadUser after EnsureLoginUserInfoAsync has run");
                 viaGetter.Should().BeSameAs(wtm.LoginUserInfo);
+            }
+            finally
+            {
+                WTMContext.ReloadUserFunc = null;
+            }
+        }
+
+        // ─── Branch 2: _remotetoken + HasMainHost==false (JWT validation path) ──
+
+        /// <summary>
+        /// Helper: build a signed JWT using the given key/issuer/audience/subject/tenant.
+        /// </summary>
+        private static string BuildJwt(
+            string securityKey,
+            string issuer,
+            string audience,
+            string userCode,
+            string? tenantCode = null)
+        {
+            var keyBytes = Encoding.UTF8.GetBytes(securityKey.PadRight(32, 'x')[..32]);
+            var signingKey = new SymmetricSecurityKey(keyBytes);
+            var credentials = new SigningCredentials(signingKey, SecurityAlgorithms.HmacSha256);
+
+            var claims = new List<Claim>
+            {
+                new(AuthConstants.JwtClaimTypes.Subject, userCode)
+            };
+            if (tenantCode != null)
+                claims.Add(new(AuthConstants.JwtClaimTypes.TenantCode, tenantCode));
+
+            var token = new JwtSecurityToken(
+                issuer: issuer,
+                audience: audience,
+                claims: claims,
+                expires: DateTime.UtcNow.AddHours(1),
+                signingCredentials: credentials);
+
+            return new JwtSecurityTokenHandler().WriteToken(token);
+        }
+
+        [TestMethod]
+        [Description(
+            "Branch 2 / HasMainHost==false: a valid signed JWT in _remotetoken must " +
+            "be validated, the subject claim extracted, and _loginUserInfo populated " +
+            "via ReloadUserAsync (Issue deferred test coverage).")]
+        public async Task EnsureLoginUserInfoAsync_RemoteToken_HasMainHostFalse_ValidJwt_PopulatesLoginUserInfo()
+        {
+            // Arrange — build a Configs with NO "mainhost" domain so HasMainHost==false.
+            const string issuer = "https://test.issuer";
+            const string audience = "https://test.audience";
+            const string rawKey = "myTestSecretKey12345678";   // will be padded to 32
+            const string userCode = "jwt_user";
+
+            var configs = new Configs
+            {
+                Domains = new Dictionary<string, WalkingTec.Mvvm.Core.ConfigOptions.Domain>
+                {
+                    // "mainhost" key is intentionally absent → HasMainHost == false
+                    {
+                        "subhost",
+                        new WalkingTec.Mvvm.Core.ConfigOptions.Domain { Address = "https://sub.example.com" }
+                    }
+                }
+            };
+            configs.JwtOptions.SecurityKey = rawKey;
+            configs.JwtOptions.Issuer = issuer;
+            configs.JwtOptions.Audience = audience;
+
+            // Build a valid JWT signed with the same key the WTMContext will validate.
+            var validToken = BuildJwt(configs.JwtOptions.SecurityKey, issuer, audience, userCode);
+
+            var httpCtx = MakeRemoteTokenHttpContext(validToken);
+            var (wtm, _) = MakeWtmContextWithConfig(httpCtx, configs);
+
+            var stubbedUser = new LoginUserInfo { ITCode = userCode };
+            int reloadCount = 0;
+            WTMContext.ReloadUserFunc = (_, code) =>
+            {
+                reloadCount++;
+                return code == userCode ? stubbedUser : null!;
+            };
+
+            try
+            {
+                // Act
+                await wtm.EnsureLoginUserInfoAsync();
+
+                // Assert
+                reloadCount.Should().Be(1,
+                    "HasMainHost==false valid JWT path must call ReloadUserAsync exactly once");
+                wtm.LoginUserInfo.Should().NotBeNull(
+                    "a valid JWT must result in _loginUserInfo being populated");
+                wtm.LoginUserInfo!.ITCode.Should().Be(userCode,
+                    "ITCode must match the sub claim in the validated JWT");
+            }
+            finally
+            {
+                WTMContext.ReloadUserFunc = null;
+            }
+        }
+
+        [TestMethod]
+        [Description(
+            "Branch 2 / HasMainHost==false: a JWT with a tampered signature must be " +
+            "rejected (SecurityTokenException) and _loginUserInfo must remain null " +
+            "(Issue deferred test coverage).")]
+        public async Task EnsureLoginUserInfoAsync_RemoteToken_HasMainHostFalse_TamperedJwt_LeavesLoginUserInfoNull()
+        {
+            // Arrange — same config as the valid-JWT test
+            const string issuer = "https://test.issuer";
+            const string audience = "https://test.audience";
+            const string rawKey = "myTestSecretKey12345678";
+            const string userCode = "tamper_victim";
+
+            var configs = new Configs
+            {
+                Domains = new Dictionary<string, WalkingTec.Mvvm.Core.ConfigOptions.Domain>
+                {
+                    {
+                        "subhost",
+                        new WalkingTec.Mvvm.Core.ConfigOptions.Domain { Address = "https://sub.example.com" }
+                    }
+                }
+            };
+            configs.JwtOptions.SecurityKey = rawKey;
+            configs.JwtOptions.Issuer = issuer;
+            configs.JwtOptions.Audience = audience;
+
+            // Build a valid token then tamper with the last character of the signature.
+            var validToken = BuildJwt(configs.JwtOptions.SecurityKey, issuer, audience, userCode);
+            var parts = validToken.Split('.');
+            var tamperedSignature = parts[2][..^1] + (parts[2][^1] == 'A' ? 'B' : 'A');
+            var tamperedToken = string.Join('.', parts[0], parts[1], tamperedSignature);
+
+            var httpCtx = MakeRemoteTokenHttpContext(tamperedToken);
+            var (wtm, _) = MakeWtmContextWithConfig(httpCtx, configs);
+
+            bool reloadCalled = false;
+            WTMContext.ReloadUserFunc = (_, _) =>
+            {
+                reloadCalled = true;
+                return new LoginUserInfo { ITCode = "should_not_reach" };
+            };
+
+            try
+            {
+                // Act — must NOT throw; SecurityTokenException is caught internally.
+                await wtm.EnsureLoginUserInfoAsync();
+
+                // Assert
+                reloadCalled.Should().BeFalse(
+                    "a tampered JWT signature must be rejected before ReloadUserAsync is called");
+                wtm.LoginUserInfo.Should().BeNull(
+                    "_loginUserInfo must remain null when JWT signature validation fails");
             }
             finally
             {

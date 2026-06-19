@@ -16,6 +16,15 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
+    <!--
+      Issue #372 — pin vulnerable transitive from NPOI.
+      NPOI's transitive pull of System.Security.Cryptography.Xml 8.0.2 has HIGH-severity
+      CVEs (GHSA-37gx-xxp4-5rgx, GHSA-w3x6-4m5h-cxqf). This direct PackageReference at
+      10.0.6 overrides the transitive for this test project.
+      .NET 10 will emit NU1510 on this line — that is the expected positive side-effect
+      of the override working. DO NOT remove based on NU1510. See Issue #372.
+    -->
+    <PackageReference Include="System.Security.Cryptography.Xml" />
   </ItemGroup>
 
   <ItemGroup>

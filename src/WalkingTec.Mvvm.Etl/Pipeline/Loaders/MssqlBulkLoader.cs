@@ -406,22 +406,38 @@ public class MssqlBulkLoader : IBulkLoader
         return columns;
     }
 
+    /// <summary>
+    /// SQL used by <see cref="IsUniqueColumnAsync"/> to check whether a column
+    /// participates in a PRIMARY KEY or UNIQUE constraint.
+    /// Exposed as <c>internal static readonly</c> so unit tests can assert that
+    /// the query filters on both TABLE_SCHEMA and TABLE_NAME (Issue #391).
+    /// </summary>
+    internal static readonly string IsUniqueColumnQuery = @"
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
+            JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS t
+              ON k.CONSTRAINT_NAME = t.CONSTRAINT_NAME
+             AND k.TABLE_SCHEMA    = t.TABLE_SCHEMA
+            WHERE k.TABLE_NAME   = @tableName
+              AND k.TABLE_SCHEMA  = @schemaName
+              AND k.COLUMN_NAME   = @colName
+              AND t.CONSTRAINT_TYPE IN ('PRIMARY KEY', 'UNIQUE')";
+
     public async Task<bool> IsUniqueColumnAsync(
         string connectionString, string tableName, string columnName,
         CancellationToken cancellationToken = default)
     {
+        var (schemaName, tableNameOnly) = ParseSchemaAndTable(tableName);
+
         await using var conn = new SqlConnection(connectionString);
         await conn.OpenAsync(cancellationToken);
 
         await using var cmd = conn.CreateCommand();
-        // Check PK or Unique constraints in MSSQL
-        cmd.CommandText = @"
-            SELECT COUNT(*)
-            FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
-            JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS t ON k.CONSTRAINT_NAME = t.CONSTRAINT_NAME
-            WHERE k.TABLE_NAME = @tableName AND k.COLUMN_NAME = @colName
-              AND t.CONSTRAINT_TYPE IN ('PRIMARY KEY', 'UNIQUE')";
-        cmd.Parameters.AddWithValue("@tableName", tableName);
+        // Check PK or Unique constraints in MSSQL, scoped to the correct schema
+        // so that a same-named table in another schema is never matched (#391).
+        cmd.CommandText = IsUniqueColumnQuery;
+        cmd.Parameters.AddWithValue("@tableName", tableNameOnly);
+        cmd.Parameters.AddWithValue("@schemaName", schemaName);
         cmd.Parameters.AddWithValue("@colName", columnName);
 
         var count = (int)(await cmd.ExecuteScalarAsync(cancellationToken))!;

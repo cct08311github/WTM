@@ -1,4 +1,5 @@
 #nullable enable
+using System;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Etl.Pipeline.Loaders;
 
@@ -117,5 +118,63 @@ public class MssqlBulkLoaderSchemaTests
     {
         var result = MssqlBulkLoader.QuoteQualified("[audit].[STG_Orders]");
         Assert.AreEqual("[audit].[STG_Orders]", result);
+    }
+
+    // ─── IsUniqueColumnQuery: schema filter regression guard (#391) ───────
+
+    [TestMethod]
+    [Description(
+        "Regression guard for Issue #391: IsUniqueColumnAsync must filter on both " +
+        "TABLE_SCHEMA and TABLE_NAME so that a same-named table in another schema " +
+        "does not match a constraint intended for a different schema. " +
+        "This test verifies the SQL constant exposed by MssqlBulkLoader.")]
+    public void IsUniqueColumnQuery_ContainsTableSchemaFilter()
+    {
+        // The query is exposed as an internal static readonly string so we can
+        // assert its content without a live MSSQL connection.
+        Assert.IsTrue(
+            MssqlBulkLoader.IsUniqueColumnQuery.Contains("TABLE_SCHEMA", StringComparison.OrdinalIgnoreCase),
+            "IsUniqueColumnAsync SQL must filter on TABLE_SCHEMA to scope the " +
+            "constraint lookup to the correct schema (Issue #391). " +
+            "Do not remove the TABLE_SCHEMA predicate from IsUniqueColumnQuery.");
+    }
+
+    [TestMethod]
+    [Description(
+        "Regression guard for Issue #391: IsUniqueColumnAsync must parse a " +
+        "schema-qualified table name (e.g. 'audit.STG_Orders') and bind @schemaName " +
+        "separately from @tableName so that both parameters are present in the query.")]
+    public void IsUniqueColumnQuery_ContainsBothSchemaAndTableNameParameters()
+    {
+        Assert.IsTrue(
+            MssqlBulkLoader.IsUniqueColumnQuery.Contains("@schemaName", StringComparison.Ordinal),
+            "IsUniqueColumnAsync SQL must use @schemaName parameter (Issue #391).");
+        Assert.IsTrue(
+            MssqlBulkLoader.IsUniqueColumnQuery.Contains("@tableName", StringComparison.Ordinal),
+            "IsUniqueColumnAsync SQL must use @tableName parameter (Issue #391).");
+    }
+
+    [TestMethod]
+    [Description(
+        "Regression guard for Issue #391: the JOIN condition between KEY_COLUMN_USAGE " +
+        "and TABLE_CONSTRAINTS must also include TABLE_SCHEMA to prevent cross-schema " +
+        "constraint name collisions.")]
+    public void IsUniqueColumnQuery_JoinIncludesTableSchema()
+    {
+        // Count occurrences of TABLE_SCHEMA — must appear at least twice:
+        // once in the JOIN ON clause and once in the WHERE clause.
+        var query = MssqlBulkLoader.IsUniqueColumnQuery;
+        int occurrences = 0;
+        int idx = 0;
+        while ((idx = query.IndexOf("TABLE_SCHEMA", idx, StringComparison.OrdinalIgnoreCase)) >= 0)
+        {
+            occurrences++;
+            idx++;
+        }
+        Assert.IsTrue(occurrences >= 2,
+            $"TABLE_SCHEMA must appear at least twice in IsUniqueColumnQuery " +
+            $"(JOIN condition + WHERE clause) but found {occurrences} occurrence(s). " +
+            $"Issue #391 requires the JOIN ON also filters on TABLE_SCHEMA to prevent " +
+            $"cross-schema CONSTRAINT_NAME collisions.");
     }
 }
