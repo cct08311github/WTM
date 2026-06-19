@@ -240,7 +240,68 @@ cache miss 時，per-key `SemaphoreSlim(1,1)` + double-check 確保只有第一�
 - Write 只清發起寫入的那台 Pod 的快取
 - 其他 Pod 的快取在 TTL 內仍是舊資料
 
-若需要強一致性，可在 TTL 設定較短（如 `TtlMinutes = 1`）接受短暫的最終一致性，或在未來升級至 `IDistributedCache`（Redis）方案。
+若需要強一致性，可使用下方的 **分散式快取後端（opt-in）** 方案。
+
+---
+
+## 分散式快取後端（OPT-IN）— #415
+
+> **版本**：v10.13.0+
+
+預設 Lookup Cache 使用 `IMemoryCache`（in-memory，process 級別）。多節點部署若需要共用快取，可切換為 `IDistributedCache` 後端（例如 Redis、SQL Server Distributed Cache）。
+
+### 啟用步驟
+
+```csharp
+// Program.cs
+builder.Services.AddWtmContext(builder.Configuration);
+
+// 1. 注冊你的 IDistributedCache 實作（不含 Redis package 的情況下可先用 AddDistributedMemoryCache）
+builder.Services.AddStackExchangeRedisCache(opts =>
+    opts.Configuration = builder.Configuration["Redis:ConnectionString"]);
+
+// 2. 啟用分散式 Lookup Cache 後端（必須在 AddWtmContext 之後呼叫）
+builder.Services.AddWtmDistributedLookupCache();
+```
+
+未呼叫 `AddWtmDistributedLookupCache()` 時，行為與原先完全相同（仍使用 in-memory backend）。
+
+### 行為差異
+
+| 行為 | in-memory（預設） | distributed（opt-in） |
+|------|-------------------|-----------------------|
+| 存儲後端 | `IMemoryCache`（process 內） | `IDistributedCache`（跨節點） |
+| 序列化 | 無（直接保存物件） | System.Text.Json（JSON） |
+| 失效 — 單 key | `IMemoryCache.Remove` | `IDistributedCache.Remove` |
+| 失效 — 整個型別 | `CancellationTokenSource`（批次清除） | Invalidation Sentinel 策略（見下） |
+| Stampede 防護 | per-key `SemaphoreSlim`（process-local） | per-key `SemaphoreSlim`（process-local）|
+| 跨節點 stampede | N/A | 不包含（需搭配 Redis distributed lock） |
+| 統計（Hits/Misses/etc.） | process-local，重啟歸零 | process-local，重啟歸零 |
+
+### InvalidateType 的 Sentinel 策略
+
+`IDistributedCache` 沒有「按前綴批次刪除」的標準 API，因此 `InvalidateType` 採用 invalidation sentinel 策略：
+
+1. 在 `wtm:lookup:inv:{type.FullName}` 寫入當前 UTC ticks 作為 sentinel 值
+2. 下次 `GetAll` / `GetAllAsync` 讀取快取條目時，同時讀取 sentinel 並比較時間戳
+3. 若 sentinel 比條目更新，視為失效 → 觸發 cache miss，重新查 DB
+
+此方式跨節點有效：任一節點呼叫 `InvalidateType` 後，所有節點在下一次讀取時都會察覺 sentinel 較新，進而重查 DB。
+
+### 序列化限制
+
+快取條目以 JSON 序列化（System.Text.Json）存入分散式快取。僅 **public property** 被序列化；欄位（field）不包含。若 Model 有 `get`-only 或 `init`-only property，需確保 JSON 反序列化時能正確還原（可加 `[JsonConstructor]`）。
+
+`TopBasePoco` 及大多數 WTM Model 只有標準 property，通常無需額外設定。
+
+### 何時選擇 distributed 後端
+
+| 場景 | 建議 |
+|------|------|
+| 單節點 / 開發環境 | 預設 in-memory，無需設定 |
+| 多 Pod，接受 TTL 範圍內的最終一致性 | 設短 TTL（如 1 分鐘）繼續使用 in-memory |
+| 多 Pod，需要跨節點強一致性失效 | 啟用 distributed 後端 + Redis |
+| 多 Pod，Model 資料很少更新（如幣別代碼） | in-memory + 較長 TTL 即可 |
 
 ---
 

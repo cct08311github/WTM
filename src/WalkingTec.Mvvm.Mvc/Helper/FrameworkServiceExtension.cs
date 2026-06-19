@@ -1285,6 +1285,49 @@ namespace WalkingTec.Mvvm.Mvc
             return expires.Value > now - skew;
         }
 
+        /// <summary>
+        /// OPT-IN: 替換 Lookup Cache 後端為 <see cref="IDistributedCache"/>（例如 Redis）。
+        /// <para>
+        /// 呼叫本方法後，框架會以 <see cref="WalkingTec.Mvvm.Core.Cache.DistributedLookupCacheService"/>
+        /// 取代預設的 in-memory <see cref="WalkingTec.Mvvm.Core.Cache.LookupCacheService"/>。
+        /// 主機必須先注冊 <see cref="IDistributedCache"/> 實作（如 <c>services.AddStackExchangeRedisCache(...)</c>），
+        /// 且本方法須在 <c>AddWtmContext()</c> 之後呼叫，否則 override 無效。
+        /// </para>
+        /// <para>
+        /// 未呼叫本方法時行為與原先完全相同（仍使用 in-memory backend）。
+        /// </para>
+        /// <example>
+        /// <code>
+        /// // Program.cs
+        /// builder.Services.AddWtmContext(config);
+        /// builder.Services.AddStackExchangeRedisCache(opts =>
+        ///     opts.Configuration = builder.Configuration["Redis:ConnectionString"]);
+        /// builder.Services.AddWtmDistributedLookupCache();
+        /// </code>
+        /// </example>
+        /// </summary>
+        public static IServiceCollection AddWtmDistributedLookupCache(
+            this IServiceCollection services)
+        {
+            // Guard: AddWtmContext must be called first to register ILookupCacheService.
+            var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(WalkingTec.Mvvm.Core.Cache.ILookupCacheService));
+            if (descriptor == null)
+                throw new InvalidOperationException("AddWtmDistributedLookupCache() must be called after AddWtmContext().");
+
+            // Override the singleton registered by AddWtmContext with the distributed implementation.
+            // We add a new singleton descriptor; ASP.NET Core DI resolves the last registered
+            // descriptor for a given service type when GetService / GetRequiredService is called,
+            // so this effectively replaces the in-memory service.
+            services.AddSingleton<WalkingTec.Mvvm.Core.Cache.ILookupCacheService>(sp =>
+                new WalkingTec.Mvvm.Core.Cache.DistributedLookupCacheService(
+                    sp.GetRequiredService<IDistributedCache>(),
+                    AppDomain.CurrentDomain.GetAssemblies(),
+                    sp.GetService<WalkingTec.Mvvm.Core.Cache.LookupCacheOptions>(),
+                    sp.GetService<Microsoft.Extensions.Logging.ILogger<
+                        WalkingTec.Mvvm.Core.Cache.DistributedLookupCacheService>>()));
+            return services;
+        }
+
     }
 
 
