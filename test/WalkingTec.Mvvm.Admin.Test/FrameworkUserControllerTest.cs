@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Core.Support.Json;
 using WalkingTec.Mvvm.Mvc.Admin.Controllers;
 using WalkingTec.Mvvm.Mvc.Admin.ViewModels.FrameworkUserVms;
 using WalkingTec.Mvvm.Test.Mock;
@@ -187,6 +188,149 @@ namespace WalkingTec.Mvvm.Admin.Test
             using (var context = new Demo.DataContext(_seed, DBTypeEnum.Memory))
             {
                 Assert.AreEqual(context.Set<FrameworkUser>().Count(), 0);
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // MVC-008 regression tests (#411) — Razor demo Password POST guard
+        // ─────────────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Non-admin attacker POSTs victim's ID but supplies their own ITCode in the body.
+        /// The old guard compared vm.Entity.ITCode (body-supplied) to the login ITCode, so
+        /// this bypass worked. The fixed guard looks up the canonical ITCode from the DB by
+        /// Entity.ID, so the attack is rejected.
+        /// </summary>
+        [TestMethod]
+        public void Password_NonAdmin_WithOwnITCodeInBodyButVictimID_IsRejected()
+        {
+            // Arrange: create a victim user whose password we want to protect
+            FrameworkUser victim = new FrameworkUser();
+            string originalPasswordHash;
+            using (var context = new Demo.DataContext(_seed, DBTypeEnum.Memory))
+            {
+                victim.ITCode = "victim";
+                victim.Name = "Victim User";
+                originalPasswordHash = PasswordHashHelper.HashPassword("original_password");
+                victim.Password = originalPasswordHash;
+                context.Set<FrameworkUser>().Add(victim);
+                context.SaveChanges();
+            }
+
+            // The controller is created with usercode "user" (non-admin, Roles is null)
+            // Attacker submits: victim's ID + their own ITCode in the body (the exploit vector)
+            FrameworkUserVM vm = _controller.Wtm.CreateVM<FrameworkUserVM>();
+            vm.Entity = new FrameworkUser
+            {
+                ID       = victim.ID,
+                ITCode   = "user",      // attacker's own ITCode in the body — old guard passed this
+                Password = "hacked!"
+            };
+
+            // Act
+            ActionResult rv = (ActionResult)_controller.Password(vm);
+
+            // Assert: must return the no-privilege content result, not a success result
+            Assert.IsInstanceOfType(rv, typeof(ContentResult),
+                "Non-admin attacker supplying own ITCode in body but victim ID must be rejected.");
+
+            // Verify the victim's password was NOT changed
+            using (var context = new Demo.DataContext(_seed, DBTypeEnum.Memory))
+            {
+                var data = context.Set<FrameworkUser>().First(x => x.ID == victim.ID);
+                var hackResult = PasswordHashHelper.VerifyPassword(data.Password, "hacked!");
+                Assert.AreEqual(PasswordVerifyResult.Failed, hackResult,
+                    "Victim's password must remain unchanged after a rejected ownership bypass attempt.");
+            }
+        }
+
+        /// <summary>
+        /// Non-admin actor CAN reset their own password (self-service path must still work).
+        /// </summary>
+        [TestMethod]
+        public void Password_NonAdmin_CanResetOwnPassword()
+        {
+            // Arrange: the actor's own user record in the DB (ITCode matches the controller login "user")
+            FrameworkUser self = new FrameworkUser();
+            using (var context = new Demo.DataContext(_seed, DBTypeEnum.Memory))
+            {
+                self.ITCode  = "user";
+                self.Name    = "Self User";
+                self.Password = PasswordHashHelper.HashPassword("oldpass");
+                context.Set<FrameworkUser>().Add(self);
+                context.SaveChanges();
+            }
+
+            FrameworkUserVM vm = _controller.Wtm.CreateVM<FrameworkUserVM>();
+            vm.Entity = new FrameworkUser
+            {
+                ID       = self.ID,
+                ITCode   = "user",
+                Password = "newpass"
+            };
+
+            // Act
+            ActionResult rv = (ActionResult)_controller.Password(vm);
+
+            // Assert: self-service must NOT return the no-privilege content result
+            Assert.IsNotInstanceOfType(rv, typeof(ContentResult),
+                "Non-admin actor must be allowed to reset their own password.");
+
+            using (var context = new Demo.DataContext(_seed, DBTypeEnum.Memory))
+            {
+                var data = context.Set<FrameworkUser>().First(x => x.ID == self.ID);
+                var verifyNew = PasswordHashHelper.VerifyPassword(data.Password, "newpass");
+                Assert.AreNotEqual(PasswordVerifyResult.Failed, verifyNew,
+                    "New password must be stored after a successful self-service reset.");
+            }
+        }
+
+        /// <summary>
+        /// Admin actor CAN reset any user's password regardless of ITCode.
+        /// </summary>
+        [TestMethod]
+        public void Password_Admin_CanResetAnotherUsersPassword()
+        {
+            // Arrange: create a target user
+            FrameworkUser target = new FrameworkUser();
+            using (var context = new Demo.DataContext(_seed, DBTypeEnum.Memory))
+            {
+                target.ITCode   = "victim2";
+                target.Name     = "Victim2 User";
+                target.Password = PasswordHashHelper.HashPassword("original");
+                context.Set<FrameworkUser>().Add(target);
+                context.SaveChanges();
+            }
+
+            // Create a controller where the acting user is an admin
+            var adminController = MockController.CreateController<WalkingTec.Mvvm.Mvc.Admin.Controllers.FrameworkUserController>(
+                new Demo.DataContext(_seed, DBTypeEnum.Memory), "admin");
+            adminController.Wtm.LoginUserInfo!.Roles = new System.Collections.Generic.List<SimpleRole>
+            {
+                new SimpleRole { RoleCode = "Admin", RoleName = "Administrator" }
+            };
+
+            FrameworkUserVM vm = adminController.Wtm.CreateVM<FrameworkUserVM>();
+            vm.Entity = new FrameworkUser
+            {
+                ID       = target.ID,
+                ITCode   = "victim2",
+                Password = "admin_reset"
+            };
+
+            // Act
+            ActionResult rv = (ActionResult)adminController.Password(vm);
+
+            // Assert: admin must not be blocked
+            Assert.IsNotInstanceOfType(rv, typeof(ContentResult),
+                "Admin actor must be allowed to reset any user's password.");
+
+            using (var context = new Demo.DataContext(_seed, DBTypeEnum.Memory))
+            {
+                var data = context.Set<FrameworkUser>().First(x => x.ID == target.ID);
+                var verifyNew = PasswordHashHelper.VerifyPassword(data.Password, "admin_reset");
+                Assert.AreNotEqual(PasswordVerifyResult.Failed, verifyNew,
+                    "Password must have been updated by the admin request.");
             }
         }
 

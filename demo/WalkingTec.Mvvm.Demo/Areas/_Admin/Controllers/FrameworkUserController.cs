@@ -190,11 +190,17 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
             {
                 return Content(Localizer["_Admin.HasMainHost"]);
             }
-            // MVC-008 (DEMO reference fix): re-check ownership on POST to guard against
-            // direct POST bypassing the GET guard.
+            // MVC-008 (#411): look up the canonical ITCode from the DB by Entity.ID so the
+            // ownership check cannot be bypassed via a body-supplied ITCode.  An attacker
+            // who POSTs { ID: victim_guid, ITCode: own_itcode } would previously pass the
+            // old guard (own_itcode == own_itcode) while ChangePassword() wrote by victim ID.
+            var targetITCode = DC.Set<FrameworkUser>()
+                .Where(x => x.ID == vm.Entity.ID)
+                .Select(x => x.ITCode)
+                .FirstOrDefault();
             var isAdmin = Wtm.LoginUserInfo?.Roles?.Any(r =>
                 string.Equals(r.RoleCode, "Admin", StringComparison.OrdinalIgnoreCase)) == true;
-            if (!isAdmin && !string.Equals(vm.Entity?.ITCode, Wtm.LoginUserInfo?.ITCode, StringComparison.OrdinalIgnoreCase))
+            if (!isAdmin && !string.Equals(targetITCode, Wtm.LoginUserInfo?.ITCode, StringComparison.OrdinalIgnoreCase))
             {
                 return Content(Localizer["Sys.NoPrivilege"]);
             }
