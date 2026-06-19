@@ -36,6 +36,40 @@ namespace WalkingTec.Mvvm.Core.ConfigOptions
         /// </summary>
         public bool EnforceTenantFileScope { get; set; } = false;
 
+        // ─── Opt-in upload validation (Issue #407) ───────────────────────────────
+        // All fields default to "allow everything" so existing apps are unaffected.
+
+        /// <summary>
+        /// Allowlist of permitted file extensions (e.g. <c>".png"</c>, <c>".pdf"</c>).
+        /// <para>
+        /// Extension matching is case-insensitive and a leading dot is normalised automatically
+        /// ("<c>png</c>" and "<c>.PNG</c>" are treated identically).
+        /// </para>
+        /// <para><strong>Default: empty (all extensions allowed).</strong></para>
+        /// <para>
+        /// Setting any values activates the built-in <c>ExtensionContentTypeUploadValidator</c>
+        /// unless the host has already registered a custom <c>IUploadValidator</c> via DI.
+        /// </para>
+        /// </summary>
+        public List<string> AllowedExtensions { get; set; } = new List<string>();
+
+        /// <summary>
+        /// Allowlist of permitted MIME / Content-Type values (e.g. <c>"image/png"</c>, <c>"application/pdf"</c>).
+        /// The comparison strips parameters (<c>; charset=utf-8</c>) before matching.
+        /// <para><strong>Default: empty (all content types allowed).</strong></para>
+        /// </summary>
+        public List<string> AllowedContentTypes { get; set; } = new List<string>();
+
+        /// <summary>
+        /// Maximum permitted upload size in bytes.  <c>0</c> (default) means unlimited.
+        /// <para>
+        /// Note: the ASP.NET Core form body limit is still governed by <see cref="UploadLimit"/>
+        /// (the Kestrel / IIS gate).  <c>MaxUploadBytes</c> is an application-layer check that
+        /// runs after the body has been received, allowing a tighter per-endpoint cap.
+        /// </para>
+        /// </summary>
+        public long MaxUploadBytes { get; set; } = 0;
+
     }
 
     public class FileHandlerOptions

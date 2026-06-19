@@ -498,25 +498,36 @@ namespace WalkingTec.Mvvm.Mvc
 
         [HttpPost]
         [ActionDescription("UploadFileRoute")]
-        public IActionResult Upload([FromServices] WtmFileProvider fp, string sm = null, string groupName = null, string subdir = null, string extra = null, bool IsTemprory = true, string _DONOT_USE_CS=null)
+        public async Task<IActionResult> Upload([FromServices] WtmFileProvider fp, string sm = null, string groupName = null, string subdir = null, string extra = null, bool IsTemprory = true, string _DONOT_USE_CS=null)
         {
             // MVC-010: reject unknown connection-string keys to prevent lateral DB reads
             if (!IsKnownConnectionKey(_DONOT_USE_CS))
                 return BadRequest("Unknown connection string key");
             var FileData = Request.Form.Files[0];
+
+            // Issue #407: opt-in upload validation (extension / content-type / size).
+            var validationResult = await ValidateUploadAsync(FileData).ConfigureAwait(false);
+            if (!validationResult.IsValid)
+                return BadRequest(validationResult.Error);
+
             var file = fp.Upload(FileData.FileName, FileData.Length, FileData.OpenReadStream(), groupName, subdir, extra, sm, Wtm.CreateDC(cskey: _DONOT_USE_CS));
             return JsonMore(new { Id = file.GetID(), Name = file.FileName });
         }
 
         [HttpPost]
         [ActionDescription("UploadFileRoute")]
-        public IActionResult UploadImage([FromServices] WtmFileProvider fp, string sm = null, string groupName = null, string subdir = null, string extra = null, bool IsTemprory = true, string _DONOT_USE_CS = null, int? width = null, int? height = null)
+        public async Task<IActionResult> UploadImage([FromServices] WtmFileProvider fp, string sm = null, string groupName = null, string subdir = null, string extra = null, bool IsTemprory = true, string _DONOT_USE_CS = null, int? width = null, int? height = null)
         {
             if (width == null && height == null)
             {
-                return Upload(fp, sm, groupName, subdir, extra, IsTemprory, _DONOT_USE_CS);
+                return await Upload(fp, sm, groupName, subdir, extra, IsTemprory, _DONOT_USE_CS).ConfigureAwait(false);
             }
             var FileData = Request.Form.Files[0];
+
+            // Issue #407: opt-in upload validation before any image processing.
+            var validationResult = await ValidateUploadAsync(FileData).ConfigureAwait(false);
+            if (!validationResult.IsValid)
+                return BadRequest(validationResult.Error);
 
             Image oimage;
             try
@@ -548,9 +559,15 @@ namespace WalkingTec.Mvvm.Mvc
 
         [HttpPost]
         [ActionDescription("UploadForLayUIRichTextBox")]
-        public IActionResult UploadForLayUIRichTextBox([FromServices] WtmFileProvider fp, string _DONOT_USE_CS = null, string groupName = null, string subdir = null)
+        public async Task<IActionResult> UploadForLayUIRichTextBox([FromServices] WtmFileProvider fp, string _DONOT_USE_CS = null, string groupName = null, string subdir = null)
         {
             var FileData = Request.Form.Files[0];
+
+            // Issue #407: opt-in upload validation.
+            var validationResult = await ValidateUploadAsync(FileData).ConfigureAwait(false);
+            if (!validationResult.IsValid)
+                return Content($"{{\"code\": 1 , \"msg\": \"{HttpUtility.JavaScriptStringEncode(validationResult.Error ?? "Upload rejected")}\", \"data\": {{\"src\": \"\"}}}}");
+
             var file = fp.Upload(FileData.FileName, FileData.Length, FileData.OpenReadStream(), groupName, subdir, dc: Wtm.CreateDC(cskey: _DONOT_USE_CS));
             if (file != null)
             {
@@ -564,6 +581,32 @@ namespace WalkingTec.Mvvm.Mvc
 
             }
 
+        }
+
+        /// <summary>
+        /// Builds an <see cref="UploadValidationContext"/> from <paramref name="file"/> and
+        /// delegates to the registered <see cref="IUploadValidator"/>.
+        /// </summary>
+        private async Task<UploadValidationResult> ValidateUploadAsync(IFormFile file)
+        {
+            var validator = HttpContext.RequestServices.GetService<IUploadValidator>();
+            if (validator == null)
+                return UploadValidationResult.Valid;
+
+            var fileName = file.FileName ?? string.Empty;
+            var dotPos = fileName.LastIndexOf('.');
+            var extension = dotPos >= 0 ? fileName[dotPos..].ToLowerInvariant() : string.Empty;
+
+            var ctx = new UploadValidationContext
+            {
+                FileName = fileName,
+                Extension = extension,
+                ContentType = file.ContentType ?? string.Empty,
+                Length = file.Length,
+                OpenReadStream = file.OpenReadStream,
+            };
+
+            return await validator.ValidateAsync(ctx, HttpContext.RequestAborted).ConfigureAwait(false);
         }
 
         [ActionDescription("GetFileName")]
@@ -819,13 +862,22 @@ namespace WalkingTec.Mvvm.Mvc
         [AllRights]
         [HttpPost]
         [ActionDescription("UploadForLayUIUEditor")]
-        public IActionResult UploadForLayUIUEditor([FromServices] WtmFileProvider fp, string _DONOT_USE_CS = "default", string groupName = null, string subdir = null)
+        public async Task<IActionResult> UploadForLayUIUEditor([FromServices] WtmFileProvider fp, string _DONOT_USE_CS = "default", string groupName = null, string subdir = null)
         {
             IWtmFile file = null;
             if (Request.Form.Files != null && Request.Form.Files.Count() > 0)
             {
                 //通过文件流方式上传附件
                 var FileData = Request.Form.Files[0];
+
+                // Issue #407: opt-in upload validation before persisting.
+                var validationResult = await ValidateUploadAsync(FileData).ConfigureAwait(false);
+                if (!validationResult.IsValid)
+                {
+                    var safeErr = HttpUtility.JavaScriptStringEncode(validationResult.Error ?? "Upload rejected");
+                    return Content($"{{\"Code\": 400 , \"Msg\": \"{safeErr}\", \"Data\": {{\"src\": \"\"}}}}");
+                }
+
                 file = fp.Upload(FileData.FileName, FileData.Length, FileData.OpenReadStream(), groupName, subdir, dc: Wtm.CreateDC(cskey: _DONOT_USE_CS));
             }
             else if (Request.Form.Keys != null && Request.Form.ContainsKey("FileID"))

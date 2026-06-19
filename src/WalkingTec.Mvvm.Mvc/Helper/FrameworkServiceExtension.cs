@@ -535,6 +535,24 @@ namespace WalkingTec.Mvvm.Mvc
             services.TryAddSingleton(TimeProvider.System);
             services.AddScoped<WTMContext>();
             services.AddScoped<WtmFileProvider>();
+
+            // Issue #407: register the default no-op upload validator.
+            // Hosts can override by calling services.AddScoped<IUploadValidator, MyValidator>()
+            // *after* AddWtmContext.  TryAddScoped ensures the first registration wins so the
+            // host replacement takes precedence.
+            services.TryAddScoped<WalkingTec.Mvvm.Core.Support.FileHandlers.IUploadValidator>(sp =>
+            {
+                var fileOpts = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<Configs>>().Value.FileUploadOptions;
+                // Activate built-in validator when any allowlist or size cap is configured.
+                if ((fileOpts.AllowedExtensions != null && fileOpts.AllowedExtensions.Count > 0) ||
+                    (fileOpts.AllowedContentTypes != null && fileOpts.AllowedContentTypes.Count > 0) ||
+                    fileOpts.MaxUploadBytes > 0)
+                {
+                    return new WalkingTec.Mvvm.Core.Support.FileHandlers.ExtensionContentTypeUploadValidator(fileOpts);
+                }
+                return new WalkingTec.Mvvm.Core.Support.FileHandlers.NoOpUploadValidator();
+            });
+
             services.Configure<FormOptions>(y =>
             {
                 y.ValueCountLimit = 5000;

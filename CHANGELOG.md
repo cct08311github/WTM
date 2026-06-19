@@ -1,5 +1,20 @@
 # 更新日志
 
+## [Unreleased]
+
+### Security
+
+- **Opt-in upload validation seam — `IUploadValidator` AV/policy hook (#407, Refs #193):**
+  A new opt-in seam blocks unsafe uploads before any file is persisted.
+  Three new `FileUploadOptions` fields activate the built-in `ExtensionContentTypeUploadValidator`:
+  - `AllowedExtensions` — allowlist of permitted file extensions (e.g. `".png"`, `".pdf"`); empty = allow all (default).
+  - `AllowedContentTypes` — allowlist of permitted MIME types (e.g. `"image/png"`); empty = allow all (default).
+  - `MaxUploadBytes` — per-upload byte cap; `0` = unlimited (default).
+
+  A new `IUploadValidator` DI seam (in `WalkingTec.Mvvm.Core.Support.FileHandlers`) enables custom validation (AV scanning, magic-byte inspection, etc.).  Register via `services.AddScoped<IUploadValidator, MyScanner>()` after `AddWtmContext`.  The default `NoOpUploadValidator` preserves existing accept-all behaviour.  Validation is enforced in `_FrameworkController.Upload`, `UploadImage`, `UploadForLayUIRichTextBox`, and `UploadForLayUIUEditor` before any file is written to storage.
+
+  **Migration / opt-in:** no configuration change required for existing apps.  Set any of the three new `FileUploadOptions` fields to restrict uploads, or replace the validator via DI.
+
 ## [10.12.5] - 2026-06-19
 
 WorkFlow engine transaction-safety campaign completed (the #320 follow-up cluster) + LayUI audit epic (#330) closed. All fixes adversarially verified; no behaviour change for correct usage.
