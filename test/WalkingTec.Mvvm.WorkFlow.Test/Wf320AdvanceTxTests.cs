@@ -413,8 +413,8 @@ public class Wf320AdvanceTxTests : IDisposable
                 $"Seq gap detected: position {i - 1}={seqsAfter[i - 1]}, position {i}={seqsAfter[i]}. " +
                 "Orphan Seq from a rolled-back concurrent transaction would cause a gap here.");
 
-        // result2 is InstanceApproved — verified indirectly via Seq count check above.
-        // (Suppress unused-variable warning via a no-op discard that does not conflict with the using alias.)
-        var _discardResult2 = result2;
+        // #401: explicitly assert the loser returns AlreadyHandled (not InstanceApproved).
+        Assert.IsTrue(result2.IsAlreadyHandled,
+            $"#401 regression: second AdvanceAsync on approved instance must return AlreadyHandled, got {result2.Code}.");
     }
 }

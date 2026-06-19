@@ -443,11 +443,17 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             if (activeNodes.Count == 0)
             {
                 // No active tokens — check if the instance is already final.
+                // #401: reaching this branch means THIS call performed no completing transition;
+                // all tokens were already drained and the instance was flipped to its final state
+                // by a concurrent winner (or this is an idempotent replay). The genuine completer
+                // returns InstanceApproved via the token-processing path earlier in this loop.
+                // Returning InstanceApproved here produced a FALSE second winner in Any-mode
+                // races (#401) and was also semantically wrong for Rejected instances.
                 var fresh = await Db.Set<ProcessInstance>()
                     .AsNoTracking()
                     .SingleAsync(x => x.ID == instance.ID, ct);
                 if (fresh.State == InstanceState.Approved || fresh.State == InstanceState.Rejected)
-                    return WorkflowActionResult.InstanceApproved;
+                    return WorkflowActionResult.AlreadyHandled;
 
                 _logger.LogWarning(
                     "AdvanceCoreAsync: no active tokens for running instance {InstanceId}. Possible data inconsistency.",
