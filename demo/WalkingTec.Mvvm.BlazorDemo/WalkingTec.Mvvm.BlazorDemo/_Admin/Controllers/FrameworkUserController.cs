@@ -294,8 +294,21 @@ namespace WalkingTec.Mvvm.Admin.Api
 
         [ActionDescription("Login.ChangePassword")]
         [HttpPut("[action]")]
-        public  IActionResult Password(FrameworkUserVM vm)
+        public IActionResult Password(FrameworkUserVM vm)
         {
+            // MVC-008 (SPA residual fix): enforce ownership — a non-admin actor may only
+            // reset their OWN password.  Look up the canonical ITCode from the DB using the
+            // submitted Entity.ID so the check cannot be spoofed via the request body.
+            var targetITCode = DC.Set<FrameworkUser>()
+                .Where(x => x.ID == vm.Entity.ID)
+                .Select(x => x.ITCode)
+                .FirstOrDefault();
+            var isAdmin = Wtm.LoginUserInfo?.Roles?.Any(r =>
+                string.Equals(r.RoleCode, "Admin", StringComparison.OrdinalIgnoreCase)) == true;
+            if (!isAdmin && !string.Equals(targetITCode, Wtm.LoginUserInfo?.ITCode, StringComparison.OrdinalIgnoreCase))
+            {
+                return Forbid();
+            }
             var keys = ModelState.Keys.ToList();
             foreach (var item in keys)
             {
