@@ -152,37 +152,63 @@ namespace WalkingTec.Mvvm.Core
                         builder!.HasOne(filepro.Name).WithMany().OnDelete(DeleteBehavior.Restrict);
                     }
                 }
-                // Dynamic global query filter construction for multi-tenancy and soft-delete.
-                // Only applied to "root" entity types (null/abstract base, or direct descendants
-                // of TopBasePoco/BasePoco/TreePoco) to avoid duplicate filters on inheritance hierarchies.
-                //   - IPersistPoco → "IsValid == true" (soft-delete)
-                //   - ITenant → "TenantCode == this.TenantCode" (tenant isolation; captures
-                //     the DataContext instance so EF reads the current TenantCode at query time)
-                // Conditions are combined with AndAlso and registered via HasQueryFilter.
-                List<Expression> list = [];
-                ParameterExpression pe = Expression.Parameter(item);
-                if (item.BaseType == null || item.BaseType.IsAbstract == true || (item.BaseType == typeof(TopBasePoco) || item.BaseType == typeof(BasePoco) || item.BaseType?.BaseType == typeof(TreePoco)))
+            }
+
+            // ── Pass 1: ensure all TopBasePoco types are registered in EF metadata
+            // so that the hierarchy (including concrete intermediates) is fully known
+            // before we apply query filters.
+            foreach (var regType in allTypes)
+            {
+                if (typeof(TopBasePoco).IsAssignableFrom(regType))
                 {
-                    if (typeof(IPersistPoco).IsAssignableFrom(item))
+                    typeof(ModelBuilder).GetMethod("Entity", Type.EmptyTypes)!
+                        .MakeGenericMethod(regType).Invoke(modelBuilder, null);
+                }
+            }
+
+            // ── Pass 2: apply global query filters only on the EF metadata root type
+            // (the type whose EF BaseType == null in the model).  This covers concrete
+            // intermediate types (Child : ConcreteParent : BasePoco) that the old
+            // CLR BaseType check missed, while avoiding the EF crash from applying a
+            // filter to a derived entity type.
+            // NOTE: GetEntityTypes() is available during OnModelCreating on the mutable
+            // model; BaseType here is the EF metadata parent (null ⟺ EF root).
+            foreach (var entityType in modelBuilder.Model.GetEntityTypes())
+            {
+                if (entityType.BaseType != null)
+                {
+                    continue; // not an EF root — filter is inherited
+                }
+
+                var clrType = entityType.ClrType;
+                if (!typeof(TopBasePoco).IsAssignableFrom(clrType))
+                {
+                    continue;
+                }
+
+                List<Expression> list = [];
+                ParameterExpression pe = Expression.Parameter(clrType);
+
+                if (typeof(IPersistPoco).IsAssignableFrom(clrType))
+                {
+                    var exp = Expression.Equal(Expression.Property(pe, "IsValid"), Expression.Constant(true));
+                    list.Add(exp);
+                }
+                if (typeof(ITenant).IsAssignableFrom(clrType))
+                {
+                    var exp = Expression.Equal(Expression.Property(pe, "TenantCode"), Expression.PropertyOrField(Expression.Constant(this), "TenantCode"));
+                    list.Add(exp);
+                }
+                if (list.Count > 0)
+                {
+                    var finalexp = list[0];
+                    for (int i = 1; i < list.Count; i++)
                     {
-                        var exp = Expression.Equal(Expression.Property(pe, "IsValid"), Expression.Constant(true));
-                        list.Add(exp);
+                        finalexp = Expression.AndAlso(finalexp, list[i]);
                     }
-                    if (typeof(ITenant).IsAssignableFrom(item))
-                    {
-                        var exp = Expression.Equal(Expression.Property(pe, "TenantCode"), Expression.PropertyOrField(Expression.Constant(this), "TenantCode"));
-                        list.Add(exp);
-                    }
-                    if (list.Count > 0)
-                    {
-                        var finalexp = list[0];
-                        for (int i = 1; i < list.Count; i++)
-                        {
-                            finalexp = Expression.AndAlso(finalexp, list[i]);
-                        }
-                        var builder = typeof(ModelBuilder).GetMethod("Entity", Type.EmptyTypes)!.MakeGenericMethod(item).Invoke(modelBuilder, null) as EntityTypeBuilder;
-                        builder!.HasQueryFilter(Expression.Lambda(finalexp, pe));
-                    }
+                    var builder = typeof(ModelBuilder).GetMethod("Entity", Type.EmptyTypes)!
+                        .MakeGenericMethod(clrType).Invoke(modelBuilder, null) as EntityTypeBuilder;
+                    builder!.HasQueryFilter(Expression.Lambda(finalexp, pe));
                 }
             }
         }

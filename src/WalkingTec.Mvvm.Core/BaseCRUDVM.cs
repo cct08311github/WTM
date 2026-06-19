@@ -997,7 +997,7 @@ namespace WalkingTec.Mvvm.Core
             if (typeof(IPersistPoco).IsAssignableFrom(typeof(TModel)))
             {
                 var _auditSnapshot = LoadEntitySnapshot();
-                FC.Add("Entity.IsValid", 0);
+                FC["Entity.IsValid"] = 0;
                 (Entity as IPersistPoco)!.IsValid = false;
 
                 var pros = typeof(TModel).GetAllProperties();
@@ -1010,7 +1010,14 @@ namespace WalkingTec.Mvvm.Core
 
                 DoEditPrepare(false);
                 AppendChangeLog("Delete", SerializeScalarProps(_auditSnapshot), null);
-                DC!.SaveChanges();
+                try
+                {
+                    DC!.SaveChanges();
+                }
+                catch (DbUpdateException)
+                {
+                    MSD?.AddModelError("", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DeleteFailed"] ?? "" : "");
+                }
             }
             //如果是普通的TopBasePoco，则进行物理删除
             else if (typeof(TModel).GetTypeInfo().IsSubclassOf(typeof(TopBasePoco)))
@@ -1025,7 +1032,7 @@ namespace WalkingTec.Mvvm.Core
             if (typeof(IPersistPoco).IsAssignableFrom(typeof(TModel)))
             {
                 var _auditSnapshot = await LoadEntitySnapshotAsync();
-                FC.Add("Entity.IsValid", 0);
+                FC["Entity.IsValid"] = 0;
                 (Entity as IPersistPoco)!.IsValid = false;
                 var pros = typeof(TModel).GetAllProperties();
                 //如果包含List<PersistPoco>，将子表IsValid也设置为false
