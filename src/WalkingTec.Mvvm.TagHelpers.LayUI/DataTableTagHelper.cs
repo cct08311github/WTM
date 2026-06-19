@@ -374,8 +374,6 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             "ViewDivId"
         };
 
-        private bool hasButtonGroup = false;
-
         /// <summary>
         /// 排除的搜索条件类型，搜索条件数据源可能会存储在Searcher对象中
         /// </summary>
@@ -390,19 +388,21 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         /// </summary>
         private static string JsEnc(string? s) => JavaScriptEncoder.Default.Encode(s ?? "");
 
-        private void CalcChildCol(List<List<LayuiColumn>> layuiCols, List<IGridColumn<TopBasePoco>> rawCols, int maxDepth, int depth)
+        private bool CalcChildCol(List<List<LayuiColumn>> layuiCols, List<IGridColumn<TopBasePoco>> rawCols, int maxDepth, int depth)
         {
             List<LayuiColumn> tempCols = [];
             layuiCols.Add(tempCols);
 
             List<IGridColumn<TopBasePoco>> nextCols = [];// 下一级列头
 
-            generateColHeader(rawCols, nextCols, tempCols, maxDepth, depth);
+            bool foundTotal = false;
+            foundTotal |= generateColHeader(rawCols, nextCols, tempCols, maxDepth, depth);
 
             if (nextCols.Count > 0)
             {
-                CalcChildCol(layuiCols, nextCols, maxDepth, depth + 1);
+                foundTotal |= CalcChildCol(layuiCols, nextCols, maxDepth, depth + 1);
             }
+            return foundTotal;
         }
 
         /// <summary>
@@ -493,56 +493,79 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     Limits = list.OrderBy(x => x).ToArray();
                 }
             }
-            var where = new Dictionary<string, object>();
-            if (UseLocalData) // 不需要分页
+            if (UseLocalData)
             {
                 ListVM.NeedPage = false;
             }
-            else
+            var where = BuildWhereFilter(vmQualifiedName, UseLocalData);
+
+            // 是否需要分页
+            var page = ListVM.NeedPage;
+
+            var (layuiCols, maxDepth) = BuildColumns();
+
+            var (rowBtnStrBuilder, toolBarBtnStrBuilder, gridBtnEventStrBuilder, hasButtonGroup) = BuildToolbarButtons(vmQualifiedName);
+
+            var toolbardef = "";
+            if(toolBarBtnStrBuilder.Length > 0 || NeedShowFilter == true || NeedShowPrint == true || EnableClientExport)
             {
-                where = Filter == null ? new Dictionary<string, object>() : new Dictionary<string, object>(Filter);
-                where["_DONOT_USE_VMNAME"] = vmQualifiedName;
-                where["_DONOT_USE_CS"] = ListVM.CurrentCS;
-                where["SearcherMode"] = ListVM.SearcherMode;
-                where["SelectorValueField"] = ListVM.SelectorValueField;
-                where["ViewDivId"] = ListVM.ViewDivId;
-                if (ListVM.Ids != null && ListVM.Ids.Count > 0)
+                toolbardef = $" ,toolbar: '#{ToolBarId}2'";
+            }
+
+            BuildTableOptionsScript(output, context, vmQualifiedName, maxDepth, layuiCols, where, righttoolbar, toolbardef, lefttoolbarmergin, rowBtnStrBuilder, toolBarBtnStrBuilder, gridBtnEventStrBuilder, hasButtonGroup, page);
+
+            base.Process(context, output);
+        }
+
+        private Dictionary<string, object> BuildWhereFilter(string vmQualifiedName, bool useLocalData)
+        {
+            if (useLocalData)
+            {
+                return new Dictionary<string, object>();
+            }
+
+            var where = Filter == null ? new Dictionary<string, object>() : new Dictionary<string, object>(Filter);
+            where["_DONOT_USE_VMNAME"] = vmQualifiedName;
+            where["_DONOT_USE_CS"] = ListVM.CurrentCS;
+            where["SearcherMode"] = ListVM.SearcherMode;
+            where["SelectorValueField"] = ListVM.SelectorValueField;
+            where["ViewDivId"] = ListVM.ViewDivId;
+            if (ListVM.Ids != null && ListVM.Ids.Count > 0)
+            {
+                where["Ids"] = ListVM.Ids;
+            }
+            // 为首次加载添加Searcher查询参数
+            if (ListVM.Searcher != null)
+            {
+                var props = ListVM.Searcher.GetType().GetAllProperties();
+                props = props.Where(x => !_excludeTypes.Contains(x.PropertyType)).ToList();
+                foreach (var prop in props)
                 {
-                    where["Ids"] = ListVM.Ids;
-                }
-                // 为首次加载添加Searcher查询参数
-                if (ListVM.Searcher != null)
-                {
-                    var props = ListVM.Searcher.GetType().GetAllProperties();
-                    props = props.Where(x => !_excludeTypes.Contains(x.PropertyType)).ToList();
-                    foreach (var prop in props)
+                    if (!_excludeParams.Contains(prop.Name))
                     {
-                        if (!_excludeParams.Contains(prop.Name))
+                        if (prop.PropertyType.IsGenericType == false || (prop.PropertyType.GenericTypeArguments[0] != typeof(ComboSelectListItem) && prop.PropertyType.GenericTypeArguments[0] != typeof(TreeSelectListItem)))
                         {
-                            if (prop.PropertyType.IsGenericType == false || (prop.PropertyType.GenericTypeArguments[0] != typeof(ComboSelectListItem) && prop.PropertyType.GenericTypeArguments[0] != typeof(TreeSelectListItem)))
+                            var listvalue = prop.GetValue(ListVM.Searcher);
+                            if (listvalue != null)
                             {
-                                var listvalue = prop.GetValue(ListVM.Searcher);
-                                if (listvalue != null)
+                                if (IsInSelector == true)
                                 {
-                                    if (IsInSelector == true)
-                                    {
-                                        where[$"Searcher.{prop.Name}"] = listvalue;
-                                    }
-                                    else
-                                    {
-                                        where[$"{prop.Name}"] = listvalue;
-                                    }
+                                    where[$"Searcher.{prop.Name}"] = listvalue;
+                                }
+                                else
+                                {
+                                    where[$"{prop.Name}"] = listvalue;
                                 }
                             }
                         }
                     }
                 }
             }
+            return where;
+        }
 
-            // 是否需要分页
-            var page = ListVM.NeedPage;
-
-            #region 生成 Layui 所需的表头
+        private (List<List<LayuiColumn>> layuiCols, int maxDepth) BuildColumns()
+        {
             var rawCols = ListVM?.GetHeaders();
             var maxDepth = (ListVM?.GetChildrenDepth()) ?? 1;
             List<List<LayuiColumn>> layuiCols = [];
@@ -586,11 +609,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             }
             List<IGridColumn<TopBasePoco>> nextCols = [];// 下一级列头
 
-            generateColHeader(rawCols, nextCols, tempCols, maxDepth,0);
+            NeedShowTotal |= generateColHeader(rawCols, nextCols, tempCols, maxDepth, 0);
 
             if (nextCols.Count > 0)
             {
-                CalcChildCol(layuiCols, nextCols, maxDepth, 1);
+                NeedShowTotal |= CalcChildCol(layuiCols, nextCols, maxDepth, 1);
             }
 
             if (layuiCols.Count > 0 && layuiCols[0].Count > 0)
@@ -598,8 +621,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 layuiCols[0][0].TotalRowText = ListVM?.TotalText;
             }
 
-            #endregion
+            return (layuiCols, maxDepth);
+        }
 
+        private (StringBuilder rowBtnStrBuilder, StringBuilder toolBarBtnStrBuilder, StringBuilder gridBtnEventStrBuilder, bool hasButtonGroup) BuildToolbarButtons(string vmQualifiedName)
+        {
             #region 处理 DataTable 操作按钮
 
             var actionCol = ListVM?.GetGridActions();
@@ -608,12 +634,13 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             var toolBarBtnStrBuilder = new StringBuilder();// Grid 工具条按钮
             var gridBtnEventStrBuilder = new StringBuilder();// Grid 按钮事件
 
+            bool hasButtonGroup = false;
             if (actionCol != null && actionCol.Count > 0)
             {
                 var vm = Vm.Model as BaseVM;
                 foreach (var item in actionCol)
                 {
-                    AddSubButton(vmQualifiedName, rowBtnStrBuilder, toolBarBtnStrBuilder, gridBtnEventStrBuilder, vm, item);
+                    AddSubButton(vmQualifiedName, rowBtnStrBuilder, toolBarBtnStrBuilder, gridBtnEventStrBuilder, vm, item, ref hasButtonGroup);
                 }
             }
 
@@ -627,12 +654,27 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
             #endregion
 
+            return (rowBtnStrBuilder, toolBarBtnStrBuilder, gridBtnEventStrBuilder, hasButtonGroup);
+        }
+
+        private void BuildTableOptionsScript(
+            TagHelperOutput output,
+            TagHelperContext context,
+            string vmQualifiedName,
+            int maxDepth,
+            List<List<LayuiColumn>> layuiCols,
+            Dictionary<string, object> where,
+            string righttoolbar,
+            string toolbardef,
+            int lefttoolbarmergin,
+            StringBuilder rowBtnStrBuilder,
+            StringBuilder toolBarBtnStrBuilder,
+            StringBuilder gridBtnEventStrBuilder,
+            bool hasButtonGroup,
+            bool page
+        )
+        {
             #region DataTable
-            var toolbardef = "";
-            if(toolBarBtnStrBuilder.Length > 0 || NeedShowFilter == true || NeedShowPrint == true || EnableClientExport)
-            {
-                toolbardef = $" ,toolbar: '#{ToolBarId}2'";
-            }
             var vmName = string.Empty;
             if (VMType != null)
             {
@@ -801,11 +843,9 @@ layui.use(['element'], function() {{
 }});
 </script>");
             }
-
-            base.Process(context, output);
         }
 
-        private void generateColHeader(
+        private bool generateColHeader(
             IEnumerable<IGridColumn<TopBasePoco>> rawCols,
             List<IGridColumn<TopBasePoco>> nextCols,
             List<LayuiColumn> tempCols,
@@ -822,12 +862,14 @@ layui.use(['element'], function() {{
                 else if (col.Fixed == GridColumnFixedEnum.Right)  rightCols.Add(col);
                 else                                              midCols.Add(col);
             }
-            generateColHeaderCore(leftCols,  nextCols, tempCols, maxDepth, depth);
-            generateColHeaderCore(midCols,   nextCols, tempCols, maxDepth, depth);
-            generateColHeaderCore(rightCols, nextCols, tempCols, maxDepth, depth);
+            bool foundTotal = false;
+            foundTotal |= generateColHeaderCore(leftCols,  nextCols, tempCols, maxDepth, depth);
+            foundTotal |= generateColHeaderCore(midCols,   nextCols, tempCols, maxDepth, depth);
+            foundTotal |= generateColHeaderCore(rightCols, nextCols, tempCols, maxDepth, depth);
+            return foundTotal;
         }
 
-        private void generateColHeaderCore(
+        private bool generateColHeaderCore(
             IEnumerable<IGridColumn<TopBasePoco>> rawCols,
             List<IGridColumn<TopBasePoco>> nextCols,
             List<LayuiColumn> tempCols,
@@ -835,6 +877,7 @@ layui.use(['element'], function() {{
         )
         {
             string random = Guid.NewGuid().ToString().Replace("-", "");
+            bool foundTotal = false;
 
             foreach (var item in rawCols)
             {
@@ -876,7 +919,7 @@ layui.use(['element'], function() {{
                 if ((string.IsNullOrEmpty(ListVM.DetailGridPrix) == true && string.IsNullOrEmpty(item.Field) == false) || item.Field == "BatchError")
                     tempCol.Templet = getTemplate(item.Field, random, item.HasFormat(), item.EncodeFormat);
 
-                NeedShowTotal |= item.ShowTotal == true;
+                foundTotal |= item.ShowTotal == true;
                 switch (item.ColumnType)
                 {
                     case GridColumnTypeEnum.Space:
@@ -901,6 +944,7 @@ layui.use(['element'], function() {{
                 if (item.Children != null && item.Children.Any())
                     nextCols.AddRange(item.Children);
             }
+            return foundTotal;
         }
 
         /// <summary>
@@ -920,6 +964,7 @@ layui.use(['element'], function() {{
             StringBuilder gridBtnEventStrBuilder,
             BaseVM vm,
             GridAction item,
+            ref bool hasButtonGroup,
             bool isSub = false
         )
         {
@@ -967,7 +1012,7 @@ layui.use(['element'], function() {{
                         foreach (var subItem in item.SubActions)
                         {
                             StringBuilder subBarBtnStr = new StringBuilder();
-                            AddSubButton(vmQualifiedName, rowBtnStrBuilder, subBarBtnStr, gridBtnEventStrBuilder, vm, subItem, true);
+                            AddSubButton(vmQualifiedName, rowBtnStrBuilder, subBarBtnStr, gridBtnEventStrBuilder, vm, subItem, ref hasButtonGroup, true);
                             if (subBarBtnStr.Length > 0)
                             {
                                 subBarBtnStrList.AppendFormat("<dd style=\"padding: 0 0px;margin-bottom:1px;line-height: initial;\">{0}</dd>", subBarBtnStr.ToString());
