@@ -1,3 +1,9 @@
+// CG-03/04: UIEnum.VUE is marked [Obsolete] to surface a deprecation warning to
+// consumers. This file is the internal back-compat implementation that must
+// continue to reference UIEnum.VUE so that existing code that selects Vue 2
+// still generates output. Suppress CS0618 file-wide here rather than scattering
+// per-call-site suppressions through the generator switch branches.
+#pragma warning disable CS0618 // UIEnum.VUE is [Obsolete] — internal back-compat, generation still works
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.AspNetCore.Mvc.ModelBinding.Validation;
 using Microsoft.EntityFrameworkCore;
@@ -36,6 +42,36 @@ namespace WalkingTec.Mvvm.Mvc
         public string PreviewFile { get; set; }
 
         public UIEnum UI { get; set; }
+
+        /// <summary>
+        /// CG-03/04: Non-null when a deprecated UI target has been selected.
+        /// Surfaced to the user in the Gen/DoGen views as a visible warning.
+        /// Generation still proceeds (backwards-compat); this is advisory only.
+        /// </summary>
+        [ValidateNever()]
+        [BindNever()]
+        public string? DeprecationWarning
+        {
+            get
+            {
+                if (UI == UIEnum.VUE)
+                {
+                    return "Warning: Vue 2 is end-of-life (EOL December 2023). " +
+                           "Code generation will complete, but you should migrate to VUE3 or Blazor. " +
+                           "UIEnum.VUE will be removed in a future major version.";
+                }
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// CG-03/04: True when the Vue 2 (EOL) UI target is active.
+        /// Views use this property instead of comparing directly against UIEnum.VUE,
+        /// so the Razor view compiler does not emit CS0618 for the [Obsolete] member.
+        /// </summary>
+        [ValidateNever()]
+        [BindNever()]
+        public bool IsVue2Ui => UI == UIEnum.VUE;
 
         [Display(Name = "Codegen.GenApi")]
         public bool IsApi { get; set; }

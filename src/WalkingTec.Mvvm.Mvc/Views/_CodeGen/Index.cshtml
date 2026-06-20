@@ -43,6 +43,14 @@
         <wt:form vm="@Model" url="/_CodeGen/SetField" old-post="true" label-width="100">
           <wt:hidden field="EntryDir" />
           <wt:hidden field="UI" />
+          @if (Model.DeprecationWarning != null)
+          {
+            @* CG-03/04: Surface deprecation warning when a deprecated UI target is active.
+               Vue 2 is EOL (December 2023); VUE3 and Blazor are the supported SPA targets. *@
+            <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:10px 16px;margin-bottom:12px;color:#856404;">
+              <strong>⚠ Deprecated UI Target:</strong> @Model.DeprecationWarning
+            </div>
+          }
           <wt:combobox field="SelectedModel" items="AllModels" />
           <wt:textbox field="Area" />
           <wt:textbox field="ModuleName" placeholder="@WalkingTec.Mvvm.Core.CoreProgram._localizer?["Codegen.InputModuleName"]" />

@@ -479,5 +479,118 @@ namespace MyApp.Controllers
             Assert.IsNotNull(prop, "UseSmartSearchDefaults property must exist");
             Assert.IsTrue(prop!.CanRead && prop.CanWrite, "UseSmartSearchDefaults must be readable and writable");
         }
+
+        // =================================================================
+        // CG-03/04: UIEnum.VUE deprecation — warning, compat, clean enum
+        // =================================================================
+
+        [TestMethod]
+        public void UIEnum_VUE_IsMarkedObsolete()
+        {
+            // UIEnum.VUE must carry [Obsolete] so consumers get a CS0618 warning.
+            var field = typeof(UIEnum).GetField(nameof(UIEnum.VUE));
+            Assert.IsNotNull(field, "UIEnum.VUE field must exist");
+            var obs = field!.GetCustomAttribute<ObsoleteAttribute>();
+            Assert.IsNotNull(obs, "UIEnum.VUE must be decorated with [Obsolete]");
+            Assert.IsFalse(obs!.IsError, "UIEnum.VUE [Obsolete] must be a warning (false), not an error");
+        }
+
+        [TestMethod]
+        public void UIEnum_VUE_ObsoleteMessage_MentionsVUE3()
+        {
+            var field = typeof(UIEnum).GetField(nameof(UIEnum.VUE));
+            var obs = field!.GetCustomAttribute<ObsoleteAttribute>()!;
+            StringAssert.Contains(obs.Message, "VUE3",
+                "UIEnum.VUE deprecation message must recommend VUE3 as the migration target");
+        }
+
+        [TestMethod]
+        public void UIEnum_VUE3_NotObsolete()
+        {
+            // VUE3 must NOT be deprecated — it is one of the supported SPA targets.
+            var field = typeof(UIEnum).GetField(nameof(UIEnum.VUE3));
+            Assert.IsNotNull(field, "UIEnum.VUE3 field must exist");
+            var obs = field!.GetCustomAttribute<ObsoleteAttribute>();
+            Assert.IsNull(obs, "UIEnum.VUE3 must NOT be marked [Obsolete]");
+        }
+
+        [TestMethod]
+        public void UIEnum_Blazor_NotObsolete()
+        {
+            // Blazor is a supported SPA target and must NOT be deprecated.
+            var field = typeof(UIEnum).GetField(nameof(UIEnum.Blazor));
+            Assert.IsNotNull(field, "UIEnum.Blazor field must exist");
+            var obs = field!.GetCustomAttribute<ObsoleteAttribute>();
+            Assert.IsNull(obs, "UIEnum.Blazor must NOT be marked [Obsolete]");
+        }
+
+#pragma warning disable CS0618 // UIEnum.VUE is [Obsolete] — these tests verify back-compat behaviour
+        [TestMethod]
+        public void CodeGenVM_DeprecationWarning_IsNull_ForVUE3()
+        {
+            var vm = new CodeGenVM { UI = UIEnum.VUE3 };
+            Assert.IsNull(vm.DeprecationWarning,
+                "DeprecationWarning must be null for VUE3 — it is a supported target");
+        }
+
+        [TestMethod]
+        public void CodeGenVM_DeprecationWarning_IsNull_ForBlazor()
+        {
+            var vm = new CodeGenVM { UI = UIEnum.Blazor };
+            Assert.IsNull(vm.DeprecationWarning,
+                "DeprecationWarning must be null for Blazor — it is a supported target");
+        }
+
+        [TestMethod]
+        public void CodeGenVM_DeprecationWarning_IsNull_ForLayUI()
+        {
+            var vm = new CodeGenVM { UI = UIEnum.LayUI };
+            Assert.IsNull(vm.DeprecationWarning,
+                "DeprecationWarning must be null for LayUI — it is a supported target");
+        }
+
+        [TestMethod]
+        public void CodeGenVM_DeprecationWarning_NonNull_ForVUE()
+        {
+            // Selecting Vue 2 must surface a non-null deprecation warning.
+            var vm = new CodeGenVM { UI = UIEnum.VUE };
+            Assert.IsNotNull(vm.DeprecationWarning,
+                "DeprecationWarning must be non-null when the deprecated VUE (Vue 2) target is selected");
+        }
+
+        [TestMethod]
+        public void CodeGenVM_DeprecationWarning_MentionsEol_ForVUE()
+        {
+            var vm = new CodeGenVM { UI = UIEnum.VUE };
+            StringAssert.Contains(vm.DeprecationWarning, "end-of-life",
+                "Deprecation warning for VUE must mention 'end-of-life'");
+        }
+
+        [TestMethod]
+        public void CodeGenVM_DeprecationWarning_MentionsVUE3_ForVUE()
+        {
+            var vm = new CodeGenVM { UI = UIEnum.VUE };
+            StringAssert.Contains(vm.DeprecationWarning, "VUE3",
+                "Deprecation warning for VUE must recommend VUE3 as the migration target");
+        }
+
+        [TestMethod]
+        public void CodeGenVM_IsVue2Ui_True_WhenUIIsVUE()
+        {
+            // IsVue2Ui allows Razor views to check for the deprecated VUE target
+            // without referencing UIEnum.VUE directly (avoids CS0618 in .cshtml).
+            var vm = new CodeGenVM { UI = UIEnum.VUE };
+            Assert.IsTrue(vm.IsVue2Ui,
+                "IsVue2Ui must return true when UI == UIEnum.VUE");
+        }
+
+        [TestMethod]
+        public void CodeGenVM_IsVue2Ui_False_WhenUIIsVUE3()
+        {
+            var vm = new CodeGenVM { UI = UIEnum.VUE3 };
+            Assert.IsFalse(vm.IsVue2Ui,
+                "IsVue2Ui must return false when UI == UIEnum.VUE3");
+        }
+#pragma warning restore CS0618
     }
 }

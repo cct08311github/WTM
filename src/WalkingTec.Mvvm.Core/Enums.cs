@@ -1,4 +1,5 @@
 #nullable enable
+using System;
 using System.ComponentModel.DataAnnotations;
 
 namespace WalkingTec.Mvvm.Core
@@ -132,7 +133,20 @@ namespace WalkingTec.Mvvm.Core
     }
 
     public enum UIEnum
-    { LayUI, React, VUE,Blazor,VUE3 }
+    {
+        LayUI,
+        React,
+        /// <summary>
+        /// Vue 2 is end-of-life (EOL as of December 2023).
+        /// This target is deprecated; use <see cref="VUE3"/> or <see cref="Blazor"/> instead.
+        /// Code generation still works for backwards-compatibility, but this option will be
+        /// removed in a future major version.
+        /// </summary>
+        [Obsolete("Vue 2 is end-of-life; use VUE3 or Blazor instead. This target will be removed in a future major version.", false)]
+        VUE,
+        Blazor,
+        VUE3
+    }
 
 
 

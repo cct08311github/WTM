@@ -1,5 +1,10 @@
+// CG-03/04: UIEnum.VUE is [Obsolete] for consumers; this controller must still
+// compare against it for back-compat generation. Suppress CS0618 file-wide.
+#pragma warning disable CS0618 // UIEnum.VUE is [Obsolete] — internal back-compat
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -27,6 +32,17 @@ namespace WalkingTec.Mvvm.Mvc
             vm.UI = ui;
             vm.EntryDir = AppDomain.CurrentDomain.BaseDirectory;
             vm.AllModels = GetAllModels().ToListItems(x => x.Name, x => x.AssemblyQualifiedName);
+
+            // CG-03/04: Log a server-side deprecation warning when a user navigates to
+            // the code generator with a deprecated UI target selected.
+            if (vm.DeprecationWarning is not null)
+            {
+                Wtm?.ServiceProvider
+                    ?.GetService<ILoggerFactory>()
+                    ?.CreateLogger("CodeGen")
+                    ?.LogWarning("[CodeGen] Deprecated UI target selected: {UI}. {Warning}", ui, vm.DeprecationWarning);
+            }
+
             return View(vm);
         }
 
@@ -66,6 +82,20 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpPost]
         public IActionResult DoGen(CodeGenVM vm)
         {
+            // CG-03/04: Log + surface deprecation warning when generating for a deprecated
+            // UI target. Generation still completes (back-compat); the warning is advisory.
+            if (vm.DeprecationWarning is not null)
+            {
+                Wtm?.ServiceProvider
+                    ?.GetService<ILoggerFactory>()
+                    ?.CreateLogger("CodeGen")
+                    ?.LogWarning("[CodeGen] Generating deprecated UI target {UI}: {Warning}", vm.UI, vm.DeprecationWarning);
+                vm.DoGen();
+                var successMsg = MvcProgram._localizer["Codegen.Success"].Value
+                    + "\n\n⚠ " + vm.DeprecationWarning;
+                return FFResultJson().Alert(successMsg);
+            }
+
             vm.DoGen();
             return FFResultJson().Alert(MvcProgram._localizer["Codegen.Success"]);
         }

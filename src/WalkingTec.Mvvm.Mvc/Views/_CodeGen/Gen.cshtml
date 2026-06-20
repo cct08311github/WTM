@@ -37,6 +37,14 @@ Layout = null;
           <wt:quote>
             @WalkingTec.Mvvm.Core.CoreProgram._localizer?["Codegen.Confirm"]<br />
           </wt:quote>
+          @if (Model.DeprecationWarning != null)
+          {
+            @* CG-03/04: Surface deprecation warning for EOL UI targets (e.g. Vue 2).
+               Generation still completes for backwards-compatibility. *@
+            <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:10px 16px;margin-bottom:12px;color:#856404;">
+              <strong>⚠ Deprecation Warning:</strong> @Model.DeprecationWarning
+            </div>
+          }
           <wt:fieldset title="Controller">
             <wt:linkbutton text="@preview" window-width="600" post-current-form="true" size=" ButtonSizeEnum.Mini"
                            target=" ButtonTargetEnum.Layer" url="/_CodeGen/Preview?PreviewFile=Controller" />
@@ -125,7 +133,9 @@ Layout = null;
 
                           }
 
-                          else if (Model.UI == WalkingTec.Mvvm.Core.UIEnum.VUE)
+                          @* CG-03/04: Use Model.IsVue2Ui instead of UIEnum.VUE directly so the Razor
+                               compiler does not emit CS0618 for the [Obsolete] UIEnum.VUE member. *@
+                          else if (Model.IsVue2Ui)
                           {
                             var viewdir = Model.MainDir + "\\ClientApp\\src\\pages\\" + Model.ModelName.ToLower();
                             <wt:fieldset title="VUE Views">

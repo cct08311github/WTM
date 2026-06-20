@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **CG-03/04: Deprecated EOL Vue 2 codegen target (`UIEnum.VUE`) (#434, Refs #193):**
+  Vue 2 reached end-of-life in December 2023.  `UIEnum.VUE` is now decorated with
+  `[Obsolete("Vue 2 is end-of-life; use VUE3 or Blazor instead.", false)]` — a **warning**,
+  not an error, so existing builds continue to compile.  Code generation for Vue 2 still
+  runs to preserve backwards-compatibility; no generated output changes.
+
+  **User-visible changes:**
+  - A yellow deprecation banner is shown in the code-generator UI (Index + Gen pages) when
+    Vue 2 is the active target.
+  - The server logs a `LogWarning` entry at start and at generation time.
+  - On the generation-success dialog the success message is appended with the deprecation text.
+
+  **Supported SPA targets (unchanged):** `VUE3` and `Blazor` remain fully functional.
+  `UIEnum.VUE` will be removed in a future major version.
+
+  **Migration:** replace `UIEnum.VUE` with `UIEnum.VUE3` and regenerate.
+
 ### Added
 
 - **Opt-in S3/MinIO file handler — new `WalkingTec.Mvvm.FileHandlers.S3` package (#425, Refs #193):**
