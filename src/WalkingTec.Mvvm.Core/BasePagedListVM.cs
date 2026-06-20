@@ -22,9 +22,11 @@ using Microsoft.EntityFrameworkCore.Metadata.Internal;
 using MySql.Data.MySqlClient;
 using Npgsql;
 using NpgsqlTypes;
+using System.Text;
 using NPOI.HSSF.Util;
 using NPOI.SS.UserModel;
 using NPOI.SS.Util;
+using NPOI.XSSF.Streaming;
 using NPOI.XSSF.UserModel;
 using WalkingTec.Mvvm.Core.Extensions;
 
@@ -408,6 +410,247 @@ namespace WalkingTec.Mvvm.Core
                 colIndex += bcount;
             }
             return maxLevel;
+        }
+
+        #endregion
+
+        #region Streaming Export (opt-in)
+
+        /// <summary>
+        /// When <see langword="true"/>, the controller's streaming export action
+        /// (<c>GetExportExcelStream</c>) is available and uses SXSSF to minimise
+        /// peak heap allocations for large grids.  Default is <see langword="false"/>
+        /// (existing byte[] path remains the default).
+        /// </summary>
+        [JsonIgnore]
+        public bool UseStreamingExport { get; set; }
+
+        /// <summary>
+        /// Writes the export data directly to <paramref name="output"/> using NPOI
+        /// <see cref="SXSSFWorkbook"/> (the streaming windowed workbook).  Only a
+        /// configurable sliding window of rows is kept in memory; the rest are flushed
+        /// to SXSSF temporary files.
+        /// <para>
+        /// Column layout, headers, title colours, and enum localisation are identical
+        /// to the existing <see cref="GenerateExcel"/> path so the produced XLSX is
+        /// equivalent.
+        /// </para>
+        /// <para>
+        /// <b>Temp-file cleanup</b>: <see cref="SXSSFWorkbook.Dispose"/> is called in
+        /// a <c>finally</c> block, which deletes the SXSSF backing files regardless of
+        /// success or failure.
+        /// </para>
+        /// </summary>
+        /// <param name="output">The stream to write the XLSX bytes into.  Must be
+        /// writable.  The caller owns the stream lifetime.</param>
+        /// <param name="rowWindowSize">
+        /// Number of rows kept in memory at a time before flushing.  Defaults to 100.
+        /// </param>
+        public virtual void GenerateExcelToStream(Stream output, int rowWindowSize = 100)
+        {
+            NeedPage = false;
+
+            if (GridHeaders == null)
+            {
+                GetHeaders();
+            }
+
+            RemoveActionAndIdColumn();
+
+            var query = SearcherMode == ListVMSearchModeEnum.CheckExport
+                ? GetCheckedExportQuery()
+                : GetExportQuery();
+
+            int listcount = query.Count();
+            ExportRowCount = listcount;
+
+            var sxssf = new SXSSFWorkbook(rowWindowSize);
+            try
+            {
+                ISheet sheet = sxssf.CreateSheet();
+                IRow row = sheet.CreateRow(0);
+
+                // Header style — mirrors GenerateWorkBook()
+                ICellStyle headerStyle = sxssf.CreateCellStyle();
+                headerStyle.FillBackgroundColor = ExportTitleBackColor ?? HSSFColor.LightBlue.Index;
+                headerStyle.FillPattern = FillPattern.SolidForeground;
+                headerStyle.FillForegroundColor = ExportTitleBackColor ?? HSSFColor.LightBlue.Index;
+                headerStyle.BorderBottom = BorderStyle.Thin;
+                headerStyle.BorderTop = BorderStyle.Thin;
+                headerStyle.BorderLeft = BorderStyle.Thin;
+                headerStyle.BorderRight = BorderStyle.Thin;
+                IFont font = sxssf.CreateFont();
+                font.FontName = "Calibri";
+                font.FontHeightInPoints = 12;
+                font.Color = ExportTitleFontColor ?? HSSFColor.Black.Index;
+                headerStyle.SetFont(font);
+
+                ICellStyle cellStyle = sxssf.CreateCellStyle();
+                cellStyle.BorderBottom = BorderStyle.Thin;
+                cellStyle.BorderTop = BorderStyle.Thin;
+                cellStyle.BorderLeft = BorderStyle.Thin;
+                cellStyle.BorderRight = BorderStyle.Thin;
+
+                // Build header rows
+                int dataStartRow = MakeExcelHeader(sheet, GridHeaders!, 0, 0, headerStyle);
+
+                // Write data rows in a streaming fashion
+                int rowIdx = 0;
+                foreach (var item in query)
+                {
+                    int colIndex = 0;
+                    IRow dr = sheet.CreateRow(rowIdx + dataStartRow);
+                    foreach (var baseCol in GridHeaders!)
+                    {
+                        foreach (var col in baseCol.BottomChildren)
+                        {
+                            bool isEnumBoolProp = col.FieldType != null && col.FieldType.IsEnumOrNullableEnum();
+                            string text = Regex.Replace(col.GetText(item).ToString() ?? "", @"<[^>]*>", string.Empty);
+
+                            if (isEnumBoolProp)
+                            {
+                                string enumDisplay = PropertyHelper.GetEnumDisplayName(col.FieldType, text);
+                                if (!string.IsNullOrEmpty(enumDisplay))
+                                {
+                                    text = enumDisplay;
+                                }
+                                else if (int.TryParse(text, out int enumValue))
+                                {
+                                    text = PropertyHelper.GetEnumDisplayName(col.FieldType, enumValue);
+                                }
+                            }
+
+                            ICell cell;
+                            if (col.FieldType?.IsNumber() == true && double.TryParse(text, out double numVal))
+                            {
+                                cell = dr.CreateCell(colIndex, CellType.Numeric);
+                                cell.SetCellValue(numVal);
+                            }
+                            else
+                            {
+                                cell = dr.CreateCell(colIndex);
+                                cell.SetCellValue(text);
+                            }
+                            cell.CellStyle = cellStyle;
+                            colIndex++;
+                        }
+                    }
+                    rowIdx++;
+                }
+
+                // NPOI IWorkbook.Write(Stream) closes the stream it receives (Apache POI
+                // legacy behaviour).  Wrap output in a NonClosingWrapper so the caller's
+                // stream remains open and usable after this call returns.
+                using var wrapper = new NonClosingStreamWrapper(output);
+                sxssf.Write(wrapper);
+            }
+            finally
+            {
+                // Deletes SXSSF backing temp files — must be called even on exception.
+                sxssf.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Writes the export data as UTF-8 CSV directly to <paramref name="output"/>.
+        /// No NPOI workbook is created, so memory usage is minimal.  Column selection
+        /// and enum localisation match the existing Excel export.
+        /// </summary>
+        /// <param name="output">The stream to write CSV bytes into.  The caller owns
+        /// the stream lifetime.</param>
+        public virtual void GenerateCsvToStream(Stream output)
+        {
+            NeedPage = false;
+
+            if (GridHeaders == null)
+            {
+                GetHeaders();
+            }
+
+            RemoveActionAndIdColumn();
+
+            var query = SearcherMode == ListVMSearchModeEnum.CheckExport
+                ? GetCheckedExportQuery()
+                : GetExportQuery();
+
+            int listcount = query.Count();
+            ExportRowCount = listcount;
+
+            using var writer = new StreamWriter(output, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true), bufferSize: 65536, leaveOpen: true);
+
+            // Write header line
+            var headerParts = new List<string>();
+            foreach (var baseCol in GridHeaders!)
+            {
+                foreach (var col in baseCol.BottomChildren)
+                {
+                    headerParts.Add(CsvEscape(col.Title ?? string.Empty));
+                }
+            }
+            writer.WriteLine(string.Join(",", headerParts));
+
+            // Write data rows
+            foreach (var item in query)
+            {
+                var parts = new List<string>();
+                foreach (var baseCol in GridHeaders!)
+                {
+                    foreach (var col in baseCol.BottomChildren)
+                    {
+                        bool isEnumBoolProp = col.FieldType != null && col.FieldType.IsEnumOrNullableEnum();
+                        string text = Regex.Replace(col.GetText(item).ToString() ?? "", @"<[^>]*>", string.Empty);
+
+                        if (isEnumBoolProp)
+                        {
+                            string enumDisplay = PropertyHelper.GetEnumDisplayName(col.FieldType, text);
+                            if (!string.IsNullOrEmpty(enumDisplay))
+                            {
+                                text = enumDisplay;
+                            }
+                            else if (int.TryParse(text, out int enumValue))
+                            {
+                                text = PropertyHelper.GetEnumDisplayName(col.FieldType, enumValue);
+                            }
+                        }
+
+                        parts.Add(CsvEscape(text));
+                    }
+                }
+                writer.WriteLine(string.Join(",", parts));
+            }
+        }
+
+        /// <summary>RFC-4180 CSV field escaping.</summary>
+        private static string CsvEscape(string value)
+        {
+            if (value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r'))
+            {
+                return "\"" + value.Replace("\"", "\"\"") + "\"";
+            }
+            return value;
+        }
+
+        /// <summary>
+        /// Delegates all <see cref="Stream"/> members to an inner stream but suppresses
+        /// <see cref="Dispose"/> and <see cref="Close"/> so that NPOI's
+        /// <c>IWorkbook.Write(Stream)</c> — which closes its argument — cannot close the
+        /// caller-owned stream.
+        /// </summary>
+        private sealed class NonClosingStreamWrapper(Stream inner) : Stream
+        {
+            public override bool CanRead => inner.CanRead;
+            public override bool CanSeek => inner.CanSeek;
+            public override bool CanWrite => inner.CanWrite;
+            public override long Length => inner.Length;
+            public override long Position { get => inner.Position; set => inner.Position = value; }
+            public override void Flush() => inner.Flush();
+            public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
+            public override long Seek(long offset, SeekOrigin origin) => inner.Seek(offset, origin);
+            public override void SetLength(long value) => inner.SetLength(value);
+            public override void Write(byte[] buffer, int offset, int count) => inner.Write(buffer, offset, count);
+            // Suppress Dispose/Close — the caller owns the inner stream.
+            protected override void Dispose(bool disposing) { /* intentionally no-op */ }
+            public override void Close() { /* intentionally no-op */ }
         }
 
         #endregion

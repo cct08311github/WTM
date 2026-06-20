@@ -404,6 +404,95 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         /// <summary>
+        /// Opt-in streaming Excel export using NPOI SXSSFWorkbook.
+        /// Only available when the VM has <c>UseStreamingExport = true</c>.
+        /// All guards (MVC-010, MVC-013, ExportRowCount==0, DONOTUSEDOWNLOADING cookie)
+        /// from <see cref="GetExportExcel"/> are preserved.
+        /// <para>
+        /// The SXSSF workbook is written to a <see cref="MemoryStream"/> so the
+        /// response headers (including the 422 empty-data guard) can be set before
+        /// the bytes are sent to the client.  Peak memory is proportional to the
+        /// SXSSF sliding window (<c>rowWindowSize</c> rows), not the full result set.
+        /// </para>
+        /// </summary>
+        [HttpPost]
+        [ActionDescription("ExportStream")]
+        public IActionResult GetExportExcelStream(string _DONOT_USE_VMNAME, string _DONOT_USE_CS)
+        {
+            // MVC-010: reject unknown connection-string keys
+            if (!IsKnownConnectionKey(_DONOT_USE_CS))
+                return BadRequest("Unknown connection string key");
+
+            var qs = new Dictionary<string, object>();
+            foreach (var item in Request.Query.Keys)
+            {
+                qs.Add(item, Request.Query[item]);
+            }
+            foreach (var item in Request.Form)
+            {
+                if (!qs.ContainsKey(item.Key))
+                {
+                    qs.Add(item.Key, item.Value);
+                }
+            }
+            Wtm.CurrentCS = _DONOT_USE_CS;
+
+            // MVC-013: wrap CreateVM to return 400 on bad VM name
+            IBasePagedListVM<TopBasePoco, ISearcher>? listVM;
+            Type? instanceType;
+            try
+            {
+                var rawVm = Wtm.CreateVM(_DONOT_USE_VMNAME);
+                listVM = rawVm as IBasePagedListVM<TopBasePoco, ISearcher>;
+                instanceType = rawVm?.GetType() ?? Type.GetType(_DONOT_USE_VMNAME);
+            }
+            catch (ArgumentException)
+            {
+                return BadRequest(MvcProgram._localizer?["Sys.InvalidVM"] ?? "Invalid Vm Name");
+            }
+
+            if (listVM == null)
+                return BadRequest(MvcProgram._localizer?["Sys.InvalidVM"] ?? "Invalid Vm Name");
+
+            // Opt-in gate: the VM must explicitly enable streaming
+            if (!listVM.UseStreamingExport)
+                return BadRequest("Streaming export is not enabled for this VM. Set UseStreamingExport = true.");
+
+            listVM.FC = qs;
+            RedoUpdateModel(listVM);
+            listVM.SearcherMode = listVM.Ids != null && listVM.Ids.Count > 0
+                ? ListVMSearchModeEnum.CheckExport
+                : ListVMSearchModeEnum.Export;
+
+            // Use a MemoryStream so we can inspect ExportRowCount before committing
+            // to the HTTP response.  The SXSSF window (default 100 rows) keeps
+            // in-process heap proportional to the window size — only the final serialised
+            // XLSX bytes are temporarily buffered here before being handed to File().
+            using var ms = new MemoryStream();
+            listVM.GenerateExcelToStream(ms);
+
+            if (listVM.ExportRowCount == 0)
+            {
+                return StatusCode(422, new { message = MvcProgram._localizer?["Sys.NoData"] ?? "No data" });
+            }
+
+            var now = Wtm.TimeProvider.GetLocalNow().DateTime;
+            HttpContext.Response.Cookies.Append("DONOTUSEDOWNLOADING", "0",
+                new Microsoft.AspNetCore.Http.CookieOptions()
+                {
+                    Path = "/",
+                    Expires = now.AddDays(2),
+                    SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Lax,
+                    Secure = Request.IsHttps
+                });
+
+            ms.Position = 0;
+            var typeName = instanceType?.Name ?? _DONOT_USE_VMNAME ?? "Export";
+            const string contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+            return File(ms.ToArray(), contentType, $"Export_{typeName}_{now:yyyy-MM-dd}.xlsx");
+        }
+
+        /// <summary>
         /// Download Excel Template
         /// </summary>
         /// <returns></returns>

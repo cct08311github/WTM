@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Threading;
@@ -41,6 +42,27 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         /// <returns>Excel文件</returns>
         byte[] GenerateExcel();
+
+        /// <summary>
+        /// Opt-in streaming XLSX export using NPOI <c>SXSSFWorkbook</c>.
+        /// Only a sliding window of rows is kept in memory at a time.
+        /// Set <see cref="UseStreamingExport"/> to <see langword="true"/> to enable
+        /// the controller path that calls this method.
+        /// </summary>
+        void GenerateExcelToStream(Stream output, int rowWindowSize = 100);
+
+        /// <summary>
+        /// Opt-in streaming CSV export.  Writes UTF-8 CSV directly to
+        /// <paramref name="output"/> with minimal memory usage.
+        /// </summary>
+        void GenerateCsvToStream(Stream output);
+
+        /// <summary>
+        /// When <see langword="true"/>, the controller's streaming export action
+        /// (<c>GetExportExcelStream</c>) is available and uses SXSSF.
+        /// Default is <see langword="false"/>.
+        /// </summary>
+        bool UseStreamingExport { get; set; }
 
         string? TotalText { get; set; }
 
