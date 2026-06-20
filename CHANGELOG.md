@@ -1,5 +1,13 @@
 # 更新日志
 
+## [10.13.3] - 2026-06-20
+
+Packaging / CI-only release — **no framework code changed.** The only commit since 10.13.2 (#456, porting #455) edits `.github/workflows/publish-nuget.yml`, which is repository CI infrastructure and is **not** shipped inside any `WalkingTec.Mvvm.*` NuGet package. The compiled content of all six existing packages is byte-for-byte identical to 10.13.2. The user-facing effect is purely distribution: the unified publish pipeline now packs two additional packages — `WalkingTec.Mvvm.Etl` and `WalkingTec.Mvvm.FileHandlers.S3` — so they reach the public GitHub Packages mirror for the first time, and the corrected end-to-end publish pipeline is exercised/validated.
+
+### Changed
+
+- **Publish pipeline now packs and pushes all six packages, incl. `WalkingTec.Mvvm.Etl` + `WalkingTec.Mvvm.FileHandlers.S3` (#455, #456):** the NuGet publish workflow previously omitted `Etl` and `FileHandlers.S3` from both the local pack stage and the GitHub-Packages re-pack block, so those two packages were never published to the public GitHub Packages mirror despite existing in the repo (they were only on the internal registry via a manual per-release push). Both pack steps are now included. The S3/MinIO file handler (introduced as the new `WalkingTec.Mvvm.FileHandlers.S3` package in the 10.13.0 商用化 program) and the ETL package are therefore installable from GitHub Packages starting with this version. **Distribution/CI change only — no shipped package binary differs from 10.13.2; the existing four packages are unchanged.**
+
 ## [10.13.2] - 2026-06-20
 
 Patch — completes the revert of a `DataContext` model-building regression introduced in 10.12.4 (#382). Multi-`DbContext` apps could crash at startup or get spurious migration tables; both code paths are now scoped to each context's own entity set.
