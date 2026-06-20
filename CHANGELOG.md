@@ -1,5 +1,17 @@
 # 更新日志
 
+## [10.13.2] - 2026-06-20
+
+Patch — completes the revert of a `DataContext` model-building regression introduced in 10.12.4 (#382). Multi-`DbContext` apps could crash at startup or get spurious migration tables; both code paths are now scoped to each context's own entity set.
+
+### Fixed
+
+- **`DataContext.OnModelCreating` over-registered foreign entities into the wrong context (#450, #452 — regression from #382):** the multi-level-inheritance query-filter fix shipped in 10.12.4 (#382) switched two model-builder loops to the **global** `Utils.GetAllModels()` set, which is populated from **all** `DbContext` subclasses visible in the loaded assemblies. In an application with a secondary context, entity types belonging to that other context were force-registered into **this** context's model. Consequences:
+  - **Startup crash** — if another context declared a keyless / no-primary-key view entity, EF's `ValidateNonNullPrimaryKeys` threw *"requires a primary key to be defined"* against a context that never owned that type.
+  - **Spurious migration tables** — foreign entities leaked into this context's model, producing tables that don't belong in its migrations.
+
+  Both the **file-attachment FK loop** and the **Pass-1 entity-registration loop** now iterate only `thisContextDbSetTypes` — the `DbSet<T>` entity types declared on this concrete context (and its base types up to, but not including, `DbContext`), which is exactly the set EF discovers naturally. `Utils.GetAllModels()` / `allTypes` is no longer referenced in `OnModelCreating`. The Pass-2 query-filter logic (the actual #382 multi-level-inheritance fix, applied on EF-root entity types) is unchanged, so the original #382 fix is preserved. #450 scoped Pass 1; #452 scoped the FK loop and removed the global set entirely. Single-context apps are unaffected. Regression tests cover both the multi-context isolation case and the file-attach FK scope.
+
 ## [10.13.1] - 2026-06-20
 
 Patch — a HIGH-impact readiness-probe bug fix + a log-injection security hardening (plus CI docs and demo/test dependency bumps).
