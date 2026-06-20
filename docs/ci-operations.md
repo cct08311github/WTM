@@ -1,8 +1,8 @@
 # CI Operations
 
 > **適用版本**：10.5.1+
-> **最後更新**：2026-05-14
-> **CI 平台**：Gitea Actions（act_runner 0.6.1，self-hosted at `mac-mini.tailde842d.ts.net`）
+> **最後更新**：2026-06-20
+> **CI 平台**：Gitea Actions（self-hosted at `mac-mini.tailde842d.ts.net`）。**兩個 runner**（見下方「Runner 拓撲」）：WTM 的 `ubuntu-latest` jobs 跑在 Docker `act_runner`；另有一個 Homebrew runner 服務其他專案。
 
 本文件涵蓋 WTM CI 工作流總覽、Gitea Actions 與 GitHub Actions 的四大已知不相容點，以及排錯 SOP。完整修復脈絡見 [Issue #11](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/issues/11) / [PR #12](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/pulls/12)。
 
@@ -15,7 +15,7 @@
 | `.github/workflows/ci-build.yml` | push + PR | `build-and-test`、`js-test`、`release-tooling-test`、`security-scan` |
 | `.github/workflows/e2e-test.yml` | push + PR（path filter：`src/**`、`demo/**`、`test/e2e/**`） | `e2e`（Python + Playwright） |
 | `.github/workflows/integration-test.yml` | push + PR（含 SQL Server container） | `integration-test` |
-| `.github/workflows/publish-nuget.yml` | release tag | NuGet pack + push 到 Gitea registry |
+| `.github/workflows/publish-nuget.yml` | `push` tag `v*` + `workflow_dispatch` | NuGet pack→Gitea registry **＋ GitHub mirror sync（清洗 + go-forward push）＋ 建立 GitHub Release＋推 GitHub Packages**（見「Runner 拓撲與發版」） |
 
 Gitea Actions 直接讀 `.github/workflows/*.yml` — 語法與 GitHub Actions 相容、不必搬到 `.gitea/`。但有些 action 版本（特別是 v4+ artifact action）不支援 Gitea 的 GHES API，見下方四大不相容點。
 
@@ -224,16 +224,40 @@ docker stop $(docker ps -q --filter "ancestor=mcr.microsoft.com/mssql/server:202
 
 ---
 
-## 與 NuGet 發佈相關
+## Runner 拓撲與發版（2026-06-20 更新）
 
-`publish-nuget.yml` 由 release tag 觸發。當前狀態：
+### Runner 拓撲（重要：有兩個 runner）
 
-- 三個 publish 套件：`WalkingTec.Mvvm.Core`、`WalkingTec.Mvvm.Mvc`、`WalkingTec.Mvvm.TagHelpers.LayUI`（Etl 模組不在 publish 清單）
-- Target registry：**Gitea NuGet registry**（`https://mac-mini.tailde842d.ts.net/api/packages/chiu0831/nuget/index.json`）
-- 自 2026-05-13 起 GitHub Packages 已停用、所有發佈走 Gitea
-- 若 Gitea Actions runner 無法觸發或想本機跑：用 `scripts/publish-to-gitea.sh`
+Mac-mini 上全部跑在 **Docker**（`/Volumes/T7/dockerdata-binds/gitea/`）：Gitea server（`gitea/gitea:1.26.1-rootless`）+ `gitea-db`（postgres）+ runner。
 
-完整 release 流程見 [`docs/wtm-developer-manual.md`](./wtm-developer-manual.md) 與 [`CHANGELOG.md`](../CHANGELOG.md)（維護者另有本機 MEMORY.md，但不入 git）。
+| Runner | 形式 | labels | 服務對象 | capacity | config |
+|--------|------|--------|----------|----------|--------|
+| `local-runner` | Docker `gitea/act_runner`（跑 `catthehacker/ubuntu` 容器） | `ubuntu-latest` / `ubuntu-22.04` / `ubuntu-20.04` | **WTM**（所有 workflow 都用 `runs-on: ubuntu-latest`） | **2** | `/Volumes/T7/dockerdata-binds/gitea/data/runner/config.yaml` |
+| `bms-macos-runner` | Homebrew `gitea-runner` | `self-hosted:host` / `macos:host` | 其他專案（BMS 等，host 直跑） | 3 | `/opt/homebrew/etc/gitea-runner/config.yaml` |
+
+- **WTM CI 的吞吐瓶頸是 Docker `local-runner` 的 `capacity`（目前 2）**，不是 Homebrew runner。大量 PR 連續 merge 時 job 會排隊；`security-scan`（`needs: build-and-test`）會排在最後，可能 pending 很久 → 看起來像「卡住」。
+- 讀內部狀態：`docker logs gitea`、`docker logs gitea-actions-runner`、`docker ps`。
+- **無依賴變更（沒動 `Directory.Packages.props` / `src` 的 `.csproj`）的 PR**：可只等 `build-and-test` 綠就合併 —— `security-scan` 對無依賴變更是確定性綠燈（不可能冒出新 CVE）；runner 真正塞爆時用本機 gate（`dotnet build` + `dotnet test` + `dotnet list --vulnerable`）替代。
+
+### 發版（`publish-nuget.yml`）
+
+由 `push` tag `v*`（或 `workflow_dispatch`）觸發，做四件事：
+
+1. pack + push **6 個套件**到 Gitea NuGet registry（`.../api/packages/chiu0831/nuget`）：`Core`、`Mvc`、`TagHelpers.LayUI`、`WorkFlow`、`Etl`、`FileHandlers.S3`（`--skip-duplicate`，重跑安全）。
+2. **GitHub mirror sync**：套 `.sync/` manifest（`github-replace` → `github-excludes` → `github-sanitize.sed`）清洗內網資訊，**go-forward**（不 force-push 改寫 public 歷史）push `dotnet10` 到 `github.com/cct08311github/WTM`。
+3. **建立 GitHub Release**（`api.github.com/.../releases`，tag = `${github.ref_name}`）。
+4. push NuGet 到 GitHub Packages。
+
+> GitHub Packages / mirror **是活躍的**（每日同步的公開鏡像），不是停用 —— 舊版本文件曾誤記「已停用」。Gitea 仍是 source of truth；GitHub 端不直接 merge。
+
+### ⚠️ 發版已知陷阱（Gitea 1.26.1）
+
+- **Gitea Release 物件「不會」自動建立 —— 要手動補。** `publish-nuget.yml` 只自動建 **GitHub** Release；**Gitea** 的 `/releases` 頁面靠人工建（API：`POST /repos/chiu0831/WTM/releases`，body 用對應版本的 CHANGELOG 段落）。曾經從 v10.12.2 起漏補到 v10.13.0，造成 Gitea releases 頁面看似停滯。**每次 tag 後記得補 Gitea Release。**
+- **`workflow_dispatch` 帶 tag ref 會回 HTTP 204 但「不建立 run」** —— Gitea 的 dispatch 只對 **branch** 真正生效。要重跑 tag 工作流不能靠 dispatch。
+- **同一 commit 重推 tag「不會」重新觸發**（Gitea 對同 commit 的 tag 事件去重）。要可靠重觸發 `publish-nuget`：**用一個新 commit 再重打 tag**（或讓下次正式 release 帶上）。
+- 想本機發 Gitea 套件（繞過 runner）：`scripts/publish-to-gitea.sh`（或手動 `dotnet pack` + `dotnet nuget push --source gitea --skip-duplicate`）。
+
+完整 release 流程見 [`docs/wtm-developer-manual.md`](./wtm-developer-manual.md) 與 [`CHANGELOG.md`](../CHANGELOG.md)。
 
 ---
 
