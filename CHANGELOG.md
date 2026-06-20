@@ -1,6 +1,8 @@
 # 更新日志
 
-## [Unreleased]
+## [10.13.0] - 2026-06-20
+
+**#193 商用化 (commercialization) program — COMPLETE.** 18 PRs (#405–#439) since 10.12.5 across Security & Correctness, the WorkFlow HTTP surface, Perf/async Phase 2, platform services, grid + import richness, CodeGen modernization, and Dashboard delivery. Every change is **opt-in / non-breaking by default**; each was independently adversarially reviewed (real defects caught and fixed before merge). Two cloud-provider areas (OSS COS/Qiniu, SMS) are intentionally shipped as seams (`IWtmFileHandler`, `ISmsSender`) rather than bundled SDKs, for the 中文內網 / single-tenant target.
 
 ### Changed
 
@@ -33,6 +35,19 @@
 
   **Migration / opt-in:** existing apps are unaffected. Install the `WalkingTec.Mvvm.FileHandlers.S3` package and call `AddWtmS3FileHandler(...)` to activate.
 
+- **WorkFlow HTTP surface completed (#406, Refs #193):** five new `WorkflowTaskController` endpoints expose engine capabilities that were previously engine-only — `add-approver` (加签), `delegate` + `revoke-delegation` (委托, admin-gated), `return-to-prev` + `return-to-node` (回退). Actor ITCode is always server-side; `MapEngineResult` extended to cover the new result codes. +23 HTTP/RBAC tests.
+- **`DoSearchAsync` async list-query path on `BasePagedListVM` (#412, Refs #193):** async EF materialization (`CountAsync`/`ToListAsync`, CancellationToken) sharing the exact query-building of sync `DoSearch` (identical results; sync API unchanged). Exposed on `IBasePagedListVM`.
+- **Async batch operations on `BaseBatchVM` (#413, Refs #193):** `DoBatchEditAsync`/`DoBatchDeleteAsync`(/`Add`) mirroring the EVM-002 atomic-transaction + per-row-validation semantics (full rollback on any mid-batch failure). Sync versions unchanged.
+- **Opt-in streaming export (#414, Refs #193):** `GenerateExcelToStream` (NPOI SXSSF windowed) + `GenerateCsvToStream`, gated by `UseStreamingExport` (default off), via `_FrameworkController.GetExportExcelStream`, to cut peak memory on large exports. Buffered `GenerateExcel()` unchanged; no new NuGet package.
+- **Opt-in distributed `LookupCache` backend (#415, Refs #193):** `IDistributedCache`-backed provider for multi-node deployments, opt-in via `AddWtmDistributedLookupCache()`, cross-node invalidation via a distributed sentinel. Default stays in-memory; no Redis/3rd-party dependency (host plugs `IDistributedCache`).
+- **Shared email notification service `IWtmEmailService` (#421, Refs #193):** opt-in SMTP sink (`System.Net.Mail`, no new package) via `AddWtmEmail(...)`; default `NullEmailService` no-op. The per-send transport is disposed deterministically.
+- **Opt-in config eager validation (#422, Refs #193):** `AddWtmConfigValidation()` uses `ValidateOnStart` to fail-fast at startup on invalid connection-string / JWT options (JWT validated via the bound `IOptions<Configs>`; gated so apps not using JWT are unaffected). Default = no validation (unchanged).
+- **SMS notification seam `ISmsSender` (#424, Refs #193):** opt-in seam + `NullSmsSender` default via `AddWtmSms()`; cloud providers (Aliyun/Tencent) intentionally not bundled — hosts plug their own. No new package.
+- **Grid server-side aggregate footers (#431, Refs #193):** opt-in per-column Sum/Avg/Count/Min/Max computed over the **full filtered query** (not just the page), surfaced in the LayUI footer; back-compatible grid-data response. Default per-page `ShowTotal` unchanged.
+- **Typed grid columns incl. per-row multi-currency (#432, Refs #193):** opt-in Progress / Tag / Image / Currency column types. **Currency is data-driven per row** (`CurrencyCodeField` → each row formats by its own ISO code via `Intl.NumberFormat`, 3-letter-ISO guarded), so a list can mix TWD + foreign currencies (travel-expense case); fixed single-currency fallback retained. XSS-safe (field names JS-encoded, values `ff.EscapeText`/`Number()`-coerced).
+- **Import inline-error endpoint (#433, Refs #193):** the framework import path now surfaces `BaseImportVM.InlineErrors` (capped by `InlineErrorLimit`) + a `ValidateOnly` dry-run, back-compatibly (additive response fields).
+- **Dashboard scheduled-snapshot delivery sinks (#438, Refs #193):** opt-in `IDashboardSnapshotSink` + built-ins — FileSystem (path-traversal-guarded), Email (attach via `IWtmEmailService`), Webhook (summary card). Wired into `DashboardSnapshotHostedService` with per-sink isolation; no sink registered = log-only (unchanged default).
+
 ### Security
 
 - **Opt-in upload validation seam — `IUploadValidator` AV/policy hook (#407, Refs #193):**
@@ -45,6 +60,12 @@
   A new `IUploadValidator` DI seam (in `WalkingTec.Mvvm.Core.Support.FileHandlers`) enables custom validation (AV scanning, magic-byte inspection, etc.).  Register via `services.AddScoped<IUploadValidator, MyScanner>()` after `AddWtmContext`.  The default `NoOpUploadValidator` preserves existing accept-all behaviour.  Validation is enforced in `_FrameworkController.Upload`, `UploadImage`, `UploadForLayUIRichTextBox`, and `UploadForLayUIUEditor` before any file is written to storage.
 
   **Migration / opt-in:** no configuration change required for existing apps.  Set any of the three new `FileUploadOptions` fields to restrict uploads, or replace the validator via DI.
+
+- **MVC-008 residual — horizontal password-reset in reference demos (#405, #411, Refs #193):** the SPA demos (Vue/Vue3/React/Blazor + the Razor API controller, #405) and the Razor MVC POST handler (#411) resolved password-reset ownership from the **body-supplied** ITCode, so a `UserManagement`-role user could reset any user's (incl. admin's) password by passing a different entity ID. The guard now resolves the target ITCode from the **DB by entity ID** (server-side identity), not the request body — not bypassable. Non-admins may reset only their own password.
+
+### Fixed
+
+- **i18n fallback hardening (#423, Refs #193):** empty/null `Configs.SupportLanguages` no longer yields an empty supported-cultures list (NRE-safe); an explicit fallback culture is set so requests for an unconfigured culture degrade gracefully. Behaviour for configured cultures is unchanged.
 
 ## [10.12.5] - 2026-06-19
 
