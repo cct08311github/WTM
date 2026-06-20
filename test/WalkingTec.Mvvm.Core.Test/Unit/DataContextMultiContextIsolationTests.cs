@@ -1,13 +1,17 @@
 #nullable enable
-// Regression tests for Issue #450:
-//   Pass 1 in FrameworkContext.OnModelCreating used Utils.GetAllModels() — the GLOBAL
+// Regression tests for Issues #450 and #452:
+//   #450: Pass 1 in DataContext.OnModelCreating used Utils.GetAllModels() — the GLOBAL
 //   set of entity types from ALL DbContext subclasses — and force-registered them all
 //   into the current context's model.  In an app with two contexts sharing an assembly,
 //   keyless / no-primary-key entities from the secondary context were injected into the
 //   primary context's model, causing EF ValidateNonNullPrimaryKeys to throw
 //   "requires a primary key to be defined".
 //
-//   The fix scopes Pass 1 registration to the DbSet<T> properties declared on THIS
+//   #452: The file-attachment FK loop ALSO used Utils.GetAllModels(), so foreign-context
+//   entities that have a FileAttachment property were registered into the primary context's
+//   model, causing spurious tables in migrations.
+//
+//   Both fixes scope all model-builder work to the DbSet<T> properties declared on THIS
 //   context type only, so foreign-context entities never enter the model.
 using Microsoft.EntityFrameworkCore;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -81,6 +85,34 @@ namespace WalkingTec.Mvvm.Core.Test.Unit
     }
 
     // ── Tests ──────────────────────────────────────────────────────────────────
+
+    // ── Secondary context entity WITH a FileAttachment property (#452) ────────
+
+    /// <summary>
+    /// A normal TopBasePoco entity that belongs ONLY to the secondary context
+    /// AND has a FileAttachment navigation property.
+    ///
+    /// If the #452 regression is present, the file-attachment FK loop uses
+    /// Utils.GetAllModels() and registers this entity into PrimaryTestContext's
+    /// model, causing a spurious table in migrations.
+    /// </summary>
+    internal class ForeignEntityWithAttachment : BasePoco
+    {
+        public string Title { get; set; } = "";
+        public Guid? AttachmentId { get; set; }
+        public FileAttachment? Attachment { get; set; }
+    }
+
+    /// <summary>
+    /// Secondary context that declares ForeignEntityWithAttachment (has FileAttachment).
+    /// This simulates the pattern where a secondary context has document/file entities.
+    /// </summary>
+    internal class SecondaryFileContext : WalkingTec.Mvvm.Core.Test.DataContext
+    {
+        public DbSet<ForeignEntityWithAttachment> ForeignAttachments { get; set; } = null!;
+
+        public SecondaryFileContext(string cs, DBTypeEnum dbType) : base(cs, dbType) { }
+    }
 
     /// <summary>
     /// Regression tests for Issue #450: verifies that building the model for
@@ -168,6 +200,95 @@ namespace WalkingTec.Mvvm.Core.Test.Unit
                     "PrimaryTestContext must be able to query its own entities normally.");
                 Assert.AreEqual("TestItem", results[0].Name);
             }
+        }
+    }
+
+    /// <summary>
+    /// Regression tests for Issue #452: the file-attachment FK loop in
+    /// DataContext.OnModelCreating previously used Utils.GetAllModels() (the global
+    /// set), which caused foreign-context entities with FileAttachment properties to
+    /// be registered into THIS context's model, producing spurious tables in migrations.
+    ///
+    /// The fix scopes the file-attachment FK loop to the same per-context
+    /// thisContextDbSetTypes set used by Pass 1 registration (#450).
+    /// </summary>
+    [TestClass]
+    public class DataContextFileAttachFkScopeTests
+    {
+        /// <summary>
+        /// Core regression for #452: PrimaryTestContext must not contain
+        /// ForeignEntityWithAttachment (which has a FileAttachment property but
+        /// belongs only to SecondaryFileContext).
+        /// </summary>
+        [TestMethod]
+        [Description("#452 regression: PrimaryTestContext model must not contain SecondaryFileContext's entity that has a FileAttachment property")]
+        public void PrimaryContext_Model_DoesNotContain_ForeignEntityWithFileAttachment()
+        {
+            var seed = Guid.NewGuid().ToString("N");
+
+            using var ctx = new PrimaryTestContext(seed, DBTypeEnum.Memory);
+            ctx.Database.EnsureCreated();
+
+            var entityTypeNames = ctx.Model.GetEntityTypes().Select(e => e.ClrType.Name).ToList();
+
+            CollectionAssert.DoesNotContain(entityTypeNames, nameof(ForeignEntityWithAttachment),
+                $"PrimaryTestContext's model must not contain '{nameof(ForeignEntityWithAttachment)}' " +
+                "— that entity (which has a FileAttachment property) belongs exclusively to SecondaryFileContext. " +
+                "If present, it means the file-attachment FK loop is still using Utils.GetAllModels() (#452).");
+        }
+
+        /// <summary>
+        /// Confirm SecondaryFileContext's own entity with a FileAttachment IS contained
+        /// in SecondaryFileContext's model (the scoping must not break the secondary context).
+        /// </summary>
+        [TestMethod]
+        [Description("#452: SecondaryFileContext model must contain its own FileAttachment entity")]
+        public void SecondaryFileContext_Model_ContainsOwnFileAttachmentEntity()
+        {
+            var seed = Guid.NewGuid().ToString("N");
+
+            using var ctx = new SecondaryFileContext(seed, DBTypeEnum.Memory);
+            ctx.Database.EnsureCreated();
+
+            var entityTypeNames = ctx.Model.GetEntityTypes().Select(e => e.ClrType.Name).ToList();
+
+            CollectionAssert.Contains(entityTypeNames, nameof(ForeignEntityWithAttachment),
+                $"SecondaryFileContext must contain its own entity '{nameof(ForeignEntityWithAttachment)}'.");
+        }
+
+        /// <summary>
+        /// Confirm that the primary test context's own Student entity (which has a
+        /// FileAttachment Photo property) still gets its FK registered correctly,
+        /// i.e., the file-attachment FK loop is not broken by the scoping fix.
+        /// </summary>
+        [TestMethod]
+        [Description("#452: primary context own entities with FileAttachment still get FK registered")]
+        public void PrimaryContext_OwnStudentEntity_WithFileAttachment_IsRegisteredInModel()
+        {
+            var seed = Guid.NewGuid().ToString("N");
+
+            // WalkingTec.Mvvm.Core.Test.DataContext includes DbSet<Student>,
+            // and Student has a FileAttachment Photo property.
+            using var ctx = new WalkingTec.Mvvm.Core.Test.DataContext(seed, DBTypeEnum.Memory);
+            ctx.Database.EnsureCreated();
+
+            var entityTypeNames = ctx.Model.GetEntityTypes().Select(e => e.ClrType.Name).ToList();
+
+            CollectionAssert.Contains(entityTypeNames, nameof(WalkingTec.Mvvm.Core.Test.Student),
+                "The test DataContext must contain Student — which has a FileAttachment Photo property.");
+
+            // Verify the FK for Student.Photo is configured as Restrict (not Cascade)
+            var studentEntityType = ctx.Model.FindEntityType(typeof(WalkingTec.Mvvm.Core.Test.Student));
+            Assert.IsNotNull(studentEntityType, "Student entity type must be found in model.");
+
+            var photoFk = studentEntityType!
+                .GetForeignKeys()
+                .FirstOrDefault(fk => fk.PrincipalEntityType.ClrType == typeof(FileAttachment));
+            Assert.IsNotNull(photoFk,
+                "Student must have a foreign key pointing to FileAttachment " +
+                "(the file-attachment FK loop must run for this context's own entities).");
+            Assert.AreEqual(Microsoft.EntityFrameworkCore.DeleteBehavior.Restrict, photoFk!.DeleteBehavior,
+                "Student -> FileAttachment FK must have DeleteBehavior.Restrict (set by the file-attachment FK loop).");
         }
     }
 }

@@ -138,9 +138,27 @@ namespace WalkingTec.Mvvm.Core
             //wtmtodo: 删除菜单同步删除页面权限
             //modelBuilder.Entity<FunctionPrivilege>().HasOne(x => x.MenuItem).WithMany(x => x.Privileges).HasForeignKey(x => x.MenuItemId).OnDelete(DeleteBehavior.Cascade);
 
-            var allTypes = Utils.GetAllModels();
+            // ── Scope all model-builder work to THIS context's own DbSet<T> entity types
+            // (declared on this concrete context and its base types up to but not including
+            // DbContext).  This is exactly the set EF discovers naturally.
+            //
+            // IMPORTANT (#450/#452 regression fix): we must NOT use Utils.GetAllModels()
+            // (the global set) here.  That set is populated from ALL DbContext subclasses
+            // visible in the loaded assemblies.  In an app with a secondary context, foreign
+            // entity types would be force-registered into THIS context's model, causing
+            // spurious tables in migrations and potentially EF's ValidateNonNullPrimaryKeys
+            // crash for keyless/no-PK view entities.
+            //
+            // Both the file-attachment FK loop (below) and Pass 1 registration use this
+            // same scoped set — #452 completes the fix started by #450.
+            var thisContextDbSetTypes = new HashSet<Type>(
+                this.GetType()
+                    .GetProperties()
+                    .Where(p => p.PropertyType.IsGenericType &&
+                                p.PropertyType.GetGenericTypeDefinition() == typeof(DbSet<>))
+                    .Select(p => p.PropertyType.GenericTypeArguments[0]));
 
-            foreach (var item in allTypes)
+            foreach (var item in thisContextDbSetTypes)
             {
                 if (typeof(TopBasePoco).IsAssignableFrom(item) && typeof(ISubFile).IsAssignableFrom(item) == false)
                 {
@@ -157,26 +175,6 @@ namespace WalkingTec.Mvvm.Core
             // ── Pass 1: ensure all TopBasePoco types that belong to THIS context are
             // registered in EF metadata so that the hierarchy (including concrete
             // intermediates) is fully known before we apply query filters.
-            //
-            // IMPORTANT (#450 regression fix): we must NOT use the global allTypes set
-            // here.  That set is populated from ALL DbContext subclasses visible in the
-            // loaded assemblies, so in an app with a secondary context that declares
-            // keyless / no-primary-key view entities those foreign types would be
-            // force-registered into THIS context's model, causing EF's
-            // ValidateNonNullPrimaryKeys to throw "requires a primary key to be defined".
-            //
-            // We scope registration to the DbSet<T> properties declared on this concrete
-            // context type (and its base types up to but not including DbContext), which
-            // is exactly the set EF would discover naturally.  allTypes is still used for
-            // the file-attachment FK loop above (which only calls Entity<T> when there is
-            // actually a FileAttachment property, so it is safe regardless).
-            var thisContextDbSetTypes = new HashSet<Type>(
-                this.GetType()
-                    .GetProperties()
-                    .Where(p => p.PropertyType.IsGenericType &&
-                                p.PropertyType.GetGenericTypeDefinition() == typeof(DbSet<>))
-                    .Select(p => p.PropertyType.GenericTypeArguments[0]));
-
             foreach (var regType in thisContextDbSetTypes)
             {
                 if (typeof(TopBasePoco).IsAssignableFrom(regType))
