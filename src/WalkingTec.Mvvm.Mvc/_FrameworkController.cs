@@ -516,6 +516,92 @@ namespace WalkingTec.Mvvm.Mvc
             return File(data, "application/vnd.ms-excel", fileName);
         }
 
+        /// <summary>
+        /// Generic framework import endpoint (#433).
+        /// Accepts a posted form whose fields are bound to the concrete
+        /// <see cref="BaseImportVM{T,P}"/> identified by <paramref name="_DONOT_USE_VMNAME"/>.
+        /// <para>
+        /// When <paramref name="validateOnly"/> is <c>true</c> the VM's
+        /// <see cref="BaseImportVM{T,P}.ValidateOnly"/> flag is set so that validation
+        /// runs but no rows are persisted (dry-run / preflight mode).
+        /// </para>
+        /// <para>
+        /// Success response (HTTP 200):
+        /// <code>{ "ImportedCount": N, "InlineErrors": [], "ValidateOnly": false }</code>
+        /// Error response (HTTP 400):
+        /// <code>{ "ImportedCount": 0, "InlineErrors": [{...}], "ValidateOnly": false }</code>
+        /// The <c>InlineErrors</c> array carries up to <c>InlineErrorLimit</c> per-row
+        /// errors so the UI can display them without requiring the user to download an
+        /// error file.  Callers that do not use the new fields (legacy callers that only
+        /// inspect the status code) are fully backward-compatible.
+        /// </para>
+        /// </summary>
+        [HttpPost]
+        [ActionDescription("Import")]
+        public IActionResult DoImport(string _DONOT_USE_VMNAME, string _DONOT_USE_CS, bool validateOnly = false)
+        {
+            // MVC-010: reject unknown connection-string keys to prevent lateral DB reads
+            if (!IsKnownConnectionKey(_DONOT_USE_CS))
+                return BadRequest("Unknown connection string key");
+
+            Wtm.CurrentCS = _DONOT_USE_CS;
+
+            // Resolve the import VM; return 400 on an unknown or non-import VM type.
+            BaseVM rawVm;
+            try
+            {
+                rawVm = Wtm.CreateVM(_DONOT_USE_VMNAME, null, null, true);
+            }
+            catch (ArgumentException)
+            {
+                return BadRequest(MvcProgram._localizer?["Sys.InvalidVM"] ?? "Invalid Vm Name");
+            }
+
+            if (rawVm is not IWtmImportable importVm)
+                return BadRequest(MvcProgram._localizer?["Sys.InvalidVM"] ?? "Not an import VM");
+
+            // Bind posted form fields onto the VM (mirrors how GetPagingData/GetExportExcel bind).
+            var fc = new Dictionary<string, object>();
+            foreach (var key in Request.Form.Keys)
+                fc[key] = Request.Form[key];
+            foreach (var key in Request.Query.Keys)
+            {
+                if (!fc.ContainsKey(key))
+                    fc[key] = Request.Query[key];
+            }
+            rawVm.FC = fc;
+            RedoUpdateModel(rawVm);
+
+            // Apply the dry-run flag before BatchSaveData runs.
+            importVm.ValidateOnly = validateOnly;
+
+            bool success = importVm.BatchSaveData();
+
+            // Build the back-compatible response envelope.
+            // Existing callers that only check the status code are unaffected; new callers
+            // can read InlineErrors and ValidateOnly from the JSON body.
+            var inlineErrors = importVm.InlineErrors
+                .Select(e => new { row = e.Index, message = e.Message })
+                .ToList();
+
+            if (!success)
+            {
+                return BadRequest(new
+                {
+                    ImportedCount = 0,
+                    InlineErrors = inlineErrors,
+                    ValidateOnly = importVm.ValidateOnly,
+                });
+            }
+
+            return Ok(new
+            {
+                ImportedCount = importVm.ImportedEntityCount,
+                InlineErrors = inlineErrors,
+                ValidateOnly = importVm.ValidateOnly,
+            });
+        }
+
         #endregion
 
         [AllowAnonymous]

@@ -48,11 +48,44 @@ namespace WalkingTec.Mvvm.Core
     }
 
     /// <summary>
+    /// Non-generic import seam used by the framework import endpoint (#433).
+    /// Exposes the minimal surface needed to execute a dry-run or real import
+    /// and surface per-row errors, without referencing the generic type parameters.
+    /// All existing code that uses <see cref="IBaseImport{T}"/> is unaffected.
+    /// </summary>
+    public interface IWtmImportable
+    {
+        /// <summary>
+        /// When <c>true</c>, validation runs but no rows are persisted.
+        /// Matches <see cref="BaseImportVM{T,P}.ValidateOnly"/>.
+        /// </summary>
+        bool ValidateOnly { get; set; }
+
+        /// <summary>
+        /// Up to <see cref="BaseImportVM{T,P}.InlineErrorLimit"/> per-row errors.
+        /// </summary>
+        IReadOnlyList<ErrorMessage> InlineErrors { get; }
+
+        /// <summary>
+        /// Count of entities that passed validation (and were persisted when
+        /// <see cref="ValidateOnly"/> is <c>false</c>).
+        /// </summary>
+        int ImportedEntityCount { get; }
+
+        /// <summary>
+        /// Executes the import pipeline: validate, then persist unless
+        /// <see cref="ValidateOnly"/> is <c>true</c>.
+        /// Returns <c>true</c> on success, <c>false</c> when validation errors exist.
+        /// </summary>
+        bool BatchSaveData(IProgress<ImportProgress>? progress = null);
+    }
+
+    /// <summary>
     /// 导入基类，Excel导入的类应继承本类
     /// </summary>
     /// <typeparam name="T">导入模版类</typeparam>
     /// <typeparam name="P">导入的Model类</typeparam>
-    public class BaseImportVM<T, P> : BaseVM, IBaseImport<T>, IDisposable
+    public class BaseImportVM<T, P> : BaseVM, IBaseImport<T>, IWtmImportable, IDisposable
         where T : BaseTemplateVM, new()
         where P : TopBasePoco, new()
     {
@@ -134,6 +167,14 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         [JsonIgnore]
         public List<P> EntityList { get; set; }
+
+        /// <summary>
+        /// Implements <see cref="IWtmImportable.ImportedEntityCount"/> (#433).
+        /// Returns <see cref="EntityList"/> count so the framework endpoint
+        /// can include it in the response without referencing the generic type.
+        /// </summary>
+        [JsonIgnore]
+        int IWtmImportable.ImportedEntityCount => EntityList?.Count ?? 0;
 
         /// <summary>
         /// 模版
