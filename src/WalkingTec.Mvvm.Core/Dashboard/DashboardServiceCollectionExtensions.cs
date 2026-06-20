@@ -11,6 +11,7 @@ using WalkingTec.Mvvm.Core.Analysis;
 using WalkingTec.Mvvm.Core.Dashboard.Alerting;
 using WalkingTec.Mvvm.Core.Dashboard.Snapshot;
 using WalkingTec.Mvvm.Core.Notifications;
+using WalkingTec.Mvvm.Core.Support.Email;
 
 namespace WalkingTec.Mvvm.Core.Dashboard
 {
@@ -220,6 +221,124 @@ namespace WalkingTec.Mvvm.Core.Dashboard
             }
 
             return services;
+        }
+
+        // ── Snapshot delivery sinks ───────────────────────────────────────────
+
+        /// <summary>
+        /// Registers <see cref="FileSystemSnapshotSink"/> as an <see cref="IDashboardSnapshotSink"/>
+        /// that writes completed snapshots to <paramref name="outputDirectory"/>.
+        /// </summary>
+        /// <remarks>
+        /// Call this <strong>after</strong> <see cref="AddWtmDashboardSnapshots"/>.
+        /// </remarks>
+        /// <param name="services">Service collection.</param>
+        /// <param name="outputDirectory">
+        /// Absolute path to the directory where snapshot files are written.
+        /// The directory is created automatically if it does not exist.
+        /// </param>
+        /// <example>
+        /// <code>
+        /// services.AddWtmDashboardSnapshots(opt => { ... });
+        /// services.AddDashboardFileSnapshotSink("/var/snapshots/dashboard");
+        /// </code>
+        /// </example>
+        public static IServiceCollection AddDashboardFileSnapshotSink(
+            this IServiceCollection services,
+            string outputDirectory)
+        {
+            if (string.IsNullOrWhiteSpace(outputDirectory))
+                throw new ArgumentException("outputDirectory must not be null or whitespace.", nameof(outputDirectory));
+
+            EnsureDeliveryOptions(services);
+            services.Configure<DashboardSnapshotDeliveryOptions>(o => o.OutputDirectory = outputDirectory);
+            services.AddSingleton<IDashboardSnapshotSink, FileSystemSnapshotSink>();
+
+            return services;
+        }
+
+        /// <summary>
+        /// Registers <see cref="EmailSnapshotSink"/> as an <see cref="IDashboardSnapshotSink"/>
+        /// that sends completed snapshots as e-mail attachments to <paramref name="recipients"/>.
+        /// </summary>
+        /// <remarks>
+        /// Requires <see cref="EmailServiceCollectionExtensions.AddWtmEmail"/> (or
+        /// <see cref="EmailServiceCollectionExtensions.AddWtmNullEmail"/>) to be called
+        /// so that <see cref="IWtmEmailService"/> is resolvable.
+        /// The sink silently no-ops when no recipients are supplied or when
+        /// <see cref="IWtmEmailService"/> is not registered.
+        /// Call this <strong>after</strong> <see cref="AddWtmDashboardSnapshots"/>.
+        /// </remarks>
+        /// <param name="services">Service collection.</param>
+        /// <param name="recipients">One or more recipient e-mail addresses.</param>
+        /// <param name="subjectTemplate">
+        /// Optional subject template. Supports <c>{DashboardId}</c>, <c>{JobId}</c>, <c>{FileName}</c>.
+        /// Defaults to <c>"Dashboard Snapshot: {DashboardId}"</c>.
+        /// </param>
+        /// <example>
+        /// <code>
+        /// services.AddWtmEmail(o => { o.Host = "smtp.example.com"; ... });
+        /// services.AddWtmDashboardSnapshots(opt => { ... });
+        /// services.AddDashboardEmailSnapshotSink("ops@example.com", "finance@example.com");
+        /// </code>
+        /// </example>
+        public static IServiceCollection AddDashboardEmailSnapshotSink(
+            this IServiceCollection services,
+            string[] recipients,
+            string? subjectTemplate = null)
+        {
+            if (recipients == null) throw new ArgumentNullException(nameof(recipients));
+
+            EnsureDeliveryOptions(services);
+            services.Configure<DashboardSnapshotDeliveryOptions>(o =>
+            {
+                o.EmailRecipients      = recipients;
+                o.EmailSubjectTemplate = subjectTemplate;
+            });
+
+            // EmailSnapshotSink takes IWtmEmailService? (nullable) so it gracefully no-ops
+            // when the email service has not been registered.
+            services.TryAddSingleton<IWtmEmailService>(_ => null!);
+            services.AddSingleton<IDashboardSnapshotSink, EmailSnapshotSink>();
+
+            return services;
+        }
+
+        /// <summary>
+        /// Registers <see cref="WebhookNotificationSnapshotSink"/> as an <see cref="IDashboardSnapshotSink"/>
+        /// that posts a completion summary card to the registered <see cref="IWtmWebhookSink"/>
+        /// when a snapshot job finishes.
+        /// </summary>
+        /// <remarks>
+        /// Webhooks cannot carry binary attachments; this sink sends a summary only (job ID,
+        /// dashboard ID, file name, byte count). The actual file bytes are not transmitted.
+        /// The sink silently no-ops when <see cref="IWtmWebhookSink"/> is not registered.
+        /// Call this <strong>after</strong> <see cref="AddWtmDashboardSnapshots"/>.
+        /// </remarks>
+        /// <example>
+        /// <code>
+        /// services.AddWtmWebhookSink(opt => opt.AddDingTalk("https://..."));
+        /// services.AddWtmDashboardSnapshots(opt => { ... });
+        /// services.AddDashboardWebhookNotificationSnapshotSink();
+        /// </code>
+        /// </example>
+        public static IServiceCollection AddDashboardWebhookNotificationSnapshotSink(
+            this IServiceCollection services)
+        {
+            // WebhookNotificationSnapshotSink takes IWtmWebhookSink? (nullable) so it gracefully
+            // no-ops when no webhook sink has been registered.
+            services.TryAddSingleton<IWtmWebhookSink>(_ => null!);
+            services.AddSingleton<IDashboardSnapshotSink, WebhookNotificationSnapshotSink>();
+
+            return services;
+        }
+
+        // ── Internal helpers ──────────────────────────────────────────────────
+
+        private static void EnsureDeliveryOptions(IServiceCollection services)
+        {
+            // Idempotent — AddOptions<T> is safe to call multiple times.
+            services.AddOptions<DashboardSnapshotDeliveryOptions>();
         }
     }
 }

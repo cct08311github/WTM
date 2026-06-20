@@ -10,6 +10,20 @@ using Quartz;
 
 namespace WalkingTec.Mvvm.Core.Dashboard.Snapshot;
 
+internal static class SnapshotContentTypeHelper
+{
+    internal static string GetContentType(DashboardExportFormat format) => format switch
+    {
+        DashboardExportFormat.Excel => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        DashboardExportFormat.Pdf   => "application/pdf",
+        DashboardExportFormat.Png   => "image/png",
+        _                          => "application/octet-stream"
+    };
+
+    internal static string BuildFileName(DashboardSnapshotResult result) =>
+        $"{result.DashboardId}-{result.JobId}-{DateTime.UtcNow:yyyyMMddHHmmss}.{result.FileExtension}";
+}
+
 /// <summary>
 /// Background service that runs scheduled dashboard snapshot jobs.
 /// </summary>
@@ -20,24 +34,29 @@ namespace WalkingTec.Mvvm.Core.Dashboard.Snapshot;
 /// <item>Uses Quartz's <see cref="CronExpression"/> (already a framework dependency) to compute
 ///   the next fire time from a 5-field UNIX cron string.</item>
 /// <item>Each job runs independently; a failure in one job does not block others.</item>
-/// <item>Snapshot results are logged. For v1, delivery (e-mail, storage) is the host's
-///   responsibility — override <see cref="IScheduledDashboardJob"/> to add custom delivery.</item>
+/// <item>After each successful job, all registered <see cref="IDashboardSnapshotSink"/> instances
+///   are invoked in order. Per-sink failures are caught and logged so one failing sink does not
+///   block the others. When no sinks are registered the service falls back to log-only behaviour
+///   (backward-compatible default).</item>
 /// </list>
 /// </remarks>
 public sealed class DashboardSnapshotHostedService : BackgroundService
 {
     private readonly IScheduledDashboardJob _job;
+    private readonly IEnumerable<IDashboardSnapshotSink> _sinks;
     private readonly IOptions<DashboardSnapshotOptions> _options;
     private readonly ILogger<DashboardSnapshotHostedService> _logger;
 
     public DashboardSnapshotHostedService(
         IScheduledDashboardJob job,
+        IEnumerable<IDashboardSnapshotSink> sinks,
         IOptions<DashboardSnapshotOptions> options,
         ILogger<DashboardSnapshotHostedService> logger)
     {
-        _job = job ?? throw new ArgumentNullException(nameof(job));
+        _job     = job     ?? throw new ArgumentNullException(nameof(job));
+        _sinks   = sinks   ?? throw new ArgumentNullException(nameof(sinks));
         _options = options ?? throw new ArgumentNullException(nameof(options));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _logger  = logger  ?? throw new ArgumentNullException(nameof(logger));
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -100,11 +119,13 @@ public sealed class DashboardSnapshotHostedService : BackgroundService
                 "DashboardSnapshotHostedService: running job {JobId} for dashboard {DashboardId} [{Format}].",
                 cfg.JobId, cfg.DashboardId, cfg.Format);
 
-            var result = await _job.RunAsync(cfg, ct);
+            var result = await _job.RunAsync(cfg, ct).ConfigureAwait(false);
 
             _logger.LogInformation(
                 "DashboardSnapshotHostedService: job {JobId} completed, {Bytes} bytes [{Extension}].",
                 cfg.JobId, result.Content.Length, result.FileExtension);
+
+            await DeliverAsync(result, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -114,6 +135,36 @@ public sealed class DashboardSnapshotHostedService : BackgroundService
         {
             _logger.LogError(ex,
                 "DashboardSnapshotHostedService: job {JobId} failed.", cfg.JobId);
+        }
+    }
+
+    /// <summary>
+    /// Invokes each registered <see cref="IDashboardSnapshotSink"/> in order.
+    /// Per-sink failures are caught and logged; one failing sink does not abort the others.
+    /// When no sinks are registered this method is a no-op (backward-compatible log-only default).
+    /// </summary>
+    private async Task DeliverAsync(DashboardSnapshotResult result, CancellationToken ct)
+    {
+        var fileName    = SnapshotContentTypeHelper.BuildFileName(result);
+        var contentType = SnapshotContentTypeHelper.GetContentType(result.Format);
+
+        foreach (var sink in _sinks)
+        {
+            try
+            {
+                await sink.DeliverAsync(result, result.Content, fileName, contentType, ct)
+                          .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw; // re-throw so the outer handler recognises graceful shutdown
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "DashboardSnapshotHostedService: sink {SinkType} failed for job {JobId} — continuing with remaining sinks.",
+                    sink.GetType().Name, result.JobId);
+            }
         }
     }
 
