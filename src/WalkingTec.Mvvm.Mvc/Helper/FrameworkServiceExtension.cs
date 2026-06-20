@@ -857,9 +857,14 @@ namespace WalkingTec.Mvvm.Mvc
 
             services.Configure<RequestLocalizationOptions>(options =>
             {
-                options.DefaultRequestCulture = new RequestCulture(conf.SupportLanguages[0]);
-                options.SupportedCultures = conf.SupportLanguages;
-                options.SupportedUICultures = conf.SupportLanguages;
+                // SupportLanguages always returns at least one entry (falls back to zh/en when
+                // Languages is empty/whitespace/null — see Configs.SupportLanguages).
+                // Setting DefaultRequestCulture explicitly ensures an unconfigured-culture
+                // request degrades to the first supported culture rather than failing.
+                var cultures = conf.SupportLanguages;
+                options.DefaultRequestCulture = new RequestCulture(cultures[0]);
+                options.SupportedCultures = cultures;
+                options.SupportedUICultures = cultures;
             });
             WtmLocalizationOption loc = new WtmLocalizationOption();
             op?.Invoke(loc);
@@ -1124,16 +1129,23 @@ namespace WalkingTec.Mvvm.Mvc
         public static IApplicationBuilder UseWtmMultiLanguages(this IApplicationBuilder app)
         {
             var configs = app.ApplicationServices.GetRequiredService<IOptionsMonitor<Configs>>().CurrentValue;
-            if (string.IsNullOrEmpty(configs.Languages) == false)
+            // SupportLanguages always returns at least one entry even when Languages is empty/whitespace.
+            // We still gate on IsNullOrWhiteSpace so that callers who skip multi-language entirely
+            // (i.e. do not call UseWtmMultiLanguages) are not affected.
+            if (!string.IsNullOrWhiteSpace(configs.Languages))
             {
+                // SupportLanguages always returns at least one entry (falls back to zh/en when unset).
+                // Setting DefaultRequestCulture explicitly ensures an unconfigured-culture
+                // request degrades to the first supported culture rather than failing.
+                var cultures = configs.SupportLanguages;
                 app.UseRequestLocalization(new RequestLocalizationOptions
                 {
-                    DefaultRequestCulture = new RequestCulture(configs.SupportLanguages[0]),
-                    SupportedCultures = configs.SupportLanguages,
-                    SupportedUICultures = configs.SupportLanguages
+                    DefaultRequestCulture = new RequestCulture(cultures[0]),
+                    SupportedCultures = cultures,
+                    SupportedUICultures = cultures,
                 });
-                System.Threading.Thread.CurrentThread.CurrentCulture = configs.SupportLanguages[0];
-                System.Threading.Thread.CurrentThread.CurrentUICulture = configs.SupportLanguages[0];
+                System.Threading.Thread.CurrentThread.CurrentCulture = cultures[0];
+                System.Threading.Thread.CurrentThread.CurrentUICulture = cultures[0];
             }
             return app;
         }

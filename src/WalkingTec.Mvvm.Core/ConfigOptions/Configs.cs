@@ -479,7 +479,18 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
+        /// <summary>
+        /// Default cultures used when <see cref="Languages"/> is empty or produces no valid entries.
+        /// </summary>
+        internal static readonly string[] DefaultFallbackLanguages = ["zh", "en"];
+
         private List<CultureInfo>? _supportLanguages;
+
+        /// <summary>
+        /// Parsed <see cref="CultureInfo"/> list derived from <see cref="Languages"/>.
+        /// Always returns at least one entry: falls back to <c>zh, en</c> when the
+        /// configured value is empty, whitespace-only, or produces no non-blank tokens.
+        /// </summary>
         public List<CultureInfo> SupportLanguages
         {
             get
@@ -490,9 +501,22 @@ namespace WalkingTec.Mvvm.Core
                     var lans = Languages.Split(",");
                     foreach (var lan in lans)
                     {
-                        _supportLanguages.Add(new CultureInfo(lan));
+                        var trimmed = lan.Trim();
+                        if (!string.IsNullOrEmpty(trimmed))
+                        {
+                            _supportLanguages.Add(new CultureInfo(trimmed));
+                        }
                     }
 
+                    // Guard: if no valid culture was parsed, fall back to sensible defaults
+                    // so that downstream code that indexes [0] never throws.
+                    if (_supportLanguages.Count == 0)
+                    {
+                        foreach (var fallback in DefaultFallbackLanguages)
+                        {
+                            _supportLanguages.Add(new CultureInfo(fallback));
+                        }
+                    }
                 }
                 return _supportLanguages;
             }
