@@ -146,6 +146,36 @@ namespace WalkingTec.Mvvm.Core
 
         public bool IsReadOnly { get; set; }
 
+        /// <summary>
+        /// Server-side aggregate type (#431). Default <c>None</c>.
+        /// </summary>
+        public GridAggregateTypeEnum AggregateType { get; set; } = GridAggregateTypeEnum.None;
+
+        /// <summary>
+        /// Rich column display type (#432). Default <c>Default</c> (no change in behaviour).
+        /// </summary>
+        public GridRichColumnTypeEnum RichColumnType { get; set; } = GridRichColumnTypeEnum.Default;
+
+        /// <summary>
+        /// Optional format string for Currency columns.
+        /// </summary>
+        public string? CurrencyFormat { get; set; }
+
+        /// <summary>
+        /// Optional name of the per-row ISO 4217 currency-code column (#432).
+        /// </summary>
+        public string? CurrencyCodeField { get; set; }
+
+        /// <summary>
+        /// Optional CSS colour token for Tag columns.
+        /// </summary>
+        public string? TagColor { get; set; }
+
+        /// <summary>
+        /// Optional pixel size for Image thumbnail columns.
+        /// </summary>
+        public int? ImageSize { get; set; }
+
         #region 只读属性 生成 Excel 及其 表头用
 
         /// <summary>

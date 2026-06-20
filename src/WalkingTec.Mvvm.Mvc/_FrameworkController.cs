@@ -228,10 +228,19 @@ namespace WalkingTec.Mvvm.Mvc
                 }
                 else
                 {
+                    // #431 Server-side aggregate footers: compute aggregates (if any column
+                    // has AggregateType set) and include them in the response under "Aggregates".
+                    // The payload is a back-compatible addition — existing consumers that do not
+                    // know about "Aggregates" will simply ignore the extra key.
+                    var aggregates = listVM.ComputeAggregates();
+                    string aggregateFragment = aggregates.Count > 0
+                        ? $@",""Aggregates"":{System.Text.Json.JsonSerializer.Serialize(aggregates)}"
+                        : string.Empty;
+
                     var rv = new ContentResult
                     {
                         ContentType = "application/json",
-                        Content = $@"{{""Data"":{listVM.GetDataJson()},""Count"":{listVM.Searcher.Count},""Msg"":""success"",""Code"":{StatusCodes.Status200OK}}}"
+                        Content = $@"{{""Data"":{listVM.GetDataJson()},""Count"":{listVM.Searcher.Count},""Msg"":""success"",""Code"":{StatusCodes.Status200OK}{aggregateFragment}}}"
                     };
                     return rv;
                 }

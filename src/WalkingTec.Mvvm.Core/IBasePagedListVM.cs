@@ -159,6 +159,15 @@ namespace WalkingTec.Mvvm.Core
         /// via EF Core async APIs (<c>CountAsync</c> / <c>ToListAsync</c>).
         /// </summary>
         Task DoSearchAsync(CancellationToken ct = default);
+
+        /// <summary>
+        /// Computes server-side column aggregates (Sum/Avg/Count/Min/Max) over the
+        /// full filtered query for every column whose <see cref="IGridColumn{T}.AggregateType"/>
+        /// is set to a value other than <see cref="GridAggregateTypeEnum.None"/> (#431).
+        /// Returns a dictionary keyed by the column field name; returns an empty dictionary
+        /// when no column has an aggregate configured.
+        /// </summary>
+        Dictionary<string, string> ComputeAggregates();
         /// <summary>
         /// CopyContext
         /// </summary>

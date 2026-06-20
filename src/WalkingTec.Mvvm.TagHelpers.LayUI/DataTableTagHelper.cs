@@ -502,7 +502,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             // 是否需要分页
             var page = ListVM.NeedPage;
 
-            var (layuiCols, maxDepth) = BuildColumns();
+            var (layuiCols, maxDepth, aggregateFields) = BuildColumns();
 
             var (rowBtnStrBuilder, toolBarBtnStrBuilder, gridBtnEventStrBuilder, hasButtonGroup) = BuildToolbarButtons(vmQualifiedName);
 
@@ -512,7 +512,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 toolbardef = $" ,toolbar: '#{ToolBarId}2'";
             }
 
-            BuildTableOptionsScript(output, context, vmQualifiedName, maxDepth, layuiCols, where, righttoolbar, toolbardef, lefttoolbarmergin, rowBtnStrBuilder, toolBarBtnStrBuilder, gridBtnEventStrBuilder, hasButtonGroup, page);
+            BuildTableOptionsScript(output, context, vmQualifiedName, maxDepth, layuiCols, aggregateFields, where, righttoolbar, toolbardef, lefttoolbarmergin, rowBtnStrBuilder, toolBarBtnStrBuilder, gridBtnEventStrBuilder, hasButtonGroup, page);
 
             base.Process(context, output);
         }
@@ -564,7 +564,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             return where;
         }
 
-        private (List<List<LayuiColumn>> layuiCols, int maxDepth) BuildColumns()
+        private (List<List<LayuiColumn>> layuiCols, int maxDepth, List<string> aggregateFields) BuildColumns()
         {
             var rawCols = ListVM?.GetHeaders();
             var maxDepth = (ListVM?.GetChildrenDepth()) ?? 1;
@@ -621,7 +621,26 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 layuiCols[0][0].TotalRowText = ListVM?.TotalText;
             }
 
-            return (layuiCols, maxDepth);
+            // #431: Collect field names that have server-side aggregates configured so the
+            // done() callback can apply them to the LayUI total-row footer cells.
+            var aggregateFields = rawCols == null
+                ? new List<string>()
+                : rawCols
+                    .SelectMany(c => c.BottomChildren)
+                    .Where(c => c.AggregateType != GridAggregateTypeEnum.None
+                                && c.ColumnType == GridColumnTypeEnum.Normal
+                                && !string.IsNullOrEmpty(c.Field))
+                    .Select(c => c.Field!)
+                    .ToList();
+
+            // When any column has a server-side aggregate we must enable the totalRow
+            // footer row in LayUI so there is a cell to write the value into.
+            if (aggregateFields.Count > 0)
+            {
+                NeedShowTotal = true;
+            }
+
+            return (layuiCols, maxDepth, aggregateFields);
         }
 
         private (StringBuilder rowBtnStrBuilder, StringBuilder toolBarBtnStrBuilder, StringBuilder gridBtnEventStrBuilder, bool hasButtonGroup) BuildToolbarButtons(string vmQualifiedName)
@@ -663,6 +682,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             string vmQualifiedName,
             int maxDepth,
             List<List<LayuiColumn>> layuiCols,
+            List<string> aggregateFields,
             Dictionary<string, object> where,
             string righttoolbar,
             string toolbardef,
@@ -740,6 +760,7 @@ layui.use(['table'], function(){{
       {(string.IsNullOrEmpty(DoneFunc) ? string.Empty : $"{DoneFunc}(res,curr,count)")}
       {(EnableHeaderFilter ? $"wtmHeaderFilter.refresh('{Id}');" : "")}
       if(typeof wtmColVis !== 'undefined'){{ wtmColVis.init('{Id}'); }}
+      {BuildAggregateFooterScript(aggregateFields)}
     }}
     }}
 {Id}defaultfilter = {{}};
@@ -916,8 +937,22 @@ layui.use(['element'], function() {{
                 // checkboxes, etc.) and must be rendered verbatim. hasFormat=false means
                 // the value is plain user/database text that must be HTML-escaped by
                 // ff.EscapeText to prevent stored XSS (grid-001 regression fix).
+                //
+                // #432: Rich column types (Progress/Tag/Image/Currency) get their own
+                // specialised templates.  Only plain/Format columns go through getTemplate().
                 if ((string.IsNullOrEmpty(ListVM.DetailGridPrix) == true && string.IsNullOrEmpty(item.Field) == false) || item.Field == "BatchError")
-                    tempCol.Templet = getTemplate(item.Field, random, item.HasFormat(), item.EncodeFormat);
+                {
+                    if (item.RichColumnType != GridRichColumnTypeEnum.Default)
+                    {
+                        tempCol.Templet = GetRichTemplate(item.Field!, item.RichColumnType,
+                            item.CurrencyFormat, item.TagColor, item.ImageSize, random,
+                            item.CurrencyCodeField);
+                    }
+                    else
+                    {
+                        tempCol.Templet = getTemplate(item.Field, random, item.HasFormat(), item.EncodeFormat);
+                    }
+                }
 
                 foundTotal |= item.ShowTotal == true;
                 switch (item.ColumnType)
@@ -1208,6 +1243,140 @@ var isPost = false;
                 gridBtnEventStrBuilder.Append($@"}};break;
 ");
             }
+        }
+
+        /// <summary>
+        /// Builds a JS snippet (for insertion into the LayUI <c>done</c> callback) that
+        /// reads <c>res.Aggregates</c> from the server response and writes each value
+        /// into the corresponding LayUI total-row cell (#431).
+        /// Returns an empty string when <paramref name="aggregateFields"/> is empty so
+        /// there is zero overhead for grids that have no aggregates configured.
+        /// </summary>
+        private static string BuildAggregateFooterScript(List<string> aggregateFields)
+        {
+            if (aggregateFields == null || aggregateFields.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            // LayUI renders the total-row as a <tfoot> whose cells carry data-field attributes.
+            // We iterate over res.Aggregates and set the cell text.
+            var sb = new System.Text.StringBuilder();
+            sb.Append(
+                "if(res.Aggregates){" +
+                "var tfoot=tab.find('.layui-table-total');");
+            foreach (var field in aggregateFields)
+            {
+                // Use data-field selector; LayUI total-row cells have this attribute.
+                sb.Append($"tfoot.find('[data-field=\"{JavaScriptEncoder.Default.Encode(field)}\"] .layui-table-cell').text(res.Aggregates[\"{JavaScriptEncoder.Default.Encode(field)}\"]||'');");
+            }
+            sb.Append('}');
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Builds the JavaScript <c>templet</c> function string for a rich-display column (#432).
+        /// </summary>
+        /// <param name="field">Column field name.</param>
+        /// <param name="richType">Rich display type.</param>
+        /// <param name="currencyFormat">Optional format string for Currency columns.</param>
+        /// <param name="tagColor">Optional layui colour token for Tag columns.</param>
+        /// <param name="imageSize">Optional pixel size for Image columns.</param>
+        /// <param name="random">Random suffix used for cell element IDs.</param>
+        /// <param name="currencyCodeField">
+        /// Optional name of a sibling column on the row that holds the ISO 4217 currency code
+        /// (e.g. "CurrencyCode"). When set, the Currency template uses per-row
+        /// <c>Intl.NumberFormat</c> formatting instead of fixed <c>CurrencyFormat</c> (#432).
+        /// </param>
+        /// <returns>A JS function string suitable for LayUI <c>templet</c>.</returns>
+        public static string GetRichTemplate(
+            string field,
+            GridRichColumnTypeEnum richType,
+            string? currencyFormat,
+            string? tagColor,
+            int? imageSize,
+            string random,
+            string? currencyCodeField = null)
+        {
+            // XSS safety: all user-data values are routed through ff.EscapeText (plain text)
+            // or used as a URL attribute that is HTML-encoded by the img src — no raw concat.
+            var escapedField = JavaScriptEncoder.Default.Encode(field);
+
+            string cellContent = richType switch
+            {
+                GridRichColumnTypeEnum.Progress =>
+                    // layui progress bar: value 0-100
+                    $"'<div class=\"layui-progress\" lay-filter=\"\"><div class=\"layui-progress-bar\" lay-percent=\"'+ff.EscapeText(d.{escapedField})+'%\"></div></div>'",
+
+                GridRichColumnTypeEnum.Tag =>
+                    // layui badge/tag; optional colour class
+                    string.IsNullOrEmpty(tagColor)
+                        ? $"'<span class=\"layui-badge-rim\">'+ff.EscapeText(d.{escapedField})+'</span>'"
+                        : $"'<span class=\"layui-badge layui-bg-{JavaScriptEncoder.Default.Encode(tagColor)}\">'+ff.EscapeText(d.{escapedField})+'</span>'",
+
+                GridRichColumnTypeEnum.Image =>
+                    // img thumbnail — src is HTML-encoded automatically by the browser attribute
+                    $"(d.{escapedField}?'<img src=\"'+ff.EscapeText(d.{escapedField})+'\" style=\"width:{imageSize ?? 32}px;height:{imageSize ?? 32}px;object-fit:cover;\"/>' : '')",
+
+                GridRichColumnTypeEnum.Currency =>
+                    BuildCurrencyTemplate(escapedField, currencyFormat, currencyCodeField),
+
+                _ => $"ff.EscapeText(d.{escapedField})"
+            };
+
+            return $"function(d){{return {cellContent};}}";
+        }
+
+        /// <summary>
+        /// Builds the client-side JS expression for a Currency column.
+        /// When <paramref name="currencyCodeField"/> is set, each row's amount is formatted
+        /// using <c>Intl.NumberFormat</c> with <c>style:'currency'</c> keyed to the row's
+        /// own currency code — enabling multi-currency travel-expense style grids where
+        /// each row carries its own ISO 4217 code (TWD/USD/JPY...).
+        /// Security:
+        ///   - <paramref name="currencyCodeField"/> field name is JS-encoded (prevents field-name breakout).
+        ///   - The row currency-code value is validated client-side as /^[A-Za-z]{3}$/ before
+        ///     being passed to Intl.NumberFormat, which would otherwise throw a RangeError.
+        ///   - A try/catch wraps the Intl.NumberFormat call; on failure the amount is rendered
+        ///     as a plain number via ff.EscapeText.
+        /// When <paramref name="currencyCodeField"/> is null, falls back to the existing fixed
+        /// CurrencyFormat behaviour (back-compat — no behaviour change for single-currency columns).
+        /// </summary>
+        private static string BuildCurrencyTemplate(
+            string escapedField,
+            string? currencyFormat,
+            string? currencyCodeField)
+        {
+            if (!string.IsNullOrEmpty(currencyCodeField))
+            {
+                // Per-row currency: data-driven ISO 4217 code from another column.
+                // currencyCodeField is the raw property name supplied by the developer;
+                // JS-encode it so a malicious field name cannot break the template string.
+                var escapedCodeField = JavaScriptEncoder.Default.Encode(currencyCodeField);
+
+                // Client-side template (multi-currency path):
+                //   1. Guard against null/undefined amount.
+                //   2. Read the row's currency code from the sibling field.
+                //   3. Validate it is exactly 3 ASCII letters (ISO 4217 pattern) — Intl.NumberFormat
+                //      throws RangeError on anything else.
+                //   4. Try Intl.NumberFormat with style:'currency'; catch RangeError (or any error)
+                //      and fall back to plain Number.toLocaleString with the escaped raw value.
+                return
+                    $"(function(d){{" +
+                    $"if(d.{escapedField}===null||d.{escapedField}===undefined)return '';" +
+                    $"var _cc=d.{escapedCodeField};" +
+                    $"var _num=Number(d.{escapedField});" +
+                    $"if(typeof _cc==='string'&&/^[A-Za-z]{{3}}$/.test(_cc)){{" +
+                    $"try{{return new Intl.NumberFormat(undefined,{{style:'currency',currency:_cc}}).format(_num);}}" +
+                    $"catch(e){{return ff.EscapeText(String(_num));}}" +
+                    $"}}else{{return ff.EscapeText(String(_num));}}" +
+                    $"}})";
+            }
+
+            // Fixed single-currency fallback (back-compat).
+            return string.IsNullOrEmpty(currencyFormat)
+                ? $"(d.{escapedField}!==null&&d.{escapedField}!==undefined?Number(d.{escapedField}).toLocaleString():'')"
+                : $"(d.{escapedField}!==null&&d.{escapedField}!==undefined?Number(d.{escapedField}).toLocaleString(undefined,{{minimumFractionDigits:2,maximumFractionDigits:2}}):'')  /* fmt:{JavaScriptEncoder.Default.Encode(currencyFormat)} */";
         }
 
         private string getTemplate(string field, string random, bool hasFormat = false, bool encodeFormat = false)

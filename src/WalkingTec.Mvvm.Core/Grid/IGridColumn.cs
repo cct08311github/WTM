@@ -83,6 +83,48 @@ namespace WalkingTec.Mvvm.Core
     }
 
     /// <summary>
+    /// Aggregate function type for server-side column footers (#431).
+    /// Set on a column via <c>SetAggregate()</c>.
+    /// Default <c>None</c> = use the existing per-page <see cref="IGridColumn{T}.ShowTotal"/> behaviour.
+    /// </summary>
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public enum GridAggregateTypeEnum
+    {
+        /// <summary>No server-side aggregate; use existing ShowTotal per-page sum if set.</summary>
+        None = 0,
+        /// <summary>Sum of the column over the full filtered result set.</summary>
+        Sum,
+        /// <summary>Average of the column over the full filtered result set.</summary>
+        Avg,
+        /// <summary>Count of non-null values of the column over the full filtered result set.</summary>
+        Count,
+        /// <summary>Minimum value of the column over the full filtered result set.</summary>
+        Min,
+        /// <summary>Maximum value of the column over the full filtered result set.</summary>
+        Max
+    }
+
+    /// <summary>
+    /// Rich display type for a column (#432).
+    /// Set on a column via <c>SetRichColumnType()</c>.
+    /// Default <c>Default</c> = plain text / existing format behaviour unchanged.
+    /// </summary>
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public enum GridRichColumnTypeEnum
+    {
+        /// <summary>Plain text (default, preserves all existing behaviour).</summary>
+        Default = 0,
+        /// <summary>Renders cell value as a layui progress bar (value must be 0–100).</summary>
+        Progress,
+        /// <summary>Renders cell value as a layui badge/tag.</summary>
+        Tag,
+        /// <summary>Renders cell value as an &lt;img&gt; thumbnail (value must be a URL).</summary>
+        Image,
+        /// <summary>Renders cell value with a locale-aware numeric format string (e.g. "#,##0.00").</summary>
+        Currency
+    }
+
+    /// <summary>
     /// IGridColumn
     /// </summary>
     /// <typeparam name="T"></typeparam>
@@ -140,6 +182,54 @@ namespace WalkingTec.Mvvm.Core
         /// 是否显示汇总
         /// </summary>
         bool? ShowTotal { get; set; }
+
+        /// <summary>
+        /// Server-side aggregate function for this column (#431).
+        /// When set to a value other than <see cref="GridAggregateTypeEnum.None"/>,
+        /// <c>BasePagedListVM.ComputeAggregates()</c> will compute the result over the
+        /// <em>full filtered query</em> (not just the current page) and include it in the
+        /// JSON response under a key matching the column field name.
+        /// Opt-in — default <c>None</c> leaves existing per-page ShowTotal behaviour intact.
+        /// </summary>
+        GridAggregateTypeEnum AggregateType { get; set; }
+
+        /// <summary>
+        /// Rich display type for this column (#432).
+        /// Opt-in — default <c>Default</c> leaves existing behaviour intact.
+        /// </summary>
+        GridRichColumnTypeEnum RichColumnType { get; set; }
+
+        /// <summary>
+        /// Optional format string for <see cref="GridRichColumnTypeEnum.Currency"/> columns.
+        /// Passed to the LayUI JS template as <c>Number.toLocaleString()</c> options
+        /// or a printf-style pattern. Defaults to <c>null</c> (no extra formatting).
+        /// Example: <c>"0,0.00"</c>
+        /// </summary>
+        string? CurrencyFormat { get; set; }
+
+        /// <summary>
+        /// Optional name of another column/property on the row that holds the
+        /// ISO 4217 currency code for that row (e.g. "CurrencyCode").
+        /// When set, the Currency template uses <c>Intl.NumberFormat</c> with
+        /// <c>style:'currency'</c> keyed to the per-row code, rather than a fixed
+        /// <c>CurrencyFormat</c> string.  Back-compat: if <c>null</c>, falls back
+        /// to the existing <c>CurrencyFormat</c> single-currency behaviour.
+        /// </summary>
+        string? CurrencyCodeField { get; set; }
+
+        /// <summary>
+        /// Optional CSS color token for <see cref="GridRichColumnTypeEnum.Tag"/> columns.
+        /// The value is placed in the layui <c>class</c> of the tag badge.
+        /// Defaults to <c>null</c> (layui default colour).
+        /// Example: <c>"green"</c>, <c>"red"</c>, <c>"blue"</c>
+        /// </summary>
+        string? TagColor { get; set; }
+
+        /// <summary>
+        /// Width/height in pixels for <see cref="GridRichColumnTypeEnum.Image"/> columns.
+        /// Defaults to <c>null</c> (32 px in the template).
+        /// </summary>
+        int? ImageSize { get; set; }
 
         /// <summary>
         /// 子列

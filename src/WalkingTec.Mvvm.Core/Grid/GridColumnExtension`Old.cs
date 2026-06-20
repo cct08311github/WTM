@@ -228,5 +228,75 @@ namespace WalkingTec.Mvvm.Core
             self.DisableExport = true;
             return self;
         }
+
+        /// <summary>
+        /// Opt-in: sets a server-side aggregate function on the column (#431).
+        /// When set, <c>BasePagedListVM.ComputeAggregates()</c> computes the result
+        /// over the <em>full filtered query</em> (not just the current page) and
+        /// surfaces it in the JSON response so the LayUI footer can display it.
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="self"></param>
+        /// <param name="aggregateType">The aggregate function to apply. Default <see cref="GridAggregateTypeEnum.None"/> disables server-side aggregation.</param>
+        /// <returns>The same column instance for fluent chaining.</returns>
+        public static GridColumn<T> SetAggregate<T>(this GridColumn<T> self, GridAggregateTypeEnum aggregateType) where T : TopBasePoco
+        {
+            self.AggregateType = aggregateType;
+            return self;
+        }
+
+        /// <summary>
+        /// Opt-in: sets a rich display type on the column (#432).
+        /// Use this together with optional per-type parameters to render the column
+        /// as a progress bar, badge/tag, image thumbnail, or formatted currency value.
+        /// Existing text/action columns are not affected when <paramref name="richType"/>
+        /// is <see cref="GridRichColumnTypeEnum.Default"/>.
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="self"></param>
+        /// <param name="richType">The rich display type.</param>
+        /// <param name="currencyFormat">
+        /// (Currency only) A printf-style number format string, e.g. <c>"#,##0.00"</c>.
+        /// Passed through to the client template unchanged.
+        /// </param>
+        /// <param name="tagColor">
+        /// (Tag only) A layui colour token, e.g. <c>"green"</c>, <c>"red"</c>, <c>"blue"</c>.
+        /// </param>
+        /// <param name="imageSize">
+        /// (Image only) Width/height in pixels for the thumbnail. Defaults to 32 px.
+        /// </param>
+        /// <returns>The same column instance for fluent chaining.</returns>
+        public static GridColumn<T> SetRichColumnType<T>(
+            this GridColumn<T> self,
+            GridRichColumnTypeEnum richType,
+            string? currencyFormat = null,
+            string? tagColor = null,
+            int? imageSize = null,
+            string? currencyCodeField = null) where T : TopBasePoco
+        {
+            self.RichColumnType = richType;
+            self.CurrencyFormat = currencyFormat;
+            self.TagColor = tagColor;
+            self.ImageSize = imageSize;
+            self.CurrencyCodeField = currencyCodeField;
+            return self;
+        }
+
+        /// <summary>
+        /// Convenience: set Currency rich column with per-row currency code field (#432).
+        /// The <paramref name="currencyCodeField"/> is the <em>property name</em> of another
+        /// column on the row model that carries the ISO 4217 currency code (e.g. "CurrencyCode").
+        /// Falls back to plain <see cref="GridRichColumnTypeEnum.Currency"/> behaviour when null.
+        /// </summary>
+        public static GridColumn<T> SetCurrencyColumn<T>(
+            this GridColumn<T> self,
+            string? currencyCodeField = null,
+            string? fixedCurrencyFormat = null) where T : TopBasePoco
+        {
+            self.RichColumnType = GridRichColumnTypeEnum.Currency;
+            self.CurrencyCodeField = currencyCodeField;
+            self.CurrencyFormat = fixedCurrencyFormat;
+            return self;
+        }
     }
 }
