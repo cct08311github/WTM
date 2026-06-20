@@ -149,8 +149,10 @@ namespace WalkingTec.Mvvm.Core
             // spurious tables in migrations and potentially EF's ValidateNonNullPrimaryKeys
             // crash for keyless/no-PK view entities.
             //
-            // Both the file-attachment FK loop (below) and Pass 1 registration use this
-            // same scoped set — #452 completes the fix started by #450.
+            // Pass 1 registration uses this same scoped set — #452 completes the fix started by #450.
+            // #458: The file-attachment FK loop was moved to AFTER Pass 1 and now iterates
+            // modelBuilder.Model.GetEntityTypes() (the fully-discovered EF model superset) so that
+            // navigation-discovered entities (not declared as DbSet<T>) also get FK Restrict.
             var thisContextDbSetTypes = new HashSet<Type>(
                 this.GetType()
                     .GetProperties()
@@ -158,19 +160,8 @@ namespace WalkingTec.Mvvm.Core
                                 p.PropertyType.GetGenericTypeDefinition() == typeof(DbSet<>))
                     .Select(p => p.PropertyType.GenericTypeArguments[0]));
 
-            foreach (var item in thisContextDbSetTypes)
-            {
-                if (typeof(TopBasePoco).IsAssignableFrom(item) && typeof(ISubFile).IsAssignableFrom(item) == false)
-                {
-                    //将所有关联附件的外键设为不可级联删除
-                    PropertyInfo[] pros = [.. item.GetProperties().Where(x => x.PropertyType == typeof(FileAttachment))];
-                    foreach (var filepro in pros)
-                    {
-                        var builder = typeof(ModelBuilder).GetMethod("Entity", Type.EmptyTypes)!.MakeGenericMethod(item).Invoke(modelBuilder, null) as EntityTypeBuilder;
-                        builder!.HasOne(filepro.Name).WithMany().OnDelete(DeleteBehavior.Restrict);
-                    }
-                }
-            }
+            // #458: FileAttachment FK-restrict loop moved to after Pass 1 (see below)
+            // so it runs on the fully-discovered EF model (not just DbSet<T> types).
 
             // ── Pass 1: ensure all TopBasePoco types that belong to THIS context are
             // registered in EF metadata so that the hierarchy (including concrete
@@ -181,6 +172,43 @@ namespace WalkingTec.Mvvm.Core
                 {
                     typeof(ModelBuilder).GetMethod("Entity", Type.EmptyTypes)!
                         .MakeGenericMethod(regType).Invoke(modelBuilder, null);
+                }
+            }
+
+            // ── #458: FileAttachment FK-restrict loop (moved from before Pass 1).
+            // Iterates the EF-discovered model (superset of DbSets) so navigation-only
+            // entities also get FK Restrict instead of EF's default Cascade.
+            foreach (var discoveredType in modelBuilder.Model.GetEntityTypes()
+                                               .Select(e => e.ClrType)
+                                               .Distinct())
+            {
+                if (discoveredType.IsAbstract)
+                {
+                    continue; // EF errors on abstract types in Entity<T>()
+                }
+                if (!typeof(TopBasePoco).IsAssignableFrom(discoveredType))
+                {
+                    continue;
+                }
+                if (typeof(ISubFile).IsAssignableFrom(discoveredType))
+                {
+                    continue;
+                }
+                // Only look at properties declared on THIS exact type (not inherited),
+                // so we don't configure the same FK twice via a base class.
+                var fileProps = discoveredType.GetProperties(
+                    System.Reflection.BindingFlags.Public |
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.DeclaredOnly)
+                    .Where(x => x.PropertyType == typeof(FileAttachment))
+                    .ToArray();
+                foreach (var fileProp in fileProps)
+                {
+                    var eb = typeof(ModelBuilder)
+                        .GetMethod("Entity", Type.EmptyTypes)!
+                        .MakeGenericMethod(discoveredType)
+                        .Invoke(modelBuilder, null) as EntityTypeBuilder;
+                    eb!.HasOne(fileProp.Name).WithMany().OnDelete(DeleteBehavior.Restrict);
                 }
             }
 
