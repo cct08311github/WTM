@@ -3,6 +3,9 @@
   "version": "2.4.3",
   "description": "vue3 vite admin template",
   "license": "MIT",
+  "overrides": {
+    "esbuild": "^0.28.1"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
