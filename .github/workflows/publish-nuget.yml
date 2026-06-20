@@ -62,6 +62,16 @@ jobs:
           PKG_VERSION: ${{ steps.version.outputs.version }}
         run: dotnet pack src/WalkingTec.Mvvm.WorkFlow/WalkingTec.Mvvm.WorkFlow.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION
 
+      - name: Pack WalkingTec.Mvvm.Etl
+        env:
+          PKG_VERSION: ${{ steps.version.outputs.version }}
+        run: dotnet pack src/WalkingTec.Mvvm.Etl/WalkingTec.Mvvm.Etl.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION
+
+      - name: Pack WalkingTec.Mvvm.FileHandlers.S3
+        env:
+          PKG_VERSION: ${{ steps.version.outputs.version }}
+        run: dotnet pack src/WalkingTec.Mvvm.FileHandlers.S3/WalkingTec.Mvvm.FileHandlers.S3.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION
+
       - name: List packages
         run: ls -lh nupkgs/
 
@@ -311,6 +321,8 @@ jobs:
           dotnet pack src/WalkingTec.Mvvm.TagHelpers.LayUI/WalkingTec.Mvvm.TagHelpers.LayUI.csproj -c Release -o nupkgs-github /p:Version=$PKG_VERSION
           dotnet pack src/WalkingTec.Mvvm.Mvc/WalkingTec.Mvvm.Mvc.csproj                              -c Release -o nupkgs-github /p:Version=$PKG_VERSION
           dotnet pack src/WalkingTec.Mvvm.WorkFlow/WalkingTec.Mvvm.WorkFlow.csproj                    -c Release -o nupkgs-github /p:Version=$PKG_VERSION
+          dotnet pack src/WalkingTec.Mvvm.Etl/WalkingTec.Mvvm.Etl.csproj                              -c Release -o nupkgs-github /p:Version=$PKG_VERSION
+          dotnet pack src/WalkingTec.Mvvm.FileHandlers.S3/WalkingTec.Mvvm.FileHandlers.S3.csproj      -c Release -o nupkgs-github /p:Version=$PKG_VERSION
           # Sanity-check: the sanitized placeholder MUST be present in EVERY nuspec.
           # Loop over each .nupkg individually — passing a glob to unzip treats the
           # first file as the archive and the rest as member-name filters, so without
