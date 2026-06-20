@@ -71,6 +71,55 @@ namespace WalkingTec.Mvvm.Core.Test
                 new WtmDataContextHealthCheck(null!, TimeSpan.FromSeconds(1)));
         }
 
+        // ── NullContext guard — issue #441 ────────────────────────────────
+
+        /// <summary>
+        /// WTM's DI default registers NullContext as IDataContext.
+        /// Accessing NullContext.DBType or .Database throws NotImplementedException.
+        /// The health check must detect this and return Healthy (skipped) rather
+        /// than letting the exception escape and permanently mark /ready as Unhealthy.
+        /// </summary>
+        [TestMethod]
+        public async Task DataContextCheck_NullContext_returns_healthy_not_throwing()
+        {
+            // Arrange — NullContext is the WTM DI sentinel; every member throws NotImplementedException
+            var nullDc = new NullContext();
+            var check = new WtmDataContextHealthCheck(nullDc, TimeSpan.FromSeconds(2));
+
+            // Act — must NOT throw, must NOT return Unhealthy
+            var result = await check.CheckHealthAsync(new HealthCheckContext());
+
+            // Assert
+            Assert.AreNotEqual(HealthStatus.Unhealthy, result.Status,
+                "NullContext must not cause a false Unhealthy (false 503) — fix #441");
+            Assert.IsNotNull(result.Description,
+                "A description explaining the skip should be present");
+        }
+
+        [TestMethod]
+        public async Task DataContextCheck_NullContext_description_mentions_no_DataContext()
+        {
+            var nullDc = new NullContext();
+            var check = new WtmDataContextHealthCheck(nullDc, TimeSpan.FromSeconds(2));
+            var result = await check.CheckHealthAsync(new HealthCheckContext());
+
+            StringAssert.Contains(result.Description, "DataContext",
+                "Description should mention DataContext so operators know why it was skipped");
+        }
+
+        [TestMethod]
+        public async Task DataContextCheck_NullContext_does_not_populate_dbType_data_key()
+        {
+            // When NullContext is in use, we short-circuit before reading .DBType,
+            // so the data dictionary should NOT contain the dbType key (it would throw).
+            var nullDc = new NullContext();
+            var check = new WtmDataContextHealthCheck(nullDc, TimeSpan.FromSeconds(2));
+            var result = await check.CheckHealthAsync(new HealthCheckContext());
+
+            Assert.IsFalse(result.Data.ContainsKey("dbType"),
+                "No dbType key expected when NullContext short-circuits (would throw if accessed)");
+        }
+
         // ── JSON response writer — shape ──────────────────────────────────
 
         [TestMethod]

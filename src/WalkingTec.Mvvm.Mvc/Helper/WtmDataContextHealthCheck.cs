@@ -17,6 +17,13 @@ namespace WalkingTec.Mvvm.Mvc
     /// rejects the connection. Introduced by issue #836 so apps don't
     /// reinvent the same boilerplate check in every Program.cs.
     /// </summary>
+    /// <remarks>
+    /// WTM's DI default registers <see cref="NullContext"/> as <see cref="IDataContext"/>
+    /// when no real DataContext is wired up. All <c>NullContext</c> members throw
+    /// <see cref="NotImplementedException"/>, so this check must detect the sentinel
+    /// and short-circuit rather than letting the exception escape the health framework
+    /// and permanently mark <c>/ready</c> as Unhealthy (fix: issue #441).
+    /// </remarks>
     public sealed class WtmDataContextHealthCheck : IHealthCheck
     {
         private readonly IDataContext _dc;
@@ -34,17 +41,29 @@ namespace WalkingTec.Mvvm.Mvc
             HealthCheckContext context,
             CancellationToken cancellationToken = default)
         {
+            // NullContext is WTM's DI sentinel (registered via TryAddScoped) for apps
+            // that have not wired up a real IDataContext.  Every member on NullContext
+            // throws NotImplementedException, so we must short-circuit here instead of
+            // letting the exception escape the health framework and cause a false 503.
+            if (_dc is NullContext)
+            {
+                return HealthCheckResult.Healthy(
+                    "No DataContext configured; health check skipped.");
+            }
+
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             linked.CancelAfter(_timeout);
 
             var sw = Stopwatch.StartNew();
-            var data = new Dictionary<string, object>
-            {
-                ["dbType"] = _dc.DBType.ToString(),
-            };
+
+            // Build the data dict inside the try so that _dc.DBType (which can throw on
+            // unusual IDataContext implementations) is also covered by the catch (fix: #441).
+            var data = new Dictionary<string, object>();
 
             try
             {
+                data["dbType"] = _dc.DBType.ToString();
+
                 var ok = await _dc.Database.CanConnectAsync(linked.Token).ConfigureAwait(false);
                 sw.Stop();
                 data["durationMs"] = sw.ElapsedMilliseconds;
