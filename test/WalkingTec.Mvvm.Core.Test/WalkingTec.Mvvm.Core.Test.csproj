@@ -36,6 +36,7 @@
   <ItemGroup>
     <ProjectReference Include="..\WalkingTec.Mvvm.Test.Mock\WalkingTec.Mvvm.Test.Mock.csproj" />
     <ProjectReference Include="..\..\src\WalkingTec.Mvvm.Etl\WalkingTec.Mvvm.Etl.csproj" />
+    <ProjectReference Include="..\..\src\WalkingTec.Mvvm.Mvc\WalkingTec.Mvvm.Mvc.csproj" />
   </ItemGroup>
 
 </Project>
