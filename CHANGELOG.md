@@ -1,5 +1,22 @@
 # 更新日志
 
+## [10.13.1] - 2026-06-20
+
+Patch — a HIGH-impact readiness-probe bug fix + a log-injection security hardening (plus CI docs and demo/test dependency bumps).
+
+### Fixed
+
+- **`/ready` permanently returned 503 with the default `IDataContext` (#441):** `WtmDataContextHealthCheck` read `_dc.DBType` **outside** its `try/catch`; with WTM's DI-default `NullContext` (whose members throw `NotImplementedException`) the exception escaped the catch, so **every app using `AddWtmDataContextCheck()` got a permanent Unhealthy / HTTP 503** readiness result (`description = "The method or operation is not implemented."`). Now: a `NullContext` sentinel short-circuits to `Healthy` ("no DataContext configured"), and the `DBType` read is moved inside the `try`. Apps with a real `IDataContext` registered are unaffected (still a genuine `CanConnectAsync` probe).
+
+### Security
+
+- **Log-injection hardening — CWE-117 / `cs/log-forging` (#442):** 19 log statements across the WorkFlow engine and the Dashboard / WorkflowDesigner / EtlSchema / WorkflowTask / WorkflowDefinition controllers logged user-controlled values (ITCodes, ids, node keys, connection-string keys, table/search inputs) without CR/LF sanitization, allowing forged/injected log entries on plain-text sinks. They now route user input through `LogSanitizer` (strips CR/LF/control chars, caps length); structured-logging placeholders are preserved.
+
+### Changed
+
+- **CI operations doc (#443):** `docs/ci-operations.md` now documents the runner topology (WTM CI runs on the Docker `act_runner`, `ubuntu-latest`; a separate Homebrew runner serves other projects) and the Gitea release/tag-trigger gotchas (Gitea Release objects are created manually; a tag-ref `workflow_dispatch` returns 204 but creates no run; a same-commit tag re-push de-dupes — use a fresh commit/tag).
+- **Demo/test npm dependencies (#447):** bumped npm deps in the Vue/Vue3 demo ClientApps and the JS test project to clear Dependabot critical/high advisories (shell-quote, axios, form-data, tar, etc.). Demo/test-only — **not** part of any shipped `WalkingTec.Mvvm.*` package.
+
 ## [10.13.0] - 2026-06-20
 
 **#193 商用化 (commercialization) program — COMPLETE.** 18 PRs (#405–#439) since 10.12.5 across Security & Correctness, the WorkFlow HTTP surface, Perf/async Phase 2, platform services, grid + import richness, CodeGen modernization, and Dashboard delivery. Every change is **opt-in / non-breaking by default**; each was independently adversarially reviewed (real defects caught and fixed before merge). Two cloud-provider areas (OSS COS/Qiniu, SMS) are intentionally shipped as seams (`IWtmFileHandler`, `ISmsSender`) rather than bundled SDKs, for the 中文內網 / single-tenant target.
