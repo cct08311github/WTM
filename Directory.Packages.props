@@ -58,6 +58,8 @@
     <PackageVersion Include="Oracle.EntityFrameworkCore" Version="10.23.26100" />
 
     <!-- ===== Third-party framework packages ===== -->
+    <!-- Issue #425: opt-in S3/MinIO file handler package -->
+    <PackageVersion Include="AWSSDK.S3" Version="4.0.25.2" />
     <PackageVersion Include="Aliyun.OSS.SDK.NetCore" Version="2.13.0" />
     <PackageVersion Include="Asp.Versioning.Mvc" Version="8.1.1" />
     <PackageVersion Include="Asp.Versioning.Mvc.ApiExplorer" Version="8.1.1" />

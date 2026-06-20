@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Opt-in S3/MinIO file handler — new `WalkingTec.Mvvm.FileHandlers.S3` package (#425, Refs #193):**
+  A new standalone NuGet package adds S3-compatible object storage (AWS S3 and MinIO) as a WTM file handler.
+  - `S3FileHandlerOptions`: `ServiceUrl`, `BucketName`, `AccessKey`, `SecretKey`, `Region`, `ForcePathStyle` (required for MinIO), `KeyPrefix`.
+  - `WtmS3FileHandler` implements `IWtmFileHandler` (Upload → PutObject; GetFileData → GetObject; DeleteFile → DeleteObject).
+  - `AddWtmS3FileHandler(Action<S3FileHandlerOptions>)` registers `IAmazonS3` as singleton and the handler as scoped `IWtmFileHandler`.
+  - `Core` gains **no** AWSSDK dependency — AWSSDK.S3 lives only in the new package.
+  - AWSSDK.S3 4.0.25.2 introduces zero new vulnerable packages (only the pre-existing SQLitePCLRaw #393 unfixable NU1903).
+
+  **Migration / opt-in:** existing apps are unaffected. Install the `WalkingTec.Mvvm.FileHandlers.S3` package and call `AddWtmS3FileHandler(...)` to activate.
+
 ### Security
 
 - **Opt-in upload validation seam — `IUploadValidator` AV/policy hook (#407, Refs #193):**
