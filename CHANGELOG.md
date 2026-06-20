@@ -1,5 +1,20 @@
 # 更新日志
 
+## [10.13.4] - 2026-06-21
+
+Patch — a data-integrity bug fix in `DataContext` model-building, found by a comprehensive regression-validation pass over the 10.13.x `OnModelCreating` changes.
+
+### Fixed
+
+- **`FileAttachment` foreign keys lost `OnDelete(Restrict)` for navigation-only entities (#458 — regression from #452):** 10.13.2 (#452) narrowed the FileAttachment FK-restrict loop in `DataContext.OnModelCreating` from the global model set to this context's declared `DbSet<T>` types only. As a result, a `TopBasePoco` entity that owns a `FileAttachment` property but is reachable only through a navigation property (i.e. not declared as a `DbSet<T>` on the context) no longer had its attachment FK marked non-cascading — it fell back to EF Core's default delete behaviour:
+  - **required FK → `Cascade`**: deleting a `FileAttachment` row would **cascade-delete the owning business entity** (data loss);
+  - **optional FK → `ClientSetNull`/`SetNull`**;
+  - multi-`DbContext` apps also saw a spurious `ALTER` foreign-key migration delta.
+
+  The FK-restrict loop now runs after entity registration and iterates the context's **fully-discovered EF model** (`modelBuilder.Model.GetEntityTypes()`) — the same superset scope the query-filter pass already uses — so navigation-reachable owners regain `OnDelete(DeleteBehavior.Restrict)`. This does **not** reintroduce the #382/#450 over-expansion crash: it only reads entities EF already discovered for *this* context and never force-registers foreign types. Abstract / non-`TopBasePoco` / `ISubFile` types are skipped, and `DeclaredOnly` property lookup prevents double-configuring inherited relationships.
+
+  **Verified unaffected:** tenant and soft-delete query-filter coverage (the Pass-2 filter loop already iterated the full discovered model across #382→#450→#452 — there was never a cross-tenant filter-coverage regression). Adds `DataContextNavOnlyFileAttachFkTests` regression coverage.
+
 ## [10.13.3] - 2026-06-20
 
 Packaging / CI-only release — **no framework code changed.** The only commit since 10.13.2 (#456, porting #455) edits `.github/workflows/publish-nuget.yml`, which is repository CI infrastructure and is **not** shipped inside any `WalkingTec.Mvvm.*` NuGet package. The compiled content of all six existing packages is byte-for-byte identical to 10.13.2. The user-facing effect is purely distribution: the unified publish pipeline now packs two additional packages — `WalkingTec.Mvvm.Etl` and `WalkingTec.Mvvm.FileHandlers.S3` — so they reach the public GitHub Packages mirror for the first time, and the corrected end-to-end publish pipeline is exercised/validated.
