@@ -213,7 +213,7 @@ namespace WalkingTec.Mvvm.Mvc
                 // generic message to the client to avoid leaking internal topology (issue #101).
                 _logger.LogWarning(ex,
                     "[Dashboard] Widget data fetch failed. DashboardId={DashboardId} WidgetId={WidgetId}",
-                    id, wid);
+                    LogSanitizer.Sanitize(id), LogSanitizer.Sanitize(wid));
                 return StatusCode(StatusCodes.Status502BadGateway, "Widget data fetch failed.");
             }
         }
@@ -256,7 +256,7 @@ namespace WalkingTec.Mvvm.Mvc
                 // Log full detail server-side but return a generic message to the client (issue #101).
                 _logger.LogWarning(ex,
                     "[Dashboard] Widget data fetch failed. DashboardId={DashboardId} WidgetId={WidgetId}",
-                    id, wid);
+                    LogSanitizer.Sanitize(id), LogSanitizer.Sanitize(wid));
                 return StatusCode(StatusCodes.Status502BadGateway, "Widget data fetch failed.");
             }
         }

@@ -3885,7 +3885,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                 _logger.LogDebug(
                     "ExecuteReturnToNodeAsync: MintNodeInstanceGuardedAsync for '{TargetNodeKey}' gen={Gen} " +
                     "already exists (UNIQUE constraint) — idempotent, proceeding.",
-                    targetNodeKey, gNew);
+                    LogSanitizer.Sanitize(targetNodeKey), gNew);
             }
 
             // ── STEP-6: Set instance Running ─────────────────────────────────
@@ -3964,7 +3964,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             _logger.LogInformation(
                 "ExecuteReturnToNodeAsync: instance {InstanceId} returned to '{TargetNodeKey}' " +
                 "by '{ActorITCode}'. Generation={Gen}, ReturnLoops={Loops}.",
-                instance.ID, targetNodeKey, actorITCode, gNew, instance.ReturnLoops);
+                instance.ID, LogSanitizer.Sanitize(targetNodeKey), LogSanitizer.Sanitize(actorITCode), gNew, instance.ReturnLoops);
         }
         catch
         {
@@ -4442,7 +4442,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             _logger.LogInformation(
                 "AddApproverAsync: injected {Count} task(s) ({ITCodes}) onto node '{NodeKey}' " +
                 "(id={NodeId}, position={Position}, depth={Depth}).",
-                delta, string.Join(",", toInject), nodeInst.NodeKey, nodeInst.ID, position, newDepth);
+                delta, LogSanitizer.Sanitize(string.Join(",", toInject)), LogSanitizer.Sanitize(nodeInst.NodeKey), nodeInst.ID, position, newDepth);
         }
 
         return addResult;
@@ -4522,7 +4522,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             _logger.LogWarning(
                 "DelegateTaskAsync: delegatee '{Delegatee}' already has an active slot on node {NodeId}. " +
                 "Refusing mid-flight merge; TotalRequired unchanged.",
-                delegateeITCode, nodeInst.ID);
+                LogSanitizer.Sanitize(delegateeITCode), nodeInst.ID);
 
             // Log the refused attempt inside its own transaction (append-only, best-effort).
             await WorkflowEventLogWriter.AppendAsync(
@@ -4673,7 +4673,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
                     "DelegateTaskAsync: unique-index collision on task {TaskId} → delegatee '{Delegatee}' " +
                     "already has a row on (NodeInstanceId={NodeId}, Generation={Gen}). " +
                     "Concurrent delegate call won; returning DelegateAlreadyParticipant.",
-                    taskId, delegateeITCode, task.NodeInstanceId, task.Generation);
+                    taskId, LogSanitizer.Sanitize(delegateeITCode), task.NodeInstanceId, task.Generation);
                 return WorkflowActionResult.DelegateAlreadyParticipant;
             }
             catch
@@ -4688,7 +4688,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             _logger.LogInformation(
                 "DelegateTaskAsync: task {TaskId} reassigned from '{Principal}' to '{Delegatee}' " +
                 "on node '{NodeKey}' (id={NodeId}).",
-                taskId, actorITCode, delegateeITCode, nodeInst.NodeKey, nodeInst.ID);
+                taskId, LogSanitizer.Sanitize(actorITCode), LogSanitizer.Sanitize(delegateeITCode), LogSanitizer.Sanitize(nodeInst.NodeKey), nodeInst.ID);
         }
 
         return delegateResult;

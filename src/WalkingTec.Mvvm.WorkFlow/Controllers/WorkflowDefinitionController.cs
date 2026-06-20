@@ -104,7 +104,7 @@ public class WorkflowDefinitionController : BaseController
 
         _logger.LogInformation(
             "[WorkflowDefinition] Publish requested. Code={Code} Actor={Actor}",
-            code, publishedBy);
+            LogSanitizer.Sanitize(code), publishedBy);
 
         var result = await _publisher.PublishAsync(code, graph, publishedBy, ct);
 

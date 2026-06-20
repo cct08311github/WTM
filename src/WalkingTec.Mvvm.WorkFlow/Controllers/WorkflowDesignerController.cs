@@ -281,7 +281,7 @@ public class WorkflowDesignerController : BaseController
 
         _logger.LogInformation(
             "[WorkflowDesigner] CreateDefinition Code={Code} Actor={Actor}",
-            request.Code, createdBy);
+            LogSanitizer.Sanitize(request.Code), createdBy);
 
         var result = await _store!.CreateDefinitionAsync(request, tenantCode, createdBy, ct);
 
@@ -524,7 +524,7 @@ public class WorkflowDesignerController : BaseController
 
         _logger.LogDebug(
             "[WorkflowDesigner] SaveDraft code={Code} create={Create} actor={Actor}",
-            code, create, savedBy);
+            LogSanitizer.Sanitize(code), create, savedBy);
 
         var result = await _store!.SaveDraftAsync(
             code, graphJson, baseContentHash,
@@ -646,7 +646,7 @@ public class WorkflowDesignerController : BaseController
 
         _logger.LogInformation(
             "[WorkflowDesigner] PublishDraft code={Code} actor={Actor}",
-            code, publishedBy);
+            LogSanitizer.Sanitize(code), publishedBy);
 
         var result = await _publisher!.PublishRawAsync(code, rawJson, publishedBy, expectedBaseHash, ct);
 

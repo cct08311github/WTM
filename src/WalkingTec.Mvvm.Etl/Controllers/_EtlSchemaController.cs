@@ -100,7 +100,7 @@ public class _EtlSchemaController : BaseController
         {
             // Never expose connection-string or DB exception detail to the client.
             // Full detail is in the server log; the client receives a generic message.
-            _logger.LogError(ex, "Schema introspection (Tables) failed for key '{CsKey}', dbType '{DbType}'", csKey, dbType);
+            _logger.LogError(ex, "Schema introspection (Tables) failed for key '{CsKey}', dbType '{DbType}'", LogSanitizer.Sanitize(csKey), dbType);
             return StatusCode(500, new { error = "Schema introspection failed; see server log." });
         }
     }
@@ -150,7 +150,7 @@ public class _EtlSchemaController : BaseController
         {
             // Never expose connection-string or DB exception detail to the client.
             // Full detail is in the server log; the client receives a generic message.
-            _logger.LogError(ex, "Schema introspection (Columns) failed for key '{CsKey}', table '{Table}', dbType '{DbType}'", csKey, table, dbType);
+            _logger.LogError(ex, "Schema introspection (Columns) failed for key '{CsKey}', table '{Table}', dbType '{DbType}'", LogSanitizer.Sanitize(csKey), LogSanitizer.Sanitize(table), dbType);
             return StatusCode(500, new { error = "Schema introspection failed; see server log." });
         }
     }

@@ -282,7 +282,7 @@ public class WorkflowTaskController : BaseController
 
         _logger.LogInformation(
             "[WorkflowTask] Delegate requested. TaskId={TaskId} Actor={Actor} Delegatee={Delegatee}",
-            id, actorITCode, request.DelegateeITCode);
+            id, actorITCode, LogSanitizer.Sanitize(request.DelegateeITCode));
 
         var result = await _engine.DelegateTaskAsync(
             id, actorITCode, request.DelegateeITCode, request.DelegationRuleId, request.Reason, ct);
@@ -370,7 +370,7 @@ public class WorkflowTaskController : BaseController
 
         _logger.LogInformation(
             "[WorkflowTask] ReturnToNode requested. TaskId={TaskId} Actor={Actor} Target={Target}",
-            id, actorITCode, request.TargetNodeKey);
+            id, actorITCode, LogSanitizer.Sanitize(request.TargetNodeKey));
 
         var result = await _engine.ReturnToNodeAsync(id, request.TargetNodeKey, actorITCode, request.Reason, ct);
         return MapEngineResult(result);
