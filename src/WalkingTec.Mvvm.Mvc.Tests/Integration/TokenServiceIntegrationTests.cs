@@ -12,7 +12,8 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Integration
 {
     /// <summary>
     /// Integration tests for TokenService.
-    /// Each test class instance gets its own isolated InMemory DB via TokenTestFixture.
+    /// Each test class instance gets its own isolated SQLite shared in-memory DB via TokenTestFixture
+    /// (SQLite, not EF InMemory, because TokenService uses ExecuteUpdateAsync).
     /// </summary>
     [TestClass]
     public class TokenServiceIntegrationTests
