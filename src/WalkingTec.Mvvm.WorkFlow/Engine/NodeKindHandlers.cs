@@ -427,13 +427,19 @@ internal sealed class ParallelGatewayHandler : INodeKindHandler
 
             // #483 Bug #8: pin JoinExpectedArrivals in-memory so it's committed atomically
             // with the Join NodeInstance row — eliminates the two-commit stranding window.
+            // Track whether the in-memory pin was applied so we can skip the post-save
+            // ExecuteUpdateAsync on the normal (fresh-mint) path.
+            bool joinPinnedInMemory = false;
             if (!string.IsNullOrWhiteSpace(joinNodeKey))
             {
                 var joinEntry = db.ChangeTracker.Entries<NodeInstance>()
                     .FirstOrDefault(e => e.State == Microsoft.EntityFrameworkCore.EntityState.Added
                                       && string.Equals(e.Entity.NodeKey, joinNodeKey, StringComparison.Ordinal));
                 if (joinEntry is not null)
+                {
                     joinEntry.Entity.JoinExpectedArrivals = branchNodeDefs.Count;
+                    joinPinnedInMemory = true;
+                }
             }
 
             try
@@ -458,10 +464,14 @@ internal sealed class ParallelGatewayHandler : INodeKindHandler
                 return;
             }
 
-            // Pin JoinExpectedArrivals on the Join NodeInstance (now guaranteed to exist).
-            // This is a best-effort defensive call — the atomic in-memory pin above already
-            // committed the value in the same SaveChanges, so this is a no-op under normal flow.
-            if (!string.IsNullOrWhiteSpace(joinNodeKey))
+            // Pin JoinExpectedArrivals via ExecuteUpdateAsync only when the in-memory pin could
+            // NOT be applied — i.e. the Join NodeInstance already existed in the DB before this
+            // gateway ran (crash-recovery / re-drive path where joinEntry was null above).
+            // On the normal fresh-mint path (joinPinnedInMemory == true), the count was already
+            // committed atomically with the Join row in the SaveChangesAsync above, so issuing
+            // an additional ExecuteUpdateAsync would bump RowVer unnecessarily on a hot row that
+            // all branches CAS on.
+            if (!string.IsNullOrWhiteSpace(joinNodeKey) && !joinPinnedInMemory)
             {
                 await PinJoinExpectedArrivalsAsync(db, instance, joinNodeKey!, branchNodeDefs.Count, ct);
             }
@@ -664,14 +674,21 @@ internal sealed class InclusiveGatewayHandler : INodeKindHandler
             }
         }
 
-        // #483 Bug #8: pin JoinExpectedArrivals atomically with the Join row.
+        // #483 Bug #8: pin JoinExpectedArrivals in-memory so it's committed atomically
+        // with the Join NodeInstance row — eliminates the two-commit stranding window.
+        // Track whether the in-memory pin was applied so we can skip the post-save
+        // ExecuteUpdateAsync on the normal (fresh-mint) path.
+        bool joinPinnedInMemory = false;
         if (!string.IsNullOrWhiteSpace(joinNodeKey))
         {
             var joinEntry = db.ChangeTracker.Entries<NodeInstance>()
                 .FirstOrDefault(e => e.State == Microsoft.EntityFrameworkCore.EntityState.Added
                                   && string.Equals(e.Entity.NodeKey, joinNodeKey, StringComparison.Ordinal));
             if (joinEntry is not null)
+            {
                 joinEntry.Entity.JoinExpectedArrivals = mintedBranches.Count;
+                joinPinnedInMemory = true;
+            }
         }
 
         try
@@ -695,7 +712,14 @@ internal sealed class InclusiveGatewayHandler : INodeKindHandler
             return;
         }
 
-        if (!string.IsNullOrWhiteSpace(joinNodeKey))
+        // Pin JoinExpectedArrivals via ExecuteUpdateAsync only when the in-memory pin could
+        // NOT be applied — i.e. the Join NodeInstance already existed in the DB before this
+        // gateway ran (crash-recovery / re-drive path where joinEntry was null above).
+        // On the normal fresh-mint path (joinPinnedInMemory == true), the count was already
+        // committed atomically with the Join row in the SaveChangesAsync above, so issuing
+        // an additional ExecuteUpdateAsync would bump RowVer unnecessarily on a hot row that
+        // all branches CAS on.
+        if (!string.IsNullOrWhiteSpace(joinNodeKey) && !joinPinnedInMemory)
         {
             await ParallelGatewayHandler.PinJoinExpectedArrivalsAsync(
                 db, instance, joinNodeKey!, mintedBranches.Count, ct);

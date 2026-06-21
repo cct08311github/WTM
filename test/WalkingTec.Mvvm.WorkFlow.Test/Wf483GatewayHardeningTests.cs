@@ -220,6 +220,129 @@ public class Wf483GatewayHardeningTests : IDisposable
             $"T_GW_3b: expected GatewayNoOutgoingTransitions, got {result.Error}: {result.ErrorMessage}");
     }
 
+    // ── T_GW_4: concurrent-loser catch path ───────────────────────────────────────
+
+    /// <summary>
+    /// T_GW_4: A second engine invocation that calls ParallelGatewayHandler.OnEnterAsync
+    /// for the same gateway on an already-minted fork hits the unique-constraint catch path
+    /// and becomes an idempotent no-op.
+    ///
+    /// <para><strong>Ordering:</strong> sequential — engine1 mints+commits first, then engine2
+    /// re-drives the same gateway entry via a fresh DbContext.  This deterministically exercises
+    /// the catch path (DbUpdateException on unique-constraint violation) without relying on
+    /// timing-sensitive true-simultaneous parallelism.  The catch path is the same code
+    /// regardless of whether the loser arrives nanoseconds or milliseconds late.</para>
+    ///
+    /// <para><strong>Asserts:</strong>
+    /// <list type="bullet">
+    ///   <item>The second OnEnterAsync call does NOT throw.</item>
+    ///   <item>The DB contains EXACTLY N branch NodeInstances (not 2N) after both calls.</item>
+    ///   <item>The Join NodeInstance has JoinExpectedArrivals == N (the count was pinned
+    ///         atomically by engine1 and was NOT clobbered by the loser's catch path).</item>
+    /// </list>
+    /// </para>
+    /// </summary>
+    [TestMethod]
+    public async Task T_GW_4_ParallelGateway_ConcurrentLoser_CatchPath_IsIdempotentNoOp()
+    {
+        // ── Phase 1: engine1 mints branches + join via StartAsync ────────────────
+        var (engine1, ctx1) = MakeEngine();
+        await using var _ctx1 = ctx1;
+
+        var version = await SeedVersionAsync(ctx1, AndFork3BranchGraph());
+        // Use a non-null tenantCode so the UNIQUE index on
+        // (TenantCode, InstanceId, NodeKey, Generation) correctly fires when
+        // the loser re-drives the same gateway — SQLite treats NULL!=NULL in
+        // unique indexes (SQL standard), which would prevent constraint violations.
+        const string tenantCode = "T_GW4";
+        var instance = await engine1.StartAsync(
+            version.ID,
+            formDataJson: null,
+            initiatorITCode: "initiator_gw4",
+            tenantCode: tenantCode,
+            ct: CancellationToken.None);
+
+        // Sanity: engine1 reached Approved (all Cc branches are pass-through).
+        Assert.AreEqual(InstanceState.Approved, instance.State,
+            "T_GW_4 Phase 1: engine1 must drive instance to Approved before the loser test.");
+
+        // Verify baseline DB state: 3 branch NodeInstances + 1 Join.
+        await using var snapshot = MakeContext();
+        int baselineBranches = await snapshot.Set<NodeInstance>()
+            .CountAsync(n => n.InstanceId == instance.ID
+                          && n.NodeKind   != NodeKind.Join
+                          && n.NodeKey    != "start"
+                          && n.NodeKey    != "fork"
+                          && n.NodeKey    != "end");
+        Assert.AreEqual(3, baselineBranches,
+            "T_GW_4 Phase 1: expected exactly 3 branch NodeInstances after engine1.");
+
+        var baselineJoin = await snapshot.Set<NodeInstance>()
+            .AsNoTracking()
+            .FirstOrDefaultAsync(n => n.InstanceId == instance.ID && n.NodeKind == NodeKind.Join);
+        Assert.IsNotNull(baselineJoin, "T_GW_4 Phase 1: Join NodeInstance must exist after engine1.");
+        Assert.AreEqual(3, baselineJoin!.JoinExpectedArrivals,
+            "T_GW_4 Phase 1: JoinExpectedArrivals must be 3 after engine1.");
+
+        // ── Phase 2: engine2 re-drives ParallelGatewayHandler.OnEnterAsync ──────
+        // Use a fresh DbContext (simulates a second engine instance) and directly invoke
+        // the handler — this deterministically exercises the unique-constraint catch path.
+        await using var db2 = MakeContext();
+
+        // Deserialize the graph.
+        var graphJson = version.GraphJson;
+        var graph     = WorkflowGraphSerializer.Deserialize(graphJson);
+
+        var forkNodeDef = graph.Nodes.First(n => n.NodeKey == "fork");
+
+        // Re-read the fork NodeInstance (created by engine1 during StartAsync drain).
+        var forkNodeInst = await db2.Set<NodeInstance>()
+            .AsNoTracking()
+            .FirstOrDefaultAsync(n => n.InstanceId == instance.ID && n.NodeKey == "fork");
+        Assert.IsNotNull(forkNodeInst, "T_GW_4 Phase 2: fork NodeInstance must exist for re-drive.");
+
+        // Re-read the ProcessInstance.
+        var processInst = await db2.Set<ProcessInstance>()
+            .AsNoTracking()
+            .SingleAsync(p => p.ID == instance.ID);
+
+        var handler = new ParallelGatewayHandler(NullLogger<ParallelGatewayHandler>.Instance);
+
+        var ctx2 = new NodeHandlerContext
+        {
+            NodeDef         = forkNodeDef,
+            NodeInstance    = forkNodeInst,
+            ProcessInstance = processInst,
+            Graph           = graph,
+            Db              = db2,
+            CancellationToken = CancellationToken.None,
+        };
+
+        // Must NOT throw — the catch path is the idempotent no-op.
+        await handler.OnEnterAsync(ctx2);
+
+        // ── Phase 3: assert DB state is unchanged ─────────────────────────────────
+        await using var verify = MakeContext();
+
+        // Still exactly 3 branch NodeInstances (not 6).
+        int finalBranches = await verify.Set<NodeInstance>()
+            .CountAsync(n => n.InstanceId == instance.ID
+                          && n.NodeKind   != NodeKind.Join
+                          && n.NodeKey    != "start"
+                          && n.NodeKey    != "fork"
+                          && n.NodeKey    != "end");
+        Assert.AreEqual(3, finalBranches,
+            "T_GW_4: DB must still contain exactly 3 branch NodeInstances after the loser's no-op — not 2N=6.");
+
+        // JoinExpectedArrivals still pinned at 3 (loser catch path must NOT clobber it).
+        var finalJoin = await verify.Set<NodeInstance>()
+            .AsNoTracking()
+            .FirstOrDefaultAsync(n => n.InstanceId == instance.ID && n.NodeKind == NodeKind.Join);
+        Assert.IsNotNull(finalJoin, "T_GW_4: Join NodeInstance must still exist after loser no-op.");
+        Assert.AreEqual(3, finalJoin!.JoinExpectedArrivals,
+            "T_GW_4: JoinExpectedArrivals must remain 3 — loser catch path must not re-pin it.");
+    }
+
     // ── Graph builder helpers ─────────────────────────────────────────────────────
 
     private static string AndFork3BranchGraph()
