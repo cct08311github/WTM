@@ -4,7 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Web;
 using DUWENINK.Captcha;
@@ -41,11 +40,31 @@ namespace WalkingTec.Mvvm.Mvc
         private readonly ISecurityCodeHelper _securityCode = securityCode;
 
         /// <summary>
-        /// Pre-compiled regex for stripping script tags from selector data — compiled once to avoid per-request allocation.
+        /// #481: Unicode-escape HTML breakout characters (<c>&lt;</c>, <c>&gt;</c>, <c>&amp;</c>)
+        /// in JSON that will be emitted raw inside an inline <c>&lt;script&gt;</c> element
+        /// (Selector.cshtml line ~57).  The paired-tag regex that previously ran here only caught
+        /// complete <c>&lt;script&gt;…&lt;/script&gt;</c> pairs; a bare <c>&lt;/script&gt;</c>
+        /// in a field value would still terminate the enclosing page script block (stored XSS).
+        /// Replacing with <c>\uXXXX</c> sequences is valid inside JSON string values and JS string
+        /// literals — the JS engine decodes them transparently so the Selector view is unaffected.
+        /// This matches the JSON.NET <c>StringEscapeHandling.EscapeHtml</c> strategy.
         /// </summary>
-        private static readonly Regex ScriptTagRegex = new Regex(
-            "<script>.*?</script>",
-            RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        public static string SanitizeSelectorJson(string json)
+        {
+            // Escape HTML breakout characters using JSON/JS unicode escape sequences so that
+            // field values containing </script> cannot terminate the enclosing <script> block
+            // in Selector.cshtml.  < / > / & are valid inside JSON string
+            // values and JS string literals — the JS engine decodes \uXXXX transparently, so
+            // displayed text in the Selector grid is unaffected.  & must be replaced first
+            // to prevent double-escaping any pre-existing escape sequences in the JSON.
+            // This matches the JSON.NET StringEscapeHandling.EscapeHtml strategy.
+            return json
+                .Replace("&",  "\\u0026")
+                .Replace("<",  "\\u003c")
+                .Replace(">",  "\\u003e")
+                .Replace("\u2028", "\\u2028")
+                .Replace("\u2029", "\\u2029");
+        }
 
         /// <summary>
         /// MVC-010: Validates that the supplied connection-string key is an explicitly
@@ -130,7 +149,6 @@ namespace WalkingTec.Mvvm.Mvc
             ViewBag.SelectorValueField = _DONOT_USE_VFIELD;
             if (listVM.Ids?.Count > 0)
             {
-                var tst = DC.Set<FrameworkRole>().Where(x => listVM.Ids.Contains(x.RoleName)).ToList();
                 listVM.DC = Wtm.CreateDC();
                 var originNeedPage = listVM.NeedPage;
                 listVM.NeedPage = false;
@@ -148,7 +166,7 @@ namespace WalkingTec.Mvvm.Mvc
                 {
                     var pro = Expression.Property(para, idproperty);
                     listVM.ReplaceWhere = listVM.Ids.GetContainIdExpression(modelType, Expression.Parameter(modelType), pro);
-                    string selectData = ScriptTagRegex.Replace((listVM as IBasePagedListVM<TopBasePoco, BaseSearcher>).GetDataJson(), "");
+                    string selectData = SanitizeSelectorJson((listVM as IBasePagedListVM<TopBasePoco, BaseSearcher>).GetDataJson());
                     ViewBag.SelectData = selectData;
                     listVM.IsSearched = false;
                     listVM.SearcherMode = ListVMSearchModeEnum.Selector;
