@@ -345,7 +345,9 @@ async def tc_04_analysis_mode_page(page, **_):
         }""",
         timeout=TIMEOUT
     )
-    await asyncio.sleep(0.5)
+    # Replace bare asyncio.sleep — wait for networkidle so the page is fully settled
+    # before we start interacting with toolbar buttons (issue #475: scroll flake)
+    await page.wait_for_load_state("networkidle", timeout=TIMEOUT)
     await page.screenshot(path=sc(4, "01-student-index"))
 
     # 等待 grid toolbar
@@ -362,10 +364,16 @@ async def tc_04_analysis_mode_page(page, **_):
     await page.screenshot(path=sc(4, "02-toolbar"))
     assert btn_count > 0, "找不到「分析模式」按鈕！"
 
-    # 點擊切換 — explicit visibility sync to avoid layout-fade flake (issue #851)
+    # 點擊切換 — wait for visible BEFORE scroll to avoid layout-fade flake (issue #475)
+    # LayUI admin layout animates visibility; scroll_into_view_if_needed times out when
+    # the element is in the DOM but the containing panel is still transitioning.
     first_btn = analysis_btn.first
-    await first_btn.scroll_into_view_if_needed()
-    await first_btn.wait_for(state="visible", timeout=10000)
+    try:
+        await first_btn.wait_for(state="visible", timeout=20000)
+    except Exception:
+        await page.screenshot(path=sc(4, "02a-btn-not-visible"), full_page=True)
+        raise
+    await first_btn.scroll_into_view_if_needed(timeout=10000)
     await first_btn.click()
     # 等待 meta API 載入和面板渲染
     try:
@@ -1262,7 +1270,9 @@ async def tc_24_analysis_full_flow(page, **_):
             await page.screenshot(path=sc(24, "02a-btn-not-visible"), full_page=True)
 
         if btn_visible:
-            await analysis_btn.first.scroll_into_view_if_needed()
+            # Explicit timeout on scroll: element is confirmed visible above, but
+            # scroll_into_view_if_needed can still timeout without its own budget (issue #475)
+            await analysis_btn.first.scroll_into_view_if_needed(timeout=10000)
             # Targeted 30s click timeout: accounts for /meta API fetch + panel animation
             # on a slow CI runner (CI showed "Locator.click: Timeout 20000ms exceeded"
             # against the 20s Playwright default — issue #328).
@@ -1304,14 +1314,18 @@ async def tc_24_analysis_full_flow(page, **_):
                     # Step 4: 點擊查詢按鈕
                     query_btn = page.locator("button:has-text('查詢'), button:has-text('執行'), .analysis-btn-query")
                     if await query_btn.count() > 0:
-                        # Ensure query button is actionable (drag-and-drop may trigger a loading
-                        # state that covers the button briefly)
+                        # Ensure query button is actionable (drag-and-drop may trigger a
+                        # loading state that covers the button briefly). Must confirm
+                        # visible BEFORE scroll_into_view_if_needed to avoid #475 flake.
+                        query_btn_visible = False
                         try:
-                            await query_btn.first.wait_for(state="visible", timeout=5000)
+                            await query_btn.first.wait_for(state="visible", timeout=10000)
+                            query_btn_visible = True
                         except Exception:
-                            pass
-                        await query_btn.first.scroll_into_view_if_needed()
-                        await query_btn.first.click(timeout=10000)
+                            await page.screenshot(path=sc(24, "05a-query-btn-not-visible"), full_page=True)
+                        if query_btn_visible:
+                            await query_btn.first.scroll_into_view_if_needed(timeout=10000)
+                            await query_btn.first.click(timeout=10000)
                         try:
                             await page.wait_for_selector(".analysis-result-section, canvas, .analysis-result-section table", state="visible", timeout=5000)
                         except Exception:
