@@ -123,6 +123,10 @@ namespace WalkingTec.Mvvm.Mvc
                 return Unauthorized();
             }
 
+            // MVC-010: reject unknown connection-string keys to prevent cross-DB reads (#503)
+            if (!IsKnownConnectionKey(_DONOT_USE_CURRENTCS))
+                return BadRequest("Unknown connection string key");
+
             string cs =_DONOT_USE_CURRENTCS;
             Wtm.CurrentCS = cs;
             var listVM = Wtm.CreateVM(_DONOT_USE_VMNAME, null, null, true) as IBasePagedListVM<TopBasePoco, ISearcher>;
