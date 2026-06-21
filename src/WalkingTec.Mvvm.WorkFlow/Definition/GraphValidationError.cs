@@ -98,6 +98,12 @@ public enum GraphValidationError
     /// </summary>
     AckNodeMissingAckMode,
 
+    /// <summary>
+    /// A ParallelGateway or InclusiveGateway node has no outgoing transitions.
+    /// A gateway with zero branches will strand the instance at runtime.
+    /// </summary>
+    GatewayNoOutgoingTransitions,
+
     // WF-20: TimeoutDef validation error codes (NEW graph publishes only).
 
     /// <summary>

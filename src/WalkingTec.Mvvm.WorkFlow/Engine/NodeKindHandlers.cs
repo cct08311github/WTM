@@ -425,9 +425,42 @@ internal sealed class ParallelGatewayHandler : INodeKindHandler
                 }
             }
 
-            await db.SaveChangesAsync(ct);
+            // #483 Bug #8: pin JoinExpectedArrivals in-memory so it's committed atomically
+            // with the Join NodeInstance row — eliminates the two-commit stranding window.
+            if (!string.IsNullOrWhiteSpace(joinNodeKey))
+            {
+                var joinEntry = db.ChangeTracker.Entries<NodeInstance>()
+                    .FirstOrDefault(e => e.State == Microsoft.EntityFrameworkCore.EntityState.Added
+                                      && string.Equals(e.Entity.NodeKey, joinNodeKey, StringComparison.Ordinal));
+                if (joinEntry is not null)
+                    joinEntry.Entity.JoinExpectedArrivals = branchNodeDefs.Count;
+            }
+
+            try
+            {
+                await db.SaveChangesAsync(ct);
+            }
+            catch (DbUpdateException dbEx) when (
+                dbEx.InnerException?.Message.Contains("unique", StringComparison.OrdinalIgnoreCase) == true
+                || dbEx.InnerException?.Message.Contains("duplicate", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                // #483 Bug #4: idempotent no-op — a concurrent winner already minted these branches.
+                // Detach all Added NodeInstance entities so the context stays usable.
+                var addedEntries = db.ChangeTracker.Entries<NodeInstance>()
+                    .Where(e => e.State == Microsoft.EntityFrameworkCore.EntityState.Added)
+                    .ToList();
+                foreach (var e in addedEntries)
+                    e.State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+                _logger.LogDebug(
+                    "ParallelGatewayHandler: unique-constraint collision for instance {InstanceId} node '{NodeKey}' — " +
+                    "concurrent winner already minted branches. No-op.",
+                    instance.ID, node.NodeKey);
+                return;
+            }
 
             // Pin JoinExpectedArrivals on the Join NodeInstance (now guaranteed to exist).
+            // This is a best-effort defensive call — the atomic in-memory pin above already
+            // committed the value in the same SaveChanges, so this is a no-op under normal flow.
             if (!string.IsNullOrWhiteSpace(joinNodeKey))
             {
                 await PinJoinExpectedArrivalsAsync(db, instance, joinNodeKey!, branchNodeDefs.Count, ct);
@@ -631,7 +664,36 @@ internal sealed class InclusiveGatewayHandler : INodeKindHandler
             }
         }
 
-        await db.SaveChangesAsync(ct);
+        // #483 Bug #8: pin JoinExpectedArrivals atomically with the Join row.
+        if (!string.IsNullOrWhiteSpace(joinNodeKey))
+        {
+            var joinEntry = db.ChangeTracker.Entries<NodeInstance>()
+                .FirstOrDefault(e => e.State == Microsoft.EntityFrameworkCore.EntityState.Added
+                                  && string.Equals(e.Entity.NodeKey, joinNodeKey, StringComparison.Ordinal));
+            if (joinEntry is not null)
+                joinEntry.Entity.JoinExpectedArrivals = mintedBranches.Count;
+        }
+
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException dbEx) when (
+            dbEx.InnerException?.Message.Contains("unique", StringComparison.OrdinalIgnoreCase) == true
+            || dbEx.InnerException?.Message.Contains("duplicate", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            // #483 Bug #4: idempotent no-op — a concurrent winner already minted these branches.
+            var addedEntries = db.ChangeTracker.Entries<NodeInstance>()
+                .Where(e => e.State == Microsoft.EntityFrameworkCore.EntityState.Added)
+                .ToList();
+            foreach (var e in addedEntries)
+                e.State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+            _logger.LogDebug(
+                "InclusiveGatewayHandler: unique-constraint collision for instance {InstanceId} node '{NodeKey}' — " +
+                "concurrent winner already minted branches. No-op.",
+                instance.ID, node.NodeKey);
+            return;
+        }
 
         if (!string.IsNullOrWhiteSpace(joinNodeKey))
         {
