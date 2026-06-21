@@ -541,6 +541,60 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.IsInstanceOfType(result, typeof(BadRequestObjectResult),
                 "PivotExport: 51 sort clauses should return 400");
         }
+
+        // ─── #501: ChangeType uses InvariantCulture — comma-decimal culture regression ─
+
+        [TestMethod]
+        public void I501_NumericFilter_InvariantCulture_CommaDecimalCulture_ParsesCorrectly()
+        {
+            // Regression for #501: Convert.ChangeType without IFormatProvider uses
+            // Thread.CurrentCulture, so "1234.56" mis-parses as 123456 under de-DE.
+            // After the fix, InvariantCulture is passed explicitly so the dot is always
+            // the decimal separator, regardless of the request's Accept-Language locale.
+
+            var prevCulture = System.Threading.Thread.CurrentThread.CurrentCulture;
+            try
+            {
+                System.Threading.Thread.CurrentThread.CurrentCulture =
+                    new System.Globalization.CultureInfo("de-DE");
+
+                var data = new List<SaleRecord>
+                {
+                    new SaleRecord { ID = Guid.NewGuid(), Region = "North", Category = "A", Amount = 1234.56m },
+                    new SaleRecord { ID = Guid.NewGuid(), Region = "South", Category = "B", Amount = 500m },
+                };
+
+                var whitelist = AnalysisFieldScanner.ScanModel(typeof(SaleRecord));
+                var wlDict    = whitelist.ToDictionary(f => f.FieldName);
+
+                // Build a Gte filter: Amount >= 1234.56 (dot-decimal, invariant representation)
+                var filters = new List<FilterCondition>
+                {
+                    new FilterCondition
+                    {
+                        Field    = "Amount",
+                        Operator = FilterOperator.Gte,
+                        Value    = "1234.56"   // dot as decimal separator — invariant
+                    }
+                };
+
+                var query   = data.AsQueryable();
+                var result  = AnalysisQueryEngine.ApplyFilters(query, filters, wlDict);
+                var matched = result.ToList();
+
+                // Under de-DE without the fix, "1234.56" → 123456 (comma culture mis-parse)
+                // and the filter would include both rows. With the fix only the 1234.56 row matches.
+                Assert.AreEqual(1, matched.Count,
+                    "InvariantCulture fix: only the 1234.56 row should satisfy Amount >= 1234.56; " +
+                    "if both rows match it means the value was mis-parsed as 123456 under de-DE.");
+                Assert.AreEqual(1234.56m, matched[0].Amount,
+                    "The matched row should be the one with Amount == 1234.56m.");
+            }
+            finally
+            {
+                System.Threading.Thread.CurrentThread.CurrentCulture = prevCulture;
+            }
+        }
     }
 
     // ─── Supporting types for M29 test (must be at namespace scope for EF) ────────
