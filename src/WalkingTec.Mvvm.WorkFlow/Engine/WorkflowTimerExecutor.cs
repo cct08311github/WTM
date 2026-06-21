@@ -854,20 +854,6 @@ internal sealed class WorkflowTimerExecutor
         return (TimerFireOutcome.Fired, acted, continuationContexts);
     }
 
-    // ── Stubs for deferred actions ────────────────────────────────────────────
-
-    private TimerFireOutcome HandleDeferredAction(Guid timerId, TimerAction action, string wave)
-    {
-        // These actions are implemented in a later sub-scope.
-        // The fire CAS already succeeded; we emit a FailClosed-flavored outcome
-        // so the timer is marked Fired (not retried) and the batch continues cleanly.
-        _logger.LogWarning(
-            "Timer {TimerId} action={Action} not yet implemented (deferred to {Wave}) — " +
-            "treating as FailClosed stub (timer Fired, no action taken)",
-            timerId, action, wave);
-        return TimerFireOutcome.FailClosed;
-    }
-
     private TimerFireOutcome HandleUnknownAction(Guid timerId, TimerAction action)
     {
         _logger.LogError(

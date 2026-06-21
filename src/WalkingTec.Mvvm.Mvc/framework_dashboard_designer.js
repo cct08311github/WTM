@@ -1035,23 +1035,6 @@
         return wrapper;
     }
 
-    /**
-     * Returns an HTML string representation of the widget cell.
-     * Kept as a thin wrapper so callers that need a string (e.g. GridStack
-     * content property when it doesn't accept DOM nodes) still work.
-     * All values go through textContent — the outerHTML is built by the browser
-     * DOM serialiser, not by string concatenation, so attribute-injection is
-     * impossible regardless of what widgetId/title contain.
-     */
-    function _makeWidgetHtml(widgetId, widgetDef) {
-        // Build via DOM to avoid any string-concatenation XSS risk,
-        // then serialise with outerHTML (browser-escaped).
-        var node = _makeWidgetNode(widgetId, widgetDef);
-        // Event listeners won't survive outerHTML serialisation, but the
-        // Designer re-attaches them via delegated event handling on the grid.
-        return node.outerHTML;
-    }
-
     // ─── Public export ────────────────────────────────────────────────────────
     var exportApi = {
         DesignerModel: DesignerModel,
