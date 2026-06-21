@@ -1,5 +1,27 @@
 # 更新日志
 
+## [10.13.7] - 2026-06-21
+
+Self-audit regression batch. A **round-2** multi-agent adversarial audit of v10.13.6 — explicitly re-auditing the just-shipped fixes — caught **two HIGH Oracle regressions introduced by v10.13.6's own #485** (its bundled "Oracle identifier quoting" change), plus resource/correctness/security issues. The over-scoped quoting is reverted; the rest fixed. Integrated full-solution suite: **5378 passed / 0 failed**, 0 NU1903.
+
+### Fixed
+
+- **Oracle ETL regressions from #485 identifier quoting — ORA-00955 + ORA-00904 (#499 — HIGH ×2):** #485 (v10.13.6) bundled an L5 "Oracle identifier quoting" hardening that applied case-sensitive double-quotes to `CREATE TABLE` but left the halves of the contract misaligned: the staging-table existence probe still uppercased the name (`USER_TABLES`) so a non-uppercase staging name (incl. the framework's own `STG_{target}_dryrun`) never matched → re-CREATE every run → **ORA-00955** on the 2nd+ run; and `INSERT`/`MERGE` referenced columns unquoted (Oracle folds to uppercase) against case-sensitively-created columns → **ORA-00904** for any non-uppercase column. CI has no live Oracle (integration tests `Assert.Inconclusive`) and the one test used all-uppercase names, so it escaped coverage. **Fix:** reverted the #485 Oracle quoting (`QuoteIdentifier`/`QuoteQualified` removed) so all Oracle identifiers are unquoted and fold consistently to uppercase, matching the probe — the known-good pre-#485 behaviour. The #485 watermark coercion fix is unaffected. *(Lesson: a speculative consistency hardening for a provider with no CI coverage, bundled into an unrelated fix, shipped two HIGH regressions.)*
+- **Resource leaks: ImageSharp `Image`, S3 `GetObjectResponse`, NPOI `XSSFWorkbook` (#500 — MEDIUM):** `UploadImage` leaked the ImageSharp `Image` (pooled pixel buffer) + `MemoryStream` when `Resize`/encode/`Upload` threw after a successful `Load`; `WtmS3FileHandler.GetFileData` never disposed the `GetObjectResponse` (owns the live HTTP response stream/connection); `DashboardExcelExporter` created an `XSSFWorkbook` with a bare `var` (never disposed) inside a recurring `IHostedService` background job. All three now wrapped in `using` so they are released on every path.
+- **Analysis filter values parsed with current-culture `Convert.ChangeType` (#501 — MEDIUM):** `AnalysisQueryEngine.Filters.cs` coerced user filter values with no `IFormatProvider`, so under comma-decimal request cultures (de/fr/ru…, switched by `Accept-Language`) a numeric filter like `1234.56` mis-parsed → silently wrong analytics or `FormatException` → 500. Now pinned to `InvariantCulture`, matching the already-hardened `PropertyHelper` sites.
+- **`DoRealDeleteAsync` orphaned physical files; `DoDeleteAsync` was sync-over-async (#504 — MEDIUM/latent):** the async hard-delete omitted the unloaded-sub-file `.Include()` re-fetch the sync path performs → physical attachment files orphaned; and `DoDeleteAsync` called the **sync** `DoRealDelete()`. Fixed: async re-fetch added (with `f.SetValue(null)` now correctly gated), and `DoDeleteAsync`'s `TopBasePoco` hard-delete branch now `await DoRealDeleteAsync()` (the `IPersistPoco` soft-delete branch is unchanged).
+
+### Security
+
+- **Selector + file endpoints set `CurrentCS`/`CreateDC` from client key without `IsKnownConnectionKey` guard (#503, #506 — MEDIUM):** the `Selector` action (and, defense-in-depth, `UploadImage`, `UploadForLayUIRichTextBox`, `UploadForLayUIUEditor`, `GetFileName`, `GetFile`, `ViewFile`) passed the client-supplied connection-string key to the data context without the allowlist guard every other endpoint applies — letting an authenticated user pivot a Selector popup to any *configured* named connection (cross-DB read in multi-datasource deployments; the file endpoints were self-limiting via a null DC). All now reject unknown keys with each endpoint's natural error shape; the null/empty default-connection path is preserved.
+- **`CodeGenVM` field-identifier validation (#505 — MEDIUM, dev-only):** the code generator interpolated POST-controlled `FieldName`/`SubField` raw into emitted C#/Razor source. Reachable only with `[DebugOnly]` + `IsQuickDebug` + the Development-only startup guard (not production), so defense-in-depth: a fail-fast `^[A-Za-z_][A-Za-z0-9_]*$` validation pass now runs before any source is emitted.
+
+### Migration
+
+- **No action required for most deployments.** #499 restores the pre-#485 Oracle behaviour (unquoted identifiers that fold to uppercase). If an Oracle ETL deployment ran under v10.13.6 and created staging tables with **case-sensitive (non-uppercase) names**, drop/recreate them (or rename to uppercase) so the restored uppercase-folding probe matches. No API surface change.
+
+---
+
 ## [10.13.6] - 2026-06-21
 
 Multi-agent adversarial security & correctness audit batch (2026-06-21): 9 confirmed findings (4 HIGH / 5 MEDIUM) plus 1 review-discovered HIGH (#490), each adversarially verified (triple-skeptic refutation panel) before fixing and re-reviewed after. Integrated full-solution suite: 5309 passed / 0 failed. (#487, an unrelated LOW `MD5` dispose cleanup, remains open and tracked.)
