@@ -1,5 +1,11 @@
 # 更新日志
 
+## [Unreleased]
+
+### Security
+
+- **Analysis `CompareWith.Filters` DoS cap (#486):** the `MaxFilterClauses` (= 50) guard that prevents CPU/stack-overflow from deeply nested `Expression.AndAlso` trees was applied to `req.Filters`, `req.HavingFilters`, and `req.Sort` in all four Analysis actions (Query, Pivot, Export, PivotExport), but `req.CompareWith?.Filters` was never checked. An authenticated user could POST thousands of valid filter clauses inside the `CompareWith` sub-request, sending them straight into `AnalysisQueryEngine.ApplyFilters` unbounded. The same inline cap is now applied to `CompareWith.Filters` in all four actions immediately after the existing clause-count guards.
+
 ## [10.13.5] - 2026-06-21
 
 Security + maintenance. Clears the last standing NU1903 (#393) now that an upstream fix exists — the vulnerable bundled SQLite engine is no longer pulled into any package. Also ships four downstream-reported (BMS-integration) regressions against 10.13.1 that had already merged to the branch (#461–#464), plus a CI reliability change (#473).
