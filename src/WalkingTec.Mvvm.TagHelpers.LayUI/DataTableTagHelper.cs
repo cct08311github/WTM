@@ -1435,7 +1435,8 @@ var isPost = false;
         /// <summary>
         /// Escapes a JSON string so it is safe to embed inside an HTML &lt;script&gt; block.
         /// Replaces every '&amp;', '&lt;', and '&gt;' with their JSON Unicode escape equivalents
-        /// (&, <, >).  The escapes are valid JSON (RFC 8259 §7 allows \uXXXX in
+        /// (&amp;amp;, &lt;, &gt;) — i.e. <c>&</c>, <c><</c>, <c>></c>.
+        /// The escapes are valid JSON (RFC 8259 §7 allows \uXXXX in
         /// string values) and JavaScript decodes them back to the literal characters when the JSON
         /// is parsed, so HTML in grid-cell values renders correctly.  Because the raw characters
         /// never appear in the script source the HTML parser cannot close the script element early
@@ -1444,7 +1445,7 @@ var isPost = false;
         /// </summary>
         public static string EscapeLocalDataJson(string json)
         {
-            // Escape '&' first to avoid double-escaping the \uXXXX sequences we are about to emit.
+            // Escape '&' first by convention; the \\uXXXX outputs are disjoint from &,<,> so order does not affect correctness.
             // \\u0026 / \\u003c / \\u003e are valid JSON Unicode escapes (RFC 8259 §7).
             // JavaScript's inline literal parser decodes them back to '&', '<', '>' before the
             // cell-HTML is rendered, so grid content is unaffected.  Because the literal characters

@@ -589,10 +589,10 @@ public class XssEncodingTests
     }
 
     [TestMethod]
-    public void EscapeLocalDataJson_AmpersandIsEscapedFirst()
+    public void EscapeLocalDataJson_AmpersandBecomesUnicodeEscape()
     {
-        // & must be replaced with \\u0026 so that the \\u sequences we emit are not
-        // themselves double-escaped on a second pass.
+        // & must be replaced with \\u0026; the \\uXXXX outputs are disjoint from &,<,>
+        // so the Replace order does not affect correctness.
         var json = "[{\"Val\":\"a&b\"}]";
         var result = DataTableTagHelper.EscapeLocalDataJson(json);
         StringAssert.Contains(result, "\\u0026",
