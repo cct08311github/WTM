@@ -1,5 +1,16 @@
 # 更新日志
 
+## [Unreleased]
+
+### Security
+
+- **SSRF hardening on ETL legacy webhook alert path (#484 — MEDIUM):** `EtlAlertService.SendLegacyWebhookAsync` posted operator-configured `AlertWebhookUrl` via a bare `AddHttpClient("EtlAlert")` with no redirect-disable, no DNS-pin, and no IP validation — allowing an admin to target IMDS (169.254.169.254), loopback, or RFC1918 addresses (blind SSRF).
+  - **Fix 1 — HttpClient hardening:** `AddHttpClient("EtlAlert")` now applies `.ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false, ConnectCallback = RestEtlSource.PinnedConnectAsync })` — identical to the existing `WtmRestEtlSource` client registration. `AllowAutoRedirect=false` prevents redirect-based bypasses; `PinnedConnectAsync` is the TOCTOU-safe DNS-pinning callback that rejects private/loopback/IMDS IPs at actual TCP connect time.
+  - **Fix 2 — Boundary validation:** `EtlJobDefinitionVM.Validate()` now validates `AlertWebhookUrl` at save time: requires absolute `https://` URI, blocks IP-literal blocked ranges using `RestEtlSource.IsBlockedIp` (the shared SSRF helper), and performs a best-effort DNS pre-check for hostname URLs. The authoritative TOCTOU-safe enforcement still runs in `PinnedConnectAsync` at POST time.
+  - **Fix 3 — Dispatch-time guard:** `SendLegacyWebhookAsync` re-validates the URL before POSTing — skips (with a `LogWarning`) if the URL is not `https://` or resolves to a blocked IP literal. This catches jobs imported via API or migration scripts that bypass the VM layer.
+  - **Fix 4 (L3 sanitization parity):** `runLog.ErrorMessage` is now passed through `EtlErrorSanitizer.SanitizeRaw` in both `SendLegacyWebhookAsync` (added to `errorMessage` payload field) and `SendEmailAsync` (used to build the body via a sanitized RunLog copy) before egress — matching the sanitization already in `SendWebhookCardAsync`. Prevents connection strings / secrets in stored error messages from leaking out via SMTP or raw webhook payloads.
+  - **Test coverage:** 12 new MSTest regression tests in `EtlAlertWebhookSsrfTests` — 8 boundary-validation tests (VM) + 4 dispatch-time tests (service). All 600 suite tests pass.
+
 ## [10.13.5] - 2026-06-21
 
 Security + maintenance. Clears the last standing NU1903 (#393) now that an upstream fix exists — the vulnerable bundled SQLite engine is no longer pulled into any package. Also ships four downstream-reported (BMS-integration) regressions against 10.13.1 that had already merged to the branch (#461–#464), plus a CI reliability change (#473).

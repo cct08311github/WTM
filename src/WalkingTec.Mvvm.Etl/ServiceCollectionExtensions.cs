@@ -108,7 +108,16 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         Action<EtlAlertOptions>? configure = null)
     {
-        services.AddHttpClient("EtlAlert");
+        // Register the EtlAlert named HttpClient with SSRF-hardening identical to
+        // the RestEtlSource client: no auto-redirect (prevents redirect-based SSRF
+        // bypasses) and a DNS-pinning ConnectCallback that rejects private/loopback/
+        // IMDS addresses at actual TCP connect time (TOCTOU-safe). Issue #484.
+        services.AddHttpClient("EtlAlert")
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+            {
+                AllowAutoRedirect = false,
+                ConnectCallback   = RestEtlSource.PinnedConnectAsync,
+            });
 
         if (configure != null)
             services.Configure(configure);
