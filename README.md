@@ -1,123 +1,85 @@
-# WalkingTec.Mvvm for asp.net core
+# WalkingTec.Mvvm for ASP.NET Core
 
-WalkingTec.Mvvm framework (WTM) is a rapid development framework based on .NET 10. It supports LayUI, React, Vue 2/3, and Blazor. WTM has a built-in code generator to maximize development efficiency. It is a powerful tool for efficient web development.
+WalkingTec.Mvvm (WTM) is a rapid-development framework for ASP.NET Core on .NET 10. It supports LayUI, React, Vue 2/3, and Blazor, and ships a built-in code generator to speed up server + client development.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## CI Build Status
+This GitHub repository is a public mirror. The current published versions are available from **GitHub Packages**.
 
-| Platform | Build Server | SDK | Branch | Status |
-| -------- | ------------ | ---- |--------|--------|
-| Gitea Actions | Ubuntu (act_runner 0.6.1) | .NET 10 | dotnet10 | see `.github/workflows/ci-build.yml` runs on Gitea |
-## Nuget Packages
+## NuGet packages
 
-Package name                              | Version                     | Downloads
-------------------------------------------|-----------------------------|-------------
-`WalkingTec.Mvvm.Core` | [![NuGet](https://img.shields.io/nuget/v/WalkingTec.Mvvm.Core.svg?style=flat-square&label=nuget)](https://www.nuget.org/packages/WalkingTec.Mvvm.Core/) | ![downloads](https://img.shields.io/nuget/dt/WalkingTec.Mvvm.Core.svg)
-`WalkingTec.Mvvm.Mvc` | [![NuGet](https://img.shields.io/nuget/v/WalkingTec.Mvvm.Mvc.svg?style=flat-square&label=nuget)](https://www.nuget.org/packages/WalkingTec.Mvvm.Mvc/) | ![downloads](https://img.shields.io/nuget/dt/WalkingTec.Mvvm.Mvc.svg)
-`WalkingTec.Mvvm.Mvc.Admin` | [![NuGet](https://img.shields.io/nuget/v/WalkingTec.Mvvm.Mvc.Admin.svg?style=flat-square&label=nuget)](https://www.nuget.org/packages/WalkingTec.Mvvm.Mvc.Admin/) | ![downloads](https://img.shields.io/nuget/dt/WalkingTec.Mvvm.Mvc.Admin.svg)
-`WalkingTec.Mvvm.TagHelpers.LayUI` | [![NuGet](https://img.shields.io/nuget/v/WalkingTec.Mvvm.TagHelpers.LayUI.svg?style=flat-square&label=nuget)](https://www.nuget.org/packages/WalkingTec.Mvvm.TagHelpers.LayUI/) | ![downloads](https://img.shields.io/nuget/dt/WalkingTec.Mvvm.TagHelpers.LayUI.svg)
+| Package | Latest |
+|---|---|
+| `WalkingTec.Mvvm.Core` | 10.5.3 |
+| `WalkingTec.Mvvm.Mvc` | 10.5.3 |
+| `WalkingTec.Mvvm.TagHelpers.LayUI` | 10.5.3 |
 
-## Quick Start
+## Quick start
 
-> 完整安裝指南與 DB 配置請見 [Getting Started](docs/getting-started.md)
+### 1. Add the GitHub Packages NuGet source
 
-**1. 配置 Gitea NuGet source**
-
-需要一個有 `read:package` scope 的 Gitea PAT（可在 Gitea UI → Settings → Applications 建立）。
+You need a GitHub Personal Access Token with the `read:packages` scope. Create one at <https://github.com/settings/tokens>.
 
 ```bash
-dotnet nuget add source "https://mac-mini.tailde842d.ts.net/api/packages/chiu0831/nuget/index.json" \
-  --name gitea-wtm --username YOUR_GITEA_USERNAME --password YOUR_GITEA_PAT \
+dotnet nuget add source "https://nuget.pkg.github.com/cct08311github/index.json" \
+  --name wtm-github \
+  --username YOUR_GITHUB_USERNAME \
+  --password YOUR_GITHUB_PAT \
   --store-password-in-clear-text
 ```
 
-**2. 安裝套件**
+### 2. Install the packages
 
 ```bash
-dotnet add package WalkingTec.Mvvm.Core --version 10.5.3 --source gitea-wtm
-dotnet add package WalkingTec.Mvvm.Mvc --version 10.5.3 --source gitea-wtm
-dotnet add package WalkingTec.Mvvm.TagHelpers.LayUI --version 10.5.3 --source gitea-wtm
+dotnet add package WalkingTec.Mvvm.Core --version 10.5.3 --source wtm-github
+dotnet add package WalkingTec.Mvvm.Mvc --version 10.5.3 --source wtm-github
+dotnet add package WalkingTec.Mvvm.TagHelpers.LayUI --version 10.5.3 --source wtm-github
 ```
 
-> 詳細安裝/發佈說明見 [`docs/gitea-packages.md`](docs/gitea-packages.md)
-
-**3. 最小 Program.cs**
+### 3. Minimal `Program.cs`
 
 ```csharp
 var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddDistributedMemoryCache();
-builder.Services.AddWtmSession(3600, builder.Configuration);
-builder.Services.AddWtmAuthentication(builder.Configuration);
-builder.Services.AddMvc();
-builder.Services.AddWtmContext(builder.Configuration);
+
+builder.Services
+    .AddWtmContext(builder.Configuration)
+    .AddWtmMvc();
 
 var app = builder.Build();
-app.UseStaticFiles();
+app.UseWtmContext();
 app.UseWtmStaticFiles();
-app.UseRouting();
-app.UseAuthentication();
-app.UseAuthorization();
-app.UseSession();
-app.UseWtm();
-app.MapControllerRoute("default", "{controller=Home}/{action=Index}/{id?}");
+app.MapControllers();
 app.Run();
 ```
 
-## WTM Features
+See [docs/getting-started.md](./docs/getting-started.md) for the full setup walk-through including database configuration.
 
-WTM provides 4 types of ViewModel, covering all of the common functionalities of mainstream web applications.
+## Highlights
 
-- CrudVM provides most common functionalities for data addition, deletion and modification.
+- **Four ViewModel base types** — `BaseCRUDVM<T>`, `BasePagedListVM<T, S>`, `BaseImportVM<T>`, `BaseBatchVM<T>` — cover the most common CRUD / list / import / batch patterns.
+- **Analysis Mode** — attribute-driven ad-hoc analytics on any list ViewModel (`[Dimension]`, `[Measure]`, `[EnableAnalysis]`). See [`docs/analysis-mode.md`](./docs/analysis-mode.md).
+- **ETL module** — pipeline, watermark, schema service. See [`docs/etl-module.md`](./docs/etl-module.md).
+- **Opt-in security middleware** — CSP, secure headers, JWT lifetime hardening, request timeouts, ETag, idempotency, server-timing, etc.
+- **Dashboard / Lookup Cache / Structured logging** — production-grade infrastructure baked in.
+- **Multi-tenant** via `ITenant` global query filter; multi-DB (MSSQL / MySQL / PostgreSQL / SQLite / Oracle).
 
-- ListVM provides paging and exporting functionality.
+## Documentation
 
-- ImportVM & TemplateVM provides importing via excel functionality.
+- [Getting Started](./docs/getting-started.md)
+- [Developer Manual](./docs/wtm-developer-manual.md) — 18-section complete reference
+- [System Architecture](./docs/system-architecture.md)
+- [Analysis Mode Guide](./docs/analysis-mode.md)
+- [Lookup Cache](./docs/lookup-cache.md)
+- [Structured Logging](./docs/structured-logging.md)
+- [ETL Module](./docs/etl-module.md)
+- [Dashboard User Guide](./docs/dashboard-user-guide.md) | [Dashboard Developer Guide](./docs/dashboard-dev-guide.md)
+- [Integration Guide](./docs/integration-guide.md)
+- [Dependency Management](./docs/dependency-management.md)
+- [Production Readiness](./docs/production-readiness.md)
+- [Changelog](./CHANGELOG.md)
 
-- BatchVM provides batch operation functionality.
+Upstream documentation site: <http://wtmdoc.walkingtec.cn>
 
-- WTM has its own code generator, which makes development efficient and fast.
+## License
 
-- WTM provides dozens of client-side controls, including Form, Grid, Panel, Dialog and quite alot of other common controls.
-
-- WTM provides built-in user, role, user group, Data permission, page permission, menu, log, mail, SMS, file and other common back-end  functionalities;
-
-- WTM supports single sign on, portal and distributed database;
-
-- WTM provides simplified integration with libraries such as Redis, DFS etc.
-
-- WTM provides both server-side and client-side frameworks for building user interfaces.
-
-
-| Mode | UI | Status  |
-|--------- |------------- |---------|
-|Server-side   |LayUI |Stable|
-|Client-side   |React |Stable|
-|Client-side   |VUE |Stable|
-|Server/Client |Blazor |Stable|
-
-
-Under WTM framework's client-side mode, you can also use code generator to generate server-side and client-side code at the same time, greatly reducing the communication cost of front-end and back-end developers, essentially improving the development efficiency, so that "separation" is no longer complex and expensive.
-
-Framework document address: http://wtmdoc.walkingtec.cn
-
-Frame QQ communication group: 694148336(full), 892848149 (group2)
-
-## Local Docs
-
-- [Getting Started 快速入門](./docs/getting-started.md)
-- [Production Readiness 評估](./docs/production-readiness.md) — 哪些場景可以上 prod、補強清單
-- [Dependency Management](./docs/dependency-management.md) — 套件版本政策、NU1510 雙意義警告、NPOI security pin
-- [CI Operations](./docs/ci-operations.md) — Gitea Actions 工作流、四大已知不相容、排錯 SOP
-- [WTM Developer Manual 開發手冊](./docs/wtm-developer-manual.md) — 18 章節完整參考
-- [WTM System Architecture Guide](./docs/system-architecture.md)
-- [WTM Analysis Mode Guide](./docs/analysis-mode.md)
-- [Gitea Packages Guide](./docs/gitea-packages.md) — Gitea NuGet registry 安裝/發佈
-
-## Click <a href="http://wtmdoc.walkingtec.cn/setup">here</a>  to generate a WTM project online and experience the beauty of WTM immediately~~~
-
-At present, we are a team of 7 developers. We are looking for all kinds of C#, React, VUE experts to join us!
-
-If WTM hepls you:
-
-<a href="https://www.paypal.me/dotnetWTM" target="_blank"><img src="https://wtmdoc.walkingtec.cn/imgs/pp_h_rgb.webp"  width="150"></a>
+MIT. See [LICENSE](./LICENSE).
