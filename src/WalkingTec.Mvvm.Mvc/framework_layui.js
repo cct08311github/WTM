@@ -65,6 +65,8 @@ window.ff = {
         return $('<div/>').text(String(s)).html();
     },
 
+    EscapeAttr: function (s) { return ff.EscapeText(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;'); },
+
     // Issue #332: DOM-safe input element builder for ChainChange and
     // LoadComboItems. Replaces string concatenation that allowed item.Value
     // and item.Text to break out of attribute contexts (stored XSS; server
