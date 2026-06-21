@@ -25,6 +25,12 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Fixtures
     /// TokenService uses IServiceProvider.CreateScope() to resolve IDataContext.
     /// We satisfy this by registering a scoped FrameworkContext in the DI container.
     /// </summary>
+    /// <remarks>
+    /// Resolves GitHub/Gitea issue #472: the original InMemory provider threw
+    /// <see cref="System.InvalidOperationException"/> on ExecuteUpdateAsync calls used
+    /// by token revocation. SQLite in-memory is a full relational provider and supports
+    /// all EF Core bulk-update APIs.
+    /// </remarks>
     public class TokenTestFixture : IDisposable
     {
         private readonly ServiceProvider _serviceProvider;
