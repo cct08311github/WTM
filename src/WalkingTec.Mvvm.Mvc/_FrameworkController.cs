@@ -740,23 +740,26 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 return JsonMore(new { Id = string.Empty, Name = string.Empty }, StatusCodes.Status400BadRequest);
             }
-            if (width == null)
+            // oimage is assigned here on every non-throw path; wrap in using so
+            // the pooled pixel buffer is released even if Mutate/SaveAsJpeg/Upload throws.
+            using (oimage)
+            using (var ms = new MemoryStream())
             {
-                width = height * oimage.Width / oimage.Height;
-            }
-            if (height == null)
-            {
-                height = width * oimage.Height / oimage.Width;
-            }
-            MemoryStream ms = new MemoryStream();
-            oimage.Mutate(x => x.Resize(width.Value, height.Value));
-            oimage.SaveAsJpeg(ms);
-            ms.Position = 0;
+                if (width == null)
+                {
+                    width = height * oimage.Width / oimage.Height;
+                }
+                if (height == null)
+                {
+                    height = width * oimage.Height / oimage.Width;
+                }
+                oimage.Mutate(x => x.Resize(width.Value, height.Value));
+                oimage.SaveAsJpeg(ms);
+                ms.Position = 0;
 
-            var file = fp.Upload(FileData.FileName, ms.Length, ms, groupName, subdir, extra, sm, Wtm.CreateDC(cskey: _DONOT_USE_CS));
-            oimage.Dispose();
-            ms.Dispose();
-            return JsonMore(new { Id = file.GetID(), Name = file.FileName });
+                var file = fp.Upload(FileData.FileName, ms.Length, ms, groupName, subdir, extra, sm, Wtm.CreateDC(cskey: _DONOT_USE_CS));
+                return JsonMore(new { Id = file.GetID(), Name = file.FileName });
+            }
         }
 
         [HttpPost]

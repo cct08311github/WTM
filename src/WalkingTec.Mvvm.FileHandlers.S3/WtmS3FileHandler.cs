@@ -107,7 +107,7 @@ public sealed class WtmS3FileHandler : IWtmFileHandler
 
         try
         {
-            var response = _s3.GetObjectAsync(request).GetAwaiter().GetResult();
+            using var response = _s3.GetObjectAsync(request).GetAwaiter().GetResult();
             var ms = new MemoryStream();
             response.ResponseStream.CopyTo(ms);
             ms.Position = 0;
