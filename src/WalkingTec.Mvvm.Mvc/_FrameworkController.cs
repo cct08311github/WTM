@@ -123,6 +123,10 @@ namespace WalkingTec.Mvvm.Mvc
                 return Unauthorized();
             }
 
+            // MVC-010: reject unknown connection-string keys to prevent cross-DB reads (#503)
+            if (!IsKnownConnectionKey(_DONOT_USE_CURRENTCS))
+                return BadRequest("Unknown connection string key");
+
             string cs =_DONOT_USE_CURRENTCS;
             Wtm.CurrentCS = cs;
             var listVM = Wtm.CreateVM(_DONOT_USE_VMNAME, null, null, true) as IBasePagedListVM<TopBasePoco, ISearcher>;
@@ -769,6 +773,9 @@ namespace WalkingTec.Mvvm.Mvc
         [ActionDescription("UploadForLayUIRichTextBox")]
         public async Task<IActionResult> UploadForLayUIRichTextBox([FromServices] WtmFileProvider fp, string _DONOT_USE_CS = null, string groupName = null, string subdir = null)
         {
+            // MVC-010: reject unknown connection-string keys to prevent lateral DB reads
+            if (!IsKnownConnectionKey(_DONOT_USE_CS))
+                return Content("{\"code\": 1 , \"msg\": \"Unknown connection string key\", \"data\": {\"src\": \"\"}}");
             var FileData = Request.Form.Files[0];
 
             // Issue #407: opt-in upload validation.
@@ -820,12 +827,18 @@ namespace WalkingTec.Mvvm.Mvc
         [ActionDescription("GetFileName")]
         public IActionResult GetFileName([FromServices] WtmFileProvider fp, Guid id, string _DONOT_USE_CS)
         {
+            // MVC-010: reject unknown connection-string keys to prevent lateral DB reads
+            if (!IsKnownConnectionKey(_DONOT_USE_CS))
+                return BadRequest("Unknown connection string key");
             return Ok(fp.GetFileName(id.ToString(), Wtm.CreateDC(cskey: _DONOT_USE_CS)));
         }
 
         [ActionDescription("GetFile")]
         public async Task<IActionResult> GetFile([FromServices] WtmFileProvider fp, string id, bool stream = false, string _DONOT_USE_CS = null, int? width = null, int? height = null)
         {
+            // MVC-010: reject unknown connection-string keys to prevent lateral DB reads
+            if (!IsKnownConnectionKey(_DONOT_USE_CS))
+                return new EmptyResult();
             var file = fp.GetFile(id, true, Wtm.CreateDC(cskey: _DONOT_USE_CS));
             if (file == null)
             {
@@ -900,6 +913,9 @@ namespace WalkingTec.Mvvm.Mvc
         [ActionDescription("ViewFile")]
         public IActionResult ViewFile([FromServices] WtmFileProvider fp, string id, string width, string _DONOT_USE_CS = null)
         {
+            // MVC-010: reject unknown connection-string keys to prevent lateral DB reads
+            if (!IsKnownConnectionKey(_DONOT_USE_CS))
+                return new EmptyResult();
             var file = fp.GetFile(id, false, Wtm.CreateDC(cskey: _DONOT_USE_CS));
             string html = string.Empty;
             var ext = file.FileExt.ToLower();
@@ -1072,6 +1088,9 @@ namespace WalkingTec.Mvvm.Mvc
         [ActionDescription("UploadForLayUIUEditor")]
         public async Task<IActionResult> UploadForLayUIUEditor([FromServices] WtmFileProvider fp, string _DONOT_USE_CS = "default", string groupName = null, string subdir = null)
         {
+            // MVC-010: reject unknown connection-string keys to prevent lateral DB reads
+            if (!IsKnownConnectionKey(_DONOT_USE_CS))
+                return Content("{\"Code\": 400 , \"Msg\": \"Unknown connection string key\", \"Data\": {\"src\": \"\"}}");
             IWtmFile file = null;
             if (Request.Form.Files != null && Request.Form.Files.Count() > 0)
             {

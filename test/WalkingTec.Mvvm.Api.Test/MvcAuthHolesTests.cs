@@ -442,6 +442,66 @@ public class MvcAuthHolesTests
         }
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // #503: Selector must apply the same IsKnownConnectionKey guard as
+    //       GetPagingData / GetExportExcel to prevent cross-DB reads.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// #503: POST /_Framework/Selector with an unrecognised _DONOT_USE_CURRENTCS key
+    /// must return 400 BadRequest — not silently point the query at an arbitrary DB.
+    /// </summary>
+    [TestMethod]
+    public async Task Selector_UnknownCurrentCs_ReturnsBadRequest()
+    {
+        var client = await NewAuthClientAsync();
+
+        var form = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["_DONOT_USE_VMNAME"] = StudentListVm,
+            ["_DONOT_USE_KFIELD"] = "Name",
+            ["_DONOT_USE_VFIELD"] = "ID",
+            ["_DONOT_USE_FIELD"] = "StudentId",
+            ["_DONOT_USE_MULTI_SEL"] = "false",
+            ["_DONOT_USE_SEL_ID"] = "sel1",
+            ["_DONOT_USE_CURRENTCS"] = "EVIL_LATERAL_DB",
+        });
+
+        var resp = await client.PostAsync("/_Framework/Selector", form);
+
+        Assert.AreEqual(HttpStatusCode.BadRequest, resp.StatusCode,
+            $"#503: Selector should reject unknown _DONOT_USE_CURRENTCS key. Got {(int)resp.StatusCode}.");
+    }
+
+    /// <summary>
+    /// #503: POST /_Framework/Selector with a null/empty _DONOT_USE_CURRENTCS key
+    /// must proceed normally (uses the default connection — safe path).
+    /// </summary>
+    [TestMethod]
+    public async Task Selector_NullCurrentCs_UsesDefault()
+    {
+        var client = await NewAuthClientAsync();
+
+        var form = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["_DONOT_USE_VMNAME"] = StudentListVm,
+            ["_DONOT_USE_KFIELD"] = "Name",
+            ["_DONOT_USE_VFIELD"] = "ID",
+            ["_DONOT_USE_FIELD"] = "StudentId",
+            ["_DONOT_USE_MULTI_SEL"] = "false",
+            ["_DONOT_USE_SEL_ID"] = "sel1",
+            // _DONOT_USE_CURRENTCS not supplied → null → default connection (always safe)
+        });
+
+        var resp = await client.PostAsync("/_Framework/Selector", form);
+
+        // Authenticated admin with null CS should reach the selector (200/redirect).
+        Assert.IsTrue(
+            resp.StatusCode == HttpStatusCode.OK ||
+            resp.StatusCode == HttpStatusCode.Redirect,
+            $"#503: Selector with null _DONOT_USE_CURRENTCS should use default. Got {(int)resp.StatusCode}.");
+    }
+
     private static bool resp200ContainsStudentData(string body) =>
         body.Contains("StudentId", StringComparison.OrdinalIgnoreCase) &&
         body.Contains("layui-table", StringComparison.OrdinalIgnoreCase);
