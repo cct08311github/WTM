@@ -199,5 +199,62 @@ namespace WalkingTec.Mvvm.Admin.Test
             Assert.IsTrue(result.Contains("\\u0026b"),
                 "& should be replaced with \\u0026");
         }
+
+        /// <summary>
+        /// #481 hardening: UPPERCASE &lt;/SCRIPT&gt; must also be blocked.
+        /// Some parsers normalise case before processing tag tokens; an uppercase variant
+        /// can break out of the inline script block the same way the lowercase one does.
+        /// Because <see cref="_FrameworkController.SanitizeSelectorJson"/> operates on the
+        /// raw characters (not tag tokens), replacing &lt; and &gt; is inherently
+        /// case-independent — this test proves it.
+        /// </summary>
+        [TestMethod]
+        public void SanitizeSelectorJson_UppercaseScriptTag_IsEscaped()
+        {
+            const string uppercasePayload = @"[{""Name"":""</SCRIPT><img src=x onerror=alert(1)>""}]";
+
+            string sanitized = _FrameworkController.SanitizeSelectorJson(uppercasePayload);
+
+            // No raw < or > must remain anywhere.
+            Assert.IsFalse(sanitized.Contains("<"),
+                "< must be unicode-escaped regardless of surrounding tag casing");
+            Assert.IsFalse(sanitized.Contains(">"),
+                "> must be unicode-escaped regardless of surrounding tag casing");
+
+            // The uppercase variant must be escaped the same way as the lowercase one.
+            Assert.IsTrue(sanitized.Contains("\\u003c/SCRIPT\\u003e"),
+                "Expected \\u003c and \\u003e to replace < and > in </SCRIPT>");
+        }
+
+        /// <summary>
+        /// #481 hardening: U+2028 (LINE SEPARATOR) and U+2029 (PARAGRAPH SEPARATOR) inside
+        /// a JSON string value that is embedded verbatim in an HTML &lt;script&gt; block cause
+        /// an implicit newline in certain older JS parsers, breaking the string literal and
+        /// potentially creating a parse error or execution boundary.  They must be escaped to
+        /// \u2028 / \u2029 (the six-character JS unicode escape sequence).
+        /// </summary>
+        [TestMethod]
+        public void SanitizeSelectorJson_LineSeparators_AreEscaped()
+        {
+            // Arrange: embed the actual code-points inside a JSON field value.
+            string lineSep = "\u2028";
+            string paraSep = "\u2029";
+            string json = $"[{{\"Name\":\"before{lineSep}middle{paraSep}after\"}}]";
+
+            // Act
+            string sanitized = _FrameworkController.SanitizeSelectorJson(json);
+
+            // Assert: neither raw code-point may remain.
+            Assert.IsFalse(sanitized.Contains(lineSep),
+                "U+2028 LINE SEPARATOR must be escaped to \\u2028 in the output");
+            Assert.IsFalse(sanitized.Contains(paraSep),
+                "U+2029 PARAGRAPH SEPARATOR must be escaped to \\u2029 in the output");
+
+            // Verify the exact escape sequences.
+            Assert.IsTrue(sanitized.Contains("\\u2028"),
+                "U+2028 must be replaced with the literal six-character sequence \\u2028");
+            Assert.IsTrue(sanitized.Contains("\\u2029"),
+                "U+2029 must be replaced with the literal six-character sequence \\u2029");
+        }
     }
 }

@@ -61,7 +61,9 @@ namespace WalkingTec.Mvvm.Mvc
             return json
                 .Replace("&",  "\\u0026")
                 .Replace("<",  "\\u003c")
-                .Replace(">",  "\\u003e");
+                .Replace(">",  "\\u003e")
+                .Replace("\u2028", "\\u2028")
+                .Replace("\u2029", "\\u2029");
         }
 
         /// <summary>
