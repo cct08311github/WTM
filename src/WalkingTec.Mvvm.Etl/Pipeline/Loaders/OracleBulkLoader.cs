@@ -42,6 +42,49 @@ public class OracleBulkLoader : IBulkLoader
         TimeoutSeconds = timeoutSeconds;
     }
 
+    // ── Identifier quoting (Oracle uses double-quote delimiters) ────────────
+
+    /// <summary>
+    /// Quotes a single Oracle identifier part (schema name or table name)
+    /// using Oracle's double-quote convention. Internal double-quotes are
+    /// escaped by doubling them per the SQL standard.
+    /// <para>
+    /// Note: Oracle quoted identifiers are case-sensitive; the rest of this
+    /// loader uses the quoted form consistently at all DDL/DML sites so the
+    /// staging and target table names always resolve correctly regardless of
+    /// whether Oracle would fold unquoted names to uppercase.
+    /// </para>
+    /// </summary>
+    public static string QuoteIdentifier(string name)
+    {
+        // Strip any existing outer double-quotes before re-quoting so that a
+        // caller passing an already-quoted part (e.g. "\"MY_SCHEMA\"") does not
+        // double-wrap it.
+        var stripped = name.Trim('"');
+        // Double any internal double-quote characters (SQL standard escaping).
+        var escaped = stripped.Replace("\"", "\"\"");
+        return $"\"{escaped}\"";
+    }
+
+    /// <summary>
+    /// Returns a fully double-quote-qualified Oracle table identifier.
+    /// Supports "SCHEMA.TABLE" and plain "TABLE" forms.
+    /// Plain names receive no schema prefix (Oracle resolves via current schema).
+    /// </summary>
+    public static string QuoteQualified(string tableName)
+    {
+        var dotIndex = tableName.IndexOf('.');
+        if (dotIndex >= 0)
+        {
+            var schema = tableName[..dotIndex].Trim('"');
+            var table  = tableName[(dotIndex + 1)..].Trim('"');
+            return $"{QuoteIdentifier(schema)}.{QuoteIdentifier(table)}";
+        }
+        return QuoteIdentifier(tableName);
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+
     public async Task BulkLoadAsync(
         string connectionString, string stagingTableName,
         DataTable batch, CancellationToken cancellationToken = default)
@@ -51,7 +94,7 @@ public class OracleBulkLoader : IBulkLoader
 
         var columns = batch.Columns.Cast<DataColumn>().ToList();
         var insertSql = new StringBuilder();
-        insertSql.Append($"INSERT INTO {stagingTableName} (");
+        insertSql.Append($"INSERT INTO {QuoteQualified(stagingTableName)} (");
         insertSql.Append(string.Join(", ", columns.Select(c => c.ColumnName)));
         insertSql.Append(") VALUES (");
         insertSql.Append(string.Join(", ", columns.Select(c => $":{c.ColumnName}")));
@@ -129,8 +172,8 @@ public class OracleBulkLoader : IBulkLoader
         var updateCols = columns.Where(c => !keySet.Contains(c)).ToList();
 
         var sb = new StringBuilder();
-        sb.AppendLine($"MERGE INTO {targetTableName} t");
-        sb.AppendLine($"USING {stagingTableName} s");
+        sb.AppendLine($"MERGE INTO {QuoteQualified(targetTableName)} t");
+        sb.AppendLine($"USING {QuoteQualified(stagingTableName)} s");
         // ETL-009: composite ON clause — AND-join all key columns inside parentheses
         sb.AppendLine("ON (" + string.Join(" AND ",
             keyColumns.Select(k => $"t.{k} = s.{k}")) + ")");
@@ -162,7 +205,7 @@ public class OracleBulkLoader : IBulkLoader
         await using var conn = new OracleConnection(connectionString);
         await conn.OpenAsync(cancellationToken);
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = $"TRUNCATE TABLE {stagingTableName}";
+        cmd.CommandText = $"TRUNCATE TABLE {QuoteQualified(stagingTableName)}";
         // 0 = no limit (Oracle default); opt-in timeout when TimeoutSeconds > 0.
         cmd.CommandTimeout = TimeoutSeconds;
         await cmd.ExecuteNonQueryAsync(cancellationToken);
@@ -197,8 +240,8 @@ public class OracleBulkLoader : IBulkLoader
         try
         {
             var deleteSql = string.IsNullOrWhiteSpace(whereClause)
-                ? $"DELETE FROM {targetTableName}"
-                : $"DELETE FROM {targetTableName} WHERE {whereClause}";
+                ? $"DELETE FROM {QuoteQualified(targetTableName)}"
+                : $"DELETE FROM {QuoteQualified(targetTableName)} WHERE {whereClause}";
             await using (var del = conn.CreateCommand())
             {
                 del.Transaction = tran;
@@ -209,8 +252,8 @@ public class OracleBulkLoader : IBulkLoader
 
             var colList = string.Join(", ", columns);
             var insertSql =
-                $"INSERT INTO {targetTableName} ({colList}) " +
-                $"SELECT {colList} FROM {stagingTableName}";
+                $"INSERT INTO {QuoteQualified(targetTableName)} ({colList}) " +
+                $"SELECT {colList} FROM {QuoteQualified(stagingTableName)}";
             await using (var ins = conn.CreateCommand())
             {
                 ins.Transaction = tran;
@@ -246,9 +289,9 @@ public class OracleBulkLoader : IBulkLoader
         if (count == 0)
         {
             var sb = new StringBuilder();
-            sb.AppendLine($"CREATE TABLE {stagingTableName} (");
+            sb.AppendLine($"CREATE TABLE {QuoteQualified(stagingTableName)} (");
             sb.AppendLine(string.Join(",\n",
-                spec.Columns.Select(c => $"  {c.Name} {c.SqlType}")));
+                spec.Columns.Select(c => $"  {QuoteIdentifier(c.Name)} {c.SqlType}")));
             sb.Append(')');
 
             await using var createCmd = conn.CreateCommand();

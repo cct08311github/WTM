@@ -1,6 +1,8 @@
 #nullable enable
 using System;
+using System.Globalization;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Etl.Models;
 
 namespace WalkingTec.Mvvm.Etl.Pipeline;
@@ -23,13 +25,15 @@ public class WatermarkStrategy
     public string TimeZone { get; }
 
     private string? _pendingValue;
+    private readonly ILogger? _logger;
 
-    public WatermarkStrategy(EtlWatermarkType type, string? column, string? currentValue, string timeZone = "UTC")
+    public WatermarkStrategy(EtlWatermarkType type, string? column, string? currentValue, string timeZone = "UTC", ILogger? logger = null)
     {
         Type = type;
         Column = column;
         CurrentValue = currentValue;
         TimeZone = timeZone;
+        _logger = logger;
     }
 
     /// <summary>
@@ -87,13 +91,40 @@ public class WatermarkStrategy
         }
         else if (Type == EtlWatermarkType.Identity)
         {
-            // DB 的 INT 欄位從 DataReader 讀出為 int，BIGINT 為 long；統一轉換為 long
-            long? idValue = maxValue switch
+            // DB 欄位型別因資料庫而異：SQL Server INT→int / BIGINT→long、
+            // Oracle NUMBER→decimal、SMALLINT→short、TINYINT→byte 等。
+            // 統一用 Convert.ToInt64 做安全型別擴展；overflow（ulong 超過 long.MaxValue
+            // 或大 decimal）和真正無法轉換的型別（string、Guid 等配置錯誤）
+            // 則記錄警告而非靜默丟失 watermark。
+            long? idValue = null;
+            try
             {
-                long l => l,
-                int i => (long)i,
-                _ => null
-            };
+                idValue = Convert.ToInt64(maxValue, CultureInfo.InvariantCulture);
+            }
+            catch (OverflowException ex)
+            {
+                _logger?.LogWarning(ex,
+                    "Identity watermark coercion overflow for column '{Column}': value {Value} (type {Type}) " +
+                    "exceeds long range. Watermark will not advance; the next run will re-process this window. " +
+                    "Consider switching to a Timestamp watermark or verifying the Identity column type.",
+                    Column, maxValue, maxValue?.GetType().FullName);
+            }
+            catch (InvalidCastException ex)
+            {
+                _logger?.LogWarning(ex,
+                    "Identity watermark coercion failed for column '{Column}': value {Value} (type {Type}) " +
+                    "cannot be converted to long. Watermark will not advance; verify EtlPipelineConfig.WatermarkColumn " +
+                    "is an integral or decimal numeric column.",
+                    Column, maxValue, maxValue?.GetType().FullName);
+            }
+            catch (FormatException ex)
+            {
+                _logger?.LogWarning(ex,
+                    "Identity watermark coercion failed for column '{Column}': value {Value} (type {Type}) " +
+                    "cannot be converted to long. Watermark will not advance; verify EtlPipelineConfig.WatermarkColumn " +
+                    "is an integral or decimal numeric column.",
+                    Column, maxValue, maxValue?.GetType().FullName);
+            }
             if (idValue.HasValue)
                 _pendingValue = JsonSerializer.Serialize(idValue.Value);
         }

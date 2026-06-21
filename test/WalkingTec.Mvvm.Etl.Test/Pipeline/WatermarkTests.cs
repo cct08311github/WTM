@@ -1,8 +1,11 @@
 #nullable enable
 using System;
+using System.Collections.Generic;
 using System.Text.Json;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Moq;
 using WalkingTec.Mvvm.Etl.Models;
 using WalkingTec.Mvvm.Etl.Pipeline;
 
@@ -153,5 +156,84 @@ public class WatermarkTests
 
         wm.UpdateFromBatchMax("not-a-number");
         wm.CommitPendingValue().Should().BeNull();
+    }
+
+    // ── #485: Broadened Identity coercion (decimal / short / byte) ──────────
+
+    [TestMethod]
+    public void Identity_decimal_column_updates_watermark()
+    {
+        // Oracle NUMBER 欄位從 DataReader 讀出為 decimal；必須正確推進 watermark
+        var wm = new WatermarkStrategy(EtlWatermarkType.Identity, "OrderId", null);
+
+        wm.UpdateFromBatchMax(42_000_000m);
+        var committed = wm.CommitPendingValue();
+
+        committed.Should().NotBeNullOrEmpty();
+        var stored = JsonSerializer.Deserialize<long>(committed!);
+        stored.Should().Be(42_000_000L);
+    }
+
+    [TestMethod]
+    public void Identity_short_column_updates_watermark()
+    {
+        // SMALLINT 欄位回傳 short；必須正確推進 watermark
+        var wm = new WatermarkStrategy(EtlWatermarkType.Identity, "SeqId", null);
+
+        wm.UpdateFromBatchMax((short)32_000);
+        var committed = wm.CommitPendingValue();
+
+        committed.Should().NotBeNullOrEmpty();
+        var stored = JsonSerializer.Deserialize<long>(committed!);
+        stored.Should().Be(32_000L);
+    }
+
+    [TestMethod]
+    public void Identity_byte_column_updates_watermark()
+    {
+        // TINYINT 欄位回傳 byte；必須正確推進 watermark
+        var wm = new WatermarkStrategy(EtlWatermarkType.Identity, "StepId", null);
+
+        wm.UpdateFromBatchMax((byte)200);
+        var committed = wm.CommitPendingValue();
+
+        committed.Should().NotBeNullOrEmpty();
+        var stored = JsonSerializer.Deserialize<long>(committed!);
+        stored.Should().Be(200L);
+    }
+
+    [TestMethod]
+    public void Identity_uncoercible_value_logs_warning_and_does_not_advance()
+    {
+        // 傳入無法轉換的值（string）應記錄 Warning 且不應推進 watermark（不崩潰）
+        var loggedMessages = new List<string>();
+        var mockLogger = new Mock<ILogger>();
+        mockLogger
+            .Setup(l => l.IsEnabled(It.IsAny<LogLevel>()))
+            .Returns(true);
+        mockLogger
+            .Setup(l => l.Log(
+                It.IsAny<LogLevel>(),
+                It.IsAny<EventId>(),
+                It.IsAny<It.IsAnyType>(),
+                It.IsAny<Exception?>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()))
+            .Callback<LogLevel, EventId, object, Exception?, Delegate>((level, _, state, _, formatter) =>
+            {
+                if (level >= LogLevel.Warning)
+                    loggedMessages.Add(formatter.DynamicInvoke(state, null) as string ?? string.Empty);
+            });
+
+        var wm = new WatermarkStrategy(EtlWatermarkType.Identity, "OrderId", null, logger: mockLogger.Object);
+
+        wm.UpdateFromBatchMax("not-a-number");
+
+        // watermark must NOT advance
+        wm.CommitPendingValue().Should().BeNull();
+
+        // a warning must have been emitted
+        loggedMessages.Should().ContainMatch(
+            "*Identity watermark coercion*",
+            "a structured warning message should be logged when the value cannot be coerced to long");
     }
 }
