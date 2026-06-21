@@ -34,6 +34,14 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+    <!--
+      Issue #393 — override vulnerable transitive native SQLite engine.
+      EF Core Sqlite pulls SQLitePCLRaw.bundle_e_sqlite3 → lib.e_sqlite3 2.1.11
+      (GHSA-2m69-gcr7-jv3q, HIGH). This direct PackageReference promotes the bundle
+      to 3.0.3 (lib.e_sqlite3 3.50.3, SQLite 3.50.3) across the whole solution,
+      which is outside the advisory's <= 2.1.11 vulnerable range. See Directory.Packages.props.
+    -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
     <PackageReference Include="Oracle.EntityFrameworkCore" />

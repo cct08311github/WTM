@@ -93,6 +93,15 @@
     -->
     <PackageVersion Include="Common.Logging" Version="3.4.1" />
     <PackageVersion Include="Common.Logging.Core" Version="3.4.1" />
+    <!--
+      Issue #393: EF Core Sqlite 10.0.4 transitively pulls SQLitePCLRaw.bundle_e_sqlite3
+      whose native SQLitePCLRaw.lib.e_sqlite3 resolved to 2.1.11 — flagged NU1903
+      (GHSA-2m69-gcr7-jv3q, HIGH: bundled SQLite engine, vulnerable range <= 2.1.11).
+      No override existed until SQLitePCLRaw shipped the 3.0.x line: bundle 3.0.3 pulls
+      lib.e_sqlite3 3.50.3 (SQLite 3.50.3), which is OUTSIDE the advisory's <= 2.1.11
+      range, clearing the NU1903. Wired via a direct PackageReference in Core.csproj.
+    -->
+    <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
 
     <!-- ===== Blazor UI component packages ===== -->
     <PackageVersion Include="BootstrapBlazor" Version="8.7.2" />
