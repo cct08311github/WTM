@@ -1965,24 +1965,6 @@ params string[] groupcode)
             return await CallAPI<string>(domainName, url, method, postdata, timeout, proxy, headers);
         }
 
-
-        private string GetServerUrl()
-        {
-            var server = ConfigInfo?.Domains.Where(x => x.Key.ToLower() == "serverpub").Select(x => x.Value).FirstOrDefault();
-            if (server == null)
-            {
-                server = ConfigInfo?.Domains.Where(x => x.Key.ToLower() == "server").Select(x => x.Value).FirstOrDefault();
-            }
-            if (server != null && string.IsNullOrEmpty(server.Address) == false)
-            {
-                return server.Address.TrimEnd('/');
-            }
-            else
-            {
-                return this.HttpContext?.Request.Scheme + "://" + this.HttpContext?.Request.Host.ToString();
-            }
-        }
-
         public void Dispose()
         {
             this._dc?.Dispose();

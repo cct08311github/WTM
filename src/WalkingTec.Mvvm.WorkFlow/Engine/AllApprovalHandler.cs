@@ -220,25 +220,6 @@ internal sealed class AllApprovalHandler : INodeKindHandler
         return fresh.ApprovedCount >= threshold;
     }
 
-    /// <summary>
-    /// Re-read the node and return the latest snapshot (WF-18 FIX-A/B helper).
-    ///
-    /// <para>The engine calls this variant when it needs the fresh
-    /// <see cref="NodeInstance.ApproverSetEpoch"/> for the completion CAS after having
-    /// incremented the advisory approval count.  The separate re-read is intentional:
-    /// the count increment was already committed so this snapshot captures both the
-    /// new count and the current epoch.</para>
-    /// </summary>
-    internal static Task<NodeInstance?> ReadFreshNodeAsync(
-        DbContext db,
-        Guid nodeInstanceId,
-        System.Threading.CancellationToken ct)
-    {
-        return db.Set<NodeInstance>()
-            .AsNoTracking()
-            .SingleOrDefaultAsync(n => n.ID == nodeInstanceId, ct)!;
-    }
-
     // ── OnCompleteAsync ───────────────────────────────────────────────────────
 
     /// <summary>

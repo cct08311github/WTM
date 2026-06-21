@@ -290,23 +290,5 @@ namespace WalkingTec.Mvvm.Mvc.Filters
             
             base.OnActionExecuting(context);
         }
-
-        private List<string> getAuthTypes(ControllerActionDescriptor ad)
-        {
-            List<string> authenticationSchemes = [];
-            if (ad.MethodInfo.IsDefined(typeof(AuthorizeAttribute), false))
-            {
-                var authorizeAttr = ad.MethodInfo.GetCustomAttributes(typeof(AuthorizeAttribute), false).FirstOrDefault() as AuthorizeAttribute;
-                if (authorizeAttr != null)
-                    authenticationSchemes = authorizeAttr.AuthenticationSchemes.Split(new char[] { ',' }, StringSplitOptions.RemoveEmptyEntries).ToList();
-            }
-            else if (ad.ControllerTypeInfo.IsDefined(typeof(AuthorizeAttribute), false))
-            {
-                var authorizeAttr = ad.ControllerTypeInfo.GetCustomAttributes(typeof(AuthorizeAttribute), false).FirstOrDefault() as AuthorizeAttribute;
-                if (authorizeAttr != null)
-                    authenticationSchemes = authorizeAttr.AuthenticationSchemes.Split(new char[] { ',' }, StringSplitOptions.RemoveEmptyEntries).ToList();
-            }
-            return authenticationSchemes;
-        }
     }
 }
