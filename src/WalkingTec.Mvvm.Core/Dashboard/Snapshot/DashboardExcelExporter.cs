@@ -34,7 +34,7 @@ internal static class DashboardExcelExporter
         if (dashboard == null) throw new ArgumentNullException(nameof(dashboard));
         if (widgetResults == null) throw new ArgumentNullException(nameof(widgetResults));
 
-        var workbook = new XSSFWorkbook();
+        using var workbook = new XSSFWorkbook();
 
         // Header cell style — bold.
         var headerStyle = workbook.CreateCellStyle();

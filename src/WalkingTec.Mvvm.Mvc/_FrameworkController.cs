@@ -720,6 +720,9 @@ namespace WalkingTec.Mvvm.Mvc
         [ActionDescription("UploadFileRoute")]
         public async Task<IActionResult> UploadImage([FromServices] WtmFileProvider fp, string sm = null, string groupName = null, string subdir = null, string extra = null, bool IsTemprory = true, string _DONOT_USE_CS = null, int? width = null, int? height = null)
         {
+            // MVC-010: reject unknown connection-string keys to prevent lateral DB reads
+            if (!IsKnownConnectionKey(_DONOT_USE_CS))
+                return JsonMore(new { Errors = "Unknown connection string key" }, StatusCodes.Status400BadRequest);
             if (width == null && height == null)
             {
                 return await Upload(fp, sm, groupName, subdir, extra, IsTemprory, _DONOT_USE_CS).ConfigureAwait(false);
@@ -740,23 +743,26 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 return JsonMore(new { Id = string.Empty, Name = string.Empty }, StatusCodes.Status400BadRequest);
             }
-            if (width == null)
+            // oimage is assigned here on every non-throw path; wrap in using so
+            // the pooled pixel buffer is released even if Mutate/SaveAsJpeg/Upload throws.
+            using (oimage)
+            using (var ms = new MemoryStream())
             {
-                width = height * oimage.Width / oimage.Height;
-            }
-            if (height == null)
-            {
-                height = width * oimage.Height / oimage.Width;
-            }
-            MemoryStream ms = new MemoryStream();
-            oimage.Mutate(x => x.Resize(width.Value, height.Value));
-            oimage.SaveAsJpeg(ms);
-            ms.Position = 0;
+                if (width == null)
+                {
+                    width = height * oimage.Width / oimage.Height;
+                }
+                if (height == null)
+                {
+                    height = width * oimage.Height / oimage.Width;
+                }
+                oimage.Mutate(x => x.Resize(width.Value, height.Value));
+                oimage.SaveAsJpeg(ms);
+                ms.Position = 0;
 
-            var file = fp.Upload(FileData.FileName, ms.Length, ms, groupName, subdir, extra, sm, Wtm.CreateDC(cskey: _DONOT_USE_CS));
-            oimage.Dispose();
-            ms.Dispose();
-            return JsonMore(new { Id = file.GetID(), Name = file.FileName });
+                var file = fp.Upload(FileData.FileName, ms.Length, ms, groupName, subdir, extra, sm, Wtm.CreateDC(cskey: _DONOT_USE_CS));
+                return JsonMore(new { Id = file.GetID(), Name = file.FileName });
+            }
         }
 
         [HttpPost]
