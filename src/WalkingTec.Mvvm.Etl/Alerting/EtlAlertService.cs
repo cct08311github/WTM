@@ -217,19 +217,36 @@ public class EtlAlertService : IEtlAlertService
         }
 
         // L3 defence-in-depth: sanitize error message before it leaves the system (#484).
-        // Mirrors the sanitization already applied in SendWebhookCardAsync — strips
-        // connection strings / secrets from the stored ErrorMessage before egress.
-        var sanitizedError = string.IsNullOrWhiteSpace(runLog.ErrorMessage)
-            ? null
-            : Pipeline.EtlErrorSanitizer.SanitizeRaw(runLog.ErrorMessage);
+        // Build a sanitized RunLog copy (same pattern as SendEmailAsync) so that
+        // BuildAlertMessage — which appends runLog.ErrorMessage verbatim into the `text`
+        // field rendered by Slack/Teams/DingTalk — also emits the redacted value.
+        // Both `text` and `errorMessage` payload fields are derived from this copy.
+        var sanitizedRunLog = string.IsNullOrWhiteSpace(runLog.ErrorMessage)
+            ? runLog
+            : new EtlRunLog
+            {
+                JobId             = runLog.JobId,
+                Trigger           = runLog.Trigger,
+                Result            = runLog.Result,
+                ErrorMessage      = Pipeline.EtlErrorSanitizer.SanitizeRaw(runLog.ErrorMessage),
+                StartedAt         = runLog.StartedAt,
+                FinishedAt        = runLog.FinishedAt,
+                ExtractedRows     = runLog.ExtractedRows,
+                LoadedRows        = runLog.LoadedRows,
+                ErrorRows         = runLog.ErrorRows,
+                ElapsedMs         = runLog.ElapsedMs,
+                WatermarkSnapshot = runLog.WatermarkSnapshot,
+            };
 
         var payload = new
         {
-            text = messageOverride ?? BuildAlertMessage(jobDef, runLog),
+            text = messageOverride ?? BuildAlertMessage(jobDef, sanitizedRunLog),
             jobName = jobDef.Name,
             jobId = jobDef.ID,
             consecutiveFailures = jobDef.ConsecutiveFailureCount,
-            errorMessage = sanitizedError,
+            errorMessage = string.IsNullOrWhiteSpace(sanitizedRunLog.ErrorMessage)
+                ? null
+                : sanitizedRunLog.ErrorMessage,
             startedAt = runLog.StartedAt,
             finishedAt = runLog.FinishedAt,
         };
@@ -245,7 +262,7 @@ public class EtlAlertService : IEtlAlertService
         try
         {
             var response = await client
-                .PostAsync(jobDef.AlertWebhookUrl, content, ct)
+                .PostAsync(webhookUrl, content, ct)
                 .ConfigureAwait(false);
 
             if (!response.IsSuccessStatusCode)
