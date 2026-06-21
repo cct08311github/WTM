@@ -359,8 +359,34 @@ internal sealed class ParallelGatewayHandler : INodeKindHandler
             branchNodeDefs.Add(branchDef);
         }
 
+        // #483 Provider-independent idempotency pre-check: query which branch NodeKeys are
+        // already present for this (InstanceId, Generation) before adding any rows.
+        // This closes the NULL-TenantCode duplicate window: standard-SQL providers (PostgreSQL,
+        // MySQL, SQLite, Oracle) treat NULL as DISTINCT in unique indexes, so the UNIQUE index
+        // on (TenantCode, InstanceId, NodeKey, Generation) does NOT fire when TenantCode IS NULL
+        // and a concurrent loser tries to re-mint the same branches.  SqlServer is covered by
+        // the catch below, but every other provider needs this pre-check.
+        // No IgnoreQueryFilters here — the surrounding Join pre-check (alreadyExists above) and
+        // all NodeInstance reads in this handler use plain AsNoTracking().  These are per-request
+        // gateway mints (not a cross-tenant system sweep), so global query filters must apply.
+        var branchNodeKeySet = branchNodeDefs.Count > 0
+            ? new HashSet<string>(
+                await db.Set<NodeInstance>()
+                    .AsNoTracking()
+                    .Where(n => n.InstanceId == instance.ID
+                             && n.Generation == instance.Generation
+                             && branchNodeDefs.Select(b => b.NodeKey).Contains(n.NodeKey))
+                    .Select(n => n.NodeKey)
+                    .ToListAsync(ct),
+                StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var branchDef in branchNodeDefs)
         {
+            // Skip branches that already exist — idempotent regardless of TenantCode nullability.
+            if (branchNodeKeySet.Contains(branchDef.NodeKey))
+                continue;
+
             var branchNode = new NodeInstance
             {
                 ID                 = Guid.NewGuid(),
@@ -425,10 +451,53 @@ internal sealed class ParallelGatewayHandler : INodeKindHandler
                 }
             }
 
-            await db.SaveChangesAsync(ct);
-
-            // Pin JoinExpectedArrivals on the Join NodeInstance (now guaranteed to exist).
+            // #483 Bug #8: pin JoinExpectedArrivals in-memory so it's committed atomically
+            // with the Join NodeInstance row — eliminates the two-commit stranding window.
+            // Track whether the in-memory pin was applied so we can skip the post-save
+            // ExecuteUpdateAsync on the normal (fresh-mint) path.
+            bool joinPinnedInMemory = false;
             if (!string.IsNullOrWhiteSpace(joinNodeKey))
+            {
+                var joinEntry = db.ChangeTracker.Entries<NodeInstance>()
+                    .FirstOrDefault(e => e.State == Microsoft.EntityFrameworkCore.EntityState.Added
+                                      && string.Equals(e.Entity.NodeKey, joinNodeKey, StringComparison.Ordinal));
+                if (joinEntry is not null)
+                {
+                    joinEntry.Entity.JoinExpectedArrivals = branchNodeDefs.Count;
+                    joinPinnedInMemory = true;
+                }
+            }
+
+            try
+            {
+                await db.SaveChangesAsync(ct);
+            }
+            catch (DbUpdateException dbEx) when (
+                dbEx.InnerException?.Message.Contains("unique", StringComparison.OrdinalIgnoreCase) == true
+                || dbEx.InnerException?.Message.Contains("duplicate", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                // #483 Bug #4: idempotent no-op — a concurrent winner already minted these branches.
+                // Detach all Added NodeInstance entities so the context stays usable.
+                var addedEntries = db.ChangeTracker.Entries<NodeInstance>()
+                    .Where(e => e.State == Microsoft.EntityFrameworkCore.EntityState.Added)
+                    .ToList();
+                foreach (var e in addedEntries)
+                    e.State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+                _logger.LogDebug(
+                    "ParallelGatewayHandler: unique-constraint collision for instance {InstanceId} node '{NodeKey}' — " +
+                    "concurrent winner already minted branches. No-op.",
+                    instance.ID, node.NodeKey);
+                return;
+            }
+
+            // Pin JoinExpectedArrivals via ExecuteUpdateAsync only when the in-memory pin could
+            // NOT be applied — i.e. the Join NodeInstance already existed in the DB before this
+            // gateway ran (crash-recovery / re-drive path where joinEntry was null above).
+            // On the normal fresh-mint path (joinPinnedInMemory == true), the count was already
+            // committed atomically with the Join row in the SaveChangesAsync above, so issuing
+            // an additional ExecuteUpdateAsync would bump RowVer unnecessarily on a hot row that
+            // all branches CAS on.
+            if (!string.IsNullOrWhiteSpace(joinNodeKey) && !joinPinnedInMemory)
             {
                 await PinJoinExpectedArrivalsAsync(db, instance, joinNodeKey!, branchNodeDefs.Count, ct);
             }
@@ -572,8 +641,32 @@ internal sealed class InclusiveGatewayHandler : INodeKindHandler
             return;
         }
 
+        // #483 Provider-independent idempotency pre-check: query which branch NodeKeys are
+        // already present for this (InstanceId, Generation) before adding any rows.
+        // Same rationale as ParallelGatewayHandler: NULL-TenantCode deployments on PostgreSQL,
+        // MySQL, SQLite, and Oracle will NOT see a unique-constraint violation from the catch
+        // below because those providers treat NULL as DISTINCT in unique indexes.  This pre-check
+        // closes that window without relying on the index.
+        // No IgnoreQueryFilters — matches the surrounding Join alreadyExists pattern (plain
+        // AsNoTracking, no cross-filter bypass needed for per-request gateway mints).
+        var mintedBranchKeySet = mintedBranches.Count > 0
+            ? new HashSet<string>(
+                await db.Set<NodeInstance>()
+                    .AsNoTracking()
+                    .Where(n => n.InstanceId == instance.ID
+                             && n.Generation == instance.Generation
+                             && mintedBranches.Select(b => b.NodeKey).Contains(n.NodeKey))
+                    .Select(n => n.NodeKey)
+                    .ToListAsync(ct),
+                StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var branchDef in mintedBranches)
         {
+            // Skip branches that already exist — idempotent regardless of TenantCode nullability.
+            if (mintedBranchKeySet.Contains(branchDef.NodeKey))
+                continue;
+
             var branchNode = new NodeInstance
             {
                 ID             = Guid.NewGuid(),
@@ -631,9 +724,52 @@ internal sealed class InclusiveGatewayHandler : INodeKindHandler
             }
         }
 
-        await db.SaveChangesAsync(ct);
-
+        // #483 Bug #8: pin JoinExpectedArrivals in-memory so it's committed atomically
+        // with the Join NodeInstance row — eliminates the two-commit stranding window.
+        // Track whether the in-memory pin was applied so we can skip the post-save
+        // ExecuteUpdateAsync on the normal (fresh-mint) path.
+        bool joinPinnedInMemory = false;
         if (!string.IsNullOrWhiteSpace(joinNodeKey))
+        {
+            var joinEntry = db.ChangeTracker.Entries<NodeInstance>()
+                .FirstOrDefault(e => e.State == Microsoft.EntityFrameworkCore.EntityState.Added
+                                  && string.Equals(e.Entity.NodeKey, joinNodeKey, StringComparison.Ordinal));
+            if (joinEntry is not null)
+            {
+                joinEntry.Entity.JoinExpectedArrivals = mintedBranches.Count;
+                joinPinnedInMemory = true;
+            }
+        }
+
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException dbEx) when (
+            dbEx.InnerException?.Message.Contains("unique", StringComparison.OrdinalIgnoreCase) == true
+            || dbEx.InnerException?.Message.Contains("duplicate", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            // #483 Bug #4: idempotent no-op — a concurrent winner already minted these branches.
+            var addedEntries = db.ChangeTracker.Entries<NodeInstance>()
+                .Where(e => e.State == Microsoft.EntityFrameworkCore.EntityState.Added)
+                .ToList();
+            foreach (var e in addedEntries)
+                e.State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+            _logger.LogDebug(
+                "InclusiveGatewayHandler: unique-constraint collision for instance {InstanceId} node '{NodeKey}' — " +
+                "concurrent winner already minted branches. No-op.",
+                instance.ID, node.NodeKey);
+            return;
+        }
+
+        // Pin JoinExpectedArrivals via ExecuteUpdateAsync only when the in-memory pin could
+        // NOT be applied — i.e. the Join NodeInstance already existed in the DB before this
+        // gateway ran (crash-recovery / re-drive path where joinEntry was null above).
+        // On the normal fresh-mint path (joinPinnedInMemory == true), the count was already
+        // committed atomically with the Join row in the SaveChangesAsync above, so issuing
+        // an additional ExecuteUpdateAsync would bump RowVer unnecessarily on a hot row that
+        // all branches CAS on.
+        if (!string.IsNullOrWhiteSpace(joinNodeKey) && !joinPinnedInMemory)
         {
             await ParallelGatewayHandler.PinJoinExpectedArrivalsAsync(
                 db, instance, joinNodeKey!, mintedBranches.Count, ct);

@@ -31,6 +31,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.RegularExpressions;
 using System.Xml;
 using WalkingTec.Mvvm.WorkFlow.Engine.Routing;
@@ -201,6 +202,19 @@ public static class WorkflowGraphValidator
                 if (!isJoin)
                     return GraphValidationResult.Fail(GraphValidationError.GatewayDanglingJoinNodeKey,
                         $"Gateway node '{node.NodeKey}' joinNodeKey '{node.JoinNodeKey}' does not reference an existing node.");
+            }
+
+            // #483 L4: gateway must have at least one outgoing transition.
+            // A gateway with zero branches will strand the instance at runtime.
+            if (node.Kind is NodeKind.ParallelGateway or NodeKind.InclusiveGateway)
+            {
+                bool hasOutgoing = graph.Transitions != null
+                    && graph.Transitions.Any(t => string.Equals(t.From, node.NodeKey, StringComparison.Ordinal));
+                if (!hasOutgoing)
+                    return GraphValidationResult.Fail(GraphValidationError.GatewayNoOutgoingTransitions,
+                        $"Gateway node '{node.NodeKey}' has no outgoing transitions. " +
+                        "A ParallelGateway or InclusiveGateway must have at least one outgoing transition " +
+                        "or it will strand the workflow instance at runtime.");
             }
 
             // WF-17 check 12: InclusiveGateway outgoing transitions must carry conditions.
