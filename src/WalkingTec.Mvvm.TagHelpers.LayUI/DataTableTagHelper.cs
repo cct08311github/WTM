@@ -769,7 +769,7 @@ layui.use(['table'], function(){{
 $.extend(true,{Id}defaultfilter ,{Id}option);
     {(EnableHeaderFilter ? $"wtmHeaderFilter.init('{Id}');" : "")}
     {TableJSVar} = table.render({Id}option);
-    {(UseLocalData ? $@"ff.LoadLocalData(""{Id}"",{Id}option,{ListVM.GetDataJson().Replace("<script>", "$$script$$").Replace("</script>", "$$#script$$")},{string.IsNullOrEmpty(ListVM.DetailGridPrix).ToString().ToLower()}); " : $@"
+    {(UseLocalData ? $@"ff.LoadLocalData(""{Id}"",{Id}option,{EscapeLocalDataJson(ListVM.GetDataJson())},{string.IsNullOrEmpty(ListVM.DetailGridPrix).ToString().ToLower()}); " : $@"
     {(page ? $"if (document.body.clientWidth< 500) {{ {Id}option.page.layout = ['count', 'prev', 'page', 'next']; {Id}option.page.groups= 1;}} " : "")}
 {(AutoSearch ? $@"
 setTimeout(function(){{
@@ -1430,6 +1430,31 @@ var isPost = false;
                 set.Add(part);
 
             return set.Count > 0 ? set : null;
+        }
+
+        /// <summary>
+        /// Escapes a JSON string so it is safe to embed inside an HTML &lt;script&gt; block.
+        /// Replaces every '&amp;', '&lt;', and '&gt;' with their JSON Unicode escape equivalents
+        /// (&amp;amp;, &lt;, &gt;) — i.e. <c>&</c>, <c><</c>, <c>></c>.
+        /// The escapes are valid JSON (RFC 8259 §7 allows \uXXXX in
+        /// string values) and JavaScript decodes them back to the literal characters when the JSON
+        /// is parsed, so HTML in grid-cell values renders correctly.  Because the raw characters
+        /// never appear in the script source the HTML parser cannot close the script element early
+        /// regardless of the case variant used (&lt;/SCRIPT&gt;, &lt;/Script&gt;, etc.).
+        /// Fix for issue #490 (stored-XSS via case-variant &lt;/SCRIPT&gt; in UseLocalData grid JSON).
+        /// </summary>
+        public static string EscapeLocalDataJson(string json)
+        {
+            // Escape '&' first by convention; the \\uXXXX outputs are disjoint from &,<,> so order does not affect correctness.
+            // \\u0026 / \\u003c / \\u003e are valid JSON Unicode escapes (RFC 8259 §7).
+            // JavaScript's inline literal parser decodes them back to '&', '<', '>' before the
+            // cell-HTML is rendered, so grid content is unaffected.  Because the literal characters
+            // never appear in the script source, the HTML parser cannot close the <script> element
+            // early regardless of case (</SCRIPT>, </Script>, etc.) — fix for issue #490.
+            return json
+                .Replace("&", "\\u0026")
+                .Replace("<", "\\u003c")
+                .Replace(">", "\\u003e");
         }
     }
 }

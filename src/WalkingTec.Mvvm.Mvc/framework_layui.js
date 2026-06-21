@@ -1463,13 +1463,17 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
     },
 
     LoadLocalData: function (gridid, option, datas, isnormaltable) {
+        // Issue #490: The $$script$$/$$#script$$ placeholder reversal was removed.
+        // The server-side EscapeLocalDataJson helper now encodes '<' / '>' / '&' as
+        // < / > / & Unicode escapes inside the JSON, which the JS
+        // engine decodes automatically.  Cell HTML is therefore delivered correctly
+        // without any client-side string surgery here.
         var re = /(<input .*?)\s*\/>/ig;
         var re2 = /(<select .*?)\s*>(.*?<\/select>)/ig;
         for (var i = 0; i < datas.length; i++) {
             var data = datas[i];
             for (val in data) {
                 if (typeof (data[val]) == 'string') {
-                    data[val] = data[val].replace(/[$]{2}script[$]{2}/img, "<script>").replace(/[$]{2}#script[$]{2}/img, "</script>");
                     if (isnormaltable === false) {
                         data[val] = data[val].replace(re, "$1 onchange=\"ff.gridcellchange(this,'" + gridid + "'," + i + ",'" + val + "',0)\" />");
                         data[val] = data[val].replace(re2, "$1 onchange=\"ff.gridcellchange(this,'" + gridid + "'," + i + ",'" + val + "',1)\" >$2");

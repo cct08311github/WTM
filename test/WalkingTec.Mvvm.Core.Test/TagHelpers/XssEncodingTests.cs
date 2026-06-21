@@ -533,4 +533,81 @@ public class XssEncodingTests
         Assert.IsFalse(encoded.Contains("'>"),
             "Slider hidden input value must HtmlEncode attribute-breaking chars");
     }
+
+    // ── Issue #490: EscapeLocalDataJson — UseLocalData grid JSON script-breakout ──
+
+    [TestMethod]
+    public void EscapeLocalDataJson_LowercaseCloseScript_IsEscaped()
+    {
+        // The baseline: lowercase </script> inside JSON must not appear in the output.
+        var json = "[{\"Name\":\"</script><script>alert(1)</script>\"}]";
+        var result = DataTableTagHelper.EscapeLocalDataJson(json);
+        Assert.IsFalse(result.Contains("</script>"),
+            "EscapeLocalDataJson must remove raw lowercase </script> from the output");
+        Assert.IsFalse(result.Contains("<script>"),
+            "EscapeLocalDataJson must remove raw lowercase <script> from the output");
+    }
+
+    [TestMethod]
+    public void EscapeLocalDataJson_UppercaseCloseScript_IsEscaped()
+    {
+        // Issue #490: the old String.Replace was case-sensitive and missed </SCRIPT>.
+        // The new Unicode-escape approach is case-independent because it escapes '<'.
+        var json = "[{\"Name\":\"</SCRIPT><script>alert(1)</script>\"}]";
+        var result = DataTableTagHelper.EscapeLocalDataJson(json);
+        Assert.IsFalse(result.Contains("</SCRIPT>"),
+            "EscapeLocalDataJson must escape uppercase </SCRIPT> (was bypassing old Replace)");
+        Assert.IsFalse(result.Contains("<script>"),
+            "EscapeLocalDataJson must escape lowercase <script> too");
+    }
+
+    [TestMethod]
+    public void EscapeLocalDataJson_MixedCaseCloseScript_IsEscaped()
+    {
+        // Verify mixed-case variants like </Script> are also neutralised.
+        var json = "[{\"Payload\":\"</Script>alert\"}]";
+        var result = DataTableTagHelper.EscapeLocalDataJson(json);
+        Assert.IsFalse(result.Contains("</Script>"),
+            "EscapeLocalDataJson must escape mixed-case </Script> variant");
+    }
+
+    [TestMethod]
+    public void EscapeLocalDataJson_UsesUnicodeEscapes_NotHtmlEntities()
+    {
+        // The replacement must emit JSON-valid \\uXXXX escapes, NOT HTML entities
+        // (HTML entities like &lt; would appear as literal text in JS, not decoded to '<').
+        var json = "[{\"Val\":\"<test>\"}]";
+        var result = DataTableTagHelper.EscapeLocalDataJson(json);
+        StringAssert.Contains(result, "\\u003c",
+            "< must be replaced with JSON Unicode escape \\u003c");
+        StringAssert.Contains(result, "\\u003e",
+            "> must be replaced with JSON Unicode escape \\u003e");
+        Assert.IsFalse(result.Contains("&lt;"),
+            "HTML entity &lt; must NOT be used — it would appear as literal text in JS");
+        Assert.IsFalse(result.Contains("&gt;"),
+            "HTML entity &gt; must NOT be used — it would appear as literal text in JS");
+    }
+
+    [TestMethod]
+    public void EscapeLocalDataJson_AmpersandBecomesUnicodeEscape()
+    {
+        // & must be replaced with \\u0026; the \\uXXXX outputs are disjoint from &,<,>
+        // so the Replace order does not affect correctness.
+        var json = "[{\"Val\":\"a&b\"}]";
+        var result = DataTableTagHelper.EscapeLocalDataJson(json);
+        StringAssert.Contains(result, "\\u0026",
+            "& must be replaced with JSON Unicode escape \\u0026");
+        Assert.IsFalse(result.Contains("&amp;"),
+            "& must not be replaced with HTML entity &amp;");
+    }
+
+    [TestMethod]
+    public void EscapeLocalDataJson_PlainText_IsUnchanged()
+    {
+        // Data that contains no angle brackets or ampersands must round-trip intact.
+        var json = "[{\"Name\":\"John\",\"Age\":42}]";
+        var result = DataTableTagHelper.EscapeLocalDataJson(json);
+        Assert.AreEqual(json, result,
+            "Plain JSON with no special characters must not be altered");
+    }
 }
