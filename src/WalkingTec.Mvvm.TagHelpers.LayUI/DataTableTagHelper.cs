@@ -1308,15 +1308,15 @@ var isPost = false;
             string random,
             string? currencyCodeField = null)
         {
-            // XSS safety: all user-data values are routed through ff.EscapeText (plain text)
-            // or used as a URL attribute that is HTML-encoded by the img src — no raw concat.
+            // XSS safety: text-context values use ff.EscapeText; attribute-context values (src, lay-percent)
+            // use ff.EscapeAttr which additionally encodes " and ' to prevent quote-breakout (#482).
             var escapedField = JavaScriptEncoder.Default.Encode(field);
 
             string cellContent = richType switch
             {
                 GridRichColumnTypeEnum.Progress =>
-                    // layui progress bar: value 0-100
-                    $"'<div class=\"layui-progress\" lay-filter=\"\"><div class=\"layui-progress-bar\" lay-percent=\"'+ff.EscapeText(d.{escapedField})+'%\"></div></div>'",
+                    // layui progress bar: value 0-100; lay-percent is a double-quoted attribute — use EscapeAttr
+                    $"'<div class=\"layui-progress\" lay-filter=\"\"><div class=\"layui-progress-bar\" lay-percent=\"'+ff.EscapeAttr(d.{escapedField})+'%\"></div></div>'",
 
                 GridRichColumnTypeEnum.Tag =>
                     // layui badge/tag; optional colour class
@@ -1325,8 +1325,8 @@ var isPost = false;
                         : $"'<span class=\"layui-badge layui-bg-{JavaScriptEncoder.Default.Encode(tagColor)}\">'+ff.EscapeText(d.{escapedField})+'</span>'",
 
                 GridRichColumnTypeEnum.Image =>
-                    // img thumbnail — src is HTML-encoded automatically by the browser attribute
-                    $"(d.{escapedField}?'<img src=\"'+ff.EscapeText(d.{escapedField})+'\" style=\"width:{imageSize ?? 32}px;height:{imageSize ?? 32}px;object-fit:cover;\"/>' : '')",
+                    // img thumbnail — src is a double-quoted attribute context; use EscapeAttr to prevent quote breakout XSS (#482)
+                    $"(d.{escapedField}?'<img src=\"'+ff.EscapeAttr(d.{escapedField})+'\" style=\"width:{imageSize ?? 32}px;height:{imageSize ?? 32}px;object-fit:cover;\"/>' : '')",
 
                 GridRichColumnTypeEnum.Currency =>
                     BuildCurrencyTemplate(escapedField, currencyFormat, currencyCodeField),

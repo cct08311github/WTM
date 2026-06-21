@@ -1,5 +1,10 @@
 # 更新日志
 
+## [Unreleased]
+
+### Security
+- **#482** Grid `Image` and `Progress` rich-column templates now use attribute-safe encoding (`ff.EscapeAttr`) to prevent quote-breakout stored XSS in `src` and `lay-percent` attributes
+
 ## [10.13.5] - 2026-06-21
 
 Security + maintenance. Clears the last standing NU1903 (#393) now that an upstream fix exists — the vulnerable bundled SQLite engine is no longer pulled into any package. Also ships four downstream-reported (BMS-integration) regressions against 10.13.1 that had already merged to the branch (#461–#464), plus a CI reliability change (#473).

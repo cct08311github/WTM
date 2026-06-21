@@ -32,15 +32,18 @@ public class GridRichColumnTests
     }
 
     [TestMethod]
-    public void GetRichTemplate_Progress_UsesEscapeText_ForXss()
+    public void GetRichTemplate_Progress_UsesEscapeAttr_ForAttributeXss()
     {
-        // The progress bar value must be routed through ff.EscapeText, not raw concat.
+        // lay-percent is a double-quoted HTML attribute — must use ff.EscapeAttr (not EscapeText)
+        // to prevent quote-breakout XSS (#482). EscapeText alone does not encode " or '.
         var tmpl = DataTableTagHelper.GetRichTemplate(
             "Score", GridRichColumnTypeEnum.Progress,
             null, null, null, "r1");
 
-        tmpl.Should().Contain("ff.EscapeText(d.Score)",
-            "Progress value must be XSS-encoded before embedding in template");
+        tmpl.Should().Contain("ff.EscapeAttr(d.Score)",
+            "Progress lay-percent attribute value must use ff.EscapeAttr to prevent quote-breakout XSS (#482)");
+        tmpl.Should().NotContain("ff.EscapeText(d.Score)",
+            "Progress must not use EscapeText in attribute context — it does not encode double-quotes");
     }
 
     // ── GetRichTemplate — Tag ─────────────────────────────────────────────────
@@ -104,16 +107,19 @@ public class GridRichColumnTests
     }
 
     [TestMethod]
-    public void GetRichTemplate_Image_UsesEscapeText_ForSrcXss()
+    public void GetRichTemplate_Image_UsesEscapeAttr_ForSrcAttributeXss()
     {
-        // The img src must be routed through ff.EscapeText so a malicious
-        // URL payload is HTML-encoded and cannot break out of the attribute.
+        // img src is a double-quoted HTML attribute — must use ff.EscapeAttr (not EscapeText)
+        // to prevent quote-breakout XSS. Payload: x" onerror="alert(1) — without &quot; encoding
+        // a double-quote in the value breaks out of the src attribute (#482).
         var tmpl = DataTableTagHelper.GetRichTemplate(
             "Photo", GridRichColumnTypeEnum.Image,
             null, null, null, "r3");
 
-        tmpl.Should().Contain("ff.EscapeText(d.Photo)",
-            "Image src must be XSS-encoded via ff.EscapeText");
+        tmpl.Should().Contain("ff.EscapeAttr(d.Photo)",
+            "Image src attribute value must use ff.EscapeAttr to prevent quote-breakout XSS (#482)");
+        tmpl.Should().NotContain("ff.EscapeText(d.Photo)",
+            "Image src must not use EscapeText — it does not encode double-quotes");
     }
 
     [TestMethod]
