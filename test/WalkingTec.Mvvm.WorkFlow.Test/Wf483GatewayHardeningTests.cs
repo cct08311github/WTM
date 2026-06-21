@@ -343,6 +343,134 @@ public class Wf483GatewayHardeningTests : IDisposable
             "T_GW_4: JoinExpectedArrivals must remain 3 — loser catch path must not re-pin it.");
     }
 
+    // ── T_GW_5: NULL TenantCode — pre-check provides idempotency ─────────────────
+
+    /// <summary>
+    /// T_GW_5: Branch-mint is idempotent when TenantCode is NULL on SQLite shared-memory,
+    /// where the UNIQUE index on (TenantCode, InstanceId, NodeKey, Generation) does NOT fire
+    /// for NULL values (SQL standard — NULL is DISTINCT from NULL in unique indexes on SQLite,
+    /// PostgreSQL, MySQL, Oracle).
+    ///
+    /// <para>Strategy: call <see cref="ParallelGatewayHandler.OnEnterAsync"/> twice in
+    /// sequence for the same instance/generation with <c>tenantCode = null</c>.
+    /// A fresh <see cref="NodeHandlerContext"/> and <see cref="DbContext"/> is used for the
+    /// second call so the second invocation has no EF change-tracker memory of the first.
+    /// Because the unique index does NOT fire (NULL != NULL), the catch block is NEVER
+    /// reached — the pre-check (reading existing NodeKeys before Add) is the ONLY guard.
+    /// Asserts: exactly N branch NodeInstances (not 2N) and one Join with
+    /// JoinExpectedArrivals == N, no exception.</para>
+    /// </summary>
+    [TestMethod]
+    public async Task T_GW_5_ParallelGateway_NullTenantCode_PreCheck_ProvidesIdempotency()
+    {
+        // Build and seed the graph.
+        var graphJson = AndFork3BranchGraph();
+        var graph     = WorkflowGraphSerializer.Deserialize(graphJson);
+        var forkDef   = graph.Nodes.First(n => n.NodeKey == "fork");
+
+        // Use null TenantCode — this is the vulnerable case for the unique index.
+        const string? tenantCode = null;
+
+        // Seed a ProcessInstance with tenantCode = null.
+        Guid instanceId;
+        await using (var seed = MakeContext())
+        {
+            await SeedVersionAsync(seed, graphJson, tenantCode);
+
+            var inst = new ProcessInstance
+            {
+                ID                  = Guid.NewGuid(),
+                State               = InstanceState.Running,
+                RowVer              = 0,
+                InitiatorITCode     = "gw5_user",
+                DefinitionVersionId = Guid.NewGuid(),
+                IsValid             = true,
+                TenantCode          = tenantCode,
+                Generation          = 0,
+                NextSeq             = 1,
+            };
+            seed.Set<ProcessInstance>().Add(inst);
+            await seed.SaveChangesAsync();
+            instanceId = inst.ID;
+        }
+
+        // Seed the fork NodeInstance itself (the gateway node that the handler is invoked for).
+        await using (var seed2 = MakeContext())
+        {
+            seed2.Set<NodeInstance>().Add(new NodeInstance
+            {
+                ID          = Guid.NewGuid(),
+                TenantCode  = tenantCode,
+                InstanceId  = instanceId,
+                NodeKey     = "fork",
+                NodeKind    = NodeKind.ParallelGateway,
+                State       = NodeState.Pending,
+                Generation  = 0,
+                RowVer      = 0,
+            });
+            await seed2.SaveChangesAsync();
+        }
+
+        var handler = new ParallelGatewayHandler(NullLogger<ParallelGatewayHandler>.Instance);
+
+        // ── First call ───────────────────────────────────────────────────────────
+        await using var db1 = MakeContext();
+        var processInst1 = await db1.Set<ProcessInstance>().AsNoTracking()
+            .SingleAsync(p => p.ID == instanceId);
+        var forkInst1 = await db1.Set<NodeInstance>().AsNoTracking()
+            .FirstAsync(n => n.InstanceId == instanceId && n.NodeKey == "fork");
+
+        var ctx1 = new NodeHandlerContext
+        {
+            NodeDef           = forkDef,
+            NodeInstance      = forkInst1,
+            ProcessInstance   = processInst1,
+            Graph             = graph,
+            Db                = db1,
+            CancellationToken = CancellationToken.None,
+        };
+        await handler.OnEnterAsync(ctx1);   // must not throw
+
+        // ── Second call (fresh DbContext — no change-tracker memory of first call) ──
+        await using var db2 = MakeContext();
+        var processInst2 = await db2.Set<ProcessInstance>().AsNoTracking()
+            .SingleAsync(p => p.ID == instanceId);
+        var forkInst2 = await db2.Set<NodeInstance>().AsNoTracking()
+            .FirstAsync(n => n.InstanceId == instanceId && n.NodeKey == "fork");
+
+        var ctx2 = new NodeHandlerContext
+        {
+            NodeDef           = forkDef,
+            NodeInstance      = forkInst2,
+            ProcessInstance   = processInst2,
+            Graph             = graph,
+            Db                = db2,
+            CancellationToken = CancellationToken.None,
+        };
+        // Must NOT throw — the pre-check (not the unique-index catch) is the guard here.
+        await handler.OnEnterAsync(ctx2);
+
+        // ── Assertions ────────────────────────────────────────────────────────────
+        await using var verify = MakeContext();
+
+        // Exactly 3 branch NodeInstances (not 6).
+        int branchCount = await verify.Set<NodeInstance>()
+            .CountAsync(n => n.InstanceId == instanceId
+                          && n.NodeKey    != "fork"
+                          && n.NodeKind   != NodeKind.Join);
+        Assert.AreEqual(3, branchCount,
+            "T_GW_5: must have exactly 3 branch NodeInstances (not 2N=6) — pre-check provides idempotency for NULL TenantCode.");
+
+        // Exactly one Join NodeInstance with JoinExpectedArrivals == 3.
+        var join = await verify.Set<NodeInstance>()
+            .AsNoTracking()
+            .FirstOrDefaultAsync(n => n.InstanceId == instanceId && n.NodeKind == NodeKind.Join);
+        Assert.IsNotNull(join,
+            "T_GW_5: Join NodeInstance must exist.");
+        Assert.AreEqual(3, join!.JoinExpectedArrivals,
+            "T_GW_5: JoinExpectedArrivals must be 3 — not doubled by the second idempotent call.");
+    }
+
     // ── Graph builder helpers ─────────────────────────────────────────────────────
 
     private static string AndFork3BranchGraph()

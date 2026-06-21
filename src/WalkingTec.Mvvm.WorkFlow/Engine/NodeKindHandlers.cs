@@ -359,8 +359,34 @@ internal sealed class ParallelGatewayHandler : INodeKindHandler
             branchNodeDefs.Add(branchDef);
         }
 
+        // #483 Provider-independent idempotency pre-check: query which branch NodeKeys are
+        // already present for this (InstanceId, Generation) before adding any rows.
+        // This closes the NULL-TenantCode duplicate window: standard-SQL providers (PostgreSQL,
+        // MySQL, SQLite, Oracle) treat NULL as DISTINCT in unique indexes, so the UNIQUE index
+        // on (TenantCode, InstanceId, NodeKey, Generation) does NOT fire when TenantCode IS NULL
+        // and a concurrent loser tries to re-mint the same branches.  SqlServer is covered by
+        // the catch below, but every other provider needs this pre-check.
+        // No IgnoreQueryFilters here — the surrounding Join pre-check (alreadyExists above) and
+        // all NodeInstance reads in this handler use plain AsNoTracking().  These are per-request
+        // gateway mints (not a cross-tenant system sweep), so global query filters must apply.
+        var branchNodeKeySet = branchNodeDefs.Count > 0
+            ? new HashSet<string>(
+                await db.Set<NodeInstance>()
+                    .AsNoTracking()
+                    .Where(n => n.InstanceId == instance.ID
+                             && n.Generation == instance.Generation
+                             && branchNodeDefs.Select(b => b.NodeKey).Contains(n.NodeKey))
+                    .Select(n => n.NodeKey)
+                    .ToListAsync(ct),
+                StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var branchDef in branchNodeDefs)
         {
+            // Skip branches that already exist — idempotent regardless of TenantCode nullability.
+            if (branchNodeKeySet.Contains(branchDef.NodeKey))
+                continue;
+
             var branchNode = new NodeInstance
             {
                 ID                 = Guid.NewGuid(),
@@ -615,8 +641,32 @@ internal sealed class InclusiveGatewayHandler : INodeKindHandler
             return;
         }
 
+        // #483 Provider-independent idempotency pre-check: query which branch NodeKeys are
+        // already present for this (InstanceId, Generation) before adding any rows.
+        // Same rationale as ParallelGatewayHandler: NULL-TenantCode deployments on PostgreSQL,
+        // MySQL, SQLite, and Oracle will NOT see a unique-constraint violation from the catch
+        // below because those providers treat NULL as DISTINCT in unique indexes.  This pre-check
+        // closes that window without relying on the index.
+        // No IgnoreQueryFilters — matches the surrounding Join alreadyExists pattern (plain
+        // AsNoTracking, no cross-filter bypass needed for per-request gateway mints).
+        var mintedBranchKeySet = mintedBranches.Count > 0
+            ? new HashSet<string>(
+                await db.Set<NodeInstance>()
+                    .AsNoTracking()
+                    .Where(n => n.InstanceId == instance.ID
+                             && n.Generation == instance.Generation
+                             && mintedBranches.Select(b => b.NodeKey).Contains(n.NodeKey))
+                    .Select(n => n.NodeKey)
+                    .ToListAsync(ct),
+                StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var branchDef in mintedBranches)
         {
+            // Skip branches that already exist — idempotent regardless of TenantCode nullability.
+            if (mintedBranchKeySet.Contains(branchDef.NodeKey))
+                continue;
+
             var branchNode = new NodeInstance
             {
                 ID             = Guid.NewGuid(),
