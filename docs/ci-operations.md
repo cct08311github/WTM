@@ -263,9 +263,17 @@ Mac-mini 上全部跑在 **Docker**（`/Volumes/T7/dockerdata-binds/gitea/`）�
 ### ⚠️ 發版已知陷阱（Gitea 1.26.1）
 
 - **Gitea Release 物件「不會」自動建立 —— 要手動補。** `publish-nuget.yml` 只自動建 **GitHub** Release；**Gitea** 的 `/releases` 頁面靠人工建（API：`POST /repos/chiu0831/WTM/releases`，body 用對應版本的 CHANGELOG 段落）。曾經從 v10.12.2 起漏補到 v10.13.0，造成 Gitea releases 頁面看似停滯。**每次 tag 後記得補 Gitea Release。**
-- **`workflow_dispatch` 帶 tag ref 會回 HTTP 204 但「不建立 run」** —— Gitea 的 dispatch 只對 **branch** 真正生效。要重跑 tag 工作流不能靠 dispatch。
-- **同一 commit 重推 tag「不會」重新觸發**（Gitea 對同 commit 的 tag 事件去重）。要可靠重觸發 `publish-nuget`：**用一個新 commit 再重打 tag**（或讓下次正式 release 帶上）。
-- 想本機發 Gitea 套件（繞過 runner）：`scripts/publish-to-gitea.sh`（或手動 `dotnet pack` + `dotnet nuget push --source gitea --skip-duplicate`）。
+- **`workflow_dispatch` 帶 tag ref 會回 HTTP 204 但「不建立 run」** —— Gitea 的 dispatch 對 tag ref 不生效（branch ref 也曾在 stuck 狀態下回 204 無 run）。要重跑 tag 工作流不能靠 dispatch。
+- **⚠️ tag-trigger 卡死的真正根因 = tag-object 去重（postgres 層），`docker restart gitea` 也清不掉。** 推 release tag 後 `publish-nuget` 完全沒建 run，是因為 Gitea 以 `(tag-ref, tag-object-sha)` 去重 tag-push 事件，而這筆記錄在 **postgres**，**重啟 gitea 容器不會清除**。所以「刪除 + 重推同一個 tag」（即使重啟過 gitea）仍送出**相同的 annotated-tag-object sha** → 仍被去重 → 不建 run。**過去文件寫「要用新 commit」其實不必要——真正關鍵是新的 tag object，不是新的 commit。**
+  - ✅ **可靠解法：推一個全新的 annotated tag object（同一個 release commit 即可）。** `git tag -a` 會用當下時間戳產生**新的 tag-object sha**，繞過去重：
+    ```bash
+    git tag -d v10.13.5
+    git push origin :refs/tags/v10.13.5            # 刪遠端
+    git tag -a v10.13.5 <release-commit> -m "..."  # 重建 → 新 timestamp → 新 object sha
+    git push origin v10.13.5                        # publish-nuget run 約 30s 內出現
+    ```
+    （2026-06-21 v10.13.5 實證：原 tag push + workflow_dispatch + restart+同物件重推 = 0 run；全新 `git tag -a` 重建 → 立即觸發 publish run 6218。**不需要重啟 gitea。**）
+- 想本機發 Gitea 套件（繞過 runner，**只發 Gitea、不含 GitHub Packages / mirror sync**——那兩者是 CI 專屬，靠 `.sync/` manifest + `GH_MIRROR_PAT`）：`scripts/publish-to-gitea.sh`（或手動 `dotnet pack` 六個專案 + `dotnet nuget push "*.nupkg" --source gitea --skip-duplicate`）。優先修好 CI 觸發，本機發只當最後 fallback。
 
 完整 release 流程見 [`docs/wtm-developer-manual.md`](./wtm-developer-manual.md) 與 [`CHANGELOG.md`](../CHANGELOG.md)。
 
