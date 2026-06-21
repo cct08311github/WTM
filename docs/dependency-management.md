@@ -98,15 +98,20 @@ warning，因為 NPOI transitive 8.0.2 不再被覆蓋。release 直接失格。
 
 這個 repo 接受 NU1510 噪音換取零漏洞 — 直到 NPOI 上游升 Crypto.Xml dep（追蹤於 [Issue #15](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/issues/15)）。
 
-### SQLitePCLRaw `e_sqlite3` — 不可修補的 NU1903（追蹤於 Issue #393）
+### SQLitePCLRaw `e_sqlite3` — NU1903 已於 10.13.5 修復（Issue #393）
 
-`SQLitePCLRaw.lib.e_sqlite3` 2.1.11（GHSA-2m69-gcr7-jv3q，HIGH — bundled SQLite 引擎）經
+`SQLitePCLRaw.lib.e_sqlite3` 2.1.11（GHSA-2m69-gcr7-jv3q，HIGH — bundled SQLite 引擎）原經
 `Microsoft.EntityFrameworkCore.Sqlite` → `Microsoft.Data.Sqlite.Core` → `SQLitePCLRaw.bundle_e_sqlite3`
-傳遞進 production `Core`/`Mvc`/`WorkFlow`/`LayUI`/`Etl`。與 Crypto.Xml 不同，**目前無法用 override 修復**：
-advisory 範圍 `<= 2.1.11`、`first_patched: None`，2.1.11 已是最新發佈版，最新的 EF Core Sqlite（10.0.9）
-仍解析到 2.1.11 — **沒有版本可 pin/bump**。處置：track #393，SQLitePCLRaw（或 EF Core Sqlite 一旦
-帶上修補後的 bundle）一釋出修補版就立即 bump。在那之前不 NoWarn、不換 native provider（除非另行決策）。
-實際暴露面僅限「使用 SQLite provider 且開啟不可信 `.db` / 執行不可信 SQL」的應用。
+傳遞進 production `Core`/`Mvc`/`WorkFlow`/`LayUI`/`Etl`。曾長期**無法 override 修復**（advisory 範圍
+`<= 2.1.11`、`first_patched: None`、2.1.11 為當時最新版），以追蹤型接受例外處理。
+
+**已修復：** SQLitePCLRaw 釋出 **3.0.x** 版本線並重構打包 — monolithic 的 `lib.e_sqlite3` 被
+`config.e_sqlite3` + `SourceGear.sqlite3`（SQLite 3.50.4）取代。在 `Directory.Packages.props` pin
+`SQLitePCLRaw.bundle_e_sqlite3 = 3.0.3`、並在 `Core.csproj` 加一條直接 `PackageReference`
+（與 Crypto.Xml override 相同 pattern），即把整條鏈推到 3.0.x。受 GHSA 影響的 `lib.e_sqlite3`
+套件因而**完全從依賴樹消失**，`--vulnerable` 掃描回報 0 NU1903。已驗證與 EF Core 10.0.4 相容
+（5314 測試通過，含 SQLite-shared-memory fixtures）。此 override 行上的 NU1510 為預期 — **請勿移除**，
+它就是修補本身。
 
 ---
 
