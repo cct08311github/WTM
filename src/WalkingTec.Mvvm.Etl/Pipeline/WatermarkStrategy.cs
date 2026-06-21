@@ -93,9 +93,17 @@ public class WatermarkStrategy
         {
             // DB 欄位型別因資料庫而異：SQL Server INT→int / BIGINT→long、
             // Oracle NUMBER→decimal、SMALLINT→short、TINYINT→byte 等。
-            // 統一用 Convert.ToInt64 做安全型別擴展；overflow（ulong 超過 long.MaxValue
-            // 或大 decimal）和真正無法轉換的型別（string、Guid 等配置錯誤）
-            // 則記錄警告而非靜默丟失 watermark。
+            // null 或 DBNull 表示本批次沒有資料（空批次或 watermark 欄位 max 為 null）——
+            // 這是正常情況，不推進 watermark 也不記錄警告。
+            // 對非 null 的真實值統一用 Convert.ToInt64 做安全型別擴展；
+            // overflow（ulong 超過 long.MaxValue 或大 decimal）和真正無法轉換的型別
+            // （string、Guid 等配置錯誤）則記錄警告而非靜默丟失 watermark。
+            if (maxValue is null || maxValue is DBNull)
+            {
+                // No data in this batch (or null max) — leave the watermark unchanged; not a misconfiguration.
+                return;
+            }
+
             long? idValue = null;
             try
             {

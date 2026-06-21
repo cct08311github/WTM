@@ -202,6 +202,76 @@ public class WatermarkTests
         stored.Should().Be(200L);
     }
 
+    // ── #485 correctness fix: null / DBNull must NOT advance watermark and must NOT warn ──
+
+    [TestMethod]
+    public void Identity_null_max_does_not_advance_and_does_not_warn()
+    {
+        // 空批次或 watermark 欄位 max 為 null 時，CurrentValue 應保持不變，且不記錄警告
+        var loggedLevels = new List<LogLevel>();
+        var mockLogger = new Mock<ILogger>();
+        mockLogger
+            .Setup(l => l.IsEnabled(It.IsAny<LogLevel>()))
+            .Returns(true);
+        mockLogger
+            .Setup(l => l.Log(
+                It.IsAny<LogLevel>(),
+                It.IsAny<EventId>(),
+                It.IsAny<It.IsAnyType>(),
+                It.IsAny<Exception?>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()))
+            .Callback<LogLevel, EventId, object, Exception?, Delegate>((level, _, _, _, _) =>
+                loggedLevels.Add(level));
+
+        var originalValue = System.Text.Json.JsonSerializer.Serialize(500L);
+        var wm = new WatermarkStrategy(EtlWatermarkType.Identity, "OrderId", originalValue, logger: mockLogger.Object);
+
+        wm.UpdateFromBatchMax(null!);
+
+        // watermark must NOT advance
+        wm.CommitPendingValue().Should().Be(originalValue,
+            "a null batch max (empty batch) must not reset the watermark");
+
+        // no warning should be logged
+        loggedLevels.Should().NotContain(
+            l => l >= LogLevel.Warning,
+            "a null max is normal 'no new rows' — it is not a misconfiguration");
+    }
+
+    [TestMethod]
+    public void Identity_DBNull_max_does_not_advance_and_does_not_warn()
+    {
+        // ADO.NET DataReader 在欄位為 NULL 時回傳 DBNull.Value；行為應與 null 相同
+        var loggedLevels = new List<LogLevel>();
+        var mockLogger = new Mock<ILogger>();
+        mockLogger
+            .Setup(l => l.IsEnabled(It.IsAny<LogLevel>()))
+            .Returns(true);
+        mockLogger
+            .Setup(l => l.Log(
+                It.IsAny<LogLevel>(),
+                It.IsAny<EventId>(),
+                It.IsAny<It.IsAnyType>(),
+                It.IsAny<Exception?>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()))
+            .Callback<LogLevel, EventId, object, Exception?, Delegate>((level, _, _, _, _) =>
+                loggedLevels.Add(level));
+
+        var originalValue = System.Text.Json.JsonSerializer.Serialize(500L);
+        var wm = new WatermarkStrategy(EtlWatermarkType.Identity, "OrderId", originalValue, logger: mockLogger.Object);
+
+        wm.UpdateFromBatchMax(DBNull.Value);
+
+        // watermark must NOT advance
+        wm.CommitPendingValue().Should().Be(originalValue,
+            "a DBNull batch max must not reset the watermark");
+
+        // no warning should be logged
+        loggedLevels.Should().NotContain(
+            l => l >= LogLevel.Warning,
+            "DBNull.Value from an ADO.NET reader is normal 'no new rows' — not a misconfiguration");
+    }
+
     [TestMethod]
     public void Identity_uncoercible_value_logs_warning_and_does_not_advance()
     {
