@@ -1,6 +1,6 @@
 # 更新日志
 
-## [Unreleased]
+## [10.13.6] - 2026-06-21
 
 Multi-agent adversarial security & correctness audit batch (2026-06-21): 9 confirmed findings (4 HIGH / 5 MEDIUM) plus 1 review-discovered HIGH (#490), each adversarially verified (triple-skeptic refutation panel) before fixing and re-reviewed after. Integrated full-solution suite: 5309 passed / 0 failed. (#487, an unrelated LOW `MD5` dispose cleanup, remains open and tracked.)
 
