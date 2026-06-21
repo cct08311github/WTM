@@ -1,7 +1,7 @@
 # CI Operations
 
 > **適用版本**：10.5.1+
-> **最後更新**：2026-06-20
+> **最後更新**：2026-06-21
 > **CI 平台**：Gitea Actions（self-hosted at `mac-mini.tailde842d.ts.net`）。**兩個 runner**（見下方「Runner 拓撲」）：WTM 的 `ubuntu-latest` jobs 跑在 Docker `act_runner`；另有一個 Homebrew runner 服務其他專案。
 
 本文件涵蓋 WTM CI 工作流總覽、Gitea Actions 與 GitHub Actions 的四大已知不相容點，以及排錯 SOP。完整修復脈絡見 [Issue #11](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/issues/11) / [PR #12](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/pulls/12)。
@@ -23,20 +23,20 @@ Gitea Actions 直接讀 `.github/workflows/*.yml` — 語法與 GitHub Actions �
 
 ## 四大已知不相容點
 
-### 1. `actions/upload-artifact@v4+` 不相容 Gitea Actions GHES API
+### 1. `actions/upload-artifact@v4` 在 Gitea 拋 `GHESNotSupportedError`
 
 **症狀**：
 ```
 ::error::@actions/artifact v2.0.0+, upload-artifact@v4+ and download-artifact@v4+
 are not currently supported on GHES.
 ```
-任何 artifact upload step hard-fail，整個 job conclusion 被標 failure，即便 build/test 全 pass。
+任何 artifact upload step 在有檔案可上傳時 hard-fail，整個 job conclusion 被標 failure，即便 build/test 全 pass。upload steps 設有 `if: always()`，因此只要 job 產出 artifact，上傳失敗就會污染本來綠燈的 job。
 
-**修法**：降回 `@v3`（最後支援 GHES 的版本），並加上 `continue-on-error: true` 雙保險：
+**修法**（已套用，見 [#471](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/issues/471)）：在每個 `upload-artifact@v4` step 加上 `continue-on-error: true`，讓 Gitea 端的 GHES 錯誤靜默失敗，不污染 job conclusion：
 
 ```yaml
 - name: Upload test results
-  uses: actions/upload-artifact@v3
+  uses: actions/upload-artifact@v4
   if: always()
   continue-on-error: true
   with:
@@ -44,9 +44,19 @@ are not currently supported on GHES.
     path: "TestResults/**/*.trx"
 ```
 
-`continue-on-error: true` 的意義：即使 v3 未來也壞掉，這個 step 失敗也不再污染 job conclusion，CI 信號回歸真實 test 結果。
+`continue-on-error: true` 的意義：upload step 失敗不再標記整個 job，CI 信號回歸真實 test 結果。artifact 是診斷用途，不是 build gate。
 
-**追蹤**：未來 Gitea act_runner 升 artifact protocol 後可再評估升回 v4+。
+**三個工作流的 upload-artifact 步驟清單（已全部套用）**：
+
+| 工作流 | Step name | 修法 |
+|--------|-----------|------|
+| `ci-build.yml` | Upload test results | `continue-on-error: true` ✅ |
+| `ci-build.yml` | Upload coverage report | `continue-on-error: true` ✅ |
+| `e2e-test.yml` | Upload screenshots | `continue-on-error: true` ✅ |
+| `e2e-test.yml` | Upload JUnit XML report | `continue-on-error: true` ✅ |
+| `integration-test.yml` | Upload test results | `continue-on-error: true` ✅ |
+
+**追蹤**：未來 Gitea act_runner 原生支援 artifact v4+ protocol 後可移除此 workaround。
 
 ### 2. `dotnet tool install -g` 後 `$PATH` 不自動延伸
 
