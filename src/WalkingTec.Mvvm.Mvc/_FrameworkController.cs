@@ -720,6 +720,9 @@ namespace WalkingTec.Mvvm.Mvc
         [ActionDescription("UploadFileRoute")]
         public async Task<IActionResult> UploadImage([FromServices] WtmFileProvider fp, string sm = null, string groupName = null, string subdir = null, string extra = null, bool IsTemprory = true, string _DONOT_USE_CS = null, int? width = null, int? height = null)
         {
+            // MVC-010: reject unknown connection-string keys to prevent lateral DB reads
+            if (!IsKnownConnectionKey(_DONOT_USE_CS))
+                return JsonMore(new { Errors = "Unknown connection string key" }, StatusCodes.Status400BadRequest);
             if (width == null && height == null)
             {
                 return await Upload(fp, sm, groupName, subdir, extra, IsTemprory, _DONOT_USE_CS).ConfigureAwait(false);
