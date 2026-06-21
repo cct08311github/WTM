@@ -1,5 +1,13 @@
 # 更新日志
 
+## [Unreleased]
+
+### Security
+
+- **Fix stored-XSS bypass in `UseLocalData` grid via case-variant `</SCRIPT>` (#490):** when a `<wt:grid use-local-data="true">` tag helper embedded the `ListVM.GetDataJson()` result inside an inline `<script>` block, it relied on `String.Replace("<script>", "$$script$$")` / `.Replace("</script>", "$$#script$$")` — a case-sensitive substitution. A DB field containing `</SCRIPT>` (or any mixed-case variant: `</Script>`, `</sCrIpT>`, etc.) bypassed the placeholder dance, causing the HTML parser to terminate the script element early and execute any following attacker-controlled markup. **Fix:** replaced the placeholder mechanism with `DataTableTagHelper.EscapeLocalDataJson`, which performs an exhaustive, case-independent escape of `&` → `&`, `<` → `<`, and `>` → `>` — valid JSON Unicode escapes per RFC 8259 §7. The JS engine decodes them back to literal characters before the data is used, so grid-cell HTML (buttons, checkboxes, etc.) renders identically to the pre-fix behaviour. The now-unnecessary `$$script$$`/`$$#script$$` reversal in `ff.LoadLocalData` (framework_layui.js) was also removed. No API surface change — the new helper is `public static` on `DataTableTagHelper` and callable from other TagHelpers if needed.
+
+---
+
 ## [10.13.5] - 2026-06-21
 
 Security + maintenance. Clears the last standing NU1903 (#393) now that an upstream fix exists — the vulnerable bundled SQLite engine is no longer pulled into any package. Also ships four downstream-reported (BMS-integration) regressions against 10.13.1 that had already merged to the branch (#461–#464), plus a CI reliability change (#473).
