@@ -486,6 +486,26 @@ public class XssEncodingTests
             "hasFormat=true encodeFormat=false must NOT wrap in ff.EscapeText");
     }
 
+    // ── Issue #461: bool column without SetFormat renders verbatim (not escaped) ──
+
+    [TestMethod]
+    public void BoolColumn_WithoutSetFormat_RendersVerbatimNotEscaped()
+    {
+        // #461: a bare MakeGridHeader(x => x.SomeBool) column has no Format callback,
+        // so HasFormat() returns false. Without the fix, getTemplate would emit
+        // ff.EscapeText(d.field), turning the framework-generated checkbox HTML into
+        // literal escaped text instead of a real checkbox.
+        //
+        // The fix detects bool/bool? FieldType and forces hasFormat=true for those
+        // columns. Verify: the verbatim (non-EscapeText) path is taken when hasFormat=true.
+        var js = InvokeGetTemplate("IsActive", "r99", hasFormat: true);
+
+        StringAssert.Contains(js, "d.IsActive",
+            "bool column template must contain the raw field expression d.IsActive");
+        Assert.IsFalse(js.Contains("ff.EscapeText(d.IsActive)"),
+            "bool column template must NOT wrap d.IsActive in ff.EscapeText — checkbox HTML must render verbatim");
+    }
+
     // ── Issue #331: Slider hidden input encoding ─────────────────────────────
 
     [TestMethod]

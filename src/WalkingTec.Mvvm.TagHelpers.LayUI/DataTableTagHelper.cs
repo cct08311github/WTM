@@ -950,7 +950,17 @@ layui.use(['element'], function() {{
                     }
                     else
                     {
-                        tempCol.Templet = getTemplate(item.Field, random, item.HasFormat(), item.EncodeFormat);
+                        // #461: bool/bool? columns without an explicit .SetFormat() receive
+                        // framework-generated checkbox HTML from ListVMExtension/MakeCheckBox.
+                        // That HTML is entirely framework-controlled and must be rendered
+                        // verbatim — treat it as hasFormat=true so getTemplate does NOT
+                        // wrap the cell expression in ff.EscapeText (which would escape the
+                        // markup into literal text instead of a real checkbox).
+                        // No XSS regression: MakeCheckBox HTML-encodes every caller-supplied
+                        // attribute (name, value, title) via WebUtility.HtmlEncode.
+                        var isBoolColumn = item.FieldType == typeof(bool) || item.FieldType == typeof(bool?);
+                        var hasFormat = item.HasFormat() || isBoolColumn;
+                        tempCol.Templet = getTemplate(item.Field, random, hasFormat, item.EncodeFormat);
                     }
                 }
 
