@@ -1060,7 +1060,7 @@ namespace WalkingTec.Mvvm.Core
             //如果是普通的TopBasePoco，则进行物理删除
             else if (typeof(TModel).GetTypeInfo().IsSubclassOf(typeof(TopBasePoco)))
             {
-                DoRealDelete();
+                await DoRealDeleteAsync();
             }
         }
 
@@ -1155,14 +1155,20 @@ namespace WalkingTec.Mvvm.Core
                 foreach (var f in fas)
                 {
                     var subs = f.GetValue(Entity) as IEnumerable<ISubFile>;
+                    if (subs == null)
+                    {
+                        var fullEntity = await DC!.Set<TModel>().AsQueryable()
+                            .Include(f.Name).AsNoTracking().CheckID(Entity.ID).FirstOrDefaultAsync();
+                        subs = fullEntity != null ? f.GetValue(fullEntity) as IEnumerable<ISubFile> : null;
+                    }
                     if (subs != null)
                     {
                         foreach (var sub in subs)
                         {
                             fileids.Add(sub.FileId);
                         }
+                        f.SetValue(Entity, null);
                     }
-                    f.SetValue(Entity, null);
                 }
                 if (typeof(TModel) != typeof(FileAttachment))
                 {
