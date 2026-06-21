@@ -137,7 +137,10 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 layfilter = output.Attributes["lay-filter"].Value.ToString();
             }
 
-            if (Field == null)
+            // #463: DisplayTagHelper legitimately renders static display-text without a field= binding;
+            // exempt it here, mirroring the existing !(this is DisplayTagHelper) special-case on the
+            // next guard below. All other field tags still require field=.
+            if (Field == null && !(this is DisplayTagHelper))
             {
                 throw new InvalidOperationException(
                     $"The 'field' attribute is required on <{GetType().Name.Replace("TagHelper", string.Empty).ToLower()}>. Ensure the field= attribute is set.");

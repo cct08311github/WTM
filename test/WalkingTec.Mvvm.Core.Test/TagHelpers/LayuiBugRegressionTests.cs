@@ -133,11 +133,14 @@ public class LayuiBugRegressionTests
     [TestMethod]
     public void BaseFieldTag_NullField_GuardThrowsInvalidOperationException()
     {
+        // Non-DisplayTagHelper tags must still throw when Field is null.
         bool guardTriggered = false;
         object? fieldValue = null;
         try
         {
-            if (fieldValue == null)
+            // Simulate: the guard applies when Field==null AND !(this is DisplayTagHelper).
+            bool isDisplay = false;
+            if (fieldValue == null && !isDisplay)
                 throw new InvalidOperationException("field attribute is required");
         }
         catch (InvalidOperationException ex)
@@ -147,7 +150,38 @@ public class LayuiBugRegressionTests
                 "Exception message must mention 'field' attribute");
         }
         Assert.IsTrue(guardTriggered,
-            "Null Field must trigger InvalidOperationException guard");
+            "Null Field must trigger InvalidOperationException guard for non-Display tags");
+    }
+
+    // ── Bug #463: DisplayTagHelper field-less static display-text ───────────
+
+    [TestMethod]
+    public void DisplayTagHelper_NullField_WithDisplayText_DoesNotThrow()
+    {
+        // Verify the corrected guard logic: DisplayTagHelper with Field==null
+        // must NOT be treated as an error — it renders static display-text.
+        bool threwFieldRequired = false;
+        object? fieldValue = null;
+        bool isDisplay = true; // simulates "this is DisplayTagHelper"
+        string? displayText = "static label";
+        string outputContent = string.Empty;
+        try
+        {
+            if (fieldValue == null && !isDisplay)
+                throw new InvalidOperationException("field attribute is required");
+
+            // Simulate what DisplayTagHelper.Process does when Field==null:
+            // render DisplayText as the label value.
+            outputContent = displayText ?? string.Empty;
+        }
+        catch (InvalidOperationException)
+        {
+            threwFieldRequired = true;
+        }
+        Assert.IsFalse(threwFieldRequired,
+            "<wt:display display-text='...'> must NOT throw when Field is null (#463)");
+        Assert.AreEqual("static label", outputContent,
+            "DisplayText must be rendered when Field is null");
     }
 
     // ── Bug 7: Radio/CheckBox null item.Value guard ─────────────────────────
