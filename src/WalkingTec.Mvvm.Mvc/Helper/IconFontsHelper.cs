@@ -9,10 +9,16 @@ namespace WalkingTec.Mvvm.Mvc
     public static class IconFontsHelper
     {
         private static List<ComboSelectListItem> _iconFontItems;
+        /// <summary>
+        /// Returns the flat icon-font list. Defensively initialises the backing field to an
+        /// empty list when accessed before <see cref="GenerateIconFont"/> has run (#464).
+        /// </summary>
         public static List<ComboSelectListItem> IconFontItems
         {
             get
             {
+                // #464: guard against access before GenerateIconFont populates the static cache.
+                _iconFontItems ??= new List<ComboSelectListItem>();
                 foreach (var item in _iconFontItems.Where(x => x.Selected == true))
                     item.Selected = false;
                 return _iconFontItems;
@@ -20,7 +26,15 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         private static Dictionary<string, List<MenuItem>> _iconFontDicItems;
-        public static Dictionary<string, List<MenuItem>> IconFontDicItems => _iconFontDicItems;
+        /// <summary>
+        /// Returns the icon-font dictionary keyed by font-family name. Defensively initialises
+        /// to an empty dictionary when accessed before <see cref="GenerateIconFont"/> has run (#464).
+        /// </summary>
+        public static Dictionary<string, List<MenuItem>> IconFontDicItems
+        {
+            // #464: guard against null when GenerateIconFont was never called.
+            get => _iconFontDicItems ??= new Dictionary<string, List<MenuItem>>();
+        }
 
         public static void GenerateIconFont(params string[] dirs)
         {
