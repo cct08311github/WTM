@@ -654,6 +654,27 @@ window.ff = {
                     ff._legacyScriptEval(str);
                 }
                 else {
+                    // Issue #462: extract trusted inline init scripts from the same-origin partial
+                    // BEFORE DOMPurify strips them, then re-run after the dialog DOM is inserted.
+                    // Use DOMParser (NOT regex) so only real <script> ELEMENTS are taken — a
+                    // "<script>" string sitting inside an attribute value or text node is NOT a
+                    // script element and must never be executed (regex would have eval'd it,
+                    // widening XSS beyond pre-#789). DOMParser does not execute scripts itself.
+                    // Markup is still sanitized via ff.SafeHtml below.
+                    var _initScripts = [];
+                    try {
+                        var _pdoc = new DOMParser().parseFromString(str, 'text/html');
+                        var _nodes = _pdoc.querySelectorAll('script');
+                        for (var _ni = 0; _ni < _nodes.length; _ni++) {
+                            var _s = _nodes[_ni];
+                            var _type = (_s.getAttribute('type') || '').toLowerCase();
+                            var _isJs = _type === '' || _type === 'text/javascript' || _type === 'application/javascript' || _type === 'module';
+                            // inline JS only — skip external src and non-JS data blocks (e.g. application/json)
+                            if (_isJs && !_s.src && _s.textContent) {
+                                _initScripts.push(_s.textContent);
+                            }
+                        }
+                    } catch (e) { /* malformed HTML → no init scripts; markup still rendered via SafeHtml */ }
                     // Issue #789 Phase 3A: build wrapper via DOM API and serialize
                     // through outerHTML so the cookie-sourced id is safely escaped
                     // in the resulting markup that becomes layer.open({content}).
@@ -687,11 +708,15 @@ window.ff = {
                         , btn: []
                         , id: windowid //设定一个id，防止重复弹出
                         , content: str
-                        //, success: function (layero, index) {
-                        //    if (height == undefined || height == null || height == '' || max == false){
-                        //        document.getElementById('layui-layer' + index).getElementsByClassName('layui-layer-content')[0].style.overflow = 'unset';
-                        //    }
-                        //}
+                        , success: function () {
+                            // Issue #462: re-run the partial's trusted inline init scripts
+                            // (layui.form.render, laydate, cascading combobox handlers, etc.)
+                            // after the dialog DOM is inserted. Markup XSS protection (SafeHtml)
+                            // is unaffected — only the script bodies are re-executed here.
+                            for (var _si = 0; _si < _initScripts.length; _si++) {
+                                ff._legacyScriptEval(_initScripts[_si]);
+                            }
+                        }
                         , resizing: function (layero) {
                             ff.triggerResize();
                           $(layero).find("div[ischart = '1']").each(
