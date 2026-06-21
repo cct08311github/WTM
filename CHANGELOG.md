@@ -1,5 +1,13 @@
 # 更新日志
 
+## [Unreleased]
+
+### Security
+
+- **Selector inline-script data `</script>` breakout XSS (#481 — HIGH):** The `/_Framework/Selector` POST action populated `ViewBag.SelectData` with raw `GetDataJson()` output and passed it through a paired-tag `ScriptTagRegex` (`<script>.*?</script>`, dotall). The Selector view emits this value as `var x = @Html.Raw(ViewBag.SelectData);` inside a live `<script>` element. A bare `</script>` in any entity field value (persisted via a legitimate Create/Edit form or direct DB insert) was not matched by the paired-tag regex, so it terminated the page's real script element and any following markup executed as HTML — stored XSS. The dead `ScriptTagRegex` is removed. `GetDataJson()` output is now passed through `SanitizeSelectorJson`, which replaces `&` → `&`, `<` → `<`, `>` → `>` before assignment to `ViewBag.SelectData`. These `\uXXXX` sequences are valid JSON string content and valid JS string literal content — the JS engine decodes them transparently, so Selector grid display is unaffected. Also removes a dead `FrameworkRole.ToList()` query (`tst` local, never read) that ran on every Selector POST with pre-selected Ids. Three regression tests added.
+
+---
+
 ## [10.13.5] - 2026-06-21
 
 Security + maintenance. Clears the last standing NU1903 (#393) now that an upstream fix exists — the vulnerable bundled SQLite engine is no longer pulled into any package. Also ships four downstream-reported (BMS-integration) regressions against 10.13.1 that had already merged to the branch (#461–#464), plus a CI reliability change (#473).

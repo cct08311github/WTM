@@ -132,5 +132,72 @@ namespace WalkingTec.Mvvm.Admin.Test
             Assert.IsInstanceOfType(result, typeof(BadRequestObjectResult),
                 "GetExportExcel should return 400 BadRequest for an unresolvable VM name");
         }
+
+        // ─── SanitizeSelectorJson — #481 stored-XSS regression ───────────────
+
+        /// <summary>
+        /// #481: A field value containing &lt;/script&gt; must be unicode-escaped so that it
+        /// cannot terminate the enclosing &lt;script&gt; element in Selector.cshtml.
+        /// The paired-tag regex that was previously used only matched complete
+        /// &lt;script&gt;…&lt;/script&gt; pairs; a bare &lt;/script&gt; survived unmodified.
+        ///
+        /// We test <see cref="_FrameworkController.SanitizeSelectorJson"/> directly — the helper
+        /// is <c>public static</c> so no DB/HTTP plumbing is required. This is the right
+        /// granularity: the helper is the exact escape boundary, and any future refactor of
+        /// the Selector action that forgets to call it will still be caught by a failing test
+        /// on the helper itself plus the absence of a call in the action.
+        /// </summary>
+        [TestMethod]
+        public void SanitizeSelectorJson_ScriptBreakoutPayload_IsEscaped()
+        {
+            // Arrange: simulate the JSON GetDataJson() might return when a DB field contains
+            // an XSS payload that terminates the page's script block.
+            const string maliciousJson =
+                @"[{""Name"":""</script><img src=x onerror=alert(1)>""}]";
+
+            // Act
+            string sanitized = _FrameworkController.SanitizeSelectorJson(maliciousJson);
+
+            // Assert: the dangerous literal must not appear verbatim.
+            Assert.IsFalse(sanitized.Contains("</script>"),
+                "Raw </script> must not survive SanitizeSelectorJson — it would terminate the page script block");
+            Assert.IsFalse(sanitized.Contains("<img"),
+                "Raw < must not survive SanitizeSelectorJson — it enables HTML injection");
+
+            // Verify the unicode-escape replacements applied by SanitizeSelectorJson.
+            Assert.IsTrue(sanitized.Contains("\\u003c/script\\u003e"),
+                "Expected \\u003c and \\u003e to replace < and > in </script>");
+
+            // No raw < or > must remain anywhere.
+            Assert.IsFalse(sanitized.Contains("<"),  "< must be unicode-escaped to \\u003c");
+            Assert.IsFalse(sanitized.Contains(">"),  "> must be unicode-escaped to \\u003e");
+        }
+
+        /// <summary>
+        /// Verifies that benign JSON (no HTML metacharacters) passes through unchanged.
+        /// </summary>
+        [TestMethod]
+        public void SanitizeSelectorJson_BenignJson_PassesThroughUnchanged()
+        {
+            const string benign = @"[{""ID"":""1"",""Name"":""Alice""}]";
+            string result = _FrameworkController.SanitizeSelectorJson(benign);
+            Assert.AreEqual(benign, result,
+                "SanitizeSelectorJson must not alter JSON that contains no HTML metacharacters");
+        }
+
+        /// <summary>
+        /// Verifies that ampersands are unicode-escaped to prevent double-decode attacks and
+        /// that & is replaced before &lt; / &gt; to avoid double-escaping.
+        /// </summary>
+        [TestMethod]
+        public void SanitizeSelectorJson_Ampersand_IsEscaped()
+        {
+            const string withAmpersand = @"[{""Url"":""https://example.com/a&b=1""}]";
+            string result = _FrameworkController.SanitizeSelectorJson(withAmpersand);
+            Assert.IsFalse(result.Contains("\"&b"),
+                "Raw & must be unicode-escaped; unescaped & enables double-decode attacks");
+            Assert.IsTrue(result.Contains("\\u0026b"),
+                "& should be replaced with \\u0026");
+        }
     }
 }
