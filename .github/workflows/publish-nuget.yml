@@ -298,13 +298,48 @@ jobs:
           print(json.dumps(body))
           " <<< "$BODY")
 
-          curl -fsSL \
-            -X POST \
+          PAYLOAD="{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"body\":${BODY_JSON},\"draft\":false,\"prerelease\":false}"
+
+          # Idempotent release creation: GET existing release → PATCH if found, POST if not.
+          # curl -sS (no -f) so a 404 is captured rather than aborting with set -e.
+          GET_RESPONSE=$(curl -sS -w "\n%{http_code}" \
             -H "Authorization: Bearer ${GH_PAT}" \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/cct08311github/WTM/releases" \
-            -d "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"body\":${BODY_JSON},\"draft\":false,\"prerelease\":false}"
+            "https://api.github.com/repos/cct08311github/WTM/releases/tags/${TAG}")
+
+          GET_HTTP_CODE=$(printf '%s' "$GET_RESPONSE" | tail -n1)
+          GET_BODY=$(printf '%s' "$GET_RESPONSE" | head -n -1)
+
+          RELEASE_ID=$(python3 -c "
+          import sys, json
+          body = sys.stdin.read()
+          try:
+              data = json.loads(body)
+              print(data.get('id', ''))
+          except Exception:
+              print('')
+          " <<< "$GET_BODY")
+
+          if [ -n "$RELEASE_ID" ] && [ "$RELEASE_ID" != "None" ]; then
+            echo "Release already exists (id=${RELEASE_ID}), updating via PATCH..."
+            curl -fsSL \
+              -X PATCH \
+              -H "Authorization: Bearer ${GH_PAT}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/cct08311github/WTM/releases/${RELEASE_ID}" \
+              -d "$PAYLOAD"
+          else
+            echo "No existing release found (HTTP ${GET_HTTP_CODE}), creating via POST..."
+            curl -fsSL \
+              -X POST \
+              -H "Authorization: Bearer ${GH_PAT}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/cct08311github/WTM/releases" \
+              -d "$PAYLOAD"
+          fi
 
       # Re-pack from the sanitized source tree so the published nuspec contains
       # `internal.registry.invalid` instead of the internal tailnet hostname.
