@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.IO;
 using System.Reflection;
@@ -592,5 +593,150 @@ namespace MyApp.Controllers
                 "IsVue2Ui must return false when UI == UIEnum.VUE3");
         }
 #pragma warning restore CS0618
+
+        // =================================================================
+        // #505 — ValidateIdentifier: defense-in-depth field-name guard
+        // =================================================================
+
+        // Helper: invoke private static ValidateIdentifier via reflection
+        private static string InvokeValidateIdentifier(string? name, string ctx)
+        {
+            var method = typeof(CodeGenVM).GetMethod(
+                "ValidateIdentifier",
+                BindingFlags.NonPublic | BindingFlags.Static)!;
+            try
+            {
+                return (string)method.Invoke(null, new object?[] { name, ctx })!;
+            }
+            catch (TargetInvocationException tie)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(tie.InnerException!).Throw();
+                throw; // unreachable
+            }
+        }
+
+        // Helper: invoke private static ValidateFieldIdentifiers via reflection
+        private static void InvokeValidateFieldIdentifiers(IEnumerable<MvcFieldInfo> fields)
+        {
+            var method = typeof(CodeGenVM).GetMethod(
+                "ValidateFieldIdentifiers",
+                BindingFlags.NonPublic | BindingFlags.Static)!;
+            try
+            {
+                method.Invoke(null, new object?[] { fields });
+            }
+            catch (TargetInvocationException tie)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(tie.InnerException!).Throw();
+                throw; // unreachable
+            }
+        }
+
+        [TestMethod]
+        public void ValidateIdentifier_AcceptsSimpleName()
+        {
+            // Legitimate C# property name must pass without throwing.
+            var result = InvokeValidateIdentifier("OrderId", "FieldName");
+            Assert.AreEqual("OrderId", result);
+        }
+
+        [TestMethod]
+        public void ValidateIdentifier_AcceptsUnderscorePrefix()
+        {
+            var result = InvokeValidateIdentifier("_MyField", "FieldName");
+            Assert.AreEqual("_MyField", result);
+        }
+
+        [TestMethod]
+        public void ValidateIdentifier_AcceptsAllDigitsAfterLetter()
+        {
+            var result = InvokeValidateIdentifier("Field123", "FieldName");
+            Assert.AreEqual("Field123", result);
+        }
+
+        [TestMethod]
+        [ExpectedException(typeof(ArgumentException))]
+        public void ValidateIdentifier_Rejects_InjectionPayload()
+        {
+            // A closing brace + newline + comment — the canonical injection pattern.
+            InvokeValidateIdentifier("Foo}\n//x", "FieldName");
+        }
+
+        [TestMethod]
+        [ExpectedException(typeof(ArgumentException))]
+        public void ValidateIdentifier_Rejects_EmptyString()
+        {
+            InvokeValidateIdentifier("", "FieldName");
+        }
+
+        [TestMethod]
+        [ExpectedException(typeof(ArgumentException))]
+        public void ValidateIdentifier_Rejects_Null()
+        {
+            InvokeValidateIdentifier(null, "FieldName");
+        }
+
+        [TestMethod]
+        [ExpectedException(typeof(ArgumentException))]
+        public void ValidateIdentifier_Rejects_StartsWithDigit()
+        {
+            InvokeValidateIdentifier("1Invalid", "FieldName");
+        }
+
+        [TestMethod]
+        [ExpectedException(typeof(ArgumentException))]
+        public void ValidateIdentifier_Rejects_DotSeparated()
+        {
+            // Dotted paths are NOT valid C# identifiers in this context.
+            InvokeValidateIdentifier("Foo.Bar", "SubField");
+        }
+
+        [TestMethod]
+        public void ValidateFieldIdentifiers_SkipsFilesSentinel()
+        {
+            // The "`file" sentinel must be skipped — it is handled separately
+            // by the generator and must not be fed to ValidateIdentifier.
+            var fields = new List<MvcFieldInfo>
+            {
+                new MvcFieldInfo { FieldName = "Photo", SubField = "`file" }
+            };
+            // Must NOT throw.
+            InvokeValidateFieldIdentifiers(fields);
+        }
+
+        [TestMethod]
+        public void ValidateFieldIdentifiers_SkipsEmptySubField()
+        {
+            // Empty/null SubField is optional — should pass without error.
+            var fields = new List<MvcFieldInfo>
+            {
+                new MvcFieldInfo { FieldName = "Name", SubField = null },
+                new MvcFieldInfo { FieldName = "Code", SubField = "" }
+            };
+            InvokeValidateFieldIdentifiers(fields);
+        }
+
+        [TestMethod]
+        [ExpectedException(typeof(ArgumentException))]
+        public void ValidateFieldIdentifiers_ThrowsOnBadFieldName()
+        {
+            var fields = new List<MvcFieldInfo>
+            {
+                new MvcFieldInfo { FieldName = "Good" },
+                new MvcFieldInfo { FieldName = "Bad}\n//inject" }
+            };
+            InvokeValidateFieldIdentifiers(fields);
+        }
+
+        [TestMethod]
+        [ExpectedException(typeof(ArgumentException))]
+        public void ValidateFieldIdentifiers_ThrowsOnBadSubField()
+        {
+            var fields = new List<MvcFieldInfo>
+            {
+                new MvcFieldInfo { FieldName = "GoodField", SubField = "Bad SubField!" }
+            };
+            InvokeValidateFieldIdentifiers(fields);
+        }
     }
 }

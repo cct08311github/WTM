@@ -670,6 +670,42 @@ namespace WalkingTec.Mvvm.Mvc
             return System.Text.RegularExpressions.Regex.Replace(input, @"[^a-zA-Z0-9_\-\.]", "");
         }
 
+        // #505 — defense-in-depth: FieldName and SubField are model-bound strings that
+        // get interpolated raw into generated C#/Razor source.  Validate them as C#
+        // identifiers once, at the start of generation, so a bad name throws clearly
+        // before any file is emitted.  SubField may be the "`file" sentinel (handled
+        // via its own early-return guards throughout the generator) — those callers
+        // never reach identifier-interpolation, so we skip validation for that value.
+        private static readonly System.Text.RegularExpressions.Regex _identifierPattern =
+            new(@"^[A-Za-z_][A-Za-z0-9_]*$",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        private static string ValidateIdentifier(string? name, string ctx)
+        {
+            if (string.IsNullOrEmpty(name) || !_identifierPattern.IsMatch(name))
+                throw new ArgumentException($"Invalid code-gen identifier '{name}' for {ctx}.");
+            return name;
+        }
+
+        /// <summary>
+        /// Validates all FieldName and SubField values in <paramref name="fields"/> before
+        /// any source file is emitted.  Throws <see cref="ArgumentException"/> on the first
+        /// invalid identifier so the caller gets a clear message rather than malformed output.
+        /// </summary>
+        private static void ValidateFieldIdentifiers(IEnumerable<FieldInfo> fields)
+        {
+            foreach (var f in fields)
+            {
+                ValidateIdentifier(f.FieldName, $"FieldName on field '{f.FieldName}'");
+                // SubField is optional; skip the "`file" sentinel which is handled
+                // separately by generation code and never interpolated as an identifier.
+                if (!string.IsNullOrEmpty(f.SubField) && f.SubField != "`file")
+                {
+                    ValidateIdentifier(f.SubField, $"SubField on field '{f.FieldName}'");
+                }
+            }
+        }
+
         // ---------------------------------------------------------------------------
         // CG-08: Build the fluent method chain appended after MakeGridHeader(x => x.Foo)
         // when [ListColumn] is present on the property, or when the type-based width
@@ -818,6 +854,13 @@ namespace WalkingTec.Mvvm.Mvc
             string safeModelName = SanitizePathComponent(ModelName);
             string safeModelNameLower = safeModelName.ToLower();
             string safeArea = SanitizePathComponent(Area);
+
+            // #505 — defense-in-depth: validate all FieldName/SubField values before
+            // any source is emitted so a malicious or malformed identifier fails fast.
+            if (FieldInfos != null)
+            {
+                ValidateFieldIdentifiers(FieldInfos);
+            }
 
             // CG-02: Controller → two-zone split
             string controllerSuffix = $"{safeModelName}{(IsApi == true ? "Api" : "")}Controller";
