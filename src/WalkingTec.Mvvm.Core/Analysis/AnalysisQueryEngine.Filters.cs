@@ -309,7 +309,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                 }
                 return Enum.ToObject(targetType, value);
             }
-            return Convert.ChangeType(value, targetType);
+            return Convert.ChangeType(value, targetType, System.Globalization.CultureInfo.InvariantCulture);
         }
     }
 }
