@@ -132,9 +132,11 @@ namespace WalkingTec.Mvvm.Mvc
             if (req.Measures.Count == 0)  return BadRequest(new ProblemDetails { Title = "至少需要選取 1 個度量指標。", Status = 400 });
             if (req.Measures.Count > 3)   return BadRequest(new ProblemDetails { Title = "最多選取 3 個度量。", Status = 400 });
             // M2: reject oversized filter/sort clause lists to prevent expression-tree DoS
-            if (req.Filters?.Count > MaxFilterClauses)        return BadRequest(new ProblemDetails { Title = $"Filters must not exceed {MaxFilterClauses} clauses.", Status = 400 });
-            if (req.HavingFilters?.Count > MaxFilterClauses)  return BadRequest(new ProblemDetails { Title = $"HavingFilters must not exceed {MaxFilterClauses} clauses.", Status = 400 });
-            if (req.Sort?.Count > MaxFilterClauses)           return BadRequest(new ProblemDetails { Title = $"Sort must not exceed {MaxFilterClauses} clauses.", Status = 400 });
+            if (req.Filters?.Count > MaxFilterClauses)                  return BadRequest(new ProblemDetails { Title = $"Filters must not exceed {MaxFilterClauses} clauses.", Status = 400 });
+            if (req.HavingFilters?.Count > MaxFilterClauses)            return BadRequest(new ProblemDetails { Title = $"HavingFilters must not exceed {MaxFilterClauses} clauses.", Status = 400 });
+            if (req.Sort?.Count > MaxFilterClauses)                     return BadRequest(new ProblemDetails { Title = $"Sort must not exceed {MaxFilterClauses} clauses.", Status = 400 });
+            // #486: CompareWith.Filters feeds the same ApplyFilters/AndAlso builder — cap it too
+            if (req.CompareWith?.Filters?.Count > MaxFilterClauses)     return BadRequest(new ProblemDetails { Title = $"CompareWith.Filters must not exceed {MaxFilterClauses} clauses.", Status = 400 });
 
             var errorResult = TryPrepareContext(req, out var ctx);
             if (errorResult != null) return errorResult;
@@ -173,9 +175,11 @@ var result = await _engine.ExecuteDynamicAsync(ctx!.BaseQuery, req, ctx.Fields, 
             if (req.Measures.Count > 3)   return BadRequest(new ProblemDetails { Title = "最多選取 3 個度量。", Status = 400 });
             if (string.IsNullOrEmpty(req.PivotDimension)) return BadRequest("必須指定 PivotDimension。");
             // M2: reject oversized filter/sort clause lists
-            if (req.Filters?.Count > MaxFilterClauses)        return BadRequest(new ProblemDetails { Title = $"Filters must not exceed {MaxFilterClauses} clauses.", Status = 400 });
-            if (req.HavingFilters?.Count > MaxFilterClauses)  return BadRequest(new ProblemDetails { Title = $"HavingFilters must not exceed {MaxFilterClauses} clauses.", Status = 400 });
-            if (req.Sort?.Count > MaxFilterClauses)           return BadRequest(new ProblemDetails { Title = $"Sort must not exceed {MaxFilterClauses} clauses.", Status = 400 });
+            if (req.Filters?.Count > MaxFilterClauses)                  return BadRequest(new ProblemDetails { Title = $"Filters must not exceed {MaxFilterClauses} clauses.", Status = 400 });
+            if (req.HavingFilters?.Count > MaxFilterClauses)            return BadRequest(new ProblemDetails { Title = $"HavingFilters must not exceed {MaxFilterClauses} clauses.", Status = 400 });
+            if (req.Sort?.Count > MaxFilterClauses)                     return BadRequest(new ProblemDetails { Title = $"Sort must not exceed {MaxFilterClauses} clauses.", Status = 400 });
+            // #486: CompareWith.Filters feeds the same ApplyFilters/AndAlso builder — cap it too
+            if (req.CompareWith?.Filters?.Count > MaxFilterClauses)     return BadRequest(new ProblemDetails { Title = $"CompareWith.Filters must not exceed {MaxFilterClauses} clauses.", Status = 400 });
 
             var errorResult = TryPrepareContext(req, out var ctx);
             if (errorResult != null) return errorResult;
@@ -227,9 +231,11 @@ var result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fie
             if (req.Measures.Count == 0)  return BadRequest(new ProblemDetails { Title = "至少需要選取 1 個度量指標。", Status = 400 });
             if (req.Measures.Count > 3)   return BadRequest(new ProblemDetails { Title = "最多選取 3 個度量。", Status = 400 });
             // M2: reject oversized filter/sort clause lists
-            if (req.Filters?.Count > MaxFilterClauses)        return BadRequest(new ProblemDetails { Title = $"Filters must not exceed {MaxFilterClauses} clauses.", Status = 400 });
-            if (req.HavingFilters?.Count > MaxFilterClauses)  return BadRequest(new ProblemDetails { Title = $"HavingFilters must not exceed {MaxFilterClauses} clauses.", Status = 400 });
-            if (req.Sort?.Count > MaxFilterClauses)           return BadRequest(new ProblemDetails { Title = $"Sort must not exceed {MaxFilterClauses} clauses.", Status = 400 });
+            if (req.Filters?.Count > MaxFilterClauses)                  return BadRequest(new ProblemDetails { Title = $"Filters must not exceed {MaxFilterClauses} clauses.", Status = 400 });
+            if (req.HavingFilters?.Count > MaxFilterClauses)            return BadRequest(new ProblemDetails { Title = $"HavingFilters must not exceed {MaxFilterClauses} clauses.", Status = 400 });
+            if (req.Sort?.Count > MaxFilterClauses)                     return BadRequest(new ProblemDetails { Title = $"Sort must not exceed {MaxFilterClauses} clauses.", Status = 400 });
+            // #486: CompareWith.Filters feeds the same ApplyFilters/AndAlso builder — cap it too
+            if (req.CompareWith?.Filters?.Count > MaxFilterClauses)     return BadRequest(new ProblemDetails { Title = $"CompareWith.Filters must not exceed {MaxFilterClauses} clauses.", Status = 400 });
 
             var errorResult = TryPrepareContext(req, out var ctx);
             if (errorResult != null) return errorResult;
@@ -298,9 +304,11 @@ result = await _engine.ExecuteDynamicAsync(ctx!.BaseQuery, req, ctx.Fields, iden
             if (req.Measures.Count > 3)   return BadRequest(new ProblemDetails { Title = "最多選取 3 個度量。", Status = 400 });
 
             // M2: reject oversized filter/sort clause lists
-            if (req.Filters?.Count > MaxFilterClauses)        return BadRequest(new ProblemDetails { Title = $"Filters must not exceed {MaxFilterClauses} clauses.", Status = 400 });
-            if (req.HavingFilters?.Count > MaxFilterClauses)  return BadRequest(new ProblemDetails { Title = $"HavingFilters must not exceed {MaxFilterClauses} clauses.", Status = 400 });
-            if (req.Sort?.Count > MaxFilterClauses)           return BadRequest(new ProblemDetails { Title = $"Sort must not exceed {MaxFilterClauses} clauses.", Status = 400 });
+            if (req.Filters?.Count > MaxFilterClauses)                  return BadRequest(new ProblemDetails { Title = $"Filters must not exceed {MaxFilterClauses} clauses.", Status = 400 });
+            if (req.HavingFilters?.Count > MaxFilterClauses)            return BadRequest(new ProblemDetails { Title = $"HavingFilters must not exceed {MaxFilterClauses} clauses.", Status = 400 });
+            if (req.Sort?.Count > MaxFilterClauses)                     return BadRequest(new ProblemDetails { Title = $"Sort must not exceed {MaxFilterClauses} clauses.", Status = 400 });
+            // #486: CompareWith.Filters feeds the same ApplyFilters/AndAlso builder — cap it too
+            if (req.CompareWith?.Filters?.Count > MaxFilterClauses)     return BadRequest(new ProblemDetails { Title = $"CompareWith.Filters must not exceed {MaxFilterClauses} clauses.", Status = 400 });
 
             var errorResult = TryPrepareContext(req, out var ctx);
             if (errorResult != null) return errorResult;

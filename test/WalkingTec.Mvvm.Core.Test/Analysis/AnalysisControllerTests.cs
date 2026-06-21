@@ -2749,5 +2749,110 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             var stillExists = controller.Wtm.DC.Set<AnalysisSavedQuery>().IgnoreQueryFilters().Any(q => q.ID == id);
             Assert.IsTrue(stillExists, "Cross-tenant delete must NOT remove the row");
         }
+
+        // ─── #486: CompareWith.Filters DoS cap ──────────────────────────────────
+        // Regression guard: CompareWith.Filters must be subject to the same
+        // MaxFilterClauses cap as req.Filters / HavingFilters / Sort.
+        // Sending 51 clauses (one over the cap of 50) must return 400 from every
+        // action that exposes a CompareWith parameter.
+
+        private static List<FilterCondition> OverClausedFilters(int count = 51)
+            => Enumerable.Range(0, count)
+                .Select(_ => new FilterCondition { Field = "Region", Operator = FilterOperator.Eq, Value = "X" })
+                .ToList();
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public async Task Query_returns_400_when_CompareWith_Filters_exceeds_50_clauses()
+        {
+            // #486: CompareWith.Filters used to bypass MaxFilterClauses guard.
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+            req.CompareWith = new ComparisonRequest { Filters = OverClausedFilters() };
+
+            var result = (await CreateController().Query(req)) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "#486 Query: CompareWith.Filters > 50 should return 400");
+            var pd = result.Value as ProblemDetails;
+            Assert.IsNotNull(pd, "Response body should be ProblemDetails");
+            StringAssert.Contains(pd.Title, "CompareWith.Filters",
+                "Error title should mention CompareWith.Filters");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public async Task Pivot_returns_400_when_CompareWith_Filters_exceeds_50_clauses()
+        {
+            // #486: Pivot action also feeds CompareWith.Filters to the same engine path.
+            var req = PivotReq(
+                dims:     new[] { "Region", "Category" },
+                pivotDim: "Category",
+                msrs:     new[] { ("Amount", AggregateFunc.Sum) });
+            req.CompareWith = new ComparisonRequest { Filters = OverClausedFilters() };
+
+            var result = (await CreateController().Pivot(req)) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "#486 Pivot: CompareWith.Filters > 50 should return 400");
+            var pd = result.Value as ProblemDetails;
+            Assert.IsNotNull(pd);
+            StringAssert.Contains(pd.Title, "CompareWith.Filters");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public async Task Export_returns_400_when_CompareWith_Filters_exceeds_50_clauses()
+        {
+            // #486: Export action also feeds CompareWith.Filters to the same engine path.
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+            req.CompareWith = new ComparisonRequest { Filters = OverClausedFilters() };
+
+            var result = (await CreateController().Export(req, "csv")) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "#486 Export: CompareWith.Filters > 50 should return 400");
+            var pd = result.Value as ProblemDetails;
+            Assert.IsNotNull(pd);
+            StringAssert.Contains(pd.Title, "CompareWith.Filters");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public async Task PivotExport_returns_400_when_CompareWith_Filters_exceeds_50_clauses()
+        {
+            // #486: PivotExport action also feeds CompareWith.Filters to the same engine path.
+            var req = PivotReq(
+                dims:     new[] { "Region", "Category" },
+                pivotDim: "Category",
+                msrs:     new[] { ("Amount", AggregateFunc.Sum) });
+            req.CompareWith = new ComparisonRequest { Filters = OverClausedFilters() };
+
+            var result = (await CreateController().PivotExport(req, "csv")) as BadRequestObjectResult;
+            Assert.IsNotNull(result, "#486 PivotExport: CompareWith.Filters > 50 should return 400");
+            var pd = result.Value as ProblemDetails;
+            Assert.IsNotNull(pd);
+            StringAssert.Contains(pd.Title, "CompareWith.Filters");
+        }
+
+        [TestMethod]
+        [TestCategory("Analysis")]
+        public async Task Query_allows_CompareWith_Filters_at_exactly_50_clauses()
+        {
+            // #486: exactly 50 clauses must NOT be rejected (boundary condition).
+            // The filters reference a valid whitelist field so they pass engine validation.
+            _testData = new List<SaleRecord>
+            {
+                new SaleRecord { ID = Guid.NewGuid(), Region = "華東", Amount = 100m }
+            };
+
+            var req = Req(
+                dims: new[] { "Region" },
+                msrs: new[] { ("Amount", AggregateFunc.Sum) });
+            req.CompareWith = new ComparisonRequest { Filters = OverClausedFilters(50) };
+
+            // Should NOT return 400 from the clause-count guard (may succeed or fail for
+            // other reasons such as engine field validation — neither is a guard regression).
+            var result = await CreateController().Query(req);
+            Assert.IsNotInstanceOfType(result, typeof(BadRequestObjectResult),
+                "#486 Query: exactly 50 CompareWith.Filters clauses must not be rejected by the count guard");
+        }
     }
 }
