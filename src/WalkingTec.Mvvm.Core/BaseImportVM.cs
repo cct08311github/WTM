@@ -211,6 +211,10 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// 是否在sqlserver时使用bulk导入
         /// </summary>
+        /// <remarks>
+        /// Accepted for source compatibility. Bulk import is not currently implemented;
+        /// all rows are persisted through EF Core regardless of this setting.
+        /// </remarks>
         public bool UseBulkSave { get; set; }
 
         /// <summary>
@@ -1119,7 +1123,6 @@ namespace WalkingTec.Mvvm.Core
             }
             var ModelType = typeof(P);
             //循环数据列表
-            List<P> ListAdd = [];
             processed = 0;
 
             // EVM-002 + EVM-008 (import contract): validate-all-then-commit.
@@ -1215,16 +1218,7 @@ namespace WalkingTec.Mvvm.Core
                         if (ent != null) ent.TenantCode = LoginUserInfo?.CurrentTenant;
                     }
 
-                    //如果是SqlServer数据库，而且没有主子表功能，进行Bulk插入
-                    var connInfo = ConfigInfo?.Connections.Where(x => x.Key == (CurrentCS ?? "default")).FirstOrDefault();
-                    if (connInfo != null && connInfo.DbType == DBTypeEnum.SqlServer && !HasSubTable && UseBulkSave == true)
-                    {
-                        //ListAdd.Add(item);
-                    }
-                    else
-                    {
-                        DC!.Set<P>().Add(item);
-                    }
+                    DC!.Set<P>().Add(item);
                     progress?.Report(new ImportProgress { Processed = ++processed, Total = total, Phase = "Saving" });
                 }
                 catch (Exception ex)
@@ -1255,11 +1249,6 @@ namespace WalkingTec.Mvvm.Core
                 {
                     DC!.SaveChanges();
                     tx.Commit();
-
-                    if (ListAdd.Count > 0)
-                    {
-                        BulkInsert<P>(DC!, DC!.GetTableName<P>(), ListAdd);
-                    }
                 }
                 catch (Exception e)
                 {
@@ -1284,67 +1273,6 @@ namespace WalkingTec.Mvvm.Core
             return true;
         }
 
-        /// <summary>
-        /// 批量插入数据库操作，支持SqlServer
-        /// </summary>
-        /// <typeparam name="K"></typeparam>
-        /// <param name="dc">data context</param>
-        /// <param name="tableName"></param>
-        /// <param name="list"></param>
-        protected static void BulkInsert<K>(IDataContext dc, string tableName, IList<K> list)
-        {
-            //using (var bulkCopy = new SqlBulkCopy(dc.CSName))
-            //{
-            //    bulkCopy.BatchSize = list.Count;
-            //    bulkCopy.DestinationTableName = tableName;
-
-            //    var table = new DataTable();
-            //    var props = typeof(K).GetAllProperties().Distinct(x => x.Name);
-
-            //    //生成Table的列
-            //    foreach (var propertyInfo in props)
-            //    {
-            //        var notmapped = propertyInfo.GetCustomAttribute<NotMappedAttribute>();
-            //        var notobject = propertyInfo.PropertyType.Namespace.Equals("System") || propertyInfo.PropertyType.IsEnumOrNullableEnum();
-            //        if (notmapped == null && notobject)
-            //        {
-            //            string Name = dc.GetFieldName<K>(propertyInfo.Name);
-            //            bulkCopy.ColumnMappings.Add(Name, Name);
-            //            table.Columns.Add(Name, Nullable.GetUnderlyingType(propertyInfo.PropertyType) ?? propertyInfo.PropertyType);
-            //        }
-            //    }
-
-            //    //给Table赋值
-            //    var values = new object[table.Columns.Count];
-            //    foreach (var item in list)
-            //    {
-            //        var Index = 0;
-            //        foreach (var propertyInfo in props)
-            //        {
-            //            var notmapped = propertyInfo.GetCustomAttribute<NotMappedAttribute>();
-            //            var notobject = propertyInfo.PropertyType.Namespace.Equals("System") || propertyInfo.PropertyType.IsEnumOrNullableEnum();
-            //            if (notmapped == null && notobject)
-            //            {
-            //                values[Index] = propertyInfo.GetValue(item);
-            //                Index++;
-            //            }
-            //        }
-            //        table.Rows.Add(values);
-            //    }
-            //    //检测是否有继承字段，如果存在，进行赋值
-            //    string Discriminator = dc.GetFieldName<K>("Discriminator");
-            //    if (!string.IsNullOrEmpty(Discriminator))
-            //    {
-            //        bulkCopy.ColumnMappings.Add("Discriminator", "Discriminator");
-            //        table.Columns.Add("Discriminator", typeof(string));
-            //        for (int i = 0; i < table.Rows.Count; i++)
-            //        {
-            //            table.Rows[i]["Discriminator"] = typeof(K).Name;
-            //        }
-            //    }
-            //    bulkCopy.WriteToServer(table);
-            //}
-        }
         #endregion
 
         #region 验证是否空行

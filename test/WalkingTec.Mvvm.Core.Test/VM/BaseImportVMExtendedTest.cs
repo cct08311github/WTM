@@ -843,5 +843,56 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             listVm.EntityList.Add(new ErrorMessage { Index = 1, Message = "Error at row 1" });
             Assert.AreEqual(1, listVm.EntityList.Count);
         }
+
+        // ─── Regression #480: UseBulkSave must not silently drop new rows ──
+
+        /// <summary>
+        /// Regression test for issue #480.
+        /// When UseBulkSave == true and ConfigInfo.Connections contains a SqlServer
+        /// entry for the "default" key, new rows must still be persisted via EF Core.
+        /// Before the fix the branch whose only statement was the commented-out
+        /// ListAdd.Add(item) caused every new row to be silently dropped, returning
+        /// true with zero rows committed.
+        /// </summary>
+        [TestMethod]
+        public void BatchSaveData_UseBulkSave_SqlServerConfigured_NewRowsArePersisted_Regression480()
+        {
+            // Arrange: two brand-new rows (no pre-existing duplicates)
+            var entities = new List<OverwriteTestItem>
+            {
+                new OverwriteTestItem { Code = "BULK1", Description = "First",  Count = 1 },
+                new OverwriteTestItem { Code = "BULK2", Description = "Second", Count = 2 },
+            };
+
+            var db = CreateOverwriteDb();
+            var vm = new OverwriteImportVM(entities);
+            vm.UseBulkSave = true;
+            vm.Wtm = MockWtmContext.CreateWtmContext(db, "user");
+
+            // Inject a SqlServer-typed connection entry for key "default" into
+            // ConfigInfo so the (now-removed) dead branch would have been entered.
+            // The actual DataContext remains InMemory (per test-isolation convention),
+            // but ConfigInfo.Connections drives the branch selection in BatchSaveData.
+            vm.Wtm.ConfigInfo!.Connections.Clear();
+            vm.Wtm.ConfigInfo.Connections.Add(new CS
+            {
+                Key     = "default",
+                DbType  = DBTypeEnum.SqlServer,
+                Enabled = true,
+            });
+
+            // Act
+            var result = vm.BatchSaveData();
+
+            // Assert: rows must be persisted — NOT silently dropped
+            Assert.IsTrue(result, "BatchSaveData should return true for valid rows with UseBulkSave=true");
+            Assert.AreEqual(0, vm.ErrorListVM.EntityList.Count, "No import errors expected");
+
+            using var ctx = (Microsoft.EntityFrameworkCore.DbContext)CreateOverwriteDb();
+            var count = ctx.Set<OverwriteTestItem>().Count();
+            Assert.AreEqual(2, count,
+                "All 2 new rows must be in the DB; prior bug silently dropped them when " +
+                "UseBulkSave=true and DbType=SqlServer (issue #480).");
+        }
     }
 }
