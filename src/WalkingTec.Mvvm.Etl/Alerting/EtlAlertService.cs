@@ -12,6 +12,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core.Notifications;
 using WalkingTec.Mvvm.Etl.Models;
+using WalkingTec.Mvvm.Etl.Pipeline.Sources;
 
 namespace WalkingTec.Mvvm.Etl.Alerting;
 
@@ -178,6 +179,32 @@ public class EtlAlertService : IEtlAlertService
         long? actualElapsedMs,
         CancellationToken ct)
     {
+        // Dispatch-time SSRF guard (#484): require absolute https:// and reject blocked IP
+        // ranges. This mirrors the boundary validation in EtlJobDefinitionVM.Validate() but
+        // runs defensively at POST time to cover jobs imported via API or migration scripts
+        // that bypass the VM layer. Uses RestEtlSource.IsBlockedIp (the shared SSRF helper).
+        var webhookUrl = jobDef.AlertWebhookUrl;
+        if (!string.IsNullOrWhiteSpace(webhookUrl))
+        {
+            if (!Uri.TryCreate(webhookUrl, UriKind.Absolute, out var webhookUri)
+                || webhookUri.Scheme != Uri.UriSchemeHttps)
+            {
+                _logger.LogWarning(
+                    "ETL alert webhook for job '{JobName}' skipped: URL is not an absolute https:// URI.",
+                    jobDef.Name);
+                return;
+            }
+
+            if (IPAddress.TryParse(webhookUri.Host, out var literalIp)
+                && RestEtlSource.IsBlockedIp(literalIp))
+            {
+                _logger.LogWarning(
+                    "ETL alert webhook for job '{JobName}' skipped: target host is in a blocked IP range (SSRF guard).",
+                    jobDef.Name);
+                return;
+            }
+        }
+
         string? messageOverride = null;
         if (isSla && actualElapsedMs.HasValue)
         {
@@ -189,13 +216,37 @@ public class EtlAlertService : IEtlAlertService
                 $"Started: {runLog.StartedAt:u}  Finished: {runLog.FinishedAt:u}";
         }
 
+        // L3 defence-in-depth: sanitize error message before it leaves the system (#484).
+        // Build a sanitized RunLog copy (same pattern as SendEmailAsync) so that
+        // BuildAlertMessage — which appends runLog.ErrorMessage verbatim into the `text`
+        // field rendered by Slack/Teams/DingTalk — also emits the redacted value.
+        // Both `text` and `errorMessage` payload fields are derived from this copy.
+        var sanitizedRunLog = string.IsNullOrWhiteSpace(runLog.ErrorMessage)
+            ? runLog
+            : new EtlRunLog
+            {
+                JobId             = runLog.JobId,
+                Trigger           = runLog.Trigger,
+                Result            = runLog.Result,
+                ErrorMessage      = Pipeline.EtlErrorSanitizer.SanitizeRaw(runLog.ErrorMessage),
+                StartedAt         = runLog.StartedAt,
+                FinishedAt        = runLog.FinishedAt,
+                ExtractedRows     = runLog.ExtractedRows,
+                LoadedRows        = runLog.LoadedRows,
+                ErrorRows         = runLog.ErrorRows,
+                ElapsedMs         = runLog.ElapsedMs,
+                WatermarkSnapshot = runLog.WatermarkSnapshot,
+            };
+
         var payload = new
         {
-            text = messageOverride ?? BuildAlertMessage(jobDef, runLog),
+            text = messageOverride ?? BuildAlertMessage(jobDef, sanitizedRunLog),
             jobName = jobDef.Name,
             jobId = jobDef.ID,
             consecutiveFailures = jobDef.ConsecutiveFailureCount,
-            errorMessage = runLog.ErrorMessage,
+            errorMessage = string.IsNullOrWhiteSpace(sanitizedRunLog.ErrorMessage)
+                ? null
+                : sanitizedRunLog.ErrorMessage,
             startedAt = runLog.StartedAt,
             finishedAt = runLog.FinishedAt,
         };
@@ -211,7 +262,7 @@ public class EtlAlertService : IEtlAlertService
         try
         {
             var response = await client
-                .PostAsync(jobDef.AlertWebhookUrl, content, ct)
+                .PostAsync(webhookUrl, content, ct)
                 .ConfigureAwait(false);
 
             if (!response.IsSuccessStatusCode)
@@ -260,7 +311,27 @@ public class EtlAlertService : IEtlAlertService
         var subject = messageOverride != null
             ? $"[ETL Alert] Job '{jobDef.Name}' SLA breach"
             : $"[ETL Alert] Job '{jobDef.Name}' failed ({jobDef.ConsecutiveFailureCount} consecutive)";
-        var body = messageOverride ?? BuildAlertMessage(jobDef, runLog);
+
+        // L3 defence-in-depth: sanitize before email egress (#484).
+        // Builds the alert body using a sanitized RunLog so connection strings / secrets
+        // in ErrorMessage are stripped before they leave the system via SMTP.
+        var sanitizedRunLog = string.IsNullOrWhiteSpace(runLog.ErrorMessage)
+            ? runLog
+            : new EtlRunLog
+            {
+                JobId            = runLog.JobId,
+                Trigger          = runLog.Trigger,
+                Result           = runLog.Result,
+                ErrorMessage     = Pipeline.EtlErrorSanitizer.SanitizeRaw(runLog.ErrorMessage),
+                StartedAt        = runLog.StartedAt,
+                FinishedAt       = runLog.FinishedAt,
+                ExtractedRows    = runLog.ExtractedRows,
+                LoadedRows       = runLog.LoadedRows,
+                ErrorRows        = runLog.ErrorRows,
+                ElapsedMs        = runLog.ElapsedMs,
+                WatermarkSnapshot = runLog.WatermarkSnapshot,
+            };
+        var body = messageOverride ?? BuildAlertMessage(jobDef, sanitizedRunLog);
 
         var from = string.IsNullOrWhiteSpace(smtp.FromName)
             ? new MailAddress(smtp.FromAddress)

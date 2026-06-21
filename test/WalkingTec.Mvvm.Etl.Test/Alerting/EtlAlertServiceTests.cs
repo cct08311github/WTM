@@ -121,6 +121,45 @@ public class EtlAlertServiceTests
     }
 
     [TestMethod]
+    [Description("#484 secret-leak gap: both `text` AND `errorMessage` payload fields must be sanitized — raw secret must not appear in either")]
+    public async Task SendAlertAsync_WithSecretInErrorMessage_BothTextAndErrorMessageAreSanitized()
+    {
+        var (svc, handler) = MakeService();
+        var job = MakeJob(webhookUrl: "https://hooks.example.com/alert");
+        // Simulate a connection string with a secret leaking into ErrorMessage.
+        var secretError = "Login failed. Server=prod-db.internal;Database=Orders;User Id=sa;Password=S3cr3t!";
+        var log = MakeRunLog(secretError);
+
+        await svc.SendAlertAsync(job, log);
+
+        Assert.AreEqual(1, handler.Calls.Count, "應呼叫一次 HTTP POST");
+        var (_, _, body) = handler.Calls[0];
+        Assert.IsNotNull(body);
+
+        using var doc = JsonDocument.Parse(body!);
+
+        // `text` field — rendered by Slack/Teams/DingTalk — must not contain the raw secret
+        Assert.IsTrue(doc.RootElement.TryGetProperty("text", out var textProp),
+            "JSON body 應包含 text 欄位");
+        var textValue = textProp.GetString() ?? string.Empty;
+        StringAssert.DoesNotMatch(textValue,
+            new System.Text.RegularExpressions.Regex(@"Password\s*=\s*S3cr3t!", System.Text.RegularExpressions.RegexOptions.IgnoreCase),
+            "text 欄位不應包含原始 Password 值");
+        StringAssert.Contains(textValue, "[redacted]",
+            "text 欄位應包含 sanitizer 的 [redacted] 標記");
+
+        // `errorMessage` field — must also be sanitized
+        Assert.IsTrue(doc.RootElement.TryGetProperty("errorMessage", out var errProp),
+            "JSON body 應包含 errorMessage 欄位");
+        var errValue = errProp.GetString() ?? string.Empty;
+        StringAssert.DoesNotMatch(errValue,
+            new System.Text.RegularExpressions.Regex(@"Password\s*=\s*S3cr3t!", System.Text.RegularExpressions.RegexOptions.IgnoreCase),
+            "errorMessage 欄位不應包含原始 Password 值");
+        StringAssert.Contains(errValue, "[redacted]",
+            "errorMessage 欄位應包含 sanitizer 的 [redacted] 標記");
+    }
+
+    [TestMethod]
     [Description("Webhook 回傳非 2xx → 不拋例外，僅記錄警告")]
     public async Task SendAlertAsync_WebhookNon2xx_DoesNotThrow()
     {

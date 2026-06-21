@@ -1,6 +1,9 @@
 #nullable enable
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
+using System.Net.Sockets;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -10,6 +13,7 @@ using WalkingTec.Mvvm.Etl.Models;
 using WalkingTec.Mvvm.Etl.Scheduling;
 using WalkingTec.Mvvm.Etl.Pipeline;
 using WalkingTec.Mvvm.Etl.Pipeline.Loaders;
+using WalkingTec.Mvvm.Etl.Pipeline.Sources;
 
 namespace WalkingTec.Mvvm.Etl.ViewModels;
 
@@ -84,6 +88,54 @@ public class EtlJobDefinitionVM : BaseCRUDVM<EtlJobDefinition>
             {
                 MSD.AddModelError("Entity.ColumnMappingJson",
                     $"欄位對應 JSON 格式錯誤：{ex.Message}");
+            }
+        }
+
+        // ── AlertWebhookUrl SSRF guard (#484) ───────────────────────────
+        // Require an absolute https:// URI and reject private/loopback/link-local/
+        // IMDS hosts. Uses the same IsBlockedIp helper as RestEtlSource so the
+        // block-list is defined in exactly one place.
+        if (!string.IsNullOrWhiteSpace(Entity.AlertWebhookUrl))
+        {
+            if (!Uri.TryCreate(Entity.AlertWebhookUrl, UriKind.Absolute, out var webhookUri)
+                || webhookUri.Scheme != Uri.UriSchemeHttps)
+            {
+                MSD.AddModelError("Entity.AlertWebhookUrl",
+                    "告警 Webhook URL 必須是絕對 https:// 網址。");
+            }
+            else
+            {
+                // Block private/loopback/link-local/IMDS IP literals.
+                if (IPAddress.TryParse(webhookUri.Host, out var literalIp)
+                    && RestEtlSource.IsBlockedIp(literalIp))
+                {
+                    MSD.AddModelError("Entity.AlertWebhookUrl",
+                        "告警 Webhook URL 目標 IP 屬於受限範圍（私有 / loopback / IMDS），不允許存取。");
+                }
+                else if (!IPAddress.TryParse(webhookUri.Host, out _))
+                {
+                    // Hostname: do a best-effort DNS pre-check at save time.
+                    // The authoritative TOCTOU-safe block runs in PinnedConnectAsync at
+                    // actual POST time; this catches obvious misconfiguration early.
+                    try
+                    {
+                        var ips = Dns.GetHostAddresses(webhookUri.Host);
+                        foreach (var ip in ips)
+                        {
+                            if (RestEtlSource.IsBlockedIp(ip))
+                            {
+                                MSD.AddModelError("Entity.AlertWebhookUrl",
+                                    "告警 Webhook URL 主機名稱解析後屬於受限 IP 範圍（私有 / loopback / IMDS），不允許存取。");
+                                break;
+                            }
+                        }
+                    }
+                    catch (SocketException)
+                    {
+                        // DNS lookup failed (host unreachable at save time) — allow save;
+                        // the ConnectCallback will enforce the block at actual POST time.
+                    }
+                }
             }
         }
 
