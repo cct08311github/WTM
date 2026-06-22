@@ -168,6 +168,37 @@ public class DialogInitTagHelperTests
             "dates must be omitted when Dates is null/empty");
     }
 
+    // ── TC-02b: null/empty FormFilter omits filter key ───────────────────────
+
+    [TestMethod]
+    public void NoFormFilter_EmitsIslandWithoutFilterKey()
+    {
+        // Arrange: FormFilter is left at its default (empty string — not set by caller)
+        var helper = new DialogInitTagHelper();
+        // Do NOT set FormFilter; the TagHelper default is string.Empty
+
+        // Act
+        var html = RenderTagHelper(helper);
+
+        // Assert: island is still emitted
+        StringAssert.Contains(html, "type=\"application/json\"",
+            "Island script must still be emitted even when FormFilter is not set");
+
+        var json = ExtractJsonFromIsland(html);
+        Assert.IsNotNull(json, "Island must contain parseable JSON");
+
+        using var doc = JsonDocument.Parse(json!);
+        var action = doc.RootElement.GetProperty("actions")[0];
+
+        // type must still be present
+        Assert.AreEqual("initForm", action.GetProperty("type").GetString(),
+            "Action type must be 'initForm' even without a filter");
+
+        // filter must be omitted (null, so JsonIgnoreCondition.WhenWritingNull drops it)
+        Assert.IsFalse(action.TryGetProperty("filter", out _),
+            "filter key must be omitted from JSON when FormFilter is null/empty");
+    }
+
     // ── TC-03: script-injection safety ───────────────────────────────────────
 
     [TestMethod]

@@ -1,3 +1,4 @@
+#nullable enable
 using System.Collections.Generic;
 using System.Text.Json;
 using Microsoft.AspNetCore.Razor.TagHelpers;
@@ -28,22 +29,20 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
         };
 
-        /// <summary>
-        /// The lay-filter value passed to layui.form.render(). Required.
-        /// </summary>
-        public string FormFilter { get; set; }
+        /// <summary>Required. The layui filter name for <c>form.render()</c>.</summary>
+        public string FormFilter { get; set; } = string.Empty;
 
         /// <summary>
         /// Optional form type passed to layui.form.render() as the first argument
         /// (e.g. "select", "checkbox", "radio"). Null / empty renders all types.
         /// </summary>
-        public string FormType { get; set; }
+        public string? FormType { get; set; }
 
         /// <summary>
         /// Optional date-picker configurations. Each entry is passed to layui.laydate.render().
         /// Serialized as the 'dates' array in the action payload.
         /// </summary>
-        public List<DialogDateConfig> Dates { get; set; }
+        public List<DialogDateConfig>? Dates { get; set; }
 
         public override void Process(TagHelperContext context, TagHelperOutput output)
         {
@@ -77,14 +76,17 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     /// <summary>Date-picker configuration for a single field.</summary>
     public class DialogDateConfig
     {
+        /// <summary>Required. The CSS selector or DOM element ID for the date input (e.g. <c>#BirthDate</c>).</summary>
         [System.Text.Json.Serialization.JsonPropertyName("elem")]
-        public string Elem { get; set; }
+        public string Elem { get; set; } = string.Empty;
 
+        /// <summary>Optional. The laydate type (e.g. <c>"date"</c>, <c>"datetime"</c>, <c>"time"</c>, <c>"year"</c>, <c>"month"</c>). Defaults to <c>"date"</c> when omitted.</summary>
         [System.Text.Json.Serialization.JsonPropertyName("type")]
-        public string Type { get; set; }
+        public string? Type { get; set; }
 
+        /// <summary>Optional. The display format string (e.g. <c>"yyyy-MM-dd"</c>). Uses laydate's default format when omitted.</summary>
         [System.Text.Json.Serialization.JsonPropertyName("format")]
-        public string Format { get; set; }
+        public string? Format { get; set; }
     }
 
     // Internal DTO types — not part of the public API surface.
@@ -92,21 +94,21 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     internal class DialogInitPayload
     {
         [System.Text.Json.Serialization.JsonPropertyName("actions")]
-        public List<DialogInitAction> Actions { get; set; }
+        public List<DialogInitAction> Actions { get; set; } = new();
     }
 
     internal class DialogInitAction
     {
         [System.Text.Json.Serialization.JsonPropertyName("type")]
-        public string Type { get; set; }
+        public string Type { get; set; } = string.Empty;
 
         [System.Text.Json.Serialization.JsonPropertyName("filter")]
-        public string Filter { get; set; }
+        public string? Filter { get; set; }
 
         [System.Text.Json.Serialization.JsonPropertyName("formType")]
-        public string FormType { get; set; }
+        public string? FormType { get; set; }
 
         [System.Text.Json.Serialization.JsonPropertyName("dates")]
-        public List<DialogDateConfig> Dates { get; set; }
+        public List<DialogDateConfig>? Dates { get; set; }
     }
 }

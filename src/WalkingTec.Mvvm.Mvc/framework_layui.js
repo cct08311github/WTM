@@ -726,7 +726,13 @@ window.ff = {
                             // Issue #470: dispatch JSON action island after legacy scripts so
                             // both paths are supported. No-op when no island was present.
                             if (_dialogInitPayload !== null) {
-                                try { ff.DispatchAction(_dialogInitPayload); } catch (e) { /* ignore */ }
+                                try {
+                                    ff.DispatchAction(_dialogInitPayload);
+                                } catch (e) {
+                                    if (typeof console !== 'undefined' && console.warn) {
+                                        console.warn('[WTM] initForm island dispatch failed:', e);
+                                    }
+                                }
                             }
                         }
                         , resizing: function (layero) {
