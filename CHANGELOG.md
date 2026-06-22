@@ -27,7 +27,7 @@ Housekeeping + small additive hardening — all **opt-in / non-breaking**, no sh
 
 ### Changed
 
-- **CI: `publish-nuget.yml` `Create GitHub Release` is now idempotent (#514):** GET the release by tag → `PATCH` if it exists, else `POST`. A re-pushed tag (during the recurring Gitea-Actions stuck-state recovery, where the publish workflow can run more than once for the same tag) no longer 422-fails the run. CI-only — not shipped in any package.
+- **CI: `publish-nuget.yml` `Create GitHub Release` is now idempotent (#514):** GET the release by tag → `PATCH` if it exists, else `POST`. A re-pushed tag (during the recurring internal infrastructure-Actions stuck-state recovery, where the publish workflow can run more than once for the same tag) no longer 422-fails the run. CI-only — not shipped in any package.
 - **Removed 705 lines of residual dead code (#502):** commented-out `LogTrace.cs` / `LogDebug.cs`, five commented regions in `PagedListExtension.cs`, and dead methods (`GetServerUrl`, `GetAllAccessUrls`, `getAuthTypes`, `HandleDeferredAction`, `ReadFreshNodeAsync`) plus dead JS (`_makeWidgetHtml` and a commented `ff.LoadPage` block). Each grep-verified zero-reference (including string/reflection lookups) before removal; full suite stayed green.
 
 ### Migration
@@ -98,7 +98,7 @@ Security + maintenance. Clears the last standing NU1903 (#393) now that an upstr
 
 ### Changed
 
-- **CI: `actions/upload-artifact@v4` marked `continue-on-error` (#473):** the v4 artifact-upload action is incompatible with the local Gitea Actions (GHES-style) API and was hard-failing the `build-and-test` / `e2e` jobs even when all tests passed (long-standing quirk, Issue #11). The upload steps are now `continue-on-error: true` so a green test run reports green. **CI infrastructure only — not shipped in any `WalkingTec.Mvvm.*` package.**
+- **CI: `actions/upload-artifact@v4` marked `continue-on-error` (#473):** the v4 artifact-upload action is incompatible with the local internal CI (GHES-style) API and was hard-failing the `build-and-test` / `e2e` jobs even when all tests passed (long-standing quirk, Issue #11). The upload steps are now `continue-on-error: true` so a green test run reports green. **CI infrastructure only — not shipped in any `WalkingTec.Mvvm.*` package.**
 
 ### Migration
 
@@ -159,7 +159,7 @@ Patch — a HIGH-impact readiness-probe bug fix + a log-injection security harde
 
 ### Changed
 
-- **CI operations doc (#443):** `docs/ci-operations.md` now documents the runner topology (WTM CI runs on the Docker `act_runner`, `ubuntu-latest`; a separate Homebrew runner serves other projects) and the Gitea release/tag-trigger gotchas (Gitea Release objects are created manually; a tag-ref `workflow_dispatch` returns 204 but creates no run; a same-commit tag re-push de-dupes — use a fresh commit/tag).
+- **CI operations doc (#443):** `docs/ci-operations.md` now documents the runner topology (WTM CI runs on the Docker `act_runner`, `ubuntu-latest`; a separate Homebrew runner serves other projects) and the release/tag-trigger gotchas (internal infrastructure Release objects are created manually; a tag-ref `workflow_dispatch` returns 204 but creates no run; a same-commit tag re-push de-dupes — use a fresh commit/tag).
 - **Demo/test npm dependencies (#447):** bumped npm deps in the Vue/Vue3 demo ClientApps and the JS test project to clear Dependabot critical/high advisories (shell-quote, axios, form-data, tar, etc.). Demo/test-only — **not** part of any shipped `WalkingTec.Mvvm.*` package.
 
 ## [10.13.0] - 2026-06-20
@@ -1239,21 +1239,21 @@ regression tests across the six PRs);
 
 ## [10.5.1] - 2026-05-13
 
-Infra-only release. All NuGet publish and CI now run on Gitea; GitHub
+Infra-only release. All NuGet publish and CI now run on internal infrastructure; GitHub
 (github-archive mirror, nuget.pkg.github.com, GitHub Actions Marketplace)
 is fully retired. No source code changes — same binaries as 10.5.0.
 
 ### Changed
 
 - **NuGet publish target** moved from `nuget.pkg.github.com/cct08311github/`
-  to Gitea NuGet registry (`/api/packages/chiu0831/nuget`).
-- **CI workflows** continue to live in `.github/workflows/` (Gitea Actions
+  to internal NuGet registry (`/api/packages/chiu0831/nuget`).
+- **CI workflows** continue to live in `.github/workflows/` (internal CI
   reads this path natively); the publish secret is now `PAT_TOKEN`.
 - **`common.props`** `RepositoryUrl` / `PackageProjectUrl` now point to the
-  Gitea repo URL.
+  internal infrastructure repo URL.
 - **`scripts/release-github-package.sh`** renamed to
   `scripts/release-gitea-package.sh`; internals rewritten from `gh` CLI to
-  `curl` against the Gitea API.
+  `curl` against the internal infrastructure API.
 - **`e2e-test.yml`** dropped the `mikepenz/action-junit-report` step
   (GitHub Marketplace-only action). E2E artifacts continue to upload via
   `actions/upload-artifact`.
@@ -1261,13 +1261,13 @@ is fully retired. No source code changes — same binaries as 10.5.0.
 ### Added
 
 - **`scripts/publish-to-gitea.sh`** — local manual publish fallback used
-  when the Gitea Actions runner is unavailable. Supports `--suffix
-  <pre-release>` and `--dry-run`. Token sourced from the `GITEA_TOKEN`
-  environment variable or `~/.gitea-token`.
+  when the internal CI runner is unavailable. Supports `--suffix
+  <pre-release>` and `--dry-run`. Token sourced from the `REGISTRY_TOKEN`
+  environment variable or `.local-token-file`.
 
 ### Security
 
-- `scripts/publish-to-gitea.sh` masks the Gitea token in `--dry-run`
+- `scripts/publish-to-gitea.sh` masks the internal infrastructure token in `--dry-run`
   output (`<prefix>***`) instead of echoing the full secret. Real
   execution still passes the full token to `dotnet nuget push`.
 
