@@ -160,6 +160,30 @@ window.ff = {
                         }
                     }
                     break;
+                // Issue #470: opt-in eval-free form initialisation via JSON island.
+                // Calls layui.form.render() and laydate.render() — no dynamic code.
+                case 'initForm':
+                    try {
+                        if (typeof layui !== 'undefined' && layui.form &&
+                            typeof layui.form.render === 'function') {
+                            layui.form.render(action.formType || null, action.filter || undefined);
+                        }
+                        if (action.dates && Array.isArray(action.dates) && action.dates.length > 0 &&
+                            typeof layui !== 'undefined' && layui.laydate &&
+                            typeof layui.laydate.render === 'function') {
+                            for (var _di = 0; _di < action.dates.length; _di++) {
+                                var _d = action.dates[_di];
+                                if (_d && _d.elem) {
+                                    layui.laydate.render({ elem: _d.elem, type: _d.type || 'date', format: _d.format });
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        if (typeof console !== 'undefined' && console.warn) {
+                            console.warn('[WTM] initForm action failed:', e);
+                        }
+                    }
+                    break;
                 default:
                     if (typeof console !== 'undefined' && console.warn) {
                         console.warn('[WTM] Unknown WtmAction type:', action.type);
@@ -645,6 +669,19 @@ window.ff = {
                             }
                         }
                     } catch (e) { /* malformed HTML → no init scripts; markup still rendered via SafeHtml */ }
+                    // Issue #470: extract opt-in JSON action island (<script type="application/json"
+                    // class="wtm-dialog-init">) from the same-origin partial BEFORE SafeHtml strips
+                    // the script elements. The island payload is dispatched via ff.DispatchAction
+                    // after the dialog DOM is inserted — zero eval, no dynamic code.
+                    var _dialogInitPayload = null;
+                    try {
+                        if (typeof _pdoc !== 'undefined') {
+                            var _islandNode = _pdoc.querySelector('script[type="application/json"].wtm-dialog-init');
+                            if (_islandNode && _islandNode.textContent) {
+                                _dialogInitPayload = JSON.parse(_islandNode.textContent);
+                            }
+                        }
+                    } catch (e) { /* malformed island JSON → skip; legacy path unaffected */ }
                     // Issue #789 Phase 3A: build wrapper via DOM API and serialize
                     // through outerHTML so the cookie-sourced id is safely escaped
                     // in the resulting markup that becomes layer.open({content}).
@@ -685,6 +722,17 @@ window.ff = {
                             // is unaffected — only the script bodies are re-executed here.
                             for (var _si = 0; _si < _initScripts.length; _si++) {
                                 ff._legacyScriptEval(_initScripts[_si]);
+                            }
+                            // Issue #470: dispatch JSON action island after legacy scripts so
+                            // both paths are supported. No-op when no island was present.
+                            if (_dialogInitPayload !== null) {
+                                try {
+                                    ff.DispatchAction(_dialogInitPayload);
+                                } catch (e) {
+                                    if (typeof console !== 'undefined' && console.warn) {
+                                        console.warn('[WTM] initForm island dispatch failed:', e);
+                                    }
+                                }
                             }
                         }
                         , resizing: function (layero) {
