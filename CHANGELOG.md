@@ -1,5 +1,17 @@
 # 更新日志
 
+## [10.13.9] - 2026-06-22
+
+### Fixed
+
+- **Dialog form init scripts re-injected as `<script>` elements — native order/scope restored, DOMPurify stays active (#522):** the #462 dialog rehydration re-ran the partial's extracted inline init scripts via per-script `eval()`, which does not reproduce native inline-`<script>` semantics — a top-level `var X = xmSelect.render(...)` (`ComboBoxTagHelper`) did not become a shared global, so the sibling `window['X'].update(...)` (`BaseFieldTag`) threw `TypeError: …update is not a function` and ordering/scope-dependent controls (xm-select, toggles, FK selects) failed to initialize. Downstream apps were forced to override `ff.SafeHtml` to a no-op so the scripts would run natively — **disabling DOMPurify on dialog markup (losing XSS protection)**. Fix: each extracted init script is now re-injected as a real `<script>` element in document order, so the browser executes them in native global scope + order with cross-script `var` sharing, **while `ff.SafeHtml`/DOMPurify stays active on the markup**. The DOMParser extraction gate (real `<script>` elements only — never attribute/text-node `"<script>"` strings), the `ff.SafeHtml` sanitization order, `ff._legacyScriptEval` (still used by the IsScript response-header branches), and the total `eval(` count (1) are all unchanged — **no wider XSS surface than #462**. Downstream apps (e.g. BMS) can now remove the `SafeHtml` no-op shim and keep DOMPurify. (+14 JS tests incl. jsdom order/scope behavioral + XSS-boundary; full suite 1132/1132.)
+
+### Migration
+
+- No action required. Apps that added an `ff.SafeHtml = h => h` no-op shim to work around the broken dialog init can now **remove it** and keep DOMPurify XSS protection on dialog markup.
+
+---
+
 ## [10.13.8] - 2026-06-22
 
 Housekeeping + small additive hardening — all **opt-in / non-breaking**, no shipped default-behaviour change. Closes the remaining P3 backlog after the v10.13.7 self-audit, plus a CI robustness fix and the foundation for eval-free dialogs.
