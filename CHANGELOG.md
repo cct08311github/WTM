@@ -1,5 +1,29 @@
 # 更新日志
 
+## [10.13.8] - 2026-06-22
+
+Housekeeping + small additive hardening — all **opt-in / non-breaking**, no shipped default-behaviour change. Closes the remaining P3 backlog after the v10.13.7 self-audit, plus a CI robustness fix and the foundation for eval-free dialogs.
+
+### Added
+
+- **Opt-in eval-free dialog form init — foundation (#470):** `ff.DispatchAction` gains a whitelisted `initForm` action (eval-free `layui.form.render` + declarative `laydate`); `ff.OpenDialog` consumes an opt-in `<script type="application/json" class="wtm-dialog-init">` JSON island (`JSON.parse` → DispatchAction, **zero eval**); and a new `DialogInitTagHelper` (`<wt:dialog-init form-filter="…">`) emits the island, JSON-serialized with `JavaScriptEncoder.Default` so a `</script>` in a value can never break out (the #481/#490 lesson). A dialog form can now initialize with **zero eval** by opting in. Purely additive — existing dialogs, `ff._legacyScriptEval`, and the #462 DOMParser rehydration are unchanged. (Full retirement of the eval sink stays tracked on #470, gated on downstream `FFResultJson` migration.)
+- **`WTMContext.IsKnownConnectionKey(string?)` (#517):** the #503/#506 connection-key guard is now a public single-source-of-truth method, callable as `Wtm.IsKnownConnectionKey(csKey)` from any derived/forked/API controller (null/empty → default connection; case-insensitive match against configured connections). Lets downstream/forked controllers reuse one guard instead of re-implementing the cross-DB check. `_FrameworkController`'s guard now delegates to it.
+
+### Fixed
+
+- **`Utils.MD5String` leaked an undisposed `MD5` instance (#487):** the legacy MD5 path created `MD5.Create()` without disposing it; now `using var`, matching the sibling `GetMD5Stream`. Managed MD5 holds no OS handle, so this is a GC-pressure consistency cleanup (no functional change).
+
+### Changed
+
+- **CI: `publish-nuget.yml` `Create GitHub Release` is now idempotent (#514):** GET the release by tag → `PATCH` if it exists, else `POST`. A re-pushed tag (during the recurring Gitea-Actions stuck-state recovery, where the publish workflow can run more than once for the same tag) no longer 422-fails the run. CI-only — not shipped in any package.
+- **Removed 705 lines of residual dead code (#502):** commented-out `LogTrace.cs` / `LogDebug.cs`, five commented regions in `PagedListExtension.cs`, and dead methods (`GetServerUrl`, `GetAllAccessUrls`, `getAuthTypes`, `HandleDeferredAction`, `ReadFreshNodeAsync`) plus dead JS (`_makeWidgetHtml` and a commented `ff.LoadPage` block). Each grep-verified zero-reference (including string/reflection lookups) before removal; full suite stayed green.
+
+### Migration
+
+- No action required. Everything is additive/opt-in or internal cleanup — no public API removed, no default behaviour changed.
+
+---
+
 ## [10.13.7] - 2026-06-21
 
 Self-audit regression batch. A **round-2** multi-agent adversarial audit of v10.13.6 — explicitly re-auditing the just-shipped fixes — caught **two HIGH Oracle regressions introduced by v10.13.6's own #485** (its bundled "Oracle identifier quoting" change), plus resource/correctness/security issues. The over-scoped quoting is reverted; the rest fixed. Integrated full-solution suite: **5378 passed / 0 failed**, 0 NU1903.
