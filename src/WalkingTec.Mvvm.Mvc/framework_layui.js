@@ -716,12 +716,25 @@ window.ff = {
                         , id: windowid //设定一个id，防止重复弹出
                         , content: str
                         , success: function () {
-                            // Issue #462: re-run the partial's trusted inline init scripts
-                            // (layui.form.render, laydate, cascading combobox handlers, etc.)
-                            // after the dialog DOM is inserted. Markup XSS protection (SafeHtml)
-                            // is unaffected — only the script bodies are re-executed here.
+                            // Issue #522: re-inject the extracted inline init scripts as real
+                            // <script> elements in original document order. The browser runs
+                            // them in native global scope + order (var sharing across sibling
+                            // scripts), reproducing the original inline-<script> semantics that
+                            // ordering/scope-dependent controls (xm-select render→update, etc.)
+                            // require — while ff.SafeHtml/DOMPurify still sanitizes the dialog
+                            // MARKUP (scripts were extracted before sanitization, markup is
+                            // purified, scripts re-injected separately). Same trust boundary as
+                            // #462: only real <script> ELEMENTS parsed by DOMParser are re-run;
+                            // "<script>" text in attrs/text nodes is not.
+                            // Previously used ff._legacyScriptEval per script (Issue #462), but
+                            // per-script eval() runs in a local scope — top-level `var X` does
+                            // NOT become a global, so sibling scripts (e.g. xmSelect.render →
+                            // window[id].update) could not share vars across eval boundaries.
                             for (var _si = 0; _si < _initScripts.length; _si++) {
-                                ff._legacyScriptEval(_initScripts[_si]);
+                                var _se = document.createElement('script');
+                                _se.text = _initScripts[_si];
+                                document.body.appendChild(_se);          // executes synchronously in global scope
+                                if (_se.parentNode) { _se.parentNode.removeChild(_se); } // tidy up; effects persist
                             }
                             // Issue #470: dispatch JSON action island after legacy scripts so
                             // both paths are supported. No-op when no island was present.

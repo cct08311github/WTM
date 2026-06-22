@@ -42,9 +42,13 @@ describe('#462 OpenDialog script rehydration — source sweep', () => {
         expect(active).not.toMatch(/_scriptRe\s*=\s*\//);
     });
 
-    test('OpenDialog layer.open success callback re-runs _initScripts via _legacyScriptEval', () => {
-        // The success callback must iterate _initScripts and call _legacyScriptEval.
-        expect(active).toMatch(/success\s*:\s*function\s*\(\s*\)\s*\{[\s\S]{0,400}?_initScripts[\s\S]{0,200}?_legacyScriptEval/);
+    test('OpenDialog layer.open success callback re-injects _initScripts as <script> elements (Issue #522)', () => {
+        // Issue #522 changed the rehydration from per-script ff._legacyScriptEval (eval scope)
+        // to real <script> element re-injection (native global scope, var-sharing across siblings).
+        // The success callback must iterate _initScripts and create a script element per entry.
+        expect(active).toMatch(/success\s*:\s*function\s*\(\s*\)\s*\{[\s\S]{0,800}?_initScripts/);
+        expect(active).toMatch(/document\.createElement\s*\(\s*['"]script['"]\s*\)/);
+        expect(active).toMatch(/document\.body\.appendChild/);
     });
 
     test('SafeHtml is still called on the partial markup (XSS protection preserved)', () => {
