@@ -941,7 +941,7 @@ namespace WalkingTec.Mvvm.Core
 
         private static string MD5String(byte[] buffer)
         {
-            var md5 = MD5.Create();
+            using var md5 = MD5.Create();
             byte[] cryptBuffer = md5.ComputeHash(buffer);
             StringBuilder sb = new StringBuilder();
             foreach (byte item in cryptBuffer)
