@@ -205,3 +205,172 @@ describe('#789 Phase 3C - DispatchAction semantic behavior (vm-loaded)', () => {
     warnSpy.mockRestore();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #470: initForm action — source sweep
+// ---------------------------------------------------------------------------
+describe('#470 DispatchAction initForm — source sweep', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const srcPath = path.resolve(
+    __dirname,
+    '../../../src/WalkingTec.Mvvm.Mvc/framework_layui.js'
+  );
+  const src = fs.readFileSync(srcPath, 'utf8');
+  const stripLineComments = (text) =>
+    text
+      .split('\n')
+      .map((line) => {
+        const idx = line.indexOf('//');
+        return idx === -1 ? line : line.slice(0, idx);
+      })
+      .join('\n');
+  const active = stripLineComments(src);
+
+  test('DispatchAction switch contains initForm case', () => {
+    expect(active).toMatch(/case\s+['"]initForm['"]/);
+  });
+
+  test('initForm calls layui.form.render (no eval)', () => {
+    // Must reference layui.form.render — never eval().
+    expect(active).toMatch(/layui\.form\.render/);
+  });
+
+  test('initForm calls layui.laydate.render for dates array', () => {
+    expect(active).toMatch(/layui\.laydate\.render/);
+  });
+
+  test('OpenDialog else-branch extracts wtm-dialog-init JSON island via DOMParser', () => {
+    // Must use querySelector for the island — never regex.
+    expect(active).toMatch(/querySelector\s*\(\s*['"]script\[type="application\/json"\]\.wtm-dialog-init['"]\s*\)/);
+  });
+
+  test('OpenDialog success callback dispatches _dialogInitPayload via ff.DispatchAction', () => {
+    // The island payload must be dispatched in the layer.open success callback.
+    expect(active).toMatch(/ff\.DispatchAction\s*\(\s*_dialogInitPayload\s*\)/);
+  });
+
+  test('active-code eval( count is still exactly 1 after #470 changes', () => {
+    // Regression guard: initForm must NOT introduce any new eval() calls.
+    const matches = active.match(/\beval\(/g) || [];
+    expect(matches).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #470: initForm action — behavioral stub
+// ---------------------------------------------------------------------------
+describe('#470 DispatchAction initForm — behavioral stub', () => {
+  // Mirrors the makeDispatcher pattern above but includes the initForm branch.
+  function makeDispatcherWithInitForm(layui) {
+    return function dispatchAction(payload) {
+      if (!payload || !payload.actions || !payload.actions.length) return;
+      var actions = payload.actions;
+      for (var i = 0; i < actions.length; i++) {
+        var action = actions[i];
+        if (!action || !action.type) continue;
+        switch (action.type) {
+          case 'initForm':
+            try {
+              if (typeof layui !== 'undefined' && layui.form &&
+                  typeof layui.form.render === 'function') {
+                layui.form.render(action.formType || null, action.filter || undefined);
+              }
+              if (action.dates && Array.isArray(action.dates) && action.dates.length > 0 &&
+                  typeof layui !== 'undefined' && layui.laydate &&
+                  typeof layui.laydate.render === 'function') {
+                for (var di = 0; di < action.dates.length; di++) {
+                  var d = action.dates[di];
+                  if (d && d.elem) {
+                    layui.laydate.render({ elem: d.elem, type: d.type || 'date', format: d.format });
+                  }
+                }
+              }
+            } catch (e) {
+              if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] initForm action failed:', e);
+              }
+            }
+            break;
+          default:
+            if (typeof console !== 'undefined' && console.warn) {
+              console.warn('[WTM] Unknown WtmAction type:', action.type);
+            }
+        }
+      }
+    };
+  }
+
+  test('initForm calls layui.form.render with filter and null formType by default', () => {
+    const formRender = jest.fn();
+    const layui = { form: { render: formRender }, laydate: { render: jest.fn() } };
+    const dispatch = makeDispatcherWithInitForm(layui);
+    dispatch({ actions: [{ type: 'initForm', filter: 'myFilter' }] });
+    // formType defaults to null, filter passed as second arg
+    expect(formRender).toHaveBeenCalledWith(null, 'myFilter');
+  });
+
+  test('initForm passes explicit formType to layui.form.render', () => {
+    const formRender = jest.fn();
+    const layui = { form: { render: formRender }, laydate: { render: jest.fn() } };
+    const dispatch = makeDispatcherWithInitForm(layui);
+    dispatch({ actions: [{ type: 'initForm', filter: 'f', formType: 'select' }] });
+    expect(formRender).toHaveBeenCalledWith('select', 'f');
+  });
+
+  test('initForm calls layui.laydate.render for each entry in dates array', () => {
+    const formRender = jest.fn();
+    const laydateRender = jest.fn();
+    const layui = { form: { render: formRender }, laydate: { render: laydateRender } };
+    const dispatch = makeDispatcherWithInitForm(layui);
+    dispatch({
+      actions: [{
+        type: 'initForm',
+        filter: 'f',
+        dates: [
+          { elem: '#BirthDate', type: 'date', format: 'yyyy-MM-dd' },
+          { elem: '#StartTime', type: 'datetime' }
+        ]
+      }]
+    });
+    expect(formRender).toHaveBeenCalledTimes(1);
+    expect(laydateRender).toHaveBeenCalledTimes(2);
+    expect(laydateRender).toHaveBeenNthCalledWith(1, { elem: '#BirthDate', type: 'date', format: 'yyyy-MM-dd' });
+    expect(laydateRender).toHaveBeenNthCalledWith(2, { elem: '#StartTime', type: 'datetime', format: undefined });
+  });
+
+  test('initForm with empty dates array does not call laydate.render', () => {
+    const formRender = jest.fn();
+    const laydateRender = jest.fn();
+    const layui = { form: { render: formRender }, laydate: { render: laydateRender } };
+    const dispatch = makeDispatcherWithInitForm(layui);
+    dispatch({ actions: [{ type: 'initForm', filter: 'f', dates: [] }] });
+    expect(formRender).toHaveBeenCalledTimes(1);
+    expect(laydateRender).not.toHaveBeenCalled();
+  });
+
+  test('initForm skips dates entries missing elem field', () => {
+    const laydateRender = jest.fn();
+    const layui = { form: { render: jest.fn() }, laydate: { render: laydateRender } };
+    const dispatch = makeDispatcherWithInitForm(layui);
+    dispatch({
+      actions: [{
+        type: 'initForm',
+        filter: 'f',
+        dates: [{ type: 'date' }, { elem: '#Valid', type: 'date' }]
+      }]
+    });
+    // Only the entry with elem should be rendered
+    expect(laydateRender).toHaveBeenCalledTimes(1);
+    expect(laydateRender).toHaveBeenCalledWith({ elem: '#Valid', type: 'date', format: undefined });
+  });
+
+  test('initForm is a no-op when layui is not defined', () => {
+    // Simulate absent layui (e.g. non-layui page)
+    const dispatch = makeDispatcherWithInitForm(undefined);
+    // Should not throw
+    expect(() => {
+      dispatch({ actions: [{ type: 'initForm', filter: 'f' }] });
+    }).not.toThrow();
+  });
+});
