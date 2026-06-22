@@ -71,14 +71,9 @@ namespace WalkingTec.Mvvm.Mvc
         /// configured key in Configs.Connections.  Returns true if the key is null/empty
         /// (caller will use the default) or is a known key.  Returns false for any
         /// unrecognised value — the caller must reject the request (400/throw).
+        /// Delegates to <see cref="WTMContext.IsKnownConnectionKey"/> — single source of truth (#517).
         /// </summary>
-        private bool IsKnownConnectionKey(string? csKey)
-        {
-            if (string.IsNullOrEmpty(csKey))
-                return true; // null → default; always safe
-            return ConfigInfo.Connections.Any(c =>
-                string.Equals(c.Key, csKey, StringComparison.OrdinalIgnoreCase));
-        }
+        private bool IsKnownConnectionKey(string? csKey) => Wtm.IsKnownConnectionKey(csKey);
 
         /// <summary>
         /// Returns true if the authenticated caller has the "Admin" role in their

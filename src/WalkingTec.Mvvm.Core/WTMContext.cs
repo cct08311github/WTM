@@ -1135,6 +1135,18 @@ params string[] groupcode)
             return false;
         }
 
+        /// <summary>
+        /// Returns true if <paramref name="csKey"/> is null/empty (→ default connection) or matches a
+        /// configured connection-string key (case-insensitive). Use to validate a client-supplied
+        /// connection-string key BEFORE CreateDC(cskey:) / setting CurrentCS, to prevent cross-DB access (#503/#506/#517).
+        /// </summary>
+        public bool IsKnownConnectionKey(string? csKey)
+        {
+            if (string.IsNullOrEmpty(csKey)) return true;
+            return ConfigInfo?.Connections.Any(c =>
+                string.Equals(c.Key, csKey, StringComparison.OrdinalIgnoreCase)) == true;
+        }
+
         private bool _isCreatingDC;
 
         #region CreateDC
