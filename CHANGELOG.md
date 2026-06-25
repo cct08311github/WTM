@@ -1,5 +1,17 @@
 # 更新日志
 
+## [10.13.10] - 2026-06-25
+
+### Fixed
+
+- **`EmptyContext.OnModelCreating` threw `InvalidCastException` on EF Core 10 (Oracle) → Oracle apps failed to start (#525):** the Oracle path cast `ModelBuilder` to `IConventionModelBuilder` — `((IConventionModelBuilder)modelBuilder).HasMaxIdentifierLength(30)` — which worked on EF Core 8 but **throws `InvalidCastException` on EF Core 10** (10.0.4): `ModelBuilder` no longer supports that cast. Any application using `EmptyContext` (or a subclass) with `DBType == DBTypeEnum.Oracle` failed to start (the Oracle path is not exercised by SQL Server / InMemory builds, so it surfaced only in Oracle production — the same no-live-Oracle CI blind spot as #485/#499). Fix: use the cast-free `IMutableModel` API `modelBuilder.Model.SetMaxIdentifierLength(30)` (verified against the EF Core 10.0.4 `Microsoft.EntityFrameworkCore.Relational` reference — `RelationalModelExtensions.SetMaxIdentifierLength(IMutableModel, int?)`); works on EF Core 8 and 10. A regression test reproduces the failure under a SQLite (relational) provider by driving the Oracle branch, so it now has CI coverage without a live Oracle.
+
+### Migration
+
+- No action required. Oracle deployments that could not start on EF Core 10 now boot correctly.
+
+---
+
 ## [10.13.9] - 2026-06-22
 
 ### Fixed
