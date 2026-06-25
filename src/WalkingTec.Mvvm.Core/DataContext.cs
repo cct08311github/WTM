@@ -771,7 +771,11 @@ namespace WalkingTec.Mvvm.Core
         {
             if (DBType == DBTypeEnum.Oracle)
             {
-                ((IConventionModelBuilder)modelBuilder).HasMaxIdentifierLength(30);
+                // #525: EF Core 10 removed the IConventionModelBuilder cast path from ModelBuilder,
+                // so the old ((IConventionModelBuilder)modelBuilder).HasMaxIdentifierLength(30) throws
+                // InvalidCastException at runtime.  Use the IMutableModel extension instead — it works
+                // on both EF Core 8 and EF Core 10.
+                modelBuilder.Model.SetMaxIdentifierLength(30);
             }
         }
 
