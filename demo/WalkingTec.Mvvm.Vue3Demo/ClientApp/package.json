@@ -19,7 +19,7 @@
     "axios": "^1.15.2",
     "countup.js": "^2.6.0",
     "cropperjs": "^1.5.13",
-    "echarts": "^5.4.2",
+    "echarts": "^6.1.0",
     "echarts-gl": "^2.0.9",
     "echarts-wordcloud": "^2.1.0",
     "element-plus": "^2.13.5",
