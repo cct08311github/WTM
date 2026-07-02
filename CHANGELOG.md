@@ -1,5 +1,37 @@
 # 更新日志
 
+## [10.13.11] - 2026-07-03
+
+Adversarial audit batch. A fresh full-framework multi-agent audit of **v10.13.10** (subsystem-scoped finders → perspective-diverse verification: a correctness lens + an exploitability lens per finding, survive only if neither ruled false-positive) confirmed 14 defects, 0 contested. **11 land here** — 1 P0 dependency, 2 HIGH, 6 MEDIUM, 4 LOW. Each fixed on its own worktree-isolated branch, then integration-merged and validated as a set before landing: full-solution build **0 errors**, **0 NU1903**, Core 4089 / Admin 121 / Etl 606 / WorkFlow 546 tests all pass. The delta finder (v10.13.7..v10.13.10) returned zero — the recently-shipped fixes were clean; the P0 below was a newly-published advisory the release gate had not yet caught.
+
+### Security
+
+- **`Microsoft.OpenApi` 2.4.1 (transitive) was vulnerable — GHSA-v5pm-xwqc-g5wc, HIGH (#528):** Swashbuckle.AspNetCore 10.1.5 transitively pulled `Microsoft.OpenApi` 2.4.1 (circular schema references can terminate OpenAPI parsing — a parser DoS), reaching production. Pinned the first patched **2.7.5** (still on the 2.x major, API-compatible with Swashbuckle) as a direct override in `Mvc.csproj` (`NU1510` on that line is expected). `--vulnerable` now reports 0 NU1903 across the solution.
+- **`GetFile` served uploads inline with no `Content-Type` → MIME-sniffing stored XSS (#530 — HIGH):** the `stream=true` (non-mp4) branch wrote the body with `Content-Disposition: inline` but never set `Response.ContentType`, so with default allow-all upload validation a browser MIME-sniffed an uploaded `.html`/`.svg` as active content in the app origin. Now sets a safe content type (native type only for whitelisted image extensions, `application/octet-stream` otherwise) and always emits `X-Content-Type-Options: nosniff` on the streamed response.
+- **RBAC public-URL regex was unanchored → fail-open privilege bypass (#531):** `WtmAuthorizationService.MatchUrl` built `"^" + p + "[/\\?]?"` with no end anchor, so any request URL that merely *started with* a public URL matched — a privilege-gated action sharing a prefix with a public one (`/Home/Index` → `/Home/IndexAdmin`) was treated as public. Anchored to a path boundary (`"^" + Regex.Escape(p) + "($|[/?])"`) on both the NonBacktracking and compiled-fallback sites. (`AllAccessUrls` are literal generated paths, so `Regex.Escape` is safe.)
+- **SSRF guard missed IPv6 transitional ranges (#533):** `RestWidgetDataSource.IsBlockedIp` did not decode NAT64 (`64:ff9b::/96`), 6to4 (`2002::/16`), or IPv4-compatible IPv6, so a host resolving to e.g. `64:ff9b::169.254.169.254` (IMDS) bypassed the guard. It now extracts the embedded IPv4 from those forms and re-applies the IPv4 rules.
+- **Open-redirect via backslash in client redirect guards (#534):** the OpenDialog `Location` guard (#332) and the DispatchAction `redirect` guard accepted `/\evil.com` because only forward-slash was checked as the second char; browsers normalize `\`→`/` for special schemes, yielding a protocol-relative external redirect. Both guards now use `/^\/(?:[^/\\]|$)/` (rejects backslash, preserves the bare-`/` case).
+
+### Fixed
+
+- **Sequential workflow stranded on a leading auto-approved step (#529 — HIGH):** with `InitiatorAutoApprove` and the initiator as the first approver of a Sequential node, `OnEnterAsync` only advanced `SequencePointer` when *every* task was auto-approved — so `[initiator, human, human]` left the pointer frozen on a terminal AutoApproved task with zero Pending tasks and no armed timer, deadlocking the instance forever (a fully-supported config). The handler now advances past the leading contiguous run of auto-approved steps and promotes the first non-auto step to Pending. Companion fix: the timer-arm block in `WorkflowEngine` no longer hardcodes `SequenceOrder == 0` — it re-reads the fresh pointer so the timeout arms on the actually-Pending step.
+- **`UpdateModelProperty` silently discarded the edited value (#532):** the entity was loaded `AsNoTracking` and the reflected field was never marked modified (the endpoint's form keys aren't `entity.`-prefixed), so `SaveChanges` wrote only `UpdateTime`/`UpdateBy` while returning `Success`. It now marks the edited property modified (via cached reflection over the runtime entity type, since `Entity` is the covariant `TopBasePoco`) after all existing guards — the sensitive-field blocklist, navigation-path guard, writable-property check, and `CanEditProperty` authz hook still run first, unchanged.
+- **Oracle bulk loader failed on an all-dropped batch (#536):** `OracleBulkLoader.BulkLoadAsync` lacked the empty-`DataTable` guard the MySQL/PostgreSQL loaders have, so a batch fully dropped by quality rules set `ArrayBindCount=0` and failed the whole job. Added `if (batch.Rows.Count == 0) return;` before any connection is opened.
+- **Low-severity audit cleanup (#538):** `[Public] SetTenant` now returns 401 instead of dereferencing a null `LoginUserInfo` (anonymous NRE); `GetGithubStarts`/`GetGithubInfo` are async (no ThreadPool-blocking `GetAwaiter().GetResult()`, new `WTMContext.ReadFromCacheAsync`); `CS.Cis`/`CisFull` publish a fully-populated list atomically (no partial-read race); and the ETL batch-retry path wraps MSSQL/MySQL bulk loads in a transaction so a failed attempt rolls back instead of duplicating already-committed rows.
+
+### Changed
+
+- **MySQL bulk loader now chunks large batches by default (#537):** `MySqlBulkLoader.InternalBatchSize` default changed **`0` → `1000`**. Previously the default emitted a single multi-row `INSERT` for the whole batch (default `BatchSize` 50,000), risking `max_allowed_packet` overflow. The default now chunks into 1,000-row statements (data written is identical; wrapped in a transaction per #538). Other providers are unaffected (SqlBulkCopy / COPY / array-bind use native mechanisms).
+- **Captcha session write is now async (#535):** `GetVerifyCode` changed from `ActionResult` to `async Task<ActionResult>` and uses a new additive `SessionExtensions.SetAsync<T>` instead of the sync `Set<T>` (which blocked a ThreadPool thread via `CommitAsync().GetAwaiter().GetResult()` on this unauthenticated path). The sync `Set<T>` is unchanged for backward compatibility.
+
+### Migration
+
+- **#537 (MySQL bulk load):** no action required and the new chunked+transactional default is recommended. If you specifically relied on a single-statement `INSERT` per batch, pass `InternalBatchSize: 0` when constructing `MySqlBulkLoader` to restore the previous behavior.
+- **#535 (captcha):** no action required unless you overrode `GetVerifyCode` with a synchronous signature — it is now `async Task<ActionResult>`. The public `ISession.Set<T>` extension is unchanged; `SetAsync<T>` is additive.
+- All other entries are security/correctness fixes with no API or default-behavior change.
+
+---
+
 ## [10.13.10] - 2026-06-25
 
 ### Fixed
