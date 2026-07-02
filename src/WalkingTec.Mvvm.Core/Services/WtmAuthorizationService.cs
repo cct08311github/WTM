@@ -122,7 +122,12 @@ namespace WalkingTec.Mvvm.Core.Services
                 // a failed factory, and an uncaught exception would surface as an unhandled 500.
                 try
                 {
-                    return new Regex("^" + p + "[/\\?]?", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.NonBacktracking);
+                    // Escape the pattern (it is a literal controller/action URL, e.g. "/Home/Index" —
+                    // never an author-supplied regex fragment) and anchor the match to a path boundary
+                    // so a public URL only matches itself, itself + "/", or itself + "?" — never a
+                    // longer sibling path segment that merely shares the same prefix
+                    // (e.g. "/Home/Index" must not match "/Home/IndexAdmin"). See Issue #531.
+                    return new Regex("^" + Regex.Escape(p) + "($|[/\\?])", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.NonBacktracking);
                 }
                 catch (Exception ex) when (ex is RegexMatchTimeoutException or NotSupportedException or ArgumentException)
                 {
@@ -131,7 +136,7 @@ namespace WalkingTec.Mvvm.Core.Services
                         ?.LogWarning(ex, "MatchUrl: NonBacktracking regex failed for pattern '{Pattern}'; falling back to compiled regex", LogSanitizer.Sanitize(p));
 
                     // Fall back to compiled regex without NonBacktracking engine.
-                    return new Regex("^" + p + "[/\\?]?", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+                    return new Regex("^" + Regex.Escape(p) + "($|[/\\?])", RegexOptions.IgnoreCase | RegexOptions.Compiled);
                 }
             });
             return regex.IsMatch(url);
