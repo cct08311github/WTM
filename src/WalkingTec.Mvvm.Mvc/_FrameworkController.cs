@@ -67,6 +67,22 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         /// <summary>
+        /// #530: Computes the Content-Type used when <see cref="GetFile"/> streams a file
+        /// inline (<c>stream=true</c>). Only the whitelisted image extensions are safe to
+        /// serve with their native, renderable content type; everything else \u2014 including
+        /// unknown extensions and actively renderable types like <c>text/html</c> or
+        /// <c>image/svg+xml</c> \u2014 is forced to <c>application/octet-stream</c> so the browser
+        /// cannot MIME-sniff an uploaded file as active content in the app's origin (stored XSS).
+        /// Callers must also set <c>X-Content-Type-Options: nosniff</c> to pin the browser to
+        /// this value.
+        /// </summary>
+        public static string GetSafeStreamContentType(string? ext, string contenttype)
+        {
+            var imageContentTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "png", "bmp", "gif", "tif", "jpg", "jpeg" };
+            return !string.IsNullOrEmpty(ext) && imageContentTypes.Contains(ext) ? contenttype : "application/octet-stream";
+        }
+
+        /// <summary>
         /// MVC-010: Validates that the supplied connection-string key is an explicitly
         /// configured key in Configs.Connections.  Returns true if the key is null/empty
         /// (caller will use the default) or is a known key.  Returns false for any
@@ -897,6 +913,12 @@ namespace WalkingTec.Mvvm.Mvc
                 }
                 else
                 {
+                    // Security (#530): never let the browser MIME-sniff an inline-streamed file.
+                    // GetSafeStreamContentType forces anything outside the image whitelist
+                    // (including unknown/renderable types like text/html or image/svg+xml) to
+                    // application/octet-stream, and nosniff pins the browser to that value.
+                    Response.ContentType = GetSafeStreamContentType(ext, contenttype);
+                    Response.Headers["X-Content-Type-Options"] = "nosniff";
                     Response.Headers.TryAdd("Content-Disposition", $"inline; filename=\"{HttpUtility.UrlEncode(file.FileName)}\"");
                     await rv.CopyToAsync(Response.Body);
                     rv.Dispose();
