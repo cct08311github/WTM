@@ -620,12 +620,18 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             var approveMode = nodeDef.ApproveMode ?? ApproveMode.Sequential;
             if (approveMode == ApproveMode.Sequential)
             {
-                // Sequential: arm task-scoped timer for the first active step (SequenceOrder==0, Pending).
+                // Sequential: arm task-scoped timer for the first active step.
+                // #529: re-read the node's SequencePointer instead of assuming SequenceOrder==0 —
+                // OnEnterAsync may have advanced it past a leading run of InitiatorAutoApprove
+                // steps, so the first Pending task can live at any SequenceOrder.
+                var freshNodeForTimer = await Db.Set<NodeInstance>()
+                    .AsNoTracking()
+                    .SingleAsync(n => n.ID == activeNode.ID, ct);
                 var step0Task = await Db.Set<ApprovalTask>()
                     .AsNoTracking()
                     .FirstOrDefaultAsync(
                         t => t.NodeInstanceId == activeNode.ID
-                             && t.SequenceOrder == 0
+                             && t.SequenceOrder == freshNodeForTimer.SequencePointer
                              && t.State == TaskState.Pending,
                         ct);
                 if (step0Task is not null)

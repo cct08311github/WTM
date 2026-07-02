@@ -6,7 +6,13 @@
 //     upfront (tasks for steps > 0 get State=NotYetActive).  This avoids a second resolver
 //     call per step and makes the full approver list visible for audit.
 //     Apply InitiatorAutoApprove: if an upfront task's AssigneeITCode == initiator AND the
-//     option is true, set that task to AutoApproved and advance the pointer past it.
+//     option is true, set that task to AutoApproved.  If such tasks form the LEADING
+//     contiguous run starting at the pointer (e.g. approvers[0] is the initiator), the
+//     pointer is advanced past that run and the first non-auto-approved step is promoted
+//     to Pending here (#529) — otherwise the node would have zero Pending tasks and be
+//     stranded forever.  Mid-chain auto-approved steps (not part of the leading run) keep
+//     their AutoApproved state and are skipped later by WorkflowEngine's #361 loop once a
+//     human approves the pointer task ahead of them.
 //   • CanCompleteAsync: returns true only when ALL tasks are terminal
 //     (Approved/AutoApproved/Rejected/Cancelled) i.e. the pointer has passed the last step.
 //     ALSO returns true immediately when the node is already in a terminal state (re-entry guard).
@@ -127,6 +133,28 @@ internal sealed class SequentialApprovalHandler : INodeKindHandler
         var delegationCtx = _resolver as IDelegationContextProvider;
         var provenance    = delegationCtx?.LastResolutionProvenance;
 
+        // #529: pre-compute InitiatorAutoApprove flags for every step, then advance the
+        // pointer past the leading CONTIGUOUS run of auto-approved steps starting at
+        // `pointer`. Without this, a leading auto-approved step (e.g. approvers =
+        // [initiator, human2, human3]) mints as a terminal AutoApproved task while the
+        // pointer stays at 0 — there is never a Pending task and no timeout timer gets
+        // armed, permanently stranding the node. Mid-chain auto-approved steps (i.e. not
+        // part of the leading run) are unaffected here; those are skipped by the #361
+        // loop in WorkflowEngine once a human approves the pointer task ahead of them.
+        var autoApproveFlags = new bool[approvers.Count];
+        for (int i = 0; i < approvers.Count; i++)
+        {
+            autoApproveFlags[i] = string.Equals(approvers[i], instance.InitiatorITCode,
+                                                 StringComparison.OrdinalIgnoreCase)
+                                   && _options.InitiatorAutoApprove;
+        }
+
+        var advancedPointer = pointer;
+        while (advancedPointer < approvers.Count && autoApproveFlags[advancedPointer])
+        {
+            advancedPointer++;
+        }
+
         var tasks = new List<ApprovalTask>(approvers.Count);
 
         for (int i = 0; i < approvers.Count; i++)
@@ -134,13 +162,11 @@ internal sealed class SequentialApprovalHandler : INodeKindHandler
             var assignee = approvers[i];
 
             // InitiatorAutoApprove: skip the step by marking it AutoApproved immediately.
-            bool isInitiator = string.Equals(assignee, instance.InitiatorITCode,
-                                             StringComparison.OrdinalIgnoreCase);
-            bool autoApprove = isInitiator && _options.InitiatorAutoApprove;
+            bool autoApprove = autoApproveFlags[i];
 
             var state = autoApprove
                 ? TaskState.AutoApproved
-                : (i == pointer ? TaskState.Pending : TaskState.NotYetActive);
+                : (i == advancedPointer ? TaskState.Pending : TaskState.NotYetActive);
 
             // WF-19 AtAssignment provenance: stamp if this slot was produced by a delegation rule.
             DelegationProvenance? prov = null;
@@ -178,31 +204,32 @@ internal sealed class SequentialApprovalHandler : INodeKindHandler
 
         db.Set<ApprovalTask>().AddRange(tasks);
 
-        // Write TotalRequired to the NodeInstance (advisory; used by engine for completion check).
-        // We do this via a direct SetProperty CAS-style update to avoid re-reading.
+        // Write TotalRequired and the advanced SequencePointer to the NodeInstance in one
+        // CAS-style update to avoid re-reading. When `advancedPointer == pointer` (no
+        // leading auto-approved run, the common case) this is a harmless no-op write.
+        // When the leading run consumes ALL steps, advancedPointer == approvers.Count,
+        // which is exactly the "beyond the last step" value CanCompleteAsync expects.
         await db.Set<NodeInstance>()
             .Where(n => n.ID == nodeInst.ID)
             .ExecuteUpdateAsync(
-                s => s.SetProperty(n => n.TotalRequired, approvers.Count),
+                s => s.SetProperty(n => n.TotalRequired, approvers.Count)
+                       .SetProperty(n => n.SequencePointer, advancedPointer),
                 ct);
 
         await db.SaveChangesAsync(ct);
 
-        // If InitiatorAutoApprove caused all steps to be auto-approved, advance the pointer
-        // so that CanCompleteAsync returns true immediately.
-        // Re-read the fresh state to get the current pointer/RowVer.
-        if (tasks.All(t => t.State == TaskState.AutoApproved))
+        if (advancedPointer >= approvers.Count)
         {
             _logger.LogInformation(
                 "SequentialApprovalHandler: all {Count} steps auto-approved for node '{NodeKey}'.",
                 tasks.Count, nodeDef.NodeKey);
-
-            // Advance pointer to beyond the last step.
-            await db.Set<NodeInstance>()
-                .Where(n => n.ID == nodeInst.ID)
-                .ExecuteUpdateAsync(
-                    s => s.SetProperty(n => n.SequencePointer, approvers.Count),
-                    ct);
+        }
+        else if (advancedPointer > pointer)
+        {
+            _logger.LogInformation(
+                "SequentialApprovalHandler: advanced pointer from {OldPointer} to {NewPointer} past leading " +
+                "auto-approved steps for node '{NodeKey}'; step {NewPointer} is now Pending.",
+                pointer, advancedPointer, nodeDef.NodeKey, advancedPointer);
         }
     }
 
