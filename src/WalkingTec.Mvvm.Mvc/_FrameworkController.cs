@@ -67,6 +67,22 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         /// <summary>
+        /// #530: Computes the Content-Type used when <see cref="GetFile"/> streams a file
+        /// inline (<c>stream=true</c>). Only the whitelisted image extensions are safe to
+        /// serve with their native, renderable content type; everything else \u2014 including
+        /// unknown extensions and actively renderable types like <c>text/html</c> or
+        /// <c>image/svg+xml</c> \u2014 is forced to <c>application/octet-stream</c> so the browser
+        /// cannot MIME-sniff an uploaded file as active content in the app's origin (stored XSS).
+        /// Callers must also set <c>X-Content-Type-Options: nosniff</c> to pin the browser to
+        /// this value.
+        /// </summary>
+        public static string GetSafeStreamContentType(string? ext, string contenttype)
+        {
+            var imageContentTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "png", "bmp", "gif", "tif", "jpg", "jpeg" };
+            return !string.IsNullOrEmpty(ext) && imageContentTypes.Contains(ext) ? contenttype : "application/octet-stream";
+        }
+
+        /// <summary>
         /// MVC-010: Validates that the supplied connection-string key is an explicitly
         /// configured key in Configs.Connections.  Returns true if the key is null/empty
         /// (caller will use the default) or is a known key.  Returns false for any
@@ -287,6 +303,21 @@ namespace WalkingTec.Mvvm.Mvc
         /// <returns><c>true</c> if the edit is allowed; <c>false</c> to return 403.</returns>
         protected virtual bool CanEditProperty(object entity, string propertyName) => true;
 
+        // #532: IDataContext.UpdateProperty<T>(T, string) is generic on the *concrete*
+        // entity type because it calls DbContext.Set<T>() internally, which throws for an
+        // unmapped base type. UpdateModelProperty only has the entity typed through the
+        // covariant IBaseCRUDVM<TopBasePoco>.Entity (static type TopBasePoco), so the open
+        // generic method must be closed over the entity's runtime type via reflection.
+        // Cache the open MethodInfo once, and cache each closed-generic MethodInfo per
+        // entity type, instead of reflecting on every request (perf convention).
+        private static readonly System.Reflection.MethodInfo s_updatePropertyMethod =
+            typeof(IDataContext).GetMethods()
+                .First(m => m.Name == nameof(IDataContext.UpdateProperty)
+                    && m.GetParameters().Length == 2
+                    && m.GetParameters()[1].ParameterType == typeof(string));
+
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, System.Reflection.MethodInfo> s_updatePropertyMethodCache = new();
+
         [HttpPost]
         public IActionResult UpdateModelProperty(string _DONOT_USE_VMNAME, Guid id, string field, string value)
         {
@@ -341,6 +372,26 @@ namespace WalkingTec.Mvvm.Mvc
             }
 
             vm.Entity.SetPropertyValue(field, value);
+
+            // #532: the entity is loaded AsNoTracking (detached), and DoEdit(false) only
+            // marks a property modified when the form collection carries an "entity.<field>"
+            // prefixed key. This endpoint's own field/value/id/_DONOT_USE_VMNAME keys never
+            // match that prefix, so without this the reflected value above was silently
+            // discarded — SaveChanges persisted only UpdateTime/UpdateBy while the endpoint
+            // still returned Success. Explicitly mark the field modified (it has already
+            // passed the navigation-path guard, the sensitive-field blocklist, the
+            // writable-property check, and the CanEditProperty authz hook above) so DoEdit's
+            // SaveChanges call actually writes it.
+            if (Wtm.DC != null)
+            {
+                var closedUpdatePropertyMethod = s_updatePropertyMethodCache.GetOrAdd(
+                    entityType,
+                    t => s_updatePropertyMethod.MakeGenericMethod(t));
+                // Use prop.Name (the exact CLR-cased property name resolved above), not the
+                // raw client-supplied 'field', because EF Core's EntityEntry.Property(string)
+                // lookup is case-sensitive.
+                closedUpdatePropertyMethod.Invoke(Wtm.DC, [vm.Entity, prop.Name]);
+            }
 
             // MVC-004: route the save through DoEdit() so VM-level Validate() and
             // DuplicateCheck() apply, exactly as the normal edit endpoint does.
@@ -897,6 +948,12 @@ namespace WalkingTec.Mvvm.Mvc
                 }
                 else
                 {
+                    // Security (#530): never let the browser MIME-sniff an inline-streamed file.
+                    // GetSafeStreamContentType forces anything outside the image whitelist
+                    // (including unknown/renderable types like text/html or image/svg+xml) to
+                    // application/octet-stream, and nosniff pins the browser to that value.
+                    Response.ContentType = GetSafeStreamContentType(ext, contenttype);
+                    Response.Headers["X-Content-Type-Options"] = "nosniff";
                     Response.Headers.TryAdd("Content-Disposition", $"inline; filename=\"{HttpUtility.UrlEncode(file.FileName)}\"");
                     await rv.CopyToAsync(Response.Body);
                     rv.Dispose();

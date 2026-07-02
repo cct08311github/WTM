@@ -107,6 +107,12 @@
     <PackageReference Include="Swashbuckle.AspNetCore.Swagger" />
     <PackageReference Include="Swashbuckle.AspNetCore.SwaggerGen" />
     <PackageReference Include="Swashbuckle.AspNetCore.SwaggerUI" />
+    <!--
+      Issue #528 — override Swashbuckle 10.1.5's vulnerable transitive Microsoft.OpenApi 2.4.1
+      (GHSA-v5pm-xwqc-g5wc, HIGH) with the first patched 2.7.5 (still on 2.x, API-compatible).
+      NU1510 on this line is EXPECTED (override working) — DO NOT remove. See Directory.Packages.props.
+    -->
+    <PackageReference Include="Microsoft.OpenApi" />
     <PackageReference Include="VueCliMiddleware" />
     <PackageReference Include="Serilog.AspNetCore" />
   </ItemGroup>
