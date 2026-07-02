@@ -285,6 +285,43 @@ public class RestWidgetDataSource : IWidgetDataSource
             // ULA fc00::/7
             var bytes = ip.GetAddressBytes();
             if ((bytes[0] & 0xFE) == 0xFC) { return true; }
+
+            // Transitional IPv6 forms that embed an IPv4 address inside them.
+            // Without decoding these, an attacker can bypass the SSRF guard by
+            // resolving/supplying a host to one of these forms instead of the
+            // raw (blocked) IPv4 address — e.g. 64:ff9b::169.254.169.254 (NAT64)
+            // reaches the AWS/GCP IMDS endpoint even though 169.254.169.254 itself
+            // is blocked. Extract the embedded IPv4 and re-apply the IPv4 rules.
+            // (IPv4-mapped ::ffff:0:0/96 is already unwrapped by IsIPv4MappedToIPv6
+            // at the top of this method, so it never reaches this branch.)
+            byte[]? embeddedV4 = null;
+
+            // NAT64 well-known prefix 64:ff9b::/96 (RFC 6052):
+            // bytes[0..3] = 00 64 ff 9b, bytes[4..11] = 0, bytes[12..15] = IPv4.
+            if (bytes[0] == 0x00 && bytes[1] == 0x64 && bytes[2] == 0xFF && bytes[3] == 0x9B
+                && bytes[4] == 0 && bytes[5] == 0 && bytes[6] == 0 && bytes[7] == 0
+                && bytes[8] == 0 && bytes[9] == 0 && bytes[10] == 0 && bytes[11] == 0)
+            {
+                embeddedV4 = new[] { bytes[12], bytes[13], bytes[14], bytes[15] };
+            }
+            // 6to4 2002::/16 (RFC 3056): bytes[0..1] = 20 02, bytes[2..5] = IPv4.
+            else if (bytes[0] == 0x20 && bytes[1] == 0x02)
+            {
+                embeddedV4 = new[] { bytes[2], bytes[3], bytes[4], bytes[5] };
+            }
+            // IPv4-compatible IPv6 ::/96 (deprecated, RFC 4291): high 96 bits zero,
+            // low 32 bits = embedded IPv4 (e.g. ::10.0.0.1, ::169.254.169.254).
+            else if (bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 0 && bytes[3] == 0
+                && bytes[4] == 0 && bytes[5] == 0 && bytes[6] == 0 && bytes[7] == 0
+                && bytes[8] == 0 && bytes[9] == 0 && bytes[10] == 0 && bytes[11] == 0)
+            {
+                embeddedV4 = new[] { bytes[12], bytes[13], bytes[14], bytes[15] };
+            }
+
+            if (embeddedV4 != null)
+            {
+                return IsBlockedIp(new IPAddress(embeddedV4));
+            }
         }
         return false;
     }
