@@ -1074,24 +1074,24 @@ namespace WalkingTec.Mvvm.Mvc
 
         [AllowAnonymous]
         [ResponseCache(Duration = 3600)]
-        public string GetGithubStarts()
+        public async Task<string> GetGithubStarts()
         {
-            return Wtm.ReadFromCache<string>("githubstar", () =>
+            // #538: async factory avoids blocking a ThreadPool thread on the outbound GitHub call.
+            return await Wtm.ReadFromCacheAsync<string>("githubstar", async () =>
             {
-                // TODO: ReadFromCache factory is sync Func<T>; GetAwaiter().GetResult() used inside sync callback
-                var s = Wtm.CallAPI<Github>("github", "/repos/dotnetcore/wtm").GetAwaiter().GetResult().Data;
+                var s = (await Wtm.CallAPI<Github>("github", "/repos/dotnetcore/wtm")).Data;
                 return s == null ? "" : s.stargazers_count.ToString();
             }, 1800);
         }
 
         [AllowAnonymous]
         [ResponseCache(Duration = 3600)]
-        public ActionResult GetGithubInfo()
+        public async Task<ActionResult> GetGithubInfo()
         {
-            var rv = Wtm.ReadFromCache<string>("githubinfo", () =>
+            // #538: async factory avoids blocking a ThreadPool thread on the outbound GitHub call.
+            var rv = await Wtm.ReadFromCacheAsync<string>("githubinfo", async () =>
             {
-                // TODO: ReadFromCache factory is sync Func<T>; GetAwaiter().GetResult() used inside sync callback
-                var s = Wtm.CallAPI<Github>("github", "/repos/dotnetcore/wtm").GetAwaiter().GetResult();
+                var s = await Wtm.CallAPI<Github>("github", "/repos/dotnetcore/wtm");
                 return JsonSerializer.Serialize(s);
             }, 1800);
             return Content(rv, "application/json");
@@ -1221,6 +1221,11 @@ namespace WalkingTec.Mvvm.Mvc
         public IActionResult SetTenant(string tenant)
         {
             Wtm.SetCurrentTenant(tenant == "" ? null : tenant);
+            // #538: guard against NRE for anonymous callers — LoginUserInfo is null when unauthenticated.
+            if (Wtm.LoginUserInfo == null)
+            {
+                return Unauthorized();
+            }
             var principal = Wtm.LoginUserInfo.CreatePrincipal();
             HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal, null);
             return FFResultJson().Reload();

@@ -32,6 +32,11 @@ namespace WalkingTec.Mvvm.Test.Mock
             Mock<IServiceProvider> mockService = new Mock<IServiceProvider>();
             MockHttpSession mockSession = new MockHttpSession();
             mockHttpRequest.Setup(x => x.Cookies).Returns(new MockCookie());
+            // Real ASP.NET Core HttpRequest.Query is never null (defaults to QueryCollection.Empty);
+            // stub it the same way so code paths reading Wtm.HttpContext.Request.Query — e.g.
+            // WTMContext.LoginUserInfo's anonymous/_remotetoken branch — don't NRE on an
+            // unconfigured Moq member (#538).
+            mockHttpRequest.Setup(x => x.Query).Returns(new QueryCollection());
             var cache = new MemoryDistributedCache(Options.Create<MemoryDistributedCacheOptions>(new MemoryDistributedCacheOptions()));
             var res = new ResourceManagerStringLocalizerFactory(Options.Create<LocalizationOptions>(new LocalizationOptions { ResourcesPath = "Resources" }), new Microsoft.Extensions.Logging.LoggerFactory());
             var mockTenantService = new Mock<IWtmTenantService>();

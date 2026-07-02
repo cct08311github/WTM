@@ -93,15 +93,32 @@ public class MySqlBulkLoader : IBulkLoader
         var subBatchSize = ResolveSubBatchSize(InternalBatchSize, batch.Rows.Count);
 
         var allRows = batch.Rows.Cast<DataRow>().ToList();
-        for (int offset = 0; offset < allRows.Count; offset += subBatchSize)
+
+        // #538: when InternalBatchSize > 0 splits the batch into multiple INSERT
+        // statements, wrap them all in one transaction so a mid-loop failure rolls
+        // back everything this call already wrote. Without this, a caller-level
+        // retry (EtlPipelineExecutor.BulkLoadWithRetryAsync) would re-insert rows
+        // already committed by an earlier chunk, duplicating staging data.
+        await using var tran = await conn.BeginTransactionAsync(cancellationToken);
+        try
         {
-            var chunk = allRows.Skip(offset).Take(subBatchSize).ToList();
-            await InsertChunkAsync(conn, stagingTableName, columns, chunk, cancellationToken);
+            for (int offset = 0; offset < allRows.Count; offset += subBatchSize)
+            {
+                var chunk = allRows.Skip(offset).Take(subBatchSize).ToList();
+                await InsertChunkAsync(conn, tran, stagingTableName, columns, chunk, cancellationToken);
+            }
+            await tran.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await tran.RollbackAsync(CancellationToken.None);
+            throw;
         }
     }
 
     private async Task InsertChunkAsync(
         MySqlConnection conn,
+        MySqlTransaction tran,
         string stagingTableName,
         List<DataColumn> columns,
         List<DataRow> rows,
@@ -124,6 +141,7 @@ public class MySqlBulkLoader : IBulkLoader
         sb.Append(string.Join(", ", rowPlaceholders));
 
         await using var cmd = conn.CreateCommand();
+        cmd.Transaction = tran;
         cmd.CommandText = sb.ToString();
         cmd.CommandTimeout = TimeoutSeconds;
 
