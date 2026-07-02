@@ -46,6 +46,8 @@ public class OracleBulkLoader : IBulkLoader
         string connectionString, string stagingTableName,
         DataTable batch, CancellationToken cancellationToken = default)
     {
+        if (batch.Rows.Count == 0) return;
+
         await using var conn = new OracleConnection(connectionString);
         await conn.OpenAsync(cancellationToken);
 
