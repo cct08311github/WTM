@@ -35,9 +35,13 @@ public class MySqlBulkLoader : IBulkLoader
     /// <summary>
     /// Number of rows per INSERT sub-batch during <see cref="BulkLoadAsync"/>.
     /// <para>
-    /// 0 (default) = insert all rows in one statement (lowest round-trip count,
-    /// highest memory peak). Set a positive value to split large batches into
-    /// smaller INSERT statements, reducing peak memory at the cost of extra round-trips.
+    /// Defaults to 1000 (#537): with the framework default <c>EtlPipelineConfig.BatchSize</c>
+    /// of 50,000 rows, emitting a single multi-row INSERT for the whole batch risks
+    /// exceeding MySQL's <c>max_allowed_packet</c>. Chunking into 1000-row statements keeps
+    /// each INSERT well within typical packet limits while still batching far more
+    /// efficiently than row-by-row inserts. Pass 0 to opt back into the old
+    /// insert-everything-in-one-statement behaviour, or any other positive value to tune
+    /// the chunk size for your <c>max_allowed_packet</c> configuration.
     /// </para>
     /// </summary>
     public int InternalBatchSize { get; }
@@ -47,12 +51,33 @@ public class MySqlBulkLoader : IBulkLoader
     /// </summary>
     /// <param name="timeoutSeconds">Per-command timeout. Defaults to 300. Pass 0 for no limit.</param>
     /// <param name="internalBatchSize">
-    /// Rows per INSERT sub-batch. 0 (default) = one INSERT per BulkLoadAsync call.
+    /// Rows per INSERT sub-batch. Defaults to 1000 (#537) so large batches are chunked
+    /// within MySQL's <c>max_allowed_packet</c>. Pass 0 for one INSERT per BulkLoadAsync
+    /// call (pre-10.13.x behaviour).
     /// </param>
-    public MySqlBulkLoader(int timeoutSeconds = 300, int internalBatchSize = 0)
+    public MySqlBulkLoader(int timeoutSeconds = 300, int internalBatchSize = 1000)
     {
         TimeoutSeconds = timeoutSeconds;
         InternalBatchSize = internalBatchSize;
+    }
+
+    /// <summary>
+    /// Resolves the effective number of rows per INSERT sub-batch: <paramref name="internalBatchSize"/>
+    /// when positive, otherwise the full <paramref name="rowCount"/> (single-statement legacy behaviour).
+    /// Extracted as a pure, testable seam — no DB round-trip required to verify the chunking math.
+    /// </summary>
+    internal static int ResolveSubBatchSize(int internalBatchSize, int rowCount) =>
+        internalBatchSize > 0 ? internalBatchSize : rowCount;
+
+    /// <summary>
+    /// Computes how many INSERT statements <see cref="BulkLoadAsync"/> will issue for
+    /// <paramref name="rowCount"/> rows given the resolved <paramref name="subBatchSize"/>.
+    /// </summary>
+    internal static int ComputeChunkCount(int rowCount, int subBatchSize)
+    {
+        if (rowCount <= 0) return 0;
+        if (subBatchSize <= 0) return 1;
+        return (rowCount + subBatchSize - 1) / subBatchSize;
     }
 
     public async Task BulkLoadAsync(
@@ -65,7 +90,7 @@ public class MySqlBulkLoader : IBulkLoader
         await conn.OpenAsync(cancellationToken);
 
         var columns = batch.Columns.Cast<DataColumn>().ToList();
-        var subBatchSize = InternalBatchSize > 0 ? InternalBatchSize : batch.Rows.Count;
+        var subBatchSize = ResolveSubBatchSize(InternalBatchSize, batch.Rows.Count);
 
         var allRows = batch.Rows.Cast<DataRow>().ToList();
         for (int offset = 0; offset < allRows.Count; offset += subBatchSize)
