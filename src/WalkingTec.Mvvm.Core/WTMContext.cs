@@ -962,6 +962,41 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
+        /// <summary>
+        /// Async variant of <see cref="ReadFromCache{T}"/> for factory delegates that need to
+        /// perform I/O (e.g. an outbound HTTP call) on cache miss. Avoids blocking a ThreadPool
+        /// thread via GetAwaiter().GetResult() in callers such as GetGithubStarts/GetGithubInfo (#538).
+        /// </summary>
+        public async Task<T> ReadFromCacheAsync<T>(string key, Func<Task<T>> setFunc, int? timeout = null)
+        {
+            if (Cache.TryGetValue(key, out T rv) == false || rv == null)
+            {
+                T data = await setFunc().ConfigureAwait(false);
+                if (timeout == null)
+                {
+                    if (Cache != null)
+                    {
+                        await Cache.AddAsync(key, data).ConfigureAwait(false);
+                    }
+                }
+                else
+                {
+                    if (Cache != null)
+                    {
+                        await Cache.AddAsync(key, data, new DistributedCacheEntryOptions()
+                        {
+                            AbsoluteExpirationRelativeToNow = new TimeSpan(0, 0, timeout.Value)
+                        }).ConfigureAwait(false);
+                    }
+                }
+                return data;
+            }
+            else
+            {
+                return rv;
+            }
+        }
+
         public async Task RemoveUserCache(
             params string[] userIds)
         {

@@ -29,10 +29,12 @@ namespace WalkingTec.Mvvm.Core
         {
             get
             {
+                // #538: populate into a local list and publish atomically at the end — a concurrent
+                // reader must never observe a partially-populated static list mid-loop.
                 if (_cis == null)
                 {
                     var AllAssembly = Utils.GetAllAssembly();
-                     _cis = [];
+                    var cis = new List<ConstructorInfo>();
                     if (AllAssembly != null)
                     {
                         foreach (var ass in AllAssembly)
@@ -45,7 +47,7 @@ namespace WalkingTec.Mvvm.Core
                                     var ci = st.GetConstructor(new Type[] { typeof(CS) });
                                     if (ci != null)
                                     {
-                                        _cis.Add(ci);
+                                        cis.Add(ci);
                                     }
                                 }
                             }
@@ -55,6 +57,7 @@ namespace WalkingTec.Mvvm.Core
                             }
                         }
                     }
+                    _cis = cis;
                 }
                 return _cis;
             }
@@ -65,10 +68,12 @@ namespace WalkingTec.Mvvm.Core
         {
             get
             {
+                // #538: populate into a local list and publish atomically at the end — a concurrent
+                // reader must never observe a partially-populated static list mid-loop.
                 if (_cisFull == null)
                 {
                     var AllAssembly = Utils.GetAllAssembly();
-                    _cisFull = [];
+                    var cisFull = new List<ConstructorInfo>();
                     if (AllAssembly != null)
                     {
                         foreach (var ass in AllAssembly)
@@ -81,7 +86,7 @@ namespace WalkingTec.Mvvm.Core
                                     var ci = st.GetConstructor(new Type[] { typeof(string), typeof(DBTypeEnum) });
                                     if (ci != null)
                                     {
-                                        _cisFull.Add(ci);
+                                        cisFull.Add(ci);
                                     }
                                 }
                             }
@@ -91,6 +96,7 @@ namespace WalkingTec.Mvvm.Core
                             }
                         }
                     }
+                    _cisFull = cisFull;
                 }
                 return _cisFull;
             }

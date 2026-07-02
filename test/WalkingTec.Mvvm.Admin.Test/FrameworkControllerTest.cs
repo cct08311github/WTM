@@ -256,5 +256,27 @@ namespace WalkingTec.Mvvm.Admin.Test
             Assert.IsTrue(sanitized.Contains("\\u2029"),
                 "U+2029 must be replaced with the literal six-character sequence \\u2029");
         }
+
+        // ─── SetTenant — anonymous-caller NRE guard (#538) ────────────────────
+
+        /// <summary>
+        /// #538: SetTenant is [Public] and reachable by unauthenticated callers.
+        /// Wtm.LoginUserInfo is null for anonymous requests — SetTenant must return
+        /// 401 Unauthorized instead of throwing a NullReferenceException from
+        /// LoginUserInfo.CreatePrincipal().
+        /// </summary>
+        [TestMethod]
+        public void SetTenant_AnonymousCaller_ReturnsUnauthorized()
+        {
+            var (controller, _) = CreateController();
+
+            // Simulate an anonymous request: no logged-in user in the context.
+            controller.Wtm.LoginUserInfo = null;
+
+            IActionResult result = controller.SetTenant("sometenant");
+
+            Assert.IsInstanceOfType(result, typeof(UnauthorizedResult),
+                "SetTenant should return 401 Unauthorized for an anonymous caller instead of throwing an NRE");
+        }
     }
 }

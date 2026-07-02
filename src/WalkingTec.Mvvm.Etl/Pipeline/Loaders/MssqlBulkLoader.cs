@@ -86,22 +86,48 @@ public class MssqlBulkLoader : IBulkLoader
         await using var conn = new SqlConnection(connectionString);
         await conn.OpenAsync(cancellationToken);
 
-        // Pass BulkCopyOptions (opt-in; default is SqlBulkCopyOptions.Default
-        // which preserves pre-10.6 row-lock behaviour).
-        using var bulkCopy = new SqlBulkCopy(conn, BulkCopyOptions, externalTransaction: null)
+        // #538: when InternalBatchSize > 0, SqlBulkCopy issues multiple server
+        // round-trips per call. Without an explicit transaction a mid-copy failure
+        // leaves earlier sub-batches committed; a caller-level retry
+        // (EtlPipelineExecutor.BulkLoadWithRetryAsync) would then re-copy those
+        // rows, duplicating staging data. Wrap in our own transaction unless the
+        // caller already opted into SqlBulkCopyOptions.UseInternalTransaction,
+        // which SqlBulkCopy refuses to combine with an externally supplied one.
+        var useOwnTransaction = !BulkCopyOptions.HasFlag(SqlBulkCopyOptions.UseInternalTransaction);
+        await using var tran = useOwnTransaction
+            ? (SqlTransaction)await conn.BeginTransactionAsync(cancellationToken)
+            : null;
+        try
         {
-            DestinationTableName = QuoteQualified(stagingTableName),
-            // InternalBatchSize == 0 → use full count, matching pre-10.6 behaviour.
-            BatchSize = InternalBatchSize > 0 ? InternalBatchSize : batch.Rows.Count,
-            BulkCopyTimeout = TimeoutSeconds
-        };
+            // Pass BulkCopyOptions (opt-in; default is SqlBulkCopyOptions.Default
+            // which preserves pre-10.6 row-lock behaviour).
+            using var bulkCopy = new SqlBulkCopy(conn, BulkCopyOptions, externalTransaction: tran)
+            {
+                DestinationTableName = QuoteQualified(stagingTableName),
+                // InternalBatchSize == 0 → use full count, matching pre-10.6 behaviour.
+                BatchSize = InternalBatchSize > 0 ? InternalBatchSize : batch.Rows.Count,
+                BulkCopyTimeout = TimeoutSeconds
+            };
 
-        foreach (DataColumn col in batch.Columns)
-        {
-            bulkCopy.ColumnMappings.Add(col.ColumnName, col.ColumnName);
+            foreach (DataColumn col in batch.Columns)
+            {
+                bulkCopy.ColumnMappings.Add(col.ColumnName, col.ColumnName);
+            }
+
+            await bulkCopy.WriteToServerAsync(batch, cancellationToken);
+            if (tran != null)
+            {
+                await tran.CommitAsync(cancellationToken);
+            }
         }
-
-        await bulkCopy.WriteToServerAsync(batch, cancellationToken);
+        catch
+        {
+            if (tran != null)
+            {
+                await tran.RollbackAsync(CancellationToken.None);
+            }
+            throw;
+        }
     }
 
     public async Task MergeAsync(
