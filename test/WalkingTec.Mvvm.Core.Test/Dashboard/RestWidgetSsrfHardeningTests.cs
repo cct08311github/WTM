@@ -117,6 +117,55 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
                 $"{ipStr} is a public IP and must NOT be blocked");
         }
 
+        // ── Issue #533: IPv6 transitional forms that embed a blocked IPv4 ───
+        // NAT64 (64:ff9b::/96, RFC 6052), 6to4 (2002::/16, RFC 3056), and
+        // IPv4-mapped (::ffff:0:0/96, RFC 4291) IPv6 addresses can smuggle a
+        // private/IMDS IPv4 destination past a naive IPv6-only check.
+
+        [TestMethod]
+        [DataRow("64:ff9b::169.254.169.254")]  // NAT64 → AWS/GCP IMDS
+        [DataRow("64:ff9b::10.0.0.1")]         // NAT64 → RFC-1918 private
+        [DataRow("64:ff9b::a9fe:a9fe")]        // NAT64 → 169.254.169.254 (hex form)
+        public void IsBlockedIp_blocks_NAT64_embedded_IPv4(string ipStr)
+        {
+            var ip = IPAddress.Parse(ipStr);
+            Assert.IsTrue(RestWidgetDataSource.IsBlockedIp(ip),
+                $"NAT64 address {ipStr} embeds a blocked IPv4 and must be blocked");
+        }
+
+        [TestMethod]
+        [DataRow("2002:a9fe:a9fe::")]   // 6to4 → 169.254.169.254 (AWS/GCP IMDS)
+        [DataRow("2002:0a00:0001::")]   // 6to4 → 10.0.0.1 (RFC-1918 private)
+        public void IsBlockedIp_blocks_6to4_embedded_IPv4(string ipStr)
+        {
+            var ip = IPAddress.Parse(ipStr);
+            Assert.IsTrue(RestWidgetDataSource.IsBlockedIp(ip),
+                $"6to4 address {ipStr} embeds a blocked IPv4 and must be blocked");
+        }
+
+        [TestMethod]
+        [DataRow("::127.0.0.1")]          // IPv4-compatible (deprecated) → loopback
+        [DataRow("::169.254.169.254")]    // IPv4-compatible (deprecated) → AWS/GCP IMDS
+        [DataRow("::ffff:127.0.0.1")]     // IPv4-mapped → loopback
+        public void IsBlockedIp_blocks_IPv4_compatible_and_mapped_embedded_IPv4(string ipStr)
+        {
+            var ip = IPAddress.Parse(ipStr);
+            Assert.IsTrue(RestWidgetDataSource.IsBlockedIp(ip),
+                $"{ipStr} embeds a blocked IPv4 and must be blocked");
+        }
+
+        [TestMethod]
+        [DataRow("2606:4700:4700::1111")]  // Cloudflare public DNS — no embedded IPv4
+        [DataRow("2001:4860:4860::8888")]  // Google public DNS — no embedded IPv4
+        [DataRow("64:ff9b::8.8.8.8")]      // NAT64 → public IPv4 (8.8.8.8) must NOT be blocked
+        [DataRow("2002:0808:0808::")]      // 6to4 → public IPv4 (8.8.8.8) must NOT be blocked
+        public void IsBlockedIp_does_not_block_public_IPv6_or_public_embedded_IPv4(string ipStr)
+        {
+            var ip = IPAddress.Parse(ipStr);
+            Assert.IsFalse(RestWidgetDataSource.IsBlockedIp(ip),
+                $"{ipStr} is public (or embeds only a public IPv4) and must NOT be blocked");
+        }
+
         // ── Defect 4: DNS pinning — SelectConnectableIp ──────────────────────
 
         [TestMethod]

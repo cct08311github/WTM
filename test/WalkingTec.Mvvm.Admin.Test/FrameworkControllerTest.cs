@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Http;
@@ -255,6 +256,140 @@ namespace WalkingTec.Mvvm.Admin.Test
                 "U+2028 must be replaced with the literal six-character sequence \\u2028");
             Assert.IsTrue(sanitized.Contains("\\u2029"),
                 "U+2029 must be replaced with the literal six-character sequence \\u2029");
+        }
+
+        // ─── GetSafeStreamContentType — #530 MIME-sniffing stored XSS fix ─────
+
+        /// <summary>
+        /// #530: <see cref="_FrameworkController.GetFile"/> streams uploaded files inline
+        /// (stream=true) without ever setting Response.ContentType, so a browser would
+        /// MIME-sniff an uploaded .html file and render it as active content in the app's
+        /// origin (stored XSS) — any authenticated user can reach any file by GUID because
+        /// default upload validation allows arbitrary extensions.
+        ///
+        /// <see cref="_FrameworkController.GetSafeStreamContentType"/> is the extracted,
+        /// directly-testable boundary that decides the Content-Type for that response (the
+        /// GetFile action itself cannot be unit-tested end-to-end: it calls
+        /// <c>Wtm.CreateDC(cskey:)</c>, which requires full connection-string configuration
+        /// not available under MockController — see known-quirks.md "TestFrameworkContext").
+        /// This test proves an .html upload never gets served as text/html.
+        /// </summary>
+        [TestMethod]
+        public void GetSafeStreamContentType_HtmlExtension_ReturnsOctetStreamNotHtml()
+        {
+            string result = _FrameworkController.GetSafeStreamContentType("html", "application/octet-stream");
+
+            Assert.AreEqual("application/octet-stream", result,
+                "An uploaded .html file must never be served with a renderable Content-Type");
+            Assert.AreNotEqual("text/html", result,
+                "text/html would let the browser render the uploaded file as active content (stored XSS)");
+        }
+
+        /// <summary>
+        /// #530: image/svg+xml is renderable (can embed &lt;script&gt;) and must also be
+        /// forced to application/octet-stream, even though it is a common inline-preview type.
+        /// </summary>
+        [TestMethod]
+        public void GetSafeStreamContentType_SvgExtension_ReturnsOctetStream()
+        {
+            string result = _FrameworkController.GetSafeStreamContentType("svg", "image/svg+xml");
+
+            Assert.AreEqual("application/octet-stream", result,
+                "SVG can embed <script> and must not be served as image/svg+xml inline");
+        }
+
+        /// <summary>
+        /// #530: unknown/unrecognised extensions fall through GetFile's contenttype
+        /// computation as the default "application/octet-stream" already — this test locks
+        /// in that the helper keeps it that way rather than accidentally widening the
+        /// whitelist.
+        /// </summary>
+        [TestMethod]
+        public void GetSafeStreamContentType_UnknownExtension_ReturnsOctetStream()
+        {
+            string result = _FrameworkController.GetSafeStreamContentType("xyz", "application/octet-stream");
+
+            Assert.AreEqual("application/octet-stream", result);
+        }
+
+        /// <summary>
+        /// #530: the whitelisted image extensions are still served with their native
+        /// image/* content type — the fix must not regress normal inline image preview.
+        /// </summary>
+        [TestMethod]
+        [DataRow("png", "image/png")]
+        [DataRow("jpg", "image/jpg")]
+        [DataRow("jpeg", "image/jpeg")]
+        [DataRow("gif", "image/gif")]
+        [DataRow("bmp", "image/bmp")]
+        [DataRow("tif", "image/tif")]
+        public void GetSafeStreamContentType_WhitelistedImageExtension_ReturnsNativeImageType(string ext, string computedContentType)
+        {
+            string result = _FrameworkController.GetSafeStreamContentType(ext, computedContentType);
+
+            Assert.AreEqual(computedContentType, result,
+                $"Whitelisted image extension '{ext}' must keep serving its native content type");
+        }
+
+        /// <summary>
+        /// #530: extension matching must be case-insensitive, mirroring the ToLower() call
+        /// GetFile already applies to file.FileExt before computing contenttype.
+        /// </summary>
+        [TestMethod]
+        public void GetSafeStreamContentType_UppercaseImageExtension_StillMatchesWhitelist()
+        {
+            string result = _FrameworkController.GetSafeStreamContentType("PNG", "image/png");
+
+            Assert.AreEqual("image/png", result,
+                "Extension matching must be case-insensitive");
+        }
+
+        /// <summary>
+        /// #530: null/empty extension (e.g. a file with no extension) must not slip through
+        /// as a renderable type.
+        /// </summary>
+        [TestMethod]
+        public void GetSafeStreamContentType_NullOrEmptyExtension_ReturnsOctetStream()
+        {
+            Assert.AreEqual("application/octet-stream", _FrameworkController.GetSafeStreamContentType(null, "application/octet-stream"));
+            Assert.AreEqual("application/octet-stream", _FrameworkController.GetSafeStreamContentType("", "application/octet-stream"));
+        }
+
+        // ─── GetVerifyCode — async session write (Issue #535) ─────────────────
+
+        /// <summary>
+        /// #535: GetVerifyCode is an unauthenticated, hot captcha endpoint. It must still
+        /// generate the image and persist the code to session after switching from the
+        /// blocking <c>Set&lt;T&gt;</c> to the async <c>SetAsync&lt;T&gt;</c> extension.
+        /// </summary>
+        [TestMethod]
+        public async Task GetVerifyCode_ReturnsPngAndStoresCodeInSessionAsync()
+        {
+            var mockSecurityCode = new Mock<ISecurityCodeHelper>();
+            mockSecurityCode.Setup(s => s.GetRandomEnDigitalText(4)).Returns("A1B2");
+            var imageBytes = new byte[] { 1, 2, 3, 4 };
+            mockSecurityCode.Setup(s => s.GetEnDigitalCodeByte("A1B2")).Returns(imageBytes);
+
+            var controller = new _FrameworkController(mockSecurityCode.Object)
+            {
+                Wtm = MockWtmContext.CreateWtmContext()
+            };
+
+            var mockSession = new MockHttpSession();
+            var mockHttpContext = new Mock<HttpContext>();
+            mockHttpContext.Setup(c => c.Session).Returns(mockSession);
+            controller.ControllerContext = new ControllerContext { HttpContext = mockHttpContext.Object };
+
+            var result = await controller.GetVerifyCode();
+
+            var fileResult = result as FileContentResult;
+            Assert.IsNotNull(fileResult, "GetVerifyCode should return a FileContentResult");
+            CollectionAssert.AreEqual(imageBytes, fileResult.FileContents);
+            Assert.AreEqual("image/png", fileResult.ContentType);
+
+            var storedCode = mockSession.Get<string>("verify_code");
+            Assert.AreEqual("A1B2", storedCode,
+                "GetVerifyCode must persist the generated code to session via SetAsync");
         }
 
         // ─── SetTenant — anonymous-caller NRE guard (#538) ────────────────────

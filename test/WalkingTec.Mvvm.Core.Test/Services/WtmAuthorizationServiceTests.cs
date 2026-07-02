@@ -92,6 +92,50 @@ namespace WalkingTec.Mvvm.Core.Test.Services
             _service.IsAccessable("/some/page", null, config, gd).Should().BeFalse();
         }
 
+        [TestMethod]
+        public void IsAccessable_PublicUrlPrefixCollision_SiblingActionDenied_Issue531()
+        {
+            // Regression test for Issue #531: MatchUrl previously built an unanchored
+            // "^pattern[/\?]?" regex with no end anchor, so IsMatch returned true whenever
+            // the requested URL merely STARTED WITH the public URL. A privilege-gated
+            // action ("/Home/IndexAdmin") that shares a prefix with a registered public
+            // URL ("/Home/Index") was therefore treated as public and became accessible
+            // to any authenticated user without the required menu privilege — a fail-open
+            // RBAC bypass. This must fail BEFORE the fix and pass AFTER the fix.
+            var menuId = Guid.NewGuid();
+            var gd = MakeGlobalData(new List<SimpleMenu>
+            {
+                new SimpleMenu { ID = menuId, Url = "/Home/IndexAdmin" }
+            });
+            gd.AllAccessUrls = new List<string> { "/Home/Index" };
+            var config = new Configs { IsQuickDebug = false };
+            var user = new LoginUserInfo
+            {
+                ITCode = "user1",
+                // Authenticated, but no function privilege granted for /Home/IndexAdmin.
+                FunctionPrivileges = new List<SimpleFunctionPri>()
+            };
+
+            _service.IsAccessable("/Home/IndexAdmin", user, config, gd)
+                .Should().BeFalse("a privilege-gated action must not be treated as public merely because " +
+                    "it shares a URL prefix with an unrelated public URL (Issue #531 fail-open bypass)");
+        }
+
+        [TestMethod]
+        public void IsAccessable_PublicUrl_ExactSelfTrailingSlashAndQueryString_StillAllowed()
+        {
+            // False-negative regression guard for the Issue #531 fix: the public URL
+            // itself, the same URL with a trailing slash, and the same URL with a query
+            // string must all still be treated as public (no regression from anchoring).
+            var gd = MakeGlobalData();
+            gd.AllAccessUrls = new List<string> { "/Home/Index" };
+            var config = new Configs { IsQuickDebug = false };
+
+            _service.IsAccessable("/Home/Index", null, config, gd).Should().BeTrue();
+            _service.IsAccessable("/Home/Index/", null, config, gd).Should().BeTrue();
+            _service.IsAccessable("/Home/Index?x=1", null, config, gd).Should().BeTrue();
+        }
+
         #endregion
 
         #region IsAccessable — no function privileges

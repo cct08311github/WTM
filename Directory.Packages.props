@@ -78,6 +78,16 @@
     <PackageVersion Include="Swashbuckle.AspNetCore.Swagger" Version="10.1.5" />
     <PackageVersion Include="Swashbuckle.AspNetCore.SwaggerGen" Version="10.1.5" />
     <PackageVersion Include="Swashbuckle.AspNetCore.SwaggerUI" Version="10.1.5" />
+    <!--
+      Issue #528 — pin vulnerable transitive from Swashbuckle.AspNetCore 10.1.5.
+      Swashbuckle 10.1.5 transitively pulls Microsoft.OpenApi 2.4.1, which carries
+      HIGH-severity GHSA-v5pm-xwqc-g5wc (circular schema references terminate OpenAPI
+      parsing). Advisory affects >= 2.0.0-preview11, <= 2.7.4; first patched 2.7.5.
+      2.7.5 stays on the 2.x major line, so it is API-compatible with Swashbuckle 10.1.5.
+      Wired via a direct PackageReference in Mvc.csproj to override the transitive
+      solution-wide. NU1510 on that line is EXPECTED (override working) — DO NOT remove.
+    -->
+    <PackageVersion Include="Microsoft.OpenApi" Version="2.7.5" />
     <PackageVersion Include="VueCliMiddleware" Version="6.0.0" />
 
     <!-- ===== Security overrides (transitive pins) ===== -->
