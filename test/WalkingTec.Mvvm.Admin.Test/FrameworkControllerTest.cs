@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Http;
@@ -352,6 +353,43 @@ namespace WalkingTec.Mvvm.Admin.Test
         {
             Assert.AreEqual("application/octet-stream", _FrameworkController.GetSafeStreamContentType(null, "application/octet-stream"));
             Assert.AreEqual("application/octet-stream", _FrameworkController.GetSafeStreamContentType("", "application/octet-stream"));
+        }
+
+        // ─── GetVerifyCode — async session write (Issue #535) ─────────────────
+
+        /// <summary>
+        /// #535: GetVerifyCode is an unauthenticated, hot captcha endpoint. It must still
+        /// generate the image and persist the code to session after switching from the
+        /// blocking <c>Set&lt;T&gt;</c> to the async <c>SetAsync&lt;T&gt;</c> extension.
+        /// </summary>
+        [TestMethod]
+        public async Task GetVerifyCode_ReturnsPngAndStoresCodeInSessionAsync()
+        {
+            var mockSecurityCode = new Mock<ISecurityCodeHelper>();
+            mockSecurityCode.Setup(s => s.GetRandomEnDigitalText(4)).Returns("A1B2");
+            var imageBytes = new byte[] { 1, 2, 3, 4 };
+            mockSecurityCode.Setup(s => s.GetEnDigitalCodeByte("A1B2")).Returns(imageBytes);
+
+            var controller = new _FrameworkController(mockSecurityCode.Object)
+            {
+                Wtm = MockWtmContext.CreateWtmContext()
+            };
+
+            var mockSession = new MockHttpSession();
+            var mockHttpContext = new Mock<HttpContext>();
+            mockHttpContext.Setup(c => c.Session).Returns(mockSession);
+            controller.ControllerContext = new ControllerContext { HttpContext = mockHttpContext.Object };
+
+            var result = await controller.GetVerifyCode();
+
+            var fileResult = result as FileContentResult;
+            Assert.IsNotNull(fileResult, "GetVerifyCode should return a FileContentResult");
+            CollectionAssert.AreEqual(imageBytes, fileResult.FileContents);
+            Assert.AreEqual("image/png", fileResult.ContentType);
+
+            var storedCode = mockSession.Get<string>("verify_code");
+            Assert.AreEqual("A1B2", storedCode,
+                "GetVerifyCode must persist the generated code to session via SetAsync");
         }
     }
 }

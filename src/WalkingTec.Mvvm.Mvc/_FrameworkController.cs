@@ -1113,14 +1113,16 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         [AllowAnonymous]
-        public ActionResult GetVerifyCode()
+        public async Task<ActionResult> GetVerifyCode()
         {
             var chkCode = _securityCode.GetRandomEnDigitalText(4);
             //写入Session用于验证码校验，可以对校验码进行加密，提高安全性
-            HttpContext.Session.Set<string>("verify_code", chkCode);
+            // Issue #535: this is a hot, unauthenticated (pre-login) endpoint — use the
+            // async SetAsync to avoid blocking a ThreadPool thread on CommitAsync().
+            await HttpContext.Session.SetAsync<string>("verify_code", chkCode);
             var imgbyte = _securityCode.GetEnDigitalCodeByte(chkCode);
             return File(imgbyte, "image/png");
-        
+
         }
 
         [Public]
