@@ -258,11 +258,61 @@ describe('#470 DispatchAction initForm — source sweep', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Issue #551 (#470-A): DispatchAction whitelist extension — source sweep
+// ---------------------------------------------------------------------------
+describe('#551 DispatchAction whitelist extension — source sweep', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const srcPath = path.resolve(
+    __dirname,
+    '../../../src/WalkingTec.Mvvm.Mvc/framework_layui.js'
+  );
+  const src = fs.readFileSync(srcPath, 'utf8');
+  const stripLineComments = (text) =>
+    text
+      .split('\n')
+      .map((line) => {
+        const idx = line.indexOf('//');
+        return idx === -1 ? line : line.slice(0, idx);
+      })
+      .join('\n');
+  const active = stripLineComments(src);
+
+  test('DispatchAction switch contains loadComboItems case', () => {
+    expect(active).toMatch(/case\s+['"]loadComboItems['"]/);
+  });
+
+  test('loadComboItems calls ff.LoadComboItems (no eval)', () => {
+    expect(active).toMatch(/case\s+['"]loadComboItems['"][\s\S]{0,400}ff\.LoadComboItems\(/);
+  });
+
+  test('initForm dates handling references the widened static laydate option set', () => {
+    const initFormBlock = active.match(/case\s+['"]initForm['"][\s\S]*?case\s+['"]loadComboItems['"]/);
+    expect(initFormBlock).not.toBeNull();
+    const block = initFormBlock[0];
+    ['range', 'min', 'max', 'zIndex', 'showBottom', 'btns', 'confirmOnly', 'calendar', 'lang', 'mark'].forEach((opt) => {
+      expect(block).toMatch(new RegExp('_d\\.' + opt));
+    });
+    // Explicitly out of scope — no callback passthrough.
+    expect(block).not.toMatch(/ready\s*:/);
+    expect(block).not.toMatch(/[^a-zA-Z]done\s*:/);
+  });
+
+  test('active-code eval( count is still exactly 1 after #551 changes', () => {
+    const matches = active.match(/\beval\(/g) || [];
+    expect(matches).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Issue #470: initForm action — behavioral stub
 // ---------------------------------------------------------------------------
 describe('#470 DispatchAction initForm — behavioral stub', () => {
   // Mirrors the makeDispatcher pattern above but includes the initForm branch.
-  function makeDispatcherWithInitForm(layui) {
+  // Issue #551: also mirrors the widened dates[] option passthrough and the
+  // new loadComboItems branch, so takes an optional `ff` mock alongside `layui`.
+  function makeDispatcherWithInitForm(layui, ff) {
+    ff = ff || {};
     return function dispatchAction(payload) {
       if (!payload || !payload.actions || !payload.actions.length) return;
       var actions = payload.actions;
@@ -282,7 +332,21 @@ describe('#470 DispatchAction initForm — behavioral stub', () => {
                 for (var di = 0; di < action.dates.length; di++) {
                   var d = action.dates[di];
                   if (d && d.elem) {
-                    layui.laydate.render({ elem: d.elem, type: d.type || 'date', format: d.format });
+                    var dOpts = { elem: d.elem, type: d.type || 'date', format: d.format };
+                    if (d.range !== undefined && d.range !== null) { dOpts.range = d.range; }
+                    if (d.min !== undefined && d.min !== null) { dOpts.min = d.min; }
+                    if (d.max !== undefined && d.max !== null) { dOpts.max = d.max; }
+                    if (d.zIndex !== undefined && d.zIndex !== null) { dOpts.zIndex = d.zIndex; }
+                    if (d.showBottom !== undefined && d.showBottom !== null) { dOpts.showBottom = d.showBottom; }
+                    if (d.btns !== undefined && d.btns !== null) {
+                      dOpts.btns = d.btns;
+                    } else if (d.confirmOnly) {
+                      dOpts.btns = ['confirm'];
+                    }
+                    if (d.calendar !== undefined && d.calendar !== null) { dOpts.calendar = d.calendar; }
+                    if (d.lang !== undefined && d.lang !== null) { dOpts.lang = d.lang; }
+                    if (d.mark !== undefined && d.mark !== null) { dOpts.mark = d.mark; }
+                    layui.laydate.render(dOpts);
                   }
                 }
               }
@@ -290,6 +354,17 @@ describe('#470 DispatchAction initForm — behavioral stub', () => {
               if (typeof console !== 'undefined' && console.warn) {
                 console.warn('[WTM] initForm action failed:', e);
               }
+            }
+            break;
+          case 'loadComboItems':
+            if (typeof ff.LoadComboItems === 'function' && action.url && action.id) {
+              ff.LoadComboItems(
+                action.controlType || undefined,
+                action.url,
+                action.id,
+                action.field || undefined,
+                action.selectVal || undefined
+              );
             }
             break;
           default:
@@ -372,5 +447,149 @@ describe('#470 DispatchAction initForm — behavioral stub', () => {
     expect(() => {
       dispatch({ actions: [{ type: 'initForm', filter: 'f' }] });
     }).not.toThrow();
+  });
+
+  // -------------------------------------------------------------------------
+  // Issue #551: widened dates[] static laydate option passthrough
+  // -------------------------------------------------------------------------
+  test('legacy {elem,type,format}-only dates entry still behaves identically', () => {
+    const formRender = jest.fn();
+    const laydateRender = jest.fn();
+    const layui = { form: { render: formRender }, laydate: { render: laydateRender } };
+    const dispatch = makeDispatcherWithInitForm(layui);
+    dispatch({
+      actions: [{
+        type: 'initForm',
+        filter: 'f',
+        dates: [{ elem: '#BirthDate', type: 'date', format: 'yyyy-MM-dd' }]
+      }]
+    });
+    expect(laydateRender).toHaveBeenCalledTimes(1);
+    expect(laydateRender).toHaveBeenCalledWith({ elem: '#BirthDate', type: 'date', format: 'yyyy-MM-dd' });
+  });
+
+  test('widened dates entry passes the extra static laydate options through, omitted options absent', () => {
+    const formRender = jest.fn();
+    const laydateRender = jest.fn();
+    const layui = { form: { render: formRender }, laydate: { render: laydateRender } };
+    const dispatch = makeDispatcherWithInitForm(layui);
+    dispatch({
+      actions: [{
+        type: 'initForm',
+        filter: 'f',
+        dates: [{
+          elem: '#StartDate',
+          type: 'date',
+          format: 'yyyy-MM-dd',
+          range: '~',
+          min: '-7',
+          max: '2099-12-31',
+          zIndex: 12345,
+          showBottom: false,
+          confirmOnly: true,
+          calendar: true,
+          lang: 'en',
+          mark: { '0-0-15': 'mid' }
+        }]
+      }]
+    });
+    expect(laydateRender).toHaveBeenCalledTimes(1);
+    const passedOpts = laydateRender.mock.calls[0][0];
+    expect(passedOpts).toEqual({
+      elem: '#StartDate',
+      type: 'date',
+      format: 'yyyy-MM-dd',
+      range: '~',
+      min: '-7',
+      max: '2099-12-31',
+      zIndex: 12345,
+      showBottom: false,
+      btns: ['confirm'],
+      calendar: true,
+      lang: 'en',
+      mark: { '0-0-15': 'mid' }
+    });
+    // No callback options ever passed through.
+    expect(passedOpts.ready).toBeUndefined();
+    expect(passedOpts.change).toBeUndefined();
+    expect(passedOpts.done).toBeUndefined();
+  });
+
+  test('explicit btns array on a dates entry is passed through as-is (takes precedence over confirmOnly)', () => {
+    const laydateRender = jest.fn();
+    const layui = { form: { render: jest.fn() }, laydate: { render: laydateRender } };
+    const dispatch = makeDispatcherWithInitForm(layui);
+    dispatch({
+      actions: [{
+        type: 'initForm',
+        dates: [{ elem: '#D', btns: ['clear', 'now', 'confirm'], confirmOnly: true }]
+      }]
+    });
+    expect(laydateRender).toHaveBeenCalledWith({
+      elem: '#D',
+      type: 'date',
+      format: undefined,
+      btns: ['clear', 'now', 'confirm']
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #551 (#470-A): loadComboItems action — behavioral stub
+// ---------------------------------------------------------------------------
+describe('#551 DispatchAction loadComboItems — behavioral stub', () => {
+  function makeDispatcher(ff) {
+    return function dispatchAction(payload) {
+      if (!payload || !payload.actions || !payload.actions.length) return;
+      var actions = payload.actions;
+      for (var i = 0; i < actions.length; i++) {
+        var action = actions[i];
+        if (!action || !action.type) continue;
+        switch (action.type) {
+          case 'loadComboItems':
+            if (typeof ff.LoadComboItems === 'function' && action.url && action.id) {
+              ff.LoadComboItems(
+                action.controlType || undefined,
+                action.url,
+                action.id,
+                action.field || undefined,
+                action.selectVal || undefined
+              );
+            }
+            break;
+          default:
+            if (typeof console !== 'undefined' && console.warn) {
+              console.warn('[WTM] Unknown WtmAction type:', action.type);
+            }
+        }
+      }
+    };
+  }
+
+  test('loadComboItems action calls ff.LoadComboItems with the mapped positional args', () => {
+    const loadComboItems = jest.fn();
+    const ff = { LoadComboItems: loadComboItems };
+    const dispatch = makeDispatcher(ff);
+    dispatch({
+      actions: [{
+        type: 'loadComboItems',
+        controlType: 'combo',
+        url: '/Home/GetItems',
+        id: 'MyCombo',
+        field: 'MyComboText',
+        selectVal: ['1', '2']
+      }]
+    });
+    expect(loadComboItems).toHaveBeenCalledTimes(1);
+    expect(loadComboItems).toHaveBeenCalledWith('combo', '/Home/GetItems', 'MyCombo', 'MyComboText', ['1', '2']);
+  });
+
+  test('loadComboItems is a no-op when url or id is missing (does not call ff.LoadComboItems)', () => {
+    const loadComboItems = jest.fn();
+    const ff = { LoadComboItems: loadComboItems };
+    const dispatch = makeDispatcher(ff);
+    dispatch({ actions: [{ type: 'loadComboItems', controlType: 'combo', id: 'MyCombo' }] });
+    dispatch({ actions: [{ type: 'loadComboItems', controlType: 'combo', url: '/Home/GetItems' }] });
+    expect(loadComboItems).not.toHaveBeenCalled();
   });
 });

@@ -176,7 +176,30 @@ window.ff = {
                             for (var _di = 0; _di < action.dates.length; _di++) {
                                 var _d = action.dates[_di];
                                 if (_d && _d.elem) {
-                                    layui.laydate.render({ elem: _d.elem, type: _d.type || 'date', format: _d.format });
+                                    // Issue #551: widen the static laydate option set beyond
+                                    // elem/type/format to the full STATIC option set already
+                                    // emitted by DateTimeTagHelper (range/min/max/zIndex/
+                                    // showBottom/btns/calendar/lang/mark). Each option is only
+                                    // added when present on the entry, so omitted options fall
+                                    // back to laydate's own defaults — legacy
+                                    // {elem,type,format}-only payloads render identically to
+                                    // before. No callbacks (ready/change/done) are supported —
+                                    // those remain an explicit out-of-scope blocker (#470).
+                                    var _dOpts = { elem: _d.elem, type: _d.type || 'date', format: _d.format };
+                                    if (_d.range !== undefined && _d.range !== null) { _dOpts.range = _d.range; }
+                                    if (_d.min !== undefined && _d.min !== null) { _dOpts.min = _d.min; }
+                                    if (_d.max !== undefined && _d.max !== null) { _dOpts.max = _d.max; }
+                                    if (_d.zIndex !== undefined && _d.zIndex !== null) { _dOpts.zIndex = _d.zIndex; }
+                                    if (_d.showBottom !== undefined && _d.showBottom !== null) { _dOpts.showBottom = _d.showBottom; }
+                                    if (_d.btns !== undefined && _d.btns !== null) {
+                                        _dOpts.btns = _d.btns;
+                                    } else if (_d.confirmOnly) {
+                                        _dOpts.btns = ['confirm'];
+                                    }
+                                    if (_d.calendar !== undefined && _d.calendar !== null) { _dOpts.calendar = _d.calendar; }
+                                    if (_d.lang !== undefined && _d.lang !== null) { _dOpts.lang = _d.lang; }
+                                    if (_d.mark !== undefined && _d.mark !== null) { _dOpts.mark = _d.mark; }
+                                    layui.laydate.render(_dOpts);
                                 }
                             }
                         }
@@ -184,6 +207,25 @@ window.ff = {
                         if (typeof console !== 'undefined' && console.warn) {
                             console.warn('[WTM] initForm action failed:', e);
                         }
+                    }
+                    break;
+                // Issue #551: thin JSON wrapper over the existing
+                // ff.LoadComboItems(controltype, url, controlid, targetname, svals)
+                // global — zero new capability, just a declarative re-expression of
+                // a plain function call that server code already triggers today via
+                // ChainChange/combo markup. Foundation for #552 (no server emitter
+                // yet). Field names avoid the 'type' key (reserved for the action
+                // discriminator above) — controlType/url/id/field/selectVal map
+                // 1:1 onto ff.LoadComboItems's positional parameters.
+                case 'loadComboItems':
+                    if (typeof ff.LoadComboItems === 'function' && action.url && action.id) {
+                        ff.LoadComboItems(
+                            action.controlType || undefined,
+                            action.url,
+                            action.id,
+                            action.field || undefined,
+                            action.selectVal || undefined
+                        );
                     }
                     break;
                 default:
