@@ -145,9 +145,11 @@ window.ff = {
                     // URLs, but if a compromised downstream controller
                     // emits raw JSON bypassing the extension, reject
                     // absolute URLs here too.
+                    // Issue #534: also reject a leading '/' followed by '\' —
+                    // browsers normalize it to '/' ("/\evil.com" -> "//evil.com").
                     if (action.url) {
                         var _u = action.url;
-                        if (_u.charAt(0) === '/' && _u.charAt(1) !== '/') {
+                        if (/^\/(?:[^/\\]|$)/.test(_u)) {
                             location.href = _u;
                             return;
                         }
@@ -606,8 +608,10 @@ window.ff = {
                     // Issue #332: validate Location header shape before redirect —
                     // reject absolute URLs, protocol-relative (//), javascript:, data:.
                     // Mirrors DispatchAction 'redirect' guard (Issue #804).
+                    // Issue #534: also reject a leading '/' followed by '\' —
+                    // browsers normalize it to '/' ("/\evil.com" -> "//evil.com").
                     var _loc = location;
-                    if ((_loc.charAt(0) === '/' && _loc.charAt(1) !== '/') ||
+                    if (/^\/(?:[^/\\]|$)/.test(_loc) ||
                         _loc.charAt(0) === '#' || _loc.charAt(0) === '?') {
                         window.location = _loc;
                         return false;

@@ -109,6 +109,19 @@ describe('#332 — framework_layui.js source sweep', () => {
   test('6. Issue #332 comment reference is present in the source', () => {
     expect(src).toMatch(/Issue #332/);
   });
+
+  test('7a. OpenDialog Location guard references Issue #534 (backslash bypass fix)', () => {
+    expect(src).toMatch(/Issue #534/);
+  });
+
+  test('7b. OpenDialog Location guard uses the backslash-safe regex, not bare charAt(1) !== \'/\'', () => {
+    // The old vulnerable check was `charAt(0) === '/' && charAt(1) !== '/'`,
+    // which let a Location header like "/\evil.com" through — browsers
+    // normalize '\' to '/' for special schemes, navigating to "//evil.com".
+    const fixedPattern = String.raw`/^\/(?:[^/\\]|$)/`;
+    expect(src.indexOf(fixedPattern)).toBeGreaterThan(-1);
+    expect(active).not.toMatch(/charAt\s*\(\s*1\s*\)\s*!==\s*['"]\/['"]/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -199,7 +212,12 @@ describe('#332 — OpenDialog Location header redirect guard', () => {
     return function guard(location) {
       if (!location) { return false; }
       var _loc = location;
-      if ((_loc.charAt(0) === '/' && _loc.charAt(1) !== '/') ||
+      // Issue #534: /^\/(?:[^/\\]|$)/ requires exactly one leading '/'
+      // followed by end-of-string or a character that is neither '/'
+      // (protocol-relative) nor '\' (backslash bypass — browsers normalize
+      // it to '/' for special schemes, turning "/\evil.com" into
+      // "//evil.com").
+      if (/^\/(?:[^/\\]|$)/.test(_loc) ||
           _loc.charAt(0) === '#' || _loc.charAt(0) === '?') {
         locationStub.location = _loc;
         return false;
@@ -214,6 +232,7 @@ describe('#332 — OpenDialog Location header redirect guard', () => {
   const allowed = [
     '/admin/home',
     '/api/v1/users',
+    '/Home/Index',
     '/',
     '#anchor',
     '?q=1',
@@ -227,6 +246,12 @@ describe('#332 — OpenDialog Location header redirect guard', () => {
     'data:text/html,<script>alert(1)<\/script>',
     'ftp://files.example.com/',
     'evil.com/path',
+    // Issue #534: backslash-as-second-character bypass variants. Browsers
+    // normalize a leading "\" run to "/" for special schemes, so these all
+    // resolve to protocol-relative navigation to evil.com.
+    String.raw`/\evil.com`,
+    String.raw`/\\evil.com`,
+    String.raw`\/evil.com`,
   ];
 
   test.each(allowed)('allows relative Location: %s', (loc) => {
