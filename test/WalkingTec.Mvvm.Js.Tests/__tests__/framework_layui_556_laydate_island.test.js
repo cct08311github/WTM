@@ -1,0 +1,409 @@
+// Tests for Issue #556 (#470-B slice 1): laydate JSON-island init +
+// universal island consumption.
+//
+// What this file locks in place:
+//   1. DispatchAction gains a 'laydate' action type that calls
+//      layui.laydate.render(action.opts) directly (no remapping, no eval).
+//   2. ff._normalizeIslandPayload wraps a bare {"type":"...", ...} island
+//      into {actions:[...]}, and passes an already-wrapped {actions:[...]}
+//      island through unchanged.
+//   3. ff.OpenDialog collects EVERY .wtm-dialog-init island in the parsed
+//      partial (querySelectorAll, not querySelector) and dispatches each.
+//   4. ff._consumePageReadyIslands dispatches .wtm-dialog-init islands
+//      present in the live document at page load, and is idempotent
+//      (marks each island data-wtm-dispatched="1" so a second call is a
+//      no-op) — this is the mechanism that makes migrated fields (e.g. the
+//      DateTimeTagHelper laydate island) initialize on full-page forms too.
+//   5. The dialog path and the page-ready path can never double-dispatch
+//      the same island, because DOMPurify (FORBID_TAGS:['script']) strips
+//      every <script> element — including .wtm-dialog-init islands — from
+//      dialog markup before it is inserted into the live document; a
+//      dialog-origin island is therefore never visible to the page-ready
+//      consumer, which only scans the live document.
+//
+// Following the same convention as framework_layui_phase3c_json_dispatch.test.js:
+// source-sweep tests assert the real file structure; behavioral-stub tests
+// re-implement the same logic (since the vm-loaded `ff` module's closures
+// were compiled without `document`/`layui` in scope — see setup.js — so the
+// live module functions cannot be exercised directly against real DOM/layui
+// mocks here). Any drift between the stub and the real file is caught by the
+// source-sweep tests.
+
+const fs = require('fs');
+const path = require('path');
+
+const srcPath = path.resolve(
+  __dirname,
+  '../../../src/WalkingTec.Mvvm.Mvc/framework_layui.js'
+);
+const src = fs.readFileSync(srcPath, 'utf8');
+
+const stripLineComments = (text) =>
+  text
+    .split('\n')
+    .map((line) => {
+      const idx = line.indexOf('//');
+      return idx === -1 ? line : line.slice(0, idx);
+    })
+    .join('\n');
+
+const active = stripLineComments(src);
+
+// ---------------------------------------------------------------------------
+// Source sweep
+// ---------------------------------------------------------------------------
+describe('#556 (#470-B slice 1) — source sweep', () => {
+  test('DispatchAction switch contains a laydate case', () => {
+    expect(active).toMatch(/case\s+['"]laydate['"]/);
+  });
+
+  test('laydate case calls layui.laydate.render(action.opts) directly (no remapping)', () => {
+    const block = active.match(/case\s+['"]laydate['"][\s\S]{0,800}?break;/);
+    expect(block).not.toBeNull();
+    expect(block[0]).toMatch(/layui\.laydate\.render\(\s*action\.opts/);
+  });
+
+  test('laydate case guards on action.opts && action.opts.elem', () => {
+    const block = active.match(/case\s+['"]laydate['"][\s\S]{0,800}?break;/);
+    expect(block).not.toBeNull();
+    expect(block[0]).toMatch(/action\.opts\s*&&\s*action\.opts\.elem/);
+  });
+
+  test('ff._normalizeIslandPayload is defined', () => {
+    expect(active).toMatch(/_normalizeIslandPayload\s*:\s*function/);
+  });
+
+  test('_normalizeIslandPayload wraps a bare action and passes an actions array through', () => {
+    const block = active.match(/_normalizeIslandPayload\s*:\s*function[\s\S]{0,500}?\n\s*\},/);
+    expect(block).not.toBeNull();
+    expect(block[0]).toMatch(/Array\.isArray\(\s*parsed\.actions\s*\)/);
+    expect(block[0]).toMatch(/actions:\s*\[\s*parsed\s*\]/);
+  });
+
+  test('OpenDialog collects islands via querySelectorAll (not querySelector)', () => {
+    expect(active).toMatch(/querySelectorAll\s*\(\s*['"]script\[type="application\/json"\]\.wtm-dialog-init['"]\s*\)/);
+    // Regression guard: the OLD singular call must be gone.
+    expect(active).not.toMatch(/[^.]querySelector\s*\(\s*['"]script\[type="application\/json"\]\.wtm-dialog-init['"]\s*\)/);
+  });
+
+  test('OpenDialog normalizes each parsed island before collecting it', () => {
+    expect(active).toMatch(/_normalizeIslandPayload\s*\(\s*_parsed\s*\)/);
+    expect(active).toMatch(/_dialogInitPayloads\.push\(\s*_normalized\s*\)/);
+  });
+
+  test('OpenDialog dispatches every collected island payload', () => {
+    expect(active).toMatch(/for\s*\(\s*var\s+_pi\s*=\s*0[\s\S]{0,200}_dialogInitPayloads\.length/);
+    expect(active).toMatch(/ff\.DispatchAction\s*\(\s*_dialogInitPayloads\[_pi\]\s*\)/);
+  });
+
+  test('ff._consumePageReadyIslands is defined', () => {
+    expect(active).toMatch(/_consumePageReadyIslands\s*=\s*function/);
+  });
+
+  test('_consumePageReadyIslands excludes already-dispatched islands and marks them before dispatch', () => {
+    const block = active.match(/_consumePageReadyIslands\s*=\s*function[\s\S]{0,900}?\n\};/);
+    expect(block).not.toBeNull();
+    expect(block[0]).toMatch(/:not\(\[data-wtm-dispatched\]\)/);
+    // The attribute must be set BEFORE the dispatch attempt (idempotency
+    // guard — a failed dispatch must not cause the island to be retried).
+    const setIdx = block[0].indexOf("setAttribute('data-wtm-dispatched'");
+    const dispatchIdx = block[0].indexOf('DispatchAction(');
+    expect(setIdx).toBeGreaterThan(-1);
+    expect(dispatchIdx).toBeGreaterThan(-1);
+    expect(setIdx).toBeLessThan(dispatchIdx);
+  });
+
+  test('page-ready consumer is wired up via DOMContentLoaded / immediate call', () => {
+    expect(active).toMatch(/document\.addEventListener\(\s*['"]DOMContentLoaded['"]\s*,\s*ff\._consumePageReadyIslands\s*\)/);
+    expect(active).toMatch(/document\.readyState\s*===\s*['"]loading['"]/);
+  });
+
+  test('active-code eval( count is still exactly 1 after #556 changes', () => {
+    const matches = active.match(/\beval\(/g) || [];
+    expect(matches).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Behavioral stub: 'laydate' DispatchAction case
+// ---------------------------------------------------------------------------
+describe('#556 DispatchAction laydate — behavioral stub', () => {
+  function makeDispatcher(layui) {
+    return function dispatchAction(payload) {
+      if (!payload || !payload.actions || !payload.actions.length) return;
+      var actions = payload.actions;
+      for (var i = 0; i < actions.length; i++) {
+        var action = actions[i];
+        if (!action || !action.type) continue;
+        switch (action.type) {
+          case 'laydate':
+            if (action.opts && action.opts.elem &&
+                typeof layui !== 'undefined' && layui.laydate &&
+                typeof layui.laydate.render === 'function') {
+              try {
+                layui.laydate.render(action.opts || {});
+              } catch (e) {
+                // swallow — mirrors the real implementation's try/catch
+              }
+            }
+            break;
+          default:
+            // ignore
+        }
+      }
+    };
+  }
+
+  test('laydate action calls layui.laydate.render with the opts object verbatim', () => {
+    const laydateRender = jest.fn();
+    const layui = { laydate: { render: laydateRender } };
+    const dispatch = makeDispatcher(layui);
+    const opts = { elem: '#MyDate', type: 'date', format: 'yyyy-MM-dd' };
+    dispatch({ actions: [{ type: 'laydate', opts: opts }] });
+    expect(laydateRender).toHaveBeenCalledTimes(1);
+    expect(laydateRender).toHaveBeenCalledWith(opts);
+  });
+
+  test('laydate action passes through the full static option set unchanged', () => {
+    const laydateRender = jest.fn();
+    const layui = { laydate: { render: laydateRender } };
+    const dispatch = makeDispatcher(layui);
+    const opts = {
+      elem: '#StartDate',
+      type: 'date',
+      range: '~',
+      format: 'yyyy-MM-dd',
+      min: -7,
+      max: '2099-12-31',
+      zIndex: 12345,
+      showBottom: false,
+      btns: ['confirm'],
+      calendar: true,
+      lang: 'en',
+      mark: { '0-0-15': 'mid' }
+    };
+    dispatch({ actions: [{ type: 'laydate', opts: opts }] });
+    expect(laydateRender).toHaveBeenCalledWith(opts);
+  });
+
+  test('laydate action is a no-op when opts.elem is missing', () => {
+    const laydateRender = jest.fn();
+    const layui = { laydate: { render: laydateRender } };
+    const dispatch = makeDispatcher(layui);
+    dispatch({ actions: [{ type: 'laydate', opts: { type: 'date' } }] });
+    expect(laydateRender).not.toHaveBeenCalled();
+  });
+
+  test('laydate action is a no-op when opts is missing entirely', () => {
+    const laydateRender = jest.fn();
+    const layui = { laydate: { render: laydateRender } };
+    const dispatch = makeDispatcher(layui);
+    dispatch({ actions: [{ type: 'laydate' }] });
+    expect(laydateRender).not.toHaveBeenCalled();
+  });
+
+  test('laydate action is a no-op when layui.laydate is not available', () => {
+    const dispatch = makeDispatcher(undefined);
+    expect(() => {
+      dispatch({ actions: [{ type: 'laydate', opts: { elem: '#D' } }] });
+    }).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Behavioral stub: _normalizeIslandPayload
+// ---------------------------------------------------------------------------
+describe('#556 _normalizeIslandPayload — behavioral stub', () => {
+  function normalizeIslandPayload(parsed) {
+    if (!parsed || typeof parsed !== 'object') { return null; }
+    if (Array.isArray(parsed.actions)) { return parsed; }
+    if (parsed.type) { return { actions: [parsed] }; }
+    return null;
+  }
+
+  test('wraps a bare single-action island into {actions:[...]}', () => {
+    const bare = { type: 'laydate', opts: { elem: '#D' } };
+    expect(normalizeIslandPayload(bare)).toEqual({ actions: [bare] });
+  });
+
+  test('passes an already-wrapped {actions:[...]} island through unchanged', () => {
+    const wrapped = { actions: [{ type: 'initForm', filter: 'f' }] };
+    expect(normalizeIslandPayload(wrapped)).toBe(wrapped);
+  });
+
+  test('returns null for malformed / unrecognized payloads', () => {
+    expect(normalizeIslandPayload(null)).toBeNull();
+    expect(normalizeIslandPayload(undefined)).toBeNull();
+    expect(normalizeIslandPayload({})).toBeNull();
+    expect(normalizeIslandPayload('a string')).toBeNull();
+    expect(normalizeIslandPayload(42)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Behavioral stub: OpenDialog multi-island collection + dispatch
+// ---------------------------------------------------------------------------
+describe('#556 OpenDialog multi-island dispatch — behavioral stub', () => {
+  // Mirrors the querySelectorAll + per-node try/catch + normalize + push
+  // loop added to ff.OpenDialog, operating on a plain array of raw JSON
+  // strings instead of real DOM nodes (DOMParser is not available in this
+  // harness — see file header).
+  function collectAndDispatch(rawIslandTexts, dispatchFn) {
+    var payloads = [];
+    for (var i = 0; i < rawIslandTexts.length; i++) {
+      try {
+        var parsed = JSON.parse(rawIslandTexts[i]);
+        var normalized = (function (p) {
+          if (!p || typeof p !== 'object') { return null; }
+          if (Array.isArray(p.actions)) { return p; }
+          if (p.type) { return { actions: [p] }; }
+          return null;
+        })(parsed);
+        if (normalized !== null) { payloads.push(normalized); }
+      } catch (e) { /* malformed single island → skip that island only */ }
+    }
+    for (var j = 0; j < payloads.length; j++) {
+      dispatchFn(payloads[j]);
+    }
+    return payloads;
+  }
+
+  test('dispatches multiple islands present in the same partial', () => {
+    const dispatchFn = jest.fn();
+    const islands = [
+      JSON.stringify({ actions: [{ type: 'initForm', filter: 'myForm' }] }),
+      JSON.stringify({ type: 'laydate', opts: { elem: '#BirthDate', type: 'date' } }),
+      JSON.stringify({ type: 'laydate', opts: { elem: '#StartDate', type: 'date' } })
+    ];
+    collectAndDispatch(islands, dispatchFn);
+    expect(dispatchFn).toHaveBeenCalledTimes(3);
+    expect(dispatchFn).toHaveBeenNthCalledWith(1, { actions: [{ type: 'initForm', filter: 'myForm' }] });
+    expect(dispatchFn).toHaveBeenNthCalledWith(2, { actions: [{ type: 'laydate', opts: { elem: '#BirthDate', type: 'date' } }] });
+    expect(dispatchFn).toHaveBeenNthCalledWith(3, { actions: [{ type: 'laydate', opts: { elem: '#StartDate', type: 'date' } }] });
+  });
+
+  test('a single legacy (wrapped) island still works exactly as before', () => {
+    const dispatchFn = jest.fn();
+    const islands = [JSON.stringify({ actions: [{ type: 'closeDialog' }] })];
+    collectAndDispatch(islands, dispatchFn);
+    expect(dispatchFn).toHaveBeenCalledTimes(1);
+    expect(dispatchFn).toHaveBeenCalledWith({ actions: [{ type: 'closeDialog' }] });
+  });
+
+  test('a malformed island is skipped without affecting the others', () => {
+    const dispatchFn = jest.fn();
+    const islands = [
+      '{not valid json',
+      JSON.stringify({ type: 'laydate', opts: { elem: '#OK' } })
+    ];
+    collectAndDispatch(islands, dispatchFn);
+    expect(dispatchFn).toHaveBeenCalledTimes(1);
+    expect(dispatchFn).toHaveBeenCalledWith({ actions: [{ type: 'laydate', opts: { elem: '#OK' } }] });
+  });
+
+  test('no islands present → no dispatch calls', () => {
+    const dispatchFn = jest.fn();
+    collectAndDispatch([], dispatchFn);
+    expect(dispatchFn).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Behavioral stub: page-ready island consumer (real jsdom `document`)
+// ---------------------------------------------------------------------------
+// Unlike the vm-loaded `ff` module (whose closures were compiled without
+// `document` in scope — see setup.js), this test file itself runs directly
+// in the jsdom test environment, so `document` here is a REAL DOM. This
+// stub mirrors ff._consumePageReadyIslands exactly (source-swept above) and
+// is exercised against genuine DOM nodes to validate the idempotency
+// mechanism (querySelectorAll + :not([data-wtm-dispatched]) + setAttribute).
+describe('#556 page-ready island consumer — behavioral stub (real DOM)', () => {
+  function consumePageReadyIslands(dispatchFn) {
+    var nodes = document.querySelectorAll(
+      'script[type="application/json"].wtm-dialog-init:not([data-wtm-dispatched])'
+    );
+    for (var i = 0; i < nodes.length; i++) {
+      var node = nodes[i];
+      node.setAttribute('data-wtm-dispatched', '1');
+      if (!node.textContent) { continue; }
+      try {
+        var parsed = JSON.parse(node.textContent);
+        var normalized = (function (p) {
+          if (!p || typeof p !== 'object') { return null; }
+          if (Array.isArray(p.actions)) { return p; }
+          if (p.type) { return { actions: [p] }; }
+          return null;
+        })(parsed);
+        if (normalized !== null) { dispatchFn(normalized); }
+      } catch (e) { /* malformed island → skip */ }
+    }
+  }
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  function addIsland(json) {
+    const el = document.createElement('script');
+    el.type = 'application/json';
+    el.className = 'wtm-dialog-init';
+    el.textContent = JSON.stringify(json);
+    document.body.appendChild(el);
+    return el;
+  }
+
+  test('dispatches a bare laydate island present in the document at load', () => {
+    addIsland({ type: 'laydate', opts: { elem: '#PageDate', type: 'date' } });
+    const dispatchFn = jest.fn();
+    consumePageReadyIslands(dispatchFn);
+    expect(dispatchFn).toHaveBeenCalledTimes(1);
+    expect(dispatchFn).toHaveBeenCalledWith({
+      actions: [{ type: 'laydate', opts: { elem: '#PageDate', type: 'date' } }]
+    });
+  });
+
+  test('marks the island data-wtm-dispatched="1" after dispatch', () => {
+    const el = addIsland({ type: 'laydate', opts: { elem: '#PageDate' } });
+    consumePageReadyIslands(jest.fn());
+    expect(el.getAttribute('data-wtm-dispatched')).toBe('1');
+  });
+
+  test('a second call does not re-dispatch an already-processed island (no double-dispatch)', () => {
+    addIsland({ type: 'laydate', opts: { elem: '#PageDate' } });
+    const dispatchFn = jest.fn();
+    consumePageReadyIslands(dispatchFn);
+    consumePageReadyIslands(dispatchFn);
+    consumePageReadyIslands(dispatchFn);
+    expect(dispatchFn).toHaveBeenCalledTimes(1);
+  });
+
+  test('dispatches multiple distinct islands present in the document, each exactly once', () => {
+    addIsland({ type: 'laydate', opts: { elem: '#A' } });
+    addIsland({ type: 'laydate', opts: { elem: '#B' } });
+    addIsland({ actions: [{ type: 'initForm', filter: 'pageForm' }] });
+    const dispatchFn = jest.fn();
+    consumePageReadyIslands(dispatchFn);
+    expect(dispatchFn).toHaveBeenCalledTimes(3);
+    consumePageReadyIslands(dispatchFn);
+    // Re-running must not add any further calls.
+    expect(dispatchFn).toHaveBeenCalledTimes(3);
+  });
+
+  test('no islands in the document → no dispatch calls', () => {
+    const dispatchFn = jest.fn();
+    consumePageReadyIslands(dispatchFn);
+    expect(dispatchFn).not.toHaveBeenCalled();
+  });
+
+  test('a malformed island in the document is marked (no retry loop) but not dispatched', () => {
+    const el = document.createElement('script');
+    el.type = 'application/json';
+    el.className = 'wtm-dialog-init';
+    el.textContent = '{not valid json';
+    document.body.appendChild(el);
+    const dispatchFn = jest.fn();
+    consumePageReadyIslands(dispatchFn);
+    expect(dispatchFn).not.toHaveBeenCalled();
+    expect(el.getAttribute('data-wtm-dispatched')).toBe('1');
+  });
+});

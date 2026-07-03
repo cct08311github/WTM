@@ -160,6 +160,58 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             _configInfo = configs.CurrentValue;
         }
 
+        // Issue #556 (#470-B slice 1): System.Text.Json's default encoder
+        // (JavaScriptEncoder.Default) escapes '<', '>', and '&', making the
+        // JSON payload safe to embed inside a <script> block without risk of
+        // </script> injection — same pattern as DialogInitTagHelper's
+        // _jsonOptions.
+        private static readonly JsonSerializerOptions _laydateJsonOptions = new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        };
+
+        /// <summary>
+        /// Issue #556 (#470-B slice 1): builds the laydate.render() options object
+        /// for the eval-free JSON island, reproducing the exact same configuration
+        /// the inline &lt;script&gt; fallback below would have produced. <paramref name="rawMin"/>
+        /// and <paramref name="rawMax"/> must be the ORIGINAL (pre-mutation) Min/Max values —
+        /// Process() rewrites Min/Max in place into JS-literal text (quoted for date
+        /// strings, bare for day-offset integers) for the inline-script code path,
+        /// which is not a valid JSON value shape.
+        /// </summary>
+        private Dictionary<string, object> BuildLaydateOpts(string rawMin, string rawMax)
+        {
+            var opts = new Dictionary<string, object>
+            {
+                ["elem"] = "#" + Id,
+                ["type"] = Type.ToString().ToLower()
+            };
+            if (!string.IsNullOrEmpty(RangeSplit)) { opts["range"] = RangeSplit; }
+            if (!string.IsNullOrEmpty(Format)) { opts["format"] = Format; }
+            if (!string.IsNullOrEmpty(rawMin))
+            {
+                opts["min"] = int.TryParse(rawMin, out int minN) ? (object)minN : rawMin;
+            }
+            if (!string.IsNullOrEmpty(rawMax))
+            {
+                opts["max"] = int.TryParse(rawMax, out int maxN) ? (object)maxN : rawMax;
+            }
+            if (ZIndex.HasValue) { opts["zIndex"] = ZIndex.Value; }
+            if (ShowBottom.HasValue) { opts["showBottom"] = ShowBottom.Value; }
+            // Mirrors the inline-script ConfirmOnly ternary exactly: btns:['confirm']
+            // only when ConfirmOnly is true AND (ShowBottom is unset — defaults to
+            // shown — or explicitly true). ShowBottom===false suppresses it even
+            // when ConfirmOnly is true, matching the original conditional.
+            bool confirmOnlyEffective = ConfirmOnly.HasValue &&
+                ((ShowBottom.HasValue && ShowBottom.Value && ConfirmOnly.Value) ||
+                 (!ShowBottom.HasValue && ConfirmOnly.Value));
+            if (confirmOnlyEffective) { opts["btns"] = new[] { "confirm" }; }
+            if (Calendar.HasValue) { opts["calendar"] = Calendar.Value; }
+            if (Lang.HasValue) { opts["lang"] = Lang.Value.ToString().ToLower(); }
+            if (Mark != null && Mark.Count > 0) { opts["mark"] = Mark; }
+            return opts;
+        }
+
         public override void Process(TagHelperContext context, TagHelperOutput output)
         {
             string Value = null;
@@ -222,6 +274,14 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             if (_configInfo.UIOptions.DateTime.DefaultReadonly)
                 output.Attributes.Add("readonly", "readonly");
 
+            // Issue #556 (#470-B slice 1): capture the ORIGINAL Min/Max before the
+            // mutation below rewrites them into JS-literal text for the inline
+            // <script> fallback (quoted date strings / bare day-offset integers).
+            // BuildLaydateOpts needs the pre-mutation values to produce correctly
+            // typed JSON (a JSON number for day-offsets, a JSON string for dates).
+            var rawMin = Min;
+            var rawMax = Max;
+
             if (!string.IsNullOrEmpty(Min))
             {
                 if (int.TryParse(Min, out int minRes))
@@ -255,7 +315,32 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
             if (!IsRange)
             {
-                var content = $@"
+                bool hasCallback = !string.IsNullOrEmpty(ReadyFunc) ||
+                                    !string.IsNullOrEmpty(ChangeFunc) ||
+                                    !string.IsNullOrEmpty(DoneFunc);
+
+                if (!hasCallback)
+                {
+                    // Issue #556 (#470-B slice 1): eval-free JSON island — no
+                    // ready/change/done callback to express, so this field
+                    // migrates off the inline <script>. ff.OpenDialog / the
+                    // page-ready consumer (framework_layui.js) parse this
+                    // island and call layui.laydate.render(action.opts)
+                    // directly, reproducing the exact same config as the
+                    // inline-script branch below.
+                    var opts = BuildLaydateOpts(rawMin, rawMax);
+                    var action = new LaydateIslandAction { Opts = opts };
+                    var json = JsonSerializer.Serialize(action, _laydateJsonOptions);
+                    output.PostElement.AppendHtml(
+                        $"<script type=\"application/json\" class=\"wtm-dialog-init\">{json}</script>");
+                }
+                else
+                {
+                    // Issue #556 (#470-B slice 1): fallback — ready/change/done are
+                    // caller-supplied JS function names invoked with live laydate
+                    // callback arguments; that can't be JSON-expressed, so this
+                    // path keeps emitting the inline <script> unchanged.
+                    var content = $@"
 <script>
 layui.use(['laydate'],function(){{
   var laydate = layui.laydate;
@@ -279,9 +364,17 @@ layui.use(['laydate'],function(){{
 }})
 </script>
 ";
-                output.PostElement.AppendHtml(content);
+                    output.PostElement.AppendHtml(content);
+                }
             }
 
+            // Issue #556 (#470-B slice 1): the two-hidden-input range path always
+            // needs its own built-in `done` callback below (splitting the picked
+            // value into RangeStartName/RangeEndName) regardless of whether the
+            // caller supplied ReadyFunc/ChangeFunc/DoneFunc — that split logic
+            // can't be JSON-expressed. So, unlike the single-field path above,
+            // this branch never migrates to the JSON island and always emits the
+            // inline <script>.
             if (IsRange && !string.IsNullOrEmpty(RangeStartName) && !string.IsNullOrEmpty(RangeEndName))
             {
                 if (!string.IsNullOrEmpty(RangePlaceholder))
@@ -322,5 +415,18 @@ layui.use(['laydate'], function() {{
 
             base.Process(context, output);
         }
+    }
+
+    // Issue #556 (#470-B slice 1): DTO for the bare (non-wrapped) laydate JSON
+    // island — {"type":"laydate","opts":{...}}. ff._normalizeIslandPayload
+    // (framework_layui.js) wraps this into the {actions:[...]} shape
+    // ff.DispatchAction expects; not part of the public API surface.
+    internal class LaydateIslandAction
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("type")]
+        public string Type { get; set; } = "laydate";
+
+        [System.Text.Json.Serialization.JsonPropertyName("opts")]
+        public Dictionary<string, object> Opts { get; set; } = new();
     }
 }
