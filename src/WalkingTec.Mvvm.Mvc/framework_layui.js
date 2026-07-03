@@ -108,6 +108,10 @@ window.ff = {
     // fail to render. Actions with no module dependency (closeDialog, alert,
     // loadComboItems, …) contribute nothing, so a payload of only those routes
     // straight through with no deferral.
+    // Issue #558 (#470-C): 'bindSubmit' calls layui.form.on, which requires the
+    // 'form' module for the same reason — without this, a bindSubmit island
+    // dispatched before layui's async 'form' module finishes loading would
+    // silently fail to register the submit handler.
     _islandModulesFor: function (payload) {
         var needed = { form: false, laydate: false };
         if (payload && payload.actions) {
@@ -119,6 +123,8 @@ window.ff = {
                 } else if (a.type === 'initForm') {
                     needed.form = true;
                     if (a.dates && a.dates.length) { needed.laydate = true; }
+                } else if (a.type === 'bindSubmit') {
+                    needed.form = true;
                 }
             }
         }
@@ -318,6 +324,52 @@ window.ff = {
                             }
                         }
                     }
+                    break;
+                // Issue #558 (#470-C): safe named-callback submit binding —
+                // mechanism only (FormTagHelper does not emit this yet). Mirrors
+                // the inline <script> FormTagHelper generates today:
+                //   layui.form.on('submit('+filter+')', function(data){
+                //     if(BeforeSubmit()==false){return false;}
+                //     ff.PostForm(url, formId, divId); return false;
+                //   });
+                //
+                // SECURITY: action.beforeSubmit is a plain identifier string
+                // chosen by the developer server-side (FormTagHelper's
+                // BeforeSubmit attribute) — trusted, but NEVER user/field data —
+                // and is resolved through a narrow window[name] lookup, never
+                // eval/new Function/string-to-code:
+                //   1. name must match /^[A-Za-z_$][\w$]*$/ — a plain identifier
+                //      only. Dotted ('a.b'), bracketed ('x[0]'), or otherwise
+                //      non-identifier strings are rejected outright.
+                //   2. name must be an OWN property of window (via
+                //      Object.prototype.hasOwnProperty), which blocks inherited
+                //      Object.prototype members ('constructor', 'toString') and
+                //      prototype-chain tricks ('__proto__') that would otherwise
+                //      pass the identifier regex.
+                //   3. window[name] must itself be a function.
+                // Any failed check silently skips the before-hook (submit still
+                // proceeds without it) — never throws.
+                case 'bindSubmit':
+                    if (!action.filter || typeof action.filter !== 'string') { break; }
+                    if (typeof layui === 'undefined' || !layui.form ||
+                        typeof layui.form.on !== 'function') { break; }
+                    var _bsBeforeFn = null;
+                    if (action.beforeSubmit &&
+                        typeof action.beforeSubmit === 'string' &&
+                        /^[A-Za-z_$][\w$]*$/.test(action.beforeSubmit) &&
+                        Object.prototype.hasOwnProperty.call(window, action.beforeSubmit) &&
+                        typeof window[action.beforeSubmit] === 'function') {
+                        _bsBeforeFn = window[action.beforeSubmit];
+                    }
+                    layui.form.on(
+                        'submit(' + action.filter + ')',
+                        ff._makeBindSubmitHandler(
+                            _bsBeforeFn,
+                            action.formId || '',
+                            action.url || '',
+                            action.divId || ''
+                        )
+                    );
                     break;
                 default:
                     if (typeof console !== 'undefined' && console.warn) {
@@ -587,6 +639,23 @@ window.ff = {
             layui.use(['form'], function () {
                 var form = layui.form.render(null, formId);
             });
+    },
+
+    // Issue #558 (#470-C): factory for the 'bindSubmit' DispatchAction case's
+    // layui.form.on('submit(...)') callback. Returning a fresh closure per
+    // call (rather than referencing DispatchAction's loop-scoped `action`
+    // variable directly from an inline function) avoids the classic
+    // var-in-a-loop capture bug: each invocation freezes its own
+    // beforeFn/formId/url/divId, so multiple bindSubmit actions registered in
+    // the same or different DispatchAction calls never share state, even
+    // though their submit handlers fire asynchronously long after the
+    // dispatch loop that created them has finished.
+    _makeBindSubmitHandler: function (beforeFn, formId, url, divId) {
+        return function (data) {
+            if (beforeFn && beforeFn(data) === false) { return false; }
+            ff.PostForm(url, formId, divId);
+            return false;
+        };
     },
 
     PostForm: function (url, formId, divid, searchervm) {
