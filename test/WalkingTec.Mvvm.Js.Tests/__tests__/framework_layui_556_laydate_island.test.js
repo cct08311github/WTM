@@ -100,14 +100,16 @@ describe('#556 (#470-B slice 1) — source sweep', () => {
     expect(active).toMatch(/_consumePageReadyIslands\s*=\s*function/);
   });
 
-  test('_consumePageReadyIslands excludes already-dispatched islands and marks them before dispatch', () => {
-    const block = active.match(/_consumePageReadyIslands\s*=\s*function[\s\S]{0,900}?\n\};/);
+  test('_consumePageReadyIslands claims islands (excludes already-claimed) and marks them before scheduling dispatch', () => {
+    const block = active.match(/_consumePageReadyIslands\s*=\s*function[\s\S]{0,1100}?\n\};/);
     expect(block).not.toBeNull();
     expect(block[0]).toMatch(/:not\(\[data-wtm-dispatched\]\)/);
-    // The attribute must be set BEFORE the dispatch attempt (idempotency
-    // guard — a failed dispatch must not cause the island to be retried).
+    // The claim (setAttribute) must happen BEFORE the dispatch is scheduled,
+    // so repeated calls / a stray double DOMContentLoaded can't schedule the
+    // same island twice. Safe now that dispatch is deferred through
+    // _dispatchIslandWhenReady (which guarantees the render eventually runs).
     const setIdx = block[0].indexOf("setAttribute('data-wtm-dispatched'");
-    const dispatchIdx = block[0].indexOf('DispatchAction(');
+    const dispatchIdx = block[0].indexOf('_dispatchIslandWhenReady(');
     expect(setIdx).toBeGreaterThan(-1);
     expect(dispatchIdx).toBeGreaterThan(-1);
     expect(setIdx).toBeLessThan(dispatchIdx);
@@ -121,6 +123,39 @@ describe('#556 (#470-B slice 1) — source sweep', () => {
   test('active-code eval( count is still exactly 1 after #556 changes', () => {
     const matches = active.match(/\beval\(/g) || [];
     expect(matches).toHaveLength(1);
+  });
+
+  // ---- #556 hardening: guaranteed-module-load deferral ---------------------
+  test('ff._islandModulesFor and ff._dispatchIslandWhenReady are defined', () => {
+    expect(active).toMatch(/_islandModulesFor\s*:\s*function/);
+    expect(active).toMatch(/_dispatchIslandWhenReady\s*:\s*function/);
+  });
+
+  test('_islandModulesFor maps laydate -> laydate module and initForm -> form module', () => {
+    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,900}?\n\s*\},/);
+    expect(block).not.toBeNull();
+    expect(block[0]).toMatch(/a\.type\s*===\s*['"]laydate['"]/);
+    expect(block[0]).toMatch(/a\.type\s*===\s*['"]initForm['"]/);
+    // initForm with dates also needs laydate.
+    expect(block[0]).toMatch(/a\.dates/);
+  });
+
+  test('_dispatchIslandWhenReady routes module-dependent payloads through layui.use', () => {
+    const block = active.match(/_dispatchIslandWhenReady\s*:\s*function[\s\S]{0,900}?\n\s*\},/);
+    expect(block).not.toBeNull();
+    expect(block[0]).toMatch(/layui\.use\s*\(\s*mods\s*,\s*function/);
+    expect(block[0]).toMatch(/ff\.DispatchAction\s*\(\s*payload\s*\)/);
+    // Fallback to a direct dispatch when there is no module dependency.
+    expect(block[0]).toMatch(/else\s*\{[\s\S]{0,120}ff\.DispatchAction\s*\(\s*payload\s*\)/);
+  });
+
+  test('page-ready consumer dispatches through the guaranteed-load helper (never a bare DispatchAction that could no-op)', () => {
+    const block = active.match(/_consumePageReadyIslands\s*=\s*function[\s\S]{0,1100}?\n\};/);
+    expect(block).not.toBeNull();
+    // The consumer must route through _dispatchIslandWhenReady, NOT call
+    // ff.DispatchAction directly (which is what allowed the laydate no-op race).
+    expect(block[0]).toMatch(/ff\._dispatchIslandWhenReady\s*\(\s*normalized\s*\)/);
+    expect(block[0]).not.toMatch(/ff\.DispatchAction\s*\(\s*normalized\s*\)/);
   });
 });
 
@@ -405,5 +440,220 @@ describe('#556 page-ready island consumer — behavioral stub (real DOM)', () =>
     consumePageReadyIslands(dispatchFn);
     expect(dispatchFn).not.toHaveBeenCalled();
     expect(el.getAttribute('data-wtm-dispatched')).toBe('1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #556 hardening — laydate loads LATE: the island must STILL render.
+// ---------------------------------------------------------------------------
+// This is the regression test for the timing race the coordinator asked to
+// bulletproof: at page-ready time layui.laydate is not yet loaded, so a bare
+// ff.DispatchAction('laydate') would silently no-op AND the island would be
+// marked data-wtm-dispatched (never retried) → the date field never renders on
+// a full-page form. The fix routes page-ready dispatch through
+// ff._dispatchIslandWhenReady, which defers into layui.use([...], cb); the cb
+// runs only once the module has loaded, so the render ALWAYS eventually
+// happens. These behavioral stubs mirror the real functions exactly (locked in
+// by the source-sweep tests above) and are exercised against a controllable
+// mock layui whose modules load on demand.
+describe('#556 hardening — late-loading laydate still renders (no silent drop)', () => {
+  function normalizeIslandPayload(parsed) {
+    if (!parsed || typeof parsed !== 'object') { return null; }
+    if (Array.isArray(parsed.actions)) { return parsed; }
+    if (parsed.type) { return { actions: [parsed] }; }
+    return null;
+  }
+
+  // Mirrors ff._islandModulesFor.
+  function islandModulesFor(payload) {
+    var needed = { form: false, laydate: false };
+    if (payload && payload.actions) {
+      for (var i = 0; i < payload.actions.length; i++) {
+        var a = payload.actions[i];
+        if (!a || !a.type) { continue; }
+        if (a.type === 'laydate') {
+          needed.laydate = true;
+        } else if (a.type === 'initForm') {
+          needed.form = true;
+          if (a.dates && a.dates.length) { needed.laydate = true; }
+        }
+      }
+    }
+    var mods = [];
+    if (needed.form) { mods.push('form'); }
+    if (needed.laydate) { mods.push('laydate'); }
+    return mods;
+  }
+
+  // Mirrors ff._dispatchIslandWhenReady.
+  function makeDispatchWhenReady(getLayui, dispatchAction) {
+    return function (payload) {
+      var mods = islandModulesFor(payload);
+      var layui = getLayui();
+      if (mods.length > 0 && layui && typeof layui.use === 'function') {
+        layui.use(mods, function () { dispatchAction(payload); });
+      } else {
+        dispatchAction(payload);
+      }
+    };
+  }
+
+  // Mirrors ff._consumePageReadyIslands (claim synchronously, dispatch deferred).
+  function makeConsume(dispatchWhenReady) {
+    return function () {
+      var nodes = document.querySelectorAll(
+        'script[type="application/json"].wtm-dialog-init:not([data-wtm-dispatched])'
+      );
+      for (var i = 0; i < nodes.length; i++) {
+        var node = nodes[i];
+        node.setAttribute('data-wtm-dispatched', '1');
+        if (!node.textContent) { continue; }
+        try {
+          var parsed = JSON.parse(node.textContent);
+          var normalized = normalizeIslandPayload(parsed);
+          if (normalized !== null) { dispatchWhenReady(normalized); }
+        } catch (e) { /* skip */ }
+      }
+    };
+  }
+
+  // Mirrors DispatchAction's laydate + initForm cases, reading layui at
+  // dispatch time (so a deferred dispatch sees the module once it has loaded).
+  function makeDispatchAction(getLayui) {
+    return function (payload) {
+      if (!payload || !payload.actions) { return; }
+      payload.actions.forEach(function (a) {
+        if (!a || !a.type) { return; }
+        var layui = getLayui();
+        if (a.type === 'laydate') {
+          if (a.opts && a.opts.elem && layui && layui.laydate &&
+              typeof layui.laydate.render === 'function') {
+            layui.laydate.render(a.opts);
+          }
+        } else if (a.type === 'initForm') {
+          if (layui && layui.form && typeof layui.form.render === 'function') {
+            layui.form.render(a.formType || null, a.filter || undefined);
+          }
+        }
+      });
+    };
+  }
+
+  // A mock layui whose modules are initially UNLOADED. layui.use queues its
+  // callback and only fires it once every requested module has been load()ed —
+  // exactly how the real layui defers a callback for a not-yet-loaded module.
+  function makeLateLayui() {
+    var pending = [];
+    var loaded = { form: false, laydate: false };
+    var laydateRender = jest.fn();
+    var formRender = jest.fn();
+    var layui = {
+      // NOTE: layui.laydate / layui.form are intentionally ABSENT until load().
+      use: function (mods, cb) {
+        pending.push({ mods: mods, cb: cb });
+        flush();
+      }
+    };
+    function flush() {
+      pending = pending.filter(function (p) {
+        var ready = p.mods.every(function (m) { return loaded[m]; });
+        if (ready) { p.cb(); return false; }
+        return true;
+      });
+    }
+    return {
+      layui: layui,
+      laydateRender: laydateRender,
+      formRender: formRender,
+      load: function (mod) {
+        loaded[mod] = true;
+        if (mod === 'laydate') { layui.laydate = { render: laydateRender }; }
+        if (mod === 'form') { layui.form = { render: formRender }; }
+        flush();
+      }
+    };
+  }
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  function addIsland(json) {
+    const el = document.createElement('script');
+    el.type = 'application/json';
+    el.className = 'wtm-dialog-init';
+    el.textContent = JSON.stringify(json);
+    document.body.appendChild(el);
+    return el;
+  }
+
+  test('laydate island: render is DEFERRED (not dropped) when laydate is not yet loaded, then fires on load', () => {
+    const el = addIsland({ type: 'laydate', opts: { elem: '#LateDate', type: 'date', format: 'yyyy-MM-dd' } });
+    const harness = makeLateLayui();
+    const dispatchAction = makeDispatchAction(function () { return harness.layui; });
+    const dispatchWhenReady = makeDispatchWhenReady(function () { return harness.layui; }, dispatchAction);
+    const consume = makeConsume(dispatchWhenReady);
+
+    // Page-ready runs while laydate is STILL loading.
+    consume();
+
+    // Old buggy behavior would have: island marked + render never called.
+    // New behavior: island claimed, but render is queued (NOT dropped).
+    expect(el.getAttribute('data-wtm-dispatched')).toBe('1');
+    expect(harness.laydateRender).not.toHaveBeenCalled();
+
+    // laydate finishes loading → the queued dispatch fires → render happens.
+    harness.load('laydate');
+    expect(harness.laydateRender).toHaveBeenCalledTimes(1);
+    expect(harness.laydateRender).toHaveBeenCalledWith({ elem: '#LateDate', type: 'date', format: 'yyyy-MM-dd' });
+  });
+
+  test('render fires exactly once even if the page-ready consumer is invoked again before load', () => {
+    addIsland({ type: 'laydate', opts: { elem: '#LateDate2' } });
+    const harness = makeLateLayui();
+    const dispatchAction = makeDispatchAction(function () { return harness.layui; });
+    const dispatchWhenReady = makeDispatchWhenReady(function () { return harness.layui; }, dispatchAction);
+    const consume = makeConsume(dispatchWhenReady);
+
+    consume();          // claims the island, queues the deferred dispatch
+    consume();          // island already claimed → no second queue entry
+    consume();
+    expect(harness.laydateRender).not.toHaveBeenCalled();
+
+    harness.load('laydate');
+    // Despite three consume() calls, the island was claimed once → one render.
+    expect(harness.laydateRender).toHaveBeenCalledTimes(1);
+  });
+
+  test('when laydate is ALREADY loaded, render fires synchronously (no regression for the fast path)', () => {
+    addIsland({ type: 'laydate', opts: { elem: '#EarlyDate' } });
+    const harness = makeLateLayui();
+    harness.load('laydate');   // module ready BEFORE page-ready runs
+    const dispatchAction = makeDispatchAction(function () { return harness.layui; });
+    const dispatchWhenReady = makeDispatchWhenReady(function () { return harness.layui; }, dispatchAction);
+    const consume = makeConsume(dispatchWhenReady);
+
+    consume();
+    // layui.use fires its callback immediately for an already-loaded module.
+    expect(harness.laydateRender).toHaveBeenCalledTimes(1);
+    expect(harness.laydateRender).toHaveBeenCalledWith({ elem: '#EarlyDate' });
+  });
+
+  test('initForm island with dates waits for BOTH form and laydate before dispatching', () => {
+    addIsland({ actions: [{ type: 'initForm', filter: 'f', dates: [{ elem: '#D', type: 'date' }] }] });
+    const harness = makeLateLayui();
+    const dispatchAction = makeDispatchAction(function () { return harness.layui; });
+    const dispatchWhenReady = makeDispatchWhenReady(function () { return harness.layui; }, dispatchAction);
+    const consume = makeConsume(dispatchWhenReady);
+
+    consume();
+    expect(harness.formRender).not.toHaveBeenCalled();
+
+    harness.load('form');   // only form loaded → still waiting on laydate
+    expect(harness.formRender).not.toHaveBeenCalled();
+
+    harness.load('laydate'); // now both loaded → dispatch fires
+    expect(harness.formRender).toHaveBeenCalledTimes(1);
+    expect(harness.formRender).toHaveBeenCalledWith(null, 'f');
   });
 });

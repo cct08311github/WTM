@@ -100,6 +100,61 @@ window.ff = {
         return null;
     },
 
+    // Issue #556 (#470-B slice 1, hardening): returns the set of layui modules
+    // a normalized island payload needs before it can be dispatched without a
+    // silent no-op. The 'laydate' / 'initForm' actions call layui.laydate.render
+    // / layui.form.render, which no-op if the module hasn't finished its async
+    // load yet — the timing race that made full-page date fields intermittently
+    // fail to render. Actions with no module dependency (closeDialog, alert,
+    // loadComboItems, …) contribute nothing, so a payload of only those routes
+    // straight through with no deferral.
+    _islandModulesFor: function (payload) {
+        var needed = { form: false, laydate: false };
+        if (payload && payload.actions) {
+            for (var i = 0; i < payload.actions.length; i++) {
+                var a = payload.actions[i];
+                if (!a || !a.type) { continue; }
+                if (a.type === 'laydate') {
+                    needed.laydate = true;
+                } else if (a.type === 'initForm') {
+                    needed.form = true;
+                    if (a.dates && a.dates.length) { needed.laydate = true; }
+                }
+            }
+        }
+        var mods = [];
+        if (needed.form) { mods.push('form'); }
+        if (needed.laydate) { mods.push('laydate'); }
+        return mods;
+    },
+
+    // Issue #556 (#470-B slice 1, hardening): dispatch a normalized island
+    // payload, GUARANTEEING any layui module it needs is loaded first. When a
+    // module dependency exists and layui.use is available, the dispatch is
+    // deferred into layui.use([...], cb) — layui runs the callback only once
+    // the modules are loaded (immediately if already loaded), so laydate.render
+    // / form.render can never silently no-op due to a not-yet-loaded module.
+    // This is the invariant that kills the page-ready timing race: a full-page
+    // island ALWAYS eventually renders. Payloads with no module dependency (or
+    // when layui.use is unavailable) fall back to a direct synchronous dispatch,
+    // preserving the original ordering for everything else.
+    _dispatchIslandWhenReady: function (payload) {
+        var mods = ff._islandModulesFor(payload);
+        if (mods.length > 0 && typeof layui !== 'undefined' && typeof layui.use === 'function') {
+            layui.use(mods, function () {
+                try {
+                    ff.DispatchAction(payload);
+                } catch (e) {
+                    if (typeof console !== 'undefined' && console.warn) {
+                        console.warn('[WTM] deferred island dispatch failed:', e);
+                    }
+                }
+            });
+        } else {
+            ff.DispatchAction(payload);
+        }
+    },
+
     // Issue #789 Phase 3C: CSP-safe JSON action dispatcher. The server returns
     // a WtmActionResult payload (X-WTM-Action: application/json header set) and
     // this function walks the whitelisted action types. Unknown action types
@@ -2249,12 +2304,23 @@ window.wtmCounter = wtmCounter;
 // DOMParser document BEFORE ff.SafeHtml (DOMPurify, FORBID_TAGS: ['script'])
 // strips ALL <script> elements from the markup that is actually inserted
 // into the live `document`. A dialog-origin island is therefore NEVER
-// present in `document` for this consumer to find. Idempotency is also
-// enforced independently here: every island this consumer dispatches is
-// immediately marked data-wtm-dispatched="1" (set BEFORE the dispatch
-// attempt, so a dispatch failure can't cause a retry loop on the next call),
-// and the query explicitly excludes already-marked nodes — so calling
-// ff._consumePageReadyIslands() more than once is a guaranteed no-op.
+// present in `document` for this consumer to find.
+//
+// Idempotency: every island this consumer touches is CLAIMED synchronously
+// (marked data-wtm-dispatched="1") before its dispatch is scheduled, and the
+// query excludes already-claimed nodes — so calling _consumePageReadyIslands()
+// more than once (or a stray double DOMContentLoaded) can never schedule the
+// same island twice.
+//
+// Timing race — FIXED (#556 hardening): claiming synchronously is safe here
+// precisely BECAUSE the dispatch is routed through ff._dispatchIslandWhenReady,
+// which defers laydate/form actions into layui.use([...], cb) so the render
+// runs only once the module has loaded. The dispatch therefore cannot silently
+// no-op on a not-yet-loaded module, so a claimed-but-unrendered island (the old
+// "date field never renders on a full-page form" bug) is no longer possible —
+// the render ALWAYS eventually happens. (The claim marks that the island has
+// been *consumed*, i.e. its dispatch is guaranteed scheduled — not that the
+// async render has already completed.)
 window.ff._consumePageReadyIslands = function () {
     if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') { return; }
     var nodes = document.querySelectorAll('script[type="application/json"].wtm-dialog-init:not([data-wtm-dispatched])');
@@ -2265,7 +2331,7 @@ window.ff._consumePageReadyIslands = function () {
         try {
             var parsed = JSON.parse(node.textContent);
             var normalized = ff._normalizeIslandPayload(parsed);
-            if (normalized !== null) { ff.DispatchAction(normalized); }
+            if (normalized !== null) { ff._dispatchIslandWhenReady(normalized); }
         } catch (e) {
             if (typeof console !== 'undefined' && console.warn) {
                 console.warn('[WTM] page-ready island dispatch failed:', e);

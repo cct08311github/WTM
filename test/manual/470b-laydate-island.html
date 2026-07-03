@@ -30,14 +30,18 @@
     <script type="application/json" class="wtm-dialog-init"> island already
     present in this page's HTML — nothing calls layui.laydate.render()
     directly. ff._consumePageReadyIslands() (wired to fire once layui's
-    laydate module is confirmed loaded — see the loader script at the
-    bottom of <head>) finds it, dispatches it via ff.DispatchAction, and
-    marks it data-wtm-dispatched="1" so it can never fire twice.
+    laydate module is confirmed loaded) finds it, claims it
+    (data-wtm-dispatched="1", so it can never fire twice), and dispatches it
+    through ff._dispatchIslandWhenReady — which routes the laydate action
+    through layui.use(['laydate'], cb) so the render runs only once the
+    laydate module has loaded. The render can therefore NEVER silently no-op
+    on a not-yet-loaded module (the #556-hardening fix), even if the island
+    is claimed before laydate finished loading.
     LOOK FOR: clicking the input opens a working laydate calendar popup.
     The status line below it should turn green and say the island was
-    marked data-wtm-dispatched="1" — open devtools and inspect the
+    consumed AND that laydate is loaded — open devtools and inspect the
     <script class="wtm-dialog-init"> element under #pageReadySection to
-    confirm the attribute yourself.
+    confirm the data-wtm-dispatched="1" attribute yourself.
 
   SECTION 2 — Dialog-injected path (simulated OpenDialog partial):
     Clicking the button feeds a raw HTML string — shaped exactly like an
@@ -60,13 +64,15 @@
     insertion, so the live document never contains a dialog-origin island
     for the page-ready consumer to find.
 
-  NOTE ON TIMING: layui.js loads its laydate module asynchronously. This
-  page mirrors WTM's real _Layout.cshtml ordering by calling
-  layui.use(['form','laydate'], ...) at the very top of <head>, before any
-  body content is parsed, so the module has the maximum possible head
-  start over DOMContentLoaded (which is when ff._consumePageReadyIslands
-  normally fires). If the page-ready picker doesn't appear on a very first
-  cold load, simply reload — the module script is now warm in cache.
+  NOTE ON TIMING (race is now FIXED, not merely mitigated): layui.js loads
+  its laydate module asynchronously, so ff._consumePageReadyIslands (fired on
+  DOMContentLoaded) may run BEFORE laydate has finished loading. That used to
+  silently drop the render (the island was marked dispatched but laydate.render
+  no-op'd, with no retry). As of the #556 hardening this can no longer happen:
+  the page-ready dispatch is routed through ff._dispatchIslandWhenReady, which
+  defers laydate/form actions into layui.use([...], cb) — the render runs only
+  once the module is loaded, and ALWAYS eventually runs. So the picker renders
+  regardless of load order; a cold-load reload is no longer required.
   ============================================================================
 -->
 <link rel="stylesheet" href="../../demo/WalkingTec.Mvvm.Demo/wwwroot/layui/css/layui.css">
@@ -121,6 +127,13 @@
   (function () {
     var pageReadyStatusEl = document.getElementById('pageReadyStatus');
 
+    // We prove the render actually HAPPENED (not merely that the island was
+    // claimed) by watching for laydate's own side effect on the input: after
+    // laydate.render(), layui stamps the target <input> with a `lay-key`
+    // attribute. Because the #556-hardening fix defers the render through
+    // layui.use, this may appear slightly AFTER the island is claimed — so we
+    // poll. The invariant under test is that it always eventually appears.
+    var pageReadyPolls = 0;
     function checkPageReadyIsland() {
       var island = document.querySelector('#pageReadySection .wtm-dialog-init');
       if (!island) {
@@ -128,29 +141,35 @@
         return;
       }
       var marked = island.getAttribute('data-wtm-dispatched') === '1';
-      if (marked && window.__wtmHarnessLayuiReady) {
+      var input = document.getElementById('pageReadyDate');
+      var rendered = input && input.getAttribute('lay-key') !== null;
+
+      if (marked && rendered) {
         pageReadyStatusEl.innerHTML =
-          '<span class="ok">OK:</span> island was consumed and marked data-wtm-dispatched="1" ' +
-          'AFTER layui.laydate finished loading.\n' +
-          'Click the date input above — it should open a laydate calendar.\n' +
-          '(ff._consumePageReadyIslands is idempotent: re-running it is a guaranteed no-op for this island now.)';
-      } else if (marked && !window.__wtmHarnessLayuiReady) {
-        // Race lost: the island was marked dispatched, but DispatchAction's
-        // 'laydate' case guard (typeof layui.laydate.render === 'function')
-        // was false at that moment, so the render() call silently no-op'd —
-        // and because the island is now marked, ff._consumePageReadyIslands
-        // will never retry it (by design — see the idempotency guard). This
-        // is the timing race called out in the NOTE ON TIMING comment above.
-        pageReadyStatusEl.innerHTML =
-          '<span class="bad">RACE LOST:</span> the island was marked data-wtm-dispatched="1" ' +
-          'before layui.laydate finished loading, so the render() call likely no-op\'d silently. ' +
-          'Reload the page (layui.js module scripts are now cached) — this should not recur.';
-      } else {
-        pageReadyStatusEl.innerHTML =
-          'not marked yet. Waiting for the page-ready consumer to run ' +
-          '(window.__wtmHarnessLayuiReady=' + window.__wtmHarnessLayuiReady + ') — this box re-checks every 150ms.';
-        setTimeout(checkPageReadyIsland, 150);
+          '<span class="ok">OK:</span> island was consumed (data-wtm-dispatched="1") AND the date input ' +
+          'was rendered by laydate (it now carries a lay-key attribute).\n' +
+          'Click the date input above — it should open a working laydate calendar.\n' +
+          '(#556 hardening: dispatch is deferred through layui.use([\'laydate\'],cb), so this render ' +
+          'happens even if the island was claimed before laydate finished loading — the render is ' +
+          'never silently dropped.)';
+        return;
       }
+
+      pageReadyPolls++;
+      if (pageReadyPolls > 80) {
+        // ~12s elapsed and still not rendered — would indicate the fix regressed
+        // (or the layui bundle failed to load). Surface it loudly.
+        pageReadyStatusEl.innerHTML =
+          '<span class="bad">island claimed=' + marked + ', but the input was never rendered after ~12s.</span> ' +
+          'If layui failed to load this is expected offline-flakiness; otherwise the deferred-dispatch fix ' +
+          'may have regressed. (window.__wtmHarnessLayuiReady=' + window.__wtmHarnessLayuiReady + ')';
+        return;
+      }
+      pageReadyStatusEl.innerHTML =
+        'waiting… island claimed=' + marked + ', laydate rendered=' + rendered +
+        ' (layuiReady=' + window.__wtmHarnessLayuiReady + '). The deferred dispatch will render the input ' +
+        'as soon as the laydate module finishes loading — re-checking every 150ms.';
+      setTimeout(checkPageReadyIsland, 150);
     }
 
     // The real dispatch is 100% automatic (wired inside framework_layui.js
