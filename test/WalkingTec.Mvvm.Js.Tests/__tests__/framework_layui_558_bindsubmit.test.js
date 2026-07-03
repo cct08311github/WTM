@@ -75,6 +75,17 @@ describe('#558 (#470-C) — source sweep', () => {
     expect(block).toMatch(/!action\.filter\s*\|\|\s*typeof\s+action\.filter\s*!==\s*['"]string['"]/);
   });
 
+  test('bindSubmit case validates action.filter against the identifier regex (no-op on failure)', () => {
+    const block = bindSubmitBlock();
+    // eslint-disable-next-line no-useless-escape
+    expect(block).toMatch(/!\/\^\[A-Za-z_\$\]\[\\w\$\]\*\$\/\.test\(\s*action\.filter\s*\)/);
+  });
+
+  test('bindSubmit case rejects beforeSubmit names in WTM_BEFORESUBMIT_DENYLIST', () => {
+    const block = bindSubmitBlock();
+    expect(block).toMatch(/WTM_BEFORESUBMIT_DENYLIST\s*&&\s*WTM_BEFORESUBMIT_DENYLIST\.has\(\s*action\.beforeSubmit\s*\)/);
+  });
+
   test('bindSubmit case guards on layui.form.on being available', () => {
     const block = bindSubmitBlock();
     expect(block).toMatch(/typeof\s+layui\s*===\s*['"]undefined['"]/);
@@ -122,6 +133,25 @@ describe('#558 (#470-C) — source sweep', () => {
     expect(block[0]).toMatch(/a\.type\s*===\s*['"]bindSubmit['"][\s\S]{0,80}needed\.form\s*=\s*true/);
   });
 
+  test('WTM_BEFORESUBMIT_DENYLIST is a module-level Set constant', () => {
+    expect(active).toMatch(/var\s+WTM_BEFORESUBMIT_DENYLIST\s*=/);
+    expect(active).toMatch(/new\s+Set\s*\(\s*\[/);
+  });
+
+  test('denylist Set contains the dangerous globals (eval/Function/setTimeout/fetch/open/postMessage/…)', () => {
+    const block = active.match(/WTM_BEFORESUBMIT_DENYLIST\s*=[\s\S]{0,700}?\]\s*\)/);
+    expect(block).not.toBeNull();
+    const required = [
+      'eval', 'Function', 'setTimeout', 'setInterval', 'fetch',
+      'XMLHttpRequest', 'WebSocket', 'open', 'postMessage', 'alert',
+      'confirm', 'prompt', 'queueMicrotask', 'requestAnimationFrame',
+      'Worker', 'SharedWorker', 'importScripts', 'structuredClone'
+    ];
+    for (const name of required) {
+      expect(block[0]).toMatch(new RegExp("['\"]" + name + "['\"]"));
+    }
+  });
+
   test('no new Function( call sites anywhere in the active source', () => {
     expect(active).not.toMatch(/new\s+Function\s*\(/);
   });
@@ -148,10 +178,24 @@ describe('#558 DispatchAction bindSubmit — behavioral stub', () => {
     };
   }
 
+  // Mirrors the module-level WTM_BEFORESUBMIT_DENYLIST in framework_layui.js.
+  // Kept in sync by the source-sweep test 'denylist Set contains the dangerous
+  // globals' below.
+  const DENYLIST = new Set([
+    'eval', 'Function', 'setTimeout', 'setInterval', 'setImmediate',
+    'fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource',
+    'open', 'postMessage', 'alert', 'confirm', 'prompt',
+    'queueMicrotask', 'requestAnimationFrame', 'requestIdleCallback',
+    'Worker', 'SharedWorker', 'importScripts', 'structuredClone',
+    'Image', 'navigator', 'location', 'document', 'window', 'globalThis',
+    'Reflect', 'Proxy'
+  ]);
+
   function resolveBeforeFn(windowObj, name) {
     if (name &&
         typeof name === 'string' &&
         /^[A-Za-z_$][\w$]*$/.test(name) &&
+        !DENYLIST.has(name) &&
         Object.prototype.hasOwnProperty.call(windowObj, name) &&
         typeof windowObj[name] === 'function') {
       return windowObj[name];
@@ -168,7 +212,8 @@ describe('#558 DispatchAction bindSubmit — behavioral stub', () => {
         if (!action || !action.type) continue;
         switch (action.type) {
           case 'bindSubmit': {
-            if (!action.filter || typeof action.filter !== 'string') { break; }
+            if (!action.filter || typeof action.filter !== 'string' ||
+                !/^[A-Za-z_$][\w$]*$/.test(action.filter)) { break; }
             if (typeof layui === 'undefined' || !layui || !layui.form ||
                 typeof layui.form.on !== 'function') { break; }
             var beforeFn = resolveBeforeFn(windowObj, action.beforeSubmit);
@@ -320,7 +365,7 @@ describe('#558 DispatchAction bindSubmit — behavioral stub', () => {
       expect(spy).not.toHaveBeenCalled();
     });
 
-    test('"window" — self-reference resolves to an object, not a function, so typeof check rejects it', () => {
+    test('"window" — self-reference (rejected by the denylist; also a non-function)', () => {
       const windowObj = {};
       windowObj.window = windowObj; // mimic window.window === window
       runAdversarial(windowObj, 'window');
@@ -382,6 +427,101 @@ describe('#558 DispatchAction bindSubmit — behavioral stub', () => {
       const windowObj = { 'evil()//<script>': malicious };
       runAdversarial(windowObj, 'evil()//<script>');
       expect(malicious).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // ADVERSARIAL: denylisted dangerous globals (defense-in-depth)
+  // -------------------------------------------------------------------------
+  // Each of these is an own, callable property of the real window whose name
+  // passes the identifier regex — so WITHOUT the denylist, the base guard
+  // would resolve it and (if beforeSubmit were ever attacker-influenced)
+  // hand an execution/exfiltration primitive to the submit path. With the
+  // denylist, the name is rejected: the spy standing in for window[name] is
+  // NEVER called, and ff.PostForm still fires (submit proceeds without a
+  // before-hook). We simulate the dangerous global by placing a spy under
+  // that own name on the injected windowObj — the denylist must reject it by
+  // NAME regardless of what it points to.
+  describe('adversarial denylisted globals — resolved as own functions but rejected by the denylist', () => {
+    function runDenied(name) {
+      const layui = makeLayui();
+      const postFormSpy = jest.fn();
+      const dangerousSpy = jest.fn();
+      const windowObj = {};
+      windowObj[name] = dangerousSpy; // own, callable, identifier-named
+      // Sanity: without a denylist this WOULD resolve (own + fn + identifier).
+      expect(Object.prototype.hasOwnProperty.call(windowObj, name)).toBe(true);
+      expect(typeof windowObj[name]).toBe('function');
+      expect(/^[A-Za-z_$][\w$]*$/.test(name)).toBe(true);
+
+      const dispatch = makeDispatcher(layui, windowObj, postFormSpy);
+      expect(() => {
+        dispatch({ actions: [{ type: 'bindSubmit', filter: 'f', beforeSubmit: name, formId: 'myForm', url: '', divId: 'body' }] });
+      }).not.toThrow();
+      const ret = layui._fire('submit(f)', {});
+      // The dangerous global is NEVER invoked...
+      expect(dangerousSpy).not.toHaveBeenCalled();
+      // ...and the submit still proceeds via ff.PostForm.
+      expect(postFormSpy).toHaveBeenCalledTimes(1);
+      expect(postFormSpy).toHaveBeenCalledWith('', 'myForm', 'body');
+      expect(ret).toBe(false);
+    }
+
+    const DENIED = [
+      'eval', 'Function', 'setTimeout', 'setInterval', 'setImmediate',
+      'fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource',
+      'open', 'postMessage', 'alert', 'confirm', 'prompt',
+      'queueMicrotask', 'requestAnimationFrame', 'requestIdleCallback',
+      'Worker', 'SharedWorker', 'importScripts', 'structuredClone',
+      'Image', 'navigator', 'location', 'document', 'window', 'globalThis',
+      'Reflect', 'Proxy'
+    ];
+
+    test.each(DENIED)('"%s" as beforeSubmit — gate skipped, name never invoked, PostForm still fires', (name) => {
+      runDenied(name);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // ADVERSARIAL: non-identifier filter — handler NOT registered (no-op)
+  // -------------------------------------------------------------------------
+  describe('adversarial filter values — non-identifier filters register no handler', () => {
+    function expectNoHandler(filterValue) {
+      const layui = makeLayui();
+      const postFormSpy = jest.fn();
+      const dispatch = makeDispatcher(layui, {}, postFormSpy);
+      expect(() => {
+        dispatch({ actions: [{ type: 'bindSubmit', filter: filterValue, formId: 'myForm', url: '', divId: 'body' }] });
+      }).not.toThrow();
+      expect(layui.form.on).not.toHaveBeenCalled();
+    }
+
+    test('filter "a)b" — parenthesis breakout attempt, no handler registered', () => {
+      expectNoHandler('a)b');
+    });
+
+    test('filter "x y" — whitespace, no handler registered', () => {
+      expectNoHandler('x y');
+    });
+
+    test('filter "" — empty string, no handler registered', () => {
+      expectNoHandler('');
+    });
+
+    test('filter "a.b" — dotted, no handler registered', () => {
+      expectNoHandler('a.b');
+    });
+
+    test('filter "f);evil(" — injection into the submit selector, no handler registered', () => {
+      expectNoHandler('f);evil(');
+    });
+
+    test('a valid identifier filter still registers exactly one handler', () => {
+      const layui = makeLayui();
+      const dispatch = makeDispatcher(layui, {}, jest.fn());
+      dispatch({ actions: [{ type: 'bindSubmit', filter: 'myForm1filter', formId: 'myForm', url: '', divId: 'body' }] });
+      expect(layui.form.on).toHaveBeenCalledTimes(1);
+      expect(layui.form.on.mock.calls[0][0]).toBe('submit(myForm1filter)');
     });
   });
 });
