@@ -217,9 +217,10 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 });
             }
 
-            var islandJson = JsonSerializer.Serialize(new FormIslandPayload { Actions = islandActions }, _islandJsonOptions);
-            output.PostElement.AppendHtml(
-                $"<script type=\"application/json\" class=\"wtm-dialog-init\">{islandJson}</script>");
+            // Issue #564 (#470-D): the island JSON is now serialized further below,
+            // AFTER the bindValidate and highlightErrors actions (added by the two
+            // blocks that follow) have had a chance to join initForm/bindSubmit in
+            // the SAME wtm-dialog-init island — one script tag, not several.
 
             if(BeforeSubmit != null && BeforeSubmit.Contains("(") == false)
             {
@@ -248,26 +249,29 @@ layui.use(['form'],function(){{
             // 使用传统表单提交方式提交，而不使用 AJAX 提交
             // 比如登陆页面，提交后校验成功会跳转其他页面，而不是返会 PartialView
             //
-            // What remains here is the auto-validate handler that drives the hidden
-            // #{Id}hidesubmit button (used by SubmitButtonTagHelper's custom-click
-            // flow to pre-validate before manually posting). There is no
-            // DispatchAction action type that models a per-form global validation
-            // flag (var {Id}validate), so this stays a residual inline <script> — the
-            // last blocker to fully retiring the eval fallback for a plain dialog.
-            // Needed for BOTH the island-migrated and the legacy-inline submit paths.
+            // Issue #564 (#470-D): the auto-validate handler that drives the hidden
+            // #{Id}hidesubmit button (used by SubmitButtonTagHelper / LinkButtonTagHelper's
+            // custom-click flow to pre-validate before manually posting) is now emitted
+            // as a 'bindValidate' island action instead of an inline <script>. It
+            // reproduces the legacy wiring exactly:
+            //   var {Id}validate = false;
+            //   layui.form.on('submit({Id}filterAuto)', function(data){ {Id}validate = true; return false; });
+            // framework_layui.js's bindValidate case sets window[formId + 'validate']
+            // (equivalent to the top-level `var` global the inline script used to
+            // declare) BEFORE binding the handler, so SubmitButtonTagHelper/
+            // LinkButtonTagHelper's own still-inline scripts — which read/write the
+            // bare identifier "{formid}validate" — keep working unchanged; a bare
+            // top-level `var` and a `window[name] =` assignment are the same global
+            // property. Needed for BOTH the island-migrated and the legacy-inline
+            // submit paths (it does not depend on BeforeSubmit at all).
             if (isAjaxSubmitForm)
             {
-                output.PostElement.AppendHtml($@"
-<script>
-var {Id}validate = false;
-layui.use(['form'],function(){{
-  layui.form.on('submit({Id}filterAuto)', function(data){{
-  {Id}validate = true;
-  return false;
-  }});
-}})
-</script>
-");
+                islandActions.Add(new FormIslandAction
+                {
+                    Type = "bindValidate",
+                    Filter = $"{Id}filterAuto",
+                    FormId = Id
+                });
                 output.PostContent.AppendHtml($@"
 <button class=""layui-hide"" id=""{Id}hidesubmit""  type=""submit"" lay-filter=""{Id}filterAuto"" lay-submit></button>
 ");
@@ -298,48 +302,61 @@ $('#{search.SearchBtnId}').on('click', function () {{
 
             }
 
-            //输出后台返回的错误信息
+            // Issue #564 (#470-D): 输出后台返回的错误信息 — ModelState error highlight/focus
+            // is now a 'highlightErrors' island action instead of an inline <script>.
+            // Reproduces the legacy behaviour exactly: EVERY error message (across ALL
+            // keys, not deduplicated per field) gets its own message element prepended
+            // into the same container (the first submit button's parent) — never
+            // per-field — while each field that has at least one error gets the
+            // 'layui-form-danger' class, and the FIRST field (in MSD.Keys iteration
+            // order, i.e. the field of errors[0]) that had an error is focused —
+            // framework_layui.js's highlightErrors case derives "first" from array
+            // order, so no separate firstkey tracking is needed here. The raw error
+            // message text (NOT HTML-encoded server-side — highlightErrors inserts it
+            // via textContent, a safe DOM API, so pre-encoding here would
+            // double-encode) only passes through System.Text.Json's default encoder
+            // (escapes '<'/'>'/'&', the same </script>-safe mechanism the rest of the
+            // island already uses) to keep the JSON payload itself </script>-safe.
             if (baseVM?.MSD?.Count > 0)
             {
-                output.PostElement.AppendHtml("<script>");
-                string firstkey = null;
+                var msdErrors = new List<FormIslandError>();
                 foreach (var key in baseVM.MSD.Keys)
                 {
-                    bool haserror = false;
                     foreach (var error in baseVM.MSD[key])
                     {
-                        haserror = true;
-                        if (firstkey == null)
+                        msdErrors.Add(new FormIslandError
                         {
-                            firstkey = key;
-                        }
-                        // TLU-SEC-004: use proper HtmlEncode; the original code used bogus &lg;/&rg;
-                        // pseudo-entities that are not valid HTML and do not prevent injection.
-                        string temperr = WebUtility.HtmlEncode(error.ErrorMessage);
-                        output.PostElement.AppendHtml($@"
-$(""#{Id}"").find(""button[type=submit]:first"").parent().prepend(""<div class='layui-input-block' style='text-align:left'><label style='color:red'>{temperr}</label></div>"");
-");
-                    }
-                    if (haserror == true)
-                    {
-                        output.PostElement.AppendHtml($@"$(""#{Utils.GetIdByName(baseVM.GetType().Name + "." + key)}"").addClass('layui-form-danger');");
+                            Field = Utils.GetIdByName(baseVM.GetType().Name + "." + key),
+                            Message = error.ErrorMessage
+                        });
                     }
                 }
-                if (firstkey != null)
+                if (msdErrors.Count > 0)
                 {
-                    output.PostElement.AppendHtml($@"$(""#{Utils.GetIdByName(baseVM.GetType().Name + "." + firstkey)}"").focus();");
+                    islandActions.Add(new FormIslandAction
+                    {
+                        Type = "highlightErrors",
+                        FormId = Id,
+                        Errors = msdErrors,
+                        FocusFirst = true
+                    });
                 }
-                output.PostElement.AppendHtml("</script>");
             }
+
+            var islandJson = JsonSerializer.Serialize(new FormIslandPayload { Actions = islandActions }, _islandJsonOptions);
+            output.PostElement.AppendHtml(
+                $"<script type=\"application/json\" class=\"wtm-dialog-init\">{islandJson}</script>");
+
             base.Process(context, output);
         }
     }
 
-    // Issue #561 (#470-B slice 2): DTOs for FormTagHelper's wrapped {"actions":[...]}
-    // JSON island — mirrors DialogInitPayload/DialogInitAction's shape (see
-    // DialogInitTagHelper) but carries the extra fields the 'bindSubmit'
-    // DispatchAction case needs (beforeSubmit/formId/url/divId). Not part of the
-    // public API surface.
+    // Issue #561 (#470-B slice 2), extended by #564 (#470-D): DTOs for
+    // FormTagHelper's wrapped {"actions":[...]} JSON island — mirrors
+    // DialogInitPayload/DialogInitAction's shape (see DialogInitTagHelper) but
+    // carries the extra fields the 'bindSubmit'/'bindValidate'/'highlightErrors'
+    // DispatchAction cases need (beforeSubmit/formId/url/divId/errors/focusFirst).
+    // Not part of the public API surface.
     internal class FormIslandPayload
     {
         [System.Text.Json.Serialization.JsonPropertyName("actions")]
@@ -368,5 +385,34 @@ $(""#{Id}"").find(""button[type=submit]:first"").parent().prepend(""<div class='
 
         [System.Text.Json.Serialization.JsonPropertyName("divId")]
         public string DivId { get; set; }
+
+        // Issue #564 (#470-D): carried by the 'highlightErrors' action — one entry
+        // per ModelState error message (a field may repeat if it has more than one
+        // error, matching the legacy inline script's un-deduplicated message list).
+        [System.Text.Json.Serialization.JsonPropertyName("errors")]
+        public List<FormIslandError> Errors { get; set; }
+
+        // Issue #564 (#470-D): carried by the 'highlightErrors' action — always
+        // true when emitted (FormTagHelper always focuses the first errored field,
+        // matching the legacy inline script's unconditional focus() call).
+        [System.Text.Json.Serialization.JsonPropertyName("focusFirst")]
+        public bool? FocusFirst { get; set; }
+    }
+
+    // Issue #564 (#470-D): a single ModelState error entry carried by the
+    // 'highlightErrors' island action. Field is the DOM element id
+    // (Utils.GetIdByName(ModelTypeName.PropertyName)) computed server-side —
+    // framework_layui.js resolves it via document.getElementById (a literal id
+    // lookup, never a CSS-selector string) so it cannot be used for selector
+    // injection. Message is the RAW (non-HTML-encoded) error text — the JS side
+    // inserts it via .textContent, a safe DOM API — encoding happens only at the
+    // JSON-serialization layer (System.Text.Json's default encoder, </script>-safe).
+    internal class FormIslandError
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("field")]
+        public string Field { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("message")]
+        public string Message { get; set; }
     }
 }

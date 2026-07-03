@@ -11,24 +11,30 @@ using WalkingTec.Mvvm.TagHelpers.LayUI;
 namespace WalkingTec.Mvvm.Core.Test.TagHelpers;
 
 /// <summary>
-/// Issue #561 (#470-B slice 2) — FormTagHelper unit tests.
+/// Issue #561 (#470-B slice 2), extended by #564 (#470-D) — FormTagHelper unit tests.
 ///
 /// Verifies:
 ///  1. FormTagHelper emits a single wtm-dialog-init JSON island carrying an
 ///     initForm action (replacing ff.RenderForm(Id)) and, for standard
 ///     AJAX-submit forms, a bindSubmit action (replacing the inline
-///     layui.form.on('submit(...)') + BeforeSubmit-gate script).
+///     layui.form.on('submit(...)') + BeforeSubmit-gate script) and a
+///     bindValidate action (replacing the inline auto-validate script).
 ///  2. action.beforeSubmit is ALWAYS exactly the developer's BeforeSubmit
 ///     Razor attribute value (raw, unmutated) — null when the attribute is
 ///     absent — and NEVER a field/model/request-derived value (#558 trust
 ///     boundary).
-///  3. The migrated inline script (ff.RenderForm / submit(Id+"filter")
-///     binding) is gone; the residual auto-validate script
-///     (submit(Id+"filterAuto")) and hidden submit button are unchanged.
-///  4. OldPost forms only get the initForm action — no bindSubmit (native
-///     form submission, no AJAX intercept to bind).
+///  3. The migrated inline scripts (ff.RenderForm / submit(Id+"filter")
+///     binding, auto-validate submit(Id+"filterAuto") binding, ModelState
+///     error highlight/focus) are gone for a fully-migrated plain dialog
+///     form — the hidden submit button remains (it is a real DOM element,
+///     not a script).
+///  4. OldPost forms only get the initForm action — no bindSubmit/bindValidate
+///     (native form submission, no AJAX intercept to bind).
 ///  5. The island JSON is </script>-safe (System.Text.Json's default
 ///     encoder), matching DialogInitTagHelper's established pattern.
+///  6. ModelState errors are carried as a 'highlightErrors' island action
+///     whose messages are the RAW (non-HTML-encoded) error text — the JS
+///     side inserts them via textContent, so pre-encoding would double-encode.
 /// </summary>
 [TestClass]
 public class FormTagHelperTests
@@ -73,10 +79,21 @@ public class FormTagHelperTests
         return html[start..end];
     }
 
-    // ── TC-01: island shape — initForm + bindSubmit ────────────────────────────
+    // Issue #564: attaches a WTMContext with ModelState errors to a BaseVM so
+    // FormTagHelper's highlightErrors island action gets exercised. Mirrors the
+    // `new WTMContext(null)` pattern used elsewhere in this test project — with
+    // no HttpContext, the constructor auto-creates wtm.MSD = new BasicMSD().
+    private static void AddModelError(BaseVM vm, string key, string message)
+    {
+        vm.Wtm ??= new WTMContext(null);
+        vm.Wtm.MSD ??= new BasicMSD();
+        vm.Wtm.MSD.AddModelError(key, message);
+    }
+
+    // ── TC-01: island shape — initForm + bindSubmit + bindValidate ─────────────
 
     [TestMethod]
-    public void Process_EmitsIsland_WithInitFormAndBindSubmitActions()
+    public void Process_EmitsIsland_WithInitFormBindSubmitAndBindValidateActions()
     {
         var vm = new TestFormVM();
         var helper = CreateHelper(vm);
@@ -95,7 +112,8 @@ public class FormTagHelperTests
         Assert.IsNotNull(json, "Island must contain parseable JSON");
         using var doc = JsonDocument.Parse(json);
         var actions = doc.RootElement.GetProperty("actions");
-        Assert.AreEqual(2, actions.GetArrayLength(), "Must have exactly initForm + bindSubmit actions");
+        Assert.AreEqual(3, actions.GetArrayLength(),
+            "Must have exactly initForm + bindSubmit + bindValidate actions (no ModelState errors, so no highlightErrors)");
 
         var initForm = actions[0];
         Assert.AreEqual("initForm", initForm.GetProperty("type").GetString());
@@ -114,6 +132,16 @@ public class FormTagHelperTests
             "divId must match ff.PostForm(...)'s third argument (baseVM.ViewDivId)");
         Assert.IsFalse(bindSubmit.TryGetProperty("url", out _),
             "url must be omitted — ff.PostForm was always called with '' so PostForm falls back to the form's action attribute");
+
+        var bindValidate = actions[2];
+        Assert.AreEqual("bindValidate", bindValidate.GetProperty("type").GetString());
+        Assert.AreEqual("wtForm_test1filterAuto", bindValidate.GetProperty("filter").GetString(),
+            "bindValidate filter must be Id+'filterAuto' — matches the hidden #{Id}hidesubmit button's lay-filter");
+        Assert.AreEqual("wtForm_test1", bindValidate.GetProperty("formId").GetString(),
+            "bindValidate formId must be the form's own Id — framework_layui.js derives the window[formId+'validate'] flag name from it");
+
+        Assert.IsFalse(content.Contains("<script>"),
+            "A plain dialog form (no non-identifier BeforeSubmit, no SearchPanel/OldPost, no ModelState errors) must emit zero inline <script> tags");
     }
 
     // ── TC-02: beforeSubmit = attribute (raw, unmutated) ───────────────────────
@@ -218,16 +246,20 @@ public class FormTagHelperTests
         StringAssert.Contains(content, "ff.PostForm('', 'wtForm_expr'",
             "The legacy inline binding must post via ff.PostForm exactly as before #561");
 
-        // 2. The island carries initForm ONLY — no bindSubmit action (which would
-        //    otherwise silently drop the gate).
+        // 2. The island carries initForm + bindValidate — no bindSubmit action
+        //    (which would otherwise silently drop the gate). bindValidate is
+        //    unconditional (#564): it does not depend on BeforeSubmit at all, so
+        //    it is still emitted even on this legacy-inline-submit fallback path.
         var json = ExtractJsonFromIsland(content);
         Assert.IsNotNull(json, "The initForm island must still be emitted for form.render");
         using var doc = JsonDocument.Parse(json);
         var actions = doc.RootElement.GetProperty("actions");
-        Assert.AreEqual(1, actions.GetArrayLength(),
-            "A non-identifier BeforeSubmit must emit initForm ONLY (no bindSubmit action)");
+        Assert.AreEqual(2, actions.GetArrayLength(),
+            "A non-identifier BeforeSubmit must emit initForm + bindValidate (no bindSubmit action)");
         Assert.AreEqual("initForm", actions[0].GetProperty("type").GetString());
         Assert.AreEqual("wtForm_expr", actions[0].GetProperty("filter").GetString());
+        Assert.AreEqual("bindValidate", actions[1].GetProperty("type").GetString());
+        Assert.AreEqual("wtForm_exprfilterAuto", actions[1].GetProperty("filter").GetString());
 
         // 3. The raw non-identifier expression must NEVER appear as a JSON
         //    beforeSubmit island value (that is the silent-drop path we are closing).
@@ -256,8 +288,8 @@ public class FormTagHelperTests
 
         var json = ExtractJsonFromIsland(content);
         using var doc = JsonDocument.Parse(json);
-        Assert.AreEqual(1, doc.RootElement.GetProperty("actions").GetArrayLength(),
-            "A dotted non-identifier BeforeSubmit must emit initForm only");
+        Assert.AreEqual(2, doc.RootElement.GetProperty("actions").GetArrayLength(),
+            "A dotted non-identifier BeforeSubmit must emit initForm + bindValidate (no bindSubmit)");
     }
 
     // ── TC-03: trust boundary — beforeSubmit is NEVER a field/model value ─────
@@ -305,11 +337,12 @@ public class FormTagHelperTests
     }
 
     [TestMethod]
-    public void Process_KeepsResidualAutoValidateScriptAndHiddenButton()
+    public void Process_MigratesAutoValidateToIslandAction_KeepsHiddenButton()
     {
-        // The auto-validate handler (submit(Id+'filterAuto')) has no
-        // corresponding DispatchAction action type — documented residual
-        // inline <script>, intentionally out of scope for Issue #561.
+        // Issue #564: the auto-validate handler (submit(Id+'filterAuto')) is now
+        // a 'bindValidate' island action — no more residual inline <script> for
+        // this path. The hidden #{Id}hidesubmit button is a real DOM element
+        // (not a script), so it remains completely unchanged.
         var helper = CreateHelper(new TestFormVM());
         helper.Id = "wtForm_test6";
         var output = MakeOutput();
@@ -317,14 +350,25 @@ public class FormTagHelperTests
         helper.Process(MakeContext(), output);
 
         var content = output.PostElement.GetContent();
-        StringAssert.Contains(content, "submit(wtForm_test6filterAuto)",
-            "The auto-validate handler must remain as a residual inline script");
-        StringAssert.Contains(content, "<script>",
-            "The residual auto-validate block must still be wrapped in its own <script> tag");
+        Assert.IsFalse(content.Contains("submit(wtForm_test6filterAuto)'"),
+            "The auto-validate submit(...) binding must no longer appear as raw inline JS " +
+            "(only as a JSON string value inside the island)");
+        Assert.IsFalse(content.Contains("<script>"),
+            "This form has no non-identifier BeforeSubmit / SearchPanel / ModelState errors, " +
+            "so it must emit zero inline <script> tags after the #564 migration");
+
+        var json = ExtractJsonFromIsland(content);
+        Assert.IsNotNull(json);
+        using var doc = JsonDocument.Parse(json);
+        var actions = doc.RootElement.GetProperty("actions");
+        var bindValidate = actions[actions.GetArrayLength() - 1];
+        Assert.AreEqual("bindValidate", bindValidate.GetProperty("type").GetString());
+        Assert.AreEqual("wtForm_test6filterAuto", bindValidate.GetProperty("filter").GetString());
+        Assert.AreEqual("wtForm_test6", bindValidate.GetProperty("formId").GetString());
 
         var postContent = output.PostContent.GetContent();
         StringAssert.Contains(postContent, "wtForm_test6hidesubmit",
-            "The hidden auto-submit button must remain unchanged");
+            "The hidden auto-submit button must remain unchanged — it is a real DOM element, not a script");
     }
 
     // ── TC-05: OldPost forms — initForm only, no bindSubmit ────────────────────
@@ -382,9 +426,10 @@ public class FormTagHelperTests
             "A non-identifier BeforeSubmit must never appear as an island beforeSubmit value");
         using var doc = JsonDocument.Parse(json);
         var actions = doc.RootElement.GetProperty("actions");
-        Assert.AreEqual(1, actions.GetArrayLength(),
-            "A non-identifier BeforeSubmit must emit initForm only (no island bindSubmit)");
+        Assert.AreEqual(2, actions.GetArrayLength(),
+            "A non-identifier BeforeSubmit must emit initForm + bindValidate only (no island bindSubmit)");
         Assert.AreEqual("initForm", actions[0].GetProperty("type").GetString());
+        Assert.AreEqual("bindValidate", actions[1].GetProperty("type").GetString());
 
         // It takes the legacy inline submit path instead (gate still runs).
         StringAssert.Contains(content, "layui.form.on('submit(wtForm_test8filter)'",
@@ -432,5 +477,142 @@ public class FormTagHelperTests
         var bindSubmit = doc.RootElement.GetProperty("actions")[1];
         Assert.IsFalse(bindSubmit.TryGetProperty("divId", out _),
             "divId must be omitted (null) when there is no BaseVM to source ViewDivId from");
+    }
+
+    // ── TC-08: highlightErrors island action (Issue #564) ──────────────────────
+
+    [TestMethod]
+    public void Process_NoModelStateErrors_NoHighlightErrorsAction_NoInlineScript()
+    {
+        // Complement to TC-01: explicitly locks that a plain form with no
+        // ModelState errors gets no highlightErrors action at all (not even an
+        // empty one) and emits zero inline <script> tags.
+        var helper = CreateHelper(new TestFormVM());
+        helper.Id = "wtForm_noerr";
+        var output = MakeOutput();
+
+        helper.Process(MakeContext(), output);
+
+        var content = output.PostElement.GetContent();
+        var json = ExtractJsonFromIsland(content);
+        Assert.IsNotNull(json);
+        using var doc = JsonDocument.Parse(json);
+        var actions = doc.RootElement.GetProperty("actions");
+        for (var i = 0; i < actions.GetArrayLength(); i++)
+        {
+            Assert.AreNotEqual("highlightErrors", actions[i].GetProperty("type").GetString(),
+                "No highlightErrors action may be present when there are no ModelState errors to report");
+        }
+
+        Assert.IsFalse(content.Contains("<script>"),
+            "A plain dialog form with no ModelState errors must emit zero inline <script> tags");
+    }
+
+    [TestMethod]
+    public void Process_WithModelStateErrors_EmitsHighlightErrorsAction_WithExpectedFieldMessagePairs()
+    {
+        var vm = new TestFormVM();
+        AddModelError(vm, "Name", "Name is required");
+        AddModelError(vm, "Email", "Email is invalid");
+        var helper = CreateHelper(vm);
+        helper.Id = "wtForm_err1";
+        var output = MakeOutput();
+
+        helper.Process(MakeContext(), output);
+
+        var content = output.PostElement.GetContent();
+        var json = ExtractJsonFromIsland(content);
+        Assert.IsNotNull(json);
+        using var doc = JsonDocument.Parse(json);
+        var actions = doc.RootElement.GetProperty("actions");
+
+        JsonElement? highlightErrors = null;
+        for (var i = 0; i < actions.GetArrayLength(); i++)
+        {
+            if (actions[i].GetProperty("type").GetString() == "highlightErrors")
+            {
+                highlightErrors = actions[i];
+                break;
+            }
+        }
+        Assert.IsTrue(highlightErrors.HasValue, "A highlightErrors action must be present when MSD has errors");
+
+        Assert.AreEqual("wtForm_err1", highlightErrors.Value.GetProperty("formId").GetString());
+        Assert.IsTrue(highlightErrors.Value.GetProperty("focusFirst").GetBoolean(),
+            "focusFirst must be true — FormTagHelper always focuses the first errored field");
+
+        var errors = highlightErrors.Value.GetProperty("errors");
+        Assert.AreEqual(2, errors.GetArrayLength(), "Must carry one entry per ModelState error message");
+
+        // Fully qualified: this test file's namespace (WalkingTec.Mvvm.Core.Test.TagHelpers)
+        // has a sibling namespace WalkingTec.Mvvm.Core.Test.Utils (the Utils/ test folder),
+        // which shadows the `using WalkingTec.Mvvm.Core;` Utils class.
+        var nameFieldId = global::WalkingTec.Mvvm.Core.Utils.GetIdByName(typeof(TestFormVM).Name + ".Name");
+        var emailFieldId = global::WalkingTec.Mvvm.Core.Utils.GetIdByName(typeof(TestFormVM).Name + ".Email");
+
+        Assert.AreEqual(nameFieldId, errors[0].GetProperty("field").GetString());
+        Assert.AreEqual("Name is required", errors[0].GetProperty("message").GetString());
+        Assert.AreEqual(emailFieldId, errors[1].GetProperty("field").GetString());
+        Assert.AreEqual("Email is invalid", errors[1].GetProperty("message").GetString());
+
+        // The legacy inline ModelState-error <script> must be fully gone.
+        Assert.IsFalse(content.Contains("layui-form-danger"),
+            "The legacy inline addClass('layui-form-danger') script must no longer appear as raw inline JS");
+        Assert.IsFalse(content.Contains("<script>"),
+            "This form has no non-identifier BeforeSubmit / SearchPanel, so even with ModelState errors present " +
+            "it must emit zero inline <script> tags — highlightErrors is fully islandified");
+    }
+
+    [TestMethod]
+    public void Json_ModelStateErrorMessageWithCloseScript_CannotBreakOutOfIsland()
+    {
+        // Adversarial: an error message containing "</script>" must not be able
+        // to terminate the island's <script> block early. System.Text.Json's
+        // default encoder (JavaScriptEncoder.Default) escapes '<'/'>'/'&', the
+        // same mechanism already used for the rest of the island — so the raw
+        // "</script>" sequence must never appear unescaped in the rendered HTML,
+        // and the JSON must still parse/round-trip correctly.
+        var vm = new TestFormVM();
+        AddModelError(vm, "Name", "</script><script>alert(1)</script>");
+        var helper = CreateHelper(vm);
+        helper.Id = "wtForm_err2";
+        var output = MakeOutput();
+
+        helper.Process(MakeContext(), output);
+
+        var content = output.PostElement.GetContent();
+
+        // The raw, un-escaped error message must never appear as a literal
+        // </script> sequence outside of the two legitimate <script> tag
+        // boundaries the helper itself emits (open + close of the JSON island).
+        var scriptCloseCount = 0;
+        var idx = 0;
+        while ((idx = content.IndexOf("</script>", idx, System.StringComparison.Ordinal)) >= 0)
+        {
+            scriptCloseCount++;
+            idx += "</script>".Length;
+        }
+        Assert.AreEqual(1, scriptCloseCount,
+            "Exactly one literal </script> may appear — the island's own closing tag. " +
+            "An attacker-controlled ModelState message must never inject a second one.");
+
+        var json = ExtractJsonFromIsland(content);
+        Assert.IsNotNull(json, "Island JSON must still be extractable (the injected </script> did not terminate it early)");
+        using var doc = JsonDocument.Parse(json); // must not throw — JSON round-trips correctly
+        var actions = doc.RootElement.GetProperty("actions");
+        JsonElement? highlightErrors = null;
+        for (var i = 0; i < actions.GetArrayLength(); i++)
+        {
+            if (actions[i].GetProperty("type").GetString() == "highlightErrors")
+            {
+                highlightErrors = actions[i];
+                break;
+            }
+        }
+        Assert.IsTrue(highlightErrors.HasValue);
+        var decodedMessage = highlightErrors.Value.GetProperty("errors")[0].GetProperty("message").GetString();
+        Assert.AreEqual("</script><script>alert(1)</script>", decodedMessage,
+            "The decoded message must round-trip back to the original raw text " +
+            "(escaping is a JSON-encoding-layer concern, not a data-mutation one)");
     }
 }
