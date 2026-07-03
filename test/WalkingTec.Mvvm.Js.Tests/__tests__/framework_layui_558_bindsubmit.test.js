@@ -62,10 +62,11 @@ describe('#558 (#470-C) — source sweep', () => {
   function bindSubmitBlock() {
     // bindSubmit's guard clauses each contain their own early `break;`, so a
     // non-greedy match up to the FIRST `break;` would only capture the guard
-    // line. Capture the whole case body instead, up to the switch's
-    // following `default:` label (bindSubmit is dispatched as the last case
-    // before default in the real switch).
-    const block = active.match(/case\s+['"]bindSubmit['"]:[\s\S]{0,2500}?\n\s*default:/);
+    // line. Capture the whole case body instead, up to the switch's next
+    // case label. Issue #564 added 'bindValidate' and 'highlightErrors'
+    // cases immediately after bindSubmit (previously the last case before
+    // default), so this now stops at 'bindValidate' rather than 'default:'.
+    const block = active.match(/case\s+['"]bindSubmit['"]:[\s\S]{0,2500}?\n\s*case\s+['"]bindValidate['"]/);
     expect(block).not.toBeNull();
     return block[0];
   }

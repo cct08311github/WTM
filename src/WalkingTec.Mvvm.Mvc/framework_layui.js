@@ -137,6 +137,10 @@ window.ff = {
     // 'form' module for the same reason — without this, a bindSubmit island
     // dispatched before layui's async 'form' module finishes loading would
     // silently fail to register the submit handler.
+    // Issue #564 (#470-D): 'bindValidate' also calls layui.form.on (the
+    // auto-validate submit(...) binding) and needs the same 'form' module
+    // deferral. 'highlightErrors' is plain DOM manipulation — no layui module
+    // dependency at all.
     _islandModulesFor: function (payload) {
         var needed = { form: false, laydate: false };
         if (payload && payload.actions) {
@@ -149,6 +153,8 @@ window.ff = {
                     needed.form = true;
                     if (a.dates && a.dates.length) { needed.laydate = true; }
                 } else if (a.type === 'bindSubmit') {
+                    needed.form = true;
+                } else if (a.type === 'bindValidate') {
                     needed.form = true;
                 }
             }
@@ -412,6 +418,107 @@ window.ff = {
                             action.divId || ''
                         )
                     );
+                    break;
+                // Issue #564 (#470-D): safe auto-validate submit binding — mirrors
+                // the inline <script> FormTagHelper generated today:
+                //   var {Id}validate = false;
+                //   layui.form.on('submit({Id}filterAuto)', function(data){
+                //     {Id}validate = true; return false;
+                //   });
+                // This is the "trigger validation without actually submitting"
+                // mechanism used by SubmitButtonTagHelper / LinkButtonTagHelper's
+                // custom-click flow: they programmatically click the hidden
+                // #{Id}hidesubmit button (lay-filter="{Id}filterAuto"), layui runs
+                // its client-side validators, and — ONLY if validation passes —
+                // fires this submit(...) handler, which flips the flag those
+                // still-inline scripts poll afterwards.
+                //
+                // SECURITY: action.filter and action.formId are ALWAYS compile-time,
+                // developer/framework-authored literals (Id and Id+"filterAuto" from
+                // FormTagHelper.Id, itself derived from the VM's UniqueId) — never
+                // request/form-field data. Both are still validated against a plain
+                // identifier regex before use as defense-in-depth: action.filter is
+                // interpolated into the submit(...) event selector (same pattern as
+                // bindSubmit above), and action.formId + 'validate' becomes a dynamic
+                // window[] property name.
+                //
+                // The flag is stored as window[formId + 'validate'] rather than
+                // declared with a top-level `var` (which is how the legacy inline
+                // <script> declared it). A `var` at the top level of a real <script>
+                // element executes in global scope, so it becomes a `window`
+                // property too — `window[name] = false` reproduces that exact
+                // observable state, so SubmitButtonTagHelper / LinkButtonTagHelper's
+                // own still-inline scripts (which read/write the bare identifier
+                // "{formid}validate") keep working unchanged.
+                case 'bindValidate':
+                    if (!action.filter || typeof action.filter !== 'string' ||
+                        !/^[A-Za-z_$][\w$]*$/.test(action.filter)) { break; }
+                    if (!action.formId || typeof action.formId !== 'string' ||
+                        !/^[A-Za-z_$][\w$]*$/.test(action.formId)) { break; }
+                    if (typeof layui === 'undefined' || !layui.form ||
+                        typeof layui.form.on !== 'function') { break; }
+                    var _validateVarName = action.formId + 'validate';
+                    window[_validateVarName] = false;
+                    layui.form.on(
+                        'submit(' + action.filter + ')',
+                        ff._makeBindValidateHandler(_validateVarName)
+                    );
+                    break;
+                // Issue #564 (#470-D): ModelState error highlight/focus — mirrors
+                // the inline <script> FormTagHelper generated today: for every
+                // error message, prepend a plain-text label into the form's first
+                // submit button's parent container; add 'layui-form-danger' to
+                // every field that had at least one error; focus the first
+                // errored field.
+                //
+                // SECURITY: ModelState error messages can carry user/validation-
+                // attribute-influenced content, so they are treated as untrusted.
+                // Every message is inserted via .textContent — NEVER innerHTML,
+                // insertAdjacentHTML, or string-built HTML — so it can never be
+                // interpreted as markup (Issue #789 Phase 3B XSS-hardening pattern).
+                // action.errors[].field is resolved via document.getElementById — a
+                // literal id lookup, never built into a CSS-selector string, so it
+                // cannot be used for selector injection — and the resolved element
+                // must live inside the form (action.formId) or it is ignored, so a
+                // field id can never reach outside its own dialog/island root.
+                case 'highlightErrors':
+                    if (!action.errors || !Array.isArray(action.errors) || action.errors.length === 0) { break; }
+                    if (!action.formId || typeof action.formId !== 'string') { break; }
+                    var _heFormEl = document.getElementById(action.formId);
+                    if (!_heFormEl) { break; }
+                    var _heSubmitBtn = _heFormEl.querySelector('button[type="submit"]');
+                    var _heMsgContainer = _heSubmitBtn ? _heSubmitBtn.parentNode : null;
+                    var _heFirstFieldId = null;
+                    for (var _hei = 0; _hei < action.errors.length; _hei++) {
+                        var _heErr = action.errors[_hei];
+                        if (!_heErr) { continue; }
+                        if (_heFirstFieldId === null && _heErr.field) { _heFirstFieldId = _heErr.field; }
+                        if (_heMsgContainer) {
+                            var _heMsg = (_heErr.message === undefined || _heErr.message === null) ? '' : String(_heErr.message);
+                            var _heMsgDiv = document.createElement('div');
+                            _heMsgDiv.className = 'layui-input-block';
+                            _heMsgDiv.style.textAlign = 'left';
+                            var _heLabel = document.createElement('label');
+                            _heLabel.style.color = 'red';
+                            // XSS-safe: textContent never parses the string as HTML.
+                            _heLabel.textContent = _heMsg;
+                            _heMsgDiv.appendChild(_heLabel);
+                            _heMsgContainer.insertBefore(_heMsgDiv, _heMsgContainer.firstChild);
+                        }
+                        if (_heErr.field && typeof _heErr.field === 'string') {
+                            var _heFieldEl = document.getElementById(_heErr.field);
+                            if (_heFieldEl && _heFormEl.contains(_heFieldEl)) {
+                                _heFieldEl.classList.add('layui-form-danger');
+                            }
+                        }
+                    }
+                    if (action.focusFirst && _heFirstFieldId) {
+                        var _heFocusEl = document.getElementById(_heFirstFieldId);
+                        if (_heFocusEl && _heFormEl.contains(_heFocusEl) &&
+                            typeof _heFocusEl.focus === 'function') {
+                            _heFocusEl.focus();
+                        }
+                    }
                     break;
                 default:
                     if (typeof console !== 'undefined' && console.warn) {
@@ -699,6 +806,18 @@ window.ff = {
         return function (data) {
             if (beforeFn && beforeFn(data) === false) { return false; }
             ff.PostForm(url, formId, divId);
+            return false;
+        };
+    },
+
+    // Issue #564 (#470-D): factory for the 'bindValidate' DispatchAction case's
+    // layui.form.on('submit(...)') callback. Same var-in-a-loop-capture rationale
+    // as _makeBindSubmitHandler above — each invocation freezes its own varName,
+    // so multiple bindValidate actions (multiple forms/dialogs on the same page)
+    // never share state even though their submit handlers fire asynchronously.
+    _makeBindValidateHandler: function (varName) {
+        return function (data) {
+            window[varName] = true;
             return false;
         };
     },

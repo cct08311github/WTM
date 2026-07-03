@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>#564 (#470-D) — FormTagHelper auto-validate + ModelState error-highlight island manual verification</title>
+<!--
+  ============================================================================
+  Issue #564 (#470-D) — manual browser verification harness
+  ============================================================================
+
+  HOW TO OPEN (no server needed — plain file:// works):
+
+      file:///Volumes/T7/openclaw/shared/projects/WTM/.claude/worktrees/agent-ab5bcd6421c315eed/test/manual/564-validate-errorhighlight-island.html
+
+  (Adjust the path if you copied the worktree elsewhere; this file loads its
+  dependencies via paths relative to itself, so it works from any checkout as
+  long as the relative layout under test/manual/, demo/, and src/ is
+  preserved — same convention as test/manual/561-formtaghelper-island.html.)
+
+  WHAT THIS PROVES
+  -----------------
+  Issue #564 islandifies the LAST two residual inline <script> fragments
+  FormTagHelper emitted after #561:
+    1. The auto-validate handler — replaced by a 'bindValidate' action:
+       {"type":"bindValidate","filter":"wtForm_1filterAuto","formId":"wtForm_1"}
+       reproduces  var wtForm_1validate = false;
+                   layui.form.on('submit(wtForm_1filterAuto)', function(data){
+                     wtForm_1validate = true; return false;
+                   });
+       via window['wtForm_1validate'] instead of a top-level `var` (same
+       observable global-scope state).
+    2. The ModelState error-highlight/focus block — replaced by a
+       'highlightErrors' action:
+       {"type":"highlightErrors","formId":"wtForm_1","errors":[...],"focusFirst":true}
+       reproduces: prepend a plain-text label per error message into the
+       form's first submit button's parent, addClass('layui-form-danger') on
+       every errored field, and focus() the first errored field — ALL
+       messages inserted via .textContent (never innerHTML), and each
+       action.errors[].field resolved via document.getElementById (never a
+       hand-built CSS-selector string).
+
+  The <form> markup below is EXACTLY what a fully-migrated FormTagHelper
+  (post-#564) renders for a plain, non-OldPost, non-SearchPanel `<wt:form>`
+  with no non-identifier BeforeSubmit: NO inline <script> of its own drives
+  auto-validate or error-highlight — every side effect comes from parsing and
+  dispatching the ONE JSON island via the REAL, unmodified
+  src/WalkingTec.Mvvm.Mvc/framework_layui.js (loaded via <script src>, not a
+  copy) plus the real layui library already vendored in this repo
+  (demo/WalkingTec.Mvvm.Demo/wwwroot/layui).
+
+  "Show errors" simulates the X-WTM-Action JSON a server would return after a
+  failed ModelState-validated POST — it calls window.ff.DispatchAction(...)
+  directly with a 'highlightErrors' action, exactly mirroring what
+  ff.PostForm would do internally on such a response.
+
+  WHAT TO LOOK FOR
+  -----------------
+  1. "No inline <script> check" — turns green once the harness confirms the
+     ONLY <script> element inside #formSection is the wtm-dialog-init JSON
+     island itself (type="application/json", never executed as JS).
+  2. "Auto-validate flag" — shows the live value of window['wtForm_1validate'].
+     Click "Trigger auto-validate (hidden button)" — this simulates
+     SubmitButtonTagHelper/LinkButtonTagHelper's custom-click flow
+     ($('#wtForm_1hidesubmit').trigger('click')). With the Name field
+     non-empty, layui's client-side validators pass, the submit(...) event
+     fires, and the flag flips from false to true — proving the
+     'bindValidate' island action reproduces the legacy wiring.
+  3. Click "Show errors (incl. adversarial payload)" — dispatches a
+     'highlightErrors' action with 3 field errors, one of which is the
+     literal string "<img src=x onerror=alert(1)>". Look for:
+       - NO alert() popup fires (a page-level alert() override below counts
+         calls — the counter must stay at 0).
+       - NO <img> element appears anywhere in the DOM/inspector — open
+         DevTools → Elements and confirm the payload rendered as a plain
+         text <label>, not a parsed <img> tag.
+       - The Name and Email fields get a red-bordered "layui-form-danger"
+         look (marked via classList.add, visible below each field).
+       - The Name field (first errored field) gets visibly FOCUSED — a
+         visible focus ring / outline appears around it.
+       - The status panel below the button reports these facts by
+         DOM-inspection (img count, alert count, field/focus state, and each
+         rendered label's textContent) — it never re-echoes the payload as
+         HTML; every piece of text (including the raw "<img ...>" string
+         read back from the DOM) is inserted via .textContent, so it can
+         never be parsed as markup even inside this harness's own status
+         <div>.
+  4. Open DevTools → Elements and inspect the <script type="application/json"
+     class="wtm-dialog-init"> element inside #formSection to see the exact
+     island payload FormTagHelper emits for this form.
+  ============================================================================
+-->
+<link rel="stylesheet" href="../../demo/WalkingTec.Mvvm.Demo/wwwroot/layui/css/layui.css">
+<script src="../../demo/WalkingTec.Mvvm.Demo/wwwroot/jquery.min.js"></script>
+<script src="../../demo/WalkingTec.Mvvm.Demo/wwwroot/jquery.cookie.js"></script>
+<script src="../../src/WalkingTec.Mvvm.Mvc/dompurify.js"></script>
+<script src="../../demo/WalkingTec.Mvvm.Demo/wwwroot/layui/layui.js"></script>
+<script src="../../src/WalkingTec.Mvvm.Mvc/framework_layui.js"></script>
+<script>
+  // Kick off the 'form' module load as early as possible (mirrors WTM's real
+  // _Layout.cshtml). ff._dispatchIslandWhenReady defers dispatch through
+  // layui.use(['form'], cb) regardless (see #556/#558/#564 hardening), so the
+  // island always eventually renders/binds — this just makes the common case
+  // fast for a human tester.
+  window.__wtmHarnessLayuiReady = false;
+  layui.use(['form'], function () {
+    window.__wtmHarnessLayuiReady = true;
+  });
+
+  // ADVERSARIAL PROOF: if the 'highlightErrors' action ever used innerHTML /
+  // insertAdjacentHTML / eval instead of textContent, the injected
+  // "<img onerror=alert(1)>" payload below would execute this override and
+  // increment the counter. It must stay at 0 for the whole session.
+  window.__wtmAlertCount = 0;
+  var __realAlert = window.alert;
+  window.alert = function () {
+    window.__wtmAlertCount++;
+    return __realAlert.apply(window, arguments);
+  };
+</script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 780px; margin: 40px auto; padding: 0 20px; color: #333; }
+  h1 { font-size: 20px; }
+  h2 { margin-top: 0; font-size: 16px; }
+  .box { border: 1px solid #ddd; border-radius: 6px; padding: 20px; margin-bottom: 24px; }
+  .status { font-family: "SFMono-Regular", Menlo, Consolas, monospace; font-size: 12px; white-space: pre-wrap; background: #f6f6f6; padding: 10px; border-radius: 4px; margin-top: 12px; line-height: 1.6; }
+  .ok { color: #16b777; font-weight: bold; }
+  .bad { color: #FF5722; font-weight: bold; }
+  .btnrow { margin-top: 12px; }
+  .btnrow button { margin-right: 8px; }
+  .layui-form-danger { border-color: #FF5722 !important; }
+</style>
+</head>
+<body>
+<h1>#564 (#470-D) — FormTagHelper auto-validate + ModelState error-highlight island manual verification</h1>
+<p>See the HTML comment at the top of this file's &lt;head&gt; (view source) for the full explanation of what each part proves.</p>
+
+<div class="box" id="formSection">
+  <h2>Form — auto-validate + error-highlight driven ONLY by the wtm-dialog-init island below (no inline &lt;script&gt;)</h2>
+
+  <!-- This <form>...</form> block is exactly what a fully-migrated
+       FormTagHelper (post-#564) renders for `<wt:form vm="@Model">` with no
+       non-identifier BeforeSubmit, not a SearchPanel/OldPost form: the
+       <form> tag, its fields, and the hidden auto-validate button carry NO
+       script of their own. -->
+  <form class="layui-form" id="wtForm_1" lay-filter="wtForm_1" style="margin:10px" action="#" method="post" onsubmit="return false;">
+    <input type="hidden" name="FromView" value="" />
+    <div class="layui-form-item">
+      <label class="layui-form-label">Name</label>
+      <div class="layui-input-block">
+        <input type="text" name="Name" id="TestFormVM_Name" class="layui-input" placeholder="type something, then try 'Trigger auto-validate'">
+      </div>
+    </div>
+    <div class="layui-form-item">
+      <label class="layui-form-label">Email</label>
+      <div class="layui-input-block">
+        <input type="text" name="Email" id="TestFormVM_Email" class="layui-input">
+      </div>
+    </div>
+    <div class="layui-form-item">
+      <div class="layui-input-block">
+        <button class="layui-btn" type="submit" lay-filter="wtForm_1filter" lay-submit>Submit</button>
+      </div>
+    </div>
+    <!-- The hidden auto-validate button — a real DOM element (not a script),
+         unchanged by #564. Used by SubmitButtonTagHelper/LinkButtonTagHelper's
+         custom-click flow to trigger layui's client-side validators without
+         actually submitting. -->
+    <button class="layui-hide" id="wtForm_1hidesubmit" type="submit" lay-filter="wtForm_1filterAuto" lay-submit></button>
+  </form>
+
+  <!-- The eval-free JSON action island — EXACTLY the shape a fully-migrated
+       FormTagHelper serializes for this form (Id=wtForm_1, no OldPost, not a
+       SearchPanel, no BeforeSubmit, no ModelState errors at initial render). -->
+  <script type="application/json" class="wtm-dialog-init">{"actions":[{"type":"initForm","filter":"wtForm_1"},{"type":"bindValidate","filter":"wtForm_1filterAuto","formId":"wtForm_1"}]}</script>
+
+  <div class="status" id="renderStatus">waiting for the page-ready island consumer to run…</div>
+  <div class="status" id="noInlineScriptStatus">checking for inline &lt;script&gt; tags…</div>
+
+  <div class="btnrow">
+    <button class="layui-btn layui-btn-normal" id="triggerValidateBtn" type="button">Trigger auto-validate (hidden button)</button>
+  </div>
+  <div class="status" id="validateStatus">click the button above to run the auto-validate scenario</div>
+
+  <div class="btnrow">
+    <button class="layui-btn layui-btn-danger" id="showErrorsBtn" type="button">Show errors (incl. adversarial payload)</button>
+  </div>
+  <div class="status" id="errorsStatus">click the button above to dispatch a highlightErrors action</div>
+</div>
+
+<script>
+  (function () {
+    // ---- status rendering helper --------------------------------------------
+    // Clears a status <div> and appends each "line" as real text/element
+    // nodes — NEVER via innerHTML/insertAdjacentHTML/string-concatenated
+    // HTML — so untrusted content (e.g. an error message read back from the
+    // DOM) can never be parsed as markup, no matter what it contains.
+    //
+    // Each entry in `lines` is either:
+    //   - a plain string  → inserted as one text node
+    //   - an array of segments, each either a plain string (text node) or an
+    //     { cls, text } object → rendered as <span class="cls">text</span>
+    //     built via createElement + .textContent (for the ok/bad styling).
+    // The .status class is `white-space: pre-wrap`, so a literal '\n' text
+    // node still renders as a line break — no <br> elements needed.
+    function renderStatusLines(el, lines) {
+      el.replaceChildren();
+      lines.forEach(function (line, idx) {
+        if (idx > 0) { el.appendChild(document.createTextNode('\n')); }
+        if (typeof line === 'string') {
+          el.appendChild(document.createTextNode(line));
+          return;
+        }
+        line.forEach(function (seg) {
+          if (typeof seg === 'string') {
+            el.appendChild(document.createTextNode(seg));
+          } else {
+            var span = document.createElement('span');
+            if (seg.cls) { span.className = seg.cls; }
+            span.textContent = seg.text;
+            el.appendChild(span);
+          }
+        });
+      });
+    }
+
+    // ---- no-inline-script check --------------------------------------------
+    // The only <script> element inside #formSection must be the JSON island
+    // itself (type="application/json" — never parsed/executed as JS by the
+    // browser). Any OTHER <script> element here would mean auto-validate or
+    // error-highlight is still being driven by an inline script.
+    function checkNoInlineScript() {
+      var statusEl = document.getElementById('noInlineScriptStatus');
+      var scripts = document.querySelectorAll('#formSection script');
+      var offenders = [];
+      scripts.forEach(function (s) {
+        var type = (s.getAttribute('type') || '').toLowerCase();
+        if (type !== 'application/json') { offenders.push(s); }
+      });
+      if (offenders.length === 0) {
+        renderStatusLines(statusEl, [
+          [
+            { cls: 'ok', text: 'OK: no inline <script> tag drives auto-validate or error-highlight.' },
+            ' Found ' + scripts.length + ' <script> element(s) total inside #formSection, all ' +
+              'type="application/json" (the wtm-dialog-init island).'
+          ]
+        ]);
+      } else {
+        renderStatusLines(statusEl, [
+          [{ cls: 'bad', text: 'FAIL: found ' + offenders.length + ' non-JSON <script> tag(s) inside #formSection.' }]
+        ]);
+      }
+    }
+    checkNoInlineScript();
+
+    // ---- render-status polling (mirrors 561-formtaghelper-island.html) ----
+    var renderStatusEl = document.getElementById('renderStatus');
+    var renderPolls = 0;
+    function checkRendered() {
+      var island = document.querySelector('#formSection .wtm-dialog-init');
+      if (!island) {
+        renderStatusLines(renderStatusEl, [[{ cls: 'bad', text: 'island element not found — unexpected.' }]]);
+        return;
+      }
+      var marked = island.getAttribute('data-wtm-dispatched') === '1';
+      var validateFlagSet = typeof window['wtForm_1validate'] !== 'undefined';
+
+      if (marked && validateFlagSet) {
+        renderStatusLines(renderStatusEl, [
+          [
+            { cls: 'ok', text: 'OK: island consumed' },
+            ' (data-wtm-dispatched="1") AND the bindValidate action ran (window[\'wtForm_1validate\'] === ' +
+              window['wtForm_1validate'] + ').'
+          ],
+          'Now use the buttons below to test auto-validate and error-highlight.'
+        ]);
+        return;
+      }
+
+      renderPolls++;
+      if (renderPolls > 80) {
+        renderStatusLines(renderStatusEl, [
+          [
+            { cls: 'bad', text: 'island claimed=' + marked + ', validateFlagSet=' + validateFlagSet + ' after ~12s.' },
+            ' (layuiReady=' + window.__wtmHarnessLayuiReady + ')'
+          ]
+        ]);
+        return;
+      }
+      renderStatusLines(renderStatusEl, [
+        'waiting… island claimed=' + marked + ', validateFlagSet=' + validateFlagSet +
+          ' (layuiReady=' + window.__wtmHarnessLayuiReady + '). Re-checking every 150ms.'
+      ]);
+      setTimeout(checkRendered, 150);
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', function () { setTimeout(checkRendered, 0); });
+    } else {
+      setTimeout(checkRendered, 0);
+    }
+
+    // ---- auto-validate scenario --------------------------------------------
+    document.getElementById('triggerValidateBtn').addEventListener('click', function () {
+      var statusEl = document.getElementById('validateStatus');
+      var before = window['wtForm_1validate'];
+      document.getElementById('wtForm_1hidesubmit').click();
+      setTimeout(function () {
+        var after = window['wtForm_1validate'];
+        var lines = [];
+        lines.push('window[\'wtForm_1validate\'] before click: ' + before);
+        lines.push('window[\'wtForm_1validate\'] after click: ' + after);
+        if (after === true) {
+          lines.push([
+            { cls: 'ok', text: 'OK: validation passed and the flag flipped to true' },
+            ' (matches the legacy inline {Id}validate = true; wiring).'
+          ]);
+        } else {
+          lines.push([
+            { cls: 'bad', text: 'Flag did not flip' },
+            ' — if the Name field is empty, layui\'s own client-side "required" validator may be ' +
+              'blocking the submit event before it ever reaches this handler (try filling in the Name ' +
+              'field first, then click again).'
+          ]);
+        }
+        renderStatusLines(statusEl, lines);
+      }, 50);
+    });
+
+    // ---- error-highlight scenario -------------------------------------------
+    document.getElementById('showErrorsBtn').addEventListener('click', function () {
+      var statusEl = document.getElementById('errorsStatus');
+      var alertsBefore = window.__wtmAlertCount;
+
+      // Simulates the X-WTM-Action JSON a server would return after a failed
+      // ModelState-validated POST. One message is the literal adversarial
+      // string "<img src=x onerror=alert(1)>" — proving the highlightErrors
+      // action inserts it as plain text (.textContent), never parsed HTML.
+      window.ff.DispatchAction({
+        actions: [{
+          type: 'highlightErrors',
+          formId: 'wtForm_1',
+          errors: [
+            { field: 'TestFormVM_Name', message: 'Name is required' },
+            { field: 'TestFormVM_Email', message: '<img src=x onerror=alert(1)>' },
+            { field: 'TestFormVM_Email', message: 'Email must be a valid address' }
+          ],
+          focusFirst: true
+        }]
+      });
+
+      setTimeout(function () {
+        // Everything below is computed by INSPECTING the live DOM/counters —
+        // never by re-echoing the dispatched payload. Where untrusted text
+        // (l.textContent, which may literally be "<img src=x onerror=alert(1)>")
+        // is displayed, it is pushed as a plain string so renderStatusLines()
+        // inserts it via document.createTextNode — it can never be parsed as
+        // markup, no matter what characters it contains.
+        var imgCount = document.querySelectorAll('#formSection img').length;
+        var alertsAfter = window.__wtmAlertCount;
+        var nameMarked = document.getElementById('TestFormVM_Name').classList.contains('layui-form-danger');
+        var emailMarked = document.getElementById('TestFormVM_Email').classList.contains('layui-form-danger');
+        var focused = document.activeElement === document.getElementById('TestFormVM_Name');
+        var labels = document.querySelectorAll('#formSection label[style*="red"]');
+
+        var noAlertFired = alertsAfter === alertsBefore;
+        var noImg = imgCount === 0;
+        var labelCountOk = labels.length === 3;
+        var pass = noAlertFired && noImg && nameMarked && emailMarked && focused && labelCountOk;
+
+        var lines = [];
+        lines.push(pass
+          ? [{ cls: 'ok', text: 'PASS — adversarial payload rendered as literal text, no script executed.' }]
+          : [{ cls: 'bad', text: 'FAIL — see details below.' }]);
+        lines.push('alert() call count: before=' + alertsBefore + ', after=' + alertsAfter +
+          (noAlertFired ? ' — OK, no alert fired' : ' — FAIL, alert() fired!'));
+        lines.push('img elements found in #formSection: ' + imgCount + (noImg ? ' — OK' : ' — FAIL'));
+        lines.push('Name field marked layui-form-danger: ' + nameMarked);
+        lines.push('Email field marked layui-form-danger: ' + emailMarked);
+        lines.push('Name field (first errored) focused: ' + focused);
+        lines.push('Error message labels rendered: ' + labels.length + ' (expected 3)');
+        labels.forEach(function (l, i) {
+          // l.textContent is UNTRUSTED (may be the raw adversarial string) —
+          // pushed as a plain string, never concatenated into an HTML string.
+          lines.push('  [' + i + '] textContent = ' + JSON.stringify(l.textContent) +
+            ' | childElementCount = ' + l.children.length + ' (0 = plain text node, proves no HTML injection)');
+        });
+
+        renderStatusLines(statusEl, lines);
+      }, 50);
+    });
+  })();
+</script>
+</body>
+</html>
