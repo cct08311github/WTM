@@ -1,0 +1,651 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>#565 — TagHelper &harr; LayUI browser regression suite (Phase-2 #566 gate)</title>
+<!--
+  ============================================================================
+  Issue #565 (Phase 1 of #567) — TagHelper<->LayUI browser regression suite
+  ============================================================================
+
+  HOW TO OPEN (file:// is blocked by Playwright and by some browsers'
+  same-origin XHR/module rules — serve this directory over HTTP):
+
+      cd /path/to/WTM/checkout
+      python3 -m http.server 8000
+      open http://localhost:8000/test/manual/regression/565-taghelper-layui-regression.html
+
+  (Loads dependencies via paths relative to itself — ../../../demo/... and
+  ../../../src/... — so it works from any checkout as long as the relative
+  layout under test/manual/regression/, demo/, and src/ is preserved. Same
+  convention as test/manual/561-formtaghelper-island.html and
+  test/manual/470b-laydate-island.html, one directory deeper.)
+
+  WHAT THIS PROVES
+  -----------------
+  This is a browser-level regression suite over the WTM TagHelper -> LayUI
+  surface: for each widget family, it renders the EXACT markup / init-call
+  shape the corresponding TagHelper (src/WalkingTec.Mvvm.TagHelpers.LayUI/**)
+  emits today, wires it up with the REAL, unmodified
+  src/WalkingTec.Mvvm.Mvc/framework_layui.js and the REAL layui 2.6.3 already
+  vendored in this repo (demo/WalkingTec.Mvvm.Demo/wwwroot/layui), and then
+  asserts — programmatically, not just visually — that the widget actually
+  initialized (the same DOM signal a human would look for in DevTools:
+  a layui-injected CSS class, a `lay-key` render marker, an `.xm-select`
+  container, etc).
+
+  This suite is the HARD GATE for #566 (bundled-layui version bump): every
+  assertion below must stay green across a layui upgrade. A version bump
+  that breaks any of these sections is a real regression, full stop.
+
+  RESULTS CONTRACT
+  -----------------
+  Every section pushes exactly one result object into the global
+  `window.__regressionResults` array:
+      { name: string, pass: boolean, detail: string, knownGap?: boolean }
+  Once all TOTAL_EXPECTED sections have reported, `window.__regressionDone`
+  is set to `true`. A headless runner (test/regression/) waits for that flag
+  and then asserts `pass === true` for every entry EXCEPT those flagged
+  `knownGap: true` (see the tagInput section below for the one gap this
+  suite currently documents — a pre-existing product gap, not a suite bug).
+
+  WIDGET COVERAGE (see the on-page PASS/FAIL banner list + README for the
+  one-line-per-widget summary):
+    1. form.render                 6. ComboBox (xmSelect)   11. slider
+    2. laydate (single date)       7. tree (xmSelect)       12. rate
+    3. laydate (range)             8. checkbox/radio +      13. colorPicker
+    4. layer / OpenDialog             ff.LoadComboItems      14. tagInput (KNOWN GAP)
+    5. table/grid                  9. transfer
+                                   10. upload (render only)
+  ============================================================================
+-->
+<link rel="stylesheet" href="../../../demo/WalkingTec.Mvvm.Demo/wwwroot/layui/css/layui.css">
+<script src="../../../demo/WalkingTec.Mvvm.Demo/wwwroot/jquery.min.js"></script>
+<script src="../../../demo/WalkingTec.Mvvm.Demo/wwwroot/jquery.cookie.js"></script>
+<script src="../../../demo/WalkingTec.Mvvm.Demo/wwwroot/layui/layui.js"></script>
+<script src="../../../demo/WalkingTec.Mvvm.Demo/wwwroot/layui/xm-select.js"></script>
+<script src="../../../src/WalkingTec.Mvvm.Mvc/dompurify.js"></script>
+<script src="../../../src/WalkingTec.Mvvm.Mvc/framework_layui.js"></script>
+<script>
+  // Mirrors the real _Layout.cshtml, which calls layui.use(['form']) (and
+  // friends) in <head> before body content is parsed, so the async module
+  // fetches are warm by the time each section's own layui.use(...) call
+  // runs. Every section still calls layui.use itself (matching what the
+  // TagHelper-emitted script actually does) — this just removes cold-load
+  // flakiness from the harness, exactly like 561/470b's early layui.use(['form']).
+  window.__wtmHarnessCoreReady = false;
+  layui.use(['form', 'laydate', 'table', 'transfer', 'slider', 'rate', 'colorpicker', 'upload'], function () {
+    window.__wtmHarnessCoreReady = true;
+  });
+</script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 920px; margin: 40px auto; padding: 0 20px; color: #333; }
+  h1 { font-size: 20px; }
+  h2 { margin-top: 0; font-size: 15px; }
+  .box { border: 1px solid #ddd; border-radius: 6px; padding: 16px 20px; margin-bottom: 20px; }
+  .status { font-family: "SFMono-Regular", Menlo, Consolas, monospace; font-size: 12px; white-space: pre-wrap; background: #f6f6f6; padding: 10px; border-radius: 4px; margin-top: 12px; line-height: 1.6; }
+  .ok { color: #16b777; font-weight: bold; }
+  .bad { color: #FF5722; font-weight: bold; }
+  .gap { color: #999; font-weight: bold; }
+  #summary { position: sticky; top: 0; background: #fff; z-index: 10; padding: 10px 0; border-bottom: 2px solid #333; margin-bottom: 20px; }
+  #summaryList { font-family: "SFMono-Regular", Menlo, Consolas, monospace; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>#565 — TagHelper &harr; LayUI browser regression suite</h1>
+<p>See the HTML comment at the top of this file's &lt;head&gt; (view source) for the full explanation. Phase-1 gate for #566 (bundled-layui version bump), part of the #567 roadmap.</p>
+
+<div id="summary">
+  <strong id="summaryHeadline">Running&hellip; (<span id="summaryCount">0</span>/<span id="summaryTotal">14</span>)</strong>
+  <div id="summaryList"></div>
+</div>
+
+<!-- ============================== 1. form.render ============================== -->
+<div class="box" id="sec-form">
+  <h2>1. form.render — WTM &lt;wt:form&gt; island (initForm action)</h2>
+  <form class="layui-form" id="regForm1" lay-filter="regForm1" style="margin:10px" action="#" onsubmit="return false;">
+    <input type="hidden" name="FromView" value="" />
+    <div class="layui-form-item">
+      <label class="layui-form-label">Name</label>
+      <div class="layui-input-block">
+        <input type="text" name="Name" class="layui-input">
+      </div>
+    </div>
+    <div class="layui-form-item">
+      <label class="layui-form-label">Render-check</label>
+      <div class="layui-input-block">
+        <!-- Raw checkbox with lay-skin="switch" is unstyled until layui.form.render
+             runs, at which point layui inserts a .layui-form-switch sibling <div> —
+             same render-detector convention as 561-formtaghelper-island.html. -->
+        <input type="checkbox" id="regForm1Switch" lay-skin="switch" title="ON|OFF">
+      </div>
+    </div>
+  </form>
+  <!-- Exactly the shape FormTagHelper (post-#561) emits for a plain form: one
+       JSON island, no inline <script> inside the form. -->
+  <script type="application/json" class="wtm-dialog-init">{"actions":[{"type":"initForm","filter":"regForm1"}]}</script>
+  <div class="status" id="status-form">waiting…</div>
+</div>
+
+<!-- ============================== 2/3. laydate ============================== -->
+<div class="box" id="sec-laydate">
+  <h2>2 &amp; 3. laydate — DateTimeTagHelper bare islands (single date + range)</h2>
+  <div class="layui-form-item">
+    <label class="layui-form-label">Single date</label>
+    <div class="layui-input-inline">
+      <input type="text" id="regDateSingle" name="SingleDate" class="layui-input" placeholder="yyyy-MM-dd">
+    </div>
+  </div>
+  <div class="layui-form-item">
+    <label class="layui-form-label">Date range</label>
+    <div class="layui-input-inline">
+      <input type="text" id="regDateRange" name="RangeDate" class="layui-input" placeholder="yyyy-MM-dd - yyyy-MM-dd">
+    </div>
+  </div>
+  <!-- Bare (non-actions-wrapped) laydate island — the DTO DateTimeTagHelper
+       serializes for the migrated laydate path (#556 / #470-B). Normalized
+       into {actions:[...]} by ff._normalizeIslandPayload. -->
+  <script type="application/json" class="wtm-dialog-init">{"type":"laydate","opts":{"elem":"#regDateSingle","type":"date","format":"yyyy-MM-dd"}}</script>
+  <script type="application/json" class="wtm-dialog-init">{"type":"laydate","opts":{"elem":"#regDateRange","type":"date","format":"yyyy-MM-dd","range":true}}</script>
+  <div class="status" id="status-laydate-single">waiting…</div>
+  <div class="status" id="status-laydate-range">waiting…</div>
+</div>
+
+<!-- ============================== 4. layer / OpenDialog ============================== -->
+<div class="box" id="sec-dialog">
+  <h2>4. layer / OpenDialog — ff.OpenDialog full pipeline ($.ajax stubbed, everything above it real)</h2>
+  <button class="layui-btn" id="openDialogBtn" type="button">Open dialog (ff.OpenDialog)</button>
+  <div class="status" id="status-dialog">click the button to run this scenario</div>
+</div>
+
+<!-- ============================== 5. table/grid ============================== -->
+<div class="box" id="sec-table">
+  <h2>5. table/grid — DataTableTagHelper's table.render(option) (local data — no backend)</h2>
+  <table id="regTable1" lay-filter="regTable1"></table>
+  <div class="status" id="status-table">waiting…</div>
+</div>
+
+<!-- ============================== 6/7. ComboBox + Tree (xmSelect) ============================== -->
+<div class="box" id="sec-xmselect">
+  <h2>6 &amp; 7. ComboBox (wt:combobox) + Tree (wt:tree) — xmSelect.render()</h2>
+  <div id="regCombo1" name="ComboField" wtm-name="ComboField" wtm-ctype="combo" wtm-multi="false"></div>
+  <div id="regTree1" name="TreeField" wtm-name="TreeField" wtm-ctype="tree" style="margin-top:12px"></div>
+  <div class="status" id="status-combo">waiting…</div>
+  <div class="status" id="status-tree">waiting…</div>
+</div>
+
+<!-- ============================== 8. checkbox/radio + LoadComboItems ============================== -->
+<div class="box" id="sec-checkradio">
+  <h2>8. checkbox/radio + ff.LoadComboItems (ItemUrl path) — then form.render skins them</h2>
+  <!-- BaseFieldTag.cs (the shared base every field TagHelper renders through)
+       always wraps its field in an outer <div class="layui-form-item layui-form"
+       lay-filter="{Id}filterdiv">. ff.LoadComboItems reads the TARGET div's own
+       lay-filter ("{Id}filter", auto-assigned by BaseFieldTag when none is
+       supplied) and calls layui.form.render(type, thatFilter + "div") — which
+       is exactly this outer wrapper's lay-filter. Both fields reproduce that
+       real two-level wrapper shape so the render-targeting matches production. -->
+  <div class="layui-form-item layui-form" lay-filter="regCheckbox1filterdiv">
+    <div class="layui-input-block">
+      <div div-for="checkbox" wtm-ctype="checkbox" wtm-name="Roles" id="regCheckbox1" lay-filter="regCheckbox1filter"></div>
+    </div>
+  </div>
+  <div class="layui-form-item layui-form" lay-filter="regRadio1filterdiv">
+    <div class="layui-input-block">
+      <div div-for="radio" wtm-ctype="radio" wtm-name="Kind" id="regRadio1" lay-filter="regRadio1filter"></div>
+    </div>
+  </div>
+  <div class="status" id="status-checkradio">waiting…</div>
+</div>
+
+<!-- ============================== 9. transfer ============================== -->
+<div class="box" id="sec-transfer">
+  <h2>9. transfer — TransferTagHelper's transfer.render()</h2>
+  <div id="regTransfer1"></div>
+  <div id="regTransfer1div"></div>
+  <div class="status" id="status-transfer">waiting…</div>
+</div>
+
+<!-- ============================== 10. upload ============================== -->
+<div class="box" id="sec-upload">
+  <h2>10. upload (render only, no file I/O) — UploadTagHelper's upload.render()</h2>
+  <button type="button" class="layui-btn" id="regUpload1">Upload</button>
+  <div class="status" id="status-upload">waiting…</div>
+</div>
+
+<!-- ============================== 11. slider ============================== -->
+<div class="box" id="sec-slider">
+  <h2>11. slider — SliderTagHelper's slider.render()</h2>
+  <input type="hidden" name="SliderField" value="30" class="layui-input">
+  <div id="regSlider1" style="margin: 20px 10px;"></div>
+  <div class="status" id="status-slider">waiting…</div>
+</div>
+
+<!-- ============================== 12. rate ============================== -->
+<div class="box" id="sec-rate">
+  <h2>12. rate — RateTagHelper's rate.render()</h2>
+  <div id="regRate1" class="wtm-rate-placeholder"></div>
+  <input type="hidden" id="regRate1_val" name="RateField" value="0" />
+  <div class="status" id="status-rate">waiting…</div>
+</div>
+
+<!-- ============================== 13. colorPicker ============================== -->
+<div class="box" id="sec-colorpicker">
+  <h2>13. colorPicker — ColorPickerTagHelper's colorpicker.render()</h2>
+  <input type="hidden" id="cp_regColor1" name="ColorField" value="#16b777" />
+  <div id="regColor1"></div>
+  <div class="status" id="status-colorpicker">waiting…</div>
+</div>
+
+<!-- ============================== 14. tagInput (KNOWN GAP) ============================== -->
+<div class="box" id="sec-taginput">
+  <h2>14. tagInput — TagInputTagHelper's tagInput.render() (Layui 2.8+ widget — KNOWN GAP against 2.6.3)</h2>
+  <div id="regTagInput1" class="wtm-taginput-placeholder"></div>
+  <input type="hidden" id="regTagInput1_val" name="TagField" value="" />
+  <div class="status" id="status-taginput">waiting…</div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var TOTAL_EXPECTED = 14;
+  window.__regressionResults = [];
+  window.__regressionDone = false;
+
+  function renderSummary() {
+    var el = document.getElementById('summaryList');
+    var lines = window.__regressionResults.map(function (r) {
+      var cls = r.knownGap ? 'gap' : (r.pass ? 'ok' : 'bad');
+      var tag = r.knownGap ? 'GAP' : (r.pass ? 'PASS' : 'FAIL');
+      return '<div class="' + cls + '">[' + tag + '] ' + r.name + ' — ' + r.detail + '</div>';
+    });
+    el.innerHTML = lines.join('');
+    document.getElementById('summaryCount').textContent = String(window.__regressionResults.length);
+    if (window.__regressionResults.length >= TOTAL_EXPECTED) {
+      var allOk = window.__regressionResults.every(function (r) { return r.knownGap || r.pass; });
+      document.getElementById('summaryHeadline').innerHTML =
+        allOk
+          ? '<span class="ok">ALL ASSERTIONS PASSED</span> (' + window.__regressionResults.length + '/' + TOTAL_EXPECTED + ', known gaps excluded from the pass bar)'
+          : '<span class="bad">FAILURES PRESENT</span> (' + window.__regressionResults.length + '/' + TOTAL_EXPECTED + ')';
+    }
+  }
+
+  function pushResult(name, pass, detail, knownGap) {
+    window.__regressionResults.push({ name: name, pass: !!pass, detail: detail, knownGap: !!knownGap });
+    if (window.__regressionResults.length >= TOTAL_EXPECTED) {
+      window.__regressionDone = true;
+    }
+    renderSummary();
+  }
+  window.__wtmPushResult = pushResult; // exposed for debugging only
+
+  function setStatus(id, html) {
+    var el = document.getElementById(id);
+    if (el) { el.innerHTML = html; }
+  }
+
+  // Generic poll helper: calls check() every `interval`ms until it returns
+  // a truthy {pass, detail} object, or `maxAttempts` is exceeded.
+  function pollUntil(check, onDone, maxAttempts, interval) {
+    var attempts = 0;
+    function tick() {
+      var result = check();
+      if (result) { onDone(result); return; }
+      attempts++;
+      if (attempts > maxAttempts) {
+        onDone({ pass: false, detail: 'timed out after ' + (maxAttempts * interval) + 'ms waiting for widget init' });
+        return;
+      }
+      setTimeout(tick, interval);
+    }
+    tick();
+  }
+
+  // ---- 1. form.render -----------------------------------------------------
+  pollUntil(function () {
+    var island = document.querySelector('#sec-form .wtm-dialog-init');
+    var marked = island && island.getAttribute('data-wtm-dispatched') === '1';
+    var rendered = document.querySelector('#sec-form .layui-form-switch') !== null;
+    return (marked && rendered) ? { pass: true, detail: 'island dispatched AND .layui-form-switch injected by form.render()' } : null;
+  }, function (result) {
+    setStatus('status-form', result.pass ? '<span class="ok">OK</span>: ' + result.detail : '<span class="bad">FAIL</span>: ' + result.detail);
+    pushResult('form.render (initForm island)', result.pass, result.detail);
+  }, 80, 150);
+
+  // ---- 2/3. laydate --------------------------------------------------------
+  pollUntil(function () {
+    var el = document.getElementById('regDateSingle');
+    return el && el.getAttribute('lay-key') !== null ? { pass: true, detail: 'lay-key="' + el.getAttribute('lay-key') + '" stamped by laydate.render()' } : null;
+  }, function (result) {
+    setStatus('status-laydate-single', result.pass ? '<span class="ok">OK</span>: single date — ' + result.detail : '<span class="bad">FAIL</span>: single date — ' + result.detail);
+    pushResult('laydate (single date)', result.pass, result.detail);
+  }, 80, 150);
+
+  pollUntil(function () {
+    var el = document.getElementById('regDateRange');
+    return el && el.getAttribute('lay-key') !== null ? { pass: true, detail: 'lay-key="' + el.getAttribute('lay-key') + '" stamped by laydate.render({range:true})' } : null;
+  }, function (result) {
+    setStatus('status-laydate-range', result.pass ? '<span class="ok">OK</span>: range — ' + result.detail : '<span class="bad">FAIL</span>: range — ' + result.detail);
+    pushResult('laydate (date range)', result.pass, result.detail);
+  }, 80, 150);
+
+  // ---- 4. layer / OpenDialog ------------------------------------------------
+  // ff.OpenDialog() is the real, unmodified function from framework_layui.js.
+  // This is a static file with no ASP.NET Core backend, so $.ajax is stubbed
+  // to synchronously invoke the success callback with a canned same-origin
+  // partial (mirroring what a real dialog action/view would return) —
+  // everything ABOVE that network boundary (DOMParser island extraction,
+  // ff.SafeHtml/DOMPurify sanitization, layer.open()) is exercised for real,
+  // same stub-the-network-boundary philosophy as 561's ff.PostForm stub.
+  (function () {
+    var realAjax = $.ajax;
+    var mockPartial =
+      '<div class="layui-form-item"><label class="layui-form-label">Dialog field</label>' +
+      '<div class="layui-input-block"><input type="text" name="DialogField" class="layui-input"></div></div>' +
+      '<script type="application/json" class="wtm-dialog-init">{"actions":[{"type":"initForm","filter":"dlgFormNOTUSED"}]}<\/script>';
+
+    document.getElementById('openDialogBtn').addEventListener('click', function () {
+      $.ajax = function (opts) {
+        var mockRequest = { getResponseHeader: function (name) {
+          if (name === 'IsScript') { return 'false'; }
+          if (name === 'X-WTM-Action') { return null; }
+          return null;
+        } };
+        opts.success(mockPartial, 'success', mockRequest);
+      };
+      try {
+        ff.OpenDialog('/mock/dialog/url', 'wtmRegDialog1', 'Regression Dialog', 500, 300);
+      } finally {
+        $.ajax = realAjax;
+      }
+
+      pollUntil(function () {
+        return document.querySelector('.layui-layer') !== null ? { pass: true, detail: '.layui-layer present after layer.open()' } : null;
+      }, function (result) {
+        setStatus('status-dialog', result.pass ? '<span class="ok">OK</span>: ' + result.detail : '<span class="bad">FAIL</span>: ' + result.detail);
+        pushResult('layer / OpenDialog', result.pass, result.detail);
+      }, 40, 150);
+    });
+
+    // Auto-trigger once layui core is warm so headless runs don't need a real click.
+    pollUntil(function () {
+      return window.__wtmHarnessCoreReady ? { pass: true, detail: 'ready' } : null;
+    }, function () {
+      document.getElementById('openDialogBtn').click();
+    }, 60, 150);
+  })();
+
+  // ---- 5. table/grid ---------------------------------------------------------
+  // Local `data:[]` array config — the same code path DataTableTagHelper itself
+  // uses for UseLocalData=true grids (no live backend needed for this harness).
+  pollUntil(function () {
+    return window.__wtmHarnessCoreReady ? { pass: true, detail: 'ready' } : null;
+  }, function () {
+    layui.use(['table'], function () {
+      var table = layui.table;
+      table.render({
+        elem: '#regTable1',
+        id: 'regTable1',
+        cols: [[
+          { field: 'name', title: 'Name' },
+          { field: 'age', title: 'Age' }
+        ]],
+        data: [{ name: 'Ada Lovelace', age: 36 }]
+      });
+      pollUntil(function () {
+        return document.querySelector('#regTable1 + .layui-table-view') !== null
+          ? { pass: true, detail: '.layui-table-view built by table.render()' } : null;
+      }, function (result) {
+        setStatus('status-table', result.pass ? '<span class="ok">OK</span>: ' + result.detail : '<span class="bad">FAIL</span>: ' + result.detail);
+        pushResult('table/grid (table.render)', result.pass, result.detail);
+      }, 40, 150);
+    });
+  }, 60, 150);
+
+  // ---- 6. ComboBox (xmSelect) -------------------------------------------------
+  pollUntil(function () { return typeof xmSelect !== 'undefined' ? { pass: true } : null; }, function () {
+    window.regCombo1 = xmSelect.render({
+      el: '#regCombo1',
+      name: 'ComboField',
+      tips: 'Please select',
+      radio: true,
+      clickClose: true,
+      data: [
+        { name: 'Option A', value: '1' },
+        { name: 'Option B', value: '2' }
+      ]
+    });
+    pollUntil(function () {
+      // xm-select.js (vendored under demo/**/wwwroot/layui/xm-select.js) mounts
+      // a custom <xm-select> element (with a nested input.xm-select-default)
+      // inside the target el — not a plain .xm-select CSS class — confirmed by
+      // inspecting the rendered DOM (see #565 PR description for the captured
+      // outerHTML).
+      return document.querySelector('#regCombo1 xm-select') !== null ? { pass: true, detail: '<xm-select> element built by xmSelect.render()' } : null;
+    }, function (result) {
+      setStatus('status-combo', result.pass ? '<span class="ok">OK</span>: ' + result.detail : '<span class="bad">FAIL</span>: ' + result.detail);
+      pushResult('ComboBox (xmSelect.render)', result.pass, result.detail);
+    }, 40, 150);
+  }, 40, 150);
+
+  // ---- 7. Tree (xmSelect, tree mode) ------------------------------------------
+  pollUntil(function () { return typeof xmSelect !== 'undefined' ? { pass: true } : null; }, function () {
+    window.regTree1 = xmSelect.render({
+      el: '#regTree1',
+      name: 'TreeField',
+      tips: 'Please select',
+      tree: { show: true, strict: false },
+      data: [
+        { name: 'Parent', value: 'p1' },
+        { name: 'Child', value: 'c1', pid: 'p1' }
+      ]
+    });
+    pollUntil(function () {
+      return document.querySelector('#regTree1 xm-select') !== null ? { pass: true, detail: '<xm-select> element built by xmSelect.render({tree:{show:true}})' } : null;
+    }, function (result) {
+      setStatus('status-tree', result.pass ? '<span class="ok">OK</span>: ' + result.detail : '<span class="bad">FAIL</span>: ' + result.detail);
+      pushResult('Tree (xmSelect.render, tree mode)', result.pass, result.detail);
+    }, 40, 150);
+  }, 40, 150);
+
+  // ---- 8. checkbox/radio + ff.LoadComboItems ----------------------------------
+  // Stub $.get (the network boundary ff.LoadComboItems uses) to synchronously
+  // return canned {Data:[...]} items — everything ABOVE that (ff._makeInput DOM
+  // construction, layui.form.render('checkbox'|'radio', ...) skinning) is real.
+  (function () {
+    var realGet = $.get;
+    $.get = function (url, params, cb) {
+      if (url.indexOf('mock-checkbox') !== -1) {
+        cb({ Data: [{ Value: '1', Text: 'Admin', Selected: false }, { Value: '2', Text: 'User', Selected: false }] }, 'success');
+      } else if (url.indexOf('mock-radio') !== -1) {
+        cb({ Data: [{ Value: 'a', Text: 'Kind A', Selected: false }, { Value: 'b', Text: 'Kind B', Selected: false }] }, 'success');
+      } else {
+        realGet.apply($, arguments);
+      }
+    };
+    pollUntil(function () { return window.__wtmHarnessCoreReady ? { pass: true } : null; }, function () {
+      // ff.LoadComboItems itself calls layui.form.render(type, targetfilter+"div")
+      // once its stubbed $.get resolves (see the real implementation in
+      // framework_layui.js) — no separate manual form.render call needed here,
+      // matching production: the TagHelper's own island/script never calls
+      // form.render again either, it relies on LoadComboItems to do it.
+      ff.LoadComboItems('checkbox', '/mock-checkbox', 'regCheckbox1', 'Roles', []);
+      ff.LoadComboItems('radio', '/mock-radio', 'regRadio1', 'Kind', []);
+      pollUntil(function () {
+        var cbInputs = document.querySelectorAll('#regCheckbox1 input[type="checkbox"]');
+        var rInputs = document.querySelectorAll('#regRadio1 input[type="radio"]');
+        if (cbInputs.length === 0 || rInputs.length === 0) { return null; }
+        var skinned = document.querySelectorAll('#regCheckbox1 .layui-form-checkbox').length === cbInputs.length &&
+          document.querySelectorAll('#regRadio1 .layui-form-radio').length === rInputs.length;
+        return skinned
+          ? { pass: true, detail: cbInputs.length + ' checkbox + ' + rInputs.length + ' radio items loaded via ff.LoadComboItems and skinned by form.render' }
+          : null;
+      }, function (result) {
+        setStatus('status-checkradio', result.pass ? '<span class="ok">OK</span>: ' + result.detail : '<span class="bad">FAIL</span>: ' + result.detail);
+        pushResult('checkbox/radio + ff.LoadComboItems', result.pass, result.detail);
+        $.get = realGet;
+      }, 40, 150);
+    }, 40, 150);
+  })();
+
+  // ---- 9. transfer -------------------------------------------------------------
+  pollUntil(function () {
+    return window.__wtmHarnessCoreReady ? { pass: true } : null;
+  }, function () {
+    layui.use(['transfer'], function () {
+      var transfer = layui.transfer;
+      transfer.render({
+        elem: '#regTransfer1',
+        id: 'regTransfer1',
+        title: ['Available', 'Selected'],
+        data: [
+          { value: '1', title: 'Item One' },
+          { value: '2', title: 'Item Two' }
+        ]
+      });
+      pollUntil(function () {
+        return document.querySelector('#regTransfer1 .layui-transfer-box') !== null
+          ? { pass: true, detail: '.layui-transfer-box built by transfer.render()' } : null;
+      }, function (result) {
+        setStatus('status-transfer', result.pass ? '<span class="ok">OK</span>: ' + result.detail : '<span class="bad">FAIL</span>: ' + result.detail);
+        pushResult('transfer (transfer.render)', result.pass, result.detail);
+      }, 40, 150);
+    });
+  }, 60, 150);
+
+  // ---- 10. upload (render only) --------------------------------------------------
+  pollUntil(function () {
+    return window.__wtmHarnessCoreReady ? { pass: true } : null;
+  }, function () {
+    layui.use(['upload'], function () {
+      var uploadInst = null;
+      var detail;
+      var pass;
+      try {
+        uploadInst = layui.upload.render({
+          elem: '#regUpload1',
+          url: '/mock/upload',
+          auto: false // no real file I/O — render-only, per #565 scope
+        });
+        pass = uploadInst !== null && typeof uploadInst === 'object';
+        detail = pass
+          ? 'upload.render() returned an upload instance (elem click-handler bound) — no real file I/O attempted per #565 scope'
+          : 'upload.render() did not return an instance';
+      } catch (e) {
+        pass = false;
+        detail = 'upload.render() threw: ' + e;
+      }
+      setStatus('status-upload', pass ? '<span class="ok">OK</span>: ' + detail : '<span class="bad">FAIL</span>: ' + detail);
+      pushResult('upload (upload.render, no file I/O)', pass, detail);
+    });
+  }, 60, 150);
+
+  // ---- 11. slider ------------------------------------------------------------
+  pollUntil(function () {
+    return window.__wtmHarnessCoreReady ? { pass: true } : null;
+  }, function () {
+    layui.use(['slider'], function () {
+      layui.slider.render({
+        elem: '#regSlider1',
+        value: 30,
+        step: 1
+      });
+      pollUntil(function () {
+        return document.querySelector('#regSlider1 .layui-slider') !== null
+          ? { pass: true, detail: '.layui-slider built by slider.render()' } : null;
+      }, function (result) {
+        setStatus('status-slider', result.pass ? '<span class="ok">OK</span>: ' + result.detail : '<span class="bad">FAIL</span>: ' + result.detail);
+        pushResult('slider (slider.render)', result.pass, result.detail);
+      }, 40, 150);
+    });
+  }, 60, 150);
+
+  // ---- 12. rate --------------------------------------------------------------
+  pollUntil(function () {
+    return window.__wtmHarnessCoreReady ? { pass: true } : null;
+  }, function () {
+    layui.use(['rate'], function () {
+      layui.rate.render({
+        elem: '#regRate1',
+        value: 0,
+        length: 5,
+        choose: function (val) { document.getElementById('regRate1_val').value = val; }
+      });
+      pollUntil(function () {
+        return document.querySelector('#regRate1 .layui-rate') !== null
+          ? { pass: true, detail: '.layui-rate built by rate.render()' } : null;
+      }, function (result) {
+        setStatus('status-rate', result.pass ? '<span class="ok">OK</span>: ' + result.detail : '<span class="bad">FAIL</span>: ' + result.detail);
+        pushResult('rate (rate.render)', result.pass, result.detail);
+      }, 40, 150);
+    });
+  }, 60, 150);
+
+  // ---- 13. colorPicker --------------------------------------------------------
+  pollUntil(function () {
+    return window.__wtmHarnessCoreReady ? { pass: true } : null;
+  }, function () {
+    layui.use('colorpicker', function () {
+      layui.colorpicker.render({
+        elem: '#regColor1',
+        color: '#16b777',
+        format: 'hex',
+        done: function (data) { $('#cp_regColor1').val(data); }
+      });
+      pollUntil(function () {
+        return document.querySelector('#regColor1 .layui-colorpicker') !== null
+          ? { pass: true, detail: '.layui-colorpicker built by colorpicker.render()' } : null;
+      }, function (result) {
+        setStatus('status-colorpicker', result.pass ? '<span class="ok">OK</span>: ' + result.detail : '<span class="bad">FAIL</span>: ' + result.detail);
+        pushResult('colorPicker (colorpicker.render)', result.pass, result.detail);
+      }, 40, 150);
+    });
+  }, 60, 150);
+
+  // ---- 14. tagInput (KNOWN GAP) -----------------------------------------------
+  // TagInputTagHelper's doc comment states it targets "Layui 2.8+ tagInput
+  // widget". The bundled layui in this repo is 2.6.3 (see demo/.../layui.js),
+  // and no 'tagInput' module file exists anywhere under demo/**/wwwroot/layui —
+  // it was never a stock 2.6.3 module and no local extend/ shim was vendored
+  // for it either. layui.use(['tagInput'], cb) will therefore try to fetch
+  // lay/modules/tagInput.js, 404, and the callback will simply never fire.
+  // This is flagged knownGap:true (not counted in the suite's pass/fail gate)
+  // so it does NOT block #565, but it IS surfaced so it isn't a silent gap —
+  // once #566 bumps the bundled layui to a version that ships tagInput, this
+  // exact assertion should start passing and can be promoted out of knownGap.
+  (function () {
+    var settled = false;
+    function finish(pass, detail) {
+      if (settled) { return; }
+      settled = true;
+      setStatus('status-taginput', '<span class="gap">KNOWN GAP</span>: ' + detail);
+      pushResult('tagInput (Layui 2.8+ widget)', pass, detail, true);
+    }
+    try {
+      layui.use(['tagInput'], function () {
+        layui.tagInput.render({
+          elem: '#regTagInput1',
+          tagInitData: ['sample'],
+          change: function (tagData) {
+            document.getElementById('regTagInput1_val').value = tagData.map(function (t) { return t.value; }).join(',');
+          }
+        });
+        finish(document.querySelector('#regTagInput1 .layui-tag-input, #regTagInput1 input') !== null,
+          'layui.use([\'tagInput\']) resolved and tagInput.render() ran — bundled layui now ships tagInput (2.8+); this can be promoted out of knownGap');
+      });
+    } catch (e) {
+      finish(false, 'layui.use([\'tagInput\']) threw synchronously: ' + e);
+    }
+    // Bounded fallback: layui.use() has its own ~10s internal timeout before it
+    // gives up on a missing module and logs an error without ever invoking the
+    // callback (see layui.js's `n.timeout` / "is not a valid module" path) —
+    // wait slightly longer than that so this section reliably resolves either way.
+    setTimeout(function () {
+      finish(false, 'tagInput module absent from bundled layui 2.6.3 (TagInputTagHelper targets Layui 2.8+) — layui.use([\'tagInput\']) never resolved within 11s. Documented pre-existing gap, tracked for #566.');
+    }, 11000);
+  })();
+
+})();
+</script>
+</body>
+</html>

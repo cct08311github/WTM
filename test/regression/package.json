@@ -1,0 +1,12 @@
+{
+  "name": "wtm-taghelper-layui-regression",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Issue #565 — headless Playwright runner for the TagHelper<->LayUI browser regression suite (Phase-2 #566 gate). See test/manual/regression/README.md.",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0"
+  }
+}
