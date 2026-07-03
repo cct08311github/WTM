@@ -77,6 +77,13 @@
          look (marked via classList.add, visible below each field).
        - The Name field (first errored field) gets visibly FOCUSED — a
          visible focus ring / outline appears around it.
+       - The status panel below the button reports these facts by
+         DOM-inspection (img count, alert count, field/focus state, and each
+         rendered label's textContent) — it never re-echoes the payload as
+         HTML; every piece of text (including the raw "<img ...>" string
+         read back from the DOM) is inserted via .textContent, so it can
+         never be parsed as markup even inside this harness's own status
+         <div>.
   4. Open DevTools → Elements and inspect the <script type="application/json"
      class="wtm-dialog-init"> element inside #formSection to see the exact
      island payload FormTagHelper emits for this form.
@@ -182,6 +189,40 @@
 
 <script>
   (function () {
+    // ---- status rendering helper --------------------------------------------
+    // Clears a status <div> and appends each "line" as real text/element
+    // nodes — NEVER via innerHTML/insertAdjacentHTML/string-concatenated
+    // HTML — so untrusted content (e.g. an error message read back from the
+    // DOM) can never be parsed as markup, no matter what it contains.
+    //
+    // Each entry in `lines` is either:
+    //   - a plain string  → inserted as one text node
+    //   - an array of segments, each either a plain string (text node) or an
+    //     { cls, text } object → rendered as <span class="cls">text</span>
+    //     built via createElement + .textContent (for the ok/bad styling).
+    // The .status class is `white-space: pre-wrap`, so a literal '\n' text
+    // node still renders as a line break — no <br> elements needed.
+    function renderStatusLines(el, lines) {
+      el.replaceChildren();
+      lines.forEach(function (line, idx) {
+        if (idx > 0) { el.appendChild(document.createTextNode('\n')); }
+        if (typeof line === 'string') {
+          el.appendChild(document.createTextNode(line));
+          return;
+        }
+        line.forEach(function (seg) {
+          if (typeof seg === 'string') {
+            el.appendChild(document.createTextNode(seg));
+          } else {
+            var span = document.createElement('span');
+            if (seg.cls) { span.className = seg.cls; }
+            span.textContent = seg.text;
+            el.appendChild(span);
+          }
+        });
+      });
+    }
+
     // ---- no-inline-script check --------------------------------------------
     // The only <script> element inside #formSection must be the JSON island
     // itself (type="application/json" — never parsed/executed as JS by the
@@ -196,12 +237,17 @@
         if (type !== 'application/json') { offenders.push(s); }
       });
       if (offenders.length === 0) {
-        statusEl.innerHTML = '<span class="ok">OK: no inline &lt;script&gt; tag drives auto-validate or ' +
-          'error-highlight.</span> Found ' + scripts.length + ' &lt;script&gt; element(s) total inside ' +
-          '#formSection, all type="application/json" (the wtm-dialog-init island).';
+        renderStatusLines(statusEl, [
+          [
+            { cls: 'ok', text: 'OK: no inline <script> tag drives auto-validate or error-highlight.' },
+            ' Found ' + scripts.length + ' <script> element(s) total inside #formSection, all ' +
+              'type="application/json" (the wtm-dialog-init island).'
+          ]
+        ]);
       } else {
-        statusEl.innerHTML = '<span class="bad">FAIL: found ' + offenders.length +
-          ' non-JSON &lt;script&gt; tag(s) inside #formSection.</span>';
+        renderStatusLines(statusEl, [
+          [{ cls: 'bad', text: 'FAIL: found ' + offenders.length + ' non-JSON <script> tag(s) inside #formSection.' }]
+        ]);
       }
     }
     checkNoInlineScript();
@@ -212,30 +258,38 @@
     function checkRendered() {
       var island = document.querySelector('#formSection .wtm-dialog-init');
       if (!island) {
-        renderStatusEl.innerHTML = '<span class="bad">island element not found — unexpected.</span>';
+        renderStatusLines(renderStatusEl, [[{ cls: 'bad', text: 'island element not found — unexpected.' }]]);
         return;
       }
       var marked = island.getAttribute('data-wtm-dispatched') === '1';
       var validateFlagSet = typeof window['wtForm_1validate'] !== 'undefined';
 
       if (marked && validateFlagSet) {
-        renderStatusEl.innerHTML =
-          '<span class="ok">OK: island consumed</span> (data-wtm-dispatched="1") AND the bindValidate ' +
-          'action ran (window[\'wtForm_1validate\'] === ' + window['wtForm_1validate'] + ').\n' +
-          'Now use the buttons below to test auto-validate and error-highlight.';
+        renderStatusLines(renderStatusEl, [
+          [
+            { cls: 'ok', text: 'OK: island consumed' },
+            ' (data-wtm-dispatched="1") AND the bindValidate action ran (window[\'wtForm_1validate\'] === ' +
+              window['wtForm_1validate'] + ').'
+          ],
+          'Now use the buttons below to test auto-validate and error-highlight.'
+        ]);
         return;
       }
 
       renderPolls++;
       if (renderPolls > 80) {
-        renderStatusEl.innerHTML =
-          '<span class="bad">island claimed=' + marked + ', validateFlagSet=' + validateFlagSet +
-          ' after ~12s.</span> (layuiReady=' + window.__wtmHarnessLayuiReady + ')';
+        renderStatusLines(renderStatusEl, [
+          [
+            { cls: 'bad', text: 'island claimed=' + marked + ', validateFlagSet=' + validateFlagSet + ' after ~12s.' },
+            ' (layuiReady=' + window.__wtmHarnessLayuiReady + ')'
+          ]
+        ]);
         return;
       }
-      renderStatusEl.innerHTML =
+      renderStatusLines(renderStatusEl, [
         'waiting… island claimed=' + marked + ', validateFlagSet=' + validateFlagSet +
-        ' (layuiReady=' + window.__wtmHarnessLayuiReady + '). Re-checking every 150ms.';
+          ' (layuiReady=' + window.__wtmHarnessLayuiReady + '). Re-checking every 150ms.'
+      ]);
       setTimeout(checkRendered, 150);
     }
     if (document.readyState === 'loading') {
@@ -255,14 +309,19 @@
         lines.push('window[\'wtForm_1validate\'] before click: ' + before);
         lines.push('window[\'wtForm_1validate\'] after click: ' + after);
         if (after === true) {
-          lines.push('<span class="ok">OK: validation passed and the flag flipped to true</span> ' +
-            '(matches the legacy inline {Id}validate = true; wiring).');
+          lines.push([
+            { cls: 'ok', text: 'OK: validation passed and the flag flipped to true' },
+            ' (matches the legacy inline {Id}validate = true; wiring).'
+          ]);
         } else {
-          lines.push('<span class="bad">Flag did not flip — if the Name field is empty, layui\'s own ' +
-            'client-side "required" validator may be blocking the submit event before it ever reaches ' +
-            'this handler (try filling in the Name field first, then click again).</span>');
+          lines.push([
+            { cls: 'bad', text: 'Flag did not flip' },
+            ' — if the Name field is empty, layui\'s own client-side "required" validator may be ' +
+              'blocking the submit event before it ever reaches this handler (try filling in the Name ' +
+              'field first, then click again).'
+          ]);
         }
-        statusEl.innerHTML = lines.join('\n');
+        renderStatusLines(statusEl, lines);
       }, 50);
     });
 
@@ -289,32 +348,43 @@
       });
 
       setTimeout(function () {
-        var imgEl = document.querySelector('#formSection img');
+        // Everything below is computed by INSPECTING the live DOM/counters —
+        // never by re-echoing the dispatched payload. Where untrusted text
+        // (l.textContent, which may literally be "<img src=x onerror=alert(1)>")
+        // is displayed, it is pushed as a plain string so renderStatusLines()
+        // inserts it via document.createTextNode — it can never be parsed as
+        // markup, no matter what characters it contains.
+        var imgCount = document.querySelectorAll('#formSection img').length;
         var alertsAfter = window.__wtmAlertCount;
         var nameMarked = document.getElementById('TestFormVM_Name').classList.contains('layui-form-danger');
         var emailMarked = document.getElementById('TestFormVM_Email').classList.contains('layui-form-danger');
         var focused = document.activeElement === document.getElementById('TestFormVM_Name');
         var labels = document.querySelectorAll('#formSection label[style*="red"]');
 
+        var noAlertFired = alertsAfter === alertsBefore;
+        var noImg = imgCount === 0;
+        var labelCountOk = labels.length === 3;
+        var pass = noAlertFired && noImg && nameMarked && emailMarked && focused && labelCountOk;
+
         var lines = [];
+        lines.push(pass
+          ? [{ cls: 'ok', text: 'PASS — adversarial payload rendered as literal text, no script executed.' }]
+          : [{ cls: 'bad', text: 'FAIL — see details below.' }]);
         lines.push('alert() call count: before=' + alertsBefore + ', after=' + alertsAfter +
-          (alertsAfter === alertsBefore ? ' — OK, no alert fired' : ' — FAIL, alert() fired!'));
-        lines.push('<img> element found in #formSection: ' + (imgEl ? 'YES — FAIL' : 'NO — OK'));
+          (noAlertFired ? ' — OK, no alert fired' : ' — FAIL, alert() fired!'));
+        lines.push('img elements found in #formSection: ' + imgCount + (noImg ? ' — OK' : ' — FAIL'));
         lines.push('Name field marked layui-form-danger: ' + nameMarked);
         lines.push('Email field marked layui-form-danger: ' + emailMarked);
         lines.push('Name field (first errored) focused: ' + focused);
         lines.push('Error message labels rendered: ' + labels.length + ' (expected 3)');
         labels.forEach(function (l, i) {
+          // l.textContent is UNTRUSTED (may be the raw adversarial string) —
+          // pushed as a plain string, never concatenated into an HTML string.
           lines.push('  [' + i + '] textContent = ' + JSON.stringify(l.textContent) +
             ' | childElementCount = ' + l.children.length + ' (0 = plain text node, proves no HTML injection)');
         });
 
-        var pass = alertsAfter === alertsBefore && !imgEl && nameMarked && emailMarked && focused && labels.length === 3;
-        lines.unshift(pass
-          ? '<span class="ok">PASS — adversarial payload rendered as literal text, no script executed.</span>'
-          : '<span class="bad">FAIL — see details below.</span>');
-
-        statusEl.innerHTML = lines.join('\n');
+        renderStatusLines(statusEl, lines);
       }, 50);
     });
   })();
