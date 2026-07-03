@@ -1,5 +1,23 @@
 # 更新日志
 
+## [10.13.13] - 2026-07-03
+
+Eval-free dialogs — completion. Building on the v10.13.12 foundations (#470-A/#556/#558), `FormTagHelper` now emits its form init, submit-binding, auto-validate, and ModelState error-highlight as an eval-free `wtm-dialog-init` JSON island instead of inline `<script>`. **A plain WTM-generated dialog now carries zero inline `<script>`**, making a strict, `unsafe-inline`/`unsafe-eval`-free CSP viable (opt-in) for the LayUI dialog flow. Behaviour is unchanged and browser-verified; the `eval`/`IsScript` fallback remains for legacy and edge-case paths.
+
+### Changed
+
+- **`FormTagHelper` emits an eval-free JSON island for form init + submit + validate + error-highlight (#561, #564):** the per-form inline `<script>` (`ff.RenderForm` / `layui.form.on('submit')` + `BeforeSubmit` gate / auto-validate handler / ModelState error-highlight) is replaced by an `{actions:[initForm, bindSubmit, bindValidate, highlightErrors]}` island dispatched via the eval-free `ff.DispatchAction` path. Rendered behaviour is identical (form render, submit, the `BeforeSubmit` gate, validation, and error display/focus) — **browser-verified** (Playwright) on the render, submit-gate (block/allow), and error-highlight flows. A dialog whose fields are all migrated now emits **no inline `<script>`**.
+
+### Security
+
+- **`highlightErrors` inserts server ModelState messages via `textContent` only (#564):** never `innerHTML`/`eval`; field lookup is `getElementById` + `form.contains()` containment-scoped. Adversarially browser-verified with an `<img src=x onerror=alert(1)>` message — rendered as inert text, zero elements created, no script executed. The `bindSubmit` `BeforeSubmit` resolution keeps the v10.13.12 hardened `window[name]` guard (identifier regex + dangerous-global denylist). The file's active `eval(` count remains 1 (the deprecated `IsScript` fallback).
+
+### Migration
+
+- No action required; the change is an equivalent output-shape change (inline `<script>` → eval-free island), opt-in, and backward-compatible. **Compatibility fallbacks preserved:** a non-identifier `BeforeSubmit` expression (e.g. `obj.Check()`) and SearchPanel / `OldPost` forms keep their legacy inline `<script>` so their gates/behaviour are unchanged. Apps wanting a strict CSP can now opt in for dialogs whose forms use only the migrated paths.
+
+---
+
 ## [10.13.12] - 2026-07-03
 
 CI reliability + eval-free dialog foundations. Fixes an intermittently-red CI signal and lands the first opt-in, non-breaking building blocks toward retiring the OpenDialog `eval` sink (#470). All items are additive/opt-in or test-only — no shipped default behaviour is removed, and the `eval` fallback stays intact.
