@@ -30,6 +30,31 @@ function removeByID(arr, id) {
 }
 if (typeof window !== 'undefined') { window.removeByID = removeByID; }
 
+// Issue #558 (#470-C): denylist of dangerous global names that the bindSubmit
+// action's beforeSubmit resolver must REFUSE to look up, even if a name somehow
+// passes the identifier-regex + own-property + typeof-function guard. This is
+// defense-in-depth layered ON TOP of the compile-time-trusted-name invariant
+// (beforeSubmit is always a developer-authored Razor literal, never request
+// data — see the trust-boundary comment at the bindSubmit case). It exists so
+// that even a future wiring mistake that let an attacker-influenced string
+// reach beforeSubmit could not turn a plain global identifier like `eval`,
+// `Function`, `setTimeout`, or `fetch` into an execution/exfiltration
+// primitive: these are all own, callable properties of `window` whose names
+// match the identifier regex, so the base guard alone would resolve them. Any
+// beforeSubmit whose name is in this set is rejected — the gate is skipped and
+// the form submit proceeds without a before-hook (never throws).
+var WTM_BEFORESUBMIT_DENYLIST = (typeof Set !== 'undefined')
+    ? new Set([
+        'eval', 'Function', 'setTimeout', 'setInterval', 'setImmediate',
+        'fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource',
+        'open', 'postMessage', 'alert', 'confirm', 'prompt',
+        'queueMicrotask', 'requestAnimationFrame', 'requestIdleCallback',
+        'Worker', 'SharedWorker', 'importScripts', 'structuredClone',
+        'Image', 'navigator', 'location', 'document', 'window', 'globalThis',
+        'Reflect', 'Proxy'
+      ])
+    : null;
+
 window.ff = {
     DONOTUSE_Text_LoadFailed: "",
     DONOTUSE_Text_SubmitFailed: "",
@@ -108,6 +133,10 @@ window.ff = {
     // fail to render. Actions with no module dependency (closeDialog, alert,
     // loadComboItems, …) contribute nothing, so a payload of only those routes
     // straight through with no deferral.
+    // Issue #558 (#470-C): 'bindSubmit' calls layui.form.on, which requires the
+    // 'form' module for the same reason — without this, a bindSubmit island
+    // dispatched before layui's async 'form' module finishes loading would
+    // silently fail to register the submit handler.
     _islandModulesFor: function (payload) {
         var needed = { form: false, laydate: false };
         if (payload && payload.actions) {
@@ -119,6 +148,8 @@ window.ff = {
                 } else if (a.type === 'initForm') {
                     needed.form = true;
                     if (a.dates && a.dates.length) { needed.laydate = true; }
+                } else if (a.type === 'bindSubmit') {
+                    needed.form = true;
                 }
             }
         }
@@ -318,6 +349,69 @@ window.ff = {
                             }
                         }
                     }
+                    break;
+                // Issue #558 (#470-C): safe named-callback submit binding —
+                // mechanism only (FormTagHelper does not emit this yet). Mirrors
+                // the inline <script> FormTagHelper generates today:
+                //   layui.form.on('submit('+filter+')', function(data){
+                //     if(BeforeSubmit()==false){return false;}
+                //     ff.PostForm(url, formId, divId); return false;
+                //   });
+                //
+                // TRUST BOUNDARY — the invariant the future FormTagHelper wiring
+                // MUST uphold: action.beforeSubmit and action.filter are ALWAYS
+                // compile-time, developer-authored literals — beforeSubmit is the
+                // `<wt:form BeforeSubmit="...">` Razor attribute value, filter is
+                // the form's own generated lay-filter id. They are NEVER derived
+                // from request / query / form-field / DB / tenant data. Every
+                // guard below is defense-in-depth on top of that invariant; the
+                // invariant itself is what makes the feature safe, and it must
+                // not be weakened when the emitter is wired up.
+                //
+                // SECURITY: action.beforeSubmit is resolved through a narrow
+                // window[name] lookup, never eval/new Function/string-to-code:
+                //   1. name must match /^[A-Za-z_$][\w$]*$/ — a plain identifier
+                //      only. Dotted ('a.b'), bracketed ('x[0]'), or otherwise
+                //      non-identifier strings are rejected outright.
+                //   2. name must NOT be in WTM_BEFORESUBMIT_DENYLIST — dangerous
+                //      built-in globals (eval, Function, setTimeout, fetch, …)
+                //      are own callable window properties whose names pass the
+                //      identifier regex, so they are rejected explicitly.
+                //   3. name must be an OWN property of window (via
+                //      Object.prototype.hasOwnProperty), which blocks inherited
+                //      Object.prototype members ('constructor', 'toString') and
+                //      prototype-chain tricks ('__proto__') that would otherwise
+                //      pass the identifier regex.
+                //   4. window[name] must itself be a function.
+                // action.filter is likewise validated against the same
+                // identifier regex (layui lay-filter ids are always simple
+                // identifiers) before it is interpolated into the submit event
+                // selector — a non-identifier filter is a no-op (handler not
+                // registered). Any failed check silently skips that step (submit
+                // still proceeds without the before-hook) — never throws.
+                case 'bindSubmit':
+                    if (!action.filter || typeof action.filter !== 'string' ||
+                        !/^[A-Za-z_$][\w$]*$/.test(action.filter)) { break; }
+                    if (typeof layui === 'undefined' || !layui.form ||
+                        typeof layui.form.on !== 'function') { break; }
+                    var _bsBeforeFn = null;
+                    if (action.beforeSubmit &&
+                        typeof action.beforeSubmit === 'string' &&
+                        /^[A-Za-z_$][\w$]*$/.test(action.beforeSubmit) &&
+                        !(WTM_BEFORESUBMIT_DENYLIST && WTM_BEFORESUBMIT_DENYLIST.has(action.beforeSubmit)) &&
+                        Object.prototype.hasOwnProperty.call(window, action.beforeSubmit) &&
+                        typeof window[action.beforeSubmit] === 'function') {
+                        _bsBeforeFn = window[action.beforeSubmit];
+                    }
+                    layui.form.on(
+                        'submit(' + action.filter + ')',
+                        ff._makeBindSubmitHandler(
+                            _bsBeforeFn,
+                            action.formId || '',
+                            action.url || '',
+                            action.divId || ''
+                        )
+                    );
                     break;
                 default:
                     if (typeof console !== 'undefined' && console.warn) {
@@ -587,6 +681,26 @@ window.ff = {
             layui.use(['form'], function () {
                 var form = layui.form.render(null, formId);
             });
+    },
+
+    // Issue #558 (#470-C): factory for the 'bindSubmit' DispatchAction case's
+    // layui.form.on('submit(...)') callback. Returning a fresh closure per
+    // call (rather than referencing DispatchAction's loop-scoped `action`
+    // variable directly from an inline function) avoids the classic
+    // var-in-a-loop capture bug: each invocation freezes its own
+    // beforeFn/formId/url/divId, so multiple bindSubmit actions registered in
+    // the same or different DispatchAction calls never share state, even
+    // though their submit handlers fire asynchronously long after the
+    // dispatch loop that created them has finished.
+    // NOTE: the caller's `filter` MUST be the form's own unique lay-filter —
+    // layui overwrites any handler that shares a (module, filter) key, so a
+    // filter collision would silently bind the wrong form's submit handler.
+    _makeBindSubmitHandler: function (beforeFn, formId, url, divId) {
+        return function (data) {
+            if (beforeFn && beforeFn(data) === false) { return false; }
+            ff.PostForm(url, formId, divId);
+            return false;
+        };
     },
 
     PostForm: function (url, formId, divid, searchervm) {
