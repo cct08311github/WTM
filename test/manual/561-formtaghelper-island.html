@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>#561 (#470-B slice 2) — FormTagHelper eval-free island manual verification</title>
+<!--
+  ============================================================================
+  Issue #561 (#470-B slice 2) — manual browser verification harness
+  ============================================================================
+
+  HOW TO OPEN (no server needed — plain file:// works):
+
+      file:///Volumes/T7/openclaw/shared/projects/WTM/.claude/worktrees/agent-aa20743206eaa5530/test/manual/561-formtaghelper-island.html
+
+  (Adjust the path if you copied the worktree elsewhere; this file loads its
+  dependencies via paths relative to itself, so it works from any checkout as
+  long as the relative layout under test/manual/, demo/, and src/ is
+  preserved — same convention as test/manual/470b-laydate-island.html.)
+
+  WHAT THIS PROVES
+  -----------------
+  FormTagHelper (Issue #561) no longer emits an inline
+  <script>ff.RenderForm('Id'); layui.form.on('submit(...)', ...)</script>
+  block for the standard AJAX-submit case. Instead it emits ONE
+  <script type="application/json" class="wtm-dialog-init"> JSON island
+  carrying two actions:
+    1. {"type":"initForm","filter":"wtForm_1"}
+       — replaces ff.RenderForm('wtForm_1') / layui.form.render(null,'wtForm_1')
+    2. {"type":"bindSubmit","filter":"wtForm_1filter","beforeSubmit":"MyBeforeSubmit",
+        "formId":"wtForm_1","divId":"ViewDivwtForm_1"}
+       — replaces layui.form.on('submit(wtForm_1filter)', function(data){
+           if(MyBeforeSubmit() == false){return false;}
+           ff.PostForm('', 'wtForm_1', 'ViewDivwtForm_1')
+         })
+
+  The form markup below is EXACTLY what FormTagHelper (post-#561) would
+  render for a plain, non-OldPost, non-SearchPanel `<wt:form>`: the <form>
+  and its fields carry NO inline <script> of their own — every field-init/
+  submit-binding side effect comes from parsing and dispatching the single
+  JSON island via the REAL, unmodified src/WalkingTec.Mvvm.Mvc/framework_layui.js
+  (loaded via <script src>, not a copy) plus the real layui library already
+  vendored in this repo (demo/WalkingTec.Mvvm.Demo/wwwroot/layui).
+
+  Because this is a static file with no ASP.NET Core backend to actually
+  post the form to, ff.PostForm is stubbed (see the inline <script> at the
+  bottom of <body>) to record its call arguments instead of firing a real
+  AJAX request — everything ABOVE that stub (island parsing, initForm/
+  bindSubmit dispatch, the BeforeSubmit gate, layui's own submit
+  interception) is exercised for real.
+
+  WHAT TO LOOK FOR
+  -----------------
+  1. "Form rendered?" — turns green once layui.form.render has actually run
+     on this form. Proven the same way DevTools would show it: the raw
+     <input type="checkbox" lay-skin="switch"> in the form gets a sibling
+     <div class="layui-form-switch"> inserted by layui ONLY after
+     form.render runs (a plain text input has no such visible signal, so the
+     switch field exists purely as a render-detector for this harness).
+  2. Click "Submit with EMPTY field" — MyBeforeSubmit (window-global,
+     name-matched via the same window[name] lookup framework_layui.js's
+     bindSubmit case uses) returns false when #nameInput is blank, so the
+     gate must block the submit: the status line must show
+     "ff.PostForm NOT called" in green, and the BeforeSubmit-call counter
+     must have incremented.
+  3. Type something into the Name field, then click "Submit with VALUE" —
+     MyBeforeSubmit now returns true, so the gate must let the submit
+     through: the status line must show "ff.PostForm WAS called" in green,
+     along with the exact (url, formId, divId) arguments PostForm received
+     — these must read '' / 'wtForm_1' / 'ViewDivwtForm_1', matching the
+     legacy inline ff.PostForm('', 'wtForm_1', 'ViewDivwtForm_1') call this
+     island replaces.
+  4. Open DevTools → Elements and inspect the <script type="application/json"
+     class="wtm-dialog-init"> element inside #formSection to see the exact
+     island payload FormTagHelper emits — there is no other <script> inside
+     the form.
+  ============================================================================
+-->
+<link rel="stylesheet" href="../../demo/WalkingTec.Mvvm.Demo/wwwroot/layui/css/layui.css">
+<script src="../../demo/WalkingTec.Mvvm.Demo/wwwroot/jquery.min.js"></script>
+<script src="../../demo/WalkingTec.Mvvm.Demo/wwwroot/jquery.cookie.js"></script>
+<script src="../../src/WalkingTec.Mvvm.Mvc/dompurify.js"></script>
+<script src="../../demo/WalkingTec.Mvvm.Demo/wwwroot/layui/layui.js"></script>
+<script src="../../src/WalkingTec.Mvvm.Mvc/framework_layui.js"></script>
+<script>
+  // Kick off the 'form' module load as early as possible (mirrors WTM's real
+  // _Layout.cshtml, which calls layui.use(['form']) in <head> before body
+  // content is parsed) so the async module fetch has finished by the time
+  // the page-ready island consumer (auto-wired inside framework_layui.js,
+  // fires on DOMContentLoaded) runs. Even if it hasn't, ff._dispatchIslandWhenReady
+  // defers the dispatch through layui.use(['form'], cb) — see #556/#558
+  // hardening — so the island ALWAYS eventually renders/binds regardless of
+  // load order; this is just to make the common case fast for a human tester.
+  window.__wtmHarnessLayuiReady = false;
+  layui.use(['form'], function () {
+    window.__wtmHarnessLayuiReady = true;
+  });
+</script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 760px; margin: 40px auto; padding: 0 20px; color: #333; }
+  h1 { font-size: 20px; }
+  h2 { margin-top: 0; font-size: 16px; }
+  .box { border: 1px solid #ddd; border-radius: 6px; padding: 20px; margin-bottom: 24px; }
+  .status { font-family: "SFMono-Regular", Menlo, Consolas, monospace; font-size: 12px; white-space: pre-wrap; background: #f6f6f6; padding: 10px; border-radius: 4px; margin-top: 12px; line-height: 1.6; }
+  .ok { color: #16b777; font-weight: bold; }
+  .bad { color: #FF5722; font-weight: bold; }
+  .btnrow { margin-top: 12px; }
+  .btnrow button { margin-right: 8px; }
+</style>
+</head>
+<body>
+<h1>#561 (#470-B slice 2) — FormTagHelper eval-free island manual verification</h1>
+<p>See the HTML comment at the top of this file's &lt;head&gt; (view source) for the full explanation of what each part proves.</p>
+
+<div class="box" id="formSection">
+  <h2>Form — initialized ONLY by the wtm-dialog-init island below (no inline &lt;script&gt;)</h2>
+
+  <!-- This <form>...</form> block is exactly what FormTagHelper (post-#561)
+       renders for `<wt:form vm="@Model" before-submit="MyBeforeSubmit">`:
+       the <form> tag, its fields, and the hidden FromView input carry no
+       script of their own. -->
+  <form class="layui-form" id="wtForm_1" lay-filter="wtForm_1" style="margin:10px" action="#" method="post" onsubmit="return false;">
+    <input type="hidden" name="FromView" value="" />
+    <div class="layui-form-item">
+      <label class="layui-form-label">Name</label>
+      <div class="layui-input-block">
+        <input type="text" name="Name" id="nameInput" class="layui-input" placeholder="leave empty to test the BeforeSubmit gate">
+      </div>
+    </div>
+    <div class="layui-form-item">
+      <label class="layui-form-label">Render-check</label>
+      <div class="layui-input-block">
+        <!-- Render-detector only (see the harness comment above): a raw
+             checkbox with lay-skin="switch" is invisible/unstyled until
+             layui.form.render runs, at which point layui inserts a
+             .layui-form-switch sibling <div>. -->
+        <input type="checkbox" id="switchField" lay-skin="switch" title="ON|OFF">
+      </div>
+    </div>
+    <div class="layui-form-item">
+      <div class="layui-input-block">
+        <button class="layui-btn" id="wtForm_1hidesubmit" type="submit" lay-filter="wtForm_1filter" lay-submit>Submit</button>
+      </div>
+    </div>
+  </form>
+
+  <!-- The eval-free JSON action island — EXACTLY the shape FormTagHelper's
+       Process() method now serializes for this form (Id=wtForm_1, no OldPost,
+       not a SearchPanel, BeforeSubmit="MyBeforeSubmit"). -->
+  <script type="application/json" class="wtm-dialog-init">{"actions":[{"type":"initForm","filter":"wtForm_1"},{"type":"bindSubmit","filter":"wtForm_1filter","beforeSubmit":"MyBeforeSubmit","formId":"wtForm_1","divId":"ViewDivwtForm_1"}]}</script>
+
+  <div class="status" id="renderStatus">waiting for the page-ready island consumer to run…</div>
+
+  <div class="btnrow">
+    <button class="layui-btn layui-btn-normal" id="testEmptyBtn" type="button">Test: Submit with EMPTY field (gate should BLOCK)</button>
+    <button class="layui-btn" id="testValueBtn" type="button">Test: Submit with a VALUE (gate should ALLOW)</button>
+  </div>
+  <div class="status" id="submitStatus">click either button above to run a scenario</div>
+</div>
+
+<script>
+  (function () {
+    // ---- ff.PostForm stub -------------------------------------------------
+    // This is a static file with no backend to actually post to. Replace
+    // ff.PostForm with a recorder so we can prove WHETHER (and with what
+    // arguments) it was called, without firing a real AJAX request. Every
+    // step above this point in the pipeline — island parsing, initForm/
+    // bindSubmit dispatch, layui's own submit interception, and the
+    // BeforeSubmit gate itself — is exercised for real, unmodified.
+    window.__wtmHarness = { postFormCalls: [], beforeSubmitCalls: 0 };
+    var realPostForm = window.ff.PostForm;
+    window.ff.PostForm = function (url, formId, divId, searchervm) {
+      window.__wtmHarness.postFormCalls.push({ url: url, formId: formId, divId: divId });
+    };
+
+    // ---- the developer-authored BeforeSubmit callback ----------------------
+    // Resolved by framework_layui.js's bindSubmit case via a guarded
+    // window[name] lookup (identifier-regex + denylist + hasOwnProperty +
+    // typeof==='function' — see the #558 trust-boundary comment in
+    // framework_layui.js). Reads the live DOM value directly (simplest,
+    // unambiguous signal for this harness) rather than layui's data.field
+    // shape, which is orthogonal to what this harness is proving.
+    window.MyBeforeSubmit = function (data) {
+      window.__wtmHarness.beforeSubmitCalls++;
+      var val = document.getElementById('nameInput').value;
+      return val.trim().length > 0;
+    };
+
+    // ---- render-status polling (mirrors 470b-laydate-island.html) ---------
+    var renderStatusEl = document.getElementById('renderStatus');
+    var renderPolls = 0;
+    function checkRendered() {
+      var island = document.querySelector('#formSection .wtm-dialog-init');
+      if (!island) {
+        renderStatusEl.innerHTML = '<span class="bad">island element not found — unexpected.</span>';
+        return;
+      }
+      var marked = island.getAttribute('data-wtm-dispatched') === '1';
+      var rendered = document.querySelector('#formSection .layui-form-switch') !== null;
+
+      if (marked && rendered) {
+        renderStatusEl.innerHTML =
+          '<span class="ok">OK: form rendered.</span> island consumed (data-wtm-dispatched="1") AND ' +
+          'layui.form.render actually ran (the switch field grew its .layui-form-switch sibling <div>).\n' +
+          'Now use the two buttons below to test the BeforeSubmit gate.';
+        return;
+      }
+
+      renderPolls++;
+      if (renderPolls > 80) {
+        renderStatusEl.innerHTML =
+          '<span class="bad">island claimed=' + marked + ', but form.render never produced the switch ' +
+          'sibling after ~12s.</span> (layuiReady=' + window.__wtmHarnessLayuiReady + ')';
+        return;
+      }
+      renderStatusEl.innerHTML =
+        'waiting… island claimed=' + marked + ', rendered=' + rendered +
+        ' (layuiReady=' + window.__wtmHarnessLayuiReady + '). Re-checking every 150ms.';
+      setTimeout(checkRendered, 150);
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', function () { setTimeout(checkRendered, 0); });
+    } else {
+      setTimeout(checkRendered, 0);
+    }
+
+    // ---- submit-scenario buttons -------------------------------------------
+    function runScenario(nameValue, label) {
+      var submitStatusEl = document.getElementById('submitStatus');
+      var nameInput = document.getElementById('nameInput');
+      nameInput.value = nameValue;
+
+      var postCallsBefore = window.__wtmHarness.postFormCalls.length;
+      var beforeCallsBefore = window.__wtmHarness.beforeSubmitCalls;
+
+      // Native click on the lay-submit button — layui's form module binds a
+      // delegated click handler on [lay-submit] elements inside .layui-form,
+      // runs field validation, then fires the submit(<filter>) event that
+      // the island's bindSubmit action registered a handler for.
+      document.getElementById('wtForm_1hidesubmit').click();
+
+      setTimeout(function () {
+        var postCalled = window.__wtmHarness.postFormCalls.length > postCallsBefore;
+        var gateRan = window.__wtmHarness.beforeSubmitCalls > beforeCallsBefore;
+        var lastCall = window.__wtmHarness.postFormCalls[window.__wtmHarness.postFormCalls.length - 1];
+
+        var lines = [];
+        lines.push(label + ' — Name field value: ' + JSON.stringify(nameValue));
+        lines.push('MyBeforeSubmit invoked: ' + gateRan);
+        if (postCalled) {
+          lines.push('<span class="ok">ff.PostForm WAS called.</span> args: url=' +
+            JSON.stringify(lastCall.url) + ', formId=' + JSON.stringify(lastCall.formId) +
+            ', divId=' + JSON.stringify(lastCall.divId));
+          lines.push('(expected url=\'\' / formId=\'wtForm_1\' / divId=\'ViewDivwtForm_1\' — matches the ' +
+            'legacy ff.PostForm(\'\', \'wtForm_1\', \'ViewDivwtForm_1\') call this island replaces)');
+        } else {
+          lines.push('<span class="ok">ff.PostForm NOT called</span> (gate blocked the submit, as expected for an empty field).');
+        }
+        submitStatusEl.innerHTML = lines.join('\n');
+      }, 50);
+    }
+
+    document.getElementById('testEmptyBtn').addEventListener('click', function () {
+      runScenario('', 'Submit with EMPTY field');
+    });
+    document.getElementById('testValueBtn').addEventListener('click', function () {
+      var current = document.getElementById('nameInput').value;
+      runScenario(current && current.trim().length > 0 ? current : 'Ada Lovelace', 'Submit with VALUE');
+    });
+  })();
+</script>
+</body>
+</html>
