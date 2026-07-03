@@ -174,20 +174,44 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             var rawBeforeSubmit = string.IsNullOrEmpty(BeforeSubmit) ? null : BeforeSubmit;
 
             // Only the standard AJAX-submit, non-SearchPanel path binds a
-            // submit("{Id}filter") handler via bindSubmit. OldPost forms use native
-            // form submission (no AJAX intercept needed) and SearchPanel's OldPost
-            // click-handler branch below binds on a button click (not a form submit
-            // event) and also passes a searchervm argument bindSubmit does not model —
-            // neither is expressible as bindSubmit, so both keep their existing inline
+            // submit("{Id}filter") handler. OldPost forms use native form submission
+            // (no AJAX intercept needed) and SearchPanel's OldPost click-handler
+            // branch below binds on a button click (not a form submit event) and
+            // also passes a searchervm argument bindSubmit does not model — neither
+            // is expressible as bindSubmit, so both keep their existing inline
             // scripts unchanged.
             bool isAjaxSubmitForm = OldPost == false && !(this is SearchPanelTagHelper);
-            if (isAjaxSubmitForm)
+
+            // Issue #561 compat fix — 3-way decision on how the submit binding is
+            // emitted for the AJAX-submit path. bindSubmit resolves
+            // action.beforeSubmit through framework_layui.js's narrow window[name]
+            // lookup (#558), which accepts ONLY a bare JS identifier
+            // (/^[A-Za-z_$][\w$]*$/). A non-identifier BeforeSubmit (a call
+            // expression like "obj.Check()" or a dotted "this.Validate") emitted into
+            // the island would be SILENTLY skipped by that guard — dropping the
+            // developer's submit gate and letting the form post ungated. Silently
+            // dropping a gate is a "never silently change default behaviour"
+            // red-line break, so for a non-identifier BeforeSubmit we do NOT migrate
+            // the submit binding: we keep the LEGACY inline
+            // layui.form.on('submit({Id}filter)') <script> (with the "()"-mutated
+            // BeforeSubmit, evaluated as a live JS expression exactly as before), and
+            // the island carries initForm only.
+            //   - BeforeSubmit absent          -> island: initForm + bindSubmit(no beforeSubmit)
+            //   - BeforeSubmit bare identifier -> island: initForm + bindSubmit(beforeSubmit:name)
+            //   - BeforeSubmit non-identifier  -> island: initForm only; legacy inline submit <script> kept
+            bool beforeSubmitPresent = !string.IsNullOrEmpty(BeforeSubmit);
+            bool beforeSubmitIsIdentifier = beforeSubmitPresent &&
+                Regex.IsMatch(BeforeSubmit, @"^[A-Za-z_$][\w$]*$");
+            bool migrateSubmitToIsland = isAjaxSubmitForm && (!beforeSubmitPresent || beforeSubmitIsIdentifier);
+            bool useLegacyInlineSubmit = isAjaxSubmitForm && beforeSubmitPresent && !beforeSubmitIsIdentifier;
+
+            if (migrateSubmitToIsland)
             {
                 islandActions.Add(new FormIslandAction
                 {
                     Type = "bindSubmit",
                     Filter = $"{Id}filter",
-                    BeforeSubmit = rawBeforeSubmit,
+                    BeforeSubmit = rawBeforeSubmit, // null when absent; a bare identifier otherwise (never a non-identifier expression)
                     FormId = Id,
                     DivId = baseVM?.ViewDivId
                 });
@@ -201,6 +225,26 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             {
                 BeforeSubmit += "()";
             }
+
+            // Issue #561 compat fallback: a non-identifier BeforeSubmit expression
+            // cannot be honoured by the island's bindSubmit guard, so this form keeps
+            // the exact legacy inline submit binding it had before #561 — the gate
+            // ({BeforeSubmit} == false) still runs, evaluated as a live JS expression.
+            if (useLegacyInlineSubmit)
+            {
+                output.PostElement.AppendHtml($@"
+<script>
+layui.use(['form'],function(){{
+  layui.form.on('submit({Id}filter)', function(data){{
+    if({BeforeSubmit ?? "true"} == false){{return false;}}
+    ff.PostForm('', '{Id}', '{baseVM?.ViewDivId}')
+    return false;
+  }});
+}})
+</script>
+");
+            }
+
             // 使用传统表单提交方式提交，而不使用 AJAX 提交
             // 比如登陆页面，提交后校验成功会跳转其他页面，而不是返会 PartialView
             //
@@ -210,6 +254,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             // DispatchAction action type that models a per-form global validation
             // flag (var {Id}validate), so this stays a residual inline <script> — the
             // last blocker to fully retiring the eval fallback for a plain dialog.
+            // Needed for BOTH the island-migrated and the legacy-inline submit paths.
             if (isAjaxSubmitForm)
             {
                 output.PostElement.AppendHtml($@"

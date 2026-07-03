@@ -154,6 +154,112 @@ public class FormTagHelperTests
             "beforeSubmit must be omitted (null) when BeforeSubmit is not set — the gate must never silently run");
     }
 
+    // Re-assert the two migrated cases (absent / bare-identifier) do NOT emit a
+    // legacy inline submit binding — the whole point of #561 is that these
+    // migrate onto the island. Complements the non-identifier test below, which
+    // asserts the OPPOSITE for the fallback case.
+
+    [TestMethod]
+    public void Process_BareIdentifierBeforeSubmit_NoInlineSubmitBinding()
+    {
+        var helper = CreateHelper(new TestFormVM());
+        helper.Id = "wtForm_id2";
+        helper.BeforeSubmit = "myBeforeSubmitCheck"; // bare identifier
+        var output = MakeOutput();
+
+        helper.Process(MakeContext(), output);
+
+        var content = output.PostElement.GetContent();
+        Assert.IsFalse(content.Contains("layui.form.on('submit(wtForm_id2filter)'"),
+            "A bare-identifier BeforeSubmit must migrate to the island bindSubmit action — no legacy inline submit binding");
+    }
+
+    [TestMethod]
+    public void Process_AbsentBeforeSubmit_NoInlineSubmitBinding()
+    {
+        var helper = CreateHelper(new TestFormVM());
+        helper.Id = "wtForm_id3";
+        var output = MakeOutput();
+
+        helper.Process(MakeContext(), output);
+
+        var content = output.PostElement.GetContent();
+        Assert.IsFalse(content.Contains("layui.form.on('submit(wtForm_id3filter)'"),
+            "An absent BeforeSubmit must migrate to the island bindSubmit action — no legacy inline submit binding");
+    }
+
+    // ── TC-02c: NON-identifier BeforeSubmit falls back to the legacy inline
+    //             submit <script> (compat fix — never silently drop the gate) ────
+
+    [TestMethod]
+    public void Process_NonIdentifierBeforeSubmit_KeepsLegacyInlineSubmit_IslandHasInitFormOnly()
+    {
+        // Compat fix: framework_layui.js's bindSubmit window[name] lookup accepts
+        // ONLY a bare identifier. A call-expression like "obj.Check()" would be
+        // silently gate-skipped if emitted as an island bindSubmit action, so
+        // FormTagHelper must instead keep the legacy inline
+        // layui.form.on('submit(<Id>filter)') <script> (with the "()"-mutated
+        // BeforeSubmit run as a live JS expression) and emit initForm ONLY in the
+        // island — the developer's submit gate keeps working.
+        var helper = CreateHelper(new TestFormVM());
+        helper.Id = "wtForm_expr";
+        helper.BeforeSubmit = "obj.Check()"; // non-identifier: dotted + call expression
+        var output = MakeOutput();
+
+        helper.Process(MakeContext(), output);
+
+        var content = output.PostElement.GetContent();
+
+        // 1. The legacy inline submit binding IS present, with the gate expression.
+        StringAssert.Contains(content, "layui.form.on('submit(wtForm_exprfilter)'",
+            "A non-identifier BeforeSubmit must keep the legacy inline submit binding");
+        StringAssert.Contains(content, "if(obj.Check() == false){return false;}",
+            "The legacy inline gate must run the developer's BeforeSubmit expression as-is (already contains '()', so no mutation)");
+        StringAssert.Contains(content, "ff.PostForm('', 'wtForm_expr'",
+            "The legacy inline binding must post via ff.PostForm exactly as before #561");
+
+        // 2. The island carries initForm ONLY — no bindSubmit action (which would
+        //    otherwise silently drop the gate).
+        var json = ExtractJsonFromIsland(content);
+        Assert.IsNotNull(json, "The initForm island must still be emitted for form.render");
+        using var doc = JsonDocument.Parse(json);
+        var actions = doc.RootElement.GetProperty("actions");
+        Assert.AreEqual(1, actions.GetArrayLength(),
+            "A non-identifier BeforeSubmit must emit initForm ONLY (no bindSubmit action)");
+        Assert.AreEqual("initForm", actions[0].GetProperty("type").GetString());
+        Assert.AreEqual("wtForm_expr", actions[0].GetProperty("filter").GetString());
+
+        // 3. The raw non-identifier expression must NEVER appear as a JSON
+        //    beforeSubmit island value (that is the silent-drop path we are closing).
+        Assert.IsFalse(json.Contains("\"bindSubmit\""),
+            "No bindSubmit action may be present in the island for a non-identifier BeforeSubmit");
+        Assert.IsFalse(json.Contains("beforeSubmit"),
+            "The non-identifier BeforeSubmit must not be carried as an island beforeSubmit value");
+    }
+
+    [TestMethod]
+    public void Process_DottedNonCallBeforeSubmit_MutatedAndKeptInline()
+    {
+        // A dotted-but-parenless BeforeSubmit ("this.Validate") is still a
+        // non-identifier, so it takes the legacy inline path. It does NOT already
+        // contain '(', so the legacy "()"-mutation applies → this.Validate().
+        var helper = CreateHelper(new TestFormVM());
+        helper.Id = "wtForm_dot";
+        helper.BeforeSubmit = "this.Validate";
+        var output = MakeOutput();
+
+        helper.Process(MakeContext(), output);
+
+        var content = output.PostElement.GetContent();
+        StringAssert.Contains(content, "if(this.Validate() == false){return false;}",
+            "A dotted parenless BeforeSubmit must be '()'-mutated and gated inline, exactly as the pre-#561 legacy path did");
+
+        var json = ExtractJsonFromIsland(content);
+        using var doc = JsonDocument.Parse(json);
+        Assert.AreEqual(1, doc.RootElement.GetProperty("actions").GetArrayLength(),
+            "A dotted non-identifier BeforeSubmit must emit initForm only");
+    }
+
     // ── TC-03: trust boundary — beforeSubmit is NEVER a field/model value ─────
 
     [TestMethod]
@@ -248,8 +354,18 @@ public class FormTagHelperTests
     // ── TC-06: script-injection safety ──────────────────────────────────────
 
     [TestMethod]
-    public void Json_BeforeSubmitWithCloseScript_IsUnicodeEscaped()
+    public void Json_BeforeSubmitWithCloseScript_TakesLegacyInlinePath_NeverIslandBeforeSubmit()
     {
+        // A "</script>..." BeforeSubmit is a non-identifier, so (per the #561
+        // compat fix) it CANNOT be an island bindSubmit value — the island's
+        // window[name] guard only accepts bare identifiers. It therefore takes
+        // the legacy inline submit path, exactly as pre-#561. BeforeSubmit is a
+        // trusted, compile-time developer-authored Razor literal (never request /
+        // user data — the #558 trust boundary), so this raw interpolation matches
+        // the original framework behaviour and is not a new injection surface.
+        // The key invariant this test locks: such a value is NEVER carried as a
+        // JSON island `beforeSubmit` (which would be the silent-drop path) — the
+        // island stays initForm-only.
         var helper = CreateHelper(new TestFormVM());
         helper.Id = "wtForm_test8";
         helper.BeforeSubmit = "</script><script>alert(1)</script>";
@@ -258,15 +374,21 @@ public class FormTagHelperTests
         helper.Process(MakeContext(), output);
 
         var content = output.PostElement.GetContent();
-        Assert.IsFalse(content.Contains("</script><script>alert(1)"),
-            "A </script> inside an attribute value must not break out of the island's <script> block");
 
+        // The island must NOT carry this value as a bindSubmit beforeSubmit.
         var json = ExtractJsonFromIsland(content);
         Assert.IsNotNull(json);
+        Assert.IsFalse(json.Contains("beforeSubmit"),
+            "A non-identifier BeforeSubmit must never appear as an island beforeSubmit value");
         using var doc = JsonDocument.Parse(json);
-        var bindSubmit = doc.RootElement.GetProperty("actions")[1];
-        Assert.AreEqual("</script><script>alert(1)</script>", bindSubmit.GetProperty("beforeSubmit").GetString(),
-            "Decoded value must round-trip — the raw attribute is Unicode-escaped for safe embedding, not stripped or rejected");
+        var actions = doc.RootElement.GetProperty("actions");
+        Assert.AreEqual(1, actions.GetArrayLength(),
+            "A non-identifier BeforeSubmit must emit initForm only (no island bindSubmit)");
+        Assert.AreEqual("initForm", actions[0].GetProperty("type").GetString());
+
+        // It takes the legacy inline submit path instead (gate still runs).
+        StringAssert.Contains(content, "layui.form.on('submit(wtForm_test8filter)'",
+            "A non-identifier BeforeSubmit falls back to the legacy inline submit binding so its gate still runs");
     }
 
     [TestMethod]
