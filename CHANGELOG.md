@@ -1,5 +1,31 @@
 # 更新日志
 
+## [10.13.12] - 2026-07-03
+
+CI reliability + eval-free dialog foundations. Fixes an intermittently-red CI signal and lands the first opt-in, non-breaking building blocks toward retiring the OpenDialog `eval` sink (#470). All items are additive/opt-in or test-only — no shipped default behaviour is removed, and the `eval` fallback stays intact.
+
+### Fixed
+
+- **Flaky CI: a WorkFlow concurrency test rejected a valid race outcome (#554):** `SequentialTests.Sequential_ConcurrentApprove_ExactlyOneWinner_OneAlreadyHandled` asserted the losing racer must return `AlreadyHandled` or `NodeClosed`, but a legitimate concurrent approve can also leave the loser at a third `ApproveTaskAsync` early guard — `TaskNotActive` (the winner advanced the Sequential pointer past the loser's `SequenceOrder`) — so the same commit passed on re-run and failed intermittently on GitHub/Gitea CI. The loser returns *before* the atomic CAS and never double-approves, so the engine was correct; the assertion was too narrow. Widened it to accept all three legitimate CAS-loss codes (sibling race tests were already correct). Verified across 50 race iterations. Test-only; no runtime change.
+
+### Added
+
+- **Eval-free dialog-init foundations (#470-A #551, #470-B slice 1 #556, #470-C #558) — opt-in, non-breaking:** `ff.DispatchAction` gains `loadComboItems`, a `laydate` action, and a security-hardened `bindSubmit` action; `initForm.dates[]` now carries the full static laydate option set. Dialog-init JSON islands (`<script type="application/json" class="wtm-dialog-init">`) are now consumed universally — all islands in a dialog (`querySelectorAll`) **and** on full-page forms via an idempotent page-ready consumer — with dispatch deferred through `layui.use([...])` so a `laydate`/`form` action can never run before its module loads. `bindSubmit` resolves a developer-named `BeforeSubmit` via a guarded `window[name]` lookup (identifier regex + a denylist of dangerous globals like `eval`/`Function`/`setTimeout`/`fetch` + `hasOwnProperty` + `typeof function`); no `eval`/`new Function` is introduced (the file's active `eval(` count stays 1, the deprecated `IsScript` path). These are the mechanism only — no generated markup emits `bindSubmit` yet.
+
+### Changed
+
+- **`DateTimeTagHelper` emits a JSON init island for callback-free date fields (#556):** a date field with no `ready`/`change`/`done` callback now renders a `wtm-dialog-init` island (dispatched via the eval-free `laydate` action) instead of an inline `<script>laydate.render(...)</script>`. The laydate options are identical, so the rendered picker is unchanged (verified in-browser on both dialog and full-page forms). Date fields **with** a callback keep the inline `<script>` fallback. This is an output-shape change with equivalent runtime behaviour, not a functional change.
+
+### Security
+
+- **`bindSubmit` `window[name]` lookup hardened (#558):** the named-callback resolution is defense-in-depth guarded (identifier-only regex, own-property check, `typeof function`, and a denylist of dangerous globals) and was adversarially security-reviewed before merge. Trust boundary (documented in code): `beforeSubmit`/`filter` must always be compile-time developer-authored literals, never request/field/DB/tenant data — the same trust as today's inline `BeforeSubmit()`.
+
+### Migration
+
+- No action required. All changes are additive/opt-in, test-only, or an equivalent output-shape change; no public API removed, no functional default behaviour changed, the `eval`/`IsScript` fallback is intact. Apps needing a `laydate` callback (`ready`/`change`/`done`) continue to get the inline-`<script>` path automatically.
+
+---
+
 ## [10.13.11] - 2026-07-03
 
 Adversarial audit batch. A fresh full-framework multi-agent audit of **v10.13.10** (subsystem-scoped finders → perspective-diverse verification: a correctness lens + an exploitability lens per finding, survive only if neither ruled false-positive) confirmed 14 defects, 0 contested. **11 land here** — 1 P0 dependency, 2 HIGH, 6 MEDIUM, 4 LOW. Each fixed on its own worktree-isolated branch, then integration-merged and validated as a set before landing: full-solution build **0 errors**, **0 NU1903**, Core 4089 / Admin 121 / Etl 606 / WorkFlow 546 tests all pass. The delta finder (v10.13.7..v10.13.10) returned zero — the recently-shipped fixes were clean; the P0 below was a newly-published advisory the release gate had not yet caught.
