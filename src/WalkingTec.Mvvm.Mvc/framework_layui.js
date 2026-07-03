@@ -83,6 +83,78 @@ window.ff = {
         return el;
     },
 
+    // Issue #556 (#470-B slice 1): normalizes a parsed .wtm-dialog-init island
+    // payload into the {actions:[...]} shape ff.DispatchAction expects.
+    // Supports two island shapes:
+    //   1. The wrapped form {"actions":[{...}, ...]} emitted by
+    //      <wt:dialog-init> (DialogInitTagHelper) — returned as-is.
+    //   2. A bare single-action object {"type":"...", ...} emitted by
+    //      lighter-weight islands such as DateTimeTagHelper's laydate
+    //      island — wrapped into {actions:[parsed]}.
+    // Returns null for anything else (malformed / unrecognized) so callers
+    // can skip that island without affecting others.
+    _normalizeIslandPayload: function (parsed) {
+        if (!parsed || typeof parsed !== 'object') { return null; }
+        if (Array.isArray(parsed.actions)) { return parsed; }
+        if (parsed.type) { return { actions: [parsed] }; }
+        return null;
+    },
+
+    // Issue #556 (#470-B slice 1, hardening): returns the set of layui modules
+    // a normalized island payload needs before it can be dispatched without a
+    // silent no-op. The 'laydate' / 'initForm' actions call layui.laydate.render
+    // / layui.form.render, which no-op if the module hasn't finished its async
+    // load yet — the timing race that made full-page date fields intermittently
+    // fail to render. Actions with no module dependency (closeDialog, alert,
+    // loadComboItems, …) contribute nothing, so a payload of only those routes
+    // straight through with no deferral.
+    _islandModulesFor: function (payload) {
+        var needed = { form: false, laydate: false };
+        if (payload && payload.actions) {
+            for (var i = 0; i < payload.actions.length; i++) {
+                var a = payload.actions[i];
+                if (!a || !a.type) { continue; }
+                if (a.type === 'laydate') {
+                    needed.laydate = true;
+                } else if (a.type === 'initForm') {
+                    needed.form = true;
+                    if (a.dates && a.dates.length) { needed.laydate = true; }
+                }
+            }
+        }
+        var mods = [];
+        if (needed.form) { mods.push('form'); }
+        if (needed.laydate) { mods.push('laydate'); }
+        return mods;
+    },
+
+    // Issue #556 (#470-B slice 1, hardening): dispatch a normalized island
+    // payload, GUARANTEEING any layui module it needs is loaded first. When a
+    // module dependency exists and layui.use is available, the dispatch is
+    // deferred into layui.use([...], cb) — layui runs the callback only once
+    // the modules are loaded (immediately if already loaded), so laydate.render
+    // / form.render can never silently no-op due to a not-yet-loaded module.
+    // This is the invariant that kills the page-ready timing race: a full-page
+    // island ALWAYS eventually renders. Payloads with no module dependency (or
+    // when layui.use is unavailable) fall back to a direct synchronous dispatch,
+    // preserving the original ordering for everything else.
+    _dispatchIslandWhenReady: function (payload) {
+        var mods = ff._islandModulesFor(payload);
+        if (mods.length > 0 && typeof layui !== 'undefined' && typeof layui.use === 'function') {
+            layui.use(mods, function () {
+                try {
+                    ff.DispatchAction(payload);
+                } catch (e) {
+                    if (typeof console !== 'undefined' && console.warn) {
+                        console.warn('[WTM] deferred island dispatch failed:', e);
+                    }
+                }
+            });
+        } else {
+            ff.DispatchAction(payload);
+        }
+    },
+
     // Issue #789 Phase 3C: CSP-safe JSON action dispatcher. The server returns
     // a WtmActionResult payload (X-WTM-Action: application/json header set) and
     // this function walks the whitelisted action types. Unknown action types
@@ -226,6 +298,25 @@ window.ff = {
                             action.field || undefined,
                             action.selectVal || undefined
                         );
+                    }
+                    break;
+                // Issue #556 (#470-B slice 1): thin JSON wrapper over
+                // layui.laydate.render(). The opts object is built entirely
+                // server-side (DateTimeTagHelper) and passed straight through —
+                // no remapping, no callbacks (ready/change/done can't be
+                // JSON-expressed, so callback-bearing date fields keep emitting
+                // the legacy inline <script> instead of this action).
+                case 'laydate':
+                    if (action.opts && action.opts.elem &&
+                        typeof layui !== 'undefined' && layui.laydate &&
+                        typeof layui.laydate.render === 'function') {
+                        try {
+                            layui.laydate.render(action.opts || {});
+                        } catch (e) {
+                            if (typeof console !== 'undefined' && console.warn) {
+                                console.warn('[WTM] laydate action failed:', e);
+                            }
+                        }
                     }
                     break;
                 default:
@@ -715,19 +806,36 @@ window.ff = {
                             }
                         }
                     } catch (e) { /* malformed HTML → no init scripts; markup still rendered via SafeHtml */ }
-                    // Issue #470: extract opt-in JSON action island (<script type="application/json"
+                    // Issue #470: extract opt-in JSON action island(s) (<script type="application/json"
                     // class="wtm-dialog-init">) from the same-origin partial BEFORE SafeHtml strips
-                    // the script elements. The island payload is dispatched via ff.DispatchAction
+                    // the script elements. Each island payload is dispatched via ff.DispatchAction
                     // after the dialog DOM is inserted — zero eval, no dynamic code.
-                    var _dialogInitPayload = null;
+                    // Issue #556 (#470-B slice 1): querySelectorAll (not querySelector) — a partial
+                    // can now carry more than one island (e.g. a <wt:dialog-init> form island plus
+                    // one bare 'laydate' island per migrated date field). Each is parsed and
+                    // normalized independently so one malformed island doesn't drop the others.
+                    // No dialog/page-ready double-dispatch: these islands are read from _pdoc, a
+                    // DETACHED DOMParser document, BEFORE ff.SafeHtml (DOMPurify, FORBID_TAGS:
+                    // ['script']) strips ALL <script> elements — including these — from the markup
+                    // that actually gets inserted into the live `document` below. The live
+                    // `document` therefore never contains a dialog-origin island, so the page-ready
+                    // consumer (ff._consumePageReadyIslands, which only scans the live `document`)
+                    // can never see or re-dispatch one of these.
+                    var _dialogInitPayloads = [];
                     try {
                         if (typeof _pdoc !== 'undefined') {
-                            var _islandNode = _pdoc.querySelector('script[type="application/json"].wtm-dialog-init');
-                            if (_islandNode && _islandNode.textContent) {
-                                _dialogInitPayload = JSON.parse(_islandNode.textContent);
+                            var _islandNodes = _pdoc.querySelectorAll('script[type="application/json"].wtm-dialog-init');
+                            for (var _ii = 0; _ii < _islandNodes.length; _ii++) {
+                                var _islandNode = _islandNodes[_ii];
+                                if (!_islandNode || !_islandNode.textContent) { continue; }
+                                try {
+                                    var _parsed = JSON.parse(_islandNode.textContent);
+                                    var _normalized = ff._normalizeIslandPayload(_parsed);
+                                    if (_normalized !== null) { _dialogInitPayloads.push(_normalized); }
+                                } catch (e) { /* malformed single island JSON → skip that island only */ }
                             }
                         }
-                    } catch (e) { /* malformed island JSON → skip; legacy path unaffected */ }
+                    } catch (e) { /* querySelectorAll failure → no islands; legacy path unaffected */ }
                     // Issue #789 Phase 3A: build wrapper via DOM API and serialize
                     // through outerHTML so the cookie-sourced id is safely escaped
                     // in the resulting markup that becomes layer.open({content}).
@@ -782,14 +890,15 @@ window.ff = {
                                 document.body.appendChild(_se);          // executes synchronously in global scope
                                 if (_se.parentNode) { _se.parentNode.removeChild(_se); } // tidy up; effects persist
                             }
-                            // Issue #470: dispatch JSON action island after legacy scripts so
+                            // Issue #470: dispatch JSON action island(s) after legacy scripts so
                             // both paths are supported. No-op when no island was present.
-                            if (_dialogInitPayload !== null) {
+                            // Issue #556 (#470-B slice 1): one dispatch per island collected above.
+                            for (var _pi = 0; _pi < _dialogInitPayloads.length; _pi++) {
                                 try {
-                                    ff.DispatchAction(_dialogInitPayload);
+                                    ff.DispatchAction(_dialogInitPayloads[_pi]);
                                 } catch (e) {
                                     if (typeof console !== 'undefined' && console.warn) {
-                                        console.warn('[WTM] initForm island dispatch failed:', e);
+                                        console.warn('[WTM] dialog-init island dispatch failed:', e);
                                     }
                                 }
                             }
@@ -2183,6 +2292,61 @@ var wtmCounter = (function () {
     return { init: init };
 }());
 window.wtmCounter = wtmCounter;
+
+// Issue #556 (#470-B slice 1): idempotent page-ready consumer for
+// .wtm-dialog-init islands present in the MAIN document at initial page
+// load. This is what lets eval-free JSON-island initialisation (laydate,
+// initForm, loadComboItems, ...) work for full-page (non-dialog) forms too,
+// not just ff.OpenDialog partials.
+//
+// No dialog/page-ready double-dispatch: see the matching comment in
+// ff.OpenDialog above — dialog-origin islands are parsed from a detached
+// DOMParser document BEFORE ff.SafeHtml (DOMPurify, FORBID_TAGS: ['script'])
+// strips ALL <script> elements from the markup that is actually inserted
+// into the live `document`. A dialog-origin island is therefore NEVER
+// present in `document` for this consumer to find.
+//
+// Idempotency: every island this consumer touches is CLAIMED synchronously
+// (marked data-wtm-dispatched="1") before its dispatch is scheduled, and the
+// query excludes already-claimed nodes — so calling _consumePageReadyIslands()
+// more than once (or a stray double DOMContentLoaded) can never schedule the
+// same island twice.
+//
+// Timing race — FIXED (#556 hardening): claiming synchronously is safe here
+// precisely BECAUSE the dispatch is routed through ff._dispatchIslandWhenReady,
+// which defers laydate/form actions into layui.use([...], cb) so the render
+// runs only once the module has loaded. The dispatch therefore cannot silently
+// no-op on a not-yet-loaded module, so a claimed-but-unrendered island (the old
+// "date field never renders on a full-page form" bug) is no longer possible —
+// the render ALWAYS eventually happens. (The claim marks that the island has
+// been *consumed*, i.e. its dispatch is guaranteed scheduled — not that the
+// async render has already completed.)
+window.ff._consumePageReadyIslands = function () {
+    if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') { return; }
+    var nodes = document.querySelectorAll('script[type="application/json"].wtm-dialog-init:not([data-wtm-dispatched])');
+    for (var _ni = 0; _ni < nodes.length; _ni++) {
+        var node = nodes[_ni];
+        node.setAttribute('data-wtm-dispatched', '1');
+        if (!node.textContent) { continue; }
+        try {
+            var parsed = JSON.parse(node.textContent);
+            var normalized = ff._normalizeIslandPayload(parsed);
+            if (normalized !== null) { ff._dispatchIslandWhenReady(normalized); }
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] page-ready island dispatch failed:', e);
+            }
+        }
+    }
+};
+
+if (typeof document !== 'undefined') {
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', ff._consumePageReadyIslands);
+    } else {
+        ff._consumePageReadyIslands();
+    }
+}
 
 $.ajax({
     url: '/_framework/GetScriptLanguage',

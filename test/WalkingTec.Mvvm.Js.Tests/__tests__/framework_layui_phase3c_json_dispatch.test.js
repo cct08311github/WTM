@@ -240,14 +240,16 @@ describe('#470 DispatchAction initForm — source sweep', () => {
     expect(active).toMatch(/layui\.laydate\.render/);
   });
 
-  test('OpenDialog else-branch extracts wtm-dialog-init JSON island via DOMParser', () => {
-    // Must use querySelector for the island — never regex.
-    expect(active).toMatch(/querySelector\s*\(\s*['"]script\[type="application\/json"\]\.wtm-dialog-init['"]\s*\)/);
+  test('OpenDialog else-branch extracts wtm-dialog-init JSON island(s) via DOMParser', () => {
+    // Issue #556 (#470-B slice 1): querySelectorAll (not querySelector) — a
+    // partial can carry more than one island. Must still use the DOM API,
+    // never regex.
+    expect(active).toMatch(/querySelectorAll\s*\(\s*['"]script\[type="application\/json"\]\.wtm-dialog-init['"]\s*\)/);
   });
 
-  test('OpenDialog success callback dispatches _dialogInitPayload via ff.DispatchAction', () => {
-    // The island payload must be dispatched in the layer.open success callback.
-    expect(active).toMatch(/ff\.DispatchAction\s*\(\s*_dialogInitPayload\s*\)/);
+  test('OpenDialog success callback dispatches each collected island payload via ff.DispatchAction', () => {
+    // Issue #556 (#470-B slice 1): one dispatch per island collected above.
+    expect(active).toMatch(/ff\.DispatchAction\s*\(\s*_dialogInitPayloads\[_pi\]\s*\)/);
   });
 
   test('active-code eval( count is still exactly 1 after #470 changes', () => {

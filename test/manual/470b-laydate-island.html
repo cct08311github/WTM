@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>#556 (#470-B slice 1) — laydate JSON-island manual verification</title>
+<!--
+  ============================================================================
+  Issue #556 (#470-B slice 1) — manual browser verification harness
+  ============================================================================
+
+  HOW TO OPEN (no server needed — plain file:// works):
+
+      file:///Volumes/T7/openclaw/shared/projects/WTM/.claude/worktrees/agent-a545a63472a517b48/test/manual/470b-laydate-island.html
+
+  (Adjust the path if you copied the worktree elsewhere; this file loads its
+  dependencies via paths relative to itself, so it works from any checkout
+  as long as the relative layout under test/manual/, demo/, and src/ is
+  preserved.)
+
+  WHAT THIS PROVES
+  -----------------
+  This page exercises the two consumption paths added in #556 for
+  .wtm-dialog-init JSON action islands, using the REAL, unmodified
+  src/WalkingTec.Mvvm.Mvc/framework_layui.js (loaded via <script src>, not a
+  copy) plus the real layui + DOMPurify libraries already vendored in this
+  repo (demo/WalkingTec.Mvvm.Demo/wwwroot/layui, src/.../dompurify.js).
+
+  SECTION 1 — Page-ready path (full-page form):
+    The #pageReadyDate input below is initialized purely by a
+    <script type="application/json" class="wtm-dialog-init"> island already
+    present in this page's HTML — nothing calls layui.laydate.render()
+    directly. ff._consumePageReadyIslands() (wired to fire once layui's
+    laydate module is confirmed loaded) finds it, claims it
+    (data-wtm-dispatched="1", so it can never fire twice), and dispatches it
+    through ff._dispatchIslandWhenReady — which routes the laydate action
+    through layui.use(['laydate'], cb) so the render runs only once the
+    laydate module has loaded. The render can therefore NEVER silently no-op
+    on a not-yet-loaded module (the #556-hardening fix), even if the island
+    is claimed before laydate finished loading.
+    LOOK FOR: clicking the input opens a working laydate calendar popup.
+    The status line below it should turn green and say the island was
+    consumed AND that laydate is loaded — open devtools and inspect the
+    <script class="wtm-dialog-init"> element under #pageReadySection to
+    confirm the data-wtm-dispatched="1" attribute yourself.
+
+  SECTION 2 — Dialog-injected path (simulated OpenDialog partial):
+    Clicking the button feeds a raw HTML string — shaped exactly like an
+    OpenDialog AJAX partial response, carrying TWO .wtm-dialog-init
+    islands — through the same extract-before-sanitize / insert / dispatch
+    pipeline ff.OpenDialog uses internally:
+      1. DOMParser().parseFromString(rawHtml, 'text/html')  (detached doc)
+      2. querySelectorAll('script[type="application/json"].wtm-dialog-init')
+         on that detached doc, normalize + collect EACH island (proves the
+         #556 multi-island change — not just the first one)
+      3. ff.SafeHtml(rawHtml) (DOMPurify, FORBID_TAGS:['script']) to build
+         the sanitized markup that actually gets inserted into the page
+      4. ff.DispatchAction(...) once per collected payload, AFTER insertion
+    LOOK FOR: the injected #dialogDate input becomes a working laydate
+    picker, a layer "message" popup appears (the second island, proving
+    multi-island dispatch), and the status box confirms the island
+    <script> elements are ABSENT from the inserted (sanitized) HTML — this
+    is the mechanism that makes page/dialog double-dispatch impossible:
+    DOMPurify strips every <script> (FORBID_TAGS:['script']) before
+    insertion, so the live document never contains a dialog-origin island
+    for the page-ready consumer to find.
+
+  NOTE ON TIMING (race is now FIXED, not merely mitigated): layui.js loads
+  its laydate module asynchronously, so ff._consumePageReadyIslands (fired on
+  DOMContentLoaded) may run BEFORE laydate has finished loading. That used to
+  silently drop the render (the island was marked dispatched but laydate.render
+  no-op'd, with no retry). As of the #556 hardening this can no longer happen:
+  the page-ready dispatch is routed through ff._dispatchIslandWhenReady, which
+  defers laydate/form actions into layui.use([...], cb) — the render runs only
+  once the module is loaded, and ALWAYS eventually runs. So the picker renders
+  regardless of load order; a cold-load reload is no longer required.
+  ============================================================================
+-->
+<link rel="stylesheet" href="../../demo/WalkingTec.Mvvm.Demo/wwwroot/layui/css/layui.css">
+<script src="../../demo/WalkingTec.Mvvm.Demo/wwwroot/jquery.min.js"></script>
+<script src="../../demo/WalkingTec.Mvvm.Demo/wwwroot/jquery.cookie.js"></script>
+<script src="../../src/WalkingTec.Mvvm.Mvc/dompurify.js"></script>
+<script src="../../demo/WalkingTec.Mvvm.Demo/wwwroot/layui/layui.js"></script>
+<script src="../../src/WalkingTec.Mvvm.Mvc/framework_layui.js"></script>
+<script>
+  // Kick off the laydate module load as early as possible (mirrors WTM's
+  // real _Layout.cshtml, which calls layui.use(['form']) in <head>, well
+  // before body content is parsed) so the async module fetch has finished
+  // by the time DOMContentLoaded fires and ff._consumePageReadyIslands
+  // (auto-wired inside framework_layui.js) runs. See the timing note above.
+  window.__wtmHarnessLayuiReady = false;
+  layui.use(['form', 'laydate'], function () {
+    window.__wtmHarnessLayuiReady = true;
+  });
+</script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 760px; margin: 40px auto; padding: 0 20px; color: #333; }
+  h1 { font-size: 20px; }
+  h2 { margin-top: 0; font-size: 16px; }
+  .box { border: 1px solid #ddd; border-radius: 6px; padding: 20px; margin-bottom: 24px; }
+  #dialogHost { border: 2px dashed #5FB878; padding: 16px; margin-top: 12px; min-height: 40px; border-radius: 4px; }
+  .status { font-family: "SFMono-Regular", Menlo, Consolas, monospace; font-size: 12px; white-space: pre-wrap; background: #f6f6f6; padding: 10px; border-radius: 4px; margin-top: 12px; line-height: 1.6; }
+  .ok { color: #16b777; font-weight: bold; }
+  .bad { color: #FF5722; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>#556 (#470-B slice 1) — laydate JSON-island manual verification</h1>
+<p>See the HTML comment at the top of this file's &lt;head&gt; (view source) for the full explanation of what each section proves.</p>
+
+<div class="box" id="pageReadySection">
+  <h2>1. Page-ready path — full-page (non-dialog) form</h2>
+  <p>Initialized purely by the <code>.wtm-dialog-init</code> island below — no direct <code>layui.laydate.render()</code> call anywhere on this page for this field.</p>
+  <input type="text" id="pageReadyDate" class="layui-input" style="width:240px" placeholder="click me — should show a calendar">
+  <script type="application/json" class="wtm-dialog-init">{"type":"laydate","opts":{"elem":"#pageReadyDate","type":"date","format":"yyyy-MM-dd"}}</script>
+  <div class="status" id="pageReadyStatus">waiting for the page-ready consumer to run…</div>
+</div>
+
+<div class="box">
+  <h2>2. Dialog-injected path — simulated OpenDialog partial</h2>
+  <p>Simulates a server-returned dialog partial carrying two islands, run through the same extract-before-sanitize pipeline ff.OpenDialog uses.</p>
+  <button class="layui-btn" id="simulateDialogBtn" type="button">Simulate dialog-injected HTML</button>
+  <div id="dialogHost"><em style="color:#999">(nothing injected yet)</em></div>
+  <div class="status" id="dialogStatus">not run yet — click the button above</div>
+</div>
+
+<script>
+  (function () {
+    var pageReadyStatusEl = document.getElementById('pageReadyStatus');
+
+    // We prove the render actually HAPPENED (not merely that the island was
+    // claimed) by watching for laydate's own side effect on the input: after
+    // laydate.render(), layui stamps the target <input> with a `lay-key`
+    // attribute. Because the #556-hardening fix defers the render through
+    // layui.use, this may appear slightly AFTER the island is claimed — so we
+    // poll. The invariant under test is that it always eventually appears.
+    var pageReadyPolls = 0;
+    function checkPageReadyIsland() {
+      var island = document.querySelector('#pageReadySection .wtm-dialog-init');
+      if (!island) {
+        pageReadyStatusEl.innerHTML = '<span class="bad">island element not found — unexpected.</span>';
+        return;
+      }
+      var marked = island.getAttribute('data-wtm-dispatched') === '1';
+      var input = document.getElementById('pageReadyDate');
+      var rendered = input && input.getAttribute('lay-key') !== null;
+
+      if (marked && rendered) {
+        pageReadyStatusEl.innerHTML =
+          '<span class="ok">OK:</span> island was consumed (data-wtm-dispatched="1") AND the date input ' +
+          'was rendered by laydate (it now carries a lay-key attribute).\n' +
+          'Click the date input above — it should open a working laydate calendar.\n' +
+          '(#556 hardening: dispatch is deferred through layui.use([\'laydate\'],cb), so this render ' +
+          'happens even if the island was claimed before laydate finished loading — the render is ' +
+          'never silently dropped.)';
+        return;
+      }
+
+      pageReadyPolls++;
+      if (pageReadyPolls > 80) {
+        // ~12s elapsed and still not rendered — would indicate the fix regressed
+        // (or the layui bundle failed to load). Surface it loudly.
+        pageReadyStatusEl.innerHTML =
+          '<span class="bad">island claimed=' + marked + ', but the input was never rendered after ~12s.</span> ' +
+          'If layui failed to load this is expected offline-flakiness; otherwise the deferred-dispatch fix ' +
+          'may have regressed. (window.__wtmHarnessLayuiReady=' + window.__wtmHarnessLayuiReady + ')';
+        return;
+      }
+      pageReadyStatusEl.innerHTML =
+        'waiting… island claimed=' + marked + ', laydate rendered=' + rendered +
+        ' (layuiReady=' + window.__wtmHarnessLayuiReady + '). The deferred dispatch will render the input ' +
+        'as soon as the laydate module finishes loading — re-checking every 150ms.';
+      setTimeout(checkPageReadyIsland, 150);
+    }
+
+    // The real dispatch is 100% automatic (wired inside framework_layui.js
+    // itself, fired on DOMContentLoaded). This just polls the DOM to report
+    // status back to the human tester — it does not itself dispatch anything.
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', function () { setTimeout(checkPageReadyIsland, 0); });
+    } else {
+      setTimeout(checkPageReadyIsland, 0);
+    }
+
+    document.getElementById('simulateDialogBtn').addEventListener('click', function () {
+      var dialogStatusEl = document.getElementById('dialogStatus');
+
+      // Shaped exactly like a real OpenDialog AJAX partial response: a form
+      // fragment carrying TWO .wtm-dialog-init islands.
+      var rawPartialHtml =
+        '<div class="layui-form" style="padding:8px 0">' +
+        '<input type="text" id="dialogDate" class="layui-input" style="width:240px" placeholder="dialog date — click me">' +
+        '<script type="application/json" class="wtm-dialog-init">' +
+        JSON.stringify({ type: 'laydate', opts: { elem: '#dialogDate', type: 'date', format: 'yyyy-MM-dd' } }) +
+        '<\/script>' +
+        '<script type="application/json" class="wtm-dialog-init">' +
+        JSON.stringify({ actions: [{ type: 'message', message: 'second island dispatched too (multi-island proof)', title: 'OK' }] }) +
+        '<\/script>' +
+        '</div>';
+
+      // ---- mirrors ff.OpenDialog's else-branch (extract BEFORE sanitize) ----
+      var payloads = [];
+      var islandCount = 0;
+      try {
+        var pdoc = new DOMParser().parseFromString(rawPartialHtml, 'text/html');
+        var islandNodes = pdoc.querySelectorAll('script[type="application/json"].wtm-dialog-init');
+        islandCount = islandNodes.length;
+        for (var i = 0; i < islandNodes.length; i++) {
+          try {
+            var parsed = JSON.parse(islandNodes[i].textContent);
+            var normalized = ff._normalizeIslandPayload(parsed);
+            if (normalized !== null) { payloads.push(normalized); }
+          } catch (e) { /* malformed single island → skip only that one */ }
+        }
+      } catch (e) { /* malformed partial → no islands */ }
+
+      // Sanitize + insert (DOMPurify strips the <script> islands here).
+      var host = document.getElementById('dialogHost');
+      host.innerHTML = ff.SafeHtml(rawPartialHtml);
+      var islandSurvivedSanitization = host.querySelector('.wtm-dialog-init') !== null;
+      var scriptSurvivedSanitization = host.querySelector('script') !== null;
+
+      // Dispatch AFTER insertion — same ordering as ff.OpenDialog's
+      // layer.open success callback.
+      for (var j = 0; j < payloads.length; j++) {
+        try { ff.DispatchAction(payloads[j]); } catch (e) { /* ignore in demo */ }
+      }
+
+      dialogStatusEl.innerHTML =
+        'islands found in the raw partial: ' + islandCount + '\n' +
+        'payloads normalized + dispatched: ' + payloads.length + '\n' +
+        '<script> element present in the INSERTED (sanitized) HTML: ' + scriptSurvivedSanitization + '\n' +
+        '.wtm-dialog-init present in the INSERTED (sanitized) HTML: ' + islandSurvivedSanitization + '\n' +
+        (scriptSurvivedSanitization
+          ? '<span class="bad">UNEXPECTED: a &lt;script&gt; survived sanitization.</span>'
+          : '<span class="ok">OK: DOMPurify stripped both &lt;script&gt; islands before insertion — ' +
+            'the live document never contains a dialog-origin island, so the page-ready consumer ' +
+            '(which only scans the live document) can never see or re-dispatch it. No double-dispatch possible.</span>') +
+        '\n\nClick the injected "dialog date" input above — it should open a laydate calendar, ' +
+        'and a layer message popup ("second island dispatched too") should have appeared.';
+    });
+  })();
+</script>
+</body>
+</html>
