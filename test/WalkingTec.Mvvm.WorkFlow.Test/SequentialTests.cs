@@ -1025,16 +1025,23 @@ public class SequentialTests : IDisposable
             var results = await Task.WhenAll(t1, t2);
 
             int approved = results.Count(r => r.Code == WorkflowActionCode.InstanceApproved);
-            // The losing racer may return AlreadyHandled (CAS failed before guard checks),
-            // or NodeClosed (guard checks find the node already completed by the winner).
-            // Both are valid "one side lost" outcomes from the CAS discipline.
+            // The loser executes its three AsNoTracking guard reads AFTER the winner's atomic
+            // claim + pointer-advance has already committed, so the exact guard it trips on is
+            // timing-dependent. All three outcomes are legitimate "CAS lost" results:
+            //   - NodeClosed:      guard 4 — the node is no longer Activated (winner closed it).
+            //   - AlreadyHandled:  guard 6 — the task is no longer Pending (CAS lost the race).
+            //   - TaskNotActive:   guard 7 — for a Sequential task, the winner already advanced
+            //                      nodeInst.SequencePointer past this task's SequenceOrder.
+            // The engine never lets the loser double-approve (it always returns before the CAS);
+            // this just widens the assertion to the full set of guard paths it can legitimately hit.
             int lost = results.Count(r => r.Code == WorkflowActionCode.AlreadyHandled
-                                           || r.Code == WorkflowActionCode.NodeClosed);
+                                           || r.Code == WorkflowActionCode.NodeClosed
+                                           || r.Code == WorkflowActionCode.TaskNotActive);
 
             Assert.AreEqual(1, approved,
                 $"Round {round}: exactly 1 result must be InstanceApproved, got [{results[0].Code},{results[1].Code}].");
             Assert.AreEqual(1, lost,
-                $"Round {round}: exactly 1 result must be AlreadyHandled or NodeClosed (loser), got [{results[0].Code},{results[1].Code}].");
+                $"Round {round}: exactly 1 result must be AlreadyHandled, NodeClosed, or TaskNotActive (loser), got [{results[0].Code},{results[1].Code}].");
         }
     }
 }
