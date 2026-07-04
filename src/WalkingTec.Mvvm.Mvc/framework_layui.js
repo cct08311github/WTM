@@ -211,14 +211,21 @@ window.ff = {
     // (layui.use(['slider'], cb) — see the 'slider' case) call the EXACT SAME
     // code, so the two paths can never drift out of sync. Reproduces what the
     // legacy inline <script> did (layui.use(['slider'], function(){ ... })),
-    // which the original island migration lost: OpenDialog dispatches islands
-    // via a direct ff.DispatchAction call (NOT ff._dispatchIslandWhenReady), so
-    // without this, a dialog whose only special field is a callback-free
-    // <wt:slider> (no other slider/rate/colorpicker/date usage on the page to
-    // have already triggered layui's async module load) would silently render
-    // nothing on first open. This function assumes layui.slider.render is
-    // already available — the case below only calls it once that is true
-    // (either immediately, or once the deferred layui.use callback fires).
+    // which the original island migration lost: at the time this was written,
+    // OpenDialog dispatched islands via a direct ff.DispatchAction call (NOT
+    // ff._dispatchIslandWhenReady), so without this, a dialog whose only
+    // special field is a callback-free <wt:slider> (no other
+    // slider/rate/colorpicker/date usage on the page to have already
+    // triggered layui's async module load) would silently render nothing on
+    // first open. This function assumes layui.slider.render is already
+    // available — the case below only calls it once that is true (either
+    // immediately, or once the deferred layui.use callback fires).
+    // Issue #576: OpenDialog's dialog-init dispatch loop now routes every
+    // island (not just slider/rate/colorpicker) through
+    // ff._dispatchIslandWhenReady generically, so this per-case guard is no
+    // longer the only thing preventing the no-op — it is now redundant
+    // belt-and-suspenders defense-in-depth. Left in place intentionally
+    // (smaller diff; harmless double guard) rather than removed.
     _renderSliderAction: function (action) {
         try {
             if (!action.opts || !action.opts.elem ||
@@ -525,14 +532,19 @@ window.ff = {
                 // This makes the "never silently no-ops due to a not-yet-loaded
                 // module" guarantee (already true for the page-ready path via
                 // _dispatchIslandWhenReady) hold for the OpenDialog dialog path
-                // too, since OpenDialog dispatches islands via a direct
-                // ff.DispatchAction call that bypasses _dispatchIslandWhenReady
-                // (see the dialog-init dispatch loop in OpenDialog — a separate,
-                // lower-risk latent race for the laydate/initForm/bindSubmit/
-                // bindValidate action types, tracked as a follow-up, not fixed
-                // here to keep this change scoped to the three new action types).
-                // If layui ITSELF isn't loaded (not just the submodule), there is
-                // no layui.use to defer through — same safe break as before.
+                // too. At the time this was written, OpenDialog dispatched
+                // islands via a direct ff.DispatchAction call that bypassed
+                // _dispatchIslandWhenReady (see the dialog-init dispatch loop in
+                // OpenDialog — a separate, lower-risk latent race for the
+                // laydate/initForm/bindSubmit/bindValidate action types, tracked
+                // as a follow-up, not fixed here to keep this change scoped to
+                // the three new action types). Issue #576 closed that follow-up:
+                // OpenDialog now routes every dialog-init island through
+                // ff._dispatchIslandWhenReady generically, so this per-case
+                // guard is redundant belt-and-suspenders defense-in-depth now,
+                // not the only guard. If layui ITSELF isn't loaded (not just the
+                // submodule), there is no layui.use to defer through — same safe
+                // break as before.
                 case 'slider':
                     if (!action.opts || !action.opts.elem) { break; }
                     if (typeof layui === 'undefined') { break; }
@@ -1351,9 +1363,22 @@ window.ff = {
                             // Issue #470: dispatch JSON action island(s) after legacy scripts so
                             // both paths are supported. No-op when no island was present.
                             // Issue #556 (#470-B slice 1): one dispatch per island collected above.
+                            // Issue #576: route through ff._dispatchIslandWhenReady (NOT a bare
+                            // ff.DispatchAction call) — mirrors ff._consumePageReadyIslands exactly.
+                            // This closes the module-load race for the dialog path generically:
+                            // initForm/bindSubmit/bindValidate/laydate/loadComboItems (none of
+                            // which had a per-case layui.use guard, unlike the #552
+                            // slider/rate/colorpicker cases) could previously no-op silently if
+                            // dispatched from a freshly-opened dialog before their layui submodule
+                            // finished loading. Ordering: this loop runs strictly after the
+                            // _initScripts rehydration loop above has fully completed (plain
+                            // synchronous JS, no yield between the two loops), so legacy inline
+                            // scripts always run before ANY island dispatch here — including one
+                            // deferred into layui.use — preserving the pre-#576 relative order
+                            // between legacy-script rehydration and island init.
                             for (var _pi = 0; _pi < _dialogInitPayloads.length; _pi++) {
                                 try {
-                                    ff.DispatchAction(_dialogInitPayloads[_pi]);
+                                    ff._dispatchIslandWhenReady(_dialogInitPayloads[_pi]);
                                 } catch (e) {
                                     if (typeof console !== 'undefined' && console.warn) {
                                         console.warn('[WTM] dialog-init island dispatch failed:', e);

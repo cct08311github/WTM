@@ -590,13 +590,25 @@ describe('#552 DispatchAction colorpicker — behavioral stub', () => {
 // of the real framework_layui.js source into its own vm context that DOES
 // provide a working `document` (the real jsdom document for this test file)
 // and a controllable `layui` mock, and calls the REAL ff.DispatchAction
-// directly — the same call ff.OpenDialog's dialog-init dispatch loop makes
-// (ff.DispatchAction(_dialogInitPayloads[_pi]), which bypasses
-// ff._dispatchIslandWhenReady's deferral entirely). This is a faithful
-// simulation of "a dialog whose only special field is a callback-free
-// <wt:slider>/<wt:rate>/<wt:colorpicker>, with the layui submodule not yet
-// loaded" — exactly the scenario the adversarial review flagged as a silent
-// render no-op before this fix.
+// directly. This is a faithful simulation of "a dialog whose only special
+// field is a callback-free <wt:slider>/<wt:rate>/<wt:colorpicker>, with the
+// layui submodule not yet loaded" — exactly the scenario the adversarial
+// review flagged as a silent render no-op before this fix.
+//
+// Issue #576 update: at the time this file was written, ff.OpenDialog's
+// dialog-init dispatch loop called ff.DispatchAction(_dialogInitPayloads[_pi])
+// directly, bypassing ff._dispatchIslandWhenReady's deferral entirely — which
+// is exactly why these tests call ff.DispatchAction directly below rather
+// than routing through the helper. #576 changed that loop to call
+// ff._dispatchIslandWhenReady instead (see
+// framework_layui_576_opendialog_island_defer.test.js), so the dialog path
+// now gets the layui.use(...) deferral generically for every action type,
+// not just slider/rate/colorpicker. The tests below still call
+// ff.DispatchAction directly on purpose: they verify the per-case guards
+// added here in #552 (_renderSliderAction/_renderRateAction/
+// _renderColorpickerAction's own layui.use fallback) still work on their
+// own, independent of #576's generic dispatch-loop fix — the two mechanisms
+// are intentionally redundant belt-and-suspenders, not exclusive.
 const vm = require('vm');
 
 function loadFreshFfWithLayui(layui) {
