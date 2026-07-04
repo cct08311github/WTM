@@ -110,6 +110,12 @@ namespace WalkingTec.Mvvm.Admin.Api
                         oimage.Mutate(x => x.Resize(width.Value, height.Value));
                         oimage.SaveAsJpeg(ms);
                         ms.Position = 0;
+                        // Security (#563, port of #530): the resized output is always re-encoded
+                        // as JPEG here, but this endpoint is [Public] and previously sent no
+                        // Content-Type header at all, letting the browser MIME-sniff the response
+                        // body. Pin the Content-Type explicitly and set nosniff.
+                        Response.ContentType = "image/jpeg";
+                        Response.Headers["X-Content-Type-Options"] = "nosniff";
                         await ms?.CopyToAsync(Response.Body);
                         file.DataStream.Dispose();
                         ms.Dispose();
@@ -127,6 +133,19 @@ namespace WalkingTec.Mvvm.Admin.Api
             }
             else
             {
+                // Security (#563, port of #530): this [Public] endpoint streamed the raw upload
+                // bytes with no Content-Type header, letting the browser MIME-sniff an uploaded
+                // file (e.g. text/html or image/svg+xml) as active content in the app's origin
+                // (stored XSS). GetSafeStreamContentType forces anything outside the image
+                // whitelist to application/octet-stream, and nosniff pins the browser to that
+                // value — same hardening as WalkingTec.Mvvm.Mvc._FrameworkController.GetFile.
+                var provider = new FileExtensionContentTypeProvider();
+                if (!provider.TryGetContentType(file.FileName, out var contenttype))
+                {
+                    contenttype = "application/octet-stream";
+                }
+                Response.ContentType = _FrameworkController.GetSafeStreamContentType(ext, contenttype);
+                Response.Headers["X-Content-Type-Options"] = "nosniff";
                 await file.DataStream?.CopyToAsync(Response.Body);
                 file.DataStream.Dispose();
                 return new EmptyResult();
