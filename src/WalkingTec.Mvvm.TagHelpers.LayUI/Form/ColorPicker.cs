@@ -136,10 +136,22 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 if (hasSafeColorVal) { opts["color"] = val; }
                 if (colorItems.Length > 0) { opts["colors"] = colorItems; }
 
+                // Issue #578: containment id for the client-side write-back
+                // gate (mirrors #564's highlightErrors FormId). Sourced from
+                // the SAME ambient context.Items["formid"] key FormTagHelper
+                // publishes for descendant tag helpers — not a new resolution
+                // mechanism. Null when the colorpicker isn't nested inside a
+                // <wt:form>; framework_layui.js treats an absent formId as
+                // back-compat (write proceeds unguarded, never throws).
+                var ownerFormId = context.Items.TryGetValue("formid", out var formIdObj)
+                    ? formIdObj as string
+                    : null;
+
                 var action = new ColorPickerIslandAction
                 {
                     Opts = opts,
-                    ValueFieldId = Id
+                    ValueFieldId = Id,
+                    FormId = ownerFormId
                 };
                 var json = JsonSerializer.Serialize(action, _islandJsonOptions);
 
@@ -192,5 +204,16 @@ layui.use('colorpicker', function(){{
 
         [System.Text.Json.Serialization.JsonPropertyName("valueFieldId")]
         public string ValueFieldId { get; set; }
+
+        // Issue #578: the owning <wt:form> id (from the ambient
+        // context.Items["formid"] key), used by framework_layui.js's
+        // 'colorpicker' write-back handler to refuse writing into
+        // valueFieldId if it resolves to an element outside this form —
+        // closing the id-spoofing gap a smuggled island (#462/#552 threat
+        // model) could otherwise use. Absent/null for back-compat with
+        // islands rendered outside a <wt:form> — the client then applies no
+        // containment check at all.
+        [System.Text.Json.Serialization.JsonPropertyName("formId")]
+        public string FormId { get; set; }
     }
 }

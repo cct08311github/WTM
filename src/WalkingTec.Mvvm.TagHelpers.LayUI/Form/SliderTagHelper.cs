@@ -280,11 +280,26 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 if (SliderType == SliderTypeEnum.Vertical && SliderHeight != null) { opts["height"] = SliderHeight.Value; }
                 if (hasSafeTheme) { opts["theme"] = Theme; }
 
+                // Issue #578: containment id for the client-side write-back
+                // gate (mirrors #564's highlightErrors FormId). Sourced from
+                // the SAME ambient context.Items["formid"] key FormTagHelper
+                // publishes for descendant tag helpers (already consumed by
+                // LinkButtonTagHelper/SubmitButtonTagHelper/BaseButton) — not
+                // a new resolution mechanism. Null when the slider isn't
+                // nested inside a <wt:form> (e.g. a bare partial or a
+                // SearchPanel, which does not publish the key); framework_layui.js
+                // treats an absent formId as back-compat (write proceeds
+                // unguarded, never throws).
+                var ownerFormId = context.Items.TryGetValue("formid", out var formIdObj)
+                    ? formIdObj as string
+                    : null;
+
                 var action = new SliderIslandAction
                 {
                     Opts = opts,
                     FieldId0 = fieldId0,
-                    FieldId1 = fieldId1
+                    FieldId1 = fieldId1,
+                    FormId = ownerFormId
                 };
                 var json = JsonSerializer.Serialize(action, _islandJsonOptions);
 
@@ -360,5 +375,15 @@ layui.use(['slider'],function(){{
 
         [System.Text.Json.Serialization.JsonPropertyName("fieldId1")]
         public string FieldId1 { get; set; }
+
+        // Issue #578: the owning <wt:form> id (from the ambient
+        // context.Items["formid"] key), used by framework_layui.js's 'slider'
+        // write-back handler to refuse writing into fieldId0/fieldId1 if they
+        // resolve to an element outside this form — closing the id-spoofing
+        // gap a smuggled island (#462/#552 threat model) could otherwise use.
+        // Absent/null for back-compat with islands rendered outside a
+        // <wt:form> — the client then applies no containment check at all.
+        [System.Text.Json.Serialization.JsonPropertyName("formId")]
+        public string FormId { get; set; }
     }
 }

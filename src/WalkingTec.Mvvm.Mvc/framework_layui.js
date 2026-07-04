@@ -248,20 +248,32 @@ window.ff = {
             if (typeof action.opts.theme === 'string') { _slOpts.theme = action.opts.theme; }
             var _slFieldId0 = (typeof action.fieldId0 === 'string') ? action.fieldId0 : null;
             var _slFieldId1 = (typeof action.fieldId1 === 'string') ? action.fieldId1 : null;
+            // Issue #578: containment gate mirrors #564's highlightErrors —
+            // action.formId (absent on old/back-compat islands, in which case
+            // the write proceeds unguarded exactly as before) is resolved via
+            // document.getElementById, then each write target must satisfy
+            // .contains(el) or the write-back is silently skipped. Closes the
+            // id-spoofing gap a smuggled island (#462/#552 threat model) could
+            // otherwise use to target a hidden input elsewhere on the page.
+            var _slFormId = (typeof action.formId === 'string') ? action.formId : null;
+            var _slFormEl = _slFormId ? document.getElementById(_slFormId) : null;
+            var _slContained = function (el) {
+                return !_slFormId || (_slFormEl != null && _slFormEl.contains(el));
+            };
             var _slIsRange = _slOpts.range === true;
             _slOpts.change = function (value) {
                 if (_slIsRange) {
                     if (_slFieldId0 && Array.isArray(value)) {
                         var _el0 = document.getElementById(_slFieldId0);
-                        if (_el0) { _el0.value = value[0]; }
+                        if (_el0 && _slContained(_el0)) { _el0.value = value[0]; }
                     }
                     if (_slFieldId1 && Array.isArray(value)) {
                         var _el1 = document.getElementById(_slFieldId1);
-                        if (_el1) { _el1.value = value[1]; }
+                        if (_el1 && _slContained(_el1)) { _el1.value = value[1]; }
                     }
                 } else if (_slFieldId0) {
                     var _el = document.getElementById(_slFieldId0);
-                    if (_el) { _el.value = value; }
+                    if (_el && _slContained(_el)) { _el.value = value; }
                 }
             };
             layui.slider.render(_slOpts);
@@ -302,10 +314,16 @@ window.ff = {
             if (action.opts.readonly === true) { _rtOpts.readonly = true; }
             if (Array.isArray(action.opts.text)) { _rtOpts.text = action.opts.text; }
             var _rtValFieldId = (typeof action.valueFieldId === 'string') ? action.valueFieldId : null;
+            // Issue #578: containment gate mirrors #564's highlightErrors —
+            // see the slider case above for the full threat-model rationale.
+            var _rtFormId = (typeof action.formId === 'string') ? action.formId : null;
+            var _rtFormEl = _rtFormId ? document.getElementById(_rtFormId) : null;
             _rtOpts.choose = function (val) {
                 if (_rtValFieldId) {
                     var _rtEl = document.getElementById(_rtValFieldId);
-                    if (_rtEl) { _rtEl.value = val; }
+                    if (_rtEl && (!_rtFormId || (_rtFormEl != null && _rtFormEl.contains(_rtEl)))) {
+                        _rtEl.value = val;
+                    }
                 }
             };
             layui.rate.render(_rtOpts);
@@ -331,10 +349,16 @@ window.ff = {
             if (typeof action.opts.predefine === 'boolean') { _cpOpts.predefine = action.opts.predefine; }
             if (Array.isArray(action.opts.colors)) { _cpOpts.colors = action.opts.colors; }
             var _cpValFieldId = (typeof action.valueFieldId === 'string') ? action.valueFieldId : null;
+            // Issue #578: containment gate mirrors #564's highlightErrors —
+            // see the slider case above for the full threat-model rationale.
+            var _cpFormId = (typeof action.formId === 'string') ? action.formId : null;
+            var _cpFormEl = _cpFormId ? document.getElementById(_cpFormId) : null;
             _cpOpts.done = function (data) {
                 if (_cpValFieldId) {
                     var _cpEl = document.getElementById(_cpValFieldId);
-                    if (_cpEl) { _cpEl.value = data; }
+                    if (_cpEl && (!_cpFormId || (_cpFormEl != null && _cpFormEl.contains(_cpEl)))) {
+                        _cpEl.value = data;
+                    }
                 }
             };
             layui.colorpicker.render(_cpOpts);
