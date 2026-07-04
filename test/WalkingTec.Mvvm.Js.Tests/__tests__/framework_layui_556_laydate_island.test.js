@@ -93,7 +93,18 @@ describe('#556 (#470-B slice 1) — source sweep', () => {
 
   test('OpenDialog dispatches every collected island payload', () => {
     expect(active).toMatch(/for\s*\(\s*var\s+_pi\s*=\s*0[\s\S]{0,200}_dialogInitPayloads\.length/);
-    expect(active).toMatch(/ff\.DispatchAction\s*\(\s*_dialogInitPayloads\[_pi\]\s*\)/);
+    // Issue #576: this loop originally called ff.DispatchAction(...) directly,
+    // bypassing ff._dispatchIslandWhenReady's layui.use(...) deferral for the
+    // dialog path (a module-load race the #552 stopgap only partially
+    // covered — see framework_layui_552_static_widgets_island.test.js). #576
+    // routes it through ff._dispatchIslandWhenReady instead, the same helper
+    // + usage ff._consumePageReadyIslands already uses for the page-ready
+    // path (asserted a few tests below). Updated here rather than left
+    // failing so this file keeps tracking the real dispatch call site; full
+    // dialog-path coverage for the new helper lives in
+    // framework_layui_576_opendialog_island_defer.test.js.
+    expect(active).toMatch(/ff\._dispatchIslandWhenReady\s*\(\s*_dialogInitPayloads\[_pi\]\s*\)/);
+    expect(active).not.toMatch(/ff\.DispatchAction\s*\(\s*_dialogInitPayloads\[_pi\]\s*\)/);
   });
 
   test('ff._consumePageReadyIslands is defined', () => {

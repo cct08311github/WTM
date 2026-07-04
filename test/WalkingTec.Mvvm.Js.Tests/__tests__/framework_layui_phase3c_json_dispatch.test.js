@@ -247,9 +247,15 @@ describe('#470 DispatchAction initForm — source sweep', () => {
     expect(active).toMatch(/querySelectorAll\s*\(\s*['"]script\[type="application\/json"\]\.wtm-dialog-init['"]\s*\)/);
   });
 
-  test('OpenDialog success callback dispatches each collected island payload via ff.DispatchAction', () => {
+  test('OpenDialog success callback dispatches each collected island payload via ff._dispatchIslandWhenReady', () => {
     // Issue #556 (#470-B slice 1): one dispatch per island collected above.
-    expect(active).toMatch(/ff\.DispatchAction\s*\(\s*_dialogInitPayloads\[_pi\]\s*\)/);
+    // Issue #576: updated from a bare ff.DispatchAction(...) call to
+    // ff._dispatchIslandWhenReady(...) — the dialog path now gets the same
+    // guaranteed-module-load deferral (layui.use(...)) that the page-ready
+    // path (ff._consumePageReadyIslands) already had via #556. See
+    // framework_layui_576_opendialog_island_defer.test.js for the
+    // module-load-race regression coverage this change closes.
+    expect(active).toMatch(/ff\._dispatchIslandWhenReady\s*\(\s*_dialogInitPayloads\[_pi\]\s*\)/);
   });
 
   test('active-code eval( count is still exactly 1 after #470 changes', () => {
