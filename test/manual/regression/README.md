@@ -50,7 +50,7 @@ in clearly separated `<section>`-style `<div class="box">` blocks:
 | 11 | slider | `SliderTagHelper` | `slider.render({elem, value, step})`; asserts `.layui-slider` is built. |
 | 12 | rate | `RateTagHelper` | `rate.render({elem, value, length, choose})`; asserts `.layui-rate` is built. |
 | 13 | colorPicker | `ColorPickerTagHelper` | `colorpicker.render({elem, color, format, done})`; asserts `.layui-colorpicker` is built. |
-| 14 | tagInput | `TagInputTagHelper` | **Documented KNOWN GAP, not a suite bug.** `TagInputTagHelper`'s own doc comment says it targets "Layui 2.8+ tagInput widget" — no `tagInput` module exists in either vendored tree (`demo/**/wwwroot/layui/` 2.6.3 or, verified during #566, `demo/**/wwwroot/layui-next/` 2.13.8), so `layui.use(['tagInput'], cb)` never resolves on either. Flagged `knownGap:true` so it is surfaced (not silently skipped) without blocking the gate. Should a future layui version ship `tagInput`, this assertion should start passing and can be promoted out of `knownGap`. |
+| 14 | tagInput | `TagInputTagHelper` | **No longer a gap — native widget assertion, gated on both trees (#581).** #571 reimplemented `TagInputTagHelper` as a plain-DOM, dependency-free chip widget with no `layui` module dependency at all, driven by `framework_layui.js`'s `_renderTagInputAction`. This section renders the real TagHelper markup (wrapper `<div>` + sibling hidden input pre-seeded `"apple,banana"` + the bare `{"type":"tagInput",...}` JSON island), lets the harness's normal page-ready island consumer dispatch it (same mechanism as sections 1-3), and asserts: the widget parses the hidden input's initial value into 2 chips (`apple`, `banana`) on init; a 3rd chip added through the widget's real entry-input+blur interaction path with an XSS payload (`<img src=x onerror=alert(1)>`) renders as inert chip *text* (`createTextNode`, no `<img>` element created); and the hidden field stays comma-joined in sync. Passes identically on `layui-263` and `layui-next` since the widget needs neither. |
 
 Every section reports one `{ name, pass, detail, knownGap? }` entry into
 `window.__regressionResults`; `window.__regressionDone` flips to `true` once
@@ -74,10 +74,12 @@ repo root (`playwright.config.mjs`'s `webServer` block starts/stops it
 automatically), navigates to the harness page (with `?layui=next` for the
 `layui-next` project, no query string for `layui-263`), waits for
 `window.__regressionDone === true`, and asserts every non-`knownGap` entry
-has `pass === true` — for **both** projects. `knownGap` entries (currently
-just `tagInput`) are logged for visibility but do not fail the run. Every
-run also logs the full per-section PASS/FAIL/GAP detail list, not just
-failures, so `layui-263` vs `layui-next` output can be diffed directly.
+has `pass === true` — for **both** projects. As of #581 there are no
+`knownGap` entries left in this suite (any that logged would still be
+surfaced for visibility without failing the run, but none currently do).
+Every run also logs the full per-section PASS/FAIL/GAP detail list, not
+just failures, so `layui-263` vs `layui-next` output can be diffed
+directly.
 
 ### Manual — open it in a real browser
 
@@ -122,13 +124,18 @@ after `npm install`.
 green — a regression there means the harness itself broke, not the
 framework. The `layui-next` project is the actual #566 gate: it runs the
 identical assertions against the opt-in vendored `layui-next` (2.13.8) tree.
-Both projects passed cleanly as of the #566 opt-in bump (verified: all 13
-non-`knownGap` sections green on both trees; `tagInput` remains a
-documented `knownGap` on both, since neither vendored tree ships that
-module — see the table above). Any future layui version bump should re-run
-`npx playwright test` from `test/regression/` and confirm both projects
-stay green (or fix `framework_layui.js`/the harness per the compat-fix
-guidance in `.claude/rules/` before landing). If the `tagInput` `knownGap`
-entry ever starts passing, promote it out of `knownGap` in the harness
-(drop the `true` argument to `pushResult`) as part of that same PR — that is
-a real capability gain, not a false negative.
+
+**#581 update:** the suite's last `knownGap` (section 14, `tagInput`) has
+been retired. #571 reimplemented `TagInputTagHelper` as a native,
+dependency-free chip widget with no `layui` module dependency at all, so
+#581 repointed section 14 at that real widget and dropped `knownGap:true` —
+it is now a real, gated (must-pass) assertion on both trees, same as every
+other section. All 14 sections are green on both `layui-263` and
+`layui-next`, and the suite currently carries **zero** `knownGap` entries.
+Any future layui version bump should re-run `npx playwright test` from
+`test/regression/` and confirm both projects stay green (or fix
+`framework_layui.js`/the harness per the compat-fix guidance in
+`.claude/rules/` before landing). If a future gap is ever discovered and
+flagged `knownGap: true` again, promote it back out once fixed by dropping
+the `true` argument to `pushResult` — that is a real capability gain, not a
+false negative.
