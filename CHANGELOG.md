@@ -1,5 +1,31 @@
 # 更新日志
 
+## [10.13.15] - 2026-07-04
+
+LayUI dialog-init island hardening + native TagInput. Follow-ups from the v10.13.14 #552 adversarial review, plus the native reimplementation of a TagHelper that never worked against any bundled layui. All changes are eval-free-island architecture (#470) refinements; no shipped default behaviour is removed and the `eval`/`IsScript` fallback stays intact (active `eval(` count remains 1).
+
+### Security
+
+- **Form-containment on slider/rate/colorpicker island write-backs (#578):** the #552 write-back handlers resolved their target hidden input via bare `document.getElementById(fieldId)` with no containment, unlike #564's `highlightErrors`. A smuggled `wtm-dialog-init` island (the #462/#552 threat model) could thus spoof-target any hidden input by id. Each `el.value = …` write is now gated on `!formId || (formEl && formEl.contains(el))`, sourcing the owning-form id from the existing ambient `context.Items["formid"]` (published by `FormTagHelper`, already consumed by the button TagHelpers). No-container case is unchanged (writes unguarded, as before) — verified by back-compat tests.
+
+### Fixed
+
+- **Dialog-path island module-load race closed generically (#576):** `ff.OpenDialog`'s dialog-init dispatch loop called `ff.DispatchAction(payload)` directly, bypassing the `layui.use([mods],cb)` deferral (`ff._dispatchIslandWhenReady`, #556) that the page-ready consumer uses. On dialog open, any island type whose layui submodule wasn't loaded yet could silently no-op. The loop now routes through `ff._dispatchIslandWhenReady`, so **all** island types (`initForm`/`bindSubmit`/`bindValidate`/`highlightErrors`/`laydate`/`loadComboItems`/`slider`/`rate`/`colorpicker`) get the module-load guarantee — superseding #552's per-case workarounds (left in place, now redundant). Legacy inline-script rehydration still runs before island dispatch (single-threaded ordering preserved; guarded by new tests).
+
+### Changed
+
+- **`TagInputTagHelper` reimplemented as a native, dependency-free tag input (#571):** it previously bound to a layui `tagInput` module that ships in NEITHER bundled tree (2.6.3 nor the opt-in 2.13.8 `layui-next`), so `layui.use(['tagInput'],cb)` never resolved and the widget **rendered nothing**. It is now a native chip input driven by `framework_layui.js` (`_renderTagInputAction`) via a `wtm-dialog-init` island — no layui module dependency, works on both trees, XSS-safe (chips built with `document.createTextNode`, never `innerHTML`; adversarially tested with an `<img onerror>` payload rendering inert). Attribute surface preserved (`Delimiter`, `EmptyText`) plus additive `Max`/`ReadOnly`; existing `<wt:taginput>` usages keep compiling.
+
+### Improved
+
+- **#565 regression suite now gates TagInput on both layui trees (#581):** section 14 was a `knownGap` probing whether layui ships a `tagInput` module; it now asserts the native widget's actual output (chips from initial value, hidden-field sync, XSS-inert payload) and passes on both `layui-263` and `layui-next` (14/14 each). **The Phase-2 (#566) gate now has zero knownGaps.**
+
+### Migration
+
+- No action required; all changes are security hardening, a race fix, an equivalent-or-better output-shape change, or test-only. `<wt:taginput>` now actually renders (it was inert before) — no API change, but a previously-broken widget becoming functional is worth noting for anyone who had worked around it.
+
+---
+
 ## [10.13.14] - 2026-07-04
 
 LayUI modernization roadmap (#567) — Phases 1–2 land, plus a demo-scaffolding security fix and the final eval-free static-widget migration. The bundled LayUI stays **2.6.3 by default** (BMS zero-risk); a vetted 2.13.8 tree ships alongside it as an **opt-in** parallel asset, gated behind a browser regression suite that passes against both trees. A pre-existing stored-DOM-XSS in the ColorPicker/Slider color emission is closed at the source (both the new island path and the legacy inline-script path).
