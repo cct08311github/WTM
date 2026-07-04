@@ -7,6 +7,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Net;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.ConfigOptions;
 using WalkingTec.Mvvm.Core.Extensions;
@@ -28,6 +29,46 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
         /// <summary>Resolved UI options (always non-null).</summary>
         protected WtmUIOptions UIConfig => _uiOptions;
+
+        // Issue #552 adversarial-review fix (P0, pre-existing XSS): ColorPickerTagHelper's
+        // 'color'/'PredefinedColors' and SliderTagHelper's 'Theme' are persisted field DATA
+        // (or a Razor-authored literal that can still originate from a DB-backed default),
+        // spliced by layui.colorpicker/slider internally into a raw HTML string
+        // (e.g. style="...'+color+'...") that is then parsed via jQuery's $(htmlString) —
+        // an attribute/tag breakout in that string is a stored DOM-XSS, independent of
+        // whatever wire-format escaping (JSON string escaping, JavaScriptEncoder) is
+        // applied to get the value there. Escaping the value for JSON/JS-string-literal
+        // syntax is NOT sufficient: once the browser JS-decodes the value back to the
+        // original string, layui still concatenates that original string into HTML.
+        //
+        // The fix is to validate the DECODED value itself against a strict allowlist
+        // BEFORE it is placed into either the JSON island opts or the legacy inline
+        // <script> — on both paths — rather than relying on escaping alone.
+        //
+        // Grammar: only '#', digits, letters, '(', ')', ',', '.', '%', whitespace and '-'
+        // are permitted. This covers every legitimate color token layui/CSS accepts:
+        //   - #RGB / #RRGGBB / #RRGGBBAA hex
+        //   - rgb(...) / rgba(...) / hsl(...) / hsla(...) functional notation
+        //   - CSS named colors (e.g. "rebeccapurple")
+        //   - decimals and percentages inside functional notation (e.g. "0.5", "50%")
+        // and structurally EXCLUDES '<', '>', '"', '\'', ';', '{', '}', '`', '/' — the
+        // characters needed to break out of an HTML attribute, a <script> block, or a
+        // CSS statement — so a value that matches can never carry a tag/attribute/script
+        // breakout, regardless of what layui does with it downstream.
+        private static readonly Regex _safeColorTokenRegex =
+            new(@"^[#0-9A-Za-z(),.%\s-]+$", RegexOptions.Compiled);
+
+        /// <summary>
+        /// Returns <see langword="true"/> when <paramref name="value"/> is safe to emit,
+        /// unescaped-downstream, as a layui color/theme option (island opts or legacy
+        /// inline &lt;script&gt;). See the remarks on <see cref="_safeColorTokenRegex"/>
+        /// for the grammar and the vulnerability this closes (Issue #552 adversarial
+        /// review). Null/empty/whitespace-only values are not safe (nothing to emit).
+        /// </summary>
+        protected static bool IsSafeColorToken(string value)
+        {
+            return !string.IsNullOrWhiteSpace(value) && _safeColorTokenRegex.IsMatch(value);
+        }
 
         protected const string REQUIRED_ATTR_NAME = "field";
         /// <summary>

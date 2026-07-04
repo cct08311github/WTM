@@ -16,15 +16,38 @@
 //      string-typed value under an unexpected key (e.g. a smuggled
 //      'change'/'done'/'choose' callback) is therefore never copied and
 //      never reaches layui's render call — no eval, no Function
-//      constructor, no dynamic code.
+//      constructor, no dynamic code. The allowlist-building + render call
+//      lives in a shared _renderSliderAction / _renderRateAction /
+//      _renderColorpickerAction function (extracted by the adversarial-review
+//      fix below), not inline in the case body.
 //   2. The mandatory "write picked value back into the bound hidden input"
 //      behavior (previously each inline script's own change/choose/done
 //      handler) is reproduced natively via getElementById — never a
 //      developer callback, always framework wiring.
 //   3. _islandModulesFor maps slider/rate/colorpicker to their own layui
 //      module name, so a late-loading module can never cause a silent
-//      render no-op (same guarantee #556 established for laydate/form).
-//   4. framework_layui.js active-code eval( count remains exactly 1.
+//      render no-op on the PAGE-READY path (via _dispatchIslandWhenReady;
+//      same guarantee #556 established for laydate/form).
+//   4. Adversarial-review fix (module-load race, HIGH): the ORIGINAL #552
+//      cases only ever did a synchronous "if module missing, break" no-op —
+//      fine for the page-ready path (which always goes through
+//      _dispatchIslandWhenReady's layui.use deferral first), but NOT fine for
+//      ff.OpenDialog's dialog-init dispatch loop, which calls
+//      ff.DispatchAction directly, bypassing that deferral entirely. A dialog
+//      whose only special field was a callback-free <wt:slider>/<wt:rate>/
+//      <wt:colorpicker> (no other same-module usage on the page to have
+//      already triggered layui's async load) would silently render nothing on
+//      first open. The fix: each of the three cases now defers via
+//      layui.use([mod], function(){ ff._renderXAction(action); }) when the
+//      module isn't loaded yet — mirroring what the legacy inline <script>
+//      did — so the "never silently no-ops due to a not-yet-loaded module"
+//      guarantee now holds for BOTH the page-ready path AND the dialog path,
+//      for these three action types specifically. (laydate/initForm/
+//      bindSubmit/bindValidate still only get the guarantee via the
+//      page-ready path — that is a separate, lower-risk follow-up, not fixed
+//      here.) If layui itself isn't loaded (not just the submodule), there is
+//      no layui.use to defer through, so the case still safely breaks.
+//   5. framework_layui.js active-code eval( count remains exactly 1.
 //
 // Following the same convention as framework_layui_556_laydate_island.test.js:
 // source-sweep tests assert the real file structure; behavioral-stub tests
@@ -32,7 +55,11 @@
 // closures were compiled without `document`/`layui` in scope — see
 // setup.js — so the live module functions cannot be exercised directly
 // against mocked DOM/layui here). Any drift between the stub and the real
-// file is caught by the source-sweep tests.
+// file is caught by the source-sweep tests. The "module loads LATE" hardening
+// describe block at the bottom of this file is the one exception: it loads a
+// FRESH instance of the real framework_layui.js into its own vm context (with
+// a working `document` and a controllable `layui`), so it exercises the
+// actual ff.DispatchAction dialog-path code directly, not a reimplementation.
 
 const fs = require('fs');
 const path = require('path');
@@ -64,34 +91,68 @@ describe('#552 (#470-E) — source sweep', () => {
     expect(active).toMatch(/case\s+['"]colorpicker['"]/);
   });
 
-  test('slider case calls layui.slider.render with a rebuilt opts object (not action.opts passthrough)', () => {
-    const block = active.match(/case\s+['"]slider['"][\s\S]*?case\s+['"]rate['"]/);
+  // Issue #552 adversarial-review fix (module-load race, HIGH): the
+  // allowlist-building + layui.<mod>.render(...) call was extracted out of the
+  // case body into a shared _render*Action function, so it can be called from
+  // both the immediate path and the deferred layui.use(...) path without
+  // duplicating (and risking drift in) the render logic. These tests assert
+  // against the shared function bodies rather than the case bodies.
+  test('_renderSliderAction calls layui.slider.render with a rebuilt opts object (not action.opts passthrough)', () => {
+    expect(active).toMatch(/_renderSliderAction\s*:\s*function/);
+    const block = active.match(/_renderSliderAction\s*:\s*function[\s\S]*?\n\s*\},/);
     expect(block).not.toBeNull();
     expect(block[0]).toMatch(/layui\.slider\.render\(\s*_slOpts\s*\)/);
     // Regression guard: must NOT be a bare passthrough like the laydate case.
     expect(block[0]).not.toMatch(/layui\.slider\.render\(\s*action\.opts/);
   });
 
-  test('rate case calls layui.rate.render with a rebuilt opts object', () => {
-    const block = active.match(/case\s+['"]rate['"][\s\S]*?case\s+['"]colorpicker['"]/);
+  test('_renderRateAction calls layui.rate.render with a rebuilt opts object', () => {
+    expect(active).toMatch(/_renderRateAction\s*:\s*function/);
+    const block = active.match(/_renderRateAction\s*:\s*function[\s\S]*?\n\s*\},/);
     expect(block).not.toBeNull();
     expect(block[0]).toMatch(/layui\.rate\.render\(\s*_rtOpts\s*\)/);
     expect(block[0]).not.toMatch(/layui\.rate\.render\(\s*action\.opts/);
   });
 
-  test('colorpicker case calls layui.colorpicker.render with a rebuilt opts object', () => {
-    const block = active.match(/case\s+['"]colorpicker['"][\s\S]*?default:/);
+  test('_renderColorpickerAction calls layui.colorpicker.render with a rebuilt opts object', () => {
+    expect(active).toMatch(/_renderColorpickerAction\s*:\s*function/);
+    const block = active.match(/_renderColorpickerAction\s*:\s*function[\s\S]*?\n\s*\},/);
     expect(block).not.toBeNull();
     expect(block[0]).toMatch(/layui\.colorpicker\.render\(\s*_cpOpts\s*\)/);
     expect(block[0]).not.toMatch(/layui\.colorpicker\.render\(\s*action\.opts/);
   });
 
   test('slider/rate/colorpicker opts are built with typeof / Array.isArray guards (allowlist discipline)', () => {
-    const sliderBlock = active.match(/case\s+['"]slider['"][\s\S]*?case\s+['"]rate['"]/)[0];
-    const rateBlock = active.match(/case\s+['"]rate['"][\s\S]*?case\s+['"]colorpicker['"]/)[0];
-    const cpBlock = active.match(/case\s+['"]colorpicker['"][\s\S]*?default:/)[0];
+    const sliderBlock = active.match(/_renderSliderAction\s*:\s*function[\s\S]*?\n\s*\},/)[0];
+    const rateBlock = active.match(/_renderRateAction\s*:\s*function[\s\S]*?\n\s*\},/)[0];
+    const cpBlock = active.match(/_renderColorpickerAction\s*:\s*function[\s\S]*?\n\s*\},/)[0];
     [sliderBlock, rateBlock, cpBlock].forEach((block) => {
       expect(block).toMatch(/typeof\s+action\.opts\./);
+    });
+  });
+
+  // ---- #552 adversarial-review fix: dialog-path module-load-race deferral ----
+  test('slider/rate/colorpicker cases defer via layui.use when the module is not yet loaded', () => {
+    const sliderCase = active.match(/case\s+['"]slider['"][\s\S]*?case\s+['"]rate['"]/)[0];
+    const rateCase = active.match(/case\s+['"]rate['"][\s\S]*?case\s+['"]colorpicker['"]/)[0];
+    const cpCase = active.match(/case\s+['"]colorpicker['"][\s\S]*?case\s+['"]bindSubmit['"]/)[0];
+
+    expect(sliderCase).toMatch(/layui\.use\(\s*\[\s*['"]slider['"]\s*\][\s\S]{0,80}ff\._renderSliderAction\(\s*action\s*\)/);
+    expect(sliderCase).toMatch(/ff\._renderSliderAction\(\s*action\s*\)/);
+
+    expect(rateCase).toMatch(/layui\.use\(\s*\[\s*['"]rate['"]\s*\][\s\S]{0,80}ff\._renderRateAction\(\s*action\s*\)/);
+    expect(rateCase).toMatch(/ff\._renderRateAction\(\s*action\s*\)/);
+
+    expect(cpCase).toMatch(/layui\.use\(\s*\[\s*['"]colorpicker['"]\s*\][\s\S]{0,80}ff\._renderColorpickerAction\(\s*action\s*\)/);
+    expect(cpCase).toMatch(/ff\._renderColorpickerAction\(\s*action\s*\)/);
+  });
+
+  test('slider/rate/colorpicker cases break immediately when layui itself is undefined (no layui.use attempt)', () => {
+    const sliderCase = active.match(/case\s+['"]slider['"][\s\S]*?case\s+['"]rate['"]/)[0];
+    const rateCase = active.match(/case\s+['"]rate['"][\s\S]*?case\s+['"]colorpicker['"]/)[0];
+    const cpCase = active.match(/case\s+['"]colorpicker['"][\s\S]*?case\s+['"]bindSubmit['"]/)[0];
+    [sliderCase, rateCase, cpCase].forEach((block) => {
+      expect(block).toMatch(/typeof\s+layui\s*===\s*['"]undefined['"]\s*\)\s*\{\s*break;\s*\}/);
     });
   });
 
@@ -514,122 +575,155 @@ describe('#552 DispatchAction colorpicker — behavioral stub', () => {
 });
 
 // ---------------------------------------------------------------------------
-// #552 hardening — module loads LATE: the island must STILL render.
+// #552 adversarial-review fix — DIALOG-PATH module-load race: the island must
+// STILL render, exercised against the REAL ff.DispatchAction.
 // ---------------------------------------------------------------------------
-// Mirrors the #556 late-loading regression test, but for the three new
-// module names. Uses the same makeLateLayui-style harness pattern: layui.use
-// queues its callback until every requested module has "loaded".
-describe('#552 hardening — late-loading slider/rate/colorpicker still render (no silent drop)', () => {
-  function islandModulesFor(payload) {
-    var needed = { form: false, laydate: false, slider: false, rate: false, colorpicker: false };
-    if (payload && payload.actions) {
-      payload.actions.forEach(function (a) {
-        if (!a || !a.type) { return; }
-        if (a.type === 'slider') { needed.slider = true; }
-        else if (a.type === 'rate') { needed.rate = true; }
-        else if (a.type === 'colorpicker') { needed.colorpicker = true; }
-      });
+// Every other describe block in this file re-implements the dispatcher logic
+// as a hand-rolled JS function, because the module-level `ff` loaded by
+// setup.js was compiled in a vm context without `document`/`layui` in scope
+// (see the file header). That is fine for asserting opts-building/allowlist
+// behavior, but it is NOT good enough to prove the module-load-race fix
+// actually works, because the bug (and the fix) live entirely in how
+// ff.DispatchAction's 'slider'/'rate'/'colorpicker' cases react to a
+// not-yet-loaded module — a reimplementation could easily "fix" itself
+// without the real file being correct. So this block loads a FRESH instance
+// of the real framework_layui.js source into its own vm context that DOES
+// provide a working `document` (the real jsdom document for this test file)
+// and a controllable `layui` mock, and calls the REAL ff.DispatchAction
+// directly — the same call ff.OpenDialog's dialog-init dispatch loop makes
+// (ff.DispatchAction(_dialogInitPayloads[_pi]), which bypasses
+// ff._dispatchIslandWhenReady's deferral entirely). This is a faithful
+// simulation of "a dialog whose only special field is a callback-free
+// <wt:slider>/<wt:rate>/<wt:colorpicker>, with the layui submodule not yet
+// loaded" — exactly the scenario the adversarial review flagged as a silent
+// render no-op before this fix.
+const vm = require('vm');
+
+function loadFreshFfWithLayui(layui) {
+  // Minimal jQuery mock for the vm context — $.ajax is called at script load
+  // time for i18n (see setup.js's own jqueryMock for the same requirement).
+  const jqueryMock = Object.assign(
+    function () { return { cookie: jest.fn() }; },
+    { ajax: jest.fn(), cookie: jest.fn(), fn: {} }
+  );
+  const ctx = vm.createContext({
+    window: {},
+    document,
+    layui,
+    console,
+    setTimeout: global.setTimeout.bind(global),
+    clearTimeout: global.clearTimeout.bind(global),
+    $: jqueryMock,
+    DONOTUSE_TABLAYID: undefined,
+    DONOTUSE_COOKIEPRE: '',
+    DONOTUSE_WINDOWGUID: '',
+  });
+  ctx.window = ctx;
+  new vm.Script(src).runInContext(ctx);
+  return ctx.ff;
+}
+
+// layui.use queues its callback and only fires it once every requested
+// module has been load()ed — exactly how the real layui defers a callback
+// for a not-yet-loaded module (same harness shape as the #556 laydate test).
+function makeLateLayui(modName) {
+  var pending = [];
+  var loaded = {};
+  var render = jest.fn();
+  var layui = {
+    use: function (mods, cb) {
+      pending.push({ mods: mods, cb: cb });
+      flush();
     }
-    var mods = [];
-    if (needed.form) { mods.push('form'); }
-    if (needed.laydate) { mods.push('laydate'); }
-    if (needed.slider) { mods.push('slider'); }
-    if (needed.rate) { mods.push('rate'); }
-    if (needed.colorpicker) { mods.push('colorpicker'); }
-    return mods;
+  };
+  function flush() {
+    pending = pending.filter(function (p) {
+      var ready = p.mods.every(function (m) { return loaded[m]; });
+      if (ready) { p.cb(); return false; }
+      return true;
+    });
   }
-
-  function makeDispatchWhenReady(getLayui, dispatchAction) {
-    return function (payload) {
-      var mods = islandModulesFor(payload);
-      var layui = getLayui();
-      if (mods.length > 0 && layui && typeof layui.use === 'function') {
-        layui.use(mods, function () { dispatchAction(payload); });
-      } else {
-        dispatchAction(payload);
-      }
-    };
-  }
-
-  function makeLateLayui(modName) {
-    var pending = [];
-    var loaded = {};
-    var render = jest.fn();
-    var layui = {
-      use: function (mods, cb) {
-        pending.push({ mods: mods, cb: cb });
-        flush();
-      }
-    };
-    function flush() {
-      pending = pending.filter(function (p) {
-        var ready = p.mods.every(function (m) { return loaded[m]; });
-        if (ready) { p.cb(); return false; }
-        return true;
-      });
+  return {
+    layui: layui,
+    render: render,
+    load: function () {
+      loaded[modName] = true;
+      layui[modName] = { render: render };
+      flush();
     }
-    return {
-      layui: layui,
-      render: render,
-      load: function () {
-        loaded[modName] = true;
-        layui[modName] = { render: render };
-        flush();
-      }
-    };
-  }
+  };
+}
 
-  test('slider island: render is DEFERRED (not dropped) when the slider module is not yet loaded', () => {
+describe('#552 adversarial-review fix — dialog-path module-load race (real ff.DispatchAction)', () => {
+  afterEach(() => { document.body.innerHTML = ''; });
+
+  test('slider: real ff.DispatchAction DEFERS (does not drop) when layui.slider is not yet loaded, then renders once it loads', () => {
     const harness = makeLateLayui('slider');
-    const dispatchAction = makeSliderDispatcher(undefined); // placeholder, replaced below
-    const realDispatch = function (payload) {
-      makeSliderDispatcher(harness.layui)(payload);
-    };
-    const dispatchWhenReady = makeDispatchWhenReady(function () { return harness.layui; }, realDispatch);
+    const ff = loadFreshFfWithLayui(harness.layui);
 
-    dispatchWhenReady({ actions: [{ type: 'slider', opts: { elem: '#_sliderLate' } }] });
+    // Same call OpenDialog's dialog-init dispatch loop makes directly.
+    ff.DispatchAction({ actions: [{ type: 'slider', opts: { elem: '#_sliderLate' } }] });
+
+    // OLD buggy behavior: this case only ever did a synchronous check-and-break
+    // -> render permanently never called, even after the module loads.
     expect(harness.render).not.toHaveBeenCalled();
 
+    // layui finishes loading 'slider' asynchronously -> the queued render fires.
     harness.load();
     expect(harness.render).toHaveBeenCalledTimes(1);
+    expect(harness.render.mock.calls[0][0].elem).toBe('#_sliderLate');
   });
 
-  test('rate island: render is DEFERRED (not dropped) when the rate module is not yet loaded', () => {
+  test('rate: real ff.DispatchAction DEFERS (does not drop) when layui.rate is not yet loaded, then renders once it loads', () => {
     const harness = makeLateLayui('rate');
-    const realDispatch = function (payload) {
-      makeRateDispatcher(harness.layui)(payload);
-    };
-    const dispatchWhenReady = makeDispatchWhenReady(function () { return harness.layui; }, realDispatch);
+    const ff = loadFreshFfWithLayui(harness.layui);
 
-    dispatchWhenReady({ actions: [{ type: 'rate', opts: { elem: '#rateLate' } }] });
+    ff.DispatchAction({ actions: [{ type: 'rate', opts: { elem: '#rateLate' } }] });
     expect(harness.render).not.toHaveBeenCalled();
 
     harness.load();
     expect(harness.render).toHaveBeenCalledTimes(1);
+    expect(harness.render.mock.calls[0][0].elem).toBe('#rateLate');
   });
 
-  test('colorpicker island: render is DEFERRED (not dropped) when the colorpicker module is not yet loaded', () => {
+  test('colorpicker: real ff.DispatchAction DEFERS (does not drop) when layui.colorpicker is not yet loaded, then renders once it loads', () => {
     const harness = makeLateLayui('colorpicker');
-    const realDispatch = function (payload) {
-      makeColorPickerDispatcher(harness.layui)(payload);
-    };
-    const dispatchWhenReady = makeDispatchWhenReady(function () { return harness.layui; }, realDispatch);
+    const ff = loadFreshFfWithLayui(harness.layui);
 
-    dispatchWhenReady({ actions: [{ type: 'colorpicker', opts: { elem: '#cp_Late' } }] });
+    ff.DispatchAction({ actions: [{ type: 'colorpicker', opts: { elem: '#cp_Late' } }] });
     expect(harness.render).not.toHaveBeenCalled();
 
     harness.load();
     expect(harness.render).toHaveBeenCalledTimes(1);
+    expect(harness.render.mock.calls[0][0].elem).toBe('#cp_Late');
   });
 
-  test('when the module is ALREADY loaded, render fires synchronously (no regression for the fast path)', () => {
+  test('when the module is ALREADY loaded, render fires synchronously through real ff.DispatchAction (no regression for the fast path)', () => {
     const harness = makeLateLayui('slider');
     harness.load();
-    const realDispatch = function (payload) {
-      makeSliderDispatcher(harness.layui)(payload);
-    };
-    const dispatchWhenReady = makeDispatchWhenReady(function () { return harness.layui; }, realDispatch);
-    dispatchWhenReady({ actions: [{ type: 'slider', opts: { elem: '#_sliderEarly' } }] });
+    const ff = loadFreshFfWithLayui(harness.layui);
+
+    ff.DispatchAction({ actions: [{ type: 'slider', opts: { elem: '#_sliderEarly' } }] });
     expect(harness.render).toHaveBeenCalledTimes(1);
+  });
+
+  test('when layui itself is entirely undefined, real ff.DispatchAction is a safe no-op (no throw, no layui.use attempt)', () => {
+    const ff = loadFreshFfWithLayui(undefined);
+    expect(() => {
+      ff.DispatchAction({ actions: [{ type: 'slider', opts: { elem: '#_sliderNoLayui' } }] });
+      ff.DispatchAction({ actions: [{ type: 'rate', opts: { elem: '#rateNoLayui' } }] });
+      ff.DispatchAction({ actions: [{ type: 'colorpicker', opts: { elem: '#cpNoLayui' } }] });
+    }).not.toThrow();
+  });
+
+  test('two independent dialog dispatches before load each render once on load (no accidental dedup/drop)', () => {
+    const harness = makeLateLayui('rate');
+    const ff = loadFreshFfWithLayui(harness.layui);
+    ff.DispatchAction({ actions: [{ type: 'rate', opts: { elem: '#rateA' } }] });
+    ff.DispatchAction({ actions: [{ type: 'rate', opts: { elem: '#rateB' } }] });
+    expect(harness.render).not.toHaveBeenCalled();
+
+    harness.load();
+    expect(harness.render).toHaveBeenCalledTimes(2);
   });
 });

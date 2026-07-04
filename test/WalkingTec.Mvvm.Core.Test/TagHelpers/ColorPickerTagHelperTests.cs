@@ -1,5 +1,6 @@
 #nullable enable
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
@@ -150,12 +151,19 @@ public class ColorPickerTagHelperTests
             "Hidden input id must match the valueFieldId referenced by the island");
     }
 
+    // Issue #552 adversarial-review fix (P0, pre-existing XSS): replaces the
+    // old Process_NoCallback_ColorWithCloseScript_CannotBreakOut test, which
+    // asserted the WRONG boundary — that an XSS payload "round-tripped" into
+    // opts.color unchanged. JSON/JS-string escaping only protects the wire
+    // format; layui.colorpicker.render still splices the DECODED value,
+    // unescaped, into an HTML string it builds internally, so a value that
+    // survives JSON-escaping can still carry a stored DOM-XSS payload. The
+    // real fix is BaseFieldTag.IsSafeColorToken validating the decoded value
+    // itself and OMITTING it entirely when unsafe — asserted below on both
+    // the island and the legacy inline-<script> emission paths.
     [TestMethod]
-    public void Process_NoCallback_ColorWithCloseScript_CannotBreakOut()
+    public void Process_NoCallback_UnsafeColorValue_IsOmittedFromIslandNotRoundTripped()
     {
-        // System.Text.Json's default encoder Unicode-escapes '<' and '>', so a
-        // color value containing "</script>" cannot terminate the surrounding
-        // <script type="application/json"> block early.
         SetupLocalizer();
         var helper = new ColorPickerTagHelper
         {
@@ -173,8 +181,132 @@ public class ColorPickerTagHelperTests
 
         using var doc = System.Text.Json.JsonDocument.Parse(json!);
         var opts = doc.RootElement.GetProperty("opts");
-        Assert.AreEqual("</script><script>alert(1)</script>", opts.GetProperty("color").GetString(),
-            "Decoded color value must round-trip to the original string");
+        Assert.IsFalse(opts.TryGetProperty("color", out _),
+            "An unsafe color value must be OMITTED from the island opts entirely — never merely escaped");
+    }
+
+    [TestMethod]
+    public void Process_WithChangeFunc_UnsafeColorValue_IsOmittedFromLegacyScript()
+    {
+        // Same neutralization must hold on the legacy inline-<script> path
+        // (ChangeFunc set) — the pre-existing vulnerability was reachable via
+        // BOTH emission paths.
+        SetupLocalizer();
+        var helper = new ColorPickerTagHelper
+        {
+            Field = MakeField("ColorField", "</script><script>alert(1)</script>"),
+            Id = "cp_xss_legacy",
+            ChangeFunc = "myColorChanged"
+        };
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+        var postHtml = output.PostElement.GetContent();
+
+        // Scope the "no unescaped payload" check to the JS-executable <script>
+        // block itself — the hidden <input>'s value attribute legitimately
+        // contains the HTML-ENCODED (safe, non-executable) representation of
+        // the same raw value, which would otherwise make this assertion
+        // falsely fail on a harmless attribute-context encoding.
+        var scriptStart = postHtml.IndexOf("<script>");
+        Assert.IsTrue(scriptStart >= 0, "Legacy inline <script> must be present");
+        var scriptContent = postHtml[scriptStart..];
+        Assert.IsFalse(scriptContent.Contains("alert(1)"),
+            "Unsafe color value must never reach the legacy inline <script> in any executable form");
+        Assert.IsFalse(scriptContent.Contains(",color:"),
+            "Unsafe color value must be OMITTED from the legacy inline <script> entirely — the 'color:' key must not be emitted");
+    }
+
+    [TestMethod]
+    public void Process_NoCallback_LegitimateColors_PassThroughIslandUnchanged()
+    {
+        // Compat red line: the allowlist grammar must accept every legitimate
+        // stored color format — hex, rgba() functional notation, and CSS
+        // named colors — unchanged.
+        SetupLocalizer();
+        foreach (var color in new[] { "#1a2b3c", "rgba(0,0,0,0.5)", "rebeccapurple" })
+        {
+            var helper = new ColorPickerTagHelper
+            {
+                Field = MakeField("ColorField", color),
+                Id = "cp_legit_" + System.Math.Abs(color.GetHashCode())
+            };
+            var output = MakeOutput();
+            helper.Process(MakeContext(), output);
+            var postHtml = output.PostElement.GetContent();
+            var json = ExtractJsonFromIsland(postHtml);
+            Assert.IsNotNull(json, $"Island must be present for legitimate color '{color}'");
+            using var doc = System.Text.Json.JsonDocument.Parse(json!);
+            var opts = doc.RootElement.GetProperty("opts");
+            Assert.AreEqual(color, opts.GetProperty("color").GetString(),
+                $"Legitimate color '{color}' must pass through the island unchanged");
+        }
+    }
+
+    [TestMethod]
+    public void Process_WithChangeFunc_LegitimateColors_PassThroughLegacyScriptUnchanged()
+    {
+        SetupLocalizer();
+        foreach (var color in new[] { "#1a2b3c", "rgba(0,0,0,0.5)", "rebeccapurple" })
+        {
+            var helper = new ColorPickerTagHelper
+            {
+                Field = MakeField("ColorField", color),
+                Id = "cp_legit_legacy_" + System.Math.Abs(color.GetHashCode()),
+                ChangeFunc = "myColorChanged"
+            };
+            var output = MakeOutput();
+            helper.Process(MakeContext(), output);
+            var postHtml = output.PostElement.GetContent();
+            StringAssert.Contains(postHtml, $",color:'{color}'",
+                $"Legitimate color '{color}' must pass through the legacy inline script unchanged");
+        }
+    }
+
+    [TestMethod]
+    public void Process_NoCallback_PredefinedColors_UnsafeTokenDroppedValidTokensKept()
+    {
+        // Each PredefinedColors token is validated independently — an unsafe
+        // token must be dropped without poisoning the rest of the list.
+        SetupLocalizer();
+        var helper = new ColorPickerTagHelper
+        {
+            Field = MakeField("ColorField"),
+            Id = "cp_predef_mixed",
+            PredefinedColors = "#fff,'});alert(1);({',#000"
+        };
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+        var postHtml = output.PostElement.GetContent();
+        var json = ExtractJsonFromIsland(postHtml);
+        Assert.IsNotNull(json);
+        using var doc = System.Text.Json.JsonDocument.Parse(json!);
+        var opts = doc.RootElement.GetProperty("opts");
+        var colors = opts.GetProperty("colors").EnumerateArray().Select(c => c.GetString()).ToList();
+        CollectionAssert.Contains(colors, "#fff");
+        CollectionAssert.Contains(colors, "#000");
+        Assert.IsFalse(colors.Any(v => v != null && v.Contains("alert")),
+            "Unsafe predefined-color token must be dropped");
+        Assert.AreEqual(2, colors.Count, "Only the two safe tokens should survive");
+    }
+
+    [TestMethod]
+    public void Process_WithChangeFunc_PredefinedColors_UnsafeTokenDroppedInLegacyScript()
+    {
+        SetupLocalizer();
+        var helper = new ColorPickerTagHelper
+        {
+            Field = MakeField("ColorField"),
+            Id = "cp_predef_mixed_legacy",
+            ChangeFunc = "cb",
+            PredefinedColors = "#fff,'});alert(1);({',#000"
+        };
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+        var postHtml = output.PostElement.GetContent();
+        Assert.IsFalse(postHtml.Contains("alert(1)"),
+            "Unsafe predefined-color token must never reach the legacy inline script");
+        StringAssert.Contains(postHtml, "'#fff'");
+        StringAssert.Contains(postHtml, "'#000'");
     }
 
     // ── Callback-bearing path: legacy inline <script> fallback preserved ─────

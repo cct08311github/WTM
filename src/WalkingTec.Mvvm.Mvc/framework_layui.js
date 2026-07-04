@@ -205,6 +205,139 @@ window.ff = {
         }
     },
 
+    // Issue #552 adversarial-review fix (module-load race, HIGH): shared render
+    // body for the 'slider' DispatchAction case (below). Extracted so the
+    // immediate path (layui.slider already loaded) and the deferred path
+    // (layui.use(['slider'], cb) — see the 'slider' case) call the EXACT SAME
+    // code, so the two paths can never drift out of sync. Reproduces what the
+    // legacy inline <script> did (layui.use(['slider'], function(){ ... })),
+    // which the original island migration lost: OpenDialog dispatches islands
+    // via a direct ff.DispatchAction call (NOT ff._dispatchIslandWhenReady), so
+    // without this, a dialog whose only special field is a callback-free
+    // <wt:slider> (no other slider/rate/colorpicker/date usage on the page to
+    // have already triggered layui's async module load) would silently render
+    // nothing on first open. This function assumes layui.slider.render is
+    // already available — the case below only calls it once that is true
+    // (either immediately, or once the deferred layui.use callback fires).
+    _renderSliderAction: function (action) {
+        try {
+            if (!action.opts || !action.opts.elem ||
+                typeof layui === 'undefined' || !layui.slider ||
+                typeof layui.slider.render !== 'function') { return; }
+            var _slOpts = { elem: action.opts.elem };
+            if (typeof action.opts.type === 'string') { _slOpts.type = action.opts.type; }
+            if (typeof action.opts.min === 'number') { _slOpts.min = action.opts.min; }
+            if (typeof action.opts.max === 'number') { _slOpts.max = action.opts.max; }
+            if (action.opts.range === true) { _slOpts.range = true; }
+            if (typeof action.opts.value === 'number' || Array.isArray(action.opts.value)) {
+                _slOpts.value = action.opts.value;
+            }
+            if (typeof action.opts.step === 'number') { _slOpts.step = action.opts.step; }
+            if (action.opts.disabled === true) { _slOpts.disabled = true; }
+            if (typeof action.opts.showstep === 'boolean') { _slOpts.showstep = action.opts.showstep; }
+            if (typeof action.opts.tips === 'boolean') { _slOpts.tips = action.opts.tips; }
+            if (typeof action.opts.input === 'boolean') { _slOpts.input = action.opts.input; }
+            if (typeof action.opts.height === 'number') { _slOpts.height = action.opts.height; }
+            if (typeof action.opts.theme === 'string') { _slOpts.theme = action.opts.theme; }
+            var _slFieldId0 = (typeof action.fieldId0 === 'string') ? action.fieldId0 : null;
+            var _slFieldId1 = (typeof action.fieldId1 === 'string') ? action.fieldId1 : null;
+            var _slIsRange = _slOpts.range === true;
+            _slOpts.change = function (value) {
+                if (_slIsRange) {
+                    if (_slFieldId0 && Array.isArray(value)) {
+                        var _el0 = document.getElementById(_slFieldId0);
+                        if (_el0) { _el0.value = value[0]; }
+                    }
+                    if (_slFieldId1 && Array.isArray(value)) {
+                        var _el1 = document.getElementById(_slFieldId1);
+                        if (_el1) { _el1.value = value[1]; }
+                    }
+                } else if (_slFieldId0) {
+                    var _el = document.getElementById(_slFieldId0);
+                    if (_el) { _el.value = value; }
+                }
+            };
+            layui.slider.render(_slOpts);
+            // Mirrors the inline-script post-render style tweaks (cosmetic
+            // only — never developer-supplied data, never eval'd).
+            if (_slOpts.type === 'vertical') {
+                if (_slOpts.input) {
+                    var _slVIn = document.querySelector(_slOpts.elem + ' .layui-slider-input');
+                    if (_slVIn) { _slVIn.style.cssText = 'right:unset;top:-40px'; }
+                }
+            } else {
+                var _slContainer = document.querySelector(_slOpts.elem);
+                if (_slContainer) { _slContainer.style.cssText = 'min-height: 18px;padding-top: 18px;'; }
+                if (_slOpts.input) {
+                    var _slDIn = document.querySelector(_slOpts.elem + ' .layui-slider-input');
+                    if (_slDIn) { _slDIn.style.cssText = 'top:3px;'; }
+                }
+            }
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] slider action failed:', e);
+            }
+        }
+    },
+
+    // Issue #552 adversarial-review fix (module-load race, HIGH): shared render
+    // body for the 'rate' DispatchAction case. Same rationale as
+    // _renderSliderAction above.
+    _renderRateAction: function (action) {
+        try {
+            if (!action.opts || !action.opts.elem ||
+                typeof layui === 'undefined' || !layui.rate ||
+                typeof layui.rate.render !== 'function') { return; }
+            var _rtOpts = { elem: action.opts.elem };
+            if (typeof action.opts.value === 'number') { _rtOpts.value = action.opts.value; }
+            if (typeof action.opts.length === 'number') { _rtOpts.length = action.opts.length; }
+            if (action.opts.half === true) { _rtOpts.half = true; }
+            if (action.opts.readonly === true) { _rtOpts.readonly = true; }
+            if (Array.isArray(action.opts.text)) { _rtOpts.text = action.opts.text; }
+            var _rtValFieldId = (typeof action.valueFieldId === 'string') ? action.valueFieldId : null;
+            _rtOpts.choose = function (val) {
+                if (_rtValFieldId) {
+                    var _rtEl = document.getElementById(_rtValFieldId);
+                    if (_rtEl) { _rtEl.value = val; }
+                }
+            };
+            layui.rate.render(_rtOpts);
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] rate action failed:', e);
+            }
+        }
+    },
+
+    // Issue #552 adversarial-review fix (module-load race, HIGH): shared render
+    // body for the 'colorpicker' DispatchAction case. Same rationale as
+    // _renderSliderAction above.
+    _renderColorpickerAction: function (action) {
+        try {
+            if (!action.opts || !action.opts.elem ||
+                typeof layui === 'undefined' || !layui.colorpicker ||
+                typeof layui.colorpicker.render !== 'function') { return; }
+            var _cpOpts = { elem: action.opts.elem };
+            if (typeof action.opts.color === 'string') { _cpOpts.color = action.opts.color; }
+            if (typeof action.opts.alpha === 'boolean') { _cpOpts.alpha = action.opts.alpha; }
+            if (typeof action.opts.format === 'string') { _cpOpts.format = action.opts.format; }
+            if (typeof action.opts.predefine === 'boolean') { _cpOpts.predefine = action.opts.predefine; }
+            if (Array.isArray(action.opts.colors)) { _cpOpts.colors = action.opts.colors; }
+            var _cpValFieldId = (typeof action.valueFieldId === 'string') ? action.valueFieldId : null;
+            _cpOpts.done = function (data) {
+                if (_cpValFieldId) {
+                    var _cpEl = document.getElementById(_cpValFieldId);
+                    if (_cpEl) { _cpEl.value = data; }
+                }
+            };
+            layui.colorpicker.render(_cpOpts);
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] colorpicker action failed:', e);
+            }
+        }
+    },
+
     // Issue #789 Phase 3C: CSP-safe JSON action dispatcher. The server returns
     // a WtmActionResult payload (X-WTM-Action: application/json header set) and
     // this function walks the whitelisted action types. Unknown action types
@@ -374,142 +507,78 @@ window.ff = {
                 // straight through because DateTimeTagHelper only ever emits
                 // already-known-safe static keys), this action rebuilds an
                 // ALLOWLISTED opts object key-by-key with a typeof/Array.isArray
-                // check on every value. This is deliberate defense in depth: any
-                // unexpected key (e.g. a 'change'/'setTips' callback name smuggled
-                // into the island JSON) is silently dropped because it is never
-                // copied, and any expected key whose value isn't the right plain-
-                // data shape (e.g. a string where a number is required) is dropped
-                // too — a function value or "javascript:..." string can therefore
-                // never reach layui.slider.render. SliderTagHelper only emits this
-                // action when ChangeFunc/OnTipsFunc are both empty; either callback
-                // routes to the legacy inline <script> instead (see SliderTagHelper).
-                // The mandatory change-callback (writing the picked value back into
-                // the bound hidden input(s), previously the inline script's
-                // defaultFunc) is reproduced natively below — it is framework
-                // wiring, not a developer-supplied callback, so it is always safe
-                // to run unconditionally.
+                // check on every value (see _renderSliderAction above). This is
+                // deliberate defense in depth: any unexpected key (e.g. a
+                // 'change'/'setTips' callback name smuggled into the island JSON)
+                // is silently dropped because it is never copied, and any expected
+                // key whose value isn't the right plain-data shape (e.g. a string
+                // where a number is required) is dropped too — a function value or
+                // "javascript:..." string can therefore never reach
+                // layui.slider.render. SliderTagHelper only emits this action when
+                // ChangeFunc/OnTipsFunc are both empty; either callback routes to
+                // the legacy inline <script> instead (see SliderTagHelper).
+                //
+                // Issue #552 adversarial-review fix (module-load race, HIGH): if
+                // layui.slider hasn't finished its async load yet, defer via
+                // layui.use(['slider'], cb) — exactly mirroring what the legacy
+                // inline <script> did — instead of the previous permanent no-op.
+                // This makes the "never silently no-ops due to a not-yet-loaded
+                // module" guarantee (already true for the page-ready path via
+                // _dispatchIslandWhenReady) hold for the OpenDialog dialog path
+                // too, since OpenDialog dispatches islands via a direct
+                // ff.DispatchAction call that bypasses _dispatchIslandWhenReady
+                // (see the dialog-init dispatch loop in OpenDialog — a separate,
+                // lower-risk latent race for the laydate/initForm/bindSubmit/
+                // bindValidate action types, tracked as a follow-up, not fixed
+                // here to keep this change scoped to the three new action types).
+                // If layui ITSELF isn't loaded (not just the submodule), there is
+                // no layui.use to defer through — same safe break as before.
                 case 'slider':
-                    try {
-                        if (!action.opts || !action.opts.elem ||
-                            typeof layui === 'undefined' || !layui.slider ||
-                            typeof layui.slider.render !== 'function') { break; }
-                        var _slOpts = { elem: action.opts.elem };
-                        if (typeof action.opts.type === 'string') { _slOpts.type = action.opts.type; }
-                        if (typeof action.opts.min === 'number') { _slOpts.min = action.opts.min; }
-                        if (typeof action.opts.max === 'number') { _slOpts.max = action.opts.max; }
-                        if (action.opts.range === true) { _slOpts.range = true; }
-                        if (typeof action.opts.value === 'number' || Array.isArray(action.opts.value)) {
-                            _slOpts.value = action.opts.value;
-                        }
-                        if (typeof action.opts.step === 'number') { _slOpts.step = action.opts.step; }
-                        if (action.opts.disabled === true) { _slOpts.disabled = true; }
-                        if (typeof action.opts.showstep === 'boolean') { _slOpts.showstep = action.opts.showstep; }
-                        if (typeof action.opts.tips === 'boolean') { _slOpts.tips = action.opts.tips; }
-                        if (typeof action.opts.input === 'boolean') { _slOpts.input = action.opts.input; }
-                        if (typeof action.opts.height === 'number') { _slOpts.height = action.opts.height; }
-                        if (typeof action.opts.theme === 'string') { _slOpts.theme = action.opts.theme; }
-                        var _slFieldId0 = (typeof action.fieldId0 === 'string') ? action.fieldId0 : null;
-                        var _slFieldId1 = (typeof action.fieldId1 === 'string') ? action.fieldId1 : null;
-                        var _slIsRange = _slOpts.range === true;
-                        _slOpts.change = function (value) {
-                            if (_slIsRange) {
-                                if (_slFieldId0 && Array.isArray(value)) {
-                                    var _el0 = document.getElementById(_slFieldId0);
-                                    if (_el0) { _el0.value = value[0]; }
-                                }
-                                if (_slFieldId1 && Array.isArray(value)) {
-                                    var _el1 = document.getElementById(_slFieldId1);
-                                    if (_el1) { _el1.value = value[1]; }
-                                }
-                            } else if (_slFieldId0) {
-                                var _el = document.getElementById(_slFieldId0);
-                                if (_el) { _el.value = value; }
-                            }
-                        };
-                        layui.slider.render(_slOpts);
-                        // Mirrors the inline-script post-render style tweaks (cosmetic
-                        // only — never developer-supplied data, never eval'd).
-                        if (_slOpts.type === 'vertical') {
-                            if (_slOpts.input) {
-                                var _slVIn = document.querySelector(_slOpts.elem + ' .layui-slider-input');
-                                if (_slVIn) { _slVIn.style.cssText = 'right:unset;top:-40px'; }
-                            }
-                        } else {
-                            var _slContainer = document.querySelector(_slOpts.elem);
-                            if (_slContainer) { _slContainer.style.cssText = 'min-height: 18px;padding-top: 18px;'; }
-                            if (_slOpts.input) {
-                                var _slDIn = document.querySelector(_slOpts.elem + ' .layui-slider-input');
-                                if (_slDIn) { _slDIn.style.cssText = 'top:3px;'; }
-                            }
-                        }
-                    } catch (e) {
-                        if (typeof console !== 'undefined' && console.warn) {
-                            console.warn('[WTM] slider action failed:', e);
-                        }
+                    if (!action.opts || !action.opts.elem) { break; }
+                    if (typeof layui === 'undefined') { break; }
+                    if (layui.slider && typeof layui.slider.render === 'function') {
+                        ff._renderSliderAction(action);
+                    } else if (typeof layui.use === 'function') {
+                        layui.use(['slider'], function () { ff._renderSliderAction(action); });
                     }
                     break;
                 // Issue #552 (#470-E): thin JSON wrapper over layui.rate.render().
-                // Same allowlist discipline as 'slider' above. RateTagHelper has no
-                // developer-facing callback attribute at all, so it always emits
-                // this action — the 'choose' write-back (persisting the picked
-                // value into the bound hidden input) is the widget's own mandatory
-                // framework wiring, reproduced natively here.
+                // Same allowlist discipline as 'slider' above (see
+                // _renderRateAction). RateTagHelper has no developer-facing
+                // callback attribute at all, so it always emits this action — the
+                // 'choose' write-back (persisting the picked value into the bound
+                // hidden input) is the widget's own mandatory framework wiring,
+                // reproduced natively in _renderRateAction.
+                //
+                // Issue #552 adversarial-review fix (module-load race, HIGH): same
+                // layui.use(['rate'], cb) deferral as the 'slider' case above.
                 case 'rate':
-                    try {
-                        if (!action.opts || !action.opts.elem ||
-                            typeof layui === 'undefined' || !layui.rate ||
-                            typeof layui.rate.render !== 'function') { break; }
-                        var _rtOpts = { elem: action.opts.elem };
-                        if (typeof action.opts.value === 'number') { _rtOpts.value = action.opts.value; }
-                        if (typeof action.opts.length === 'number') { _rtOpts.length = action.opts.length; }
-                        if (action.opts.half === true) { _rtOpts.half = true; }
-                        if (action.opts.readonly === true) { _rtOpts.readonly = true; }
-                        if (Array.isArray(action.opts.text)) { _rtOpts.text = action.opts.text; }
-                        var _rtValFieldId = (typeof action.valueFieldId === 'string') ? action.valueFieldId : null;
-                        _rtOpts.choose = function (val) {
-                            if (_rtValFieldId) {
-                                var _rtEl = document.getElementById(_rtValFieldId);
-                                if (_rtEl) { _rtEl.value = val; }
-                            }
-                        };
-                        layui.rate.render(_rtOpts);
-                    } catch (e) {
-                        if (typeof console !== 'undefined' && console.warn) {
-                            console.warn('[WTM] rate action failed:', e);
-                        }
+                    if (!action.opts || !action.opts.elem) { break; }
+                    if (typeof layui === 'undefined') { break; }
+                    if (layui.rate && typeof layui.rate.render === 'function') {
+                        ff._renderRateAction(action);
+                    } else if (typeof layui.use === 'function') {
+                        layui.use(['rate'], function () { ff._renderRateAction(action); });
                     }
                     break;
                 // Issue #552 (#470-E): thin JSON wrapper over layui.colorpicker.render().
-                // Same allowlist discipline as 'slider'/'rate' above. The 'done'
-                // write-back (persisting the picked color into the bound hidden
-                // input) is mandatory framework wiring reproduced natively.
-                // ColorPickerTagHelper only emits this action when ChangeFunc is
-                // empty; a non-empty ChangeFunc routes to the legacy inline
-                // <script> instead (an arbitrary developer callback name can't be
-                // safely JSON-expressed).
+                // Same allowlist discipline as 'slider'/'rate' above (see
+                // _renderColorpickerAction). The 'done' write-back (persisting the
+                // picked color into the bound hidden input) is mandatory framework
+                // wiring reproduced natively. ColorPickerTagHelper only emits this
+                // action when ChangeFunc is empty; a non-empty ChangeFunc routes to
+                // the legacy inline <script> instead (an arbitrary developer
+                // callback name can't be safely JSON-expressed).
+                //
+                // Issue #552 adversarial-review fix (module-load race, HIGH): same
+                // layui.use(['colorpicker'], cb) deferral as the 'slider' case above.
                 case 'colorpicker':
-                    try {
-                        if (!action.opts || !action.opts.elem ||
-                            typeof layui === 'undefined' || !layui.colorpicker ||
-                            typeof layui.colorpicker.render !== 'function') { break; }
-                        var _cpOpts = { elem: action.opts.elem };
-                        if (typeof action.opts.color === 'string') { _cpOpts.color = action.opts.color; }
-                        if (typeof action.opts.alpha === 'boolean') { _cpOpts.alpha = action.opts.alpha; }
-                        if (typeof action.opts.format === 'string') { _cpOpts.format = action.opts.format; }
-                        if (typeof action.opts.predefine === 'boolean') { _cpOpts.predefine = action.opts.predefine; }
-                        if (Array.isArray(action.opts.colors)) { _cpOpts.colors = action.opts.colors; }
-                        var _cpValFieldId = (typeof action.valueFieldId === 'string') ? action.valueFieldId : null;
-                        _cpOpts.done = function (data) {
-                            if (_cpValFieldId) {
-                                var _cpEl = document.getElementById(_cpValFieldId);
-                                if (_cpEl) { _cpEl.value = data; }
-                            }
-                        };
-                        layui.colorpicker.render(_cpOpts);
-                    } catch (e) {
-                        if (typeof console !== 'undefined' && console.warn) {
-                            console.warn('[WTM] colorpicker action failed:', e);
-                        }
+                    if (!action.opts || !action.opts.elem) { break; }
+                    if (typeof layui === 'undefined') { break; }
+                    if (layui.colorpicker && typeof layui.colorpicker.render === 'function') {
+                        ff._renderColorpickerAction(action);
+                    } else if (typeof layui.use === 'function') {
+                        layui.use(['colorpicker'], function () { ff._renderColorpickerAction(action); });
                     }
                     break;
                 // Issue #558 (#470-C): safe named-callback submit binding —

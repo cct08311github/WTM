@@ -228,12 +228,22 @@ public class SliderTagHelperTests
         StringAssert.Contains(postHtml, $"id='{f1.GetString()}'");
     }
 
+    // Issue #552 adversarial-review fix (P0, pre-existing XSS): replaces the
+    // old Process_NoCallback_ThemeWithCloseScript_CannotBreakOut test, which
+    // asserted the WRONG boundary — that an XSS payload "round-tripped" into
+    // opts.theme unchanged. JSON/JS-string escaping only protects the wire
+    // format; layui.slider.render still splices the DECODED theme value,
+    // unescaped, into an HTML string it builds internally
+    // (style="border:2px solid '+theme+'"), so a value that survives
+    // JSON-escaping can still carry a stored DOM-XSS payload. The real fix is
+    // BaseFieldTag.IsSafeColorToken validating the decoded value itself and
+    // OMITTING it entirely when unsafe — asserted below on both the island
+    // and the legacy inline-<script> emission paths (the legacy path
+    // previously had NO encoding at all on Theme, unlike ColorPicker's
+    // JavaScriptEncoder-wrapped color).
     [TestMethod]
-    public void Process_NoCallback_ThemeWithCloseScript_CannotBreakOut()
+    public void Process_NoCallback_UnsafeThemeValue_IsOmittedFromIslandNotRoundTripped()
     {
-        // System.Text.Json's default encoder Unicode-escapes '<' and '>', so a
-        // Theme value containing "</script>" cannot terminate the surrounding
-        // <script type="application/json"> block early.
         SetupLocalizer();
         var helper = new SliderTagHelper
         {
@@ -254,8 +264,80 @@ public class SliderTagHelperTests
 
         using var doc = System.Text.Json.JsonDocument.Parse(json!);
         var opts = doc.RootElement.GetProperty("opts");
-        Assert.AreEqual("</script><script>alert(1)</script>", opts.GetProperty("theme").GetString(),
-            "Decoded theme value must round-trip to the original string");
+        Assert.IsFalse(opts.TryGetProperty("theme", out _),
+            "An unsafe theme value must be OMITTED from the island opts entirely — never merely escaped");
+    }
+
+    [TestMethod]
+    public void Process_WithChangeFunc_UnsafeThemeValue_IsOmittedFromLegacyScript()
+    {
+        // Same neutralization must hold on the legacy inline-<script> path
+        // (ChangeFunc set) — the pre-existing vulnerability was reachable via
+        // BOTH emission paths, and the legacy path previously emitted Theme
+        // with NO escaping at all (,theme: '{Theme}').
+        SetupLocalizer();
+        var helper = new SliderTagHelper
+        {
+            Field = MakeField("IntField"),
+            Id = "slider_xss_legacy",
+            ChangeFunc = "myChangeCallback",
+            Theme = "</script><script>alert(1)</script>"
+        };
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+        var postHtml = output.PostElement.GetContent();
+        Assert.IsFalse(postHtml.Contains("alert(1)"),
+            "Unsafe theme value must never reach the legacy inline <script> in any form");
+        Assert.IsFalse(postHtml.Contains(",theme:"),
+            "Unsafe theme value must be OMITTED from the legacy inline <script> entirely — the 'theme:' key must not be emitted");
+    }
+
+    [TestMethod]
+    public void Process_NoCallback_LegitimateThemes_PassThroughIslandUnchanged()
+    {
+        // Compat red line: the allowlist grammar must accept every legitimate
+        // stored color format — hex, rgba() functional notation, and CSS
+        // named colors — unchanged.
+        SetupLocalizer();
+        foreach (var theme in new[] { "#1a2b3c", "rgba(0,0,0,0.5)", "rebeccapurple" })
+        {
+            var helper = new SliderTagHelper
+            {
+                Field = MakeField("IntField"),
+                Id = "slider_legit_" + System.Math.Abs(theme.GetHashCode()),
+                Theme = theme
+            };
+            var output = MakeOutput();
+            helper.Process(MakeContext(), output);
+            var postHtml = output.PostElement.GetContent();
+            var json = ExtractJsonFromIsland(postHtml);
+            Assert.IsNotNull(json, $"Island must be present for legitimate theme '{theme}'");
+            using var doc = System.Text.Json.JsonDocument.Parse(json!);
+            var opts = doc.RootElement.GetProperty("opts");
+            Assert.AreEqual(theme, opts.GetProperty("theme").GetString(),
+                $"Legitimate theme '{theme}' must pass through the island unchanged");
+        }
+    }
+
+    [TestMethod]
+    public void Process_WithChangeFunc_LegitimateThemes_PassThroughLegacyScriptUnchanged()
+    {
+        SetupLocalizer();
+        foreach (var theme in new[] { "#1a2b3c", "rgba(0,0,0,0.5)", "rebeccapurple" })
+        {
+            var helper = new SliderTagHelper
+            {
+                Field = MakeField("IntField"),
+                Id = "slider_legit_legacy_" + System.Math.Abs(theme.GetHashCode()),
+                ChangeFunc = "myChangeCallback",
+                Theme = theme
+            };
+            var output = MakeOutput();
+            helper.Process(MakeContext(), output);
+            var postHtml = output.PostElement.GetContent();
+            StringAssert.Contains(postHtml, $",theme: '{theme}'",
+                $"Legitimate theme '{theme}' must pass through the legacy inline script unchanged");
+        }
     }
 
     // ── Callback-bearing path: legacy inline <script> fallback preserved ─────

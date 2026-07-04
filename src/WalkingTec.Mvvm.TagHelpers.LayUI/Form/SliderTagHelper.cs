@@ -243,6 +243,20 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             // callback and is reproduced natively in the JS action handler.
             bool hasCallback = !string.IsNullOrEmpty(ChangeFunc) || !string.IsNullOrEmpty(OnTipsFunc);
 
+            // Issue #552 adversarial-review fix (P0, pre-existing XSS): Theme is
+            // spliced by layui.slider internally into a raw HTML string it builds
+            // for the slider's styling (style="border:2px solid '+theme+'") that is
+            // then parsed as markup — an attribute/tag breakout in that string is a
+            // stored DOM-XSS regardless of how the value is escaped on the wire
+            // (JSON string escaping / JS string-literal escaping only protects the
+            // *transport*, not what layui does with the decoded value afterwards).
+            // Theme is therefore validated against the shared color-token grammar
+            // (BaseFieldTag.IsSafeColorToken) before being emitted on EITHER path;
+            // an unsafe value is omitted entirely (the 'theme' key/argument is
+            // dropped) rather than emitted empty, so layui falls back to its own
+            // default theme color, same as when Theme was never set.
+            bool hasSafeTheme = IsSafeColorToken(Theme);
+
             if (!hasCallback)
             {
                 var fieldId0 = $"{_idPrefix}{Id}_v0";
@@ -264,7 +278,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 opts["tips"] = Tips;
                 opts["input"] = Input;
                 if (SliderType == SliderTypeEnum.Vertical && SliderHeight != null) { opts["height"] = SliderHeight.Value; }
-                if (!string.IsNullOrEmpty(Theme)) { opts["theme"] = Theme; }
+                if (hasSafeTheme) { opts["theme"] = Theme; }
 
                 var action = new SliderIslandAction
                 {
@@ -307,7 +321,7 @@ layui.use(['slider'],function(){{
     ,tips:{Tips.ToString().ToLower()}
     ,input:{Input.ToString().ToLower()}
     {(SliderType == null || SliderType.Value == SliderTypeEnum.Default ? string.Empty : (SliderHeight == null ? string.Empty : $",height:{SliderHeight.Value}"))}
-    {(string.IsNullOrEmpty(Theme) ? string.Empty : $",theme: '{Theme}'")}
+    {(hasSafeTheme ? $",theme: '{JavaScriptEncoder.Default.Encode(Theme)}'" : string.Empty)}
     ,change: function(value){{defaultFunc(value,sliderIns);
     {(string.IsNullOrEmpty(ChangeFunc) ? string.Empty : $"{ChangeFunc}(value,sliderIns)")}
     }}
