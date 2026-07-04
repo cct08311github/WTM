@@ -50,7 +50,6 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
             var safeId = HtmlEncoder.Default.Encode(id);
             var safeName = HtmlEncoder.Default.Encode(string.IsNullOrEmpty(Name) ? (Field?.Name ?? "") : Name);
-            var safeJsId = JavaScriptEncoder.Default.Encode(id);
             var valueFieldId = $"{id}_val";
 
             output.PostElement.AppendHtml(
@@ -67,9 +66,19 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             // to take here (unlike DateTimeTagHelper/SliderTagHelper/
             // ColorPickerTagHelper, which each have a genuine developer callback
             // attribute that keeps emitting the inline <script> when set).
+            // Issue #584: the selector MUST be the raw id, not a manually
+            // JavaScriptEncoder-escaped copy. System.Text.Json already
+            // Unicode-escapes this string when the island DTO is serialized
+            // below (see _islandJsonOptions), so JavaScriptEncoder-escaping
+            // it here first double-escapes non-BasicLatin characters (e.g. a
+            // Chinese field id) — after JSON.parse on the client the selector
+            // no longer matches the raw DOM id set above, and
+            // layui.rate.render silently targets nothing. Matches the
+            // sibling widgets (Slider/ColorPicker/TagInput), which all pass
+            // the raw id through unescaped.
             var opts = new Dictionary<string, object>
             {
-                ["elem"] = "#" + safeJsId,
+                ["elem"] = "#" + id,
                 ["value"] = currentVal,
                 ["length"] = Length
             };

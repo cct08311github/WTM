@@ -17,6 +17,12 @@ public class RateTagHelperTests
     private sealed class DummyModel
     {
         public int IntField { get; set; }
+
+        // Issue #584: Chinese identifiers are legal C# property names, and
+        // Utils.GetIdByName only replaces '.', '[', ']', '-' — it does not
+        // strip non-ASCII characters — so a DOM id derived from a field like
+        // this can legitimately contain non-BasicLatin characters.
+        public int 评分 { get; set; }
     }
 
     private static void SetupLocalizer()
@@ -218,6 +224,44 @@ public class RateTagHelperTests
         using var doc = System.Text.Json.JsonDocument.Parse(json!);
         Assert.IsFalse(doc.RootElement.TryGetProperty("formId", out _),
             "formId must be absent from the island entirely when there is no ambient owning form");
+    }
+
+    // ── Issue #584: island 'elem' selector must be the raw DOM id ──────────
+
+    [TestMethod]
+    public void Process_NonAsciiFieldId_IslandSelectorMatchesRawDomId()
+    {
+        SetupLocalizer();
+        // Id mirrors exactly what BaseFieldTag's Id getter would derive for
+        // this field via Utils.GetIdByName(ModelType.Name + "." + Field.Name)
+        // — that helper only replaces '.', '[', ']', '-' and leaves non-ASCII
+        // characters untouched, so a real Chinese-named field produces this
+        // same shape of id in production.
+        var helper = new RateTagHelper { Field = MakeField("评分"), Id = "DummyModel_评分" };
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+
+        var domId = output.Attributes["id"].Value?.ToString();
+        Assert.IsFalse(string.IsNullOrEmpty(domId), "DOM id must be set");
+        Assert.IsTrue(domId!.Contains('评'),
+            "Sanity check: the derived id must actually contain the non-ASCII character under test");
+
+        var postHtml = output.PostElement.GetContent();
+        var json = ExtractJsonFromIsland(postHtml);
+        Assert.IsNotNull(json, "Island must contain parseable JSON");
+
+        using var doc = System.Text.Json.JsonDocument.Parse(json!);
+        var opts = doc.RootElement.GetProperty("opts");
+        var elemSelector = opts.GetProperty("elem").GetString();
+
+        // Issue #584: the selector must be the RAW "#<id>". JSON transport
+        // escaping (System.Text.Json, applied once during serialization) is
+        // what makes this safe to embed — a manual JavaScriptEncoder
+        // pre-escape double-escapes non-BasicLatin characters, so after
+        // JSON.parse on the client the selector no longer matches the raw
+        // DOM id set above, and layui.rate.render silently targets nothing.
+        Assert.AreEqual("#" + domId, elemSelector,
+            "Island 'elem' selector must exactly match the raw DOM id, or layui.rate.render silently renders nothing for non-ASCII field ids");
     }
 
     [TestCleanup]
