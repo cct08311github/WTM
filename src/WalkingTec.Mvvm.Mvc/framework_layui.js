@@ -145,6 +145,10 @@ window.ff = {
     // own layui.<mod>.render, which — same as laydate/form — no-ops if the
     // module hasn't finished its async load yet. Each needs its own module
     // deferral entry.
+    // Issue #571: 'tagInput' is intentionally ABSENT from the map below — the
+    // native tag/chip input has no layui module dependency at all (pure DOM
+    // widget), so it never needs a layui.use(...) deferral and always
+    // dispatches immediately, on both the page-ready and dialog paths.
     _islandModulesFor: function (payload) {
         var needed = { form: false, laydate: false, slider: false, rate: false, colorpicker: false };
         if (payload && payload.actions) {
@@ -365,6 +369,131 @@ window.ff = {
         } catch (e) {
             if (typeof console !== 'undefined' && console.warn) {
                 console.warn('[WTM] colorpicker action failed:', e);
+            }
+        }
+    },
+
+    // Issue #571: native, dependency-free tag/chip input render body for the
+    // 'tagInput' DispatchAction case (below). Unlike slider/rate/colorpicker
+    // (#552), this widget has NO layui module dependency at all — it is built
+    // entirely from plain DOM APIs, which is the whole point of the rewrite
+    // (the old TagInputTagHelper targeted a layui.tagInput module that has
+    // never shipped in any bundled layui tree — see TagInputTagHelper's XML
+    // doc comment). Chips are built with createElement + textContent /
+    // createTextNode ONLY — never innerHTML or string-concatenation with a
+    // tag value, since tag values are user data (the #462/#552 stored-XSS
+    // threat class: a tag value like '<img src=x onerror=alert(1)>' must
+    // render as inert text, never markup). No eval, no Function constructor.
+    _renderTagInputAction: function (action) {
+        try {
+            if (!action.opts || !action.opts.elem) { return; }
+            var container = document.querySelector(action.opts.elem);
+            if (!container) { return; }
+            var _tiValueFieldId = (typeof action.valueFieldId === 'string') ? action.valueFieldId : null;
+            if (!_tiValueFieldId) { return; }
+            // Prefer resolving the hidden value input scoped to the widget's
+            // own container when it happens to live inside it; falls back to
+            // a page-wide lookup for the layout TagInputTagHelper emits today
+            // (the hidden input is a sibling of the container, not a child).
+            var _tiHidden = container.querySelector('#' + _tiValueFieldId) || document.getElementById(_tiValueFieldId);
+            if (!_tiHidden) { return; }
+
+            var _tiSeparator = (typeof action.opts.separator === 'string' && action.opts.separator.length > 0)
+                ? action.opts.separator : ',';
+            var _tiPlaceholder = (typeof action.opts.placeholder === 'string') ? action.opts.placeholder : '';
+            var _tiMax = (typeof action.opts.max === 'number' && action.opts.max > 0) ? action.opts.max : null;
+            var _tiReadOnly = action.opts.readonly === true;
+            var _tiDisabled = action.opts.disabled === true;
+            var _tiInteractive = !_tiReadOnly && !_tiDisabled;
+
+            // Idempotent — safe to invoke twice on the same container.
+            while (container.firstChild) { container.removeChild(container.firstChild); }
+            container.style.cssText = 'display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px;' +
+                'border:1px solid #e6e6e6;border-radius:2px;padding:4px 6px;min-height:20px;box-sizing:border-box;width:100%;';
+
+            var _tiChips = document.createElement('span');
+            _tiChips.className = 'wtm-taginput-chips';
+            _tiChips.style.cssText = 'display:inline-flex;flex-wrap:wrap;gap:4px;';
+            container.appendChild(_tiChips);
+
+            var _tiTextInput = null;
+            if (_tiInteractive) {
+                _tiTextInput = document.createElement('input');
+                _tiTextInput.type = 'text';
+                _tiTextInput.className = 'wtm-taginput-entry';
+                _tiTextInput.style.cssText = 'border:none;outline:none;flex:1;min-width:80px;';
+                if (_tiPlaceholder) { _tiTextInput.placeholder = _tiPlaceholder; }
+                container.appendChild(_tiTextInput);
+            }
+
+            function _tiCurrentTags() {
+                if (!_tiHidden.value) { return []; }
+                return _tiHidden.value.split(_tiSeparator).filter(function (s) { return s.length > 0; });
+            }
+
+            function _tiWriteBack(tags) {
+                _tiHidden.value = tags.join(_tiSeparator);
+            }
+
+            function _tiRenderChips() {
+                while (_tiChips.firstChild) { _tiChips.removeChild(_tiChips.firstChild); }
+                var tags = _tiCurrentTags();
+                tags.forEach(function (tag, idx) {
+                    var chip = document.createElement('span');
+                    chip.className = 'wtm-taginput-chip';
+                    chip.style.cssText = 'display:inline-flex;align-items:center;gap:3px;' +
+                        'background:#f2f2f2;border-radius:2px;padding:2px 6px;';
+                    // XSS-safe: textContent/createTextNode never parse the
+                    // string as HTML — a payload like '<img src=x onerror=...>'
+                    // is rendered as the literal, inert text of the chip.
+                    chip.appendChild(document.createTextNode(tag));
+                    if (_tiInteractive) {
+                        var _tiClose = document.createElement('span');
+                        _tiClose.className = 'wtm-taginput-chip-close';
+                        _tiClose.style.cssText = 'cursor:pointer;color:#999;';
+                        _tiClose.textContent = '×';
+                        _tiClose.addEventListener('click', function () {
+                            var t = _tiCurrentTags();
+                            t.splice(idx, 1);
+                            _tiWriteBack(t);
+                            _tiRenderChips();
+                        });
+                        chip.appendChild(_tiClose);
+                    }
+                    _tiChips.appendChild(chip);
+                });
+            }
+
+            function _tiAddTag(raw) {
+                var value = (raw || '').replace(/^\s+|\s+$/g, '');
+                if (!value) { return; }
+                var tags = _tiCurrentTags();
+                if (_tiMax !== null && tags.length >= _tiMax) { return; }
+                tags.push(value);
+                _tiWriteBack(tags);
+                _tiRenderChips();
+            }
+
+            if (_tiTextInput) {
+                _tiTextInput.addEventListener('keydown', function (e) {
+                    if (e.key === 'Enter' || e.key === _tiSeparator) {
+                        e.preventDefault();
+                        _tiAddTag(_tiTextInput.value);
+                        _tiTextInput.value = '';
+                    }
+                });
+                _tiTextInput.addEventListener('blur', function () {
+                    if (_tiTextInput.value) {
+                        _tiAddTag(_tiTextInput.value);
+                        _tiTextInput.value = '';
+                    }
+                });
+            }
+
+            _tiRenderChips();
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] tagInput action failed:', e);
             }
         }
     },
@@ -780,6 +909,19 @@ window.ff = {
                             _heFocusEl.focus();
                         }
                     }
+                    break;
+                // Issue #571: thin dispatcher for the native, dependency-free
+                // tag/chip input (replaces the non-functional layui.tagInput
+                // module reference — see TagInputTagHelper's doc comment). No
+                // layui module is required (pure DOM widget), so — unlike
+                // slider/rate/colorpicker (#552) — there is no layui.use
+                // deferral needed here; the render body itself
+                // (_renderTagInputAction) is directly safe to call as soon as
+                // the container element exists in the DOM. TagInputTagHelper
+                // never had a developer-facing callback attribute, so — like
+                // RateTagHelper — it unconditionally emits this action.
+                case 'tagInput':
+                    ff._renderTagInputAction(action);
                     break;
                 default:
                     if (typeof console !== 'undefined' && console.warn) {
