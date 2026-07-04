@@ -1,5 +1,7 @@
 #nullable enable
+using System.Collections.Generic;
 using System.Text.Encodings.Web;
+using System.Text.Json;
 using Microsoft.AspNetCore.Razor.TagHelpers;
 
 namespace WalkingTec.Mvvm.TagHelpers.LayUI
@@ -23,6 +25,15 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         /// <summary>Optional text displayed beside the stars.</summary>
         public string? Text { get; set; }
 
+        // Issue #552 (#470-E): System.Text.Json's default encoder escapes '<', '>',
+        // and '&', making the JSON payload safe to embed inside a <script> block
+        // without risk of </script> injection — same pattern as
+        // DateTimeTagHelper's _laydateJsonOptions (#556).
+        private static readonly JsonSerializerOptions _islandJsonOptions = new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        };
+
         public override void Process(TagHelperContext context, TagHelperOutput output)
         {
             output.TagName = "div";
@@ -40,31 +51,58 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             var safeId = HtmlEncoder.Default.Encode(id);
             var safeName = HtmlEncoder.Default.Encode(string.IsNullOrEmpty(Name) ? (Field?.Name ?? "") : Name);
             var safeJsId = JavaScriptEncoder.Default.Encode(id);
-            var textAttr = string.IsNullOrEmpty(Text) ? "" : $",text:['{JavaScriptEncoder.Default.Encode(Text)}']";
-            var readOnlyAttr = ReadOnly ? ",readonly:true" : "";
-            var halfAttr = Half ? ",half:true" : "";
+            var valueFieldId = $"{id}_val";
 
             output.PostElement.AppendHtml(
                 $"<input type=\"hidden\" id=\"{safeId}_val\" name=\"{safeName}\" value=\"{HtmlEncoder.Default.Encode(currentVal.ToString())}\" />");
-            output.PostElement.AppendHtml($@"
-<script>
-layui.use(['rate'], function(){{
-  var rate = layui.rate;
-  rate.render({{
-    elem: '#{safeJsId}'
-    ,value: {currentVal}
-    ,length: {Length}
-    {halfAttr}
-    {readOnlyAttr}
-    {textAttr}
-    ,choose: function(val){{
-      document.getElementById('{safeJsId}_val').value = val;
-    }}
-  }});
-}});
-</script>");
+
+            // Issue #552 (#470-E): RateTagHelper exposes no developer-facing
+            // callback attribute at all — the 'choose' handler in the legacy
+            // inline <script> below only ever wrote the picked value back into
+            // the widget's own hidden input, which is mandatory framework wiring,
+            // not a developer callback. That write-back is therefore always safe
+            // to reproduce natively in the JS action handler (framework_layui.js
+            // DispatchAction 'rate' case), so this field unconditionally migrates
+            // to the eval-free JSON island — there is no legacy-fallback branch
+            // to take here (unlike DateTimeTagHelper/SliderTagHelper/
+            // ColorPickerTagHelper, which each have a genuine developer callback
+            // attribute that keeps emitting the inline <script> when set).
+            var opts = new Dictionary<string, object>
+            {
+                ["elem"] = "#" + safeJsId,
+                ["value"] = currentVal,
+                ["length"] = Length
+            };
+            if (Half) { opts["half"] = true; }
+            if (ReadOnly) { opts["readonly"] = true; }
+            if (!string.IsNullOrEmpty(Text)) { opts["text"] = new[] { Text }; }
+
+            var action = new RateIslandAction
+            {
+                Opts = opts,
+                ValueFieldId = valueFieldId
+            };
+            var json = JsonSerializer.Serialize(action, _islandJsonOptions);
+            output.PostElement.AppendHtml(
+                $"<script type=\"application/json\" class=\"wtm-dialog-init\">{json}</script>");
 
             base.Process(context, output);
         }
+    }
+
+    // Issue #552 (#470-E): DTO for the bare (non-wrapped) rate JSON island —
+    // {"type":"rate","opts":{...},"valueFieldId":"..."}. ff._normalizeIslandPayload
+    // (framework_layui.js) wraps this into the {actions:[...]} shape
+    // ff.DispatchAction expects; not part of the public API surface.
+    internal class RateIslandAction
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("type")]
+        public string Type { get; set; } = "rate";
+
+        [System.Text.Json.Serialization.JsonPropertyName("opts")]
+        public Dictionary<string, object> Opts { get; set; } = new();
+
+        [System.Text.Json.Serialization.JsonPropertyName("valueFieldId")]
+        public string? ValueFieldId { get; set; }
     }
 }

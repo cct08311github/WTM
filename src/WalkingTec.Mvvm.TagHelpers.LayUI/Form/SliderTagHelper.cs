@@ -1,7 +1,10 @@
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Text.Encodings.Web;
+using System.Text.Json;
 
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.Razor.TagHelpers;
@@ -111,6 +114,47 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         /// </summary>
         public string OnTipsFunc { get; set; }
 
+        // Issue #552 (#470-E): System.Text.Json's default encoder escapes '<', '>',
+        // and '&', making the JSON payload safe to embed inside a <script> block
+        // without risk of </script> injection — same pattern as
+        // DateTimeTagHelper's _laydateJsonOptions (#556).
+        private static readonly JsonSerializerOptions _islandJsonOptions = new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        };
+
+        /// <summary>
+        /// Issue #552 (#470-E): interprets the already-validated <c>safeDefaultValue</c>
+        /// string (numeric, "[n,n]" range-pair, or the "0" fallback — see the
+        /// validation block in <see cref="Process"/>) into the JSON value shape
+        /// layui.slider.render's <c>value</c> option expects: a plain number for a
+        /// single slider, or a two-element number array for a range slider.
+        /// Returns <see langword="null"/> when there is no default value to emit
+        /// (the <c>value</c> key is then omitted from the island entirely, exactly
+        /// like the inline-script branch's <c>string.IsNullOrEmpty</c> guard).
+        /// </summary>
+        private static object ParseSliderValueForJson(string safeDefaultValue)
+        {
+            if (string.IsNullOrEmpty(safeDefaultValue)) { return null; }
+            if (safeDefaultValue.StartsWith('[') && safeDefaultValue.EndsWith(']'))
+            {
+                var inner = safeDefaultValue.TrimStart('[').TrimEnd(']').Replace(" ", string.Empty);
+                var parts = inner.Split(',');
+                if (parts.Length == 2 &&
+                    double.TryParse(parts[0], NumberStyles.Any, CultureInfo.InvariantCulture, out var a) &&
+                    double.TryParse(parts[1], NumberStyles.Any, CultureInfo.InvariantCulture, out var b))
+                {
+                    return new object[] { a, b };
+                }
+                return 0d;
+            }
+            if (double.TryParse(safeDefaultValue, NumberStyles.Any, CultureInfo.InvariantCulture, out var v))
+            {
+                return v;
+            }
+            return 0d;
+        }
+
         public override void Process(TagHelperContext context, TagHelperOutput output)
         {
             output.TagName = "div";
@@ -185,7 +229,75 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     safeDefaultValue = "0";
                 }
             }
-            var content = $@"
+
+            // Issue #552 (#470-E): ChangeFunc / OnTipsFunc are developer-supplied JS
+            // function names invoked with live slider callback arguments (and, for
+            // OnTipsFunc, a return value) — neither can be JSON-expressed, so their
+            // presence keeps this field on the legacy inline <script> path below,
+            // unchanged from before. A callback-free field migrates to the eval-free
+            // JSON island: ff.OpenDialog / the page-ready consumer (framework_layui.js)
+            // parse the island and call layui.slider.render(action.opts) directly,
+            // reproducing the exact same configuration — including the mandatory
+            // change-callback that writes the picked value back into the bound
+            // hidden input(s), which is framework wiring rather than a developer
+            // callback and is reproduced natively in the JS action handler.
+            bool hasCallback = !string.IsNullOrEmpty(ChangeFunc) || !string.IsNullOrEmpty(OnTipsFunc);
+
+            // Issue #552 adversarial-review fix (P0, pre-existing XSS): Theme is
+            // spliced by layui.slider internally into a raw HTML string it builds
+            // for the slider's styling (style="border:2px solid '+theme+'") that is
+            // then parsed as markup — an attribute/tag breakout in that string is a
+            // stored DOM-XSS regardless of how the value is escaped on the wire
+            // (JSON string escaping / JS string-literal escaping only protects the
+            // *transport*, not what layui does with the decoded value afterwards).
+            // Theme is therefore validated against the shared color-token grammar
+            // (BaseFieldTag.IsSafeColorToken) before being emitted on EITHER path;
+            // an unsafe value is omitted entirely (the 'theme' key/argument is
+            // dropped) rather than emitted empty, so layui falls back to its own
+            // default theme color, same as when Theme was never set.
+            bool hasSafeTheme = IsSafeColorToken(Theme);
+
+            if (!hasCallback)
+            {
+                var fieldId0 = $"{_idPrefix}{Id}_v0";
+                var fieldId1 = range ? $"{_idPrefix}{Id}_v1" : null;
+
+                var opts = new Dictionary<string, object>
+                {
+                    ["elem"] = "#" + _idPrefix + Id
+                };
+                if (SliderType != null) { opts["type"] = SliderType.Value.ToString().ToLower(); }
+                if (Min != null) { opts["min"] = Min.Value; }
+                if (Max != null) { opts["max"] = Max.Value; }
+                if (range) { opts["range"] = true; }
+                var jsonValue = ParseSliderValueForJson(safeDefaultValue);
+                if (jsonValue != null) { opts["value"] = jsonValue; }
+                opts["step"] = Step;
+                if (Disabled) { opts["disabled"] = true; }
+                opts["showstep"] = ShowStep;
+                opts["tips"] = Tips;
+                opts["input"] = Input;
+                if (SliderType == SliderTypeEnum.Vertical && SliderHeight != null) { opts["height"] = SliderHeight.Value; }
+                if (hasSafeTheme) { opts["theme"] = Theme; }
+
+                var action = new SliderIslandAction
+                {
+                    Opts = opts,
+                    FieldId0 = fieldId0,
+                    FieldId1 = fieldId1
+                };
+                var json = JsonSerializer.Serialize(action, _islandJsonOptions);
+
+                var islandContent = $@"
+<input type='hidden' id='{fieldId0}' name='{WebUtility.HtmlEncode(Field.Name)}' value='{WebUtility.HtmlEncode(value0 ?? "")}' class='layui-input'>
+{(Field1 == null ? string.Empty : $"<input type='hidden' id='{fieldId1}' name='{WebUtility.HtmlEncode(Field1.Name)}' value='{WebUtility.HtmlEncode(value1 ?? "")}' class='layui-input'>")}
+<script type=""application/json"" class=""wtm-dialog-init"">{json}</script>
+";
+                output.PostElement.AppendHtml(islandContent);
+            }
+            else
+            {
+                var content = $@"
 <input type='hidden' name='{WebUtility.HtmlEncode(Field.Name)}' value='{WebUtility.HtmlEncode(value0 ?? "")}' class='layui-input'>
 {(Field1 == null ? string.Empty : $"<input type='hidden' name='{WebUtility.HtmlEncode(Field1.Name)}' value='{WebUtility.HtmlEncode(value1 ?? "")}' class='layui-input'>")}
 <script>
@@ -209,7 +321,7 @@ layui.use(['slider'],function(){{
     ,tips:{Tips.ToString().ToLower()}
     ,input:{Input.ToString().ToLower()}
     {(SliderType == null || SliderType.Value == SliderTypeEnum.Default ? string.Empty : (SliderHeight == null ? string.Empty : $",height:{SliderHeight.Value}"))}
-    {(string.IsNullOrEmpty(Theme) ? string.Empty : $",theme: '{Theme}'")}
+    {(hasSafeTheme ? $",theme: '{JavaScriptEncoder.Default.Encode(Theme)}'" : string.Empty)}
     ,change: function(value){{defaultFunc(value,sliderIns);
     {(string.IsNullOrEmpty(ChangeFunc) ? string.Empty : $"{ChangeFunc}(value,sliderIns)")}
     }}
@@ -224,8 +336,29 @@ layui.use(['slider'],function(){{
 </script>
 ";
 
-            output.PostElement.AppendHtml(content);
+                output.PostElement.AppendHtml(content);
+            }
             base.Process(context, output);
         }
+    }
+
+    // Issue #552 (#470-E): DTO for the bare (non-wrapped) slider JSON island —
+    // {"type":"slider","opts":{...},"fieldId0":"...","fieldId1":"..."}.
+    // ff._normalizeIslandPayload (framework_layui.js) wraps this into the
+    // {actions:[...]} shape ff.DispatchAction expects; not part of the public
+    // API surface.
+    internal class SliderIslandAction
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("type")]
+        public string Type { get; set; } = "slider";
+
+        [System.Text.Json.Serialization.JsonPropertyName("opts")]
+        public Dictionary<string, object> Opts { get; set; } = new();
+
+        [System.Text.Json.Serialization.JsonPropertyName("fieldId0")]
+        public string FieldId0 { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("fieldId1")]
+        public string FieldId1 { get; set; }
     }
 }
