@@ -4,14 +4,30 @@ Phase 1 of the LayUI modernization roadmap (#567). This suite is the
 **hard gate** that must stay green before any bundled-layui version bump
 (Phase 2, #566): every assertion here renders the exact markup / init-call
 shape a WTM TagHelper emits today, drives it through the real, unmodified
-`src/WalkingTec.Mvvm.Mvc/framework_layui.js` and the real vendored layui
-(currently 2.6.3, `demo/WalkingTec.Mvvm.Demo/wwwroot/layui/layui.js`), and
-asserts — programmatically, not just visually — that the widget actually
+`src/WalkingTec.Mvvm.Mvc/framework_layui.js` and a real vendored layui build,
+and asserts — programmatically, not just visually — that the widget actually
 initialized. A layui upgrade that breaks any of these assertions is a real
-regression; this run is the baseline #566 will diff against.
+regression.
 
-No `src/` or `demo/` files are touched by this suite — test infrastructure
-only.
+**#566 update:** the harness and Playwright config now run this exact suite
+against **both** vendored layui trees side by side:
+
+| Tree | Version | Path | Selected via |
+|------|---------|------|---------------|
+| `layui-263` (default/baseline) | 2.6.3 | `demo/WalkingTec.Mvvm.Demo/wwwroot/layui/` | no query string |
+| `layui-next` (opt-in) | 2.13.8 | `demo/WalkingTec.Mvvm.Demo/wwwroot/layui-next/` | `?layui=next` |
+
+The harness page's `<head>` maps the `?layui=` query param to one of two
+hardcoded literal asset-tree base paths via strict (`===`) equality — the
+raw query text itself is never written into the DOM or concatenated into a
+URL (same self-XSS discipline as the harness status fix in commit
+495080441). `layui-263` is the compatibility baseline and must always stay
+green; `layui-next` is the live #566 gate for the opt-in bump.
+
+This suite's own test infrastructure (`test/manual/regression/`,
+`test/regression/`) does not touch `src/` or `demo/` — it only *reads* two
+pre-existing vendored trees under `demo/WalkingTec.Mvvm.Demo/wwwroot/`
+(`layui/` and, since #566, `layui-next/`).
 
 ## What each harness section proves
 
@@ -34,7 +50,7 @@ in clearly separated `<section>`-style `<div class="box">` blocks:
 | 11 | slider | `SliderTagHelper` | `slider.render({elem, value, step})`; asserts `.layui-slider` is built. |
 | 12 | rate | `RateTagHelper` | `rate.render({elem, value, length, choose})`; asserts `.layui-rate` is built. |
 | 13 | colorPicker | `ColorPickerTagHelper` | `colorpicker.render({elem, color, format, done})`; asserts `.layui-colorpicker` is built. |
-| 14 | tagInput | `TagInputTagHelper` | **Documented KNOWN GAP, not a suite bug.** `TagInputTagHelper`'s own doc comment says it targets "Layui 2.8+ tagInput widget" — no `tagInput` module file exists anywhere under the vendored layui 2.6.3 trees (`demo/**/wwwroot/layui/`), so `layui.use(['tagInput'], cb)` never resolves. Flagged `knownGap:true` so it is surfaced (not silently skipped) without blocking the gate. Once #566 bumps layui to a version that ships `tagInput`, this assertion should start passing and can be promoted out of `knownGap`. |
+| 14 | tagInput | `TagInputTagHelper` | **Documented KNOWN GAP, not a suite bug.** `TagInputTagHelper`'s own doc comment says it targets "Layui 2.8+ tagInput widget" — no `tagInput` module exists in either vendored tree (`demo/**/wwwroot/layui/` 2.6.3 or, verified during #566, `demo/**/wwwroot/layui-next/` 2.13.8), so `layui.use(['tagInput'], cb)` never resolves on either. Flagged `knownGap:true` so it is surfaced (not silently skipped) without blocking the gate. Should a future layui version ship `tagInput`, this assertion should start passing and can be promoted out of `knownGap`. |
 
 Every section reports one `{ name, pass, detail, knownGap? }` entry into
 `window.__regressionResults`; `window.__regressionDone` flips to `true` once
@@ -47,23 +63,31 @@ all 14 have reported.
 ```bash
 cd test/regression
 npm install          # installs @playwright/test only — see "dependency footprint" below
-npx playwright test
+npx playwright test                     # runs BOTH projects: layui-263 + layui-next
+npx playwright test --project=layui-263 # baseline only (bundled 2.6.3)
+npx playwright test --project=layui-next # opt-in tree only (2.13.8)
 ```
 
 This boots a zero-dependency Node static file server
 ([`static-server.mjs`](../../regression/static-server.mjs)) rooted at the
 repo root (`playwright.config.mjs`'s `webServer` block starts/stops it
-automatically), navigates to the harness page, waits for
+automatically), navigates to the harness page (with `?layui=next` for the
+`layui-next` project, no query string for `layui-263`), waits for
 `window.__regressionDone === true`, and asserts every non-`knownGap` entry
-has `pass === true`. `knownGap` entries (currently just `tagInput`) are
-logged for visibility but do not fail the run.
+has `pass === true` — for **both** projects. `knownGap` entries (currently
+just `tagInput`) are logged for visibility but do not fail the run. Every
+run also logs the full per-section PASS/FAIL/GAP detail list, not just
+failures, so `layui-263` vs `layui-next` output can be diffed directly.
 
 ### Manual — open it in a real browser
 
 ```bash
 # from the repo root
 python3 -m http.server 8000
+# baseline — bundled layui 2.6.3 (default, no query string)
 open http://localhost:8000/test/manual/regression/565-taghelper-layui-regression.html
+# opt-in — vendored layui-next 2.13.8 (#566)
+open http://localhost:8000/test/manual/regression/565-taghelper-layui-regression.html?layui=next
 ```
 
 `file://` does not work — the harness's relative `<script src>` loads and
@@ -73,7 +97,10 @@ requirement as `test/manual/561-formtaghelper-island.html` and
 color-coded PASS/FAIL/GAP summary banner at the top (sticky, updates as each
 section reports) so a human can eyeball the result without opening
 DevTools — each entry also shows the exact detail message the headless
-runner asserts on.
+runner asserts on. The `?layui=next` query param is read once at the top of
+`<head>` and mapped (strict `===` compare, never echoed back into the page)
+to the fixed `layui-next` asset-tree base path; omitting it (or passing any
+other value) keeps the original `layui` 2.6.3 base.
 
 ## Dependency footprint
 
@@ -90,11 +117,18 @@ after `npm install`.
 
 ## Gate statement
 
-**This suite is the Phase-2 (#566) gate.** Before bumping the bundled layui
-version, run `npx playwright test` from `test/regression/` against the new
-layui build (swap the vendored `demo/WalkingTec.Mvvm.Demo/wwwroot/layui/`
-tree, or point the harness's relative paths at a build under test) and
-confirm every non-`knownGap` assertion still passes. If the `tagInput`
-`knownGap` entry starts passing under the new layui version, promote it out
-of `knownGap` in the harness (drop the `true` argument to `pushResult`) as
-part of that same PR — that is a real capability gain, not a false negative.
+**This suite is the Phase-2 (#566) gate, and #566 exercises it live.** The
+`layui-263` project is the compatibility baseline and must always stay
+green — a regression there means the harness itself broke, not the
+framework. The `layui-next` project is the actual #566 gate: it runs the
+identical assertions against the opt-in vendored `layui-next` (2.13.8) tree.
+Both projects passed cleanly as of the #566 opt-in bump (verified: all 13
+non-`knownGap` sections green on both trees; `tagInput` remains a
+documented `knownGap` on both, since neither vendored tree ships that
+module — see the table above). Any future layui version bump should re-run
+`npx playwright test` from `test/regression/` and confirm both projects
+stay green (or fix `framework_layui.js`/the harness per the compat-fix
+guidance in `.claude/rules/` before landing). If the `tagInput` `knownGap`
+entry ever starts passing, promote it out of `knownGap` in the harness
+(drop the `true` argument to `pushResult`) as part of that same PR — that is
+a real capability gain, not a false negative.

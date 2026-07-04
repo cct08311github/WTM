@@ -58,12 +58,44 @@
     5. table/grid                  9. transfer
                                    10. upload (render only)
   ============================================================================
+
+  #566 DUAL-TREE HEAD LOADER
+  --------------------------
+  This harness now runs against EITHER the vendored layui 2.6.3 tree
+  (demo/**/wwwroot/layui/, the default) OR the opt-in layui-next 2.13.8 tree
+  (demo/**/wwwroot/layui-next/), selected via a `?layui=next` query-string
+  param on this page's own URL. The param is mapped with a STRICT equality
+  check to one of exactly two hardcoded literal base-path strings below —
+  the raw query value itself is never concatenated into any URL or written
+  into the DOM (same self-XSS discipline as commit 495080441's harness
+  status fix: read the query, branch on it, never echo it back verbatim).
+  `document.write` of these fixed literals in <head> preserves the exact
+  load order the original static tags had: jquery -> jquery.cookie ->
+  layui.css/layui.js/xm-select.js -> dompurify.js -> framework_layui.js.
 -->
-<link rel="stylesheet" href="../../../demo/WalkingTec.Mvvm.Demo/wwwroot/layui/css/layui.css">
+<script>
+  var WTM_LAYUI_NEXT = (function () {
+    try {
+      // Strict equality against the literal string 'next' only — no other
+      // value (and no raw echoing of the param) ever reaches the page.
+      return new URLSearchParams(location.search).get('layui') === 'next';
+    } catch (e) {
+      return false;
+    }
+  })();
+  // Exactly two hardcoded literal base paths. WTM_LAYUI_NEXT (a boolean)
+  // selects between them; the query string's raw text is never used here.
+  var WTM_LAYUI_BASE = WTM_LAYUI_NEXT
+    ? '../../../demo/WalkingTec.Mvvm.Demo/wwwroot/layui-next'
+    : '../../../demo/WalkingTec.Mvvm.Demo/wwwroot/layui';
+  document.write('<link rel="stylesheet" href="' + WTM_LAYUI_BASE + '/css/layui.css">');
+</script>
 <script src="../../../demo/WalkingTec.Mvvm.Demo/wwwroot/jquery.min.js"></script>
 <script src="../../../demo/WalkingTec.Mvvm.Demo/wwwroot/jquery.cookie.js"></script>
-<script src="../../../demo/WalkingTec.Mvvm.Demo/wwwroot/layui/layui.js"></script>
-<script src="../../../demo/WalkingTec.Mvvm.Demo/wwwroot/layui/xm-select.js"></script>
+<script>
+  document.write('<script src="' + WTM_LAYUI_BASE + '/layui.js"><\/script>');
+  document.write('<script src="' + WTM_LAYUI_BASE + '/xm-select.js"><\/script>');
+</script>
 <script src="../../../src/WalkingTec.Mvvm.Mvc/dompurify.js"></script>
 <script src="../../../src/WalkingTec.Mvvm.Mvc/framework_layui.js"></script>
 <script>
@@ -604,15 +636,17 @@
 
   // ---- 14. tagInput (KNOWN GAP) -----------------------------------------------
   // TagInputTagHelper's doc comment states it targets "Layui 2.8+ tagInput
-  // widget". The bundled layui in this repo is 2.6.3 (see demo/.../layui.js),
-  // and no 'tagInput' module file exists anywhere under demo/**/wwwroot/layui —
-  // it was never a stock 2.6.3 module and no local extend/ shim was vendored
-  // for it either. layui.use(['tagInput'], cb) will therefore try to fetch
-  // lay/modules/tagInput.js, 404, and the callback will simply never fire.
-  // This is flagged knownGap:true (not counted in the suite's pass/fail gate)
-  // so it does NOT block #565, but it IS surfaced so it isn't a silent gap —
-  // once #566 bumps the bundled layui to a version that ships tagInput, this
-  // exact assertion should start passing and can be promoted out of knownGap.
+  // widget". Verified absent from BOTH vendored trees this harness runs
+  // against (#566): the bundled layui 2.6.3 (demo/**/wwwroot/layui/) never
+  // shipped it, and the opt-in layui-next 2.13.8 (demo/**/wwwroot/layui-next/)
+  // still doesn't ship a 'tagInput' module either (checked: no tagInput
+  // reference anywhere in either layui.js bundle, no separate module file).
+  // layui.use(['tagInput'], cb) will therefore try to resolve the module,
+  // fail, and the callback will simply never fire, on either tree. This is
+  // flagged knownGap:true (not counted in the suite's pass/fail gate) so it
+  // does NOT block #565/#566, but it IS surfaced so it isn't a silent gap —
+  // if a future layui version ships tagInput, this exact assertion should
+  // start passing and can be promoted out of knownGap.
   (function () {
     var settled = false;
     function finish(pass, detail) {
@@ -641,7 +675,7 @@
     // callback (see layui.js's `n.timeout` / "is not a valid module" path) —
     // wait slightly longer than that so this section reliably resolves either way.
     setTimeout(function () {
-      finish(false, 'tagInput module absent from bundled layui 2.6.3 (TagInputTagHelper targets Layui 2.8+) — layui.use([\'tagInput\']) never resolved within 11s. Documented pre-existing gap, tracked for #566.');
+      finish(false, 'tagInput module absent from bundled layui ' + (WTM_LAYUI_NEXT ? '2.13.8 (layui-next)' : '2.6.3') + ' (TagInputTagHelper targets Layui 2.8+) — layui.use([\'tagInput\']) never resolved within 11s. Documented pre-existing gap in both vendored trees, verified during #566.');
     }, 11000);
   })();
 
