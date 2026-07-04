@@ -1,9 +1,15 @@
 // Issue #565 — headless assertion pass over the TagHelper<->LayUI browser
 // regression harness. This IS the Phase-2 (#566) gate: it navigates to the
 // combined harness page, waits for every section to finish reporting into
-// window.__regressionResults, and asserts every entry passed — except
-// entries explicitly flagged knownGap:true (currently just `tagInput`,
-// which targets a Layui 2.8+ module).
+// window.__regressionResults, and asserts every entry passed — except any
+// entry explicitly flagged knownGap:true. There is no hardcoded per-name
+// exemption list here — this spec generically filters on each result's own
+// `knownGap` field, whatever it is (or isn't) at the time. As of #581, the
+// suite carries ZERO knownGap entries: the last one (tagInput, which used
+// to target a never-shipped Layui 2.8+ module) was retired once #571
+// reimplemented TagInputTagHelper as a native, dependency-free widget — it
+// is now a real must-pass section on both projects below, same as every
+// other widget.
 //
 // #566 update: this spec now runs under TWO Playwright projects (see
 // playwright.config.mjs) — `layui-263` (the original bundled 2.6.3 tree,

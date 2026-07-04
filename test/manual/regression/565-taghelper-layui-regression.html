@@ -46,15 +46,18 @@
   Once all TOTAL_EXPECTED sections have reported, `window.__regressionDone`
   is set to `true`. A headless runner (test/regression/) waits for that flag
   and then asserts `pass === true` for every entry EXCEPT those flagged
-  `knownGap: true` (see the tagInput section below for the one gap this
-  suite currently documents — a pre-existing product gap, not a suite bug).
+  `knownGap: true`. As of #581, this suite has ZERO `knownGap` entries — the
+  last one (section 14, tagInput) was retired once #571 reimplemented
+  TagInputTagHelper as a native, dependency-free widget (see section 14
+  below); the `knownGap` mechanism itself is left in place for any future
+  gap, it just has nothing to flag right now.
 
   WIDGET COVERAGE (see the on-page PASS/FAIL banner list + README for the
   one-line-per-widget summary):
     1. form.render                 6. ComboBox (xmSelect)   11. slider
     2. laydate (single date)       7. tree (xmSelect)       12. rate
     3. laydate (range)             8. checkbox/radio +      13. colorPicker
-    4. layer / OpenDialog             ff.LoadComboItems      14. tagInput (KNOWN GAP)
+    4. layer / OpenDialog             ff.LoadComboItems      14. tagInput (native, #571)
     5. table/grid                  9. transfer
                                    10. upload (render only)
   ============================================================================
@@ -268,11 +271,24 @@
   <div class="status" id="status-colorpicker">waiting…</div>
 </div>
 
-<!-- ============================== 14. tagInput (KNOWN GAP) ============================== -->
+<!-- ============================== 14. tagInput (native, #571) ============================== -->
 <div class="box" id="sec-taginput">
-  <h2>14. tagInput — TagInputTagHelper's tagInput.render() (Layui 2.8+ widget — KNOWN GAP against 2.6.3)</h2>
-  <div id="regTagInput1" class="wtm-taginput-placeholder"></div>
-  <input type="hidden" id="regTagInput1_val" name="TagField" value="" />
+  <h2>14. tagInput — TagInputTagHelper's native, dependency-free chip widget (#571)</h2>
+  <!-- Exactly the shape TagInputTagHelper (post-#571, see
+       src/WalkingTec.Mvvm.TagHelpers.LayUI/Form/TagInputTagHelper.cs) emits
+       today: an (initially empty) wrapper <div id> the widget itself
+       populates, a sibling hidden input carrying the delimiter-joined value
+       (pre-seeded here with "apple,banana" to exercise init-from-value chip
+       population), and the bare (non-actions-wrapped) tagInput JSON island —
+       normalized by ff._normalizeIslandPayload and auto-dispatched by the
+       SAME page-ready island consumer (ff._consumePageReadyIslands) that
+       drives sections 1-3 above; no hand-rolled dispatch path. The native
+       widget has no layui module dependency at all (#571), so it must
+       initialize identically on both layui-263 and layui-next — that's the
+       whole point of this section. -->
+  <div id="regTagInput1" class="wtm-taginput layui-input-inline"></div>
+  <input type="hidden" id="regTagInput1_val" name="TagField" value="apple,banana" />
+  <script type="application/json" class="wtm-dialog-init">{"type":"tagInput","opts":{"elem":"#regTagInput1","separator":","},"valueFieldId":"regTagInput1_val"}</script>
   <div class="status" id="status-taginput">waiting…</div>
 </div>
 
@@ -634,50 +650,102 @@
     });
   }, 60, 150);
 
-  // ---- 14. tagInput (KNOWN GAP) -----------------------------------------------
-  // TagInputTagHelper's doc comment states it targets "Layui 2.8+ tagInput
-  // widget". Verified absent from BOTH vendored trees this harness runs
-  // against (#566): the bundled layui 2.6.3 (demo/**/wwwroot/layui/) never
-  // shipped it, and the opt-in layui-next 2.13.8 (demo/**/wwwroot/layui-next/)
-  // still doesn't ship a 'tagInput' module either (checked: no tagInput
-  // reference anywhere in either layui.js bundle, no separate module file).
-  // layui.use(['tagInput'], cb) will therefore try to resolve the module,
-  // fail, and the callback will simply never fire, on either tree. This is
-  // flagged knownGap:true (not counted in the suite's pass/fail gate) so it
-  // does NOT block #565/#566, but it IS surfaced so it isn't a silent gap —
-  // if a future layui version ships tagInput, this exact assertion should
-  // start passing and can be promoted out of knownGap.
-  (function () {
-    var settled = false;
-    function finish(pass, detail) {
-      if (settled) { return; }
-      settled = true;
-      setStatus('status-taginput', '<span class="gap">KNOWN GAP</span>: ' + detail);
-      pushResult('tagInput (Layui 2.8+ widget)', pass, detail, true);
+  // ---- 14. tagInput (native, dependency-free — #571) ---------------------------
+  // #581: this section used to be a KNOWN GAP because layui never shipped a
+  // 'tagInput' module (neither bundled 2.6.3 nor opt-in layui-next 2.13.8).
+  // #571 removed the gap at the source by reimplementing TagInputTagHelper
+  // as a plain-DOM widget with NO layui module dependency at all, so — like
+  // sections 1-3 above — there is nothing to layui.use(...)-gate here; the
+  // only thing to wait on is the page-ready island consumer itself
+  // (ff._consumePageReadyIslands / ff._dispatchIslandWhenReady, which routes
+  // straight to a synchronous ff.DispatchAction since 'tagInput' contributes
+  // no entry to ff._islandModulesFor). This is now a real, gated (must-pass)
+  // assertion on BOTH layui-263 and layui-next — the whole point of #581 is
+  // proving the widget renders identically on both because it depends on
+  // neither.
+  // Chip DOM shape (see _renderTagInputAction / _tiRenderChips in
+  // framework_layui.js): chip.appendChild(createTextNode(tag)) ALWAYS runs
+  // first, then — only when interactive (not readonly/disabled) — a second
+  // child (the '×' close <span>) is appended. So the tag's own text lives
+  // exclusively in the chip's FIRST child node; chip.textContent would
+  // wrongly include the close glyph too. Read childNodes[0] to isolate it.
+  function chipTagText(chip) {
+    var first = chip.childNodes[0];
+    return first ? first.nodeValue : '';
+  }
+
+  pollUntil(function () {
+    var island = document.querySelector('#sec-taginput .wtm-dialog-init');
+    var marked = island && island.getAttribute('data-wtm-dispatched') === '1';
+    var chips = document.querySelectorAll('#regTagInput1 .wtm-taginput-chips .wtm-taginput-chip');
+    return (marked && chips.length >= 2) ? { pass: true, chips: chips } : null;
+  }, function (result) {
+    if (!result.pass) {
+      setStatus('status-taginput', '<span class="bad">FAIL</span>: ' + result.detail);
+      pushResult('tagInput (native widget init)', false, result.detail);
+      return;
     }
-    try {
-      layui.use(['tagInput'], function () {
-        layui.tagInput.render({
-          elem: '#regTagInput1',
-          tagInitData: ['sample'],
-          change: function (tagData) {
-            document.getElementById('regTagInput1_val').value = tagData.map(function (t) { return t.value; }).join(',');
-          }
-        });
-        finish(document.querySelector('#regTagInput1 .layui-tag-input, #regTagInput1 input') !== null,
-          'layui.use([\'tagInput\']) resolved and tagInput.render() ran — bundled layui now ships tagInput (2.8+); this can be promoted out of knownGap');
-      });
-    } catch (e) {
-      finish(false, 'layui.use([\'tagInput\']) threw synchronously: ' + e);
+
+    // --- init-from-value: the widget must parse the pre-seeded hidden
+    // input's "apple,banana" value into two chips on init (verified in
+    // _renderTagInputAction: it unconditionally calls _tiRenderChips(),
+    // which reads _tiCurrentTags() from the hidden input's CURRENT value,
+    // before any user interaction happens).
+    var chipTexts = Array.prototype.map.call(result.chips, chipTagText);
+    var hidden = document.getElementById('regTagInput1_val');
+    var initOk = chipTexts.length === 2 && chipTexts[0] === 'apple' && chipTexts[1] === 'banana' &&
+      hidden && hidden.value === 'apple,banana';
+    if (!initOk) {
+      var initDetail = 'init-from-value population mismatch: chips=' + JSON.stringify(chipTexts) +
+        ' hidden.value=' + JSON.stringify(hidden ? hidden.value : null);
+      setStatus('status-taginput', '<span class="bad">FAIL</span>: ' + initDetail);
+      pushResult('tagInput (native widget init)', false, initDetail);
+      return;
     }
-    // Bounded fallback: layui.use() has its own ~10s internal timeout before it
-    // gives up on a missing module and logs an error without ever invoking the
-    // callback (see layui.js's `n.timeout` / "is not a valid module" path) —
-    // wait slightly longer than that so this section reliably resolves either way.
-    setTimeout(function () {
-      finish(false, 'tagInput module absent from bundled layui ' + (WTM_LAYUI_NEXT ? '2.13.8 (layui-next)' : '2.6.3') + ' (TagInputTagHelper targets Layui 2.8+) — layui.use([\'tagInput\']) never resolved within 11s. Documented pre-existing gap in both vendored trees, verified during #566.');
-    }, 11000);
-  })();
+
+    // --- XSS-safety: add a tag through the widget's REAL interaction path —
+    // typing into its own .wtm-taginput-entry <input> and blurring it (the
+    // exact _tiAddTag() call path a real user triggers via the entry input's
+    // 'blur' listener) — never by calling an internal helper directly. A
+    // payload like '<img src=x onerror=...>' must render as inert chip TEXT
+    // (createTextNode/textContent), never as a parsed <img> element — the
+    // #462/#552 stored-XSS threat class this native widget was built to
+    // avoid (see _renderTagInputAction's doc comment in framework_layui.js).
+    var xssPayload = '<img src=x onerror=alert(1)>';
+    var entry = document.querySelector('#regTagInput1 .wtm-taginput-entry');
+    if (!entry) {
+      var noEntryDetail = 'no .wtm-taginput-entry text input found — cannot exercise the real add-tag path';
+      setStatus('status-taginput', '<span class="bad">FAIL</span>: ' + noEntryDetail);
+      pushResult('tagInput (native widget init)', false, noEntryDetail);
+      return;
+    }
+    entry.value = xssPayload;
+    entry.dispatchEvent(new Event('blur'));
+
+    pollUntil(function () {
+      var nowChips = document.querySelectorAll('#regTagInput1 .wtm-taginput-chips .wtm-taginput-chip');
+      return nowChips.length === 3 ? { pass: true, chips: nowChips } : null;
+    }, function (xssResult) {
+      if (!xssResult.pass) {
+        setStatus('status-taginput', '<span class="bad">FAIL</span>: ' + xssResult.detail);
+        pushResult('tagInput (native widget init)', false, xssResult.detail);
+        return;
+      }
+      var lastChip = xssResult.chips[xssResult.chips.length - 1];
+      var textMatches = chipTagText(lastChip) === xssPayload;
+      var noInjectedImg = lastChip.querySelector('img') === null;
+      var hiddenAfter = document.getElementById('regTagInput1_val');
+      var hiddenJoinOk = hiddenAfter && hiddenAfter.value === 'apple,banana,' + xssPayload;
+
+      var pass = textMatches && noInjectedImg && hiddenJoinOk;
+      var detail = pass
+        ? 'native widget populated 2 chips from the hidden input\'s initial value (apple, banana; #571 init-from-value), then a 3rd chip was added via the REAL entry-input+blur interaction path carrying an XSS payload — it rendered as inert chip text (createTextNode, no <img> element created) and the hidden field stayed comma-joined in sync ("' + hiddenAfter.value + '")'
+        : 'assertion mismatch: textMatches=' + textMatches + ' noInjectedImg=' + noInjectedImg +
+          ' hiddenJoinOk=' + hiddenJoinOk + ' hidden.value=' + JSON.stringify(hiddenAfter ? hiddenAfter.value : null);
+      setStatus('status-taginput', (pass ? '<span class="ok">OK</span>: ' : '<span class="bad">FAIL</span>: ') + detail);
+      pushResult('tagInput (native widget init)', pass, detail);
+    }, 40, 150);
+  }, 80, 150);
 
 })();
 </script>
