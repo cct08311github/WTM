@@ -129,7 +129,7 @@ describe('#558 (#470-C) — source sweep', () => {
   });
 
   test('_islandModulesFor maps bindSubmit -> the form module', () => {
-    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,1200}?\n\s*\},/);
+    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,1600}?\n\s*\},/);
     expect(block).not.toBeNull();
     expect(block[0]).toMatch(/a\.type\s*===\s*['"]bindSubmit['"][\s\S]{0,80}needed\.form\s*=\s*true/);
   });

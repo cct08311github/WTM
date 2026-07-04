@@ -132,7 +132,7 @@ describe('#556 (#470-B slice 1) — source sweep', () => {
   });
 
   test('_islandModulesFor maps laydate -> laydate module and initForm -> form module', () => {
-    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,900}?\n\s*\},/);
+    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,1600}?\n\s*\},/);
     expect(block).not.toBeNull();
     expect(block[0]).toMatch(/a\.type\s*===\s*['"]laydate['"]/);
     expect(block[0]).toMatch(/a\.type\s*===\s*['"]initForm['"]/);

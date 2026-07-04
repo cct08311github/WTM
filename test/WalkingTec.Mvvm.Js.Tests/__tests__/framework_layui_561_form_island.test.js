@@ -53,7 +53,7 @@ describe('#561 (#470-B slice 2) — source sweep', () => {
   });
 
   test('_islandModulesFor maps both initForm and bindSubmit to the form module', () => {
-    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,1200}?\n\s*\},/);
+    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,1600}?\n\s*\},/);
     expect(block).not.toBeNull();
     expect(block[0]).toMatch(/a\.type\s*===\s*['"]initForm['"][\s\S]{0,80}needed\.form\s*=\s*true/);
     expect(block[0]).toMatch(/a\.type\s*===\s*['"]bindSubmit['"][\s\S]{0,80}needed\.form\s*=\s*true/);
