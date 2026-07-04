@@ -44,6 +44,14 @@ public class SliderTagHelperTests
         => new("wt:slider", new TagHelperAttributeList(),
                new Dictionary<object, object>(), "test-id");
 
+    // Issue #578: same ambient "formid" context item FormTagHelper publishes
+    // for descendant tag helpers (already consumed by LinkButtonTagHelper /
+    // SubmitButtonTagHelper / BaseButton) — simulates rendering inside a
+    // <wt:form>.
+    private static TagHelperContext MakeContextInsideForm(string formId)
+        => new("wt:slider", new TagHelperAttributeList(),
+               new Dictionary<object, object> { ["formid"] = formId }, "test-id");
+
     private static TagHelperOutput MakeOutput()
         => new("div", new TagHelperAttributeList(),
                (_, __) => Task.FromResult<TagHelperContent>(new DefaultTagHelperContent()));
@@ -338,6 +346,42 @@ public class SliderTagHelperTests
             StringAssert.Contains(postHtml, $",theme: '{theme}'",
                 $"Legitimate theme '{theme}' must pass through the legacy inline script unchanged");
         }
+    }
+
+    // ── Issue #578: owning-form id plumbed into the island for the client-side
+    //    write-back containment gate ────────────────────────────────────────
+
+    [TestMethod]
+    public void Process_InsideForm_NoCallback_JsonIslandContainsFormId()
+    {
+        SetupLocalizer();
+        var helper = new SliderTagHelper { Field = MakeField("IntField"), Id = "slider_formid1" };
+        var output = MakeOutput();
+        helper.Process(MakeContextInsideForm("wtForm_test1"), output);
+        var postHtml = output.PostElement.GetContent();
+        var json = ExtractJsonFromIsland(postHtml);
+        Assert.IsNotNull(json, "Island must contain parseable JSON");
+        using var doc = System.Text.Json.JsonDocument.Parse(json!);
+        Assert.AreEqual("wtForm_test1", doc.RootElement.GetProperty("formId").GetString());
+    }
+
+    [TestMethod]
+    public void Process_NotInsideForm_NoCallback_JsonIslandOmitsFormId()
+    {
+        // No ambient "formid" context item (e.g. rendered outside <wt:form>)
+        // -> the field must be OMITTED entirely (never emitted as null/empty),
+        // matching the DTO's WhenWritingNull serializer option and the
+        // client's back-compat no-containment-check behavior.
+        SetupLocalizer();
+        var helper = new SliderTagHelper { Field = MakeField("IntField"), Id = "slider_noformid" };
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+        var postHtml = output.PostElement.GetContent();
+        var json = ExtractJsonFromIsland(postHtml);
+        Assert.IsNotNull(json, "Island must contain parseable JSON");
+        using var doc = System.Text.Json.JsonDocument.Parse(json!);
+        Assert.IsFalse(doc.RootElement.TryGetProperty("formId", out _),
+            "formId must be absent from the island entirely when there is no ambient owning form");
     }
 
     // ── Callback-bearing path: legacy inline <script> fallback preserved ─────
