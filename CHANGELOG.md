@@ -1,5 +1,28 @@
 # 更新日志
 
+## [10.13.14] - 2026-07-04
+
+LayUI modernization roadmap (#567) — Phases 1–2 land, plus a demo-scaffolding security fix and the final eval-free static-widget migration. The bundled LayUI stays **2.6.3 by default** (BMS zero-risk); a vetted 2.13.8 tree ships alongside it as an **opt-in** parallel asset, gated behind a browser regression suite that passes against both trees. A pre-existing stored-DOM-XSS in the ColorPicker/Slider color emission is closed at the source (both the new island path and the legacy inline-script path).
+
+### Security
+
+- **Demo `FileApiController.GetFile` MIME-sniffing hardening ported to all five demo scaffolds (#563):** the #530 fix (v10.13.11) hardened the framework `_FrameworkController.GetFile`, but the app-owned `[Public]` `FileApiController.GetFile` copied into every `dotnet new wtm` app was never updated — and was actually worse than pre-#530 (it sent **no `Content-Type` header at all** on the raw-stream path, letting the browser sniff an uploaded `text/html`/`image/svg+xml` as active content in the app origin → stored XSS). All five demos (`Demo`, `VueDemo`, `Vue3Demo`, `ReactDemo`, `BlazorDemo`) shared a byte-identical unhardened `GetFile`; all now reuse `_FrameworkController.GetSafeStreamContentType` + `X-Content-Type-Options: nosniff` on the non-mp4 stream branch and pin `image/jpeg` on the re-encoded resize branch. Three behavior-asserting regression tests added.
+- **Closed a pre-existing stored-DOM-XSS in ColorPicker/Slider color emission (#552):** the persisted ColorPicker `color` (field data), `PredefinedColors` tokens, and Slider `Theme` were spliced unescaped into LayUI 2.6.3's internal `style="…"` HTML string (`$(htmlString)` parse) on **both** the inline-`<script>` and island paths — `JavaScriptEncoder` protected only the JS string literal, not the decoded runtime value that reaches LayUI's HTML sink. Fixed at the C# source with a shared `BaseFieldTag.IsSafeColorToken` allowlist grammar (`^[#0-9A-Za-z(),.%\s-]+$` — accepts hex/rgb/rgba/hsl/named colors, structurally excludes `< > " ' ; { }`); unsafe values are omitted (LayUI falls back to its default), legitimate colors pass through unchanged, and the bound hidden input still stores the HtmlEncoded value (no data loss). Found via perspective-diverse adversarial review of the #552 island migration.
+
+### Added
+
+- **Opt-in LayUI 2.13.8 parallel asset `layui-next` (#566, roadmap #567 Phase 2):** the demo vendors LayUI 2.13.8 (latest stable 2.x) at `wwwroot/layui-next/` alongside the default 2.6.3 tree; a `Layui:Asset=next` config key switches the demo layout/login to it. **The default stays 2.6.3 — no behaviour change without explicit opt-in.** The #565 TagHelper↔LayUI browser regression suite now runs against **both** trees (`?layui=next`); LayUI 2.13.8 passed all 13 non-gap assertions on the first run with zero TagHelper compat fixes. A default flip to 2.13.8 remains gated on BMS staging sign-off (tracked: #573).
+
+### Changed
+
+- **Slider / Rate / ColorPicker emit an eval-free JSON dialog-init island on the callback-free path (#552, #470-E):** completes the static-config-widget slice of the eval-free dialog epic. A widget with no developer callback (`ChangeFunc`/`OnTipsFunc`) now renders a `wtm-dialog-init` island dispatched via `ff.DispatchAction` instead of an inline `<script>`; a widget **with** a callback keeps the inline-`<script>` fallback unchanged. Equivalent rendered behaviour; the dialog-path dispatch now defers through `layui.use([mod], …)` so a first-in-dialog slider/rate/colorpicker can never silently no-op on a not-yet-loaded module. The Slider value write-back is now per-instance id-scoped (was a shared `name` selector; only differs with duplicate `Field.Name` on one page — tracked: #577).
+
+### Migration
+
+- No action required; all three changes are opt-in, an equivalent output-shape change, or a security fix that only alters output for values that were already an XSS payload. Apps stay on LayUI 2.6.3 unless they explicitly set `Layui:Asset=next`. Follow-ups tracked: #571 (tagInput module absent in all 2.x), #573 (default-flip gate), #576/#577/#578 (OpenDialog dispatch deferral, slider write-back note, write-back containment).
+
+---
+
 ## [10.13.13] - 2026-07-03
 
 Eval-free dialogs — completion. Building on the v10.13.12 foundations (#470-A/#556/#558), `FormTagHelper` now emits its form init, submit-binding, auto-validate, and ModelState error-highlight as an eval-free `wtm-dialog-init` JSON island instead of inline `<script>`. **A plain WTM-generated dialog now carries zero inline `<script>`**, making a strict, `unsafe-inline`/`unsafe-eval`-free CSP viable (opt-in) for the LayUI dialog flow. Behaviour is unchanged and browser-verified; the `eval`/`IsScript` fallback remains for legacy and edge-case paths.
