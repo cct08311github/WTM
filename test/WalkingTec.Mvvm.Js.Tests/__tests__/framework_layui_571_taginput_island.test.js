@@ -159,7 +159,12 @@ describe('#571 tagInput island — real ff.DispatchAction', () => {
     expect(chips.length).toBe(2);
   });
 
-  test('removing a chip via click on the × control updates the hidden field joined value', () => {
+  // Issue #585 (D): chip removal is bound to 'mousedown' (not 'click') to
+  // close a blur/rebuild race — see
+  // framework_layui_585_taginput_hardening.test.js for the full race
+  // regression coverage. This test dispatches 'mousedown' (not 'click') to
+  // match the current implementation.
+  test('removing a chip via mousedown on the × control updates the hidden field joined value', () => {
     makeIslandDom('ti3', 'ti3_val', 'red,green,blue');
     const ff = loadFreshFf();
     ff.DispatchAction({
@@ -168,7 +173,7 @@ describe('#571 tagInput island — real ff.DispatchAction', () => {
     const closeButtons = document.querySelectorAll('#ti3 .wtm-taginput-chip-close');
     expect(closeButtons.length).toBe(3);
     // Remove the middle chip ("green").
-    closeButtons[1].dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    closeButtons[1].dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
 
     const hidden = document.getElementById('ti3_val');
     expect(hidden.value).toBe('red,blue');
