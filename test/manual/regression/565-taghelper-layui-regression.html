@@ -385,12 +385,46 @@
   // everything ABOVE that network boundary (DOMParser island extraction,
   // ff.SafeHtml/DOMPurify sanitization, layer.open()) is exercised for real,
   // same stub-the-network-boundary philosophy as 561's ff.PostForm stub.
+  //
+  // Issue #586: the mock partial now carries a REAL island-backed widget (a
+  // bare 'rate' island, identical shape to RateTagHelper's RateIslandAction —
+  // see RateTagHelper.cs) instead of the old dead-letter initForm island —
+  // the previous "dlgFormNOTUSED" filter matched no element at all (the
+  // partial had no <form> to begin with), so that island silently no-op'd on
+  // every run and the section's ONLY assertion was `.layui-layer !== null`,
+  // which stays true even when dialog-dispatched island rendering is
+  // completely broken.
+  //
+  // Deliberately NOT an 'initForm'/lay-filter-scoped island here: ff.SafeHtml
+  // (DOMPurify, default ALLOWED_ATTR) strips non-standard attributes —
+  // including `lay-filter` and `lay-skin` — from ANY ajax-loaded dialog
+  // partial before it reaches the live DOM (verified empirically; this is a
+  // separate, pre-existing gap in ff.SafeHtml's attribute allowlist, tracked
+  // separately — see #591 — and out of scope for this harness fix). A 'rate'
+  // island only needs a plain `id` selector (a standard attribute DOMPurify
+  // always preserves), so it exercises the SAME dialog-init dispatch loop /
+  // ff._dispatchIslandWhenReady (#576) mechanism without tripping over that
+  // unrelated gap.
+  //
+  // The assertion below checks the CONCRETE post-dispatch DOM the rate island
+  // must produce: a `.layui-rate` element inside `#dlgRate1`, with EXACTLY 3
+  // filled (`.layui-icon-rate-solid`) stars — matching the island's own
+  // `value: 3` opt — so a widget that rendered garbage (or the wrong value)
+  // would still fail this even if some `.layui-rate` element happened to
+  // exist. If ff._dispatchIslandWhenReady (or the dialog-init dispatch loop
+  // that calls it) breaks — e.g. a #576-style regression, or a future layui
+  // bump that changes module-load timing for the dialog path — layer.open()
+  // can still succeed (the OLD, sole signal) while the island never renders;
+  // this section now fails in that case instead of reporting a false PASS.
   (function () {
     var realAjax = $.ajax;
     var mockPartial =
       '<div class="layui-form-item"><label class="layui-form-label">Dialog field</label>' +
       '<div class="layui-input-block"><input type="text" name="DialogField" class="layui-input"></div></div>' +
-      '<script type="application/json" class="wtm-dialog-init">{"actions":[{"type":"initForm","filter":"dlgFormNOTUSED"}]}<\/script>';
+      '<div class="layui-form-item"><label class="layui-form-label">Dialog rate</label>' +
+      '<div class="layui-input-block"><div id="dlgRate1" class="wtm-rate-placeholder"></div>' +
+      '<input type="hidden" id="dlgRate1_val" name="DialogRateField" value="0" /></div></div>' +
+      '<script type="application/json" class="wtm-dialog-init">{"type":"rate","opts":{"elem":"#dlgRate1","value":3,"length":5},"valueFieldId":"dlgRate1_val"}<\/script>';
 
     document.getElementById('openDialogBtn').addEventListener('click', function () {
       $.ajax = function (opts) {
@@ -408,7 +442,18 @@
       }
 
       pollUntil(function () {
-        return document.querySelector('.layui-layer') !== null ? { pass: true, detail: '.layui-layer present after layer.open()' } : null;
+        var layer = document.querySelector('.layui-layer');
+        if (!layer) { return null; }
+        var rateEl = layer.querySelector('#dlgRate1 .layui-rate');
+        if (!rateEl) { return null; }
+        var solidCount = rateEl.querySelectorAll('.layui-icon-rate-solid').length;
+        if (solidCount !== 3) { return null; }
+        return {
+          pass: true,
+          detail: '.layui-layer present; dialog-dispatched rate island (elem="#dlgRate1", value:3) rendered ' +
+            '.layui-rate with exactly 3 filled stars — proves ff._dispatchIslandWhenReady (#576) actually ' +
+            'dispatched and rendered the widget inside the dialog, not merely that the layer opened'
+        };
       }, function (result) {
         setStatus('status-dialog', result.pass ? '<span class="ok">OK</span>: ' + result.detail : '<span class="bad">FAIL</span>: ' + result.detail);
         pushResult('layer / OpenDialog', result.pass, result.detail);
@@ -562,6 +607,33 @@
   }, 60, 150);
 
   // ---- 10. upload (render only) --------------------------------------------------
+  // Issue #586: a broken upload.render() that still returns SOME truthy object
+  // (e.g. one that threw internally after construction, or a stub swapped in
+  // by a bad layui build) used to report PASS on that signal alone. This now
+  // additionally asserts two concrete signals that layui.upload.render() is
+  // documented (and, per the vendored source in both
+  // demo/**/wwwroot/layui/lay/modules/upload.js and the layui-next bundle, is
+  // GUARANTEED) to produce when it actually renders and wires up the widget:
+  //   1. A sibling <input class="layui-upload-file" type="file"> inserted
+  //      immediately after #regUpload1 (prototype.file(): `elem.after(...)`,
+  //      identical class name/insertion point on both vendored layui trees).
+  //   2. Clicking #regUpload1 forwards to that hidden file input's own
+  //      .click() — proving the click handler was actually BOUND and wired
+  //      end-to-end, not merely that some DOM node was constructed.
+  // Both must be present for a real PASS — a widget that renders a dead
+  // button (file input present but nothing wired to it) will now fail here.
+  //
+  // Deliberately NOT asserting via an internal jQuery-data "already bound"
+  // guard flag (e.g. a literal 'haveEvents' key): that guard's NAME is a
+  // private implementation detail that changed between the two vendored
+  // trees (2.6.3 keys it "haveEvents"; the layui-next 2.13.8 bundle renamed
+  // it to a per-module "layui_upload_index" key for this exact module — both
+  // are internal de-dupe flags, not part of any public contract). Hardcoding
+  // either name would make this section version-specific instead of testing
+  // BOTH trees identically. Simulating the real click and observing the file
+  // input's .click() invocation (intercepted here so no actual native file
+  // picker ever opens) tests the widget's PUBLIC, user-facing behavior
+  // instead, which layui guarantees identically on both trees.
   pollUntil(function () {
     return window.__wtmHarnessCoreReady ? { pass: true } : null;
   }, function () {
@@ -575,10 +647,27 @@
           url: '/mock/upload',
           auto: false // no real file I/O — render-only, per #565 scope
         });
-        pass = uploadInst !== null && typeof uploadInst === 'object';
+        var instOk = uploadInst !== null && typeof uploadInst === 'object';
+        var fileInputEl = document.querySelector('#regUpload1 + input.layui-upload-file');
+        var fileInputOk = fileInputEl !== null;
+        var clickForwardedOk = false;
+        if (fileInputEl) {
+          var originalFileClick = fileInputEl.click;
+          fileInputEl.click = function () { clickForwardedOk = true; };
+          try {
+            document.getElementById('regUpload1').dispatchEvent(
+              new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+          } finally {
+            fileInputEl.click = originalFileClick; // restore immediately either way
+          }
+        }
+        pass = instOk && fileInputOk && clickForwardedOk;
         detail = pass
-          ? 'upload.render() returned an upload instance (elem click-handler bound) — no real file I/O attempted per #565 scope'
-          : 'upload.render() did not return an instance';
+          ? 'upload.render() returned an instance, injected the sibling input.layui-upload-file it uses ' +
+            'to capture file selection, and a real click on #regUpload1 forwarded to that file input\'s ' +
+            'own .click() (intercepted — no real file I/O attempted per #565 scope)'
+          : 'assertion mismatch: instanceReturned=' + instOk + ' fileInputInjected=' + fileInputOk +
+            ' clickForwardedToFileInput=' + clickForwardedOk;
       } catch (e) {
         pass = false;
         detail = 'upload.render() threw: ' + e;
