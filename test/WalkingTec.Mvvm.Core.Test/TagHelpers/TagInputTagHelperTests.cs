@@ -55,6 +55,15 @@ public class TagInputTagHelperTests
         => new("wt:taginput", new TagHelperAttributeList(),
                new Dictionary<object, object>(), "test-id");
 
+    // Issue #578/#585: same ambient "formid" context item FormTagHelper
+    // publishes for descendant tag helpers (already consumed by
+    // LinkButtonTagHelper/SubmitButtonTagHelper/BaseButton and, since #578,
+    // SliderTagHelper/RateTagHelper/ColorPickerTagHelper) — simulates
+    // rendering inside a <wt:form>.
+    private static TagHelperContext MakeContextInsideForm(string formId)
+        => new("wt:taginput", new TagHelperAttributeList(),
+               new Dictionary<object, object> { ["formid"] = formId }, "test-id");
+
     private static TagHelperOutput MakeOutput()
         => new("div", new TagHelperAttributeList(),
                (_, __) => Task.FromResult<TagHelperContent>(new DefaultTagHelperContent()));
@@ -231,6 +240,42 @@ public class TagInputTagHelperTests
         var opts = doc.RootElement.GetProperty("opts");
         Assert.AreEqual("</script><script>alert(1)</script>", opts.GetProperty("placeholder").GetString(),
             "Decoded placeholder value must round-trip to the original string");
+    }
+
+    // ── Issue #578/#585: owning-form id plumbed into the island for the
+    //    client-side write-back/containment gate ─────────────────────────
+
+    [TestMethod]
+    public void Process_InsideForm_JsonIslandContainsFormId()
+    {
+        SetupLocalizer();
+        var helper = new TagInputTagHelper { Field = MakeField("TagField"), Id = "tag_formid1" };
+        var output = MakeOutput();
+        helper.Process(MakeContextInsideForm("wtForm_test1"), output);
+        var postHtml = output.PostElement.GetContent();
+        var json = ExtractJsonFromIsland(postHtml);
+        Assert.IsNotNull(json, "Island must contain parseable JSON");
+        using var doc = System.Text.Json.JsonDocument.Parse(json!);
+        Assert.AreEqual("wtForm_test1", doc.RootElement.GetProperty("formId").GetString());
+    }
+
+    [TestMethod]
+    public void Process_NotInsideForm_JsonIslandOmitsFormId()
+    {
+        // No ambient "formid" context item (e.g. rendered outside <wt:form>)
+        // -> the field must be OMITTED entirely (never emitted as
+        // null/empty), matching the DTO's WhenWritingNull serializer option
+        // and the client's back-compat no-containment-check behavior.
+        SetupLocalizer();
+        var helper = new TagInputTagHelper { Field = MakeField("TagField"), Id = "tag_noformid" };
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+        var postHtml = output.PostElement.GetContent();
+        var json = ExtractJsonFromIsland(postHtml);
+        Assert.IsNotNull(json, "Island must contain parseable JSON");
+        using var doc = System.Text.Json.JsonDocument.Parse(json!);
+        Assert.IsFalse(doc.RootElement.TryGetProperty("formId", out _),
+            "formId must be absent from the island entirely when there is no ambient owning form");
     }
 
     [TestCleanup]

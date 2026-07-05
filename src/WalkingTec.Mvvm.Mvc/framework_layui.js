@@ -389,6 +389,31 @@ window.ff = {
             if (!action.opts || !action.opts.elem) { return; }
             var container = document.querySelector(action.opts.elem);
             if (!container) { return; }
+
+            // Issue #578/#585: containment gate mirrors the #578 fix already
+            // applied to _renderSliderAction/_renderRateAction/
+            // _renderColorpickerAction — action.formId (absent on old/
+            // back-compat islands, in which case rendering proceeds
+            // unguarded exactly as before) is resolved via
+            // document.getElementById, then BOTH the opts.elem container
+            // (about to be destructively cleared/rebuilt below — unique to
+            // tagInput among the island widgets, which otherwise only gated
+            // their write-back callback) and the bound hidden value input
+            // must satisfy formEl.contains(el) or the entire render is
+            // silently skipped, BEFORE any clearing/writing happens. Closes
+            // the id-spoofing gap a smuggled island (#462/#552 threat model)
+            // could otherwise use — e.g.
+            // {"type":"tagInput","opts":{"elem":"#anyContainer"},
+            // "valueFieldId":"anyHiddenInput"} — to wipe an arbitrary
+            // container and bind writes to an arbitrary hidden input
+            // anywhere on the page.
+            var _tiFormId = (typeof action.formId === 'string') ? action.formId : null;
+            var _tiFormEl = _tiFormId ? document.getElementById(_tiFormId) : null;
+            var _tiContained = function (el) {
+                return !_tiFormId || (_tiFormEl != null && _tiFormEl.contains(el));
+            };
+            if (_tiFormId && !_tiContained(container)) { return; }
+
             var _tiValueFieldId = (typeof action.valueFieldId === 'string') ? action.valueFieldId : null;
             if (!_tiValueFieldId) { return; }
             // Prefer resolving the hidden value input scoped to the widget's
@@ -397,6 +422,7 @@ window.ff = {
             // (the hidden input is a sibling of the container, not a child).
             var _tiHidden = container.querySelector('#' + _tiValueFieldId) || document.getElementById(_tiValueFieldId);
             if (!_tiHidden) { return; }
+            if (_tiFormId && !_tiContained(_tiHidden)) { return; }
 
             var _tiSeparator = (typeof action.opts.separator === 'string' && action.opts.separator.length > 0)
                 ? action.opts.separator : ',';
@@ -426,9 +452,16 @@ window.ff = {
                 container.appendChild(_tiTextInput);
             }
 
+            // Issue #585 (B): trim each split piece — the legacy
+            // BuildTagsJson implementation trimmed values before persisting
+            // (so a server value like "a, b" rendered as clean "a"/"b"
+            // chips); the native re-render must not regress and show
+            // untrimmed leading/trailing whitespace.
             function _tiCurrentTags() {
                 if (!_tiHidden.value) { return []; }
-                return _tiHidden.value.split(_tiSeparator).filter(function (s) { return s.length > 0; });
+                return _tiHidden.value.split(_tiSeparator)
+                    .map(function (s) { return s.replace(/^\s+|\s+$/g, ''); })
+                    .filter(function (s) { return s.length > 0; });
             }
 
             function _tiWriteBack(tags) {
@@ -452,7 +485,39 @@ window.ff = {
                         _tiClose.className = 'wtm-taginput-chip-close';
                         _tiClose.style.cssText = 'cursor:pointer;color:#999;';
                         _tiClose.textContent = '×';
-                        _tiClose.addEventListener('click', function () {
+                        // Issue #585 (D): bind removal to mousedown (with
+                        // preventDefault) rather than click. mousedown fires
+                        // BEFORE the browser's default focus-shift blurs the
+                        // entry input; blurring the entry input (see the
+                        // 'blur' listener below) commits any pending typed
+                        // text via _tiAddTag -> _tiRenderChips, which
+                        // rebuilds every chip node from scratch — including
+                        // the very × node the user is mid-click on. The
+                        // subsequent click is then suppressed by the browser
+                        // because its target was removed from the document
+                        // between mousedown and mouseup, silently swallowing
+                        // the removal. Handling removal on mousedown — and
+                        // calling preventDefault() to stop the default blur
+                        // outright — makes the removal atomic and immune to
+                        // the race regardless of any pending entry text.
+                        // Issue #585 review follow-up: 'click' only ever
+                        // fires for the primary (left) button — auxiliary
+                        // buttons dispatch 'auxclick' instead — but
+                        // 'mousedown' fires for EVERY button. Without a
+                        // guard, right-clicking the × (e.g. to open a
+                        // context menu — preventDefault on mousedown does
+                        // NOT suppress the separate 'contextmenu' event) or
+                        // middle-clicking it (the Linux paste gesture) would
+                        // also silently remove the tag, which 'click' never
+                        // did. Bail out for any non-primary button before
+                        // doing anything else. e.button is 0 for the
+                        // primary button; treat a missing/non-numeric
+                        // e.button (e.g. synthetic events dispatched by
+                        // tests or programmatic .click() callers) as
+                        // primary so existing callers keep working.
+                        _tiClose.addEventListener('mousedown', function (e) {
+                            if (e && typeof e.button === 'number' && e.button !== 0) { return; }
+                            if (e && e.preventDefault) { e.preventDefault(); }
                             var t = _tiCurrentTags();
                             t.splice(idx, 1);
                             _tiWriteBack(t);
@@ -464,13 +529,27 @@ window.ff = {
                 });
             }
 
+            // Issue #585 (B): split the raw input on the separator (handles
+            // a pasted/typed multi-value string like "a,b,c", not just a
+            // single value), trim each piece, drop empties, and enforce
+            // _tiMax against the RESULTING total tag count — not just the
+            // pre-add count. The previous guard (`tags.length >= _tiMax`)
+            // counted a separator-bearing string as ONE tag against Max, so
+            // e.g. max=5 with 4 existing tags let "a,b,c" through (4 < 5)
+            // and produced 7 effective chips once _tiCurrentTags re-split
+            // the written-back value. The whole batch is rejected (no
+            // partial add) if it would push the total over max, matching
+            // the previous single-tag reject-outright behavior. This also
+            // sanitizes paste/blur uniformly with keydown, since both route
+            // through this same function.
             function _tiAddTag(raw) {
-                var value = (raw || '').replace(/^\s+|\s+$/g, '');
-                if (!value) { return; }
+                var pieces = (raw || '').split(_tiSeparator)
+                    .map(function (s) { return s.replace(/^\s+|\s+$/g, ''); })
+                    .filter(function (s) { return s.length > 0; });
+                if (!pieces.length) { return; }
                 var tags = _tiCurrentTags();
-                if (_tiMax !== null && tags.length >= _tiMax) { return; }
-                tags.push(value);
-                _tiWriteBack(tags);
+                if (_tiMax !== null && (tags.length + pieces.length) > _tiMax) { return; }
+                _tiWriteBack(tags.concat(pieces));
                 _tiRenderChips();
             }
 

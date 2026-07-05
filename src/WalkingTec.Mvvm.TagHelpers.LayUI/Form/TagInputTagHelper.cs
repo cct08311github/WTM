@@ -96,10 +96,24 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             if (ReadOnly) { opts["readonly"] = true; }
             if (Disabled) { opts["disabled"] = true; }
 
+            // Issue #578 parity fix (#585): read the ambient owning-form id the
+            // SAME way SliderTagHelper/RateTagHelper/ColorPicker do — sourced
+            // from the SAME ambient context.Items["formid"] key FormTagHelper
+            // publishes for descendant tag helpers, not a new resolution
+            // mechanism. tagInput shipped in #571 (same release as #578) but
+            // never received the containment gate its siblings did. Null when
+            // tagInput isn't nested inside a <wt:form>; framework_layui.js
+            // treats an absent formId as back-compat (render/write-back
+            // proceeds unguarded, never throws).
+            var ownerFormId = context.Items.TryGetValue("formid", out var formIdObj)
+                ? formIdObj as string
+                : null;
+
             var action = new TagInputIslandAction
             {
                 Opts = opts,
-                ValueFieldId = valueFieldId
+                ValueFieldId = valueFieldId,
+                FormId = ownerFormId
             };
             var json = JsonSerializer.Serialize(action, _islandJsonOptions);
             output.PostElement.AppendHtml(
@@ -126,5 +140,18 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
         [System.Text.Json.Serialization.JsonPropertyName("valueFieldId")]
         public string? ValueFieldId { get; set; }
+
+        // Issue #578/#585: the owning <wt:form> id (from the ambient
+        // context.Items["formid"] key), used by framework_layui.js's
+        // 'tagInput' write-back handler to refuse writing into / clearing
+        // opts.elem's container if it resolves to an element outside this
+        // form — closing the id-spoofing gap a smuggled island (#462/#552
+        // threat model) could otherwise use. Absent/null for back-compat
+        // with islands rendered outside a <wt:form> — the client then
+        // applies no containment check at all (same as
+        // SliderIslandAction/RateIslandAction/ColorPickerIslandAction's
+        // FormId, #578).
+        [System.Text.Json.Serialization.JsonPropertyName("formId")]
+        public string? FormId { get; set; }
     }
 }
