@@ -357,6 +357,27 @@ async def tc_04_analysis_mode_page(page, **_):
         await page.screenshot(path=sc(4, "00-toolbar-timeout"), full_page=True)
         raise
 
+    # 等待 grid 實際完成渲染（issue #596）：
+    # toolbar 只是「attached」不代表資料列已渲染完畢 —「分析模式」按鈕在部分
+    # runner 負載下要等到 grid render 完成才會變 visible，過去只等 toolbar
+    # attached 就去等按鈕，20s 的按鈕可見性視窗有時撐不到 grid render 完成
+    # （2026-07-04 / 2026-07-05 各一次相同簽章的 timeout）。這裡採用其他通過
+    # 的 TC（TC-25/TC-26）等 grid 的相同訊號：.layui-table-body tr[data-index]。
+    GRID_RENDER_TIMEOUT = 30000  # ms — 比預設 TIMEOUT 寬鬆，吸收 CI runner 負載尖峰
+    BTN_VISIBILITY_TIMEOUT = 45000  # ms — 按鈕本身也給獨立、更寬裕的預算
+    grid_wait_start = datetime.now()
+    try:
+        await page.wait_for_selector(
+            ".layui-table-body tr[data-index]", state="visible", timeout=GRID_RENDER_TIMEOUT
+        )
+    except Exception:
+        grid_wait_elapsed = (datetime.now() - grid_wait_start).total_seconds()
+        print(f"[TC-04] grid 渲染等待逾時（耗時 {grid_wait_elapsed:.2f}s）")
+        await page.screenshot(path=sc(4, "00b-grid-render-timeout"), full_page=True)
+        raise
+    grid_wait_elapsed = (datetime.now() - grid_wait_start).total_seconds()
+    print(f"[TC-04] grid 渲染耗時: {grid_wait_elapsed:.2f}s")
+
     # 找「分析模式」按鈕 —— DataTableTagHelper 渲染的 onclick="wtmAnalysis.toggle(...)"
     analysis_btn = page.locator("button:has-text('分析模式')")
     btn_count = await analysis_btn.count()
@@ -367,12 +388,20 @@ async def tc_04_analysis_mode_page(page, **_):
     # 點擊切換 — wait for visible BEFORE scroll to avoid layout-fade flake (issue #475)
     # LayUI admin layout animates visibility; scroll_into_view_if_needed times out when
     # the element is in the DOM but the containing panel is still transitioning.
+    # issue #596: grid render 已在上面等過了，但按鈕本身的可見性切換仍可能落後
+    # 一拍，因此給這顆 locator 獨立、更長的可見性逾時（45s），並記錄耗時方便從
+    # CI log 診斷未來的 flake。
     first_btn = analysis_btn.first
+    btn_wait_start = datetime.now()
     try:
-        await first_btn.wait_for(state="visible", timeout=20000)
+        await first_btn.wait_for(state="visible", timeout=BTN_VISIBILITY_TIMEOUT)
     except Exception:
+        btn_wait_elapsed = (datetime.now() - btn_wait_start).total_seconds()
+        print(f"[TC-04] 「分析模式」按鈕可見性等待逾時（耗時 {btn_wait_elapsed:.2f}s）")
         await page.screenshot(path=sc(4, "02a-btn-not-visible"), full_page=True)
         raise
+    btn_wait_elapsed = (datetime.now() - btn_wait_start).total_seconds()
+    print(f"[TC-04] 「分析模式」按鈕可見耗時: {btn_wait_elapsed:.2f}s")
     await first_btn.scroll_into_view_if_needed(timeout=10000)
     await first_btn.click()
     # 等待 meta API 載入和面板渲染
