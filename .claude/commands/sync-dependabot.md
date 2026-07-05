@@ -176,6 +176,14 @@ Note the returned `number` — this is `<gitea-pr>`.
 
 Poll Gitea PR-level commit status with **explicit max-iterations AND hard timeout**. Real CI runs are 15–25 min; cap at 25 min so a stuck/non-existent target surfaces fast.
 
+> **Never gate on the combined `state` field alone (Issue #605).** Gitea's combined status
+> only aggregates contexts that have *already reported*. Early in a run only the fast jobs
+> (release-tooling-test, js-test) have status rows, so combined = `success` while
+> build-and-test/e2e are still running — merging then is premature and additionally starts
+> push-CI in parallel with the still-running PR-CI on the same runner (known concurrency-test
+> flake trigger, #596/#554). The loop below requires every REQUIRED context to be present
+> AND `success` before declaring green.
+
 ```bash
 source $HOME/.gitea-token
 
@@ -203,17 +211,34 @@ while :; do
   sha=$(curl -s -H "Authorization: token $GITEA_TOKEN" \
     "https://$GITEA_HOST/api/v1/repos/chiu0831/WTM/pulls/<gitea-pr>" \
     | python3 -c "import sys,json;print(json.load(sys.stdin)['head']['sha'])")
-  state=$(curl -s -H "Authorization: token $GITEA_TOKEN" \
+  result=$(curl -s -H "Authorization: token $GITEA_TOKEN" \
     "https://$GITEA_HOST/api/v1/repos/chiu0831/WTM/commits/$sha/status" \
-    | python3 -c "import sys,json;d=json.load(sys.stdin);sts=d.get('statuses',[]);print(d.get('state','?') if sts else 'pending')")
+    | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+sts = {s['context']: s['status'] for s in d.get('statuses', [])}
+required = [
+    'WTM Build and Test / build-and-test (pull_request)',
+    'WTM Build and Test / js-test (pull_request)',
+    'WTM Build and Test / release-tooling-test (pull_request)',
+    'E2E Tests / e2e (pull_request)',
+]
+bad = [c for c, v in sts.items() if v in ('failure', 'error')]
+if bad:
+    print('FAILURE:' + ','.join(bad))
+elif all(sts.get(c) == 'success' for c in required):
+    print('ALLGREEN')
+else:
+    done = sum(1 for c in required if sts.get(c) == 'success')
+    print(f'WAITING {done}/{len(required)}')
+")
 
-  echo "[$attempt/$MAX_ATTEMPTS @ ${elapsed}s] head=${sha:0:8} state=$state"
+  echo "[$attempt/$MAX_ATTEMPTS @ ${elapsed}s] head=${sha:0:8} $result"
 
-  case "$state" in
-    success)        echo "ALL GREEN"; break ;;
-    failure|error)  echo "FAILURE — read job log, decide rebase (4b) vs fix"; exit 1 ;;
-    pending|"?")    sleep $INTERVAL ;;
-    *)              echo "unexpected state '$state'"; sleep $INTERVAL ;;
+  case "$result" in
+    ALLGREEN)   echo "ALL GREEN — all required contexts present and successful"; break ;;
+    FAILURE:*)  echo "FAILURE — read job log, decide rebase (4b) vs fix"; exit 1 ;;
+    *)          sleep $INTERVAL ;;
   esac
 done
 ```
@@ -263,6 +288,13 @@ Work on a throwaway local branch so the manifest mods never touch `dotnet10`:
 git fetch origin dotnet10
 git checkout -B tmp/github-sync origin/dotnet10
 
+# 5a.0 — preserve the sanitize rules BEFORE excludes delete .sync/ (Issue #605).
+# .sync/ itself is in github-excludes.txt, so step 5a.ii removes it from the
+# working tree; without this copy, step 5a.iii has no rules file and silently
+# skips sanitization. (The publish workflow does the same via $RUNNER_TEMP.)
+SANITIZE_SED=$(mktemp -t wtm-sanitize)
+cp .sync/github-sanitize.sed "$SANITIZE_SED"
+
 # 5a.i — apply github-replace.txt (file swaps)
 while IFS=$'\t' read -r src dst; do
   case "$src" in ''|\#*) continue;; esac
@@ -278,26 +310,56 @@ while IFS= read -r line; do
   esac
 done < .sync/github-excludes.txt
 
-# 5a.iii — apply github-sanitize.sed (scrub residual references)
-find . -type f \
-  \( -name '*.md' -o -name '*.yml' -o -name '*.props' -o -name '*.csproj' -o -name '*.json' -o -name '*.cs' \) \
-  -not -path './.git/*' -print0 \
-  | xargs -0 sed -i -f .sync/github-sanitize.sed
+# 5a.iii — apply github-sanitize.sed to TRACKED text files (Issue #605: use perl,
+# NOT sed. macOS BSD sed treats \b as a literal, so every word-boundary rule in
+# github-sanitize.sed is a silent no-op — GITEA_TOKEN/Gitea-brand references would
+# leak to the public mirror. Perl's regex engine matches GNU sed semantics for
+# these rules. git ls-files (not find) keeps node_modules/untracked files out.)
+# (sed s|pat|repl|g rules are valid perl statements once ';'-terminated)
+git ls-files -z -- '*.md' '*.yml' '*.props' '*.csproj' '*.json' '*.cs' \
+  | xargs -0 perl -pi -e "$(grep -vE '^\s*(#|$)' "$SANITIZE_SED" | sed 's/$/;/')"
 
-# 5a.iv — commit the manifest application as a single chore commit
+# 5a.iv — LEAK GATE (Issue #605): hard-verify no internal marker survived.
+# The one expected survivor is publish-nuget.yml's deliberately-split
+# _G="GITEA""_" line and its \b-prefixed comment (no word boundary between
+# the literal backslash-b text and GITEA, so GNU sed/perl skip it by design).
+if git grep -n -E 'mac-mini\.tailde842d|tailde842d|\bGITEA_TOKEN\b|\bGITEA_HOST\b|\bGITEA_USER\b|\bGitea\b|\bgitea-wtm\b' \
+     -- '*.md' '*.yml' '*.props' '*.csproj' '*.json' '*.cs' \
+     | grep -v 'bGITEA_TOKEN/HOST/USER'; then
+  echo "FATAL: internal references survived sanitize — DO NOT PUSH"; exit 1
+fi
+
+# 5a.v — commit the manifest application as a single chore commit
 git add -A
-git -c user.email=$(git config user.email) -c user.name=$(git config user.name) \
-  commit -m "chore(sync): apply .sync/ manifest for GitHub mirror push (Dependabot #<n>)"
+git commit -m "chore(sync): apply .sync/ manifest for GitHub mirror push (Dependabot #<n>)"
 
-# 5a.v — push to GitHub. Fast-forward first, fallback merge `-X ours` (Gitea authoritative).
+# 5a.vi — push to GitHub. Fast-forward first; fallback merge with the same
+# deterministic conflict resolution the publish workflow uses (Gitea authoritative).
 if ! git push github HEAD:refs/heads/dotnet10; then
   git fetch github dotnet10
-  git merge github/dotnet10 -X ours \
-    -m "merge: reconcile GitHub divergence (Dependabot #<n>)"
+  # -X ours resolves content conflicts but leaves modify/delete conflicts
+  # unresolved — resolve them explicitly, exactly like publish-nuget.yml does.
+  git merge github/dotnet10 -X ours --allow-unrelated-histories --no-edit \
+    -m "merge: reconcile GitHub divergence (Dependabot #<n>)" || true
+  # DU = deleted by us (excluded from mirror) → keep deletion.
+  git status --porcelain | awk '/^DU /{print $2}' | while IFS= read -r f; do git rm -f -- "$f"; done
+  # UD = deleted on mirror, present here → keep HEAD version.
+  git status --porcelain | awk '/^UD /{print $2}' | while IFS= read -r f; do git checkout --ours -- "$f"; git add -- "$f"; done
+  # Remaining content conflicts → keep HEAD (the sanitized tree).
+  git diff --name-only --diff-filter=U | while IFS= read -r f; do git checkout --ours -- "$f"; git add -- "$f"; done
+  if [ "$(git ls-files -u | wc -l | tr -d ' ')" -gt 0 ]; then
+    echo "FATAL: unresolved conflicts remain"; git ls-files -u | head -20; exit 1
+  fi
+  # Commit only if the merge is still open (it completed cleanly otherwise)
+  [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ] && git commit --no-edit
+  # Final sanity before push: the tree diff vs the mirror must contain ONLY the
+  # intended dependency files (mirror-side drift like docs/github-packages.md and
+  # the ci-build.yml internal-name rename is preserved by the merge — expected).
+  git diff --stat github/dotnet10..HEAD
   git push github HEAD:refs/heads/dotnet10
 fi
 
-# 5a.vi — clean up the throwaway branch
+# 5a.vii — clean up the throwaway branch
 git checkout dotnet10
 git branch -D tmp/github-sync
 ```
@@ -345,4 +407,7 @@ gh api -X DELETE \
 - ❌ Auto-merging without verifying both CI green AND diff scope
 - ❌ Treating a shipped-package dep bump (`src/*.csproj`) the same as a demo-only npm bump — shipped bumps require operator confirmation
 - ❌ Cancelling or skipping the Gitea CI wait — even a one-line dep bump must pass CI before merge
+- ❌ Treating Gitea's combined commit status `success` as ALL GREEN — contexts that haven't reported yet are invisible; require the full required-context set (Issue #605)
+- ❌ Running the sanitize step with macOS BSD `sed` — `\b` rules silently no-op; use the perl pipeline in 5a.iii and always run the 5a.iv leak gate before pushing (Issue #605)
+- ❌ Applying excludes before copying `github-sanitize.sed` out of `.sync/` — the rules file deletes itself (Issue #605)
 - ❌ Leaving the GitHub Dependabot branch alive after sync — delete it so Dependabot doesn't re-open the same PR unnecessarily
