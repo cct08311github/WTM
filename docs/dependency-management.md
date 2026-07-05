@@ -200,6 +200,22 @@ NPOI（Excel 匯入/匯出）是 WTM 對外部相依的單一最大來源。當�
 
 ---
 
+## GitHub Mirror Dependabot Alerts — 已接受的例外（demo-only、上游無修復）
+
+公開 mirror（`cct08311github/WTM`）Security tab 上 **上游沒有修復版**（`first_patched: None`）的
+npm alert，依 `/sync-github-security` 政策以 `tolerable_risk` dismiss 並在此記錄。兩者都只影響
+demo 應用程式，**不進任何 NuGet 套件**。每次跑 security 分流時重新檢視；解鎖條件一旦成立，
+立即 un-dismiss 並修復。
+
+| Alert | 套件 | CVE | 嚴重度 | 範圍 | 解鎖條件 |
+|---|---|---|---|---|---|
+| #181 | vue-template-compiler | CVE-2024-6783 | Medium | VueDemo ClientApp（runtime） | 受影響範圍為整條 `>= 2.0.0, < 3.0.0`（Vue 2 已於 2023-12 EOL，修復即 Vue 3）→ VueDemo 遷移到 Vue 3 或該 demo 退役 |
+| #91 | elliptic | CVE-2025-14505 | Low | ReactDemo ClientApp（dev-scope） | 受影響範圍 `<= 6.6.1` = 所有已發佈版本；lockfile 標記 `dev: true`（webpack 4 時代建置鏈的 transitive）→ 上游發佈 > 6.6.1 修復版，或 ReactDemo 建置鏈脫離 webpack 4 |
+
+追蹤 issue：#610。
+
+---
+
 ## 相關文件
 
 - [`docs/production-readiness.md`](./production-readiness.md) — 整體 production readiness 評估
