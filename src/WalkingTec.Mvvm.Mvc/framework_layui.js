@@ -209,6 +209,95 @@ window.ff = {
         }
     },
 
+    // Issue #587: shared extraction helper — factors out the COLLECTION half
+    // of ff.OpenDialog's #462/#470/#522 same-origin-partial pre-collection
+    // (parse the raw HTML with a DETACHED DOMParser, then walk it for inline
+    // <script> bodies and .wtm-dialog-init JSON islands, all BEFORE
+    // ff.SafeHtml/DOMPurify strips <script> elements — including islands —
+    // from the markup that actually gets inserted into the live document).
+    // This is the SAME logic ff.OpenDialog has always run inline in its
+    // $.ajax success handler; it is factored out here so a second call site
+    // (ff.PostForm's validation-failure form-HTML redraw branch, added by
+    // #587) can reuse it instead of duplicating it.
+    // ff.OpenDialog's own inline extraction code is left COMPLETELY
+    // UNCHANGED by this addition — its behavior (and the #462/#470/#522/#556
+    // tests that pin its exact source shape) is unaffected; this helper
+    // simply gives new call sites going forward a single place to call
+    // instead of copy-pasting the DOMParser walk.
+    // Returns { initScripts: string[], islandPayloads: object[] }. Never
+    // throws: a malformed HTML document, a malformed individual island, or a
+    // querySelectorAll failure is swallowed and simply yields fewer
+    // collected entries (matching OpenDialog's own per-try/catch
+    // granularity — one bad island must never drop the others).
+    _collectInitFromHtml: function (html) {
+        var initScripts = [];
+        var pdoc = null;
+        try {
+            pdoc = new DOMParser().parseFromString(html, 'text/html');
+            var nodes = pdoc.querySelectorAll('script');
+            for (var ni = 0; ni < nodes.length; ni++) {
+                var s = nodes[ni];
+                var type = (s.getAttribute('type') || '').toLowerCase();
+                var isJs = type === '' || type === 'text/javascript' || type === 'application/javascript' || type === 'module';
+                // inline JS only — skip external src and non-JS data blocks (e.g. application/json)
+                if (isJs && !s.src && s.textContent) {
+                    initScripts.push(s.textContent);
+                }
+            }
+        } catch (e) { /* malformed HTML → no init scripts; markup still rendered via SafeHtml */ }
+
+        var islandPayloads = [];
+        try {
+            if (pdoc !== null) {
+                var islandNodes = pdoc.querySelectorAll('script[type="application/json"].wtm-dialog-init');
+                for (var ii = 0; ii < islandNodes.length; ii++) {
+                    var islandNode = islandNodes[ii];
+                    if (!islandNode || !islandNode.textContent) { continue; }
+                    try {
+                        var parsed = JSON.parse(islandNode.textContent);
+                        var normalized = ff._normalizeIslandPayload(parsed);
+                        if (normalized !== null) { islandPayloads.push(normalized); }
+                    } catch (e) { /* malformed single island JSON → skip that island only */ }
+                }
+            }
+        } catch (e) { /* querySelectorAll failure → no islands; legacy path unaffected */ }
+
+        return { initScripts: initScripts, islandPayloads: islandPayloads };
+    },
+
+    // Issue #587: replay half of the shared helper above. Re-injects
+    // previously-collected legacy inline <script> texts as real <script>
+    // elements in original document order — the same technique as
+    // ff.OpenDialog's #522 rehydration loop (native global scope +
+    // execution order, so sibling scripts can share top-level vars) — and
+    // then dispatches previously-collected .wtm-dialog-init island payloads
+    // via ff._dispatchIslandWhenReady, scripts first and islands after,
+    // matching ff.OpenDialog's ordering exactly (see the #576 comment on
+    // that ordering invariant). Callers MUST invoke this only AFTER the
+    // fragment the HTML came from has already been inserted into the live
+    // document — script re-injection targets document.body directly and
+    // does not itself insert `collected` anywhere.
+    _replayInitFromHtml: function (collected) {
+        if (!collected) { return; }
+        var initScripts = collected.initScripts || [];
+        for (var si = 0; si < initScripts.length; si++) {
+            var se = document.createElement('script');
+            se.text = initScripts[si];
+            document.body.appendChild(se);          // executes synchronously in global scope
+            if (se.parentNode) { se.parentNode.removeChild(se); } // tidy up; effects persist
+        }
+        var islandPayloads = collected.islandPayloads || [];
+        for (var pi = 0; pi < islandPayloads.length; pi++) {
+            try {
+                ff._dispatchIslandWhenReady(islandPayloads[pi]);
+            } catch (e) {
+                if (typeof console !== 'undefined' && console.warn) {
+                    console.warn('[WTM] init replay island dispatch failed:', e);
+                }
+            }
+        }
+    },
+
     // Issue #552 adversarial-review fix (module-load race, HIGH): shared render
     // body for the 'slider' DispatchAction case (below). Extracted so the
     // immediate path (layui.slider already loaded) and the deferred path
@@ -1351,6 +1440,20 @@ window.ff = {
                     ff._legacyScriptEval(data);
                 }
                 else {
+                    // Issue #587: pre-collect legacy inline <script> bodies and
+                    // .wtm-dialog-init JSON islands from the same-origin response
+                    // HTML via a DETACHED DOMParser, BEFORE ff.SafeHtml/DOMPurify
+                    // strips <script> elements from the markup inserted below —
+                    // mirrors ff.OpenDialog's #462/#470/#522 extraction via the
+                    // shared ff._collectInitFromHtml helper (see its comment for
+                    // why OpenDialog's own inline extraction is left untouched).
+                    // Without this, a validation-failure redraw of an islandized
+                    // form (initForm/bindSubmit/bindValidate/laydate/slider/rate/
+                    // colorpicker fields — islandized since #556/#558/#564/#552)
+                    // silently lost all of that init: SafeHtml strips the
+                    // island/script and nothing ever re-ran it (Gap 2, #587).
+                    var _pfCollected = ff._collectInitFromHtml(data);
+
                     // Issue #789 Phase 3A: build wrapper via jQuery .attr() so the
                     // cookie-sourced id is set through setAttribute (safe) instead
                     // of being concatenated into an HTML string (breakable).
@@ -1363,6 +1466,12 @@ window.ff = {
                         .addClass(_wrapperClass)
                         .html(ff.SafeHtml(data));
                     $("#" + divid).parent().empty().append(_wrapper);
+
+                    // Issue #587: now that the redrawn fragment is attached to the
+                    // live document, replay the collected legacy scripts and
+                    // dispatch the collected islands — same ordering (scripts,
+                    // then islands) as ff.OpenDialog's layer.open success callback.
+                    ff._replayInitFromHtml(_pfCollected);
                 }
                 layer.close(index);
             }
@@ -3075,6 +3184,99 @@ if (typeof document !== 'undefined') {
         ff._consumePageReadyIslands();
     }
 }
+
+// Issue #587: scoped island consumer for DOM subtrees inserted by code paths
+// that neither of the two existing consumers cover:
+//   - ff._consumePageReadyIslands (above) only ever runs ONCE, against the
+//     live `document`, at DOMContentLoaded (or immediately if the document
+//     has already finished loading). It never re-scans anything inserted
+//     into the page LATER.
+//   - ff.OpenDialog's detached-DOMParser pre-collection (see the #462/#470/
+//     #522 comments in OpenDialog's $.ajax success handler) reads islands
+//     from a DETACHED parse of the same-origin partial BEFORE ff.SafeHtml/
+//     DOMPurify strips <script> elements from what is actually inserted —
+//     it is specific to that one call site's response-handling shape.
+//
+// Two real DOM-insertion paths bypass BOTH of the above:
+//   GAP 1 — a SPA-tab framework (e.g. layuiadmin lib/view.js) that inserts
+//   ajax'd HTML fragments into the LIVE document via jQuery .html() well
+//   after the page's initial DOMContentLoaded: islands inside the fragment
+//   are never `.wtm-dialog-init`-scanned by anything, so laydate/initForm/
+//   bindSubmit/etc. never initialize for a field that only exists inside a
+//   SPA tab's ajax'd content.
+//   GAP 2 — ff.PostForm's validation-failure form-HTML redraw branch, fixed
+//   directly in this same #587 change via the ff._collectInitFromHtml /
+//   ff._replayInitFromHtml pair above (that branch doesn't need this
+//   function — it never inserts an unstripped island into the live
+//   document in the first place, so there's nothing left here to scan).
+//
+// ff.ConsumeIslandsIn(rootEl) closes GAP 1 (and any future similar one):
+// callers invoke it immediately after inserting a fragment into the LIVE
+// document, passing the just-inserted root element (its jQuery wrapper is
+// also accepted and unwrapped via [0]). It scans rootEl's own subtree —
+// INCLUDING rootEl itself, if rootEl is itself a matching island node — for
+// un-claimed `.wtm-dialog-init` islands and dispatches each via
+// ff._dispatchIslandWhenReady, using the exact same claim-then-dispatch
+// idempotency mechanic as ff._consumePageReadyIslands (mark
+// data-wtm-dispatched="1" BEFORE scheduling the dispatch, and exclude
+// already-claimed nodes from the query), just scoped to rootEl instead of
+// the whole document.
+//
+// rootEl contract — never throws:
+//   - a DOM Element with a working querySelectorAll → scanned.
+//   - a jQuery-wrapped element (has a truthy `.jquery` property) → unwrapped
+//     via rootEl[0] first (an empty jQuery collection unwraps to
+//     `undefined`, which then hits the no-op branch below).
+//   - null / undefined / anything without a querySelectorAll function, or
+//     an element not currently connected to the document (`isConnected ===
+//     false`) → silent no-op. A detached rootEl is deliberately a no-op:
+//     this consumer's whole contract is "islands that just became part of
+//     the live page", and every action a dispatched island can run
+//     (layui.*.render, form field write-backs by element id, …) assumes a
+//     connected element to measure or attach to — exactly like every other
+//     island-dispatch call site, which only ever runs against the live
+//     document.
+//
+// SCOPED-ONLY BY DESIGN — this function intentionally has NO document-wide
+// fallback path, and must never grow one. Some downstream SafeHtml shims
+// (see the #587 issue's BMS-canary notes) can leave an OpenDialog-dispatched
+// island unmarked (missing data-wtm-dispatched) inside dialog DOM after
+// insertion. If ConsumeIslandsIn ever rescanned the whole document instead
+// of the caller's own just-inserted rootEl, it would re-dispatch that
+// already-handled island — double bindSubmit registration, double form
+// submission. Scoping to rootEl means a caller can only ever re-claim
+// islands within the subtree it itself just inserted, never something
+// dispatched earlier by an unrelated code path elsewhere in the page.
+window.ff.ConsumeIslandsIn = function (rootEl) {
+    if (rootEl && rootEl.jquery) { rootEl = rootEl[0]; } // unwrap a jQuery object
+    if (!rootEl || typeof rootEl.querySelectorAll !== 'function') { return; }
+    if (rootEl.isConnected === false) { return; } // detached subtree → no-op
+
+    var SELECTOR = 'script[type="application/json"].wtm-dialog-init:not([data-wtm-dispatched])';
+    var nodes = [];
+    try {
+        if (typeof rootEl.matches === 'function' && rootEl.matches(SELECTOR)) {
+            nodes.push(rootEl);
+        }
+    } catch (e) { /* matches() unsupported/failed on this node → skip the root-self check only */ }
+    var scoped = rootEl.querySelectorAll(SELECTOR);
+    for (var _si = 0; _si < scoped.length; _si++) { nodes.push(scoped[_si]); }
+
+    for (var _ni = 0; _ni < nodes.length; _ni++) {
+        var node = nodes[_ni];
+        node.setAttribute('data-wtm-dispatched', '1');
+        if (!node.textContent) { continue; }
+        try {
+            var parsed = JSON.parse(node.textContent);
+            var normalized = ff._normalizeIslandPayload(parsed);
+            if (normalized !== null) { ff._dispatchIslandWhenReady(normalized); }
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] ConsumeIslandsIn dispatch failed:', e);
+            }
+        }
+    }
+};
 
 $.ajax({
     url: '/_framework/GetScriptLanguage',
