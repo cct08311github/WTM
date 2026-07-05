@@ -71,20 +71,30 @@ window.ff = {
     //
     // Issue #591: DOMPurify's internal default allowlist only recognizes
     // standard HTML attributes, so it silently strips WTM's own non-standard
-    // lay-*/wtm-*/div-for attributes from every dialog partial and PostForm/
-    // BgRequest redraw that passes through here — breaking lay-filter scoped
-    // re-render, lay-skin styling, form validation (lay-verify/lay-reqtext),
-    // combo/tree/chain-change metadata (wtm-*), etc. ADD_ATTR restores
-    // exactly the attributes WTM TagHelpers are confirmed (by source audit)
-    // to emit into markup that flows through ff.SafeHtml — see the #591 PR
-    // body for the full emission-site inventory. Attribute VALUES are still
-    // run through DOMPurify's normal value/serialization handling, and
-    // FORBID_TAGS/FORBID_ATTR below are unchanged, so this does not weaken
-    // the script/style/event-handler blocks.
+    // framework attributes from every dialog partial and PostForm/BgRequest
+    // redraw that passes through here — breaking lay-filter scoped re-render,
+    // lay-skin styling, form validation (lay-verify/lay-reqtext), combo/tree/
+    // chain-change metadata (wtm-*), master-detail grid clearing (subpro),
+    // search-panel wiring (IsSearchButton/oldpost/chartlink), and dialog
+    // chart resize (ischart), etc. ADD_ATTR restores exactly the attributes
+    // WTM TagHelpers are confirmed (by source audit) to emit into markup
+    // that flows through ff.SafeHtml — see the #591 PR body for the full
+    // emission-site inventory. Attribute VALUES are still run through
+    // DOMPurify's normal value/serialization handling, and FORBID_TAGS/
+    // FORBID_ATTR below are unchanged, so this does not weaken the
+    // script/style/event-handler blocks.
     //
-    // INVARIANT: this list mirrors what WTM TagHelpers emit today. Any
-    // addition requires adversarial review. In particular, do NOT add
-    // `lay-on` or `lay-event` (layui's name-resolved event-binding
+    // Issue #591 (review round): the initial audit swept source for the
+    // `lay-`/`wtm-`/`div-for` prefixes only, which missed five non-prefixed
+    // framework marker attributes (`subpro`, `IsSearchButton`/`issearchbutton`,
+    // `oldpost`, `ischart`, `chartlink`). A follow-up full-source audit added
+    // them below — same risk profile as the prefixed entries (plain markers/
+    // flags read via getAttribute/.attr, never resolved into a handler name).
+    //
+    // INVARIANT: this list mirrors what WTM TagHelpers emit today — prefixed
+    // AND non-prefixed. Any addition requires adversarial review across the
+    // whole codebase, not just a lay-/wtm-/div-for grep. In particular, do
+    // NOT add `lay-on` or `lay-event` (layui's name-resolved event-binding
     // attributes): the only current `lay-event` usage (grid row/toolbar
     // buttons) is produced client-side by layui.table's own templating
     // engine from AJAX JSON data and never passes through ff.SafeHtml, so
@@ -92,6 +102,25 @@ window.ff = {
     // allowlist. If a future TagHelper needs to emit `lay-event`/`lay-on`
     // into SafeHtml-sanitized markup, first prove that the value can never
     // be attacker-influenced (it would resolve/dispatch a handler by name).
+    //
+    // Issue #591 (review round) note on `wtm-cf`: its value is a JS function
+    // NAME (ComboBoxTagHelper / CheckBoxTagHelper emit
+    // FormatFuncName(ChangeFunc, ...)), which makes it shaped like the
+    // name-resolved handler attributes excluded above. Verified inert today:
+    // no sink reads `wtm-cf` off the DOM and invokes window[value](); in
+    // legitimate markup the value is a compile-time, developer-authored
+    // Razor literal (same trust class as bindSubmit's beforeSubmit), never
+    // request/field data. If a future change wires a window[wtm-cf]()
+    // invocation over combo/checkbox elements, it must get the same
+    // adversarial review as lay-on/lay-event above.
+    //
+    // Issue #591 (review round) note on attribute VALUES: DOMPurify's
+    // IS_ALLOWED_URI safety net can still drop an allowlisted attribute whose
+    // value looks like an unknown URI scheme (`^[A-Za-z+.-]+:`) — e.g. a
+    // localized lay-reqtext value like "Password: required" — even though
+    // the attribute NAME is in ADD_ATTR. This is inherent DOMPurify behavior
+    // (the same mechanism that strips `wtm-turl="javascript:...`) and is not
+    // specific to this list.
     SafeHtml: function (rawHtml) {
         if (typeof window.DOMPurify === 'undefined' ||
             !window.DOMPurify ||
@@ -106,7 +135,18 @@ window.ff = {
                 'lay-submit', 'lay-accordion', 'lay-allowclose', 'lay-height',
                 'lay-title', 'lay-ignore', 'lay-percent', 'lay-showpercent',
                 'wtm-name', 'wtm-ctype', 'wtm-multi', 'wtm-linkto', 'wtm-cf',
-                'wtm-turl', 'div-for'
+                'wtm-turl', 'div-for',
+                // Issue #591 review round: non-prefixed framework marker/flag
+                // attributes missed by the initial lay-/wtm-/div-for sweep.
+                // subpro: DataTableTagHelper detail-grid clear marker (GetFormData).
+                // issearchbutton: SearchPanelTagHelper search button marker
+                //   (emitted as `IsSearchButton`; HTML lower-cases attribute
+                //   names, so DOMPurify — and jQuery's attr selector, which is
+                //   also case-insensitive for attribute names — see `issearchbutton`).
+                // oldpost: SearchPanelTagHelper old-post-mode marker (RefreshGrid).
+                // ischart: ChartTagHelper dialog-resize / redraw target marker.
+                // chartlink: SearchPanelTagHelper chart-linked searcher marker (RefreshChart).
+                'subpro', 'issearchbutton', 'oldpost', 'ischart', 'chartlink'
             ]
         });
     },

@@ -1,17 +1,28 @@
 // Tests for issue #591: ff.SafeHtml (DOMPurify) strips WTM's own custom
-// lay-*/wtm-*/div-for attributes from dialog partials.
+// lay-*/wtm-*/div-for attributes (and, per the review-round follow-up audit,
+// non-prefixed framework marker attributes) from dialog partials.
 //
 // Root cause: DOMPurify's internal default ALLOWED_ATTR list only recognizes
 // standard HTML attributes. Every dialog partial rendered via ff.OpenDialog
 // (and every PostForm/BgRequest redraw) is run through ff.SafeHtml before
 // insertion, so any non-standard framework attribute — lay-filter scoped
 // re-render, lay-skin styling, lay-verify/lay-reqtext validation, wtm-*
-// combo/tree/chain-change metadata — was silently dropped.
+// combo/tree/chain-change metadata, and non-prefixed markers like subpro
+// (master-detail grid clear), IsSearchButton/oldpost/chartlink (search
+// panel wiring), and ischart (dialog chart resize) — was silently dropped.
 //
 // Fix: an explicit ADD_ATTR allowlist (source-audited — see the #591 PR body
 // for the full per-attribute emission-site inventory) restores exactly the
 // attributes WTM TagHelpers emit, with no wildcard/regex hook and no
 // weakening of the existing FORBID_TAGS/FORBID_ATTR blocklists.
+//
+// Review-round follow-up: the initial audit grepped only for lay-/wtm-/
+// div-for prefixed tokens, which missed five non-prefixed attributes
+// (subpro, IsSearchButton, oldpost, ischart, chartlink) emitted by
+// DataTableTagHelper, SearchPanelTagHelper, and ChartTagHelper. A full-source
+// re-audit (Attributes.Add/SetAttribute + raw HTML literals across all of
+// TagHelpers.LayUI, cross-checked against getAttribute/.attr reads in
+// framework_layui.js) added them here and to ADD_ATTR.
 
 'use strict';
 
@@ -40,7 +51,10 @@ const EXPECTED_ADD_ATTR = [
     'lay-submit', 'lay-accordion', 'lay-allowclose', 'lay-height',
     'lay-title', 'lay-ignore', 'lay-percent', 'lay-showpercent',
     'wtm-name', 'wtm-ctype', 'wtm-multi', 'wtm-linkto', 'wtm-cf',
-    'wtm-turl', 'div-for'
+    'wtm-turl', 'div-for',
+    // Review-round follow-up: non-prefixed marker attributes missed by the
+    // initial lay-/wtm-/div-for grep sweep (see file header comment).
+    'subpro', 'issearchbutton', 'oldpost', 'ischart', 'chartlink'
 ];
 
 // Attributes that must NOT be allowlisted, even though they are real layui
@@ -217,5 +231,47 @@ describe('#591 semantic — ff.SafeHtml preserves framework attributes (jsdom + 
         expect(out).toMatch(/lay-submit/);
         expect(out).toMatch(/lay-filter="myformfilterbtn"/);
         expect(out).not.toMatch(/<script/i);
+    });
+
+    // ─── Review-round: non-prefixed marker attributes (subpro, IsSearchButton,
+    // oldpost, ischart, chartlink) — each mirrors the exact shape the real
+    // TagHelper emits, not just the generic test.each `<div attr="v">` case.
+
+    test('#591 review round: subpro (DataTableTagHelper detail-grid marker) survives on <table>', () => {
+        // DataTableTagHelper.cs:444 -- output.Attributes.Add("subpro", prefix)
+        // on the <table> element; read by GetFormData (framework_layui.js)
+        // via tables[i].attributes["subpro"].value.
+        const out = ff.SafeHtml('<table id="grid1" subpro="Children"></table>');
+        expect(out).toMatch(/subpro="Children"/);
+    });
+
+    test('#591 review round: issearchbutton (SearchPanelTagHelper search button) survives as boolean attribute', () => {
+        // SearchPanelTagHelper.cs:206 -- raw literal `<a ... IsSearchButton>`
+        // (no value). HTML lower-cases attribute names, so DOMPurify and
+        // jQuery's `a[IsSearchButton]` selector both see `issearchbutton`.
+        const out = ff.SafeHtml('<a href="javascript:void(0)" IsSearchButton>Search</a>');
+        expect(out).toMatch(/issearchbutton/i);
+    });
+
+    test('#591 review round: oldpost (SearchPanelTagHelper old-post marker) survives on <form>', () => {
+        // SearchPanelTagHelper.cs:170 -- output.Attributes.Add("oldpost", true);
+        // read by RefreshGrid: form.attr("oldpost") == 'True'.
+        const out = ff.SafeHtml('<form class="layui-form" oldpost="True"></form>');
+        expect(out).toMatch(/oldpost="True"/);
+    });
+
+    test('#591 review round: ischart (ChartTagHelper dialog-resize marker) survives on <div>', () => {
+        // ChartTagHelper.cs:94 -- output.Attributes.Add("ischart", "1");
+        // read via $(layero).find("div[ischart = '1']") in dialog
+        // resize/full/restore callbacks and ResizeChart.
+        const out = ff.SafeHtml('<div id="chart1" ischart="1"></div>');
+        expect(out).toMatch(/ischart="1"/);
+    });
+
+    test('#591 review round: chartlink (SearchPanelTagHelper chart-linked searcher marker) survives on <form>', () => {
+        // SearchPanelTagHelper.cs:236 -- output.Attributes.SetAttribute("chartlink", ChartId);
+        // read by RefreshChart: $('form[chartlink*="' + chartid + '"]').
+        const out = ff.SafeHtml('<form class="layui-form" chartlink="chart1"></form>');
+        expect(out).toMatch(/chartlink="chart1"/);
     });
 });
