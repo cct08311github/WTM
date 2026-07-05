@@ -45,21 +45,27 @@ jobs:
         run: |
           dotnet run -c Release --no-build \
             --urls http://0.0.0.0:52837 \
-            -- --environment Development &
+            -- --environment Development > "$GITHUB_WORKSPACE/demo-app.log" 2>&1 &
           echo "DEMO_PID=$!" >> $GITHUB_ENV
 
       - name: Wait for demo to be ready
         run: |
           echo "Waiting for demo app on port 52837..."
-          for i in $(seq 1 30); do
+          for i in $(seq 1 90); do
             if curl -sf http://localhost:52837/Login/Login > /dev/null 2>&1; then
               echo "Demo app ready after ${i}s"
               exit 0
             fi
             sleep 1
           done
-          echo "Demo app did not start in 30s"
+          echo "Demo app did not start in 90s"
           exit 1
+
+      - name: Show demo app log on readiness failure
+        if: failure()
+        run: |
+          echo "---- tail -50 demo-app.log ----"
+          tail -50 "$GITHUB_WORKSPACE/demo-app.log" || echo "demo-app.log not found"
 
       - name: Setup Python
         uses: actions/setup-python@v5
