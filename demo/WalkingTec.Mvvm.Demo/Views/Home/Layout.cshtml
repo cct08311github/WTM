@@ -117,6 +117,11 @@
     </div>
 
     <!-- 侧边菜单 -->
+    @* WTM #594: laytpl double-brace interpolation HTML-escapes by default since layui 2.8 (2.6.3 was
+       raw). Building a whole attribute string inside a single interpolation used to be safe but
+       corrupts the emitted attribute value on 2.13.8 once quote characters get entity-escaped.
+       Conditional attributes below branch the whole opening tag with an if/else block instead;
+       quotes stay in the static template and each interpolation only ever emits a bare value. *@
     <div class="layui-side layui-side-menu">
         <div class="layui-side-scroll">
             <!-- <script type="text/html" template lay-url="./json/menu.js?v={{ layui.admin.v }}" -->
@@ -138,7 +143,11 @@
                         ,url = (item.jump && typeof item.jump === 'string') ? item.jump : item.name;
                   }}
                   <li data-name="{{ item.name || '' }}" data-jump="{{ item.jump || '' }}" class="layui-nav-item ">
-                    <a href="javascript:;" {{ hasChildren ? '' : 'lay-href="'+ url +'"' }} lay-tips="{{ item.title }}" lay-direction="2">
+                    {{# if(hasChildren){ }}
+                    <a href="javascript:;" lay-tips="{{ item.title }}" lay-direction="2">
+                    {{# } else { }}
+                    <a href="javascript:;" lay-href="{{ url }}" lay-tips="{{ item.title }}" lay-direction="2">
+                    {{# } }}
                       <i class="{{ item.icon }}"></i>
                       <cite>{{ item.title }}</cite>
                     </a>
@@ -151,7 +160,11 @@
                             : [item.name, item2.name, ''].join('/');
                       }}
                       <dd data-name="{{ item2.name || '' }}" data-jump="{{ item2.jump || '' }}">
-                        <a href="javascript:;" {{ hasChildren2 ? '' : 'lay-href="'+ url2 +'"' }}>
+                        {{# if(hasChildren2){ }}
+                        <a href="javascript:;">
+                        {{# } else { }}
+                        <a href="javascript:;" lay-href="{{ url2 }}">
+                        {{# } }}
                           <i class="{{ item2.icon }}"></i>
                           <cite>{{ item2.title }}</cite>
                         </a>
@@ -163,7 +176,11 @@
                                     : [item.name, item2.name, item3.name].join('/')
                           }}
                           <dd data-name="{{ item3.name || '' }}" data-jump="{{ item3.jump || '' }}">
-                            <a href="javascript:;" lay-href="{{ url3 }}" {{ item3.iframe ? 'lay-iframe="true"' : '' }}>
+                            {{# if(item3.iframe){ }}
+                            <a href="javascript:;" lay-href="{{ url3 }}" lay-iframe="true">
+                            {{# } else { }}
+                            <a href="javascript:;" lay-href="{{ url3 }}">
+                            {{# } }}
                               <i class="{{ item3.icon }}"></i>
                               <cite>{{ item3.title }}</cite>
                             </a>
