@@ -29,7 +29,7 @@ WTM 設計為「快速 CRUD 開發框架」，**不**是高流量 SaaS 平台或
 - `dotnet list package --vulnerable --include-transitive`：**22 個專案 0 個 NU1903 漏洞**
 - 單元測試：**1647 / 1647 pass**（Core.Test 1640、Mvc.Tests 38、Admin.Test 75、Api.Test 20、Etl.Test 174 等等）
 - E2E 測試：**30 / 30 pass**（Playwright + Python 驅動，含 XSS / SQL Injection / CSRF / Session Fixation / RBAC 場景）
-- CI（Gitea Actions）：5 / 5 jobs green（build-and-test、js-test、e2e、release-tooling-test、security-scan）
+- CI（internal CI）：5 / 5 jobs green（build-and-test、js-test、e2e、release-tooling-test、security-scan）
 - 安全 audit 歷史：v10.2.0 完整 audit、封掉 password、JWT、Analysis 注入、`UpdateModelProperty` 反射攻擊、檔案路徑跳脫等已知高優先漏洞
 
 ### 架構評估
@@ -96,7 +96,7 @@ NPOI 2.7.6（也包含最新 2.8.0）transitive 拉 vulnerable `System.Security.
 | K8s 官方部署案例 | 缺 |
 | Distributed cache / session 文件 | 缺 |
 | Build 警告 | ~260（多數為 nullable CS8632、CS0108 等代碼風格警告，非錯誤） |
-| Open source 社群 | 小，主要溝通在 Gitea issues |
+| Open source 社群 | 小，主要溝通在 internal infrastructure issues |
 | 主流商業支援 | 無 SLA、無付費 support 管道 |
 
 ---
@@ -133,7 +133,7 @@ NPOI 2.7.6（也包含最新 2.8.0）transitive 拉 vulnerable `System.Security.
 ## 相關文件
 
 - [`docs/dependency-management.md`](./dependency-management.md) — 套件版本政策、NU1510 雙意義警告、NPOI security pin 詳解
-- [`docs/ci-operations.md`](./ci-operations.md) — Gitea Actions 已知不相容與排錯
+- [`docs/ci-operations.md`](./ci-operations.md) — internal CI 已知不相容與排錯
 - [`docs/wtm-developer-manual.md`](./wtm-developer-manual.md) — 完整 18 章節開發手冊（§ 10 安全機制）
 - [`docs/structured-logging.md`](./structured-logging.md) — 結構化 log 整合方式
 - [`CHANGELOG.md`](../CHANGELOG.md) — 版本演進與每版 breaking changes
