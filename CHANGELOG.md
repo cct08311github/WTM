@@ -1,5 +1,34 @@
 # 更新日志
 
+## [10.13.16] - 2026-07-05
+
+Island-pipeline gap closure + native TagInput hardening bundle. Fixes a v10.13.14 rendering regression, gives the #571 native TagInput the same containment gate as its sibling widgets, and closes the two island-consumption gaps that left SPA-fragment and validation-redraw paths dead (found by downstream BMS staging canary against the #573 flip gate). All changes keep the eval-free island architecture (#470); active `eval(` count remains 1.
+
+### Security
+
+- **#578 form-containment gate extended to the native TagInput (#585):** the #571 native tagInput shipped one PR after #578 added the id-spoofing write-back gate to slider/rate/colorpicker — and never received it. `_renderTagInputAction` resolved its hidden input page-wide and cleared an arbitrary `opts.elem` subtree, so a smuggled island (the #462/#552 threat model) could wipe any container and bind writes to any hidden input. `TagInputTagHelper` now emits `FormId` from the ambient `context.Items["formid"]` and every write-back/container operation is gated on `formEl.contains(...)`, mirroring #578 exactly; absent `formId` keeps back-compat behaviour. Jest containment suite mirrors the #578 tests (cross-form blocked, same-form works, back-compat unguarded).
+
+### Added
+
+- **`ff.ConsumeIslandsIn(rootEl)` — public scoped island consumer (#587):** the `wtm-dialog-init` island pipeline had exactly two consumption entry points (main-document `DOMContentLoaded`, `ff.OpenDialog` pre-collection), so islands inserted by any other DOM path stayed inert — reproduced downstream on layuiadmin SPA-tab fragment loads (laydate panels dead since 10.13.12, form init/submit/validate islands dead since 10.13.13). The new API scans a **subtree only** (`script[type="application/json"].wtm-dialog-init:not([data-wtm-dispatched])`), claims each island before dispatch, and routes through `ff._dispatchIslandWhenReady`. Deliberately scoped — a document-wide rescan would double-dispatch islands left unmarked by downstream `SafeHtml` shims (double `bindSubmit` = duplicate form submission). Demo layuiadmin `lib/view.js` (all five scaffolds) now calls it after ajax fragment insertion.
+
+### Fixed
+
+- **Rate island selector double-escape — non-ASCII field ids rendered nothing (#584, v10.13.14 regression):** `RateTagHelper` built the island's `elem` selector from a `JavaScriptEncoder`-escaped copy of the id while the DOM id stayed raw; `System.Text.Json` then re-escaped the `\uXXXX` sequences, so after client `JSON.parse` the selector no longer matched and `layui.rate.render` silently targeted nothing for legal non-BasicLatin C# identifiers (e.g. Chinese property names). The selector now uses the raw id, matching every sibling widget.
+- **`ff.PostForm` validation-failure redraw re-arms islands and legacy scripts (#587):** the form-HTML redraw branch inserted sanitized HTML with no island pre-collection and no inline-script re-execution (lost when `SafeHtml`/DOMPurify hardening landed), so a redrawn form lost error highlights, submit binding, and datetime pickers — a validation failure became a dead end. The branch now mirrors `ff.OpenDialog`: detached-DOMParser pre-collection of islands + `_initScripts` before sanitization, dispatch + re-execution after insertion.
+- **Native TagInput separator/Max bypass, no-trim, and chip-remove race (#585):** a pasted/typed string containing the separator counted as ONE tag against `Max` then re-split on render (max 5 could become 7); separator was guarded on keydown only. `_tiAddTag` now splits raw input, trims, drops empties, and enforces `Max` against the resulting count; `_tiCurrentTags` trims (matching legacy `BuildTagsJson`). Chip removal moved from `click` to a primary-button-guarded `mousedown` with `preventDefault`, so removing a chip while the entry input holds pending text is atomic (the blur-rebuild race silently swallowed the deletion; right/middle click correctly no-op).
+
+### Improved
+
+- **#565 harness sections 4 & 10 false-greens killed (#586):** Section 4 passed on `layer.open` alone (its mock island targeted a nonexistent filter — a broken dialog-island dispatch still passed) and Section 10 passed on any truthy `upload.render` return. Section 4 now embeds a real island-backed widget in the dialog partial and asserts post-dispatch DOM + `data-wtm-dispatched`; Section 10 asserts the rendered upload button and click-forwarding. Both proven by sabotage (stubbing `_dispatchIslandWhenReady` / neutering `upload.render` makes them fail, on both trees). The #573 flip gate's green light now actually certifies dialog-dispatch and upload.
+- **e2e demo-app readiness gate 30s → 90s + startup log capture (#589):** healthy startups took 20–24s of the 30s budget, so runner contention produced false reds (PR #588 cost a triage cycle); the app's stdout/stderr is now captured and tailed on failure so a genuine crash is distinguishable from a slow start.
+
+### Migration
+
+- No action required. The containment gate only changes behaviour for islands that were already forged; `ff.ConsumeIslandsIn` is additive public API (downstream SPA shells that insert WTM partials via ajax should call it after insertion — see the demo `view.js` diff); the PostForm redraw fix restores behaviour lost in 10.13.12/13. Known follow-ups: #591 (`SafeHtml` strips custom `lay-*`/`wtm-*` attributes from dialog partials), #594 (two real layui-2.13.8 demo-scaffolding regressions — **must fix before the #573 default flip**), #596 (flaky e2e TC-04).
+
+---
+
 ## [10.13.15] - 2026-07-04
 
 LayUI dialog-init island hardening + native TagInput. Follow-ups from the v10.13.14 #552 adversarial review, plus the native reimplementation of a TagHelper that never worked against any bundled layui. All changes are eval-free-island architecture (#470) refinements; no shipped default behaviour is removed and the `eval`/`IsScript` fallback stays intact (active `eval(` count remains 1).
