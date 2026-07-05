@@ -68,6 +68,30 @@ window.ff = {
     // Login.cshtml script tag order). Fails closed — if DOMPurify is absent
     // the helper returns an empty string so attacker-controlled HTML is
     // dropped rather than rendered.
+    //
+    // Issue #591: DOMPurify's internal default allowlist only recognizes
+    // standard HTML attributes, so it silently strips WTM's own non-standard
+    // lay-*/wtm-*/div-for attributes from every dialog partial and PostForm/
+    // BgRequest redraw that passes through here — breaking lay-filter scoped
+    // re-render, lay-skin styling, form validation (lay-verify/lay-reqtext),
+    // combo/tree/chain-change metadata (wtm-*), etc. ADD_ATTR restores
+    // exactly the attributes WTM TagHelpers are confirmed (by source audit)
+    // to emit into markup that flows through ff.SafeHtml — see the #591 PR
+    // body for the full emission-site inventory. Attribute VALUES are still
+    // run through DOMPurify's normal value/serialization handling, and
+    // FORBID_TAGS/FORBID_ATTR below are unchanged, so this does not weaken
+    // the script/style/event-handler blocks.
+    //
+    // INVARIANT: this list mirrors what WTM TagHelpers emit today. Any
+    // addition requires adversarial review. In particular, do NOT add
+    // `lay-on` or `lay-event` (layui's name-resolved event-binding
+    // attributes): the only current `lay-event` usage (grid row/toolbar
+    // buttons) is produced client-side by layui.table's own templating
+    // engine from AJAX JSON data and never passes through ff.SafeHtml, so
+    // it is correctly left out and stays stripped by DOMPurify's default
+    // allowlist. If a future TagHelper needs to emit `lay-event`/`lay-on`
+    // into SafeHtml-sanitized markup, first prove that the value can never
+    // be attacker-influenced (it would resolve/dispatch a handler by name).
     SafeHtml: function (rawHtml) {
         if (typeof window.DOMPurify === 'undefined' ||
             !window.DOMPurify ||
@@ -76,7 +100,14 @@ window.ff = {
         }
         return window.DOMPurify.sanitize(rawHtml || '', {
             FORBID_TAGS: ['script', 'style'],
-            FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'onblur', 'onchange', 'onsubmit']
+            FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'onblur', 'onchange', 'onsubmit'],
+            ADD_ATTR: [
+                'lay-filter', 'lay-verify', 'lay-reqtext', 'lay-skin', 'lay-text',
+                'lay-submit', 'lay-accordion', 'lay-allowclose', 'lay-height',
+                'lay-title', 'lay-ignore', 'lay-percent', 'lay-showpercent',
+                'wtm-name', 'wtm-ctype', 'wtm-multi', 'wtm-linkto', 'wtm-cf',
+                'wtm-turl', 'div-for'
+            ]
         });
     },
 
