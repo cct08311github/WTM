@@ -1,5 +1,25 @@
 # 更新日志
 
+## [10.13.17] - 2026-07-05
+
+Dialog-attribute restoration + layui-next flip prerequisites. Fixes `ff.SafeHtml` silently stripping WTM's own framework attributes from every sanitized dialog partial, and ports the two layui-2.13.8 demo-scaffolding regressions (found by downstream BMS staging canary, fixed in their fork) to WTM — clearing the WTM-side blockers on the #573 default-flip checklist.
+
+### Fixed
+
+- **`ff.SafeHtml` no longer strips WTM's custom framework attributes (#591):** DOMPurify's internal default allowlist only recognizes standard HTML5 attributes, so every non-standard attribute WTM's own TagHelpers emit — `lay-filter`, `lay-skin`, `lay-verify`/`lay-vertype`/`lay-reqtext`, `wtm-name`/`wtm-ctype`/`wtm-multi`, `div-for`, and five non-prefixed ones (`subpro`, `issearchbutton`, `oldpost`, `ischart`, `chartlink`) caught by the adversarial review round — was silently removed from dialog partials and PostForm redraws (scoped `form.render` filters, switch skins, validation rules all degraded). The audited inventory is now an explicit `ADD_ATTR` allowlist (per-attribute emission/consumption sites documented in the PR); name-resolved event-binding attributes (`lay-on`, `lay-event`) remain deliberately stripped. 47 dedicated Jest tests incl. attribute-value smuggle inertness. Follow-ups that `ADD_ATTR` structurally cannot fix are tracked in #601.
+- **Demo/layuiadmin: two real layui 2.6.3→2.13.8 regressions fixed dual-tree-compatibly (#594, #573 flip prerequisites):** (1) laytpl `{{ }}` HTML-escapes since layui 2.8, so menu templates composing whole attributes inside interpolations (`{{ … ? '' : 'lay-href="'+url+'"' }}`) emitted literally-quoted attribute values on 2.13.8 → SPA menu navigation broke; conditional attributes now branch the opening tag via `{{# if }}` blocks with quotes kept static (menu `Layout.cshtml` + `theme.html` across all demo scaffolds; full anti-pattern sweep documented in the PR). (2) 2.13.8's `router().path` carries a leading empty element, turning SPA tab URLs into protocol-relative `//host` forms (`ERR_NAME_NOT_RESOLVED`); every layuiadmin consumption site now normalizes (`""===path[0]&&path.shift()`) — a 2.6.3 no-op, with no global `layui.router` monkey-patch. 43 new Jest tests load the REAL vendored laytpl/router engines from both trees and assert output parity.
+
+### Improved
+
+- **e2e TC-04 de-flaked with diagnosable timing (#596):** the Analysis-Mode test now waits for grid rows before the toolbar-button visibility wait (45s dedicated timeout) and prints grid-render/button-visible timings — the very logs that later proved two red runs were concurrent-e2e resource starvation, not code regressions.
+- **AGENTS.md added (#597):** cross-agent repo entry point mirroring CLAUDE.md, pointing at the shared `.claude/rules/`.
+
+### Migration
+
+- No action required. #591 only preserves attributes that WTM's own server-side TagHelpers emit (values still flow through DOMPurify sanitization); #594 changes demo scaffolding templates only — downstream apps that copied the old layuiadmin templates should port the same two patterns before opting into `Layui:Asset=next`. Known follow-up: #601 (TextBox inline-handler island migration, CodeTagHelper dead `encode` attribute, `<hidden>` element).
+
+---
+
 ## [10.13.16] - 2026-07-05
 
 Island-pipeline gap closure + native TagInput hardening bundle. Fixes a v10.13.14 rendering regression, gives the #571 native TagInput the same containment gate as its sibling widgets, and closes the two island-consumption gaps that left SPA-fragment and validation-redraw paths dead (found by downstream BMS staging canary against the #573 flip gate). All changes keep the eval-free island architecture (#470); active `eval(` count remains 1.
