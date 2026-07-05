@@ -54,7 +54,7 @@ Print all results, grouped by type. For `all` mode, triage in the order: **secre
 | Dependabot | Shipped packages (`src/*/*.csproj`, `common.props`) | Always fix — open Gitea issue + PR |
 | Dependabot | Demo apps (`demo/**/package*.json` or `demo/**/*.csproj`) | Fix Critical/High; defer Medium/Low |
 | Dependabot | Test projects (`test/*/*.csproj`) | Fix Critical/High; defer otherwise |
-| Dependabot | Upstream-blocked transitive (e.g. NPOI pulling a vulnerable dep it doesn't expose) | Document in `MEMORY.md` `## 待跟蹤的長期項`; dismiss with `tolerable_risk` + comment |
+| Dependabot | Upstream-blocked transitive (e.g. NPOI pulling a vulnerable dep it doesn't expose) | Document in `docs/dependency-management.md` § GitHub Mirror Dependabot Alerts; dismiss with `tolerable_risk` + comment |
 | CodeQL | High / Critical | Always fix |
 | CodeQL | Medium / Low — confirmed true positive | Fix if low-risk change; defer if risky (note in MEMORY) |
 | CodeQL | False positive | Dismiss with `false_positive` + comment explaining why |
@@ -158,7 +158,7 @@ Note the returned `number` — this is `<gitea-pr>`.
 
 ### 5a. Wait for CI
 
-Poll Gitea CI. The canonical check: look for `Test Run Successful` in the build-and-test log and `PASS: N | FAIL: 0` in the e2e log — do NOT rely on job `conclusion` alone (known infra quirk documented in `MEMORY.md` and `docs/ci-operations.md`).
+Poll Gitea CI. The canonical check: look for `Test Run Successful` in the build-and-test log and `PASS: N | FAIL: 0` in the e2e log — do NOT rely on job `conclusion` alone (known infra quirk documented in `docs/ci-operations.md`). Gate on the full required-context set, never the combined state field alone — see `/sync-dependabot` §4a (Issue #605) for the reference loop; note e2e only triggers for diffs touching `src/**`, `demo/**`, or `test/e2e/**` (paths filter), so require the e2e context only when the diff touches those paths.
 
 ```bash
 source $HOME/.gitea-token
@@ -286,11 +286,13 @@ gh api -X PATCH /repos/cct08311github/WTM/secret-scanning/alerts/<n> \
 
 ## 7. Long-term tracking
 
-For alerts that cannot be fixed (upstream-blocked transitive, by-design CodeQL findings, ongoing secret-rotation logistics), add an entry to `MEMORY.md` under `## 待跟蹤的長期項` following the existing NPOI entry style:
+For alerts that cannot be fixed (upstream-blocked transitive, by-design CodeQL findings, ongoing secret-rotation logistics), add an entry to `docs/dependency-management.md` under `## GitHub Mirror Dependabot Alerts — 已接受的例外` (created for Issue #610; follows the NPOI/SQLitePCLRaw tracking conventions). Each entry records: alert number, package, CVE, severity, scope, and an explicit **unblock condition**. Example row:
 
 ```markdown
-- **<Package/Rule> alert(s) (GitHub <alert-type> #<n>, NOT_FIXABLE upstream)**: <package> <version> pulls <vulnerable-dep> <version> which is not exposed at the application surface. This repo's `Core.csproj` pins `<dep>` to a safe version as a transitive override (NU1510 — see `dependency-management.md` §NU1510). The pin **must stay** until the upstream <package> upgrades. Dismissed with `tolerable_risk`. Would unblock when: upstream releases a version with <dep> ≥ <safe-version>.
+| #<n> | <package> | <CVE> | <severity> | <manifest scope> | first_patched: None（<why blocked>）→ <unblock condition> |
 ```
+
+This lives in a tracked repo doc (public-mirror-safe) — NOT in `.claude/rules/` (local-only, gitignored) and NOT in a repo `MEMORY.md` (does not exist).
 
 ---
 

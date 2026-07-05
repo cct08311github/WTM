@@ -183,6 +183,15 @@ Poll Gitea PR-level commit status with **explicit max-iterations AND hard timeou
 > push-CI in parallel with the still-running PR-CI on the same runner (known concurrency-test
 > flake trigger, #596/#554). The loop below requires every REQUIRED context to be present
 > AND `success` before declaring green.
+>
+> **Path-aware required set:** `e2e-test.yml` only triggers for diffs touching `src/**`,
+> `demo/**`, or `test/e2e/**`. A bump confined to other paths (e.g. only
+> `test/WalkingTec.Mvvm.Js.Tests/package-lock.json`) never produces an e2e context — drop
+> `E2E Tests / e2e (pull_request)` from `required` for such diffs or the loop can never go
+> green. And regardless of what any watcher reports: **re-read job-level status
+> (`/actions/runs/<id>/jobs`) directly in the same command that performs the merge** —
+> job-level status is ground truth; run-level `conclusion`, combined status, and stale
+> monitor notifications are all unreliable.
 
 ```bash
 source $HOME/.gitea-token
