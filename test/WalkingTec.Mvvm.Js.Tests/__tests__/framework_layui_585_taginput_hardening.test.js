@@ -418,4 +418,55 @@ describe('#585 (D) — chip removal survives the blur/rebuild race', () => {
     expect(document.getElementById('d3_val').value).toBe('red,green');
     expect(document.querySelectorAll('#d3 .wtm-taginput-chip').length).toBe(2);
   });
+
+  // Review follow-up: rebinding removal from 'click' to 'mousedown' means it
+  // now fires for every mouse button, not just the primary one ('click' only
+  // ever fires for the primary button; auxiliary buttons dispatch
+  // 'auxclick'). Without a button === 0 guard, right-clicking or
+  // middle-clicking the × would silently delete the tag — a regression the
+  // old 'click' binding did not have. These pin the guard.
+  test('right-click (button: 2) on the close control does NOT remove the tag and does not preventDefault', () => {
+    makeIslandDom('d4', 'd4_val', 'red,green');
+    const ff = loadFreshFf();
+    ff.DispatchAction({
+      actions: [{ type: 'tagInput', opts: { elem: '#d4', separator: ',' }, valueFieldId: 'd4_val' }],
+    });
+    const closeButtons = document.querySelectorAll('#d4 .wtm-taginput-chip-close');
+    const evt = new window.MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 2 });
+    closeButtons[0].dispatchEvent(evt);
+
+    expect(evt.defaultPrevented).toBe(false);
+    expect(document.getElementById('d4_val').value).toBe('red,green');
+    expect(document.querySelectorAll('#d4 .wtm-taginput-chip').length).toBe(2);
+  });
+
+  test('middle-click (button: 1) on the close control does NOT remove the tag', () => {
+    makeIslandDom('d5', 'd5_val', 'red,green');
+    const ff = loadFreshFf();
+    ff.DispatchAction({
+      actions: [{ type: 'tagInput', opts: { elem: '#d5', separator: ',' }, valueFieldId: 'd5_val' }],
+    });
+    const closeButtons = document.querySelectorAll('#d5 .wtm-taginput-chip-close');
+    const evt = new window.MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 1 });
+    closeButtons[0].dispatchEvent(evt);
+
+    expect(evt.defaultPrevented).toBe(false);
+    expect(document.getElementById('d5_val').value).toBe('red,green');
+    expect(document.querySelectorAll('#d5 .wtm-taginput-chip').length).toBe(2);
+  });
+
+  test('primary click (button: 0, the jsdom default) still removes the tag as before', () => {
+    makeIslandDom('d6', 'd6_val', 'red,green');
+    const ff = loadFreshFf();
+    ff.DispatchAction({
+      actions: [{ type: 'tagInput', opts: { elem: '#d6', separator: ',' }, valueFieldId: 'd6_val' }],
+    });
+    const closeButtons = document.querySelectorAll('#d6 .wtm-taginput-chip-close');
+    const evt = new window.MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 });
+    closeButtons[0].dispatchEvent(evt);
+
+    expect(evt.defaultPrevented).toBe(true);
+    expect(document.getElementById('d6_val').value).toBe('green');
+    expect(document.querySelectorAll('#d6 .wtm-taginput-chip').length).toBe(1);
+  });
 });

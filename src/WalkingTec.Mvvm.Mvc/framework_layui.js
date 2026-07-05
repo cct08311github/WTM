@@ -500,7 +500,23 @@ window.ff = {
                         // calling preventDefault() to stop the default blur
                         // outright — makes the removal atomic and immune to
                         // the race regardless of any pending entry text.
+                        // Issue #585 review follow-up: 'click' only ever
+                        // fires for the primary (left) button — auxiliary
+                        // buttons dispatch 'auxclick' instead — but
+                        // 'mousedown' fires for EVERY button. Without a
+                        // guard, right-clicking the × (e.g. to open a
+                        // context menu — preventDefault on mousedown does
+                        // NOT suppress the separate 'contextmenu' event) or
+                        // middle-clicking it (the Linux paste gesture) would
+                        // also silently remove the tag, which 'click' never
+                        // did. Bail out for any non-primary button before
+                        // doing anything else. e.button is 0 for the
+                        // primary button; treat a missing/non-numeric
+                        // e.button (e.g. synthetic events dispatched by
+                        // tests or programmatic .click() callers) as
+                        // primary so existing callers keep working.
                         _tiClose.addEventListener('mousedown', function (e) {
+                            if (e && typeof e.button === 'number' && e.button !== 0) { return; }
                             if (e && e.preventDefault) { e.preventDefault(); }
                             var t = _tiCurrentTags();
                             t.splice(idx, 1);
