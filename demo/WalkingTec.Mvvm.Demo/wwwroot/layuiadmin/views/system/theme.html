@@ -10,8 +10,11 @@
   <div class="layui-card-body layadmin-setTheme">
     <ul class="layadmin-setTheme-color">
       {{# layui.each(layui.setter.theme.color, function(index, item){ }}
-        <li layadmin-event="setTheme" data-index="{{ index }}" data-alias="{{ item.alias }}" 
-        {{ index === themeColorIndex ? 'class="layui-this"' : '' }} title="{{ item.alias }}">
+        {{# if(index === themeColorIndex){ }}
+        <li layadmin-event="setTheme" data-index="{{ index }}" data-alias="{{ item.alias }}" class="layui-this" title="{{ item.alias }}">
+        {{# } else { }}
+        <li layadmin-event="setTheme" data-index="{{ index }}" data-alias="{{ item.alias }}" title="{{ item.alias }}">
+        {{# } }}
           <div class="layadmin-setTheme-header" style="background-color: {{ item.header }};"></div>
           <div class="layadmin-setTheme-side" style="background-color: {{ item.main }};">
             <div class="layadmin-setTheme-logo" style="background-color: {{ item.logo }};"></div>
