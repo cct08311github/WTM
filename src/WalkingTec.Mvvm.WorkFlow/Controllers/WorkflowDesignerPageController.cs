@@ -32,8 +32,10 @@ using System.Reflection;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Mvc;
 using WalkingTec.Mvvm.WorkFlow.Definition;
 
 namespace WalkingTec.Mvvm.WorkFlow.Controllers;
@@ -96,10 +98,16 @@ public class WorkflowDesignerPageController : Mvc.BaseController
     /// <c>[HttpGet("/")]</c> was removed because a leading-slash template is ABSOLUTE
     /// in ASP.NET attribute routing, causing this action to also register at <c>GET /</c>
     /// (homepage hijack).</para>
+    ///
+    /// <para><strong>Issue #614:</strong> the embedded HTML carries the developer-authored
+    /// token <c>%%WTM_LAYUI_BASE%%</c> in place of a hardcoded <c>/layui</c> prefix. It is
+    /// substituted here with <see cref="LayuiAssets.ResolveLayuiBase(IConfiguration)"/>'s
+    /// result — always one of the two fixed literals <c>"/layui"</c> or <c>"/layui-next"</c>,
+    /// never a value derived by concatenating raw config into the response.</para>
     /// </summary>
     [HttpGet("")]
     [ActionDescription("Index")]
-    public async Task<IActionResult> Index()
+    public async Task<IActionResult> Index([FromServices] IConfiguration configuration)
     {
         // FIX-A2: Non-opted-in hosts get 404, never 500.
         if (!IsDesignerRegistered)
@@ -119,15 +127,17 @@ public class WorkflowDesignerPageController : Mvc.BaseController
                 "WalkingTec.Mvvm.WorkFlow.csproj and the assembly was rebuilt.");
         }
 
-        Response.ContentType = "text/html; charset=utf-8";
-
-        using (stream)
+        string html;
+        using (var reader = new StreamReader(stream))
         {
-            await stream.CopyToAsync(Response.Body);
+            html = await reader.ReadToEndAsync();
         }
 
-        // FileStreamResult would close the stream after sending; CopyToAsync + EmptyResult
-        // is equivalent and does not require the stream to remain open after the action returns.
-        return new EmptyResult();
+        // Issue #614: substitute the %%WTM_LAYUI_BASE%% token with one of the two fixed
+        // literals from LayuiAssets — never concatenate the raw config value itself.
+        var layuiBase = LayuiAssets.ResolveLayuiBase(configuration);
+        html = html.Replace("%%WTM_LAYUI_BASE%%", layuiBase);
+
+        return Content(html, "text/html; charset=utf-8");
     }
 }

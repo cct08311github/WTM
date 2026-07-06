@@ -5,7 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
     <title>工作流设计器</title>
     <!-- Consumer wwwroot prerequisites (layui + jquery) -->
-    <link rel="stylesheet" href="/layui/css/layui.css">
+    <!-- %%WTM_LAYUI_BASE%% is substituted server-side by WorkflowDesignerPageController.Index()
+         with the LayuiAssets.ResolveLayuiBase() result ("/layui" or "/layui-next") — see #614. -->
+    <link rel="stylesheet" href="%%WTM_LAYUI_BASE%%/css/layui.css">
     <!-- Designer CSS (embedded asset) -->
     <link rel="stylesheet" href="/_workflow_designer/assets/framework_workflow_designer.css">
 </head>
@@ -53,7 +55,7 @@
 
     <!-- ── Consumer prerequisites: layui + jquery from wwwroot ───────────────── -->
     <script src="/jquery.min.js"></script>
-    <script src="/layui/layui.js"></script>
+    <script src="%%WTM_LAYUI_BASE%%/layui.js"></script>
 
     <!-- ── Designer modules (embedded assets, WF-21.5/6/7) ─────────────────── -->
     <script src="/_workflow_designer/assets/framework_workflow_designer_core.js" type="module"></script>

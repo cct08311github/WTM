@@ -1,12 +1,26 @@
 # 更新日志
 
+## [10.14.1] - 2026-07-06
+
+Completes the #573/#567 layui flip: the seven framework-embedded tool-UI shells that 10.14.0 left hardcoded to `/layui` (2.6.3) now follow the `Layui:Asset` switch like every other page. Phase-3/4 prep (#614) for the eventual 2.6.3 tree removal. Non-breaking — the `Layui:Asset=legacy` pin restores 2.6.3 for these views exactly as for the app pages.
+
+### Changed
+
+- **Framework-embedded tool views now honour `Layui:Asset` (#614):** `_CodeGen/{Index,Gen,SetField}.cshtml`, `_DashboardPage/{Index,Designer,Render}.cshtml`, and the WorkFlow `designer.html` (streamed by `WorkflowDesignerPageController`) previously hardcoded `/layui` (2.6.3), so 10.14.0's default flip did not reach them. They now resolve their layui base through a single new helper, `WalkingTec.Mvvm.Mvc.LayuiAssets.ResolveLayuiBase(IConfiguration)` — the one source of truth for the "select between two fixed literals, never concatenate config into a URL" invariant (`Layui:Asset == "legacy"` → `/layui`, else → `/layui-next`). The 6 Razor views `@inject IConfiguration`; `designer.html` carries a `%%WTM_LAYUI_BASE%%` token substituted server-side with the helper's fixed-literal output. **Behaviour change**: on upgrade, a host that has *not* set `Layui:Asset=legacy` (i.e. anyone on the 10.14.0 default) now serves 2.13.8 assets to these tool pages instead of 2.6.3. All seven were real-browser-certified on **both** trees — CodeGen wizard, Dashboard designer/render, and the WorkFlow designer render cleanly on 2.13.8 with zero console/page errors and correct token substitution (no per-view gating needed). Regression tests added: `LayuiAssetsTests` (23 cases incl. hostile inputs — result is always one of the two literals) and `WorkflowDesignerPageControllerLayuiTokenTests` (4 cases — action-level, no `%%WTM_LAYUI_BASE%%` token leaks in either config branch).
+
+### Migration
+
+- No action required for hosts on 2.13.8. To keep these tool pages (and everything else) on 2.6.3, set `Layui:Asset=legacy` — the same one-line pin documented for 10.14.0; it now covers the tool views too.
+
+---
+
 ## [10.14.0] - 2026-07-06
 
 Default bundled layui flipped 2.6.3 → 2.13.8 (#573, Phase-2b of the #567 roadmap). Minor version bump per the default-behaviour-change policy; both asset trees remain vendored and served, and a one-line config pin restores the previous default. Gate history: #565 dual-tree suite green on both trees (now 15/15 including the new richtextbox section), BMS staging sign-off on `Layui:Asset=next` (620/620 real-browser e2e against WTM 10.13.17), and the two real 2.13.8 regressions that gate surfaced (#594) fixed in 10.13.17; a third gate catch (#615, SPA tab-switch race) is fixed in this release.
 
 ### Changed
 
-- **Demo shells now select the layui-next (2.13.8) tree by default (#573):** `_Layout.cshtml` and `Login.cshtml` — the only two `Layui:Asset` consumers — flip their default from `/layui` (2.6.3) to `/layui-next` (2.13.8). New semantics: `Layui:Asset` == `legacy` (exact match only) pins back to the vendored 2.6.3 tree; any other value — **including the former opt-in value `next`, which stays valid** — or absent config selects 2.13.8. The raw config value is still never concatenated into a URL; it only selects between two fixed literals. Framework-embedded tool views (`_CodeGen`, `_DashboardPage`, WorkFlow designer) intentionally keep loading `/layui` (2.6.3) — they are untested on 2.13.8 and both trees stay served; making them config-aware is tracked in #614 for Phase-3/4.
+- **Demo shells now select the layui-next (2.13.8) tree by default (#573):** `_Layout.cshtml` and `Login.cshtml` — the only two `Layui:Asset` consumers — flip their default from `/layui` (2.6.3) to `/layui-next` (2.13.8). New semantics: `Layui:Asset` == `legacy` (exact match only) pins back to the vendored 2.6.3 tree; any other value — **including the former opt-in value `next`, which stays valid** — or absent config selects 2.13.8. The raw config value is still never concatenated into a URL; it only selects between two fixed literals. Framework-embedded tool views (`_CodeGen`, `_DashboardPage`, WorkFlow designer) intentionally keep loading `/layui` (2.6.3) in this release — they were untested on 2.13.8 at the time; both trees stay served, so nothing breaks. (Completed in **10.14.1**, #614 — they now follow `Layui:Asset` too, certified on 2.13.8.)
 - **`wt:richtextbox` kept working on the new default via layedit vendoring (#573 blocker G):** layui removed the `layedit` module upstream in 2.8, so on the 2.13.8 tree `layui.use('layedit', …)` (emitted by `RichTextBoxTagHelper`) would silently never fire and the editor degraded to a hidden textarea. The 2.6.3 `layedit.js`, its face-panel images, and its extracted CSS rules are now vendored beside the next tree (`layui-next/layedit.js`, `layui-next/images/face/`, `layui-next/css/layedit.css`), and `_Layout.cshtml` registers `layui.extend({ layedit: '{/}/layui-next/layedit' })` when serving the next tree. Harness section 15 (new) proves `layedit.build()` + a functional content round-trip on **both** trees; a pre-existing upstream defect in `layedit.setContent()` (bare `layedit.sync()` instead of `this.sync()`, present in 2.6.3 itself) is documented in the harness — production code never calls it.
 
 ### Fixed

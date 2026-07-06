@@ -1,6 +1,8 @@
+@inject Microsoft.Extensions.Configuration.IConfiguration Configuration
 @{
     Layout = null;
     var dashboardId = ViewBag.DashboardId as string ?? "";
+    var layuiBase = WalkingTec.Mvvm.Mvc.LayuiAssets.ResolveLayuiBase(Configuration);
 }
 <!DOCTYPE html>
 <html>
@@ -8,7 +10,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
     <title>Dashboard</title>
-    <link rel="stylesheet" href="/layui/css/layui.css">
+    <link rel="stylesheet" href="@(layuiBase)/css/layui.css">
     <link rel="stylesheet" href="/sitecss/wtm.css">
     <link rel="stylesheet" href="/_js/lib/gridstack/gridstack.min.css">
     <link rel="stylesheet" href="/_js/framework_dashboard.css">
@@ -80,7 +82,7 @@
     </div>
 
     <script src="/jquery.min.js"></script>
-    <script src="/layui/layui.js"></script>
+    <script src="@(layuiBase)/layui.js"></script>
     <script src="/_js/lib/gridstack/gridstack-all.min.js"></script>
     <script src="/_js/framework_dashboard.js"></script>
     <script>
