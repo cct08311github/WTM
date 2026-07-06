@@ -31,7 +31,7 @@ pre-existing vendored trees under `demo/WalkingTec.Mvvm.Demo/wwwroot/`
 
 ## What each harness section proves
 
-All 14 sections live in one combined harness page,
+All 15 sections live in one combined harness page,
 [`565-taghelper-layui-regression.html`](./565-taghelper-layui-regression.html),
 in clearly separated `<section>`-style `<div class="box">` blocks:
 
@@ -51,10 +51,11 @@ in clearly separated `<section>`-style `<div class="box">` blocks:
 | 12 | rate | `RateTagHelper` | `rate.render({elem, value, length, choose})`; asserts `.layui-rate` is built. |
 | 13 | colorPicker | `ColorPickerTagHelper` | `colorpicker.render({elem, color, format, done})`; asserts `.layui-colorpicker` is built. |
 | 14 | tagInput | `TagInputTagHelper` | **No longer a gap — native widget assertion, gated on both trees (#581).** #571 reimplemented `TagInputTagHelper` as a plain-DOM, dependency-free chip widget with no `layui` module dependency at all, driven by `framework_layui.js`'s `_renderTagInputAction`. This section renders the real TagHelper markup (wrapper `<div>` + sibling hidden input pre-seeded `"apple,banana"` + the bare `{"type":"tagInput",...}` JSON island), lets the harness's normal page-ready island consumer dispatch it (same mechanism as sections 1-3), and asserts: the widget parses the hidden input's initial value into 2 chips (`apple`, `banana`) on init; a 3rd chip added through the widget's real entry-input+blur interaction path with an XSS payload (`<img src=x onerror=alert(1)>`) renders as inert chip *text* (`createTextNode`, no `<img>` element created); and the hidden field stays comma-joined in sync. Passes identically on `layui-263` and `layui-next` since the widget needs neither. |
+| 15 | richtextbox | `RichTextBoxTagHelper` | **New — #573 layedit-vendoring compat gate.** `layedit` was removed from layui upstream in 2.8 and is absent from `layui-next` (2.13.8); #573 vendors the 2.6.3 `layedit.js` (+ face images + a hand-extracted `layedit.css`) beside `layui-next` and registers it via `layui.extend({layedit: ...})` before this section's script runs (see the `<head>` loader). This section reproduces `RichTextBoxTagHelper`'s exact (non-island) markup — the `BaseFieldTag` wrapper divs + a pre-seeded `<textarea isrich="1">` + the TagHelper's own inline `<script>` calling `layui.use('layedit', ...)` — and asserts: `.layui-layedit` is built immediately after the textarea; the toolbar has `>0` tool items; the edit iframe exists and its document is initialized (`contenteditable="true"`); `layeditindex` is stamped on the textarea; **and** a functional round-trip — `layedit.setContent(index,'hello-573')` followed by `layedit.getContent(index)` — returns the same content, proving the module is not just present as DOM scaffolding but actually works, on both `layui-263` (builtin lazy-load) and `layui-next` (vendored + extended). |
 
 Every section reports one `{ name, pass, detail, knownGap? }` entry into
 `window.__regressionResults`; `window.__regressionDone` flips to `true` once
-all 14 have reported.
+all 15 have reported.
 
 ## How to run
 
@@ -130,8 +131,11 @@ been retired. #571 reimplemented `TagInputTagHelper` as a native,
 dependency-free chip widget with no `layui` module dependency at all, so
 #581 repointed section 14 at that real widget and dropped `knownGap:true` —
 it is now a real, gated (must-pass) assertion on both trees, same as every
-other section. All 14 sections are green on both `layui-263` and
-`layui-next`, and the suite currently carries **zero** `knownGap` entries.
+other section. **#573 update:** section 15 (`richtextbox`) was added as a real,
+gated assertion on both trees from day one (vendoring the 2.6.3 `layedit`
+module beside `layui-next` rather than leaving it a gap) — see its row above.
+All 15 sections are green on both `layui-263` and `layui-next`, and the suite
+currently carries **zero** `knownGap` entries.
 Any future layui version bump should re-run `npx playwright test` from
 `test/regression/` and confirm both projects stay green (or fix
 `framework_layui.js`/the harness per the compat-fix guidance in

@@ -4,12 +4,13 @@
 @{
   Layout = null;
     int bgnumber = new Random().Next(1, 6);
-    // Issue #566: opt-in parallel layui asset tree. Config key "Layui:Asset" ==
-    // "next" (exact match only) switches the base to the vendored layui-next
-    // (2.13.8) tree; any other value or absent config keeps the default 2.6.3
-    // tree at /layui. The raw config value is NEVER concatenated into the URL —
-    // it only selects between these two fixed string literals.
-    var layuiBase = string.Equals(Configuration["Layui:Asset"], "next", StringComparison.Ordinal) ? "/layui-next" : "/layui";
+    // Issue #573 default flip: layui-next (2.13.8) is now the default. Config
+    // key "Layui:Asset" == "legacy" (exact match only) pins back to the
+    // vendored 2.6.3 tree at /layui; any other value (including the former
+    // opt-in value "next") or absent config selects /layui-next. The raw
+    // config value is NEVER concatenated into the URL — it only selects
+    // between these two fixed string literals.
+    var layuiBase = string.Equals(Configuration["Layui:Asset"], "legacy", StringComparison.Ordinal) ? "/layui" : "/layui-next";
 }
 <!DOCTYPE html>
 <html lang="en">

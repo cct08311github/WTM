@@ -1,11 +1,12 @@
 @inject Microsoft.Extensions.Configuration.IConfiguration Configuration
 @{
-  // Issue #566: opt-in parallel layui asset tree. Config key "Layui:Asset" ==
-  // "next" (exact match only) switches the base to the vendored layui-next
-  // (2.13.8) tree; any other value or absent config keeps the default 2.6.3
-  // tree at /layui. The raw config value is NEVER concatenated into the URL —
-  // it only selects between these two fixed string literals.
-  var layuiBase = string.Equals(Configuration["Layui:Asset"], "next", StringComparison.Ordinal) ? "/layui-next" : "/layui";
+  // Issue #573 default flip: layui-next (2.13.8) is now the default. Config
+  // key "Layui:Asset" == "legacy" (exact match only) pins back to the
+  // vendored 2.6.3 tree at /layui; any other value (including the former
+  // opt-in value "next") or absent config selects /layui-next. The raw
+  // config value is NEVER concatenated into the URL — it only selects
+  // between these two fixed string literals.
+  var layuiBase = string.Equals(Configuration["Layui:Asset"], "legacy", StringComparison.Ordinal) ? "/layui" : "/layui-next";
 }
 <!DOCTYPE html>
 <html>
@@ -18,6 +19,13 @@
   <meta name="viewport"
     content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=0">
   <link rel="stylesheet" href="@(layuiBase)/css/layui.css" media="all">
+  @if (layuiBase == "/layui-next")
+  {
+    @* Issue #573: layedit was removed from layui upstream in 2.8, so
+       layui-next (2.13.8) ships no CSS for it; this vendors the 2.6.3
+       layedit rules so wt:richtextbox stays styled on the next tree. *@
+    <link rel="stylesheet" href="/layui-next/css/layedit.css" media="all">
+  }
   <link rel="stylesheet" href="/sitecss/wtm.css">
   <link rel="stylesheet" href="/font/iconfont.css">
   <link rel="shortcut icon" href="/favicon.ico" />
@@ -50,6 +58,17 @@
       base: '/layuiadmin/'
       , version: '@DateTime.Now.Ticks'
     });
+    @* Issue #573: layedit was removed from layui upstream in 2.8, so
+       layui-next (2.13.8) has no builtin layedit module for wt:richtextbox's
+       layui.use('layedit', ...) call (see RichTextBox.cs) to lazy-load. The
+       extend below points module resolution at the vendored 2.6.3 layedit.js
+       beside the next tree, right after layui.config() and before any page
+       body renders. On the legacy /layui tree the line is omitted and layedit
+       keeps lazy-loading as a 2.6.3 builtin. *@
+    @if (layuiBase == "/layui-next")
+    {
+      @:layui.extend({ layedit: '{/}/layui-next/layedit' });
+    }
   </script>
   @RenderBody()
 </body>

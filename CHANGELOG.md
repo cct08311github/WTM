@@ -1,5 +1,27 @@
 # 更新日志
 
+## [10.14.0] - 2026-07-06
+
+Default bundled layui flipped 2.6.3 → 2.13.8 (#573, Phase-2b of the #567 roadmap). Minor version bump per the default-behaviour-change policy; both asset trees remain vendored and served, and a one-line config pin restores the previous default. Gate history: #565 dual-tree suite green on both trees (now 15/15 including the new richtextbox section), BMS staging sign-off on `Layui:Asset=next` (620/620 real-browser e2e against WTM 10.13.17), and the two real 2.13.8 regressions that gate surfaced (#594) fixed in 10.13.17; a third gate catch (#615, SPA tab-switch race) is fixed in this release.
+
+### Changed
+
+- **Demo shells now select the layui-next (2.13.8) tree by default (#573):** `_Layout.cshtml` and `Login.cshtml` — the only two `Layui:Asset` consumers — flip their default from `/layui` (2.6.3) to `/layui-next` (2.13.8). New semantics: `Layui:Asset` == `legacy` (exact match only) pins back to the vendored 2.6.3 tree; any other value — **including the former opt-in value `next`, which stays valid** — or absent config selects 2.13.8. The raw config value is still never concatenated into a URL; it only selects between two fixed literals. Framework-embedded tool views (`_CodeGen`, `_DashboardPage`, WorkFlow designer) intentionally keep loading `/layui` (2.6.3) — they are untested on 2.13.8 and both trees stay served; making them config-aware is tracked in #614 for Phase-3/4.
+- **`wt:richtextbox` kept working on the new default via layedit vendoring (#573 blocker G):** layui removed the `layedit` module upstream in 2.8, so on the 2.13.8 tree `layui.use('layedit', …)` (emitted by `RichTextBoxTagHelper`) would silently never fire and the editor degraded to a hidden textarea. The 2.6.3 `layedit.js`, its face-panel images, and its extracted CSS rules are now vendored beside the next tree (`layui-next/layedit.js`, `layui-next/images/face/`, `layui-next/css/layedit.css`), and `_Layout.cshtml` registers `layui.extend({ layedit: '{/}/layui-next/layedit' })` when serving the next tree. Harness section 15 (new) proves `layedit.build()` + a functional content round-trip on **both** trees; a pre-existing upstream defect in `layedit.setContent()` (bare `layedit.sync()` instead of `this.sync()`, present in 2.6.3 itself) is documented in the harness — production code never calls it.
+
+### Fixed
+
+- **SPA tab switch no longer clobbered by a stale home-render callback (#615, found by this release's flip gate):** layuiadmin `index.js`'s view-render `.then()`/`.done()` applied `tabChange`/`tabsBodyChange` with the route captured at render start, so a slow earlier render (the home `/` render kicked off at login) resolving after a faster navigation switched the UI back to home — deterministic on layui 2.13.8 (e2e TC-04), and the probable root cause of the #596 CI flakes on 2.6.3 (where the window only opened under load). Both callbacks now bail when the current route no longer matches; the guard deliberately sits **after** the `this.container` reassignment (view.js's `parse()` targets it — an earlier return made the stale render wipe the whole tab body, a worse bug). All five demo variants patched identically; 11 new Jest tests drive the real vendored layui + view.js + admin.js + index.js on both trees with controlled ajax timing. Downstreams that copied the layuiadmin scaffolding should port the same guard (mind the placement note).
+
+### Migration
+
+- **To stay on layui 2.6.3, set `Layui:Asset` to `legacy`** (configuration key, e.g. `"Layui": { "Asset": "legacy" }` in appsettings.json or the `Layui__Asset` environment variable). This is the complete rollback path — both trees ship, nothing is removed.
+- Deployments that already set `Layui:Asset=next` (the 10.13.x opt-in) need no change — the value remains valid and selects the same tree as the new default.
+- Apps with their **own** layout shells are unaffected by this release: the asset choice lives in app-side views, the framework never picks layui assets. To adopt 2.13.8, port the demo `_Layout.cshtml`/`Login.cshtml` switch pattern — and first port the two #594 template patterns (laytpl `{{ }}` escaping and `router().path` leading-empty-element normalization, see 10.13.17) if you copied the layuiadmin scaffolding.
+- Apps using `wt:richtextbox` on the 2.13.8 tree must also copy the three vendored layedit files from the demo tree and register the `layui.extend` line after `layui.config` (see `_Layout.cshtml`); alternatively keep those pages on `legacy`.
+
+---
+
 ## [10.13.17] - 2026-07-05
 
 Dialog-attribute restoration + layui-next flip prerequisites. Fixes `ff.SafeHtml` silently stripping WTM's own framework attributes from every sanitized dialog partial, and ports the two layui-2.13.8 demo-scaffolding regressions (found by downstream BMS staging canary, fixed in their fork) to WTM — clearing the WTM-side blockers on the #573 default-flip checklist.

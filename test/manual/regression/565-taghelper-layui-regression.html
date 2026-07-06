@@ -50,7 +50,9 @@
   last one (section 14, tagInput) was retired once #571 reimplemented
   TagInputTagHelper as a native, dependency-free widget (see section 14
   below); the `knownGap` mechanism itself is left in place for any future
-  gap, it just has nothing to flag right now.
+  gap, it just has nothing to flag right now. #573 added section 15
+  (richtextbox) as a real, gated assertion from day one — see the DUAL-TREE
+  HEAD LOADER comment below for how it vendors layedit onto layui-next.
 
   WIDGET COVERAGE (see the on-page PASS/FAIL banner list + README for the
   one-line-per-widget summary):
@@ -58,7 +60,7 @@
     2. laydate (single date)       7. tree (xmSelect)       12. rate
     3. laydate (range)             8. checkbox/radio +      13. colorPicker
     4. layer / OpenDialog             ff.LoadComboItems      14. tagInput (native, #571)
-    5. table/grid                  9. transfer
+    5. table/grid                  9. transfer              15. richtextbox (layedit, #573)
                                    10. upload (render only)
   ============================================================================
 
@@ -92,6 +94,15 @@
     ? '../../../demo/WalkingTec.Mvvm.Demo/wwwroot/layui-next'
     : '../../../demo/WalkingTec.Mvvm.Demo/wwwroot/layui';
   document.write('<link rel="stylesheet" href="' + WTM_LAYUI_BASE + '/css/layui.css">');
+  if (WTM_LAYUI_NEXT) {
+    // Issue #573: layedit was removed from layui upstream in 2.8, so
+    // layui-next (2.13.8) ships no CSS for it. Vendored 2.6.3 layedit rules
+    // live at layui-next/css/layedit.css (see demo wwwroot) — same
+    // fixed-literal-suffix-onto-hardcoded-base pattern as the layui.css
+    // document.write above, only ever built from the two hardcoded
+    // WTM_LAYUI_BASE strings, never from raw request/query data.
+    document.write('<link rel="stylesheet" href="' + WTM_LAYUI_BASE + '/css/layedit.css">');
+  }
 </script>
 <script src="../../../demo/WalkingTec.Mvvm.Demo/wwwroot/jquery.min.js"></script>
 <script src="../../../demo/WalkingTec.Mvvm.Demo/wwwroot/jquery.cookie.js"></script>
@@ -108,6 +119,19 @@
   // runs. Every section still calls layui.use itself (matching what the
   // TagHelper-emitted script actually does) — this just removes cold-load
   // flakiness from the harness, exactly like 561/470b's early layui.use(['form']).
+  if (WTM_LAYUI_NEXT) {
+    // Issue #573: layedit was removed from layui upstream in 2.8, so
+    // layui-next (2.13.8) has no builtin layedit module for section 15's
+    // (RichTextBoxTagHelper's) layui.use('layedit', ...) call to lazy-load.
+    // Point module resolution at the vendored 2.6.3 layedit.js sitting
+    // beside the next tree instead — same WTM_LAYUI_BASE mapping already
+    // used for layui.css/layui.js/xm-select.js above, and the identical
+    // gate/wiring _Layout.cshtml uses in production. Runs before any
+    // section's own layui.use('layedit', ...) call parses further down the
+    // page. On the 263 tree this block is skipped and layedit keeps
+    // lazy-loading as a 2.6.3 builtin.
+    layui.extend({ layedit: WTM_LAYUI_BASE + '/layedit' });
+  }
   window.__wtmHarnessCoreReady = false;
   layui.use(['form', 'laydate', 'table', 'transfer', 'slider', 'rate', 'colorpicker', 'upload'], function () {
     window.__wtmHarnessCoreReady = true;
@@ -131,7 +155,7 @@
 <p>See the HTML comment at the top of this file's &lt;head&gt; (view source) for the full explanation. Phase-1 gate for #566 (bundled-layui version bump), part of the #567 roadmap.</p>
 
 <div id="summary">
-  <strong id="summaryHeadline">Running&hellip; (<span id="summaryCount">0</span>/<span id="summaryTotal">14</span>)</strong>
+  <strong id="summaryHeadline">Running&hellip; (<span id="summaryCount">0</span>/<span id="summaryTotal">15</span>)</strong>
   <div id="summaryList"></div>
 </div>
 
@@ -292,11 +316,52 @@
   <div class="status" id="status-taginput">waiting…</div>
 </div>
 
+<!-- ============================== 15. richtextbox (#573 layedit vendoring) ============================== -->
+<div class="box" id="sec-richtext">
+  <h2>15. richtextbox — RichTextBoxTagHelper's layui.use('layedit', ...) (#573, both trees)</h2>
+  <!-- Exactly the shape RichTextBoxTagHelper (src/WalkingTec.Mvvm.TagHelpers.LayUI/Form/RichTextBox.cs)
+       emits today through its BaseFieldTag wrapper: an outer
+       <div class="layui-form-item layui-form" lay-filter="{id}filterdiv"> + label +
+       <div class="layui-input-block"> containing the <textarea isrich="1" style="display:none">
+       (pre-seeded with content to exercise the round-trip assertion below), followed by the
+       TagHelper's own inline (non-island) <script> calling
+       layui.use('layedit', function(){ layedit.set({uploadImage:{url:...}}); var index =
+       layedit.build(id); $('#'+id).attr('layeditindex', index); }) — RichTextBox.cs has not been
+       migrated to the JSON-island dispatch path (unlike form/laydate/tagInput above), so this
+       inline <script> is the real, current production shape, not a simplification.
+
+       Issue #573: layedit was removed from layui upstream in 2.8 and is entirely absent from the
+       layui-next (2.13.8) tree. The <head> loader above vendors 2.6.3's layedit.js beside
+       layui-next and registers it via layui.extend({layedit: WTM_LAYUI_BASE + '/layedit'}) before
+       this section's script runs, so layui.use('layedit', ...) resolves identically on both
+       trees — this section is the live #573 compat gate for that vendoring, same role sections
+       1-14 play for #566. -->
+  <div class="layui-form-item layui-form" lay-filter="regRichText1filterdiv">
+    <label for="regRichText1" class="layui-form-label" style="min-height:21px;">Rich text:</label>
+    <div class="layui-input-block">
+      <textarea placeholder="" style="display:none" isrich="1" id="regRichText1" name="RichTextField" lay-filter="regRichText1filter">seed-content-573</textarea>
+      <script>
+      layui.use('layedit', function(){
+        var layedit = layui.layedit;
+        layedit.set({
+          uploadImage: {
+            url: '/_framework/UploadForLayUIRichTextBox'
+          }
+        });
+        var index = layedit.build('regRichText1');
+        $('#regRichText1').attr('layeditindex',index);
+      });
+      </script>
+    </div>
+  </div>
+  <div class="status" id="status-richtext">waiting…</div>
+</div>
+
 <script>
 (function () {
   'use strict';
 
-  var TOTAL_EXPECTED = 14;
+  var TOTAL_EXPECTED = 15;
   window.__regressionResults = [];
   window.__regressionDone = false;
 
@@ -834,6 +899,91 @@
       setStatus('status-taginput', (pass ? '<span class="ok">OK</span>: ' : '<span class="bad">FAIL</span>: ') + detail);
       pushResult('tagInput (native widget init)', pass, detail);
     }, 40, 150);
+  }, 80, 150);
+
+  // ---- 15. richtextbox (layedit, #573) ----------------------------------------
+  // No __wtmHarnessCoreReady gate needed here: RichTextBoxTagHelper's own inline
+  // <script> (embedded directly in the section 15 markup above, exactly as
+  // production emits it) already calls layui.use('layedit', ...) itself — this
+  // poll just waits for that async module load + layedit.build() to finish,
+  // same pattern as sections 5/9/11/12/13 waiting on their own layui.use calls.
+  pollUntil(function () {
+    var textarea = document.getElementById('regRichText1');
+    if (!textarea) { return null; }
+    var indexAttr = textarea.getAttribute('layeditindex');
+    if (indexAttr === null) { return null; }
+    // layedit.build() does c.addClass("layui-hide").after(m) — the built
+    // .layui-layedit container is inserted as the textarea's IMMEDIATE next
+    // sibling, so the adjacent-sibling selector is the precise "built next
+    // to the textarea" assertion, not just "exists somewhere on the page".
+    var container = document.querySelector('#regRichText1 + .layui-layedit');
+    if (!container) { return null; }
+    var toolItems = container.querySelectorAll('.layui-layedit-tool .layui-icon');
+    var iframe = container.querySelector('.layui-layedit-iframe iframe');
+    if (!iframe) { return null; }
+    var iframeDoc;
+    try {
+      iframeDoc = iframe.contentWindow && iframe.contentWindow.document;
+    } catch (e) {
+      return null;
+    }
+    // layedit's iframe 'load' handler sets contenteditable="true" (and injects
+    // the seeded textarea content into the iframe body) asynchronously; until
+    // that fires, setContent/getContent below would race an empty/unready
+    // document — keep polling until it's observably done.
+    if (!iframeDoc || !iframeDoc.body || iframeDoc.body.getAttribute('contenteditable') !== 'true') {
+      return null;
+    }
+    if (toolItems.length === 0) { return null; }
+    return { pass: true, index: parseInt(indexAttr, 10), toolCount: toolItems.length, iframeDoc: iframeDoc };
+  }, function (result) {
+    if (!result.pass) {
+      setStatus('status-richtext', '<span class="bad">FAIL</span>: ' + result.detail);
+      pushResult('richtextbox (layedit.build + round-trip)', false, result.detail);
+      return;
+    }
+
+    // Round-trip: build-time init (textarea's seeded value flows into the
+    // iframe body) + a live edit, both read back via layedit.getContent(). Not
+    // layedit.setContent(): the VENDORED 2.6.3 layedit.js has a pre-existing,
+    // upstream bug in setContent() — its body calls the bare identifier
+    // `layedit.sync(t)` instead of `this.sync(t)` — which throws
+    // "ReferenceError: layedit is not defined" when invoked from any scope
+    // that hasn't separately assigned a global `window.layedit` (confirmed
+    // byte-identical on both trees; NOT a #573 regression — production
+    // (RichTextBoxTagHelper) never calls setContent() so this latent defect
+    // is never hit in practice). Editing the iframe body directly is exactly
+    // what a real user's contenteditable typing does to the DOM, so this is
+    // a MORE realistic round-trip than calling the buggy API would have been.
+    var index = result.index;
+    var body = result.iframeDoc.body;
+    var roundTripOk = false;
+    var roundTripDetail;
+    try {
+      var initial = layui.layedit.getContent(index);
+      var initialOk = initial === 'seed-content-573';
+      body.innerHTML = 'hello-573';
+      var edited = layui.layedit.getContent(index);
+      var editedOk = edited === 'hello-573';
+      roundTripOk = initialOk && editedOk;
+      roundTripDetail = roundTripOk
+        ? "build-time init from the textarea's seeded value round-tripped through getContent() ('seed-content-573'), " +
+          "then a direct iframe-body edit (simulating real contenteditable typing) round-tripped through " +
+          "getContent() again ('hello-573')"
+        : 'round-trip mismatch: initial getContent()=' + JSON.stringify(initial) + ' (expected seed-content-573), ' +
+          'post-edit getContent()=' + JSON.stringify(edited) + ' (expected hello-573)';
+    } catch (e) {
+      roundTripDetail = 'getContent() threw: ' + e;
+    }
+
+    var pass = roundTripOk;
+    var detail = pass
+      ? '.layui-layedit built immediately after the textarea, toolbar has ' + result.toolCount +
+        ' tool item(s), edit iframe present and initialized (contenteditable=true), ' +
+        'layeditindex="' + index + '" stamped on the textarea, and ' + roundTripDetail
+      : 'DOM scaffolding built (toolbar=' + result.toolCount + ' items, layeditindex=' + index + ') but ' + roundTripDetail;
+    setStatus('status-richtext', (pass ? '<span class="ok">OK</span>: ' : '<span class="bad">FAIL</span>: ') + detail);
+    pushResult('richtextbox (layedit.build + round-trip)', pass, detail);
   }, 80, 150);
 
 })();
