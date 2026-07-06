@@ -105,9 +105,23 @@ public class AllAnyTests : IDisposable
     {
         _dbName = $"WfAllAny_{Guid.NewGuid():N}";
         _keepAlive = new SqliteConnection($"DataSource={_dbName}?mode=memory&cache=shared");
-        _keepAlive.Open();
+        OpenWithBusyTimeout(_keepAlive);
         using var ctx = MakeContext();
         ctx.Database.EnsureCreated();
+    }
+
+    /// <summary>
+    /// Opens <paramref name="connection"/> and immediately sets a busy_timeout PRAGMA
+    /// (#620): the raw <c>_keepAlive</c>/round-loop connections in this fixture don't go
+    /// through EF Core's <see cref="SqliteBusyTimeoutInterceptor"/>, so they need the same
+    /// protection applied by hand, as the very first statement after Open().
+    /// </summary>
+    private static void OpenWithBusyTimeout(SqliteConnection connection)
+    {
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "PRAGMA busy_timeout = 3000;";
+        cmd.ExecuteNonQuery();
     }
 
     [TestCleanup]
@@ -509,7 +523,7 @@ public class AllAnyTests : IDisposable
             var dbName = $"WfAllConc_{round}_{Guid.NewGuid():N}";
             await using var keepAlive = new SqliteConnection(
                 $"DataSource={dbName}?mode=memory&cache=shared");
-            keepAlive.Open();
+            OpenWithBusyTimeout(keepAlive);
 
             await using var seedCtx = new WfSequentialTestContext(dbName);
             seedCtx.Database.EnsureCreated();
@@ -662,7 +676,7 @@ public class AllAnyTests : IDisposable
             var dbName = $"WfAnyConc_{round}_{Guid.NewGuid():N}";
             await using var keepAlive = new SqliteConnection(
                 $"DataSource={dbName}?mode=memory&cache=shared");
-            keepAlive.Open();
+            OpenWithBusyTimeout(keepAlive);
 
             await using var seedCtx = new WfSequentialTestContext(dbName);
             seedCtx.Database.EnsureCreated();

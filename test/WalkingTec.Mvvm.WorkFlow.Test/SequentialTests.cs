@@ -19,11 +19,13 @@
 
 using System;
 using System.Collections.Generic;
+using System.Data.Common;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
@@ -32,6 +34,53 @@ using WalkingTec.Mvvm.WorkFlow.Engine;
 using WalkingTec.Mvvm.WorkFlow.Models;
 
 namespace WalkingTec.Mvvm.WorkFlow.Test;
+
+// ── Busy-timeout interceptor: covers EF Core's lazily-opened connections ────────
+//
+// Issue #620: the T-CONC-1 / T-CONC-3 concurrency tests in AllAnyTests.cs
+// (WfSequentialTestContext consumers) race two approver connections against the
+// same SQLite shared-in-memory database and intermittently hit SQLITE_BUSY
+// (error code 5) at connection-open time under CI parallel load.
+//
+// Microsoft.Data.Sqlite has no connection-string keyword that maps to the native
+// sqlite3_busy_timeout() API (its own "Default Timeout" keyword only sets
+// SqliteCommand.CommandTimeout, which governs step-time retries on already-open
+// connections, not the schema-lock acquisition that can occur on a brand new
+// connection's very first statement). So busy_timeout must be applied by running
+// "PRAGMA busy_timeout" as literally the first statement on every connection.
+//
+// ConnectionOpened fires immediately after the underlying ADO.NET connection
+// physically opens and BEFORE EF Core (or any caller) issues its first query —
+// the earliest hook available, and a single DRY application point covering every
+// WfSequentialTestContext instance (including the ones constructed inline inside
+// the TCONC race loops).
+internal sealed class SqliteBusyTimeoutInterceptor : DbConnectionInterceptor
+{
+    private const int BusyTimeoutMs = 3000;
+
+    public override void ConnectionOpened(DbConnection connection, ConnectionEndEventData eventData)
+    {
+        using (var cmd = connection.CreateCommand())
+        {
+            cmd.CommandText = $"PRAGMA busy_timeout = {BusyTimeoutMs};";
+            cmd.ExecuteNonQuery();
+        }
+        base.ConnectionOpened(connection, eventData);
+    }
+
+    public override async Task ConnectionOpenedAsync(
+        DbConnection connection,
+        ConnectionEndEventData eventData,
+        CancellationToken cancellationToken = default)
+    {
+        await using (var cmd = connection.CreateCommand())
+        {
+            cmd.CommandText = $"PRAGMA busy_timeout = {BusyTimeoutMs};";
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await base.ConnectionOpenedAsync(connection, eventData, cancellationToken);
+    }
+}
 
 // ── Extended DbContext: adds FrameworkUserRole for Role-resolution tests ────────
 
@@ -46,7 +95,8 @@ internal sealed class WfSequentialTestContext : DbContext
     public WfSequentialTestContext(string connStr) { _connStr = connStr; }
 
     protected override void OnConfiguring(DbContextOptionsBuilder b) =>
-        b.UseSqlite($"DataSource={_connStr}?mode=memory&cache=shared");
+        b.UseSqlite($"DataSource={_connStr}?mode=memory&cache=shared")
+            .AddInterceptors(new SqliteBusyTimeoutInterceptor());
 
     protected override void OnModelCreating(ModelBuilder m)
     {
