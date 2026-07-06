@@ -1,6 +1,12 @@
 # WTM 開發與使用手冊
 
-> **版本**：10.12.1 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-06-13
+> **版本**：10.14.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-07-06
+>
+> **10.14.0 重點**（bundled layui 預設翻轉 2.6.3 → 2.13.8，#573 / #567 Phase-2b）：demo 佈局殼（`_Layout.cshtml` / `Login.cshtml`）預設改載 **layui-next（2.13.8）** 資產樹。**這是 opt-out 式行為變更**：設定鍵 `Layui:Asset == "legacy"`（精確比對）釘回舊的 2.6.3 樹（`/layui`），其他任意值（含舊 opt-in 值 `"next"`，維持有效）或未設定則選 2.13.8（`/layui-next`）；config 值永不串接進 URL，僅在兩個固定字面值間選擇。翻轉閘經 BMS staging 真瀏覽器 e2e 620/620 sign-off + #565 雙樹 harness 15/15 把關。`wt:richtextbox` 相容性保留：layui 於 2.8 移除 `layedit` 模組，故 2.6.3 的 `layedit.js` + face 圖 + CSS 已 vendor 至 layui-next 樹旁並在 next 樹條件式 `layui.extend`。**升級指引**：要留在 2.6.3 設 `Layui:Asset=legacy`（appsettings 或 `Layui__Asset` 環境變數）即為完整回退路徑（兩樹皆隨附，無移除）；自帶佈局殼的 App 不受影響（資產選擇在 App 端 view，框架從不挑 layui 資產）。詳見 §6.1 及 `CHANGELOG.md` `[10.14.0]`。
+>
+> **10.13.x 重點**（LayUI 現代化硬化 + 對抗式稽核修復群，10.13.0 → 10.13.17）：**eval-free 對話框島架構完成（#470 退役）** — 對話框/表單初始化改由 JSON island（`ff.DispatchAction`）驅動，一個標準 WTM 對話框現發出**零** inline `<script>`（`framework_layui.js` 全檔僅存 1 個 `eval(`，即已棄用的 `IsScript` 路徑），嚴格 CSP 成為可選；`ff.SafeHtml`（DOMPurify）淨化所有對話框 partial 與 PostForm 重繪，`ff.ConsumeIslandsIn(rootEl)` 公開 API（#587）供 SPA 片段消費島；ChangeFunc/DoneFunc/BeforeSubmit 等具名回呼經 `window[name]` 白名單/黑名單守衛解析（#558/#601），trust boundary 見 `.claude/rules/architecture.md`。**原生無依賴 TagInput**（#571，chip 輸入，`createTextNode` XSS-safe）。**LayUI 雙樹**：opt-in `layui-next`（2.13.8）平行資產（#566），為 10.14.0 翻轉鋪路。安全：`SQLitePCLRaw` 3.0.x override 清除 GHSA-2m69（#393，10.13.5 起 0 NU1903）、`Microsoft.OpenApi` 2.7.5 P0 修復（#528）、多輪對抗式稽核修復（#528–#549 等）。**皆相容 / opt-in**；預設行為在 10.14.0 前不變。詳見各版 `CHANGELOG.md`。
+>
+> **10.13.0 重點**（#193 商用化 program 完成 — 18 PRs，全 opt-in / 非破壞）：新增獨立套件 **`WalkingTec.Mvvm.FileHandlers.S3`**（S3/MinIO 物件儲存 `IWtmFileHandler`，`AddWtmS3FileHandler(...)`，Core 不引入 AWSSDK 依賴）；WorkFlow HTTP 面補齊（加签/委托/回退 5 端點）；`BasePagedListVM.DoSearchAsync` / `BaseBatchVM` 非同步批次（原子交易 + 逐列驗證）；opt-in 串流匯出（`UseStreamingExport`，NPOI SXSSF 窗格化）；opt-in 分散式 `LookupCache`（`AddWtmDistributedLookupCache`）。**行為變更**：`UIEnum.VUE`（Vue 2，2023-12 EOL）標記 `[Obsolete]`（僅警告，仍可產碼；改用 `VUE3`/`Blazor`）。詳見 `CHANGELOG.md` `[10.13.0]`。
 >
 > **10.12.0 重點**（WorkFlow Wave 6 — 低代码设计器 + 安全強化）：`AddWtmWorkFlowDesigner()` + `UseWtmWorkFlowDesigner()`（opt-in）啟用 `/_workflow-designer` 低代碼視覺設計器；eval-free、no-CDN、三個嵌入式 IIFE 模組（表單視圖 / 源碼視圖 / SVG 圖形視圖，9 種 NodeKind 全覆蓋）；原始位元組保真（`WtmJsonRaw` 無損數字 codec；unknown fields 存活；no-op 儲存 ContentHash 不變 → `IdempotentNoOp`）；伺服器端草稿（`ProcessDefinitionDraft` **新表，需 migration**，RowVersion If-Match 並發保護，publish 在同一 transaction 刪草稿）；Publish CAS（`expectedBaseContentHash`，伺服器事務內比對，並發衝突 → HTTP 409 `BaseVersionChanged`）；設計器範圍 Antiforgery（`X-WTM-WF-XSRF`，不觸碰全局設定）；URL-RBAC（`WorkflowPrivileges.DesignerPage/DesignerBase`，嚴於 `[AllRights]`）。#296 安全修復：`WebhookWorkflowNotifier` escape-at-sink（已發布流程圖同樣受保護，無需重發布）+ `InvalidNodeKey`/`DuplicateNodeKey` 驗證器（新 publish 時 fail-close）。#297 修復 `framework_dashboard_designer.js` 未列為 EmbeddedResource → 404。詳見 §18.13（Wave 6 設計器）、§18.14（安全修復）及 `CHANGELOG.md` `[10.12.0]`。
 >
@@ -893,6 +899,21 @@ public class Employee : BasePoco
 ```cshtml
 @addTagHelper *, WalkingTec.Mvvm.TagHelpers.LayUI
 ```
+
+#### 6.1.1 隨附的 LayUI 版本與 `Layui:Asset` 切換（10.14.0+）
+
+WTM 的 TagHelper 渲染 LayUI 標記，但**框架本身從不挑選 layui 資產** —— 資產的 `<link>`/`<script>` 由 App 端的佈局殼（demo 的 `_Layout.cshtml` / `Login.cshtml`）提供。demo 隨附兩棵 vendored 資產樹並同時服務，由設定鍵 `Layui:Asset` 選擇：
+
+| `Layui:Asset` 值 | 選中的樹 | LayUI 版本 |
+|------------------|----------|-----------|
+| `legacy`（精確比對） | `/layui` | 2.6.3 |
+| 其他任意值 / 未設定（**10.14.0 起的預設**） | `/layui-next` | 2.13.8 |
+
+> **安全不變量**：config 值**永不串接進 URL**，只在上表兩個固定字面值之間選擇。
+
+**10.14.0 前**預設是 2.6.3（`next` 為 opt-in）；**10.14.0 起翻轉**為 2.13.8 預設，`legacy` 釘回。要留在 2.6.3，在 appsettings 設 `"Layui": { "Asset": "legacy" }` 或環境變數 `Layui__Asset=legacy` —— 這是完整回退路徑（兩樹皆隨附，無移除）。**自帶佈局殼的 App 不受此翻轉影響**；要採用 2.13.8 需比照 demo 的切換模式接線（含 layuiadmin scaffolding 的 laytpl `{{ }}` 轉義與 `router().path` 正規化兩處相容性修補，見 `CHANGELOG.md` `[10.13.17]`）。`wt:richtextbox` 在 2.13.8 樹上需比照 demo vendored 的 `layedit` 三檔 + `layui.extend` 接線（layui 於 2.8 移除 layedit 模組）。
+
+**對話框初始化採 eval-free JSON island 架構**（#470，10.13.x）：一個標準 WTM 對話框發出零 inline `<script>`，表單/日期/驗證/具名回呼皆透過 `ff.DispatchAction` 島派發並經 `ff.SafeHtml`（DOMPurify）淨化。SPA 片段可用 `ff.ConsumeIslandsIn(rootEl)` 消費子樹內的島（#587）。
 
 ### 6.2 佈局
 
@@ -4518,6 +4539,7 @@ public class Order : BasePoco
 |--------|--------|------|
 | `CookiePre` | `"WTM"` | Cookie 前綴（多站部署時避免衝突） |
 | `IsQuickDebug` | `true` | 快速調試模式（跳過部分權限檢查） |
+| `Layui:Asset` | （未設定 → `next`） | 佈局殼隨附的 LayUI 資產樹選擇：`legacy` → 2.6.3（`/layui`）；其他值/未設定 → 2.13.8（`/layui-next`，**10.14.0 起的預設**）。App 端 view 消費，框架不挑資產；值不串接進 URL。詳見 §6.1.1 |
 | `EnableTenant` | `false` | 啟用多租戶 |
 | `UIOptions.DataTable.RPP` | `20` | Grid 每頁預設行數 |
 | `FileUploadOptions.UploadLimit` | `20971520` | 上傳限制（bytes，預設 20MB） |
