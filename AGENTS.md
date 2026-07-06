@@ -64,12 +64,17 @@ Detail + workaround SOP → `docs/ci-operations.md`. Tracking: Issue #11.
 
 ## Available Slash Commands
 
-- `/wtm-release-check` — BLOCKING gate before any release (build + test + vuln scan)
+- `/wtm-release-check` — BLOCKING gate before any release (build + test + LOCAL vuln scan)
 - `/wtm-manual-update` — Updates `docs/wtm-developer-manual.md` for the version
-- `/wtm-test` — Runs the full .NET + JS test suite with summary
-- `/wtm-nullable-scan` — Identifies files needing nullable annotation
 - `/sync-dependabot` — Validates Dependabot PRs opened on the GitHub mirror and ports them to Gitea (never merged on GitHub directly)
 - `/sync-github-security` — Triages GitHub mirror Security tab alerts (Dependabot CVEs / CodeQL / secrets) and ports fixes to Gitea
+
+### Documented workflows (not slash commands)
+
+These are one-liners kept as documented steps rather than command files:
+
+- **Full test suite:** `dotnet test WalkingTec.Mvvm.sln -c Release` then `cd test/WalkingTec.Mvvm.Js.Tests && npm test` (see `.claude/rules/tools-commands.md` § Test)
+- **Nullable-annotation scan:** `grep -rln "#nullable disable" src/` and review `<Nullable>` project settings (new code must never commit `#nullable disable`)
 
 ## Key Files
 
