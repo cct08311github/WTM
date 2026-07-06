@@ -1,5 +1,21 @@
 # 更新日志
 
+## [10.14.2] - 2026-07-06
+
+Phase-4a of the #567 LayUI roadmap: formally **deprecate** `Layui:Asset=legacy` and the bundled layui 2.6.3 asset tree, opening the removal window. Nothing is removed — this is advance notice only. The conservative path was chosen at the explicit request of the stability-sensitive downstream (BMS), whose production is still on WTM 8.x and which keeps `legacy` as a one-line rollback safety net for its eventual 8→10 cutover.
+
+### Deprecated
+
+- **`Layui:Asset=legacy` and the bundled layui 2.6.3 (`/layui`) tree are deprecated (#567 Phase-4a).** They remain **fully functional** — `Layui:Asset=legacy` still selects `/layui` exactly as before, and both trees stay vendored. Removal (the `legacy` branch in `LayuiAssets.ResolveLayuiBase`, the vendored 2.6.3 tree, and the `layui-263` arm of the #565 regression suite) is planned for the **next major version**, gated on downstream production migration off `legacy` (tracked as BMS#242). A `<remarks>` deprecation notice was added to `LayuiAssets` so package consumers see it in source/IntelliSense.
+- **Package-side removal is verified clean:** an audit confirmed the WTM NuGet packages contain **zero** hardcoded `/layui/` paths — `framework_layui.js` and every embedded resource are clean, and the WorkFlow `designer.html` uses the `%%WTM_LAYUI_BASE%%` token (#614). The only package path to the 2.6.3 tree is the config-controlled `ResolveLayuiBase` `legacy` branch, so the eventual removal will strand nothing that a downstream consumes through the package.
+- **`wt:richtextbox` is not a removal blocker:** its 2.6.3 `layedit` is already self-contained in the `layui-next` tree (`layui-next/layedit.js` + face images + CSS, wired via `layui.extend`, #573), so it keeps working on 2.13.8 independently of the 2.6.3 tree.
+
+### Migration
+
+- No action required. To use `Layui:Asset=legacy` you already had to opt in; it continues to work. When removal lands (a future major, announced separately), migrate to the default (`/layui-next`, 2.13.8) — for `wt:richtextbox`, vendor the three `layedit` files beside your `layui-next` tree as the demo `_Layout.cshtml` does.
+
+---
+
 ## [10.14.1] - 2026-07-06
 
 Completes the #573/#567 layui flip: the seven framework-embedded tool-UI shells that 10.14.0 left hardcoded to `/layui` (2.6.3) now follow the `Layui:Asset` switch like every other page. Phase-3/4 prep (#614) for the eventual 2.6.3 tree removal. Non-breaking — the `Layui:Asset=legacy` pin restores 2.6.3 for these views exactly as for the app pages.

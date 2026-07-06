@@ -17,6 +17,13 @@ namespace WalkingTec.Mvvm.Mvc
     /// literal <c>"legacy"</c>; the return value is always one of exactly two hardcoded string
     /// literals (<c>"/layui"</c> or <c>"/layui-next"</c>). This method is the only place that
     /// decision is made — callers must never re-derive the base path from config themselves.</para>
+    ///
+    /// <para><strong>DEPRECATED (Phase-4a, #567):</strong> the <c>"legacy"</c> config value —
+    /// and the bundled 2.6.3 <c>/layui</c> asset tree it selects — is deprecated. This is a
+    /// non-breaking, advance notice only: <c>Layui:Asset=legacy</c> remains fully functional and
+    /// continues to select <c>/layui</c> exactly as documented above. Actual removal (this
+    /// <c>legacy</c> branch and the vendored 2.6.3 tree) is planned for the next MAJOR version,
+    /// gated on downstream production migration off <c>legacy</c> (tracked as BMS#242).</para>
     /// </summary>
     public static class LayuiAssets
     {
