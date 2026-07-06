@@ -364,10 +364,37 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
                 output.PreElement.AppendHtml($@"
 <input type=""hidden"" name=""_DONOTUSE_{Field.Name}"" value=""1"" />
 <div id=""{Id}_Container"" style=""position:absolute;right:{SelectButtonWidth?.ToString() ?? "50"}px;left:0px;width:auto"">");
+                // Issue #601: the non-standard `<hidden id='{Id}' name='{Field.Name}' />`
+                // element previously emitted here is dead: (1) `<hidden>` is not a
+                // real HTML element, so it is never form-associated — browsers
+                // never include it in FormData/serialize()/`:input` regardless of
+                // DOMPurify, so its `name` attribute never contributed a submitted
+                // value (the REAL values are the per-item `input[type=hidden]`
+                // tags inside `#{Id}_Container` above); (2) a full-repo sweep of
+                // framework_layui.js + every TagHelper + demo views found exactly
+                // one consumer resolving this bare id — `ff.clearSelector(id)`'s
+                // `$("#"+id).val("")` (framework_layui.js) — which is a
+                // write-only no-op: nothing ever reads `$("#"+id).val()` back, so
+                // the call has no observable effect whether or not this element
+                // exists. Converting it to a REAL `<input type="hidden">` (the
+                // brief's "alive" remediation) was evaluated and rejected: for a
+                // List<T>-bound selector (e.g. demo DataPrivilege/Create.cshtml's
+                // `field="SelectedItemsID"`, a List<string>), ASP.NET Core's list
+                // model binding aggregates EVERY same-named form value, so adding
+                // one more empty-valued `name='{Field.Name}'` input would inject a
+                // spurious empty entry into the bound collection on EVERY submit —
+                // a real double-submit regression, not merely a hypothetical one.
+                // Removing the emission (rather than "fixing" it into a real
+                // input) is therefore correct on both fronts: it closes the
+                // DOMPurify-strips-a-non-ALLOWED_TAGS-element gap in dialog
+                // partials with no behavior change anywhere (dead code has no
+                // behavior to preserve), and it avoids introducing this
+                // double-submit risk. `clearSelector`'s harmless `$("#"+id)` call
+                // now simply resolves to an empty jQuery set, exactly as it
+                // already did whenever this control rendered inside a dialog.
                 output.PostElement.AppendHtml($@"
 {hiddenStr}
 </div>
-<hidden id='{Id}' name='{Field.Name}' />
 ");
                 if (Disabled == true)
                 {

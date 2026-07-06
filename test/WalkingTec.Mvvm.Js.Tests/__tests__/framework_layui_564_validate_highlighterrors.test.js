@@ -124,7 +124,14 @@ describe('#564 (#470-D) — highlightErrors source sweep', () => {
   });
 
   function highlightErrorsBlock() {
-    const block = active.match(/case\s+['"]highlightErrors['"]:[\s\S]{0,3000}?\n\s*default:/);
+    // Issue #601: retargeted from a `default:` terminator to the next case
+    // label (`tagInput`, the case immediately following highlightErrors) —
+    // #601 inserted a new, sizeable 'bindInput' case between 'tagInput' and
+    // 'default:', which pushed the highlightErrors-to-`default:` span past
+    // this regex's {0,3000} bound and made the match fail. Stopping at the
+    // next case label (mirroring #558's bindSubmitBlock() convention) is
+    // immune to further insertions later in the switch.
+    const block = active.match(/case\s+['"]highlightErrors['"]:[\s\S]{0,3000}?\n\s*case\s+['"]tagInput['"]/);
     expect(block).not.toBeNull();
     return block[0];
   }

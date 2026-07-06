@@ -146,7 +146,19 @@ window.ff = {
                 // oldpost: SearchPanelTagHelper old-post-mode marker (RefreshGrid).
                 // ischart: ChartTagHelper dialog-resize / redraw target marker.
                 // chartlink: SearchPanelTagHelper chart-linked searcher marker (RefreshChart).
-                'subpro', 'issearchbutton', 'oldpost', 'ischart', 'chartlink'
+                'subpro', 'issearchbutton', 'oldpost', 'ischart', 'chartlink',
+                // Issue #601: lay-encode is CodeTagHelper's sibling attribute to
+                // the already-allowlisted lay-height/lay-title/lay-skin above —
+                // it used to be emitted as the dead, non-`lay-`-prefixed `encode`
+                // attribute (neither layui.code module — 2.6.3's
+                // demo/.../layui/lay/modules/code.js nor 2.13.8's
+                // layui-next bundle — ever reads bare `encode`; both read
+                // `lay-encode` via `elem.attr("lay-"+"encode")`), so it was
+                // ALREADY silently inert even outside dialogs. #601 renames the
+                // emission to `lay-encode`, restoring the intended
+                // escape-code-sample behavior; add it here so it also survives
+                // SafeHtml in dialog partials, matching its siblings.
+                'lay-encode'
             ]
         });
     },
@@ -220,6 +232,9 @@ window.ff = {
     // native tag/chip input has no layui module dependency at all (pure DOM
     // widget), so it never needs a layui.use(...) deferral and always
     // dispatches immediately, on both the page-ready and dialog paths.
+    // Issue #601: 'bindInput' is likewise intentionally ABSENT — it is a plain
+    // addEventListener bind (TextBoxTagHelper's ChangeFunc/DoneFunc), no layui
+    // module involved at all, same rationale as 'tagInput' above.
     _islandModulesFor: function (payload) {
         var needed = { form: false, laydate: false, slider: false, rate: false, colorpicker: false };
         if (payload && payload.actions) {
@@ -1029,15 +1044,14 @@ window.ff = {
                         !/^[A-Za-z_$][\w$]*$/.test(action.filter)) { break; }
                     if (typeof layui === 'undefined' || !layui.form ||
                         typeof layui.form.on !== 'function') { break; }
-                    var _bsBeforeFn = null;
-                    if (action.beforeSubmit &&
-                        typeof action.beforeSubmit === 'string' &&
-                        /^[A-Za-z_$][\w$]*$/.test(action.beforeSubmit) &&
-                        !(WTM_BEFORESUBMIT_DENYLIST && WTM_BEFORESUBMIT_DENYLIST.has(action.beforeSubmit)) &&
-                        Object.prototype.hasOwnProperty.call(window, action.beforeSubmit) &&
-                        typeof window[action.beforeSubmit] === 'function') {
-                        _bsBeforeFn = window[action.beforeSubmit];
-                    }
+                    // Issue #601 (#470-F): resolved through the shared
+                    // ff._resolveGuardedWindowFn helper (extracted from this
+                    // case's original inline checks) so TextBoxTagHelper's
+                    // 'bindInput' action (ChangeFunc/DoneFunc) below can reuse
+                    // the EXACT SAME guard instead of a second, possibly-
+                    // drifting copy. Same four checks as before the extraction:
+                    // identifier regex, denylist, own-property, typeof function.
+                    var _bsBeforeFn = ff._resolveGuardedWindowFn(action.beforeSubmit);
                     layui.form.on(
                         'submit(' + action.filter + ')',
                         ff._makeBindSubmitHandler(
@@ -1161,6 +1175,70 @@ window.ff = {
                 // RateTagHelper — it unconditionally emits this action.
                 case 'tagInput':
                     ff._renderTagInputAction(action);
+                    break;
+                // Issue #601 (#470-F): safe named-callback input/change binding
+                // for <wt:textbox ChangeFunc="..." DoneFunc="..." />, mirroring
+                // how #558's 'bindSubmit' migrated FormTagHelper's BeforeSubmit
+                // off an inline <script>. TextBoxTagHelper used to emit raw
+                // oninput="fn(this.value)" / onchange="fn(this.value)"
+                // attributes — ff.SafeHtml's FORBID_ATTR strips 'onchange'
+                // outright and DOMPurify's own default allowlist already drops
+                // any other on* handler attribute (neither is in the #591
+                // ADD_ATTR allowlist, and adding either back would reopen the
+                // inline-event-handler XSS class #591 closed) — so
+                // ChangeFunc/DoneFunc silently died on every dialog render.
+                // No layui module is required (pure DOM addEventListener), so —
+                // like 'tagInput' above — there is no layui.use deferral needed
+                // here.
+                //
+                // TRUST BOUNDARY: action.changeFunc/action.doneFunc are ALWAYS
+                // compile-time, developer-authored Razor literals (the
+                // ChangeFunc/DoneFunc TagHelper attribute values) — NEVER
+                // field/request/model data. TextBoxTagHelper only emits this
+                // action for a name that is already a plain identifier; a
+                // dotted/call-expression name keeps the exact legacy inline
+                // attribute instead (see TextBoxTagHelper.cs). Resolved through
+                // the SAME ff._resolveGuardedWindowFn guard 'bindSubmit' uses —
+                // identifier regex + denylist + own-property + typeof function
+                // — so even a future wiring mistake can't turn this into an
+                // eval-equivalent primitive. A failed resolution silently skips
+                // JUST that one callback and never throws.
+                //
+                // NOTE on `this`: the legacy inline attribute
+                // (onchange="fn(this.value)") is a DOM0 event-handler-attribute
+                // call, where `this` inside the handler body is bound to the
+                // ELEMENT (DOM0 semantics — NOT window, despite the bare-call
+                // syntax). addEventListener's listener is also invoked with
+                // `this` === the element it is bound to, so calling
+                // fn(el.value) here reproduces the exact same (fn, argument)
+                // pair the legacy attribute produced — the only thing that
+                // changes is how the LISTENER ITSELF is invoked, never what fn
+                // receives. No known consumer relies on `this` inside fn (fn is
+                // always called with a single positional value argument, never
+                // .apply()'d against a `this`).
+                //
+                // Containment mirrors #578/#585: when action.formId is
+                // present, the target element must resolve INSIDE that form
+                // (formEl.contains(el)) or the whole bind is skipped. Element
+                // resolution is BY ID (document.getElementById) — never a
+                // page-wide CSS-selector query — and an absent formId simply
+                // skips the check (back-compat with islands rendered outside a
+                // <wt:form>).
+                case 'bindInput':
+                    if (!action.elemId || typeof action.elemId !== 'string') { break; }
+                    var _biEl = document.getElementById(action.elemId);
+                    if (!_biEl) { break; }
+                    var _biFormId = (typeof action.formId === 'string') ? action.formId : null;
+                    var _biFormEl = _biFormId ? document.getElementById(_biFormId) : null;
+                    if (_biFormId && (!_biFormEl || !_biFormEl.contains(_biEl))) { break; }
+                    var _biChangeFn = ff._resolveGuardedWindowFn(action.changeFunc);
+                    var _biDoneFn = ff._resolveGuardedWindowFn(action.doneFunc);
+                    if (_biChangeFn) {
+                        _biEl.addEventListener('input', function () { _biChangeFn(_biEl.value); });
+                    }
+                    if (_biDoneFn) {
+                        _biEl.addEventListener('change', function () { _biDoneFn(_biEl.value); });
+                    }
                     break;
                 default:
                     if (typeof console !== 'undefined' && console.warn) {
@@ -1430,6 +1508,41 @@ window.ff = {
             layui.use(['form'], function () {
                 var form = layui.form.render(null, formId);
             });
+    },
+
+    // Issue #601 (#470-F): shared guarded window[name] resolver — extracted
+    // from the #558 'bindSubmit' case's original inline checks (beforeSubmit)
+    // so 'bindInput' (TextBoxTagHelper's ChangeFunc/DoneFunc, #601) can reuse
+    // the EXACT SAME guard instead of a second, possibly-drifting copy. Both
+    // callers share the SAME trust boundary: `name` is ALWAYS a compile-time,
+    // developer-authored Razor literal (BeforeSubmit / ChangeFunc / DoneFunc
+    // TagHelper attribute values) — NEVER request/field/model data. Every
+    // check below is defense-in-depth on top of that invariant:
+    //   1. name must match /^[A-Za-z_$][\w$]*$/ — a plain identifier only.
+    //      Dotted ('a.b'), bracketed ('x[0]'), or otherwise non-identifier
+    //      strings are rejected outright.
+    //   2. name must NOT be in WTM_BEFORESUBMIT_DENYLIST — dangerous built-in
+    //      globals (eval, Function, setTimeout, fetch, …) are own callable
+    //      window properties whose names pass the identifier regex, so they
+    //      are rejected explicitly.
+    //   3. name must be an OWN property of window (via
+    //      Object.prototype.hasOwnProperty), which blocks inherited
+    //      Object.prototype members ('constructor', 'toString') and
+    //      prototype-chain tricks ('__proto__') that would otherwise pass the
+    //      identifier regex.
+    //   4. window[name] must itself be a function.
+    // Any failed check returns null — the caller silently skips that one
+    // callback/gate and never throws.
+    _resolveGuardedWindowFn: function (name) {
+        if (name &&
+            typeof name === 'string' &&
+            /^[A-Za-z_$][\w$]*$/.test(name) &&
+            !(WTM_BEFORESUBMIT_DENYLIST && WTM_BEFORESUBMIT_DENYLIST.has(name)) &&
+            Object.prototype.hasOwnProperty.call(window, name) &&
+            typeof window[name] === 'function') {
+            return window[name];
+        }
+        return null;
     },
 
     // Issue #558 (#470-C): factory for the 'bindSubmit' DispatchAction case's

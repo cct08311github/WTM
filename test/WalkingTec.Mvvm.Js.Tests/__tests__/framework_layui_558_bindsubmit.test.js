@@ -30,6 +30,18 @@
 // setup.js — so the live module functions cannot be exercised directly
 // against real DOM/layui mocks here). Any drift between the stub and the
 // real file is caught by the source-sweep tests.
+//
+// Issue #601 (#470-F) update: the four guard checks below (identifier regex,
+// denylist, own-property, typeof-function) were EXTRACTED out of this case's
+// inline body into the shared ff._resolveGuardedWindowFn(name) helper, so
+// TextBoxTagHelper's new 'bindInput' action (ChangeFunc/DoneFunc) can reuse
+// the exact same guard instead of a second, possibly-drifting copy. The
+// source-sweep assertions below were retargeted at _resolveGuardedWindowFn
+// itself (where the literal regex/denylist/hasOwnProperty/typeof checks now
+// live) rather than at the bindSubmit case body; a new assertion locks that
+// the bindSubmit case delegates to that shared helper. Behavior (all
+// downstream describe blocks) is unchanged — bindSubmit's observable
+// semantics did not change, only where the guard logic lives.
 
 const fs = require('fs');
 const path = require('path');
@@ -82,9 +94,18 @@ describe('#558 (#470-C) — source sweep', () => {
     expect(block).toMatch(/!\/\^\[A-Za-z_\$\]\[\\w\$\]\*\$\/\.test\(\s*action\.filter\s*\)/);
   });
 
-  test('bindSubmit case rejects beforeSubmit names in WTM_BEFORESUBMIT_DENYLIST', () => {
+  // Issue #601: the four checks below (identifier regex, denylist,
+  // own-property, typeof-function) were extracted out of the bindSubmit case
+  // body into the shared ff._resolveGuardedWindowFn(name) helper — see the
+  // '_resolveGuardedWindowFn' describe block further down, which now owns
+  // these assertions (retargeted at `name` instead of `action.beforeSubmit`,
+  // since the helper is name-agnostic and shared with 'bindInput', #601).
+  // This test locks in that the bindSubmit case actually DELEGATES to that
+  // shared helper rather than re-inlining an equivalent (and possibly
+  // drifting) copy of the same checks.
+  test('bindSubmit case resolves beforeSubmit via the shared ff._resolveGuardedWindowFn helper', () => {
     const block = bindSubmitBlock();
-    expect(block).toMatch(/WTM_BEFORESUBMIT_DENYLIST\s*&&\s*WTM_BEFORESUBMIT_DENYLIST\.has\(\s*action\.beforeSubmit\s*\)/);
+    expect(block).toMatch(/ff\._resolveGuardedWindowFn\(\s*action\.beforeSubmit\s*\)/);
   });
 
   test('bindSubmit case guards on layui.form.on being available', () => {
@@ -93,20 +114,14 @@ describe('#558 (#470-C) — source sweep', () => {
     expect(block).toMatch(/typeof\s+layui\.form\.on\s*!==\s*['"]function['"]/);
   });
 
-  test('bindSubmit case resolves beforeSubmit only via the identifier-regex guard', () => {
-    const block = bindSubmitBlock();
+  test('ff._resolveGuardedWindowFn applies the identifier regex, denylist, own-property, and typeof-function guards', () => {
+    const block = active.match(/_resolveGuardedWindowFn\s*:\s*function[\s\S]{0,700}?\n\s*\},/);
+    expect(block).not.toBeNull();
     // eslint-disable-next-line no-useless-escape
-    expect(block).toMatch(/\/\^\[A-Za-z_\$\]\[\\w\$\]\*\$\/\.test\(\s*action\.beforeSubmit\s*\)/);
-  });
-
-  test('bindSubmit case requires beforeSubmit to be an OWN property of window (hasOwnProperty)', () => {
-    const block = bindSubmitBlock();
-    expect(block).toMatch(/Object\.prototype\.hasOwnProperty\.call\(\s*window\s*,\s*action\.beforeSubmit\s*\)/);
-  });
-
-  test('bindSubmit case requires window[beforeSubmit] to be a function before use', () => {
-    const block = bindSubmitBlock();
-    expect(block).toMatch(/typeof\s+window\[action\.beforeSubmit\]\s*===\s*['"]function['"]/);
+    expect(block[0]).toMatch(/\/\^\[A-Za-z_\$\]\[\\w\$\]\*\$\/\.test\(\s*name\s*\)/);
+    expect(block[0]).toMatch(/WTM_BEFORESUBMIT_DENYLIST\s*&&\s*WTM_BEFORESUBMIT_DENYLIST\.has\(\s*name\s*\)/);
+    expect(block[0]).toMatch(/Object\.prototype\.hasOwnProperty\.call\(\s*window\s*,\s*name\s*\)/);
+    expect(block[0]).toMatch(/typeof\s+window\[name\]\s*===\s*['"]function['"]/);
   });
 
   test('bindSubmit case registers layui.form.on with the action.filter-derived submit event', () => {

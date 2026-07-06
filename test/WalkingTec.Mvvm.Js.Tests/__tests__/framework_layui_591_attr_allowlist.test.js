@@ -54,7 +54,12 @@ const EXPECTED_ADD_ATTR = [
     'wtm-turl', 'div-for',
     // Review-round follow-up: non-prefixed marker attributes missed by the
     // initial lay-/wtm-/div-for grep sweep (see file header comment).
-    'subpro', 'issearchbutton', 'oldpost', 'ischart', 'chartlink'
+    'subpro', 'issearchbutton', 'oldpost', 'ischart', 'chartlink',
+    // Issue #601: CodeTagHelper's lay-encode (sibling of lay-height/lay-title
+    // above) — the layui code module (both the 2.6.3 and 2.13.8 vendored
+    // trees) reads lay-encode, never the bare `encode` CodeTagHelper used to
+    // emit; #601 renamed the emission and added the matching ADD_ATTR entry.
+    'lay-encode'
 ];
 
 // Attributes that must NOT be allowlisted, even though they are real layui

@@ -200,8 +200,22 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             //   - BeforeSubmit bare identifier -> island: initForm + bindSubmit(beforeSubmit:name)
             //   - BeforeSubmit non-identifier  -> island: initForm only; legacy inline submit <script> kept
             bool beforeSubmitPresent = !string.IsNullOrEmpty(BeforeSubmit);
+            // ANCHOR NOTE (#601 adversarial-review parity fix): the end anchor
+            // is `\z`, NOT `$`. .NET's `$` (even without RegexOptions.Multiline)
+            // also matches immediately before a single trailing '\n', whereas
+            // the client-side JS resolver — /^[A-Za-z_$][\w$]*$/ — matches only
+            // the absolute end. With `$` here, a BeforeSubmit like "myFunc\n"
+            // would be classified an identifier server-side (island bindSubmit
+            // emitted, legacy inline submit suppressed) while the JS resolver
+            // REJECTED it — silently dropping the developer's submit gate and
+            // letting the form post ungated, the exact "never silently change
+            // default behaviour" red-line break this 3-way decision exists to
+            // prevent. `\z` (absolute end only) makes both engines agree, so
+            // "myFunc\n" is a non-identifier and correctly falls back to the
+            // legacy inline submit binding whose gate still runs. (Same fix as
+            // TextBoxTagHelper's #601 _identifierRegex.)
             bool beforeSubmitIsIdentifier = beforeSubmitPresent &&
-                Regex.IsMatch(BeforeSubmit, @"^[A-Za-z_$][\w$]*$");
+                Regex.IsMatch(BeforeSubmit, @"^[A-Za-z_$][\w$]*\z");
             bool migrateSubmitToIsland = isAjaxSubmitForm && (!beforeSubmitPresent || beforeSubmitIsIdentifier);
             bool useLegacyInlineSubmit = isAjaxSubmitForm && beforeSubmitPresent && !beforeSubmitIsIdentifier;
 

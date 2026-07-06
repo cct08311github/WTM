@@ -292,6 +292,50 @@ public class FormTagHelperTests
             "A dotted non-identifier BeforeSubmit must emit initForm + bindValidate (no bindSubmit)");
     }
 
+    // ── TC-02d: #601 adversarial-review parity fix — .NET `$` vs JS `$` anchor
+    //             mismatch on the BeforeSubmit identifier check ─────────────────
+
+    [TestMethod]
+    public void Process_BeforeSubmitWithTrailingNewline_TakesLegacyInlinePath_NeverIslandBeforeSubmit()
+    {
+        // .NET's `$` (even without RegexOptions.Multiline) also matches
+        // immediately before a single trailing '\n', but the client-side JS
+        // bindSubmit resolver (/^[A-Za-z_$][\w$]*$/) matches only the absolute
+        // end. If FormTagHelper's identifier check used `$`, "myGate\n" would be
+        // classified an identifier server-side (island bindSubmit emitted,
+        // legacy inline submit suppressed) while the JS resolver REJECTED it —
+        // silently dropping the developer's submit gate and letting the form
+        // post ungated. The `\z` anchor (absolute end only) makes both engines
+        // agree: "myGate\n" is a non-identifier → keeps the legacy inline submit
+        // binding whose gate still runs. Mirrors TextBoxTagHelper's #601 fix.
+        var helper = CreateHelper(new TestFormVM());
+        helper.Id = "wtForm_nl";
+        helper.BeforeSubmit = "myGate\n"; // identifier + trailing newline
+        var output = MakeOutput();
+
+        helper.Process(MakeContext(), output);
+
+        var content = output.PostElement.GetContent();
+
+        // The island must NOT carry this value as a bindSubmit beforeSubmit
+        // (which would be the silent-drop path the JS gate rejects).
+        var json = ExtractJsonFromIsland(content);
+        Assert.IsNotNull(json);
+        Assert.IsFalse(json.Contains("beforeSubmit"),
+            "A trailing-newline BeforeSubmit must never appear as an island beforeSubmit value — " +
+            "the JS resolver's /$/ would reject it, silently dropping the gate");
+        using var doc = JsonDocument.Parse(json);
+        var actions = doc.RootElement.GetProperty("actions");
+        Assert.AreEqual(2, actions.GetArrayLength(),
+            "A trailing-newline BeforeSubmit must emit initForm + bindValidate only (no island bindSubmit)");
+        Assert.AreEqual("initForm", actions[0].GetProperty("type").GetString());
+        Assert.AreEqual("bindValidate", actions[1].GetProperty("type").GetString());
+
+        // It takes the legacy inline submit path instead (gate still runs).
+        StringAssert.Contains(content, "layui.form.on('submit(wtForm_nlfilter)'",
+            "A trailing-newline BeforeSubmit falls back to the legacy inline submit binding so its gate still runs");
+    }
+
     // ── TC-03: trust boundary — beforeSubmit is NEVER a field/model value ─────
 
     [TestMethod]
