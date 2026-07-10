@@ -2077,6 +2077,23 @@ window.ff = {
                 // The $$script$$/$$#script$$ escape tokens in the tempId template are
                 // rehydrated AFTER sanitization (they live in local DOM, not the server
                 // response, so they are trusted content).
+                //
+                // Issue #635 (#470 prerequisite): unlike ff.OpenDialog, this response
+                // (`str`, pre-SafeHtml) is deliberately NOT scanned for wtm-dialog-init
+                // islands here. OpenDialog is a generic dialog opener that can point at
+                // ANY controller action/view, including arbitrary developer-authored
+                // forms; `str` here is always the response of the ONE fixed, framework-
+                // owned view this function calls (Views/_Framework/Selector.cshtml),
+                // which renders only wt:container/wt:grid/wt:row/wt:button — none of
+                // which are dialog-init island emitters (only the Form/ field
+                // TagHelpers and <wt:dialog-init> emit them, and none appear in that
+                // view). Adding a pre-sanitize extraction step for a response shape that
+                // can never carry one would be unreachable code in a security-sensitive
+                // path. If a future change adds an island-emitting TagHelper to that
+                // view (or an app overrides it to include one), the island is simply
+                // stripped by ff.SafeHtml's FORBID_TAGS below (same inert-and-dropped
+                // fate as today, not a new gap) until this is revisited — see the #635
+                // PR description for the tracking note.
                 var safeStr = ff.SafeHtml(str);
                 if ($(tempId).length > 0 && regGridVar.test(str)) {
                     // Issue #332: replace brittle regex grid-id extraction with safe
@@ -2089,6 +2106,21 @@ window.ff = {
                     var gridVar = gridId ? ('wtVar_' + regGridVar.exec(str)[1]) : null;
                     if (gridId) {
                         var template = $(tempId)[0].innerHTML;
+                        // Issue #635 (#470 prerequisite): rehydrate wtm-dialog-init JSON
+                        // island tokens UNCONDITIONALLY — independent of, and BEFORE, the
+                        // kill-switch branch below. These tokens are DATA (JSON.parse +
+                        // whitelist dispatch via ff._dispatchIslandWhenReady in the
+                        // layer.open success callback further down), never eval'd code, so
+                        // the #627 kill-switch's "block WTM-driven dynamic script
+                        // execution" contract does not apply to them — the kill-switch's
+                        // whole point is that an islandified selector panel becomes
+                        // CSP-clean, not dead. SelectorTagHelper.cs tokenizes each island's
+                        // own open+close tag as ONE matched pair specifically so this
+                        // restore is unambiguous and independent of the legacy
+                        // $$script$$/$$#script$$ handling below.
+                        template = template
+                            .replace(/[$]{2}dialoginit[$]{2}/img, '<script type="application/json" class="wtm-dialog-init">')
+                            .replace(/[$]{2}#dialoginit[$]{2}/img, '<\/script>');
                         // Issue #627 review follow-up: this is the FOURTH gated legacy
                         // dynamic-script-execution point in this file (see
                         // ff._isLegacyRehydrationDisabled) — the original #627 commit only
@@ -2156,6 +2188,23 @@ window.ff = {
                     , shade: 0.8
                     , id: windowid //设定一个id，防止重复弹出
                     , content: str
+                    , success: function (layero) {
+                        // Issue #635 (#470 prerequisite): dispatch any wtm-dialog-init
+                        // island(s) that just became part of the live DOM as this layer's
+                        // content — e.g. a callback-free <wt:datetime> field inside the
+                        // selector search-panel template rehydrated above.
+                        // ff.ConsumeIslandsIn is scoped to layero's own subtree — never the
+                        // whole document (see its #587 comment) — and claims each island
+                        // (data-wtm-dispatched="1") before scheduling its dispatch, so this
+                        // can never double-dispatch. Ordering: layer.open's own content
+                        // insertion (the mechanism that turns a rehydrated bare
+                        // <script>...</script> segment into a running side effect — there
+                        // is no separate explicit re-injection loop here, unlike
+                        // ff.OpenDialog/#522) has already completed by the time `success`
+                        // fires, so a legacy $$script$$ segment (when the kill-switch is
+                        // OFF) always runs before this island dispatch.
+                        ff.ConsumeIslandsIn(layero);
+                    }
                     , end: function () {
                         ff.SetCookie("windowids", owid);
                     }

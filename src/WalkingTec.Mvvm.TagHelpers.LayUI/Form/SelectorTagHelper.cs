@@ -24,6 +24,15 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
         private static readonly Regex _regColDivEnd = new Regex(@"</div>$", RegexOptions.Compiled);
         private static readonly Regex _regSearcherName = new Regex(@"(name="")((_DONOTUSE_)?[0-9a-zA-z]{0,}[.]?)(Searcher[.][0-9a-zA-z]{0,}"")", RegexOptions.Compiled | RegexOptions.Multiline | RegexOptions.IgnoreCase);
 
+        // Issue #635 (#470 prerequisite): matches a complete wtm-dialog-init JSON
+        // island — <script type="application/json" class="wtm-dialog-init">...
+        // </script> — as ONE unit, open tag through its own matching close tag.
+        // See the usage site below for why this must run BEFORE the bare-<script>
+        // escape that follows it.
+        private static readonly Regex _regDialogInitIsland = new Regex(
+            "<script type=\"application/json\" class=\"wtm-dialog-init\">([\\s\\S]*?)</script>",
+            RegexOptions.Compiled);
+
         /// <summary>
         /// EmptyText
         /// </summary>
@@ -276,6 +285,29 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
                 content = _regSearcherName.Replace(content, "$1$2$4");
                 //reg = new Regex("(name=\")([0-9a-zA-z]{0,}[.]?)(Searcher[.]?[0-9a-zA-z]{0,}\")", RegexOptions.Multiline | RegexOptions.IgnoreCase);
                 //content = reg.Replace(content, "$1$3");
+                // Issue #635 (#470 prerequisite): tokenize wtm-dialog-init JSON
+                // islands as a matched open+close PAIR, with DEDICATED sentinel
+                // tokens, BEFORE the bare-<script> escape below. A field TagHelper
+                // nested inside <wt:searchpanel> (e.g. a callback-free
+                // <wt:datetime>) can emit one of these islands into `content`. Its
+                // opening tag never matches the bare "<script>" literal the escape
+                // below rewrites (it carries attributes), but its closing
+                // "</script>" IS an exact literal match for that escape's blanket
+                // replace — so without this step running first, the island's close
+                // tag alone would get tokenized while its open tag stays literal: a
+                // mismatched, unpaired token that framework_layui.js's OpenDialog2
+                // can neither treat as a legacy-script pair (kill-switch strip) nor
+                // restore to a valid tag (legacy convert-back only flips whole
+                // token pairs) — leaving an UNCLOSED <script> in the composed
+                // dialog HTML that silently swallows every element rendered after
+                // it. The JSON body itself can never contain a literal '<' or '>'
+                // (every emitter here serializes with the default System.Text.Json
+                // encoder, which escapes them — see DialogInitTagHelper's
+                // comment), so a non-greedy match to the next "</script>" always
+                // lands on this island's own closing tag, never a later one.
+                content = _regDialogInitIsland.Replace(
+                    content,
+                    m => "$$dialoginit$$" + m.Groups[1].Value + "$$#dialoginit$$");
                 content = content.Replace("<script>", "$$script$$").Replace("</script>", "$$#script$$");
                 var searchPanelTemplate = $@"<script type=""text/template"" id=""Temp{Id}"">{content}</script>";
 
