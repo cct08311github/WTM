@@ -2399,6 +2399,31 @@ window.ff = {
         return legacy;
     },
 
+    // Issue #645: order-independent race guard between ff.ChainChange and
+    // ff.LoadComboItems. Since #633 islandified item-url loads to fire at
+    // DOMContentLoaded, while a chained field's default-value cascade
+    // (ComboBoxTagHelper's `on:` handler / its edit-page setTimeout) fires
+    // its own $.get independently, two unrelated network round trips can
+    // both resolve against the SAME target element with no
+    // generation/cancellation guard — whichever $.get lands last silently
+    // wins, even when that means the stale unfiltered item-url list
+    // clobbers the correct filtered chain result (or vice versa).
+    // The fix: the instant ChainChange applies items to `target` — in any
+    // of the tree/transfer/combo/checkbox/radio branches below, regardless
+    // of usedefaultvalue, since a user-driven refresh must claim authority
+    // too — it stamps `data-wtm-chain-applied` on that element. ChainChange's
+    // `target` (`$('#'+formid).find('#'+linkto.value)`) and
+    // ff.LoadComboItems' own `target` (`$('#'+controlid)`) resolve to the
+    // SAME DOM node whenever a field is simultaneously a chain target and
+    // has its own item-url (linkto.value === controlid === the field's own
+    // wrapping `#{Id}` div — see ComboBoxTagHelper.cs). Chain is
+    // authoritative: once claimed, ff.LoadComboItems' still-in-flight (or
+    // future) item-url apply is a no-op — order-independent of which $.get
+    // actually resolves first (see ff.LoadComboItems' matching check).
+    // Fields that are never a chain target (no source's wtm-linkto ever
+    // points at them) never get this attribute set, so the marker check in
+    // ff.LoadComboItems is inert for them — byte-identical to pre-#645
+    // behavior for the plain item-url-only and plain-chain-only cases.
     ChainChange: function (url, self, usedefaultvalue) {
         var form = layui.form;
         var linkto = self.attributes["wtm-linkto"];
@@ -2458,11 +2483,15 @@ window.ff = {
                             df = ff._readFieldDefaults(target, comboid);
                         }
                        window[comboid].update({ data: ff.getTreeItems(data.Data,df) });
+                        // Issue #645: claim the target — see the comment above ff.ChainChange.
+                        target.attr('data-wtm-chain-applied', '1');
                     }
                     if (controltype === "transfer") {
                         layui.transfer.reload(targetid, {
                             data: ff.getTransferItems(data.Data)
                         });
+                        // Issue #645: claim the target — see the comment above ff.ChainChange.
+                        target.attr('data-wtm-chain-applied', '1');
                     }
 
                     if (controltype === "combo") {
@@ -2471,6 +2500,8 @@ window.ff = {
                             df = ff._readFieldDefaults(target, comboid);
                       }
                         window[comboid].update({ data: ff.getComboItems(data.Data, df, usedefaultvalue) });
+                        // Issue #645: claim the target — see the comment above ff.ChainChange.
+                        target.attr('data-wtm-chain-applied', '1');
                     }
                     if (controltype === "checkbox") {
                         for (i = 0; i < data.Data.length; i++) {
@@ -2490,6 +2521,8 @@ window.ff = {
                             }
                         }
                         form.render('checkbox', targetfilter);
+                        // Issue #645: claim the target — see the comment above ff.ChainChange.
+                        target.attr('data-wtm-chain-applied', '1');
                     }
                     if (controltype === "radio") {
                         for (i = 0; i < data.Data.length; i++) {
@@ -2506,6 +2539,8 @@ window.ff = {
                             }
                         }
                         form.render('radio', targetfilter);
+                        // Issue #645: claim the target — see the comment above ff.ChainChange.
+                        target.attr('data-wtm-chain-applied', '1');
                     }
 
                 }
@@ -2528,6 +2563,21 @@ window.ff = {
         }
        $.get(url, {}, function (data, status) {
            if (status === "success") {
+               // Issue #645: ff.ChainChange (a chain link targeting this SAME
+               // element — see the comment above ff.ChainChange for the DOM-
+               // node-identity argument) may have already applied a filtered
+               // result to `target` while this item-url fetch was still in
+               // flight, or may still be about to (the two $.get round trips
+               // race with no ordering guarantee). Once claimed, chain is
+               // authoritative — this apply must yield rather than clobber it
+               // with the stale/unfiltered item-url list. This is expected,
+               // not an error, so it's a quiet debug note, not a warning.
+               if (target.attr('data-wtm-chain-applied')) {
+                   if (typeof console !== 'undefined' && console.debug) {
+                       console.debug('[WTM] LoadComboItems: widget "' + controlid + '" already claimed by ff.ChainChange — skipping stale item-url apply (#645).');
+                   }
+                   return;
+               }
                var i = 0;
                var item = null;
                if (controltype === "tree") {
