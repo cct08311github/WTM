@@ -132,6 +132,35 @@ GitHub Actions 的 API 不是這個行為（GitHub 各 step 各自獨立 conclus
 
 ---
 
+## 重複觸發：feature-branch push 曾讓整套測試並行跑兩遍（#640，2026-07-10 修正）
+
+`ci-build.yml` 過去同時掛在 `push: [dotnet8, dotnet10, "feature/**", "feat/**"]` 與
+`pull_request: [dotnet8, dotnet10]`。專案流程是「推 `feat/**` 分支 → 對 `dotnet10` 開 PR」，
+兩個 trigger 因此對**同一個 commit** 各跑一次完整測試套件，**並行**擠在單一 self-hosted runner 上。
+
+**證據**：SHA `ea0e6b9d7` 的 task 清單中 `release-tooling-test` / `build-and-test` / `js-test`
+各出現兩次（9308/9311、9309/9312、9310/9313）。而且三次觀察一致 —— **push run 敗、PR run 過**：
+
+| SHA | push-event `build-and-test` | pull_request-event |
+|-----|-----------------------------|--------------------|
+| `ea0e6b9d7` | ❌ `Test host process crashed`（Core.Test，1644/4218） | ✅ |
+| `d77d6a468` | ❌ `cannot start a transaction within a transaction`（#629） | ✅ |
+| `c23873c79` | ❌ | ✅ |
+
+這很可能就是長年「SQLite 併發測試很 flaky」（#620 `database is locked`、#629 `tx-in-tx`、
+以及新出現的 testhost 原生崩潰）的**共同觸發器**：測試本身不 flaky，是 runner 被自己塞爆。
+佐證：這些簽名在本機一律無法重現（#629 曾跑 96 輪蓄意 4-6 路並行負載仍全綠）。
+
+**修法**：從 `push` trigger 移除 `feature/**` / `feat/**`（PR trigger 已完整覆蓋 feature 分支）。
+**不可**改用 `concurrency:` group —— push 與 pull_request 事件的 `github.ref` 不同
+（`refs/heads/feat/x` vs PR merge ref），彼此不會 dedupe，反而會取消正當的 dotnet10 in-flight run。
+
+**SOP 影響**：看到 commit 的 combined status 是 failure 時，先分辨失敗的是 push-event 還是
+pull_request-event 的 job。修正後 feature 分支只會有 pull_request-event 的 job；若舊 commit
+仍帶著 push-event 的紅燈，那是歷史雜訊。
+
+---
+
 ## 排錯 SOP
 
 當 PR 的 CI conclusion 是 failure：

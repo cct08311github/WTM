@@ -1,8 +1,11 @@
 name: WTM Build and Test
 on:
   workflow_dispatch:
+  # No feature/**, feat/** here on purpose: every feature branch reaches dotnet10 via a
+  # PR, whose pull_request trigger below already runs the full suite. Firing both meant
+  # two concurrent full suites per push, starving the self-hosted runner (#640).
   push:
-    branches: [ dotnet8, dotnet10, "feature/**", "feat/**" ]
+    branches: [ dotnet8, dotnet10 ]
   pull_request:
     branches: [ dotnet8, dotnet10 ]
 
