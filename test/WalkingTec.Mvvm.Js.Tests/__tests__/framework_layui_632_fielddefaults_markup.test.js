@@ -1,7 +1,7 @@
 // Tests for Issue #632 (redesigned — "data as markup, not script"):
 // CheckBoxTagHelper/RadioTagHelper's per-widget
 //   {Id}defaultvalues = [...];
-// inline <script> is replaced by TWO things:
+// inline <script> was originally replaced by TWO things:
 //   1. A data-wtm-defaults="[...]" HTML attribute on the control's own div —
 //      the AUTHORITATIVE source ff.ChainChange now reads via the new
 //      ff._readFieldDefaults(target, comboid) helper (framework_layui.js).
@@ -21,6 +21,24 @@
 // ACCEPTED design does not have that problem: the attribute is present at
 // HTML-parse time, before any script (including this one) has even started
 // running, so there is no dispatch to race in the first place.
+//
+// Issue #649 UPDATE (second pre-release Codex adversarial review): #646
+// restored the legacy inline "{Id}defaultvalues = [...];" write ALONGSIDE
+// item 2 above (kept for a different back-compat reason — synchronous,
+// parse-time global publication). Keeping BOTH publishers turned out to be a
+// bug of its own: on a default full-page load, the island's DOMContentLoaded
+// dispatch unconditionally re-published the ORIGINAL server values over
+// whatever an app had mutated the global to in between — see
+// framework_layui_649_clobber_regression.test.js. CheckBoxTagHelper.cs /
+// RadioTagHelper.cs no longer emit item 2 at all; the tests in THIS file that
+// exercise the 'fieldDefaults' DispatchAction case below do so against
+// HAND-CRAFTED island fixtures — they prove the dispatch mechanism itself
+// still works correctly (id validation, values coercion, Unicode ids) for the
+// case where an island of this shape exists (e.g. app-authored), NOT that any
+// framework TagHelper still emits one. The case is retained in
+// framework_layui.js as documented, unreachable-from-framework-markup
+// back-compat infrastructure — see its own comment for the full #649
+// rationale.
 
 'use strict';
 
@@ -351,7 +369,13 @@ describe('#632 full-page ordering — attribute readable before island dispatch;
     expect(target.getAttribute('data-wtm-defaults')).toBe('["a","b"]');
   });
 
-  test('the fieldDefaults island (when present) still dispatches at ordinary page-ready time and publishes the back-compat global', () => {
+  // Issue #649: no CheckBoxTagHelper/RadioTagHelper output can produce this
+  // island anymore (see the file-header update above) — this fixture is
+  // HAND-CRAFTED to prove the DispatchAction case itself is still functional,
+  // documented back-compat infrastructure (framework_layui.js retains it as a
+  // no-op no longer reachable from any framework-generated markup), not that
+  // any emitter still uses it.
+  test('the fieldDefaults island (when present, e.g. hand-authored) still dispatches at ordinary page-ready time and publishes the back-compat global', () => {
     const islandHtml = '<script type="application/json" class="wtm-dialog-init">'
       + JSON.stringify({ type: 'fieldDefaults', id: 'TargetField', values: ['a', 'b'] })
       + '</script>';

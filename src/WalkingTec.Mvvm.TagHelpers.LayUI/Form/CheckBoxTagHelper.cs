@@ -212,47 +212,45 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             // window[Id + 'defaultvalues'] directly still gets it published.
             //
             // Issue #646 (Codex adversarial review, pre-10.14.4): #632 replaced the
-            // legacy inline <script>{Id}defaultvalues=...} with ONLY the eval-free
-            // wtm-dialog-init JSON island below, which on a full page is consumed at
-            // DOMContentLoaded (ff._consumePageReadyIslands). That broke app code that
-            // reads the global from an inline <script> immediately AFTER this widget's
+            // legacy inline <script>{Id}defaultvalues=...} with ONLY an eval-free
+            // wtm-dialog-init JSON island, consumed at DOMContentLoaded
+            // (ff._consumePageReadyIslands). That broke app code that reads the
+            // global from an inline <script> immediately AFTER this widget's
             // markup — it saw `undefined` until DOMContentLoaded, a real timing
             // regression vs. the pre-#632 synchronous, parse-time publication. The
             // FRAMEWORK's own consumer was and remains unaffected — ff.ChainChange
             // reads the race-free data-wtm-defaults attribute above, never this
-            // global — so this fix is purely about restoring the app-facing contract.
+            // global. #646's fix restored the inline write, unconditionally, in
+            // PostElement — but KEPT the island alongside it.
             //
-            // Fix: unconditionally re-emit the inline <script>{Id}defaultvalues=...}
-            // write here too (byte-identical to pre-#632, same default — HTML-safe —
-            // JsonSerializer.Serialize encoder), alongside the island. The TagHelper
-            // runs server-side and cannot see the client-only #627 kill-switch flag,
-            // so it cannot conditionally omit the inline script — both paths are
-            // always emitted:
-            //  - Default (kill-switch OFF): the inline write executes at parse time,
-            //    giving synchronous back-compat; the island redundantly re-sets the
-            //    same global at DOMContentLoaded (harmless).
-            //  - Kill-switch ON under strict CSP (app opted in): the browser blocks
-            //    this inline script, so the island becomes the sole (deferred)
-            //    publisher — acceptable, since the app explicitly chose CSP over the
-            //    sync guarantee. See the 'fieldDefaults' DispatchAction case
-            //    (framework_layui.js) for why action.id is validated with a plain
-            //    non-empty-string check rather than an identifier grammar.
+            // Issue #649 (second pre-release Codex adversarial review): keeping BOTH
+            // publishers was itself a bug. On a default full-page load: the inline
+            // <script> below runs first, at parse time, and sets
+            // window[Id + 'defaultvalues'] to the server values; app-authored JS
+            // running after it may legitimately read AND MUTATE that array; then, at
+            // DOMContentLoaded, the island's 'fieldDefaults' DispatchAction case
+            // unconditionally re-assigned window[Id + 'defaultvalues'] back to the
+            // ORIGINAL server values, silently clobbering whatever the app had done
+            // in between. The fix: emit ONLY the inline write below — never the
+            // island. The inline write alone already satisfies #646's synchronous
+            // back-compat contract; a second, later, unconditional overwrite was
+            // never needed and is exactly the regression this comment documents.
+            // See framework_layui.js's 'fieldDefaults' DispatchAction case for why
+            // that case is retained (as a no-op no longer reachable from this
+            // emitter) rather than deleted outright.
             //
-            // Net effect: <wt:checkbox> is NOT CSP-clean by default — it rejoins the
-            // #470 "still emits inline script" hard-blocker list (see
-            // docs/csp-hardening.md). A synchronous global fundamentally requires an
-            // inline script; CSP-cleanliness forbids one. Don't try to have both.
-            var fieldDefaultsAction = new FieldDefaultsIslandAction
-            {
-                Id = Id,
-                Values = values
-            };
+            // Net effect: <wt:checkbox> is still NOT CSP-clean by default — it stays
+            // on the #470 "still emits inline script" hard-blocker list (see
+            // docs/csp-hardening.md). Under the #627 kill-switch (strict CSP, app
+            // opted in) the browser blocks this inline script and — since #649 —
+            // NOTHING else publishes window[Id + 'defaultvalues'] for this widget;
+            // apps that need the value under strict CSP must read the
+            // data-wtm-defaults attribute instead (ff.ChainChange already does).
             output.PostElement.AppendHtml($@"
 <input type=""hidden"" name=""_DONOTUSE_{Field.Name}"" value=""1"" />
 <script>
  {Id}defaultvalues = {JsonSerializer.Serialize(values)};
 </script>
-<script type=""application/json"" class=""wtm-dialog-init"">{JsonSerializer.Serialize(fieldDefaultsAction, _islandJsonOptions)}</script>
 ");
             base.Process(context, output);
 
@@ -301,41 +299,5 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             }
 
         }
-    }
-
-    // Issue #632 (redesigned, #470 slice 1): DTO for the bare (non-wrapped)
-    // fieldDefaults JSON island — {"type":"fieldDefaults","id":"...","values":[...]}.
-    // Shared by CheckBoxTagHelper (this file) and RadioTagHelper. Consumed by the
-    // 'fieldDefaults' DispatchAction case (framework_layui.js) to publish
-    // window[id + 'defaultvalues'] for app-authored JS — BACK-COMPAT ONLY; the
-    // framework's own consumer (ff.ChainChange) reads the data-wtm-defaults HTML
-    // attribute emitted alongside this island on the same element, never this
-    // island itself.
-    //
-    // Unlike LoadComboItemsIslandAction.Id (also unvalidated) this DTO's Id is
-    // documented explicitly: the 'fieldDefaults' DispatchAction case validates it
-    // with a plain non-empty-string check, NOT an identifier grammar (unlike
-    // bindSubmit/bindValidate/bindInput's action.id/name, which resolve-and-CALL
-    // an existing window[] property as a FUNCTION and therefore need the strict
-    // ASCII identifier + denylist + own-property + typeof-function guard). This
-    // action only ever WRITES JSON data behind a fixed, non-configurable
-    // 'defaultvalues' suffix — never resolves or invokes anything — so an
-    // identifier-shaped id like '__proto__' still only ever produces the harmless
-    // property name "__proto__defaultvalues", and a non-ASCII id (WTM's own
-    // Utils.GetIdByName only strips '.'/'['/']'/'-', so ids derived from
-    // non-ASCII model/property names — e.g. the ConsoleDemo's
-    // 不要用中文模型名_View_模型名 fixture — are valid, real ids in production)
-    // is not silently rejected the way an ASCII-only /^[A-Za-z_$][\w$]*$/ grammar
-    // would reject it.
-    internal sealed class FieldDefaultsIslandAction
-    {
-        [JsonPropertyName("type")]
-        public string Type { get; set; } = "fieldDefaults";
-
-        [JsonPropertyName("id")]
-        public string Id { get; set; }
-
-        [JsonPropertyName("values")]
-        public List<string> Values { get; set; }
     }
 }

@@ -32,19 +32,30 @@ ended with:
     `<wt:selector>` (the whole `$$script$$`-tokenized search-panel template), the
     SearchPanel `OldPost` click handler, and `<wt:checkbox>` / `<wt:radio>`. The
     field's default selection travels as a `data-wtm-defaults` HTML attribute
-    (race-free; `ff.ChainChange` reads only this, never a script), but the legacy
-    `{Id}defaultvalues` global is *also* republished via an unconditional inline
+    (race-free; `ff.ChainChange` reads only this, never a script), and the legacy
+    `{Id}defaultvalues` global is *also* published via an unconditional inline
     `<script>` write, for app-authored JS that reads it synchronously right after the
     widget markup (#646: an earlier redesign (#632) made a `wtm-dialog-init` JSON
     island — type `fieldDefaults` — the *only* publisher of that global; on a full
     page the island is consumed at DOMContentLoaded, which silently broke that
     parse-time back-compat guarantee). checkbox/radio therefore rejoined this
-    unconditional inline-script list in #646 — the inline write is what keeps the
-    global available synchronously by default; the island is what still publishes it
-    (deferred) once the #627 kill-switch blocks the inline script under strict CSP.
-    (An earlier draft made the island the authoritative source for `ff.ChainChange`
-    itself; review found a real dispatch-ordering race — see the #632 commit
-    message. That part of #632 stands; only the app-facing global's timing changed.)
+    unconditional inline-script list in #646.
+    **#649 correction:** #646's fix kept the island alongside the restored inline
+    write, which reintroduced a *different* bug — on a default full-page load the
+    island's DOMContentLoaded dispatch unconditionally re-published the *original
+    server* values, silently clobbering any mutation app-authored JS made to the
+    global in between. checkbox/radio no longer emit the `fieldDefaults` island at
+    all; the inline write is now the **sole** publisher of the global. Consequence:
+    under the #627 kill-switch (strict CSP), the browser blocks this inline script
+    and, since #649, nothing else republishes the global for these two widgets — an
+    app that needs the value under strict CSP must read the `data-wtm-defaults`
+    attribute instead (exactly what `ff.ChainChange` already does). The global is
+    therefore no longer CSP-clean-capable via a deferred island; it is inline-only,
+    synchronous-or-absent.
+    (An earlier #632 draft made the island the authoritative source for
+    `ff.ChainChange` itself; review found a real dispatch-ordering race — see the
+    #632 commit message. That part of #632 stands; only the app-facing global's
+    publisher changed.)
   - *Conditional*: `item-url` on combobox/transfer/checkbox/radio (`ff.LoadComboItems`);
     `<wt:datetime>` **callback and range** branches (the range configuration emits the
     inline script even with zero callbacks); `<wt:slider>` / `<wt:colorpicker>` when a

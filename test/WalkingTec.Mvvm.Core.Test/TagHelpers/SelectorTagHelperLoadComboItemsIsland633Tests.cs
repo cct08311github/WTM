@@ -279,23 +279,20 @@ public class SelectorTagHelperLoadComboItemsIsland633Tests
         var checkboxHtml = RenderRealCheckBoxIsland("checkbox_sel633_3", "/Home/GetCheckboxItems", disabled: false);
         var comboIslandJson = ExtractBetween(comboHtml, IslandOpenTag, ScriptCloseTag);
         var checkboxIslandJson = ExtractBetween(checkboxHtml, IslandOpenTag, ScriptCloseTag);
-        // Issue #632 (redesigned): CheckBoxTagHelper now emits a SECOND
-        // wtm-dialog-init island unconditionally — the back-compat-only
+        // Issue #632 (redesigned) originally had CheckBoxTagHelper emit a
+        // SECOND wtm-dialog-init island unconditionally — the back-compat-only
         // 'fieldDefaults' island (window[id+'defaultvalues'] publisher) — in
         // addition to the ItemUrl branch's 'loadComboItems' island extracted
-        // above. Extract it too (the first occurrence AFTER the
-        // loadComboItems island's own close tag) so this test's "both
-        // islands round-trip independently" claim actually covers checkbox's
-        // NOW-two islands, not just its first.
-        var checkboxFieldDefaultsJson = ExtractBetween(
-            checkboxHtml[(checkboxHtml.IndexOf(checkboxIslandJson!, System.StringComparison.Ordinal) + checkboxIslandJson!.Length)..],
-            IslandOpenTag, ScriptCloseTag);
-        Assert.IsNotNull(checkboxFieldDefaultsJson,
-            "Precondition: CheckBoxTagHelper must still emit its back-compat fieldDefaults island");
-        using (var fdDoc = JsonDocument.Parse(checkboxFieldDefaultsJson!))
-        {
-            Assert.AreEqual("fieldDefaults", fdDoc.RootElement.GetProperty("type").GetString());
-        }
+        // above. Issue #649 removed that second island entirely (it
+        // unconditionally re-published server values at DOMContentLoaded,
+        // clobbering any app mutation made to the global in the meantime — see
+        // framework_layui_649_clobber_regression.test.js). CheckBoxTagHelper's
+        // ItemUrl branch therefore emits exactly ONE island again, matching the
+        // pre-#632 shape.
+        Assert.IsFalse(
+            checkboxHtml[(checkboxHtml.IndexOf(checkboxIslandJson!, System.StringComparison.Ordinal) + checkboxIslandJson!.Length)..]
+                .Contains(IslandOpenTag),
+            "CheckBoxTagHelper must no longer emit a second (fieldDefaults) island after its loadComboItems island (#649)");
 
         var selectorHelper = CreateSelectorHelper("sel633_3", System.Guid.NewGuid().ToString());
         var output = MakeOutputWithChildContent(comboHtml + "<div>separator</div>" + checkboxHtml);
@@ -306,18 +303,16 @@ public class SelectorTagHelperLoadComboItemsIsland633Tests
 
         StringAssert.Contains(postHtml, "$$dialoginit$$" + comboIslandJson + "$$#dialoginit$$");
         StringAssert.Contains(postHtml, "$$dialoginit$$" + checkboxIslandJson + "$$#dialoginit$$");
-        StringAssert.Contains(postHtml, "$$dialoginit$$" + checkboxFieldDefaultsJson + "$$#dialoginit$$",
-            "The checkbox's second (fieldDefaults, back-compat) island must ALSO tokenize as its own matched pair");
         Assert.IsFalse(postHtml.Contains(IslandOpenTag));
 
-        // 3 islands total: 1 from the combo (loadComboItems only) + 2 from
-        // the checkbox (loadComboItems + #632's fieldDefaults back-compat
-        // island) — updated from the pre-#632 expectation of 2 (1 island per
-        // widget), when checkbox/radio still only ever emitted one island.
+        // 2 islands total: 1 from the combo (loadComboItems) + 1 from the
+        // checkbox (loadComboItems only, since #649 removed the second
+        // fieldDefaults back-compat island) — restored to the pre-#632
+        // expectation of 2 (1 island per widget).
         var dialogOpenCount = CountOccurrences(postHtml, "$$dialoginit$$");
         var dialogCloseCount = CountOccurrences(postHtml, "$$#dialoginit$$");
-        Assert.AreEqual(3, dialogOpenCount);
-        Assert.AreEqual(3, dialogCloseCount);
+        Assert.AreEqual(2, dialogOpenCount);
+        Assert.AreEqual(2, dialogCloseCount);
     }
 
     private static int CountOccurrences(string haystack, string needle)

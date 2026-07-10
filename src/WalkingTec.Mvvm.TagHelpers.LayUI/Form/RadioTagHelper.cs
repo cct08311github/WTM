@@ -171,50 +171,46 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             // window[Id + 'defaultvalues'] directly still gets it published.
             //
             // Issue #646 (Codex adversarial review, pre-10.14.4): #632 replaced the
-            // #638-fixed-in-place inline <script>{Id}defaultvalues=...} with ONLY the
-            // eval-free wtm-dialog-init JSON island below, which on a full page is
-            // consumed at DOMContentLoaded (ff._consumePageReadyIslands). That broke
-            // app code that reads the global from an inline <script> immediately
-            // AFTER this widget's markup — it saw `undefined` until DOMContentLoaded,
-            // a real timing regression vs. the pre-#632 synchronous, parse-time
-            // publication. The FRAMEWORK's own consumer was and remains unaffected —
-            // ff.ChainChange reads the race-free data-wtm-defaults attribute above,
-            // never this global — so this fix is purely about restoring the
-            // app-facing contract.
+            // #638-fixed-in-place inline <script>{Id}defaultvalues=...} with ONLY an
+            // eval-free wtm-dialog-init JSON island, consumed at DOMContentLoaded
+            // (ff._consumePageReadyIslands). That broke app code that reads the
+            // global from an inline <script> immediately AFTER this widget's
+            // markup — it saw `undefined` until DOMContentLoaded, a real timing
+            // regression vs. the pre-#632 synchronous, parse-time publication. The
+            // FRAMEWORK's own consumer was and remains unaffected — ff.ChainChange
+            // reads the race-free data-wtm-defaults attribute above, never this
+            // global. #646's fix restored the inline write, unconditionally, in
+            // PostElement — but KEPT the island alongside it.
             //
-            // Fix: unconditionally re-emit the inline <script>{Id}defaultvalues=...}
-            // write here too (byte-identical to the pre-#632/#638 emission — same
-            // PostElement placement, same single-unconditional-emit-outside-the-loop
-            // fix #638 made, same default — HTML-safe — JsonSerializer.Serialize
-            // encoder), alongside the island. Do NOT reintroduce #638's fixed bug of
-            // emitting per-item inside the listItems loop above. The TagHelper runs
-            // server-side and cannot see the client-only #627 kill-switch flag, so it
-            // cannot conditionally omit the inline script — both paths are always
-            // emitted:
-            //  - Default (kill-switch OFF): the inline write executes at parse time,
-            //    giving synchronous back-compat; the island redundantly re-sets the
-            //    same global at DOMContentLoaded (harmless).
-            //  - Kill-switch ON under strict CSP (app opted in): the browser blocks
-            //    this inline script, so the island becomes the sole (deferred)
-            //    publisher — acceptable, since the app explicitly chose CSP over the
-            //    sync guarantee. See the 'fieldDefaults' DispatchAction case
-            //    (framework_layui.js) for why action.id is validated with a plain
-            //    non-empty-string check rather than an identifier grammar.
+            // Issue #649 (second pre-release Codex adversarial review): keeping BOTH
+            // publishers was itself a bug. On a default full-page load: the inline
+            // <script> below runs first, at parse time, and sets
+            // window[Id + 'defaultvalues'] to the server values; app-authored JS
+            // running after it may legitimately read AND MUTATE that array; then, at
+            // DOMContentLoaded, the island's 'fieldDefaults' DispatchAction case
+            // unconditionally re-assigned window[Id + 'defaultvalues'] back to the
+            // ORIGINAL server values, silently clobbering whatever the app had done
+            // in between. The fix: emit ONLY the inline write below — never the
+            // island. Do NOT reintroduce #638's fixed bug of emitting per-item inside
+            // the listItems loop above — this stays a single, unconditional,
+            // PostElement emission. The inline write alone already satisfies #646's
+            // synchronous back-compat contract; a second, later, unconditional
+            // overwrite was never needed and is exactly the regression this comment
+            // documents. See framework_layui.js's 'fieldDefaults' DispatchAction case
+            // for why that case is retained (as a no-op no longer reachable from this
+            // emitter) rather than deleted outright.
             //
-            // Net effect: <wt:radio> is NOT CSP-clean by default — it rejoins the
-            // #470 "still emits inline script" hard-blocker list (see
-            // docs/csp-hardening.md). A synchronous global fundamentally requires an
-            // inline script; CSP-cleanliness forbids one. Don't try to have both.
-            var fieldDefaultsAction = new FieldDefaultsIslandAction
-            {
-                Id = Id,
-                Values = values
-            };
+            // Net effect: <wt:radio> is still NOT CSP-clean by default — it stays on
+            // the #470 "still emits inline script" hard-blocker list (see
+            // docs/csp-hardening.md). Under the #627 kill-switch (strict CSP, app
+            // opted in) the browser blocks this inline script and — since #649 —
+            // NOTHING else publishes window[Id + 'defaultvalues'] for this widget;
+            // apps that need the value under strict CSP must read the
+            // data-wtm-defaults attribute instead (ff.ChainChange already does).
             output.PostElement.AppendHtml($@"
         <script>
          {Id}defaultvalues = {JsonSerializer.Serialize(values)};
         </script>
-        <script type=""application/json"" class=""wtm-dialog-init"">{JsonSerializer.Serialize(fieldDefaultsAction, _islandJsonOptions)}</script>
 ");
 
             base.Process(context, output);

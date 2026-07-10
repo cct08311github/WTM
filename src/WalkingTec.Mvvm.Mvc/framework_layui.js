@@ -1271,6 +1271,24 @@ window.ff = {
                         _biEl.addEventListener('change', function () { _biDoneFn(_biEl.value); });
                     }
                     break;
+                // Issue #649 (second pre-release Codex adversarial review):
+                // CheckBoxTagHelper.cs / RadioTagHelper.cs stopped emitting this
+                // island. #646 had restored their synchronous inline
+                // "{Id}defaultvalues = [...];" <script> write ALONGSIDE this
+                // island; on a default full-page load the inline write ran first
+                // (parse time, server values), app-authored JS could legitimately
+                // mutate the resulting global afterward, and then — at
+                // DOMContentLoaded — this case unconditionally overwrote it back
+                // to the original server values, silently clobbering the app's
+                // change. The fix removed the EMITTER (the island), not this
+                // DispatchAction case: the case itself stays, as documented
+                // back-compat infrastructure for hand-authored `wtm-dialog-init`
+                // islands that still use this shape (its dispatch-mechanism
+                // hardening below — id grammar, values coercion — has its own
+                // direct test coverage), but no framework TagHelper output can
+                // reach it anymore, so the #649 clobber cannot recur through any
+                // framework-generated markup.
+                //
                 // Issue #632 (redesigned — data as markup, not script): BACK-COMPAT
                 // ONLY replacement for CheckBoxTagHelper / RadioTagHelper's former
                 // per-widget
@@ -1330,6 +1348,8 @@ window.ff = {
                 // this one) rather than just mis-handling one non-ASCII id. A
                 // plain typeof/non-empty check carries none of that risk and, per
                 // the write-only analysis above, loses no real security coverage.
+                // #649: retained as a no-op; no server emitter after checkbox/radio
+                // stopped islanding defaults.
                 case 'fieldDefaults':
                     if (action.id && typeof action.id === 'string') {
                         window[action.id + 'defaultvalues'] = Array.isArray(action.values) ? action.values : [];

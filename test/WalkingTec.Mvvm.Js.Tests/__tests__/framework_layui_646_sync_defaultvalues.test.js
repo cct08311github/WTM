@@ -114,11 +114,22 @@ describe('#646 source sweep — CheckBoxTagHelper.cs / RadioTagHelper.cs restore
     expect(radioActive).toMatch(/"data-wtm-defaults"/);
   });
 
-  test('both TagHelpers still emit the fieldDefaults wtm-dialog-init island (kept: it is how the global still publishes once the #627 kill-switch blocks the inline script)', () => {
-    expect(checkBoxActive).toMatch(/FieldDefaultsIslandAction/);
-    expect(checkBoxActive).toMatch(/wtm-dialog-init/);
-    expect(radioActive).toMatch(/FieldDefaultsIslandAction/);
-    expect(radioActive).toMatch(/wtm-dialog-init/);
+  // Issue #649 (second pre-release Codex adversarial review): the fieldDefaults
+  // wtm-dialog-init island this test used to require is GONE. Keeping it
+  // alongside the restored inline write (this file's whole point) was itself a
+  // bug: on a default full-page load the island's DOMContentLoaded dispatch
+  // unconditionally re-published the ORIGINAL server values, silently
+  // clobbering any mutation app-authored JS made to the global between the
+  // inline write and DOMContentLoaded. See
+  // framework_layui_649_clobber_regression.test.js for the regression proof.
+  test('neither TagHelper references FieldDefaultsIslandAction anymore — the clobbering island emission was removed (#649)', () => {
+    expect(checkBoxActive).not.toMatch(/FieldDefaultsIslandAction/);
+    expect(radioActive).not.toMatch(/FieldDefaultsIslandAction/);
+  });
+
+  test('neither TagHelper emits a fieldDefaults-type wtm-dialog-init island anymore (#649)', () => {
+    expect(checkBoxActive).not.toMatch(/"fieldDefaults"/);
+    expect(radioActive).not.toMatch(/"fieldDefaults"/);
   });
 });
 
