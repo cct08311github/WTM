@@ -54,9 +54,38 @@ namespace WalkingTec.Mvvm.WorkFlow.Test;
 // the earliest hook available, and a single DRY application point covering every
 // WfSequentialTestContext instance (including the ones constructed inline inside
 // the TCONC race loops).
+//
+// Issue #629 (2026-07-10, CI run 4735): a NEW, distinct flake signature —
+// SqliteException "cannot start a transaction within a transaction" (error code 1,
+// not 5) thrown from WorkflowEngine.AdvanceTokenAsync's BeginTransactionAsync call.
+// Root-cause investigation (72 local TCONC iterations under parallel load did not
+// reproduce it; decompiled Microsoft.Data.Sqlite 10.0.4 was reviewed directly):
+//   - Connection pooling was ruled OUT: SqliteConnectionFactory.GetPoolGroup() forces
+//     `isNonPooled = true` whenever the connection string's Mode is Memory (which every
+//     WfSequentialTestContext / TCONC keepAlive connection uses), so a pooled connection
+//     handing back a "dirty" transaction from an unrelated SqliteConnection instance is
+//     structurally impossible here.
+//   - No abandoned-transaction code path was found anywhere in WorkflowEngine.cs — every
+//     BeginTransactionAsync is wrapped in `await using` with an explicit try/catch/rollback.
+//   - The leading candidate, confirmed by reading the decompiled source but not fully
+//     provable via a deterministic local repro: Microsoft.Data.Sqlite's
+//     SqliteTransaction.Commit() has no try/finally around its native "COMMIT;" call,
+//     while RollbackInternal() unconditionally clears the wrapper's own transaction-state
+//     tracking (via `finally { Complete(); }`) even when the native "ROLLBACK;" statement
+//     itself fails. Under genuine SQLite lock contention (COMMIT's RESERVED→EXCLUSIVE
+//     lock upgrade blocked by a concurrent reader's SHARED lock — the same class of
+//     contention #620 already targets), this asymmetry can in principle leave a single
+//     connection's wrapper-level transaction state out of sync with the native engine,
+//     so that connection's *next* BeginTransaction() fails immediately with "cannot start
+//     a transaction within a transaction" — matching #629's signature.
+// Widening the busy_timeout window gives SQLite's own retry logic more headroom to
+// resolve the underlying lock contention before ANY caller (BEGIN, COMMIT, or the
+// explicit ROLLBACK in the engine's catch blocks) ever reaches a failure path — the same
+// mitigation layer as #620, applied more generously. This does not touch engine code;
+// no abandoned-transaction bug was found there to fix.
 internal sealed class SqliteBusyTimeoutInterceptor : DbConnectionInterceptor
 {
-    private const int BusyTimeoutMs = 3000;
+    private const int BusyTimeoutMs = 8000;
 
     public override void ConnectionOpened(DbConnection connection, ConnectionEndEventData eventData)
     {

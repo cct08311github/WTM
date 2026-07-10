@@ -115,12 +115,14 @@ public class AllAnyTests : IDisposable
     /// (#620): the raw <c>_keepAlive</c>/round-loop connections in this fixture don't go
     /// through EF Core's <see cref="SqliteBusyTimeoutInterceptor"/>, so they need the same
     /// protection applied by hand, as the very first statement after Open().
+    /// #629: value kept in sync with <see cref="SqliteBusyTimeoutInterceptor"/>'s
+    /// BusyTimeoutMs — see that type's doc comment for the widened-timeout rationale.
     /// </summary>
     private static void OpenWithBusyTimeout(SqliteConnection connection)
     {
         connection.Open();
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = "PRAGMA busy_timeout = 3000;";
+        cmd.CommandText = "PRAGMA busy_timeout = 8000;";
         cmd.ExecuteNonQuery();
     }
 
