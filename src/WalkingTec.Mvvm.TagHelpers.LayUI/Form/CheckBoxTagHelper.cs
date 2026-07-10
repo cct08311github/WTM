@@ -5,8 +5,8 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
-using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Attributes;
 using WalkingTec.Mvvm.Core.Extensions;
@@ -16,6 +16,15 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     [HtmlTargetElement("wt:checkbox", Attributes = REQUIRED_ATTR_NAME, TagStructure = TagStructure.WithoutEndTag)]
     public class CheckBoxTagHelper : BaseFieldTag
     {
+        // Issue #633 (#470-F): see ComboBoxTagHelper's _islandJsonOptions for the
+        // full rationale (same shared LoadComboItemsIslandAction DTO, defined in
+        // ComboBoxTagHelper.cs). This TagHelper is the one emitter that DOES set
+        // Disabled — WhenWritingNull only matters here for staying byte-identical
+        // with the other three emitters' options object shape.
+        private static readonly JsonSerializerOptions _islandJsonOptions = new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        };
 
         /// <summary>
         /// 选项
@@ -94,7 +103,22 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     });
 
                 }
-                output.PostElement.AppendHtml($"<script>ff.LoadComboItems('checkbox','{JavaScriptEncoder.Default.Encode(ItemUrl)}','{Id}','{Field.Name}',{JsonSerializer.Serialize(values)},undefined,{Disabled.ToString().ToLower()})</script>");
+                // Issue #633 (#470-F): eval-free JSON island — see ComboBoxTagHelper's
+                // matching comment for the full rationale (shared action shape, JSON
+                // escaping, and the async-ajax timing argument, which applies
+                // identically here: LoadComboItems('checkbox', ...) only mutates the
+                // DOM from inside its $.get callback, well after both this island's
+                // dispatch and the placeholder <input> elements above already exist).
+                var loadComboItemsAction = new LoadComboItemsIslandAction
+                {
+                    ControlType = "checkbox",
+                    Url = ItemUrl,
+                    Id = Id,
+                    Field = Field.Name,
+                    SelectVal = values,
+                    Disabled = Disabled
+                };
+                output.PostElement.AppendHtml($@"<script type=""application/json"" class=""wtm-dialog-init"">{JsonSerializer.Serialize(loadComboItemsAction, _islandJsonOptions)}</script>");
             }
             else
             {

@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.Razor.TagHelpers;
 using WalkingTec.Mvvm.Core;
@@ -20,6 +21,14 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         private static readonly JsonSerializerOptions _camelCaseOptions = new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        };
+
+        // Issue #633 (#470-F): see ComboBoxTagHelper's _islandJsonOptions for the
+        // full rationale (same shared LoadComboItemsIslandAction DTO, defined in
+        // ComboBoxTagHelper.cs).
+        private static readonly JsonSerializerOptions _islandJsonOptions = new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
         };
 
         /// <summary>
@@ -181,7 +190,22 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     x.Disabled,
                     Checked = x.Selected
                 }).ToArray();
-                output.PostElement.AppendHtml($"<script>ff.LoadComboItems('transfer','{ItemUrl}','{Id}','{Field.Name}',{JsonSerializer.Serialize(selectVal)})</script>");
+                // Issue #633 (#470-F): eval-free JSON island — see ComboBoxTagHelper's
+                // matching comment for the full rationale (shared action shape, JSON
+                // escaping, and the async-ajax timing argument, which applies
+                // identically here). This also incidentally fixes a pre-existing gap:
+                // the legacy inline <script> this replaces interpolated ItemUrl RAW
+                // (unlike the Combo/CheckBox/Radio siblings' #108 JavaScriptEncoder
+                // wrap) — System.Text.Json now escapes it like every other field.
+                var loadComboItemsAction = new LoadComboItemsIslandAction
+                {
+                    ControlType = "transfer",
+                    Url = ItemUrl,
+                    Id = Id,
+                    Field = Field.Name,
+                    SelectVal = selectVal
+                };
+                output.PostElement.AppendHtml($@"<script type=""application/json"" class=""wtm-dialog-init"">{JsonSerializer.Serialize(loadComboItemsAction, _islandJsonOptions)}</script>");
             }
 
             var title = $"['{(string.IsNullOrEmpty(LeftTitle) ? THProgram._localizer["Sys.ForSelect"] : LeftTitle)}','{(string.IsNullOrEmpty(RightTitle) ? THProgram._localizer["Sys.Selected"] : RightTitle)}']";

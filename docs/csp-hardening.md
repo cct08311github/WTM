@@ -179,6 +179,15 @@ Recommended rollout for level 3: switch `Mode = WtmCspMode.ReportOnly` with the 
 
 ### Honest limits
 
+- **Partially-islandified widgets degrade, they do not work.** Islandification lands one
+  widget concern at a time. A widget whose *data-loading* half is an island but whose
+  *render* half is still a legacy inline `<script>` (today: `<wt:combobox>`/`<wt:tree>`'s
+  `xmSelect.render`, `<wt:transfer>`'s `transfer.render`) behaves asymmetrically with the
+  kill-switch ON: the island still dispatches, the render script does not. The framework
+  detects this and emits one actionable `console.warn` naming the widget instead of
+  throwing — items are fetched but cannot be applied. That warning means "this widget is
+  not yet eligible", not "your page is broken beyond this point". It disappears when the
+  widget's render half is islandified (tracked under #470).
 - **Most WTM apps cannot reach level 2/3 yet** if their dialogs use comboboxes/selectors —
   that is a framework limitation (the #470 xmSelect hard blocker), not an app defect.
   The switch still has value there as a *staging audit tool*: flip it in a test

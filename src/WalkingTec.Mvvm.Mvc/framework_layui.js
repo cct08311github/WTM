@@ -895,6 +895,22 @@ window.ff = {
                 // yet). Field names avoid the 'type' key (reserved for the action
                 // discriminator above) — controlType/url/id/field/selectVal map
                 // 1:1 onto ff.LoadComboItems's positional parameters.
+                //
+                // Issue #633 (#470-F): server emitter shipped — ComboBoxTagHelper /
+                // CheckBoxTagHelper / RadioTagHelper / TransferTagHelper now emit this
+                // action for their ItemUrl branch instead of an inline <script>. Also
+                // additively wires the 7th positional arg (disabled) through: the
+                // legacy inline script CheckBoxTagHelper emitted always passed an
+                // explicit true/false 7th arg
+                // (`ff.LoadComboItems('checkbox',url,id,field,vals,undefined,disabled)`)
+                // so the freshly-fetched <input> elements come back with the right
+                // disabled state. action.disabled is optional — combo/radio/transfer
+                // never set it, so `action.disabled === true || action.disabled ===
+                // false ? action.disabled : undefined` evaluates to `undefined` for
+                // them, identical to the pre-#633 5-arg call (JS leaves an omitted
+                // trailing arg `undefined` either way). cb (6th positional arg) has no
+                // island caller yet (only the 'tree' controlType uses it) and stays
+                // hard-coded `undefined`.
                 case 'loadComboItems':
                     if (typeof ff.LoadComboItems === 'function' && action.url && action.id) {
                         ff.LoadComboItems(
@@ -902,7 +918,9 @@ window.ff = {
                             action.url,
                             action.id,
                             action.field || undefined,
-                            action.selectVal || undefined
+                            action.selectVal || undefined,
+                            undefined,
+                            (action.disabled === true || action.disabled === false) ? action.disabled : undefined
                         );
                     }
                     break;
@@ -2410,13 +2428,43 @@ window.ff = {
                    }
                }
                if (controltype == "transfer") {
-                   layui.transfer.reload(controlid, {
-                       data: ff.getTransferItems(data.Data, svals)
-                   });
+                   // Issue #633 (review follow-up) / #627 / #470: dialog-init islands
+                   // (this LoadComboItems call) dispatch unconditionally under the
+                   // DisableLegacyScriptRehydration kill-switch — islands are data, not
+                   // code. The widget's own render call (`layui.transfer.render(...)`,
+                   // TransferTagHelper) is still a bare inline <script>, which the
+                   // kill-switch DOES block, so a partially-islandified widget can reach
+                   // here with no rendered instance. layui.transfer keeps its rendered-
+                   // instance registry (`r.that`, keyed by id) in a private closure with
+                   // no public API to probe it ahead of time — probing would just
+                   // reproduce the same throw reload() itself would raise — so detection
+                   // here is a try/catch around the call rather than a pre-check.
+                   try {
+                       layui.transfer.reload(controlid, {
+                           data: ff.getTransferItems(data.Data, svals)
+                       });
+                   } catch (e) {
+                       if (typeof console !== 'undefined' && console.warn) {
+                           console.warn('[WTM] LoadComboItems: widget "' + controlid + '" was never rendered — its inline render script did not run. If DisableLegacyScriptRehydration is enabled (#627), this widget still emits a legacy inline render script and is not yet islandified (#470 hard blocker). Items were fetched but could not be applied.');
+                       }
+                   }
                }
                if (controltype === "combo") {
                    var da = ff.getComboItems(data.Data, svals,undefined,disabled);
-                    window[controlid].update({ data: da });
+                   // Issue #633 (review follow-up) / #627 / #470: same invariant as the
+                   // transfer branch above — xmSelect.render(...) (ComboBoxTagHelper)
+                   // assigns window[Id] from a bare inline <script> that the kill-switch
+                   // blocks, while this LoadComboItems island dispatch always runs.
+                   // Degrade with a diagnostic instead of an uncaught throw when the
+                   // widget was never rendered; leave the normal (rendered) path
+                   // byte-identical to before.
+                   if (!window[controlid] || typeof window[controlid].update !== 'function') {
+                       if (typeof console !== 'undefined' && console.warn) {
+                           console.warn('[WTM] LoadComboItems: widget "' + controlid + '" was never rendered — its inline render script did not run. If DisableLegacyScriptRehydration is enabled (#627), this widget still emits a legacy inline render script and is not yet islandified (#470 hard blocker). Items were fetched but could not be applied.');
+                       }
+                   } else {
+                       window[controlid].update({ data: da });
+                   }
                }
                if (controltype === "checkbox") {
                    target[0].innerHTML = "";

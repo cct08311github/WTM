@@ -65,6 +65,17 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         /// </summary>
         public string RemoteUrl { get; set; }
 
+        // Issue #633 (#470-F): System.Text.Json's default encoder escapes '<', '>',
+        // and '&', making the JSON payload safe to embed inside a <script> block
+        // without risk of </script> injection — same pattern as SliderTagHelper's
+        // _islandJsonOptions (#552). WhenWritingNull drops the optional shared
+        // LoadComboItemsIslandAction.Disabled field entirely when unset (this
+        // TagHelper never sets it — only CheckBoxTagHelper does).
+        private static readonly JsonSerializerOptions _islandJsonOptions = new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        };
+
         private WTMContext _wtm;
         public ComboBoxTagHelper(IOptionsMonitor<Configs> configs, WTMContext wtm)
         {
@@ -182,9 +193,30 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     });
 
                 }
-                // Issue #108: ItemUrl is developer-configured but defensive JS-encode to prevent
-                // JS string breakout if ever it contained quotes or backslashes.
-                output.PostElement.AppendHtml($"<script>ff.LoadComboItems('combo','{JavaScriptEncoder.Default.Encode(ItemUrl)}','{Id}','{Field.Name}',{JsonSerializer.Serialize(selectVal)})</script>");
+                // Issue #633 (#470-F): eval-free JSON island — thin re-expression of
+                // ff.LoadComboItems('combo', url, id, field, selectVal), which the
+                // 'loadComboItems' DispatchAction case (framework_layui.js, #551)
+                // already knows how to replay. System.Text.Json's default encoder
+                // escapes '<', '>', '&', making the payload safe to embed inside a
+                // <script> block (no </script> breakout) — this supersedes the #108
+                // defensive JS-encode of ItemUrl, since JSON string escaping covers
+                // the same quote/backslash breakout risk.
+                // Timing: LoadComboItems only ever mutates the widget from inside an
+                // async $.get callback (a network round trip), so it is safe whether
+                // it fires before or after the always-unconditional inline xmSelect
+                // render script below (untouched by this slice) — by the time the
+                // ajax response arrives, window[Id] (assigned synchronously by that
+                // script) already exists on every path (full page, dialog replay,
+                // fragment). See the #633 PR body for the full ordering analysis.
+                var loadComboItemsAction = new LoadComboItemsIslandAction
+                {
+                    ControlType = "combo",
+                    Url = ItemUrl,
+                    Id = Id,
+                    Field = Field.Name,
+                    SelectVal = selectVal
+                };
+                output.PostElement.AppendHtml($@"<script type=""application/json"" class=""wtm-dialog-init"">{JsonSerializer.Serialize(loadComboItemsAction, _islandJsonOptions)}</script>");
             }
 
             else
@@ -371,5 +403,44 @@ var {Id} = xmSelect.render({{
             return rv;
         }
 
+    }
+
+    // Issue #633 (#470-F): DTO for the bare (non-wrapped) loadComboItems JSON
+    // island — {"type":"loadComboItems","controlType":"...","url":"...","id":"...",
+    // "field":"...","selectVal":[...],"disabled":true}. Shared by ComboBoxTagHelper
+    // (this file), CheckBoxTagHelper, RadioTagHelper, and TransferTagHelper — all
+    // four ItemUrl branches emit the SAME action shape the 'loadComboItems'
+    // DispatchAction case (framework_layui.js, #551) already knew how to replay
+    // onto ff.LoadComboItems(controlType, url, id, field, selectVal[, cb, disabled]).
+    // ff._normalizeIslandPayload wraps this into the {actions:[...]} shape
+    // ff.DispatchAction expects; not part of the public API surface.
+    internal sealed class LoadComboItemsIslandAction
+    {
+        [JsonPropertyName("type")]
+        public string Type { get; set; } = "loadComboItems";
+
+        [JsonPropertyName("controlType")]
+        public string ControlType { get; set; }
+
+        [JsonPropertyName("url")]
+        public string Url { get; set; }
+
+        [JsonPropertyName("id")]
+        public string Id { get; set; }
+
+        [JsonPropertyName("field")]
+        public string Field { get; set; }
+
+        [JsonPropertyName("selectVal")]
+        public List<string> SelectVal { get; set; }
+
+        // Issue #633: CheckBoxTagHelper is the only current emitter that sets this —
+        // mirrors the legacy inline script's always-explicit 7th positional arg
+        // (`,undefined,{Disabled.ToString().ToLower()}`). Omitted (never emitted as
+        // null, via _islandJsonOptions' WhenWritingNull) for ComboBox/Radio/Transfer,
+        // matching their legacy calls, which never passed a 7th arg at all (JS
+        // leaves an omitted trailing arg `undefined`, same effective result).
+        [JsonPropertyName("disabled")]
+        public bool? Disabled { get; set; }
     }
 }
