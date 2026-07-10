@@ -235,6 +235,10 @@ window.ff = {
     // Issue #601: 'bindInput' is likewise intentionally ABSENT — it is a plain
     // addEventListener bind (TextBoxTagHelper's ChangeFunc/DoneFunc), no layui
     // module involved at all, same rationale as 'tagInput' above.
+    // Issue #632: 'fieldDefaults' is likewise intentionally ABSENT — it is a
+    // plain window[] property write (CheckBoxTagHelper/RadioTagHelper's
+    // back-compat default-selection global), no layui module and no DOM widget
+    // involved at all, same rationale as 'tagInput'/'bindInput' above.
     _islandModulesFor: function (payload) {
         var needed = { form: false, laydate: false, slider: false, rate: false, colorpicker: false };
         if (payload && payload.actions) {
@@ -1267,6 +1271,70 @@ window.ff = {
                         _biEl.addEventListener('change', function () { _biDoneFn(_biEl.value); });
                     }
                     break;
+                // Issue #632 (redesigned — data as markup, not script): BACK-COMPAT
+                // ONLY replacement for CheckBoxTagHelper / RadioTagHelper's former
+                // per-widget
+                //   {Id}defaultvalues = [...];
+                // inline <script>. The FRAMEWORK no longer reads this global for
+                // those two control types at all — ff.ChainChange reads the
+                // data-wtm-defaults HTML attribute instead (see
+                // ff._readFieldDefaults) — so this action exists purely so
+                // app-authored JS that still reads window[id + 'defaultvalues']
+                // directly keeps working, and its dispatch timing (ordinary
+                // island timing: DOMContentLoaded / dialog-fragment-insertion) is
+                // safe precisely BECAUSE nothing the framework reads depends on
+                // it anymore. This is the design the REJECTED fieldDefaults-
+                // island-AS-AUTHORITATIVE approach could not claim: this island's
+                // write is data consumed only by code OUTSIDE this file.
+                //
+                // TRUST BOUNDARY (deliberately narrower than bindSubmit/
+                // bindValidate/bindInput's action.id/name grammar): this action
+                // never RESOLVES-AND-CALLS a window[] property as a function — it
+                // only WRITES action.values (JSON data, decoded by JSON.parse
+                // before DispatchAction ever sees it — never code, no eval, no
+                // Function constructor) behind a FIXED, non-configurable
+                // 'defaultvalues' suffix. That fixed suffix — never a
+                // caller-supplied path, dotted, or bracketed accessor — is what
+                // guarantees the write can only ever land on
+                // window[<action.id>+'defaultvalues'], never an arbitrary global
+                // or a real prototype-chain property, even for identifier-shaped
+                // ids like '__proto__' or 'constructor' (those become the
+                // harmless property names "__proto__defaultvalues" /
+                // "constructordefaultvalues", not the special __proto__/
+                // constructor bindings). Given that, a strict ASCII identifier
+                // grammar (/^[A-Za-z_$][\w$]*$/, the bindSubmit/bindValidate/
+                // bindInput grammar) would do no additional security work here —
+                // it would only reject legitimate ids: WTM's own
+                // Utils.GetIdByName only strips '.'/'['/']'/'-', so ids derived
+                // from non-ASCII model/property names (e.g. the ConsoleDemo's
+                // 不要用中文模型名_View_模型名 fixture) are valid, real ids in
+                // production. This case therefore validates only that action.id
+                // is a non-empty string — matching the 'loadComboItems' case
+                // above, which has always passed its own unvalidated `action.id`
+                // straight through for the identical "write-only, id used as an
+                // opaque handle" reason. action.values is coerced to [] when it
+                // is not an array, so a malformed payload can never publish
+                // something ff._readFieldDefaults' consumers wouldn't already
+                // tolerate.
+                //
+                // A `u`-flag / \p{ID_Start}/\p{ID_Continue} Unicode identifier
+                // regex was considered (and rejected) as a middle ground between
+                // "strict ASCII grammar" and "no grammar": framework_layui.js
+                // ships to the browser completely unbundled/untranspiled (no
+                // babel/webpack step anywhere in this repo touches it) and is
+                // otherwise ES5-flavored (plain `var`, no arrow functions, no
+                // template literals), so a `u`-flag regex LITERAL would be a hard
+                // SyntaxError — not a mere missing-feature no-op — on any engine
+                // predating widespread Unicode property escape support,
+                // breaking this file's ENTIRE parse (every action type, not just
+                // this one) rather than just mis-handling one non-ASCII id. A
+                // plain typeof/non-empty check carries none of that risk and, per
+                // the write-only analysis above, loses no real security coverage.
+                case 'fieldDefaults':
+                    if (action.id && typeof action.id === 'string') {
+                        window[action.id + 'defaultvalues'] = Array.isArray(action.values) ? action.values : [];
+                    }
+                    break;
                 default:
                     if (typeof console !== 'undefined' && console.warn) {
                         console.warn('[WTM] Unknown WtmAction type:', action.type);
@@ -2292,6 +2360,45 @@ window.ff = {
         }
     },
 
+    // Issue #632 (redesigned — data as markup, not script): authoritative source
+    // for ff.ChainChange's default-selection lookups. `target` is the CHAINED
+    // control's own wrapping div (BaseFieldTag gives it `id="{Id}"`, the same
+    // element ChainChange already resolved as `target` via
+    // `$('#'+formid).find('#'+linkto.value)`), so `target.attr('data-wtm-defaults')`
+    // is read directly off it — no extra DOM lookup, no timing dependency on
+    // DOMContentLoaded/island dispatch at all, since the attribute is written by
+    // the server into the initial HTML and is therefore present at HTML-parse
+    // time, before any script on the page (including this one) has even started
+    // running. CheckBoxTagHelper/RadioTagHelper emit this attribute (#632); it is
+    // the ONLY authoritative source for those two control types now — the
+    // legacy window[comboid+"defaultvalues"] global is published purely for
+    // BACK-COMPAT app-authored JS and is never read by this function for a
+    // migrated control type.
+    // ComboBoxTagHelper/TreeTagHelper are NOT migrated by #632 (out of scope —
+    // see the #632 commit body) and still only publish the legacy global
+    // synchronously, at inline-<script> parse time (unchanged, unraced). Falling
+    // back to that global when the attribute is absent therefore preserves their
+    // existing behavior byte-for-byte: the fallback branch is live code for
+    // combo/tree and effectively unreachable dead code for checkbox/radio (whose
+    // attribute — even an empty-array "[]" — is always a non-empty attribute
+    // string once the TagHelper has run).
+    // Issue #638: whichever source resolves, this ALWAYS returns an array, never
+    // undefined/null — callers can safely call .indexOf on the result with no
+    // separate guard (this subsumes the standalone `if (df == undefined...)`
+    // checks #638 added directly in the checkbox/radio branches below).
+    _readFieldDefaults: function (target, comboid) {
+        var raw = target && typeof target.attr === 'function' ? target.attr('data-wtm-defaults') : undefined;
+        if (raw !== undefined && raw !== null && raw !== '') {
+            try {
+                var parsed = JSON.parse(raw);
+                if (Array.isArray(parsed)) { return parsed; }
+            } catch (e) { /* malformed attribute → fall through to the legacy global */ }
+        }
+        var legacy = window[comboid + "defaultvalues"];
+        if (legacy == undefined || legacy == null) { return []; }
+        return legacy;
+    },
+
     ChainChange: function (url, self, usedefaultvalue) {
         var form = layui.form;
         var linkto = self.attributes["wtm-linkto"];
@@ -2348,7 +2455,7 @@ window.ff = {
                     if (controltype === "tree") {
                         var df = [];
                         if (usedefaultvalue == true) {
-                            df = window[comboid + "defaultvalues"];
+                            df = ff._readFieldDefaults(target, comboid);
                         }
                        window[comboid].update({ data: ff.getTreeItems(data.Data,df) });
                     }
@@ -2361,7 +2468,7 @@ window.ff = {
                     if (controltype === "combo") {
                         var df = [];
                         if (usedefaultvalue == true) {
-                            df = window[comboid + "defaultvalues"]; 
+                            df = ff._readFieldDefaults(target, comboid);
                       }
                         window[comboid].update({ data: ff.getComboItems(data.Data, df, usedefaultvalue) });
                     }
@@ -2369,21 +2476,11 @@ window.ff = {
                         for (i = 0; i < data.Data.length; i++) {
                             item = data.Data[i];
                             if (usedefaultvalue == true) {
-                                var df = [];
-                                df = window[comboid + "defaultvalues"];
-                                // Issue #638: a ChainChange TARGET checkbox may
-                                // legitimately have never published its own
-                                // {comboid}defaultvalues global (e.g. a target
-                                // rendered via item-url, which has zero static
-                                // items at render time) — df would be undefined
-                                // here and df.indexOf below would throw
-                                // TypeError on iteration 0, leaving target.html('')
-                                // empty and form.render() unreached (the whole
-                                // linked control renders blank, not just missing
-                                // defaults). Guard matches ff.getComboItems's
-                                // existing `if (svals == undefined || svals ==
-                                // null) { svals = []; }` null-check.
-                                if (df == undefined || df == null) { df = []; }
+                                // Issue #632: ff._readFieldDefaults always returns an
+                                // array (never undefined/null — see its own comment
+                                // for the #638 guarantee this subsumes), so
+                                // df.indexOf below is always safe.
+                                var df = ff._readFieldDefaults(target, comboid);
                                 // Issue #332: use ff._makeInput (DOM API) instead of HTML
                                 // string concat to safely set name/value/title attributes.
                                 target.append(ff._makeInput('checkbox', targetname, item.Value, item.Text, df.indexOf(item.Value) > -1, false));
@@ -2398,14 +2495,8 @@ window.ff = {
                         for (i = 0; i < data.Data.length; i++) {
                             item = data.Data[i];
                             if (usedefaultvalue == true) {
-                                var df = [];
-                                df = window[comboid + "defaultvalues"];
-                                // Issue #638: same reachable no-publish
-                                // configuration and same guard as the checkbox
-                                // branch above (a chained target radio has no
-                                // static items at render time either — see
-                                // RadioTagHelper's item-url branch).
-                                if (df == undefined || df == null) { df = []; }
+                                // Issue #632/#638: see the checkbox branch above.
+                                var df = ff._readFieldDefaults(target, comboid);
                                 // Issue #332: use ff._makeInput (DOM API) instead of HTML
                                 // string concat to safely set name/value/title attributes.
                                 target.append(ff._makeInput('radio', targetname, item.Value, item.Text, df.indexOf(item.Value) > -1, false));

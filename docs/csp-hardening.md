@@ -28,10 +28,15 @@ ended with:
   - *Unconditional*: `<wt:combobox>` / `<wt:tree>` (the `xmSelect.render` block — every
     combobox), `<wt:transfer>` (`layui.transfer.render`), `<wt:ueditor>`,
     `<wt:upload>` / `<wt:multiupload>` (per-widget `DoDelete`/`DoPreview` helpers),
-    `<wt:checkbox>` / `<wt:radio>` (the `{Id}defaultvalues` globals consumed by form
-    reset), `<wt:grid>`/data tables rendered inside AJAX-loaded partials,
+    `<wt:grid>`/data tables rendered inside AJAX-loaded partials,
     `<wt:selector>` (the whole `$$script$$`-tokenized search-panel template), and the
-    SearchPanel `OldPost` click handler.
+    SearchPanel `OldPost` click handler. `<wt:checkbox>` / `<wt:radio>` are OFF this
+    list as of #632: their default-selection data now travels as a
+    `data-wtm-defaults` HTML attribute (not a script), with only a back-compat-only,
+    already-eval-free JSON island (`wtm-dialog-init`, type `fieldDefaults`) publishing
+    the legacy `{Id}defaultvalues` global for app-authored JS that still reads it
+    directly. (An earlier draft made that island itself the authoritative source;
+    review found a real dispatch-ordering race — see the #632 commit message.)
   - *Conditional*: `item-url` on combobox/transfer/checkbox/radio (`ff.LoadComboItems`);
     `<wt:datetime>` **callback and range** branches (the range configuration emits the
     inline script even with zero callbacks); `<wt:slider>` / `<wt:colorpicker>` when a

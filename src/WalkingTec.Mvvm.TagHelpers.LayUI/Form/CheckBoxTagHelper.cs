@@ -172,6 +172,27 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             output.Attributes.Add("div-for", "checkbox");
             output.Attributes.Add("wtm-ctype", "checkbox");
             output.Attributes.Add("wtm-name", Field.Name);
+            // Issue #632 (redesigned — data as markup, not script): the field's
+            // default selection travels as a data-wtm-defaults attribute on THIS
+            // SAME div — the element ff.ChainChange already resolves as `target`
+            // via `$('#'+formid).find('#'+linkto.value)`, since BaseFieldTag sets
+            // `id="{Id}"` on it. It is present synchronously, at HTML-parse time,
+            // on every render path (full page, dialog fragment, PostForm redraw) —
+            // no DOMContentLoaded/island-dispatch timing dependency, which is
+            // exactly what the REJECTED fieldDefaults-island-as-authoritative
+            // design could not guarantee (see the commit body for the race that
+            // design lost to: the island write happens at DOMContentLoaded, but
+            // the only reader — ff.ChainChange — can fire earlier via a
+            // setTimeout(..., 100) anchored at the SOURCE widget's parse point).
+            // `target.html('')` in ChainChange's "clear" step only ever clears
+            // this div's CHILDREN, never the div itself or its attributes, so the
+            // attribute survives ChainChange's own clear-and-repopulate cycle too.
+            // Serialized with the same HTML-safe default JSON encoder used
+            // elsewhere in this file (escapes '<'/'>'/'&' as \uXXXX) and then
+            // HTML-attribute-encoded by ASP.NET Core's TagHelperOutput.Attributes
+            // pipeline (a plain string Add(), never raw HtmlContent) — a value
+            // containing '"' cannot break out of the attribute.
+            output.Attributes.Add("data-wtm-defaults", JsonSerializer.Serialize(values, _islandJsonOptions));
 
             if (string.IsNullOrEmpty(ChangeFunc) == false)
             {
@@ -187,11 +208,26 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 output.PostContent.AppendHtml($@"
 <input type=""checkbox"" name=""{Field.Name}"" value=""{WebUtility.HtmlEncode(item.Value)}"" title=""{WebUtility.HtmlEncode(item.Text)}"" {selected} {(Disabled ? "disabled" : string.Empty)}/>");
             }
+            // Issue #632 (redesigned): BACK-COMPAT ONLY from here down — app-authored
+            // JS that reads window[Id + 'defaultvalues'] directly still gets it
+            // published, via the eval-free wtm-dialog-init JSON island (the #552
+            // pattern), replacing the legacy inline <script>{Id}defaultvalues=...}.
+            // This island can dispatch at ordinary island timing (DOMContentLoaded /
+            // dialog-fragment-insertion) because nothing in the FRAMEWORK reads this
+            // global anymore for checkbox/radio — ff.ChainChange reads the
+            // data-wtm-defaults attribute above instead, which is always present
+            // before any island ever dispatches. See the 'fieldDefaults'
+            // DispatchAction case (framework_layui.js) for why action.id is
+            // validated with a plain non-empty-string check rather than an
+            // identifier grammar.
+            var fieldDefaultsAction = new FieldDefaultsIslandAction
+            {
+                Id = Id,
+                Values = values
+            };
             output.PostElement.AppendHtml($@"
 <input type=""hidden"" name=""_DONOTUSE_{Field.Name}"" value=""1"" />
-<script>
- {Id}defaultvalues = {JsonSerializer.Serialize(values)};
-</script>
+<script type=""application/json"" class=""wtm-dialog-init"">{JsonSerializer.Serialize(fieldDefaultsAction, _islandJsonOptions)}</script>
 ");
             base.Process(context, output);
 
@@ -240,5 +276,41 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             }
 
         }
+    }
+
+    // Issue #632 (redesigned, #470 slice 1): DTO for the bare (non-wrapped)
+    // fieldDefaults JSON island — {"type":"fieldDefaults","id":"...","values":[...]}.
+    // Shared by CheckBoxTagHelper (this file) and RadioTagHelper. Consumed by the
+    // 'fieldDefaults' DispatchAction case (framework_layui.js) to publish
+    // window[id + 'defaultvalues'] for app-authored JS — BACK-COMPAT ONLY; the
+    // framework's own consumer (ff.ChainChange) reads the data-wtm-defaults HTML
+    // attribute emitted alongside this island on the same element, never this
+    // island itself.
+    //
+    // Unlike LoadComboItemsIslandAction.Id (also unvalidated) this DTO's Id is
+    // documented explicitly: the 'fieldDefaults' DispatchAction case validates it
+    // with a plain non-empty-string check, NOT an identifier grammar (unlike
+    // bindSubmit/bindValidate/bindInput's action.id/name, which resolve-and-CALL
+    // an existing window[] property as a FUNCTION and therefore need the strict
+    // ASCII identifier + denylist + own-property + typeof-function guard). This
+    // action only ever WRITES JSON data behind a fixed, non-configurable
+    // 'defaultvalues' suffix — never resolves or invokes anything — so an
+    // identifier-shaped id like '__proto__' still only ever produces the harmless
+    // property name "__proto__defaultvalues", and a non-ASCII id (WTM's own
+    // Utils.GetIdByName only strips '.'/'['/']'/'-', so ids derived from
+    // non-ASCII model/property names — e.g. the ConsoleDemo's
+    // 不要用中文模型名_View_模型名 fixture — are valid, real ids in production)
+    // is not silently rejected the way an ASCII-only /^[A-Za-z_$][\w$]*$/ grammar
+    // would reject it.
+    internal sealed class FieldDefaultsIslandAction
+    {
+        [JsonPropertyName("type")]
+        public string Type { get; set; } = "fieldDefaults";
+
+        [JsonPropertyName("id")]
+        public string Id { get; set; }
+
+        [JsonPropertyName("values")]
+        public List<string> Values { get; set; }
     }
 }

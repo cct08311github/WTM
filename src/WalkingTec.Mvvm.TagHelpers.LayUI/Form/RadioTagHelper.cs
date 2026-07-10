@@ -80,6 +80,13 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
             }
 
+            // Issue #632 (redesigned — data as markup, not script): see
+            // CheckBoxTagHelper's matching comment for the full rationale (same
+            // stable host element — this div, which BaseFieldTag gives `id="{Id}"`,
+            // and which ff.ChainChange already resolves as `target` — same
+            // HTML-safe JSON encoder, same ASP.NET Core attribute-value encoding).
+            output.Attributes.Add("data-wtm-defaults", JsonSerializer.Serialize(values, _islandJsonOptions));
+
             if (string.IsNullOrEmpty(ItemUrl) == false)
             {
                 // Issue #633 (#470-F): eval-free JSON island — see ComboBoxTagHelper's
@@ -160,23 +167,24 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 ");
             }
 
-            // Issue #638: emit {Id}defaultvalues ONCE, unconditionally, here in
-            // PostElement — matching CheckBoxTagHelper's placement — instead of once
-            // PER RENDERED <input> inside the loop above. The old per-item placement
-            // meant a ChainChange TARGET radio (which has zero static items at render
-            // time — see the item-url branch above, where listItems stays empty)
-            // never published this global at all: framework_layui.js's ChainChange
-            // then read window[id + "defaultvalues"] as undefined and threw calling
-            // .indexOf on it (guarded independently, above in this same #638 fix).
-            // Every repeated write the old loop performed was for the SAME id and
-            // SAME value, so the final observable state was already identical to a
-            // single write — this is a redundancy removal for the already-working
-            // case, and additively fixes the previously-never-published item-url
-            // (0-item) case.
+            // Issue #632 (redesigned): BACK-COMPAT ONLY — app-authored JS that reads
+            // window[Id + 'defaultvalues'] directly still gets it published, via the
+            // eval-free wtm-dialog-init JSON island (the #552 pattern), replacing
+            // the #638-fixed-in-place inline <script>{Id}defaultvalues=...} this
+            // commit removes entirely (that #638 fix moved the emission to
+            // PostElement, unconditional — this commit keeps that placement/
+            // unconditional-ness, only swaps the transport). See
+            // CheckBoxTagHelper's matching comment for why this island's timing is
+            // safe: ff.ChainChange now reads the data-wtm-defaults attribute above
+            // instead of this global, so nothing in the framework depends on when
+            // this island dispatches.
+            var fieldDefaultsAction = new FieldDefaultsIslandAction
+            {
+                Id = Id,
+                Values = values
+            };
             output.PostElement.AppendHtml($@"
-        <script>
-         {Id}defaultvalues = {JsonSerializer.Serialize(values)};
-        </script>
+        <script type=""application/json"" class=""wtm-dialog-init"">{JsonSerializer.Serialize(fieldDefaultsAction, _islandJsonOptions)}</script>
 ");
 
             base.Process(context, output);
