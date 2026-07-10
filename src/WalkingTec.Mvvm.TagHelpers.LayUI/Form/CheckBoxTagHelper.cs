@@ -208,18 +208,40 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 output.PostContent.AppendHtml($@"
 <input type=""checkbox"" name=""{Field.Name}"" value=""{WebUtility.HtmlEncode(item.Value)}"" title=""{WebUtility.HtmlEncode(item.Text)}"" {selected} {(Disabled ? "disabled" : string.Empty)}/>");
             }
-            // Issue #632 (redesigned): BACK-COMPAT ONLY from here down — app-authored
-            // JS that reads window[Id + 'defaultvalues'] directly still gets it
-            // published, via the eval-free wtm-dialog-init JSON island (the #552
-            // pattern), replacing the legacy inline <script>{Id}defaultvalues=...}.
-            // This island can dispatch at ordinary island timing (DOMContentLoaded /
-            // dialog-fragment-insertion) because nothing in the FRAMEWORK reads this
-            // global anymore for checkbox/radio — ff.ChainChange reads the
-            // data-wtm-defaults attribute above instead, which is always present
-            // before any island ever dispatches. See the 'fieldDefaults'
-            // DispatchAction case (framework_layui.js) for why action.id is
-            // validated with a plain non-empty-string check rather than an
-            // identifier grammar.
+            // Issue #632 (redesigned): BACK-COMPAT — app-authored JS that reads
+            // window[Id + 'defaultvalues'] directly still gets it published.
+            //
+            // Issue #646 (Codex adversarial review, pre-10.14.4): #632 replaced the
+            // legacy inline <script>{Id}defaultvalues=...} with ONLY the eval-free
+            // wtm-dialog-init JSON island below, which on a full page is consumed at
+            // DOMContentLoaded (ff._consumePageReadyIslands). That broke app code that
+            // reads the global from an inline <script> immediately AFTER this widget's
+            // markup — it saw `undefined` until DOMContentLoaded, a real timing
+            // regression vs. the pre-#632 synchronous, parse-time publication. The
+            // FRAMEWORK's own consumer was and remains unaffected — ff.ChainChange
+            // reads the race-free data-wtm-defaults attribute above, never this
+            // global — so this fix is purely about restoring the app-facing contract.
+            //
+            // Fix: unconditionally re-emit the inline <script>{Id}defaultvalues=...}
+            // write here too (byte-identical to pre-#632, same default — HTML-safe —
+            // JsonSerializer.Serialize encoder), alongside the island. The TagHelper
+            // runs server-side and cannot see the client-only #627 kill-switch flag,
+            // so it cannot conditionally omit the inline script — both paths are
+            // always emitted:
+            //  - Default (kill-switch OFF): the inline write executes at parse time,
+            //    giving synchronous back-compat; the island redundantly re-sets the
+            //    same global at DOMContentLoaded (harmless).
+            //  - Kill-switch ON under strict CSP (app opted in): the browser blocks
+            //    this inline script, so the island becomes the sole (deferred)
+            //    publisher — acceptable, since the app explicitly chose CSP over the
+            //    sync guarantee. See the 'fieldDefaults' DispatchAction case
+            //    (framework_layui.js) for why action.id is validated with a plain
+            //    non-empty-string check rather than an identifier grammar.
+            //
+            // Net effect: <wt:checkbox> is NOT CSP-clean by default — it rejoins the
+            // #470 "still emits inline script" hard-blocker list (see
+            // docs/csp-hardening.md). A synchronous global fundamentally requires an
+            // inline script; CSP-cleanliness forbids one. Don't try to have both.
             var fieldDefaultsAction = new FieldDefaultsIslandAction
             {
                 Id = Id,
@@ -227,6 +249,9 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             };
             output.PostElement.AppendHtml($@"
 <input type=""hidden"" name=""_DONOTUSE_{Field.Name}"" value=""1"" />
+<script>
+ {Id}defaultvalues = {JsonSerializer.Serialize(values)};
+</script>
 <script type=""application/json"" class=""wtm-dialog-init"">{JsonSerializer.Serialize(fieldDefaultsAction, _islandJsonOptions)}</script>
 ");
             base.Process(context, output);

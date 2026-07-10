@@ -29,14 +29,22 @@ ended with:
     combobox), `<wt:transfer>` (`layui.transfer.render`), `<wt:ueditor>`,
     `<wt:upload>` / `<wt:multiupload>` (per-widget `DoDelete`/`DoPreview` helpers),
     `<wt:grid>`/data tables rendered inside AJAX-loaded partials,
-    `<wt:selector>` (the whole `$$script$$`-tokenized search-panel template), and the
-    SearchPanel `OldPost` click handler. `<wt:checkbox>` / `<wt:radio>` are OFF this
-    list as of #632: their default-selection data now travels as a
-    `data-wtm-defaults` HTML attribute (not a script), with only a back-compat-only,
-    already-eval-free JSON island (`wtm-dialog-init`, type `fieldDefaults`) publishing
-    the legacy `{Id}defaultvalues` global for app-authored JS that still reads it
-    directly. (An earlier draft made that island itself the authoritative source;
-    review found a real dispatch-ordering race — see the #632 commit message.)
+    `<wt:selector>` (the whole `$$script$$`-tokenized search-panel template), the
+    SearchPanel `OldPost` click handler, and `<wt:checkbox>` / `<wt:radio>`. The
+    field's default selection travels as a `data-wtm-defaults` HTML attribute
+    (race-free; `ff.ChainChange` reads only this, never a script), but the legacy
+    `{Id}defaultvalues` global is *also* republished via an unconditional inline
+    `<script>` write, for app-authored JS that reads it synchronously right after the
+    widget markup (#646: an earlier redesign (#632) made a `wtm-dialog-init` JSON
+    island — type `fieldDefaults` — the *only* publisher of that global; on a full
+    page the island is consumed at DOMContentLoaded, which silently broke that
+    parse-time back-compat guarantee). checkbox/radio therefore rejoined this
+    unconditional inline-script list in #646 — the inline write is what keeps the
+    global available synchronously by default; the island is what still publishes it
+    (deferred) once the #627 kill-switch blocks the inline script under strict CSP.
+    (An earlier draft made the island the authoritative source for `ff.ChainChange`
+    itself; review found a real dispatch-ordering race — see the #632 commit
+    message. That part of #632 stands; only the app-facing global's timing changed.)
   - *Conditional*: `item-url` on combobox/transfer/checkbox/radio (`ff.LoadComboItems`);
     `<wt:datetime>` **callback and range** branches (the range configuration emits the
     inline script even with zero callbacks); `<wt:slider>` / `<wt:colorpicker>` when a
