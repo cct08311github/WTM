@@ -62,7 +62,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 Actions = new List<DialogInitAction> { action }
             };
 
-            var json = JsonSerializer.Serialize(payload, _jsonOptions);
+            var json = LayuiIslandJson.Serialize(payload, _jsonOptions);
 
             // The emitted island is picked up by ff.OpenDialog's DOMParser extraction
             // (Issue #470) and dispatched via ff.DispatchAction. The type="application/json"

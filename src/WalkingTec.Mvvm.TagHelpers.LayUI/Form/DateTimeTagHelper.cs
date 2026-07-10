@@ -330,7 +330,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     // inline-script branch below.
                     var opts = BuildLaydateOpts(rawMin, rawMax);
                     var action = new LaydateIslandAction { Opts = opts };
-                    var json = JsonSerializer.Serialize(action, _laydateJsonOptions);
+                    var json = LayuiIslandJson.Serialize(action, _laydateJsonOptions);
                     output.PostElement.AppendHtml(
                         $"<script type=\"application/json\" class=\"wtm-dialog-init\">{json}</script>");
                 }
@@ -356,7 +356,7 @@ layui.use(['laydate'],function(){{
     {(!ConfirmOnly.HasValue ? string.Empty : ShowBottom.HasValue && ShowBottom.Value && ConfirmOnly.Value || !ShowBottom.HasValue && ConfirmOnly.Value ? $",btns: ['confirm']" : string.Empty)}
     {(!Calendar.HasValue ? string.Empty : $",calendar: {Calendar.Value.ToString().ToLower()}")}
     {(!Lang.HasValue ? string.Empty : $",lang: '{Lang.Value.ToString().ToLower()}'")}
-    {(Mark == null || Mark.Count == 0 ? string.Empty : $",mark: {JsonSerializer.Serialize(Mark)}")}
+    {(Mark == null || Mark.Count == 0 ? string.Empty : $",mark: {LayuiIslandJson.Serialize(Mark)}")}
     {(string.IsNullOrEmpty(ReadyFunc) ? string.Empty : $",ready: function(value){{{ReadyFunc}(value,dateIns)}}")}
     {(string.IsNullOrEmpty(ChangeFunc) ? string.Empty : $",change: function(value,date,endDate){{{ChangeFunc}(value,date,endDate,dateIns)}}")}
     {(string.IsNullOrEmpty(DoneFunc) ? string.Empty : $",done: function(value,date,endDate){{{DoneFunc}(value,date,endDate,dateIns)}}")}
@@ -399,7 +399,7 @@ layui.use(['laydate'], function() {{
         {(!ConfirmOnly.HasValue ? string.Empty : ShowBottom.HasValue && ShowBottom.Value && ConfirmOnly.Value || !ShowBottom.HasValue && ConfirmOnly.Value ? $",btns: ['confirm']" : string.Empty)}
         {(!Calendar.HasValue ? string.Empty : $",calendar: {Calendar.Value.ToString().ToLower()}")}
         {(!Lang.HasValue ? string.Empty : $",lang: '{Lang.Value.ToString().ToLower()}'")}
-        {(Mark == null || Mark.Count == 0 ? string.Empty : $",mark: {JsonSerializer.Serialize(Mark)}")}
+        {(Mark == null || Mark.Count == 0 ? string.Empty : $",mark: {LayuiIslandJson.Serialize(Mark)}")}
         {(string.IsNullOrEmpty(ReadyFunc) ? string.Empty : $",ready: function(value){{{ReadyFunc}(value,dateIns)}}")}
         {(string.IsNullOrEmpty(ChangeFunc) ? string.Empty : $",change: function(value,date,endDate){{{ChangeFunc}(value,date,endDate,dateIns)}}")}
         ,done: function(value, date, endDate) {{

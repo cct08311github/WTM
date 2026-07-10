@@ -161,13 +161,13 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             }
             if(selectVal.Count > 0)
             {
-                DefaultValue = JsonSerializer.Serialize(selectVal);
+                DefaultValue = LayuiIslandJson.Serialize(selectVal);
             }
             else
             {
                 if(string.IsNullOrEmpty(DefaultValue) == false)
                 {
-                    DefaultValue = JsonSerializer.Serialize(DefaultValue.Split(",").Select(x => x.Trim()).ToArray());
+                    DefaultValue = LayuiIslandJson.Serialize(DefaultValue.Split(",").Select(x => x.Trim()).ToArray());
                 }
             }
             if (string.IsNullOrEmpty(ItemUrl) == false)
@@ -205,7 +205,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     Field = Field.Name,
                     SelectVal = selectVal
                 };
-                output.PostElement.AppendHtml($@"<script type=""application/json"" class=""wtm-dialog-init"">{JsonSerializer.Serialize(loadComboItemsAction, _islandJsonOptions)}</script>");
+                output.PostElement.AppendHtml($@"<script type=""application/json"" class=""wtm-dialog-init"">{LayuiIslandJson.Serialize(loadComboItemsAction, _islandJsonOptions)}</script>");
             }
 
             var title = $"['{(string.IsNullOrEmpty(LeftTitle) ? THProgram._localizer["Sys.ForSelect"] : LeftTitle)}','{(string.IsNullOrEmpty(RightTitle) ? THProgram._localizer["Sys.Selected"] : RightTitle)}']";
@@ -235,7 +235,7 @@ layui.use(['transfer'],function(){{
   var transferIns = transfer.render({{
     elem: '#'+_id
     ,title:{title}
-    ,data:{JsonSerializer.Serialize(data,_camelCaseOptions)}
+    ,data:{LayuiIslandJson.Serialize(data,_camelCaseOptions)}
     {(string.IsNullOrEmpty(DefaultValue) ? string.Empty : $",value:defaultVal")}
     ,id:'{Id}'
     ,text:{{none:'{NonePlaceholder}',searchNone:'{SearchNonePlaceholder}'}}

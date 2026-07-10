@@ -78,13 +78,16 @@ const checkBoxActive = stripLineComments(checkBoxSrc);
 const radioActive = stripLineComments(radioSrc);
 
 // The exact literal CheckBoxTagHelper.cs / RadioTagHelper.cs must emit, in
-// REAL code (not a comment), for the restored inline write — a plain
-// JsonSerializer.Serialize(values) call with no options object, matching the
-// pre-#632/#638 emission byte-for-byte (spaces around '=', trailing ';').
-// The many surrounding comments in both files intentionally use the
-// no-spaces "{Id}defaultvalues=...}"" shorthand precisely so they can never
-// accidentally satisfy this pattern.
-const INLINE_WRITE_PATTERN = /\{Id\}defaultvalues = \{JsonSerializer\.Serialize\(values\)\};/;
+// REAL code (not a comment), for the restored inline write. Issue #651 routed
+// this serialization through LayuiIslandJson.Serialize(values) — the '$'-escaping
+// wrapper over JsonSerializer.Serialize — so an unescaped sentinel in the
+// default value can no longer break out of this inline <script> when the field
+// is a searcher inside a tokenized <wt:selector> panel. The write's SHAPE is
+// otherwise unchanged (spaces around '=', trailing ';'); only the serializer
+// call is wrapped. The many surrounding comments in both files intentionally
+// use the no-spaces "{Id}defaultvalues=...}" shorthand precisely so they can
+// never accidentally satisfy this pattern.
+const INLINE_WRITE_PATTERN = /\{Id\}defaultvalues = \{LayuiIslandJson\.Serialize\(values\)\};/;
 
 // ---------------------------------------------------------------------------
 // Part 1: source sweep (the actual regression lock)
@@ -104,7 +107,7 @@ describe('#646 source sweep — CheckBoxTagHelper.cs / RadioTagHelper.cs restore
 
   test('RadioTagHelper.cs emits the write exactly once in code, outside the listItems loop (#638 placement preserved)', () => {
     const codeMatches = radioActive.match(
-      /\{Id\}defaultvalues = \{JsonSerializer\.Serialize\(values\)\};/g
+      /\{Id\}defaultvalues = \{LayuiIslandJson\.Serialize\(values\)\};/g
     ) || [];
     expect(codeMatches).toHaveLength(1);
   });

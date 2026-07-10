@@ -301,7 +301,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     FieldId1 = fieldId1,
                     FormId = ownerFormId
                 };
-                var json = JsonSerializer.Serialize(action, _islandJsonOptions);
+                var json = LayuiIslandJson.Serialize(action, _islandJsonOptions);
 
                 var islandContent = $@"
 <input type='hidden' id='{fieldId0}' name='{WebUtility.HtmlEncode(Field.Name)}' value='{WebUtility.HtmlEncode(value0 ?? "")}' class='layui-input'>

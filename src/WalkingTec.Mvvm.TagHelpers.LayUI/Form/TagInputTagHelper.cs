@@ -115,7 +115,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 ValueFieldId = valueFieldId,
                 FormId = ownerFormId
             };
-            var json = JsonSerializer.Serialize(action, _islandJsonOptions);
+            var json = LayuiIslandJson.Serialize(action, _islandJsonOptions);
             output.PostElement.AppendHtml(
                 $"<script type=\"application/json\" class=\"wtm-dialog-init\">{json}</script>");
 

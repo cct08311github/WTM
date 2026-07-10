@@ -118,7 +118,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     SelectVal = values,
                     Disabled = Disabled
                 };
-                output.PostElement.AppendHtml($@"<script type=""application/json"" class=""wtm-dialog-init"">{JsonSerializer.Serialize(loadComboItemsAction, _islandJsonOptions)}</script>");
+                output.PostElement.AppendHtml($@"<script type=""application/json"" class=""wtm-dialog-init"">{LayuiIslandJson.Serialize(loadComboItemsAction, _islandJsonOptions)}</script>");
             }
             else
             {
@@ -192,7 +192,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             // HTML-attribute-encoded by ASP.NET Core's TagHelperOutput.Attributes
             // pipeline (a plain string Add(), never raw HtmlContent) — a value
             // containing '"' cannot break out of the attribute.
-            output.Attributes.Add("data-wtm-defaults", JsonSerializer.Serialize(values, _islandJsonOptions));
+            output.Attributes.Add("data-wtm-defaults", LayuiIslandJson.Serialize(values, _islandJsonOptions));
 
             if (string.IsNullOrEmpty(ChangeFunc) == false)
             {
@@ -249,7 +249,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             output.PostElement.AppendHtml($@"
 <input type=""hidden"" name=""_DONOTUSE_{Field.Name}"" value=""1"" />
 <script>
- {Id}defaultvalues = {JsonSerializer.Serialize(values)};
+ {Id}defaultvalues = {LayuiIslandJson.Serialize(values)};
 </script>
 ");
             base.Process(context, output);

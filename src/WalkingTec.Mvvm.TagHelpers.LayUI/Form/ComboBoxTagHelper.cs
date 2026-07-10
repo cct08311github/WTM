@@ -216,7 +216,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     Field = Field.Name,
                     SelectVal = selectVal
                 };
-                output.PostElement.AppendHtml($@"<script type=""application/json"" class=""wtm-dialog-init"">{JsonSerializer.Serialize(loadComboItemsAction, _islandJsonOptions)}</script>");
+                output.PostElement.AppendHtml($@"<script type=""application/json"" class=""wtm-dialog-init"">{LayuiIslandJson.Serialize(loadComboItemsAction, _islandJsonOptions)}</script>");
             }
 
             else
@@ -356,15 +356,15 @@ var {Id} = xmSelect.render({{
                 ff.ChainChange(u, $('#{Id}')[0])
         }}" : FormatFuncName(ChangeFunc))}
    }},
-	data:  {JsonSerializer.Serialize(GetLayuiTree(listItems,selectVal))}
+	data:  {LayuiIslandJson.Serialize(GetLayuiTree(listItems,selectVal))}
 }});
-     {Id}defaultvalues = {JsonSerializer.Serialize(selectVal)};
+     {Id}defaultvalues = {LayuiIslandJson.Serialize(selectVal)};
         {(selectVal?.Count>0 && (LinkField != null || string.IsNullOrEmpty(LinkId) == false) ? @$"
                 var {Id}u = ""{JavaScriptEncoder.Default.Encode(TriggerUrl ?? "")}"";
                 if ({Id}u.indexOf(""?"") == -1) {{
                     {Id}u += ""?t="" + new Date().getTime();
                 }}
-                var {Id}data = {JsonSerializer.Serialize(selectVal)};
+                var {Id}data = {LayuiIslandJson.Serialize(selectVal)};
                 for (var i = 0; i < {Id}data.length; i++) {{
                     {Id}u += ""&id="" + {Id}data[i];
                 }};
@@ -442,5 +442,65 @@ var {Id} = xmSelect.render({{
         // leaves an omitted trailing arg `undefined`, same effective result).
         [JsonPropertyName("disabled")]
         public bool? Disabled { get; set; }
+    }
+
+    // Issue #651: ff.OpenDialog2 (the <wt:selector> search-panel dialog opener,
+    // SelectorTagHelper.cs) tokenizes the WHOLE composed search-panel template
+    // with GLOBAL regex replaces — $$dialoginit$$/$$#dialoginit$$ (a
+    // wtm-dialog-init island's own open/close tag) and $$script$$/$$#script$$
+    // (any bare <script> tag) — and framework_layui.js's OpenDialog2 rehydrates
+    // those same tokens back into real markup with an equally global regex
+    // (`.replace(/[$]{2}dialoginit[$]{2}/img, ...)` etc.), over the ENTIRE
+    // template string, not scoped to the sentinel occurrences SelectorTagHelper
+    // itself placed. The four loadComboItemsAction islands below (Combo/CheckBox/
+    // Radio/Transfer) and the data-wtm-defaults attribute (CheckBox/Radio) carry
+    // MODEL-DERIVED data (selectVal, url, the defaults array) inside that
+    // template. _islandJsonOptions' default encoder escapes '<', '>', '&' (safe
+    // against a raw </script> breakout) but NOT '$' — so a stored value
+    // containing e.g. "$$#dialoginit$$$$script$$window.evil=1$$#script$$" would
+    // survive JSON serialization intact and, once the composed template reaches
+    // OpenDialog2, get tokenized/rehydrated exactly like a real sentinel,
+    // yielding attacker-controlled markup/script execution (stored XSS).
+    //
+    // The fix: after serializing, replace every '$' character with the 6-char
+    // JSON Unicode escape sequence for it (backslash, 'u', '0', '0', '2', '4').
+    // This is always a valid, reversible transform for these payloads — '$' can
+    // only ever appear inside JSON STRING VALUES here (the structural JSON:
+    // braces, the fixed property names, the defaults array shape, never contains
+    // '$'). The client's JSON.parse (ff.LoadComboItems's dispatch,
+    // ff._readFieldDefaults) already decodes that escape sequence back to a
+    // plain '$' per the JSON spec, so callers see the exact original value. With
+    // no literal '$$' anywhere in the payload, the $$dialoginit$$/$$script$$
+    // global replaces can only ever match the real sentinels SelectorTagHelper
+    // placed. Route every wtm-dialog-init island / data-wtm-defaults attribute
+    // serialization through this helper — do not call JsonSerializer.Serialize
+    // directly for those payloads.
+    //
+    // Issue #651 (follow-up — same collision, inline &lt;script&gt; bodies): the
+    // wtm-dialog-init island and the data-wtm-defaults attribute are NOT the only
+    // model-derived JSON that lands inside the tokenized selector-panel template.
+    // These same four TagHelpers ALSO emit INLINE &lt;script&gt; bodies carrying
+    // JsonSerializer.Serialize output — ComboBox/CheckBox/Radio's
+    // `{Id}defaultvalues = [...]`, ComboBox's xmSelect `data:` and setTimeout
+    // `{Id}data`, Transfer's `defaultVal` value and `data:`. When such a field is
+    // a searcher inside a &lt;wt:selector&gt; panel, that inline &lt;script&gt; is
+    // tokenized to $$script$$...$$#script$$ by SelectorTagHelper too, so an
+    // unescaped '$$#script$$' in the serialized model data breaks out of the
+    // inline script exactly as it would out of an island. Those call sites pass
+    // DEFAULT options (not _islandJsonOptions); the parameterless overload below
+    // keeps them on the identical '$'-escaping invariant. This is transparent in
+    // a plain inline-JS context as well: the JS parser decodes a $ inside a
+    // string literal back to '$' at parse time, so a NORMAL (non-selector) form
+    // sees byte-identical runtime values — only the WIRE encoding changes, never
+    // behaviour. (Partially addresses #652.)
+    internal static class LayuiIslandJson
+    {
+        internal static string Serialize<TValue>(TValue value, JsonSerializerOptions options) =>
+            JsonSerializer.Serialize(value, options).Replace("$", "\\u0024");
+
+        // Default-options overload for the inline-&lt;script&gt; sites described
+        // above (they call JsonSerializer.Serialize(value) with no options).
+        internal static string Serialize<TValue>(TValue value) =>
+            JsonSerializer.Serialize(value).Replace("$", "\\u0024");
     }
 }

@@ -442,7 +442,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
 var {Id}filter = {{}};
 $('#{Id}_Select').on('click',function(){{
   {(string.IsNullOrEmpty(BeforeOnpenDialogFunc) == true ? "" : "var data={};" + FormatFuncName(BeforeOnpenDialogFunc) + ";")}
-  var filter = {JsonSerializer.Serialize(Filter)};
+  var filter = {LayuiIslandJson.Serialize(Filter)};
   var vals = $('#{Id}_Container input[type=hidden]');
   filter.Ids = [];
   for(var i=0;i<vals.length;i++){{

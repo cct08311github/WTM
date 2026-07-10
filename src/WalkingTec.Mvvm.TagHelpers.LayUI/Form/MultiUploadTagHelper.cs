@@ -162,7 +162,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             output.PreElement.SetHtmlContent($@"
 <div id='{Id}label'></div>
 ");
-            var initselected = JsonSerializer.Serialize(
+            var initselected = LayuiIslandJson.Serialize(
                 idstring.Split('|', StringSplitOptions.RemoveEmptyEntries));
             var requiredtext = "";
             if (Field.Metadata.IsRequired)

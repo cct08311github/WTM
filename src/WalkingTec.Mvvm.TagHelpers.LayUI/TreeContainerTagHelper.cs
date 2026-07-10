@@ -195,10 +195,10 @@ layui.use(['tree'],function(){{
   var treecontainer{Id} = layui.tree.render({{
     id:'tree{Id}',elem: '#div{Id}',onlyIconControl:true, showCheckbox:false,showLine:{ShowLine.ToString().ToLower()}
     {onclick}
-    ,data: {JsonSerializer.Serialize(treeitems)}
+    ,data: {LayuiIslandJson.Serialize(treeitems)}
   }});
   {(selecteditem == null ? string.Empty : $@"treecontainer{Id}.config.setSelected({{
-     data: {JsonSerializer.Serialize(selecteditem)}
+     data: {LayuiIslandJson.Serialize(selecteditem)}
     }});")}
   {(string.IsNullOrEmpty(AutoLoadUrl) || selecteditem != null ? string.Empty : $"ff.LoadPage1('{AutoLoadUrl}','div_{Id}');")}
 }})

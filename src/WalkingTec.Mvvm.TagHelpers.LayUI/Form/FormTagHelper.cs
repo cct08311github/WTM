@@ -357,7 +357,7 @@ $('#{search.SearchBtnId}').on('click', function () {{
                 }
             }
 
-            var islandJson = JsonSerializer.Serialize(new FormIslandPayload { Actions = islandActions }, _islandJsonOptions);
+            var islandJson = LayuiIslandJson.Serialize(new FormIslandPayload { Actions = islandActions }, _islandJsonOptions);
             output.PostElement.AppendHtml(
                 $"<script type=\"application/json\" class=\"wtm-dialog-init\">{islandJson}</script>");
 

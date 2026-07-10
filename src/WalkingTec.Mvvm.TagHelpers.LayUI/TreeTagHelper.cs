@@ -132,7 +132,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
                 }
                 output.PostElement.AppendHtml($@"<script>
-ff.LoadComboItems('tree','{ItemUrl}','{Id}','{Field.Name}',{JsonSerializer.Serialize(vals)},function(){{
+ff.LoadComboItems('tree','{ItemUrl}','{Id}','{Field.Name}',{LayuiIslandJson.Serialize(vals)},function(){{
 }})
 
 </script>");
@@ -221,15 +221,15 @@ var {Id} = xmSelect.render({{
                 ff.ChainChange(u, $('#{Id}')[0])
         }}" : FormatFuncName(ChangeFunc))}
    }},
-	data:  {JsonSerializer.Serialize(treeitems)}
+	data:  {LayuiIslandJson.Serialize(treeitems)}
 }});
-     {Id}defaultvalues = {JsonSerializer.Serialize(vals)};
+     {Id}defaultvalues = {LayuiIslandJson.Serialize(vals)};
         {(vals?.Count > 0 && (LinkField != null || string.IsNullOrEmpty(LinkId) == false) ? @$"
                 var {Id}u = ""{(TriggerUrl ?? "")}"";
                 if ({Id}u.indexOf(""?"") == -1) {{
                     {Id}u += ""?t="" + new Date().getTime();
                 }}
-                var {Id}data = {JsonSerializer.Serialize(vals)};
+                var {Id}data = {LayuiIslandJson.Serialize(vals)};
                 for (var i = 0; i < {Id}data.length; i++) {{
                     {Id}u += ""&id="" + {Id}data[i];
                 }};

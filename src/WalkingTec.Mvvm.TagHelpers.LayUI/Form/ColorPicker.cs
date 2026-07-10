@@ -153,7 +153,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     ValueFieldId = Id,
                     FormId = ownerFormId
                 };
-                var json = JsonSerializer.Serialize(action, _islandJsonOptions);
+                var json = LayuiIslandJson.Serialize(action, _islandJsonOptions);
 
                 var islandContent = $@"
 <input type='hidden' id='{Id}' name='{Field.Name}' value='{encodedVal}' {requiredtext}/>

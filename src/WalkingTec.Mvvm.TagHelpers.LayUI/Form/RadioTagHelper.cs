@@ -85,7 +85,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             // stable host element — this div, which BaseFieldTag gives `id="{Id}"`,
             // and which ff.ChainChange already resolves as `target` — same
             // HTML-safe JSON encoder, same ASP.NET Core attribute-value encoding).
-            output.Attributes.Add("data-wtm-defaults", JsonSerializer.Serialize(values, _islandJsonOptions));
+            output.Attributes.Add("data-wtm-defaults", LayuiIslandJson.Serialize(values, _islandJsonOptions));
 
             if (string.IsNullOrEmpty(ItemUrl) == false)
             {
@@ -101,7 +101,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     Field = Field.Name,
                     SelectVal = values
                 };
-                output.PostElement.AppendHtml($@"<script type=""application/json"" class=""wtm-dialog-init"">{JsonSerializer.Serialize(loadComboItemsAction, _islandJsonOptions)}</script>");
+                output.PostElement.AppendHtml($@"<script type=""application/json"" class=""wtm-dialog-init"">{LayuiIslandJson.Serialize(loadComboItemsAction, _islandJsonOptions)}</script>");
             }
             else
             {
@@ -209,7 +209,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             // data-wtm-defaults attribute instead (ff.ChainChange already does).
             output.PostElement.AppendHtml($@"
         <script>
-         {Id}defaultvalues = {JsonSerializer.Serialize(values)};
+         {Id}defaultvalues = {LayuiIslandJson.Serialize(values)};
         </script>
 ");
 
