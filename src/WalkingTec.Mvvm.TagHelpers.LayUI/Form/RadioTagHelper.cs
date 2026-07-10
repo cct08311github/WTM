@@ -157,11 +157,27 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 // contains quotes or angle brackets can break attribute boundaries (XSS).
                 output.PostContent.AppendHtml($@"
         <input type=""radio"" name=""{Field.Name}"" value=""{WebUtility.HtmlEncode(item.Value)}"" title=""{WebUtility.HtmlEncode(item.Text)}"" {selected} />
+");
+            }
+
+            // Issue #638: emit {Id}defaultvalues ONCE, unconditionally, here in
+            // PostElement — matching CheckBoxTagHelper's placement — instead of once
+            // PER RENDERED <input> inside the loop above. The old per-item placement
+            // meant a ChainChange TARGET radio (which has zero static items at render
+            // time — see the item-url branch above, where listItems stays empty)
+            // never published this global at all: framework_layui.js's ChainChange
+            // then read window[id + "defaultvalues"] as undefined and threw calling
+            // .indexOf on it (guarded independently, above in this same #638 fix).
+            // Every repeated write the old loop performed was for the SAME id and
+            // SAME value, so the final observable state was already identical to a
+            // single write — this is a redundancy removal for the already-working
+            // case, and additively fixes the previously-never-published item-url
+            // (0-item) case.
+            output.PostElement.AppendHtml($@"
         <script>
          {Id}defaultvalues = {JsonSerializer.Serialize(values)};
         </script>
 ");
-            }
 
             base.Process(context, output);
 

@@ -2371,6 +2371,19 @@ window.ff = {
                             if (usedefaultvalue == true) {
                                 var df = [];
                                 df = window[comboid + "defaultvalues"];
+                                // Issue #638: a ChainChange TARGET checkbox may
+                                // legitimately have never published its own
+                                // {comboid}defaultvalues global (e.g. a target
+                                // rendered via item-url, which has zero static
+                                // items at render time) — df would be undefined
+                                // here and df.indexOf below would throw
+                                // TypeError on iteration 0, leaving target.html('')
+                                // empty and form.render() unreached (the whole
+                                // linked control renders blank, not just missing
+                                // defaults). Guard matches ff.getComboItems's
+                                // existing `if (svals == undefined || svals ==
+                                // null) { svals = []; }` null-check.
+                                if (df == undefined || df == null) { df = []; }
                                 // Issue #332: use ff._makeInput (DOM API) instead of HTML
                                 // string concat to safely set name/value/title attributes.
                                 target.append(ff._makeInput('checkbox', targetname, item.Value, item.Text, df.indexOf(item.Value) > -1, false));
@@ -2387,6 +2400,12 @@ window.ff = {
                             if (usedefaultvalue == true) {
                                 var df = [];
                                 df = window[comboid + "defaultvalues"];
+                                // Issue #638: same reachable no-publish
+                                // configuration and same guard as the checkbox
+                                // branch above (a chained target radio has no
+                                // static items at render time either — see
+                                // RadioTagHelper's item-url branch).
+                                if (df == undefined || df == null) { df = []; }
                                 // Issue #332: use ff._makeInput (DOM API) instead of HTML
                                 // string concat to safely set name/value/title attributes.
                                 target.append(ff._makeInput('radio', targetname, item.Value, item.Text, df.indexOf(item.Value) > -1, false));
