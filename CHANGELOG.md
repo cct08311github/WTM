@@ -1,5 +1,21 @@
 # 更新日志
 
+## [10.14.3] - 2026-07-10
+
+A slice of the #470 eval-retirement epic (#627): an **opt-in kill-switch** that disables the four legacy dynamic-script-execution points in `framework_layui.js`, plus a documented graduated CSP-hardening recipe. Default OFF — zero behaviour change unless an app opts in.
+
+### Added
+
+- **Legacy script-rehydration kill-switch (#627, opt-in).** Disables the framework's legacy dynamic-script-execution surface for AJAX-loaded content — either markup-only via `<meta name="wtm-disable-legacy-script-rehydration" content="true">` (usable under the strictest CSP) or programmatically via `ff.DisableLegacyScriptRehydration = true` (strict boolean check). When enabled, all **four** legacy paths block with loud diagnostics instead of executing: `ff._legacyScriptEval` (the deprecated `IsScript` fallback and the file's single `eval(`) logs a `console.error` migration pointer; the `ff.OpenDialog` (#522) and `ff._replayInitFromHtml` (#587) inline-script re-injection loops and the `ff.OpenDialog2` Selector search-panel `$$script$$` rehydration (#332) skip execution and emit a counted `console.warn` so stragglers are discoverable in staging. Script *extraction* (part of the DOMPurify markup-sanitization pipeline) and JSON-island dispatch are unchanged in both modes. The flag is read live on every call (SPA shells/tests may toggle it).
+  **Eligibility caveat (read before enabling):** many framework TagHelper configurations still emit executable inline `<script>` at this release — non-exhaustively: `<wt:combobox>`/`<wt:tree>` (`xmSelect.render`, `item-url`), `<wt:transfer>`, `<wt:ueditor>`, `<wt:upload>`/`<wt:multiupload>`, `<wt:checkbox>`/`<wt:radio>` default-value globals, grids inside AJAX-loaded partials, `<wt:selector>` search panels, `<wt:datetime>` callback **and range** branches, callback `<wt:slider>`/`<wt:colorpicker>`, and `<wt:form>` with a non-identifier `BeforeSubmit` (#470 hard-blocker territory). Dialogs/fragments containing them **will break (loudly) with the switch on** — the precondition is not just "no hand-written inline scripts" but a clean level-1 audit per `docs/csp-hardening.md`, whose authoritative check is the staging flip, not the widget list. For most CRUD apps the switch is currently a *staging audit tool*; production enablement becomes broadly viable once the widget islandification lands under #470.
+- **`docs/csp-hardening.md`** — the graduated recipe: level 0 (shipped default, already `unsafe-eval`-free), level 1 (auditing that AJAX-loaded content is script-free — both hand-written scripts and the still-script-based framework widgets), level 2 (flipping the switch in production, one-line rollback), level 3 (tightening `WtmCspOptions.ScriptSrc` toward `'self'`, with honest notes on full-page widget scripts, layout-bootstrap externalization, static-hash limits for per-request Razor values, and why hand-rolled static nonces are not an option — nonce support tracked under #807).
+
+### Migration
+
+- No action required. The switch is opt-in; without it, behaviour is byte-identical (verified by the pre-existing 1570-test Jest suite passing unchanged). To adopt, follow the level 1 audit in `docs/csp-hardening.md` — including the framework-widget eligibility caveat above — before enabling in production.
+
+---
+
 ## [10.14.2] - 2026-07-06
 
 Phase-4a of the #567 LayUI roadmap: formally **deprecate** `Layui:Asset=legacy` and the bundled layui 2.6.3 asset tree, opening the removal window. Nothing is removed — this is advance notice only. The conservative path was chosen at the explicit request of the stability-sensitive downstream (BMS), whose production is still on WTM 8.x and which keeps `legacy` as a one-line rollback safety net for its eventual 8→10 cutover.

@@ -366,11 +366,20 @@ window.ff = {
     _replayInitFromHtml: function (collected) {
         if (!collected) { return; }
         var initScripts = collected.initScripts || [];
-        for (var si = 0; si < initScripts.length; si++) {
-            var se = document.createElement('script');
-            se.text = initScripts[si];
-            document.body.appendChild(se);          // executes synchronously in global scope
-            if (se.parentNode) { se.parentNode.removeChild(se); } // tidy up; effects persist
+        // Issue #627: kill-switch check — extraction above (ff._collectInitFromHtml)
+        // is completely unchanged; only this execution loop is gated. Island
+        // payload dispatch below runs unchanged in both modes.
+        if (ff._isLegacyRehydrationDisabled()) {
+            if (initScripts.length > 0 && typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] ' + initScripts.length + ' legacy inline script(s) in fragment were NOT executed (DisableLegacyScriptRehydration). Migrate them to dialog-init islands. See #627/#470.');
+            }
+        } else {
+            for (var si = 0; si < initScripts.length; si++) {
+                var se = document.createElement('script');
+                se.text = initScripts[si];
+                document.body.appendChild(se);          // executes synchronously in global scope
+                if (se.parentNode) { se.parentNode.removeChild(se); } // tidy up; effects persist
+            }
         }
         var islandPayloads = collected.islandPayloads || [];
         for (var pi = 0; pi < islandPayloads.length; pi++) {
@@ -1248,12 +1257,64 @@ window.ff = {
         }
     },
 
+    // Issue #627: opt-in kill-switch for FOUR legacy dynamic-script-execution
+    // points in this file: this helper's dynamic eval-based fallback, the two
+    // <script>-element re-injection loops in ff._replayInitFromHtml /
+    // ff.OpenDialog's layer.open success callback, and ff.OpenDialog2's
+    // $$script$$/$$#script$$ selector search-panel template rehydration
+    // (review follow-up to the original #627 commit, which gated only the
+    // first three).
+    // The common form-init paths (form init/submit/validate/error-highlight,
+    // laydate, rate, taginput — plus slider/colorpicker in their
+    // callback-free configurations) have been island-driven since
+    // v10.13.12/13 (#470) and never touch these four points. But MANY
+    // framework TagHelper configurations still ride legacy rehydration when
+    // loaded inside an AJAX dialog/fragment — for example ComboBoxTagHelper's
+    // xmSelect.render block (every combobox), DateTimeTagHelper's callback
+    // and range branches, FormTagHelper's legacy inline submit <script> for
+    // a non-identifier BeforeSubmit, and SelectorTagHelper's
+    // $$script$$-tokenized search panel, among others
+    // (transfer/ueditor/upload/checkbox-radio-defaults/grids; see
+    // docs/csp-hardening.md for the audit method). So this is NOT purely an
+    // "app-authored inline <script> in partials" concern. The kill-switch
+    // blocks all of the above too, by design, with loud diagnostics: apps
+    // whose AJAX-loaded content passes the audit can flip the switch to
+    // unblock strict CSP (script-src without 'unsafe-inline').
+    // Checked via EITHER mechanism:
+    //   1. ff.DisableLegacyScriptRehydration === true (strict boolean check
+    //      — a truthy string like 'true' does NOT count, only the literal
+    //      boolean true, so a stray misconfiguration can't silently flip
+    //      this on)
+    //   2. <meta name="wtm-disable-legacy-script-rehydration" content="true">
+    //      present in the document, with content exactly the string 'true'
+    // Read LIVE on every call — never cached — because SPA layouts and test
+    // harnesses may toggle either mechanism at runtime between calls. Both
+    // mechanisms default to ABSENT, so this returns false unless an app
+    // opts in: zero behaviour change for existing deployments (project red
+    // line — see CLAUDE.md "never silently change default behaviour").
+    _isLegacyRehydrationDisabled: function () {
+        if (ff.DisableLegacyScriptRehydration === true) { return true; }
+        if (typeof document !== 'undefined' && typeof document.querySelector === 'function') {
+            var _meta = document.querySelector('meta[name="wtm-disable-legacy-script-rehydration"]');
+            if (_meta && _meta.getAttribute('content') === 'true') { return true; }
+        }
+        return false;
+    },
+
     // Issue #789 Phase 3C: centralized legacy fallback for the deprecated
     // IsScript response header. Every call site routes through this single
     // helper so the total number of eval( tokens in this file is 1 (down
     // from 18 before Phase 1), making the removal of this helper a one-line
     // change once downstream apps have finished migrating to FFResultJson.
     _legacyScriptEval: function (code) {
+        // Issue #627: kill-switch check — when disabled, block execution
+        // entirely instead of eval'ing. See ff._isLegacyRehydrationDisabled.
+        if (ff._isLegacyRehydrationDisabled()) {
+            if (typeof console !== 'undefined' && console.error) {
+                console.error('[WTM] Legacy IsScript script-body response BLOCKED by DisableLegacyScriptRehydration. Migrate the server action to FFResultJson() (X-WTM-Action). See #627/#470.');
+            }
+            return;
+        }
         if (typeof console !== 'undefined' && console.warn) {
             console.warn('[WTM] IsScript script-body response is deprecated. ' +
                          'Migrate server-side controllers to FFResultJson() ' +
@@ -1892,11 +1953,21 @@ window.ff = {
                             // per-script eval() runs in a local scope — top-level `var X` does
                             // NOT become a global, so sibling scripts (e.g. xmSelect.render →
                             // window[id].update) could not share vars across eval boundaries.
-                            for (var _si = 0; _si < _initScripts.length; _si++) {
-                                var _se = document.createElement('script');
-                                _se.text = _initScripts[_si];
-                                document.body.appendChild(_se);          // executes synchronously in global scope
-                                if (_se.parentNode) { _se.parentNode.removeChild(_se); } // tidy up; effects persist
+                            // Issue #627: kill-switch check — the extraction above (before
+                            // ff.SafeHtml/DOMPurify sanitizes the dialog markup) is completely
+                            // unchanged; only this execution loop is gated. Island dispatch
+                            // below runs unchanged in both modes.
+                            if (ff._isLegacyRehydrationDisabled()) {
+                                if (_initScripts.length > 0 && typeof console !== 'undefined' && console.warn) {
+                                    console.warn('[WTM] ' + _initScripts.length + ' legacy inline script(s) in dialog were NOT executed (DisableLegacyScriptRehydration). Migrate them to dialog-init islands. See #627/#470.');
+                                }
+                            } else {
+                                for (var _si = 0; _si < _initScripts.length; _si++) {
+                                    var _se = document.createElement('script');
+                                    _se.text = _initScripts[_si];
+                                    document.body.appendChild(_se);          // executes synchronously in global scope
+                                    if (_se.parentNode) { _se.parentNode.removeChild(_se); } // tidy up; effects persist
+                                }
                             }
                             // Issue #470: dispatch JSON action island(s) after legacy scripts so
                             // both paths are supported. No-op when no island was present.
@@ -2018,7 +2089,37 @@ window.ff = {
                     var gridVar = gridId ? ('wtVar_' + regGridVar.exec(str)[1]) : null;
                     if (gridId) {
                         var template = $(tempId)[0].innerHTML;
-                        template = template.replace(/[$]{2}script[$]{2}/img, "<script>").replace(/[$]{2}#script[$]{2}/img, "<\/script>");
+                        // Issue #627 review follow-up: this is the FOURTH gated legacy
+                        // dynamic-script-execution point in this file (see
+                        // ff._isLegacyRehydrationDisabled) — the original #627 commit only
+                        // gated the other three. The $$script$$/$$#script$$ tokens here
+                        // live in the page-local #Temp{Id} template markup (SelectorTagHelper
+                        // escapes its child <script> to these tokens before emitting the
+                        // template) — local developer-authored DOM, not server response data
+                        // (see the #332 comment above: `str`/`safeStr` are the sanitized
+                        // server response and are untouched by this branch). Gating is
+                        // execution-only: extraction/reading of the surrounding search-panel
+                        // markup is unaffected in both modes; only whether the token pair
+                        // becomes a live <script> element differs. Contract: the kill-switch
+                        // means zero WTM-driven dynamic script execution across dialog/
+                        // fragment flows, so this token pair must be blocked here too.
+                        if (ff._isLegacyRehydrationDisabled()) {
+                            // Strip the token-delimited segments entirely — rather than
+                            // rehydrating them into a live <script>, or leaving the literal
+                            // "$$script$$"/"$$#script$$" text visible in the rendered
+                            // dialog — so nothing here can execute or leak. The rest of the
+                            // search-panel template (grid/table markup) still renders.
+                            var _scriptSegmentRe = /[$]{2}script[$]{2}[\s\S]*?[$]{2}#script[$]{2}/img;
+                            var _scriptSegments = template.match(_scriptSegmentRe) || [];
+                            if (_scriptSegments.length > 0) {
+                                template = template.replace(_scriptSegmentRe, '');
+                                if (typeof console !== 'undefined' && console.warn) {
+                                    console.warn('[WTM] ' + _scriptSegments.length + ' legacy inline script(s) in the selector search-panel template were NOT executed (DisableLegacyScriptRehydration). See #627/#470.');
+                                }
+                            }
+                        } else {
+                            template = template.replace(/[$]{2}script[$]{2}/img, "<script>").replace(/[$]{2}#script[$]{2}/img, "<\/script>");
+                        }
                         //get old gridid
                         try {
                             var oldgridid = /table[.]reload\('(.*)',\s{0,}{/img.exec(template)[1];

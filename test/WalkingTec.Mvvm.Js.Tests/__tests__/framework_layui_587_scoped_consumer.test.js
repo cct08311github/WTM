@@ -145,7 +145,12 @@ describe('#587 ff.ConsumeIslandsIn — source sweep', () => {
   });
 
   test('_replayInitFromHtml re-injects scripts via real <script> elements, then dispatches islands', () => {
-    const block = active.match(/_replayInitFromHtml\s*:\s*function[\s\S]{0,900}?\n\s*\},/);
+    // Budget raised from 900 to 1500 by Issue #627 (opt-in legacy-rehydration
+    // kill-switch): the injection loop is now wrapped in an
+    // ff._isLegacyRehydrationDisabled() if/else, adding a warn-and-skip
+    // branch — see framework_layui_627_legacy_killswitch.test.js for full
+    // coverage of that branch.
+    const block = active.match(/_replayInitFromHtml\s*:\s*function[\s\S]{0,1500}?\n\s*\},/);
     expect(block).not.toBeNull();
     expect(block[0]).toMatch(/document\.createElement\s*\(\s*['"]script['"]\s*\)/);
     expect(block[0]).toMatch(/document\.body\.appendChild/);
