@@ -1,5 +1,35 @@
 # 更新日志
 
+## [10.14.4] - 2026-07-11
+
+Continues the #470 CSP-hardening epic: the `<wt:selector>` search-panel dialog path gains the JSON-island machinery it was missing, and two field-widget concerns move toward islands / markup. Also fixes a defect shipped in 10.14.3, a pre-existing chained-control bug, and — caught by the pre-release cross-vendor review before any tag — a stored-XSS class in the selector-panel dialog tokenization and three timing regressions. The buggy intermediate states never reached a release. All changes are behaviour-preserving unless an app has opted into the #627 kill-switch; no migration required.
+
+### Security
+
+- **Stored XSS via sentinel-collision in the `<wt:selector>` dialog tokenization (#651).** `ff.OpenDialog2` restores the tokenized search-panel template with **global** string replaces (`$$dialoginit$$`/`$$#dialoginit$$`/`$$script$$`/`$$#script$$` → `<script>`/`</script>`), and this release (#635) made **every** `wtm-dialog-init` island dispatch on that path. Island JSON bodies and inline `<script>` field writes carry model-derived data serialized with `System.Text.Json`, whose default encoder escapes `<>&` but **not `$`** — so a stored value containing `$$#dialoginit$$$$script$$…$$#script$$` (e.g. a combobox `selectVal`, a `<wt:taginput>` tag, a tree node label) could break out and inject an executable `<script>` when a selector dialog opened (default, kill-switch-off path). Fixed by routing **every** serialization that can land in the tokenized `#Temp{Id}` template through a shared `LayuiIslandJson.Serialize` that escapes `$`→`$` (transparent — `JSON.parse` / the JS string-literal parser decode it back; `framework_layui.js` is unchanged), guarded by a source-sweep test so no future emitter can silently reintroduce it. **Known remaining item (#652, tracked):** the same sentinel scheme can also be forged by literal `$$script$$` in server-rendered *plaintext* labels/values (HtmlEncode does not escape `$`); this predates the island work and will be addressed by reworking the tokenization scheme.
+
+### Fixed
+
+- **`Layui:Asset` kill-switch could corrupt `<wt:selector>` dialogs in 10.14.3 (#636).** With the #627 kill-switch enabled **and** a search panel containing an island-emitting field, the island's `</script>` was blanket-tokenized while its attribute-bearing open tag was not — an orphaned token the kill-switch's pair-matching strip regex could not remove left an **unclosed `<script>` that silently swallowed the rest of the dialog markup**. `SelectorTagHelper` now tokenizes each island's open+close tags as one matched pair (`$$dialoginit$$`), restored unconditionally by `ff.OpenDialog2`. Apps that never enabled the kill-switch were unaffected. Fixed as part of #635.
+- **Chained `<wt:radio>`/`<wt:checkbox>` targets rendered blank on edit pages (#638, pre-existing).** `ff.ChainChange`'s checkbox/radio branches called `.indexOf(...)` on `window[id+'defaultvalues']` without the null-guard the combobox/tree branches have; a chained radio *target* never published the global, so on an Edit page with a preselected source the linked group threw and rendered empty. Both branches are now guarded, and `RadioTagHelper` publishes its defaults once, unconditionally.
+
+### Changed
+
+- **`<wt:selector>` search-panel dialogs now dispatch JSON islands (#635, #470 slice 0).** `ff.OpenDialog2` previously had no island machinery, so any islandified widget inside a selector search panel was inert on that path. It now collects and dispatches `wtm-dialog-init` islands from the opened layer (`ff.ConsumeIslandsIn`), preserving the legacy-scripts-before-islands ordering and the #627 kill-switch semantics. Prerequisite for islandifying widgets used in selector panels.
+- **`item-url` combobox/checkbox/radio/transfer emit a JSON island instead of an inline `ff.LoadComboItems(...)` script (#633, #470 slice).** Rides the existing `loadComboItems` dispatch action across all four control types. **A combobox that is both `item-url`-populated and a chain target now yields deterministically to its chain result (#645):** `ff.ChainChange` marks the target and `ff.LoadComboItems` skips a stale/racing apply, so on an Edit page the filtered (chain) selection wins regardless of async completion order. Under the kill-switch, a widget whose data-loading half is islandified but whose render half is still a legacy inline script (combobox `xmSelect.render`, transfer `transfer.render`) emits one actionable `console.warn` naming the widget instead of throwing — see `docs/csp-hardening.md`. Also fixes a latent gap where `TransferTagHelper` interpolated `item-url` without `JavaScriptEncoder`.
+- **checkbox/radio default-selection is now also exposed as a `data-wtm-defaults` markup attribute (#632, #470 slice).** `ff.ChainChange` reads defaults from this attribute — available the instant the parser reaches the node — removing a dispatch-timing race an island-only approach would have introduced. The legacy `window[id+'defaultvalues']` global remains published **inline at parse time, and only there** (#646, #649), so its synchronous visibility is byte-identical to earlier releases and there is a single publisher (an earlier draft that also re-published via a page-ready island was dropped because it clobbered app mutations to the global). Because the inline write is retained, checkbox/radio are *not* CSP-clean by default; under strict CSP the global is absent and app code should read the `data-wtm-defaults` attribute. Behaviour is byte-identical for apps that do not use chaining.
+
+### Improved
+
+- **The `item-url` data-load no longer requires `'unsafe-inline'` script on the dialog/selector paths.** Remaining inline-script widget configurations — combobox/tree `xmSelect.render`, transfer/ueditor render, datetime callback/range, callback slider/colorpicker, grids, and checkbox/radio `defaultvalues` — are tracked as #470 hard blockers; `docs/csp-hardening.md` documents the current eligibility for the strict-CSP recipe.
+- **CI reliability (#640).** `ci-build.yml` fired on both `push: [..., feat/**]` and `pull_request: [dotnet10]`, running the full test suite twice concurrently on one runner per feature-branch push — the likely root cause of the long-standing "flaky SQLite concurrency test" family (#620, #629). The duplicate push trigger was removed. No package impact.
+
+### Migration
+
+- None. Every change is behaviour-preserving for apps on the default configuration. Apps that enabled the #627 kill-switch should re-read `docs/csp-hardening.md` — the selector-panel path now dispatches islands, and half-islandified widgets degrade with a diagnostic warning rather than silently.
+
+---
+
 ## [10.14.3] - 2026-07-10
 
 A slice of the #470 eval-retirement epic (#627): an **opt-in kill-switch** that disables the four legacy dynamic-script-execution points in `framework_layui.js`, plus a documented graduated CSP-hardening recipe. Default OFF — zero behaviour change unless an app opts in.

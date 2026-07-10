@@ -1,6 +1,8 @@
 # WTM 開發與使用手冊
 
-> **版本**：10.14.3 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-07-10
+> **版本**：10.14.4 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-07-11
+>
+> **10.14.4 重點**（#470 島化推進 + 修復；預設零行為變更）：`ff.OpenDialog2`（`<wt:selector>` 面板路徑）補上 JSON island 機制（#635，slice 0）；`item-url` 的 combobox/checkbox/radio/transfer 改發 island（#633，且同時是 chain target 者決定性讓步給 chain 結果 #645）；checkbox/radio 預設值改走 `data-wtm-defaults` 屬性供 `ff.ChainChange` 無競態讀取（#632），back-compat global 僅以 parse-time inline script 單一發佈（#646/#649）。**安全**：#651 —— tokenize 的 selector 面板中,model 衍生 JSON（島體/inline 寫入）因 System.Text.Json 不轉義 `$`,含 `$$#dialoginit$$$$script$$…` 的值會被 OpenDialog2 全域替換注入可執行腳本（stored XSS）；已將**所有**流入 tokenized 面板的序列化路由經 `LayuiIslandJson.Serialize`(`$`→`$`,可逆)並加 source-sweep guard 鎖住。**修復**:#636（kill-switch 孤兒 token 吞內容）、#638（鏈式 radio 編輯頁空白）。此 release 於 tag 前經跨廠商 review 攔下 1 個 stored-XSS 類 + 3 個時序回歸（#645/#646/#649）,帶 bug 中間態未進任何 release。殘留追蹤:#652（plaintext label 的同類 sentinel 碰撞,pre-existing）。詳見 §6.1.1、§10.7 及 `CHANGELOG.md` `[10.14.4]`。
 >
 > **10.14.3 重點**（legacy script rehydration kill-switch，#627 / #470；opt-in，預設零行為變更）：新增**選擇性停用 legacy 動態腳本執行**的開關 —— 佈局加 `<meta name="wtm-disable-legacy-script-rehydration" content="true">`（純標記，最嚴 CSP 下可用）或設 `ff.DisableLegacyScriptRehydration = true`（嚴格 boolean），即停用 `framework_layui.js` 的**四個** legacy 執行點（`IsScript` eval fallback、`ff.OpenDialog`/`ff._replayInitFromHtml` 的 inline script 再注入、`ff.OpenDialog2` 的 selector 搜尋面板 `$$script$$` 還原），全部改為大聲診斷（計數 `console.warn` / `console.error`）。**資格注意**：多個 TagHelper 組態（combobox/tree 的 `xmSelect.render`、transfer、ueditor、upload、checkbox/radio 預設值、AJAX partial 內 grid、selector 面板、datetime callback 與 range 分支、帶 callback 的 slider/colorpicker、非識別字 `BeforeSubmit`——非窮舉）**仍發出可執行 inline `<script>`**，含這些 widget 的 AJAX 對話框開啟開關會（大聲地）壞——對多數 CRUD app 而言此開關目前是 *staging 稽核工具*，正式啟用待 #470 widget 島化完成。分級 CSP 硬化配方見新文件 `docs/csp-hardening.md` 與 §10.7；`CHANGELOG.md` `[10.14.3]`。
 >
