@@ -1,6 +1,10 @@
 # WTM 開發與使用手冊
 
-> **版本**：10.14.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-07-06
+> **版本**：10.14.3 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-07-10
+>
+> **10.14.3 重點**（legacy script rehydration kill-switch，#627 / #470；opt-in，預設零行為變更）：新增**選擇性停用 legacy 動態腳本執行**的開關 —— 佈局加 `<meta name="wtm-disable-legacy-script-rehydration" content="true">`（純標記，最嚴 CSP 下可用）或設 `ff.DisableLegacyScriptRehydration = true`（嚴格 boolean），即停用 `framework_layui.js` 的**四個** legacy 執行點（`IsScript` eval fallback、`ff.OpenDialog`/`ff._replayInitFromHtml` 的 inline script 再注入、`ff.OpenDialog2` 的 selector 搜尋面板 `$$script$$` 還原），全部改為大聲診斷（計數 `console.warn` / `console.error`）。**資格注意**：多個 TagHelper 組態（combobox/tree 的 `xmSelect.render`、transfer、ueditor、upload、checkbox/radio 預設值、AJAX partial 內 grid、selector 面板、datetime callback 與 range 分支、帶 callback 的 slider/colorpicker、非識別字 `BeforeSubmit`——非窮舉）**仍發出可執行 inline `<script>`**，含這些 widget 的 AJAX 對話框開啟開關會（大聲地）壞——對多數 CRUD app 而言此開關目前是 *staging 稽核工具*，正式啟用待 #470 widget 島化完成。分級 CSP 硬化配方見新文件 `docs/csp-hardening.md` 與 §10.7；`CHANGELOG.md` `[10.14.3]`。
+>
+> **10.14.1–10.14.2 重點**（#567 Phase-3/4a — 工具 views 跟隨資產切換 + legacy 樹 deprecation）：**10.14.1（#614）** 七個框架內嵌工具 UI 殼（`_CodeGen/{Index,Gen,SetField}`、`_DashboardPage/{Index,Designer,Render}`、WorkFlow designer 頁）原先硬編 `/layui`（2.6.3），現一律經新 helper `WalkingTec.Mvvm.Mvc.LayuiAssets.ResolveLayuiBase(IConfiguration)` 跟隨 `Layui:Asset`（兩個固定字面值之間選擇、永不串接 config 進 URL）——升級後未設 `legacy` 的 host 這些工具頁改 serve 2.13.8（七頁皆經雙樹真瀏覽器認證）。**10.14.2（#567 Phase-4a）** 正式將 `Layui:Asset=legacy` 與隨附的 2.6.3（`/layui`）樹標記 **deprecated**（CHANGELOG `### Deprecated` + `LayuiAssets` XML `<remarks>`）：**功能完全不變**（`legacy` 照常解析、兩樹續存），僅為移除窗口預告；實際移除排在**下一個 major**，gated on 下游（BMS）prod 遷移完成。套件端稽核確認零硬編 `/layui/` 殘留。見 §6.1.1 及 `CHANGELOG.md` `[10.14.1]`/`[10.14.2]`。
 >
 > **10.14.0 重點**（bundled layui 預設翻轉 2.6.3 → 2.13.8，#573 / #567 Phase-2b）：demo 佈局殼（`_Layout.cshtml` / `Login.cshtml`）預設改載 **layui-next（2.13.8）** 資產樹。**這是 opt-out 式行為變更**：設定鍵 `Layui:Asset == "legacy"`（精確比對）釘回舊的 2.6.3 樹（`/layui`），其他任意值（含舊 opt-in 值 `"next"`，維持有效）或未設定則選 2.13.8（`/layui-next`）；config 值永不串接進 URL，僅在兩個固定字面值間選擇。翻轉閘經 BMS staging 真瀏覽器 e2e 620/620 sign-off + #565 雙樹 harness 15/15 把關。`wt:richtextbox` 相容性保留：layui 於 2.8 移除 `layedit` 模組，故 2.6.3 的 `layedit.js` + face 圖 + CSS 已 vendor 至 layui-next 樹旁並在 next 樹條件式 `layui.extend`。**升級指引**：要留在 2.6.3 設 `Layui:Asset=legacy`（appsettings 或 `Layui__Asset` 環境變數）即為完整回退路徑（兩樹皆隨附，無移除）；自帶佈局殼的 App 不受影響（資產選擇在 App 端 view，框架從不挑 layui 資產）。詳見 §6.1 及 `CHANGELOG.md` `[10.14.0]`。
 >
@@ -913,7 +917,11 @@ WTM 的 TagHelper 渲染 LayUI 標記，但**框架本身從不挑選 layui 資�
 
 **10.14.0 前**預設是 2.6.3（`next` 為 opt-in）；**10.14.0 起翻轉**為 2.13.8 預設，`legacy` 釘回。要留在 2.6.3，在 appsettings 設 `"Layui": { "Asset": "legacy" }` 或環境變數 `Layui__Asset=legacy` —— 這是完整回退路徑（兩樹皆隨附，無移除）。**自帶佈局殼的 App 不受此翻轉影響**；要採用 2.13.8 需比照 demo 的切換模式接線（含 layuiadmin scaffolding 的 laytpl `{{ }}` 轉義與 `router().path` 正規化兩處相容性修補，見 `CHANGELOG.md` `[10.13.17]`）。`wt:richtextbox` 在 2.13.8 樹上需比照 demo vendored 的 `layedit` 三檔 + `layui.extend` 接線（layui 於 2.8 移除 layedit 模組）。
 
-**對話框初始化採 eval-free JSON island 架構**（#470，10.13.x）：一個標準 WTM 對話框發出零 inline `<script>`，表單/日期/驗證/具名回呼皆透過 `ff.DispatchAction` 島派發並經 `ff.SafeHtml`（DOMPurify）淨化。SPA 片段可用 `ff.ConsumeIslandsIn(rootEl)` 消費子樹內的島（#587）。
+**框架內嵌工具頁也跟隨此開關（10.14.1+，#614）**：`_CodeGen`、`_DashboardPage` 與 WorkFlow designer 頁經 `LayuiAssets.ResolveLayuiBase(IConfiguration)` 解析資產基底（同一安全不變量：兩個固定字面值，永不串接）。
+
+> **Deprecation（10.14.2，#567 Phase-4a）**：`Layui:Asset=legacy` 與隨附的 2.6.3（`/layui`）樹已標記 **deprecated** —— 功能完全不變、兩樹續存，這是移除窗口的預告。實際移除排在**下一個 major**，並 gated on 下游 production 遷移；在那之前 `legacy` 保證可用。
+
+**對話框初始化採 eval-free JSON island 架構**（#470，10.13.x）：**常用表單初始化路徑**（form init/submit/validate/error-highlight、laydate、rate、taginput，及 callback-free 的 slider/colorpicker）透過 `ff.DispatchAction` 島派發、零 inline `<script>`，並經 `ff.SafeHtml`（DOMPurify）淨化；SPA 片段可用 `ff.ConsumeIslandsIn(rootEl)` 消費子樹內的島（#587）。惟**多個 widget 組態仍發出可執行 inline `<script>`**（combobox/tree `xmSelect.render`、transfer、ueditor、upload、checkbox/radio 預設值等——#470 hard-blocker 清單，非窮舉），在 AJAX 對話框內靠 legacy 再注入路徑運作；欲量測/停用該 legacy 面，見 §10.7.1 的 kill-switch（10.14.3+）與 `docs/csp-hardening.md`。
 
 ### 6.2 佈局
 
@@ -3111,6 +3119,23 @@ app.UseWtmContentSecurityPolicy(o =>
 - **ReportOnly 模式**：emit `Content-Security-Policy-Report-Only` 而非 enforcement
 
 **遷移須知：** 啟用前先搜尋 app 自有 JS 的 `" + "eval(" + "` 呼叫，全部改用 JSON 或 `Function` 等 CSP 相容寫法。
+
+#### 10.7.1 Legacy script rehydration kill-switch（opt-in，10.14.3+，#627）
+
+CSP 硬化的下一階（拿掉 `script-src` 的 `'unsafe-inline'`）被 `framework_layui.js` 為 AJAX 載入內容保留的 **legacy 動態腳本執行面**擋住。10.14.3 新增 opt-in 開關（預設 OFF，行為 byte-identical），二擇一：
+
+```html
+<!-- 佈局標記（建議 — 純 markup，最嚴 CSP 下也可用） -->
+<meta name="wtm-disable-legacy-script-rehydration" content="true">
+```
+
+```js
+ff.DisableLegacyScriptRehydration = true; // 嚴格 boolean —— 字串 'true' 不算
+```
+
+開啟後**四個** legacy 執行點全部改為封鎖＋大聲診斷：`ff._legacyScriptEval`（已棄用 `IsScript` 回應的唯一 `eval(`）→ `console.error`；`ff.OpenDialog` / `ff._replayInitFromHtml` 的 inline `<script>` 再注入迴圈與 `ff.OpenDialog2` 的 selector 搜尋面板 `$$script$$` 還原 → 跳過執行＋計數 `console.warn`。腳本**抽取**（DOMPurify 淨化管線的一部分）與 JSON island 派發兩種模式下皆不變；開關每次呼叫即時讀取（SPA/測試可動態切換）。
+
+**資格前提（開啟前必讀）**：多個 TagHelper 組態至今仍發出可執行 inline `<script>`（combobox/tree `xmSelect.render`、transfer、ueditor、upload、checkbox/radio 預設值、AJAX partial 內 grid、selector 面板、datetime callback 與 range 分支、帶 callback 的 slider/colorpicker、非識別字 `BeforeSubmit`——**非窮舉**，#470 hard-blocker 清單）。AJAX 對話框含這些 widget 時開啟開關會（大聲地）壞。權威稽核法是 **staging 實開開關看診斷**，不是比對 widget 清單。完整分級配方（level 0 出廠 eval-free 預設 → level 1 稽核 → level 2 production 開啟 → level 3 `script-src 'self'`）見 `docs/csp-hardening.md`。
 
 ### 10.8 Cookie SecurePolicy（10.3.0+）
 
