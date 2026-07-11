@@ -33,6 +33,14 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
             "<script type=\"application/json\" class=\"wtm-dialog-init\">([\\s\\S]*?)</script>",
             RegexOptions.Compiled);
 
+        // Issue #652: Private-Use-Area placeholder for a literal '$' in model-derived
+        // search-panel content. See the escape step in Process() and the matching
+        // restore in ff.OpenDialog2 (framework_layui.js). U+E000 was chosen because it
+        // cannot appear in any HTML metacharacter position and is astronomically
+        // unlikely in real data; System.Text.Json escapes any literal U+E000 in JSON
+        // bodies to , so island payloads never carry the raw char.
+        private const string DollarEscapePlaceholder = "";
+
         /// <summary>
         /// EmptyText
         /// </summary>
@@ -285,6 +293,32 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
                 content = _regSearcherName.Replace(content, "$1$2$4");
                 //reg = new Regex("(name=\")([0-9a-zA-z]{0,}[.]?)(Searcher[.]?[0-9a-zA-z]{0,}\")", RegexOptions.Multiline | RegexOptions.IgnoreCase);
                 //content = reg.Replace(content, "$1$3");
+                // Issue #652 (SECURITY, stored XSS — dialog trust boundary): neutralize the
+                // sentinel-collision CLASS at this single tokenization chokepoint. Every field
+                // TagHelper that can render inside a <wt:selector> search panel (radio/checkbox
+                // option labels & values, tree nodes, taginput tags, slider/rate/upload/hidden
+                // values, nested selectors, …) HtmlEncodes its model-derived plaintext, which
+                // escapes <>&"' but NOT '$'. So a stored value containing the literal token text
+                // "$$script$$…$$#script$$" survives into `content` and would be rehydrated into a
+                // live <script> by ff.OpenDialog2's GLOBAL sentinel replace. Escaping every
+                // literal '$' to a Private-Use placeholder HERE — before the two tokenize
+                // replaces below — guarantees the ONLY '$' sequences reaching the client are the
+                // $$dialoginit$$/$$script$$ tokens WE place. ff.OpenDialog2 restores the
+                // placeholder to '$' AFTER un-tokenizing, so real jQuery '$' inside developer
+                // scripts round-trips exactly. Because that restore is the LAST transform at
+                // this level, a plaintext "$$script$$…" re-formed by it stays INERT text (there
+                // is no later un-tokenize to turn it into a live <script>) — safe at a SINGLE
+                // selector level, which is the actual #652 fix. KNOWN LIMITATION (#655): a
+                // <wt:selector> nested inside another selector's <wt:searchpanel> folds its own
+                // #Temp template into the outer `content`, and the outer restore reverses the
+                // inner escape, re-arming a sentinel the inner selector's own ff.OpenDialog2
+                // pass then executes. This is an unused/exotic composition (0 demos), mitigated
+                // by the #627 kill-switch (which strips those segments at every level) and
+                // resolved by the #470 string-sentinel retirement — not chased with regex here.
+                // This one chokepoint covers ALL current and future field helpers — do not
+                // scatter per-helper '$' escaping. Islands' JSON bodies already carry $
+                // (#651), which contains no literal '$', so this step leaves them untouched.
+                content = content.Replace("$", DollarEscapePlaceholder);
                 // Issue #635 (#470 prerequisite): tokenize wtm-dialog-init JSON
                 // islands as a matched open+close PAIR, with DEDICATED sentinel
                 // tokens, BEFORE the bare-<script> escape below. A field TagHelper

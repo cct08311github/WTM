@@ -2258,6 +2258,21 @@ window.ff = {
                         } else {
                             template = template.replace(/[$]{2}script[$]{2}/img, "<script>").replace(/[$]{2}#script[$]{2}/img, "<\/script>");
                         }
+                        // Issue #652 (SECURITY): restore model '$' that SelectorTagHelper escaped to the
+                        // U+E000 placeholder (see its DollarEscapePlaceholder comment). Runs AFTER both the
+                        // $$dialoginit$$ and $$script$$ un-tokenize steps above, so every sentinel WE place
+                        // at this level is already a real tag again — the remaining U+E000 chars are escaped
+                        // model dollars. Because this restore is the LAST transform on the template at this
+                        // level, a plaintext "$$script$$…" re-formed by it stays INERT text (no later
+                        // un-tokenize turns it into a live <script>): safe for a SINGLE selector level.
+                        // split/join (not .replace) so a restored '$' is never treated as a $$/$& pattern.
+                        // KNOWN LIMITATION (#655, kill-switch-mitigated): a <wt:selector> nested inside
+                        // another selector's <wt:searchpanel> folds its own #Temp template into the outer
+                        // content; this global restore reverses the inner escape, re-arming a sentinel the
+                        // inner selector's own OpenDialog2 pass then executes. Unused/exotic composition
+                        // (0 demos); the #627 kill-switch strips those segments at every level. The real fix
+                        // is the #470 string-sentinel retirement — do NOT chase depth with regex here.
+                        template = template.split('').join('$');
                         //get old gridid
                         try {
                             var oldgridid = /table[.]reload\('(.*)',\s{0,}{/img.exec(template)[1];
@@ -2265,7 +2280,12 @@ window.ff = {
                             template = template.replace(new RegExp(oldgridid, "gim"), gridId);
                         }
                         catch (e) { }
-                        safeStr = safeStr.replace('$$SearchPanel$$', template);
+                        // Issue #652: insert the restored template via a REPLACER FUNCTION, not a
+                        // replacement string — String.prototype.replace special-cases $$/$&/$`/$'/$n
+                        // in a string 2nd arg, which would re-corrupt the '$' we just restored above
+                        // (e.g. a "$$10$$" price label -> "$10$", or "$&" -> the matched marker text).
+                        // A function return value is inserted literally, making the round-trip lossless.
+                        safeStr = safeStr.replace('$$SearchPanel$$', function () { return template; });
                     }
                 }
                 str = safeStr;

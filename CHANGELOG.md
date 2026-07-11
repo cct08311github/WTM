@@ -1,5 +1,23 @@
 # 更新日志
 
+## [10.14.5] - 2026-07-11
+
+Closes the tracked follow-up to #651: the same `<wt:selector>` dialog sentinel-collision could also be forged through **server-rendered plaintext** (not just JSON island / inline-script bodies), because `WebUtility.HtmlEncode` does not escape `$`. Fixed once at the tokenization chokepoint rather than per field-widget. No migration required — behaviour-preserving for all existing content on both the default and #627-kill-switch paths.
+
+### Security
+
+- **Stored XSS via `$`-sentinel collision in server-rendered selector-panel plaintext (#652).** `SelectorTagHelper` tokenizes its search-panel content into `$$script$$`/`$$dialoginit$$` string sentinels that `ff.OpenDialog2` restores with a **global** replace. Every field TagHelper that can render inside a `<wt:selector>` panel — `<wt:radio>`/`<wt:checkbox>` option labels & values, `<wt:tree>` nodes, `<wt:taginput>` tags, slider/rate/upload/hidden values — HtmlEncodes its model-derived plaintext, which escapes `<>&"'` but **not `$`**. So a stored value containing the literal text `$$script$$…$$#script$$` survived into the template unchanged and was rehydrated into a live `<script>` when the selector dialog opened (default, kill-switch-off path). This predated the island work; #651 closed only the JSON-body sub-case. Fixed at the single tokenization chokepoint: `SelectorTagHelper` now escapes **every** literal `$` in the panel content to a Private-Use placeholder (U+E000) **before** tokenizing real tags, so the only `$` sequences reaching the client are the framework-placed sentinels; `ff.OpenDialog2` restores the placeholder to `$` **after** un-tokenizing — and because that restore is the *last* transform at a selector level, a forged `$$script$$…` re-formed by it stays inert text, never executed, while real jQuery `$` in developer scripts round-trips exactly. One chokepoint covers all current and future field widgets. The `$$SearchPanel$$` template insertion was hardened to a replacer function so the restored `$` cannot be re-mangled by `String.prototype.replace`'s `$$`/`$&` special-casing (a pre-existing latent lossy-round-trip bug — e.g. a `Save $$10$$` label). Also neutralizes the sibling `$$dialoginit$$` island-forgery vector by the same escape. Guarded by C# and JS regression tests, including a JS mutation-verify proving the pre-fix shape executes and a lossless-round-trip test for `$`-heavy labels.
+
+### Known issues
+
+- **Nested `<wt:selector>` inside another selector's `<wt:searchpanel>` (#655, kill-switch-mitigated).** The #652 escape/restore is composition-safe for a single selector level (the real-world reachable case). When one selector is nested inside another selector's *search panel* — an unusual composition used by no demo — the outer dialog's global restore reverses the inner selector's escape, re-arming a sentinel the inner selector's own dialog then executes. The string-sentinel scheme cannot be made composition-safe against arbitrary nesting depth (that is what the #470/#627 retirement resolves). The **#627 kill-switch** (`ff.DisableLegacyScriptRehydration` / the `wtm-disable-legacy-script-rehydration` meta) strips those segments at every level and fully neutralizes this today; a kill-switch-ON nested regression test guards the mitigation. Tracked in #655.
+
+### Migration
+
+- None. Model-derived `$` is escaped and restored transparently; existing content renders byte-identically. Applies on both the default and #627-kill-switch paths.
+
+---
+
 ## [10.14.4] - 2026-07-11
 
 Continues the #470 CSP-hardening epic: the `<wt:selector>` search-panel dialog path gains the JSON-island machinery it was missing, and two field-widget concerns move toward islands / markup. Also fixes a defect shipped in 10.14.3, a pre-existing chained-control bug, and — caught by the pre-release cross-vendor review before any tag — a stored-XSS class in the selector-panel dialog tokenization and three timing regressions. The buggy intermediate states never reached a release. All changes are behaviour-preserving unless an app has opted into the #627 kill-switch; no migration required.
