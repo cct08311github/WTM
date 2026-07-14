@@ -34,6 +34,9 @@ namespace WalkingTec.Mvvm.Etl.Pipeline.Sources;
 /// <item>JSON→DataTable 映射（RecordsPath 指向記錄陣列；頂層純量欄位攤平為欄位）</item>
 /// <item>IHttpClientFactory 整合（pooled client、per-request timeout）</item>
 /// <item>SSRF 防護：HTTPS 強制、私有 IP 封鎖、DNS-pinned ConnectCallback、AllowAutoRedirect=false、response size limit</item>
+/// <item>next-link 分頁 same-host 防護（Issue #661）：next-link cursor 預設須與設定端點同 scheme+host+port，
+///   否則視為 semantic redirect 立即中止（headers 會隨每頁請求附上，opt-out：<c>AllowCrossHostPagination</c>）；
+///   cursor 重複造訪視為 cycle 立即中止；<c>MaxPages</c> 預設 1000（顯式設為 0 才是 unlimited）</item>
 /// </list>
 ///
 /// <para>
@@ -127,6 +130,13 @@ public sealed class RestEtlSource : IEtlSource
         int pageNumber = config.FirstPage;
         int offset     = 0;
 
+        // Issue #661: cycle guard for NextLink pagination — tracks every cursor URL we have
+        // already followed (seeded with the starting URL) so a pathological/hostile upstream
+        // that loops the "next" field back to a previously-seen page cannot crawl forever.
+        HashSet<string>? visitedNextLinks = config.PaginationStrategy == RestPaginationStrategy.NextLink
+            ? new HashSet<string>(StringComparer.Ordinal) { config.Url }
+            : null;
+
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -181,7 +191,25 @@ public sealed class RestEtlSource : IEtlSource
             // Issue #376: re-validate next-link scheme on every follow-on page to prevent
             // HTTPS→HTTP downgrade that would expose Authorization headers in plaintext.
             if (nextCursor is not null)
+            {
                 ValidateNextLinkScheme(nextCursor, config.AllowHttp);
+
+                // Issue #661: reject a next-link that points at a different host than the
+                // configured endpoint unless AllowCrossHostPagination opts in. config.Headers
+                // (bearer tokens / API keys) are attached to every page request, so an
+                // unchecked next-link is a credential-exfiltration vector that the HTTP-level
+                // AllowAutoRedirect=false setting does not cover (this is a semantic redirect,
+                // not an HTTP one). Must run before this URL is ever used to build a request.
+                ValidateNextLinkHost(nextCursor, config.Url, config.AllowCrossHostPagination);
+
+                // Issue #661: cycle guard — stop a next-link crawl that loops back to a
+                // previously-visited cursor URL instead of spinning until MaxPages.
+                if (visitedNextLinks is not null && !visitedNextLinks.Add(nextCursor))
+                    throw new InvalidOperationException(
+                        $"RestEtlSource: next-link cycle detected after {pagesFetched} page(s) fetched — " +
+                        "the upstream 'next' field looped back to a previously-visited page. " +
+                        "Stopping to prevent an infinite pagination loop.");
+            }
 
             // Navigate to the records array.
             var recordsNode = recordsPath is null
@@ -560,6 +588,53 @@ public sealed class RestEtlSource : IEtlSource
         throw new InvalidOperationException(
             $"RestEtlSource: next-link cursor uses an unsupported scheme '{uri.Scheme}'. " +
             $"Only http and https are supported. Next-link: '{nextLink}'");
+    }
+
+    /// <summary>
+    /// Validates that a server-supplied next-link cursor targets the same
+    /// scheme+host+port as the configured endpoint. <see cref="RestEtlSourceConfig.Headers"/>
+    /// (bearer tokens, API keys) are attached to every page request, so an upstream that
+    /// points "next" at a foreign host could otherwise exfiltrate those credentials — a
+    /// semantic redirect the HTTP-level <c>AllowAutoRedirect=false</c> setting does not
+    /// cover. Callers must invoke <see cref="ValidateNextLinkScheme"/> first so
+    /// <paramref name="nextLink"/> is known to be an absolute http(s) URI.
+    /// </summary>
+    /// <param name="nextLink">The next-link cursor URL extracted from the response body.</param>
+    /// <param name="originalUrl">The configured endpoint (<see cref="RestEtlSourceConfig.Url"/>).</param>
+    /// <param name="allowCrossHost">
+    /// <see cref="RestEtlSourceConfig.AllowCrossHostPagination"/> — when <c>true</c>, this
+    /// check is skipped entirely (opt-out).
+    /// </param>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when the next-link's scheme, host, or port differs from the configured
+    /// endpoint's and cross-host pagination has not been explicitly allowed. The message is
+    /// sanitized to scheme/host/port only — it never includes the full URL (which may carry
+    /// cursor tokens in its query string) or any header value.
+    /// </exception>
+    private static void ValidateNextLinkHost(string nextLink, string originalUrl, bool allowCrossHost)
+    {
+        if (allowCrossHost) return;
+
+        // Both URIs are absolute at this point: nextLink was already validated by
+        // ValidateNextLinkScheme, and originalUrl (RestEtlSourceConfig.Url) was already
+        // validated by ValidateUrlAsync before the crawl began.
+        var nextUri = new Uri(nextLink, UriKind.Absolute);
+        var origUri = new Uri(originalUrl, UriKind.Absolute);
+
+        var sameHost =
+            string.Equals(nextUri.Scheme, origUri.Scheme, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(nextUri.Host, origUri.Host, StringComparison.OrdinalIgnoreCase) &&
+            nextUri.Port == origUri.Port;
+
+        if (!sameHost)
+            throw new InvalidOperationException(
+                $"RestEtlSource: next-link cursor points to a different host " +
+                $"('{nextUri.Scheme}://{nextUri.Host}:{nextUri.Port}') than the configured " +
+                $"endpoint ('{origUri.Scheme}://{origUri.Host}:{origUri.Port}'). Request headers " +
+                "(Authorization / API keys) are attached to every page request, so following a " +
+                "cross-host next-link could exfiltrate credentials to a third-party host. Set " +
+                "AllowCrossHostPagination=true in RestEtlSourceConfig to permit this only if the " +
+                "upstream API is known and trusted to paginate across multiple hosts.");
     }
 
     private static string? ExtractNextLink(JsonNode? root, string nextLinkField)

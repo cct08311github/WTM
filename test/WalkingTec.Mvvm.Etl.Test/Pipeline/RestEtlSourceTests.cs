@@ -119,23 +119,25 @@ internal static class RestTestHelper
         Dictionary<string, string>? headers = null,
         bool allowHttp = true,
         int pageDelayMs = 0,
-        int maxPages = 0)
+        int maxPages = 0,
+        bool allowCrossHostPagination = false)
     {
         var cfg = new RestEtlSourceConfig
         {
-            Url                = url,
-            RecordsPath        = recordsPath,
-            PaginationStrategy = strategy,
-            PageParam          = pageParam,
-            FirstPage          = firstPage,
-            OffsetParam        = offsetParam,
-            LimitParam         = limitParam,
-            NextLinkField      = nextLinkField,
-            Headers            = headers ?? new Dictionary<string, string>(),
-            AllowHttp          = allowHttp,
-            PageDelayMs        = pageDelayMs,
-            TimeoutSeconds     = 10,
-            MaxPages           = maxPages,
+            Url                       = url,
+            RecordsPath               = recordsPath,
+            PaginationStrategy        = strategy,
+            PageParam                 = pageParam,
+            FirstPage                 = firstPage,
+            OffsetParam               = offsetParam,
+            LimitParam                = limitParam,
+            NextLinkField             = nextLinkField,
+            Headers                   = headers ?? new Dictionary<string, string>(),
+            AllowHttp                 = allowHttp,
+            PageDelayMs               = pageDelayMs,
+            TimeoutSeconds            = 10,
+            MaxPages                  = maxPages,
+            AllowCrossHostPagination  = allowCrossHostPagination,
         };
         return JsonSerializer.Serialize(cfg);
     }
@@ -799,5 +801,205 @@ public class RestEtlSourceNextLinkSchemeTests
 
         await act.Should().ThrowAsync<InvalidOperationException>(
             "a relative next-link must be rejected to prevent open-redirect attacks");
+    }
+}
+
+/// <summary>
+/// Issue #661: same-host restriction on next-link pagination, cycle detection, and the
+/// finite default <see cref="RestEtlSourceConfig.MaxPages"/>.
+///
+/// <see cref="RestEtlSourceConfig.Headers"/> (bearer tokens / API keys) are attached to
+/// every page request, so an unchecked next-link is a credential-exfiltration vector
+/// distinct from — and not covered by — the HTTP-level <c>AllowAutoRedirect=false</c>
+/// protection, since the crawl deliberately follows the JSON-embedded "next" field.
+/// </summary>
+[TestClass]
+public class RestEtlSourceNextLinkHostAndCycleTests
+{
+    // ── (a) cross-host next-link is blocked, and no request (with credentials) ──
+    // ── ever reaches the foreign host ────────────────────────────────────────
+
+    [TestMethod]
+    public async Task CrossHost_next_link_stops_the_crawl_before_any_request_reaches_the_foreign_host()
+    {
+        var handler = new MockHttpMessageHandler();
+        // First page: same host as configured Url, points "next" at a different host.
+        handler.SetResponse("https://api.example.com/orders",
+            """{"next":"https://evil.attacker.test/orders?page=2","items":[{"id":1}]}""");
+        // If the guard failed, this response would satisfy the follow-on request.
+        handler.SetResponse("https://evil.attacker.test/orders?page=2",
+            """{"items":[{"id":2}]}""");
+
+        using var source = RestTestHelper.MockSource(handler);
+        var config = RestTestHelper.Config(
+            "https://api.example.com/orders",
+            recordsPath: "items",
+            strategy: RestPaginationStrategy.NextLink,
+            headers: new Dictionary<string, string> { ["Authorization"] = "Bearer secret-token" });
+
+        var act = async () =>
+        {
+            await foreach (var _ in source.ExtractBatchesAsync(config, "", null, 100))
+            { }
+        };
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*different host*");
+
+        // Exactly one request was ever sent (page 1) — the crawl never reached the
+        // foreign host, so the Authorization header was never forwarded to it.
+        handler.CapturedAuthHeaders.Should().HaveCount(1);
+        handler.CapturedAuthHeaders[0].Should().Be("Bearer secret-token");
+    }
+
+    [TestMethod]
+    public async Task CrossHost_next_link_error_message_does_not_leak_header_values()
+    {
+        var handler = new MockHttpMessageHandler();
+        handler.SetResponse("https://api.example.com/orders",
+            """{"next":"https://evil.attacker.test/orders?page=2","items":[{"id":1}]}""");
+
+        using var source = RestTestHelper.MockSource(handler);
+        var config = RestTestHelper.Config(
+            "https://api.example.com/orders",
+            recordsPath: "items",
+            strategy: RestPaginationStrategy.NextLink,
+            headers: new Dictionary<string, string> { ["Authorization"] = "Bearer super-secret-token" });
+
+        var act = async () =>
+        {
+            await foreach (var _ in source.ExtractBatchesAsync(config, "", null, 100))
+            { }
+        };
+
+        var thrown = await act.Should().ThrowAsync<InvalidOperationException>();
+        thrown.Which.Message.Should().NotContain("super-secret-token");
+    }
+
+    // ── (b) AllowCrossHostPagination=true opts back in ──────────────────────
+
+    [TestMethod]
+    public async Task AllowCrossHostPagination_true_permits_the_foreign_host_next_link()
+    {
+        var handler = new MockHttpMessageHandler();
+        handler.SetResponse("https://api.example.com/orders",
+            """{"next":"https://partner.example.net/orders?page=2","items":[{"id":1}]}""");
+        handler.SetResponse("https://partner.example.net/orders?page=2",
+            """{"items":[{"id":2}]}"""); // no "next" → stops
+
+        using var source = RestTestHelper.MockSource(handler);
+        var config = RestTestHelper.Config(
+            "https://api.example.com/orders",
+            recordsPath: "items",
+            strategy: RestPaginationStrategy.NextLink,
+            allowCrossHostPagination: true);
+
+        var rows = await RestTestHelper.CollectAllRowsAsync(source, config);
+
+        rows.Should().HaveCount(2,
+            "AllowCrossHostPagination=true must permit following a next-link to a different host");
+    }
+
+    // ── (c) cycle detection stops the crawl ──────────────────────────────────
+
+    [TestMethod]
+    public async Task Cycle_in_next_link_pagination_stops_the_crawl()
+    {
+        var handler = new MockHttpMessageHandler();
+        // page1 -> page2 -> page1 (loop back to the starting URL).
+        handler.SetResponse("https://api.example.com/loop",
+            """{"next":"https://api.example.com/loop?page=2","items":[{"id":1}]}""");
+        handler.SetResponse("https://api.example.com/loop?page=2",
+            """{"next":"https://api.example.com/loop","items":[{"id":2}]}""");
+
+        using var source = RestTestHelper.MockSource(handler);
+        var config = RestTestHelper.Config(
+            "https://api.example.com/loop",
+            recordsPath: "items",
+            strategy: RestPaginationStrategy.NextLink);
+
+        var act = async () =>
+        {
+            await foreach (var _ in source.ExtractBatchesAsync(config, "", null, 100))
+            { }
+        };
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*cycle*");
+    }
+
+    [TestMethod]
+    public async Task Self_referencing_next_link_is_detected_as_a_cycle_on_the_second_page()
+    {
+        var handler = new MockHttpMessageHandler();
+        // The very first page's "next" points back at itself.
+        handler.SetResponse("https://api.example.com/selfloop",
+            """{"next":"https://api.example.com/selfloop","items":[{"id":1}]}""");
+
+        using var source = RestTestHelper.MockSource(handler);
+        var config = RestTestHelper.Config(
+            "https://api.example.com/selfloop",
+            recordsPath: "items",
+            strategy: RestPaginationStrategy.NextLink);
+
+        var act = async () =>
+        {
+            await foreach (var _ in source.ExtractBatchesAsync(config, "", null, 100))
+            { }
+        };
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*cycle*");
+    }
+
+    // ── (d) default MaxPages is finite; explicit 0 remains unlimited ────────
+
+    [TestMethod]
+    public void Default_MaxPages_is_finite_when_omitted_from_config_json()
+    {
+        var json = """{"Url":"https://api.example.com/data"}""";
+        var cfg  = RestEtlSource.ParseConfig(json);
+
+        cfg.MaxPages.Should().Be(1000,
+            "an omitted MaxPages must fall back to a finite default, not unlimited");
+    }
+
+    [TestMethod]
+    public void Explicit_MaxPages_zero_still_means_unlimited()
+    {
+        var json = """{"Url":"https://api.example.com/data","MaxPages":0}""";
+        var cfg  = RestEtlSource.ParseConfig(json);
+
+        cfg.MaxPages.Should().Be(0,
+            "an explicit MaxPages=0 must still be honoured as unlimited");
+    }
+
+    [TestMethod]
+    public async Task Default_MaxPages_bounds_a_crawl_that_never_terminates_on_its_own()
+    {
+        // PageNumber pagination where every page is "full" (never returns a short page),
+        // so without a finite default the crawl would run forever. Register enough
+        // sequential pages to exceed the finite default and prove the crawl stops there.
+        var handler = new MockHttpMessageHandler();
+        for (var i = 1; i <= 1005; i++)
+        {
+            handler.SetResponse($"http://api.test/endless?page={i}", $$"""[{"n":"{{i}}"}]""");
+        }
+
+        using var source = RestTestHelper.MockSource(handler);
+        // batchSize=1 with a 1-row page means every page is "full" (never short),
+        // so PageNumber pagination alone would never stop. Parse a config that omits
+        // MaxPages entirely so it picks up the real production default (1000).
+        var cfgObj = RestEtlSource.ParseConfig(
+            """{"Url":"http://api.test/endless","AllowHttp":true}""");
+        cfgObj.MaxPages.Should().Be(1000);
+
+        var rows = await RestTestHelper.CollectAllRowsAsync(
+            source,
+            JsonSerializer.Serialize(cfgObj),
+            batchSize: 1);
+
+        rows.Should().HaveCount(1000,
+            "the finite default MaxPages must stop an otherwise-endless PageNumber crawl");
     }
 }

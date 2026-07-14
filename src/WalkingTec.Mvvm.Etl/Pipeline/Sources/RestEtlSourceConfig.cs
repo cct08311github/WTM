@@ -56,6 +56,22 @@ public sealed class RestEtlSourceConfig
     /// </summary>
     public Dictionary<string, string> Headers { get; set; } = new();
 
+    /// <summary>
+    /// Allow a <see cref="RestPaginationStrategy.NextLink"/> pagination cursor to point at a
+    /// different scheme/host/port than <see cref="Url"/>.  Defaults to <c>false</c>.
+    /// <para>
+    /// <see cref="Headers"/> (bearer tokens, API keys) are attached to <b>every</b> page
+    /// request, including next-link follow-ups. A hostile or compromised upstream could set
+    /// the response's next-link field to an attacker-controlled host, causing the crawl to
+    /// forward those same credentials there — a <i>semantic</i> redirect that the
+    /// HTTP-level <c>AllowAutoRedirect=false</c> protection does not cover, since the
+    /// pagination logic deliberately follows the JSON-embedded link rather than an HTTP
+    /// redirect response. Leave this <c>false</c> unless the upstream API is known and
+    /// trusted to paginate across multiple hosts.
+    /// </para>
+    /// </summary>
+    public bool AllowCrossHostPagination { get; set; } = false;
+
     // ── JSON mapping ────────────────────────────────────────────────────
 
     /// <summary>
@@ -127,8 +143,16 @@ public sealed class RestEtlSourceConfig
     public int MaxResponseBytes { get; set; } = 10 * 1024 * 1024;
 
     /// <summary>
-    /// Maximum number of pages to fetch per run. Zero means unlimited.
-    /// Default <c>0</c> (unlimited).
+    /// Maximum number of pages to fetch per run. Default <c>1000</c> — a finite safety
+    /// bound (also serves as a backstop against a pathological/hostile upstream that
+    /// never terminates pagination, in addition to the explicit cycle guard on
+    /// <see cref="RestPaginationStrategy.NextLink"/> cursors).
+    /// <para>
+    /// Set this <b>explicitly</b> to <c>0</c> to opt back into unlimited paging — the
+    /// zero-means-unlimited semantics are unchanged, only the default value changed.
+    /// Existing configurations that omit <c>MaxPages</c> and rely on crawls longer than
+    /// 1000 pages must now set <c>MaxPages=0</c> explicitly.
+    /// </para>
     /// </summary>
-    public int MaxPages { get; set; } = 0;
+    public int MaxPages { get; set; } = 1000;
 }

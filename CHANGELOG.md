@@ -1,5 +1,19 @@
 # 更新日志
 
+## [Unreleased]
+
+### Security
+
+- **`RestEtlSource` next-link pagination: same-host restriction + finite `MaxPages` default (#661).** `RestEtlSourceConfig.Headers` (bearer tokens / API keys) are attached to **every** page request, including next-link follow-ups — but the next-link cursor was only scheme-validated (#376: rejects `https://`→`http://` downgrade), never host-checked. A hostile or compromised upstream could set the response's `next` field to an attacker-controlled host and have the crawl forward those same credentials there: a *semantic* redirect distinct from (and not covered by) the existing `AllowAutoRedirect=false` HTTP-level protection, since the pagination logic deliberately follows the JSON-embedded link rather than an HTTP redirect response. Compounding this, `MaxPages` defaulted to `0` (unlimited) with no cursor-cycle detection, so a pathological or hostile upstream could also drive an unbounded crawl. Fixed with three changes to `RestEtlSource`/`RestEtlSourceConfig`:
+  - A next-link cursor must now match the configured endpoint's scheme+host+port, or the crawl stops immediately with a sanitized error (scheme/host/port only — never the full URL or header values). New opt-out `RestEtlSourceConfig.AllowCrossHostPagination` (default `false`) permits cross-host pagination for upstream APIs that are known and trusted to do this.
+  - `RestEtlSourceConfig.MaxPages` now defaults to `1000` (previously `0`/unlimited) as a finite safety bound. The zero-means-unlimited semantics are unchanged — set `MaxPages=0` explicitly to keep unlimited paging.
+  - A cycle guard tracks every next-link cursor URL already followed (seeded with the starting URL); a repeat stops the crawl with a counted error instead of looping.
+
+### Migration
+
+- **`RestEtlSource` (ETL) configs using `NextLink` pagination across multiple hosts** must now set `AllowCrossHostPagination=true` explicitly in `RestEtlSourceConfig` — cross-host next-links are rejected by default.
+- **`RestEtlSource` (ETL) configs relying on crawls longer than 1000 pages** (the previous default was unlimited) must now set `MaxPages=0` explicitly to restore unlimited paging. Configs that already set `MaxPages` to a nonzero value, or that never exceed 1000 pages, are unaffected.
+
 ## [10.14.5] - 2026-07-11
 
 Closes the tracked follow-up to #651: the same `<wt:selector>` dialog sentinel-collision could also be forged through **server-rendered plaintext** (not just JSON island / inline-script bodies), because `WebUtility.HtmlEncode` does not escape `$`. Fixed once at the tokenization chokepoint rather than per field-widget. No migration required — behaviour-preserving for all existing content on both the default and #627-kill-switch paths.
