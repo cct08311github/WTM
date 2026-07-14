@@ -314,6 +314,24 @@ public sealed class WorkFlowOptions
     /// </summary>
     public int StrandReaperBatchSize { get; set; } = 50;
 
+    // ── Issue #665: bounded per-tick sweeps ──────────────────────────────────
+
+    /// <summary>
+    /// Maximum number of candidate rows processed per timer tick by the unbounded
+    /// per-tick sweeps: <c>WorkflowTimerExecutor.SweepExpiredAtActionDelegationsAsync</c>
+    /// (AtAction expired-delegation revert, WF-20.5) and
+    /// <c>WorkflowTimerExecutor.ReclaimExpiredLeasesAsync</c> (Returning-lease reclaim,
+    /// Phase-2).
+    /// <para>Both sweeps previously issued an unbounded candidate SELECT — under normal
+    /// load this is fine (both are narrow, opt-in-gated backstops), but after an extended
+    /// outage or a pathological backlog the candidate set could grow large enough to make
+    /// a single tick run long. Capping with <c>.Take(SweepBatchSize)</c> bounds per-tick
+    /// work; any remainder is naturally picked up on the next poll tick.</para>
+    /// <para>Default: 500 — generous enough that well-behaved deployments never observe
+    /// the cap in practice.</para>
+    /// </summary>
+    public int SweepBatchSize { get; set; } = 500;
+
     // ── WF-21.3: Low-code designer sub-options ────────────────────────────────
 
     /// <summary>

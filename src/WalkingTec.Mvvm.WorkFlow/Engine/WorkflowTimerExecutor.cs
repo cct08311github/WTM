@@ -1070,6 +1070,8 @@ internal sealed class WorkflowTimerExecutor
 
         // SELECT expired Returning instances — expiry evaluated CLIENT-SIDE on the snapshot
         // so NO DateTime appears in any UPDATE WHERE clause (portable: Oracle/DaMeng safe).
+        // Issue #665: bounded per-tick sweep — see WorkFlowOptions.SweepBatchSize.
+        // Any remainder beyond the cap is picked up on the next poll tick.
         var expiredLeases = await db.Set<ProcessInstance>()
             .IgnoreQueryFilters() // cross-tenant system sweep; every reclaim write is PK+RowVer CAS
             .AsNoTracking()
@@ -1077,6 +1079,7 @@ internal sealed class WorkflowTimerExecutor
                          && i.ReturningLeaseUtc != null
                          && i.ReturningLeaseUtc < now)
             .Select(i => new { i.ID, i.RowVer, i.TenantCode })
+            .Take(_options.SweepBatchSize)
             .ToListAsync(ct);
 
         foreach (var inst in expiredLeases)
@@ -1547,6 +1550,8 @@ internal sealed class WorkflowTimerExecutor
         // SELECT expired delegated Pending tasks — expiry evaluated CLIENT-SIDE on the snapshot
         // (nullable-DateTime SELECT-side only; no DateTime in UPDATE WHERE — portability preserved).
         // IgnoreQueryFilters: cross-tenant system sweep; every write is PK+RowVer CAS.
+        // Issue #665: bounded per-tick sweep — see WorkFlowOptions.SweepBatchSize.
+        // Any remainder beyond the cap is picked up on the next poll tick.
         var expiredDelegated = await db.Set<ApprovalTask>()
             .IgnoreQueryFilters() // justified: cross-tenant system reaper sweep; all writes are PK+RowVer CAS
             .AsNoTracking()
@@ -1565,6 +1570,7 @@ internal sealed class WorkflowTimerExecutor
                 t.DelegatedFromITCode,
                 t.TenantCode,
             })
+            .Take(_options.SweepBatchSize)
             .ToListAsync(ct);
 
         foreach (var row in expiredDelegated)
@@ -1854,12 +1860,41 @@ internal sealed class WorkflowTimerExecutor
         // SystemContinueTaskAsync which uses RowVer-guarded CAS writes.
         // No cross-tenant write is possible: each write is pinned to the node's own rows.
         // TenantCode projected so we can set _dc.TenantCode before calling the engine.
+        // Issue #665: deterministic, starvation-proof ordering — oldest-Activated-first.
+        //
+        // Without an OrderBy, Take(StrandReaperBatchSize) is a provider-defined, effectively
+        // arbitrary window. With more than batch-size candidates, a genuinely stranded node
+        // outside that window could go unselected on every tick, silently starving the
+        // crash-recovery backstop.
+        //
+        // NodeInstance.UpdateTime (BasePoco) is NOT usable here: every post-mint write to
+        // NodeInstance goes through GuardedTransition's ExecuteUpdateAsync CAS helpers, which
+        // bypass DataContext's ChangeTracker-based audit stamping — UpdateTime is never written
+        // by the WorkFlow engine and stays permanently null. Ordering on it would collapse to a
+        // null/null tie on every row, degrading to OrderBy(ID) alone — deterministic, but NOT
+        // starvation-proof: it would return the exact same window forever, permanently starving
+        // any node whose ID sorts after the batch cutoff.
+        //
+        // ActivatedAt IS reliably populated for this candidate set: the only write path that
+        // transitions State -> Activated is GuardedTransition.ActivateNodeInstanceAsync, which
+        // always stamps ActivatedAt in that same atomic CAS. Ordering oldest-ActivatedAt-first
+        // puts the longest-waiting nodes — including genuine strands, which stop making progress
+        // the instant they strand — at the front of the window. Because nodes leave the Activated
+        // population as they advance/complete, the "oldest surviving" set naturally rotates tick
+        // to tick, giving real coverage instead of a fixed, permanently-starved tail.
+        //
+        // The null-check is defensive belt-and-suspenders (ActivatedAt is not null in practice
+        // for State==Activated rows today) and keeps the ordering translatable/null-safe across
+        // all 7 DBTypeEnum providers if a future code path ever mints directly into Activated.
         var activatedSeqNodes = await db.Set<NodeInstance>()
             .IgnoreQueryFilters() // justified: cross-tenant system reaper sweep; all re-drives are RowVer CAS-guarded via SystemContinueTaskAsync
             .AsNoTracking()
             .Where(n => n.State == NodeState.Activated
                          && n.ApproveMode == ApproveMode.Sequential
                          && n.SequencePointer < n.TotalRequired)
+            .OrderBy(n => n.ActivatedAt == null)
+            .ThenBy(n => n.ActivatedAt)
+            .ThenBy(n => n.ID)
             .Select(n => new { n.ID, n.RowVer, n.InstanceId, n.TenantCode, n.SequencePointer })
             .Take(_options.StrandReaperBatchSize)
             .ToListAsync(ct);
