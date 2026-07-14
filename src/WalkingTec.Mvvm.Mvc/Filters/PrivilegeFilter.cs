@@ -205,14 +205,12 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                                 };
                                 //context.HttpContext.Response.Headers.Add("IsScript", "true");
                                 context.Result = cr;
-                                //context.Result = ctrl.Redirect(GlobalServices.GetRequiredService<IOptions<CookieOptions>>().Value.LoginPath);
                             }
                         }
                     }
                     base.OnActionExecuting(context);
                     return;
                 }
-                //context.HttpContext.ChallengeAsync().Wait();
             }
             else if (isHostOnly)
             {

@@ -55,7 +55,6 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 </div>";
                 output.PreContent.SetHtmlContent(pre);
                 output.PostContent.SetHtmlContent(post);
-                //output.Content.SetHtmlContent(pre + output.GetChildContentAsync().Result.GetContent() + post);
             }
             base.Process(context, output);
         }
