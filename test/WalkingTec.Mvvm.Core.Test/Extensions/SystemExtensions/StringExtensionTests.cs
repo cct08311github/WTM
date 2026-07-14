@@ -3,6 +3,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Collections.Specialized;
+using System.Linq;
 using FluentAssertions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core.Extensions;
@@ -131,6 +132,65 @@ namespace WalkingTec.Mvvm.Core.Test.Extensions.SystemExtensions
         {
             new List<string?> { "a", null, "b" }.ToSepratedString(x => x)
                 .Should().Be("a,,b");
+        }
+
+        // ─── ToSepratedString<T,V> regression coverage for #663 (Compile() hoist +
+        //     O(n^2) Count()/ElementAt() removal) - output must stay byte-identical.
+
+        [TestMethod]
+        public void ToSepratedString_Typed_FormatReturnsEmptyMidSequence_SeparatorStillEmitted()
+        {
+            // Separator placement is index-based (like the original "i < Count-1" check),
+            // not content-based - an empty formatted value must NOT be skipped the way
+            // the unrelated non-generic ToSepratedString(IEnumerable) overload does.
+            new List<int> { 1, 2, 3 }.ToSepratedString(x => x, v => v == 2 ? "" : v.ToString())
+                .Should().Be("1,,3");
+        }
+
+        [TestMethod]
+        public void ToSepratedString_Typed_SingleElement_FormatReturnsEmpty_NoSeparator()
+        {
+            new List<int> { 1 }.ToSepratedString(x => x, v => "")
+                .Should().Be("");
+        }
+
+        [TestMethod]
+        public void ToSepratedString_Typed_LargeSequence_MatchesManualJoin()
+        {
+            // Guards the O(n) rewrite against off-by-one errors that a naive single-pass
+            // rewrite could introduce at scale (the O(n^2) original was only practical to
+            // hand-verify on small lists).
+            var items = Enumerable.Range(0, 500).ToList();
+            var expected = string.Join(",", items);
+            items.ToSepratedString(x => x).Should().Be(expected);
+        }
+
+        [TestMethod]
+        public void ToSepratedString_Typed_SinglePassEnumerable_EnumeratedOnce()
+        {
+            // The original implementation re-enumerated `self` via Count()/ElementAt(i)
+            // on every loop iteration; a source that only supports a single enumeration
+            // would misbehave (or throw) under that pattern. The rewrite must walk the
+            // sequence with exactly one foreach.
+            var source = new SinglePassEnumerable(["x", "y", "z"]);
+            source.ToSepratedString(x => x, seperator: "-").Should().Be("x-y-z");
+        }
+
+        private sealed class SinglePassEnumerable(string[] items) : IEnumerable<string>
+        {
+            private bool _consumed;
+
+            public IEnumerator<string> GetEnumerator()
+            {
+                if (_consumed)
+                {
+                    throw new InvalidOperationException("This sequence supports only a single enumeration.");
+                }
+                _consumed = true;
+                return ((IEnumerable<string>)items).GetEnumerator();
+            }
+
+            IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
         }
 
         // ─── ToSepratedString(IEnumerable) ────────────────────────────────────

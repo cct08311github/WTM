@@ -39,6 +39,15 @@ namespace WalkingTec.Mvvm.Mvc
         /// </summary>
         private readonly ISecurityCodeHelper _securityCode = securityCode;
 
+        // Perf(#663): Menu() is called on every menu render; it does not depend on any
+        // instance/request state (unlike CoreProgram.DefaultJsonOption elsewhere in this
+        // file, there is no startup-ordering concern here), so a single shared, fully
+        // self-contained instance is safe.
+        private static readonly JsonSerializerOptions _menuJsonOptions = new()
+        {
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault
+        };
+
         /// <summary>
         /// #481: Unicode-escape HTML breakout characters (<c>&lt;</c>, <c>&gt;</c>, <c>&amp;</c>)
         /// in JSON that will be emitted raw inside an inline <c>&lt;script&gt;</c> element
@@ -1044,10 +1053,7 @@ namespace WalkingTec.Mvvm.Mvc
         public IActionResult Menu()
         {
             var resultMenus = GlobaInfo.AllMenus.ToLayuiMenu(Wtm);
-            return Content(JsonSerializer.Serialize(new { Code = 200, Msg = string.Empty, Data = resultMenus }, new JsonSerializerOptions()
-            {
-                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault
-            }), "application/json");
+            return Content(JsonSerializer.Serialize(new { Code = 200, Msg = string.Empty, Data = resultMenus }, _menuJsonOptions), "application/json");
         }
 
         [AllowAnonymous]

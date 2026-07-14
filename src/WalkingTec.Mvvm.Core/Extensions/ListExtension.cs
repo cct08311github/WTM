@@ -22,30 +22,45 @@ namespace WalkingTec.Mvvm.Core.Extensions
             , Expression<Func<T, object>> valueField
             , Expression<Func<T, bool>>? selectedCondition = null)
         {
-            List<ComboSelectListItem> rv = [];
+            List<ComboSelectListItem> rv;
             if (self != null)
             {
+                // Perf(#663): Compile() builds a delegate via IL emission - it is orders
+                // of magnitude more expensive than invoking the resulting delegate. The
+                // original code called .Compile() once PER ROW inside the foreach; hoist
+                // each expression's Compile() above the loop so it runs exactly once per
+                // ToListItems() call, regardless of list size. self.Count is O(1) on
+                // List<T>, so pre-size the result to avoid List<T>'s growth reallocations.
+                var compiledTextField = textField.Compile();
+                var compiledValueField = valueField.Compile();
+                var compiledSelectedCondition = selectedCondition?.Compile();
+
+                rv = new List<ComboSelectListItem>(self.Count);
                 //循环列表中的数据
                 foreach (var item in self)
                 {
                     //获取textField的值作为text
-                    string text = textField.Compile().Invoke(item)?.ToString() ?? "";
+                    string text = compiledTextField.Invoke(item)?.ToString() ?? "";
                     //获取valueField的值作为value
-                    string value = valueField.Compile().Invoke(item)?.ToString() ?? "";
+                    string value = compiledValueField.Invoke(item)?.ToString() ?? "";
                     //添加到下拉菜单List中
                     ComboSelectListItem li = new ComboSelectListItem();
                     li.Text = text;
                     li.Value = value;
                     //如果有默认选择的条件，则将当前数据带入到判断表达式中，如果返回true，则将下拉数据的selected属性设为true
-                    if (selectedCondition != null)
+                    if (compiledSelectedCondition != null)
                     {
-                        if (selectedCondition.Compile().Invoke(item))
+                        if (compiledSelectedCondition(item))
                         {
                             li.Selected = true;
                         }
                     }
                     rv.Add(li);
                 }
+            }
+            else
+            {
+                rv = [];
             }
             return rv;
         }

@@ -17,6 +17,24 @@ namespace WalkingTec.Mvvm.Core.Extensions
     public static class TypeExtension
     {
         private static readonly ConcurrentDictionary<string, List<PropertyInfo>> _propertyCache = new();
+
+        // Perf(#663): dedicated cache for the (Public | Instance | DeclaredOnly) reflection
+        // shape used by BaseBatchVM.DoBatchEdit/DoBatchEditAsync. This is intentionally NOT
+        // merged into _propertyCache above: that cache is built from the flag-less
+        // Type.GetProperties() (Public | Instance, walks the inheritance chain), which is a
+        // different result set than DeclaredOnly - reusing it would silently pull in
+        // inherited BaseVM properties (Wtm, DC, ...) that the DeclaredOnly call intentionally
+        // excludes, changing DoBatchEdit's per-property FC lookup behavior.
+        private static readonly ConcurrentDictionary<Type, PropertyInfo[]> _declaredPublicInstancePropertyCache = new();
+
+        /// <summary>
+        /// Cached equivalent of <c>self.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)</c>.
+        /// </summary>
+        public static PropertyInfo[] GetDeclaredPublicInstanceProperties(this Type self)
+        {
+            return _declaredPublicInstancePropertyCache.GetOrAdd(self,
+                static t => t.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly));
+        }
         /// <summary>
         /// 判断是否是泛型
         /// </summary>

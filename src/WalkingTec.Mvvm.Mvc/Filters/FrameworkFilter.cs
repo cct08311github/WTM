@@ -24,6 +24,24 @@ namespace WalkingTec.Mvvm.Mvc.Filters
 {
     public class FrameworkFilter : ActionFilterAttribute
     {
+        // Perf(#663): this filter runs on every API POST that carries a request body -
+        // building a fresh JsonSerializerOptions (+ registering a new BodyConverter) per
+        // request was measurable allocation/setup overhead on the request hot path.
+        // BodyConverter (Core/Json/BodyConverter.cs) is stateless: Read()/Write() only use
+        // per-call locals, no instance fields, so a single shared instance is safe to reuse
+        // across concurrent requests. CoreProgram.DefaultJsonOption is assigned during
+        // startup (MvcOptionExtension.UseMvcWtm), which can run after this filter type is
+        // first touched by the DI container - wrapping the capture in Lazy<T> defers the
+        // factory until first *use* (the first request needing it), so it observes the
+        // startup-configured value rather than whatever DefaultJsonOption held at type-init
+        // time.
+        private static readonly Lazy<JsonSerializerOptions> _bodyJsonOptions = new(() =>
+        {
+            var joption = new JsonSerializerOptions(Core.CoreProgram.DefaultJsonOption);
+            joption.Converters.Add(new BodyConverter());
+            return joption;
+        });
+
         public override void OnActionExecuting(ActionExecutingContext context)
         {
             var ctrl = context.Controller as IBaseController;
@@ -101,8 +119,7 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                         if (context.HttpContext.Items.ContainsKey("DONOTUSE_REQUESTBODY"))
                         {
                             string body = context.HttpContext.Items["DONOTUSE_REQUESTBODY"].ToString();
-                            var joption = new JsonSerializerOptions(Core.CoreProgram.DefaultJsonOption);
-                            joption.Converters.Add(new BodyConverter());
+                            var joption = _bodyJsonOptions.Value;
                             try
                             {
                                 var obj = JsonSerializer.Deserialize<PostedBody>(body, joption);

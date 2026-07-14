@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Frozen;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -21,7 +22,12 @@ namespace WalkingTec.Mvvm.Core.Extensions
 
         // CSS Level 4 named colors (https://www.w3.org/TR/css-color-4/#named-colors).
         // Only ASCII alphanumeric — safe to use directly in attribute values and JS strings.
-        private static readonly HashSet<string> _namedColors = new(StringComparer.OrdinalIgnoreCase)
+        // Perf(#663): _namedColors is private and read-only after initialization (only
+        // .Contains is ever called on it) - FrozenSet<T> is a drop-in, faster read path
+        // for this shape. The OrdinalIgnoreCase comparer must be passed explicitly to
+        // ToFrozenSet: it does NOT inherit the comparer from the source collection, so
+        // omitting it would silently make color matching case-sensitive.
+        private static readonly FrozenSet<string> _namedColors = new[]
         {
             "aliceblue","antiquewhite","aqua","aquamarine","azure","beige","bisque","black",
             "blanchedalmond","blue","blueviolet","brown","burlywood","cadetblue","chartreuse",
@@ -46,7 +52,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             "skyblue","slateblue","slategray","slategrey","snow","springgreen","steelblue",
             "tan","teal","thistle","tomato","turquoise","violet","wheat","white","whitesmoke",
             "yellow","yellowgreen","transparent"
-        };
+        }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
         /// Validates a color value against a strict allowlist (hex or CSS named color).

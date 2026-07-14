@@ -58,17 +58,35 @@ namespace WalkingTec.Mvvm.Core.Extensions
         /// <returns>转化后的字符串</returns>
         public static string ToSepratedString<T, V>(this IEnumerable<T> self, Expression<Func<T, V>> textField, Func<V, string>? Format = null, string seperator = ",")
         {
-            string rv = "";
             if (self == null)
             {
-                return rv;
+                return "";
             }
+            // Perf(#663): the original loop called textField.Compile() once PER ELEMENT
+            // (Compile() is an expensive IL-emitting call), and used self.Count()/
+            // self.ElementAt(i) to index a plain IEnumerable<T> - both are O(n) on a
+            // non-IList source, making the whole method O(n^2) (or worse, since Count()
+            // and ElementAt() were each called again on every iteration). Rewritten to
+            // compile textField exactly once and walk the sequence with a single foreach.
+            // Output is byte-identical to the original: a separator is emitted between
+            // every pair of elements (based on position, exactly like the original's
+            // "i < Count-1" check) regardless of whether the formatted text is empty/null.
+            var compiledTextField = textField.Compile();
+            var sb = new System.Text.StringBuilder();
+            bool first = true;
             //循环所有数据
-            for (int i = 0; i < self.Count(); i++)
+            foreach (var element in self)
             {
+                if (!first)
+                {
+                    //拼接分隔符
+                    sb.Append(seperator);
+                }
+                first = false;
+
                 //获取文本字段的值
-                V text = textField.Compile().Invoke(self.ElementAt(i));
-                string str = "";
+                V text = compiledTextField.Invoke(element);
+                string str;
                 //如果有转换函数，则调用获取转换后的字符串
                 if (Format == null)
                 {
@@ -85,15 +103,10 @@ namespace WalkingTec.Mvvm.Core.Extensions
                 {
                     str = Format.Invoke(text);
                 }
-                rv += str;
-                //拼接分隔符
-                if (i < self.Count() - 1)
-                {
-                    rv += seperator;
-                }
+                sb.Append(str);
             }
             //返回转化后的字符串
-            return rv;
+            return sb.ToString();
         }
 
         public static string ToSepratedString(this IEnumerable self, Func<object, string>? Format = null, string seperator = ",")

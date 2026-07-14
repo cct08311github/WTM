@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Frozen;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -149,8 +150,11 @@ public class RestWidgetDataSource : IWidgetDataSource
     /// The set of HTTP methods permitted for widget data sources.
     /// Widget fetches must be idempotent reads; only GET and POST are accepted.
     /// </summary>
-    private static readonly HashSet<string> _allowedMethods =
-        new(StringComparer.OrdinalIgnoreCase) { "GET", "POST" };
+    // Perf(#663): private and read-only after initialization (only .Contains is ever
+    // called) - FrozenSet<T> is a drop-in, faster read path. OrdinalIgnoreCase must be
+    // passed explicitly to ToFrozenSet (it does not inherit the source comparer).
+    private static readonly FrozenSet<string> _allowedMethods =
+        new[] { "GET", "POST" }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
     // ── URL validation + SSRF guard (fast-fail pre-check) ───────────────
 

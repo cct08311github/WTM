@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
@@ -17,6 +18,29 @@ namespace WalkingTec.Mvvm.Core.Services
     /// </summary>
     public class WtmVmFactory : IWtmVmFactory
     {
+        // Perf(#663): CreateVM runs on every WTM request (once for the top-level VM, plus
+        // once per nested sub-VM in SetSubVm below). GetConstructor(Type.EmptyTypes) +
+        // ConstructorInfo.Invoke() is reflection-invoke, which is far slower than a
+        // compiled Expression.New delegate. Cache the compiled factory per Type so the
+        // (relatively) expensive Expression.Lambda(...).Compile() call happens once per
+        // distinct VM type for the lifetime of the process, not once per request.
+        // A null cached value (Type has no public parameterless constructor) is a valid,
+        // cached outcome - it is not retried on every call.
+        private static readonly ConcurrentDictionary<Type, Func<object>?> _ctorFactoryCache = new();
+
+        private static Func<object>? GetOrAddCtorFactory(Type type)
+        {
+            return _ctorFactoryCache.GetOrAdd(type, static t =>
+            {
+                var ctor = t.GetConstructor(Type.EmptyTypes);
+                if (ctor == null)
+                {
+                    return null;
+                }
+                return Expression.Lambda<Func<object>>(Expression.New(ctor)).Compile();
+            });
+        }
+
         public BaseVM CreateVM(WTMContext wtm, Type? vmType, object? id = null,
             object[]? ids = null, Dictionary<string, object>? values = null,
             bool passInit = false)
@@ -25,14 +49,17 @@ namespace WalkingTec.Mvvm.Core.Services
             // invoking the constructor.  Without this guard a crafted client-supplied VM
             // name (resolved via GlobaInfo.AllAssembly scan in the string overload) could
             // cause an arbitrary parameterless constructor to execute. (#201)
+            // This check MUST run before any factory lookup/creation/invocation below -
+            // the cache is keyed by Type but that does not change the ordering guarantee:
+            // no factory for vmType is ever built or invoked until after this guard passes.
             if (vmType == null || !typeof(BaseVM).IsAssignableFrom(vmType))
             {
                 throw new InvalidOperationException(
                     $"Type '{vmType?.FullName ?? "(null)"}' is not a BaseVM and cannot be instantiated by WtmVmFactory.");
             }
 
-            var ctor = vmType.GetConstructor(Type.EmptyTypes);
-            BaseVM rv = ctor?.Invoke(null) as BaseVM
+            var factory = GetOrAddCtorFactory(vmType);
+            BaseVM rv = factory?.Invoke() as BaseVM
                 ?? throw new InvalidOperationException($"Cannot create instance of {vmType.FullName}. Ensure it has a parameterless constructor.");
             rv.Wtm = wtm;
             rv.FC = new Dictionary<string, object>();
@@ -212,7 +239,10 @@ namespace WalkingTec.Mvvm.Core.Services
                 bool exist = subins != null;
                 if (subins == null)
                 {
-                    subins = prop.PropertyType?.GetConstructor(Type.EmptyTypes)?.Invoke(null) as BaseVM;
+                    // prop was filtered above by typeof(BaseVM).IsAssignableFrom(x.PropertyType),
+                    // so this is always a framework-declared VM property type, never
+                    // client-controlled input - the #201 type guard above does not apply here.
+                    subins = prop.PropertyType != null ? GetOrAddCtorFactory(prop.PropertyType)?.Invoke() as BaseVM : null;
                 }
                 if (subins != null)
                 {

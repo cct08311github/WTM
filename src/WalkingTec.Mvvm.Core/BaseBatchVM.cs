@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Primitives;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
@@ -74,6 +75,31 @@ namespace WalkingTec.Mvvm.Core
         // batch calls (Task.WhenAll / Parallel.ForEach against a shared instance)
         // cannot corrupt the underlying Dictionary<string,string>.
         private readonly object _errorMessageLock = new();
+
+        // Perf(#663): DoBatchEdit/DoBatchEditAsync used to run Assembly.GetExportedTypes()
+        // (a full assembly member scan) on every call to locate the matching BaseCRUDVM<TModel>
+        // for validation. The result is a pure function of the concrete runtime VM Type (its
+        // Assembly, its Name - which decides the "...apivm" vs "...apibatchvm" match - and the
+        // fixed TModel of this closed generic all derive from the Type itself), so it is safe
+        // to cache keyed by that Type for the process lifetime.
+        private static readonly ConcurrentDictionary<Type, Type?> _batchEditVmTypeCache = new();
+
+        private Type? ResolveBatchEditVmType()
+        {
+            var selfType = this.GetType();
+            return _batchEditVmTypeCache.GetOrAdd(selfType, t =>
+            {
+                // currentvmname/isApiBatchVm intentionally preserve the original .ToLower()
+                // (culture-sensitive) call rather than switching to ToLowerInvariant(), to
+                // keep this cached path byte-for-byte behaviorally identical to the
+                // uncached original.
+                string currentvmname = t.Name;
+                bool isApiBatchVm = currentvmname.ToLower().Contains("apibatchvm");
+                return t.Assembly.GetExportedTypes()
+                    .Where(x => x.IsSubclassOf(typeof(BaseCRUDVM<TModel>)) && x.Name.ToLower().Contains("apivm") == isApiBatchVm)
+                    .FirstOrDefault();
+            });
+        }
 
         /// <summary>
         /// 列表数据的Id数组
@@ -481,20 +507,11 @@ namespace WalkingTec.Mvvm.Core
         public virtual bool DoBatchEdit()
         {
             //获取批量修改VM的所有属性
-            var pros = LinkedVM!.GetType().GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly);
+            var pros = LinkedVM!.GetType().GetDeclaredPublicInstanceProperties();
             bool rv = true;
             List<string> idsData = [.. Ids!];
-            string currentvmname = this.GetType().Name;
-            Type? vmtype = null;
             //找到对应的BaseCRUDVM，并初始化
-            if (currentvmname.ToLower().Contains("apibatchvm"))
-            {
-                vmtype = this.GetType().Assembly.GetExportedTypes().Where(x => x.IsSubclassOf(typeof(BaseCRUDVM<TModel>)) && x.Name.ToLower().Contains("apivm") == true).FirstOrDefault();
-            }
-            else
-            {
-                vmtype = this.GetType().Assembly.GetExportedTypes().Where(x => x.IsSubclassOf(typeof(BaseCRUDVM<TModel>)) && x.Name.ToLower().Contains("apivm") == false).FirstOrDefault();
-            }
+            Type? vmtype = ResolveBatchEditVmType();
             IBaseCRUDVM<TModel>? vm = null;
             if (vmtype != null)
             {
@@ -635,19 +652,10 @@ namespace WalkingTec.Mvvm.Core
         /// <returns>true代表成功，false代表失败</returns>
         public virtual async Task<bool> DoBatchEditAsync(CancellationToken cancellationToken = default)
         {
-            var pros = LinkedVM!.GetType().GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly);
+            var pros = LinkedVM!.GetType().GetDeclaredPublicInstanceProperties();
             bool rv = true;
             List<string> idsData = [.. Ids!];
-            string currentvmname = this.GetType().Name;
-            Type? vmtype = null;
-            if (currentvmname.ToLower().Contains("apibatchvm"))
-            {
-                vmtype = this.GetType().Assembly.GetExportedTypes().Where(x => x.IsSubclassOf(typeof(BaseCRUDVM<TModel>)) && x.Name.ToLower().Contains("apivm") == true).FirstOrDefault();
-            }
-            else
-            {
-                vmtype = this.GetType().Assembly.GetExportedTypes().Where(x => x.IsSubclassOf(typeof(BaseCRUDVM<TModel>)) && x.Name.ToLower().Contains("apivm") == false).FirstOrDefault();
-            }
+            Type? vmtype = ResolveBatchEditVmType();
             IBaseCRUDVM<TModel>? vm = null;
             if (vmtype != null)
             {
