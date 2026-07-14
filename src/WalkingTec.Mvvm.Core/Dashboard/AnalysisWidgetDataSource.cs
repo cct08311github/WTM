@@ -53,7 +53,7 @@ public class AnalysisWidgetDataSource : IWidgetDataSource
         _options = options?.Value ?? new DashboardOptions();
     }
 
-    public Task<WidgetDataResult> GetDataAsync(WidgetDataRequest request, CancellationToken ct = default)
+    public async Task<WidgetDataResult> GetDataAsync(WidgetDataRequest request, CancellationToken ct = default)
     {
         if (!request.Parameters.TryGetValue("listVmType", out var listVmType) || string.IsNullOrWhiteSpace(listVmType))
             throw new InvalidOperationException("Widget data request missing required parameter 'listVmType'.");
@@ -118,9 +118,9 @@ public class AnalysisWidgetDataSource : IWidgetDataSource
         {
             var cacheKey = BuildCacheKey(request, listVmType, identityKey);
             if (_cache.TryGetValue(cacheKey, out WidgetDataResult? cached) && cached != null)
-                return Task.FromResult(cached);
+                return cached;
 
-            var response = _engine.ExecuteDynamic(baseQuery, analysisReq, fields, identityKey: identityKey, cancellationToken: ct);
+            var response = await _engine.ExecuteDynamicAsync(baseQuery, analysisReq, fields, identityKey: identityKey, cancellationToken: ct);
             var result = new WidgetDataResult
             {
                 Columns = response.Columns,
@@ -132,11 +132,11 @@ public class AnalysisWidgetDataSource : IWidgetDataSource
                 }
             };
             _cache.Set(cacheKey, result, TimeSpan.FromSeconds(ttl));
-            return Task.FromResult(result);
+            return result;
         }
 
         // 9. Execute via engine (no cache)
-        var responseNc = _engine.ExecuteDynamic(baseQuery, analysisReq, fields, identityKey: identityKey, cancellationToken: ct);
+        var responseNc = await _engine.ExecuteDynamicAsync(baseQuery, analysisReq, fields, identityKey: identityKey, cancellationToken: ct);
 
         var resultNc = new WidgetDataResult
         {
@@ -149,7 +149,7 @@ public class AnalysisWidgetDataSource : IWidgetDataSource
             }
         };
 
-        return Task.FromResult(resultNc);
+        return resultNc;
     }
 
     /// <summary>
