@@ -22,7 +22,9 @@
     Security overrides:
       System.Security.Cryptography.Xml — direct pin at 10.0.6 to override
       NPOI's transitive pull of 8.0.2 (GHSA-37gx-xxp4-5rgx, GHSA-w3x6-4m5h-cxqf).
-      NU1510 on this entry is EXPECTED (override working). See Issue #816.
+      NU1510 on this entry is EXPECTED (override working). See Issue #13
+      (originally introduced as #816/#817 on this repo's pre-Gitea-cutover GitHub
+      tracker, now defunct).
 
     Common.Logging — transitive from NPOI; pinned to 3.4.1 (.NET Standard 2.0)
     to avoid malformed TFM in 1.2.0 that newer NuGet rejects with NU1202.
@@ -92,8 +94,11 @@
 
     <!-- ===== Security overrides (transitive pins) ===== -->
     <!--
-      Issue #816: NPOI transitively pulls System.Security.Cryptography.Xml 8.0.2
+      Issue #13: NPOI transitively pulls System.Security.Cryptography.Xml 8.0.2
       which has HIGH CVEs. Pinned to 10.0.6. NU1510 here is EXPECTED = override working.
+      (Originally introduced as #816/#817 on this repo's pre-Gitea-cutover GitHub
+      tracker, now defunct; #13 is the local post-mortem issue — see
+      dependency-management.md § "Known Scenario B".)
       See dependency-management.md § NU1510 section before removing this.
     -->
     <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.6" />

@@ -7,8 +7,9 @@
 
 ## Background: what is and is not eval-free today
 
-The `framework_layui.js` eval-removal effort (#789 phases 1–3D, #470/#552/#556/#558/#561/#564/#576/#587)
-ended with:
+The `framework_layui.js` eval-removal effort (originally tracked as #789 on this repo's
+pre-Gitea-cutover GitHub tracker, now defunct, phases 1–3D; continued locally as
+#470/#552/#556/#558/#561/#564/#576/#587) ended with:
 
 - **The common form-init paths are JSON-island-driven** (v10.13.12+): form init/submit/
   validate/error-highlight, laydate (non-range, callback-free), rate, taginput, and the
@@ -236,5 +237,6 @@ Recommended rollout for level 3: switch `Mode = WtmCspMode.ReportOnly` with the 
 | `WtmCspOptions.ReportUri` | same | `null` |
 
 Related: `docs/wtm-developer-manual.md` § security middleware; issues #470 (epic — the
-xmSelect/widget islandification hard blockers live there), #789 (eval removal), #627
-(this kill-switch), #807 (nonce/report-to futures).
+xmSelect/widget islandification hard blockers live there), #789 (eval removal epic) and
+#807 (nonce/report-to futures, unsafe-inline removal epic) — both on this repo's
+pre-Gitea-cutover GitHub tracker, now defunct — and #627 (this kill-switch).

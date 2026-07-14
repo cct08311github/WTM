@@ -1,7 +1,7 @@
 # Dependency Management
 
 > **適用版本**：10.5.1+
-> **最後更新**：2026-05-14
+> **最後更新**：2026-07-06
 > **對應 .claude/rules**：本檔是 `.claude/rules/dependency-management.md` 的 public-facing 對應版本
 
 WTM 的套件版本管理政策、升級流程、與 .NET 10 帶來的 `NU1510` 雙意義警告陷阱。

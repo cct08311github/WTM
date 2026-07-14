@@ -59,7 +59,7 @@ Full command reference → `.claude/rules/tools-commands.md`
 
 `actions/upload-artifact@v4` is incompatible with the local Gitea Actions API.
 `build-and-test` and `e2e` jobs can finish with `conclusion: failure` even when tests passed.
-**Always verify by reading the log:** look for `Test Run Successful` (.NET) and `PASS: 30 | FAIL: 0` (e2e).
+**Always verify by reading the log:** look for `Test Run Successful` (.NET) and `PASS: 31 | FAIL: 0` (e2e).
 Detail + workaround SOP → `docs/ci-operations.md`. Tracking: Issue #11.
 
 ## Available Slash Commands

@@ -61,7 +61,7 @@ Print all results, grouped by type. For `all` mode, triage in the order: **secre
 | Secret scanning | Real leaked credential | **P0**: rotate the secret immediately before any other step, then redact from history + document as security incident |
 | Secret scanning | False positive (test fixture, example value) | Dismiss with `revoked` or `used_in_tests` + comment |
 
-**Before removing any `PackageReference` for a Dependabot alert:** read `.claude/rules/dependency-management.md` §NU1510, run the before/after vulnerability scan diff described there, and verify no new NU1903 appears after removal. A pin that looks unnecessary may be a transitive security override (canonical example: `System.Security.Cryptography.Xml` in `Core.csproj` — Issue #816). Removing it would re-expose the CVE it suppresses.
+**Before removing any `PackageReference` for a Dependabot alert:** read `.claude/rules/dependency-management.md` §NU1510, run the before/after vulnerability scan diff described there, and verify no new NU1903 appears after removal. A pin that looks unnecessary may be a transitive security override (canonical example: `System.Security.Cryptography.Xml` in `Core.csproj` — Issue #13). Removing it would re-expose the CVE it suppresses.
 
 ---
 
