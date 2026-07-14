@@ -282,6 +282,26 @@ public class OracleBulkLoader : IBulkLoader
         return columns;
     }
 
+    /// <summary>
+    /// SQL used by <see cref="IsUniqueColumnAsync"/> to check whether a column
+    /// participates in a PRIMARY KEY or UNIQUE constraint.
+    /// Exposed as <c>internal static readonly</c> so unit tests can assert that the
+    /// query is scoped to the connected schema (Issue #664, mirroring the MSSQL fix
+    /// from #391). Uses <c>USER_CONS_COLUMNS</c>/<c>USER_CONSTRAINTS</c> rather than
+    /// <c>ALL_CONS_COLUMNS</c>/<c>ALL_CONSTRAINTS</c> — the <c>USER_</c> dictionary
+    /// views are implicitly restricted to objects owned by the connected user, which
+    /// matches the same-schema idiom this loader already uses for
+    /// <c>EnsureStagingTableAsync</c> (<c>USER_TABLES</c>) and <c>GetColumnsAsync</c>
+    /// (<c>USER_TAB_COLUMNS</c>). Without this, a same-named/same-column table owned by
+    /// a different schema (but visible via grants) could satisfy the uniqueness check.
+    /// </summary>
+    internal static readonly string IsUniqueColumnQuery = @"
+            SELECT COUNT(*)
+            FROM USER_CONS_COLUMNS a
+            JOIN USER_CONSTRAINTS c ON a.constraint_name = c.constraint_name
+            WHERE a.table_name = :tableName AND a.column_name = :colName
+              AND c.constraint_type IN ('P', 'U')";
+
     public async Task<bool> IsUniqueColumnAsync(
         string connectionString, string tableName, string columnName,
         CancellationToken cancellationToken = default)
@@ -290,13 +310,7 @@ public class OracleBulkLoader : IBulkLoader
         await conn.OpenAsync(cancellationToken);
 
         await using var cmd = conn.CreateCommand();
-        // Check PK or Unique constraints in Oracle
-        cmd.CommandText = @"
-            SELECT COUNT(*)
-            FROM all_cons_columns a
-            JOIN all_constraints c ON a.constraint_name = c.constraint_name
-            WHERE a.table_name = :tableName AND a.column_name = :colName
-              AND c.constraint_type IN ('P', 'U')";
+        cmd.CommandText = IsUniqueColumnQuery;
         cmd.Parameters.Add(new OracleParameter("tableName", tableName.ToUpperInvariant()));
         cmd.Parameters.Add(new OracleParameter("colName", columnName.ToUpperInvariant()));
 

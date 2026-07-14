@@ -360,6 +360,24 @@ public class MySqlBulkLoader : IBulkLoader
         }
     }
 
+    /// <summary>
+    /// SQL used by <see cref="IsUniqueColumnAsync"/> to check whether a column
+    /// participates in a PRIMARY KEY or UNIQUE constraint.
+    /// Exposed as <c>internal static readonly</c> so unit tests can assert that
+    /// the query filters on TABLE_SCHEMA in addition to TABLE_NAME (Issue #664,
+    /// mirroring the MSSQL fix from #391).
+    /// </summary>
+    internal static readonly string IsUniqueColumnQuery = @"
+            SELECT COUNT(*)
+            FROM information_schema.key_column_usage k
+            JOIN information_schema.table_constraints t
+              ON k.constraint_name = t.constraint_name
+             AND k.constraint_schema = t.constraint_schema
+            WHERE k.table_name = @tableName
+              AND k.table_schema = @dbName
+              AND k.column_name = @colName
+              AND t.constraint_type IN ('PRIMARY KEY', 'UNIQUE')";
+
     public async Task<bool> IsUniqueColumnAsync(
         string connectionString, string tableName, string columnName,
         CancellationToken cancellationToken = default)
@@ -367,18 +385,18 @@ public class MySqlBulkLoader : IBulkLoader
         await using var conn = new MySqlConnection(connectionString);
         await conn.OpenAsync(cancellationToken);
 
+        // Resolve the database the same way EnsureStagingTableAsync/GetColumnsAsync do:
+        // an explicit "db.table" prefix, or the connection's current database otherwise.
+        // Without this filter, a same-named table in another database on the same server
+        // could satisfy the uniqueness check (#664).
+        var (dbName, tableNameOnly) = ParseDatabaseAndTable(conn, tableName);
+
         await using var cmd = conn.CreateCommand();
-        // Check PK or Unique constraints via information_schema (MySQL-compatible)
-        cmd.CommandText = @"
-            SELECT COUNT(*)
-            FROM information_schema.key_column_usage k
-            JOIN information_schema.table_constraints t
-              ON k.constraint_name = t.constraint_name
-             AND k.constraint_schema = t.constraint_schema
-            WHERE k.table_name = @tableName
-              AND k.column_name = @colName
-              AND t.constraint_type IN ('PRIMARY KEY', 'UNIQUE')";
-        cmd.Parameters.AddWithValue("@tableName", tableName);
+        // Check PK or Unique constraints via information_schema (MySQL-compatible),
+        // scoped to the resolved database so a same-named table elsewhere is never matched.
+        cmd.CommandText = IsUniqueColumnQuery;
+        cmd.Parameters.AddWithValue("@tableName", tableNameOnly);
+        cmd.Parameters.AddWithValue("@dbName", dbName);
         cmd.Parameters.AddWithValue("@colName", columnName);
 
         var count = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken));

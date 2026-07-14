@@ -283,6 +283,24 @@ public class PostgreSqlBulkLoader : IBulkLoader
         }
     }
 
+    /// <summary>
+    /// SQL used by <see cref="IsUniqueColumnAsync"/> to check whether a column
+    /// participates in a PRIMARY KEY or UNIQUE constraint.
+    /// Exposed as <c>internal static readonly</c> so unit tests can assert that
+    /// the query filters on both TABLE_SCHEMA and TABLE_NAME (Issue #664,
+    /// mirroring the MSSQL fix from #391).
+    /// </summary>
+    internal static readonly string IsUniqueColumnQuery = @"
+            SELECT COUNT(*)
+            FROM information_schema.key_column_usage k
+            JOIN information_schema.table_constraints t
+              ON k.constraint_name = t.constraint_name
+             AND k.constraint_schema = t.constraint_schema
+            WHERE k.table_name = @tableName
+              AND k.table_schema = @schemaName
+              AND k.column_name = @colName
+              AND t.constraint_type IN ('PRIMARY KEY', 'UNIQUE')";
+
     public async Task<bool> IsUniqueColumnAsync(
         string connectionString, string tableName, string columnName,
         CancellationToken cancellationToken = default)
@@ -290,18 +308,17 @@ public class PostgreSqlBulkLoader : IBulkLoader
         await using var conn = new NpgsqlConnection(connectionString);
         await conn.OpenAsync(cancellationToken);
 
+        // Resolve the schema the same way EnsureStagingTableAsync/GetColumnsAsync do
+        // (explicit "schema.table" prefix, else "public"). Without this filter, a
+        // same-named table in another schema could satisfy the uniqueness check (#664).
+        var (schemaName, tableNameOnly) = ParseSchemaAndTable(tableName);
+
         await using var cmd = conn.CreateCommand();
-        // Check PK or Unique constraints via information_schema (PostgreSQL-compatible)
-        cmd.CommandText = @"
-            SELECT COUNT(*)
-            FROM information_schema.key_column_usage k
-            JOIN information_schema.table_constraints t
-              ON k.constraint_name = t.constraint_name
-             AND k.constraint_schema = t.constraint_schema
-            WHERE k.table_name = @tableName
-              AND k.column_name = @colName
-              AND t.constraint_type IN ('PRIMARY KEY', 'UNIQUE')";
-        cmd.Parameters.AddWithValue("@tableName", tableName.ToLowerInvariant());
+        // Check PK or Unique constraints via information_schema (PostgreSQL-compatible),
+        // scoped to the resolved schema so a same-named table elsewhere is never matched.
+        cmd.CommandText = IsUniqueColumnQuery;
+        cmd.Parameters.AddWithValue("@tableName", tableNameOnly.ToLowerInvariant());
+        cmd.Parameters.AddWithValue("@schemaName", schemaName.ToLowerInvariant());
         cmd.Parameters.AddWithValue("@colName", columnName.ToLowerInvariant());
 
         var count = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken));
