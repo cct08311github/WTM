@@ -13,15 +13,16 @@
     CPM evaluation is order-independent and SDK-patch-independent.
 
     Version groups:
-      - Microsoft .NET 10 runtime packages: 10.0.4 (GA cadence)
-      - Blazor WebAssembly SDK packages: 10.0.5 (slightly ahead of runtime GA)
-      - Third-party: pinned to latest stable as of 2026-05
+      - Microsoft .NET 10 runtime packages: 10.0.9 (GA cadence, Issue #660)
+      - Blazor WebAssembly SDK packages: 10.0.9 (aligned with runtime GA, Issue #660)
+      - Third-party: pinned to latest stable as of 2026-05, routine patches per Issue #660
       - DB providers: independent cadence, pinned explicitly
       - Test packages: aligned with test/Directory.Build.props
 
     Security overrides:
-      System.Security.Cryptography.Xml — direct pin at 10.0.6 to override
-      NPOI's transitive pull of 8.0.2 (GHSA-37gx-xxp4-5rgx, GHSA-w3x6-4m5h-cxqf).
+      System.Security.Cryptography.Xml — direct pin at 10.0.9 to override
+      NPOI's transitive pull of 8.0.2 (GHSA-37gx-xxp4-5rgx, GHSA-w3x6-4m5h-cxqf),
+      kept >= the Microsoft runtime/EF Core group above.
       NU1510 on this entry is EXPECTED (override working). See Issue #13
       (originally introduced as #816/#817 on this repo's pre-Gitea-cutover GitHub
       tracker, now defunct).
@@ -31,37 +32,39 @@
   -->
 
   <ItemGroup>
-    <!-- ===== Microsoft ASP.NET Core / EF Core (10.0.4) ===== -->
-    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.4" />
-    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="10.0.5" />
-    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.5" />
-    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="10.0.5" />
-    <PackageVersion Include="Microsoft.AspNetCore.Mvc.NewtonsoftJson" Version="10.0.4" />
-    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Razor.RuntimeCompilation" Version="10.0.4" />
-    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.4" />
-    <PackageVersion Include="Microsoft.AspNetCore.SpaServices.Extensions" Version="10.0.4" />
+    <!-- ===== Microsoft ASP.NET Core / EF Core (10.0.9) ===== -->
+    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.NewtonsoftJson" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Razor.RuntimeCompilation" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.AspNetCore.SpaServices.Extensions" Version="10.0.9" />
     <PackageVersion Include="Microsoft.Data.SqlClient" Version="6.1.1" />
-    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.4" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.4" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.4" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.4" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.4" />
-    <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="10.0.4" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.4" />
-    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.9" />
+    <!-- Microsoft.Extensions.TimeProvider.Testing has no 10.0.x patch beyond 10.0.0 as of 2026-07
+         (next published version is 10.1.0, a minor bump outside the 10.0.x line) -->
     <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.0.0" />
 
     <!-- ===== DB Providers (independent cadence) ===== -->
     <PackageVersion Include="MySql.EntityFrameworkCore" Version="10.0.1" />
     <PackageVersion Include="MySqlConnector" Version="2.4.0" />
-    <!-- Npgsql: must be >= 10.0.2 to satisfy Npgsql.EntityFrameworkCore.PostgreSQL 10.0.1 transitive requirement -->
-    <PackageVersion Include="Npgsql" Version="10.0.2" />
-    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
+    <!-- Npgsql: pinned to exactly what Npgsql.EntityFrameworkCore.PostgreSQL 10.0.3 requires transitively -->
+    <PackageVersion Include="Npgsql" Version="10.0.3" />
+    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
     <PackageVersion Include="Oracle.EntityFrameworkCore" Version="10.23.26100" />
 
     <!-- ===== Third-party framework packages ===== -->
     <!-- Issue #425: opt-in S3/MinIO file handler package -->
-    <PackageVersion Include="AWSSDK.S3" Version="4.0.25.2" />
+    <PackageVersion Include="AWSSDK.S3" Version="4.0.25.3" />
     <PackageVersion Include="Aliyun.OSS.SDK.NetCore" Version="2.13.0" />
     <PackageVersion Include="Asp.Versioning.Mvc" Version="8.1.1" />
     <PackageVersion Include="Asp.Versioning.Mvc.ApiExplorer" Version="8.1.1" />
@@ -95,13 +98,14 @@
     <!-- ===== Security overrides (transitive pins) ===== -->
     <!--
       Issue #13: NPOI transitively pulls System.Security.Cryptography.Xml 8.0.2
-      which has HIGH CVEs. Pinned to 10.0.6. NU1510 here is EXPECTED = override working.
+      which has HIGH CVEs. Pinned to 10.0.9 to stay >= the Microsoft ASP.NET Core / EF
+      Core group above (Issue #660). NU1510 here is EXPECTED = override working.
       (Originally introduced as #816/#817 on this repo's pre-Gitea-cutover GitHub
       tracker, now defunct; #13 is the local post-mortem issue — see
       dependency-management.md § "Known Scenario B".)
       See dependency-management.md § NU1510 section before removing this.
     -->
-    <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.6" />
+    <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.9" />
     <!--
       NPOI 1.2.3 (legacy compat shim) transitively pulls Common.Logging 1.2.0 which has
       a malformed TFM that newer NuGet rejects with NU1202. Pinned to 3.4.1 (netstandard2.0).
