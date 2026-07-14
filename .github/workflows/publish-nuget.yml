@@ -96,6 +96,15 @@ jobs:
       # Security: all github.ref_name / steps.* values are passed through env:
       # vars rather than inline shell interpolation to prevent accidental
       # injection if expression semantics ever change.
+      #
+      # Leak-gate invariant (#659): the internal-marker scan runs exactly once,
+      # unconditionally, immediately before the tree can reach ANY `git push`
+      # to the github remote — see "Sync manifest — leak-gate scan" below. The
+      # merge-fallback path re-runs the same shared script as a second, final
+      # safety net after conflict resolution (a non-conflicting file add from
+      # github/dotnet10 is the one thing the pre-push scan can't see). Both
+      # invocations share one script materialized in $RUNNER_TEMP so the check
+      # can never drift between the two call sites.
 
       - name: Configure GitHub remote
         if: startsWith(github.ref, 'refs/tags/')
@@ -104,6 +113,38 @@ jobs:
         run: |
           git remote add github \
             "https://x-access-token:${GH_PAT}@github.com/cct08311github/WTM.git"
+
+      # Fail fast if .sync/github-replace.txt has drifted from the required
+      # `<source>\t<destination>` format (#659). A space-edited line parses as
+      # ONE field under `cut -f1`/`cut -f2` — cut silently returns the whole
+      # line for field 1 and empty for field 2, so the replace step's
+      # whitespace fallback (awk) masks the typo instead of failing loudly.
+      #
+      # Only a truly EMPTY line (`/^$/`) is tolerated as a blank separator —
+      # matching the replace step's own skip rule below (`case "$line" in
+      # '#'*|'') continue ;;`, which also only matches the literal empty
+      # string, not `/^[[:space:]]*$/`). A whitespace-only line (e.g. one
+      # stray space) is deliberately NOT skipped here: it has no tab, so
+      # NF == 1, and it falls through to the NF != 2 check and fails loudly.
+      # Skipping it (as an earlier revision of this lint did) would let it
+      # reach the replace step instead, where `cut`'s no-tab fallback and
+      # the whitespace-split `awk` fallback both collapse it to an empty
+      # src/dst and crash `cp -f "" ""`.
+      - name: Sync manifest — lint github-replace.txt
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -euo pipefail
+          awk -F'\t' '
+            /^#/ { next }
+            /^$/ { next }
+            {
+              if (NF != 2 || $1 == "" || $2 == "") {
+                print "ERROR: line " NR " is not exactly two TAB-separated fields: " $0
+                bad = 1
+              }
+            }
+            END { if (bad) exit 1 }
+          ' .sync/github-replace.txt
 
       # ── Apply .sync/ manifest to produce a filtered tree for GitHub ──────────
       # All three steps operate on a temporary local branch `sync-to-github-tmp`
@@ -121,6 +162,38 @@ jobs:
           git config user.name "WTM Sync Bot"
           # Preserve the sanitize rules before the excludes step deletes .sync/.
           cp .sync/github-sanitize.sed "$RUNNER_TEMP/wtm-sanitize.sed"
+
+          # Materialize the shared leak-gate scan now (before excludes removes
+          # .sync/) so both the pre-push step below and the merge-fallback
+          # retry can invoke the exact same check. Marker literals are built
+          # at runtime from fragments so the bare strings never appear
+          # verbatim in this workflow file (which is itself synced to the
+          # mirror and passed through github-sanitize.sed like any other
+          # tracked .yml file). The unique tailnet segment and full hostname
+          # suffix are the true identifiers; github-sanitize.sed rewrites
+          # them completely, so any surviving occurrence is a genuine
+          # sanitize failure.
+          cat > "$RUNNER_TEMP/wtm-leak-gate.sh" <<'LEAKGATE'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          _M="mac""-mini"          # rewrites via full-host rule in .sed
+          _G="GITEA""_"            # rewrites via \bGITEA_TOKEN/HOST/USER\b rules
+          _T="tailde842d"          # rewrites: s|tailde842d|internal-tailnet|g
+          _N="\.ts\.net"           # rewrites as part of full-host rule in .sed
+          BAD=$(git grep -lI \
+            -e "$_M" \
+            -e "$_T" \
+            -e "$_G" \
+            -e "$_N" \
+            -- ':!.sync/' ':!.github/workflows/' 2>/dev/null || true)
+          if [ -n "$BAD" ]; then
+            echo "ERROR: leak-gate triggered — internal markers found in:"
+            echo "$BAD"
+            exit 1
+          fi
+          echo "leak-gate: no internal markers found in tracked tree."
+          LEAKGATE
+          chmod +x "$RUNNER_TEMP/wtm-leak-gate.sh"
 
       - name: Sync manifest — apply github-replace.txt
         if: startsWith(github.ref, 'refs/tags/')
@@ -161,16 +234,51 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           set -euo pipefail
-          # Run sed in-place over all remaining text source files, skipping .git/.
-          find . -path './.git' -prune -o \
-            \( -name '*.md' -o -name '*.yml' -o -name '*.props' \
-               -o -name '*.csproj' -o -name '*.json' -o -name '*.cs' \
-               -o -name '*.sh' \) \
-            -print | xargs sed -i -f "$RUNNER_TEMP/wtm-sanitize.sed"
+          # Run sed in-place over every git-tracked file that is text (post
+          # replace/exclude), not a fixed extension allowlist (#659) — a new
+          # file type (.ts, .txt, …) must never silently bypass sanitization.
+          #
+          # `git grep -zIl -e '' -- .` enumerates matching filenames in a
+          # SINGLE process, NUL-terminated (`-z`), and `-I` skips binaries
+          # exactly like the leak-gate's own `git grep -I` does below, so
+          # both passes agree on what counts as "text". This repo has
+          # tracked filenames containing literal spaces (two ClientApp demo
+          # files under demo/WalkingTec.Mvvm.ReactDemo/) — an earlier
+          # revision piped `grep -Il` (newline-delimited, unquoted output)
+          # into a plain `xargs sed -i` (word-splits on whitespace), which
+          # is NUL-safe only at the first hop and deterministically failed
+          # ("sed: can't read ...", exit 123) the moment this tree-wide scan
+          # (vs. the old extension allowlist, which never matched those two
+          # files) reached them. `-z` + the paired `xargs -0` below keep the
+          # hand-off NUL-safe end to end.
+          #
+          # Single-process enumeration also sidesteps a latent pipefail
+          # fragility: piping `git ls-files -z` through `xargs -0 grep` lets
+          # xargs split ~5200 filenames into several `grep` invocations: any
+          # one batch with zero matches (or an unreadable file) makes that
+          # invocation exit 1 (or 2), which xargs turns into exit 123 for
+          # the whole stage — failing the release under `set -o pipefail`
+          # even though nothing is actually wrong. `git grep` scans the
+          # whole tree in one process, so no such batch exists; the `|| true`
+          # only guards the one remaining edge case (zero matching text
+          # files in the entire tree), where `git grep -l` itself exits 1.
+          # No `2>/dev/null` here — genuine errors must stay visible in the
+          # CI log, not be silently swallowed.
+          { git grep -zIl -e '' -- . || true; } | \
+            xargs -0 -r sed -i -f "$RUNNER_TEMP/wtm-sanitize.sed"
           git add -A
           # Bundle all manifest changes into a single commit.
           git diff --cached --quiet || \
             git commit -m "chore(sync): apply github mirror manifest"
+
+      # Leak-gate: scan the fully sanitized, committed tree BEFORE the first
+      # push attempt (#659). This is the step that closes the fast-forward
+      # gap — previously the scan only ran inside the merge-fallback branch
+      # below, so a clean fast-forward push shipped with no final marker scan
+      # at all.
+      - name: Sync manifest — leak-gate scan
+        if: startsWith(github.ref, 'refs/tags/')
+        run: bash "$RUNNER_TEMP/wtm-leak-gate.sh"
 
       - name: Push dotnet10 branch to GitHub
         if: startsWith(github.ref, 'refs/tags/')
@@ -230,29 +338,13 @@ jobs:
                 -m "merge: sync Gitea release to GitHub (auto-resolve excludes)"
             fi
 
-            # Leak-gate: ensure no internal markers survived in the merged tree.
-            # (Resolution always keeps HEAD, which is the sanitized sync tree, so
-            # this is a final safety net against any --theirs content slipping through.)
-            # Marker literals are built at runtime from fragments so the bare strings
-            # never appear verbatim in this workflow file (which is itself synced to
-            # the mirror).  The unique tailnet segment and full hostname suffix are
-            # the true identifiers; github-sanitize.sed rewrites them completely, so
-            # any surviving occurrence is a genuine sanitize failure.
-            _M="mac""-mini"          # rewrites via full-host rule in .sed
-            _G="GITEA""_"            # rewrites via \bGITEA_TOKEN/HOST/USER\b rules
-            _T="tailde842d"          # rewrites: s|tailde842d|internal-tailnet|g
-            _N="\.ts\.net"           # rewrites as part of full-host rule in .sed
-            BAD=$(git grep -lI \
-              -e "$_M" \
-              -e "$_T" \
-              -e "$_G" \
-              -e "$_N" \
-              -- ':!.sync/' ':!.github/workflows/' 2>/dev/null || true)
-            if [ -n "$BAD" ]; then
-              echo "ERROR: leak-gate triggered — internal markers found in:"
-              echo "$BAD"
-              exit 1
-            fi
+            # Leak-gate: re-scan after merge resolution (#659), using the same
+            # shared script as the pre-push scan above. Resolution always
+            # keeps HEAD, which is the sanitized sync tree, so this is a
+            # final safety net against a non-conflicting file add from
+            # github/dotnet10 introducing content the earlier pre-push scan
+            # never had a chance to see.
+            bash "$RUNNER_TEMP/wtm-leak-gate.sh"
 
             # Retry push after merge resolution.
             if ! git push github HEAD:refs/heads/dotnet10; then

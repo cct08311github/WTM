@@ -30,7 +30,8 @@ docs/workflow-wave4-design.md
 docs/getting-started.md
 
 # Internal helper scripts (private-registry release tooling — also carry the
-# internal hostname/token names and are NOT covered by the sanitize .sed extension set)
+# internal hostname/token names; excluded outright rather than relying on
+# sanitize, since they're maintainer-only tooling with no GitHub-side use)
 scripts/publish-to-gitea.sh
 scripts/release-gitea-package.sh
 test/release-script-tests.sh

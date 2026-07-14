@@ -1,6 +1,13 @@
 # Sed rules applied to remaining text files during Gitea -> GitHub sync,
 # AFTER excludes are removed and replaces are applied.
-# Run as: find <push-tree> -type f \( -name '*.md' -o -name '*.yml' -o -name '*.props' -o -name '*.csproj' -o -name '*.json' -o -name '*.cs' \) -exec sed -i -f .sync/github-sanitize.sed {} +
+# Run as: git grep -zIl -e '' -- . | xargs -0 sed -i -f .sync/github-sanitize.sed
+# (single-process, NUL-safe enumeration — see publish-nuget.yml's
+# "Sync manifest — apply github-sanitize.sed and commit" step for why a
+# two-hop `git ls-files -z | xargs -0 grep -Il` | `xargs sed -i` pipeline is
+# NOT NUL-safe end-to-end and breaks on tracked filenames with spaces.)
+# Coverage is tree-wide (every tracked text file, binary-safe via `git grep
+# -I`), not a fixed extension allowlist (#659) — a new file type is
+# sanitized too.
 #
 # Targets: internal hostname, tailnet name, macOS username, internal token names.
 # Replacement strings are intentionally generic / clearly-placeholder.
