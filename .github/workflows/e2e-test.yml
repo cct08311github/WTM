@@ -3,6 +3,12 @@ name: E2E Tests
 permissions:
   contents: read
 
+# Same self-hosted-runner rationale as ci-build.yml: cancel a superseded PR run of this
+# workflow, but never cancel one push run in favor of another (#670).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 on:
   workflow_dispatch:
   push:

@@ -3,6 +3,13 @@ name: Integration Tests (MSSQL)
 permissions:
   contents: read
 
+# Same self-hosted-runner rationale as ci-build.yml. This workflow currently has no
+# pull_request trigger, so cancel-in-progress evaluates to false today; the group is
+# added for consistency and to future-proof if a pull_request trigger is added (#670).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 on:
   workflow_dispatch:
   push:

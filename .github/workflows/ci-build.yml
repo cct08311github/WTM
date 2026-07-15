@@ -6,11 +6,31 @@ on:
   # two concurrent full suites per push, starving the self-hosted runner (#640).
   push:
     branches: [ dotnet8, dotnet10 ]
+    # Docs-only changes never touch build/test outcome. A PR containing ONLY docs-path
+    # changes will therefore have no ci-build statuses at all — accepted policy (#670).
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - '.claude/**'
+      - '.gitea/**'
   pull_request:
     branches: [ dotnet8, dotnet10 ]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - '.claude/**'
+      - '.gitea/**'
 
 permissions:
   contents: read
+
+# One self-hosted runner (#640): a superseded PR push should cancel its own in-flight
+# run instead of queuing behind it. Pushes to dotnet10/dotnet8 must NOT cancel each
+# other (each push is a distinct, wanted result), so cancel-in-progress is scoped to
+# pull_request events only (#670).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   release-tooling-test:
@@ -29,6 +49,19 @@ jobs:
     - uses: actions/setup-dotnet@v5
       with:
         dotnet-version: '10.0.x'
+    # setup-dotnet's built-in `cache:` option requires a packages.lock.json, which this
+    # repo does not commit — fall back to actions/cache keyed on the CPM version file and
+    # every csproj. continue-on-error so a cache-backend hiccup on the self-hosted Gitea
+    # runner (same class of issue as actions/upload-artifact@v4, #11) can only skip the
+    # speedup, never fail the job (#670).
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      continue-on-error: true
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('Directory.Packages.props', '**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
     - run: dotnet restore core.slnf
     - run: dotnet build core.slnf --no-restore -c Release
 
@@ -100,6 +133,16 @@ jobs:
     - uses: actions/setup-node@v5
       with:
         node-version: '20'
+    # continue-on-error per #670: a cache-backend failure must only cost the speedup,
+    # never fail the job (see NuGet cache comment above in build-and-test).
+    - name: Cache npm packages
+      uses: actions/cache@v4
+      continue-on-error: true
+      with:
+        path: ~/.npm
+        key: ${{ runner.os }}-npm-${{ hashFiles('test/WalkingTec.Mvvm.Js.Tests/package-lock.json') }}
+        restore-keys: |
+          ${{ runner.os }}-npm-
     - name: Install JS test dependencies
       run: npm ci
       working-directory: test/WalkingTec.Mvvm.Js.Tests
@@ -120,5 +163,13 @@ jobs:
     - uses: actions/setup-dotnet@v5
       with:
         dotnet-version: '10.0.x'
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      continue-on-error: true
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('Directory.Packages.props', '**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
     - run: dotnet restore WalkingTec.Mvvm.sln
     - run: dotnet list WalkingTec.Mvvm.sln package --vulnerable --include-transitive
