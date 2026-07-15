@@ -1014,13 +1014,64 @@ internal sealed class FakeOracleException : Exception
         => Number = number;
 }
 
-// ─── §5.1 Retry-envelope tests (FIX-2: now use REAL RunWithDeadlockRetryAsync) ──
+/// <summary>Mimics Microsoft.Data.Sqlite.SqliteException — FullName contains "SqliteException".</summary>
+internal sealed class FakeSqliteException : Exception
+{
+    public int SqliteErrorCode { get; }
+
+    public FakeSqliteException(int sqliteErrorCode) : base($"Fake SqliteException SqliteErrorCode={sqliteErrorCode}")
+        => SqliteErrorCode = sqliteErrorCode;
+}
+
+// ─── #667: SQLite BUSY/LOCKED classifier coverage ─────────────────────────────
+//
+// T-667-CLS-01  classifier: SqliteException SqliteErrorCode=5 (SQLITE_BUSY) → true.
+// T-667-CLS-02  classifier: SqliteException SqliteErrorCode=6 (SQLITE_LOCKED) → true.
+// T-667-CLS-03  classifier: SqliteException SqliteErrorCode=1 (SQLITE_ERROR, #629 signature) → false.
+//               (Intentional: #629's "cannot start a transaction within a transaction" is a
+//               wrapper-state-desync signature, not proven-safe-to-retry contention — see the
+//               ExecuteInTransactionAsync doc comment in WorkflowEngine.cs.)
+
+[TestClass]
+public class WorkflowDeadlockClassifierSqliteTests
+{
+    [TestMethod]
+    public void T_667_CLS_01_Sqlite_ErrorCode_5_Busy_IsDeadlock()
+    {
+        var ex = new FakeSqliteException(5);
+        Assert.IsTrue(
+            WorkflowDeadlockClassifier.IsDeadlockVictim(ex),
+            "T-667-CLS-01: SqliteException SqliteErrorCode=5 (SQLITE_BUSY) must be classified as retryable");
+    }
+
+    [TestMethod]
+    public void T_667_CLS_02_Sqlite_ErrorCode_6_Locked_IsDeadlock()
+    {
+        var ex = new FakeSqliteException(6);
+        Assert.IsTrue(
+            WorkflowDeadlockClassifier.IsDeadlockVictim(ex),
+            "T-667-CLS-02: SqliteException SqliteErrorCode=6 (SQLITE_LOCKED) must be classified as retryable");
+    }
+
+    [TestMethod]
+    public void T_667_CLS_03_Sqlite_ErrorCode_1_GenericError_NotClassified()
+    {
+        // #629 signature ("cannot start a transaction within a transaction") — deliberately NOT
+        // classified as retryable; see WorkflowEngine.cs ExecuteInTransactionAsync doc comment.
+        var ex = new FakeSqliteException(1);
+        Assert.IsFalse(
+            WorkflowDeadlockClassifier.IsDeadlockVictim(ex),
+            "T-667-CLS-03: SqliteException SqliteErrorCode=1 (SQLITE_ERROR) must NOT be classified as retryable");
+    }
+}
+
+// ─── §5.1 Retry-envelope tests (FIX-2: now use REAL ExecuteInTransactionAsync) ──
 //
 // DESIGN NOTE — why these tests deleted TestableRetryEngine and rewire to the real engine:
-// The original tests drove a hand-copied TestableRetryEngine MIRROR of RunWithDeadlockRetryAsync
+// The original tests drove a hand-copied TestableRetryEngine MIRROR of ExecuteInTransactionAsync
 // and never touched a DbContext.  This is the same "test a reimplementation, not the product"
 // anti-pattern that hid WF-21's NullContext and #299's T-SV-4/5 bugs.  FIX-2 deletes the
-// mirror and calls the REAL RunWithDeadlockRetryAsync (now internal via InternalsVisibleTo)
+// mirror and calls the REAL ExecuteInTransactionAsync (now internal via InternalsVisibleTo)
 // directly from the tests.  The critical idempotency test (T-ABBA-RETRY-04) additionally
 // exercises AddApproverAsync end-to-end with a SaveChangesInterceptor that throws a classified
 // exception on attempt-1, proving that FIX-1 (ChangeTracker.Clear()) is necessary and
@@ -1077,7 +1128,7 @@ public class DeadlockRetryEnvelopeTests : IDisposable
     /// <summary>
     /// T-ABBA-RETRY-01 (REAL engine): A body that fails with a deadlock exception on
     /// attempt 1 and succeeds on attempt 2 must return the success result.
-    /// Drives the REAL RunWithDeadlockRetryAsync (now internal) — NOT a mirror.
+    /// Drives the REAL ExecuteInTransactionAsync (now internal) — NOT a mirror.
     /// </summary>
     [TestMethod]
     public async Task T_ABBA_RETRY_01_RealEngine_OneShot_Deadlock_Then_Success()
@@ -1085,7 +1136,7 @@ public class DeadlockRetryEnvelopeTests : IDisposable
         int callCount = 0;
         var engine = MakeMinimalEngine();
 
-        var result = await engine.RunWithDeadlockRetryAsync(ct =>
+        var result = await engine.ExecuteInTransactionAsync(ct =>
         {
             callCount++;
             if (callCount == 1)
@@ -1102,7 +1153,7 @@ public class DeadlockRetryEnvelopeTests : IDisposable
     /// <summary>
     /// T-ABBA-RETRY-02 (REAL engine): A body that always throws a deadlock exception
     /// must eventually return DeadlockRetryExhausted after maxAttempts retries.
-    /// Drives the REAL RunWithDeadlockRetryAsync.
+    /// Drives the REAL ExecuteInTransactionAsync.
     /// </summary>
     [TestMethod]
     public async Task T_ABBA_RETRY_02_RealEngine_Always_Deadlock_Returns_DeadlockRetryExhausted()
@@ -1110,7 +1161,7 @@ public class DeadlockRetryEnvelopeTests : IDisposable
         int callCount = 0;
         var engine = MakeMinimalEngine(new WorkFlowOptions { DeadlockRetryAttempts = 3, DeadlockRetryBaseDelay = TimeSpan.Zero });
 
-        var result = await engine.RunWithDeadlockRetryAsync(ct =>
+        var result = await engine.ExecuteInTransactionAsync(ct =>
         {
             callCount++;
             throw new FakeSqlException(1205); // always deadlock
@@ -1126,7 +1177,7 @@ public class DeadlockRetryEnvelopeTests : IDisposable
     /// <summary>
     /// T-ABBA-RETRY-03 (REAL engine): A body that throws a non-deadlock exception must
     /// propagate immediately without retrying.
-    /// Drives the REAL RunWithDeadlockRetryAsync.
+    /// Drives the REAL ExecuteInTransactionAsync.
     /// </summary>
     [TestMethod]
     public async Task T_ABBA_RETRY_03_RealEngine_NonDeadlock_Exception_Propagates_Immediately()
@@ -1136,7 +1187,7 @@ public class DeadlockRetryEnvelopeTests : IDisposable
 
         await Assert.ThrowsExceptionAsync<InvalidOperationException>(async () =>
         {
-            await engine.RunWithDeadlockRetryAsync(ct =>
+            await engine.ExecuteInTransactionAsync(ct =>
             {
                 callCount++;
                 throw new InvalidOperationException("non-deadlock error");
@@ -1162,7 +1213,7 @@ public class DeadlockRetryEnvelopeTests : IDisposable
     ///
     /// CRITICAL: This test MUST FAIL against pre-FIX-1 code and PASS after FIX-1.
     /// Verify: in the original commit (before this hardening PR), remove the
-    /// ChangeTracker.Clear() call from RunWithDeadlockRetryAsync — this test will
+    /// ChangeTracker.Clear() call from ExecuteInTransactionAsync — this test will
     /// throw a UniqueConstraintViolation (SQLite duplicate index) or produce
     /// 2k task rows instead of k.
     /// </summary>
@@ -1172,7 +1223,7 @@ public class DeadlockRetryEnvelopeTests : IDisposable
         // The interceptor throws on the FIRST SaveChanges that inserts ApprovalTask rows,
         // then lets all subsequent SaveChanges through.
         // "Deadlock" is simulated by throwing FakeSqlException(1205) which the classifier
-        // recognises → RunWithDeadlockRetryAsync retries the whole body.
+        // recognises → ExecuteInTransactionAsync retries the whole body.
         var interceptor = new FirstSaveChangesDeadlockInterceptor();
 
         // Build schema first (no interceptor), then open instrumented context.
@@ -1272,6 +1323,114 @@ public class DeadlockRetryEnvelopeTests : IDisposable
         // Assert: the interceptor actually fired on attempt-1 (proving the test exercised the retry).
         Assert.IsTrue(interceptor.DeadlockFired,
             "T-ABBA-RETRY-04: interceptor must have injected the deadlock on attempt-1");
+    }
+
+    // ── T-667-RETRY-05: previously-UNWRAPPED path (All-mode reject completion) now retries ──
+    //
+    // Before #667, ExecuteRejectCompletionAsync's All branch (RejectAll) used a raw, unretried
+    // BeginTransactionAsync — a deadlock-classified exception on the node-completion/instance-
+    // reject WorkflowEventLog INSERT propagated as a raw provider exception to the caller.
+    // After #667 it is routed through ExecuteInTransactionAsync like every other transactional
+    // unit: an always-deadlocking write must retry DeadlockRetryAttempts times, then return
+    // DeadlockRetryExhausted instead of throwing.
+    //
+    // Reached via the direct human path: nodeB (bob, ApproveMode.All, single approver,
+    // RejectGate.Immediate default) — RejectTaskAsync's All branch calls
+    // ExecuteRejectCompletionAsync(rejectMode: All) directly (unlike Sequential, which routes
+    // through the separate WF-373 ExecuteSequentialRejectAtomicAsync atomic helper — already
+    // one of the original 6 wrapped paths, not a #667 target).
+    //
+    // The interceptor targets the WorkflowEventLog INSERT specifically (not NodeInstance/
+    // ApprovalTask) because IncrementNodeRejectedCountAsync and the ApprovalTask reject-claim
+    // CAS both run BEFORE ExecuteInTransactionAsync is invoked (standalone, un-retried by
+    // design) — arming on those tables would fire on that pre-tx work instead of inside the
+    // retried unit.
+    [TestMethod]
+    public async Task T_667_RETRY_05_PreviouslyUnwrapped_RejectAll_AlwaysDeadlocks_Returns_DeadlockRetryExhausted()
+    {
+        var interceptor = new AlwaysDeadlockNonQueryInterceptor("Wf_WorkflowEventLog", "INSERT");
+
+        using (var schema = new WfAbbaTestContext(_dbName)) { /* EnsureCreated already ran in Setup */ }
+
+        await using var ctx = new WfAbbaTestContext(_dbName, interceptor);
+        var opts = new WorkFlowOptions { DeadlockRetryAttempts = 3, DeadlockRetryBaseDelay = TimeSpan.Zero };
+        var resolver   = new DefaultApproverResolverExposed(opts, ctx);
+        var dispatcher = NodeKindDispatcher_Exposed.CreateWithSequential(resolver, opts);
+        var engine     = WorkflowEngine_Exposed.CreateWithOptions(ctx, dispatcher, opts, NullLogger.Instance);
+
+        var version = await SeedVersionAsync(ctx);
+        var inst = await engine.StartAsync(version.ID, null, "initiator", null);
+
+        // Advance nodeA (alice) so bob gets nodeB (All mode, single approver).
+        await using var readCtx1 = new WfAbbaTestContext(_dbName);
+        var taskA = await readCtx1.Set<ApprovalTask>()
+            .AsNoTracking()
+            .SingleAsync(t => t.State == TaskState.Pending);
+        await engine.ApproveTaskAsync(taskA.ID, "alice");
+
+        await using var readCtx2 = new WfAbbaTestContext(_dbName);
+        var taskB = await readCtx2.Set<ApprovalTask>()
+            .AsNoTracking()
+            .SingleAsync(t => t.State == TaskState.Pending);
+
+        interceptor.Arm();
+
+        var result = await engine.RejectTaskAsync(taskB.ID, "bob", reason: "T-667-RETRY-05");
+
+        Assert.AreEqual(WorkflowActionCode.DeadlockRetryExhausted, result.Code,
+            $"T-667-RETRY-05: an always-deadlocking All-mode reject completion must return " +
+            $"DeadlockRetryExhausted, not throw raw or succeed. Got {result.Code}.");
+        Assert.AreEqual(opts.DeadlockRetryAttempts, interceptor.FireCount,
+            $"T-667-RETRY-05: the interceptor must have fired exactly DeadlockRetryAttempts " +
+            $"({opts.DeadlockRetryAttempts}) times — one per attempt. Got {interceptor.FireCount}.");
+
+        // The instance must NOT have transitioned — the whole unit rolled back on every attempt.
+        await using var verify = new WfAbbaTestContext(_dbName);
+        var freshInst = await verify.Set<ProcessInstance>().AsNoTracking().SingleAsync(x => x.ID == inst.ID);
+        Assert.AreEqual(InstanceState.Running, freshInst.State,
+            "T-667-RETRY-05: instance must remain Running — an exhausted retry must not leave partial state.");
+    }
+
+    // ── T-667-RETRY-06: previously-UNWRAPPED path (StartAsync) idempotency on retry ──
+    //
+    // Before #667, StartAsync's start-handoff transaction used a raw, unretried
+    // BeginTransactionAsync. This test proves both that (a) StartAsync now retries a
+    // deadlock-classified failure and succeeds, and (b) ChangeTracker.Clear() prevents the
+    // attempt-1 Added NodeInstance from being duplicated alongside attempt-2's fresh insert
+    // (mirrors T-ABBA-RETRY-04's duplicate-row proof, applied to a previously-unwrapped path).
+    [TestMethod]
+    public async Task T_667_RETRY_06_PreviouslyUnwrapped_Start_OneShotDeadlock_ThenSucceeds_NoDuplicateNode()
+    {
+        var interceptor = new FirstSaveChangesDeadlockForEntityInterceptor<NodeInstance>();
+
+        using (var schema = new WfAbbaTestContext(_dbName)) { /* EnsureCreated already ran in Setup */ }
+
+        await using var ctx = new WfAbbaTestContext(_dbName, interceptor);
+        var opts = new WorkFlowOptions { DeadlockRetryAttempts = 3, DeadlockRetryBaseDelay = TimeSpan.Zero };
+        var resolver   = new DefaultApproverResolverExposed(opts, ctx);
+        var dispatcher = NodeKindDispatcher_Exposed.CreateWithSequential(resolver, opts);
+        var engine     = WorkflowEngine_Exposed.CreateWithOptions(ctx, dispatcher, opts, NullLogger.Instance);
+
+        var version = await SeedVersionAsync(ctx);
+
+        interceptor.Arm();
+        var inst = await engine.StartAsync(version.ID, null, "initiator", null);
+
+        Assert.AreEqual(InstanceState.Running, inst.State,
+            "T-667-RETRY-06: StartAsync must succeed on retry after a one-shot deadlock.");
+        Assert.IsTrue(interceptor.DeadlockFired,
+            "T-667-RETRY-06: the interceptor must have injected the deadlock on attempt-1.");
+
+        await using var verify = new WfAbbaTestContext(_dbName);
+        var startNodes = await verify.Set<NodeInstance>()
+            .AsNoTracking()
+            .Where(n => n.InstanceId == inst.ID && n.NodeKey == "start")
+            .ToListAsync();
+
+        Assert.AreEqual(1, startNodes.Count,
+            $"T-667-RETRY-06: EXACTLY one Start NodeInstance row must exist (no duplicates). " +
+            $"Found {startNodes.Count}. (If 2, ChangeTracker.Clear() is not applied for this " +
+            "previously-unwrapped path.)");
     }
 
     private static async Task<ProcessDefinitionVersion> SeedVersionAsync(WfAbbaTestContext ctx)
@@ -1554,6 +1713,149 @@ internal sealed class FirstSaveChangesDeadlockInterceptor : SaveChangesIntercept
     }
 }
 
+// ─── #667: AlwaysDeadlockNonQueryInterceptor ──────────────────────────────────
+// Used by T-667-RETRY-05: throws a deadlock-classified exception on EVERY NonQuery
+// command matching a SQL fragment + verb once armed — simulating a transactional unit
+// that deadlocks on every single attempt, driving the retry envelope to exhaustion.
+
+/// <summary>
+/// A <see cref="DbCommandInterceptor"/> that, once armed, throws a
+/// <see cref="FakeSqlException"/> (Number=1205) on every NonQuery command whose SQL text
+/// contains <c>sqlContains</c> and starts with <c>verbPrefix</c> — deliberately excludes
+/// the transaction's own BEGIN command (which is not a NonQuery data command) so the
+/// engine's <c>await using var tx = ...</c> / <c>catch { tx.RollbackAsync(); throw; }</c>
+/// pattern always has a valid transaction object to roll back.
+/// </summary>
+internal sealed class AlwaysDeadlockNonQueryInterceptor : DbCommandInterceptor
+{
+    private readonly string _sqlContains;
+    private readonly string _verbPrefix;
+    private volatile bool _armed;
+    private int _fireCount;
+
+    public int FireCount => _fireCount;
+
+    public AlwaysDeadlockNonQueryInterceptor(string sqlContains, string verbPrefix)
+    {
+        _sqlContains = sqlContains;
+        _verbPrefix  = verbPrefix;
+    }
+
+    /// <summary>Arms the interceptor: every matching NonQuery from now on throws.</summary>
+    public void Arm()
+    {
+        _fireCount = 0;
+        _armed = true;
+    }
+
+    public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<int> result,
+        CancellationToken cancellationToken = default)
+    {
+        MaybeThrow(command.CommandText);
+        return base.NonQueryExecutingAsync(command, eventData, result, cancellationToken);
+    }
+
+    public override InterceptionResult<int> NonQueryExecuting(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<int> result)
+    {
+        MaybeThrow(command.CommandText);
+        return base.NonQueryExecuting(command, eventData, result);
+    }
+
+    // EF Core's SQLite provider executes INSERTs with a "RETURNING" clause to read back
+    // store-generated values, via ReaderExecuting(Async) rather than NonQueryExecuting(Async) —
+    // both must be intercepted or an INSERT-verb match silently never fires.
+    public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result,
+        CancellationToken cancellationToken = default)
+    {
+        MaybeThrow(command.CommandText);
+        return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+    }
+
+    public override InterceptionResult<DbDataReader> ReaderExecuting(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result)
+    {
+        MaybeThrow(command.CommandText);
+        return base.ReaderExecuting(command, eventData, result);
+    }
+
+    private void MaybeThrow(string sql)
+    {
+        if (!_armed) return;
+
+        var trimmed = sql.TrimStart();
+        bool matches = sql.IndexOf(_sqlContains, StringComparison.OrdinalIgnoreCase) >= 0
+                       && trimmed.StartsWith(_verbPrefix, StringComparison.OrdinalIgnoreCase);
+        if (!matches) return;
+
+        Interlocked.Increment(ref _fireCount);
+        var inner = new FakeSqlException(1205);
+        throw new Microsoft.EntityFrameworkCore.DbUpdateException(
+            "Simulated always-on deadlock victim (#667 retry-envelope test)", inner);
+    }
+}
+
+// ─── #667: FirstSaveChangesDeadlockForEntityInterceptor<T> ───────────────────
+// Generalizes FirstSaveChangesDeadlockInterceptor (which is ApprovalTask-specific) to
+// any entity type, for T-667-RETRY-06's NodeInstance-based idempotency proof.
+
+/// <summary>
+/// A <see cref="SaveChangesInterceptor"/> that throws a deadlock-classified exception on the
+/// FIRST SaveChanges call that has an Added <typeparamref name="T"/> row, then lets all
+/// subsequent SaveChanges calls through. Mirrors <see cref="FirstSaveChangesDeadlockInterceptor"/>
+/// generalized to an arbitrary entity type.
+/// </summary>
+internal sealed class FirstSaveChangesDeadlockForEntityInterceptor<T> : SaveChangesInterceptor
+    where T : class
+{
+    private volatile bool _armed;
+    private int _matchCallCount;
+    public bool DeadlockFired { get; private set; }
+
+    public void Arm()
+    {
+        _matchCallCount = 0;
+        DeadlockFired = false;
+        _armed = true;
+    }
+
+    public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+        DbContextEventData eventData,
+        InterceptionResult<int> result,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_armed || !HasAddedEntities(eventData.Context))
+            return base.SavingChangesAsync(eventData, result, cancellationToken);
+
+        var callNo = Interlocked.Increment(ref _matchCallCount);
+        if (callNo == 1)
+        {
+            DeadlockFired = true;
+            var inner = new FakeSqlException(1205);
+            throw new Microsoft.EntityFrameworkCore.DbUpdateException(
+                "Simulated deadlock victim (#667 retry-envelope test)", inner);
+        }
+
+        return base.SavingChangesAsync(eventData, result, cancellationToken);
+    }
+
+    private static bool HasAddedEntities(DbContext? ctx)
+    {
+        if (ctx is null) return false;
+        return ctx.ChangeTracker.Entries<T>().Any(e => e.State == EntityState.Added);
+    }
+}
+
 // ─── WfAbbaTestContext — self-contained test context for AbbaFixTests ────────
 // WfAbbaTestContext (DelegationTests.cs) is internal sealed and cannot be
 // subclassed from another file.  WfAbbaTestContext is a standalone copy of the
@@ -1571,6 +1873,11 @@ internal sealed class WfAbbaTestContext : DbContext
 {
     private readonly string _connStr;
     private readonly IInterceptor[] _interceptors;
+    // #667 completion (T-667-LEGALITY): when true, configures a custom retrying
+    // IExecutionStrategy (RetriesOnFailure == true) — the exact host configuration
+    // (options.EnableRetryOnFailure()) that makes a bare Database.BeginTransactionAsync()
+    // illegal. See RetryingExecutionStrategyLegalityTests.cs.
+    private readonly bool _useRetryingExecutionStrategy;
 
     /// <summary>Plain context — no interceptors.</summary>
     public WfAbbaTestContext(string connStr)
@@ -1586,9 +1893,27 @@ internal sealed class WfAbbaTestContext : DbContext
         _interceptors = interceptors;
     }
 
+    /// <summary>
+    /// Retrying-execution-strategy context (#667 T-667-LEGALITY): configures a custom
+    /// <see cref="ExecutionStrategy"/> subclass whose <c>RetriesOnFailure</c> is <c>true</c> —
+    /// SQLite has no built-in retrying strategy (no EnableRetryOnFailure option), so this is the
+    /// minimal way to reproduce, on the CI-default provider, the exact condition under which EF
+    /// Core throws <c>InvalidOperationException</c> on a bare <c>BeginTransactionAsync()</c>.
+    /// </summary>
+    public WfAbbaTestContext(string connStr, bool useRetryingExecutionStrategy)
+    {
+        _connStr      = connStr;
+        _interceptors = Array.Empty<IInterceptor>();
+        _useRetryingExecutionStrategy = useRetryingExecutionStrategy;
+    }
+
     protected override void OnConfiguring(DbContextOptionsBuilder b)
     {
-        b.UseSqlite($"DataSource={_connStr}?mode=memory&cache=shared");
+        b.UseSqlite($"DataSource={_connStr}?mode=memory&cache=shared", sqliteOptions =>
+        {
+            if (_useRetryingExecutionStrategy)
+                sqliteOptions.ExecutionStrategy(deps => new TestRetryingExecutionStrategy(deps));
+        });
         if (_interceptors.Length > 0)
             b.AddInterceptors(_interceptors);
     }

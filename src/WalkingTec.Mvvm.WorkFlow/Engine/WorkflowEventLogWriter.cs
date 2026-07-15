@@ -97,12 +97,13 @@ public static class WorkflowEventLogWriter
         // engine wraps STEP 0-6 in one transaction).  Otherwise, wrap just the INSERT in a
         // default-isolation transaction so the row is never left half-written.
         bool ownsTransaction = db.Database.CurrentTransaction is null;
-        IDbContextTransaction? tx = ownsTransaction
-            ? await db.Database.BeginTransactionAsync(ct)
-            : null;
 
-        try
+        if (!ownsTransaction)
         {
+            // ── ENLIST branch: participate in the caller's ambient transaction ──
+            // Must NOT begin (or strategy-wrap) a transaction here — the ambient transaction's
+            // own owner (already running inside its own execution-strategy delegate, per #667)
+            // is responsible for the legality wrap and any retry.
             var logEntry = new WorkflowEventLog
             {
                 ID = Guid.NewGuid(),
@@ -121,20 +122,63 @@ public static class WorkflowEventLogWriter
 
             db.Set<WorkflowEventLog>().Add(logEntry);
             await db.SaveChangesAsync(ct);
+            return;
+        }
 
-            if (ownsTransaction)
-                await tx!.CommitAsync(ct);
-        }
-        catch when (ownsTransaction && tx is not null)
+        // ── OWN branch: standalone append, no ambient transaction ──
+        //
+        // #667 fix: this used to be a BARE, unretried BeginTransactionAsync. Under a
+        // host-configured retrying execution strategy (EnableRetryOnFailure), that call threw
+        // InvalidOperationException("...does not support user-initiated transactions...") on
+        // every standalone (non-enlisted) audit-log append — a correctness-adjacent audit-trail
+        // gap on any host that opted into that commonly-recommended cloud SQL Server/Postgres
+        // setting. Strategy-wrapped now via Database.CreateExecutionStrategy() for legality.
+        //
+        // This is a low-level static utility with no WorkFlowOptions/ILogger available (unlike
+        // WorkflowEngine/WorkflowTimerExecutor/ProcessDefinitionPublisher, which all route
+        // through the shared WorkflowTransactionExecutor helper), so it deliberately does NOT
+        // run the WorkflowDeadlockClassifier outer retry loop (concern B) here — only the
+        // execution-strategy legality wrap (concern A). If the host's own EnableRetryOnFailure
+        // strategy retries internally, ChangeTracker.Clear() before every invocation of the
+        // delegate prevents the logEntry Add from being duplicated on that inner retry (same
+        // #290 FIX-1 idempotency invariant used everywhere else in this codebase). Seq itself
+        // was already allocated above via its own independent CAS retry loop and is safely
+        // reused verbatim across any retry of this INSERT (no gap, no duplicate, since a
+        // rolled-back attempt never committed the row).
+        var strategy = db.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(ct, async token =>
         {
-            await tx.RollbackAsync(CancellationToken.None);
-            throw;
-        }
-        finally
-        {
-            if (ownsTransaction)
-                tx?.Dispose();
-        }
+            db.ChangeTracker.Clear();
+
+            await using var tx = await db.Database.BeginTransactionAsync(token);
+            try
+            {
+                var logEntry = new WorkflowEventLog
+                {
+                    ID = Guid.NewGuid(),
+                    TenantCode = tenantCode,
+                    InstanceId = instanceId,
+                    Seq = seq,
+                    ActorITCode = actorITCode,
+                    Action = action,
+                    NodeKey = nodeKey,
+                    BeforeState = beforeState,
+                    AfterState = afterState,
+                    Reason = reason,
+                    Generation = generation,
+                    OccurredUtc = DateTime.UtcNow,
+                };
+
+                db.Set<WorkflowEventLog>().Add(logEntry);
+                await db.SaveChangesAsync(token);
+                await tx.CommitAsync(token);
+            }
+            catch
+            {
+                await tx.RollbackAsync(CancellationToken.None);
+                throw;
+            }
+        });
     }
 
     // ── Private: Seq allocation ────────────────────────────────────────────────

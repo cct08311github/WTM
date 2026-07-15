@@ -9,15 +9,25 @@
   - `RestEtlSourceConfig.MaxPages` now defaults to `1000` (previously `0`/unlimited) as a finite safety bound. The zero-means-unlimited semantics are unchanged — set `MaxPages=0` explicitly to keep unlimited paging.
   - A cycle guard tracks every next-link cursor URL already followed (seeded with the starting URL); a repeat stops the crawl with a counted error instead of looping.
 
+### Fixed
+
+- **WorkFlow engine transactions now work under EF Core `EnableRetryOnFailure`.** Every transactional unit in the engine (start/advance/approve/reject/return/withdraw/delegate/timer-fire/publish/audit-append) previously opened a manual `BeginTransactionAsync`, which EF Core rejects with `InvalidOperationException` when the host configured a retrying execution strategy (`options.EnableRetryOnFailure` — a commonly-recommended cloud SQL Server/PostgreSQL setting). All 23 transactional sites are now routed through `Db.Database.CreateExecutionStrategy().ExecuteAsync(...)`, making them legal under any host strategy. (#667)
+
 ### Changed
 
 - **ETL dead-letter capture on the opt-in `EnableDeadLetter` path now buffers and flushes once per run** (previously flushed per batch), enabling run-scoped de-duplication so a failed-then-rerun job no longer writes duplicate dead-letter rows. Capture now also covers bulk-load failures, transform exceptions, and the quality-rule Abort path (previously only the Drop path). (#673)
+- **Deadlock/transient-failure handling is now uniform across all WorkFlow transactional paths.** Eight paths that previously threw the raw provider exception to the caller on a deadlock/transient failure (Start, advance-completion, sequential mid-chain, the #361 auto-approve loop, and All/Any/Sequential reject-completion) now retry and, on exhaustion, return `WorkflowActionCode.DeadlockRetryExhausted` — matching the six paths that already did so. SQLite `SQLITE_BUSY`/`SQLITE_LOCKED` are now classified as retryable transients. (#667)
+
+### Known issues
+
+- This change does **not** eliminate the SQLite-shared-memory test flake #629 (`SQLITE_ERROR: cannot start a transaction within a transaction`). That signature is a Microsoft.Data.Sqlite connection-wrapper state desync, not a retryable transient, and the SQLite test fixture uses a non-retrying strategy; #629 remains mitigated at the connection layer (busy_timeout). (#629, #667)
 
 ### Migration
 
 - **`RestEtlSource` (ETL) configs using `NextLink` pagination across multiple hosts** must now set `AllowCrossHostPagination=true` explicitly in `RestEtlSourceConfig` — cross-host next-links are rejected by default.
 - **`RestEtlSource` (ETL) configs relying on crawls longer than 1000 pages** (the previous default was unlimited) must now set `MaxPages=0` explicitly to restore unlimited paging. Configs that already set `MaxPages` to a nonzero value, or that never exceed 1000 pages, are unaffected.
 - **If you enabled `EnableDeadLetter`** (available since 10.5.1): dead-letter rows are now persisted once at run completion rather than incrementally per batch, and are bounded by the new `EtlOptions.MaxDeadLetterRowsPerRun` (default 10000; excess rows dropped with a truncation marker). A hard process crash mid-run no longer persists partial dead-letter diagnostics for that run — see #700 for the durability tradeoff discussion. No action needed for the default `EnableDeadLetter=false`.
+- Callers that previously wrapped `StartAsync`/`ApproveTaskAsync`/`RejectTaskAsync` etc. in try/catch to handle a deadlock/transient provider exception should instead check `result.Code == WorkflowActionCode.DeadlockRetryExhausted` (the other engine paths already used this pattern; this makes it uniform). No change needed for callers already checking result codes. (#667)
 
 ## [10.14.5] - 2026-07-11
 

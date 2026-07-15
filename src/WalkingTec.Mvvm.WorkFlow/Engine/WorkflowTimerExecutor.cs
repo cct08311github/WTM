@@ -322,175 +322,240 @@ internal sealed class WorkflowTimerExecutor
         //
         // FIX-A2 deadlock-victim semantics:
         // Any remaining cross-txn cycle (e.g. vs the 回退 txn's instance-first lock order)
-        // is resolved by the DB choosing this txn as the deadlock victim → per-timer catch →
-        // rollback → timer stays Armed → next-tick retry (self-healing, no data loss).
-        // DO NOT add lock hints or serializable isolation to "fix" this — the retry is correct.
+        // is resolved by the DB choosing this txn as the deadlock victim → classified retry
+        // (bounded, in-tick) → if exhausted, timer stays Armed → next-tick retry (self-healing,
+        // no data loss).  DO NOT add lock hints or serializable isolation to "fix" this — the
+        // retry is correct.
         //
         // FIX-C: capture the concrete engine once outside the txn for post-commit continuation.
         // HandleAutoActionAsync uses SystemClaimTaskAsync (IN-TXN) inside the fire transaction;
         // after txn.CommitAsync the executor drives SystemContinueTaskAsync (POST-COMMIT) here.
         var concreteEngineForContinuation = _engine as WorkflowEngine;
 
-        await using var txn = await db.Database.BeginTransactionAsync(ct);
-        try
+        // #667 fix: this used to be a BARE, unretried BeginTransactionAsync — this file had ZERO
+        // CreateExecutionStrategy call sites before #667 completion. Under a host-configured
+        // retrying execution strategy (EnableRetryOnFailure), EVERY timer fire threw
+        // InvalidOperationException("...does not support user-initiated transactions..."),
+        // silently breaking Remind/Escalate/AutoApprove/AutoReject SLA processing for any host
+        // that had opted into that commonly-recommended cloud SQL Server/Postgres setting.
+        // Routed through the shared WorkflowTransactionExecutor helper (the same helper
+        // WorkflowEngine.ExecuteInTransactionAsync forwards to — no duplicated retry/legality
+        // logic). retryOnDeadlock: true is appropriate: each timer fire is CAS-guarded (Step-1
+        // Fire CAS) and idempotent under ChangeTracker.Clear()-then-replay, and — unlike the
+        // Return-path txA/txB — there is no per-timer nesting: FireDueTimersAsync's foreach loop
+        // never holds an ambient transaction across iterations, so this call is always the
+        // outermost (owning) transaction boundary; no ambient-tx nesting risk.
+        var (txnResult, bodyExtra) = await WorkflowTransactionExecutor.ExecuteInTransactionAsync(
+            db, _options, _logger,
+            async innerCt =>
         {
-            // Step-1: Fire CAS — the multi-host mutex (lock-order first: WorkflowTimer).
-            var fireRows = await GuardedTransition.FireTimerAsync(db, timerId, timerRowVer, ct);
-            if (fireRows == 0)
+            await using var txn = await db.Database.BeginTransactionAsync(innerCt);
+            try
             {
-                // Another host won the fire CAS — rollback, no side-effects.
-                await txn.RollbackAsync(ct);
-                _logger.LogDebug("Timer {TimerId} LostRace — another host won the fire CAS", timerId);
-                return;
-            }
-
-            // Step-2: Action-decision branch.
-            // AutoApprove/AutoReject use HandleAutoActionAsync returning (outcome, actedTasks, continuationContexts) tuple;
-            // Escalate uses HandleEscalateAsync returning (outcome, escalateInfo) tuple;
-            // other actions use simple TimerFireOutcome returns.
-            List<(Guid taskId, string assigneeITCode)>? autoActedTasks = null;
-            // FIX-C: collect per-task continuation contexts to run POST-COMMIT (split claim from continuation).
-            List<WorkflowEngine.SystemClaimContext>? autoContinuationContexts = null;
-            EscalateInfo? escalateInfo = null;
-            TimerFireOutcome outcome;
-
-            if (action == TimerAction.AutoApprove || action == TimerAction.AutoReject)
-            {
-                // WF-20.4: double-gate + in-txn bounded DRAIN.
-                // FIX-B3: pass approvalTaskId so task-scoped timers drain only their own task.
-                // FIX-C: HandleAutoActionAsync now only runs the IN-TXN claim CAS + event rows.
-                //        Continuation (AdvanceAsync, timer re-arm, WF-15 notifier) is post-commit.
-                var (actionOutcome, actedTasks, continuationContexts) = await HandleAutoActionAsync(
-                    db, action, nodeInstanceId, approvalTaskId, timerGeneration,
-                    instanceSnap.ID, instanceSnap.RowVer, instanceSnap.TenantCode,
-                    now, ct);
-                outcome = actionOutcome;
-                autoActedTasks = actedTasks;
-                autoContinuationContexts = continuationContexts;
-            }
-            else if (action == TimerAction.Escalate)
-            {
-                // WF-20.5: Escalate — task-scoped vs node-scoped dispatch.
-                // FIX-A3: timeoutDef re-read from graph above; passed in lieu of removed entity columns.
-                var (escalateOutcome, info) = await HandleEscalateAsync(
-                    db, timerId, nodeInstanceId, approvalTaskId, timerGeneration,
-                    remindCount, idempotencyKey, tenantCode,
-                    timeoutDef,
-                    instanceSnap.ID, instanceSnap.RowVer, instanceSnap.TenantCode,
-                    now, ct);
-                outcome = escalateOutcome;
-                escalateInfo = info;
-            }
-            else
-            {
-                outcome = action switch
+                // Step-1: Fire CAS — the multi-host mutex (lock-order first: WorkflowTimer).
+                var fireRows = await GuardedTransition.FireTimerAsync(db, timerId, timerRowVer, innerCt);
+                if (fireRows == 0)
                 {
+                    // Another host won the fire CAS — rollback, no side-effects.
+                    await txn.RollbackAsync(innerCt);
+                    _logger.LogDebug("Timer {TimerId} LostRace — another host won the fire CAS", timerId);
+                    return (WorkflowActionResult.AlreadyHandled,
+                        new TimerFireBodyExtra(TimerFireOutcome.LostRace, null, null, null));
+                }
+
+                // Step-2: Action-decision branch.
+                // AutoApprove/AutoReject use HandleAutoActionAsync returning (outcome, actedTasks, continuationContexts) tuple;
+                // Escalate uses HandleEscalateAsync returning (outcome, escalateInfo) tuple;
+                // other actions use simple TimerFireOutcome returns.
+                List<(Guid taskId, string assigneeITCode)>? autoActedTasks = null;
+                // FIX-C: collect per-task continuation contexts to run POST-COMMIT (split claim from continuation).
+                List<WorkflowEngine.SystemClaimContext>? autoContinuationContexts = null;
+                EscalateInfo? escalateInfo = null;
+                TimerFireOutcome outcome;
+
+                if (action == TimerAction.AutoApprove || action == TimerAction.AutoReject)
+                {
+                    // WF-20.4: double-gate + in-txn bounded DRAIN.
+                    // FIX-B3: pass approvalTaskId so task-scoped timers drain only their own task.
+                    // FIX-C: HandleAutoActionAsync now only runs the IN-TXN claim CAS + event rows.
+                    //        Continuation (AdvanceAsync, timer re-arm, WF-15 notifier) is post-commit.
+                    var (actionOutcome, actedTasks, continuationContexts) = await HandleAutoActionAsync(
+                        db, action, nodeInstanceId, approvalTaskId, timerGeneration,
+                        instanceSnap.ID, instanceSnap.RowVer, instanceSnap.TenantCode,
+                        now, innerCt);
+                    outcome = actionOutcome;
+                    autoActedTasks = actedTasks;
+                    autoContinuationContexts = continuationContexts;
+                }
+                else if (action == TimerAction.Escalate)
+                {
+                    // WF-20.5: Escalate — task-scoped vs node-scoped dispatch.
                     // FIX-A3: timeoutDef re-read from graph above; passed in lieu of removed entity columns.
-                    TimerAction.Remind => await HandleRemindAsync(
+                    var (escalateOutcome, info) = await HandleEscalateAsync(
                         db, timerId, nodeInstanceId, approvalTaskId, timerGeneration,
                         remindCount, idempotencyKey, tenantCode,
                         timeoutDef,
                         instanceSnap.ID, instanceSnap.RowVer, instanceSnap.TenantCode,
-                        now, ct),
-
-                    _ => HandleUnknownAction(timerId, action),
-                };
-            }
-
-            await txn.CommitAsync(ct);
-
-            // ── Post-commit: FIX-C — run auto-action continuations BEFORE notifications ──
-            // The fire txn committed the task-claim CASes + TimeoutFire event rows.
-            // Now drive the node-completion continuation (increment → TryComplete → AdvanceAsync
-            // recursion + timer re-arm + WF-15 in-engine notifier calls) outside any transaction.
-            //
-            // Per-task try/catch + LogError: a continuation failure MUST NOT undo the committed
-            // claims (tasks are already AutoApproved/AutoRejected — the SLA action is recorded).
-            // Phase-4 (ReDriveStrandedSequentialNodesAsync) is the recovery backstop for this window.
-            // It detects: Running instance + Activated Sequential node + terminal task at SequencePointer
-            // + SequencePointer not yet advanced → re-drives via AdvanceAsync.
-            // This is the documented crash-profile limitation (design §6 R3 Known limitation).
-            if (autoContinuationContexts is { Count: > 0 } && concreteEngineForContinuation is not null)
-            {
-                foreach (var ctx in autoContinuationContexts)
+                        now, innerCt);
+                    outcome = escalateOutcome;
+                    escalateInfo = info;
+                }
+                else
                 {
-                    try
+                    outcome = action switch
                     {
-                        await concreteEngineForContinuation.SystemContinueTaskAsync(ctx, ct);
-                    }
-                    catch (Exception contEx)
-                    {
-                        // Continuation failure: task is already committed (AutoApproved/AutoRejected).
-                        // Log and continue — node may stay at Activated with zero Pending tasks;
-                        // Phase-4 (ReDriveStrandedSequentialNodesAsync) re-drives it next tick
-                        // (documented crash-profile limitation §6 R3).
-                        _logger.LogError(contEx,
-                            "FIX-C: SystemContinueTaskAsync failed for task {TaskId} (node {NodeId}) — " +
-                            "claim is committed; continuation failure logged and suppressed. " +
-                            "Node may require manual re-drive if left with zero Pending tasks.",
-                            ctx.TaskId, nodeInstanceId);
-                    }
+                        // FIX-A3: timeoutDef re-read from graph above; passed in lieu of removed entity columns.
+                        TimerAction.Remind => await HandleRemindAsync(
+                            db, timerId, nodeInstanceId, approvalTaskId, timerGeneration,
+                            remindCount, idempotencyKey, tenantCode,
+                            timeoutDef,
+                            instanceSnap.ID, instanceSnap.RowVer, instanceSnap.TenantCode,
+                            now, innerCt),
+
+                        _ => HandleUnknownAction(timerId, action),
+                    };
+                }
+
+                await txn.CommitAsync(innerCt);
+
+                return (WorkflowActionResult.Advanced,
+                    new TimerFireBodyExtra(outcome, autoActedTasks, autoContinuationContexts, escalateInfo));
+            }
+            catch
+            {
+                await txn.RollbackAsync(CancellationToken.None);
+                throw; // classified by ExecuteInTransactionAsync; a non-deadlock exception
+                       // re-throws out to the per-timer catch in FireDueTimersAsync, exactly as
+                       // before #667.
+            }
+        },
+            defaultExtra: new TimerFireBodyExtra(TimerFireOutcome.LostRace, null, null, null),
+            ct,
+            retryOnDeadlock: true);
+
+        if (txnResult.Code == WorkflowActionCode.DeadlockRetryExhausted)
+        {
+            // Deadlock-classified failure on every retry attempt — same ultimate outcome as the
+            // pre-#667 raw-throw path (timer stays Armed for next-tick retry), but now closed
+            // instead of propagating a raw provider exception up through FireDueTimersAsync.
+            _logger.LogError(
+                "Timer {TimerId} fire transaction exhausted deadlock retries — timer stays Armed for next-tick retry",
+                timerId);
+            return;
+        }
+
+        if (bodyExtra.Outcome == TimerFireOutcome.LostRace)
+        {
+            // Another host won the fire CAS — no side-effects, nothing further to do this tick.
+            return;
+        }
+
+        var outcome2 = bodyExtra.Outcome;
+        var autoActedTasks2 = bodyExtra.AutoActedTasks;
+        var autoContinuationContexts2 = bodyExtra.AutoContinuationContexts;
+        var escalateInfo2 = bodyExtra.EscalateInfo;
+
+        // ── Post-commit: FIX-C — run auto-action continuations BEFORE notifications ──
+        // The fire txn committed the task-claim CASes + TimeoutFire event rows.
+        // Now drive the node-completion continuation (increment → TryComplete → AdvanceAsync
+        // recursion + timer re-arm + WF-15 in-engine notifier calls) outside any transaction
+        // (moved fully outside the strategy-wrapped delegate by #667 completion — was previously
+        // inside the try, after CommitAsync, which risked the outer catch calling RollbackAsync
+        // on an already-committed transaction if a post-commit call ever threw uncaught).
+        //
+        // Per-task try/catch + LogError: a continuation failure MUST NOT undo the committed
+        // claims (tasks are already AutoApproved/AutoRejected — the SLA action is recorded).
+        // Phase-4 (ReDriveStrandedSequentialNodesAsync) is the recovery backstop for this window.
+        // It detects: Running instance + Activated Sequential node + terminal task at SequencePointer
+        // + SequencePointer not yet advanced → re-drives via AdvanceAsync.
+        // This is the documented crash-profile limitation (design §6 R3 Known limitation).
+        if (autoContinuationContexts2 is { Count: > 0 } && concreteEngineForContinuation is not null)
+        {
+            foreach (var ctx in autoContinuationContexts2)
+            {
+                try
+                {
+                    await concreteEngineForContinuation.SystemContinueTaskAsync(ctx, ct);
+                }
+                catch (Exception contEx)
+                {
+                    // Continuation failure: task is already committed (AutoApproved/AutoRejected).
+                    // Log and continue — node may stay at Activated with zero Pending tasks;
+                    // Phase-4 (ReDriveStrandedSequentialNodesAsync) re-drives it next tick
+                    // (documented crash-profile limitation §6 R3).
+                    _logger.LogError(contEx,
+                        "FIX-C: SystemContinueTaskAsync failed for task {TaskId} (node {NodeId}) — " +
+                        "claim is committed; continuation failure logged and suppressed. " +
+                        "Node may require manual re-drive if left with zero Pending tasks.",
+                        ctx.TaskId, nodeInstanceId);
                 }
             }
-
-            // ── Post-commit: notify (re-gated on fresh read) ──────────────────
-            // WF-20.3: call NotifyTimeoutRemindAsync for Remind outcome.
-            if (outcome == TimerFireOutcome.Fired && action == TimerAction.Remind && _notifier is not null)
-            {
-                await NotifyRemindAsync(db, _notifier, nodeInstanceId, timerGeneration,
-                    instanceSnap.ID, remindCount, ct);
-            }
-
-            // WF-20.4: call NotifyTimeoutAutoActionedAsync for each successfully acted task.
-            if (outcome == TimerFireOutcome.Fired
-                && (action == TimerAction.AutoApprove || action == TimerAction.AutoReject)
-                && autoActedTasks is { Count: > 0 }
-                && _notifier is not null)
-            {
-                await NotifyAutoActionedAsync(db, _notifier, nodeInstanceId, timerGeneration,
-                    instanceSnap.ID, action, autoActedTasks, ct);
-            }
-
-            // WF-20.5: call NotifyTimeoutEscalatedAsync post-commit for Escalate action.
-            if (action == TimerAction.Escalate && _notifier is not null && escalateInfo is not null)
-            {
-                await NotifyEscalateAsync(db, _notifier, nodeInstanceId, timerGeneration,
-                    instanceSnap.ID, escalateInfo, ct);
-            }
-
-            // FIX-B4: DowngradedToRemind paths (gate-off auto-action, custom-engine, escalate-no-target,
-            // escalate-collision) commit a FailClosed event but historically sent NO notification and armed
-            // NO follow-up chain link.  Execute real Remind semantics post-commit:
-            //   • Notify current Pending assignees (NotifyTimeoutRemindAsync re-gated on fresh read).
-            //   • Arm the next Remind chain link when the graph def has RemindEveryHours.
-            // This ensures the human assignee is alerted even when the auto/escalation gate is off.
-            if (outcome == TimerFireOutcome.DowngradedToRemind && _notifier is not null)
-            {
-                await NotifyRemindAsync(db, _notifier, nodeInstanceId, timerGeneration,
-                    instanceSnap.ID, remindCount, ct);
-            }
-            // EscalateCollisionNotifyOnly is handled by NotifyEscalateAsync above (uses Remind fallback).
-            // DowngradedToRemind from escalate (no-target / gate-off) may also need chain arm.
-            // The chain-link insert is inside the transaction (HandleRemindAsync / HandleEscalateAsync).
-            // For DowngradedToRemind paths the chain-link was NOT inserted in-txn because the gate
-            // aborted early.  Insert it post-commit here using the same BuildNextLinkKey logic.
-            if (outcome == TimerFireOutcome.DowngradedToRemind && timeoutDef?.RemindEveryHours.HasValue == true)
-            {
-                await TryArmDowngradedRemindChainLinkAsync(
-                    db, nodeInstanceId, approvalTaskId, timerGeneration,
-                    remindCount, idempotencyKey, tenantCode, timeoutDef, now, ct);
-            }
-
-            _logger.LogDebug(
-                "Timer {TimerId} outcome={Outcome} (action={Action})",
-                timerId, outcome, action);
         }
-        catch
+
+        // ── Post-commit: notify (re-gated on fresh read) ──────────────────
+        // WF-20.3: call NotifyTimeoutRemindAsync for Remind outcome.
+        if (outcome2 == TimerFireOutcome.Fired && action == TimerAction.Remind && _notifier is not null)
         {
-            await txn.RollbackAsync(ct);
-            throw; // re-throw to the per-timer catch in FireDueTimersAsync
+            await NotifyRemindAsync(db, _notifier, nodeInstanceId, timerGeneration,
+                instanceSnap.ID, remindCount, ct);
         }
+
+        // WF-20.4: call NotifyTimeoutAutoActionedAsync for each successfully acted task.
+        if (outcome2 == TimerFireOutcome.Fired
+            && (action == TimerAction.AutoApprove || action == TimerAction.AutoReject)
+            && autoActedTasks2 is { Count: > 0 }
+            && _notifier is not null)
+        {
+            await NotifyAutoActionedAsync(db, _notifier, nodeInstanceId, timerGeneration,
+                instanceSnap.ID, action, autoActedTasks2, ct);
+        }
+
+        // WF-20.5: call NotifyTimeoutEscalatedAsync post-commit for Escalate action.
+        if (action == TimerAction.Escalate && _notifier is not null && escalateInfo2 is not null)
+        {
+            await NotifyEscalateAsync(db, _notifier, nodeInstanceId, timerGeneration,
+                instanceSnap.ID, escalateInfo2, ct);
+        }
+
+        // FIX-B4: DowngradedToRemind paths (gate-off auto-action, custom-engine, escalate-no-target,
+        // escalate-collision) commit a FailClosed event but historically sent NO notification and armed
+        // NO follow-up chain link.  Execute real Remind semantics post-commit:
+        //   • Notify current Pending assignees (NotifyTimeoutRemindAsync re-gated on fresh read).
+        //   • Arm the next Remind chain link when the graph def has RemindEveryHours.
+        // This ensures the human assignee is alerted even when the auto/escalation gate is off.
+        if (outcome2 == TimerFireOutcome.DowngradedToRemind && _notifier is not null)
+        {
+            await NotifyRemindAsync(db, _notifier, nodeInstanceId, timerGeneration,
+                instanceSnap.ID, remindCount, ct);
+        }
+        // EscalateCollisionNotifyOnly is handled by NotifyEscalateAsync above (uses Remind fallback).
+        // DowngradedToRemind from escalate (no-target / gate-off) may also need chain arm.
+        // The chain-link insert is inside the transaction (HandleRemindAsync / HandleEscalateAsync).
+        // For DowngradedToRemind paths the chain-link was NOT inserted in-txn because the gate
+        // aborted early.  Insert it post-commit here using the same BuildNextLinkKey logic.
+        if (outcome2 == TimerFireOutcome.DowngradedToRemind && timeoutDef?.RemindEveryHours.HasValue == true)
+        {
+            await TryArmDowngradedRemindChainLinkAsync(
+                db, nodeInstanceId, approvalTaskId, timerGeneration,
+                remindCount, idempotencyKey, tenantCode, timeoutDef, now, ct);
+        }
+
+        _logger.LogDebug(
+            "Timer {TimerId} outcome={Outcome} (action={Action})",
+            timerId, outcome2, action);
     }
+
+    /// <summary>
+    /// #667 completion: carries the per-timer-fire body's outcome + auto-action/escalate
+    /// context out of the strategy-wrapped <see cref="WorkflowTransactionExecutor.ExecuteInTransactionAsync"/>
+    /// delegate to the post-commit continuation/notification code (which must run OUTSIDE the
+    /// transactional unit). See <see cref="ProcessTimerAsync"/>.
+    /// </summary>
+    private sealed record TimerFireBodyExtra(
+        TimerFireOutcome Outcome,
+        List<(Guid taskId, string assigneeITCode)>? AutoActedTasks,
+        List<WorkflowEngine.SystemClaimContext>? AutoContinuationContexts,
+        EscalateInfo? EscalateInfo);
 
     // ── Remind action (WF-20.1 fully implemented) ────────────────────────────
 

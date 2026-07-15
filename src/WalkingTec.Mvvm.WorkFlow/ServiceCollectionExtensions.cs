@@ -65,10 +65,14 @@ public static class ServiceCollectionExtensions
         {
             var factory = sp.GetService<IWtmDataContextFactory>();
             var options = sp.GetService<IOptions<WorkFlowOptions>>();
+            // #667 completion: wire the publisher's optional logger so the strategy-wrap's
+            // deadlock-retry diagnostics are captured in production; falls back to NullLogger
+            // (unchanged behaviour) when no logging provider is registered.
+            var logger = sp.GetService<ILogger<ProcessDefinitionPublisher>>();
             if (factory != null)
-                return new ProcessDefinitionPublisher(factory, options);
+                return new ProcessDefinitionPublisher(factory, options, logger);
             var dc = sp.GetRequiredService<IDataContext>();
-            return new ProcessDefinitionPublisher(dc, options);
+            return new ProcessDefinitionPublisher(dc, options, logger);
         });
 
         // 3. WF-6/7: IWorkflowEngine.

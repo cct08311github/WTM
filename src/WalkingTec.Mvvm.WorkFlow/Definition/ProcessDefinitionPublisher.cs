@@ -35,9 +35,12 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Services;
+using WalkingTec.Mvvm.WorkFlow.Engine;
 using WalkingTec.Mvvm.WorkFlow.Models;
 
 namespace WalkingTec.Mvvm.WorkFlow.Definition;
@@ -50,6 +53,10 @@ public sealed class ProcessDefinitionPublisher : IProcessDefinitionPublisher, ID
 {
     private readonly IDataContext _dc;
     private readonly WorkFlowOptions? _options;
+    // #667 completion: optional — falls back to NullLogger so existing callers that don't
+    // supply a logger (both public constructors default this to null) keep working exactly as
+    // before; only deadlock-retry diagnostics are lost, never functionality.
+    private readonly ILogger _logger;
     // True when this instance owns the DataContext lifetime (created via IWtmDataContextFactory).
     // False when the caller (tests) passed a pre-existing IDataContext — caller manages lifetime.
     private readonly bool _ownsDc;
@@ -59,7 +66,10 @@ public sealed class ProcessDefinitionPublisher : IProcessDefinitionPublisher, ID
     /// <see cref="IWtmDataContextFactory"/> (same mechanism as <c>WTMContext.DC</c>).
     /// This publisher owns and disposes the created DataContext on <see cref="Dispose"/>.
     /// </summary>
-    public ProcessDefinitionPublisher(IWtmDataContextFactory dcFactory, IOptions<WorkFlowOptions>? options = null)
+    public ProcessDefinitionPublisher(
+        IWtmDataContextFactory dcFactory,
+        IOptions<WorkFlowOptions>? options = null,
+        ILogger<ProcessDefinitionPublisher>? logger = null)
     {
         if (dcFactory is null) throw new ArgumentNullException(nameof(dcFactory));
         _dc = dcFactory.CreateDC()
@@ -67,6 +77,7 @@ public sealed class ProcessDefinitionPublisher : IProcessDefinitionPublisher, ID
                 "IWtmDataContextFactory.CreateDC() returned null. " +
                 "Ensure a valid database connection is configured in appsettings.json.");
         _options = options?.Value;
+        _logger = (ILogger?)logger ?? NullLogger.Instance;
         _ownsDc = true;
     }
 
@@ -74,10 +85,14 @@ public sealed class ProcessDefinitionPublisher : IProcessDefinitionPublisher, ID
     /// Test/direct constructor: accepts a pre-existing <see cref="IDataContext"/> and optional options.
     /// The caller is responsible for the DataContext lifetime — this publisher does NOT dispose it.
     /// </summary>
-    public ProcessDefinitionPublisher(IDataContext dc, IOptions<WorkFlowOptions>? options = null)
+    public ProcessDefinitionPublisher(
+        IDataContext dc,
+        IOptions<WorkFlowOptions>? options = null,
+        ILogger<ProcessDefinitionPublisher>? logger = null)
     {
         _dc = dc ?? throw new ArgumentNullException(nameof(dc));
         _options = options?.Value;
+        _logger = (ILogger?)logger ?? NullLogger.Instance;
         _ownsDc = false;
     }
 
@@ -86,6 +101,21 @@ public sealed class ProcessDefinitionPublisher : IProcessDefinitionPublisher, ID
     {
         if (_ownsDc)
             _dc.Dispose();
+    }
+
+    // #667: the execution-strategy legality wrap only needs IDataContext.Database (available on
+    // every implementation via the interface) — it does NOT require a concrete DbContext. The
+    // ChangeTracker.Clear() idempotency step DOES need one; some IDataContext implementations
+    // (hand-written test adapters wrapping an inner DbContext — mirrored across several test
+    // files, e.g. SvPublisherTestDataContext) are not themselves DbContext subclasses, so this is
+    // a best-effort cast: production callers (FrameworkContext/EmptyContext) always get the
+    // idempotency guard; adapter-wrapped test doubles still get full legality-wrap + retry
+    // coverage, just without ChangeTracker.Clear() — no worse than the pre-#667 status quo (zero
+    // wrap, zero guard) for that narrow case. See WorkflowTransactionExecutor's type-level remarks.
+    private Action? GetChangeTrackerClear()
+    {
+        var dbForClear = _dc as DbContext;
+        return dbForClear is null ? null : dbForClear.ChangeTracker.Clear;
     }
 
     /// <inheritdoc/>
@@ -112,78 +142,108 @@ public sealed class ProcessDefinitionPublisher : IProcessDefinitionPublisher, ID
 
         // ── Steps 4 & 5: load definition, hash-check, version-insert ──────────
         // Wrap in a transaction to prevent TOCTOU double-insert under concurrent publish.
-        await using var tx = await _dc.Database.BeginTransactionAsync(cancellationToken);
-        try
+        //
+        // #667 fix: this used to be a BARE, unretried BeginTransactionAsync. Under a
+        // host-configured retrying execution strategy (EnableRetryOnFailure), EF Core throws
+        // InvalidOperationException("...does not support user-initiated transactions...") on
+        // every publish — a user-initiated write silently broken on any host that opted into
+        // that commonly-recommended cloud SQL Server/Postgres setting. Strategy-wrapped now via
+        // the shared WorkflowTransactionExecutor helper. retryOnDeadlock: true is safe — the
+        // body is idempotent under ChangeTracker.Clear()-then-replay (definition/maxVersionNo
+        // are freshly re-read every attempt; newVersion.ID is freshly minted every attempt; a
+        // rolled-back attempt's Added/Modified entities never survive into the retry).
+        var options = _options ?? new WorkFlowOptions();
+        var (txResult, publishResult) = await WorkflowTransactionExecutor.ExecuteInTransactionAsync(
+            _dc.Database, GetChangeTrackerClear(), options, _logger,
+            async innerCt =>
         {
-            // Load the definition head (tenant filter auto-applied by DataContext).
-            var definition = await _dc.Set<ProcessDefinition>()
-                .FirstOrDefaultAsync(d => d.Code == definitionCode, cancellationToken);
-
-            if (definition == null)
-                return PublishResult.NotFound(definitionCode);
-
-            // ── Step 4: idempotent no-op check ─────────────────────────────────
-            if (definition.CurrentVersionId.HasValue)
+            await using var tx = await _dc.Database.BeginTransactionAsync(innerCt);
+            try
             {
-                var currentVersion = await _dc.Set<ProcessDefinitionVersion>()
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync(
-                        v => v.ID == definition.CurrentVersionId.Value,
-                        cancellationToken);
+                // Load the definition head (tenant filter auto-applied by DataContext).
+                var definition = await _dc.Set<ProcessDefinition>()
+                    .FirstOrDefaultAsync(d => d.Code == definitionCode, innerCt);
 
-                if (currentVersion != null &&
-                    string.Equals(currentVersion.ContentHash, contentHash, StringComparison.Ordinal))
+                if (definition == null)
                 {
-                    // Same graph — no-op.
-                    await tx.RollbackAsync(cancellationToken);
-                    return PublishResult.NoOp(
-                        currentVersion.ID,
-                        currentVersion.VersionNo,
-                        contentHash);
+                    await tx.RollbackAsync(innerCt);
+                    return (WorkflowActionResult.Advanced, PublishResult.NotFound(definitionCode));
                 }
+
+                // ── Step 4: idempotent no-op check ─────────────────────────────────
+                if (definition.CurrentVersionId.HasValue)
+                {
+                    var currentVersion = await _dc.Set<ProcessDefinitionVersion>()
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync(
+                            v => v.ID == definition.CurrentVersionId.Value,
+                            innerCt);
+
+                    if (currentVersion != null &&
+                        string.Equals(currentVersion.ContentHash, contentHash, StringComparison.Ordinal))
+                    {
+                        // Same graph — no-op.
+                        await tx.RollbackAsync(innerCt);
+                        return (WorkflowActionResult.Advanced, PublishResult.NoOp(
+                            currentVersion.ID,
+                            currentVersion.VersionNo,
+                            contentHash));
+                    }
+                }
+
+                // ── Step 5: compute next VersionNo ─────────────────────────────────
+                // max(VersionNo) for this definition, or 0 if none exist.
+                var maxVersionNo = await _dc.Set<ProcessDefinitionVersion>()
+                    .Where(v => v.DefinitionId == definition.ID)
+                    .Select(v => (int?)v.VersionNo)
+                    .MaxAsync(innerCt) ?? 0;
+
+                var newVersionNo = maxVersionNo + 1;
+
+                // ── Step 5a: INSERT new immutable version row ──────────────────────
+                var newVersion = new ProcessDefinitionVersion
+                {
+                    ID            = Guid.NewGuid(),
+                    TenantCode    = definition.TenantCode,
+                    DefinitionId  = definition.ID,
+                    VersionNo     = newVersionNo,
+                    SchemaVersion = graph.SchemaVersion,
+                    GraphJson     = canonicalJson,
+                    ContentHash   = contentHash,
+                    PublishedAt   = DateTime.UtcNow,
+                    PublishedBy   = publishedBy,
+                    IsValid       = true,
+                };
+                _dc.AddEntity(newVersion);
+
+                // ── Step 5b: repoint definition head to the new version ────────────
+                // Use UpdateProperty to issue a narrow UPDATE — avoids a full entity
+                // update when only CurrentVersionId changes.
+                definition.CurrentVersionId = newVersion.ID;
+                _dc.UpdateProperty(definition, d => d.CurrentVersionId!);
+
+                await _dc.SaveChangesAsync(innerCt);
+                await tx.CommitAsync(innerCt);
+
+                return (WorkflowActionResult.Advanced,
+                    PublishResult.NewVersion(newVersion.ID, newVersionNo, contentHash));
             }
-
-            // ── Step 5: compute next VersionNo ─────────────────────────────────
-            // max(VersionNo) for this definition, or 0 if none exist.
-            var maxVersionNo = await _dc.Set<ProcessDefinitionVersion>()
-                .Where(v => v.DefinitionId == definition.ID)
-                .Select(v => (int?)v.VersionNo)
-                .MaxAsync(cancellationToken) ?? 0;
-
-            var newVersionNo = maxVersionNo + 1;
-
-            // ── Step 5a: INSERT new immutable version row ──────────────────────
-            var newVersion = new ProcessDefinitionVersion
+            catch
             {
-                ID            = Guid.NewGuid(),
-                TenantCode    = definition.TenantCode,
-                DefinitionId  = definition.ID,
-                VersionNo     = newVersionNo,
-                SchemaVersion = graph.SchemaVersion,
-                GraphJson     = canonicalJson,
-                ContentHash   = contentHash,
-                PublishedAt   = DateTime.UtcNow,
-                PublishedBy   = publishedBy,
-                IsValid       = true,
-            };
-            _dc.AddEntity(newVersion);
+                await tx.RollbackAsync(CancellationToken.None);
+                throw;
+            }
+        },
+            defaultExtra: PublishResult.Invalid(GraphValidationError.None, "unreachable"),
+            cancellationToken,
+            retryOnDeadlock: true);
 
-            // ── Step 5b: repoint definition head to the new version ────────────
-            // Use UpdateProperty to issue a narrow UPDATE — avoids a full entity
-            // update when only CurrentVersionId changes.
-            definition.CurrentVersionId = newVersion.ID;
-            _dc.UpdateProperty(definition, d => d.CurrentVersionId!);
+        if (txResult.Code == WorkflowActionCode.DeadlockRetryExhausted)
+            throw new InvalidOperationException(
+                $"ProcessDefinitionPublisher.PublishAsync: deadlock-classified failure persisted " +
+                $"after {options.DeadlockRetryAttempts} attempts while publishing '{definitionCode}'.");
 
-            await _dc.SaveChangesAsync(cancellationToken);
-            await tx.CommitAsync(cancellationToken);
-
-            return PublishResult.NewVersion(newVersion.ID, newVersionNo, contentHash);
-        }
-        catch
-        {
-            await tx.RollbackAsync(cancellationToken);
-            throw;
-        }
+        return publishResult;
     }
 
     // ── WF-21.1: Designer raw-path publish ────────────────────────────────────
@@ -243,115 +303,140 @@ public sealed class ProcessDefinitionPublisher : IProcessDefinitionPublisher, ID
             return PublishResult.Invalid(validation.Error, validation.ErrorMessage!);
 
         // ── Steps 6 & 7: DB transaction — idempotent check, CAS, version-insert ──
-        await using var tx = await _dc.Database.BeginTransactionAsync(cancellationToken);
-        try
+        //
+        // #667 fix: same legality gap as PublishAsync above — this used to be a BARE, unretried
+        // BeginTransactionAsync, throwing InvalidOperationException on every raw-path publish
+        // under a host-configured retrying execution strategy. Strategy-wrapped now via the
+        // shared WorkflowTransactionExecutor helper. retryOnDeadlock: true — same idempotency
+        // reasoning as PublishAsync (fresh re-reads + freshly-minted IDs every attempt,
+        // ChangeTracker.Clear() before each invocation discards any stale tracked entities from
+        // a rolled-back prior attempt).
+        var options = _options ?? new WorkFlowOptions();
+        var (txResult, publishResult) = await WorkflowTransactionExecutor.ExecuteInTransactionAsync(
+            _dc.Database, GetChangeTrackerClear(), options, _logger,
+            async innerCt =>
         {
-            // Load head (tenant filter auto-applied).
-            var definition = await _dc.Set<ProcessDefinition>()
-                .FirstOrDefaultAsync(d => d.Code == definitionCode, cancellationToken);
-
-            if (definition == null)
+            await using var tx = await _dc.Database.BeginTransactionAsync(innerCt);
+            try
             {
-                await tx.RollbackAsync(cancellationToken);
-                return PublishResult.NotFound(definitionCode);
-            }
+                // Load head (tenant filter auto-applied).
+                var definition = await _dc.Set<ProcessDefinition>()
+                    .FirstOrDefaultAsync(d => d.Code == definitionCode, innerCt);
 
-            string? currentHash = null;
-
-            if (definition.CurrentVersionId.HasValue)
-            {
-                var currentVersion = await _dc.Set<ProcessDefinitionVersion>()
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync(
-                        v => v.ID == definition.CurrentVersionId.Value,
-                        cancellationToken);
-
-                if (currentVersion != null)
+                if (definition == null)
                 {
-                    currentHash = currentVersion.ContentHash;
+                    await tx.RollbackAsync(innerCt);
+                    return (WorkflowActionResult.Advanced, PublishResult.NotFound(definitionCode));
+                }
 
-                    // ── Idempotent no-op check (short-circuits CAS, per spec) ──
-                    // If the incoming canonical bytes are byte-identical to the current
-                    // version, this is always a NoOp — regardless of expectedBaseContentHash.
-                    if (string.Equals(currentHash, contentHash, StringComparison.Ordinal))
-                    {
-                        await tx.RollbackAsync(cancellationToken);
-                        return PublishResult.NoOp(
-                            currentVersion.ID,
-                            currentVersion.VersionNo,
-                            contentHash);
-                    }
+                string? currentHash = null;
 
-                    // ── CAS check — only when expected hash is supplied ────────
-                    if (!string.IsNullOrEmpty(expectedBaseContentHash) &&
-                        !string.Equals(expectedBaseContentHash, currentHash, StringComparison.Ordinal))
+                if (definition.CurrentVersionId.HasValue)
+                {
+                    var currentVersion = await _dc.Set<ProcessDefinitionVersion>()
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync(
+                            v => v.ID == definition.CurrentVersionId.Value,
+                            innerCt);
+
+                    if (currentVersion != null)
                     {
-                        await tx.RollbackAsync(cancellationToken);
-                        return PublishResult.CasConflict(currentHash);
+                        currentHash = currentVersion.ContentHash;
+
+                        // ── Idempotent no-op check (short-circuits CAS, per spec) ──
+                        // If the incoming canonical bytes are byte-identical to the current
+                        // version, this is always a NoOp — regardless of expectedBaseContentHash.
+                        if (string.Equals(currentHash, contentHash, StringComparison.Ordinal))
+                        {
+                            await tx.RollbackAsync(innerCt);
+                            return (WorkflowActionResult.Advanced, PublishResult.NoOp(
+                                currentVersion.ID,
+                                currentVersion.VersionNo,
+                                contentHash));
+                        }
+
+                        // ── CAS check — only when expected hash is supplied ────────
+                        if (!string.IsNullOrEmpty(expectedBaseContentHash) &&
+                            !string.Equals(expectedBaseContentHash, currentHash, StringComparison.Ordinal))
+                        {
+                            await tx.RollbackAsync(innerCt);
+                            return (WorkflowActionResult.Advanced, PublishResult.CasConflict(currentHash));
+                        }
                     }
                 }
-            }
-            else
-            {
-                // First publish — no current version.
-                // CAS requires null/empty expectedBaseContentHash (first publish).
-                // If caller supplied a non-empty hash, it can't match (no current version),
-                // so treat as conflict to prevent a "stale first publish" race.
-                if (!string.IsNullOrEmpty(expectedBaseContentHash))
+                else
                 {
-                    await tx.RollbackAsync(cancellationToken);
-                    return PublishResult.CasConflict(string.Empty);
+                    // First publish — no current version.
+                    // CAS requires null/empty expectedBaseContentHash (first publish).
+                    // If caller supplied a non-empty hash, it can't match (no current version),
+                    // so treat as conflict to prevent a "stale first publish" race.
+                    if (!string.IsNullOrEmpty(expectedBaseContentHash))
+                    {
+                        await tx.RollbackAsync(innerCt);
+                        return (WorkflowActionResult.Advanced, PublishResult.CasConflict(string.Empty));
+                    }
                 }
+
+                // ── Compute next VersionNo ────────────────────────────────────────
+                var maxVersionNo = await _dc.Set<ProcessDefinitionVersion>()
+                    .Where(v => v.DefinitionId == definition.ID)
+                    .Select(v => (int?)v.VersionNo)
+                    .MaxAsync(innerCt) ?? 0;
+
+                var newVersionNo = maxVersionNo + 1;
+
+                // ── INSERT immutable version row with CANONICAL RAW BYTES ─────────
+                // Key fidelity point: GraphJson stores the canonical raw bytes (not the
+                // typed-path re-serialization), so unknown fields and exact number literals
+                // are preserved verbatim in the version history.
+                var newVersion = new ProcessDefinitionVersion
+                {
+                    ID            = Guid.NewGuid(),
+                    TenantCode    = definition.TenantCode,
+                    DefinitionId  = definition.ID,
+                    VersionNo     = newVersionNo,
+                    SchemaVersion = graphForValidation.SchemaVersion,
+                    GraphJson     = canonicalJson,  // canonical raw bytes — fidelity contract
+                    ContentHash   = contentHash,
+                    PublishedAt   = DateTime.UtcNow,
+                    PublishedBy   = publishedBy,
+                    IsValid       = true,
+                };
+                _dc.AddEntity(newVersion);
+
+                // ── Repoint definition head ───────────────────────────────────────
+                definition.CurrentVersionId = newVersion.ID;
+                _dc.UpdateProperty(definition, d => d.CurrentVersionId!);
+
+                // ── Draft deletion hook (WF-21.3) ─────────────────────────────────
+                // ProcessDefinitionDraft entity is introduced in WF-21.3.
+                // The deletion happens here, in the same transaction, so that a concurrent
+                // stale editor's subsequent PUT /draft sees the row gone and returns 409.
+                // No-op until the entity type is registered in ApplyWorkFlowModels.
+                await DeleteDraftIfExistsAsync(definition.ID, innerCt);
+
+                await _dc.SaveChangesAsync(innerCt);
+                await tx.CommitAsync(innerCt);
+
+                return (WorkflowActionResult.Advanced,
+                    PublishResult.NewVersion(newVersion.ID, newVersionNo, contentHash));
             }
-
-            // ── Compute next VersionNo ────────────────────────────────────────
-            var maxVersionNo = await _dc.Set<ProcessDefinitionVersion>()
-                .Where(v => v.DefinitionId == definition.ID)
-                .Select(v => (int?)v.VersionNo)
-                .MaxAsync(cancellationToken) ?? 0;
-
-            var newVersionNo = maxVersionNo + 1;
-
-            // ── INSERT immutable version row with CANONICAL RAW BYTES ─────────
-            // Key fidelity point: GraphJson stores the canonical raw bytes (not the
-            // typed-path re-serialization), so unknown fields and exact number literals
-            // are preserved verbatim in the version history.
-            var newVersion = new ProcessDefinitionVersion
+            catch
             {
-                ID            = Guid.NewGuid(),
-                TenantCode    = definition.TenantCode,
-                DefinitionId  = definition.ID,
-                VersionNo     = newVersionNo,
-                SchemaVersion = graphForValidation.SchemaVersion,
-                GraphJson     = canonicalJson,  // canonical raw bytes — fidelity contract
-                ContentHash   = contentHash,
-                PublishedAt   = DateTime.UtcNow,
-                PublishedBy   = publishedBy,
-                IsValid       = true,
-            };
-            _dc.AddEntity(newVersion);
+                await tx.RollbackAsync(CancellationToken.None);
+                throw;
+            }
+        },
+            defaultExtra: PublishResult.Invalid(GraphValidationError.None, "unreachable"),
+            cancellationToken,
+            retryOnDeadlock: true);
 
-            // ── Repoint definition head ───────────────────────────────────────
-            definition.CurrentVersionId = newVersion.ID;
-            _dc.UpdateProperty(definition, d => d.CurrentVersionId!);
+        if (txResult.Code == WorkflowActionCode.DeadlockRetryExhausted)
+            throw new InvalidOperationException(
+                $"ProcessDefinitionPublisher.PublishRawAsync: deadlock-classified failure persisted " +
+                $"after {options.DeadlockRetryAttempts} attempts while publishing '{definitionCode}'.");
 
-            // ── Draft deletion hook (WF-21.3) ─────────────────────────────────
-            // ProcessDefinitionDraft entity is introduced in WF-21.3.
-            // The deletion happens here, in the same transaction, so that a concurrent
-            // stale editor's subsequent PUT /draft sees the row gone and returns 409.
-            // No-op until the entity type is registered in ApplyWorkFlowModels.
-            await DeleteDraftIfExistsAsync(definition.ID, cancellationToken);
-
-            await _dc.SaveChangesAsync(cancellationToken);
-            await tx.CommitAsync(cancellationToken);
-
-            return PublishResult.NewVersion(newVersion.ID, newVersionNo, contentHash);
-        }
-        catch
-        {
-            await tx.RollbackAsync(cancellationToken);
-            throw;
-        }
+        return publishResult;
     }
 
     /// <summary>

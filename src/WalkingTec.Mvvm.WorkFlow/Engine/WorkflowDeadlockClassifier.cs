@@ -11,6 +11,15 @@
 //   PgSql      — NpgsqlException.SqlState == "40P01" or "40001"
 //   MySql      — MySqlException.Number == 1213 (ER_LOCK_DEADLOCK)
 //   Oracle     — OracleException.Number == 60 (ORA-00060)
+//   Sqlite     — SqliteException.SqliteErrorCode == 5 (SQLITE_BUSY) or 6 (SQLITE_LOCKED)
+//                (#667: the unit-test substrate DOES have single-writer lock contention
+//                under concurrent SQLite shared-memory connections — see #620/#629 — so
+//                "SQLite never deadlocks" is true for true multi-writer deadlock, but NOT
+//                true for transient BUSY/LOCKED contention on the shared-memory db file.
+//                This is a distinct signal from #629's "cannot start a transaction within
+//                a transaction" (SqliteErrorCode 1, SQLITE_ERROR) wrapper-state-desync
+//                signature, which is NOT classified as retryable here — see the #667
+//                ExecuteInTransactionAsync doc comment in WorkflowEngine.cs for why.)
 //   DaMeng     — UNCONFIRMED under #270; degrades to status-quo rethrow.
 //
 // IMPORTANT: The DaMeng deadlock code must be confirmed against a live DaMeng
@@ -48,7 +57,8 @@ internal static class WorkflowDeadlockClassifier
         return IsSqlServerDeadlock(inner)
             || IsPgSqlDeadlock(inner)
             || IsMySqlDeadlock(inner)
-            || IsOracleDeadlock(inner);
+            || IsOracleDeadlock(inner)
+            || IsSqliteBusyOrLocked(inner);
         // DaMeng: code unconfirmed under #270 — intentionally omitted.
         // When #270 wires a live DaMeng instance, add IsDaMengDeadlock() here.
     }
@@ -94,6 +104,21 @@ internal static class WorkflowDeadlockClassifier
 
         // ORA-00060 = deadlock detected while waiting for resource
         return ReadIntProperty(ex, "Number") == 60;
+    }
+
+    private static bool IsSqliteBusyOrLocked(Exception ex)
+    {
+        // Microsoft.Data.Sqlite.SqliteException — SqliteErrorCode property.
+        var typeName = ex.GetType().FullName ?? string.Empty;
+        if (!typeName.Contains("SqliteException", StringComparison.Ordinal)) return false;
+
+        // SQLITE_BUSY = 5 (another connection holds a conflicting lock on the shared-memory db);
+        // SQLITE_LOCKED = 6 (a table lock is held within the same connection/process).
+        // Both are transient contention signals safe to retry from scratch (unlike SQLITE_ERROR=1,
+        // which #629 showed can indicate a wrapper-state desync rather than pure contention —
+        // intentionally NOT classified as retryable here; see WorkflowEngine.cs #667 doc comment).
+        var code = ReadIntProperty(ex, "SqliteErrorCode");
+        return code is 5 or 6;
     }
 
     // ── Reflection helpers ────────────────────────────────────────────────────
