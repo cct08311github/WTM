@@ -54,10 +54,37 @@ public sealed class DbEtlGovernanceStore : IEtlGovernanceStore
                 Source         = entry.Source,
                 QuarantinedAt  = now,
                 TenantCode     = tenantCode,
+                // #673(d): starts "not yet confirmed successful" — MarkDeadLetterRunSucceededAsync
+                // flips this to true after a successful run's flush. See
+                // EtlDeadLetterRow.RunSucceeded for the full state machine.
+                RunSucceeded   = false,
             });
         }
 
         await _dc.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc/>
+    public async Task MarkDeadLetterRunSucceededAsync(
+        Guid jobId, Guid runId, CancellationToken cancellationToken = default)
+    {
+        await _dc.Set<EtlDeadLetterRow>()
+            .Where(r => r.JobId == jobId && r.RunId == runId)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.RunSucceeded, true), cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <inheritdoc/>
+    public async Task ClearDeadLetterFromFailedRunsAsync(
+        Guid jobId, CancellationToken cancellationToken = default)
+    {
+        // RunSucceeded == false only — never null (legacy rows) or true (permanent
+        // successful-run history). See EtlDeadLetterRow.RunSucceeded for the state
+        // machine this enforces.
+        await _dc.Set<EtlDeadLetterRow>()
+            .Where(r => r.JobId == jobId && r.RunSucceeded == false)
+            .ExecuteDeleteAsync(cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -74,7 +101,17 @@ public sealed class DbEtlGovernanceStore : IEtlGovernanceStore
         Guid jobId,
         CancellationToken cancellationToken = default)
     {
+        // #673(d): AsNoTracking is required for correctness, not just perf. This is a
+        // read-only reporting query, and MarkDeadLetterRunSucceededAsync /
+        // ClearDeadLetterFromFailedRunsAsync are set-based ExecuteUpdate/ExecuteDelete
+        // calls that bypass the change tracker by design. A caller that reuses the same
+        // IDataContext instance across a run (as EtlQuartzJob and EtlPipelineExecutor
+        // do) would otherwise see the STALE pre-update tracked entity here — e.g.
+        // RunSucceeded still false immediately after MarkDeadLetterRunSucceededAsync set
+        // it true in the database — because a tracking query returns the already-tracked
+        // identity-mapped instance instead of re-materializing from the query results.
         return await _dc.Set<EtlDeadLetterRow>()
+            .AsNoTracking()
             .Where(r => r.JobId == jobId)
             .OrderBy(r => r.QuarantinedAt)
             .ToListAsync(cancellationToken)

@@ -43,6 +43,44 @@ public interface IEtlGovernanceStore
     Task<IReadOnlyList<EtlDeadLetterRow>> QueryDeadLetterAsync(
         Guid jobId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// #673(d) — run-scoped dedupe: marks the dead-letter rows written for
+    /// <paramref name="jobId"/>/<paramref name="runId"/> as <see cref="EtlDeadLetterRow.RunSucceeded"/>
+    /// = true. Called by <see cref="Pipeline.EtlPipelineExecutor"/> once, right after a
+    /// successful run flushes its buffered dead-letter entries — see
+    /// <see cref="EtlDeadLetterRow.RunSucceeded"/> for the full state machine.
+    /// <para>
+    /// Default implementation is a no-op so existing implementers of this interface
+    /// keep compiling and behaving exactly as before (source- and binary-compatible via
+    /// C# default interface members) — override only if your store persists
+    /// <see cref="EtlDeadLetterRow.RunSucceeded"/> and wants run-scoped dedupe.
+    /// </para>
+    /// </summary>
+    Task MarkDeadLetterRunSucceededAsync(
+        Guid jobId, Guid runId, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    /// <summary>
+    /// #673(d) — run-scoped dedupe: deletes dead-letter rows for <paramref name="jobId"/>
+    /// whose owning run did NOT complete successfully
+    /// (<see cref="EtlDeadLetterRow.RunSucceeded"/> == <c>false</c>). Called by
+    /// <see cref="Pipeline.EtlPipelineExecutor"/> once, at the start of every run when
+    /// dead-letter capture is enabled — a retry re-extracts the same (watermark
+    /// unchanged) window and produces its own up-to-date diagnostics, so the prior
+    /// failed attempt's rows are stale and would otherwise duplicate on every retry.
+    /// <para>
+    /// Rows with <see cref="EtlDeadLetterRow.RunSucceeded"/> == <c>null</c> (legacy rows
+    /// written before this column existed) or == <c>true</c> (a successful run's
+    /// permanent Drop-path record) are never touched.
+    /// </para>
+    /// <para>
+    /// Default implementation is a no-op — see <see cref="MarkDeadLetterRunSucceededAsync"/>.
+    /// </para>
+    /// </summary>
+    Task ClearDeadLetterFromFailedRunsAsync(
+        Guid jobId, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
 }
 
 /// <summary>

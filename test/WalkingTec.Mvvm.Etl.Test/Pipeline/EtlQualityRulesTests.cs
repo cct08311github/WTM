@@ -205,6 +205,78 @@ namespace WalkingTec.Mvvm.Etl.Test.Pipeline
         }
 
         [TestMethod]
+        public void Abort_with_captureRows_true_attaches_offending_row_to_exception()
+        {
+            // #673(c): when captureRows is on, Abort must attach the offending row to
+            // the exception BEFORE throwing so the caller can dead-letter it — additive
+            // diagnostic only, does not change the throw-and-fail semantics.
+            var t = Table();
+            AddRow(t, "a@x.com", 30, "NEW", "C1");
+            var badRow = AddRow(t, "b@x.com", 999, "NEW", "C2"); // out of range
+
+            var rules = new List<EtlQualityRule>
+            {
+                new() { Column = "Age", RuleType = EtlQualityRuleType.Range, Min = 0, Max = 120 },
+            };
+
+            var ex = Assert.ThrowsException<EtlQualityRuleViolationException>(() =>
+                EtlQualityRuleEvaluator.Apply(
+                    t, rules, EtlQualityRuleAction.Abort, out _, out _,
+                    captureRows: true, out _));
+
+            Assert.IsNotNull(ex.OffendingRow, "captureRows=true must attach the offending row");
+            Assert.AreSame(badRow, ex.OffendingRow);
+            Assert.IsNotNull(ex.ViolationReason);
+            Assert.IsTrue(ex.ViolationReason!.Contains("Age"));
+        }
+
+        [TestMethod]
+        public void Abort_with_captureRows_false_does_not_attach_offending_row()
+        {
+            // Symmetric with the Drop path's capture gate — hot-path callers that never
+            // enable dead-letter pay zero extra cost and see identical exception shape.
+            var t = Table();
+            AddRow(t, "b@x.com", 999, "NEW", "C2"); // out of range
+
+            var rules = new List<EtlQualityRule>
+            {
+                new() { Column = "Age", RuleType = EtlQualityRuleType.Range, Min = 0, Max = 120 },
+            };
+
+            var ex = Assert.ThrowsException<EtlQualityRuleViolationException>(() =>
+                EtlQualityRuleEvaluator.Apply(
+                    t, rules, EtlQualityRuleAction.Abort, out _, out _,
+                    captureRows: false, out _));
+
+            Assert.IsNull(ex.OffendingRow);
+            Assert.IsNull(ex.ViolationReason);
+        }
+
+        [TestMethod]
+        public void Abort_exception_message_is_identical_regardless_of_captureRows()
+        {
+            // The additive constructor must never change Message — legacy callers
+            // parsing/logging the message string see byte-identical output.
+            DataTable Make()
+            {
+                var t = Table();
+                AddRow(t, "b@x.com", 999, "NEW", "C2");
+                return t;
+            }
+            var rules = new List<EtlQualityRule>
+            {
+                new() { Column = "Age", RuleType = EtlQualityRuleType.Range, Min = 0, Max = 120 },
+            };
+
+            var exCaptured = Assert.ThrowsException<EtlQualityRuleViolationException>(() =>
+                EtlQualityRuleEvaluator.Apply(Make(), rules, EtlQualityRuleAction.Abort, out _, out _, captureRows: true, out _));
+            var exNotCaptured = Assert.ThrowsException<EtlQualityRuleViolationException>(() =>
+                EtlQualityRuleEvaluator.Apply(Make(), rules, EtlQualityRuleAction.Abort, out _, out _, captureRows: false, out _));
+
+            Assert.AreEqual(exNotCaptured.Message, exCaptured.Message);
+        }
+
+        [TestMethod]
         public void Missing_column_throws_ArgumentException()
         {
             var t = Table();

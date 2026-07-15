@@ -267,7 +267,11 @@ public class EtlSchedulerService
             DryRunPreviewSampleSize = Math.Max(0, sampleSize),
         };
 
-        var executor = new EtlPipelineExecutor(source, loader);
+        // #700: mirror the same EtlOptions.MaxDeadLetterRowsPerRun wiring as
+        // EtlQuartzJob.Execute, even though dry-run config never sets EnableDeadLetter
+        // today — keeps both executor construction sites consistent.
+        var maxDeadLetterRowsPerRun = _sp.GetService<IOptions<EtlOptions>>()?.Value?.MaxDeadLetterRowsPerRun;
+        var executor = new EtlPipelineExecutor(source, loader, maxDeadLetterRowsPerRun: maxDeadLetterRowsPerRun);
         return await executor.ExecuteAsync(config, watermark, cancellationToken).ConfigureAwait(false);
     }
 
@@ -351,6 +355,56 @@ public class EtlSchedulerService
             // Pruning failure must never crash the scheduler.
             _sp.GetService<ILogger<EtlSchedulerService>>()
                 ?.LogError(ex, "ETL run-log retention pruning failed (RetentionDays={RetentionDays})", retentionDays);
+        }
+    }
+
+    /// <summary>
+    /// #673(e): Prune <see cref="EtlDeadLetterRow"/> records older than the configured
+    /// retention window.
+    /// <para>
+    /// No-op when <see cref="EtlOptions.DeadLetterRetentionDays"/> is 0 (the default),
+    /// preserving pre-10.14 "keep forever" behaviour — upgrading to a version that has
+    /// this knob never silently deletes existing dead-letter rows.
+    /// </para>
+    /// <para>
+    /// Mirrors <see cref="PruneRunLogsAsync"/>: a single <c>ExecuteDeleteAsync</c> keyed
+    /// on <see cref="EtlDeadLetterRow.QuarantinedAt"/> rather than materialising entities.
+    /// Requires SQLite shared-memory or a real DB; EF InMemory provider does NOT support
+    /// <c>ExecuteDeleteAsync</c>.
+    /// </para>
+    /// </summary>
+    public virtual async Task PruneDeadLetterAsync(CancellationToken cancellationToken = default)
+    {
+        var options = _sp.GetService<IOptions<EtlOptions>>()?.Value;
+        var retentionDays = options?.DeadLetterRetentionDays ?? 0;
+        if (retentionDays <= 0) return;
+
+        var cutoff = (_sp.GetService<TimeProvider>() ?? TimeProvider.System)
+            .GetUtcNow().UtcDateTime
+            .AddDays(-retentionDays);
+
+        using var scope = _sp.CreateScope();
+        var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
+
+        try
+        {
+            var deleted = await wtm.DC.Set<EtlDeadLetterRow>()
+                .Where(r => r.QuarantinedAt < cutoff)
+                .ExecuteDeleteAsync(cancellationToken);
+
+            if (deleted > 0)
+            {
+                _sp.GetService<ILogger<EtlSchedulerService>>()
+                    ?.LogInformation(
+                        "ETL dead-letter retention pruning: deleted {Count} records older than {Cutoff:u} (>{RetentionDays} days)",
+                        deleted, cutoff, retentionDays);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Pruning failure must never crash the scheduler.
+            _sp.GetService<ILogger<EtlSchedulerService>>()
+                ?.LogError(ex, "ETL dead-letter retention pruning failed (RetentionDays={RetentionDays})", retentionDays);
         }
     }
 

@@ -37,24 +37,43 @@ namespace WalkingTec.Mvvm.Etl.Pipeline;
 /// </summary>
 public class EtlPipelineExecutor
 {
+    /// <summary>
+    /// #673/#700: default safety cap on the number of dead-letter entries buffered in
+    /// memory for a single run, used when the caller does not supply one explicitly
+    /// (e.g. direct construction outside DI). Mirrors <see cref="EtlOptions.MaxDeadLetterRowsPerRun"/>'s
+    /// default so behaviour is unchanged for callers that predate the configurable cap.
+    /// A run that produces more violations than this is almost certainly misconfigured
+    /// (e.g. a quality rule that rejects nearly every row) — capturing unbounded rows in
+    /// memory risks OOM long before the DB write. Once the cap is reached, a single
+    /// truncation-marker entry is appended and further entries for this run are dropped
+    /// (never silently — the marker documents that truncation happened and by how much).
+    /// </summary>
+    internal const int DefaultMaxDeadLetterRowsPerRun = 10_000;
+
     private readonly IEtlSource _source;
     private readonly IBulkLoader _loader;
     private readonly IProgress<EtlProgress>? _progress;
     private readonly ILogger? _logger;
     private readonly IEtlGovernanceStore _governance;
+    private readonly int _maxDeadLetterRowsPerRun;
 
     public EtlPipelineExecutor(
         IEtlSource source,
         IBulkLoader loader,
         IProgress<EtlProgress>? progress = null,
         ILogger? logger = null,
-        IEtlGovernanceStore? governanceStore = null)
+        IEtlGovernanceStore? governanceStore = null,
+        int? maxDeadLetterRowsPerRun = null)
     {
         _source = source;
         _loader = loader;
         _progress = progress;
         _logger = logger;
         _governance = governanceStore ?? NullEtlGovernanceStore.Instance;
+        // #700: caller-supplied cap (normally EtlOptions.MaxDeadLetterRowsPerRun, wired
+        // by EtlQuartzJob/EtlSchedulerService) takes precedence; falls back to the
+        // pre-#700 hardcoded default for callers that don't pass one.
+        _maxDeadLetterRowsPerRun = maxDeadLetterRowsPerRun ?? DefaultMaxDeadLetterRowsPerRun;
     }
 
     /// <summary>
@@ -78,8 +97,16 @@ public class EtlPipelineExecutor
         int qualityFailedRows = 0;
         var qualityFailureSamples = new List<string>();
         var warnings = new List<string>();
-        // ETL-004: accumulated dead-letter entries (per-batch, flushed to store after each batch)
-        var deadLetterBatch = new List<EtlDeadLetterEntry>();
+        // ETL-004/#673: dead-letter entries accumulated for the ENTIRE run and flushed
+        // exactly once, after the run's outcome (success/abort/failure) is known — see
+        // FlushDeadLetterBufferAsync. Previously this flushed per-batch, which could
+        // persist rows from a run that later failed, before the caller (e.g. a rerun
+        // after a transient failure) had a chance to decide whether they were still
+        // relevant; buffering avoids writing partial-run diagnostics ahead of the
+        // final outcome. Bounded by _maxDeadLetterRowsPerRun (#700: configurable via
+        // EtlOptions.MaxDeadLetterRowsPerRun; defaults to DefaultMaxDeadLetterRowsPerRun).
+        var deadLetterEntries = new List<EtlDeadLetterEntry>();
+        var deadLetterTruncated = false;
 
         try
         {
@@ -90,6 +117,30 @@ public class EtlPipelineExecutor
                 throw new ArgumentException(
                     "MergeKeyColumn must not be null or empty when LoadMode = Merge.",
                     nameof(config));
+
+            // #673(d): run-scoped dead-letter dedupe — before this run writes anything,
+            // clear any dead-letter rows left over from a PRIOR run of this same job that
+            // did NOT complete successfully. A retry re-extracts the same
+            // (watermark-unchanged) window and will produce its own up-to-date
+            // diagnostics, so the previous failed attempt's rows are stale and would
+            // otherwise accumulate as duplicates on every retry. Rows from a
+            // successfully-completed run (RunSucceeded == true) or written before this
+            // feature existed (RunSucceeded == null) are never touched — see
+            // EtlDeadLetterRow.RunSucceeded. Best-effort: a failure here is logged, not
+            // fatal, and never blocks the run itself from proceeding.
+            if (config.EnableDeadLetter)
+            {
+                try
+                {
+                    await _governance.ClearDeadLetterFromFailedRunsAsync(config.JobId, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogError(ex,
+                        "ETL dead-letter failed-run cleanup failed for Job={JobId}", config.JobId);
+                }
+            }
 
             // 1. 確認 staging table
             await _loader.EnsureStagingTableAsync(
@@ -129,9 +180,27 @@ public class EtlPipelineExecutor
                 totalExtracted += extractedBatchRows;
 
                 // Transform hook
-                var transformed = config.TransformFunc != null
-                    ? config.TransformFunc(batch)
-                    : batch;
+                // #673(b): capture a batch-level dead-letter marker when TransformFunc
+                // throws. Per-row attribution is not possible here — the function
+                // receives the whole batch and can do arbitrary reshaping — so we record
+                // one documented marker entry rather than guessing which rows were at
+                // fault. The `when` filter means this adds ZERO behaviour when
+                // EnableDeadLetter is false (or on cancellation): the original exception
+                // propagates untouched to the existing outer catch, preserving the exact
+                // rollback/rethrow semantics that existed before this change.
+                DataTable transformed;
+                try
+                {
+                    transformed = config.TransformFunc != null
+                        ? config.TransformFunc(batch)
+                        : batch;
+                }
+                catch (Exception ex) when (config.EnableDeadLetter && ex is not OperationCanceledException)
+                {
+                    TryCaptureBatchLevelDeadLetter(
+                        deadLetterEntries, ref deadLetterTruncated, batch, ex, EtlDeadLetterSource.TransformError);
+                    throw;
+                }
 
                 // Column mapping (10.5+): rename source-column names to
                 // target-column names and drop columns not in the map.
@@ -148,39 +217,48 @@ public class EtlPipelineExecutor
                 // Abort 會 throw 並沿用既有 catch 走 watermark discard 路徑。
                 if (config.QualityRules != null && config.QualityRules.Count > 0)
                 {
-                    transformed = EtlQualityRuleEvaluator.Apply(
-                        transformed, config.QualityRules, config.QualityRuleAction,
-                        out int batchFailed, out var batchSamples,
-                        captureRows: config.EnableDeadLetter,
-                        out var droppedRows);
-                    qualityFailedRows += batchFailed;
-                    foreach (var s in batchSamples)
+                    // #673(c): Abort throws EtlQualityRuleViolationException with the
+                    // offending row attached (only when captureRows/EnableDeadLetter is
+                    // on) — capture it here, BEFORE the exception reaches the outer
+                    // catch, then rethrow unchanged. This is additive diagnostics only:
+                    // the exception type, message, and the fact that it fails the run
+                    // are exactly as before.
+                    try
                     {
-                        if (qualityFailureSamples.Count >= EtlQualityRuleEvaluator.MaxFailureSamples) { break; }
-                        qualityFailureSamples.Add(s);
-                    }
-
-                    // ETL-004: capture failed rows for dead-letter store
-                    if (config.EnableDeadLetter && droppedRows != null && droppedRows.Count > 0)
-                    {
-                        foreach (var (row, reason) in droppedRows)
+                        transformed = EtlQualityRuleEvaluator.Apply(
+                            transformed, config.QualityRules, config.QualityRuleAction,
+                            out int batchFailed, out var batchSamples,
+                            captureRows: config.EnableDeadLetter,
+                            out var droppedRows);
+                        qualityFailedRows += batchFailed;
+                        foreach (var s in batchSamples)
                         {
-                            deadLetterBatch.Add(new EtlDeadLetterEntry(
-                                SerializeRow(transformed, row),
-                                reason,
-                                EtlDeadLetterSource.QualityRule));
+                            if (qualityFailureSamples.Count >= EtlQualityRuleEvaluator.MaxFailureSamples) { break; }
+                            qualityFailureSamples.Add(s);
+                        }
+
+                        // ETL-004: capture failed rows for dead-letter store
+                        if (config.EnableDeadLetter && droppedRows != null && droppedRows.Count > 0)
+                        {
+                            foreach (var (row, reason) in droppedRows)
+                            {
+                                TryAddDeadLetterEntry(deadLetterEntries, ref deadLetterTruncated,
+                                    new EtlDeadLetterEntry(
+                                        SerializeRow(transformed, row),
+                                        reason,
+                                        EtlDeadLetterSource.QualityRule));
+                            }
                         }
                     }
-                }
-
-                // ETL-004: flush dead-letter entries for this batch to persistent store
-                if (config.EnableDeadLetter && deadLetterBatch.Count > 0)
-                {
-                    await _governance.AddDeadLetterRowsAsync(
-                        config.JobId, runId, deadLetterBatch,
-                        config.DeadLetterTenantCode, cancellationToken)
-                        .ConfigureAwait(false);
-                    deadLetterBatch.Clear();
+                    catch (EtlQualityRuleViolationException ex) when (config.EnableDeadLetter && ex.OffendingRow != null)
+                    {
+                        TryAddDeadLetterEntry(deadLetterEntries, ref deadLetterTruncated,
+                            new EtlDeadLetterEntry(
+                                SerializeRow(transformed, ex.OffendingRow),
+                                ex.ViolationReason ?? ex.Message,
+                                EtlDeadLetterSource.QualityRuleAbort));
+                        throw;
+                    }
                 }
 
                 // Capture column names from the first transformed batch (all batches share
@@ -195,10 +273,28 @@ public class EtlPipelineExecutor
                         .ToList();
                 }
 
-                await BulkLoadWithRetryAsync(
-                    config, transformed,
-                    onRetryStarted: () => retryAttempts++,
-                    cancellationToken).ConfigureAwait(false);
+                // #673(a): capture a batch-level dead-letter marker when the retried
+                // BulkLoad ultimately fails (type/constraint errors etc.). Per-row
+                // attribution isn't available at this level — bulk-copy failures are
+                // reported per-batch by ADO.NET providers — so we record one documented
+                // marker for the whole batch rather than guessing. The `when` filter
+                // means this is a no-op (zero behaviour change) when EnableDeadLetter is
+                // false: the original exception propagates to the existing outer catch
+                // exactly as before, and retry/backoff behaviour inside
+                // BulkLoadWithRetryAsync is untouched.
+                try
+                {
+                    await BulkLoadWithRetryAsync(
+                        config, transformed,
+                        onRetryStarted: () => retryAttempts++,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (config.EnableDeadLetter && ex is not OperationCanceledException)
+                {
+                    TryCaptureBatchLevelDeadLetter(
+                        deadLetterEntries, ref deadLetterTruncated, transformed, ex, EtlDeadLetterSource.LoadError);
+                    throw;
+                }
 
                 totalLoaded += transformed.Rows.Count;
 
@@ -269,6 +365,15 @@ public class EtlPipelineExecutor
                 }, cancellationToken).ConfigureAwait(false);
             }
 
+            // #673(d): flush the run's buffered dead-letter entries now that the
+            // outcome is known (success), then mark them RunSucceeded=true so the NEXT
+            // run's start-of-run cleanup never deletes them — this is a permanent
+            // Drop-path record for a window that loaded successfully, not stale retry
+            // noise. See FlushDeadLetterBufferAsync for why a flush failure here is
+            // logged, not propagated.
+            await FlushDeadLetterBufferAsync(config, runId, deadLetterEntries, runSucceeded: true, cancellationToken)
+                .ConfigureAwait(false);
+
             sw.Stop();
             return new EtlExecutionResult
             {
@@ -287,6 +392,10 @@ public class EtlPipelineExecutor
         catch (OperationCanceledException)
         {
             watermark.DiscardPendingValue();
+            // #673: cancellation is an operator action, not a data-quality event —
+            // any dead-letter entries buffered so far for this cancelled run are
+            // discarded along with the rest of the run's progress (consistent with
+            // TransformFunc/BulkLoad capture also excluding OperationCanceledException).
             sw.Stop();
             return new EtlExecutionResult
             {
@@ -306,6 +415,15 @@ public class EtlPipelineExecutor
         catch (Exception ex)
         {
             watermark.DiscardPendingValue();
+            // #673(c): flush whatever was captured for this failed run — including a
+            // quality-rule Abort's offending row and/or earlier batches' Drop-path
+            // captures from before the failure. This is the diagnostic payoff of
+            // buffering: the flush happens AFTER the outcome (failure) is known,
+            // tagged with this run's RunId, instead of racing ahead of it per-batch.
+            // runSucceeded: false — left for the NEXT run's start-of-run cleanup
+            // (ClearDeadLetterFromFailedRunsAsync) to remove once superseded.
+            await FlushDeadLetterBufferAsync(config, runId, deadLetterEntries, runSucceeded: false, cancellationToken)
+                .ConfigureAwait(false);
             sw.Stop();
             return new EtlExecutionResult
             {
@@ -321,6 +439,100 @@ public class EtlPipelineExecutor
                 ValidationWarnings = warnings,
             };
         }
+    }
+
+    /// <summary>
+    /// #673(d): persists the run's buffered dead-letter entries in a single write,
+    /// tagged with <paramref name="runId"/>. No-op when dead-letter is disabled or the
+    /// buffer is empty. A failure to persist is logged but never propagated — by the
+    /// time this runs, the run's real outcome (success/failure) is already decided;
+    /// letting a diagnostics-write failure override that outcome would be worse than
+    /// losing the diagnostics (e.g. it would report an already-merged, successful load
+    /// as "Failed" and trigger an unnecessary rerun).
+    /// </summary>
+    private async Task FlushDeadLetterBufferAsync(
+        EtlPipelineConfig config, Guid runId, List<EtlDeadLetterEntry> buffer,
+        bool runSucceeded, CancellationToken cancellationToken)
+    {
+        if (!config.EnableDeadLetter || buffer.Count == 0) { return; }
+
+        try
+        {
+            await _governance.AddDeadLetterRowsAsync(
+                config.JobId, runId, buffer, config.DeadLetterTenantCode, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (runSucceeded)
+            {
+                // #673(d): flip RunSucceeded=true for the rows just written so a future
+                // run's ClearDeadLetterFromFailedRunsAsync never deletes them. A failure
+                // here is folded into the same best-effort logging as the write above —
+                // worst case the rows remain RunSucceeded=false and get cleaned up by the
+                // next run's cleanup pass, which is a false-negative (loses a legitimate
+                // historical record slightly early) rather than a false-positive
+                // (deleting something it shouldn't) — the safer failure mode.
+                await _governance.MarkDeadLetterRunSucceededAsync(config.JobId, runId, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex,
+                "ETL dead-letter flush failed for Job={JobId} Run={RunId}: {Count} buffered entries were NOT persisted",
+                config.JobId, runId, buffer.Count);
+        }
+    }
+
+    /// <summary>
+    /// #673/#700: appends <paramref name="entry"/> to the run's dead-letter buffer,
+    /// enforcing the configured <see cref="_maxDeadLetterRowsPerRun"/> cap (from
+    /// <see cref="EtlOptions.MaxDeadLetterRowsPerRun"/>). Once the cap is reached a
+    /// single truncation-marker entry is appended (once) and all further entries for
+    /// this run are dropped — bounds memory for a pathologically-misconfigured quality
+    /// rule without ever silently under-reporting (the marker documents that it
+    /// happened). Instance method (not static) so it can read the per-executor cap.
+    /// </summary>
+    private void TryAddDeadLetterEntry(
+        List<EtlDeadLetterEntry> buffer, ref bool truncated, EtlDeadLetterEntry entry)
+    {
+        if (truncated) { return; }
+        if (buffer.Count >= _maxDeadLetterRowsPerRun)
+        {
+            truncated = true;
+            buffer.Add(new EtlDeadLetterEntry(
+                "{\"_marker\":\"dead-letter-capture-truncated\"}",
+                $"Dead-letter capture capped at {_maxDeadLetterRowsPerRun} entries for this run; " +
+                "further violations were not captured (bounds memory use for this run).",
+                EtlDeadLetterSource.QualityRule));
+            return;
+        }
+        buffer.Add(entry);
+    }
+
+    /// <summary>
+    /// #673(a)/(b): builds a batch-level dead-letter marker for failures where per-row
+    /// attribution isn't available — bulk-load and transform exceptions operate on the
+    /// whole batch (a provider-level bulk-copy failure or an arbitrary
+    /// <see cref="EtlPipelineConfig.TransformFunc"/> reshape doesn't identify a single
+    /// offending row). One documented marker entry represents the whole batch rather
+    /// than guessing. Routed through <see cref="TryAddDeadLetterEntry"/> for the same
+    /// truncation cap as row-level captures. The error is sanitized via
+    /// <see cref="EtlErrorSanitizer"/> — never a raw provider message.
+    /// </summary>
+    private void TryCaptureBatchLevelDeadLetter(
+        List<EtlDeadLetterEntry> buffer, ref bool truncated, DataTable batch, Exception ex, string source)
+    {
+        var marker = new Dictionary<string, object?>
+        {
+            ["_marker"] = "batch-level-capture",
+            ["batchRowCount"] = batch.Rows.Count,
+            ["note"] = "Per-row attribution is not available for this failure type; " +
+                       "all rows in this batch are represented by this single dead-letter entry.",
+        };
+        TryAddDeadLetterEntry(buffer, ref truncated, new EtlDeadLetterEntry(
+            JsonSerializer.Serialize(marker),
+            EtlErrorSanitizer.Sanitize(ex),
+            source));
     }
 
     /// <summary>

@@ -41,6 +41,10 @@ public class EtlHostedService : IHostedService
                 // ETL-014: fire-and-forget run-log retention pruning after jobs are loaded.
                 // Failures are caught inside PruneRunLogsAsync; no-op when RetentionDays == 0.
                 _ = _schedulerService.PruneRunLogsAsync(cancellationToken);
+                // #673(e): fire-and-forget dead-letter retention pruning, same pattern.
+                // Failures are caught inside PruneDeadLetterAsync; no-op when
+                // DeadLetterRetentionDays == 0 (default — never silently deletes data).
+                _ = _schedulerService.PruneDeadLetterAsync(cancellationToken);
                 return;
             }
             catch (Exception) when (attempt < 3)

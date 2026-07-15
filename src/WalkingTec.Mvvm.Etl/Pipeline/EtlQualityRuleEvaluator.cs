@@ -143,8 +143,16 @@ public static class EtlQualityRuleEvaluator
 
             if (action == EtlQualityRuleAction.Abort)
             {
+                // #673: capture the offending row on the exception itself (additive
+                // diagnostic only) so the caller can persist it to dead-letter BEFORE
+                // the run fails — Abort's throw-and-discard-watermark semantics are
+                // unchanged; only populated when captureRows is true (mirrors the Drop
+                // path's opt-in gate) so callers that never enable dead-letter pay no
+                // extra cost and see byte-identical exception messages.
                 throw new EtlQualityRuleViolationException(
-                    $"Quality rule violated: {violation}");
+                    $"Quality rule violated: {violation}",
+                    offendingRow: captureRows ? row : null,
+                    violationReason: captureRows ? violation : null);
             }
             if (action == EtlQualityRuleAction.Continue)
             {
@@ -260,4 +268,28 @@ public static class EtlQualityRuleEvaluator
 public class EtlQualityRuleViolationException : Exception
 {
     public EtlQualityRuleViolationException(string message) : base(message) { }
+
+    /// <summary>
+    /// #673: additive constructor used by the Abort path when
+    /// <c>captureRows</c> is true — carries the offending <see cref="DataRow"/> and its
+    /// violation reason so <see cref="EtlPipelineExecutor"/> can capture a
+    /// dead-letter diagnostic before this exception fails the run. Purely additive:
+    /// <see cref="Exception.Message"/> is identical to the single-arg constructor's output.
+    /// </summary>
+    public EtlQualityRuleViolationException(string message, DataRow? offendingRow, string? violationReason)
+        : base(message)
+    {
+        OffendingRow = offendingRow;
+        ViolationReason = violationReason;
+    }
+
+    /// <summary>
+    /// The row that triggered the Abort, when captured (opt-in via
+    /// <c>EtlPipelineConfig.EnableDeadLetter</c>). Null when dead-letter capture is
+    /// disabled or when constructed via the legacy single-arg constructor.
+    /// </summary>
+    public DataRow? OffendingRow { get; }
+
+    /// <summary>Human-readable violation reason paired with <see cref="OffendingRow"/>.</summary>
+    public string? ViolationReason { get; }
 }

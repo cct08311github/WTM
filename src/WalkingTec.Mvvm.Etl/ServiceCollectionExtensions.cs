@@ -174,6 +174,10 @@ public static class EtlDbContextExtensions
             e.HasIndex(x => x.RunId);
             e.HasIndex(x => x.QuarantinedAt);
             e.HasIndex(x => x.TenantCode);
+            // #673(d): composite index for ClearDeadLetterFromFailedRunsAsync's
+            // (JobId, RunSucceeded == false) lookup, run at the start of every job
+            // execution when EnableDeadLetter is on.
+            e.HasIndex(x => new { x.JobId, x.RunSucceeded });
         });
 
         // ETL-005: Data lineage records

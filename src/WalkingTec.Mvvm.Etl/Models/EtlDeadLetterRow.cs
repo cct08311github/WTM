@@ -41,15 +41,68 @@ public class EtlDeadLetterRow : BasePoco
     public string? TenantCode { get; set; }
 
     /// <summary>
-    /// Indicates the quarantine source — "QualityRule" (Drop path) or "LoadError".
+    /// Indicates the quarantine source — see <see cref="EtlDeadLetterSource"/> for the
+    /// full set of well-known values.
     /// </summary>
     [StringLength(50)]
     public string Source { get; set; } = EtlDeadLetterSource.QualityRule;
+
+    /// <summary>
+    /// #673(d) — run-scoped dedupe tri-state:
+    /// <list type="bullet">
+    /// <item><c>null</c> (default) — legacy rows written before this column existed, or
+    /// written by an <see cref="Governance.IEtlGovernanceStore"/> implementation that
+    /// doesn't track it. <b>Never</b> touched by the failed-run cleanup below — this is
+    /// what makes the column additive/migration-safe: upgrading never deletes existing
+    /// dead-letter history.</item>
+    /// <item><c>false</c> — written by the run identified by <see cref="RunId"/>, which
+    /// has not (yet, or ever) completed successfully. At the START of the job's NEXT
+    /// run, <see cref="Governance.IEtlGovernanceStore.ClearDeadLetterFromFailedRunsAsync"/>
+    /// deletes rows in this state for the same <see cref="JobId"/> — a retry re-extracts
+    /// the same (watermark-unchanged) window and will produce its own up-to-date
+    /// diagnostics, so the previous failed attempt's rows are superseded, not
+    /// permanent history.</item>
+    /// <item><c>true</c> — the owning run completed successfully;
+    /// <see cref="Governance.IEtlGovernanceStore.MarkDeadLetterRunSucceededAsync"/> flips
+    /// this after a successful flush. These rows represent a genuine, permanent
+    /// Quality-rule Drop-path record (the row really was excluded from an otherwise
+    /// successful load) and are never auto-deleted by the failed-run cleanup — only by
+    /// <see cref="EtlOptions.DeadLetterRetentionDays"/> pruning, if enabled.</item>
+    /// </list>
+    /// </summary>
+    public bool? RunSucceeded { get; set; }
 }
 
-/// <summary>Well-known values for <see cref="EtlDeadLetterRow.Source"/>.</summary>
+/// <summary>
+/// Well-known values for <see cref="EtlDeadLetterRow.Source"/>.
+/// <para>
+/// <b>Migration-safe by design (#673):</b> <see cref="EtlDeadLetterRow.Source"/> is a
+/// plain <c>string</c> column (not a persisted enum/int), so adding new well-known
+/// values here never requires a schema change or an EF migration in downstream apps —
+/// existing rows and existing string comparisons against <see cref="QualityRule"/> /
+/// <see cref="LoadError"/> keep working unchanged.
+/// </para>
+/// </summary>
 public static class EtlDeadLetterSource
 {
+    /// <summary>Quality-rule Drop path (10.5.1+) — a row was excluded from load.</summary>
     public const string QualityRule = "QualityRule";
-    public const string LoadError   = "LoadError";
+
+    /// <summary>Bulk-load failure (#673) — batch could not be written to staging.</summary>
+    public const string LoadError = "LoadError";
+
+    /// <summary>
+    /// Quality-rule Abort path (#673) — the offending row that triggered
+    /// <see cref="Pipeline.EtlQualityRuleViolationException"/> before the run aborted.
+    /// Diagnostic only: capturing this row does not change Abort's throw-and-fail semantics.
+    /// </summary>
+    public const string QualityRuleAbort = "QualityRuleAbort";
+
+    /// <summary>
+    /// <see cref="Pipeline.EtlPipelineConfig.TransformFunc"/> threw (#673). Per-row
+    /// attribution is not possible for transform failures (the function operates on the
+    /// whole batch), so the captured entry is a batch-level marker — see
+    /// <see cref="Pipeline.EtlPipelineExecutor"/>'s batch-level capture helper.
+    /// </summary>
+    public const string TransformError = "TransformError";
 }

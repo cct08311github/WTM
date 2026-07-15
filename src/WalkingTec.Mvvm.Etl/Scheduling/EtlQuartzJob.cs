@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Quartz;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Support.Quartz;
@@ -167,9 +168,17 @@ public class EtlQuartzJob : WtmJob
                 ? new DbEtlGovernanceStore(dc)
                 : NullEtlGovernanceStore.Instance;
 
+            // #700: cap comes from EtlOptions.MaxDeadLetterRowsPerRun (registered by
+            // AddWtmEtl for every app that uses the ETL module) — mirrors how
+            // EtlSchedulerService.PruneDeadLetterAsync resolves DeadLetterRetentionDays.
+            // Falls back to EtlPipelineExecutor's own default when EtlOptions somehow
+            // isn't registered.
+            var maxDeadLetterRowsPerRun = Sp.GetService<IOptions<EtlOptions>>()?.Value?.MaxDeadLetterRowsPerRun;
+
             var executor = new EtlPipelineExecutor(source, loader, progress,
                 Sp.GetService<ILogger<EtlPipelineExecutor>>(),
-                governance);
+                governance,
+                maxDeadLetterRowsPerRun);
             result = await executor.ExecuteAsync(config, watermark, timeoutCts.Token);
 
             // 10. 成功 → 更新 watermark、重置連續失敗計數

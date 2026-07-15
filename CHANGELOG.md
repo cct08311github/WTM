@@ -9,10 +9,15 @@
   - `RestEtlSourceConfig.MaxPages` now defaults to `1000` (previously `0`/unlimited) as a finite safety bound. The zero-means-unlimited semantics are unchanged — set `MaxPages=0` explicitly to keep unlimited paging.
   - A cycle guard tracks every next-link cursor URL already followed (seeded with the starting URL); a repeat stops the crawl with a counted error instead of looping.
 
+### Changed
+
+- **ETL dead-letter capture on the opt-in `EnableDeadLetter` path now buffers and flushes once per run** (previously flushed per batch), enabling run-scoped de-duplication so a failed-then-rerun job no longer writes duplicate dead-letter rows. Capture now also covers bulk-load failures, transform exceptions, and the quality-rule Abort path (previously only the Drop path). (#673)
+
 ### Migration
 
 - **`RestEtlSource` (ETL) configs using `NextLink` pagination across multiple hosts** must now set `AllowCrossHostPagination=true` explicitly in `RestEtlSourceConfig` — cross-host next-links are rejected by default.
 - **`RestEtlSource` (ETL) configs relying on crawls longer than 1000 pages** (the previous default was unlimited) must now set `MaxPages=0` explicitly to restore unlimited paging. Configs that already set `MaxPages` to a nonzero value, or that never exceed 1000 pages, are unaffected.
+- **If you enabled `EnableDeadLetter`** (available since 10.5.1): dead-letter rows are now persisted once at run completion rather than incrementally per batch, and are bounded by the new `EtlOptions.MaxDeadLetterRowsPerRun` (default 10000; excess rows dropped with a truncation marker). A hard process crash mid-run no longer persists partial dead-letter diagnostics for that run — see #700 for the durability tradeoff discussion. No action needed for the default `EnableDeadLetter=false`.
 
 ## [10.14.5] - 2026-07-11
 
