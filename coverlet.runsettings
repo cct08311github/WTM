@@ -23,8 +23,6 @@
             ExcludeFromCodeCoverageAttribute
           </ExcludeByAttribute>
 
-          <!-- Merge coverage from multiple test runs -->
-          <MergeWith>/tmp/coverage/coverage.json</MergeWith>
           <SingleHit>false</SingleHit>
           <IncludeTestAssembly>false</IncludeTestAssembly>
         </Configuration>
