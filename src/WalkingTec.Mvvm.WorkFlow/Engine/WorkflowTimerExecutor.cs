@@ -66,13 +66,18 @@ internal sealed class WorkflowTimerExecutor
     // WF-20.4: typed to IWorkflowEngine for type-test; system auto-actions require the concrete
     // WorkflowEngine.SystemClaimTaskAsync / SystemContinueTaskAsync path.  Custom IWorkflowEngine registrations → downgrade.
     private readonly IWorkflowEngine? _engine;
+    // #666: deserialized-graph cache. Defaults to a private (non-shared) instance when not
+    // supplied — production DI always supplies the process-wide singleton (see
+    // ServiceCollectionExtensions.AddWtmWorkFlow).
+    private readonly IWorkflowGraphProvider _graphProvider;
 
     public WorkflowTimerExecutor(
         IDataContext dc,
         IOptions<WorkFlowOptions> options,
         ILogger<WorkflowTimerExecutor> logger,
         IWorkflowEngine? engine = null,
-        IWorkflowNotifier? notifier = null)
+        IWorkflowNotifier? notifier = null,
+        IWorkflowGraphProvider? graphProvider = null)
     {
         _dc = dc;
         _dbDirect = null;
@@ -80,6 +85,7 @@ internal sealed class WorkflowTimerExecutor
         _logger = logger;
         _engine = engine;
         _notifier = notifier;
+        _graphProvider = graphProvider ?? new WorkflowGraphProvider();
     }
 
     /// <summary>Test / direct-DbContext constructor (mirrors WorkflowEngine's test path).
@@ -90,7 +96,8 @@ internal sealed class WorkflowTimerExecutor
         IOptions<WorkFlowOptions> options,
         ILogger<WorkflowTimerExecutor> logger,
         IWorkflowEngine? engine = null,
-        IWorkflowNotifier? notifier = null)
+        IWorkflowNotifier? notifier = null,
+        IWorkflowGraphProvider? graphProvider = null)
     {
         _dc = null;
         _dbDirect = db ?? throw new ArgumentNullException(nameof(db));
@@ -98,6 +105,7 @@ internal sealed class WorkflowTimerExecutor
         _logger = logger;
         _engine = engine;
         _notifier = notifier;
+        _graphProvider = graphProvider ?? new WorkflowGraphProvider();
     }
 
     // Returns the underlying DbContext from either the prod or test constructor path.
@@ -2066,7 +2074,7 @@ internal sealed class WorkflowTimerExecutor
                 return null;
             }
 
-            var graph = WorkflowGraphSerializer.Deserialize(version.GraphJson);
+            var graph = _graphProvider.GetGraph(version);
             var nodeDef = graph.Nodes.FirstOrDefault(n =>
                 string.Equals(n.NodeKey, nodeKey, StringComparison.Ordinal));
 

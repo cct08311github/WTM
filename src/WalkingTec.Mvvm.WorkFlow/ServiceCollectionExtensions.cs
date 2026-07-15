@@ -82,6 +82,13 @@ public static class ServiceCollectionExtensions
         //    ConcurrentDictionary. Must be singleton to share the compiled-predicate cache
         //    across all request-scoped engine instances.
         services.AddSingleton<IRoutingEvaluator, WhitelistRoutingEvaluator>();
+
+        // #666: IWorkflowGraphProvider — singleton cache of deserialized WorkflowGraph documents,
+        // keyed by DefinitionVersionId. Same rationale as IRoutingEvaluator above: ProcessDefinitionVersion
+        // is immutable once published, so the deserialized graph is safe to share across every
+        // scoped engine/timer-executor instance for the process lifetime. See IWorkflowGraphProvider.cs.
+        services.AddSingleton<IWorkflowGraphProvider, WorkflowGraphProvider>();
+
         services.TryAddScoped<IManagerChainProvider, DefaultManagerChainProvider>();
 
         // WF-19: IApproverResolver is decorated with DelegationResolvingDecorator.

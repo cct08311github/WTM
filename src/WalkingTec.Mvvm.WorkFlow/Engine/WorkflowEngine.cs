@@ -90,6 +90,12 @@ internal sealed class WorkflowEngine : IWorkflowEngine
     // WF-20.2: business-calendar seam.  Null when AddWtmWorkFlowTimers() was not called.
     // When null the arm helpers skip all timer arming (no timer rows) — fully opt-in.
     private readonly IBusinessCalendar? _businessCalendar;
+    // #666: deserialized-graph cache. Defaults to a private (non-shared) instance when not
+    // supplied — production DI always supplies the process-wide singleton (see
+    // ServiceCollectionExtensions.AddWtmWorkFlow); the private-instance fallback only matters
+    // for the internal test constructors below, which still get correct (just non-shared)
+    // caching behavior without needing to be updated for this parameter.
+    private readonly IWorkflowGraphProvider _graphProvider;
 
     // Convenience alias — keeps all the engine body code readable.
     private DbContext Db => _db;
@@ -107,7 +113,8 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         IOptions<WorkFlowOptions> options,
         ILogger<WorkflowEngine> logger,
         IWorkflowNotifier? notifier = null,
-        IBusinessCalendar? businessCalendar = null)
+        IBusinessCalendar? businessCalendar = null,
+        IWorkflowGraphProvider? graphProvider = null)
     {
         if (dc is null) throw new ArgumentNullException(nameof(dc));
         _dc = dc;
@@ -118,6 +125,9 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         _logger = (ILogger)(logger ?? throw new ArgumentNullException(nameof(logger)));
         _notifier = notifier;
         _businessCalendar = businessCalendar; // null → timer arming skipped (opt-in via AddWtmWorkFlowTimers)
+        // #666: DI always supplies the process-wide singleton; null only in ad-hoc construction
+        // (defensive fallback — never expected on the production DI path).
+        _graphProvider = graphProvider ?? new WorkflowGraphProvider();
 
         // WF-19 FIX-8: AtAction mode uses a nullable-DateTime WHERE clause inside
         // ClaimDelegatedTaskAsync's ExecuteUpdateAsync.  Oracle and DaMeng EF Core providers
@@ -166,8 +176,9 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         INodeKindDispatcher dispatcher,
         IRoutingEvaluator routingEvaluator,
         ILogger logger,
-        IWorkflowNotifier? notifier = null)
-        : this(db, dispatcher, routingEvaluator, new WorkFlowOptions(), logger, notifier)
+        IWorkflowNotifier? notifier = null,
+        IWorkflowGraphProvider? graphProvider = null)
+        : this(db, dispatcher, routingEvaluator, new WorkFlowOptions(), logger, notifier, graphProvider: graphProvider)
     { }
 
     /// <summary>Full internal constructor used by tests that need to override WorkFlowOptions.</summary>
@@ -178,7 +189,8 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         WorkFlowOptions options,
         ILogger logger,
         IWorkflowNotifier? notifier = null,
-        IBusinessCalendar? businessCalendar = null)
+        IBusinessCalendar? businessCalendar = null,
+        IWorkflowGraphProvider? graphProvider = null)
     {
         _db = db ?? throw new ArgumentNullException(nameof(db));
         _dc = null; // No IDataContext in the direct-DbContext test path — ValidateDbTypeOnFirstUse skipped.
@@ -188,6 +200,9 @@ internal sealed class WorkflowEngine : IWorkflowEngine
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _notifier = notifier; // null is valid — skip all notifications
         _businessCalendar = businessCalendar; // null → timer arming skipped in arm helpers
+        // #666: tests that don't care about cache sharing get a private per-instance cache;
+        // production DI always supplies the process-wide singleton via the public constructor above.
+        _graphProvider = graphProvider ?? new WorkflowGraphProvider();
     }
 
     // ── StartAsync ────────────────────────────────────────────────────────────
@@ -220,7 +235,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             ?? throw new InvalidOperationException(
                    $"ProcessDefinitionVersion {definitionVersionId} not found or not valid.");
 
-        var graph = WorkflowGraphSerializer.Deserialize(version.GraphJson);
+        var graph = _graphProvider.GetGraph(version);
 
         // Find the single Start node (validated at publish time).
         var startNodeDef = graph.Nodes.FirstOrDefault(n => n.Kind == NodeKind.Start)
@@ -355,7 +370,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             .AsNoTracking()
             .SingleAsync(v => v.ID == instance.DefinitionVersionId, ct);
 
-        var graph = WorkflowGraphSerializer.Deserialize(version.GraphJson);
+        var graph = _graphProvider.GetGraph(version);
 
         return await AdvanceCoreAsync(instance, graph, ct);
     }
@@ -394,7 +409,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             .AsNoTracking()
             .SingleAsync(v => v.ID == instance.DefinitionVersionId, ct);
 
-        var graph = WorkflowGraphSerializer.Deserialize(version.GraphJson);
+        var graph = _graphProvider.GetGraph(version);
 
         return await AdvanceCoreAsync(instance, graph, ct, actingApproverITCode);
     }
@@ -3492,7 +3507,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             .AsNoTracking()
             .SingleAsync(v => v.ID == instance.DefinitionVersionId, ct);
 
-        var graph = WorkflowGraphSerializer.Deserialize(version.GraphJson);
+        var graph = _graphProvider.GetGraph(version);
 
         // Resolve the closest dominating Approval node (ReturnToPrev semantics).
         var targetNodeKey = WorkflowGraphValidator.GetPrevApprovalNode(graph, nodeInst.NodeKey);
@@ -3551,7 +3566,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
             .AsNoTracking()
             .SingleAsync(v => v.ID == instance.DefinitionVersionId, ct);
 
-        var graph = WorkflowGraphSerializer.Deserialize(version.GraphJson);
+        var graph = _graphProvider.GetGraph(version);
 
         // Validate that targetNodeKey is a dominator of the trigger node.
         var validTargets = WorkflowGraphValidator.GetValidReturnTargets(graph, nodeInst.NodeKey);
@@ -5043,7 +5058,7 @@ internal sealed class WorkflowEngine : IWorkflowEngine
 
         if (version is null) return null;
 
-        var graph = WorkflowGraphSerializer.Deserialize(version.GraphJson);
+        var graph = _graphProvider.GetGraph(version);
         return graph.Nodes.FirstOrDefault(n =>
             string.Equals(n.NodeKey, nodeKey, StringComparison.Ordinal));
     }
