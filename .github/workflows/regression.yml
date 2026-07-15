@@ -1,0 +1,86 @@
+name: Regression Suite (TagHelper<->LayUI)
+
+# Issue #672 — wires the Playwright regression suite (Issue #565/#566 gate:
+# layui-263 baseline vs layui-next compat, retries: 0, self-contained
+# webServer via test/regression/static-server.mjs) into CI. Previously the
+# suite existed but ran in no workflow. Scoped via paths filter so it only
+# fires when the TagHelper/LayUI surface it exercises actually changes.
+
+on:
+  pull_request:
+    branches: [dotnet10]
+    paths:
+      - 'src/WalkingTec.Mvvm.TagHelpers.LayUI/**'
+      - 'src/WalkingTec.Mvvm.Mvc/framework_layui.js'
+      - 'src/WalkingTec.Mvvm.Mvc/dompurify.js'
+      - 'test/regression/**'
+      - 'test/manual/regression/**'
+      - 'demo/WalkingTec.Mvvm.Demo/wwwroot/layui/**'
+      - 'demo/WalkingTec.Mvvm.Demo/wwwroot/layui-next/**'
+      - 'demo/WalkingTec.Mvvm.Demo/wwwroot/jquery.min.js'
+      - 'demo/WalkingTec.Mvvm.Demo/wwwroot/jquery.cookie.js'
+  push:
+    branches: [dotnet10]
+    paths:
+      - 'src/WalkingTec.Mvvm.TagHelpers.LayUI/**'
+      - 'src/WalkingTec.Mvvm.Mvc/framework_layui.js'
+      - 'src/WalkingTec.Mvvm.Mvc/dompurify.js'
+      - 'test/regression/**'
+      - 'test/manual/regression/**'
+      - 'demo/WalkingTec.Mvvm.Demo/wwwroot/layui/**'
+      - 'demo/WalkingTec.Mvvm.Demo/wwwroot/layui-next/**'
+      - 'demo/WalkingTec.Mvvm.Demo/wwwroot/jquery.min.js'
+      - 'demo/WalkingTec.Mvvm.Demo/wwwroot/jquery.cookie.js'
+  workflow_dispatch: {}
+
+jobs:
+  regression:
+    name: Playwright regression suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+
+      - name: Install regression suite dependencies
+        run: npm ci
+        working-directory: test/regression
+
+      # Cache Playwright's downloaded browser binaries. Best-effort only —
+      # cache misses/failures must never fail the job (Gitea act_runner
+      # portability caveat, same rationale as the artifact-upload workaround
+      # below).
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('test/regression/package-lock.json') }}
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: test/regression
+
+      - name: Run regression suite
+        run: npx playwright test
+        working-directory: test/regression
+
+      # actions/upload-artifact@v4 is incompatible with the local Gitea
+      # Actions API (see docs/ci-operations.md, Issue #11) — the job can
+      # report conclusion: failure at this step even though the suite
+      # itself passed. continue-on-error keeps that quirk from masking a
+      # real test result.
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: playwright-report
+          path: test/regression/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14
