@@ -304,7 +304,7 @@ namespace WalkingTec.Mvvm.Core
                     {
                         IsEmunBoolParp = true;
                     }                       //获取数据，并过滤特殊字符
-                    string text = Regex.Replace(col.GetText(List[i]).ToString() ?? "", @"<[^>]*>", String.Empty);
+                    string text = Helper.CoreRegexes.HtmlTagStripRegex().Replace(col.GetText(List[i]).ToString() ?? "", String.Empty);
 
                     //处理枚举变量的多语言
                     if (IsEmunBoolParp)
@@ -511,7 +511,7 @@ namespace WalkingTec.Mvvm.Core
                     foreach (var col in flatCols)
                     {
                         bool isEnumBoolProp = col.FieldType != null && col.FieldType.IsEnumOrNullableEnum();
-                        string text = Regex.Replace(col.GetText(item).ToString() ?? "", @"<[^>]*>", string.Empty);
+                        string text = Helper.CoreRegexes.HtmlTagStripRegex().Replace(col.GetText(item).ToString() ?? "", string.Empty);
 
                         if (isEnumBoolProp)
                         {
@@ -604,7 +604,7 @@ namespace WalkingTec.Mvvm.Core
                 foreach (var col in flatCols)
                 {
                     bool isEnumBoolProp = col.FieldType != null && col.FieldType.IsEnumOrNullableEnum();
-                    string text = Regex.Replace(col.GetText(item).ToString() ?? "", @"<[^>]*>", string.Empty);
+                    string text = Helper.CoreRegexes.HtmlTagStripRegex().Replace(col.GetText(item).ToString() ?? "", string.Empty);
 
                     if (isEnumBoolProp)
                     {
@@ -1465,7 +1465,7 @@ namespace WalkingTec.Mvvm.Core
                             var errors = MSD[item];
                             if (errors.Count > 0)
                             {
-                                Regex r = new Regex($"{DetailGridPrix}\\[(.*?)\\]");
+                                Regex r = WalkingTec.Mvvm.Core.Helper.CoreRegexes.GetDetailGridIndexRegex(DetailGridPrix!);
                                 try
                                 {
                                     if (int.TryParse(r.Match(item).Groups[1].Value, out int index))

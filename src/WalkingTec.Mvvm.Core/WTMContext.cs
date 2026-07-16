@@ -1301,7 +1301,7 @@ params string[] groupcode)
                     var hostonly = _globaInfo.AllMainTenantOnlyUrls;
                     foreach (var au in hostonly)
                     {
-                        if (new Regex("^" + au + "[/\\?]?", RegexOptions.IgnoreCase).IsMatch(url))
+                        if (Helper.CoreRegexes.GetUrlPrefixRegex(au).IsMatch(url))
                         {
                             return false;
                         }
@@ -1312,7 +1312,7 @@ params string[] groupcode)
             var publicActions = _globaInfo.AllAccessUrls;
             foreach (var au in publicActions)
             {                
-                if (au != "/" && new Regex("^" + au + "[/\\?]?", RegexOptions.IgnoreCase).IsMatch(url))
+                if (au != "/" && Helper.CoreRegexes.GetUrlPrefixRegex(au).IsMatch(url))
                 {
                     return true;
                 }

@@ -10,6 +10,9 @@
   <Import Project="..\..\common.props" />
 
   <ItemGroup>
+    <!-- Perf(#677): expose internal LayUiRegexes accessors to the Core test assembly for
+         regex-parity tests (mirrors the InternalsVisibleTo pattern already used by Core/Mvc). -->
+    <InternalsVisibleTo Include="WalkingTec.Mvvm.Core.Test" />
   </ItemGroup>
 
   <ItemGroup>

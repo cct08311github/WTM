@@ -1169,7 +1169,7 @@ isPost = true;
 case '{item.Area + item.ControllerName + item.ActionName + item.QueryString}':{{");
                 if (item.ParameterType == GridActionParameterTypesEnum.AddRow)
                 {
-                    Regex r = new Regex("<script>.*?</script>");
+                    Regex r = LayUiRegexes.ScriptBlockRegex();
                     gridBtnEventStrBuilder.Append($@"ff.AddGridRow(""{Id}"",{Id}option,{r.Replace(ListVM.GetSingleDataJson(null, false), "")});
 ");
                 }

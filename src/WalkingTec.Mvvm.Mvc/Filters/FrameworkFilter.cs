@@ -200,7 +200,7 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                         {
                             if (v?.StartsWith($"{model.GetParentStr()}Entity.") == true)
                             {
-                                Regex r = new Regex("(.*?)\\[.*?\\](.*?$)");
+                                Regex r = WalkingTec.Mvvm.Mvc.Helper.MvcRegexes.ChildCollectionIndexRegex();
                                 var m = r.Match(v);
                                 var check = v;
                                 if (m.Success)

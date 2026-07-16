@@ -408,7 +408,7 @@ namespace WalkingTec.Mvvm.Core
             {
                 return new List<string>();
             }
-            Regex reg = new Regex("(.*?)\\[\\-?\\d?\\]\\.(.*?)$");
+            Regex reg = CoreRegexes.PropertySiblingPathRegex();
             var match = reg.Match(propertyName);
             if (match.Success)
             {
