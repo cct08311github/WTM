@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Concurrent;
+using System.ComponentModel.DataAnnotations;
 using System.Reflection;
 using WalkingTec.Mvvm.Core.Analysis;
 
@@ -30,6 +31,15 @@ namespace WalkingTec.Mvvm.Core.Helper
         // Type -> AnalysisFieldScanTemplate[] (structural scan, no live localizer-dependent fields)
         internal static readonly ConcurrentDictionary<Type, AnalysisFieldScanTemplate[]> AnalysisFieldTemplates = new();
 
+        // Perf(#674): Type -> per-property (PropertyInfo, ValidationAttribute[]) pairs for
+        // BaseImportVM's per-row data-annotation validation. GetProperties() and the per-property
+        // GetCustomAttributes(true) scan (which re-instantiates attribute objects on every call)
+        // are pure functions of the CLR type — cache once per model type instead of once per
+        // imported row. DisplayName is intentionally NOT cached here: it is resolved fresh via
+        // the already-cached PropertyHelper.GetPropertyDisplayName() at validation time so that
+        // localizer/culture changes are still respected (same as before #674).
+        internal static readonly ConcurrentDictionary<Type, ImportPropertyValidationInfo[]> ImportValidationInfos = new();
+
         /// <summary>Test-only: clear all caches. Production code should never call this.</summary>
         internal static void ClearAll()
         {
@@ -39,6 +49,7 @@ namespace WalkingTec.Mvvm.Core.Helper
             RawEnumDisplayNames.Clear();
             RawEnumDisplayNamesByInt.Clear();
             AnalysisFieldTemplates.Clear();
+            ImportValidationInfos.Clear();
         }
     }
 
@@ -59,5 +70,15 @@ namespace WalkingTec.Mvvm.Core.Helper
         internal MeasureFormat Format { get; init; }
         /// <summary>The underlying (non-nullable) CLR type for enum AllowedValues generation.</summary>
         internal Type? UnderlyingEnumType { get; init; }
+    }
+
+    /// <summary>
+    /// Cached (PropertyInfo, ValidationAttribute[]) pair for one property of an import model
+    /// type, used by BaseImportVM's per-row data-annotation validation (#674).
+    /// </summary>
+    internal sealed class ImportPropertyValidationInfo(PropertyInfo property, ValidationAttribute[] rules)
+    {
+        internal PropertyInfo Property { get; } = property;
+        internal ValidationAttribute[] Rules { get; } = rules;
     }
 }

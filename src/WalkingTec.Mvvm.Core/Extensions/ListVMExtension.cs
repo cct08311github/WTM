@@ -114,10 +114,17 @@ namespace WalkingTec.Mvvm.Core.Extensions
                 el.ForEach(x => x.ID = Guid.NewGuid());
             }
             //循环生成列表数据
+            // Perf(#674): flatten the (possibly multi-level) header tree into its bottom
+            // columns ONCE for the whole result set instead of once per row — BottomChildren
+            // recursively rebuilds a List on every access, so re-flattening inside the
+            // per-row loop was O(rows * columns) tree walks. The flattened column set is
+            // identical for every row (same TModel, same GridHeaders instance), so hoisting
+            // it above the loop is behaviour-identical.
+            var flatColumns = self.GetHeaders().SelectMany(h => h.BottomChildren).ToList();
             for (int x = 0; x < el.Count; x++)
             {
                 var sou = el[x];
-                sb.Append(self.GetSingleDataJson(sou, returnColumnObject, x, enumToString));
+                sb.Append(self.GetSingleDataJsonCore(sou, returnColumnObject, x, enumToString, flatColumns));
                 if (x < el.Count - 1)
                 {
                     sb.Append(',');
@@ -182,6 +189,20 @@ namespace WalkingTec.Mvvm.Core.Extensions
         /// <returns>Json格式的数据</returns>
         public static string GetSingleDataJson<T>(this IBasePagedListVM<T, BaseSearcher> self, object obj, bool returnColumnObject, int index = 0, bool enumToString = true) where T : TopBasePoco
         {
+            return self.GetSingleDataJsonCore(obj, returnColumnObject, index, enumToString, flatColumns: null);
+        }
+
+        /// <summary>
+        /// Core implementation shared by <see cref="GetSingleDataJson{T}"/> and the per-row
+        /// loop in <see cref="GetDataJson{T}"/>. Perf(#674): accepts an optional pre-flattened
+        /// bottom-column list so callers that render many rows (or nested tree-grid child
+        /// rows, which share the same TModel header tree) can compute the flatten once and
+        /// reuse it, instead of re-walking <see cref="IGridColumn{T}.BottomChildren"/> for
+        /// every row. When null, flattens on demand — identical to the pre-#674 behaviour —
+        /// so single-row callers (e.g. add-row endpoints) are unaffected.
+        /// </summary>
+        private static string GetSingleDataJsonCore<T>(this IBasePagedListVM<T, BaseSearcher> self, object obj, bool returnColumnObject, int index, bool enumToString, List<IGridColumn<T>>? flatColumns) where T : TopBasePoco
+        {
             bool inner = false;
             var sb = new StringBuilder();
             var RowBgColor = string.Empty;
@@ -198,198 +219,199 @@ namespace WalkingTec.Mvvm.Core.Extensions
             bool containsID = false;
             bool addHiddenID = false;
             Dictionary<string, (string, string)> colorcolumns = new Dictionary<string, (string, string)>();
-            foreach (var baseCol in self.GetHeaders())
+            var cols = flatColumns ?? self.GetHeaders().SelectMany(h => h.BottomChildren).ToList();
+            foreach (var col in cols)
             {
-                foreach (var col in baseCol.BottomChildren)
+                inner = false;
+                if (col.ColumnType != GridColumnTypeEnum.Normal)
                 {
-                    inner = false;
-                    if (col.ColumnType != GridColumnTypeEnum.Normal)
+                    continue;
+                }
+                if (col.FieldName?.ToLower() == "id")
+                {
+                    containsID = true;
+                }
+                var backColor = col.GetBackGroundColor(sou);
+                //获取ListVM中设定的单元格前景色
+                var foreColor = col.GetForeGroundColor(sou);
+
+                if (backColor == string.Empty)
+                {
+                    backColor = RowBgColor;
+                }
+                if (foreColor == string.Empty)
+                {
+                    foreColor = RowColor;
+                }
+                (string? bgcolor, string? forecolor) colors = (null, null);
+                if (backColor != string.Empty)
+                {
+                    colors.bgcolor = backColor;
+                }
+                if (foreColor != string.Empty)
+                {
+                    colors.forecolor = foreColor;
+                }
+                if (string.IsNullOrEmpty(colors.bgcolor) == false || string.IsNullOrEmpty(colors.forecolor) == false)
+                {
+                    if (col.Field != null && colors.bgcolor != null && colors.forecolor != null) { colorcolumns.Add(col.Field, (colors.bgcolor, colors.forecolor)); }
+                }
+                //设定列名，如果是主键ID，则列名为id，如果不是主键列，则使用f0，f1,f2...这种方式命名，避免重复
+                var ptype = col.FieldType;
+                if (col.Field?.ToLower() == "children" && typeof(IEnumerable<T>).IsAssignableFrom(ptype))
+                {
+                    var children = (col.GetObject(obj) as IEnumerable<T>)?.ToList();
+                    if (children == null || children.Count == 0)
                     {
                         continue;
                     }
-                    if (col.FieldName?.ToLower() == "id")
-                    {
-                        containsID = true;
-                    }
-                    var backColor = col.GetBackGroundColor(sou);
-                    //获取ListVM中设定的单元格前景色
-                    var foreColor = col.GetForeGroundColor(sou);
+                }
+                var html = string.Empty;
 
-                    if (backColor == string.Empty)
-                    {
-                        backColor = RowBgColor;
-                    }
-                    if (foreColor == string.Empty)
-                    {
-                        foreColor = RowColor;
-                    }
-                    (string? bgcolor, string? forecolor) colors = (null, null);
-                    if (backColor != string.Empty)
-                    {
-                        colors.bgcolor = backColor;
-                    }
-                    if (foreColor != string.Empty)
-                    {
-                        colors.forecolor = foreColor;
-                    }
-                    if (string.IsNullOrEmpty(colors.bgcolor) == false || string.IsNullOrEmpty(colors.forecolor) == false)
-                    {
-                        if (col.Field != null && colors.bgcolor != null && colors.forecolor != null) { colorcolumns.Add(col.Field, (colors.bgcolor, colors.forecolor)); }
-                    }
-                    //设定列名，如果是主键ID，则列名为id，如果不是主键列，则使用f0，f1,f2...这种方式命名，避免重复
-                    var ptype = col.FieldType;
-                    if (col.Field?.ToLower() == "children" && typeof(IEnumerable<T>).IsAssignableFrom(ptype))
+                if (col.EditType == EditTypeEnum.Text || col.EditType == null)
+                {
+                    if (typeof(IEnumerable<T>).IsAssignableFrom(ptype))
                     {
                         var children = (col.GetObject(obj) as IEnumerable<T>)?.ToList();
-                        if (children == null || children.Count == 0)
+                        if (children != null)
                         {
-                            continue;
-                        }
-                    }
-                    var html = string.Empty;
-
-                    if (col.EditType == EditTypeEnum.Text || col.EditType == null)
-                    {
-                        if (typeof(IEnumerable<T>).IsAssignableFrom(ptype))
-                        {
-                            var children = (col.GetObject(obj) as IEnumerable<T>)?.ToList();
-                            if (children != null)
+                            html = "[";
+                            for (int i = 0; i < children.Count; i++)
                             {
-                                html = "[";
-                                for (int i = 0; i < children.Count; i++)
+                                var item = children[i];
+                                // Perf(#674): nested tree-grid child rows share the same TModel
+                                // header tree as the parent row — reuse the already-flattened
+                                // column list instead of re-walking BottomChildren per child row.
+                                html += self.GetSingleDataJsonCore(item, returnColumnObject, 0, enumToString, cols);
+                                if (i < children.Count - 1)
                                 {
-                                    var item = children[i];
-                                    html += self.GetSingleDataJson(item, returnColumnObject,0,enumToString);
-                                    if (i < children.Count - 1)
-                                    {
-                                        html += ",";
-                                    }
+                                    html += ",";
                                 }
-                                html += "]";
                             }
-                            else
-                            {
-                                //html = "[]";
-                            }
-                            inner = true;
+                            html += "]";
                         }
                         else
                         {
-                            if (returnColumnObject == true)
-                            {
-                                html = col.GetText(sou, false).ToString();
-                            }
-                            else
-                            {
-                                var info = col.GetText(sou);
-
-                                if (info is ColumnFormatInfo)
-                                {
-                                    html = GetFormatResult(self as BaseVM, info as ColumnFormatInfo);
-                                }
-                                else if (info is List<ColumnFormatInfo> list)
-                                {
-                                    var temp = string.Empty;
-                                    foreach (var item in list)
-                                    {
-                                        temp += GetFormatResult(self as BaseVM, item);
-                                        temp += "&nbsp;&nbsp;";
-                                    }
-                                    html = temp;
-                                }
-                                else
-                                {
-                                    html = info.ToString();
-                                }
-                            }
-
-                            //如果列是布尔值，直接返回true或false，让前台生成CheckBox
-                            if (ptype == typeof(bool) || ptype == typeof(bool?))
-                            {
-                                if(enumToString == false)
-                                {
-                                    html = html?.ToLower() ?? "";
-                                    inner = true;
-                                }
-                                else if (returnColumnObject == false)
-                                {
-                                    if (html?.ToLower() == "true")
-                                    {
-                                        html = (self as BaseVM)?.UIService?.MakeCheckBox(true, isReadOnly: true)?.ToString() ?? "";
-                                    }
-                                    if (html?.ToLower() == "false" || html == string.Empty)
-                                    {
-                                        html = (self as BaseVM)?.UIService?.MakeCheckBox(false, isReadOnly: true)?.ToString() ?? "";
-                                    }
-                                }
-                                else
-                                {
-                                    if (html != null && html != string.Empty)
-                                    {
-                                        html = html.ToLower();
-                                    }
-                                }
-                            }
-                            //如果列是枚举，直接使用枚举的文本作为多语言的Key查询多语言文字
-                            else if (ptype != null && ptype.IsEnumOrNullableEnum())
-                            {
-                                if (enumToString == true)
-                                {
-                                    string enumdisplay = ptype != null ? PropertyHelper.GetEnumDisplayName(ptype, html) : "";
-                                    if (string.IsNullOrEmpty(enumdisplay) == false)
-                                    {
-                                        html = enumdisplay;
-                                    }
-                                }
-                            }
-                            //If this column is a class or list, html will be set to a json string, sest inner to true to remove the "
-                            if (returnColumnObject == true && ptype?.Namespace?.Equals("System") == false && ptype != null && ptype.IsEnumOrNullableEnum() == false)
-                            {
-                                inner = true;
-                            }
+                            //html = "[]";
                         }
-                        if (enumToString == false && string.IsNullOrEmpty(html))
-                        {
-                            continue;
-                        }
-
+                        inner = true;
                     }
                     else
                     {
-                        string val = col.GetText(sou)?.ToString() ?? "";
-                        string name = $"{self.DetailGridPrix}[{index}].{col.Field}";
-                        switch (col.EditType)
+                        if (returnColumnObject == true)
                         {
-                            case EditTypeEnum.TextBox:
-                                html = (self as BaseVM)?.UIService?.MakeTextBox(name, val,null,col.IsReadOnly)?.ToString() ?? "";
-                                break;
-                            case EditTypeEnum.CheckBox:
-                                _ = bool.TryParse(val, out bool nb);
-                                html = (self as BaseVM)?.UIService?.MakeCheckBox(nb, null, name, "true",col.IsReadOnly)?.ToString() ?? "";
-                                break;
-                            case EditTypeEnum.ComboBox:
-                                html = (self as BaseVM)?.UIService?.MakeCombo(name, col.ListItems, val,null,col.IsReadOnly)?.ToString() ?? "";
-                                break;
-                            case EditTypeEnum.Datetime:
-                                html = (self as BaseVM)?.UIService?.MakeDateTime(name, val,null, col.IsReadOnly,col.DateType)?.ToString() ?? "";
-                                break;
-                            default:
-                                break;
+                            html = col.GetText(sou, false).ToString();
+                        }
+                        else
+                        {
+                            var info = col.GetText(sou);
+
+                            if (info is ColumnFormatInfo)
+                            {
+                                html = GetFormatResult(self as BaseVM, info as ColumnFormatInfo);
+                            }
+                            else if (info is List<ColumnFormatInfo> list)
+                            {
+                                var temp = string.Empty;
+                                foreach (var item in list)
+                                {
+                                    temp += GetFormatResult(self as BaseVM, item);
+                                    temp += "&nbsp;&nbsp;";
+                                }
+                                html = temp;
+                            }
+                            else
+                            {
+                                html = info.ToString();
+                            }
+                        }
+
+                        //如果列是布尔值，直接返回true或false，让前台生成CheckBox
+                        if (ptype == typeof(bool) || ptype == typeof(bool?))
+                        {
+                            if(enumToString == false)
+                            {
+                                html = html?.ToLower() ?? "";
+                                inner = true;
+                            }
+                            else if (returnColumnObject == false)
+                            {
+                                if (html?.ToLower() == "true")
+                                {
+                                    html = (self as BaseVM)?.UIService?.MakeCheckBox(true, isReadOnly: true)?.ToString() ?? "";
+                                }
+                                if (html?.ToLower() == "false" || html == string.Empty)
+                                {
+                                    html = (self as BaseVM)?.UIService?.MakeCheckBox(false, isReadOnly: true)?.ToString() ?? "";
+                                }
+                            }
+                            else
+                            {
+                                if (html != null && html != string.Empty)
+                                {
+                                    html = html.ToLower();
+                                }
+                            }
+                        }
+                        //如果列是枚举，直接使用枚举的文本作为多语言的Key查询多语言文字
+                        else if (ptype != null && ptype.IsEnumOrNullableEnum())
+                        {
+                            if (enumToString == true)
+                            {
+                                string enumdisplay = ptype != null ? PropertyHelper.GetEnumDisplayName(ptype, html) : "";
+                                if (string.IsNullOrEmpty(enumdisplay) == false)
+                                {
+                                    html = enumdisplay;
+                                }
+                            }
+                        }
+                        //If this column is a class or list, html will be set to a json string, sest inner to true to remove the "
+                        if (returnColumnObject == true && ptype?.Namespace?.Equals("System") == false && ptype != null && ptype.IsEnumOrNullableEnum() == false)
+                        {
+                            inner = true;
                         }
                     }
-                    if (string.IsNullOrEmpty(self.DetailGridPrix) == false && addHiddenID == false)
+                    if (enumToString == false && string.IsNullOrEmpty(html))
                     {
-                        html += $@"<input hidden name='{self.DetailGridPrix}[{index}].ID' value='{sou.GetID()}'/>";
-                        addHiddenID = true;
+                        continue;
                     }
-                    if (inner == false)
-                    {
-                        html = "\"" + (html?.RemoveSpecialChar() ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
-                    }
-                    sb.Append($"\"{col.Field}\":");
-                    sb.Append(html);
-                    sb.Append(',');
+
                 }
+                else
+                {
+                    string val = col.GetText(sou)?.ToString() ?? "";
+                    string name = $"{self.DetailGridPrix}[{index}].{col.Field}";
+                    switch (col.EditType)
+                    {
+                        case EditTypeEnum.TextBox:
+                            html = (self as BaseVM)?.UIService?.MakeTextBox(name, val,null,col.IsReadOnly)?.ToString() ?? "";
+                            break;
+                        case EditTypeEnum.CheckBox:
+                            _ = bool.TryParse(val, out bool nb);
+                            html = (self as BaseVM)?.UIService?.MakeCheckBox(nb, null, name, "true",col.IsReadOnly)?.ToString() ?? "";
+                            break;
+                        case EditTypeEnum.ComboBox:
+                            html = (self as BaseVM)?.UIService?.MakeCombo(name, col.ListItems, val,null,col.IsReadOnly)?.ToString() ?? "";
+                            break;
+                        case EditTypeEnum.Datetime:
+                            html = (self as BaseVM)?.UIService?.MakeDateTime(name, val,null, col.IsReadOnly,col.DateType)?.ToString() ?? "";
+                            break;
+                        default:
+                            break;
+                    }
+                }
+                if (string.IsNullOrEmpty(self.DetailGridPrix) == false && addHiddenID == false)
+                {
+                    html += $@"<input hidden name='{self.DetailGridPrix}[{index}].ID' value='{sou.GetID()}'/>";
+                    addHiddenID = true;
+                }
+                if (inner == false)
+                {
+                    html = "\"" + (html?.RemoveSpecialChar() ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+                }
+                sb.Append($"\"{col.Field}\":");
+                sb.Append(html);
+                sb.Append(',');
             }
             sb.Append($"\"TempIsSelected\":\"{ (isSelected == true ? "1" : "0") }\"");
             foreach (var cc in colorcolumns)

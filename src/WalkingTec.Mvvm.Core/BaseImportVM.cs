@@ -17,6 +17,7 @@ using NPOI.HSSF.Util;
 using NPOI.SS.UserModel;
 using NPOI.XSSF.UserModel;
 using WalkingTec.Mvvm.Core.Extensions;
+using WalkingTec.Mvvm.Core.Helper;
 using WalkingTec.Mvvm.Core.Support.FileHandlers;
 
 namespace WalkingTec.Mvvm.Core
@@ -984,14 +985,27 @@ namespace WalkingTec.Mvvm.Core
         private void TryValidateObject(object model, ValidationContext context, ICollection<ValidationResult> results)
         {
             var modelType = model.GetType();
-            foreach (var p in modelType.GetProperties())
+            // Perf(#674): modelType.GetProperties() plus a per-property GetCustomAttributes(true)
+            // scan (which re-instantiates attribute objects on every call) previously ran on
+            // EVERY imported row. Both are pure functions of the CLR type, so cache the
+            // (PropertyInfo, ValidationAttribute[]) pairs once per model type and reuse them
+            // across rows. The exact same "i.GetType().BaseType == typeof(ValidationAttribute)"
+            // filter is preserved in the cache-population factory below, so which attributes
+            // are treated as validation rules is unchanged (it intentionally matches only
+            // attributes that derive DIRECTLY from ValidationAttribute, same as before #674).
+            var infos = ReflectionCache.ImportValidationInfos.GetOrAdd(modelType, static t =>
+                [.. t.GetProperties().Select(p => new ImportPropertyValidationInfo(
+                    p,
+                    [.. p.GetCustomAttributes(true).Where(i => i.GetType().BaseType == typeof(ValidationAttribute)).Cast<ValidationAttribute>()]))]);
+
+            foreach (var info in infos)
             {
-                var propertyValue = p.GetValue(model);
-                TryValidateProperty(propertyValue, context, results, p);
+                var propertyValue = info.Property.GetValue(model);
+                TryValidateProperty(propertyValue, context, results, info.Property, info.Rules);
             }
         }
 
-        private void TryValidateProperty(object? value, ValidationContext context, ICollection<ValidationResult> results, PropertyInfo? propertyInfo = null)
+        private void TryValidateProperty(object? value, ValidationContext context, ICollection<ValidationResult> results, PropertyInfo? propertyInfo = null, ValidationAttribute[]? rules = null)
         {
             var modelType = context.ObjectType;
             if (propertyInfo == null)
@@ -1001,7 +1015,7 @@ namespace WalkingTec.Mvvm.Core
 
             if (propertyInfo != null)
             {
-                var rules = propertyInfo.GetCustomAttributes(true).Where(i => i.GetType().BaseType == typeof(ValidationAttribute)).Cast<ValidationAttribute>();
+                rules ??= [.. propertyInfo.GetCustomAttributes(true).Where(i => i.GetType().BaseType == typeof(ValidationAttribute)).Cast<ValidationAttribute>()];
                 var displayName = propertyInfo.GetPropertyDisplayName();
                 var memberName = propertyInfo.Name;
                 foreach (var rule in rules)

@@ -821,6 +821,18 @@ public class EtlPipelineExecutor
         if (mappings == null) { throw new ArgumentNullException(nameof(mappings)); }
 
         var output = new DataTable();
+        // Perf(#674): pre-resolve each mapping's source column ordinal ONCE here, instead
+        // of a Columns.Contains(key) + string-indexed srcRow[key] lookup PER ROW PER
+        // MAPPING in the loop below (O(rows * mappings) string lookups over the whole
+        // batch). srcOrdinals[i] == -1 marks a mapping whose source column is absent from
+        // this batch — the row loop below still emits DBNull.Value for it, identical to
+        // the previous per-row Contains() check. Target-side is also indexed by position
+        // (mappingCount output columns are added below in this exact loop order, so
+        // output column ordinal i == array index i) rather than by name — same target
+        // column, same value, just resolved once instead of via a name lookup per row.
+        var mappingCount = mappings.Count;
+        var srcOrdinals = new int[mappingCount];
+        int idx = 0;
         // Build target column schema in mapping-iteration order so the
         // operator controls column order at the load step.
         foreach (var kv in mappings)
@@ -832,26 +844,19 @@ public class EtlPipelineExecutor
                 throw new ArgumentException(
                     "Column mapping entry has empty source or target name.", nameof(mappings));
             }
-            var srcType = source.Columns.Contains(srcName)
-                ? source.Columns[srcName]!.DataType
-                : typeof(object);
+            var srcCol = source.Columns.Contains(srcName) ? source.Columns[srcName] : null;
+            var srcType = srcCol?.DataType ?? typeof(object);
             output.Columns.Add(tgtName, srcType);
+            srcOrdinals[idx] = srcCol?.Ordinal ?? -1;
+            idx++;
         }
 
         foreach (DataRow srcRow in source.Rows)
         {
             var newRow = output.NewRow();
-            foreach (var kv in mappings)
+            for (int i = 0; i < mappingCount; i++)
             {
-                var tgtName = kv.Value;
-                if (source.Columns.Contains(kv.Key))
-                {
-                    newRow[tgtName] = srcRow[kv.Key];
-                }
-                else
-                {
-                    newRow[tgtName] = DBNull.Value;
-                }
+                newRow[i] = srcOrdinals[i] >= 0 ? srcRow[srcOrdinals[i]] : DBNull.Value;
             }
             output.Rows.Add(newRow);
         }

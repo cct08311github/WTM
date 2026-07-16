@@ -284,62 +284,65 @@ namespace WalkingTec.Mvvm.Core
             int max = MakeExcelHeader(sheet, GridHeaders!, 0, 0, headerStyle);
 
             //放入数据
+            // Perf(#674): flatten the header tree into its bottom columns ONCE for this
+            // chunk's row loop instead of re-walking BottomChildren (which rebuilds a new
+            // List) for every row. GridHeaders is unchanged across the loop
+            // (RemoveActionAndIdColumn already ran before GenerateWorkBook is invoked), so
+            // the flattened set is identical for every row — behaviour-preserving.
+            var flatCols = GridHeaders!.SelectMany(h => h.BottomChildren).ToList();
             var ColIndex = 0;
             for (int i = 0; i < List.Count; i++)
             {
                 ColIndex = 0;
                 var DR = sheet.CreateRow(i + max);
-                foreach (var baseCol in GridHeaders!)
+                foreach (var col in flatCols)
                 {
-                    foreach (var col in baseCol.BottomChildren)
+                    //处理枚举变量的多语言
+                    bool IsEmunBoolParp = false;
+                    var proType = col.FieldType;
+                    if (proType != null && proType.IsEnumOrNullableEnum())
                     {
-                        //处理枚举变量的多语言
-                        bool IsEmunBoolParp = false;
-                        var proType = col.FieldType;
-                        if (proType != null && proType.IsEnumOrNullableEnum())
-                        {
-                            IsEmunBoolParp = true;
-                        }                       //获取数据，并过滤特殊字符
-                        string text = Regex.Replace(col.GetText(List[i]).ToString() ?? "", @"<[^>]*>", String.Empty);
+                        IsEmunBoolParp = true;
+                    }                       //获取数据，并过滤特殊字符
+                    string text = Regex.Replace(col.GetText(List[i]).ToString() ?? "", @"<[^>]*>", String.Empty);
 
-                        //处理枚举变量的多语言
-                        if (IsEmunBoolParp)
+                    //处理枚举变量的多语言
+                    if (IsEmunBoolParp)
+                    {
+                        string enumdisplay = PropertyHelper.GetEnumDisplayName(proType, text);
+                        if (string.IsNullOrEmpty(enumdisplay) == false)
                         {
-                            string enumdisplay = PropertyHelper.GetEnumDisplayName(proType, text);
-                            if (string.IsNullOrEmpty(enumdisplay) == false)
-                            {
-                                text = enumdisplay;
-                            }
-
-                            else
-                            {
-                                if (int.TryParse(text, out int enumvalue))
-                                {
-                                    text = PropertyHelper.GetEnumDisplayName(proType, enumvalue);
-                                }
-                            }
+                            text = enumdisplay;
                         }
 
-                        //建立excel单元格
-                        ICell cell;
-                        if (col.FieldType?.IsNumber() == true)
-                        {
-                            double trydouble = 0;
-                            cell = DR.CreateCell(ColIndex, CellType.Numeric);
-                            if (double.TryParse(text, out trydouble))
-                            {
-                                cell.SetCellValue(trydouble);
-                            }
-
-                        }
                         else
                         {
-                            cell = DR.CreateCell(ColIndex);
-                            cell.SetCellValue(text);
+                            if (int.TryParse(text, out int enumvalue))
+                            {
+                                text = PropertyHelper.GetEnumDisplayName(proType, enumvalue);
+                            }
                         }
-                        cell.CellStyle = cellStyle;
-                        ColIndex++;
                     }
+
+                    //建立excel单元格
+                    ICell cell;
+                    if (col.FieldType?.IsNumber() == true)
+                    {
+                        double trydouble = 0;
+                        cell = DR.CreateCell(ColIndex, CellType.Numeric);
+                        if (double.TryParse(text, out trydouble))
+                        {
+                            cell.SetCellValue(trydouble);
+                        }
+
+                    }
+                    else
+                    {
+                        cell = DR.CreateCell(ColIndex);
+                        cell.SetCellValue(text);
+                    }
+                    cell.CellStyle = cellStyle;
+                    ColIndex++;
                 }
             }
             return book;
@@ -495,45 +498,47 @@ namespace WalkingTec.Mvvm.Core
                 int dataStartRow = MakeExcelHeader(sheet, GridHeaders!, 0, 0, headerStyle);
 
                 // Write data rows in a streaming fashion
+                // Perf(#674): flatten the header tree ONCE before the row loop instead of
+                // re-walking BottomChildren per row. GridHeaders is fixed for the duration
+                // of this export (RemoveActionAndIdColumn already ran above), so the
+                // flattened set is identical for every row.
+                var flatCols = GridHeaders!.SelectMany(h => h.BottomChildren).ToList();
                 int rowIdx = 0;
                 foreach (var item in query)
                 {
                     int colIndex = 0;
                     IRow dr = sheet.CreateRow(rowIdx + dataStartRow);
-                    foreach (var baseCol in GridHeaders!)
+                    foreach (var col in flatCols)
                     {
-                        foreach (var col in baseCol.BottomChildren)
+                        bool isEnumBoolProp = col.FieldType != null && col.FieldType.IsEnumOrNullableEnum();
+                        string text = Regex.Replace(col.GetText(item).ToString() ?? "", @"<[^>]*>", string.Empty);
+
+                        if (isEnumBoolProp)
                         {
-                            bool isEnumBoolProp = col.FieldType != null && col.FieldType.IsEnumOrNullableEnum();
-                            string text = Regex.Replace(col.GetText(item).ToString() ?? "", @"<[^>]*>", string.Empty);
-
-                            if (isEnumBoolProp)
+                            string enumDisplay = PropertyHelper.GetEnumDisplayName(col.FieldType, text);
+                            if (!string.IsNullOrEmpty(enumDisplay))
                             {
-                                string enumDisplay = PropertyHelper.GetEnumDisplayName(col.FieldType, text);
-                                if (!string.IsNullOrEmpty(enumDisplay))
-                                {
-                                    text = enumDisplay;
-                                }
-                                else if (int.TryParse(text, out int enumValue))
-                                {
-                                    text = PropertyHelper.GetEnumDisplayName(col.FieldType, enumValue);
-                                }
+                                text = enumDisplay;
                             }
-
-                            ICell cell;
-                            if (col.FieldType?.IsNumber() == true && double.TryParse(text, out double numVal))
+                            else if (int.TryParse(text, out int enumValue))
                             {
-                                cell = dr.CreateCell(colIndex, CellType.Numeric);
-                                cell.SetCellValue(numVal);
+                                text = PropertyHelper.GetEnumDisplayName(col.FieldType, enumValue);
                             }
-                            else
-                            {
-                                cell = dr.CreateCell(colIndex);
-                                cell.SetCellValue(text);
-                            }
-                            cell.CellStyle = cellStyle;
-                            colIndex++;
                         }
+
+                        ICell cell;
+                        if (col.FieldType?.IsNumber() == true && double.TryParse(text, out double numVal))
+                        {
+                            cell = dr.CreateCell(colIndex, CellType.Numeric);
+                            cell.SetCellValue(numVal);
+                        }
+                        else
+                        {
+                            cell = dr.CreateCell(colIndex);
+                            cell.SetCellValue(text);
+                        }
+                        cell.CellStyle = cellStyle;
+                        colIndex++;
                     }
                     rowIdx++;
                 }
@@ -578,14 +583,17 @@ namespace WalkingTec.Mvvm.Core
 
             using var writer = new StreamWriter(output, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true), bufferSize: 65536, leaveOpen: true);
 
+            // Perf(#674): flatten the header tree ONCE — reused for both the header line
+            // and every data row below — instead of re-walking BottomChildren per row.
+            // GridHeaders is fixed for the duration of this export (RemoveActionAndIdColumn
+            // already ran above), so the flattened set is identical for every row.
+            var flatCols = GridHeaders!.SelectMany(h => h.BottomChildren).ToList();
+
             // Write header line
             var headerParts = new List<string>();
-            foreach (var baseCol in GridHeaders!)
+            foreach (var col in flatCols)
             {
-                foreach (var col in baseCol.BottomChildren)
-                {
-                    headerParts.Add(CsvEscape(col.Title ?? string.Empty));
-                }
+                headerParts.Add(CsvEscape(col.Title ?? string.Empty));
             }
             writer.WriteLine(string.Join(",", headerParts));
 
@@ -593,28 +601,25 @@ namespace WalkingTec.Mvvm.Core
             foreach (var item in query)
             {
                 var parts = new List<string>();
-                foreach (var baseCol in GridHeaders!)
+                foreach (var col in flatCols)
                 {
-                    foreach (var col in baseCol.BottomChildren)
+                    bool isEnumBoolProp = col.FieldType != null && col.FieldType.IsEnumOrNullableEnum();
+                    string text = Regex.Replace(col.GetText(item).ToString() ?? "", @"<[^>]*>", string.Empty);
+
+                    if (isEnumBoolProp)
                     {
-                        bool isEnumBoolProp = col.FieldType != null && col.FieldType.IsEnumOrNullableEnum();
-                        string text = Regex.Replace(col.GetText(item).ToString() ?? "", @"<[^>]*>", string.Empty);
-
-                        if (isEnumBoolProp)
+                        string enumDisplay = PropertyHelper.GetEnumDisplayName(col.FieldType, text);
+                        if (!string.IsNullOrEmpty(enumDisplay))
                         {
-                            string enumDisplay = PropertyHelper.GetEnumDisplayName(col.FieldType, text);
-                            if (!string.IsNullOrEmpty(enumDisplay))
-                            {
-                                text = enumDisplay;
-                            }
-                            else if (int.TryParse(text, out int enumValue))
-                            {
-                                text = PropertyHelper.GetEnumDisplayName(col.FieldType, enumValue);
-                            }
+                            text = enumDisplay;
                         }
-
-                        parts.Add(CsvEscape(text));
+                        else if (int.TryParse(text, out int enumValue))
+                        {
+                            text = PropertyHelper.GetEnumDisplayName(col.FieldType, enumValue);
+                        }
                     }
+
+                    parts.Add(CsvEscape(text));
                 }
                 writer.WriteLine(string.Join(",", parts));
             }

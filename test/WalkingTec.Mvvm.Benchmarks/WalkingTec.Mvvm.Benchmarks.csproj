@@ -10,10 +10,20 @@
 
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" />
+    <!--
+      Issue #674 review fix — the Etl ProjectReference below pulls NPOI, which
+      transitively pulls the vulnerable System.Security.Cryptography.Xml 8.0.2
+      (GHSA-37gx-xxp4-5rgx, GHSA-w3x6-4m5h-cxqf). Core.csproj overrides this at the
+      solution level, but the override does not flow through a ProjectReference —
+      each project pulling NPOI (directly or transitively) needs its own explicit
+      PackageReference. Mirrors the pin in Core.csproj; version resolved via CPM.
+    -->
+    <PackageReference Include="System.Security.Cryptography.Xml" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\WalkingTec.Mvvm.Core\WalkingTec.Mvvm.Core.csproj" />
+    <ProjectReference Include="..\..\src\WalkingTec.Mvvm.Etl\WalkingTec.Mvvm.Etl.csproj" />
   </ItemGroup>
 
 </Project>
