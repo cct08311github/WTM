@@ -22,6 +22,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using WalkingTec.Mvvm.Test.Mock;
 using WalkingTec.Mvvm.WorkFlow.Definition;
 using WalkingTec.Mvvm.WorkFlow.Engine;
 using WalkingTec.Mvvm.WorkFlow.Models;
@@ -34,14 +35,49 @@ namespace WalkingTec.Mvvm.WorkFlow.Test;
 /// SQLite-backed DbContext that covers all WorkFlow entities needed by the engine.
 /// Uses the same shared-in-memory approach as ConcurrencyConformanceTests.
 /// </summary>
+/// <remarks>
+/// #709 root-cause fix: this context is used by WithdrawCcTests.cs's
+/// WithdrawAsync_TCONC2_ConcurrentWinner_LoserGetsCannotWithdraw and by this file's own
+/// AdvanceAsync_ConcurrentCalls_ExactlyOneWinner_NoDoubleAdvance concurrency race, but —
+/// unlike WfSequentialTestContext — never had the #620/#629 busy_timeout mitigation
+/// registered. That gap (not connection pooling, which Microsoft.Data.Sqlite structurally
+/// rules out for Mode=Memory connection strings) is why the TCONC flake class kept
+/// recurring. See WalkingTec.Mvvm.Test.Mock.SqliteBusyTimeoutInterceptor's doc comment for
+/// the full mechanism.
+/// </remarks>
 internal sealed class WfEngineTestContext : DbContext
 {
     private readonly string _connStr;
+    private readonly SqliteTestDbMode _mode;
 
-    public WfEngineTestContext(string connStr) { _connStr = connStr; }
+    /// <summary>Shared-cache in-memory (default) — for sequential, non-racing tests.</summary>
+    public WfEngineTestContext(string connStr) : this(connStr, SqliteTestDbMode.SharedMemory) { }
 
-    protected override void OnConfiguring(DbContextOptionsBuilder b) =>
-        b.UseSqlite($"DataSource={_connStr}?mode=memory&cache=shared");
+    /// <summary>
+    /// #709 round 2: genuinely-racing concurrency tests (T-CONC family — including
+    /// WithdrawCcTests.cs's WithdrawAsync_TCONC2_...) pass <see cref="SqliteTestDbMode.FileWal"/>
+    /// here instead of relying on shared-cache in-memory — see
+    /// <see cref="SqliteSharedMemoryFixture"/>'s remarks for why shared-cache in-memory's
+    /// connection pooling + coarse table locking make it unsafe under genuine concurrent
+    /// contention, no matter how much the busy_timeout PRAGMA is widened.
+    /// </summary>
+    public WfEngineTestContext(string connStr, SqliteTestDbMode mode)
+    {
+        _connStr = connStr;
+        _mode = mode;
+    }
+
+    // Kept registered on both modes as cheap defense-in-depth (see
+    // SqliteBusyRetryExecutionStrategy's doc comment) — it is not the primary fix for either.
+    protected override void OnConfiguring(DbContextOptionsBuilder b)
+    {
+        var connectionString = _mode == SqliteTestDbMode.FileWal
+            ? SqliteSharedMemoryFixture.BuildFileWalConnectionString(_connStr)
+            : SqliteSharedMemoryFixture.BuildConnectionString(_connStr);
+        b.UseSqlite(connectionString, sqliteOptions =>
+                sqliteOptions.ExecutionStrategy(deps => new SqliteBusyRetryExecutionStrategy(deps)))
+            .AddInterceptors(new SqliteBusyTimeoutInterceptor());
+    }
 
     protected override void OnModelCreating(ModelBuilder m)
     {
@@ -275,8 +311,7 @@ public class EngineTests : IDisposable
     public void Setup()
     {
         _dbName = $"WfEngine_{Guid.NewGuid():N}";
-        _keepAlive = new SqliteConnection($"DataSource={_dbName}?mode=memory&cache=shared");
-        _keepAlive.Open();
+        _keepAlive = SqliteSharedMemoryFixture.OpenKeepAliveWithBusyTimeout(_dbName);
         using var ctx = MakeContext();
         ctx.Database.EnsureCreated();
     }
@@ -482,84 +517,89 @@ public class EngineTests : IDisposable
 
         for (int round = 0; round < Rounds; round++)
         {
-            // Each round: create a fresh DB name so state is clean.
-            var dbName = $"WfConcEngine_{round}_{Guid.NewGuid():N}";
-            await using var keepAlive = new SqliteConnection($"DataSource={dbName}?mode=memory&cache=shared");
-            keepAlive.Open();
-
-            await using var seedCtx = new WfEngineTestContext(dbName);
-            seedCtx.Database.EnsureCreated();
-
-            // Seed the definition version.
-            var graphJson = EngineTestHelpers.SimpleStartEndGraph($"ConcGraph_{round}");
-            var versionId = Guid.NewGuid();
-            seedCtx.Set<ProcessDefinitionVersion>().Add(new ProcessDefinitionVersion
+            // #709 round 2: genuinely-racing (two concurrent AdvanceAsync actors) — use
+            // file-WAL, not shared-cache in-memory. See SqliteSharedMemoryFixture's remarks.
+            var dbPath = SqliteSharedMemoryFixture.NewFileDbPath($"WfConcEngine_{round}");
+            try
             {
-                ID = versionId,
-                DefinitionId = Guid.NewGuid(),
-                VersionNo = 1,
-                SchemaVersion = 1,
-                GraphJson = graphJson,
-                ContentHash = "test-" + versionId,
-                TenantCode = null,
-                IsValid = true,
-            });
-            await seedCtx.SaveChangesAsync();
+                await using var seedCtx = new WfEngineTestContext(dbPath, SqliteTestDbMode.FileWal);
+                seedCtx.Database.EnsureCreated();
 
-            // Start the instance using engine1.
-            await using var ctx1 = new WfEngineTestContext(dbName);
-            var dispatcher1 = NodeKindDispatcher_Exposed.Create();
-            var engine1 = WorkflowEngine_Exposed.Create(ctx1, dispatcher1, NullLogger.Instance);
-            var instance = await engine1.StartAsync(
-                versionId, null, "initiator_conc", null);
-
-            // If the trivial graph already reached Approved in StartAsync, we can't race
-            // AdvanceAsync on it (it drives synchronously through Start→End).
-            // Instead verify the end state is deterministic.
-            if (instance.State == InstanceState.Approved)
-            {
-                // Trivial path: single StartAsync drove it to completion. Verify no double-advance.
-                await using var verifyCtx = new WfEngineTestContext(dbName);
-                var nodeCount = await verifyCtx.Set<NodeInstance>()
-                    .CountAsync(n => n.InstanceId == instance.ID && n.State == NodeState.CompletedApproved);
-
-                // Start node + End node = 2 completed nodes maximum.
-                Assert.IsTrue(nodeCount <= 2,
-                    $"Round {round}: expected ≤2 CompletedApproved nodes, got {nodeCount}.");
-                continue;
-            }
-
-            // For any case where the instance is still Running, race two AdvanceAsync calls.
-            var barrier = new SemaphoreSlim(0, 2);
-
-            Task<WorkflowActionResult> MakeTask()
-            {
-                var capturedId = instance.ID;
-                var capturedDb = dbName;
-                return Task.Run(async () =>
+                // Seed the definition version.
+                var graphJson = EngineTestHelpers.SimpleStartEndGraph($"ConcGraph_{round}");
+                var versionId = Guid.NewGuid();
+                seedCtx.Set<ProcessDefinitionVersion>().Add(new ProcessDefinitionVersion
                 {
-                    await barrier.WaitAsync();
-                    await using var raceCtx = new WfEngineTestContext(capturedDb);
-                    var raceDispatcher = NodeKindDispatcher_Exposed.Create();
-                    var raceEngine = WorkflowEngine_Exposed.Create(
-                        raceCtx, raceDispatcher, NullLogger.Instance);
-                    return await raceEngine.AdvanceAsync(capturedId);
+                    ID = versionId,
+                    DefinitionId = Guid.NewGuid(),
+                    VersionNo = 1,
+                    SchemaVersion = 1,
+                    GraphJson = graphJson,
+                    ContentHash = "test-" + versionId,
+                    TenantCode = null,
+                    IsValid = true,
                 });
+                await seedCtx.SaveChangesAsync();
+
+                // Start the instance using engine1.
+                await using var ctx1 = new WfEngineTestContext(dbPath, SqliteTestDbMode.FileWal);
+                var dispatcher1 = NodeKindDispatcher_Exposed.Create();
+                var engine1 = WorkflowEngine_Exposed.Create(ctx1, dispatcher1, NullLogger.Instance);
+                var instance = await engine1.StartAsync(
+                    versionId, null, "initiator_conc", null);
+
+                // If the trivial graph already reached Approved in StartAsync, we can't race
+                // AdvanceAsync on it (it drives synchronously through Start→End).
+                // Instead verify the end state is deterministic.
+                if (instance.State == InstanceState.Approved)
+                {
+                    // Trivial path: single StartAsync drove it to completion. Verify no double-advance.
+                    await using var verifyCtx = new WfEngineTestContext(dbPath, SqliteTestDbMode.FileWal);
+                    var nodeCount = await verifyCtx.Set<NodeInstance>()
+                        .CountAsync(n => n.InstanceId == instance.ID && n.State == NodeState.CompletedApproved);
+
+                    // Start node + End node = 2 completed nodes maximum.
+                    Assert.IsTrue(nodeCount <= 2,
+                        $"Round {round}: expected ≤2 CompletedApproved nodes, got {nodeCount}.");
+                    continue;
+                }
+
+                // For any case where the instance is still Running, race two AdvanceAsync calls.
+                var barrier = new SemaphoreSlim(0, 2);
+
+                Task<WorkflowActionResult> MakeTask()
+                {
+                    var capturedId = instance.ID;
+                    var capturedDb = dbPath;
+                    return Task.Run(async () =>
+                    {
+                        await barrier.WaitAsync();
+                        await using var raceCtx = new WfEngineTestContext(capturedDb, SqliteTestDbMode.FileWal);
+                        var raceDispatcher = NodeKindDispatcher_Exposed.Create();
+                        var raceEngine = WorkflowEngine_Exposed.Create(
+                            raceCtx, raceDispatcher, NullLogger.Instance);
+                        return await raceEngine.AdvanceAsync(capturedId);
+                    });
+                }
+
+                var t1 = MakeTask();
+                var t2 = MakeTask();
+                barrier.Release(2);
+
+                WorkflowActionResult[] results = await Task.WhenAll(t1, t2);
+
+                int approved = results.Count(r => r.Code == WorkflowActionCode.InstanceApproved);
+                int handled  = results.Count(r => r.Code == WorkflowActionCode.AlreadyHandled
+                                                   || r.Code == WorkflowActionCode.Blocked);
+
+                Assert.IsTrue(
+                    approved + handled == 2,
+                    $"Round {round}: expected 2 results totaling approved+handled, got: [{results[0].Code},{results[1].Code}]");
             }
-
-            var t1 = MakeTask();
-            var t2 = MakeTask();
-            barrier.Release(2);
-
-            WorkflowActionResult[] results = await Task.WhenAll(t1, t2);
-
-            int approved = results.Count(r => r.Code == WorkflowActionCode.InstanceApproved);
-            int handled  = results.Count(r => r.Code == WorkflowActionCode.AlreadyHandled
-                                               || r.Code == WorkflowActionCode.Blocked);
-
-            Assert.IsTrue(
-                approved + handled == 2,
-                $"Round {round}: expected 2 results totaling approved+handled, got: [{results[0].Code},{results[1].Code}]");
+            finally
+            {
+                SqliteSharedMemoryFixture.DeleteFileDatabase(dbPath);
+            }
         }
     }
 
@@ -587,65 +627,83 @@ public class EngineTests : IDisposable
     {
         const int Rounds = 20;
 
-        for (int round = 0; round < Rounds; round++)
+        // #709 round 2: genuinely-racing (two concurrent AppendAsync actors per round) — use
+        // a dedicated file-WAL database instead of the class-level shared-cache in-memory
+        // MakeContext() fixture. See SqliteSharedMemoryFixture's remarks. One database is
+        // reused across all rounds (each round's rows are isolated by a fresh instanceId), so
+        // creation/cleanup happens once for the whole test rather than per round.
+        var dbPath = SqliteSharedMemoryFixture.NewFileDbPath("WfConcAppend");
+        try
         {
-            var instanceId = Guid.NewGuid();
+            await using (var schemaCtx = new WfEngineTestContext(dbPath, SqliteTestDbMode.FileWal))
+                schemaCtx.Database.EnsureCreated();
 
-            // Seed a ProcessInstance row so AppendAsync FK is satisfied.
-            await using var seed = MakeContext();
-            seed.Set<ProcessInstance>().Add(new ProcessInstance
+            WfEngineTestContext MakeFileContext() => new(dbPath, SqliteTestDbMode.FileWal);
+
+            for (int round = 0; round < Rounds; round++)
             {
-                ID = instanceId,
-                State = InstanceState.Running,
-                RowVer = 0,
-                InitiatorITCode = "tester",
-                DefinitionVersionId = Guid.NewGuid(),
-                IsValid = true,
-            });
-            await seed.SaveChangesAsync();
+                var instanceId = Guid.NewGuid();
 
-            var barrier = new SemaphoreSlim(0, 2);
-
-            // Two concurrent AppendAsync calls on the SAME instanceId.
-            Task MakeConcurrentAppend(EventAction action)
-            {
-                return Task.Run(async () =>
+                // Seed a ProcessInstance row so AppendAsync FK is satisfied.
+                await using var seed = MakeFileContext();
+                seed.Set<ProcessInstance>().Add(new ProcessInstance
                 {
-                    await barrier.WaitAsync();
-                    await using var db = MakeContext();
-                    await WorkflowEventLogWriter.AppendAsync(
-                        db,
-                        instanceId,
-                        tenantCode: null,
-                        action: action,
-                        nodeKey: "start",
-                        actorITCode: "actor",
-                        beforeState: "Draft",
-                        afterState: "Running");
+                    ID = instanceId,
+                    State = InstanceState.Running,
+                    RowVer = 0,
+                    InitiatorITCode = "tester",
+                    DefinitionVersionId = Guid.NewGuid(),
+                    IsValid = true,
                 });
+                await seed.SaveChangesAsync();
+
+                var barrier = new SemaphoreSlim(0, 2);
+
+                // Two concurrent AppendAsync calls on the SAME instanceId.
+                Task MakeConcurrentAppend(EventAction action)
+                {
+                    return Task.Run(async () =>
+                    {
+                        await barrier.WaitAsync();
+                        await using var db = MakeFileContext();
+                        await WorkflowEventLogWriter.AppendAsync(
+                            db,
+                            instanceId,
+                            tenantCode: null,
+                            action: action,
+                            nodeKey: "start",
+                            actorITCode: "actor",
+                            beforeState: "Draft",
+                            afterState: "Running");
+                    });
+                }
+
+                var t1 = MakeConcurrentAppend(EventAction.Submit);
+                var t2 = MakeConcurrentAppend(EventAction.AutoAdvance);
+                barrier.Release(2);
+
+                // Both must complete without exception (no UNIQUE index violation).
+                await Task.WhenAll(t1, t2);
+
+                // Verify: exactly 2 rows, Seq values are 1 and 2 (unique + contiguous from 1).
+                await using var verify = MakeFileContext();
+                var seqs = await verify.Set<WorkflowEventLog>()
+                    .Where(e => e.InstanceId == instanceId)
+                    .Select(e => e.Seq)
+                    .OrderBy(s => s)
+                    .ToListAsync();
+
+                Assert.AreEqual(2, seqs.Count,
+                    $"Round {round}: expected 2 event log rows, got {seqs.Count}");
+                Assert.AreEqual(1, seqs[0],
+                    $"Round {round}: expected first Seq = 1, got {seqs[0]}");
+                Assert.AreEqual(2, seqs[1],
+                    $"Round {round}: expected second Seq = 2, got {seqs[1]}");
             }
-
-            var t1 = MakeConcurrentAppend(EventAction.Submit);
-            var t2 = MakeConcurrentAppend(EventAction.AutoAdvance);
-            barrier.Release(2);
-
-            // Both must complete without exception (no UNIQUE index violation).
-            await Task.WhenAll(t1, t2);
-
-            // Verify: exactly 2 rows, Seq values are 1 and 2 (unique + contiguous from 1).
-            await using var verify = MakeContext();
-            var seqs = await verify.Set<WorkflowEventLog>()
-                .Where(e => e.InstanceId == instanceId)
-                .Select(e => e.Seq)
-                .OrderBy(s => s)
-                .ToListAsync();
-
-            Assert.AreEqual(2, seqs.Count,
-                $"Round {round}: expected 2 event log rows, got {seqs.Count}");
-            Assert.AreEqual(1, seqs[0],
-                $"Round {round}: expected first Seq = 1, got {seqs[0]}");
-            Assert.AreEqual(2, seqs[1],
-                $"Round {round}: expected second Seq = 2, got {seqs[1]}");
+        }
+        finally
+        {
+            SqliteSharedMemoryFixture.DeleteFileDatabase(dbPath);
         }
     }
 }

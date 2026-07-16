@@ -10,6 +10,7 @@ using Microsoft.Extensions.Caching.Memory;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Cache;
+using WalkingTec.Mvvm.Test.Mock;
 
 namespace WalkingTec.Mvvm.Core.Test.Cache
 {
@@ -680,22 +681,25 @@ namespace WalkingTec.Mvvm.Core.Test.Cache
     public class Bug112CrossTenantLeakTests
     {
         // ── Helper: build a shared in-memory SQLite connection + seeded data ──
+        //
+        // #709: routed through WalkingTec.Mvvm.Test.Mock.SqliteSharedMemoryFixture — the
+        // shared helper extracted for the WorkFlow TCONC fixtures — instead of hand-rolling
+        // the connection string here. This class doesn't race multiple connections against
+        // each other (each test method seeds then reads sequentially), so it isn't exposed
+        // to the #620/#629 lock-contention flakes, but centralizing the connection-string
+        // construction keeps this fixture in sync with the canonical helper.
 
-        private static SqliteConnection OpenSharedConnection(string name)
-        {
-            var conn = new SqliteConnection($"DataSource={name};Mode=Memory;Cache=Shared");
-            conn.Open();
-            return conn;
-        }
+        private static SqliteConnection OpenSharedConnection(string name) =>
+            SqliteSharedMemoryFixture.OpenKeepAliveWithBusyTimeout(name);
 
         private static DbContextOptions<SeedContext> SeedOpts(string name) =>
             new DbContextOptionsBuilder<SeedContext>()
-                .UseSqlite($"DataSource={name};Mode=Memory;Cache=Shared")
+                .UseSqlite(SqliteSharedMemoryFixture.BuildConnectionString(name))
                 .Options;
 
         private static DbContextOptions<TenantFilterContext> FilterOpts(string name) =>
             new DbContextOptionsBuilder<TenantFilterContext>()
-                .UseSqlite($"DataSource={name};Mode=Memory;Cache=Shared")
+                .UseSqlite(SqliteSharedMemoryFixture.BuildConnectionString(name))
                 .Options;
 
         // ── Bug #112 (1): ITenant + TenantIsolation=false → no cross-tenant leak ──

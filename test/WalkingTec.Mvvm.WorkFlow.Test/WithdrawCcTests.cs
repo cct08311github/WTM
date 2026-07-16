@@ -26,6 +26,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using WalkingTec.Mvvm.Test.Mock;
 using WalkingTec.Mvvm.WorkFlow.Definition;
 using WalkingTec.Mvvm.WorkFlow.Engine;
 using WalkingTec.Mvvm.WorkFlow.Models;
@@ -42,8 +43,10 @@ public class WithdrawCcTests : IDisposable
     public void Setup()
     {
         _dbName = $"WfWC_{Guid.NewGuid():N}";
-        _keepAlive = new SqliteConnection($"DataSource={_dbName}?mode=memory&cache=shared");
-        _keepAlive.Open();
+        // #709: WfEngineTestContext now registers SqliteBusyTimeoutInterceptor (see its
+        // definition in EngineTests.cs) — this raw keep-alive connection needs the same
+        // PRAGMA applied by hand since it never goes through EF Core's interceptor pipeline.
+        _keepAlive = SqliteSharedMemoryFixture.OpenKeepAliveWithBusyTimeout(_dbName);
         using var ctx = MakeContext();
         ctx.Database.EnsureCreated();
     }
@@ -298,52 +301,59 @@ public class WithdrawCcTests : IDisposable
         const int Rounds = 5;
         for (int round = 0; round < Rounds; round++)
         {
-            var dbName = $"WfTConc2_{round}_{Guid.NewGuid():N}";
-            await using var ka = new SqliteConnection($"DataSource={dbName}?mode=memory&cache=shared");
-            ka.Open();
-            await using var seed = new WfEngineTestContext(dbName);
-            seed.Database.EnsureCreated();
-
-            var version = new ProcessDefinitionVersion
+            // #709 round 2: named as one of the "at minimum" fixtures to fix — use file-WAL
+            // instead of shared-cache in-memory. See SqliteSharedMemoryFixture's remarks.
+            var dbPath = SqliteSharedMemoryFixture.NewFileDbPath($"WfTConc2_{round}");
+            try
             {
-                ID           = Guid.NewGuid(),
-                DefinitionId = Guid.NewGuid(),
-                VersionNo    = 1, SchemaVersion = 1,
-                GraphJson    = ApprovalGraph("approver1"),
-                ContentHash  = "tc2-" + Guid.NewGuid().ToString("N"),
-                PublishedAt  = DateTime.UtcNow, PublishedBy = "test",
-                TenantCode   = null, IsValid = true,
-            };
-            seed.Set<ProcessDefinitionVersion>().Add(version);
-            await seed.SaveChangesAsync();
+                await using var seed = new WfEngineTestContext(dbPath, SqliteTestDbMode.FileWal);
+                seed.Database.EnsureCreated();
 
-            var resolver   = new StaticApproverResolver();
-            var opts       = new WorkFlowOptions();
-            var dispatcher = NodeKindDispatcher_Exposed.CreateWithSequential(resolver, opts);
-            await using var startCtx = new WfEngineTestContext(dbName);
-            var startEngine = WorkflowEngine_Exposed.CreateWithOptions(startCtx, dispatcher, opts, NullLogger.Instance);
-            var instance = await startEngine.StartAsync(version.ID, null, "initiator1", null);
+                var version = new ProcessDefinitionVersion
+                {
+                    ID           = Guid.NewGuid(),
+                    DefinitionId = Guid.NewGuid(),
+                    VersionNo    = 1, SchemaVersion = 1,
+                    GraphJson    = ApprovalGraph("approver1"),
+                    ContentHash  = "tc2-" + Guid.NewGuid().ToString("N"),
+                    PublishedAt  = DateTime.UtcNow, PublishedBy = "test",
+                    TenantCode   = null, IsValid = true,
+                };
+                seed.Set<ProcessDefinitionVersion>().Add(version);
+                await seed.SaveChangesAsync();
 
-            Assert.AreEqual(InstanceState.Running, instance.State,
-                $"Round {round}: Instance must be Running before T-CONC-2 test.");
+                var resolver   = new StaticApproverResolver();
+                var opts       = new WorkFlowOptions();
+                var dispatcher = NodeKindDispatcher_Exposed.CreateWithSequential(resolver, opts);
+                await using var startCtx = new WfEngineTestContext(dbPath, SqliteTestDbMode.FileWal);
+                var startEngine = WorkflowEngine_Exposed.CreateWithOptions(startCtx, dispatcher, opts, NullLogger.Instance);
+                var instance = await startEngine.StartAsync(version.ID, null, "initiator1", null);
 
-            // Simulate "concurrent winner" by using GuardedTransition to flip Running → Approved.
-            await using var winCtx = new WfEngineTestContext(dbName);
-            var freshInst = await winCtx.Set<ProcessInstance>().SingleAsync(x => x.ID == instance.ID);
-            await GuardedTransition.AdvanceProcessInstanceAsync(
-                winCtx, instance.ID,
-                expectedState: InstanceState.Running,
-                expectedRowVer: freshInst.RowVer,
-                nextState: InstanceState.Approved);
+                Assert.AreEqual(InstanceState.Running, instance.State,
+                    $"Round {round}: Instance must be Running before T-CONC-2 test.");
 
-            // Now call WithdrawAsync — instance.RowVer is stale (was bumped by the winner above).
-            await using var withdrawCtx = new WfEngineTestContext(dbName);
-            var withdrawDispatcher = NodeKindDispatcher_Exposed.CreateWithSequential(resolver, opts);
-            var withdrawEngine = WorkflowEngine_Exposed.CreateWithOptions(withdrawCtx, withdrawDispatcher, opts, NullLogger.Instance);
-            var result = await withdrawEngine.WithdrawAsync(instance.ID, "initiator1");
+                // Simulate "concurrent winner" by using GuardedTransition to flip Running → Approved.
+                await using var winCtx = new WfEngineTestContext(dbPath, SqliteTestDbMode.FileWal);
+                var freshInst = await winCtx.Set<ProcessInstance>().SingleAsync(x => x.ID == instance.ID);
+                await GuardedTransition.AdvanceProcessInstanceAsync(
+                    winCtx, instance.ID,
+                    expectedState: InstanceState.Running,
+                    expectedRowVer: freshInst.RowVer,
+                    nextState: InstanceState.Approved);
 
-            Assert.AreEqual(WorkflowActionCode.CannotWithdrawAlreadyFinal, result.Code,
-                $"Round {round}: Withdraw loser must get CannotWithdrawAlreadyFinal, got {result.Code}.");
+                // Now call WithdrawAsync — instance.RowVer is stale (was bumped by the winner above).
+                await using var withdrawCtx = new WfEngineTestContext(dbPath, SqliteTestDbMode.FileWal);
+                var withdrawDispatcher = NodeKindDispatcher_Exposed.CreateWithSequential(resolver, opts);
+                var withdrawEngine = WorkflowEngine_Exposed.CreateWithOptions(withdrawCtx, withdrawDispatcher, opts, NullLogger.Instance);
+                var result = await withdrawEngine.WithdrawAsync(instance.ID, "initiator1");
+
+                Assert.AreEqual(WorkflowActionCode.CannotWithdrawAlreadyFinal, result.Code,
+                    $"Round {round}: Withdraw loser must get CannotWithdrawAlreadyFinal, got {result.Code}.");
+            }
+            finally
+            {
+                SqliteSharedMemoryFixture.DeleteFileDatabase(dbPath);
+            }
         }
     }
 

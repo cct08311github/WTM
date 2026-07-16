@@ -19,16 +19,15 @@
 
 using System;
 using System.Collections.Generic;
-using System.Data.Common;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Test.Mock;
 using WalkingTec.Mvvm.WorkFlow.Definition;
 using WalkingTec.Mvvm.WorkFlow.Engine;
 using WalkingTec.Mvvm.WorkFlow.Models;
@@ -37,79 +36,16 @@ namespace WalkingTec.Mvvm.WorkFlow.Test;
 
 // ── Busy-timeout interceptor: covers EF Core's lazily-opened connections ────────
 //
-// Issue #620: the T-CONC-1 / T-CONC-3 concurrency tests in AllAnyTests.cs
-// (WfSequentialTestContext consumers) race two approver connections against the
-// same SQLite shared-in-memory database and intermittently hit SQLITE_BUSY
-// (error code 5) at connection-open time under CI parallel load.
-//
-// Microsoft.Data.Sqlite has no connection-string keyword that maps to the native
-// sqlite3_busy_timeout() API (its own "Default Timeout" keyword only sets
-// SqliteCommand.CommandTimeout, which governs step-time retries on already-open
-// connections, not the schema-lock acquisition that can occur on a brand new
-// connection's very first statement). So busy_timeout must be applied by running
-// "PRAGMA busy_timeout" as literally the first statement on every connection.
-//
-// ConnectionOpened fires immediately after the underlying ADO.NET connection
-// physically opens and BEFORE EF Core (or any caller) issues its first query —
-// the earliest hook available, and a single DRY application point covering every
-// WfSequentialTestContext instance (including the ones constructed inline inside
-// the TCONC race loops).
-//
-// Issue #629 (2026-07-10, CI run 4735): a NEW, distinct flake signature —
-// SqliteException "cannot start a transaction within a transaction" (error code 1,
-// not 5) thrown from WorkflowEngine.AdvanceTokenAsync's BeginTransactionAsync call.
-// Root-cause investigation (72 local TCONC iterations under parallel load did not
-// reproduce it; decompiled Microsoft.Data.Sqlite 10.0.4 was reviewed directly):
-//   - Connection pooling was ruled OUT: SqliteConnectionFactory.GetPoolGroup() forces
-//     `isNonPooled = true` whenever the connection string's Mode is Memory (which every
-//     WfSequentialTestContext / TCONC keepAlive connection uses), so a pooled connection
-//     handing back a "dirty" transaction from an unrelated SqliteConnection instance is
-//     structurally impossible here.
-//   - No abandoned-transaction code path was found anywhere in WorkflowEngine.cs — every
-//     BeginTransactionAsync is wrapped in `await using` with an explicit try/catch/rollback.
-//   - The leading candidate, confirmed by reading the decompiled source but not fully
-//     provable via a deterministic local repro: Microsoft.Data.Sqlite's
-//     SqliteTransaction.Commit() has no try/finally around its native "COMMIT;" call,
-//     while RollbackInternal() unconditionally clears the wrapper's own transaction-state
-//     tracking (via `finally { Complete(); }`) even when the native "ROLLBACK;" statement
-//     itself fails. Under genuine SQLite lock contention (COMMIT's RESERVED→EXCLUSIVE
-//     lock upgrade blocked by a concurrent reader's SHARED lock — the same class of
-//     contention #620 already targets), this asymmetry can in principle leave a single
-//     connection's wrapper-level transaction state out of sync with the native engine,
-//     so that connection's *next* BeginTransaction() fails immediately with "cannot start
-//     a transaction within a transaction" — matching #629's signature.
-// Widening the busy_timeout window gives SQLite's own retry logic more headroom to
-// resolve the underlying lock contention before ANY caller (BEGIN, COMMIT, or the
-// explicit ROLLBACK in the engine's catch blocks) ever reaches a failure path — the same
-// mitigation layer as #620, applied more generously. This does not touch engine code;
-// no abandoned-transaction bug was found there to fix.
-internal sealed class SqliteBusyTimeoutInterceptor : DbConnectionInterceptor
-{
-    private const int BusyTimeoutMs = 8000;
-
-    public override void ConnectionOpened(DbConnection connection, ConnectionEndEventData eventData)
-    {
-        using (var cmd = connection.CreateCommand())
-        {
-            cmd.CommandText = $"PRAGMA busy_timeout = {BusyTimeoutMs};";
-            cmd.ExecuteNonQuery();
-        }
-        base.ConnectionOpened(connection, eventData);
-    }
-
-    public override async Task ConnectionOpenedAsync(
-        DbConnection connection,
-        ConnectionEndEventData eventData,
-        CancellationToken cancellationToken = default)
-    {
-        await using (var cmd = connection.CreateCommand())
-        {
-            cmd.CommandText = $"PRAGMA busy_timeout = {BusyTimeoutMs};";
-            await cmd.ExecuteNonQueryAsync(cancellationToken);
-        }
-        await base.ConnectionOpenedAsync(connection, eventData, cancellationToken);
-    }
-}
+// #709: this project used to define its own copy of SqliteBusyTimeoutInterceptor here
+// (Issue #620 / #629 mitigation for the T-CONC-1 / T-CONC-3 concurrency tests in
+// AllAnyTests.cs, WfSequentialTestContext consumers). #709's root-cause finding: that
+// copy was the ONLY place the mitigation got applied — several other independently
+// defined shared-in-memory DbContext fixtures in this project (e.g. WfEngineTestContext,
+// consumed by WithdrawCcTests.cs's WithdrawAsync_TCONC2_... test) never got it, so the
+// flake class kept recurring under CI load despite the #629 timeout widening. The
+// interceptor now lives once in WalkingTec.Mvvm.Test.Mock.SqliteBusyTimeoutInterceptor
+// (full mechanism + root-cause write-up in its doc comment) so every fixture in this
+// project references the SAME implementation instead of reinventing it.
 
 // ── Extended DbContext: adds FrameworkUserRole for Role-resolution tests ────────
 
@@ -120,12 +56,35 @@ internal sealed class SqliteBusyTimeoutInterceptor : DbConnectionInterceptor
 internal sealed class WfSequentialTestContext : DbContext
 {
     private readonly string _connStr;
+    private readonly SqliteTestDbMode _mode;
 
-    public WfSequentialTestContext(string connStr) { _connStr = connStr; }
+    /// <summary>Shared-cache in-memory (default) — for sequential, non-racing tests.</summary>
+    public WfSequentialTestContext(string connStr) : this(connStr, SqliteTestDbMode.SharedMemory) { }
 
-    protected override void OnConfiguring(DbContextOptionsBuilder b) =>
-        b.UseSqlite($"DataSource={_connStr}?mode=memory&cache=shared")
+    /// <summary>
+    /// #709 round 2: genuinely-racing concurrency tests (T-CONC family) pass
+    /// <see cref="SqliteTestDbMode.FileWal"/> here instead of relying on shared-cache
+    /// in-memory — see <see cref="SqliteSharedMemoryFixture"/>'s remarks for why shared-cache
+    /// in-memory's connection pooling + coarse table locking make it unsafe under genuine
+    /// concurrent contention, no matter how much the busy_timeout PRAGMA is widened.
+    /// </summary>
+    public WfSequentialTestContext(string connStr, SqliteTestDbMode mode)
+    {
+        _connStr = connStr;
+        _mode = mode;
+    }
+
+    // Kept registered on both modes as cheap defense-in-depth (see
+    // SqliteBusyRetryExecutionStrategy's doc comment) — it is not the primary fix for either.
+    protected override void OnConfiguring(DbContextOptionsBuilder b)
+    {
+        var connectionString = _mode == SqliteTestDbMode.FileWal
+            ? SqliteSharedMemoryFixture.BuildFileWalConnectionString(_connStr)
+            : SqliteSharedMemoryFixture.BuildConnectionString(_connStr);
+        b.UseSqlite(connectionString, sqliteOptions =>
+                sqliteOptions.ExecutionStrategy(deps => new SqliteBusyRetryExecutionStrategy(deps)))
             .AddInterceptors(new SqliteBusyTimeoutInterceptor());
+    }
 
     protected override void OnModelCreating(ModelBuilder m)
     {
@@ -361,8 +320,7 @@ public class SequentialTests : IDisposable
     public void Setup()
     {
         _dbName = $"WfSeq_{Guid.NewGuid():N}";
-        _keepAlive = new SqliteConnection($"DataSource={_dbName}?mode=memory&cache=shared");
-        _keepAlive.Open();
+        _keepAlive = SqliteSharedMemoryFixture.OpenKeepAliveWithBusyTimeout(_dbName);
         using var ctx = MakeContext();
         ctx.Database.EnsureCreated();
     }
@@ -1036,8 +994,7 @@ public class SequentialTests : IDisposable
         {
             // Fresh DB per round.
             var dbName = $"WfSeqConc_{round}_{Guid.NewGuid():N}";
-            await using var keepAlive = new SqliteConnection($"DataSource={dbName}?mode=memory&cache=shared");
-            keepAlive.Open();
+            await using var keepAlive = SqliteSharedMemoryFixture.OpenKeepAliveWithBusyTimeout(dbName);
 
             await using var initCtx = new WfSequentialTestContext(dbName);
             initCtx.Database.EnsureCreated();

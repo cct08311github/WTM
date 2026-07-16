@@ -23,6 +23,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using WalkingTec.Mvvm.Test.Mock;
 using WalkingTec.Mvvm.WorkFlow.Definition;
 using WalkingTec.Mvvm.WorkFlow.Engine;
 using WalkingTec.Mvvm.WorkFlow.Models;
@@ -104,26 +105,13 @@ public class AllAnyTests : IDisposable
     public void Setup()
     {
         _dbName = $"WfAllAny_{Guid.NewGuid():N}";
-        _keepAlive = new SqliteConnection($"DataSource={_dbName}?mode=memory&cache=shared");
-        OpenWithBusyTimeout(_keepAlive);
+        // #709: busy_timeout is applied by SqliteSharedMemoryFixture.OpenKeepAliveWithBusyTimeout
+        // for this raw keep-alive connection (it never goes through EF Core's
+        // SqliteBusyTimeoutInterceptor, applied instead to WfSequentialTestContext below) — see
+        // that helper's doc comment for the full #620/#629/#709 mechanism and root-cause write-up.
+        _keepAlive = SqliteSharedMemoryFixture.OpenKeepAliveWithBusyTimeout(_dbName);
         using var ctx = MakeContext();
         ctx.Database.EnsureCreated();
-    }
-
-    /// <summary>
-    /// Opens <paramref name="connection"/> and immediately sets a busy_timeout PRAGMA
-    /// (#620): the raw <c>_keepAlive</c>/round-loop connections in this fixture don't go
-    /// through EF Core's <see cref="SqliteBusyTimeoutInterceptor"/>, so they need the same
-    /// protection applied by hand, as the very first statement after Open().
-    /// #629: value kept in sync with <see cref="SqliteBusyTimeoutInterceptor"/>'s
-    /// BusyTimeoutMs — see that type's doc comment for the widened-timeout rationale.
-    /// </summary>
-    private static void OpenWithBusyTimeout(SqliteConnection connection)
-    {
-        connection.Open();
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = "PRAGMA busy_timeout = 8000;";
-        cmd.ExecuteNonQuery();
     }
 
     [TestCleanup]
@@ -522,90 +510,99 @@ public class AllAnyTests : IDisposable
 
         for (int round = 0; round < Rounds; round++)
         {
-            var dbName = $"WfAllConc_{round}_{Guid.NewGuid():N}";
-            await using var keepAlive = new SqliteConnection(
-                $"DataSource={dbName}?mode=memory&cache=shared");
-            OpenWithBusyTimeout(keepAlive);
-
-            await using var seedCtx = new WfSequentialTestContext(dbName);
-            seedCtx.Database.EnsureCreated();
-
-            const string A1 = "alice"; const string A2 = "bob";
-
-            // 2 approvers, percent=null → threshold=2. Race the 2nd (final) approval.
-            var graphJson = AllAnyGraphs.AllApprovers(new[] { A1, A2 });
-            var versionId = Guid.NewGuid();
-            seedCtx.Set<ProcessDefinitionVersion>().Add(new ProcessDefinitionVersion
+            // #709 round 2: genuinely-racing (two concurrent ApproveTaskAsync actors) — use
+            // file-WAL, not shared-cache in-memory. See SqliteSharedMemoryFixture's remarks.
+            var dbPath = SqliteSharedMemoryFixture.NewFileDbPath($"WfAllConc_{round}");
+            try
             {
-                ID = versionId, DefinitionId = Guid.NewGuid(), VersionNo = 1, SchemaVersion = 1,
-                GraphJson = graphJson, ContentHash = "hash-" + versionId, IsValid = true,
-            });
-            await seedCtx.SaveChangesAsync();
+                await using var seedCtx = new WfSequentialTestContext(dbPath, SqliteTestDbMode.FileWal);
+                seedCtx.Database.EnsureCreated();
 
-            // Start the instance.
-            await using var ctx1 = new WfSequentialTestContext(dbName);
-            var opts = new WorkFlowOptions();
-            var resolver1   = new DefaultApproverResolverExposed(opts, ctx1);
-            var dispatcher1 = NodeKindDispatcher_Exposed.CreateWithAllModes(resolver1, opts);
-            var engine1     = WorkflowEngine_Exposed.Create(ctx1, dispatcher1, NullLogger.Instance);
-            var instance    = await engine1.StartAsync(versionId, null, "init_conc", null);
+                const string A1 = "alice"; const string A2 = "bob";
 
-            // Find the approval node and approve A1 first (step 0/2 — advisory count = 1 < threshold=2).
-            await using var readCtx = new WfSequentialTestContext(dbName);
-            var nodeInst = await readCtx.Set<NodeInstance>().AsNoTracking()
-                .SingleAsync(n => n.InstanceId == instance.ID && n.NodeKind == NodeKind.Approval);
-            var tasks = await readCtx.Set<ApprovalTask>().AsNoTracking()
-                .Where(t => t.NodeInstanceId == nodeInst.ID).ToListAsync();
-            var t0 = tasks.Single(t => t.AssigneeITCode == A1);
-
-            // ApproveA1 via engine1.
-            var r0 = await engine1.ApproveTaskAsync(t0.ID, A1);
-            Assert.AreEqual(WorkflowActionCode.Advanced, r0.Code,
-                $"Round {round}: A1 approval (1/2) must return Advanced.");
-
-            // Now A2 task is the final approval. Race it with two concurrent engines.
-            await using var rCtx = new WfSequentialTestContext(dbName);
-            var t1Id = (await rCtx.Set<ApprovalTask>().AsNoTracking()
-                .SingleAsync(t => t.NodeInstanceId == nodeInst.ID && t.AssigneeITCode == A2)).ID;
-
-            var barrier = new SemaphoreSlim(0, 2);
-
-            Task<WorkflowActionResult> MakeRacer(string dbN, Guid taskId, string actor)
-            {
-                return Task.Run(async () =>
+                // 2 approvers, percent=null → threshold=2. Race the 2nd (final) approval.
+                var graphJson = AllAnyGraphs.AllApprovers(new[] { A1, A2 });
+                var versionId = Guid.NewGuid();
+                seedCtx.Set<ProcessDefinitionVersion>().Add(new ProcessDefinitionVersion
                 {
-                    await barrier.WaitAsync();
-                    await using var raceCtx = new WfSequentialTestContext(dbN);
-                    var raceOpts       = new WorkFlowOptions();
-                    var raceResolver   = new DefaultApproverResolverExposed(raceOpts, raceCtx);
-                    var raceDispatcher = NodeKindDispatcher_Exposed.CreateWithAllModes(raceResolver, raceOpts);
-                    var raceEngine     = WorkflowEngine_Exposed.Create(raceCtx, raceDispatcher, NullLogger.Instance);
-                    return await raceEngine.ApproveTaskAsync(taskId, actor);
+                    ID = versionId, DefinitionId = Guid.NewGuid(), VersionNo = 1, SchemaVersion = 1,
+                    GraphJson = graphJson, ContentHash = "hash-" + versionId, IsValid = true,
                 });
+                await seedCtx.SaveChangesAsync();
+
+                // Start the instance.
+                await using var ctx1 = new WfSequentialTestContext(dbPath, SqliteTestDbMode.FileWal);
+                var opts = new WorkFlowOptions();
+                var resolver1   = new DefaultApproverResolverExposed(opts, ctx1);
+                var dispatcher1 = NodeKindDispatcher_Exposed.CreateWithAllModes(resolver1, opts);
+                var engine1     = WorkflowEngine_Exposed.Create(ctx1, dispatcher1, NullLogger.Instance);
+                var instance    = await engine1.StartAsync(versionId, null, "init_conc", null);
+
+                // Find the approval node and approve A1 first (step 0/2 — advisory count = 1 < threshold=2).
+                await using var readCtx = new WfSequentialTestContext(dbPath, SqliteTestDbMode.FileWal);
+                var nodeInst = await readCtx.Set<NodeInstance>().AsNoTracking()
+                    .SingleAsync(n => n.InstanceId == instance.ID && n.NodeKind == NodeKind.Approval);
+                var tasks = await readCtx.Set<ApprovalTask>().AsNoTracking()
+                    .Where(t => t.NodeInstanceId == nodeInst.ID).ToListAsync();
+                var t0 = tasks.Single(t => t.AssigneeITCode == A1);
+
+                // ApproveA1 via engine1.
+                var r0 = await engine1.ApproveTaskAsync(t0.ID, A1);
+                Assert.AreEqual(WorkflowActionCode.Advanced, r0.Code,
+                    $"Round {round}: A1 approval (1/2) must return Advanced.");
+
+                // Now A2 task is the final approval. Race it with two concurrent engines.
+                await using var rCtx = new WfSequentialTestContext(dbPath, SqliteTestDbMode.FileWal);
+                var t1Id = (await rCtx.Set<ApprovalTask>().AsNoTracking()
+                    .SingleAsync(t => t.NodeInstanceId == nodeInst.ID && t.AssigneeITCode == A2)).ID;
+
+                var barrier = new SemaphoreSlim(0, 2);
+
+                Task<WorkflowActionResult> MakeRacer(string dbP, Guid taskId, string actor)
+                {
+                    return Task.Run(async () =>
+                    {
+                        await barrier.WaitAsync();
+                        await using var raceCtx = new WfSequentialTestContext(dbP, SqliteTestDbMode.FileWal);
+                        var raceOpts       = new WorkFlowOptions();
+                        var raceResolver   = new DefaultApproverResolverExposed(raceOpts, raceCtx);
+                        var raceDispatcher = NodeKindDispatcher_Exposed.CreateWithAllModes(raceResolver, raceOpts);
+                        var raceEngine     = WorkflowEngine_Exposed.Create(raceCtx, raceDispatcher, NullLogger.Instance);
+                        return await raceEngine.ApproveTaskAsync(taskId, actor);
+                    });
+                }
+
+                var race1 = MakeRacer(dbPath, t1Id, A2);
+                var race2 = MakeRacer(dbPath, t1Id, A2);
+                barrier.Release(2);
+                var results = await Task.WhenAll(race1, race2);
+
+                int approved = results.Count(r => r.Code == WorkflowActionCode.InstanceApproved);
+                int others   = results.Count(r => r.Code != WorkflowActionCode.InstanceApproved);
+
+                Assert.AreEqual(1, approved,
+                    $"Round {round}: exactly one must return InstanceApproved, got [{results[0].Code},{results[1].Code}].");
+                Assert.AreEqual(1, others,
+                    $"Round {round}: exactly one must return non-InstanceApproved (AlreadyHandled or Advanced), " +
+                    $"got [{results[0].Code},{results[1].Code}].");
+
+                // Node must be CompletedApproved exactly once.
+                await using var finalCtx = new WfSequentialTestContext(dbPath, SqliteTestDbMode.FileWal);
+                var completedNodes = await finalCtx.Set<NodeInstance>().AsNoTracking()
+                    .CountAsync(n => n.InstanceId == instance.ID
+                                      && n.NodeKind == NodeKind.Approval
+                                      && n.State == NodeState.CompletedApproved);
+                Assert.AreEqual(1, completedNodes,
+                    $"Round {round}: exactly one CompletedApproved NodeInstance must exist.");
             }
-
-            var race1 = MakeRacer(dbName, t1Id, A2);
-            var race2 = MakeRacer(dbName, t1Id, A2);
-            barrier.Release(2);
-            var results = await Task.WhenAll(race1, race2);
-
-            int approved = results.Count(r => r.Code == WorkflowActionCode.InstanceApproved);
-            int others   = results.Count(r => r.Code != WorkflowActionCode.InstanceApproved);
-
-            Assert.AreEqual(1, approved,
-                $"Round {round}: exactly one must return InstanceApproved, got [{results[0].Code},{results[1].Code}].");
-            Assert.AreEqual(1, others,
-                $"Round {round}: exactly one must return non-InstanceApproved (AlreadyHandled or Advanced), " +
-                $"got [{results[0].Code},{results[1].Code}].");
-
-            // Node must be CompletedApproved exactly once.
-            await using var finalCtx = new WfSequentialTestContext(dbName);
-            var completedNodes = await finalCtx.Set<NodeInstance>().AsNoTracking()
-                .CountAsync(n => n.InstanceId == instance.ID
-                                  && n.NodeKind == NodeKind.Approval
-                                  && n.State == NodeState.CompletedApproved);
-            Assert.AreEqual(1, completedNodes,
-                $"Round {round}: exactly one CompletedApproved NodeInstance must exist.");
+            finally
+            {
+                // Best-effort: connections are disposed above (await using) before we reach
+                // here, so no active statements remain to trip the "collation sequence /
+                // active statements" dispose-ordering race. DeleteFileDatabase swallows any
+                // residual failure regardless.
+                SqliteSharedMemoryFixture.DeleteFileDatabase(dbPath);
+            }
         }
     }
 
@@ -675,81 +672,86 @@ public class AllAnyTests : IDisposable
 
         for (int round = 0; round < Rounds; round++)
         {
-            var dbName = $"WfAnyConc_{round}_{Guid.NewGuid():N}";
-            await using var keepAlive = new SqliteConnection(
-                $"DataSource={dbName}?mode=memory&cache=shared");
-            OpenWithBusyTimeout(keepAlive);
-
-            await using var seedCtx = new WfSequentialTestContext(dbName);
-            seedCtx.Database.EnsureCreated();
-
-            const string A1 = "alice"; const string A2 = "bob";
-            var graphJson = AllAnyGraphs.AnyApprovers(new[] { A1, A2 });
-            var versionId = Guid.NewGuid();
-            seedCtx.Set<ProcessDefinitionVersion>().Add(new ProcessDefinitionVersion
+            // #709 round 2: genuinely-racing (two concurrent ApproveTaskAsync actors) — use
+            // file-WAL, not shared-cache in-memory. See SqliteSharedMemoryFixture's remarks.
+            var dbPath = SqliteSharedMemoryFixture.NewFileDbPath($"WfAnyConc_{round}");
+            try
             {
-                ID = versionId, DefinitionId = Guid.NewGuid(), VersionNo = 1, SchemaVersion = 1,
-                GraphJson = graphJson, ContentHash = "hash-" + versionId, IsValid = true,
-            });
-            await seedCtx.SaveChangesAsync();
+                await using var seedCtx = new WfSequentialTestContext(dbPath, SqliteTestDbMode.FileWal);
+                seedCtx.Database.EnsureCreated();
 
-            await using var ctx1 = new WfSequentialTestContext(dbName);
-            var opts1       = new WorkFlowOptions();
-            var resolver1   = new DefaultApproverResolverExposed(opts1, ctx1);
-            var dispatcher1 = NodeKindDispatcher_Exposed.CreateWithAllModes(resolver1, opts1);
-            var engine1     = WorkflowEngine_Exposed.Create(ctx1, dispatcher1, NullLogger.Instance);
-            var instance    = await engine1.StartAsync(versionId, null, "init_any_conc", null);
-
-            await using var readCtx = new WfSequentialTestContext(dbName);
-            var nodeInst = await readCtx.Set<NodeInstance>().AsNoTracking()
-                .SingleAsync(n => n.InstanceId == instance.ID && n.NodeKind == NodeKind.Approval);
-            var tasks = await readCtx.Set<ApprovalTask>().AsNoTracking()
-                .Where(t => t.NodeInstanceId == nodeInst.ID).ToListAsync();
-            var t0Id = tasks.Single(t => t.AssigneeITCode == A1).ID;
-            var t1Id = tasks.Single(t => t.AssigneeITCode == A2).ID;
-
-            var barrier = new SemaphoreSlim(0, 2);
-
-            Task<WorkflowActionResult> MakeRacer(string dbN, Guid taskId, string actor)
-            {
-                return Task.Run(async () =>
+                const string A1 = "alice"; const string A2 = "bob";
+                var graphJson = AllAnyGraphs.AnyApprovers(new[] { A1, A2 });
+                var versionId = Guid.NewGuid();
+                seedCtx.Set<ProcessDefinitionVersion>().Add(new ProcessDefinitionVersion
                 {
-                    await barrier.WaitAsync();
-                    await using var raceCtx = new WfSequentialTestContext(dbN);
-                    var raceOpts       = new WorkFlowOptions();
-                    var raceResolver   = new DefaultApproverResolverExposed(raceOpts, raceCtx);
-                    var raceDispatcher = NodeKindDispatcher_Exposed.CreateWithAllModes(raceResolver, raceOpts);
-                    var raceEngine     = WorkflowEngine_Exposed.Create(raceCtx, raceDispatcher, NullLogger.Instance);
-                    return await raceEngine.ApproveTaskAsync(taskId, actor);
+                    ID = versionId, DefinitionId = Guid.NewGuid(), VersionNo = 1, SchemaVersion = 1,
+                    GraphJson = graphJson, ContentHash = "hash-" + versionId, IsValid = true,
                 });
+                await seedCtx.SaveChangesAsync();
+
+                await using var ctx1 = new WfSequentialTestContext(dbPath, SqliteTestDbMode.FileWal);
+                var opts1       = new WorkFlowOptions();
+                var resolver1   = new DefaultApproverResolverExposed(opts1, ctx1);
+                var dispatcher1 = NodeKindDispatcher_Exposed.CreateWithAllModes(resolver1, opts1);
+                var engine1     = WorkflowEngine_Exposed.Create(ctx1, dispatcher1, NullLogger.Instance);
+                var instance    = await engine1.StartAsync(versionId, null, "init_any_conc", null);
+
+                await using var readCtx = new WfSequentialTestContext(dbPath, SqliteTestDbMode.FileWal);
+                var nodeInst = await readCtx.Set<NodeInstance>().AsNoTracking()
+                    .SingleAsync(n => n.InstanceId == instance.ID && n.NodeKind == NodeKind.Approval);
+                var tasks = await readCtx.Set<ApprovalTask>().AsNoTracking()
+                    .Where(t => t.NodeInstanceId == nodeInst.ID).ToListAsync();
+                var t0Id = tasks.Single(t => t.AssigneeITCode == A1).ID;
+                var t1Id = tasks.Single(t => t.AssigneeITCode == A2).ID;
+
+                var barrier = new SemaphoreSlim(0, 2);
+
+                Task<WorkflowActionResult> MakeRacer(string dbP, Guid taskId, string actor)
+                {
+                    return Task.Run(async () =>
+                    {
+                        await barrier.WaitAsync();
+                        await using var raceCtx = new WfSequentialTestContext(dbP, SqliteTestDbMode.FileWal);
+                        var raceOpts       = new WorkFlowOptions();
+                        var raceResolver   = new DefaultApproverResolverExposed(raceOpts, raceCtx);
+                        var raceDispatcher = NodeKindDispatcher_Exposed.CreateWithAllModes(raceResolver, raceOpts);
+                        var raceEngine     = WorkflowEngine_Exposed.Create(raceCtx, raceDispatcher, NullLogger.Instance);
+                        return await raceEngine.ApproveTaskAsync(taskId, actor);
+                    });
+                }
+
+                var race1   = MakeRacer(dbPath, t0Id, A1);
+                var race2   = MakeRacer(dbPath, t1Id, A2);
+                barrier.Release(2);
+                var results = await Task.WhenAll(race1, race2);
+
+                int approved = results.Count(r => r.Code == WorkflowActionCode.InstanceApproved);
+                // #307: widen loser set — NodeClosed is a valid race-loser code when the winner
+                // drives the node/instance to approved+closed before the concurrent loser's CAS
+                // guard runs.  AlreadyHandled, NodeAlreadyDecided, and TaskNotActive are also
+                // legitimate "I lost the race / already decided" outcomes.
+                int loser = results.Count(r => IsLegitimateLoserOutcome(r.Code));
+
+                Assert.AreEqual(1, approved,
+                    $"Round {round}: exactly one must return InstanceApproved, got [{results[0].Code},{results[1].Code}].");
+                Assert.AreEqual(1, loser,
+                    $"Round {round}: exactly one must be a clean loser (AlreadyHandled/NodeClosed/NodeAlreadyDecided/TaskNotActive), " +
+                    $"got [{results[0].Code},{results[1].Code}].");
+
+                // Node completed exactly once.
+                await using var finalCtx = new WfSequentialTestContext(dbPath, SqliteTestDbMode.FileWal);
+                var completedNodes = await finalCtx.Set<NodeInstance>().AsNoTracking()
+                    .CountAsync(n => n.InstanceId == instance.ID
+                                      && n.NodeKind == NodeKind.Approval
+                                      && n.State == NodeState.CompletedApproved);
+                Assert.AreEqual(1, completedNodes,
+                    $"Round {round}: exactly one CompletedApproved NodeInstance must exist.");
             }
-
-            var race1   = MakeRacer(dbName, t0Id, A1);
-            var race2   = MakeRacer(dbName, t1Id, A2);
-            barrier.Release(2);
-            var results = await Task.WhenAll(race1, race2);
-
-            int approved = results.Count(r => r.Code == WorkflowActionCode.InstanceApproved);
-            // #307: widen loser set — NodeClosed is a valid race-loser code when the winner
-            // drives the node/instance to approved+closed before the concurrent loser's CAS
-            // guard runs.  AlreadyHandled, NodeAlreadyDecided, and TaskNotActive are also
-            // legitimate "I lost the race / already decided" outcomes.
-            int loser = results.Count(r => IsLegitimateLoserOutcome(r.Code));
-
-            Assert.AreEqual(1, approved,
-                $"Round {round}: exactly one must return InstanceApproved, got [{results[0].Code},{results[1].Code}].");
-            Assert.AreEqual(1, loser,
-                $"Round {round}: exactly one must be a clean loser (AlreadyHandled/NodeClosed/NodeAlreadyDecided/TaskNotActive), " +
-                $"got [{results[0].Code},{results[1].Code}].");
-
-            // Node completed exactly once.
-            await using var finalCtx = new WfSequentialTestContext(dbName);
-            var completedNodes = await finalCtx.Set<NodeInstance>().AsNoTracking()
-                .CountAsync(n => n.InstanceId == instance.ID
-                                  && n.NodeKind == NodeKind.Approval
-                                  && n.State == NodeState.CompletedApproved);
-            Assert.AreEqual(1, completedNodes,
-                $"Round {round}: exactly one CompletedApproved NodeInstance must exist.");
+            finally
+            {
+                SqliteSharedMemoryFixture.DeleteFileDatabase(dbPath);
+            }
         }
     }
 

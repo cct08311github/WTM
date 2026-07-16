@@ -51,6 +51,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using WalkingTec.Mvvm.Test.Mock;
 using WalkingTec.Mvvm.WorkFlow;
 using WalkingTec.Mvvm.WorkFlow.Definition;
 using WalkingTec.Mvvm.WorkFlow.Engine;
@@ -70,8 +71,7 @@ public class AbbaFixTests : IDisposable
     public void Setup()
     {
         _dbName = $"WfAbbaFix_{Guid.NewGuid():N}";
-        _keepAlive = new SqliteConnection($"DataSource={_dbName}?mode=memory&cache=shared");
-        _keepAlive.Open();
+        _keepAlive = SqliteSharedMemoryFixture.OpenKeepAliveWithBusyTimeout(_dbName);
         using var db = MakeContext();
         db.Database.EnsureCreated();
     }
@@ -368,8 +368,7 @@ public class ReturnToNodeEngineTests : IDisposable
     public void Setup()
     {
         _dbName = $"WfAbbaRet_{Guid.NewGuid():N}";
-        _keepAlive = new SqliteConnection($"DataSource={_dbName}?mode=memory&cache=shared");
-        _keepAlive.Open();
+        _keepAlive = SqliteSharedMemoryFixture.OpenKeepAliveWithBusyTimeout(_dbName);
         using var db = new WfAbbaTestContext(_dbName);
         db.Database.EnsureCreated();
     }
@@ -583,8 +582,7 @@ public class ReturnToNodeEngineTests : IDisposable
     {
         // Build an interceptor-instrumented DB context.
         var dbName   = $"WfAbbaRet06_{Guid.NewGuid():N}";
-        using var kl = new SqliteConnection($"DataSource={dbName}?mode=memory&cache=shared");
-        kl.Open();
+        using var kl = SqliteSharedMemoryFixture.OpenKeepAliveWithBusyTimeout(dbName);
 
         var interceptor = new TableOrderInterceptor();
 
@@ -722,8 +720,7 @@ public class ReturnToNodeEngineTests : IDisposable
         var txBFailInterceptor = new FirstTxBNonQueryInterceptor();
 
         var dbName = $"WfAbbaRet07_{Guid.NewGuid():N}";
-        using var kl = new SqliteConnection($"DataSource={dbName}?mode=memory&cache=shared");
-        kl.Open();
+        using var kl = SqliteSharedMemoryFixture.OpenKeepAliveWithBusyTimeout(dbName);
 
         // Schema setup (unintercepted).
         using (var schema = new WfAbbaTestContext(dbName))
@@ -1087,8 +1084,7 @@ public class DeadlockRetryEnvelopeTests : IDisposable
     public void Setup()
     {
         _dbName = $"WfRetry_{Guid.NewGuid():N}";
-        _keepAlive = new SqliteConnection($"DataSource={_dbName}?mode=memory&cache=shared");
-        _keepAlive.Open();
+        _keepAlive = SqliteSharedMemoryFixture.OpenKeepAliveWithBusyTimeout(_dbName);
         using var db = new WfAbbaTestContext(_dbName);
         db.Database.EnsureCreated();
     }
@@ -1109,8 +1105,7 @@ public class DeadlockRetryEnvelopeTests : IDisposable
         // For T-ABBA-RETRY-01/02/03 the body never touches the DB — we only test
         // the retry counting/backoff behaviour.  Any valid SQLite context works.
         var dbName   = $"WfRetryMin_{Guid.NewGuid():N}";
-        using var kl = new SqliteConnection($"DataSource={dbName}?mode=memory&cache=shared");
-        kl.Open();
+        using var kl = SqliteSharedMemoryFixture.OpenKeepAliveWithBusyTimeout(dbName);
         using var schema = new WfAbbaTestContext(dbName);
         schema.Database.EnsureCreated();
 
@@ -1872,6 +1867,7 @@ internal sealed class FirstSaveChangesDeadlockForEntityInterceptor<T> : SaveChan
 internal sealed class WfAbbaTestContext : DbContext
 {
     private readonly string _connStr;
+    private readonly SqliteTestDbMode _mode;
     private readonly IInterceptor[] _interceptors;
     // #667 completion (T-667-LEGALITY): when true, configures a custom retrying
     // IExecutionStrategy (RetriesOnFailure == true) — the exact host configuration
@@ -1879,10 +1875,21 @@ internal sealed class WfAbbaTestContext : DbContext
     // illegal. See RetryingExecutionStrategyLegalityTests.cs.
     private readonly bool _useRetryingExecutionStrategy;
 
-    /// <summary>Plain context — no interceptors.</summary>
-    public WfAbbaTestContext(string connStr)
+    /// <summary>Plain context — no interceptors. Shared-cache in-memory by default.</summary>
+    public WfAbbaTestContext(string connStr) : this(connStr, SqliteTestDbMode.SharedMemory)
+    {
+    }
+
+    /// <summary>
+    /// Plain context — no interceptors, explicit DB provisioning mode. #709 round 2:
+    /// T_ABBA_2902_CONC_01 passes <see cref="SqliteTestDbMode.FileWal"/> — see
+    /// <see cref="SqliteSharedMemoryFixture"/>'s remarks for why shared-cache in-memory is
+    /// unsafe for genuinely-racing concurrency tests no matter how much busy_timeout is widened.
+    /// </summary>
+    public WfAbbaTestContext(string connStr, SqliteTestDbMode mode)
     {
         _connStr      = connStr;
+        _mode         = mode;
         _interceptors = Array.Empty<IInterceptor>();
     }
 
@@ -1890,6 +1897,7 @@ internal sealed class WfAbbaTestContext : DbContext
     public WfAbbaTestContext(string connStr, params IInterceptor[] interceptors)
     {
         _connStr      = connStr;
+        _mode         = SqliteTestDbMode.SharedMemory;
         _interceptors = interceptors;
     }
 
@@ -1903,17 +1911,32 @@ internal sealed class WfAbbaTestContext : DbContext
     public WfAbbaTestContext(string connStr, bool useRetryingExecutionStrategy)
     {
         _connStr      = connStr;
+        _mode         = SqliteTestDbMode.SharedMemory;
         _interceptors = Array.Empty<IInterceptor>();
         _useRetryingExecutionStrategy = useRetryingExecutionStrategy;
     }
 
     protected override void OnConfiguring(DbContextOptionsBuilder b)
     {
-        b.UseSqlite($"DataSource={_connStr}?mode=memory&cache=shared", sqliteOptions =>
+        var connectionString = _mode == SqliteTestDbMode.FileWal
+            ? SqliteSharedMemoryFixture.BuildFileWalConnectionString(_connStr)
+            : SqliteSharedMemoryFixture.BuildConnectionString(_connStr);
+        b.UseSqlite(connectionString, sqliteOptions =>
         {
             if (_useRetryingExecutionStrategy)
                 sqliteOptions.ExecutionStrategy(deps => new TestRetryingExecutionStrategy(deps));
+            else if (_mode == SqliteTestDbMode.FileWal)
+                // Cheap defense-in-depth (see SqliteBusyRetryExecutionStrategy's doc comment) —
+                // not the primary fix, which is file-WAL's real per-connection concurrency.
+                sqliteOptions.ExecutionStrategy(deps => new SqliteBusyRetryExecutionStrategy(deps));
         });
+        // #709: apply the shared busy_timeout (+ WAL) mitigation unconditionally —
+        // T_ABBA_2902_CONC_01 races two concurrent WfAbbaTestContext instances against the same
+        // logical database (same class of contention as the WorkFlow TCONC family). Additive
+        // with any test-provided interceptors: this is a DbConnectionInterceptor (ConnectionOpened
+        // hook only), so it never touches the DbCommand/SaveChanges hooks the deadlock-simulation
+        // interceptors below assert on.
+        b.AddInterceptors(new SqliteBusyTimeoutInterceptor());
         if (_interceptors.Length > 0)
             b.AddInterceptors(_interceptors);
     }
@@ -2103,8 +2126,7 @@ public class AddApproverLockOrderTests : IDisposable
     public void Setup()
     {
         _dbName = $"WfAddLO_{Guid.NewGuid():N}";
-        _keepAlive = new SqliteConnection($"DataSource={_dbName}?mode=memory&cache=shared");
-        _keepAlive.Open();
+        _keepAlive = SqliteSharedMemoryFixture.OpenKeepAliveWithBusyTimeout(_dbName);
         using var db = new WfAbbaTestContext(_dbName);
         db.Database.EnsureCreated();
     }
@@ -2193,8 +2215,7 @@ public class AddApproverLockOrderTests : IDisposable
     {
         // Build instrumented context + schema.
         var dbName = $"WfAddLO01_{Guid.NewGuid():N}";
-        using var kl = new SqliteConnection($"DataSource={dbName}?mode=memory&cache=shared");
-        kl.Open();
+        using var kl = SqliteSharedMemoryFixture.OpenKeepAliveWithBusyTimeout(dbName);
         using (var schema = new WfAbbaTestContext(dbName))
             schema.Database.EnsureCreated();
 
@@ -2474,61 +2495,103 @@ public class AddApproverLockOrderTests : IDisposable
     [TestMethod]
     public async Task T_ABBA_2902_CONC_01_ConcurrentAddApproverAndDelegate_ConsistentState()
     {
-        await using var ctx = MakeContext();
-        var (_, inst, task) = await SeedRunningInstanceAsync(ctx);
-
-        // Run AddApprover and Delegate concurrently (SQLite serializes them).
-        var addCtx = MakeContext();
-        var delCtx = MakeContext();
+        // #709 round 2: genuinely-racing (two concurrent WfAbbaTestContext actors) — use a
+        // dedicated file-WAL database instead of the class-level shared-cache in-memory
+        // MakeContext() fixture (which many OTHER, non-racing tests in this class still use
+        // safely — see SqliteSharedMemoryFixture's remarks for why only genuine concurrent
+        // contention needs file-WAL). Seeding is inlined here (rather than reusing
+        // SeedRunningInstanceAsync, which reads back through the class's shared-memory
+        // MakeContext()) so every context in this test targets the same file-WAL database.
+        var dbPath = SqliteSharedMemoryFixture.NewFileDbPath("WfAddLOConc");
         try
         {
-            var addEngine = MakeEngine(addCtx);
-            var delEngine = MakeEngine(delCtx);
+            await using var schemaCtx = new WfAbbaTestContext(dbPath, SqliteTestDbMode.FileWal);
+            schemaCtx.Database.EnsureCreated();
 
-            var addTask = addEngine.AddApproverAsync(task.ID, "alice", new[] { "bob" }, AddPosition.After);
-            var delTask = delEngine.DelegateTaskAsync(task.ID, "alice", "charlie");
-
-            await Task.WhenAll(addTask, delTask);
-            var addResult = addTask.Result;
-            var delResult = delTask.Result;
-
-            // Both must have completed without throwing.
-            var validCodes = new[]
+            var ver = new ProcessDefinitionVersion
             {
-                WorkflowActionCode.Advanced,
-                WorkflowActionCode.AlreadyHandled,
-                WorkflowActionCode.NotAuthorized,
-                WorkflowActionCode.NodeAlreadyDecided,
-                WorkflowActionCode.TaskNotActive,
-                WorkflowActionCode.NodeClosed,
-                WorkflowActionCode.DelegateAlreadyParticipant,
+                ID          = Guid.NewGuid(),
+                GraphJson   = OneNodeGraph("alice"),
+                ContentHash = $"conc01-hash-{Guid.NewGuid():N}",
+                VersionNo   = 1,
+                TenantCode  = "T1",
+                IsValid     = true,
             };
+            schemaCtx.Set<ProcessDefinitionVersion>().Add(ver);
+            await schemaCtx.SaveChangesAsync();
 
-            Assert.IsTrue(validCodes.Contains(addResult.Code),
-                $"T-ABBA-2902-CONC-01: AddApproverAsync must complete with valid code. Got {addResult.Code}.");
-            Assert.IsTrue(validCodes.Contains(delResult.Code),
-                $"T-ABBA-2902-CONC-01: DelegateTaskAsync must complete with valid code. Got {delResult.Code}.");
+            var seedEngine = MakeEngine(schemaCtx);
+            var inst = await seedEngine.StartAsync(ver.ID, null, "initiator", null);
+            Assert.IsNotNull(inst, "T-ABBA-2902-CONC-01: StartAsync must succeed");
 
-            // Assert consistent final state: TotalRequired matches actual active task count.
-            await using var verify = MakeContext();
-            var nodeAfter = await verify.Set<NodeInstance>().AsNoTracking()
-                .SingleAsync(n => n.InstanceId == inst.ID && n.NodeKey == "nodeA");
-            var activeTaskCount = await verify.Set<ApprovalTask>().AsNoTracking()
-                .CountAsync(t => t.NodeInstanceId == nodeAfter.ID
-                                  && (t.State == TaskState.Pending
-                                      || t.State == TaskState.NotYetActive
-                                      || t.State == TaskState.AddedPending));
+            await using var readCtx = new WfAbbaTestContext(dbPath, SqliteTestDbMode.FileWal);
+            var nodeId = await readCtx.Set<NodeInstance>().AsNoTracking()
+                .Where(n => n.InstanceId == inst!.ID && n.NodeKey == "nodeA")
+                .Select(n => n.ID)
+                .SingleAsync();
+            var task = await readCtx.Set<ApprovalTask>().AsNoTracking()
+                .SingleAsync(t => t.NodeInstanceId == nodeId && t.State == TaskState.Pending);
 
-            Assert.IsTrue(nodeAfter.TotalRequired >= 1 && nodeAfter.TotalRequired <= 2,
-                $"T-ABBA-2902-CONC-01: TotalRequired must be 1 or 2. Got {nodeAfter.TotalRequired}.");
+            // Run AddApprover and Delegate concurrently — each actor opens its own distinct
+            // physical connection to the same file (see BuildFileWalConnectionString's
+            // Pooling=False remarks); WAL gives SQLite's own lock manager real headroom to
+            // serialize the two writers instead of racing a coarse shared-cache table lock.
+            var addCtx = new WfAbbaTestContext(dbPath, SqliteTestDbMode.FileWal);
+            var delCtx = new WfAbbaTestContext(dbPath, SqliteTestDbMode.FileWal);
+            try
+            {
+                var addEngine = MakeEngine(addCtx);
+                var delEngine = MakeEngine(delCtx);
 
-            Assert.IsTrue(activeTaskCount >= 1,
-                $"T-ABBA-2902-CONC-01: at least 1 active task expected. Got {activeTaskCount}.");
+                var addTask = addEngine.AddApproverAsync(task.ID, "alice", new[] { "bob" }, AddPosition.After);
+                var delTask = delEngine.DelegateTaskAsync(task.ID, "alice", "charlie");
+
+                await Task.WhenAll(addTask, delTask);
+                var addResult = addTask.Result;
+                var delResult = delTask.Result;
+
+                // Both must have completed without throwing.
+                var validCodes = new[]
+                {
+                    WorkflowActionCode.Advanced,
+                    WorkflowActionCode.AlreadyHandled,
+                    WorkflowActionCode.NotAuthorized,
+                    WorkflowActionCode.NodeAlreadyDecided,
+                    WorkflowActionCode.TaskNotActive,
+                    WorkflowActionCode.NodeClosed,
+                    WorkflowActionCode.DelegateAlreadyParticipant,
+                };
+
+                Assert.IsTrue(validCodes.Contains(addResult.Code),
+                    $"T-ABBA-2902-CONC-01: AddApproverAsync must complete with valid code. Got {addResult.Code}.");
+                Assert.IsTrue(validCodes.Contains(delResult.Code),
+                    $"T-ABBA-2902-CONC-01: DelegateTaskAsync must complete with valid code. Got {delResult.Code}.");
+
+                // Assert consistent final state: TotalRequired matches actual active task count.
+                await using var verify = new WfAbbaTestContext(dbPath, SqliteTestDbMode.FileWal);
+                var nodeAfter = await verify.Set<NodeInstance>().AsNoTracking()
+                    .SingleAsync(n => n.InstanceId == inst.ID && n.NodeKey == "nodeA");
+                var activeTaskCount = await verify.Set<ApprovalTask>().AsNoTracking()
+                    .CountAsync(t => t.NodeInstanceId == nodeAfter.ID
+                                      && (t.State == TaskState.Pending
+                                          || t.State == TaskState.NotYetActive
+                                          || t.State == TaskState.AddedPending));
+
+                Assert.IsTrue(nodeAfter.TotalRequired >= 1 && nodeAfter.TotalRequired <= 2,
+                    $"T-ABBA-2902-CONC-01: TotalRequired must be 1 or 2. Got {nodeAfter.TotalRequired}.");
+
+                Assert.IsTrue(activeTaskCount >= 1,
+                    $"T-ABBA-2902-CONC-01: at least 1 active task expected. Got {activeTaskCount}.");
+            }
+            finally
+            {
+                await addCtx.DisposeAsync();
+                await delCtx.DisposeAsync();
+            }
         }
         finally
         {
-            await addCtx.DisposeAsync();
-            await delCtx.DisposeAsync();
+            SqliteSharedMemoryFixture.DeleteFileDatabase(dbPath);
         }
     }
 }
