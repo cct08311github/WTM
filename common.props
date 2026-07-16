@@ -5,35 +5,67 @@
     <PackageId>$(ProjectName)</PackageId>
     <Authors>Michael,Vito</Authors>
     <Company>Michael,Vito</Company>
-    <Copyright>Copyright © Michael,Vito 2019</Copyright>
+    <!-- Issue #678: reflect fork reality — original 2019 upstream copyright plus the
+         dotnet10 fork maintained on this repo since 2026-03 (see CLAUDE.md "Project Mission"). -->
+    <Copyright>Copyright © Michael,Vito 2019. WTM dotnet10 fork © chiu0831 2026.</Copyright>
     <RepositoryType>git</RepositoryType>
+    <!-- Issue #678: MIT is a standard SPDX identifier (confirmed via repo LICENSE file);
+         PackageLicenseExpression is preferred by nuget.org/NuGet tooling over
+         PackageLicenseFile for standard licenses (machine-readable, no need to ship the
+         LICENSE file inside every package). -->
     <PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>
-    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageIcon>icon.png</PackageIcon>
+    <!-- Issue #678: PackageReadmeFile shown on the NuGet package details page. -->
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <RepositoryUrl>https://mac-mini.tailde842d.ts.net/chiu0831/WTM</RepositoryUrl>
     <PackageProjectUrl>https://mac-mini.tailde842d.ts.net/chiu0831/WTM</PackageProjectUrl>
     <PackageTags>aspnetcore, mvc, mvvm, layui, wtm</PackageTags>
-    <PackageReleaseNotes>框架文档地址：https://wtmdoc.walkingtec.cn，QQ群：694148336</PackageReleaseNotes>
+    <!-- Issue #678: point at this fork's own CHANGELOG, not upstream's walkingtec.cn/QQ contacts. -->
+    <PackageReleaseNotes>Changelog: $(RepositoryUrl)/raw/branch/dotnet10/CHANGELOG.md</PackageReleaseNotes>
     <IncludeSource>false</IncludeSource>
     <MinClientVersion>4.1.0</MinClientVersion>
     <IncludeContentInPack>true</IncludeContentInPack>
     <NeutralLanguage>zh-CN</NeutralLanguage>
     <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+
+    <!-- Issue #678: NuGet packaging modernization — SourceLink, symbol packages,
+         deterministic/CI builds. These only change package METADATA (debug/source-link
+         info, symbol package emission) and never alter runtime behaviour, so this is not
+         a "default behaviour" change under the red-line policy. -->
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <!-- Gitea Actions runners (act_runner) execute GitHub-Actions-compatible workflow
+         files (.github/workflows/*.yml) and set GITHUB_ACTIONS=true, same as GitHub's
+         own runners; CI also sets the generic CI=true. Deterministic builds are gated to
+         CI only so local `dotnet pack` for manual testing keeps prior (non-CI) PDB paths. -->
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true' or '$(CI)' == 'true'">true</ContinuousIntegrationBuild>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
     <DocumentationFile>bin\Release\$(TargetFramework)\$(AssemblyName).xml</DocumentationFile>
-    <NoWarn>1701;1702;1705;1591;0809;1587;1570;NU1608</NoWarn>
+    <NoWarn>1701;1702;1705;1591;0809;1587;1570</NoWarn>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
     <DocumentationFile>bin\Debug\$(TargetFramework)\$(AssemblyName).xml</DocumentationFile>
-    <NoWarn>1701;1702;1705;1591;0809;1587;1570;NU1608</NoWarn>
+    <NoWarn>1701;1702;1705;1591;0809;1587;1570</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
-    <None Include="$(MSBuildThisFileDirectory)LICENSE" Pack="true" PackagePath="" Visible="false" />
-    <None Include="$(MSBuildThisFileDirectory)demo/WalkingTec.Mvvm.BlazorDemo/WalkingTec.Mvvm.BlazorDemo/wwwroot/logo.png" Pack="true" PackagePath="icon.png" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)assets\icon.png" Pack="true" PackagePath="icon.png" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)nuget-README.md" Pack="true" PackagePath="README.md" Visible="false" />
+  </ItemGroup>
+
+  <!-- Issue #678: Gitea SourceLink provider — self-hosted origin needs the host mapped
+       explicitly (the GitHub/GitLab providers URL-map differently and would embed wrong
+       source-server links in the PDB). PrivateAssets=All: build-time only, never flows
+       to consumers of the package. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.SourceLink.Gitea" PrivateAssets="All" />
+    <SourceLinkGiteaHost Include="mac-mini.tailde842d.ts.net" ContentUrl="https://mac-mini.tailde842d.ts.net" />
   </ItemGroup>
 
   <!--

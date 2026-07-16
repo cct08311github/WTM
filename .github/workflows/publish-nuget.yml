@@ -75,6 +75,23 @@ jobs:
       - name: List packages
         run: ls -lh nupkgs/
 
+      # Issue #678: common.props now sets IncludeSymbols/SymbolPackageFormat=snupkg, so
+      # `dotnet pack` above also emits a *.snupkg (symbol package, containing the PDB +
+      # SourceLink map) alongside each *.nupkg in nupkgs/. No separate push step is
+      # needed for it: `dotnet nuget push` auto-detects the adjacent *.snupkg for each
+      # *.nupkg it pushes and publishes it to the source's SymbolPackagePublish
+      # resource unless `--no-symbols` is passed (see `dotnet nuget push` docs). Gitea's
+      # NuGet service index (https://mac-mini.tailde842d.ts.net/api/packages/chiu0831/nuget/index.json)
+      # advertises `SymbolPackagePublish/4.9.0`, and this was confirmed live: pushing
+      # `*.nupkg` here also ships the matching `*.snupkg`. A prior revision added a
+      # dedicated "Push symbol packages" step on the (incorrect) premise that the glob
+      # below doesn't cover snupkgs — that step was a redundant duplicate push
+      # (harmless only via --skip-duplicate) and was removed. Do not re-add it; if the
+      # symbol endpoint ever needs independent failure isolation from the primary
+      # publish, that must be done via `--no-symbols` on this step plus a separate
+      # explicit `*.snupkg` push, verified end-to-end against Gitea before merging —
+      # not by re-adding a step that runs after (and depends on) this one having
+      # already pushed the symbols implicitly.
       - name: Push to Gitea Packages
         run: |
           dotnet nuget push "nupkgs/*.nupkg" \
@@ -463,6 +480,9 @@ jobs:
           echo "Sanitized nupkgs ready:"
           ls -lh nupkgs-github/
 
+      # Issue #678: deliberately `*.nupkg` only here — GitHub Packages' NuGet registry
+      # has never supported symbol packages (no snupkg endpoint), unlike Gitea. Do not
+      # add a matching *.snupkg push for this source; it has nowhere to land.
       - name: Push NuGet packages to GitHub Packages
         if: startsWith(github.ref, 'refs/tags/')
         env:

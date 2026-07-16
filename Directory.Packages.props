@@ -127,6 +127,16 @@
     <PackageVersion Include="BootstrapBlazor.Chart" Version="8.1.5" />
     <PackageVersion Include="BootstrapBlazor.SummerNote" Version="8.0.3" />
 
+    <!-- ===== Packaging / SourceLink (Issue #678) ===== -->
+    <!--
+      Origin is a self-hosted Gitea instance, so the Gitea-specific SourceLink
+      provider is required (GitHub/GitLab providers URL-map differently and
+      would embed the wrong source-server URLs in the PDB). Pinned to the
+      latest stable (non-preview) release as of 2026-07 alongside the other
+      Microsoft SourceLink/Build.Tasks.Git packages' shared release cadence.
+    -->
+    <PackageVersion Include="Microsoft.SourceLink.Gitea" Version="10.0.301" />
+
     <!-- ===== Test packages ===== -->
     <PackageVersion Include="BenchmarkDotNet" Version="0.14.0" />
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />

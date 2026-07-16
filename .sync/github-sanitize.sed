@@ -12,6 +12,20 @@
 # Targets: internal hostname, tailnet name, macOS username, internal token names.
 # Replacement strings are intentionally generic / clearly-placeholder.
 
+# Issue #678 CRITICAL (PR review, round 1): the `Microsoft.SourceLink.Gitea`
+# NuGet package identifier (Directory.Packages.props PackageVersion + common.props
+# PackageReference) sits on a word boundary that the catch-all `\bGitea\b` rule
+# below would otherwise match — "SourceLink." (non-word char before) ... "Gitea"
+# ... `"` (non-word char after). That rewrite produced the INVALID package id
+# `Microsoft.SourceLink.internal infrastructure` (embedded space), which broke
+# `dotnet restore`/`pack` with NU1017 for every project importing common.props on
+# the sanitized tree — i.e. it bricked the public GitHub mirror's restorability on
+# the very next sync, and failed the "Re-pack from sanitized source for GitHub
+# Packages" release step. Protect the literal package id by swapping it out to a
+# placeholder with no "Gitea" substring BEFORE the generic rule runs, then swap it
+# back in immediately after. Ordered first so it always runs before line ~27.
+s|Microsoft\.SourceLink\.Gitea|Microsoft.SourceLink.__SOURCELINK_PKGID_PLACEHOLDER__|g
+
 s|mac-mini\.tailde842d\.ts\.net|internal.registry.invalid|g
 s|tailde842d|internal-tailnet|g
 s|/Users/openclaw/|~/|g
@@ -26,3 +40,8 @@ s|\bGitea registry\b|internal registry|g
 s|\bGitea release\b|release|g
 s|\bGitea\b|internal infrastructure|g
 s|\bgitea-wtm\b|private-feed|g
+
+# Swap-back for the package id protected above. Must run after the bare
+# \bGitea\b rule (it does — sed applies -f script rules top-to-bottom per
+# line) so the placeholder never survives into the committed sanitized tree.
+s|Microsoft\.SourceLink\.__SOURCELINK_PKGID_PLACEHOLDER__|Microsoft.SourceLink.Gitea|g
