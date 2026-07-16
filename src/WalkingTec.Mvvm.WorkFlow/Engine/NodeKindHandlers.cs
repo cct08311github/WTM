@@ -472,11 +472,11 @@ internal sealed class ParallelGatewayHandler : INodeKindHandler
             {
                 await db.SaveChangesAsync(ct);
             }
-            catch (DbUpdateException dbEx) when (
-                dbEx.InnerException?.Message.Contains("unique", StringComparison.OrdinalIgnoreCase) == true
-                || dbEx.InnerException?.Message.Contains("duplicate", StringComparison.OrdinalIgnoreCase) == true)
+            catch (DbUpdateException dbEx) when (GuardedTransition.IsUniqueConstraintViolation(dbEx))
             {
                 // #483 Bug #4: idempotent no-op — a concurrent winner already minted these branches.
+                // #668: catch-when filter consolidated onto GuardedTransition.IsUniqueConstraintViolation
+                // (the robust 8-provider-marker detector) — was a bare "unique"/"duplicate" match.
                 // Detach all Added NodeInstance entities so the context stays usable.
                 var addedEntries = db.ChangeTracker.Entries<NodeInstance>()
                     .Where(e => e.State == Microsoft.EntityFrameworkCore.EntityState.Added)
@@ -745,11 +745,11 @@ internal sealed class InclusiveGatewayHandler : INodeKindHandler
         {
             await db.SaveChangesAsync(ct);
         }
-        catch (DbUpdateException dbEx) when (
-            dbEx.InnerException?.Message.Contains("unique", StringComparison.OrdinalIgnoreCase) == true
-            || dbEx.InnerException?.Message.Contains("duplicate", StringComparison.OrdinalIgnoreCase) == true)
+        catch (DbUpdateException dbEx) when (GuardedTransition.IsUniqueConstraintViolation(dbEx))
         {
             // #483 Bug #4: idempotent no-op — a concurrent winner already minted these branches.
+            // #668: catch-when filter consolidated onto GuardedTransition.IsUniqueConstraintViolation
+            // (the robust 8-provider-marker detector) — was a bare "unique"/"duplicate" match.
             var addedEntries = db.ChangeTracker.Entries<NodeInstance>()
                 .Where(e => e.State == Microsoft.EntityFrameworkCore.EntityState.Added)
                 .ToList();

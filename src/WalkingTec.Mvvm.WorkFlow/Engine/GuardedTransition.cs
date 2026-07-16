@@ -306,6 +306,82 @@ public static class GuardedTransition
     }
 
     /// <summary>
+    /// Issue #668: retry-wrapped <see cref="AllocateSeqAsync"/>.  Consolidated here from two
+    /// verbatim-duplicated copies (<c>WorkflowEngine.AllocateSeqWithRetryAsync</c> and
+    /// <c>WorkflowTimerExecutor.AllocateSeqWithRetryAsync</c>, both WF-20.4) — both the engine
+    /// and the timer executor share the same "CAS on RowVer, re-read on mismatch, retry" pattern
+    /// when appending an event-log Seq inside their own transactions.
+    /// </summary>
+    /// <param name="db">DbContext (caller owns the ambient transaction).</param>
+    /// <param name="instanceId">PK of the <see cref="ProcessInstance"/>.</param>
+    /// <param name="instanceRowVer">Current RowVer (stale → CAS fails and this helper re-reads).</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <param name="maxRetries">Maximum re-read/retry attempts before giving up.</param>
+    /// <returns>(rows, seq): rows==1 + seq = the allocated Seq; rows==0 if the instance
+    /// disappeared or all retries were exhausted.</returns>
+    internal static async Task<(int rows, int seq)> AllocateSeqWithRetryAsync(
+        DbContext db,
+        Guid instanceId,
+        uint instanceRowVer,
+        CancellationToken ct,
+        int maxRetries = 5)
+    {
+        var rowVer = instanceRowVer;
+        for (int attempt = 0; attempt < maxRetries; attempt++)
+        {
+            var result = await AllocateSeqAsync(db, instanceId, rowVer, ct);
+            if (result.rows == 1)
+                return result;
+
+            // RowVer mismatch — re-read and retry.
+            var fresh = await db.Set<ProcessInstance>()
+                .AsNoTracking()
+                .Where(i => i.ID == instanceId)
+                .Select(i => new { i.RowVer })
+                .FirstOrDefaultAsync(ct);
+
+            if (fresh == null)
+                return (0, 0); // instance disappeared — caller handles
+
+            rowVer = fresh.RowVer;
+        }
+        return (0, 0);
+    }
+
+    /// <summary>
+    /// Issue #668: consolidated unique-constraint-violation detector, promoted here from
+    /// <c>WorkflowEngine.IsUniqueConstraintViolation</c> (the "robust" 8-provider-marker
+    /// version — FIX-B5f) to replace three divergent copies: this one, plus two weaker
+    /// inline <c>catch (DbUpdateException ex) when (...)</c> filters that matched only the
+    /// bare word "unique"/"duplicate" (<c>MintNodeInstanceGuardedAsync</c> here and
+    /// the ParallelGatewayHandler/InclusiveGatewayHandler catch-when filters in
+    /// <c>NodeKindHandlers.cs</c>).  Narrowed heuristic — requires constraint-name markers
+    /// (<c>IX_</c>, "unique constraint") or well-known duplicate-key phrases rather than
+    /// matching the bare word "UNIQUE", which can appear in unrelated error messages (e.g.
+    /// "unique" in a column description).
+    ///
+    /// <para><strong>PostgreSQL note:</strong> on PostgreSQL, a unique-constraint violation
+    /// (error code 23505) ABORTS the enclosing transaction — callers that catch this from
+    /// inside a fire/arm transaction must roll back the whole unit and rely on a retry (the
+    /// unique index guarantees exactly-once, so the retry observes the winner's committed
+    /// state and exits cleanly).</para>
+    /// </summary>
+    internal static bool IsUniqueConstraintViolation(DbUpdateException ex)
+    {
+        // EF Core wraps the provider-specific exception — check both levels.
+        var inner = ex.InnerException?.Message ?? ex.Message;
+
+        return inner.Contains("IX_", StringComparison.OrdinalIgnoreCase)         // index name prefix (all providers)
+            || inner.Contains("unique constraint", StringComparison.OrdinalIgnoreCase) // SQLite / PostgreSQL
+            || inner.Contains("UNIQUE constraint failed", StringComparison.OrdinalIgnoreCase) // SQLite
+            || inner.Contains("duplicate key", StringComparison.OrdinalIgnoreCase)    // SQL Server / PostgreSQL
+            || inner.Contains("Duplicate entry", StringComparison.OrdinalIgnoreCase)  // MySQL / MariaDB
+            || inner.Contains("unique index", StringComparison.OrdinalIgnoreCase)     // Oracle / DaMeng
+            || inner.Contains("23505", StringComparison.Ordinal)                      // PostgreSQL SQLSTATE
+            || inner.Contains("ORA-00001", StringComparison.OrdinalIgnoreCase);       // Oracle unique violation
+    }
+
+    /// <summary>
     /// STEP-5: Mint a new <see cref="NodeInstance"/> for the return target, guarded so that
     /// the insert only proceeds if the instance is still in the <c>Returning</c> state at
     /// the new generation (WF-16 successor-TOCTOU, Race A §3).
@@ -353,17 +429,16 @@ public static class GuardedTransition
             await db.SaveChangesAsync(ct);
             return true;
         }
-        catch (DbUpdateException ex) when (
-            ex.InnerException?.Message.Contains("unique", StringComparison.OrdinalIgnoreCase) == true
-            || ex.InnerException?.Message.Contains("duplicate", StringComparison.OrdinalIgnoreCase) == true)
+        catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
         {
             // Idempotent no-op: another concurrent caller already minted this node.
-            // The catch-when filter is intentionally NARROW: it matches ONLY UNIQUE / duplicate-key
+            // #668: catch-when filter consolidated onto IsUniqueConstraintViolation (the
+            // robust 8-provider-marker detector) — matches ONLY UNIQUE / duplicate-key
             // violations (SQLite "UNIQUE constraint failed", SQL Server "duplicate key", PostgreSQL
             // "duplicate key value violates unique constraint", MySQL "Duplicate entry", Oracle "unique
             // constraint").  FK violations ("FOREIGN KEY constraint"), NOT NULL violations
-            // ("NOT NULL constraint failed"), and CHECK violations ("CHECK constraint") do NOT contain
-            // "unique" or "duplicate" and will propagate as real errors.
+            // ("NOT NULL constraint failed"), and CHECK violations ("CHECK constraint") do NOT match
+            // and will propagate as real errors.
             // Detach the conflicting entity so the context stays clean.
             var entry = db.Entry(node);
             if (entry.State != Microsoft.EntityFrameworkCore.EntityState.Detached)
