@@ -343,12 +343,16 @@ public class Wave2SchedulerTuningTests : IDisposable
             .Setup(s => s.ListTablesAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<EtlTableInfo>().AsReadOnly());
 
+        // #676: FakeTimeProvider instead of TTL=1ms + Task.Delay(50) — deterministic, zero
+        // wall-clock dependency (CachingEtlSchemaService's TryGet-equivalent is the
+        // authoritative expiry check; see GetOrCreateWithExpiryAsync remarks).
+        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
         using var cache = new MemoryCache(new MemoryCacheOptions());
-        var svc = new CachingEtlSchemaService(innerMock.Object, cache, TimeSpan.FromMilliseconds(1));
+        var svc = new CachingEtlSchemaService(innerMock.Object, cache, TimeSpan.FromMilliseconds(1), fakeTime);
 
-        // Act — first call, then wait for TTL expiry, then second call
+        // Act — first call, then advance past TTL expiry, then second call
         await svc.ListTablesAsync("Server=x", null);
-        await Task.Delay(50); // 50ms >> 1ms TTL; entry should have expired
+        fakeTime.Advance(TimeSpan.FromMilliseconds(2)); // 2ms > 1ms TTL; entry should have expired
         await svc.ListTablesAsync("Server=x", null);
 
         // Assert — inner called twice (cache miss after expiry)

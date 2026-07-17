@@ -57,15 +57,19 @@ internal sealed class SequentialApprovalHandler : INodeKindHandler
     private readonly IApproverResolver _resolver;
     private readonly WorkFlowOptions _options;
     private readonly ILogger<SequentialApprovalHandler> _logger;
+    // #676: clock seam — see NodeKindHandlers.CcHandler for the rationale/pattern.
+    private readonly TimeProvider _timeProvider;
 
     public SequentialApprovalHandler(
         IApproverResolver resolver,
         IOptions<WorkFlowOptions> options,
-        ILogger<SequentialApprovalHandler> logger)
+        ILogger<SequentialApprovalHandler> logger,
+        TimeProvider? timeProvider = null)
     {
         _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     // ── OnEnterAsync ──────────────────────────────────────────────────────────
@@ -127,7 +131,7 @@ internal sealed class SequentialApprovalHandler : INodeKindHandler
 
         var approvers = resolution.Approvers;
         var pointer = nodeInst.SequencePointer; // typically 0 on fresh activation
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
 
         // WF-19: read delegation provenance from the decorator (if active).
         var delegationCtx = _resolver as IDelegationContextProvider;

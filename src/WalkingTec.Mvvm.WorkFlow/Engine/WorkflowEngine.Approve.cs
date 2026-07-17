@@ -109,7 +109,7 @@ internal sealed partial class WorkflowEngine
             }
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
 
         // 8+10. Sequential mode: atomic claim + pointer-advance in ONE transaction (WF-373).
         //        All/Any mode: standalone claim CAS below (unchanged pre-WF-373 path).
@@ -141,6 +141,7 @@ internal sealed partial class WorkflowEngine
                 beforeState: TaskState.Pending.ToString(),
                 afterState: TaskState.Approved.ToString(),
                 reason: comment,
+                timeProvider: _timeProvider,
                 ct: ct);
 
             // WF-15 — Notify approved (post-commit, best-effort).
@@ -198,7 +199,7 @@ internal sealed partial class WorkflowEngine
                         if (nextPendingForArm is not null)
                         {
                             await ArmTaskTimerIfConfiguredAsync(
-                                nextPendingForArm, freshNodeForPointer, stepBNodeDef, DateTime.UtcNow, ct);
+                                nextPendingForArm, freshNodeForPointer, stepBNodeDef, _timeProvider.GetUtcNow().UtcDateTime, ct);
                         }
                     }
                 }
@@ -478,6 +479,7 @@ internal sealed partial class WorkflowEngine
                         beforeState: TaskState.Pending.ToString(),
                         afterState: TaskState.Approved.ToString(),
                         reason: comment,
+                        timeProvider: _timeProvider,
                         ct: innerCt);
 
                     if (ownsTx)
@@ -513,6 +515,7 @@ internal sealed partial class WorkflowEngine
                 beforeState: TaskState.Pending.ToString(),
                 afterState: TaskState.Approved.ToString(),
                 reason: comment,
+                timeProvider: _timeProvider,
                 ct: ct);
         }
 
@@ -988,7 +991,7 @@ internal sealed partial class WorkflowEngine
                         var freshNodeForArm = await Db.Set<NodeInstance>()
                             .AsNoTracking().SingleAsync(n => n.ID == nodeInst.ID, ct);
                         await ArmTaskTimerIfConfiguredAsync(
-                            nextPendingForArm, freshNodeForArm, stepBNodeDef, DateTime.UtcNow, ct);
+                            nextPendingForArm, freshNodeForArm, stepBNodeDef, _timeProvider.GetUtcNow().UtcDateTime, ct);
                     }
                 }
             }

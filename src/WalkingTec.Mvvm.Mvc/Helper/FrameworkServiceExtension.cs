@@ -450,7 +450,10 @@ namespace WalkingTec.Mvvm.Mvc
             services.AddSingleton<WalkingTec.Mvvm.Core.Analysis.IAnalysisCache>(sp =>
                 new WalkingTec.Mvvm.Core.Analysis.MemoryAnalysisCache(
                     sp.GetRequiredService<Microsoft.Extensions.Caching.Memory.IMemoryCache>(),
-                    conf.AnalysisCacheTtl));
+                    conf.AnalysisCacheTtl,
+                    // #676: explicit resolve — this is a factory delegate, not auto constructor-
+                    // injection, so TimeProvider must be pulled from the container by hand.
+                    sp.GetService<TimeProvider>()));
             services.AddSingleton<WalkingTec.Mvvm.Core.Analysis.IAnalysisFieldPolicy, WalkingTec.Mvvm.Core.Analysis.DefaultAnalysisFieldPolicy>();
             services.AddSingleton<WalkingTec.Mvvm.Core.Analysis.AnalysisQueryEngine>(sp =>
             {

@@ -96,6 +96,12 @@ internal sealed partial class WorkflowEngine : IWorkflowEngine
     // for the internal test constructors below, which still get correct (just non-shared)
     // caching behavior without needing to be updated for this parameter.
     private readonly IWorkflowGraphProvider _graphProvider;
+    // #676: clock seam. Defaults to TimeProvider.System when DI has no TimeProvider registered
+    // (or when a test constructs the engine directly) — identical behavior to raw DateTime.UtcNow.
+    // Production DI resolves whatever TimeProvider the host registered (e.g. Mvc's
+    // `services.TryAddSingleton(TimeProvider.System)`), so a single fake TimeProvider registered
+    // by a test host flows through automatically without any extra wiring.
+    private readonly TimeProvider _timeProvider;
 
     // Convenience alias — keeps all the engine body code readable.
     private DbContext Db => _db;
@@ -105,6 +111,9 @@ internal sealed partial class WorkflowEngine : IWorkflowEngine
     /// mis-registration fails loudly at startup.
     /// <para><see cref="IWorkflowNotifier"/> is optional — injected when
     /// <see cref="ServiceCollectionExtensions.AddWtmWorkFlowNotifications"/> was called; null otherwise.</para>
+    /// <para>#676: <paramref name="timeProvider"/> is optional — trailing-optional-parameter pattern
+    /// (mirrors <paramref name="graphProvider"/> from #666). Defaults to <see cref="TimeProvider.System"/>
+    /// so every existing call site / test compiles and behaves unchanged.</para>
     /// </summary>
     public WorkflowEngine(
         IDataContext dc,
@@ -114,7 +123,8 @@ internal sealed partial class WorkflowEngine : IWorkflowEngine
         ILogger<WorkflowEngine> logger,
         IWorkflowNotifier? notifier = null,
         IBusinessCalendar? businessCalendar = null,
-        IWorkflowGraphProvider? graphProvider = null)
+        IWorkflowGraphProvider? graphProvider = null,
+        TimeProvider? timeProvider = null)
     {
         if (dc is null) throw new ArgumentNullException(nameof(dc));
         _dc = dc;
@@ -128,6 +138,8 @@ internal sealed partial class WorkflowEngine : IWorkflowEngine
         // #666: DI always supplies the process-wide singleton; null only in ad-hoc construction
         // (defensive fallback — never expected on the production DI path).
         _graphProvider = graphProvider ?? new WorkflowGraphProvider();
+        // #676: null only when DI has no TimeProvider registered and no ad-hoc caller supplied one.
+        _timeProvider = timeProvider ?? TimeProvider.System;
 
         // WF-19 FIX-8: AtAction mode uses a nullable-DateTime WHERE clause inside
         // ClaimDelegatedTaskAsync's ExecuteUpdateAsync.  Oracle and DaMeng EF Core providers
@@ -177,8 +189,10 @@ internal sealed partial class WorkflowEngine : IWorkflowEngine
         IRoutingEvaluator routingEvaluator,
         ILogger logger,
         IWorkflowNotifier? notifier = null,
-        IWorkflowGraphProvider? graphProvider = null)
-        : this(db, dispatcher, routingEvaluator, new WorkFlowOptions(), logger, notifier, graphProvider: graphProvider)
+        IWorkflowGraphProvider? graphProvider = null,
+        TimeProvider? timeProvider = null)
+        : this(db, dispatcher, routingEvaluator, new WorkFlowOptions(), logger, notifier,
+               graphProvider: graphProvider, timeProvider: timeProvider)
     { }
 
     /// <summary>Full internal constructor used by tests that need to override WorkFlowOptions.</summary>
@@ -190,7 +204,8 @@ internal sealed partial class WorkflowEngine : IWorkflowEngine
         ILogger logger,
         IWorkflowNotifier? notifier = null,
         IBusinessCalendar? businessCalendar = null,
-        IWorkflowGraphProvider? graphProvider = null)
+        IWorkflowGraphProvider? graphProvider = null,
+        TimeProvider? timeProvider = null)
     {
         _db = db ?? throw new ArgumentNullException(nameof(db));
         _dc = null; // No IDataContext in the direct-DbContext test path — ValidateDbTypeOnFirstUse skipped.
@@ -203,6 +218,8 @@ internal sealed partial class WorkflowEngine : IWorkflowEngine
         // #666: tests that don't care about cache sharing get a private per-instance cache;
         // production DI always supplies the process-wide singleton via the public constructor above.
         _graphProvider = graphProvider ?? new WorkflowGraphProvider();
+        // #676: same default-to-System fallback as the production constructor.
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     // ── StartAsync ────────────────────────────────────────────────────────────
@@ -308,6 +325,7 @@ internal sealed partial class WorkflowEngine : IWorkflowEngine
                     actorITCode: initiatorITCode,
                     beforeState: InstanceState.Draft.ToString(),
                     afterState: InstanceState.Running.ToString(),
+                    timeProvider: _timeProvider,
                     ct: innerCt);
 
                 await txStart.CommitAsync(innerCt);
@@ -582,7 +600,7 @@ internal sealed partial class WorkflowEngine : IWorkflowEngine
         if (activeNode.State == NodeState.Pending)
         {
             var activateRows = await GuardedTransition.ActivateNodeInstanceAsync(
-                Db, activeNode.ID, activeNode.RowVer, DateTime.UtcNow,
+                Db, activeNode.ID, activeNode.RowVer, _timeProvider.GetUtcNow().UtcDateTime,
                 generation: instance.Generation, ct: ct);
 
             if (activateRows == 0)
@@ -612,6 +630,7 @@ internal sealed partial class WorkflowEngine : IWorkflowEngine
                     actorITCode: null,
                     beforeState: NodeState.Pending.ToString(),
                     afterState: NodeState.Activated.ToString(),
+                    timeProvider: _timeProvider,
                     ct: ct);
             }
         }
@@ -634,7 +653,7 @@ internal sealed partial class WorkflowEngine : IWorkflowEngine
         // WF-20.2: arm timeout timer(s) for Approval nodes after tasks are minted.
         if (activeNode.NodeKind == NodeKind.Approval && nodeDef.Timeout is not null)
         {
-            var now20 = DateTime.UtcNow;
+            var now20 = _timeProvider.GetUtcNow().UtcDateTime;
             var approveMode = nodeDef.ApproveMode ?? ApproveMode.Sequential;
             if (approveMode == ApproveMode.Sequential)
             {
@@ -682,6 +701,7 @@ internal sealed partial class WorkflowEngine : IWorkflowEngine
                     beforeState: NodeState.Activated.ToString(),
                     afterState: "FailClosed",
                     reason: "InclusiveGateway: no outgoing branches matched.",
+                    timeProvider: _timeProvider,
                     ct: ct);
                 return WorkflowActionResult.FailClosedRouting;
             }
@@ -715,6 +735,7 @@ internal sealed partial class WorkflowEngine : IWorkflowEngine
                     beforeState: NodeState.Activated.ToString(),
                     afterState: "FailClosed",
                     reason: "No matching branch and no default target.",
+                    timeProvider: _timeProvider,
                     ct: ct);
 
                 return WorkflowActionResult.FailClosedRouting;
@@ -823,6 +844,7 @@ internal sealed partial class WorkflowEngine : IWorkflowEngine
                             actorITCode: null,
                             beforeState: NodeState.Activated.ToString(),
                             afterState: NodeState.CompletedApproved.ToString(),
+                            timeProvider: _timeProvider,
                             ct: innerCt);
 
                         // Instance-level event: Running → Approved.
@@ -833,6 +855,7 @@ internal sealed partial class WorkflowEngine : IWorkflowEngine
                             actorITCode: null,
                             beforeState: InstanceState.Running.ToString(),
                             afterState: InstanceState.Approved.ToString(),
+                            timeProvider: _timeProvider,
                             ct: innerCt);
 
                         await txAdvanceApproveEnd.CommitAsync(innerCt);
@@ -908,6 +931,7 @@ internal sealed partial class WorkflowEngine : IWorkflowEngine
                         actorITCode: null,
                         beforeState: NodeState.Activated.ToString(),
                         afterState: NodeState.CompletedApproved.ToString(),
+                        timeProvider: _timeProvider,
                         ct: innerCt);
 
                     await txAdvanceComplete.CommitAsync(innerCt);
@@ -946,6 +970,7 @@ internal sealed partial class WorkflowEngine : IWorkflowEngine
                 actorITCode: null,
                 beforeState: NodeState.Activated.ToString(),
                 afterState: NodeState.CompletedApproved.ToString(),
+                timeProvider: _timeProvider,
                 ct: ct);
 
             // Branches are now Pending — the outer drain loop will pick them up.

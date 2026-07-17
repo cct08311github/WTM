@@ -204,7 +204,7 @@ internal sealed partial class WorkflowEngine
                     insertionOrder = freshNode.TotalRequired; // append at end (pre-bump value)
                 }
 
-                var now = DateTime.UtcNow;
+                var now = _timeProvider.GetUtcNow().UtcDateTime;
                 var newTasks = new List<ApprovalTask>(delta);
                 for (int i = 0; i < delta; i++)
                 {
@@ -267,6 +267,7 @@ internal sealed partial class WorkflowEngine
                     reason: reason is not null
                         ? $"[加签:{position}→{addedCodes}] {reason}"
                         : $"加签:{position}→{addedCodes}",
+                    timeProvider: _timeProvider,
                     ct: innerCt);
 
                 await tx.CommitAsync(innerCt);
@@ -375,6 +376,7 @@ internal sealed partial class WorkflowEngine
                 beforeState: nodeInst.State.ToString(),
                 afterState: nodeInst.State.ToString(),
                 reason: $"[委托拒绝: delegatee already an approver] delegate→{delegateeITCode}",
+                timeProvider: _timeProvider,
                 ct: ct);
 
             return WorkflowActionResult.DelegateAlreadyParticipant;
@@ -496,6 +498,7 @@ internal sealed partial class WorkflowEngine
                     afterState: freshNode.State.ToString(),
                     reason: delegateDetail,
                     generation: (int)freshNode.Generation,
+                    timeProvider: _timeProvider,
                     ct: innerCt);
 
                 await tx.CommitAsync(innerCt);
@@ -605,6 +608,7 @@ internal sealed partial class WorkflowEngine
                     afterState: nodeSnap.State.ToString(),
                     reason: revokeDetail,
                     generation: (int)nodeSnap.Generation,
+                    timeProvider: _timeProvider,
                     ct: ct);
             }
             catch (Exception ex)

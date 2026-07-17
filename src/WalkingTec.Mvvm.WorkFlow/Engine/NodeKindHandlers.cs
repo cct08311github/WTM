@@ -90,15 +90,21 @@ internal sealed class CcHandler : INodeKindHandler
     private readonly IApproverResolver _resolver;
     private readonly ICcTenantValidator _tenantValidator;
     private readonly ILogger<CcHandler> _logger;
+    // #676: clock seam — trailing-optional DI parameter (same pattern as WorkflowEngine's
+    // graphProvider/timeProvider). Defaults to TimeProvider.System when the host has no
+    // TimeProvider registered, so behavior is identical to the pre-#676 raw DateTime.UtcNow call.
+    private readonly TimeProvider _timeProvider;
 
     public CcHandler(
         IApproverResolver resolver,
         ICcTenantValidator tenantValidator,
-        ILogger<CcHandler> logger)
+        ILogger<CcHandler> logger,
+        TimeProvider? timeProvider = null)
     {
         _resolver        = resolver        ?? throw new ArgumentNullException(nameof(resolver));
         _tenantValidator = tenantValidator ?? throw new ArgumentNullException(nameof(tenantValidator));
         _logger          = logger          ?? throw new ArgumentNullException(nameof(logger));
+        _timeProvider    = timeProvider ?? TimeProvider.System;
     }
 
     public async Task OnEnterAsync(NodeHandlerContext ctx)
@@ -106,7 +112,7 @@ internal sealed class CcHandler : INodeKindHandler
         var nodeDef  = ctx.NodeDef;
         var instance = ctx.ProcessInstance;
         var nodeInst = ctx.NodeInstance;
-        var now      = DateTime.UtcNow;
+        var now      = _timeProvider.GetUtcNow().UtcDateTime;
 
         // Collect candidate ITCodes from two sources (in priority order):
         // 1. The node's primary approverRule (resolves User/Role/ManagerChain).
@@ -311,10 +317,13 @@ internal sealed class ApprovalHandler : INodeKindHandler
 internal sealed class ParallelGatewayHandler : INodeKindHandler
 {
     private readonly ILogger<ParallelGatewayHandler> _logger;
+    // #676: clock seam — see CcHandler for the rationale/pattern.
+    private readonly TimeProvider _timeProvider;
 
-    public ParallelGatewayHandler(ILogger<ParallelGatewayHandler> logger)
+    public ParallelGatewayHandler(ILogger<ParallelGatewayHandler> logger, TimeProvider? timeProvider = null)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task OnEnterAsync(NodeHandlerContext ctx)
@@ -323,7 +332,7 @@ internal sealed class ParallelGatewayHandler : INodeKindHandler
         var instance = ctx.ProcessInstance;
         var db       = ctx.Db;
         var ct       = ctx.CancellationToken;
-        var now      = DateTime.UtcNow;
+        var now      = _timeProvider.GetUtcNow().UtcDateTime;
 
         // Collect all outgoing transitions from this gateway.
         var outgoing = ctx.Graph.Transitions
@@ -554,13 +563,17 @@ internal sealed class InclusiveGatewayHandler : INodeKindHandler
 {
     private readonly IRoutingEvaluator _routingEvaluator;
     private readonly ILogger<InclusiveGatewayHandler> _logger;
+    // #676: clock seam — see CcHandler for the rationale/pattern.
+    private readonly TimeProvider _timeProvider;
 
     public InclusiveGatewayHandler(
         IRoutingEvaluator routingEvaluator,
-        ILogger<InclusiveGatewayHandler> logger)
+        ILogger<InclusiveGatewayHandler> logger,
+        TimeProvider? timeProvider = null)
     {
         _routingEvaluator = routingEvaluator ?? throw new ArgumentNullException(nameof(routingEvaluator));
         _logger           = logger           ?? throw new ArgumentNullException(nameof(logger));
+        _timeProvider     = timeProvider ?? TimeProvider.System;
     }
 
     // Tracks the number of branches minted (set in OnEnterAsync; read in CanCompleteAsync).
@@ -572,7 +585,7 @@ internal sealed class InclusiveGatewayHandler : INodeKindHandler
         var instance = ctx.ProcessInstance;
         var db       = ctx.Db;
         var ct       = ctx.CancellationToken;
-        var now      = DateTime.UtcNow;
+        var now      = _timeProvider.GetUtcNow().UtcDateTime;
 
         // Deserialize FormDataJson for routing evaluation.
         IReadOnlyDictionary<string, object?> formData =

@@ -13,6 +13,8 @@
     <PackageReference Include="FluentAssertions" />
     <PackageReference Include="Microsoft.Data.Sqlite" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+    <!-- #676: FakeTimeProvider — replaces Task.Delay-based wall-clock TTL-expiry waits -->
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
     <!-- NPOI needed by ExcelEtlSourceTests to build .xlsx fixtures in-test -->
     <PackageReference Include="NPOI" />
     <!--

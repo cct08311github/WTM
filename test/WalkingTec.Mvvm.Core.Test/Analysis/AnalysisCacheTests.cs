@@ -2,10 +2,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Time.Testing;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Analysis;
@@ -79,11 +79,15 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         [TestMethod]
         public void MemoryCache_expired_entry_is_not_returned()
         {
+            // #676: FakeTimeProvider instead of Set(1ms) + Thread.Sleep(50) — deterministic,
+            // zero wall-clock dependency (MemoryAnalysisCache's TryGet is the authoritative
+            // expiry check against the injected TimeProvider; see MemoryAnalysisCache remarks).
+            var fakeTime = new FakeTimeProvider();
             var mc = new MemoryCache(new MemoryCacheOptions());
-            var cache = new MemoryAnalysisCache(mc);
+            var cache = new MemoryAnalysisCache(mc, timeProvider: fakeTime);
             cache.Set("SHORT", MakeResponse("SHORT"), ttl: TimeSpan.FromMilliseconds(1));
 
-            Thread.Sleep(50);
+            fakeTime.Advance(TimeSpan.FromMilliseconds(2));
 
             Assert.IsFalse(cache.TryGet("SHORT", out _));
         }
@@ -204,8 +208,11 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             ctx.SaveChanges();
 
             var whitelist = AnalysisFieldScanner.ScanModel(typeof(SaleRecord));
+            // #676: FakeTimeProvider instead of TTL=1ms + Thread.Sleep(50) — deterministic,
+            // zero wall-clock dependency (see MemoryAnalysisCache_expired_entry_is_not_returned).
+            var fakeTime = new FakeTimeProvider();
             var mc = new MemoryCache(new MemoryCacheOptions());
-            var cache = new MemoryAnalysisCache(mc);
+            var cache = new MemoryAnalysisCache(mc, timeProvider: fakeTime);
             // engine TTL 設為 1ms，快取應很快過期
             var engine = new AnalysisQueryEngine(GroupByStrategyResolver.Default, cache,
                 defaultTtl: TimeSpan.FromMilliseconds(1));
@@ -226,7 +233,7 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
             Assert.AreEqual(1, result1.Rows.Count);
 
             // 等待 TTL 過期
-            Thread.Sleep(50);
+            fakeTime.Advance(TimeSpan.FromMilliseconds(2));
 
             // 新增資料後，快取已過期，第二次應重新查詢
             ctx.SaleRecords.Add(new SaleRecord { ID = Guid.NewGuid(), Region = "南", Amount = 200m });

@@ -96,7 +96,7 @@ internal sealed partial class WorkflowEngine
             }
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
 
         // 8+9. Sequential mode: atomic claim + node/instance rejection in ONE transaction (WF-373).
         //      All/Any mode: standalone claim CAS below (unchanged pre-WF-373 path).
@@ -418,6 +418,7 @@ internal sealed partial class WorkflowEngine
                                 beforeState: TaskState.Pending.ToString(),
                                 afterState: TaskState.Rejected.ToString(),
                                 reason: reason,
+                                timeProvider: _timeProvider,
                                 ct: innerCt);
                         }
                         return WorkflowActionResult.Advanced;
@@ -468,6 +469,7 @@ internal sealed partial class WorkflowEngine
                                 beforeState: TaskState.Pending.ToString(),
                                 afterState: TaskState.Rejected.ToString(),
                                 reason: reason,
+                                timeProvider: _timeProvider,
                                 ct: innerCt);
                         }
                         return WorkflowActionResult.Advanced;
@@ -580,6 +582,7 @@ internal sealed partial class WorkflowEngine
                 beforeState: NodeState.Activated.ToString(),
                 afterState: NodeState.CompletedRejected.ToString(),
                 reason: reason,
+                timeProvider: _timeProvider,
                 ct: ct);
         }
 
@@ -613,6 +616,7 @@ internal sealed partial class WorkflowEngine
             beforeState: InstanceState.Running.ToString(),
             afterState: InstanceState.Rejected.ToString(),
             reason: $"Rejected by '{actorITCode}'. RejectPolicy={rejectPolicy}. {reason}",
+            timeProvider: _timeProvider,
             ct: ct);
 
         // Commit the transaction (Task cancels + Node CAS + events + Instance CAS all atomic).

@@ -112,7 +112,13 @@ public static class ServiceCollectionExtensions
             new DelegationResolvingDecorator(
                 sp.GetRequiredService<DefaultApproverResolver>(),
                 sp.GetRequiredService<IOptions<WorkFlowOptions>>(),
-                sp.GetRequiredService<ILogger<DelegationResolvingDecorator>>()));
+                sp.GetRequiredService<ILogger<DelegationResolvingDecorator>>(),
+                // #676: explicit resolve — this is a factory delegate, not auto constructor-injection,
+                // so TimeProvider must be pulled from the container by hand to share the same clock
+                // as WorkflowEngine and the other DI-constructed handlers (GetService, not
+                // GetRequiredService — null is a valid "no host TimeProvider registered" case and the
+                // decorator's own constructor already defaults to TimeProvider.System).
+                sp.GetService<TimeProvider>()));
         services.AddScoped<SequentialApprovalHandler>(); // WF-8 串签
         services.AddScoped<AllApprovalHandler>();        // WF-9 会签
         services.AddScoped<AnyApprovalHandler>();        // WF-10 或签

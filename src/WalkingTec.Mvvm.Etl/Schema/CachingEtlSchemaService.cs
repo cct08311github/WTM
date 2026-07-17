@@ -34,6 +34,21 @@ public sealed class CachingEtlSchemaService : IEtlSchemaService
     private readonly IEtlSchemaService _inner;
     private readonly IMemoryCache _cache;
     private readonly TimeSpan _ttl;
+    // #676: defaults to TimeProvider.System — identical behavior to the pre-#676 code, which
+    // relied entirely on IMemoryCache's own real-wall-clock expiration (see remarks on
+    // GetOrCreateWithExpiryAsync for why that native expiration is no longer authoritative).
+    private readonly TimeProvider _timeProvider;
+
+    // Wraps a cached value with the absolute expiry computed when it was stored, so
+    // GetOrCreateWithExpiryAsync can authoritatively decide "still fresh?" against
+    // _timeProvider instead of trusting IMemoryCache's own (non-TimeProvider-aware,
+    // ISystemClock-based) internal expiration timer. Same pattern as
+    // WalkingTec.Mvvm.Core.Analysis.MemoryAnalysisCache.
+    private sealed class CacheEntry<T>(T value, DateTimeOffset expiresAt)
+    {
+        public T Value { get; } = value;
+        public DateTimeOffset ExpiresAt { get; } = expiresAt;
+    }
 
     /// <summary>
     /// Creates a caching decorator wrapping <paramref name="inner"/>.
@@ -41,14 +56,19 @@ public sealed class CachingEtlSchemaService : IEtlSchemaService
     /// <param name="inner">The inner (non-caching) schema service.</param>
     /// <param name="cache">Memory cache instance (injected from DI or created ad-hoc).</param>
     /// <param name="ttl">Cache TTL; <c>null</c> uses <see cref="DefaultTtlSeconds"/>.</param>
+    /// <param name="timeProvider">
+    /// #676: clock seam for TTL expiry. Optional — defaults to <see cref="TimeProvider.System"/>.
+    /// </param>
     public CachingEtlSchemaService(
         IEtlSchemaService inner,
         IMemoryCache cache,
-        TimeSpan? ttl = null)
+        TimeSpan? ttl = null,
+        TimeProvider? timeProvider = null)
     {
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
         _cache = cache ?? throw new ArgumentNullException(nameof(cache));
         _ttl = ttl ?? TimeSpan.FromSeconds(DefaultTtlSeconds);
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <inheritdoc/>
@@ -61,11 +81,9 @@ public sealed class CachingEtlSchemaService : IEtlSchemaService
         // so that different databases on the same host are cached separately,
         // without persisting the full connection string (which may contain credentials).
         var cacheKey = $"etl-schema:tables:{CsKey(connectionString)}:{schemaFilter ?? "*"}";
-        return _cache.GetOrCreateAsync(cacheKey, entry =>
-        {
-            entry.AbsoluteExpirationRelativeToNow = _ttl;
-            return _inner.ListTablesAsync(connectionString, schemaFilter, cancellationToken)!;
-        })!;
+        return GetOrCreateWithExpiryAsync(
+            cacheKey,
+            () => _inner.ListTablesAsync(connectionString, schemaFilter, cancellationToken));
     }
 
     /// <inheritdoc/>
@@ -76,11 +94,37 @@ public sealed class CachingEtlSchemaService : IEtlSchemaService
         CancellationToken cancellationToken = default)
     {
         var cacheKey = $"etl-schema:columns:{CsKey(connectionString)}:{schemaName ?? "*"}:{tableName}";
-        return _cache.GetOrCreateAsync(cacheKey, entry =>
+        return GetOrCreateWithExpiryAsync(
+            cacheKey,
+            () => _inner.ListColumnsAsync(connectionString, tableName, schemaName, cancellationToken));
+    }
+
+    /// <summary>
+    /// Get-or-create with an explicit, TimeProvider-driven expiry check (#676).
+    ///
+    /// <para><see cref="Microsoft.Extensions.Caching.Memory.MemoryCache"/>'s own
+    /// <c>AbsoluteExpirationRelativeToNow</c> expiration is driven by
+    /// <c>MemoryCacheOptions.Clock</c> (the legacy <c>ISystemClock</c> abstraction, not
+    /// <see cref="TimeProvider"/> — the pinned package version exposes no TimeProvider seam), so
+    /// it cannot be faked deterministically in tests. Every entry is stamped with its own
+    /// absolute expiry computed from <see cref="_timeProvider"/> and re-checked explicitly on
+    /// every read — this is the authoritative expiry check. <c>IMemoryCache</c>'s own TTL is
+    /// still set (using the same <see cref="_ttl"/>) purely as a real-wall-clock backstop so
+    /// entries are still reclaimed for memory pressure; it is never relied upon for
+    /// correctness.</para>
+    /// </summary>
+    private async Task<T> GetOrCreateWithExpiryAsync<T>(string cacheKey, Func<Task<T>> factory)
+    {
+        if (_cache.TryGetValue(cacheKey, out CacheEntry<T>? entry) && entry is not null
+            && _timeProvider.GetUtcNow() < entry.ExpiresAt)
         {
-            entry.AbsoluteExpirationRelativeToNow = _ttl;
-            return _inner.ListColumnsAsync(connectionString, tableName, schemaName, cancellationToken)!;
-        })!;
+            return entry.Value;
+        }
+
+        var value = await factory().ConfigureAwait(false);
+        var newEntry = new CacheEntry<T>(value, _timeProvider.GetUtcNow() + _ttl);
+        _cache.Set(cacheKey, newEntry, _ttl);
+        return value;
     }
 
     /// <summary>

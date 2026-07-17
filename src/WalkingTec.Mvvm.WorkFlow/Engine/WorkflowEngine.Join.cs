@@ -108,6 +108,7 @@ internal sealed partial class WorkflowEngine
                         actorITCode: null,
                         beforeState: NodeState.Activated.ToString(),
                         afterState: NodeState.CompletedApproved.ToString(),
+                        timeProvider: _timeProvider,
                         ct: innerCt);
                     if (ownedTx is not null) await ownedTx.CommitAsync(innerCt);
                     return WorkflowActionResult.Advanced;
@@ -120,7 +121,7 @@ internal sealed partial class WorkflowEngine
                 if (joinNode.State == NodeState.Pending)
                 {
                     var activateJoinRows = await GuardedTransition.ActivateNodeInstanceAsync(
-                        Db, joinNode.ID, joinNode.RowVer, DateTime.UtcNow,
+                        Db, joinNode.ID, joinNode.RowVer, _timeProvider.GetUtcNow().UtcDateTime,
                         generation: instance.Generation, ct: innerCt);
 
                     if (activateJoinRows == 1)
@@ -143,6 +144,7 @@ internal sealed partial class WorkflowEngine
                         actorITCode: null,
                         beforeState: NodeState.Activated.ToString(),
                         afterState: NodeState.CompletedApproved.ToString(),
+                        timeProvider: _timeProvider,
                         ct: innerCt);
                     if (ownedTx is not null) await ownedTx.CommitAsync(innerCt);
                     return WorkflowActionResult.Advanced;
@@ -172,6 +174,7 @@ internal sealed partial class WorkflowEngine
                     actorITCode: null,
                     beforeState: NodeState.Activated.ToString(),
                     afterState: NodeState.CompletedApproved.ToString(),
+                    timeProvider: _timeProvider,
                     ct: innerCt);
 
                 // Append: join activate log (only if we won the activation CAS).
@@ -184,6 +187,7 @@ internal sealed partial class WorkflowEngine
                         actorITCode: null,
                         beforeState: NodeState.Pending.ToString(),
                         afterState: NodeState.Activated.ToString(),
+                        timeProvider: _timeProvider,
                         ct: innerCt);
                 }
 
@@ -206,6 +210,7 @@ internal sealed partial class WorkflowEngine
                     actorITCode: null,
                     beforeState: NodeState.Activated.ToString(),
                     afterState: NodeState.CompletedApproved.ToString(),
+                    timeProvider: _timeProvider,
                     ct: innerCt);
 
                 var joinSuccessorKey = graph.Transitions
@@ -343,6 +348,7 @@ internal sealed partial class WorkflowEngine
                 beforeState: NodeState.Activated.ToString(),
                 afterState: NodeState.CompletedRejected.ToString(),
                 reason: "Join unsatisfiable: all feeding branches died without arriving.",
+                timeProvider: _timeProvider,
                 ct: ct);
         }
     }

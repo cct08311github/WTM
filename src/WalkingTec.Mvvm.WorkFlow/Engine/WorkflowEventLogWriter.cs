@@ -17,7 +17,10 @@
 //   • AppendAsync allocates the next Seq via AllocateSeqAsync (retry loop, max 5 attempts).
 //   • If the DbContext has an ambient transaction the INSERT commits with it; otherwise a
 //     new default-isolation transaction wraps just the INSERT.
-//   • OccurredUtc sourced from DateTime.UtcNow (proper clock injection deferred to WF-14).
+//   • OccurredUtc sourced from an injected TimeProvider (#676: clock injection wired — was
+//     previously deferred to WF-14 as a raw DateTime.UtcNow call). Callers pass their own
+//     TimeProvider (WorkflowEngine._timeProvider); defaults to TimeProvider.System when omitted
+//     so pre-#676 callers keep identical behavior.
 
 using System;
 using System.Linq;
@@ -74,6 +77,13 @@ public static class WorkflowEventLogWriter
     /// Null for pre-Wave-3 callers and instance-level events not tied to a generation.
     /// Stored for audit grouping only — never enters Seq math or control-flow branching.
     /// </param>
+    /// <param name="timeProvider">
+    /// #676: clock seam for <see cref="WorkflowEventLog.OccurredUtc"/>. Optional — defaults to
+    /// <see cref="TimeProvider.System"/> when the caller does not supply one (identical behavior
+    /// to the pre-#676 raw <c>DateTime.UtcNow</c> call). Engine callers pass their own
+    /// <c>WorkflowEngine._timeProvider</c> so the audit-log timestamp matches every other
+    /// timestamp written by the same engine call.
+    /// </param>
     /// <param name="ct">Cancellation token.</param>
     public static async Task AppendAsync(
         DbContext db,
@@ -86,6 +96,7 @@ public static class WorkflowEventLogWriter
         string? afterState,
         string? reason = null,
         int? generation = null,
+        TimeProvider? timeProvider = null,
         CancellationToken ct = default)
     {
         // Allocate the next Seq value from the per-instance counter.
@@ -117,7 +128,7 @@ public static class WorkflowEventLogWriter
                 AfterState = afterState,
                 Reason = reason,
                 Generation = generation,
-                OccurredUtc = DateTime.UtcNow,
+                OccurredUtc = (timeProvider ?? TimeProvider.System).GetUtcNow().UtcDateTime,
             };
 
             db.Set<WorkflowEventLog>().Add(logEntry);
@@ -166,7 +177,7 @@ public static class WorkflowEventLogWriter
                     AfterState = afterState,
                     Reason = reason,
                     Generation = generation,
-                    OccurredUtc = DateTime.UtcNow,
+                    OccurredUtc = (timeProvider ?? TimeProvider.System).GetUtcNow().UtcDateTime,
                 };
 
                 db.Set<WorkflowEventLog>().Add(logEntry);

@@ -113,6 +113,12 @@ internal sealed class DelegationResolvingDecorator : IApproverResolver, IDelegat
     private readonly IApproverResolver _inner;
     private readonly WorkFlowOptions _options;
     private readonly ILogger<DelegationResolvingDecorator> _logger;
+    // #676: clock seam — trailing-optional DI parameter (same pattern as WorkflowEngine's
+    // graphProvider/timeProvider). This decorator is constructed via a factory delegate in
+    // ServiceCollectionExtensions.AddWtmWorkFlow, which explicitly resolves TimeProvider from
+    // the scoped IServiceProvider so it shares the same clock as WorkflowEngine when the host
+    // registers one; defaults to TimeProvider.System otherwise (identical to pre-#676 behavior).
+    private readonly TimeProvider _timeProvider;
 
     // Provenance from the most recent ResolveAsync call (scoped — one instance per request).
     private IReadOnlyDictionary<string, DelegationProvenance>? _lastProvenance;
@@ -124,11 +130,13 @@ internal sealed class DelegationResolvingDecorator : IApproverResolver, IDelegat
     public DelegationResolvingDecorator(
         IApproverResolver inner,
         IOptions<WorkFlowOptions> options,
-        ILogger<DelegationResolvingDecorator> logger)
+        ILogger<DelegationResolvingDecorator> logger,
+        TimeProvider? timeProvider = null)
     {
         _inner   = inner   ?? throw new ArgumentNullException(nameof(inner));
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
         _logger  = logger  ?? throw new ArgumentNullException(nameof(logger));
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <inheritdoc/>
@@ -158,7 +166,7 @@ internal sealed class DelegationResolvingDecorator : IApproverResolver, IDelegat
             return inner;
         }
 
-        var now = DateTime.UtcNow; // single app-supplied clock; never SQL CURRENT_TIMESTAMP
+        var now = _timeProvider.GetUtcNow().UtcDateTime; // single app-supplied clock; never SQL CURRENT_TIMESTAMP
         var definitionCode = nodeInstance.DefinitionCode; // scope filter
         var tenantCode     = nodeInstance.TenantCode;
 

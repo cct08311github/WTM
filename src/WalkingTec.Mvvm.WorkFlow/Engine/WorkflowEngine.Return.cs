@@ -175,6 +175,7 @@ internal sealed partial class WorkflowEngine
                     beforeState: InstanceState.Running.ToString(),
                     afterState: InstanceState.Withdrawn.ToString(),
                     reason: reason,
+                    timeProvider: _timeProvider,
                     ct: innerCt);
 
                 await txWithdraw.CommitAsync(innerCt);
@@ -275,7 +276,7 @@ internal sealed partial class WorkflowEngine
                 $"Task {taskId} is in state {task.State}, not Pending.");
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
 
         // 7. CAS: claim the trigger task as Rejected (the task that triggered the return).
         // FIX-3: AtAction window applies to ALL actions by the delegatee, not just Approve.
@@ -429,6 +430,7 @@ internal sealed partial class WorkflowEngine
                         beforeState: InstanceState.Running.ToString(),
                         afterState: InstanceState.Draft.ToString(),
                         reason: reason,
+                        timeProvider: _timeProvider,
                         ct: innerCt);
                 }
 
@@ -655,7 +657,7 @@ internal sealed partial class WorkflowEngine
 
         int maxReturnLoops = _options.MaxReturnLoops;
         // WF-20.2: use configurable ReturningLeaseTtl (default 30 min) — zero behavior change.
-        var leaseExpiry = DateTime.UtcNow.Add(_options.ReturningLeaseTtl);
+        var leaseExpiry = _timeProvider.GetUtcNow().UtcDateTime.Add(_options.ReturningLeaseTtl);
 
         // Compute the span of node keys that must be superseded.
         var spanNodeKeys = WorkflowGraphValidator.ComputeReturnSpan(graph, targetNodeKey, triggerNode.NodeKey);
@@ -804,7 +806,7 @@ internal sealed partial class WorkflowEngine
                 // state flip are atomic.  If the window has expired, we still proceed with the return
                 // (BeginReturnAsync already won the linearization point in txA), but we log the anomaly and
                 // stamp WindowVerifiedUtc only on success.
-                var stepNow = DateTime.UtcNow;
+                var stepNow = _timeProvider.GetUtcNow().UtcDateTime;
                 bool isAtActionDelegatedStep3b = _options.DelegationWindowMode == DelegationWindowMode.AtAction
                                                  && task.DelegationExpiresUtc.HasValue;
                 int claimedRows;
@@ -1018,6 +1020,7 @@ internal sealed partial class WorkflowEngine
                     afterState: InstanceState.Running.ToString(),
                     reason: $"ReturnToNode '{targetNodeKey}'. {reason}",
                     generation: (int)gNew,
+                    timeProvider: _timeProvider,
                     ct: innerCt);
 
                 await txB.CommitAsync(innerCt);

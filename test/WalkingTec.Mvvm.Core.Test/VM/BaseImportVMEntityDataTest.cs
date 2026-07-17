@@ -182,6 +182,20 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             return vm;
         }
 
+        // #676: synchronous IProgress<T> stub. `System.Progress<T>` captures the calling
+        // thread's SynchronizationContext and marshals Report() callbacks onto it
+        // asynchronously (posted, not invoked inline) — under MSTest there is usually no
+        // captured context, so it schedules onto the ThreadPool, which made the assertion
+        // below racy and required a `Thread.Sleep(50)` "give the callback time to fire" hack.
+        // This stub invokes the handler synchronously on the calling thread instead, so the
+        // test is deterministic with zero wall-clock dependency.
+        private sealed class SyncProgress<T> : IProgress<T>
+        {
+            private readonly Action<T> _handler;
+            public SyncProgress(Action<T> handler) => _handler = handler;
+            public void Report(T value) => _handler(value);
+        }
+
         // ─── SetEntityData: basic population ─────────────────────────────
 
         [TestMethod]
@@ -350,11 +364,8 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             vm.InjectTemplateData(rows);
 
             var reports = new List<ImportProgress>();
-            var progress = new Progress<ImportProgress>(p => reports.Add(p));
+            var progress = new SyncProgress<ImportProgress>(p => reports.Add(p));
             vm.BatchSaveData(progress);
-
-            // Give the Progress<T> callbacks time to fire (they post to sync context)
-            System.Threading.Thread.Sleep(50);
 
             Assert.IsTrue(reports.Count > 0, "Progress should have been reported at least once");
         }

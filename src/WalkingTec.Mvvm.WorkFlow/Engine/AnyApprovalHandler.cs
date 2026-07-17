@@ -55,15 +55,19 @@ internal sealed class AnyApprovalHandler : INodeKindHandler
     private readonly IApproverResolver _resolver;
     private readonly WorkFlowOptions _options;
     private readonly ILogger<AnyApprovalHandler> _logger;
+    // #676: clock seam — see NodeKindHandlers.CcHandler for the rationale/pattern.
+    private readonly TimeProvider _timeProvider;
 
     public AnyApprovalHandler(
         IApproverResolver resolver,
         IOptions<WorkFlowOptions> options,
-        ILogger<AnyApprovalHandler> logger)
+        ILogger<AnyApprovalHandler> logger,
+        TimeProvider? timeProvider = null)
     {
         _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
         _options  = options?.Value ?? throw new ArgumentNullException(nameof(options));
         _logger   = logger ?? throw new ArgumentNullException(nameof(logger));
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     // ── OnEnterAsync ──────────────────────────────────────────────────────────
@@ -126,7 +130,7 @@ internal sealed class AnyApprovalHandler : INodeKindHandler
         var delegationCtx = _resolver as IDelegationContextProvider;
         var provenance    = delegationCtx?.LastResolutionProvenance;
 
-        var now   = DateTime.UtcNow;
+        var now   = _timeProvider.GetUtcNow().UtcDateTime;
         var tasks = new List<ApprovalTask>(total);
 
         for (int i = 0; i < total; i++)

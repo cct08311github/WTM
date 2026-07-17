@@ -89,13 +89,18 @@ namespace WalkingTec.Mvvm.Mvc.Auth
                 return null;
             }
 
-            if (existing.IsExpired)
+            // #676: route the expiry check through _timeProvider instead of the entity's own
+            // RefreshTokenEntity.IsExpired (which reads DateTime.UtcNow directly) — this is an
+            // advisory pre-check only (the authoritative enforcement is the ExecuteUpdateAsync
+            // `x.ExpiresUtc > now` predicate below), but using the same clock for both avoids a
+            // seeded FakeTimeProvider test disagreeing with itself between the two checks.
+            var now = _timeProvider.GetUtcNow().UtcDateTime;
+            if (now >= existing.ExpiresUtc)
                 return null;
 
             // ── Atomic claim via ExecuteUpdateAsync ───────────────────────────────
             // Only the first concurrent caller wins; any later caller that presents
             // the same token finds RevokedUtc already set and gets claimed == 0.
-            var now = _timeProvider.GetUtcNow().UtcDateTime;
             var newTokenString = GenerateRefreshTokenString();
 
             var claimed = await dbSet
@@ -121,6 +126,9 @@ namespace WalkingTec.Mvvm.Mvc.Auth
                 Token = newTokenString,
                 ITCode = existing.ITCode,
                 TenantCode = existing.TenantCode,
+                // #676: explicit CreatedUtc stamp — overrides RefreshTokenEntity's own
+                // `= DateTime.UtcNow` field initializer so this row's clock matches _timeProvider.
+                CreatedUtc = now,
                 ExpiresUtc = now.AddDays(RefreshTokenExpiryDays),
                 CreatedByIp = ipAddress
             };
@@ -233,11 +241,15 @@ namespace WalkingTec.Mvvm.Mvc.Auth
         {
             using var scope = _sp.CreateScope();
             var dc = scope.ServiceProvider.GetService<IDataContext>() as DbContext;
+            var createdUtc = _timeProvider.GetUtcNow().UtcDateTime;
             var entity = new RefreshTokenEntity
             {
                 Token = GenerateRefreshTokenString(),
                 ITCode = itCode, TenantCode = tenantCode,
-                ExpiresUtc = _timeProvider.GetUtcNow().UtcDateTime.AddDays(RefreshTokenExpiryDays),
+                // #676: explicit CreatedUtc stamp — overrides RefreshTokenEntity's own
+                // `= DateTime.UtcNow` field initializer so this row's clock matches _timeProvider.
+                CreatedUtc = createdUtc,
+                ExpiresUtc = createdUtc.AddDays(RefreshTokenExpiryDays),
                 CreatedByIp = ipAddress
             };
             if (dc != null)
