@@ -391,36 +391,67 @@ namespace WalkingTec.Mvvm.Core
             return DoLoginAsync(username, password, tenant).GetAwaiter().GetResult();
         }
 
-        public async Task<Token?> RefreshTokenAsync()
+        /// <summary>
+        /// SECURITY (#721): this no-argument overload used to reissue a brand-new token
+        /// pair purely from <see cref="LoginUserInfo"/> identity, completely ignoring
+        /// whatever refresh token (if any) the caller actually presented — an auth
+        /// bypass that let anyone holding a still-valid access token mint fresh tokens
+        /// indefinitely, with the entire <see cref="ITokenService"/> rotation/replay-guard
+        /// machinery dead on this path. It now always rejects. Use
+        /// <see cref="RefreshTokenAsync(string?)"/>, which validates the presented
+        /// refresh token (or forwards it to the mainhost for federation frontends)
+        /// before issuing anything. Kept only for binary/source compatibility.
+        /// </summary>
+        [Obsolete("Insecure: performed identity-based reissue that ignored the presented refresh token (#721 auth bypass). Always rejects now. Use RefreshTokenAsync(string refreshToken).")]
+        public Task<Token?> RefreshTokenAsync()
         {
-            if (LoginUserInfo == null)
-            {
-                return null!;
-            }
-            string rt = null;
-            if (ConfigInfo?.HasMainHost == true && LoginUserInfo?.CurrentTenant == null)
-            {
-                var r = await CallAPI<Token>("mainhost", $"/api/_account/RefreshToken", HttpMethodEnum.POST, new { });
-                rt = r?.Data?.AccessToken;
-            }
-            else
-            {
-                rt = LoginUserInfo?.RemoteToken;
-            }
-            var _authService = ServiceProvider?.GetRequiredService<ITokenService>();
-            var rv = await _authService.IssueTokenAsync(new LoginUserInfo
-            {
-                ITCode = LoginUserInfo?.ITCode,
-                TenantCode = LoginUserInfo?.TenantCode,
-                RemoteToken = rt
-            });
-            return rv;
+            return Task.FromResult<Token?>(null);
         }
 
-        [Obsolete("Use RefreshTokenAsync to avoid ThreadPool starvation. RefreshToken blocks threads on every token refresh.")]
+        /// <summary>
+        /// Refreshes a token pair by validating the caller-presented <paramref name="refreshToken"/>.
+        /// This is the sanctioned refresh path (#721 security fix) — a bogus, never-issued,
+        /// expired, or already-rotated refresh token is rejected (returns <c>null</c>); it
+        /// never reissues purely from <see cref="LoginUserInfo"/> identity.
+        /// </summary>
+        /// <param name="refreshToken">The refresh token the caller is presenting.</param>
+        /// <returns>
+        /// A newly issued <see cref="Token"/> pair (with the presented refresh token rotated)
+        /// when <paramref name="refreshToken"/> validates successfully; otherwise <c>null</c>.
+        /// </returns>
+        public async Task<Token?> RefreshTokenAsync(string? refreshToken)
+        {
+            if (string.IsNullOrEmpty(refreshToken))
+            {
+                return null;
+            }
+
+            if (ConfigInfo?.HasMainHost == true && LoginUserInfo?.CurrentTenant == null)
+            {
+                // Federation frontend: this host has no RefreshTokenEntity DB of its own,
+                // so it cannot validate the token locally. Forward the ACTUAL presented
+                // token to the mainhost's hardened endpoint — never an empty body — and
+                // let the mainhost validate/rotate it (#721).
+                var r = await CallAPI<Token>("mainhost", "/api/_account/refreshtoken", HttpMethodEnum.POST,
+                    new { RefreshToken = refreshToken });
+                return r?.Data;
+            }
+
+            var _authService = ServiceProvider?.GetRequiredService<ITokenService>();
+            if (_authService == null)
+            {
+                return null;
+            }
+            var ip = HttpContext?.Connection?.RemoteIpAddress?.ToString();
+            return await _authService.RefreshTokenAsync(refreshToken, ip);
+        }
+
+        [Obsolete("Insecure and blocks threads: performed identity-based reissue that ignored the presented refresh token (#721 auth bypass). Always rejects now. Use RefreshTokenAsync(string refreshToken).")]
         public Token? RefreshToken()
         {
+#pragma warning disable CS0618 // intentionally calling the deprecated no-arg async overload
             return RefreshTokenAsync().GetAwaiter().GetResult();
+#pragma warning restore CS0618
         }
 
         public T ReadFromCache<T>(string key, Func<T> setFunc, int? timeout = null)

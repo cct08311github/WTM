@@ -62,7 +62,10 @@
             else
             {
                 var refreshtoken = await GetRefreshToken();
-                var rv = await WtmBlazor.Api.CallAPI<DynamicData>($"/api/_account/RefreshToken?refreshToken={refreshtoken}", HttpMethodEnum.POST, new { });
+                // #721: the presented refresh token must travel in the JSON body — the
+                // framework's hardened refresh endpoint validates it via ITokenService and
+                // rejects a bogus/missing token; it is never accepted as a query string.
+                var rv = await WtmBlazor.Api.CallAPI<DynamicData>("/api/_account/refreshtoken", HttpMethodEnum.POST, new { RefreshToken = refreshtoken });
                 if (rv.StatusCode == System.Net.HttpStatusCode.OK)
                 {
                     var t = rv.Data.Fields["access_token"].ToString();

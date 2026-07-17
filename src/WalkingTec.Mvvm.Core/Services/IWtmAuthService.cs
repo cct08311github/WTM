@@ -1,4 +1,5 @@
 #nullable enable
+using System;
 using System.Linq;
 using System.Threading.Tasks;
 using WalkingTec.Mvvm.Core.Auth;
@@ -40,9 +41,40 @@ namespace WalkingTec.Mvvm.Core.Services
             string? password);
 
         /// <summary>
-        /// Refresh the current user's JWT token.
+        /// SECURITY (#721): this overload used to reissue a brand-new token pair purely
+        /// from <paramref name="loginUser"/> identity, completely ignoring whatever
+        /// refresh token (if any) the caller actually presented — an auth bypass that let
+        /// anyone holding a still-valid access token mint fresh tokens indefinitely, with
+        /// the entire <see cref="ITokenService"/> rotation/replay-guard machinery dead on
+        /// this path. It now always rejects (returns <c>null</c>). Use
+        /// <see cref="RefreshTokenAsync(string?, LoginUserInfo?, ITokenService, IWtmApiClient?, bool)"/>,
+        /// which validates the presented refresh token (or forwards it to the mainhost for
+        /// federation frontends) before issuing anything. Kept only for source/binary
+        /// compatibility.
         /// </summary>
+        [Obsolete("Insecure: performed identity-based reissue that ignored the presented refresh token (#721 auth bypass). Always rejects now. Use RefreshTokenAsync(string, LoginUserInfo, ITokenService, IWtmApiClient, bool).")]
         Task<Token?> RefreshTokenAsync(
+            LoginUserInfo? loginUser,
+            ITokenService tokenService,
+            IWtmApiClient? apiClient,
+            bool hasMainHost);
+
+        /// <summary>
+        /// Refreshes a token pair by validating the caller-presented <paramref name="refreshToken"/>.
+        /// This is the sanctioned refresh path (#721 security fix) — a bogus, never-issued,
+        /// expired, or already-rotated refresh token is rejected (returns <c>null</c>); it
+        /// never reissues purely from <paramref name="loginUser"/> identity. For federation
+        /// frontends (<paramref name="hasMainHost"/> true with no current tenant) the real
+        /// presented token is forwarded to the mainhost's hardened endpoint for validation —
+        /// never an empty body.
+        /// </summary>
+        /// <param name="refreshToken">The refresh token the caller is presenting.</param>
+        /// <param name="loginUser">The caller's current identity (used only for federation routing).</param>
+        /// <param name="tokenService">The token service that performs local validation/rotation.</param>
+        /// <param name="apiClient">API client used to forward the request to the mainhost when federated.</param>
+        /// <param name="hasMainHost">Whether this host is a federation frontend of a mainhost.</param>
+        Task<Token?> RefreshTokenAsync(
+            string? refreshToken,
             LoginUserInfo? loginUser,
             ITokenService tokenService,
             IWtmApiClient? apiClient,

@@ -2081,45 +2081,48 @@ async def tc_32_jwt_refresh_rotation_replay(page, **_):
     優先度: P1
     預估執行: 5s
 
-    驗證 /api/_account/LoginJwt 簽發 access/refresh token pair，
-    以及 /api/_account/refreshtoken 端點目前實際可達的行為。
+    驗證 /api/_account/LoginJwt 簽發 access/refresh token pair，以及
+    /api/_account/refreshtoken 端點在 #721 修復後的行為。
 
-    KNOWN-FINDING（本測試撰寫過程中發現，2026-07-17 對照 live demo 實測）：
-    框架內有兩個控制器都在處理 POST /api/_account/refreshtoken 這條路由：
-      - AccountController.RefreshToken(string refreshToken)
-        （demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/AccountController.cs）：
-        [AllRights]，需要已認證身分（cookie 或 Bearer），完全忽略傳入的
-        refreshToken 參數值，直接依目前登入者身分重新核發一組新 token。
-      - _FrameworkController.RefreshToken([FromBody] RefreshTokenRequest req)
-        （src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs）：[AllowAnonymous]，
-        呼叫 ITokenService.RefreshTokenAsync —— 真正做 atomic rotation +
-        reuse-attack chain revocation 的實作（見 TokenService.cs、
-        test/.../Security/RefreshTokenAtomicRotationTests.cs、
-        src/WalkingTec.Mvvm.Mvc.Tests/Security/TokenChainSecurityTests.cs）。
+    背景（#721 安全修復，本測試原始版本撰寫於 #681，當時捕捉的是修復前的
+    漏洞行為 —— 現已更新為驗證修復後的正確行為）：
+    修復前，demo 的 AccountController.RefreshToken（[AllRights]，需先認證）
+    與框架的 _FrameworkController.RefreshToken（[AllowAnonymous]）共用同一條
+    路由樣板（"api/_account/refreshtoken"，ASP.NET Core 路由比對 case-
+    insensitive），請求一律落在 demo 較舊、較簡單的實作 —— 它完全忽略傳入的
+    refreshToken 值，直接依目前登入者身分（Bearer/cookie）重新核發一組新
+    token，形同放行任何字串當 refresh token。#721 移除了 demo 這個 shadow
+    action，讓 _FrameworkController.RefreshToken 成為唯一端點：真正呼叫
+    ITokenService.RefreshTokenAsync 驗證「呼叫者實際提交的 refreshToken 值」，
+    無效／從未核發／已輪替過的 token 一律拒絕核發，且完全不需要 Bearer
+    access token（[AllowAnonymous] 是正確語意 —— refresh 本來就該只憑
+    refresh token 本身，不該要求呼叫者手上還有一個尚未過期的 access token）。
+    詳見 test/WalkingTec.Mvvm.Api.Test/RefreshTokenApiTests.cs（#721 authoritative
+    HTTP-level 回歸測試）。
 
-    兩者的路由樣板在 ASP.NET Core 預設 case-insensitive 比對下完全相同
-    （"api/_account/refreshtoken" vs "api/_Account/RefreshToken"）。實測顯示
-    請求一律落在 AccountController 這個較舊、較簡單的實作 —— 也就是說
-    _FrameworkController 那組有完整單元/整合測試覆蓋、文件宣稱有
-    replay-guard 的版本，在目前的路由設定下永遠不會被呼叫到。可觀察到的
-    症狀：
-      1. 不帶身分呼叫該端點一律 401（即使 _FrameworkController 版本標記為
-         [AllowAnonymous]，因為請求根本沒有被路由過去那個 action）。
-      2. 帶有效身分時，傳入完全捏造、從未存在過的 refreshToken 值一樣會
-         成功核發新 token（AccountController 版本不驗證這個值）。
+    本測試涵蓋 RefreshTokenApiTests.cs 三組斷言裡、demo 這台單機（無
+    mainhost/federation）可經由這條 e2e 路徑重現的部分：
+      (a) 合法 refresh token、不帶任何 Authorization header → 200 + 全新
+          access_token/refresh_token pair（證明 AllowAnonymous 語意正確：
+          refresh 不需要 access-token bearer）。
+      (b) 從未核發過的捏造 refresh token → REJECTED（401，body 不含可用的
+          access_token）—— 這是 #721 的核心安全斷言：修復前這個情境會回
+          200 並核發一組全新可用 token（身分位重放），修復後必須被拒絕。
+      (c) Replay：重放剛才已經被輪替掉的舊 refresh token → 拒絕（401/400，
+          body 不含可用 access_token），證明 atomic-rotation + replay-guard
+          在 HTTP 路徑上確實生效，不只是在 ITokenService 單元測試層級。
 
-    本測試如實記錄「目前可達」的行為，不假裝驗證 _FrameworkController 版本
-    的 atomic-rotation / replay-guard 語意（那組邏輯目前透過 HTTP 不可達）。
-    這是本次 #681 e2e 盤點意外發現的一個路由層級問題，超出 #681 本身的範圍，
-    建議另開 Issue 追蹤／修復；若該路由衝突未來被修正，本測試的第二個斷言
-    （捏造 refreshToken 仍可成功）預期會失敗 —— 屆時應同步更新本測試以驗證
-    正確的 atomic-rotation/replay-guard 行為。
+    未涵蓋範圍：mainhost/federation 轉發路徑（WTMContext.RefreshTokenAsync
+    在 ConfigInfo.HasMainHost==true 時的分支）—— demo 是單機部署，
+    HasMainHost 為 false，這條 e2e 測試走不到那個分支；該路徑已由
+    WtmAuthServiceTests（單元測試）覆蓋。
 
-    預期結果（目前實際行為，非規格應然）：
+    預期結果：
     - LoginJwt 回傳 200，含 access_token/refresh_token
-    - 未帶身分呼叫 refreshtoken → 401
-    - 帶有效 Bearer、任意 refreshToken 值呼叫 → 200，且核發的 access_token
-      與登入時不同（證明確實重新核發了一組新 token，而非原樣回傳）
+    - 合法 refresh token、不帶 Bearer → 200，核發的 access_token 與
+      refresh_token 皆與登入時不同（rotation）
+    - 從未核發過的捏造 refresh token → 401，body 不含 access_token
+    - 重放已輪替的舊 refresh token → 401 或 400，body 不含 access_token
     """
     print("[TC-32] 開始執行...")
 
@@ -2139,39 +2142,72 @@ async def tc_32_jwt_refresh_rotation_replay(page, **_):
     assert refresh_token_1, "LoginJwt 回應缺少 refresh_token"
     print(f"  access_token 長度={len(access_token_1)}, refresh_token 長度={len(refresh_token_1)}")
 
-    # 未帶身分呼叫 refreshtoken：實測落在 AccountController（需身分），故 401。
-    anon_resp = await page.request.post(
+    # (a) 合法 refresh token、不帶任何 Authorization header —— 證明 #721 修復後
+    # 的端點是真正的 AllowAnonymous：refresh 只需要 refresh token 本身。
+    valid_resp = await page.request.post(
         f"{BASE_URL}/api/_account/refreshtoken",
         data=json.dumps({"refreshToken": refresh_token_1}),
         headers={"Content-Type": "application/json"},
     )
-    print(f"  未帶身分呼叫 refreshtoken: HTTP {anon_resp.status}")
-    assert anon_resp.status == 401, (
-        f"預期 401（見本函式 docstring 的 KNOWN-FINDING：該路由目前一律需要身分），"
-        f"實際 {anon_resp.status}"
+    valid_status = valid_resp.status
+    valid_body = await valid_resp.text()
+    print(f"  合法 refresh token（無 Bearer）呼叫 refreshtoken: HTTP {valid_status}")
+    assert valid_status == 200, (
+        f"#721: 合法 refresh token 不帶 Bearer 應核發新 token pair，"
+        f"預期 200，實際 {valid_status}: {valid_body[:200]}"
     )
+    valid_data = json.loads(valid_body)
+    access_token_2 = valid_data.get("access_token")
+    refresh_token_2 = valid_data.get("refresh_token")
+    assert access_token_2, "refreshtoken 回應缺少 access_token"
+    assert refresh_token_2, "refreshtoken 回應缺少 refresh_token"
+    assert access_token_2 != access_token_1, "refreshtoken 應核發一組全新的 access_token"
+    assert refresh_token_2 != refresh_token_1, (
+        "#721: refresh token 應被輪替（rotated），不應原樣回傳同一個值"
+    )
+    print("  已確認核發了新的 access_token/refresh_token（rotation 生效）")
 
-    # 帶有效 Bearer、任意（未曾存在過的）refreshToken 值呼叫。
-    bogus_refresh_token = "e2e-bogus-refresh-token-681-" + refresh_token_1[:8]
-    auth_resp = await page.request.post(
+    # (b) #721 核心安全斷言：從未核發過的捏造 refresh token 必須被拒絕。
+    # 修復前這裡會回 200 並核發一組全新可用 token（身分位重放漏洞）。
+    bogus_refresh_token = "e2e-bogus-refresh-token-721-" + refresh_token_1[:8]
+    bogus_resp = await page.request.post(
         f"{BASE_URL}/api/_account/refreshtoken",
         data=json.dumps({"refreshToken": bogus_refresh_token}),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {access_token_1}",
-        },
+        headers={"Content-Type": "application/json"},
     )
-    auth_status = auth_resp.status
-    auth_body = await auth_resp.text()
-    print(f"  帶身分＋捏造 refreshToken 呼叫 refreshtoken: HTTP {auth_status}")
-    assert auth_status == 200, f"預期 200，實際 {auth_status}: {auth_body[:200]}"
-    auth_data = json.loads(auth_body)
-    access_token_2 = auth_data.get("access_token")
-    assert access_token_2, "refreshtoken 回應缺少 access_token"
-    assert access_token_2 != access_token_1, "refreshtoken 應核發一組全新的 access_token"
-    print("  已確認核發了新的 access_token（與登入時不同）")
+    bogus_status = bogus_resp.status
+    bogus_body = await bogus_resp.text()
+    print(f"  從未核發過的捏造 refreshToken 呼叫 refreshtoken: HTTP {bogus_status}")
+    assert bogus_status == 401, (
+        f"#721: 捏造／從未核發過的 refresh token 必須被拒絕（401），"
+        f"不得依身分位重新核發，實際 {bogus_status}: {bogus_body[:200]}"
+    )
+    assert "access_token" not in bogus_body.lower(), (
+        f"#721: 拒絕回應不應包含可用的 access_token。Body: {bogus_body[:200]}"
+    )
+    print("  已確認捏造 refresh token 被正確拒絕（無可用 token 外洩）")
 
-    print("[TC-32] PASS -- LoginJwt/refreshtoken 目前可達行為驗證通過（見 KNOWN-FINDING）")
+    # (c) Replay：重放剛才已經被 (a) 輪替掉的舊 refresh token，證明
+    # atomic-rotation + replay-guard 在 HTTP 路徑上確實生效。
+    replay_resp = await page.request.post(
+        f"{BASE_URL}/api/_account/refreshtoken",
+        data=json.dumps({"refreshToken": refresh_token_1}),
+        headers={"Content-Type": "application/json"},
+    )
+    replay_status = replay_resp.status
+    replay_body = await replay_resp.text()
+    print(f"  重放已輪替的舊 refresh token 呼叫 refreshtoken: HTTP {replay_status}")
+    assert replay_status in (401, 400), (
+        f"#721/replay-guard: 重放已輪替的舊 refresh token 必須被拒絕，"
+        f"實際 {replay_status}: {replay_body[:200]}"
+    )
+    assert "access_token" not in replay_body.lower(), (
+        f"#721: replay 拒絕回應不應包含可用的 access_token。Body: {replay_body[:200]}"
+    )
+    print("  已確認舊（已輪替）refresh token 重放被正確拒絕")
+
+    print("[TC-32] PASS -- LoginJwt/refreshtoken #721 修復後行為驗證通過"
+          "（合法 token rotation + 捏造 token 拒絕 + replay 拒絕）")
 
 
 # ─── TC-33: combobox 聯動串聯（tree → combobox chain/cascade，issue #681）──

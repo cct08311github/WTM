@@ -134,21 +134,14 @@ namespace WalkingTec.Mvvm.Admin.Api
         }
 
 
-        [HttpPost("[action]")]
-        [AllRights]
-        [ProducesResponseType(typeof(Token), StatusCodes.Status200OK)]
-        public async Task<IActionResult> RefreshToken(string refreshToken)
-        {
-            var rv = await Wtm.RefreshTokenAsync();
-            if (rv == null)
-            {
-                return BadRequest();
-            }
-            else
-            {
-                return Ok(rv);
-            }
-        }
+        // SECURITY (#721): RefreshToken used to live here as [HttpPost("[action]")], which
+        // resolves to the same URL ("api/_account/refreshtoken", case-insensitive) as the
+        // framework's hardened _FrameworkController.RefreshToken endpoint — two attribute
+        // routes on the same URL+verb throw AmbiguousMatchException at request time. This
+        // local copy also ignored its `refreshToken` parameter and reissued a token purely
+        // from identity (the #721 auth bypass). Removed in favor of the single framework
+        // endpoint, which validates the presented token and is federation-aware. Callers
+        // must POST { "RefreshToken": "<token>" } (JSON body) to api/_account/refreshtoken.
 
         [AllRights]
         [HttpGet("[action]")]

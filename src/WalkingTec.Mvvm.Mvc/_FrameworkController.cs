@@ -1358,16 +1358,21 @@ namespace WalkingTec.Mvvm.Mvc
             return Ok();
         }
 
+        // SECURITY (#721): this is the single canonical refresh-token endpoint for the
+        // whole framework — it delegates to WTMContext.RefreshTokenAsync(string), which
+        // validates the PRESENTED token (rejecting bogus/expired/already-rotated tokens)
+        // and transparently forwards to the mainhost for federation frontends. Apps must
+        // NOT define their own competing action on this same route ("api/_account/refreshtoken"
+        // matches case-insensitively) — two attribute-routed actions on the same URL+verb
+        // throw AmbiguousMatchException at request time. Demo AccountControllers were
+        // updated to stop shadowing this route rather than duplicate it.
         [AllowAnonymous]
         [HttpPost("api/_account/refreshtoken")]
         public async Task<IActionResult> RefreshToken([FromBody] RefreshTokenRequest req)
         {
             if (string.IsNullOrEmpty(req?.RefreshToken))
                 return BadRequest(new { message = "RefreshToken is required" });
-            var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
-            var tokenService = HttpContext.RequestServices
-                .GetRequiredService<ITokenService>();
-            var token = await tokenService.RefreshTokenAsync(req.RefreshToken, ip);
+            var token = await Wtm.RefreshTokenAsync(req.RefreshToken);
             if (token == null)
                 return Unauthorized(new { message = "Invalid or expired refresh token" });
             return Ok(token);

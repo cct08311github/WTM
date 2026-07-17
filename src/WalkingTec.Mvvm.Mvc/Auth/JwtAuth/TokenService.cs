@@ -56,7 +56,7 @@ namespace WalkingTec.Mvvm.Mvc.Auth
         {
             if (string.IsNullOrEmpty(refreshToken)) return null;
             using var scope = _sp.CreateScope();
-            var dc = scope.ServiceProvider.GetService<IDataContext>() as DbContext;
+            var dc = ResolveDataContext(scope.ServiceProvider);
             if (dc == null) return null;
             var dbSet = dc.Set<RefreshTokenEntity>();
 
@@ -151,7 +151,7 @@ namespace WalkingTec.Mvvm.Mvc.Auth
         {
             if (string.IsNullOrEmpty(refreshToken)) return;
             using var scope = _sp.CreateScope();
-            var dc = scope.ServiceProvider.GetService<IDataContext>() as DbContext;
+            var dc = ResolveDataContext(scope.ServiceProvider);
             if (dc == null) return;
             var existing = await dc.Set<RefreshTokenEntity>()
                 .FirstOrDefaultAsync(x => x.Token == refreshToken);
@@ -240,7 +240,7 @@ namespace WalkingTec.Mvvm.Mvc.Auth
             string itCode, string tenantCode, string ipAddress)
         {
             using var scope = _sp.CreateScope();
-            var dc = scope.ServiceProvider.GetService<IDataContext>() as DbContext;
+            var dc = ResolveDataContext(scope.ServiceProvider);
             var createdUtc = _timeProvider.GetUtcNow().UtcDateTime;
             var entity = new RefreshTokenEntity
             {
@@ -257,7 +257,52 @@ namespace WalkingTec.Mvvm.Mvc.Auth
                 await dc.Set<RefreshTokenEntity>().AddAsync(entity);
                 await dc.SaveChangesAsync();
             }
+            else
+            {
+                // #721 follow-up: if this ever fires it means the returned RefreshToken
+                // string was never persisted, so a subsequent RefreshTokenAsync call for
+                // it will always (correctly) reject as "not found" — fail-closed, not a
+                // security hole, but silently non-functional for legitimate refreshes.
+                _sp.GetService<ILoggerFactory>()?.CreateLogger("TokenService")
+                    ?.LogWarning("Could not resolve a DataContext to persist the issued refresh token for {ITCode}; the refresh token will not be usable.", itCode);
+            }
             return entity;
+        }
+
+        /// <summary>
+        /// Resolves the app's real, connection-string/tenant-routed DataContext for
+        /// refresh-token persistence.
+        ///
+        /// #721 follow-up: <c>IDataContext</c> is NOT usable via plain DI resolution here.
+        /// <c>AddWtmContext</c> only registers
+        /// <c>services.TryAddScoped&lt;IDataContext, NullContext&gt;()</c> as a safe
+        /// placeholder default — apps obtain their real, connection-string-resolved
+        /// DataContext through <see cref="WTMContext.DC"/> (built by
+        /// <see cref="WTMContext.CreateDC"/>), never through generic DI. Before this fix,
+        /// <c>scope.ServiceProvider.GetService&lt;IDataContext&gt;() as DbContext</c> always
+        /// resolved <c>NullContext</c> (cast to <c>DbContext</c> =&gt; null) in every real
+        /// deployment, silently making refresh-token persistence/validation a no-op over
+        /// HTTP end-to-end — masked only because the unit-test fixtures
+        /// (<c>TokenTestFixture</c>) explicitly re-register <c>IDataContext</c> to point at
+        /// a real <c>DbContext</c>. Resolving a scoped <see cref="WTMContext"/> instead gives
+        /// the same connection-string/tenant-aware <c>DbContext</c> the rest of the
+        /// framework uses, isolated in <paramref name="scopedProvider"/>'s own DI scope.
+        /// </summary>
+        private static DbContext ResolveDataContext(IServiceProvider scopedProvider)
+        {
+            // Primary path (real deployments): WTMContext.DC is built by
+            // WTMContext.CreateDC(), the framework's connection-string/tenant-aware
+            // factory — this is what every other part of WTM actually uses.
+            var wtm = scopedProvider.GetService<WTMContext>();
+            var dc = wtm?.DC as DbContext;
+            if (dc != null)
+            {
+                return dc;
+            }
+
+            // Fallback: hosts that explicitly re-register IDataContext against a real
+            // DbContext in DI (e.g. test fixtures) without registering WTMContext itself.
+            return scopedProvider.GetService<IDataContext>() as DbContext;
         }
 
         private static string GenerateRefreshTokenString()

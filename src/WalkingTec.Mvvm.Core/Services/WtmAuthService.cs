@@ -73,41 +73,48 @@ namespace WalkingTec.Mvvm.Core.Services
             return rv;
         }
 
-        public async Task<Token?> RefreshTokenAsync(
+        [System.Obsolete("Insecure: performed identity-based reissue that ignored the presented refresh token (#721 auth bypass). Always rejects now. Use RefreshTokenAsync(string, LoginUserInfo, ITokenService, IWtmApiClient, bool).")]
+        public Task<Token?> RefreshTokenAsync(
             LoginUserInfo? loginUser,
             ITokenService tokenService,
             IWtmApiClient? apiClient,
             bool hasMainHost)
         {
-            if (loginUser == null)
+            return Task.FromResult<Token?>(null);
+        }
+
+        public async Task<Token?> RefreshTokenAsync(
+            string? refreshToken,
+            LoginUserInfo? loginUser,
+            ITokenService tokenService,
+            IWtmApiClient? apiClient,
+            bool hasMainHost)
+        {
+            if (string.IsNullOrEmpty(refreshToken))
             {
                 return null;
             }
 
-            string? rt = null;
-            if (hasMainHost && loginUser.CurrentTenant == null)
+            if (hasMainHost && loginUser?.CurrentTenant == null)
             {
-                if (apiClient != null)
+                // Federation frontend: this host has no RefreshTokenEntity DB of its own,
+                // so it cannot validate the token locally. Forward the ACTUAL presented
+                // token to the mainhost's hardened endpoint — never an empty body — and
+                // let the mainhost validate/rotate it (#721). Route to the framework's
+                // canonical _FrameworkController.RefreshToken endpoint (lowercase path),
+                // not the old shadowed/removed demo AccountController action.
+                if (apiClient == null)
                 {
-                    var r = await apiClient.CallAPI<Token>(
-                        "mainhost", "/api/_account/RefreshToken",
-                        HttpMethodEnum.POST, (object?)new { },
-                        authToken: loginUser.RemoteToken);
-                    rt = r?.Data?.AccessToken;
+                    return null;
                 }
-            }
-            else
-            {
-                rt = loginUser.RemoteToken;
+
+                var r = await apiClient.CallAPI<Token>(
+                    "mainhost", "/api/_account/refreshtoken",
+                    HttpMethodEnum.POST, new { RefreshToken = refreshToken });
+                return r?.Data;
             }
 
-            var rv = await tokenService.IssueTokenAsync(new LoginUserInfo
-            {
-                ITCode = loginUser.ITCode,
-                TenantCode = loginUser.TenantCode,
-                RemoteToken = rt
-            });
-            return rv;
+            return await tokenService.RefreshTokenAsync(refreshToken);
         }
     }
 }
