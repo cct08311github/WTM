@@ -13,7 +13,6 @@
             [*.Test]*,
             [WalkingTec.Mvvm.Demo]*,
             [WalkingTec.Mvvm.BlazorDemo*]*,
-            [WalkingTec.Mvvm.ReactDemo*]*,
             [WalkingTec.Mvvm.Vue*]*
           </Exclude>
 

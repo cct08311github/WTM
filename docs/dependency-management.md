@@ -214,6 +214,12 @@ demo 應用程式，**不進任何 NuGet 套件**。每次跑 security 分流時
 
 追蹤 issue：#610。
 
+**已 MOOT（#679）：** VueDemo 與 ReactDemo 兩個 demo 專案已於 #679 從 `dotnet10` 分支整個移除
+（含其 `ClientApp`），自 `[Unreleased]`／下一個版本號起生效（發布版本號尚未確定，屆時回填），
+上述兩個 alert 的來源已不存在於 repo 中。仍需在公開 GitHub mirror 上手動
+un-dismiss 並 close（透過 `/sync-github-security` 或直接在 mirror Security tab 操作）——本檔的移除
+只反映 Gitea 側（authoritative source），不會自動傳播到 mirror 的 alert 狀態。
+
 ---
 
 ## 相關文件

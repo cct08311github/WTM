@@ -183,11 +183,13 @@ describe('#594 admin.js hash(side) style — shift-only (no root guard), used on
 
 describe('#594 source-consistency sweep — normalize applied at all 5 documented sites, in every demo variant', () => {
     const DEMO_ROOT = path.resolve(DEMO_WWWROOT, '../..');
+    // #679 retired VueDemo (Vue2) and ReactDemo (webpack4); only the surviving
+    // demo variants are swept here. ("5 documented sites" above refers to the
+    // 2+2+1 normalize call sites across index.js/pindex.js/lib/admin.js per
+    // variant, not the variant count.)
     const VARIANTS = [
         'WalkingTec.Mvvm.Demo',
-        'WalkingTec.Mvvm.VueDemo',
         'WalkingTec.Mvvm.Vue3Demo',
-        'WalkingTec.Mvvm.ReactDemo',
         'WalkingTec.Mvvm.BlazorDemo/WalkingTec.Mvvm.BlazorDemo',
     ];
 

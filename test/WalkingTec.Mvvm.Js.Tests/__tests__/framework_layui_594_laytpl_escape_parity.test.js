@@ -185,11 +185,11 @@ describe('#594 FIXED theme.html per-color template — identical output on both 
 
 describe('#594 source-consistency sweep — fix applied uniformly across all demo variants', () => {
     const DEMO_ROOT = path.resolve(DEMO_WWWROOT, '../..');
+    // #679 retired VueDemo (Vue2) and ReactDemo (webpack4); only the surviving
+    // demo variants are swept here.
     const VARIANTS = [
         'WalkingTec.Mvvm.Demo',
-        'WalkingTec.Mvvm.VueDemo',
         'WalkingTec.Mvvm.Vue3Demo',
-        'WalkingTec.Mvvm.ReactDemo',
         'WalkingTec.Mvvm.BlazorDemo/WalkingTec.Mvvm.BlazorDemo',
     ];
 

@@ -8,8 +8,8 @@
 //   - "next" engine = wwwroot/layui-next/       (layui 2.13.8 — single-file bundle, laytpl inlined)
 //
 // WalkingTec.Mvvm.Demo's copies are used as the canonical reference; the #594 fix is byte-identical
-// across all five demo variants (Demo/VueDemo/Vue3Demo/ReactDemo/BlazorDemo), which the accompanying
-// source-consistency tests verify independently.
+// across all surviving demo variants (Demo/Vue3Demo/BlazorDemo — VueDemo and ReactDemo were retired
+// in #679), which the accompanying source-consistency tests verify independently.
 'use strict';
 
 const fs = require('fs');

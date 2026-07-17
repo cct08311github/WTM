@@ -14,8 +14,6 @@
       "test/WalkingTec.Mvvm.Etl.Test/WalkingTec.Mvvm.Etl.Test.csproj",
       "test/WalkingTec.Mvvm.WorkFlow.Test/WalkingTec.Mvvm.WorkFlow.Test.csproj",
       "demo/WalkingTec.Mvvm.Demo/WalkingTec.Mvvm.Demo.csproj",
-      "demo/WalkingTec.Mvvm.ReactDemo/WalkingTec.Mvvm.ReactDemo.csproj",
-      "demo/WalkingTec.Mvvm.VueDemo/WalkingTec.Mvvm.VueDemo.csproj",
       "demo/WalkingTec.Mvvm.Vue3Demo/WalkingTec.Mvvm.Vue3Demo.csproj",
       "demo/WalkingTec.Mvvm.ConsoleDemo/WalkingTec.Mvvm.ConsoleDemo.csproj",
       "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj"

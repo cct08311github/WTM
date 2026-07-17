@@ -218,10 +218,10 @@ describe('#587 ff.ConsumeIslandsIn — source sweep', () => {
 // layuiadmin lib/view.js SPA-tab integration — source sweep (Gap 1 fix)
 // ---------------------------------------------------------------------------
 describe('#587 layuiadmin lib/view.js SPA-tab integration — every demo copy', () => {
+  // #679 retired VueDemo (Vue2) and ReactDemo (webpack4); only the surviving
+  // demo variants are swept here.
   const viewJsPaths = [
     '../../../demo/WalkingTec.Mvvm.Demo/wwwroot/layuiadmin/lib/view.js',
-    '../../../demo/WalkingTec.Mvvm.ReactDemo/wwwroot/layuiadmin/lib/view.js',
-    '../../../demo/WalkingTec.Mvvm.VueDemo/wwwroot/layuiadmin/lib/view.js',
     '../../../demo/WalkingTec.Mvvm.Vue3Demo/wwwroot/layuiadmin/lib/view.js',
     '../../../demo/WalkingTec.Mvvm.BlazorDemo/WalkingTec.Mvvm.BlazorDemo/wwwroot/layuiadmin/lib/view.js',
   ];

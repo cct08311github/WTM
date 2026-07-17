@@ -259,15 +259,18 @@ jobs:
           # SINGLE process, NUL-terminated (`-z`), and `-I` skips binaries
           # exactly like the leak-gate's own `git grep -I` does below, so
           # both passes agree on what counts as "text". This repo has
-          # tracked filenames containing literal spaces (two ClientApp demo
-          # files under demo/WalkingTec.Mvvm.ReactDemo/) — an earlier
+          # historically carried tracked filenames containing literal spaces
+          # (two ClientApp demo files under the now-retired
+          # demo/WalkingTec.Mvvm.ReactDemo/ — removed in #679) — an earlier
           # revision piped `grep -Il` (newline-delimited, unquoted output)
           # into a plain `xargs sed -i` (word-splits on whitespace), which
           # is NUL-safe only at the first hop and deterministically failed
           # ("sed: can't read ...", exit 123) the moment this tree-wide scan
           # (vs. the old extension allowlist, which never matched those two
-          # files) reached them. `-z` + the paired `xargs -0` below keep the
-          # hand-off NUL-safe end to end.
+          # files) reached them. The NUL-safe `-z` + paired `xargs -0` below
+          # keep the hand-off NUL-safe end to end regardless of whether any
+          # spaced filename currently exists in the tree — a future one must
+          # not silently regress this.
           #
           # Single-process enumeration also sidesteps a latent pipefail
           # fragility: piping `git ls-files -z` through `xargs -0 grep` lets

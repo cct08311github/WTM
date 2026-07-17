@@ -123,13 +123,13 @@ describe.each([
   });
 });
 
-describe('#615 source-consistency sweep — guard applied identically at both then()/done() sites, all 5 demo variants', () => {
+describe('#615 source-consistency sweep — guard applied identically at both then()/done() sites, all surviving demo variants', () => {
   const DEMO_ROOT = path.resolve(DEMO_WWWROOT, '../..');
+  // #679 retired VueDemo (Vue2) and ReactDemo (webpack4); only the surviving
+  // demo variants are swept here.
   const VARIANTS = [
     'WalkingTec.Mvvm.Demo',
-    'WalkingTec.Mvvm.VueDemo',
     'WalkingTec.Mvvm.Vue3Demo',
-    'WalkingTec.Mvvm.ReactDemo',
     'WalkingTec.Mvvm.BlazorDemo/WalkingTec.Mvvm.BlazorDemo',
   ];
 
@@ -143,7 +143,7 @@ describe('#615 source-consistency sweep — guard applied identically at both th
     expect(src).toMatch(/if\(i\.correctRouter\(layui\.router\(\)\.path\.join\("\/"\)\)!==r\)return;/);
   });
 
-  test('all 5 variants have byte-identical index.js', () => {
+  test('all surviving variants have byte-identical index.js', () => {
     const contents = VARIANTS.map((variant) =>
       fs.readFileSync(path.join(DEMO_ROOT, variant, 'wwwroot/layuiadmin/index.js'), 'utf8')
     );
