@@ -59,7 +59,11 @@ Full command reference → `.claude/rules/tools-commands.md`
 
 `actions/upload-artifact@v4` is incompatible with the local Gitea Actions API.
 `build-and-test` and `e2e` jobs can finish with `conclusion: failure` even when tests passed.
-**Always verify by reading the log:** look for `Test Run Successful` (.NET) and `PASS: 31 | FAIL: 0` (e2e).
+**Always verify by reading the log:** look for `Test Run Successful` (.NET) and, for e2e,
+`FAIL: 0 | ERROR: 0` in the `Total: N | PASS: n | FAIL: 0 | ERROR: 0 | SKIP: n` summary line —
+**match on `FAIL: 0`, not a hardcoded `PASS: N`**: `N` legitimately differs between the
+`e2e-test.yml` matrix's `baseline` leg (full suite) and `killswitch` leg (focused subset,
+issue #681), and changes again whenever `TC_REGISTRY` in `test/e2e/wtm_e2e_tests.py` grows.
 Detail + workaround SOP → `docs/ci-operations.md`. Tracking: Issue #11.
 
 ## Available Slash Commands

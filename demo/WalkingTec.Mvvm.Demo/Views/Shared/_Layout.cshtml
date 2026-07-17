@@ -7,6 +7,15 @@
   // config value is NEVER concatenated into the URL — it only selects
   // between these two fixed string literals.
   var layuiBase = string.Equals(Configuration["Layui:Asset"], "legacy", StringComparison.Ordinal) ? "/layui" : "/layui-next";
+  // Issue #681: e2e-only opt-in for the #627 legacy-script-rehydration kill-switch
+  // (docs/csp-hardening.md). Gated on the WTM_E2E_KILLSWITCH env var, which the
+  // e2e-test.yml workflow's "killswitch" matrix leg sets to "1" for the demo
+  // process it starts (IConfiguration's environment-variables provider surfaces a
+  // flat env var name as a top-level config key with no extra wiring needed).
+  // Absent (the default, including every non-e2e run and the baseline matrix leg)
+  // == exact-match miss == meta tag never emitted == byte-identical default
+  // behaviour, per docs/csp-hardening.md's "Default is OFF" contract.
+  var e2eKillSwitchEnabled = string.Equals(Configuration["WTM_E2E_KILLSWITCH"], "1", StringComparison.Ordinal);
 }
 <!DOCTYPE html>
 <html>
@@ -18,6 +27,12 @@
   <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
   <meta name="viewport"
     content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=0">
+  @if (e2eKillSwitchEnabled)
+  {
+    @* Issue #681/#627: enables ff.DisableLegacyScriptRehydration for the e2e
+       "killswitch" matrix leg only — see docs/csp-hardening.md § "The kill-switch". *@
+    <meta name="wtm-disable-legacy-script-rehydration" content="true">
+  }
   <link rel="stylesheet" href="@(layuiBase)/css/layui.css" media="all">
   @if (layuiBase == "/layui-next")
   {

@@ -27,6 +27,18 @@ on:
 jobs:
   e2e:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Issue #681: second leg exercises the #627 legacy-script-rehydration
+        # kill-switch (docs/csp-hardening.md). "killswitch" sets WTM_E2E_KILLSWITCH=1,
+        # which _Layout.cshtml reads to emit the opt-in meta tag for THIS matrix leg's
+        # demo process only — the "baseline" leg (and every non-matrix run) is
+        # byte-identical to today. Both legs run the same suite: most TC-01..31 are
+        # direct-navigation/API checks unaffected by the switch either way, and the
+        # #681-added dialog-driven checks (tc_32+) branch their own assertions on
+        # WTM_E2E_KILLSWITCH so neither leg produces a false failure.
+        leg: [baseline, killswitch]
     env:
       # PEP 668: allow pip into the disposable runner container's system Python when setup-python degrades (issue #292)
       PIP_BREAK_SYSTEM_PACKAGES: "1"
@@ -34,6 +46,7 @@ jobs:
       WTM_E2E_HEADLESS: "true"
       WTM_E2E_TIMEOUT: "20000"
       WTM_E2E_REPORT: test/e2e/results/junit.xml
+      WTM_E2E_KILLSWITCH: ${{ matrix.leg == 'killswitch' && '1' || '0' }}
 
     steps:
       - uses: actions/checkout@v5
@@ -48,6 +61,12 @@ jobs:
 
       - name: Start demo app
         working-directory: demo/WalkingTec.Mvvm.Demo
+        env:
+          # Read by _Layout.cshtml via IConfiguration to opt this leg's demo process
+          # into the #627 kill-switch meta tag. Explicitly re-declared here (rather
+          # than relying on job-level env inheritance alone) so the intent is visible
+          # at the point the ASP.NET Core process actually starts.
+          WTM_E2E_KILLSWITCH: ${{ env.WTM_E2E_KILLSWITCH }}
         run: |
           dotnet run -c Release --no-build \
             --urls http://0.0.0.0:52837 \
@@ -86,10 +105,28 @@ jobs:
       - name: Install Playwright browsers
         run: playwright install chromium --with-deps
 
-      - name: Run E2E tests
+      - name: Run E2E tests (baseline)
+        if: matrix.leg == 'baseline'
         working-directory: test/e2e
         run: |
           python wtm_e2e_tests.py \
+            --headless \
+            --report results/junit.xml
+
+      - name: Run E2E tests (killswitch subset)
+        if: matrix.leg == 'killswitch'
+        working-directory: test/e2e
+        # Issue #681: a focused subset rather than the full 36-check suite — most of
+        # TC-01..31 are direct-navigation/API checks with no dialog-widget dependency
+        # and would just duplicate the baseline leg's signal. This subset covers: a
+        # security smoke check (01), basic login/logout (06/07), the full-page-load
+        # analysis panel (04, NOT routed through ff.OpenDialog so it's a useful control
+        # showing the switch didn't break unrelated UI), structural CRUD markup (26),
+        # and every #681-added dialog-driven check (32-36), which self-assert
+        # kill-switch-aware expectations via the WTM_E2E_KILLSWITCH env var.
+        run: |
+          python wtm_e2e_tests.py \
+            --tc 1,4,6,7,26,32,33,34,35,36 \
             --headless \
             --report results/junit.xml
 
@@ -98,7 +135,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-screenshots
+          name: e2e-screenshots-${{ matrix.leg }}
           path: test/e2e/screenshots/
           if-no-files-found: ignore
           retention-days: 7
@@ -108,7 +145,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-junit-report
+          name: e2e-junit-report-${{ matrix.leg }}
           path: test/e2e/results/junit.xml
           if-no-files-found: ignore
           retention-days: 30
