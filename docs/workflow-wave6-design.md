@@ -37,7 +37,7 @@ Three layers, all owned by `WalkingTec.Mvvm.WorkFlow` (the designer is useless w
 - **Server** — new `WorkflowDesignerController` (`api/_workflow/designer`, URL-RBAC) + `WorkflowDesignerPageController` (`/_workflow-designer`, avoids the legacy Elsa `/_Workflow` demo collision) + scoped `IWorkflowDefinitionStore` + additive `IProcessDefinitionPublisher.PublishRawAsync` + one new entity `ProcessDefinitionDraft`. Controllers never touch `IDataContext` (red line) — all DB work in the store/publisher services.
 - **Fidelity layer** — stored GraphJson is the source of truth; the designer is a JSON patcher, not a model rebuilder. Raw-body transport end to end; the typed MVC binding pipeline (which drops unknown fields AND strips `<`/`>` via `StringIgnoreLTGTConverter`) is bypassed by construction on every designer graph payload (§2).
 
-The page is a static embedded `designer.html` with **zero inline scripts** (stricter than #238's inline bootstrap; nonce-CSP-ready for epic #807 with no rework). Boot config (current user display name, antiforgery token, options, `?code=` echo) arrives via `URLSearchParams` + `GET api/_workflow/designer/bootstrap`.
+The page is a static embedded `designer.html` with **zero inline scripts** (stricter than #238's inline bootstrap; nonce-CSP-ready for epic #807, on this repo's pre-Gitea-cutover GitHub tracker, now defunct, with no rework). Boot config (current user display name, antiforgery token, options, `?code=` echo) arrives via `URLSearchParams` + `GET api/_workflow/designer/bootstrap`.
 
 ---
 

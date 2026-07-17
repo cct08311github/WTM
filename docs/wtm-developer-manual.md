@@ -3114,7 +3114,7 @@ app.UseWtmContentSecurityPolicy(o =>
 | 指令 | 預設 | 原因 |
 |------|------|------|
 | `'unsafe-eval'` | **omitted** | #789 六階段清除 eval，框架自身無需此例外 |
-| `'unsafe-inline'` | **kept** | LayUI TagHelper 大量輸出 inline `<script>` 與 `style=""`；移除需重構所有 TagHelper（#807 epic 追蹤） |
+| `'unsafe-inline'` | **kept** | LayUI TagHelper 大量輸出 inline `<script>` 與 `style=""`；移除需重構所有 TagHelper（#807 epic 追蹤，本repo pre-Gitea-cutover GitHub tracker 編號，該tracker已停用） |
 | `img-src data: https:` | 寬鬆 | 支援上傳圖片 base64 + 外部 CDN |
 
 **行為：**

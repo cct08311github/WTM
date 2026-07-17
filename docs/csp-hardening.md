@@ -195,8 +195,10 @@ cover it. Your options, in increasing order of effort:
   with the static policy string; browsers print the expected hash in the violation
   message).
 - **Nonce-based CSP**: not currently provided by `WtmCspMiddleware` (a per-request nonce
-  needs middleware↔Razor cooperation) — tracked separately under #807. Do not hand-roll a
-  static "nonce": a fixed value defeats the mechanism.
+  needs middleware↔Razor cooperation) — tracked separately under #807 (nonce/report-to
+  futures epic, on this repo's pre-Gitea-cutover GitHub tracker, now defunct — see
+  § Reference below). Do not hand-roll a static "nonce": a fixed value defeats the
+  mechanism.
 
 Recommended rollout for level 3: switch `Mode = WtmCspMode.ReportOnly` with the tightened
 `ScriptSrc`, run staging + a production canary until the violation reports are quiet, then
