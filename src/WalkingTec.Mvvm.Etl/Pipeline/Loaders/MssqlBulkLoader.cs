@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Data.SqlClient;
@@ -214,19 +215,19 @@ public class MssqlBulkLoader : IBulkLoader
         sb.AppendLine($"USING {QuoteQualified(stagingTableName)} AS source");
         // ETL-009: build composite ON clause from all key columns (AND-joined)
         sb.AppendLine("ON " + string.Join(" AND ",
-            keyColumns.Select(k => $"target.[{k}] = source.[{k}]")));
+            keyColumns.Select(k => $"target.{QuoteIdentifier(k)} = source.{QuoteIdentifier(k)}")));
 
         if (updateCols.Count > 0)
         {
             sb.AppendLine("WHEN MATCHED THEN UPDATE SET");
             sb.AppendLine(string.Join(",\n",
-                updateCols.Select(c => $"  target.[{c}] = source.[{c}]")));
+                updateCols.Select(c => $"  target.{QuoteIdentifier(c)} = source.{QuoteIdentifier(c)}")));
         }
 
         sb.AppendLine("WHEN NOT MATCHED THEN INSERT (");
-        sb.AppendLine(string.Join(", ", columns.Select(c => $"[{c}]")));
+        sb.AppendLine(string.Join(", ", columns.Select(QuoteIdentifier)));
         sb.AppendLine(") VALUES (");
-        sb.AppendLine(string.Join(", ", columns.Select(c => $"source.[{c}]")));
+        sb.AppendLine(string.Join(", ", columns.Select(c => $"source.{QuoteIdentifier(c)}")));
         sb.AppendLine(");");
 
         await using var cmd = conn.CreateCommand();
@@ -280,7 +281,7 @@ public class MssqlBulkLoader : IBulkLoader
             }
 
             // 2. INSERT FROM staging
-            var colList = string.Join(", ", columns.Select(c => $"[{c}]"));
+            var colList = string.Join(", ", columns.Select(QuoteIdentifier));
             var insertSql =
                 $"INSERT INTO {QuoteQualified(targetTableName)} ({colList}) " +
                 $"SELECT {colList} FROM {QuoteQualified(stagingTableName)}";
@@ -302,6 +303,20 @@ public class MssqlBulkLoader : IBulkLoader
     }
 
     /// <summary>
+    /// Matches "xp_" / "sp_" only at a word boundary (start of string, or
+    /// preceded by a non-word character) — #680: the previous plain
+    /// substring check (<c>Contains("sp_")</c>) false-positived on
+    /// perfectly legitimate column names like <c>resp_code</c> that merely
+    /// contain "sp_" mid-word. A real system-procedure invocation always
+    /// begins at a token boundary (e.g. <c>"... ; sp_executesql ..."</c> or
+    /// <c>"xp_cmdshell(...)"</c> at the start of the clause), so anchoring to
+    /// <c>\b</c> preserves the original guard's protection while no longer
+    /// rejecting substrings.
+    /// </summary>
+    private static readonly Regex DangerousProcPrefix =
+        new(@"\b(xp_|sp_)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>
     /// Conservative whitelist for the operator-supplied DELETE WHERE
     /// clause. Public for unit-test determinism. Returns true for
     /// null/empty (which means "delete entire table" — a deliberate
@@ -314,10 +329,8 @@ public class MssqlBulkLoader : IBulkLoader
         if (whereClause.Contains(';')) { return false; }
         if (whereClause.Contains("--")) { return false; }
         if (whereClause.Contains("/*")) { return false; }
-        // Block extended-procedure prefixes regardless of case.
-        var lower = whereClause.ToLowerInvariant();
-        if (lower.Contains("xp_")) { return false; }
-        if (lower.Contains("sp_")) { return false; }
+        // Block extended-procedure prefixes regardless of case, at a word boundary.
+        if (DangerousProcPrefix.IsMatch(whereClause)) { return false; }
         return true;
     }
 
@@ -342,6 +355,25 @@ public class MssqlBulkLoader : IBulkLoader
     }
 
     /// <summary>
+    /// Bracket-quotes a single, unqualified T-SQL identifier, escaping any literal
+    /// <c>]</c> by doubling it to <c>]]</c> — the standard T-SQL bracket-escape
+    /// sequence (e.g. <c>Weird]Name</c> → <c>[Weird]]Name]</c>). Without this, an
+    /// identifier containing <c>]</c> could prematurely close the bracket and let
+    /// the remainder of the string execute as SQL rather than being treated as
+    /// part of the identifier.
+    /// <para>
+    /// Defense-in-depth (#680): staging/batch column names are also validated
+    /// against an allowlist upstream (<see cref="EtlColumnNameValidator"/>) that
+    /// rejects <c>]</c> outright, so this escape should never actually fire for
+    /// them — but table/schema names (<c>StagingTable.TableName</c>,
+    /// <c>TargetTableName</c>) are admin-configured and not covered by that
+    /// allowlist, so this loader escapes independently rather than relying
+    /// solely on the caller.
+    /// </para>
+    /// </summary>
+    public static string QuoteIdentifier(string name) => "[" + name.Replace("]", "]]") + "]";
+
+    /// <summary>
     /// Returns a properly bracket-quoted, schema-qualified table identifier for use in
     /// T-SQL DDL/DML. Each part is quoted independently so schema-qualified names like
     /// "audit.STG_Orders" produce "[audit].[STG_Orders]" rather than "[audit.STG_Orders]".
@@ -349,7 +381,7 @@ public class MssqlBulkLoader : IBulkLoader
     public static string QuoteQualified(string tableName)
     {
         var (schema, table) = ParseSchemaAndTable(tableName);
-        return $"[{schema}].[{table}]";
+        return $"{QuoteIdentifier(schema)}.{QuoteIdentifier(table)}";
     }
 
     public async Task TruncateStagingAsync(
@@ -393,7 +425,7 @@ public class MssqlBulkLoader : IBulkLoader
             var sb = new StringBuilder();
             sb.AppendLine($"CREATE TABLE {QuoteQualified(stagingTableName)} (");
             sb.AppendLine(string.Join(",\n",
-                spec.Columns.Select(c => $"  [{c.Name}] {c.SqlType}")));
+                spec.Columns.Select(c => $"  {QuoteIdentifier(c.Name)} {c.SqlType}")));
             sb.AppendLine(")");
 
             await using var createCmd = conn.CreateCommand();

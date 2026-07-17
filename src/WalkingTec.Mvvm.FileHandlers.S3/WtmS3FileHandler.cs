@@ -1,7 +1,9 @@
 #nullable enable
 using System;
+using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.IO;
+using Amazon.Runtime;
 using Amazon.S3;
 using Amazon.S3.Model;
 using Microsoft.Extensions.Logging;
@@ -72,6 +74,14 @@ public sealed class WtmS3FileHandler : IWtmFileHandler
             BucketName  = _options.BucketName,
             Key         = key,
             InputStream = data,
+            // #680: set Content-Type from the file extension so objects browsed
+            // directly in S3 (or served by a CDN/proxy in front of the bucket)
+            // get a correct type instead of the SDK's implicit
+            // application/octet-stream default. WTM's own GetFile action
+            // (Mvc/_FrameworkController) re-derives its response Content-Type
+            // from the extension independently, so this is additive metadata
+            // rather than something WTM's own download path depends on.
+            ContentType = GetContentType(ext),
         };
 
         try
@@ -79,8 +89,13 @@ public sealed class WtmS3FileHandler : IWtmFileHandler
             var response = _s3.PutObjectAsync(request).GetAwaiter().GetResult();
             return (key, "s3");
         }
-        catch (AmazonS3Exception ex)
+        catch (AmazonServiceException ex)
         {
+            // #680: broadened from AmazonS3Exception to its base AmazonServiceException
+            // so throttling/HTTP-timeout/other-service-level failures are handled the
+            // same way (logged, null-signalled) instead of escaping unhandled.
+            // AmazonS3Exception derives from AmazonServiceException, so S3-specific
+            // failures are still caught identically to before.
             _logger?.LogError(ex,
                 "S3 PutObject failed for bucket '{Bucket}', key '{Key}'",
                 _options.BucketName, key);
@@ -108,19 +123,51 @@ public sealed class WtmS3FileHandler : IWtmFileHandler
         try
         {
             using var response = _s3.GetObjectAsync(request).GetAwaiter().GetResult();
-            var ms = new MemoryStream();
+            // #680: pre-size the buffer from the response's known Content-Length
+            // instead of letting MemoryStream grow organically. An un-sized
+            // MemoryStream.CopyTo doubles its backing array on every overflow —
+            // each doubling reallocates a new array and copies the entire
+            // existing contents into it, so for a multi-GB object the naive
+            // path performs several large-object-heap copies and briefly holds
+            // both the old and new buffers in memory simultaneously (worse
+            // peak memory than a single correctly-sized allocation). This does
+            // NOT eliminate full in-memory buffering — IWtmFileHandler.GetFileData
+            // must return a seekable stream (Mvc's GetFile action unconditionally
+            // does `rv.Position = 0`, and BaseImportVM checks CanSeek before
+            // trusting Length), so the S3 response stream itself (forward-only,
+            // non-seekable) cannot be returned directly without breaking that
+            // contract. ContentLength is capped defensively at
+            // MaxPreSizableContentLength to stay within MemoryStream's ~2GB
+            // backing-array limit; falls back to the default growable
+            // constructor when the length is unknown/negative/oversized.
+            var contentLength = response.Headers?.ContentLength ?? 0;
+            var ms = contentLength > 0 && contentLength <= MaxPreSizableContentLength
+                ? new MemoryStream((int)contentLength)
+                : new MemoryStream();
             response.ResponseStream.CopyTo(ms);
             ms.Position = 0;
             return ms;
         }
-        catch (AmazonS3Exception ex)
+        catch (AmazonServiceException ex)
         {
+            // #680: broadened from AmazonS3Exception — see Upload() for rationale.
             _logger?.LogWarning(ex,
                 "S3 GetObject failed for bucket '{Bucket}', key '{Key}'",
                 _options.BucketName, file.Path);
             return null;
         }
     }
+
+    /// <summary>
+    /// Upper bound for pre-sizing the <see cref="GetFileData"/> buffer from the
+    /// S3 response's Content-Length. <see cref="MemoryStream"/>'s backing array
+    /// is limited to just under 2 GiB (<c>Array.MaxLength</c>-ish); staying well
+    /// under that avoids an <see cref="OutOfMemoryException"/>/overflow on the
+    /// pre-size attempt itself for pathologically large objects — those still
+    /// download via the default growable constructor, unchanged from before
+    /// this fix (no smaller and no larger than the pre-#680 buffering).
+    /// </summary>
+    private const long MaxPreSizableContentLength = 1_900_000_000L;
 
     /// <summary>
     /// Deletes the object identified by <see cref="IWtmFile.Path"/> from S3.
@@ -141,8 +188,9 @@ public sealed class WtmS3FileHandler : IWtmFileHandler
         {
             _s3.DeleteObjectAsync(request).GetAwaiter().GetResult();
         }
-        catch (AmazonS3Exception ex)
+        catch (AmazonServiceException ex)
         {
+            // #680: broadened from AmazonS3Exception — see Upload() for rationale.
             _logger?.LogWarning(ex,
                 "S3 DeleteObject failed for bucket '{Bucket}', key '{Key}'",
                 _options.BucketName, file?.Path);
@@ -172,8 +220,25 @@ public sealed class WtmS3FileHandler : IWtmFileHandler
             // Sanitise: allow only alphanumeric, underscore, hyphen, period, forward-slash
             var safe = System.Text.RegularExpressions.Regex.Replace(
                 subdir, @"[^a-zA-Z0-9_\-\./]", "");
-            if (!string.IsNullOrEmpty(safe))
-                prefix += safe.TrimEnd('/') + "/";
+
+            // #680: the character-class filter above still allows '.' and '/'
+            // (needed for legitimate segments like "archive.2024/reports"), so a
+            // caller-supplied subdir of "../../secrets" survived unchanged and
+            // could walk the resulting key above KeyPrefix. Reject '.'/'..'
+            // path segments outright rather than trying to "resolve" them —
+            // only whole segments that are exactly "." or ".." are dropped;
+            // a segment merely containing a dot (e.g. "archive.2024") is
+            // untouched.
+            var segments = safe.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            var normalizedSegments = new List<string>(segments.Length);
+            foreach (var segment in segments)
+            {
+                if (segment != "." && segment != "..")
+                    normalizedSegments.Add(segment);
+            }
+            var normalized = string.Join('/', normalizedSegments);
+            if (!string.IsNullOrEmpty(normalized))
+                prefix += normalized + "/";
         }
 
         var fileName = string.IsNullOrEmpty(ext)
@@ -181,5 +246,41 @@ public sealed class WtmS3FileHandler : IWtmFileHandler
             : $"{Guid.NewGuid():N}.{ext}";
 
         return prefix + fileName;
+    }
+
+    /// <summary>
+    /// Small extension→MIME-type map used to set <see cref="PutObjectRequest.ContentType"/>
+    /// on upload (#680). Deliberately conservative — unknown extensions fall back to
+    /// <c>application/octet-stream</c> rather than guessing, matching the same
+    /// fail-safe default the AWS SDK itself would otherwise apply.
+    /// </summary>
+    private static string GetContentType(string ext)
+    {
+        if (string.IsNullOrEmpty(ext)) { return "application/octet-stream"; }
+        return ext.ToLowerInvariant() switch
+        {
+            "txt" or "csv" or "log" => "text/plain",
+            "html" or "htm" => "text/html",
+            "css" => "text/css",
+            "json" => "application/json",
+            "xml" => "application/xml",
+            "pdf" => "application/pdf",
+            "zip" => "application/zip",
+            "png" => "image/png",
+            "jpg" or "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "bmp" => "image/bmp",
+            "webp" => "image/webp",
+            "svg" => "image/svg+xml",
+            "mp4" => "video/mp4",
+            "mp3" => "audio/mpeg",
+            "doc" => "application/msword",
+            "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "xls" => "application/vnd.ms-excel",
+            "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "ppt" => "application/vnd.ms-powerpoint",
+            "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            _ => "application/octet-stream",
+        };
     }
 }

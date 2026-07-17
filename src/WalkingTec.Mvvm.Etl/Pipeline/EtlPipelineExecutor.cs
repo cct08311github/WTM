@@ -271,6 +271,16 @@ public class EtlPipelineExecutor
                         .Cast<DataColumn>()
                         .Select(c => c.ColumnName)
                         .ToList();
+
+                    // #680: allowlist the batch-derived column names BEFORE the first
+                    // BulkLoad — these names originate from the batch schema
+                    // (CSV/Excel headers, REST JSON keys) and are embedded directly
+                    // into loader-generated SQL by MssqlBulkLoader/OracleBulkLoader.
+                    // Throws ArgumentException on the first violation; caught by the
+                    // outer catch like any other pipeline failure (discards the
+                    // pending watermark, sanitizes the message for RunLog).
+                    // See EtlColumnNameValidator for the full threat model.
+                    EtlColumnNameValidator.ValidateOrThrow(stagingColumnNames);
                 }
 
                 // #673(a): capture a batch-level dead-letter marker when the retried

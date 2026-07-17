@@ -120,6 +120,64 @@ public class MssqlBulkLoaderSchemaTests
         Assert.AreEqual("[audit].[STG_Orders]", result);
     }
 
+    // ─── QuoteIdentifier: ']' escaping (#680) ─────────────────────────────
+    // MSSQL's bracket-quoting escape sequence for a literal ']' inside an
+    // identifier is to double it ("]]"). Without this, an identifier
+    // containing ']' could prematurely close the bracket and let the
+    // remainder execute as SQL rather than being treated as part of the name.
+
+    [TestMethod]
+    public void QuoteIdentifier_plain_name_is_simply_bracketed()
+    {
+        Assert.AreEqual("[OrderNo]", MssqlBulkLoader.QuoteIdentifier("OrderNo"));
+    }
+
+    [TestMethod]
+    public void QuoteIdentifier_escapes_embedded_closing_bracket()
+    {
+        // "Weird]Name" must become "[Weird]]Name]" — the doubled ']]' is the
+        // escape, not an early close.
+        Assert.AreEqual("[Weird]]Name]", MssqlBulkLoader.QuoteIdentifier("Weird]Name"));
+    }
+
+    [TestMethod]
+    public void QuoteIdentifier_escapes_injection_attempt_via_bracket_close()
+    {
+        // A hostile "name" trying to close the bracket and append SQL must be
+        // fully neutralised into a single (very long, harmless) identifier.
+        var hostile = "X]; DROP TABLE Users; --";
+        var result = MssqlBulkLoader.QuoteIdentifier(hostile);
+
+        Assert.AreEqual("[X]]; DROP TABLE Users; --]", result);
+        // The only unescaped ']' characters are the opening/closing brackets
+        // themselves — every embedded ']' must be doubled.
+        Assert.AreEqual(1, CountUnescapedClosingBrackets(result));
+    }
+
+    [TestMethod]
+    public void QuoteQualified_schema_and_table_each_escape_embedded_brackets()
+    {
+        var result = MssqlBulkLoader.QuoteQualified("aud]it.STG]Orders");
+        Assert.AreEqual("[aud]]it].[STG]]Orders]", result);
+    }
+
+    /// <summary>Counts ']' characters that are NOT part of a doubled "]]" escape pair.</summary>
+    private static int CountUnescapedClosingBrackets(string s)
+    {
+        int count = 0;
+        for (int i = 0; i < s.Length; i++)
+        {
+            if (s[i] != ']') continue;
+            if (i + 1 < s.Length && s[i + 1] == ']')
+            {
+                i++; // skip the escaped pair
+                continue;
+            }
+            count++;
+        }
+        return count;
+    }
+
     // ─── IsUniqueColumnQuery: schema filter regression guard (#391) ───────
 
     [TestMethod]

@@ -3,6 +3,7 @@ using System;
 using System.IO;
 using System.Text;
 using System.Threading;
+using Amazon.Runtime;
 using Amazon.S3;
 using Amazon.S3.Model;
 using FluentAssertions;
@@ -130,6 +131,99 @@ public class WtmS3FileHandlerTests
         handlerInfo.Should().BeNull();
     }
 
+    [TestMethod]
+    public void Upload_ReturnsNullPath_WhenGenericAmazonServiceExceptionThrown()
+    {
+        // #680: the catch was broadened from AmazonS3Exception to its base
+        // AmazonServiceException so throttling/timeout/other service-level
+        // failures (which the SDK may surface as the base type rather than
+        // the S3-specific subtype) no longer escape unhandled.
+        var s3Mock = new Mock<IAmazonS3>();
+        s3Mock
+            .Setup(c => c.PutObjectAsync(It.IsAny<PutObjectRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new AmazonServiceException("request timed out"));
+
+        var handler = new WtmS3FileHandler(s3Mock.Object, BuildOptions());
+        var data    = new MemoryStream(Encoding.UTF8.GetBytes("hello"));
+
+        var act = () => handler.Upload("file.txt", 5, data);
+
+        act.Should().NotThrow("a base AmazonServiceException must be handled the same way as AmazonS3Exception");
+    }
+
+    [TestMethod]
+    public void Upload_SetsContentType_FromFileExtension()
+    {
+        PutObjectRequest? captured = null;
+        var s3Mock = new Mock<IAmazonS3>();
+        s3Mock
+            .Setup(c => c.PutObjectAsync(It.IsAny<PutObjectRequest>(), It.IsAny<CancellationToken>()))
+            .Callback<PutObjectRequest, CancellationToken>((r, _) => captured = r)
+            .ReturnsAsync(new PutObjectResponse { HttpStatusCode = System.Net.HttpStatusCode.OK });
+
+        var handler = new WtmS3FileHandler(s3Mock.Object, BuildOptions());
+        var data    = new MemoryStream(Encoding.UTF8.GetBytes("hello"));
+
+        handler.Upload("photo.jpg", 5, data);
+
+        captured.Should().NotBeNull();
+        captured!.ContentType.Should().Be("image/jpeg", "the object's Content-Type should be derived from the file extension");
+    }
+
+    [TestMethod]
+    public void Upload_UnknownExtension_FallsBackToOctetStream()
+    {
+        PutObjectRequest? captured = null;
+        var s3Mock = new Mock<IAmazonS3>();
+        s3Mock
+            .Setup(c => c.PutObjectAsync(It.IsAny<PutObjectRequest>(), It.IsAny<CancellationToken>()))
+            .Callback<PutObjectRequest, CancellationToken>((r, _) => captured = r)
+            .ReturnsAsync(new PutObjectResponse { HttpStatusCode = System.Net.HttpStatusCode.OK });
+
+        var handler = new WtmS3FileHandler(s3Mock.Object, BuildOptions());
+        var data    = new MemoryStream(Encoding.UTF8.GetBytes("hello"));
+
+        handler.Upload("archive.xyz123", 5, data);
+
+        captured!.ContentType.Should().Be("application/octet-stream");
+    }
+
+    [TestMethod]
+    public void Upload_RejectsPathTraversal_InSubdir()
+    {
+        var s3Mock = new Mock<IAmazonS3>();
+        s3Mock
+            .Setup(c => c.PutObjectAsync(It.IsAny<PutObjectRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PutObjectResponse { HttpStatusCode = System.Net.HttpStatusCode.OK });
+
+        var handler = new WtmS3FileHandler(s3Mock.Object, BuildOptions(prefix: "uploads"));
+        var data    = new MemoryStream(Encoding.UTF8.GetBytes("x"));
+
+        var (path, _) = handler.Upload("doc.pdf", 1, data, subdir: "../../secrets");
+
+        path.Should().NotBeNull();
+        path.Should().NotContain("..", "a '..' path segment in subdir must never survive into the S3 key");
+        path.Should().StartWith("uploads/", "the traversal segments are dropped, leaving only KeyPrefix");
+    }
+
+    [TestMethod]
+    public void Upload_SubdirWithLegitimateDots_IsPreserved()
+    {
+        var s3Mock = new Mock<IAmazonS3>();
+        s3Mock
+            .Setup(c => c.PutObjectAsync(It.IsAny<PutObjectRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PutObjectResponse { HttpStatusCode = System.Net.HttpStatusCode.OK });
+
+        var handler = new WtmS3FileHandler(s3Mock.Object, BuildOptions());
+        var data    = new MemoryStream(Encoding.UTF8.GetBytes("x"));
+
+        var (path, _) = handler.Upload("doc.pdf", 1, data, subdir: "archive.2024/reports");
+
+        // Only whole "." / ".." segments are dropped — a segment that merely
+        // contains a dot must be preserved unchanged (no regression).
+        path.Should().StartWith("archive.2024/reports/");
+    }
+
     // ─── GetFileData tests ───────────────────────────────────────────────────
 
     [TestMethod]
@@ -199,6 +293,57 @@ public class WtmS3FileHandlerTests
         result.Should().BeNull();
     }
 
+    [TestMethod]
+    public void GetFileData_ReturnsNull_WhenGenericAmazonServiceExceptionThrown()
+    {
+        // #680: broadened catch — see Upload_ReturnsNullPath_WhenGenericAmazonServiceExceptionThrown.
+        var s3Mock = new Mock<IAmazonS3>();
+        s3Mock
+            .Setup(c => c.GetObjectAsync(It.IsAny<GetObjectRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new AmazonServiceException("service unavailable"));
+
+        var handler = new WtmS3FileHandler(s3Mock.Object, BuildOptions());
+        var file    = new StubFile { Path = "some/key.txt" };
+
+        var act = () => handler.GetFileData(file);
+
+        act.Should().NotThrow();
+    }
+
+    [TestMethod]
+    public void GetFileData_ReturnsSeekableStream_WithKnownContentLength()
+    {
+        // #680: the pre-sized-buffer optimisation (avoids MemoryStream's
+        // internal buffer-doubling reallocations for large objects) must not
+        // change the returned stream's contract — still seekable, still
+        // correct content, regardless of whether Content-Length was known.
+        const string key     = "uploads/big.bin";
+        const string content = "content-with-known-length";
+        var contentStream    = new MemoryStream(Encoding.UTF8.GetBytes(content));
+
+        var response = new GetObjectResponse
+        {
+            ResponseStream = contentStream,
+            HttpStatusCode = System.Net.HttpStatusCode.OK,
+        };
+        response.Headers.ContentLength = Encoding.UTF8.GetByteCount(content);
+
+        var s3Mock = new Mock<IAmazonS3>();
+        s3Mock
+            .Setup(c => c.GetObjectAsync(It.IsAny<GetObjectRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(response);
+
+        var handler = new WtmS3FileHandler(s3Mock.Object, BuildOptions());
+        var file    = new StubFile { Path = key };
+
+        var result = handler.GetFileData(file);
+
+        result.Should().NotBeNull();
+        result!.CanSeek.Should().BeTrue("Mvc's GetFile action unconditionally sets Position = 0");
+        result.Position = 0;
+        new StreamReader(result).ReadToEnd().Should().Be(content);
+    }
+
     // ─── DeleteFile tests ────────────────────────────────────────────────────
 
     [TestMethod]
@@ -237,6 +382,22 @@ public class WtmS3FileHandlerTests
         var file    = new StubFile { Path = "some/key.txt" };
 
         // Should log and swallow — not propagate.
+        var act = () => handler.DeleteFile(file);
+        act.Should().NotThrow();
+    }
+
+    [TestMethod]
+    public void DeleteFile_DoesNotThrow_WhenGenericAmazonServiceExceptionThrown()
+    {
+        // #680: broadened catch — see Upload_ReturnsNullPath_WhenGenericAmazonServiceExceptionThrown.
+        var s3Mock = new Mock<IAmazonS3>();
+        s3Mock
+            .Setup(c => c.DeleteObjectAsync(It.IsAny<DeleteObjectRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new AmazonServiceException("throttled"));
+
+        var handler = new WtmS3FileHandler(s3Mock.Object, BuildOptions());
+        var file    = new StubFile { Path = "some/key.txt" };
+
         var act = () => handler.DeleteFile(file);
         act.Should().NotThrow();
     }

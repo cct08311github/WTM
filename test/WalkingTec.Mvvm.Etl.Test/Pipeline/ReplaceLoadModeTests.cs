@@ -153,4 +153,30 @@ public class ReplaceLoadModeTests
         Assert.IsFalse(MssqlBulkLoader.IsSafeWhereClause("XP_CMDSHELL('') = ''"),
             "Prefix check must be case-insensitive.");
     }
+
+    // ─── #680 (P3): word-boundary fix for the sp_/xp_ prefix check ────────
+    // The previous plain Contains("sp_")/Contains("xp_") check false-positived
+    // on legitimate column names that merely contain "sp_"/"xp_" mid-word
+    // (e.g. "resp_code"). The guard must still reject a real proc-prefix
+    // invocation appearing anywhere at a word boundary within the clause.
+
+    [TestMethod]
+    public void IsSafeWhereClause_allows_columns_with_sp_or_xp_substring_not_at_word_boundary()
+    {
+        Assert.IsTrue(MssqlBulkLoader.IsSafeWhereClause("resp_code = 'X'"),
+            "'resp_code' merely contains 'sp_' mid-word and must not be rejected.");
+        Assert.IsTrue(MssqlBulkLoader.IsSafeWhereClause("expat_code = 'Y'"));
+        Assert.IsTrue(MssqlBulkLoader.IsSafeWhereClause("TransportCost > 100 AND resp_code IS NOT NULL"));
+    }
+
+    [TestMethod]
+    public void IsSafeWhereClause_still_rejects_proc_prefix_at_word_boundary_mid_clause()
+    {
+        // A genuine sp_/xp_ invocation preceded by a space (a real word
+        // boundary) inside a longer clause must still be rejected — the fix
+        // only stops matching MID-WORD substrings, not real occurrences
+        // anywhere in the string.
+        Assert.IsFalse(MssqlBulkLoader.IsSafeWhereClause("1=1 AND xp_cmdshell('x')=''"));
+        Assert.IsFalse(MssqlBulkLoader.IsSafeWhereClause("1=1 AND sp_executesql(N'x')"));
+    }
 }
