@@ -992,92 +992,102 @@ public class SequentialTests : IDisposable
 
         for (int round = 0; round < Rounds; round++)
         {
-            // Fresh DB per round.
-            var dbName = $"WfSeqConc_{round}_{Guid.NewGuid():N}";
-            await using var keepAlive = SqliteSharedMemoryFixture.OpenKeepAliveWithBusyTimeout(dbName);
-
-            await using var initCtx = new WfSequentialTestContext(dbName);
-            initCtx.Database.EnsureCreated();
-
-            // Seed definition.
-            const string Actor = "approver_conc";
-            var graphJson = SeqTestGraphs.SingleApprover(Actor);
-            var versionId = Guid.NewGuid();
-            initCtx.Set<ProcessDefinitionVersion>().Add(new ProcessDefinitionVersion
+            // #711 (#709 round 2): genuinely-racing (two concurrent WfSequentialTestContext
+            // actors) — use a dedicated per-round file-WAL database instead of shared-cache
+            // in-memory. See SqliteSharedMemoryFixture's remarks for why shared-cache
+            // in-memory's connection pooling + coarse table locking make it unsafe under
+            // genuine concurrent contention, no matter how much busy_timeout is widened.
+            var dbPath = SqliteSharedMemoryFixture.NewFileDbPath($"WfSeqConc_{round}");
+            try
             {
-                ID = versionId,
-                DefinitionId = Guid.NewGuid(),
-                VersionNo = 1,
-                SchemaVersion = 1,
-                GraphJson = graphJson,
-                ContentHash = "conc-" + versionId,
-                IsValid = true,
-            });
-            await initCtx.SaveChangesAsync();
+                await using var initCtx = new WfSequentialTestContext(dbPath, SqliteTestDbMode.FileWal);
+                initCtx.Database.EnsureCreated();
 
-            // Start via engine1.
-            var opts = new WorkFlowOptions();
-            await using var startCtx = new WfSequentialTestContext(dbName);
-            var startResolver   = new DefaultApproverResolverExposed(opts, startCtx);
-            var startDispatcher = NodeKindDispatcher_Exposed.CreateWithSequential(startResolver, opts);
-            var engine1 = WorkflowEngine_Exposed.Create(startCtx, startDispatcher, NullLogger.Instance);
-            var instance = await engine1.StartAsync(versionId, null, "initiator", null);
-
-            Assert.AreEqual(InstanceState.Running, instance.State,
-                $"Round {round}: instance must be Running (blocked at approval).");
-
-            // Find the Pending task.
-            await using var readCtx = new WfSequentialTestContext(dbName);
-            var nodeInst = await readCtx.Set<NodeInstance>()
-                .AsNoTracking()
-                .SingleAsync(n => n.InstanceId == instance.ID && n.NodeKind == NodeKind.Approval);
-            var task = await readCtx.Set<ApprovalTask>()
-                .AsNoTracking()
-                .SingleAsync(t => t.NodeInstanceId == nodeInst.ID && t.State == TaskState.Pending);
-
-            // Race two approvals.
-            var barrier = new SemaphoreSlim(0, 2);
-            var instanceId = instance.ID;
-            var taskId = task.ID;
-
-            Task<WorkflowActionResult> MakeApproveTask()
-            {
-                return Task.Run(async () =>
+                // Seed definition.
+                const string Actor = "approver_conc";
+                var graphJson = SeqTestGraphs.SingleApprover(Actor);
+                var versionId = Guid.NewGuid();
+                initCtx.Set<ProcessDefinitionVersion>().Add(new ProcessDefinitionVersion
                 {
-                    await barrier.WaitAsync();
-                    var raceOpts = new WorkFlowOptions();
-                    await using var raceCtx = new WfSequentialTestContext(dbName);
-                    var raceResolver   = new DefaultApproverResolverExposed(raceOpts, raceCtx);
-                    var raceDispatcher = NodeKindDispatcher_Exposed.CreateWithSequential(raceResolver, raceOpts);
-                    var raceEngine = WorkflowEngine_Exposed.Create(raceCtx, raceDispatcher, NullLogger.Instance);
-                    return await raceEngine.ApproveTaskAsync(taskId, Actor);
+                    ID = versionId,
+                    DefinitionId = Guid.NewGuid(),
+                    VersionNo = 1,
+                    SchemaVersion = 1,
+                    GraphJson = graphJson,
+                    ContentHash = "conc-" + versionId,
+                    IsValid = true,
                 });
+                await initCtx.SaveChangesAsync();
+
+                // Start via engine1.
+                var opts = new WorkFlowOptions();
+                await using var startCtx = new WfSequentialTestContext(dbPath, SqliteTestDbMode.FileWal);
+                var startResolver   = new DefaultApproverResolverExposed(opts, startCtx);
+                var startDispatcher = NodeKindDispatcher_Exposed.CreateWithSequential(startResolver, opts);
+                var engine1 = WorkflowEngine_Exposed.Create(startCtx, startDispatcher, NullLogger.Instance);
+                var instance = await engine1.StartAsync(versionId, null, "initiator", null);
+
+                Assert.AreEqual(InstanceState.Running, instance.State,
+                    $"Round {round}: instance must be Running (blocked at approval).");
+
+                // Find the Pending task.
+                await using var readCtx = new WfSequentialTestContext(dbPath, SqliteTestDbMode.FileWal);
+                var nodeInst = await readCtx.Set<NodeInstance>()
+                    .AsNoTracking()
+                    .SingleAsync(n => n.InstanceId == instance.ID && n.NodeKind == NodeKind.Approval);
+                var task = await readCtx.Set<ApprovalTask>()
+                    .AsNoTracking()
+                    .SingleAsync(t => t.NodeInstanceId == nodeInst.ID && t.State == TaskState.Pending);
+
+                // Race two approvals.
+                var barrier = new SemaphoreSlim(0, 2);
+                var instanceId = instance.ID;
+                var taskId = task.ID;
+
+                Task<WorkflowActionResult> MakeApproveTask()
+                {
+                    var capturedDb = dbPath;
+                    return Task.Run(async () =>
+                    {
+                        await barrier.WaitAsync();
+                        var raceOpts = new WorkFlowOptions();
+                        await using var raceCtx = new WfSequentialTestContext(capturedDb, SqliteTestDbMode.FileWal);
+                        var raceResolver   = new DefaultApproverResolverExposed(raceOpts, raceCtx);
+                        var raceDispatcher = NodeKindDispatcher_Exposed.CreateWithSequential(raceResolver, raceOpts);
+                        var raceEngine = WorkflowEngine_Exposed.Create(raceCtx, raceDispatcher, NullLogger.Instance);
+                        return await raceEngine.ApproveTaskAsync(taskId, Actor);
+                    });
+                }
+
+                var t1 = MakeApproveTask();
+                var t2 = MakeApproveTask();
+                barrier.Release(2);
+
+                var results = await Task.WhenAll(t1, t2);
+
+                int approved = results.Count(r => r.Code == WorkflowActionCode.InstanceApproved);
+                // The loser executes its three AsNoTracking guard reads AFTER the winner's atomic
+                // claim + pointer-advance has already committed, so the exact guard it trips on is
+                // timing-dependent. All three outcomes are legitimate "CAS lost" results:
+                //   - NodeClosed:      guard 4 — the node is no longer Activated (winner closed it).
+                //   - AlreadyHandled:  guard 6 — the task is no longer Pending (CAS lost the race).
+                //   - TaskNotActive:   guard 7 — for a Sequential task, the winner already advanced
+                //                      nodeInst.SequencePointer past this task's SequenceOrder.
+                // The engine never lets the loser double-approve (it always returns before the CAS);
+                // this just widens the assertion to the full set of guard paths it can legitimately hit.
+                int lost = results.Count(r => r.Code == WorkflowActionCode.AlreadyHandled
+                                               || r.Code == WorkflowActionCode.NodeClosed
+                                               || r.Code == WorkflowActionCode.TaskNotActive);
+
+                Assert.AreEqual(1, approved,
+                    $"Round {round}: exactly 1 result must be InstanceApproved, got [{results[0].Code},{results[1].Code}].");
+                Assert.AreEqual(1, lost,
+                    $"Round {round}: exactly 1 result must be AlreadyHandled, NodeClosed, or TaskNotActive (loser), got [{results[0].Code},{results[1].Code}].");
             }
-
-            var t1 = MakeApproveTask();
-            var t2 = MakeApproveTask();
-            barrier.Release(2);
-
-            var results = await Task.WhenAll(t1, t2);
-
-            int approved = results.Count(r => r.Code == WorkflowActionCode.InstanceApproved);
-            // The loser executes its three AsNoTracking guard reads AFTER the winner's atomic
-            // claim + pointer-advance has already committed, so the exact guard it trips on is
-            // timing-dependent. All three outcomes are legitimate "CAS lost" results:
-            //   - NodeClosed:      guard 4 — the node is no longer Activated (winner closed it).
-            //   - AlreadyHandled:  guard 6 — the task is no longer Pending (CAS lost the race).
-            //   - TaskNotActive:   guard 7 — for a Sequential task, the winner already advanced
-            //                      nodeInst.SequencePointer past this task's SequenceOrder.
-            // The engine never lets the loser double-approve (it always returns before the CAS);
-            // this just widens the assertion to the full set of guard paths it can legitimately hit.
-            int lost = results.Count(r => r.Code == WorkflowActionCode.AlreadyHandled
-                                           || r.Code == WorkflowActionCode.NodeClosed
-                                           || r.Code == WorkflowActionCode.TaskNotActive);
-
-            Assert.AreEqual(1, approved,
-                $"Round {round}: exactly 1 result must be InstanceApproved, got [{results[0].Code},{results[1].Code}].");
-            Assert.AreEqual(1, lost,
-                $"Round {round}: exactly 1 result must be AlreadyHandled, NodeClosed, or TaskNotActive (loser), got [{results[0].Code},{results[1].Code}].");
+            finally
+            {
+                SqliteSharedMemoryFixture.DeleteFileDatabase(dbPath);
+            }
         }
     }
 }

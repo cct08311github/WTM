@@ -30,6 +30,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Test.Mock;
 using WalkingTec.Mvvm.WorkFlow.Definition;
 using WalkingTec.Mvvm.WorkFlow.Engine;
 using WalkingTec.Mvvm.WorkFlow.Models;
@@ -601,98 +602,107 @@ public class Wf361MidChainAutoApproveTests : Wf357358361TestBase
 
         for (int round = 0; round < Rounds; round++)
         {
-            var dbName = $"Wf361Conc_{round}_{Guid.NewGuid():N}";
-            await using var keepAlive = new SqliteConnection($"DataSource={dbName}?mode=memory&cache=shared");
-            keepAlive.Open();
-
-            await using var initCtx = new WfAbbaTestContext(dbName);
-            initCtx.Database.EnsureCreated();
-
-            var opts = new WorkFlowOptions { InitiatorAutoApprove = true };
-
-            // Seed the mid-chain graph.
-            var ver = new ProcessDefinitionVersion
+            // #711 (#709 round 2): genuinely-racing (two concurrent WfAbbaTestContext actors)
+            // — use a dedicated per-round file-WAL database instead of shared-cache in-memory.
+            // See SqliteSharedMemoryFixture's remarks for why shared-cache in-memory's
+            // connection pooling + coarse table locking make it unsafe under genuine
+            // concurrent contention, no matter how much busy_timeout is widened.
+            var dbPath = SqliteSharedMemoryFixture.NewFileDbPath($"Wf361Conc_{round}");
+            try
             {
-                ID = Guid.NewGuid(),
-                DefinitionId = Guid.NewGuid(),
-                GraphJson = MidChainAutoGraph(),
-                ContentHash = $"hash-{Guid.NewGuid():N}",
-                VersionNo = 1,
-                IsValid = true,
-            };
-            initCtx.Set<ProcessDefinitionVersion>().Add(ver);
-            await initCtx.SaveChangesAsync();
+                await using var initCtx = new WfAbbaTestContext(dbPath, SqliteTestDbMode.FileWal);
+                initCtx.Database.EnsureCreated();
 
-            // Start instance ("initiator" is the process submitter → step 1 is AutoApproved).
-            await using var startCtx = new WfAbbaTestContext(dbName);
-            var startEngine = MakeEngine(startCtx, opts);
-            var instance = await startEngine.StartAsync(ver.ID, null, "initiator", null);
+                var opts = new WorkFlowOptions { InitiatorAutoApprove = true };
 
-            // Read alice's step-0 Pending task.
-            await using var readCtx = new WfAbbaTestContext(dbName);
-            var nodeInst = await readCtx.Set<NodeInstance>()
-                .AsNoTracking()
-                .SingleAsync(n => n.InstanceId == instance.ID && n.NodeKind == NodeKind.Approval);
-            var aliceTask = await readCtx.Set<ApprovalTask>()
-                .AsNoTracking()
-                .SingleAsync(t => t.NodeInstanceId == nodeInst.ID
-                                   && t.SequenceOrder == 0
-                                   && t.State == TaskState.Pending);
+                // Seed the mid-chain graph.
+                var ver = new ProcessDefinitionVersion
+                {
+                    ID = Guid.NewGuid(),
+                    DefinitionId = Guid.NewGuid(),
+                    GraphJson = MidChainAutoGraph(),
+                    ContentHash = $"hash-{Guid.NewGuid():N}",
+                    VersionNo = 1,
+                    IsValid = true,
+                };
+                initCtx.Set<ProcessDefinitionVersion>().Add(ver);
+                await initCtx.SaveChangesAsync();
 
-            var taskId = aliceTask.ID;
-            var nodeInstId = nodeInst.ID;
+                // Start instance ("initiator" is the process submitter → step 1 is AutoApproved).
+                await using var startCtx = new WfAbbaTestContext(dbPath, SqliteTestDbMode.FileWal);
+                var startEngine = MakeEngine(startCtx, opts);
+                var instance = await startEngine.StartAsync(ver.ID, null, "initiator", null);
 
-            // Race two concurrent approve calls on alice's task.
-            var barrier = new SemaphoreSlim(0, 2);
+                // Read alice's step-0 Pending task.
+                await using var readCtx = new WfAbbaTestContext(dbPath, SqliteTestDbMode.FileWal);
+                var nodeInst = await readCtx.Set<NodeInstance>()
+                    .AsNoTracking()
+                    .SingleAsync(n => n.InstanceId == instance.ID && n.NodeKind == NodeKind.Approval);
+                var aliceTask = await readCtx.Set<ApprovalTask>()
+                    .AsNoTracking()
+                    .SingleAsync(t => t.NodeInstanceId == nodeInst.ID
+                                       && t.SequenceOrder == 0
+                                       && t.State == TaskState.Pending);
 
-            Task<WorkflowActionResult> MakeApproveTask(string actor) => Task.Run(async () =>
-            {
-                await barrier.WaitAsync();
-                await using var raceCtx = new WfAbbaTestContext(dbName);
-                var raceEngine = MakeEngine(raceCtx, opts);
-                return await raceEngine.ApproveTaskAsync(taskId, actor);
-            });
+                var taskId = aliceTask.ID;
+                var nodeInstId = nodeInst.ID;
 
-            var t1 = MakeApproveTask("alice");
-            var t2 = MakeApproveTask("alice");
-            barrier.Release(2);
-            var results = await Task.WhenAll(t1, t2);
+                // Race two concurrent approve calls on alice's task.
+                var barrier = new SemaphoreSlim(0, 2);
 
-            // One must win (Advanced/Blocked/InstanceApproved), one must lose gracefully.
-            int won = results.Count(r =>
-                r.Code is WorkflowActionCode.Advanced
-                       or WorkflowActionCode.Blocked
-                       or WorkflowActionCode.InstanceApproved);
-            int lost = results.Count(r =>
-                r.Code is WorkflowActionCode.AlreadyHandled
-                       or WorkflowActionCode.TaskNotActive
-                       or WorkflowActionCode.NodeClosed);
-            Assert.AreEqual(1, won,
-                $"Round {round}: exactly 1 result must be Advanced/Blocked/InstanceApproved, got [{results[0].Code},{results[1].Code}].");
-            Assert.AreEqual(1, lost,
-                $"Round {round}: exactly 1 result must be AlreadyHandled/TaskNotActive/NodeClosed, got [{results[0].Code},{results[1].Code}].");
+                Task<WorkflowActionResult> MakeApproveTask(string actor) => Task.Run(async () =>
+                {
+                    await barrier.WaitAsync();
+                    await using var raceCtx = new WfAbbaTestContext(dbPath, SqliteTestDbMode.FileWal);
+                    var raceEngine = MakeEngine(raceCtx, opts);
+                    return await raceEngine.ApproveTaskAsync(taskId, actor);
+                });
 
-            // KEY INVARIANT: no orphan-Pending task at step 2 while pointer is still at step 1.
-            await using var verifyCtx = new WfAbbaTestContext(dbName);
-            var freshNode = await verifyCtx.Set<NodeInstance>()
-                .AsNoTracking()
-                .SingleAsync(n => n.ID == nodeInstId);
-            var step2Task = await verifyCtx.Set<ApprovalTask>()
-                .AsNoTracking()
-                .SingleAsync(t => t.NodeInstanceId == nodeInstId && t.SequenceOrder == 2);
+                var t1 = MakeApproveTask("alice");
+                var t2 = MakeApproveTask("alice");
+                barrier.Release(2);
+                var results = await Task.WhenAll(t1, t2);
 
-            if (freshNode.SequencePointer >= 2)
-            {
-                // Pointer reached step 2 — step-2 task must be Pending (winner activated it correctly).
-                Assert.AreEqual(TaskState.Pending, step2Task.State,
-                    $"Round {round}: SequencePointer=={freshNode.SequencePointer} but step-2 task is {step2Task.State} — pointer advanced without activating carol's task.");
+                // One must win (Advanced/Blocked/InstanceApproved), one must lose gracefully.
+                int won = results.Count(r =>
+                    r.Code is WorkflowActionCode.Advanced
+                           or WorkflowActionCode.Blocked
+                           or WorkflowActionCode.InstanceApproved);
+                int lost = results.Count(r =>
+                    r.Code is WorkflowActionCode.AlreadyHandled
+                           or WorkflowActionCode.TaskNotActive
+                           or WorkflowActionCode.NodeClosed);
+                Assert.AreEqual(1, won,
+                    $"Round {round}: exactly 1 result must be Advanced/Blocked/InstanceApproved, got [{results[0].Code},{results[1].Code}].");
+                Assert.AreEqual(1, lost,
+                    $"Round {round}: exactly 1 result must be AlreadyHandled/TaskNotActive/NodeClosed, got [{results[0].Code},{results[1].Code}].");
+
+                // KEY INVARIANT: no orphan-Pending task at step 2 while pointer is still at step 1.
+                await using var verifyCtx = new WfAbbaTestContext(dbPath, SqliteTestDbMode.FileWal);
+                var freshNode = await verifyCtx.Set<NodeInstance>()
+                    .AsNoTracking()
+                    .SingleAsync(n => n.ID == nodeInstId);
+                var step2Task = await verifyCtx.Set<ApprovalTask>()
+                    .AsNoTracking()
+                    .SingleAsync(t => t.NodeInstanceId == nodeInstId && t.SequenceOrder == 2);
+
+                if (freshNode.SequencePointer >= 2)
+                {
+                    // Pointer reached step 2 — step-2 task must be Pending (winner activated it correctly).
+                    Assert.AreEqual(TaskState.Pending, step2Task.State,
+                        $"Round {round}: SequencePointer=={freshNode.SequencePointer} but step-2 task is {step2Task.State} — pointer advanced without activating carol's task.");
+                }
+                else
+                {
+                    // Pointer is still at step 1 — step-2 task must NOT be Pending (no orphan activation).
+                    Assert.AreNotEqual(TaskState.Pending, step2Task.State,
+                        $"Round {round}: SequencePointer=={freshNode.SequencePointer} (step 1) but step-2 task is Pending — " +
+                        "orphan-Pending orphan! The per-iteration tx must roll back the activate when the CAS is lost (#361 R2).");
+                }
             }
-            else
+            finally
             {
-                // Pointer is still at step 1 — step-2 task must NOT be Pending (no orphan activation).
-                Assert.AreNotEqual(TaskState.Pending, step2Task.State,
-                    $"Round {round}: SequencePointer=={freshNode.SequencePointer} (step 1) but step-2 task is Pending — " +
-                    "orphan-Pending orphan! The per-iteration tx must roll back the activate when the CAS is lost (#361 R2).");
+                SqliteSharedMemoryFixture.DeleteFileDatabase(dbPath);
             }
         }
     }

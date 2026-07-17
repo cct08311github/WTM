@@ -20,6 +20,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Test.Mock;
 using WalkingTec.Mvvm.WorkFlow.Definition;
 using WalkingTec.Mvvm.WorkFlow.Engine;
 using WalkingTec.Mvvm.WorkFlow.Models;
@@ -312,103 +313,112 @@ public class Wf320SeqMidChainTxTests : IDisposable
 
         for (int round = 0; round < Rounds; round++)
         {
-            var dbName = $"WfSeqMidChainConc_{round}_{Guid.NewGuid():N}";
-            await using var keepAlive = new SqliteConnection($"DataSource={dbName}?mode=memory&cache=shared");
-            keepAlive.Open();
-
-            await using var initCtx = new WfSequentialTestContext(dbName);
-            initCtx.Database.EnsureCreated();
-
-            const string A1 = "alice_conc";
-            const string A2 = "bob_conc";
-            const string A3 = "carol_conc";
-            var graphJson = ThreeApproversGraph(A1, A2, A3);
-
-            var versionId = Guid.NewGuid();
-            initCtx.Set<ProcessDefinitionVersion>().Add(new ProcessDefinitionVersion
+            // #711 (#709 round 2): genuinely-racing (two concurrent WfSequentialTestContext
+            // actors) — use a dedicated per-round file-WAL database instead of shared-cache
+            // in-memory. See SqliteSharedMemoryFixture's remarks for why shared-cache
+            // in-memory's connection pooling + coarse table locking make it unsafe under
+            // genuine concurrent contention, no matter how much busy_timeout is widened.
+            var dbPath = SqliteSharedMemoryFixture.NewFileDbPath($"WfSeqMidChainConc_{round}");
+            try
             {
-                ID = versionId,
-                DefinitionId = Guid.NewGuid(),
-                VersionNo = 1,
-                SchemaVersion = 1,
-                GraphJson = graphJson,
-                ContentHash = "conc-mid-" + versionId.ToString("N"),
-                PublishedAt = DateTime.UtcNow,
-                PublishedBy = "test",
-                IsValid = true,
-            });
-            await initCtx.SaveChangesAsync();
+                await using var initCtx = new WfSequentialTestContext(dbPath, SqliteTestDbMode.FileWal);
+                initCtx.Database.EnsureCreated();
 
-            // Start instance.
-            await using var startCtx = new WfSequentialTestContext(dbName);
-            var startOpts = new WorkFlowOptions();
-            var startResolver = new DefaultApproverResolverExposed(startOpts, startCtx);
-            var startDispatcher = NodeKindDispatcher_Exposed.CreateWithSequential(startResolver, startOpts);
-            var startEngine = WorkflowEngine_Exposed.Create(startCtx, startDispatcher, NullLogger.Instance);
-            var instance = await startEngine.StartAsync(versionId, null, "initiator", null);
+                const string A1 = "alice_conc";
+                const string A2 = "bob_conc";
+                const string A3 = "carol_conc";
+                var graphJson = ThreeApproversGraph(A1, A2, A3);
 
-            await using var readCtx = new WfSequentialTestContext(dbName);
-            var nodeInst = await readCtx.Set<NodeInstance>()
-                .AsNoTracking()
-                .SingleAsync(n => n.InstanceId == instance.ID && n.NodeKind == NodeKind.Approval);
-            var task0 = await readCtx.Set<ApprovalTask>()
-                .AsNoTracking()
-                .SingleAsync(t => t.NodeInstanceId == nodeInst.ID && t.SequenceOrder == 0 && t.State == TaskState.Pending);
+                var versionId = Guid.NewGuid();
+                initCtx.Set<ProcessDefinitionVersion>().Add(new ProcessDefinitionVersion
+                {
+                    ID = versionId,
+                    DefinitionId = Guid.NewGuid(),
+                    VersionNo = 1,
+                    SchemaVersion = 1,
+                    GraphJson = graphJson,
+                    ContentHash = "conc-mid-" + versionId.ToString("N"),
+                    PublishedAt = DateTime.UtcNow,
+                    PublishedBy = "test",
+                    IsValid = true,
+                });
+                await initCtx.SaveChangesAsync();
 
-            // Race two approve calls on the same task0.
-            var barrier = new SemaphoreSlim(0, 2);
-            var taskId = task0.ID;
-            var nodeInstId = nodeInst.ID;
+                // Start instance.
+                await using var startCtx = new WfSequentialTestContext(dbPath, SqliteTestDbMode.FileWal);
+                var startOpts = new WorkFlowOptions();
+                var startResolver = new DefaultApproverResolverExposed(startOpts, startCtx);
+                var startDispatcher = NodeKindDispatcher_Exposed.CreateWithSequential(startResolver, startOpts);
+                var startEngine = WorkflowEngine_Exposed.Create(startCtx, startDispatcher, NullLogger.Instance);
+                var instance = await startEngine.StartAsync(versionId, null, "initiator", null);
 
-            Task<WorkflowActionResult> MakeApproveTask(string actor) => Task.Run(async () =>
-            {
-                await barrier.WaitAsync();
-                var raceOpts = new WorkFlowOptions();
-                await using var raceCtx = new WfSequentialTestContext(dbName);
-                var raceResolver = new DefaultApproverResolverExposed(raceOpts, raceCtx);
-                var raceDispatcher = NodeKindDispatcher_Exposed.CreateWithSequential(raceResolver, raceOpts);
-                var raceEngine = WorkflowEngine_Exposed.Create(raceCtx, raceDispatcher, NullLogger.Instance);
-                return await raceEngine.ApproveTaskAsync(taskId, actor);
-            });
+                await using var readCtx = new WfSequentialTestContext(dbPath, SqliteTestDbMode.FileWal);
+                var nodeInst = await readCtx.Set<NodeInstance>()
+                    .AsNoTracking()
+                    .SingleAsync(n => n.InstanceId == instance.ID && n.NodeKind == NodeKind.Approval);
+                var task0 = await readCtx.Set<ApprovalTask>()
+                    .AsNoTracking()
+                    .SingleAsync(t => t.NodeInstanceId == nodeInst.ID && t.SequenceOrder == 0 && t.State == TaskState.Pending);
 
-            var t1 = MakeApproveTask(A1);
-            var t2 = MakeApproveTask(A1);
-            barrier.Release(2);
-            var results = await Task.WhenAll(t1, t2);
+                // Race two approve calls on the same task0.
+                var barrier = new SemaphoreSlim(0, 2);
+                var taskId = task0.ID;
+                var nodeInstId = nodeInst.ID;
 
-            // Exactly one must advance; the other must lose gracefully.
-            int advanced = results.Count(r => r.Code == WorkflowActionCode.Advanced);
-            int lost = results.Count(r =>
-                r.Code == WorkflowActionCode.AlreadyHandled ||
-                r.Code == WorkflowActionCode.TaskNotActive ||
-                r.Code == WorkflowActionCode.NodeClosed);
+                Task<WorkflowActionResult> MakeApproveTask(string actor) => Task.Run(async () =>
+                {
+                    await barrier.WaitAsync();
+                    var raceOpts = new WorkFlowOptions();
+                    await using var raceCtx = new WfSequentialTestContext(dbPath, SqliteTestDbMode.FileWal);
+                    var raceResolver = new DefaultApproverResolverExposed(raceOpts, raceCtx);
+                    var raceDispatcher = NodeKindDispatcher_Exposed.CreateWithSequential(raceResolver, raceOpts);
+                    var raceEngine = WorkflowEngine_Exposed.Create(raceCtx, raceDispatcher, NullLogger.Instance);
+                    return await raceEngine.ApproveTaskAsync(taskId, actor);
+                });
 
-            Assert.AreEqual(1, advanced,
-                $"Round {round}: exactly 1 result must be Advanced (mid-chain), got [{results[0].Code},{results[1].Code}].");
-            Assert.AreEqual(1, lost,
-                $"Round {round}: exactly 1 result must be AlreadyHandled/TaskNotActive/NodeClosed, got [{results[0].Code},{results[1].Code}].");
+                var t1 = MakeApproveTask(A1);
+                var t2 = MakeApproveTask(A1);
+                barrier.Release(2);
+                var results = await Task.WhenAll(t1, t2);
 
-            // KEY INVARIANT: no half-activated state.
-            await using var verifyCtx = new WfSequentialTestContext(dbName);
-            var freshNode = await verifyCtx.Set<NodeInstance>()
-                .AsNoTracking()
-                .SingleAsync(n => n.ID == nodeInstId);
-            var step1Task = await verifyCtx.Set<ApprovalTask>()
-                .AsNoTracking()
-                .SingleAsync(t => t.NodeInstanceId == nodeInstId && t.SequenceOrder == 1);
+                // Exactly one must advance; the other must lose gracefully.
+                int advanced = results.Count(r => r.Code == WorkflowActionCode.Advanced);
+                int lost = results.Count(r =>
+                    r.Code == WorkflowActionCode.AlreadyHandled ||
+                    r.Code == WorkflowActionCode.TaskNotActive ||
+                    r.Code == WorkflowActionCode.NodeClosed);
 
-            if (freshNode.SequencePointer == 1)
-            {
-                Assert.AreEqual(TaskState.Pending, step1Task.State,
-                    $"Round {round}: SequencePointer==1 but step-1 task is {step1Task.State} — half-activated strand! " +
-                    "The tx must have committed both pointer advance AND task activation together.");
+                Assert.AreEqual(1, advanced,
+                    $"Round {round}: exactly 1 result must be Advanced (mid-chain), got [{results[0].Code},{results[1].Code}].");
+                Assert.AreEqual(1, lost,
+                    $"Round {round}: exactly 1 result must be AlreadyHandled/TaskNotActive/NodeClosed, got [{results[0].Code},{results[1].Code}].");
+
+                // KEY INVARIANT: no half-activated state.
+                await using var verifyCtx = new WfSequentialTestContext(dbPath, SqliteTestDbMode.FileWal);
+                var freshNode = await verifyCtx.Set<NodeInstance>()
+                    .AsNoTracking()
+                    .SingleAsync(n => n.ID == nodeInstId);
+                var step1Task = await verifyCtx.Set<ApprovalTask>()
+                    .AsNoTracking()
+                    .SingleAsync(t => t.NodeInstanceId == nodeInstId && t.SequenceOrder == 1);
+
+                if (freshNode.SequencePointer == 1)
+                {
+                    Assert.AreEqual(TaskState.Pending, step1Task.State,
+                        $"Round {round}: SequencePointer==1 but step-1 task is {step1Task.State} — half-activated strand! " +
+                        "The tx must have committed both pointer advance AND task activation together.");
+                }
+                else
+                {
+                    // pointer still 0: step-1 task must NOT be Pending (no orphan activation without pointer advance).
+                    Assert.AreNotEqual(TaskState.Pending, step1Task.State,
+                        $"Round {round}: SequencePointer==0 but step-1 task is Pending — orphan activation! " +
+                        "The task was activated without the pointer advancing (half-activated in reverse).");
+                }
             }
-            else
+            finally
             {
-                // pointer still 0: step-1 task must NOT be Pending (no orphan activation without pointer advance).
-                Assert.AreNotEqual(TaskState.Pending, step1Task.State,
-                    $"Round {round}: SequencePointer==0 but step-1 task is Pending — orphan activation! " +
-                    "The task was activated without the pointer advancing (half-activated in reverse).");
+                SqliteSharedMemoryFixture.DeleteFileDatabase(dbPath);
             }
         }
     }

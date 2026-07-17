@@ -684,10 +684,19 @@ namespace WalkingTec.Mvvm.Core.Test.Cache
         //
         // #709: routed through WalkingTec.Mvvm.Test.Mock.SqliteSharedMemoryFixture — the
         // shared helper extracted for the WorkFlow TCONC fixtures — instead of hand-rolling
-        // the connection string here. This class doesn't race multiple connections against
-        // each other (each test method seeds then reads sequentially), so it isn't exposed
-        // to the #620/#629 lock-contention flakes, but centralizing the connection-string
-        // construction keeps this fixture in sync with the canonical helper.
+        // the connection string here. This switched the connection string from the keyword
+        // form (`DataSource={name};Mode=Memory;Cache=Shared`) to
+        // SqliteSharedMemoryFixture.BuildConnectionString's URI-query form
+        // (`DataSource={name}?mode=memory&cache=shared`). Per SqliteSharedMemoryFixture's
+        // #709-round-2 remarks, the URI-query form does NOT set
+        // SqliteConnectionStringBuilder.Mode, so Microsoft.Data.Sqlite's connection pool
+        // stays ACTIVE for it (unlike the keyword form, which was structurally non-pooled).
+        // That is benign here specifically because this class never races multiple
+        // DbContext/SqliteConnection instances against each other — each test method seeds
+        // then reads back sequentially (one actor at a time) — so there is no concurrent
+        // actor that could be handed the same pooled physical connection. Do not reuse this
+        // helper for a test that adds concurrent racing actors without first switching it to
+        // SqliteTestDbMode.FileWal.
 
         private static SqliteConnection OpenSharedConnection(string name) =>
             SqliteSharedMemoryFixture.OpenKeepAliveWithBusyTimeout(name);

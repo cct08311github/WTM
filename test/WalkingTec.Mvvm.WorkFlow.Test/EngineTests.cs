@@ -36,14 +36,19 @@ namespace WalkingTec.Mvvm.WorkFlow.Test;
 /// Uses the same shared-in-memory approach as ConcurrencyConformanceTests.
 /// </summary>
 /// <remarks>
-/// #709 root-cause fix: this context is used by WithdrawCcTests.cs's
+/// This context is used by WithdrawCcTests.cs's
 /// WithdrawAsync_TCONC2_ConcurrentWinner_LoserGetsCannotWithdraw and by this file's own
-/// AdvanceAsync_ConcurrentCalls_ExactlyOneWinner_NoDoubleAdvance concurrency race, but —
-/// unlike WfSequentialTestContext — never had the #620/#629 busy_timeout mitigation
-/// registered. That gap (not connection pooling, which Microsoft.Data.Sqlite structurally
-/// rules out for Mode=Memory connection strings) is why the TCONC flake class kept
-/// recurring. See WalkingTec.Mvvm.Test.Mock.SqliteBusyTimeoutInterceptor's doc comment for
-/// the full mechanism.
+/// AdvanceAsync_ConcurrentCalls_ExactlyOneWinner_NoDoubleAdvance /
+/// ConcurrentAppendAsync_ProducesUniqueSeq_NoConstraintViolation concurrency races. All
+/// three now construct this context with <see cref="SqliteTestDbMode.FileWal"/> rather
+/// than the shared-cache in-memory default — see
+/// <see cref="WalkingTec.Mvvm.Test.Mock.SqliteSharedMemoryFixture"/>'s remarks for the full
+/// #709 root-cause write-up (round 2 corrected an earlier, INCORRECT claim on this type that
+/// connection pooling was "structurally impossible" for shared-cache in-memory connection
+/// strings — it is not: the URI-query form these fixtures build leaves
+/// <c>SqliteConnectionStringBuilder.Mode</c> at its default, so Microsoft.Data.Sqlite's
+/// connection pool stays active for it, which is exactly why genuinely-racing fixtures moved
+/// to file-WAL instead of merely widening <c>busy_timeout</c>).
 /// </remarks>
 internal sealed class WfEngineTestContext : DbContext
 {
