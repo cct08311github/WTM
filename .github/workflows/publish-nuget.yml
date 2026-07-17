@@ -151,12 +151,31 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           set -euo pipefail
+          # #696: also reject a trailing CR (CRLF line ending) and leading/
+          # trailing whitespace within either field. Either defect parses
+          # "successfully" here (still 2 tab-separated fields) but corrupts
+          # the src/dst path used by `cp -f`/`git rm` in the replace step —
+          # a trailing CR or space makes the path not match any tracked
+          # file, so the replace silently no-ops instead of erroring.
           awk -F'\t' '
             /^#/ { next }
             /^$/ { next }
             {
+              if ($0 ~ /\r$/) {
+                print "ERROR: line " NR " has a trailing CR (CRLF line ending): " $0
+                bad = 1
+              }
               if (NF != 2 || $1 == "" || $2 == "") {
                 print "ERROR: line " NR " is not exactly two TAB-separated fields: " $0
+                bad = 1
+                next
+              }
+              if ($1 ~ /(^[ \t])|([ \t\r]$)/) {
+                print "ERROR: line " NR " field 1 has leading/trailing whitespace or CR: " $0
+                bad = 1
+              }
+              if ($2 ~ /(^[ \t])|([ \t\r]$)/) {
+                print "ERROR: line " NR " field 2 has leading/trailing whitespace or CR: " $0
                 bad = 1
               }
             }
@@ -197,12 +216,25 @@ jobs:
           _G="GITEA""_"            # rewrites via \bGITEA_TOKEN/HOST/USER\b rules
           _T="tailde842d"          # rewrites: s|tailde842d|internal-tailnet|g
           _N="\.ts\.net"           # rewrites as part of full-host rule in .sed
+          # #696: `git grep` exits 1 for "no match" (expected — the tree is
+          # clean) but exits >1 for a real failure (bad pattern, I/O error,
+          # not a git repo, ...). The old `2>/dev/null || true` collapsed
+          # both into "pass", silently turning a broken scan into a green
+          # leak-gate. Capture the exit code explicitly and only tolerate
+          # exit 1; anything else fails the job loudly, with stderr intact.
+          set +e
           BAD=$(git grep -lI \
             -e "$_M" \
             -e "$_T" \
             -e "$_G" \
             -e "$_N" \
-            -- ':!.sync/' ':!.github/workflows/' 2>/dev/null || true)
+            -- ':!.sync/' ':!.github/workflows/')
+          GG_EXIT=$?
+          set -e
+          if [ "$GG_EXIT" -gt 1 ]; then
+            echo "ERROR: leak-gate scan failed — git grep exited ${GG_EXIT} (expected 0 or 1). Treating as a leak-gate failure rather than risking a false pass." >&2
+            exit "$GG_EXIT"
+          fi
           if [ -n "$BAD" ]; then
             echo "ERROR: leak-gate triggered — internal markers found in:"
             echo "$BAD"
