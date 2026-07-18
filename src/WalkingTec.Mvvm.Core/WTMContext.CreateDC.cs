@@ -44,7 +44,7 @@ namespace WalkingTec.Mvvm.Core
                     && ConfigInfo?.DisableRefererTenantResolution != true
                     && HttpContext?.Request.Headers.ContainsKey("Referer") == true)
                 {
-                    Regex r = new Regex("(http://|https://)?(.+?)(/)?$");
+                    Regex r = WalkingTec.Mvvm.Core.Helper.CoreRegexes.BaseUrlDomainRegex();
                     var m = r.Match(HttpContext?.Request.Headers["Referer"]);
                     string dom = "";
                     if (m.Success)

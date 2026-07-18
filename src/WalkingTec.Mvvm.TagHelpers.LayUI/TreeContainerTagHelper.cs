@@ -16,9 +16,12 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     {
         protected const string REQUIRED_ATTR_NAME = "items";
 
-        private static readonly Regex _regStripSearcherPrefix = new Regex(@".*?Searcher\.", RegexOptions.Compiled);
-        private static readonly Regex _regSearchButtonId = new Regex(@"id=""(.*?)"" IsSearchButton", RegexOptions.Compiled);
-        private static readonly Regex _regGridOptionVar = new Regex(@"(.*?)option = \{", RegexOptions.Compiled);
+        // Perf(#713): converted to [GeneratedRegex] accessors (LayUiRegexes) — same pattern
+        // text as before; RegexOptions.Compiled is dropped as redundant with source
+        // generation (the source-gen implementation is already compiled).
+        private static readonly Regex _regStripSearcherPrefix = LayUiRegexes.SearcherPrefixStripRegex();
+        private static readonly Regex _regSearchButtonId = LayUiRegexes.SearchButtonIdRegex();
+        private static readonly Regex _regGridOptionVar = LayUiRegexes.GridOptionVarRegex();
         public ModelExpression Items { get; set; }
         /// <summary>
         /// 加载页面之前执行

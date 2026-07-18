@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
+using WalkingTec.Mvvm.Core.Helper;
 using WalkingTec.Mvvm.Core.Support.Json;
 
 namespace WalkingTec.Mvvm.Core.Services
@@ -16,7 +17,6 @@ namespace WalkingTec.Mvvm.Core.Services
     public class WtmAuthorizationService : IWtmAuthorizationService
     {
         private static readonly ConcurrentDictionary<string, Regex> _regexCache = new();
-        private static readonly Regex _batchRewrite = new("/do(batch.*)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         private readonly ILogger<WtmAuthorizationService>? _logger;
 
@@ -64,7 +64,7 @@ namespace WalkingTec.Mvvm.Core.Services
                 return false;
             }
 
-            url = _batchRewrite.Replace(url, "/$1");
+            url = CoreRegexes.BatchActionRewriteRegex().Replace(url, "/$1");
             url = url.Trim();
 
             if (url.StartsWith("#"))
@@ -88,7 +88,7 @@ namespace WalkingTec.Mvvm.Core.Services
         {
             try
             {
-                url = _batchRewrite.Replace(url ?? "", "/$1");
+                url = CoreRegexes.BatchActionRewriteRegex().Replace(url ?? "", "/$1");
                 url = url.Trim();
 
                 if (url.StartsWith("#"))

@@ -11,16 +11,19 @@ namespace WalkingTec.Mvvm.Etl.Pipeline;
 /// </summary>
 public static class EtlErrorSanitizer
 {
-    // Patterns covering common ADO.NET / EF Core connection string fragments
+    // Patterns covering common ADO.NET / EF Core connection string fragments.
+    // Perf(#713): converted to [GeneratedRegex] accessors (EtlRegexes) — same pattern text
+    // and RegexOptions.IgnoreCase as before; RegexOptions.Compiled is dropped as redundant
+    // with source generation (the source-gen implementation is already compiled).
     private static readonly Regex[] _sensitivePatterns =
     [
-        new Regex(@"Password\s*=[^;""']*",   RegexOptions.IgnoreCase | RegexOptions.Compiled),
-        new Regex(@"Pwd\s*=[^;""']*",        RegexOptions.IgnoreCase | RegexOptions.Compiled),
-        new Regex(@"User Id\s*=[^;""']*",    RegexOptions.IgnoreCase | RegexOptions.Compiled),
-        new Regex(@"Uid\s*=[^;""']*",        RegexOptions.IgnoreCase | RegexOptions.Compiled),
-        new Regex(@"Data Source\s*=[^;""']*",RegexOptions.IgnoreCase | RegexOptions.Compiled),
-        new Regex(@"Server\s*=[^;""']*",     RegexOptions.IgnoreCase | RegexOptions.Compiled),
-        new Regex(@"Database\s*=[^;""']*",   RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        EtlRegexes.PasswordFragmentRegex(),
+        EtlRegexes.PwdFragmentRegex(),
+        EtlRegexes.UserIdFragmentRegex(),
+        EtlRegexes.UidFragmentRegex(),
+        EtlRegexes.DataSourceFragmentRegex(),
+        EtlRegexes.ServerFragmentRegex(),
+        EtlRegexes.DatabaseFragmentRegex(),
     ];
 
     private const int MaxLength = 2000;
