@@ -37,6 +37,7 @@ TC_REGISTRY 增減而變動（見 #681），CI log 判讀請認 "FAIL: 0" 與 "E
 
 import asyncio
 import argparse
+import base64
 import json
 import os
 import sys
@@ -2414,7 +2415,7 @@ async def tc_34_selector_dialog_flow(page, **_):
     print("[TC-34] PASS -- Selector 對話框開啟結構驗證通過（挑選/write-back 為 KNOWN-GAP，見 docstring）")
 
 
-# ─── TC-35: 上傳元件（wt:upload）往返流程（issue #681）─────────────────────
+# ─── TC-35: 上傳元件（wt:upload）往返流程（issue #681, root cause #723）───
 
 async def tc_35_upload_widget_roundtrip(page, **_):
     """
@@ -2425,23 +2426,44 @@ async def tc_35_upload_widget_roundtrip(page, **_):
     Student/Create 的 <wt:upload field="Entity.PhotoId" upload-type=" ImageFile" />
     渲染為一個綁定 layui.upload.render 的按鈕 + 一個回填上傳結果 GUID 的
     hidden input。本測試透過瀏覽器原生檔案選擇器上傳一個固定測試檔案，
-    確認結構存在、檔案選擇器可被觸發，並盡力（best-effort）驗證上傳後
-    hidden input 是否回填。
+    確認結構存在、檔案選擇器可被觸發，並驗證上傳後 hidden input 是否回填。
 
-    KNOWN-GAP（本測試撰寫過程中發現）：在本次 #681 authoring 過程的 live demo
-    驗證中（baseline，kill-switch 關閉），點擊上傳按鈕確實能觸發瀏覽器原生
-    檔案選擇器（Playwright expect_file_chooser 有 resolve），但選檔後並未
-    觀察到任何上傳 POST 請求，hidden input 也未回填。根因未在 #681 範圍內
-    完全釐清（候選原因包含 layui.upload 內部 file input 抽換的時序問題，或
-    change 事件綁定落差），先如實記錄、軟性檢查（print，不 assert）避免讓
-    一個範圍外的既有問題讓 CI 常態變紅，並建議另開 Issue 追蹤根因。
+    根因已確認（issue #723，取代先前 #681 authoring 時留下的 KNOWN-GAP）：
+    先前版本的固定測試檔案是純文字的 e2e_upload_test.txt。但 Student/Create
+    的 upload-type="ImageFile" 會讓 UploadTagHelper（見
+    src/WalkingTec.Mvvm.TagHelpers.LayUI/Form/UploadTagHelper.cs 的
+    `ext = "jpg|jpeg|gif|bmp|png|tif"`）把這個副檔名白名單原樣寫進
+    layui.upload.render 的 `exts` config。無論是 legacy 樹（layui 2.5.7，
+    wwwroot/layui/lay/modules/upload.js）還是 #573 flip 後預設的
+    layui-next 樹（layui 2.13.8，wwwroot/layui-next/layui.js），upload
+    模組的 `case "file":` 副檔名檢查都是
+    `RegExp(...).test(escape(filename))`——比對失敗時直接 `return`
+    （附一個 layer.msg 提示），且這個 return **發生在呼叫 $.ajax 之前**。
+    也就是說 .txt 檔案在兩個 layui 版本中都會被靜音擋下：瀏覽器原生檔案
+    選擇器確實會開啟（widget 的 click→elemFile.click() 綁定正常且未變），
+    選檔後 elemFile 的 change handler 也確實觸發、`auto:true` 也確實呼叫了
+    upload()，但 upload() 內部的副檔名白名單檢查搶先 return——因此觀察不到
+    任何上傳 POST、hidden input 也不會回填。這不是 layui 內部 file input
+    抽換的時序問題，不是 Playwright file-chooser 互動的 artifact，也不是
+    UploadTagHelper 的 done/hidden-input write-back 邏輯有誤
+    （`$('#{Id}').val(res.Data.Id)` 本身完全正確，只是因為 upload() 提早
+    return 而永遠沒有機會被呼叫到）——單純是本測試先前選用的固定檔案副檔名
+    與被測 UI 元件的用途（僅接受圖片）不符。
 
-    kill-switch（issue #681 額外實測）：WTM_E2E_KILLSWITCH=1 時症狀更明確 ——
-    上傳按鈕的 layui.upload.render({elem:'#..button', ...}) 綁定本身就是
-    UploadTagHelper 輸出的 inline <script>，透過 ff.OpenDialog 開啟的對話框
-    載入，因此也被 kill-switch 擋下，按鈕完全沒有綁定任何 click handler，
-    連原生檔案選擇器都不會觸發。此時不嘗試互動，只驗證結構存在、無未捕捉
-    例外。
+    修正：改用副檔名在允許清單內的固定測試檔案（e2e_upload_test.png，內容
+    為一個最小合法的 1x1 透明 PNG）。Student/Create 沒有指定
+    thumb-width/thumb-height，因此 `/_Framework/UploadImage`
+    （src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs）伺服器端會落入
+    width==null && height==null 分支、直接委派給 `Upload()`，不會呼叫
+    ImageSharp `Image.Load` 解碼真實圖片內容——但仍附上一個真正合法的 PNG
+    位元組，確保未來若這個 view 加上縮圖尺寸參數，測試檔案依然合法可解碼。
+
+    kill-switch（issue #681 額外實測，與上述副檔名根因無關，仍然成立）：
+    WTM_E2E_KILLSWITCH=1 時，上傳按鈕的 layui.upload.render({elem:'#..button',
+    ...}) 綁定本身就是 UploadTagHelper 輸出的 inline <script>，透過
+    ff.OpenDialog 開啟的對話框載入，因此也被 kill-switch 擋下，按鈕完全沒有
+    綁定任何 click handler，連原生檔案選擇器都不會觸發。此時不嘗試互動，只
+    驗證結構存在、無未捕捉例外。
     """
     print("[TC-35] 開始執行...")
 
@@ -2468,9 +2490,23 @@ async def tc_35_upload_widget_roundtrip(page, **_):
 
     fixtures_dir = Path(__file__).parent / "fixtures"
     fixtures_dir.mkdir(parents=True, exist_ok=True)
-    test_file = fixtures_dir / "e2e_upload_test.txt"
+    # Issue #723: MUST use an extension that layui.upload's client-side `exts`
+    # allowlist accepts for upload-type="ImageFile" ("jpg|jpeg|gif|bmp|png|tif" — see
+    # UploadTagHelper.cs). A mismatched extension (e.g. the previous .txt fixture)
+    # is silently rejected by layui's upload() BEFORE it ever sends the XHR — no
+    # POST, no hidden-input write-back, and no exception to catch. See this
+    # function's docstring for the full root-cause trace through both vendored
+    # layui trees. Real (tiny, valid, 1x1 transparent) PNG bytes are used rather
+    # than a renamed .txt, so the fixture stays valid even if a future view adds
+    # thumb-width/thumb-height (which would route UploadImage through ImageSharp's
+    # Image.Load instead of the raw-bytes Upload() fallback).
+    test_file = fixtures_dir / "e2e_upload_test.png"
     if not test_file.exists():
-        test_file.write_text("WTM e2e upload round-trip fixture (issue #681)\n", encoding="utf-8")
+        _MIN_PNG_B64 = (
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+            "+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+        test_file.write_bytes(base64.b64decode(_MIN_PNG_B64))
 
     upload_requests = []
     page.on(
@@ -2499,12 +2535,22 @@ async def tc_35_upload_widget_roundtrip(page, **_):
     print(f"  上傳後 hidden input 值: {hidden_val!r}")
     print(f"  觀察到的上傳相關請求: {upload_requests}")
 
-    if hidden_val:
-        print("[TC-35] PASS -- 上傳往返流程完整驗證通過（檔案已上傳並回填 ID）")
-    else:
-        print("  [KNOWN-GAP] 上傳未完成往返（hidden input 未回填）—— 詳見本函式 docstring，"
-              "已記錄為待後續調查項目，非本次新增之迴歸")
-        print("[TC-35] PASS -- 上傳元件結構與檔案選擇器觸發驗證通過（往返部分為 KNOWN-GAP）")
+    # Issue #723: root cause of the previous KNOWN-GAP was a fixture/widget extension
+    # mismatch (see docstring), not a framework wiring bug or a Playwright artifact —
+    # now fixed by using an accepted image extension. This is asserted for real (not
+    # a soft print) so a genuine future regression in the round-trip is caught, per
+    # this repo's "don't fake a passing test" convention (see #681 review history).
+    assert upload_requests, (
+        "點擊上傳按鈕、選擇合法副檔名（.png）的檔案後，應觀察到一個上傳 POST 請求，"
+        "但完全沒有——若此斷言失敗，代表 #723 修正的根因（副檔名白名單不符）已不再是"
+        "唯一成因，需重新調查（見本函式 docstring 的根因分析）"
+    )
+    assert hidden_val, (
+        "上傳 POST 請求已送出，但 hidden input 未回填上傳結果 ID——"
+        "UploadTagHelper 的 done callback（$('#{Id}').val(res.Data.Id)）"
+        "未被正確觸發，需重新調查"
+    )
+    print("[TC-35] PASS -- 上傳往返流程完整驗證通過（檔案已上傳並回填 ID）")
 
 
 # ─── TC-36: 租戶切換（Tenant Switch）— SKIP（issue #681）───────────────────
