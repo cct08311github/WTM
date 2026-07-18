@@ -432,6 +432,25 @@ window.ff = {
     // longer the only thing preventing the no-op — it is now redundant
     // belt-and-suspenders defense-in-depth. Left in place intentionally
     // (smaller diff; harmless double guard) rather than removed.
+    //
+    // Issue #470 Slice I: extended to also carry caller-supplied
+    // ChangeFunc/OnTipsFunc callback NAMES (action.changeFn/action.onTipsFn),
+    // resolved/wired here — NOT baked into action.opts server-side, because a
+    // JSON island can only carry data, never a live function reference.
+    //
+    // TRUST BOUNDARY: action.changeFn/action.onTipsFn are ALWAYS compile-time,
+    // developer-authored Razor literals (the ChangeFunc/OnTipsFunc TagHelper
+    // attribute values) — NEVER field/request/model data, the same trust
+    // class as bindSubmit's beforeSubmit (#558), bindInput's changeFunc/
+    // doneFunc (#601), and laydate's readyFn/changeFn/doneFn (Slice H).
+    // SliderTagHelper only ever emits these fields for a name that is already
+    // a plain identifier; a dotted/call-expression name keeps the legacy
+    // inline <script> instead (see SliderTagHelper.cs). Resolved through the
+    // SAME ff._resolveGuardedWindowFn guard those callers use — identifier
+    // regex + denylist + own-property + typeof function — so even a future
+    // wiring mistake can't turn this into an eval-equivalent primitive. A
+    // failed resolution silently skips JUST that one callback and never
+    // throws, never evals.
     _renderSliderAction: function (action) {
         try {
             if (!action.opts || !action.opts.elem ||
@@ -467,6 +486,14 @@ window.ff = {
                 return !_slFormId || (_slFormEl != null && _slFormEl.contains(el));
             };
             var _slIsRange = _slOpts.range === true;
+            // Issue #470 Slice I: resolved BEFORE render so both change/setTips
+            // closures can reference them; _slSliderIns is assigned AFTER
+            // render (same pattern as laydate's Slice H _ldDateIns) so the
+            // closures — which fire only on later user interaction — always
+            // see the live instance, never undefined.
+            var _slSliderIns;
+            var _slChangeFn = ff._resolveGuardedWindowFn(action.changeFn);
+            var _slOnTipsFn = ff._resolveGuardedWindowFn(action.onTipsFn);
             _slOpts.change = function (value) {
                 if (_slIsRange) {
                     if (_slFieldId0 && Array.isArray(value)) {
@@ -481,8 +508,19 @@ window.ff = {
                     var _el = document.getElementById(_slFieldId0);
                     if (_el && _slContained(_el)) { _el.value = value; }
                 }
+                // Issue #470 Slice I: mirrors the legacy inline <script>'s
+                // `change: function(value){defaultFunc(value,sliderIns); ChangeFunc(value,sliderIns)}`
+                // — the built-in write-back above runs FIRST, then the
+                // resolved caller callback (if any) runs with the same
+                // (value, sliderIns) argument shape.
+                if (_slChangeFn) { _slChangeFn(value, _slSliderIns); }
             };
-            layui.slider.render(_slOpts);
+            if (_slOnTipsFn) {
+                // Mirrors the legacy inline <script>'s
+                // `setTips: function(value){return OnTipsFunc(value,sliderIns);}`.
+                _slOpts.setTips = function (value) { return _slOnTipsFn(value, _slSliderIns); };
+            }
+            _slSliderIns = layui.slider.render(_slOpts);
             // Mirrors the inline-script post-render style tweaks (cosmetic
             // only — never developer-supplied data, never eval'd).
             if (_slOpts.type === 'vertical') {
@@ -543,6 +581,25 @@ window.ff = {
     // Issue #552 adversarial-review fix (module-load race, HIGH): shared render
     // body for the 'colorpicker' DispatchAction case. Same rationale as
     // _renderSliderAction above.
+    //
+    // Issue #470 Slice I: extended to also carry a caller-supplied ChangeFunc
+    // callback NAME (action.changeFn), resolved/wired here — NOT baked into
+    // action.opts server-side, because a JSON island can only carry data,
+    // never a live function reference.
+    //
+    // TRUST BOUNDARY: action.changeFn is ALWAYS a compile-time,
+    // developer-authored Razor literal (the ChangeFunc TagHelper attribute
+    // value, run through FormatFuncName(ChangeFunc, false) server-side — see
+    // ColorPicker.cs) — NEVER field/request/model data, the same trust class
+    // as bindSubmit's beforeSubmit (#558), bindInput's changeFunc/doneFunc
+    // (#601), and laydate's readyFn/changeFn/doneFn (Slice H).
+    // ColorPickerTagHelper only ever emits this field for a bare name that is
+    // already a plain identifier; a dotted/bracketed name keeps the legacy
+    // inline <script> instead (see ColorPicker.cs). Resolved through the SAME
+    // ff._resolveGuardedWindowFn guard those callers use — identifier regex +
+    // denylist + own-property + typeof function — so even a future wiring
+    // mistake can't turn this into an eval-equivalent primitive. A failed
+    // resolution silently skips the callback and never throws, never evals.
     _renderColorpickerAction: function (action) {
         try {
             if (!action.opts || !action.opts.elem ||
@@ -559,6 +616,7 @@ window.ff = {
             // see the slider case above for the full threat-model rationale.
             var _cpFormId = (typeof action.formId === 'string') ? action.formId : null;
             var _cpFormEl = _cpFormId ? document.getElementById(_cpFormId) : null;
+            var _cpChangeFn = ff._resolveGuardedWindowFn(action.changeFn);
             _cpOpts.done = function (data) {
                 if (_cpValFieldId) {
                     var _cpEl = document.getElementById(_cpValFieldId);
@@ -566,6 +624,12 @@ window.ff = {
                         _cpEl.value = data;
                     }
                 }
+                // Issue #470 Slice I: mirrors the legacy inline <script>'s
+                // `done: function(data){ $('#Id').val(data); ChangeFunc(data); }`
+                // — the built-in write-back above runs FIRST, then the
+                // resolved caller callback (if any) runs with the single
+                // "data" argument, matching FormatFuncName's legacy "(data)" call.
+                if (_cpChangeFn) { _cpChangeFn(data); }
             };
             layui.colorpicker.render(_cpOpts);
         } catch (e) {
@@ -1115,9 +1179,14 @@ window.ff = {
                 // key whose value isn't the right plain-data shape (e.g. a string
                 // where a number is required) is dropped too — a function value or
                 // "javascript:..." string can therefore never reach
-                // layui.slider.render. SliderTagHelper only emits this action when
-                // ChangeFunc/OnTipsFunc are both empty; either callback routes to
-                // the legacy inline <script> instead (see SliderTagHelper).
+                // layui.slider.render. Issue #470 Slice I: SliderTagHelper now also
+                // emits this action when ChangeFunc/OnTipsFunc are set to a plain
+                // identifier — carried as action.changeFn/action.onTipsFn (data,
+                // not opts keys, so the allowlist copy above still can't smuggle a
+                // function through opts itself) and resolved via
+                // ff._resolveGuardedWindowFn in _renderSliderAction. A
+                // non-identifier callback expression still routes to the legacy
+                // inline <script> instead (see SliderTagHelper).
                 //
                 // Issue #552 adversarial-review fix (module-load race, HIGH): if
                 // layui.slider hasn't finished its async load yet, defer via
@@ -1171,10 +1240,12 @@ window.ff = {
                 // Same allowlist discipline as 'slider'/'rate' above (see
                 // _renderColorpickerAction). The 'done' write-back (persisting the
                 // picked color into the bound hidden input) is mandatory framework
-                // wiring reproduced natively. ColorPickerTagHelper only emits this
-                // action when ChangeFunc is empty; a non-empty ChangeFunc routes to
-                // the legacy inline <script> instead (an arbitrary developer
-                // callback name can't be safely JSON-expressed).
+                // wiring reproduced natively. Issue #470 Slice I: ColorPickerTagHelper
+                // now also emits this action when ChangeFunc resolves to a plain
+                // identifier — carried as action.changeFn and resolved via
+                // ff._resolveGuardedWindowFn in _renderColorpickerAction. A
+                // non-identifier ChangeFunc still routes to the legacy inline
+                // <script> instead.
                 //
                 // Issue #552 adversarial-review fix (module-load race, HIGH): same
                 // layui.use(['colorpicker'], cb) deferral as the 'slider' case above.

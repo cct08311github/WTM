@@ -5,6 +5,7 @@ using System.Linq;
 using System.Net;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.Razor.TagHelpers;
@@ -123,6 +124,73 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
         };
 
+        // Issue #470 Slice I: identifier check for the ChangeFunc/OnTipsFunc
+        // island migration below — the SAME identifier class framework_layui.js's
+        // #558/#601/Slice-H guarded window[name] resolver
+        // (ff._resolveGuardedWindowFn) enforces: a bare JS identifier, nothing
+        // else. Uses `\z` (not `$`) as the end anchor for the same reason as
+        // TextBoxTagHelper's #601 _identifierRegex / DateTimeTagHelper's Slice H
+        // _identifierRegex: in .NET, `$` matches at end-of-string OR immediately
+        // before a single trailing '\n', but the client-side JS resolver's
+        // `/.../.test()` with `$` matches ONLY the absolute end. `\z` keeps both
+        // engines in agreement so a value like "myFunc\n" is classified as a
+        // non-identifier by BOTH — never silently dropped end-to-end.
+        private static readonly Regex _identifierRegex = new(@"^[A-Za-z_$][\w$]*\z", RegexOptions.Compiled);
+
+        private static bool IsPlainIdentifier(string name) =>
+            !string.IsNullOrEmpty(name) && _identifierRegex.IsMatch(name);
+
+        /// <summary>
+        /// Issue #470 Slice I: builds the <c>console.warn(...)</c> statement (with a
+        /// trailing newline so it can be inlined right before <c>layui.use(...)</c>)
+        /// that the legacy inline-&lt;script&gt; fallback emits for a non-identifier
+        /// ChangeFunc/OnTipsFunc — mirroring DateTimeTagHelper's Slice H /
+        /// FormTagHelper's #558/#561 non-identifier 3-way decision: never silently
+        /// drop the developer's handler, but make the deprecated eval-equivalent
+        /// code path loud so they migrate to a plain named function instead.
+        /// </summary>
+        private string BuildDeprecationWarnScript(List<string> nonIdentifierAttrs)
+        {
+            var attrList = string.Join("/", nonIdentifierAttrs);
+            var message = $"[WTM] <wt:slider id=\"{Id}\"> {attrList} is not a plain function name; " +
+                "falling back to the legacy inline <script> slider init. Use a plain named function " +
+                "instead to get the eval-free JSON-island path. See #470.";
+            // Issue #651 guard: every JsonSerializer.Serialize(..., _islandJsonOptions)
+            // call in an island-emitting file must route through LayuiIslandJson
+            // (the '$'-escape wrapper) — never call JsonSerializer.Serialize directly,
+            // even for non-island inline-script text like this warning string.
+            var encodedMessage = LayuiIslandJson.Serialize(message, _islandJsonOptions);
+            return $"console.warn({encodedMessage});\n  ";
+        }
+
+        /// <summary>
+        /// Issue #470 Slice I: builds the layui.slider.render() opts object shared
+        /// by the callback-free island path (#552) AND the callback-migrated
+        /// island path below — the two differ only in whether the DTO also
+        /// carries ChangeFn/OnTipsFn callback names, never in these static opts.
+        /// </summary>
+        private Dictionary<string, object> BuildSliderOpts(bool range, string safeDefaultValue, bool hasSafeTheme)
+        {
+            var opts = new Dictionary<string, object>
+            {
+                ["elem"] = "#" + _idPrefix + Id
+            };
+            if (SliderType != null) { opts["type"] = SliderType.Value.ToString().ToLower(); }
+            if (Min != null) { opts["min"] = Min.Value; }
+            if (Max != null) { opts["max"] = Max.Value; }
+            if (range) { opts["range"] = true; }
+            var jsonValue = ParseSliderValueForJson(safeDefaultValue);
+            if (jsonValue != null) { opts["value"] = jsonValue; }
+            opts["step"] = Step;
+            if (Disabled) { opts["disabled"] = true; }
+            opts["showstep"] = ShowStep;
+            opts["tips"] = Tips;
+            opts["input"] = Input;
+            if (SliderType == SliderTypeEnum.Vertical && SliderHeight != null) { opts["height"] = SliderHeight.Value; }
+            if (hasSafeTheme) { opts["theme"] = Theme; }
+            return opts;
+        }
+
         /// <summary>
         /// Issue #552 (#470-E): interprets the already-validated <c>safeDefaultValue</c>
         /// string (numeric, "[n,n]" range-pair, or the "0" fallback — see the
@@ -230,18 +298,28 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 }
             }
 
-            // Issue #552 (#470-E): ChangeFunc / OnTipsFunc are developer-supplied JS
-            // function names invoked with live slider callback arguments (and, for
-            // OnTipsFunc, a return value) — neither can be JSON-expressed, so their
-            // presence keeps this field on the legacy inline <script> path below,
-            // unchanged from before. A callback-free field migrates to the eval-free
-            // JSON island: ff.OpenDialog / the page-ready consumer (framework_layui.js)
-            // parse the island and call layui.slider.render(action.opts) directly,
+            // Issue #552 (#470-E) / Issue #470 Slice I: ChangeFunc / OnTipsFunc are
+            // developer-supplied JS function names invoked with live slider
+            // callback arguments (and, for OnTipsFunc, a return value). A
+            // callback-free field migrates to the eval-free JSON island:
+            // ff.OpenDialog / the page-ready consumer (framework_layui.js) parse
+            // the island and call layui.slider.render(action.opts) directly,
             // reproducing the exact same configuration — including the mandatory
             // change-callback that writes the picked value back into the bound
             // hidden input(s), which is framework wiring rather than a developer
             // callback and is reproduced natively in the JS action handler.
-            bool hasCallback = !string.IsNullOrEmpty(ChangeFunc) || !string.IsNullOrEmpty(OnTipsFunc);
+            //
+            // Slice I extends the migration: a PLAIN-IDENTIFIER ChangeFunc/
+            // OnTipsFunc (the only shape ff._resolveGuardedWindowFn can safely
+            // resolve by name) ALSO migrates to the island, carried as
+            // changeFn/onTipsFn island data and wired client-side after the
+            // built-in write-back — mirroring DateTimeTagHelper's Slice H 3-way
+            // decision. A non-identifier callback expression (dotted/call-syntax)
+            // can never be resolved that way and keeps the exact legacy inline
+            // <script> below, loudly deprecated via console.warn.
+            bool changePresent = !string.IsNullOrEmpty(ChangeFunc);
+            bool onTipsPresent = !string.IsNullOrEmpty(OnTipsFunc);
+            bool hasCallback = changePresent || onTipsPresent;
 
             // Issue #552 adversarial-review fix (P0, pre-existing XSS): Theme is
             // spliced by layui.slider internally into a raw HTML string it builds
@@ -257,42 +335,25 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             // default theme color, same as when Theme was never set.
             bool hasSafeTheme = IsSafeColorToken(Theme);
 
+            // Issue #578: containment id for the client-side write-back gate
+            // (mirrors #564's highlightErrors FormId). Sourced from the SAME
+            // ambient context.Items["formid"] key FormTagHelper publishes for
+            // descendant tag helpers (already consumed by LinkButtonTagHelper/
+            // SubmitButtonTagHelper/BaseButton) — not a new resolution
+            // mechanism. Null when the slider isn't nested inside a <wt:form>
+            // (e.g. a bare partial or a SearchPanel, which does not publish
+            // the key); framework_layui.js treats an absent formId as
+            // back-compat (write proceeds unguarded, never throws). Shared by
+            // both island-emitting branches below.
+            var ownerFormId = context.Items.TryGetValue("formid", out var formIdObj)
+                ? formIdObj as string
+                : null;
+
             if (!hasCallback)
             {
                 var fieldId0 = $"{_idPrefix}{Id}_v0";
                 var fieldId1 = range ? $"{_idPrefix}{Id}_v1" : null;
-
-                var opts = new Dictionary<string, object>
-                {
-                    ["elem"] = "#" + _idPrefix + Id
-                };
-                if (SliderType != null) { opts["type"] = SliderType.Value.ToString().ToLower(); }
-                if (Min != null) { opts["min"] = Min.Value; }
-                if (Max != null) { opts["max"] = Max.Value; }
-                if (range) { opts["range"] = true; }
-                var jsonValue = ParseSliderValueForJson(safeDefaultValue);
-                if (jsonValue != null) { opts["value"] = jsonValue; }
-                opts["step"] = Step;
-                if (Disabled) { opts["disabled"] = true; }
-                opts["showstep"] = ShowStep;
-                opts["tips"] = Tips;
-                opts["input"] = Input;
-                if (SliderType == SliderTypeEnum.Vertical && SliderHeight != null) { opts["height"] = SliderHeight.Value; }
-                if (hasSafeTheme) { opts["theme"] = Theme; }
-
-                // Issue #578: containment id for the client-side write-back
-                // gate (mirrors #564's highlightErrors FormId). Sourced from
-                // the SAME ambient context.Items["formid"] key FormTagHelper
-                // publishes for descendant tag helpers (already consumed by
-                // LinkButtonTagHelper/SubmitButtonTagHelper/BaseButton) — not
-                // a new resolution mechanism. Null when the slider isn't
-                // nested inside a <wt:form> (e.g. a bare partial or a
-                // SearchPanel, which does not publish the key); framework_layui.js
-                // treats an absent formId as back-compat (write proceeds
-                // unguarded, never throws).
-                var ownerFormId = context.Items.TryGetValue("formid", out var formIdObj)
-                    ? formIdObj as string
-                    : null;
+                var opts = BuildSliderOpts(range, safeDefaultValue, hasSafeTheme);
 
                 var action = new SliderIslandAction
                 {
@@ -312,11 +373,66 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             }
             else
             {
-                var content = $@"
+                // Issue #470 Slice I: 3-way decision mirroring DateTimeTagHelper's
+                // Slice H — a plain-identifier callback name migrates to the
+                // eval-free JSON island; a non-identifier expression
+                // (dotted/call-syntax) can never be resolved that way and keeps
+                // the exact legacy inline <script>, loudly deprecated.
+                bool changeIsIdentifier = changePresent && IsPlainIdentifier(ChangeFunc);
+                bool onTipsIsIdentifier = onTipsPresent && IsPlainIdentifier(OnTipsFunc);
+                bool allCallbacksMigratable =
+                    (!changePresent || changeIsIdentifier) &&
+                    (!onTipsPresent || onTipsIsIdentifier);
+
+                if (allCallbacksMigratable)
+                {
+                    // Issue #470 Slice I: every supplied callback is a plain
+                    // identifier — migrate to the eval-free JSON island.
+                    // framework_layui.js resolves each name through the SAME
+                    // #558/#601/Slice-H guarded window[name] lookup and wires it
+                    // to the live slider instance AFTER the built-in write-back,
+                    // with the exact same argument shape the legacy inline
+                    // <script> below passes (value,sliderIns).
+                    var fieldId0 = $"{_idPrefix}{Id}_v0";
+                    var fieldId1 = range ? $"{_idPrefix}{Id}_v1" : null;
+                    var opts = BuildSliderOpts(range, safeDefaultValue, hasSafeTheme);
+
+                    var action = new SliderIslandAction
+                    {
+                        Opts = opts,
+                        FieldId0 = fieldId0,
+                        FieldId1 = fieldId1,
+                        FormId = ownerFormId,
+                        ChangeFn = changeIsIdentifier ? ChangeFunc : null,
+                        OnTipsFn = onTipsIsIdentifier ? OnTipsFunc : null
+                    };
+                    var json = LayuiIslandJson.Serialize(action, _islandJsonOptions);
+
+                    var islandContent = $@"
+<input type='hidden' id='{fieldId0}' name='{WebUtility.HtmlEncode(Field.Name)}' value='{WebUtility.HtmlEncode(value0 ?? "")}' class='layui-input'>
+{(Field1 == null ? string.Empty : $"<input type='hidden' id='{fieldId1}' name='{WebUtility.HtmlEncode(Field1.Name)}' value='{WebUtility.HtmlEncode(value1 ?? "")}' class='layui-input'>")}
+<script type=""application/json"" class=""wtm-dialog-init"">{json}</script>
+";
+                    output.PostElement.AppendHtml(islandContent);
+                }
+                else
+                {
+                    // Issue #470 Slice I: at least one of ChangeFunc/OnTipsFunc is
+                    // a non-identifier expression that can't be safely resolved by
+                    // name — never silently drop the developer's handler, keep the
+                    // EXACT legacy inline <script>, but surface a loud deprecation
+                    // warning so they can migrate to a plain named function and
+                    // get the eval-free island path.
+                    var nonIdentifierAttrs = new List<string>();
+                    if (changePresent && !changeIsIdentifier) { nonIdentifierAttrs.Add(nameof(ChangeFunc)); }
+                    if (onTipsPresent && !onTipsIsIdentifier) { nonIdentifierAttrs.Add(nameof(OnTipsFunc)); }
+                    var warnJs = BuildDeprecationWarnScript(nonIdentifierAttrs);
+
+                    var content = $@"
 <input type='hidden' name='{WebUtility.HtmlEncode(Field.Name)}' value='{WebUtility.HtmlEncode(value0 ?? "")}' class='layui-input'>
 {(Field1 == null ? string.Empty : $"<input type='hidden' name='{WebUtility.HtmlEncode(Field1.Name)}' value='{WebUtility.HtmlEncode(value1 ?? "")}' class='layui-input'>")}
 <script>
-layui.use(['slider'],function(){{
+{warnJs}layui.use(['slider'],function(){{
   var $ = layui.$;
   var _id = '{_idPrefix}{Id}';
   var slider = layui.slider;
@@ -351,7 +467,8 @@ layui.use(['slider'],function(){{
 </script>
 ";
 
-                output.PostElement.AppendHtml(content);
+                    output.PostElement.AppendHtml(content);
+                }
             }
             base.Process(context, output);
         }
@@ -385,5 +502,22 @@ layui.use(['slider'],function(){{
         // <wt:form> — the client then applies no containment check at all.
         [System.Text.Json.Serialization.JsonPropertyName("formId")]
         public string FormId { get; set; }
+
+        // Issue #470 Slice I: caller-supplied ChangeFunc/OnTipsFunc NAMES
+        // (compile-time, developer-authored Razor literals from the
+        // ChangeFunc/OnTipsFunc TagHelper attributes — NEVER field/request/
+        // model data, the same trust class as DateTimeTagHelper's Slice H
+        // readyFn/changeFn/doneFn and FormTagHelper's #558/#561 beforeSubmit),
+        // present only when the name is a plain identifier
+        // (/^[A-Za-z_$][\w$]*\z/ server-side / /^[A-Za-z_$][\w$]*$/
+        // client-side). framework_layui.js resolves each through the SAME
+        // ff._resolveGuardedWindowFn guard before wiring it to the live
+        // slider instance — a failed resolution silently skips just that one
+        // callback, never throws, never evals.
+        [System.Text.Json.Serialization.JsonPropertyName("changeFn")]
+        public string ChangeFn { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("onTipsFn")]
+        public string OnTipsFn { get; set; }
     }
 }

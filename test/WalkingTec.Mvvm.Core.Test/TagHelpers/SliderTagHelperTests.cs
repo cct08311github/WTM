@@ -277,18 +277,19 @@ public class SliderTagHelperTests
     }
 
     [TestMethod]
-    public void Process_WithChangeFunc_UnsafeThemeValue_IsOmittedFromLegacyScript()
+    public void Process_WithNonIdentifierChangeFunc_UnsafeThemeValue_IsOmittedFromLegacyScript()
     {
         // Same neutralization must hold on the legacy inline-<script> path
-        // (ChangeFunc set) — the pre-existing vulnerability was reachable via
-        // BOTH emission paths, and the legacy path previously emitted Theme
-        // with NO escaping at all (,theme: '{Theme}').
+        // (non-identifier ChangeFunc, still forcing the legacy fallback post
+        // Slice I) — the pre-existing vulnerability was reachable via BOTH
+        // emission paths, and the legacy path previously emitted Theme with
+        // NO escaping at all (,theme: '{Theme}').
         SetupLocalizer();
         var helper = new SliderTagHelper
         {
             Field = MakeField("IntField"),
             Id = "slider_xss_legacy",
-            ChangeFunc = "myChangeCallback",
+            ChangeFunc = "obj.myChangeCallback",
             Theme = "</script><script>alert(1)</script>"
         };
         var output = MakeOutput();
@@ -328,7 +329,7 @@ public class SliderTagHelperTests
     }
 
     [TestMethod]
-    public void Process_WithChangeFunc_LegitimateThemes_PassThroughLegacyScriptUnchanged()
+    public void Process_WithNonIdentifierChangeFunc_LegitimateThemes_PassThroughLegacyScriptUnchanged()
     {
         SetupLocalizer();
         foreach (var theme in new[] { "#1a2b3c", "rgba(0,0,0,0.5)", "rebeccapurple" })
@@ -337,7 +338,7 @@ public class SliderTagHelperTests
             {
                 Field = MakeField("IntField"),
                 Id = "slider_legit_legacy_" + System.Math.Abs(theme.GetHashCode()),
-                ChangeFunc = "myChangeCallback",
+                ChangeFunc = "obj.myChangeCallback",
                 Theme = theme
             };
             var output = MakeOutput();
@@ -345,6 +346,33 @@ public class SliderTagHelperTests
             var postHtml = output.PostElement.GetContent();
             StringAssert.Contains(postHtml, $",theme: '{theme}'",
                 $"Legitimate theme '{theme}' must pass through the legacy inline script unchanged");
+        }
+    }
+
+    [TestMethod]
+    public void Process_WithIdentifierChangeFunc_LegitimateThemes_PassThroughIslandUnchanged()
+    {
+        // Issue #470 Slice I: a plain-identifier ChangeFunc now migrates to the
+        // island — Theme must still pass through unchanged there too.
+        SetupLocalizer();
+        foreach (var theme in new[] { "#1a2b3c", "rgba(0,0,0,0.5)", "rebeccapurple" })
+        {
+            var helper = new SliderTagHelper
+            {
+                Field = MakeField("IntField"),
+                Id = "slider_legit_island_" + System.Math.Abs(theme.GetHashCode()),
+                ChangeFunc = "myChangeCallback",
+                Theme = theme
+            };
+            var output = MakeOutput();
+            helper.Process(MakeContext(), output);
+            var postHtml = output.PostElement.GetContent();
+            var json = ExtractJsonFromIsland(postHtml);
+            Assert.IsNotNull(json, $"Island must be present for legitimate theme '{theme}'");
+            using var doc = System.Text.Json.JsonDocument.Parse(json!);
+            var opts = doc.RootElement.GetProperty("opts");
+            Assert.AreEqual(theme, opts.GetProperty("theme").GetString(),
+                $"Legitimate theme '{theme}' must pass through the island unchanged");
         }
     }
 
@@ -384,10 +412,14 @@ public class SliderTagHelperTests
             "formId must be absent from the island entirely when there is no ambient owning form");
     }
 
-    // ── Callback-bearing path: legacy inline <script> fallback preserved ─────
+    // ── Callback-bearing path: 3-way decision (Issue #470 Slice I) ───────────
+    // A plain-identifier ChangeFunc/OnTipsFunc migrates to the eval-free JSON
+    // island (superseding #552's blanket "any callback keeps the inline
+    // script" rule); a non-identifier expression still keeps the legacy
+    // inline <script> fallback, now with a deprecation console.warn.
 
     [TestMethod]
-    public void Process_WithChangeFunc_KeepsInlineScriptFallback()
+    public void Process_WithIdentifierChangeFunc_MigratesToJsonIsland()
     {
         SetupLocalizer();
         var helper = new SliderTagHelper
@@ -399,15 +431,21 @@ public class SliderTagHelperTests
         var output = MakeOutput();
         helper.Process(MakeContext(), output);
         var postHtml = output.PostElement.GetContent();
-        Assert.IsTrue(postHtml.Contains("layui.use(['slider']"), "Must still emit layui.use(['slider']");
-        Assert.IsTrue(postHtml.Contains("slider.render("), "Must still emit slider.render(");
-        StringAssert.Contains(postHtml, "myChangeCallback", "Must reference the change callback");
-        Assert.IsFalse(postHtml.Contains("wtm-dialog-init"),
-            "Must not emit the JSON island when a callback is present");
+        StringAssert.Contains(postHtml, "class=\"wtm-dialog-init\"", "Must emit the JSON island");
+        Assert.IsFalse(postHtml.Contains("layui.use(['slider']"),
+            "Must not emit the legacy inline layui.use(['slider'] call");
+        Assert.IsFalse(postHtml.Contains("slider.render("),
+            "Must not emit a raw slider.render( call");
+
+        var json = ExtractJsonFromIsland(postHtml);
+        Assert.IsNotNull(json);
+        using var doc = System.Text.Json.JsonDocument.Parse(json!);
+        Assert.AreEqual("myChangeCallback", doc.RootElement.GetProperty("changeFn").GetString());
+        Assert.IsFalse(doc.RootElement.TryGetProperty("onTipsFn", out _));
     }
 
     [TestMethod]
-    public void Process_WithOnTipsFunc_KeepsInlineScriptFallback()
+    public void Process_WithIdentifierOnTipsFunc_MigratesToJsonIsland()
     {
         SetupLocalizer();
         var helper = new SliderTagHelper
@@ -419,14 +457,112 @@ public class SliderTagHelperTests
         var output = MakeOutput();
         helper.Process(MakeContext(), output);
         var postHtml = output.PostElement.GetContent();
-        Assert.IsTrue(postHtml.Contains("slider.render("), "Must still emit slider.render(");
-        StringAssert.Contains(postHtml, "myTipsCallback", "Must reference the setTips callback");
-        Assert.IsFalse(postHtml.Contains("wtm-dialog-init"),
-            "Must not emit the JSON island when a callback is present");
+        StringAssert.Contains(postHtml, "class=\"wtm-dialog-init\"", "Must emit the JSON island");
+        Assert.IsFalse(postHtml.Contains("slider.render("),
+            "Must not emit a raw slider.render( call");
+
+        var json = ExtractJsonFromIsland(postHtml);
+        Assert.IsNotNull(json);
+        using var doc = System.Text.Json.JsonDocument.Parse(json!);
+        Assert.AreEqual("myTipsCallback", doc.RootElement.GetProperty("onTipsFn").GetString());
+        Assert.IsFalse(doc.RootElement.TryGetProperty("changeFn", out _));
     }
 
     [TestMethod]
-    public void Process_MinSet_WithCallback_InlineScriptContainsMin()
+    public void Process_WithBothIdentifierCallbacks_MigratesToJsonIslandWithBoth()
+    {
+        SetupLocalizer();
+        var helper = new SliderTagHelper
+        {
+            Field = MakeField("IntField"),
+            Id = "slider_bothcb",
+            ChangeFunc = "c1",
+            OnTipsFunc = "t1"
+        };
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+        var postHtml = output.PostElement.GetContent();
+        var json = ExtractJsonFromIsland(postHtml);
+        Assert.IsNotNull(json);
+        using var doc = System.Text.Json.JsonDocument.Parse(json!);
+        Assert.AreEqual("c1", doc.RootElement.GetProperty("changeFn").GetString());
+        Assert.AreEqual("t1", doc.RootElement.GetProperty("onTipsFn").GetString());
+    }
+
+    [TestMethod]
+    public void Process_WithNonIdentifierChangeFunc_KeepsInlineScriptFallbackAndWarns()
+    {
+        // Issue #470 Slice I: a non-identifier expression (dotted/call-syntax)
+        // can never be safely resolved by ff._resolveGuardedWindowFn, so it
+        // keeps the exact legacy inline <script> fallback — never silently
+        // dropping the developer's handler — but must surface a loud
+        // deprecation console.warn.
+        SetupLocalizer();
+        var helper = new SliderTagHelper
+        {
+            Field = MakeField("IntField"),
+            Id = "slider_changefunc_dotted",
+            ChangeFunc = "obj.myChangeCallback"
+        };
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+        var postHtml = output.PostElement.GetContent();
+        Assert.IsTrue(postHtml.Contains("layui.use(['slider']"), "Must still emit layui.use(['slider']");
+        Assert.IsTrue(postHtml.Contains("slider.render("), "Must still emit slider.render(");
+        StringAssert.Contains(postHtml, "obj.myChangeCallback", "Must reference the change callback");
+        Assert.IsFalse(postHtml.Contains("wtm-dialog-init"),
+            "Must not emit the JSON island for a non-identifier callback");
+        StringAssert.Contains(postHtml, "console.warn(", "Must emit a deprecation console.warn");
+        StringAssert.Contains(postHtml, "ChangeFunc", "Warning must name the offending attribute");
+    }
+
+    [TestMethod]
+    public void Process_WithNonIdentifierOnTipsFunc_KeepsInlineScriptFallbackAndWarns()
+    {
+        SetupLocalizer();
+        var helper = new SliderTagHelper
+        {
+            Field = MakeField("IntField"),
+            Id = "slider_tipsfunc_callexpr",
+            OnTipsFunc = "myTipsCallback()"
+        };
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+        var postHtml = output.PostElement.GetContent();
+        Assert.IsTrue(postHtml.Contains("slider.render("), "Must still emit slider.render(");
+        StringAssert.Contains(postHtml, "myTipsCallback", "Must reference the setTips callback");
+        Assert.IsFalse(postHtml.Contains("wtm-dialog-init"),
+            "Must not emit the JSON island for a non-identifier callback");
+        StringAssert.Contains(postHtml, "console.warn(", "Must emit a deprecation console.warn");
+        StringAssert.Contains(postHtml, "OnTipsFunc", "Warning must name the offending attribute");
+    }
+
+    [TestMethod]
+    public void Process_MixedIdentifierAndNonIdentifierCallbacks_WholeFieldFallsBackAndWarns()
+    {
+        // Issue #470 Slice I: the 3-way decision is PER-FIELD, not per-callback
+        // — one non-identifier callback forces the ENTIRE field back to the
+        // inline <script>, even though the other callback is a valid identifier.
+        SetupLocalizer();
+        var helper = new SliderTagHelper
+        {
+            Field = MakeField("IntField"),
+            Id = "slider_mixed",
+            ChangeFunc = "validIdentifier",
+            OnTipsFunc = "obj.notAnIdentifier"
+        };
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+        var postHtml = output.PostElement.GetContent();
+        Assert.IsFalse(postHtml.Contains("wtm-dialog-init"),
+            "A single non-identifier callback must force the whole field back to inline");
+        StringAssert.Contains(postHtml, "validIdentifier");
+        StringAssert.Contains(postHtml, "obj.notAnIdentifier");
+        StringAssert.Contains(postHtml, "console.warn(");
+    }
+
+    [TestMethod]
+    public void Process_MinSet_WithNonIdentifierCallback_InlineScriptContainsMin()
     {
         SetupLocalizer();
         var helper = new SliderTagHelper
@@ -434,13 +570,34 @@ public class SliderTagHelperTests
             Field = MakeField("IntField"),
             Id = "slider_min_cb",
             Min = 5,
-            ChangeFunc = "cb"
+            ChangeFunc = "obj.cb"
         };
         var output = MakeOutput();
         helper.Process(MakeContext(), output);
         var postHtml = output.PostElement.GetContent();
         Assert.IsTrue(postHtml.Contains(",min:5"),
             "PostElement must contain ,min:5 when Min is set to 5 (legacy path)");
+    }
+
+    [TestMethod]
+    public void Process_MinSet_WithIdentifierCallback_JsonIslandContainsMin()
+    {
+        SetupLocalizer();
+        var helper = new SliderTagHelper
+        {
+            Field = MakeField("IntField"),
+            Id = "slider_min_cb_island",
+            Min = 5,
+            ChangeFunc = "cb"
+        };
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+        var postHtml = output.PostElement.GetContent();
+        var json = ExtractJsonFromIsland(postHtml);
+        Assert.IsNotNull(json, "Island must contain parseable JSON");
+        using var doc = System.Text.Json.JsonDocument.Parse(json!);
+        var opts = doc.RootElement.GetProperty("opts");
+        Assert.AreEqual(5, opts.GetProperty("min").GetInt32());
     }
 
     // ── Pure logic tests (no DI / taghelper needed) ──────────────────────────

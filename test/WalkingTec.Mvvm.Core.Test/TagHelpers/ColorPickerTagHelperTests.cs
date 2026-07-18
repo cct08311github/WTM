@@ -192,17 +192,18 @@ public class ColorPickerTagHelperTests
     }
 
     [TestMethod]
-    public void Process_WithChangeFunc_UnsafeColorValue_IsOmittedFromLegacyScript()
+    public void Process_WithNonIdentifierChangeFunc_UnsafeColorValue_IsOmittedFromLegacyScript()
     {
         // Same neutralization must hold on the legacy inline-<script> path
-        // (ChangeFunc set) — the pre-existing vulnerability was reachable via
-        // BOTH emission paths.
+        // (non-identifier ChangeFunc, still forcing the legacy fallback post
+        // Slice I) — the pre-existing vulnerability was reachable via BOTH
+        // emission paths.
         SetupLocalizer();
         var helper = new ColorPickerTagHelper
         {
             Field = MakeField("ColorField", "</script><script>alert(1)</script>"),
             Id = "cp_xss_legacy",
-            ChangeFunc = "myColorChanged"
+            ChangeFunc = "obj.myColorChanged"
         };
         var output = MakeOutput();
         helper.Process(MakeContext(), output);
@@ -249,7 +250,7 @@ public class ColorPickerTagHelperTests
     }
 
     [TestMethod]
-    public void Process_WithChangeFunc_LegitimateColors_PassThroughLegacyScriptUnchanged()
+    public void Process_WithNonIdentifierChangeFunc_LegitimateColors_PassThroughLegacyScriptUnchanged()
     {
         SetupLocalizer();
         foreach (var color in new[] { "#1a2b3c", "rgba(0,0,0,0.5)", "rebeccapurple" })
@@ -258,13 +259,39 @@ public class ColorPickerTagHelperTests
             {
                 Field = MakeField("ColorField", color),
                 Id = "cp_legit_legacy_" + System.Math.Abs(color.GetHashCode()),
-                ChangeFunc = "myColorChanged"
+                ChangeFunc = "obj.myColorChanged"
             };
             var output = MakeOutput();
             helper.Process(MakeContext(), output);
             var postHtml = output.PostElement.GetContent();
             StringAssert.Contains(postHtml, $",color:'{color}'",
                 $"Legitimate color '{color}' must pass through the legacy inline script unchanged");
+        }
+    }
+
+    [TestMethod]
+    public void Process_WithIdentifierChangeFunc_LegitimateColors_PassThroughIslandUnchanged()
+    {
+        // Issue #470 Slice I: a plain-identifier ChangeFunc now migrates to the
+        // island — color must still pass through unchanged there too.
+        SetupLocalizer();
+        foreach (var color in new[] { "#1a2b3c", "rgba(0,0,0,0.5)", "rebeccapurple" })
+        {
+            var helper = new ColorPickerTagHelper
+            {
+                Field = MakeField("ColorField", color),
+                Id = "cp_legit_island_" + System.Math.Abs(color.GetHashCode()),
+                ChangeFunc = "myColorChanged"
+            };
+            var output = MakeOutput();
+            helper.Process(MakeContext(), output);
+            var postHtml = output.PostElement.GetContent();
+            var json = ExtractJsonFromIsland(postHtml);
+            Assert.IsNotNull(json, $"Island must be present for legitimate color '{color}'");
+            using var doc = System.Text.Json.JsonDocument.Parse(json!);
+            var opts = doc.RootElement.GetProperty("opts");
+            Assert.AreEqual(color, opts.GetProperty("color").GetString(),
+                $"Legitimate color '{color}' must pass through the island unchanged");
         }
     }
 
@@ -296,14 +323,14 @@ public class ColorPickerTagHelperTests
     }
 
     [TestMethod]
-    public void Process_WithChangeFunc_PredefinedColors_UnsafeTokenDroppedInLegacyScript()
+    public void Process_WithNonIdentifierChangeFunc_PredefinedColors_UnsafeTokenDroppedInLegacyScript()
     {
         SetupLocalizer();
         var helper = new ColorPickerTagHelper
         {
             Field = MakeField("ColorField"),
             Id = "cp_predef_mixed_legacy",
-            ChangeFunc = "cb",
+            ChangeFunc = "obj.cb",
             PredefinedColors = "#fff,'});alert(1);({',#000"
         };
         var output = MakeOutput();
@@ -351,10 +378,15 @@ public class ColorPickerTagHelperTests
             "formId must be absent from the island entirely when there is no ambient owning form");
     }
 
-    // ── Callback-bearing path: legacy inline <script> fallback preserved ─────
+    // ── Callback-bearing path: 3-way decision (Issue #470 Slice I) ───────────
+    // A ChangeFunc whose bare name (FormatFuncName(ChangeFunc, false)) is a
+    // plain identifier migrates to the eval-free JSON island (superseding
+    // #552's blanket "any callback keeps the inline script" rule); a
+    // non-identifier bare name still keeps the legacy inline <script>
+    // fallback, now with a deprecation console.warn.
 
     [TestMethod]
-    public void Process_WithChangeFunc_KeepsInlineScriptFallback()
+    public void Process_WithIdentifierChangeFunc_MigratesToJsonIsland()
     {
         SetupLocalizer();
         var helper = new ColorPickerTagHelper
@@ -366,15 +398,46 @@ public class ColorPickerTagHelperTests
         var output = MakeOutput();
         helper.Process(MakeContext(), output);
         var postHtml = output.PostElement.GetContent();
-        Assert.IsTrue(postHtml.Contains("layui.use('colorpicker'"), "Must still emit layui.use('colorpicker'");
-        Assert.IsTrue(postHtml.Contains("colorpicker.render("), "Must still emit colorpicker.render(");
-        StringAssert.Contains(postHtml, "myColorChanged", "Must reference the change callback");
-        Assert.IsFalse(postHtml.Contains("wtm-dialog-init"),
-            "Must not emit the JSON island when a callback is present");
+        StringAssert.Contains(postHtml, "class=\"wtm-dialog-init\"", "Must emit the JSON island");
+        Assert.IsFalse(postHtml.Contains("layui.use('colorpicker'"),
+            "Must not emit the legacy inline layui.use('colorpicker' call");
+        Assert.IsFalse(postHtml.Contains("colorpicker.render("),
+            "Must not emit a raw colorpicker.render( call");
+
+        var json = ExtractJsonFromIsland(postHtml);
+        Assert.IsNotNull(json);
+        using var doc = System.Text.Json.JsonDocument.Parse(json!);
+        Assert.AreEqual("myColorChanged", doc.RootElement.GetProperty("changeFn").GetString());
     }
 
     [TestMethod]
-    public void Process_WithChangeFunc_PredefinedColorsStillInInlineScript()
+    public void Process_WithCallArgumentSyntaxChangeFunc_TruncatesToBareNameAndMigratesToJsonIsland()
+    {
+        // Issue #470 Slice I: the legacy path ALWAYS truncated ChangeFunc at
+        // its first "(" via FormatFuncName(ChangeFunc, false) and invoked the
+        // bare name with the framework's own "data" argument — so
+        // "myColorChanged(ignored)" resolves to the SAME bare identifier
+        // "myColorChanged" the plain-identifier case above does, and migrates
+        // to the island too (dropping the caller's explicit arg text, exactly
+        // as the legacy path already did).
+        SetupLocalizer();
+        var helper = new ColorPickerTagHelper
+        {
+            Field = MakeField("ColorField"),
+            Id = "cp_changefunc_callexpr",
+            ChangeFunc = "myColorChanged(ignoredArg)"
+        };
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+        var postHtml = output.PostElement.GetContent();
+        var json = ExtractJsonFromIsland(postHtml);
+        Assert.IsNotNull(json);
+        using var doc = System.Text.Json.JsonDocument.Parse(json!);
+        Assert.AreEqual("myColorChanged", doc.RootElement.GetProperty("changeFn").GetString());
+    }
+
+    [TestMethod]
+    public void Process_WithIdentifierChangeFunc_PredefinedColorsStillInIsland()
     {
         SetupLocalizer();
         var helper = new ColorPickerTagHelper
@@ -382,6 +445,56 @@ public class ColorPickerTagHelperTests
             Field = MakeField("ColorField"),
             Id = "cp_changefunc2",
             ChangeFunc = "myColorChanged",
+            PredefinedColors = "#fff,#000"
+        };
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+        var postHtml = output.PostElement.GetContent();
+        var json = ExtractJsonFromIsland(postHtml);
+        Assert.IsNotNull(json);
+        using var doc = System.Text.Json.JsonDocument.Parse(json!);
+        var colors = doc.RootElement.GetProperty("opts").GetProperty("colors")
+            .EnumerateArray().Select(c => c.GetString()).ToList();
+        CollectionAssert.Contains(colors, "#fff");
+        CollectionAssert.Contains(colors, "#000");
+    }
+
+    [TestMethod]
+    public void Process_WithNonIdentifierChangeFunc_KeepsInlineScriptFallbackAndWarns()
+    {
+        // Issue #470 Slice I: a non-identifier bare name (dotted/bracketed,
+        // which never had a "(" to truncate) can never be safely resolved by
+        // ff._resolveGuardedWindowFn, so it keeps the exact legacy inline
+        // <script> fallback — never silently dropping the developer's
+        // handler — but must surface a loud deprecation console.warn.
+        SetupLocalizer();
+        var helper = new ColorPickerTagHelper
+        {
+            Field = MakeField("ColorField"),
+            Id = "cp_changefunc_dotted",
+            ChangeFunc = "obj.myColorChanged"
+        };
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+        var postHtml = output.PostElement.GetContent();
+        Assert.IsTrue(postHtml.Contains("layui.use('colorpicker'"), "Must still emit layui.use('colorpicker'");
+        Assert.IsTrue(postHtml.Contains("colorpicker.render("), "Must still emit colorpicker.render(");
+        StringAssert.Contains(postHtml, "obj.myColorChanged", "Must reference the change callback");
+        Assert.IsFalse(postHtml.Contains("wtm-dialog-init"),
+            "Must not emit the JSON island for a non-identifier callback");
+        StringAssert.Contains(postHtml, "console.warn(", "Must emit a deprecation console.warn");
+        StringAssert.Contains(postHtml, "ChangeFunc", "Warning must name the offending attribute");
+    }
+
+    [TestMethod]
+    public void Process_WithNonIdentifierChangeFunc_PredefinedColorsStillInInlineScript()
+    {
+        SetupLocalizer();
+        var helper = new ColorPickerTagHelper
+        {
+            Field = MakeField("ColorField"),
+            Id = "cp_changefunc2_dotted",
+            ChangeFunc = "obj.myColorChanged",
             PredefinedColors = "#fff,#000"
         };
         var output = MakeOutput();
