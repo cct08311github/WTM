@@ -3,7 +3,11 @@
 //
 // What this file locks in place:
 //   1. DispatchAction gains a 'laydate' action type that calls
-//      layui.laydate.render(action.opts) directly (no remapping, no eval).
+//      layui.laydate.render(action.opts) directly (opts itself is passed
+//      through unchanged; #470 Slice H — see
+//      framework_layui_470_sliceH_laydate.test.js — additionally mutates
+//      action.opts in place to wire ready/change/done through the guarded
+//      window[name] resolver before the render call, never via eval).
 //   2. ff._normalizeIslandPayload wraps a bare {"type":"...", ...} island
 //      into {actions:[...]}, and passes an already-wrapped {actions:[...]}
 //      island through unchanged.
@@ -57,14 +61,18 @@ describe('#556 (#470-B slice 1) — source sweep', () => {
     expect(active).toMatch(/case\s+['"]laydate['"]/);
   });
 
-  test('laydate case calls layui.laydate.render(action.opts) directly (no remapping)', () => {
-    const block = active.match(/case\s+['"]laydate['"][\s\S]{0,800}?break;/);
+  test('laydate case calls layui.laydate.render(action.opts) directly (opts object itself is never rebuilt)', () => {
+    // Issue #470 Slice H grew this case substantially (ready/change/done +
+    // range-split wiring), pushing it well past the original 800-char
+    // window — widened to 3500 to comfortably fit the case body up to its
+    // closing break; the assertions themselves are unchanged.
+    const block = active.match(/case\s+['"]laydate['"][\s\S]{0,3500}?break;/);
     expect(block).not.toBeNull();
     expect(block[0]).toMatch(/layui\.laydate\.render\(\s*action\.opts/);
   });
 
   test('laydate case guards on action.opts && action.opts.elem', () => {
-    const block = active.match(/case\s+['"]laydate['"][\s\S]{0,800}?break;/);
+    const block = active.match(/case\s+['"]laydate['"][\s\S]{0,3500}?break;/);
     expect(block).not.toBeNull();
     expect(block[0]).toMatch(/action\.opts\s*&&\s*action\.opts\.elem/);
   });

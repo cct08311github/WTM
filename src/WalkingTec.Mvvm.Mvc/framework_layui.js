@@ -1022,15 +1022,80 @@ window.ff = {
                 // Issue #556 (#470-B slice 1): thin JSON wrapper over
                 // layui.laydate.render(). The opts object is built entirely
                 // server-side (DateTimeTagHelper) and passed straight through —
-                // no remapping, no callbacks (ready/change/done can't be
-                // JSON-expressed, so callback-bearing date fields keep emitting
-                // the legacy inline <script> instead of this action).
+                // no remapping of opts itself.
+                //
+                // Issue #470 Slice H: extended to also carry caller-supplied
+                // ready/change/done callback NAMES (action.readyFn/changeFn/
+                // doneFn) and, for the two-hidden-input range mode, a built-in
+                // start/end split (action.rangeStartId/rangeEndId/
+                // rangeSplitStr). Both are resolved/wired here, NOT baked into
+                // action.opts server-side, because a JSON island can only carry
+                // data — never a live function reference.
+                //
+                // TRUST BOUNDARY: action.readyFn/changeFn/doneFn are ALWAYS
+                // compile-time, developer-authored Razor literals (the
+                // ReadyFunc/ChangeFunc/DoneFunc TagHelper attribute values) —
+                // NEVER field/request/model data, the same trust class as
+                // bindSubmit's beforeSubmit (#558) and bindInput's changeFunc/
+                // doneFunc (#601). DateTimeTagHelper only ever emits this
+                // action for a name that is already a plain identifier; a
+                // dotted/call-expression name keeps the legacy inline <script>
+                // instead (see DateTimeTagHelper.cs). Resolved through the SAME
+                // ff._resolveGuardedWindowFn guard bindSubmit/bindInput use —
+                // identifier regex + denylist + own-property + typeof function
+                // — so even a future wiring mistake can't turn this into an
+                // eval-equivalent primitive. A failed resolution silently skips
+                // JUST that one callback and never throws, never evals.
+                //
+                // action.opts is mutated in place (rather than copied) before
+                // being handed to layui.laydate.render — safe because it is a
+                // freshly JSON.parse()'d object with no other holders, never
+                // shared/re-dispatched, and this keeps the render call itself
+                // (`layui.laydate.render(action.opts)`) byte-identical to the
+                // pre-#470-Slice-H call site.
                 case 'laydate':
                     if (action.opts && action.opts.elem &&
                         typeof layui !== 'undefined' && layui.laydate &&
                         typeof layui.laydate.render === 'function') {
                         try {
-                            layui.laydate.render(action.opts || {});
+                            var _ldDateIns;
+                            var _ldReadyFn = ff._resolveGuardedWindowFn(action.readyFn);
+                            var _ldChangeFn = ff._resolveGuardedWindowFn(action.changeFn);
+                            var _ldDoneFn = ff._resolveGuardedWindowFn(action.doneFn);
+                            var _ldRangeStartEl = (typeof action.rangeStartId === 'string')
+                                ? document.getElementById(action.rangeStartId) : null;
+                            var _ldRangeEndEl = (typeof action.rangeEndId === 'string')
+                                ? document.getElementById(action.rangeEndId) : null;
+                            var _ldRangeSplitStr = (typeof action.rangeSplitStr === 'string')
+                                ? action.rangeSplitStr : ' - ';
+
+                            if (_ldReadyFn) {
+                                action.opts.ready = function (value) { _ldReadyFn(value, _ldDateIns); };
+                            }
+                            if (_ldChangeFn) {
+                                action.opts.change = function (value, date, endDate) {
+                                    _ldChangeFn(value, date, endDate, _ldDateIns);
+                                };
+                            }
+                            // Issue #470 Slice H: reproduces the legacy inline
+                            // range <script>'s done: body exactly — the
+                            // built-in start/end split runs FIRST, then (if
+                            // present) the caller's DoneFn is chained AFTER it.
+                            // When there is no range write-back, a plain
+                            // doneFn (if any) is wired on its own.
+                            if (_ldRangeStartEl && _ldRangeEndEl) {
+                                action.opts.done = function (value, date, endDate) {
+                                    _ldRangeStartEl.value = value.split(_ldRangeSplitStr)[0] || '';
+                                    _ldRangeEndEl.value = value.split(_ldRangeSplitStr)[1] || '';
+                                    if (_ldDoneFn) { _ldDoneFn(value, date, endDate, _ldDateIns); }
+                                };
+                            } else if (_ldDoneFn) {
+                                action.opts.done = function (value, date, endDate) {
+                                    _ldDoneFn(value, date, endDate, _ldDateIns);
+                                };
+                            }
+
+                            _ldDateIns = layui.laydate.render(action.opts);
                         } catch (e) {
                             if (typeof console !== 'undefined' && console.warn) {
                                 console.warn('[WTM] laydate action failed:', e);

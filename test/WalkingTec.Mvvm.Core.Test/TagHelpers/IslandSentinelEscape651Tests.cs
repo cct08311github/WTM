@@ -559,7 +559,12 @@ public class IslandSentinelEscape651Tests
 
     // DateTime mark: — a newly-routed INLINE <script> serialization (the laydate
     // render script's `,mark: {...}`), fed from the model-derived Mark dictionary.
-    // hasCallback (DoneFunc) forces the inline branch that carries mark:.
+    // Issue #470 Slice H: a PLAIN-IDENTIFIER callback (e.g. the former
+    // "someDoneFunc") now migrates to the eval-free JSON island instead of
+    // forcing the inline branch — only a non-identifier callback expression
+    // (dotted/call-syntax, which ff._resolveGuardedWindowFn can never safely
+    // resolve by name) still keeps the legacy inline mark: script this test
+    // exercises.
     [DataTestMethod]
     [DataRow("$$dialoginit$$")]
     [DataRow("$$#dialoginit$$")]
@@ -571,7 +576,7 @@ public class IslandSentinelEscape651Tests
         var payload = MakeCompositePayload(sentinel);
         var helper = CreateDateTimeHelper();
         helper.Id = "dt_651";
-        helper.DoneFunc = "someDoneFunc"; // forces the inline (non-island) branch that emits mark:
+        helper.DoneFunc = "obj.someDoneFunc"; // non-identifier: forces the inline (non-island) branch that emits mark:
         helper.Mark = new Dictionary<string, string> { ["01"] = payload };
         var output = MakeOutput();
         helper.Process(MakeContext("wt:datetime"), output);

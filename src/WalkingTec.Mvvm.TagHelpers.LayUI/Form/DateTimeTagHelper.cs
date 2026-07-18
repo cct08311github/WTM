@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Razor.TagHelpers;
 using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core;
@@ -170,6 +171,32 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
         };
 
+        // Issue #470 Slice H: identifier check for the ReadyFunc/ChangeFunc/
+        // DoneFunc island migration below — the SAME identifier class
+        // framework_layui.js's #558/#601 guarded window[name] resolver
+        // (ff._resolveGuardedWindowFn) enforces: a bare JS identifier, nothing
+        // else. Uses `\z` (not `$`) as the end anchor for the same reason as
+        // TextBoxTagHelper's #601 _identifierRegex: in .NET, `$` matches at
+        // end-of-string OR immediately before a single trailing '\n', but the
+        // client-side JS resolver's `/.../.test()` with `$` matches ONLY the
+        // absolute end. `\z` keeps both engines in agreement so a value like
+        // "myFunc\n" is classified as a non-identifier by BOTH — never
+        // silently dropped end-to-end.
+        private static readonly Regex _identifierRegex = new(@"^[A-Za-z_$][\w$]*\z", RegexOptions.Compiled);
+
+        private static bool IsPlainIdentifier(string name) =>
+            !string.IsNullOrEmpty(name) && _identifierRegex.IsMatch(name);
+
+        // Issue #470 Slice H: the two-hidden-input range path's built-in
+        // `done` split has ALWAYS used a hardcoded " - " delimiter (layui's
+        // own two-date display separator for its boolean `range: true`
+        // mode), independent of the RangeSplit attribute (which only applies
+        // to the separate Range+DateRange model-binding mode). Carried as
+        // island data (rangeSplitStr) rather than re-hardcoded a second time
+        // in framework_layui.js, so this constant stays the single source of
+        // truth.
+        private const string RangeDoneSplit = " - ";
+
         /// <summary>
         /// Issue #556 (#470-B slice 1): builds the laydate.render() options object
         /// for the eval-free JSON island, reproducing the exact same configuration
@@ -177,16 +204,19 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         /// and <paramref name="rawMax"/> must be the ORIGINAL (pre-mutation) Min/Max values —
         /// Process() rewrites Min/Max in place into JS-literal text (quoted for date
         /// strings, bare for day-offset integers) for the inline-script code path,
-        /// which is not a valid JSON value shape.
+        /// which is not a valid JSON value shape. <paramref name="isRangeMode"/> (Issue #470
+        /// Slice H) forces the boolean laydate `range: true` mode used by the
+        /// two-hidden-input IsRange path, overriding the RangeSplit-string mode below.
         /// </summary>
-        private Dictionary<string, object> BuildLaydateOpts(string rawMin, string rawMax)
+        private Dictionary<string, object> BuildLaydateOpts(string rawMin, string rawMax, bool isRangeMode = false)
         {
             var opts = new Dictionary<string, object>
             {
                 ["elem"] = "#" + Id,
                 ["type"] = Type.ToString().ToLower()
             };
-            if (!string.IsNullOrEmpty(RangeSplit)) { opts["range"] = RangeSplit; }
+            if (isRangeMode) { opts["range"] = true; }
+            else if (!string.IsNullOrEmpty(RangeSplit)) { opts["range"] = RangeSplit; }
             if (!string.IsNullOrEmpty(Format)) { opts["format"] = Format; }
             if (!string.IsNullOrEmpty(rawMin))
             {
@@ -210,6 +240,29 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             if (Lang.HasValue) { opts["lang"] = Lang.Value.ToString().ToLower(); }
             if (Mark != null && Mark.Count > 0) { opts["mark"] = Mark; }
             return opts;
+        }
+
+        /// <summary>
+        /// Issue #470 Slice H: builds the <c>console.warn(...)</c> statement (with a
+        /// trailing newline so it can be inlined right before <c>layui.use(...)</c>)
+        /// that the legacy inline-&lt;script&gt; fallback emits for a non-identifier
+        /// ReadyFunc/ChangeFunc/DoneFunc — mirroring the FormTagHelper #558/#561
+        /// non-identifier BeforeSubmit 3-way decision: never silently drop the
+        /// developer's handler, but make the deprecated eval-equivalent code path
+        /// loud so they migrate to a plain named function instead.
+        /// </summary>
+        private string BuildDeprecationWarnScript(List<string> nonIdentifierAttrs)
+        {
+            var attrList = string.Join("/", nonIdentifierAttrs);
+            var message = $"[WTM] <wt:datetime id=\"{Id}\"> {attrList} is not a plain function name; " +
+                "falling back to the legacy inline <script> laydate init. Use a plain named function " +
+                "instead to get the eval-free JSON-island path. See #470.";
+            // Issue #651 guard: every JsonSerializer.Serialize(..., _laydateJsonOptions)
+            // call in an island-emitting file must route through LayuiIslandJson
+            // (the '$'-escape wrapper) — never call JsonSerializer.Serialize directly,
+            // even for non-island inline-script text like this warning string.
+            var encodedMessage = LayuiIslandJson.Serialize(message, _laydateJsonOptions);
+            return $"console.warn({encodedMessage});\n  ";
         }
 
         public override void Process(TagHelperContext context, TagHelperOutput output)
@@ -315,9 +368,10 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
             if (!IsRange)
             {
-                bool hasCallback = !string.IsNullOrEmpty(ReadyFunc) ||
-                                    !string.IsNullOrEmpty(ChangeFunc) ||
-                                    !string.IsNullOrEmpty(DoneFunc);
+                bool readyPresent = !string.IsNullOrEmpty(ReadyFunc);
+                bool changePresent = !string.IsNullOrEmpty(ChangeFunc);
+                bool donePresent = !string.IsNullOrEmpty(DoneFunc);
+                bool hasCallback = readyPresent || changePresent || donePresent;
 
                 if (!hasCallback)
                 {
@@ -336,13 +390,63 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 }
                 else
                 {
-                    // Issue #556 (#470-B slice 1): fallback — ready/change/done are
-                    // caller-supplied JS function names invoked with live laydate
-                    // callback arguments; that can't be JSON-expressed, so this
-                    // path keeps emitting the inline <script> unchanged.
-                    var content = $@"
+                    // Issue #470 Slice H: 3-way decision mirroring FormTagHelper's
+                    // #558/#561 BeforeSubmit migration — a plain-identifier
+                    // callback name (the ONLY shape ff._resolveGuardedWindowFn can
+                    // safely resolve by name) migrates to the eval-free JSON
+                    // island; a non-identifier expression (dotted/call-syntax)
+                    // can never be resolved that way and keeps the exact legacy
+                    // inline <script> below, loudly deprecated via console.warn.
+                    bool readyIsIdentifier = readyPresent && IsPlainIdentifier(ReadyFunc);
+                    bool changeIsIdentifier = changePresent && IsPlainIdentifier(ChangeFunc);
+                    bool doneIsIdentifier = donePresent && IsPlainIdentifier(DoneFunc);
+                    bool allCallbacksMigratable =
+                        (!readyPresent || readyIsIdentifier) &&
+                        (!changePresent || changeIsIdentifier) &&
+                        (!donePresent || doneIsIdentifier);
+
+                    if (allCallbacksMigratable)
+                    {
+                        // Issue #470 Slice H: every supplied callback is a plain
+                        // identifier — migrate to the eval-free JSON island.
+                        // framework_layui.js resolves each name through the SAME
+                        // #558/#601 guarded window[name] lookup bindSubmit/
+                        // bindInput use (identifier regex + denylist +
+                        // own-property + typeof function; a failed lookup
+                        // silently skips just that one callback and never
+                        // throws) and wires it to the live laydate instance with
+                        // the exact same argument shape the legacy inline
+                        // <script> below passes.
+                        var opts = BuildLaydateOpts(rawMin, rawMax);
+                        var action = new LaydateIslandAction
+                        {
+                            Opts = opts,
+                            ReadyFn = readyIsIdentifier ? ReadyFunc : null,
+                            ChangeFn = changeIsIdentifier ? ChangeFunc : null,
+                            DoneFn = doneIsIdentifier ? DoneFunc : null
+                        };
+                        var json = LayuiIslandJson.Serialize(action, _laydateJsonOptions);
+                        output.PostElement.AppendHtml(
+                            $"<script type=\"application/json\" class=\"wtm-dialog-init\">{json}</script>");
+                    }
+                    else
+                    {
+                        // Issue #470 Slice H: at least one of
+                        // ReadyFunc/ChangeFunc/DoneFunc is a non-identifier
+                        // expression that can't be safely resolved by name —
+                        // never silently drop the developer's handler, keep the
+                        // EXACT legacy inline <script>, but surface a loud
+                        // deprecation warning so they can migrate to a plain
+                        // named function and get the eval-free island path.
+                        var nonIdentifierAttrs = new List<string>();
+                        if (readyPresent && !readyIsIdentifier) { nonIdentifierAttrs.Add(nameof(ReadyFunc)); }
+                        if (changePresent && !changeIsIdentifier) { nonIdentifierAttrs.Add(nameof(ChangeFunc)); }
+                        if (donePresent && !doneIsIdentifier) { nonIdentifierAttrs.Add(nameof(DoneFunc)); }
+                        var warnJs = BuildDeprecationWarnScript(nonIdentifierAttrs);
+
+                        var content = $@"
 <script>
-layui.use(['laydate'],function(){{
+{warnJs}layui.use(['laydate'],function(){{
   var laydate = layui.laydate;
   var dateIns = laydate.render({{
     elem: '#{Id}',
@@ -364,28 +468,78 @@ layui.use(['laydate'],function(){{
 }})
 </script>
 ";
-                    output.PostElement.AppendHtml(content);
+                        output.PostElement.AppendHtml(content);
+                    }
                 }
             }
 
-            // Issue #556 (#470-B slice 1): the two-hidden-input range path always
-            // needs its own built-in `done` callback below (splitting the picked
-            // value into RangeStartName/RangeEndName) regardless of whether the
-            // caller supplied ReadyFunc/ChangeFunc/DoneFunc — that split logic
-            // can't be JSON-expressed. So, unlike the single-field path above,
-            // this branch never migrates to the JSON island and always emits the
-            // inline <script>.
+            // Issue #470 Slice H: the two-hidden-input range path used to ALWAYS
+            // emit the inline <script> (it needs its own built-in `done` split
+            // callback regardless of caller callbacks, which used to be
+            // impossible to JSON-express). It now migrates to the island too
+            // whenever every supplied callback is a plain identifier — the split
+            // itself is carried as island data (RangeStartId/RangeEndId/
+            // RangeSplitStr) and framework_layui.js installs the built-in
+            // `done` client-side. A non-identifier callback still falls back to
+            // the exact legacy inline <script>, loudly deprecated.
             if (IsRange && !string.IsNullOrEmpty(RangeStartName) && !string.IsNullOrEmpty(RangeEndName))
             {
                 if (!string.IsNullOrEmpty(RangePlaceholder))
                 {
                     output.Attributes.SetAttribute("placeholder", RangePlaceholder);
                 }
-                var rangeScript = $@"
+
+                var hiddenInputsHtml = $@"
 <input type=""hidden"" id=""{RangeStartName}"" name=""{RangeStartName}"" />
-<input type=""hidden"" id=""{RangeEndName}"" name=""{RangeEndName}"" />
+<input type=""hidden"" id=""{RangeEndName}"" name=""{RangeEndName}"" />";
+                output.PostElement.AppendHtml(hiddenInputsHtml);
+
+                bool rangeReadyPresent = !string.IsNullOrEmpty(ReadyFunc);
+                bool rangeChangePresent = !string.IsNullOrEmpty(ChangeFunc);
+                bool rangeDonePresent = !string.IsNullOrEmpty(DoneFunc);
+                bool rangeReadyIsIdentifier = rangeReadyPresent && IsPlainIdentifier(ReadyFunc);
+                bool rangeChangeIsIdentifier = rangeChangePresent && IsPlainIdentifier(ChangeFunc);
+                bool rangeDoneIsIdentifier = rangeDonePresent && IsPlainIdentifier(DoneFunc);
+                bool rangeAllCallbacksMigratable =
+                    (!rangeReadyPresent || rangeReadyIsIdentifier) &&
+                    (!rangeChangePresent || rangeChangeIsIdentifier) &&
+                    (!rangeDonePresent || rangeDoneIsIdentifier);
+
+                if (rangeAllCallbacksMigratable)
+                {
+                    // Issue #470 Slice H: the built-in start/end split is carried
+                    // as island data (RangeStartId/RangeEndId/RangeSplitStr) —
+                    // framework_layui.js's 'laydate' case installs it as the
+                    // built-in `done`, chaining any caller-supplied DoneFn AFTER
+                    // the split — reproducing the legacy inline range
+                    // <script>'s done: body exactly (split first, then the
+                    // caller's DoneFunc).
+                    var rangeOpts = BuildLaydateOpts(rawMin, rawMax, isRangeMode: true);
+                    var rangeAction = new LaydateIslandAction
+                    {
+                        Opts = rangeOpts,
+                        ReadyFn = rangeReadyIsIdentifier ? ReadyFunc : null,
+                        ChangeFn = rangeChangeIsIdentifier ? ChangeFunc : null,
+                        DoneFn = rangeDoneIsIdentifier ? DoneFunc : null,
+                        RangeStartId = RangeStartName,
+                        RangeEndId = RangeEndName,
+                        RangeSplitStr = RangeDoneSplit
+                    };
+                    var rangeJson = LayuiIslandJson.Serialize(rangeAction, _laydateJsonOptions);
+                    output.PostElement.AppendHtml(
+                        $"<script type=\"application/json\" class=\"wtm-dialog-init\">{rangeJson}</script>");
+                }
+                else
+                {
+                    var rangeNonIdentifierAttrs = new List<string>();
+                    if (rangeReadyPresent && !rangeReadyIsIdentifier) { rangeNonIdentifierAttrs.Add(nameof(ReadyFunc)); }
+                    if (rangeChangePresent && !rangeChangeIsIdentifier) { rangeNonIdentifierAttrs.Add(nameof(ChangeFunc)); }
+                    if (rangeDonePresent && !rangeDoneIsIdentifier) { rangeNonIdentifierAttrs.Add(nameof(DoneFunc)); }
+                    var rangeWarnJs = BuildDeprecationWarnScript(rangeNonIdentifierAttrs);
+
+                    var rangeScript = $@"
 <script>
-layui.use(['laydate'], function() {{
+{rangeWarnJs}layui.use(['laydate'], function() {{
     var laydate = layui.laydate;
     var dateIns = laydate.render({{
         elem: '#{Id}',
@@ -410,7 +564,8 @@ layui.use(['laydate'], function() {{
     }});
 }});
 </script>";
-                output.PostElement.AppendHtml(rangeScript);
+                    output.PostElement.AppendHtml(rangeScript);
+                }
             }
 
             base.Process(context, output);
@@ -421,6 +576,20 @@ layui.use(['laydate'], function() {{
     // island — {"type":"laydate","opts":{...}}. ff._normalizeIslandPayload
     // (framework_layui.js) wraps this into the {actions:[...]} shape
     // ff.DispatchAction expects; not part of the public API surface.
+    //
+    // Issue #470 Slice H: extended with ReadyFn/ChangeFn/DoneFn — caller
+    // callback NAMES (compile-time, developer-authored Razor literals from
+    // the ReadyFunc/ChangeFunc/DoneFunc TagHelper attributes — NEVER
+    // field/request/model data, the same trust class as FormTagHelper's
+    // beforeSubmit #558/#561 and TextBoxTagHelper's bindInput #601), present
+    // only when the name is a plain identifier
+    // (/^[A-Za-z_$][\w$]*\z/ server-side / /^[A-Za-z_$][\w$]*$/ client-side).
+    // framework_layui.js resolves each through the SAME #558/#601 guarded
+    // ff._resolveGuardedWindowFn lookup before wiring it to the live laydate
+    // instance — a failed resolution silently skips just that one callback,
+    // never throws, never evals. RangeStartId/RangeEndId/RangeSplitStr are
+    // present only for the two-hidden-input IsRange path — see
+    // DateTimeTagHelper.RangeDoneSplit.
     internal class LaydateIslandAction
     {
         [System.Text.Json.Serialization.JsonPropertyName("type")]
@@ -428,5 +597,23 @@ layui.use(['laydate'], function() {{
 
         [System.Text.Json.Serialization.JsonPropertyName("opts")]
         public Dictionary<string, object> Opts { get; set; } = new();
+
+        [System.Text.Json.Serialization.JsonPropertyName("readyFn")]
+        public string ReadyFn { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("changeFn")]
+        public string ChangeFn { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("doneFn")]
+        public string DoneFn { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("rangeStartId")]
+        public string RangeStartId { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("rangeEndId")]
+        public string RangeEndId { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("rangeSplitStr")]
+        public string RangeSplitStr { get; set; }
     }
 }

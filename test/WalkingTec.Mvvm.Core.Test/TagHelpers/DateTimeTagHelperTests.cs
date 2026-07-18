@@ -165,10 +165,12 @@ public class DateTimeTagHelperTests
     }
 
     [TestMethod]
-    public void Process_IsRangeFalse_WithReadyFunc_KeepsInlineScriptFallback()
+    public void Process_IsRangeFalse_WithIdentifierReadyFunc_MigratesToJsonIsland()
     {
-        // Issue #556 (#470-B slice 1): a callback can't be JSON-expressed, so
-        // the inline <script> fallback must be preserved unchanged.
+        // Issue #470 Slice H: a PLAIN-IDENTIFIER callback name is the one
+        // shape ff._resolveGuardedWindowFn can safely resolve by name, so it
+        // now migrates to the eval-free JSON island (superseding #556's
+        // blanket "any callback keeps the inline script" rule).
         var helper = CreateHelper();
         helper.Id = "test_date_ready";
         helper.IsRange = false;
@@ -179,14 +181,20 @@ public class DateTimeTagHelperTests
         helper.Process(context, output);
 
         var content = output.PostElement.GetContent();
-        Assert.IsTrue(content.Contains("laydate.render("), "Must still emit laydate.render(");
-        StringAssert.Contains(content, "myReadyCallback", "Must reference the ready callback");
-        Assert.IsFalse(content.Contains("wtm-dialog-init"),
-            "Must not emit the JSON island when a callback is present");
+        StringAssert.Contains(content, "class=\"wtm-dialog-init\"", "Must emit the JSON island");
+        Assert.IsFalse(content.Contains("laydate.render("),
+            "Must not emit the legacy inline laydate.render( call");
+
+        var json = ExtractJsonFromIsland(content);
+        Assert.IsNotNull(json);
+        using var doc = System.Text.Json.JsonDocument.Parse(json!);
+        Assert.AreEqual("myReadyCallback", doc.RootElement.GetProperty("readyFn").GetString());
+        Assert.IsFalse(doc.RootElement.TryGetProperty("changeFn", out _));
+        Assert.IsFalse(doc.RootElement.TryGetProperty("doneFn", out _));
     }
 
     [TestMethod]
-    public void Process_IsRangeFalse_WithChangeFunc_KeepsInlineScriptFallback()
+    public void Process_IsRangeFalse_WithIdentifierChangeFunc_MigratesToJsonIsland()
     {
         var helper = CreateHelper();
         helper.Id = "test_date_change";
@@ -198,14 +206,18 @@ public class DateTimeTagHelperTests
         helper.Process(context, output);
 
         var content = output.PostElement.GetContent();
-        Assert.IsTrue(content.Contains("laydate.render("), "Must still emit laydate.render(");
-        StringAssert.Contains(content, "myChangeCallback", "Must reference the change callback");
-        Assert.IsFalse(content.Contains("wtm-dialog-init"),
-            "Must not emit the JSON island when a callback is present");
+        StringAssert.Contains(content, "class=\"wtm-dialog-init\"", "Must emit the JSON island");
+        Assert.IsFalse(content.Contains("laydate.render("),
+            "Must not emit the legacy inline laydate.render( call");
+
+        var json = ExtractJsonFromIsland(content);
+        Assert.IsNotNull(json);
+        using var doc = System.Text.Json.JsonDocument.Parse(json!);
+        Assert.AreEqual("myChangeCallback", doc.RootElement.GetProperty("changeFn").GetString());
     }
 
     [TestMethod]
-    public void Process_IsRangeFalse_WithDoneFunc_KeepsInlineScriptFallback()
+    public void Process_IsRangeFalse_WithIdentifierDoneFunc_MigratesToJsonIsland()
     {
         var helper = CreateHelper();
         helper.Id = "test_date_done";
@@ -217,10 +229,108 @@ public class DateTimeTagHelperTests
         helper.Process(context, output);
 
         var content = output.PostElement.GetContent();
+        StringAssert.Contains(content, "class=\"wtm-dialog-init\"", "Must emit the JSON island");
+        Assert.IsFalse(content.Contains("laydate.render("),
+            "Must not emit the legacy inline laydate.render( call");
+
+        var json = ExtractJsonFromIsland(content);
+        Assert.IsNotNull(json);
+        using var doc = System.Text.Json.JsonDocument.Parse(json!);
+        Assert.AreEqual("myDoneCallback", doc.RootElement.GetProperty("doneFn").GetString());
+    }
+
+    [TestMethod]
+    public void Process_IsRangeFalse_WithAllThreeIdentifierCallbacks_MigratesToJsonIslandWithAllThree()
+    {
+        var helper = CreateHelper();
+        helper.Id = "test_date_all_cb";
+        helper.IsRange = false;
+        helper.ReadyFunc = "r1";
+        helper.ChangeFunc = "c1";
+        helper.DoneFunc = "d1";
+        var context = MakeContext();
+        var output = MakeOutput();
+
+        helper.Process(context, output);
+
+        var content = output.PostElement.GetContent();
+        var json = ExtractJsonFromIsland(content);
+        Assert.IsNotNull(json);
+        using var doc = System.Text.Json.JsonDocument.Parse(json!);
+        Assert.AreEqual("r1", doc.RootElement.GetProperty("readyFn").GetString());
+        Assert.AreEqual("c1", doc.RootElement.GetProperty("changeFn").GetString());
+        Assert.AreEqual("d1", doc.RootElement.GetProperty("doneFn").GetString());
+    }
+
+    [TestMethod]
+    public void Process_IsRangeFalse_WithNonIdentifierReadyFunc_KeepsInlineScriptFallbackAndWarns()
+    {
+        // Issue #470 Slice H: a non-identifier expression (dotted/call-syntax)
+        // can never be safely resolved by ff._resolveGuardedWindowFn, so it
+        // keeps the exact legacy inline <script> fallback — never silently
+        // dropping the developer's handler — but must surface a loud
+        // deprecation console.warn (mirroring FormTagHelper's #558/#561
+        // non-identifier BeforeSubmit decision).
+        var helper = CreateHelper();
+        helper.Id = "test_date_ready_dotted";
+        helper.IsRange = false;
+        helper.ReadyFunc = "obj.myReadyCallback";
+        var context = MakeContext();
+        var output = MakeOutput();
+
+        helper.Process(context, output);
+
+        var content = output.PostElement.GetContent();
         Assert.IsTrue(content.Contains("laydate.render("), "Must still emit laydate.render(");
-        StringAssert.Contains(content, "myDoneCallback", "Must reference the done callback");
+        StringAssert.Contains(content, "obj.myReadyCallback", "Must reference the ready callback");
         Assert.IsFalse(content.Contains("wtm-dialog-init"),
-            "Must not emit the JSON island when a callback is present");
+            "Must not emit the JSON island for a non-identifier callback");
+        StringAssert.Contains(content, "console.warn(", "Must emit a deprecation console.warn");
+        StringAssert.Contains(content, "ReadyFunc", "Warning must name the offending attribute");
+    }
+
+    [TestMethod]
+    public void Process_IsRangeFalse_WithNonIdentifierChangeFunc_KeepsInlineScriptFallbackAndWarns()
+    {
+        var helper = CreateHelper();
+        helper.Id = "test_date_change_call_expr";
+        helper.IsRange = false;
+        helper.ChangeFunc = "myChangeCallback()";
+        var context = MakeContext();
+        var output = MakeOutput();
+
+        helper.Process(context, output);
+
+        var content = output.PostElement.GetContent();
+        Assert.IsTrue(content.Contains("laydate.render("), "Must still emit laydate.render(");
+        Assert.IsFalse(content.Contains("wtm-dialog-init"),
+            "Must not emit the JSON island for a non-identifier callback");
+        StringAssert.Contains(content, "console.warn(", "Must emit a deprecation console.warn");
+        StringAssert.Contains(content, "ChangeFunc", "Warning must name the offending attribute");
+    }
+
+    [TestMethod]
+    public void Process_IsRangeFalse_MixedIdentifierAndNonIdentifierCallbacks_WholeFieldFallsBackAndWarns()
+    {
+        // Issue #470 Slice H: the 3-way decision is PER-FIELD, not per-callback
+        // — one non-identifier callback forces the ENTIRE field back to the
+        // inline <script>, even though the other callback is a valid identifier.
+        var helper = CreateHelper();
+        helper.Id = "test_date_mixed";
+        helper.IsRange = false;
+        helper.ReadyFunc = "validIdentifier";
+        helper.ChangeFunc = "obj.notAnIdentifier";
+        var context = MakeContext();
+        var output = MakeOutput();
+
+        helper.Process(context, output);
+
+        var content = output.PostElement.GetContent();
+        Assert.IsFalse(content.Contains("wtm-dialog-init"),
+            "A single non-identifier callback must force the whole field back to inline");
+        StringAssert.Contains(content, "validIdentifier");
+        StringAssert.Contains(content, "obj.notAnIdentifier");
+        StringAssert.Contains(content, "console.warn(");
     }
 
     [TestMethod]
@@ -254,13 +364,17 @@ public class DateTimeTagHelperTests
     }
 
     [TestMethod]
-    public void Process_IsRangeTrue_EmitsRangeLaydateRenderWithoutDuplicates()
+    public void Process_IsRangeTrue_WithNonIdentifierCallback_EmitsRangeLaydateRenderWithoutDuplicates()
     {
+        // Issue #470 Slice H: a non-identifier callback forces the range path
+        // back to the legacy inline <script> (exercising the pre-existing
+        // "exactly one laydate.render(" invariant on that fallback path).
         var helper = CreateHelper();
         helper.Id = "test_date_range";
         helper.IsRange = true;
         helper.RangeStartName = "StartName";
         helper.RangeEndName = "EndName";
+        helper.DoneFunc = "obj.notAnIdentifier";
         var context = MakeContext();
         var output = MakeOutput();
 
@@ -270,20 +384,22 @@ public class DateTimeTagHelperTests
         var renderCount = System.Text.RegularExpressions.Regex.Matches(content, "laydate\\.render").Count;
 
         Assert.AreEqual(1, renderCount, "Must emit exactly one laydate.render call");
+        Assert.IsFalse(content.Contains("wtm-dialog-init"), "Must not emit the JSON island");
         Assert.IsTrue(content.Contains("range: true"), "Must have range: true");
         Assert.IsTrue(content.Contains("StartName"), "Must contain RangeStartName");
         Assert.IsTrue(content.Contains("EndName"), "Must contain RangeEndName");
         Assert.IsTrue(content.Contains("type=\"hidden\""), "Must contain hidden inputs for range");
+        StringAssert.Contains(content, "console.warn(");
     }
 
     [TestMethod]
-    public void Process_IsRangeTrue_NoUserCallback_StillEmitsInlineScriptNeverJsonIsland()
+    public void Process_IsRangeTrue_NoUserCallback_MigratesToJsonIslandCarryingRangeData()
     {
-        // Issue #556 (#470-B slice 1): the two-hidden-input range path always
-        // needs its own built-in `done` callback (splitting the picked value
-        // into RangeStartName/RangeEndName) — that can't be JSON-expressed, so
-        // this path never migrates to the JSON island, even when the caller
-        // supplied no ReadyFunc/ChangeFunc/DoneFunc of their own.
+        // Issue #470 Slice H: the two-hidden-input range path's built-in
+        // `done` split is now carried as island data (rangeStartId/
+        // rangeEndId/rangeSplitStr) instead of always needing the inline
+        // <script> — a callback-free range field migrates to the island,
+        // exactly like the non-range #556 path.
         var helper = CreateHelper();
         helper.Id = "test_date_range_no_callback";
         helper.IsRange = true;
@@ -295,10 +411,56 @@ public class DateTimeTagHelperTests
         helper.Process(context, output);
 
         var content = output.PostElement.GetContent();
-        Assert.IsFalse(content.Contains("wtm-dialog-init"),
-            "Range path must never emit the JSON island");
-        Assert.IsTrue(content.Contains("laydate.render("),
-            "Range path must always keep the inline laydate.render( call");
+        StringAssert.Contains(content, "class=\"wtm-dialog-init\"", "Must emit the JSON island");
+        Assert.IsFalse(content.Contains("laydate.render("),
+            "Must not emit the legacy inline laydate.render( call");
+        Assert.IsTrue(content.Contains("type=\"hidden\""), "Must still emit the two hidden inputs");
+        Assert.IsTrue(content.Contains("Start2"), "Must contain RangeStartName in the hidden input markup");
+        Assert.IsTrue(content.Contains("End2"), "Must contain RangeEndName in the hidden input markup");
+
+        var json = ExtractJsonFromIsland(content);
+        Assert.IsNotNull(json);
+        using var doc = System.Text.Json.JsonDocument.Parse(json!);
+        var root = doc.RootElement;
+        Assert.AreEqual("laydate", root.GetProperty("type").GetString());
+        Assert.AreEqual("Start2", root.GetProperty("rangeStartId").GetString());
+        Assert.AreEqual("End2", root.GetProperty("rangeEndId").GetString());
+        Assert.AreEqual(" - ", root.GetProperty("rangeSplitStr").GetString());
+        Assert.IsTrue(root.GetProperty("opts").GetProperty("range").GetBoolean(),
+            "opts.range must be the boolean laydate range:true mode");
+        Assert.IsFalse(root.TryGetProperty("readyFn", out _));
+        Assert.IsFalse(root.TryGetProperty("changeFn", out _));
+        Assert.IsFalse(root.TryGetProperty("doneFn", out _));
+    }
+
+    [TestMethod]
+    public void Process_IsRangeTrue_WithIdentifierDoneFunc_MigratesToJsonIslandCarryingDoneFn()
+    {
+        // Issue #470 Slice H: a plain-identifier DoneFunc on a range field
+        // also migrates — framework_layui.js chains it AFTER the built-in
+        // split (see the JS-side test for the ordering proof).
+        var helper = CreateHelper();
+        helper.Id = "test_date_range_done";
+        helper.IsRange = true;
+        helper.RangeStartName = "Start3";
+        helper.RangeEndName = "End3";
+        helper.DoneFunc = "myRangeDone";
+        var context = MakeContext();
+        var output = MakeOutput();
+
+        helper.Process(context, output);
+
+        var content = output.PostElement.GetContent();
+        StringAssert.Contains(content, "class=\"wtm-dialog-init\"", "Must emit the JSON island");
+        Assert.IsFalse(content.Contains("laydate.render("),
+            "Must not emit the legacy inline laydate.render( call");
+
+        var json = ExtractJsonFromIsland(content);
+        Assert.IsNotNull(json);
+        using var doc = System.Text.Json.JsonDocument.Parse(json!);
+        Assert.AreEqual("myRangeDone", doc.RootElement.GetProperty("doneFn").GetString());
+        Assert.AreEqual("Start3", doc.RootElement.GetProperty("rangeStartId").GetString());
+        Assert.AreEqual("End3", doc.RootElement.GetProperty("rangeEndId").GetString());
     }
 
     [TestMethod]
