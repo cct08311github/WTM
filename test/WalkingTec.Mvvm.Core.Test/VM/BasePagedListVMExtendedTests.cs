@@ -655,6 +655,32 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             Assert.AreEqual("u0", checkedItems[0].LoginName);
         }
 
+        /// <summary>
+        /// #705 pinning test: AfterDoSearcher's Selector-mode loop was reworked to use a
+        /// HashSet + cached compiled getter instead of List&lt;string&gt;.Contains + raw
+        /// reflection (PropertyHelper.GetPropertyValue). Preserve the pre-existing silent
+        /// fallback for a SelectorValueField naming a non-existent property (no exception,
+        /// simply no rows get marked Checked) — same guard GetBatchQuery already documents
+        /// for issue #106.
+        /// </summary>
+        [TestMethod]
+        public void AfterDoSearcher_Selector_with_nonexistent_SelectorValueField_does_not_throw()
+        {
+            var vm = new SelectorStudentListVM();
+            vm.Wtm = MockWtmContext.CreateWtmContext(new DataContext(_seed, DBTypeEnum.Memory));
+            AddStudents(vm.DC!, 3);
+
+            vm.SelectorValueField = "___NonExistentField___";
+            vm.Ids = new List<string> { "u0" };
+            vm.SearcherMode = ListVMSearchModeEnum.Selector;
+            vm.NeedPage = false;
+
+            vm.DoSearch();
+
+            var checkedItems = vm.EntityList.Where(x => x.Checked).ToList();
+            Assert.AreEqual(0, checkedItems.Count);
+        }
+
         // ----------------------------------------------------------------------
         // GetBatchQuery — SelectorValueField not "id"
         // ----------------------------------------------------------------------

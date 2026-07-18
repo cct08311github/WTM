@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
@@ -86,6 +87,31 @@ namespace WalkingTec.Mvvm.Core
 
         void Validate();
         IModelStateService? MSD { get; }
+    }
+
+    /// <summary>
+    /// #705: DoEdit/DoAdd's soft-relation resolution and <see cref="IncludeInfo.SoftSelect"/>
+    /// previously called <c>DC.GetType().GetMethod("Set", Type.EmptyTypes)!.MakeGenericMethod(entityType)</c>
+    /// on every save — a full reflection method lookup plus a closed-generic build, per
+    /// sub-collection property, per request. Cache the open <c>Set&lt;T&gt;()</c> MethodInfo
+    /// once per concrete <see cref="IDataContext"/> type, and each closed-generic MethodInfo
+    /// per (dcType, entityType) pair, instead of reflecting on every call — mirrors the
+    /// _FrameworkController.cs UpdateProperty cache pattern from #34/#663. Shared by both
+    /// <see cref="BaseCRUDVM{TModel}"/> (generic) and the non-generic <see cref="IncludeInfo"/>.
+    /// </summary>
+    internal static class EfSetMethodCache
+    {
+        private static readonly ConcurrentDictionary<Type, MethodInfo> s_openMethodCache = new();
+        private static readonly ConcurrentDictionary<(Type dcType, Type entityType), MethodInfo> s_closedMethodCache = new();
+
+        public static MethodInfo GetClosedSetMethod(Type dcType, Type entityType)
+        {
+            return s_closedMethodCache.GetOrAdd((dcType, entityType), key =>
+            {
+                var openMethod = s_openMethodCache.GetOrAdd(key.dcType, t => t.GetMethod("Set", Type.EmptyTypes)!);
+                return openMethod.MakeGenericMethod(key.entityType);
+            });
+        }
     }
 
     /// <summary>
@@ -741,7 +767,7 @@ namespace WalkingTec.Mvvm.Core
                                 continue;
                             }
 
-                            var set = DC!.GetType().GetMethod("Set", Type.EmptyTypes)!.MakeGenericMethod(ftype);
+                            var set = EfSetMethodCache.GetClosedSetMethod(DC!.GetType(), ftype);
                             var dataquery = set.Invoke(DC!, null) as IQueryable<TopBasePoco>;
                             ParameterExpression pe = Expression.Parameter(ftype);
                             Expression member = Expression.MakeMemberAccess(pe, ftype.GetSingleProperty(fkname)!);
@@ -862,7 +888,7 @@ namespace WalkingTec.Mvvm.Core
                                 continue;
                             }
                             var itemPros = ftype.GetAllProperties();
-                            var set = DC!.GetType().GetMethod("Set", Type.EmptyTypes)!.MakeGenericMethod(ftype);
+                            var set = EfSetMethodCache.GetClosedSetMethod(DC!.GetType(), ftype);
                             var dataquery = set.Invoke(DC!, null) as IQueryable<TopBasePoco>;
                             ParameterExpression pe = Expression.Parameter(ftype);
                             Expression member = Expression.MakeMemberAccess(pe, ftype.GetSingleProperty(fkname)!);
@@ -1664,7 +1690,7 @@ namespace WalkingTec.Mvvm.Core
                     {
                         return rv;
                     }
-                    var set = DC.GetType().GetMethod("Set", Type.EmptyTypes)!.MakeGenericMethod(InnerType);
+                    var set = EfSetMethodCache.GetClosedSetMethod(DC.GetType(), InnerType);
                     rv = Expression.Call(Expression.Constant(DC), set);
                     ParameterExpression pe = Expression.Parameter(InnerType);
                     Expression member = Expression.MakeMemberAccess(pe, InnerType.GetSingleProperty(this.SoftKey)!);
@@ -1688,7 +1714,7 @@ namespace WalkingTec.Mvvm.Core
                     {
                         return rv;
                     }
-                    var set = DC.GetType().GetMethod("Set", Type.EmptyTypes)!.MakeGenericMethod(InnerType);
+                    var set = EfSetMethodCache.GetClosedSetMethod(DC.GetType(), InnerType);
                     rv = Expression.Call(Expression.Constant(DC), set);
                     ParameterExpression pe = Expression.Parameter(InnerType);
                     Expression member = Expression.MakeMemberAccess(pe, InnerType.GetSingleProperty(this.SoftFK)!);

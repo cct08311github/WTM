@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
@@ -162,6 +163,25 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
+        // #705: ComputeMinMax previously re-resolved the open Select/Min/Max MethodInfo via
+        // typeof(Queryable).GetMethods().First(...) and called .MakeGenericMethod(...) for
+        // every aggregate column, on every request (full reflection scan of Queryable's
+        // methods each time). Resolve each open MethodInfo once (static, first use) and cache
+        // each closed-generic MethodInfo per column property Type — mirrors the
+        // _FrameworkController.cs UpdateProperty cache pattern from #34/#663.
+        private static readonly MethodInfo s_openSelectMethod =
+            typeof(Queryable).GetMethods().First(m => m.Name == "Select" && m.GetParameters().Length == 2);
+
+        private static readonly MethodInfo s_openMinMethod =
+            typeof(Queryable).GetMethods().First(m => m.Name == "Min" && m.GetParameters().Length == 1);
+
+        private static readonly MethodInfo s_openMaxMethod =
+            typeof(Queryable).GetMethods().First(m => m.Name == "Max" && m.GetParameters().Length == 1);
+
+        private static readonly ConcurrentDictionary<Type, MethodInfo> s_selectMethodCache = new();
+        private static readonly ConcurrentDictionary<Type, MethodInfo> s_minMethodCache = new();
+        private static readonly ConcurrentDictionary<Type, MethodInfo> s_maxMethodCache = new();
+
         private static string ComputeMinMax(
             IQueryable<TModel> query,
             ParameterExpression param,
@@ -173,10 +193,9 @@ namespace WalkingTec.Mvvm.Core
             // For Min/Max we use a generic Select + Min()/Max() via reflection.
             // Cast the property to its nullable form so nulls are handled correctly.
             var selectLambda = Expression.Lambda(body, param);
-            var selectMethod = typeof(Queryable)
-                .GetMethods()
-                .First(m => m.Name == "Select" && m.GetParameters().Length == 2)
-                .MakeGenericMethod(typeof(TModel), propType);
+            var selectMethod = s_selectMethodCache.GetOrAdd(
+                propType,
+                t => s_openSelectMethod.MakeGenericMethod(typeof(TModel), t));
             var projected = selectMethod.Invoke(null, new object[] { query, selectLambda }) as IQueryable;
 
             if (projected == null)
@@ -184,11 +203,9 @@ namespace WalkingTec.Mvvm.Core
                 return string.Empty;
             }
 
-            var aggregateMethodName = isMin ? "Min" : "Max";
-            var aggregateMethod = typeof(Queryable)
-                .GetMethods()
-                .First(m => m.Name == aggregateMethodName && m.GetParameters().Length == 1)
-                .MakeGenericMethod(propType);
+            var cache = isMin ? s_minMethodCache : s_maxMethodCache;
+            var openAggregateMethod = isMin ? s_openMinMethod : s_openMaxMethod;
+            var aggregateMethod = cache.GetOrAdd(propType, t => openAggregateMethod.MakeGenericMethod(t));
 
             var result = aggregateMethod.Invoke(null, new object[] { projected });
             return result?.ToString() ?? string.Empty;

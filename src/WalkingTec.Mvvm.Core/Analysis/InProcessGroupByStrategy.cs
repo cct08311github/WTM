@@ -6,6 +6,7 @@ using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using WalkingTec.Mvvm.Core;
 
 namespace WalkingTec.Mvvm.Core.Analysis
 {
@@ -49,6 +50,25 @@ namespace WalkingTec.Mvvm.Core.Analysis
                     throw new InvalidOperationException(
                         $"Property '{k.Item2}' not found on {k.Item1.Name}.");
                 return pi;
+            });
+        }
+
+        // #705: GroupAndAggregate previously called PropertyInfo.GetValue(row) once per
+        // dimension/measure per row (reflection invoke on every row of every group). Reuse
+        // the PropertyHelper compiled-getter factory (WalkingTec.Mvvm.Core.PropertyHelper.
+        // GetPropertyExpression, already cached via ReflectionCache.PropertyAccessors) for a
+        // compiled delegate instead. ResolveProperty above is kept and called first so the
+        // existing descriptive InvalidOperationException on an unknown field name is
+        // preserved unchanged — PropertyHelper.GetPropertyExpression itself throws a raw
+        // NullReferenceException for a missing property, which would be a behaviour change.
+        private static readonly ConcurrentDictionary<(Type, string), Func<object, object?>> _getterCache = new();
+
+        private static Func<object, object?> ResolveGetter(Type type, string name)
+        {
+            return _getterCache.GetOrAdd((type, name), k =>
+            {
+                ResolveProperty(k.Item1, k.Item2);
+                return PropertyHelper.GetPropertyExpression(k.Item1, k.Item2);
             });
         }
 
@@ -109,19 +129,20 @@ namespace WalkingTec.Mvvm.Core.Analysis
             List<TModel> items,
             AnalysisQueryRequest req)
         {
-            // Pre-resolve dimension PropertyInfos once (avoids per-row GetProperty calls
-            // inside BuildGroupKey and the key-building lambda).
-            var dimProps = req.Dimensions
-                .Select(d => ResolveProperty(typeof(TModel), d))
+            // Pre-resolve dimension compiled getters once (avoids per-row GetProperty +
+            // PropertyInfo.GetValue reflection calls inside BuildGroupKey and the
+            // key-building lambda).
+            var dimGetters = req.Dimensions
+                .Select(d => ResolveGetter(typeof(TModel), d))
                 .ToArray();
 
-            // Pre-resolve measure PropertyInfos once.
-            var measureProps = req.Measures
-                .Select(m => ResolveProperty(typeof(TModel), m.Field))
+            // Pre-resolve measure compiled getters once.
+            var measureGetters = req.Measures
+                .Select(m => ResolveGetter(typeof(TModel), m.Field))
                 .ToArray();
 
             List<Dictionary<string, object?>> result = [.. items
-                .GroupBy(row => BuildGroupKey(row, req.Dimensions, req.DimensionHierarchies, dimProps))
+                .GroupBy(row => BuildGroupKey(row, req.Dimensions, req.DimensionHierarchies, dimGetters))
                 .Take(MaxRows + 1)
                 .Select(g =>
                 {
@@ -148,7 +169,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
                         for (int mi = 0; mi < measureCount; mi++)
                         {
                             var m = req.Measures[mi];
-                            var rawVal = measureProps[mi].GetValue(row);
+                            var rawVal = measureGetters[mi](row!);
 
                             if (m.Func == AggregateFunc.DistinctCount)
                             {
@@ -226,11 +247,11 @@ namespace WalkingTec.Mvvm.Core.Analysis
             TModel row,
             List<string> dimensions,
             Dictionary<string, DateHierarchy>? hierarchies,
-            PropertyInfo[] dimProps)
+            Func<object, object?>[] dimGetters)
             => string.Join('\0', dimensions.Select((d, idx) =>
                {
-                   var propInfo = dimProps[idx];
-                   var val = propInfo.GetValue(row);
+                   var getter = dimGetters[idx];
+                   var val = getter(row!);
                    if (val == null) return string.Empty;
 
                    if (hierarchies != null

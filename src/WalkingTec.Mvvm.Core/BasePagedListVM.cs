@@ -796,23 +796,50 @@ namespace WalkingTec.Mvvm.Core
         {
             if (SearcherMode == ListVMSearchModeEnum.Selector && Ids != null && Ids.Count > 0 && EntityList != null && EntityList.Count > 0)
             {
+                // #705: this loop was O(rows * ids) — Ids is a List<string>, so
+                // Ids.Contains(...) did a linear scan per row — plus a per-row reflection
+                // getter (item.GetID() / GetPropertyValue(string) both call
+                // PropertyInfo.GetValue via reflection). Build the id lookup once as a
+                // HashSet (same equality semantics as List<string>.Contains's default
+                // EqualityComparer<string>.Default) and reuse a compiled getter per distinct
+                // runtime type instead of reflecting on every row.
+                var idSet = new HashSet<string>(Ids);
+                bool useIdField = string.IsNullOrEmpty(SelectorValueField) || SelectorValueField.ToLower() == "id";
+                string propName = useIdField ? "ID" : SelectorValueField!;
+                var getterCache = new Dictionary<Type, Func<object, object?>?>();
+
                 foreach (var item in EntityList)
                 {
-                    if (string.IsNullOrEmpty(SelectorValueField) || SelectorValueField.ToLower() == "id")
+                    var itemType = item.GetType();
+                    if (!getterCache.TryGetValue(itemType, out var getter))
                     {
-                        var id = item.GetID();
-                        if (Ids.Contains(id.ToString()!))
-                        {
-                            item.Checked = true;
-                        }
+                        // Preserve the original GetPropertyValue(string) fallback: a
+                        // property that doesn't exist on the runtime type (e.g. a
+                        // form-tampered SelectorValueField) silently contributes nothing
+                        // instead of throwing.
+                        getter = itemType.GetSingleProperty(propName) != null
+                            ? PropertyHelper.GetPropertyExpression(itemType, propName)
+                            : null;
+                        getterCache[itemType] = getter;
                     }
-                    else
+
+                    // Preserve GetPropertyValue's original try/catch: a property getter
+                    // that throws must not abort the whole loop — the original non-ID
+                    // path (GetPropertyValue) swallowed the exception and effectively
+                    // skipped the row (returned "" instead of a matching id).
+                    object? v;
+                    try
                     {
-                        var v = item.GetPropertyValue(SelectorValueField);
-                        if (v != null && Ids.Contains(v.ToString()!))
-                        {
-                            item.Checked = true;
-                        }
+                        v = getter?.Invoke(item);
+                    }
+                    catch
+                    {
+                        v = null;
+                    }
+
+                    if (v != null && idSet.Contains(v.ToString()!))
+                    {
+                        item.Checked = true;
                     }
                 }
             }
