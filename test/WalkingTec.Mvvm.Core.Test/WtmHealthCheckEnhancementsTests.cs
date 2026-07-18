@@ -48,7 +48,7 @@ namespace WalkingTec.Mvvm.Core.Test
         public async Task DataContextCheck_returns_healthy_when_CanConnect_true()
         {
             using var dc = InMemoryDataContext.Create();
-            var check = new WtmDataContextHealthCheck(dc, TimeSpan.FromSeconds(2));
+            var check = new WtmDataContextHealthCheck(dc, null, TimeSpan.FromSeconds(2));
             var result = await check.CheckHealthAsync(new HealthCheckContext());
             Assert.AreEqual(HealthStatus.Healthy, result.Status);
             Assert.IsTrue(result.Data.ContainsKey("dbType"));
@@ -59,7 +59,7 @@ namespace WalkingTec.Mvvm.Core.Test
         {
             using var dc = InMemoryDataContext.Create();
             // TimeSpan.Zero → constructor should coerce to a sane default
-            var check = new WtmDataContextHealthCheck(dc, TimeSpan.Zero);
+            var check = new WtmDataContextHealthCheck(dc, null, TimeSpan.Zero);
             var result = await check.CheckHealthAsync(new HealthCheckContext());
             Assert.AreEqual(HealthStatus.Healthy, result.Status);
         }
@@ -68,7 +68,7 @@ namespace WalkingTec.Mvvm.Core.Test
         public void DataContextCheck_throws_on_null_dc()
         {
             Assert.ThrowsException<ArgumentNullException>(() =>
-                new WtmDataContextHealthCheck(null!, TimeSpan.FromSeconds(1)));
+                new WtmDataContextHealthCheck(null!, null, TimeSpan.FromSeconds(1)));
         }
 
         // ── NullContext guard — issue #441 ────────────────────────────────
@@ -82,9 +82,10 @@ namespace WalkingTec.Mvvm.Core.Test
         [TestMethod]
         public async Task DataContextCheck_NullContext_returns_healthy_not_throwing()
         {
-            // Arrange — NullContext is the WTM DI sentinel; every member throws NotImplementedException
+            // Arrange — NullContext is the WTM DI sentinel; every member throws NotImplementedException.
+            // No WTMContext is supplied here, so ResolveDataContext falls back to the DI dc (NullContext).
             var nullDc = new NullContext();
-            var check = new WtmDataContextHealthCheck(nullDc, TimeSpan.FromSeconds(2));
+            var check = new WtmDataContextHealthCheck(nullDc, null, TimeSpan.FromSeconds(2));
 
             // Act — must NOT throw, must NOT return Unhealthy
             var result = await check.CheckHealthAsync(new HealthCheckContext());
@@ -100,7 +101,7 @@ namespace WalkingTec.Mvvm.Core.Test
         public async Task DataContextCheck_NullContext_description_mentions_no_DataContext()
         {
             var nullDc = new NullContext();
-            var check = new WtmDataContextHealthCheck(nullDc, TimeSpan.FromSeconds(2));
+            var check = new WtmDataContextHealthCheck(nullDc, null, TimeSpan.FromSeconds(2));
             var result = await check.CheckHealthAsync(new HealthCheckContext());
 
             StringAssert.Contains(result.Description, "DataContext",
@@ -113,11 +114,190 @@ namespace WalkingTec.Mvvm.Core.Test
             // When NullContext is in use, we short-circuit before reading .DBType,
             // so the data dictionary should NOT contain the dbType key (it would throw).
             var nullDc = new NullContext();
-            var check = new WtmDataContextHealthCheck(nullDc, TimeSpan.FromSeconds(2));
+            var check = new WtmDataContextHealthCheck(nullDc, null, TimeSpan.FromSeconds(2));
             var result = await check.CheckHealthAsync(new HealthCheckContext());
 
             Assert.IsFalse(result.Data.ContainsKey("dbType"),
                 "No dbType key expected when NullContext short-circuits (would throw if accessed)");
+        }
+
+        // ── WTMContext-first resolution — issue #741 (residual of #727) ───
+
+        /// <summary>
+        /// #741: <c>AddTypeActivatedCheck</c> constructs this check inside a fresh DI scope on
+        /// every probe. Before the fix, constructor-injecting bare <see cref="IDataContext"/>
+        /// ALWAYS resolved WTM's <c>NullContext</c> placeholder in a real deployment (WTM never
+        /// replaces the DI <see cref="IDataContext"/> registration — apps get their real
+        /// DataContext through <see cref="WTMContext.CreateDC"/>), so the check silently reported
+        /// "Healthy (skipped)" even when a real, reachable database was configured. This proves
+        /// the check now prefers the WTMContext-resolved real DataContext over the DI placeholder.
+        /// </summary>
+        [TestMethod]
+        public async Task DataContextCheck_WtmContextAvailable_ProbesRealDbContext_NotNullContextSkip()
+        {
+            // Arrange — mirrors AddWtmContext's actual DI shape: IDataContext -> NullContext
+            // placeholder, plus a WTMContext whose CreateDC() resolves a real DataContext.
+            using var realDc = InMemoryDataContext.Create();
+            var wtm = new FakeWtmContext(realDc);
+            var nullDc = new NullContext();
+
+            var check = new WtmDataContextHealthCheck(nullDc, wtm, TimeSpan.FromSeconds(2));
+            var result = await check.CheckHealthAsync(new HealthCheckContext());
+
+            Assert.AreEqual(HealthStatus.Healthy, result.Status);
+            Assert.AreEqual("DataContext connection OK.", result.Description,
+                "Before #741 this reported the NullContext 'skipped' description even though a " +
+                "real WTMContext-resolved DataContext was available — the DB was never probed.");
+            Assert.IsTrue(result.Data.ContainsKey("dbType"),
+                "dbType should reflect the real, WTMContext-resolved DataContext.");
+        }
+
+        /// <summary>
+        /// The DataContext obtained via <see cref="WTMContext.CreateDC"/> is not DI-tracked, so
+        /// the health check must dispose it itself after each probe.
+        /// </summary>
+        [TestMethod]
+        public async Task DataContextCheck_WtmContextAvailable_DisposesOwnedDataContext()
+        {
+            var trackedDc = InMemoryDataContext.Create();
+            var wtm = new FakeWtmContext(trackedDc);
+            var check = new WtmDataContextHealthCheck(new NullContext(), wtm, TimeSpan.FromSeconds(2));
+
+            await check.CheckHealthAsync(new HealthCheckContext());
+
+            Assert.IsTrue(trackedDc.WasDisposed,
+                "A DataContext obtained via WTMContext.CreateDC() must be owned/disposed by the health check.");
+        }
+
+        /// <summary>
+        /// A DI-fallback DataContext (host registered IDataContext directly, without WTMContext)
+        /// is owned by its DI scope, not by the health check — disposing it here would break the
+        /// caller's scope-managed lifetime.
+        /// </summary>
+        [TestMethod]
+        public async Task DataContextCheck_NoWtmContext_DoesNotDisposeDiFallbackDataContext()
+        {
+            using var diDc = InMemoryDataContext.Create();
+            var check = new WtmDataContextHealthCheck(diDc, null, TimeSpan.FromSeconds(2));
+
+            var result = await check.CheckHealthAsync(new HealthCheckContext());
+
+            Assert.AreEqual(HealthStatus.Healthy, result.Status);
+            Assert.IsFalse(diDc.WasDisposed,
+                "The DI-fallback DataContext's lifetime belongs to its own DI scope, not the health check.");
+        }
+
+        /// <summary>
+        /// WTMContext.CreateDC() failing (misconfigured/disabled connection) must surface as
+        /// Unhealthy — not escape uncaught, and not be silently swallowed as a NullContext skip.
+        /// </summary>
+        [TestMethod]
+        public async Task DataContextCheck_WtmContextCreateDCThrows_ReturnsUnhealthy()
+        {
+            var wtm = new ThrowingFakeWtmContext();
+            var check = new WtmDataContextHealthCheck(new NullContext(), wtm, TimeSpan.FromSeconds(2));
+
+            var result = await check.CheckHealthAsync(new HealthCheckContext());
+
+            Assert.AreEqual(HealthStatus.Unhealthy, result.Status);
+            Assert.IsNotNull(result.Exception);
+        }
+
+        // ── Registration-path (ActivatorUtilities) — #741 regression guard ─
+
+        /// <summary>
+        /// #741 regression: an earlier draft of the fix gave the <c>WTMContext? wtm</c>
+        /// constructor parameter no default value. <c>AddWtmDataContextCheck</c> registers this
+        /// check via <c>AddTypeActivatedCheck&lt;WtmDataContextHealthCheck&gt;</c>
+        /// (<c>ActivatorUtilities.CreateInstance</c>), which resolves constructor parameters not
+        /// covered by the explicit <c>args</c> array through <c>IServiceProvider.GetService</c> —
+        /// if that returns <c>null</c> AND the parameter has no default value, ActivatorUtilities
+        /// throws instead of passing <c>null</c> through. All the unit tests above construct the
+        /// check directly (<c>new WtmDataContextHealthCheck(...)</c>), bypassing
+        /// ActivatorUtilities entirely, so none of them could catch this. These two tests build a
+        /// real <see cref="ServiceProvider"/> and drive the check through its actual
+        /// <c>AddWtmDataContextCheck()</c> registration via <see cref="HealthCheckService"/> —
+        /// the exact masking gap the #727 post-mortem warned about (constructing test doubles
+        /// directly instead of exercising the real DI/activation path).
+        /// </summary>
+        [TestMethod]
+        public async Task DataContextCheck_RegisteredWithWtmContext_ActivatesAndProbesWtmContextDataContext()
+        {
+            // Arrange — mirrors AddWtmContext's real DI shape: IDataContext -> NullContext
+            // placeholder, WTMContext registered separately with a real DataContext behind
+            // CreateDC(). This is scenario (a): WTMContext IS present in DI.
+            using var realDc = InMemoryDataContext.Create();
+            var wtm = new FakeWtmContext(realDc);
+
+            var services = new ServiceCollection();
+            services.AddLogging();
+            services.AddSingleton<IDataContext>(new NullContext());
+            services.AddSingleton<WTMContext>(wtm);
+            services.AddHealthChecks().AddWtmDataContextCheck();
+
+            using var provider = services.BuildServiceProvider();
+            var healthCheckService = provider.GetRequiredService<HealthCheckService>();
+
+            // Act
+            var report = await healthCheckService.CheckHealthAsync();
+
+            // Assert
+            Assert.AreEqual(HealthStatus.Healthy, report.Status);
+            var entry = report.Entries["datacontext"];
+            Assert.AreEqual("DataContext connection OK.", entry.Description,
+                "WTMContext is registered — the check must resolve WTMContext.CreateDC()'s real " +
+                "DataContext, not the DI NullContext placeholder.");
+        }
+
+        [TestMethod]
+        public async Task DataContextCheck_RegisteredWithoutWtmContext_ActivatesWithoutThrowing_ProbesDiFallback()
+        {
+            // Arrange — host registers a real IDataContext directly, WITHOUT calling
+            // AddWtmContext, so WTMContext is absent from DI entirely. This is scenario (b):
+            // the exact shape of the #741 regression. Before the constructor parameter got its
+            // default value, ActivatorUtilities.CreateInstance threw InvalidOperationException
+            // here because the (then-mandatory) WTMContext parameter could not be resolved from
+            // an empty container — the health-check framework surfaced that as an
+            // activation-failure Unhealthy/503, contradicting the fix's own documented
+            // "graceful DI-fallback" behaviour.
+            using var diDc = InMemoryDataContext.Create();
+
+            var services = new ServiceCollection();
+            services.AddLogging();
+            services.AddSingleton<IDataContext>(diDc);
+            // Deliberately NOT registering WTMContext.
+            services.AddHealthChecks().AddWtmDataContextCheck();
+
+            using var provider = services.BuildServiceProvider();
+            var healthCheckService = provider.GetRequiredService<HealthCheckService>();
+
+            // Act — must not throw during activation.
+            var report = await healthCheckService.CheckHealthAsync();
+
+            // Assert
+            Assert.AreEqual(HealthStatus.Healthy, report.Status);
+            var entry = report.Entries["datacontext"];
+            Assert.AreEqual("DataContext connection OK.", entry.Description,
+                "No WTMContext in DI — the check must fall back to the directly DI-registered " +
+                "IDataContext instead of failing to activate.");
+        }
+
+        /// <summary>Minimal <see cref="WTMContext"/> double whose <c>CreateDC</c> returns a
+        /// pre-built <see cref="IDataContext"/> — mirrors the FakeWtmContext pattern used by
+        /// the #727 ProdDi regression tests for ActionLogRetentionService/LookupCacheWarmupService.</summary>
+        private sealed class FakeWtmContext : WTMContext
+        {
+            private readonly IDataContext? _dc;
+            public FakeWtmContext(IDataContext? dc) : base(null) => _dc = dc;
+            public override IDataContext? CreateDC(bool isLog = false, string? cskey = null, bool logerror = true)
+                => _dc;
+        }
+
+        private sealed class ThrowingFakeWtmContext : WTMContext
+        {
+            public ThrowingFakeWtmContext() : base(null) { }
+            public override IDataContext? CreateDC(bool isLog = false, string? cskey = null, bool logerror = true)
+                => throw new InvalidOperationException("simulated disabled connection");
         }
 
         // ── JSON response writer — shape ──────────────────────────────────
@@ -325,6 +505,17 @@ namespace WalkingTec.Mvvm.Core.Test
                     .Options);
 
             private InMemoryDataContext(DbContextOptions opts) : base(opts) { }
+
+            /// <summary>Set when Dispose is called — lets ownership/disposal tests
+            /// (issue #741) verify the health check disposes only the DataContext
+            /// instances it created itself via WTMContext.CreateDC().</summary>
+            public bool WasDisposed { get; private set; }
+
+            public override void Dispose()
+            {
+                WasDisposed = true;
+                base.Dispose();
+            }
 
             // ── IDataContext surface ─────────────────────────────────────
             bool IDataContext.IsFake { get; set; } = true;

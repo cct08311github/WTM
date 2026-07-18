@@ -19,10 +19,16 @@ namespace WalkingTec.Mvvm.Mvc
         /// <paramref name="tags"/> (default <c>ready</c>).
         /// </summary>
         /// <remarks>
-        /// Resolves <see cref="IDataContext"/> from DI. Apps must have
-        /// registered one (typically via <c>AddWtmContext</c>) before
-        /// calling this — otherwise the check activates but fails with a
-        /// DI resolution error on first probe.
+        /// Resolves the app's real DataContext via the optional, DI-injected
+        /// <see cref="WTMContext"/> (<c>WTMContext.CreateDC()</c>) — the same
+        /// connection-string/tenant-aware factory every other part of WTM uses — falling
+        /// back to a directly DI-registered <see cref="IDataContext"/> for hosts/tests that
+        /// register one without registering <see cref="WTMContext"/> (fix: #741, residual of
+        /// #727 — a bare DI-injected <see cref="IDataContext"/> always resolves WTM's
+        /// <c>NullContext</c> placeholder in real deployments and silently skips the probe).
+        /// Apps should call <c>AddWtmContext</c> before calling this so <see cref="WTMContext"/>
+        /// is registered; without it the check still activates but only ever probes the
+        /// placeholder (reports "Healthy (skipped)").
         /// </remarks>
         public static IHealthChecksBuilder AddWtmDataContextCheck(
             this IHealthChecksBuilder builder,

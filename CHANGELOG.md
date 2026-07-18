@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`WtmDataContextHealthCheck` (opt-in `AddWtmDataContextCheck`) previously always returned "Healthy (skipped)" in real deployments — it resolved WTM's `NullContext` DI placeholder instead of the app's real DataContext (#741, follow-up to #727).** It now resolves through the optional, DI-injected `WTMContext` first (`WTMContext.CreateDC()` — the same connection-string/tenant-aware factory every other part of WTM uses) and probes that real database with `Database.CanConnectAsync`, falling back to a directly DI-registered `IDataContext` only for hosts/tests that register one without also registering `WTMContext`. **Operator note:** a previously-always-green `/ready` readiness probe can now go **Unhealthy** when the underlying database is unreachable or the `default` connection is disabled — this is the intended fix, but multi-tenant apps whose `default` connection is intentionally disabled should scope or omit this opt-in check rather than relying on the prior (silently no-op) behaviour.
+
 ## [10.15.0] - 2026-07-18
 
 The "final optimization" batch: 40+ issues across security, CI reliability, WorkFlow transaction correctness, performance (evidence-based, benchmarked), .NET 10 modernization, and dependency/packaging hygiene. Highlights below. **Security:** a JWT refresh auth-bypass (#721) and an ETL ReDoS/identifier-injection hardening pass (#680, #703). **Correctness:** four framework services (`IWorkflowEngine`, `WorkflowTimerExecutor`, `ActionLogRetentionService`, `LookupCacheWarmupService`) were silently non-functional in every real deployment due to an `IDataContext`→`NullContext` DI-resolution gap — all fixed (#721, #727); and all engine transactions now work under EF Core `EnableRetryOnFailure` (#667). Read the Migration section before upgrading.
