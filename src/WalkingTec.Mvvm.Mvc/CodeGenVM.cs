@@ -3,6 +3,7 @@
 // continue to reference UIEnum.VUE so that existing code that selects Vue 2
 // still generates output. Suppress CS0618 file-wide here rather than scattering
 // per-call-site suppressions through the generator switch branches.
+#nullable enable
 #pragma warning disable CS0618 // UIEnum.VUE is [Obsolete] — internal back-compat, generation still works
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.AspNetCore.Mvc.ModelBinding.Validation;
@@ -35,11 +36,13 @@ namespace WalkingTec.Mvvm.Mvc
     [ReInit(ReInitModes.ALWAYS)]
     public partial class CodeGenVM : BaseVM
     {
-        public CodeGenListVM FieldList { get; set; }
+        // Set by InitVM()/CopyContext (framework lifecycle), not the literal constructor —
+        // same "= null!" pattern used for framework-managed properties elsewhere (e.g. DataContext DbSets).
+        public CodeGenListVM FieldList { get; set; } = null!;
 
-        public List<FieldInfo> FieldInfos { get; set; }
+        public List<FieldInfo> FieldInfos { get; set; } = null!;
 
-        public string PreviewFile { get; set; }
+        public string? PreviewFile { get; set; }
 
         public UIEnum UI { get; set; }
 
@@ -99,7 +102,7 @@ namespace WalkingTec.Mvvm.Mvc
         }
         [Display(Name = "Codegen.ModelNS")]
         [ValidateNever()]
-        public string ModelNS => SelectedModel?.Split(',').FirstOrDefault()?.Split('.').SkipLast(1).ToSepratedString(seperator: ".");
+        public string ModelNS => SelectedModel?.Split(',').FirstOrDefault()?.Split('.').SkipLast(1).ToSepratedString(seperator: ".") ?? "";
         [Display(Name = "Codegen.ModuleName")]
         [Required(ErrorMessage = "Validate.{0}required")]
         // Prevent code/JSON injection: allow Unicode letters (covers CJK, Latin, etc.),
@@ -107,15 +110,15 @@ namespace WalkingTec.Mvvm.Mvc
         // to exclude newlines/tabs). \p{L} and \p{N} accept CJK module names like "用户管理"
         // while still blocking quotes, backslashes, angle-brackets and other injection chars.
         [RegularExpression(@"^[\p{L}\p{N}_\- ]+$", ErrorMessage = "Codegen.ModuleNameInvalid")]
-        public string ModuleName { get; set; }
+        public string ModuleName { get; set; } = null!;
         [RegularExpression("^[A-Za-z_]+$", ErrorMessage = "Codegen.EnglishOnly")]
-        public string Area { get; set; }
+        public string? Area { get; set; }
         [ValidateNever()]
         [BindNever()]
-        public List<ComboSelectListItem> AllModels { get; set; }
+        public List<ComboSelectListItem> AllModels { get; set; } = null!;
         [Required(ErrorMessage = "Validate.{0}required")]
         [Display(Name = "_Admin.SelectedModel")]
-        public string SelectedModel { get; set; }
+        public string SelectedModel { get; set; } = null!;
         // [BindNever] prevents any HTTP model-binding from overriding this value;
         // it is set server-side only (AppDomain.CurrentDomain.BaseDirectory) by
         // _CodeGenController.  Allowing model-binding would let a crafted POST set
@@ -123,10 +126,10 @@ namespace WalkingTec.Mvvm.Mvc
         // a user-controlled value, defeating SafeCombine's boundary checks.
         [ValidateNever()]
         [BindNever()]
-        public string EntryDir { get; set; }
+        public string? EntryDir { get; set; }
 
 
-        public string _mainDir;
+        public string? _mainDir;
         // [BindNever] prevents HTTP model-binding from overriding this value.
         // MainDir is the write root for all generated files — VmDir, ShareDir, ControllerDir,
         // ViewDir, and every SafeCombine call anchors from this property. Allowing model-binding
@@ -168,7 +171,7 @@ namespace WalkingTec.Mvvm.Mvc
             }
         }
 
-        public string _vmdir;
+        public string? _vmdir;
         [ValidateNever()]
         public string VmDir
         {
@@ -176,7 +179,11 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 if (_vmdir == null)
                 {
-                    var up = Directory.GetParent(MainDir);
+                    // MainDir is always a non-empty path; GetParent only returns null for a root
+                    // path (e.g. "C:\" or "/"), which is not a valid project directory — fail
+                    // fast with a clear message rather than an implicit NRE below.
+                    var up = Directory.GetParent(MainDir)
+                        ?? throw new InvalidOperationException($"Cannot resolve parent directory of '{MainDir}'; MainDir must not be a filesystem root.");
                     var vmdir = up.GetDirectories().Where(x => x.Name.ToLower().EndsWith(".viewmodel")).FirstOrDefault();
                     if (vmdir == null)
                     {
@@ -219,7 +226,7 @@ namespace WalkingTec.Mvvm.Mvc
             }
         }
 
-        public string _sharedir;
+        public string? _sharedir;
         [ValidateNever()]
         public string ShareDir
         {
@@ -227,7 +234,11 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 if (_sharedir == null)
                 {
-                    var up = Directory.GetParent(MainDir);
+                    // MainDir is always a non-empty path; GetParent only returns null for a root
+                    // path (e.g. "C:\" or "/"), which is not a valid project directory — fail
+                    // fast with a clear message rather than an implicit NRE below.
+                    var up = Directory.GetParent(MainDir)
+                        ?? throw new InvalidOperationException($"Cannot resolve parent directory of '{MainDir}'; MainDir must not be a filesystem root.");
                     var sharedir = up.GetDirectories().Where(x => x.Name.ToLower().EndsWith(".shared")).FirstOrDefault();
                     if (sharedir == null)
                     {
@@ -272,15 +283,22 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
 
-        public string _testdir;
+        public string? _testdir;
+        // Nullable by design: unlike VmDir/ShareDir/ControllerDir/ViewDir, TestDir has no
+        // fallback-create-under-MainDir branch — when no sibling *.test project exists, it stays
+        // null and DoGen() skips test-file generation (see `if (test != "" && TestDir != null)`).
         [ValidateNever()]
-        public string TestDir
+        public string? TestDir
         {
             get
             {
                 if (_testdir == null)
                 {
-                    var up = Directory.GetParent(MainDir);
+                    // MainDir is always a non-empty path; GetParent only returns null for a root
+                    // path (e.g. "C:\" or "/"), which is not a valid project directory — fail
+                    // fast with a clear message rather than an implicit NRE below.
+                    var up = Directory.GetParent(MainDir)
+                        ?? throw new InvalidOperationException($"Cannot resolve parent directory of '{MainDir}'; MainDir must not be a filesystem root.");
                     var testdir = up.GetDirectories().Where(x => x.Name.ToLower().EndsWith(".test")).FirstOrDefault();
                     _testdir = testdir?.FullName;
                 }
@@ -289,7 +307,7 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
 
-        public string _controllerdir;
+        public string? _controllerdir;
         [ValidateNever()]
         public string ControllerDir
         {
@@ -314,7 +332,7 @@ namespace WalkingTec.Mvvm.Mvc
             }
         }
 
-        public string _viewdir;
+        public string? _viewdir;
         [ValidateNever()]
         public string ViewDir
         {
@@ -342,7 +360,7 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
 
-        private string _mainNs;
+        private string? _mainNs;
         public string MainNS
         {
             get
@@ -365,7 +383,7 @@ namespace WalkingTec.Mvvm.Mvc
 
         }
 
-        private string _controllerNs;
+        private string? _controllerNs;
         [Display(Name = "Codegen.ControllerNs")]
         [ValidateNever()]
         public string ControllerNs
@@ -384,7 +402,7 @@ namespace WalkingTec.Mvvm.Mvc
             }
         }
 
-        private string _testNs;
+        private string? _testNs;
         [Display(Name = "Codegen.TestNs")]
         [ValidateNever()]
         public string TestNs
@@ -403,7 +421,7 @@ namespace WalkingTec.Mvvm.Mvc
             }
         }
 
-        private string _dataNs;
+        private string? _dataNs;
         [Display(Name = "Codegen.DataNs")]
         [ValidateNever()]
         public string DataNs
@@ -412,7 +430,11 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 if (_dataNs == null)
                 {
-                    var up = Directory.GetParent(MainDir);
+                    // MainDir is always a non-empty path; GetParent only returns null for a root
+                    // path (e.g. "C:\" or "/"), which is not a valid project directory — fail
+                    // fast with a clear message rather than an implicit NRE below.
+                    var up = Directory.GetParent(MainDir)
+                        ?? throw new InvalidOperationException($"Cannot resolve parent directory of '{MainDir}'; MainDir must not be a filesystem root.");
                     var vmdir = up.GetDirectories().Where(x => x.Name.ToLower().EndsWith(".dataaccess")).FirstOrDefault();
                     if (vmdir == null)
                     {
@@ -432,7 +454,7 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
 
-        private string _vmNs;
+        private string? _vmNs;
         [Display(Name = "Codegen.VMNs")]
         [ValidateNever()]
         public string VMNs
@@ -441,7 +463,11 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 if (_vmNs == null)
                 {
-                    var up = Directory.GetParent(MainDir);
+                    // MainDir is always a non-empty path; GetParent only returns null for a root
+                    // path (e.g. "C:\" or "/"), which is not a valid project directory — fail
+                    // fast with a clear message rather than an implicit NRE below.
+                    var up = Directory.GetParent(MainDir)
+                        ?? throw new InvalidOperationException($"Cannot resolve parent directory of '{MainDir}'; MainDir must not be a filesystem root.");
                     var vmdir = up.GetDirectories().Where(x => x.Name.ToLower().EndsWith(".viewmodel")).FirstOrDefault();
                     if (vmdir == null)
                     {
@@ -485,12 +511,19 @@ namespace WalkingTec.Mvvm.Mvc
 
         protected override void InitVM()
         {
-            if (string.IsNullOrEmpty(SelectedModel) == false)
+            // ConfigInfo resolves via Wtm?.ConfigInfo and CreateDC() can return null for a
+            // misconfigured connection — both are genuinely optional here, so skip rather than
+            // let either propagate an NRE; DC simply stays unset (its existing nullable default).
+            if (string.IsNullOrEmpty(SelectedModel) == false && ConfigInfo != null)
             {
                 foreach (var item in ConfigInfo.Connections)
                 {
                     var dc = item.CreateDC();
-                    Type t = typeof(DbSet<>).MakeGenericType(Type.GetType(SelectedModel));
+                    if (dc == null)
+                    {
+                        continue;
+                    }
+                    Type t = typeof(DbSet<>).MakeGenericType(GetSelectedModelType());
                     var exist = dc.GetType().GetSingleProperty(x => x.PropertyType == t);
                     if (exist != null)
                     {
@@ -513,12 +546,18 @@ namespace WalkingTec.Mvvm.Mvc
             var analysisFields = FieldInfos?.Where(x => x.IsDimensionField || x.IsMeasureField).ToList();
             if (analysisFields == null || analysisFields.Count == 0) return "";
 
+            // Captured once: SelectedModel is a non-nullable property, so the local is
+            // guaranteed non-null and used directly (no `?.`) below — a redundant `?.` on an
+            // already non-null value flips the compiler's flow-state to maybe-null for the
+            // rest of the method, which is what caused the false CS8604 on Type.GetType below.
+            string selectedModel = SelectedModel;
+
             // Find Model source file
-            string modelName = SelectedModel?.Split(',').FirstOrDefault()?.Split('.').LastOrDefault() ?? "";
+            string modelName = selectedModel.Split(',').FirstOrDefault()?.Split('.').LastOrDefault() ?? "";
             if (string.IsNullOrEmpty(modelName)) return "Error: Cannot resolve model name.";
 
             string modelFileName = modelName + ".cs";
-            string modelFilePath = FindModelFile(MainDir, modelFileName);
+            string? modelFilePath = FindModelFile(MainDir, modelFileName);
             if (modelFilePath == null)
             {
                 return $"Warning: Cannot find {modelFileName}. Please manually add [Dimension]/[Measure] attributes.";
@@ -561,8 +600,12 @@ namespace WalkingTec.Mvvm.Mvc
                 }
             }
 
-            // Try to resolve model type for DateTime detection
-            Type modelType = Type.GetType(SelectedModel);
+            // Try to resolve model type for DateTime detection. Unlike the code-generation
+            // methods below (which require a resolvable model and fail fast via
+            // GetSelectedModelType()), this lookup is intentionally best-effort: SelectedModel
+            // may reference a source-only type that isn't loadable via reflection at generation
+            // time, in which case the loop below falls back to a source-text DateTime check.
+            Type? modelType = Type.GetType(selectedModel);
 
             foreach (var field in analysisFields)
             {
@@ -637,9 +680,11 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         /// <summary>
-        /// Search for a model .cs file starting from startDir and going up
+        /// Search for a model .cs file starting from startDir and going up. Returns null when
+        /// no matching file is found within the search depth — callers must check for null
+        /// (see <see cref="InjectAnalysisAttributes"/>).
         /// </summary>
-        public string FindModelFile(string startDir, string fileName)
+        public string? FindModelFile(string startDir, string fileName)
         {
             var dir = new DirectoryInfo(startDir);
             int levels = 0;
@@ -668,6 +713,49 @@ namespace WalkingTec.Mvvm.Mvc
         {
             if (string.IsNullOrEmpty(input)) return input ?? "";
             return System.Text.RegularExpressions.Regex.Replace(input, @"[^a-zA-Z0-9_\-\.]", "");
+        }
+
+        // SelectedModel is always one of the assembly-qualified type names offered in AllModels
+        // (populated server-side from the scanned model assemblies), so Type.GetType(SelectedModel)
+        // should never fail in practice. Centralize the resolution so every generator method — in
+        // this file and in the UI-specific partials (CodeGenVM.Mvc.cs/.React.cs/.Vue.cs/etc.) — fails
+        // fast with a clear message instead of letting a null Type propagate into dozens of
+        // reflection calls below.
+        private Type GetSelectedModelType()
+        {
+            return Type.GetType(SelectedModel)
+                ?? throw new InvalidOperationException($"Cannot resolve model type '{SelectedModel}'.");
+        }
+
+        // DC (inherited from BaseVM) is nullable: it resolves via Wtm?.DC and can be null if
+        // InitVM() found no configured connection whose DbSet matches SelectedModel. Every
+        // generator method below needs a live IDataContext to resolve FK/relation names via
+        // DCExtension, so fail fast here instead of letting a null DC reach those calls.
+        private IDataContext GetDC()
+        {
+            return DC ?? throw new InvalidOperationException(
+                "DC (data context) is not available; code generation requires a database connection matching SelectedModel.");
+        }
+
+        // RelatedField is only ever read once InfoType is One2Many/Many2Many (see FieldInfo.InfoType,
+        // which derives InfoType from RelatedField being non-empty) — every call site is already
+        // inside such a branch, so RelatedField is guaranteed non-null there. Resolve through one
+        // helper so a genuinely-unresolvable related type name fails fast with a clear message
+        // instead of an NRE deep in reflection/string-interpolation code.
+        private static Type GetRelatedType(FieldInfo field)
+        {
+            return Type.GetType(field.RelatedField ?? "")
+                ?? throw new InvalidOperationException($"Cannot resolve related type '{field.RelatedField}' for field '{field.FieldName}'.");
+        }
+
+        // SubField is populated alongside RelatedField whenever InfoType != Normal (see
+        // FieldInfo.InfoType) and names a real property on the related type. Resolve through one
+        // helper so a genuinely missing/renamed property fails fast with a clear message instead
+        // of an NRE deep in string interpolation.
+        private static PropertyInfo GetRelatedProperty(Type relatedType, FieldInfo field)
+        {
+            return relatedType.GetSingleProperty(field.SubField ?? "")
+                ?? throw new InvalidOperationException($"Cannot resolve property '{field.SubField}' on related type '{relatedType.Name}' for field '{field.FieldName}'.");
         }
 
         // #505 — defense-in-depth: FieldName and SubField are model-bound strings that
@@ -1125,8 +1213,8 @@ namespace WalkingTec.Mvvm.Mvc
                     var item = pros[i];
                     if ((item.InfoType == FieldInfoType.One2Many || item.InfoType == FieldInfoType.Many2Many) && item.SubField != "`file")
                     {
-                        var subtype = Type.GetType(item.RelatedField);
-                        var subpro = subtype.GetSingleProperty(item.SubField);
+                        var subtype = GetRelatedType(item);
+                        var subpro = GetRelatedProperty(subtype, item);
                         var key = subtype.FullName + ":" + subpro.Name;
                         existSubPro.Add(key);
                         int count = existSubPro.Where(x => x == key).Count();
@@ -1155,8 +1243,8 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 string prostring = "";
                 string initstr = "";
-                Type modelType = Type.GetType(SelectedModel);
-                List<FieldInfo> pros = null;
+                Type modelType = GetSelectedModelType();
+                List<FieldInfo> pros = new();
                 if (name == "Searcher")
                 {
                     pros = FieldInfos.Where(x => x.IsSearcherField == true).ToList();
@@ -1170,7 +1258,7 @@ namespace WalkingTec.Mvvm.Mvc
                     //对于一对一或者一对多的搜索和批量修改字段，需要在vm中生成对应的变量来获取关联表的数据
                     if (pro.InfoType != FieldInfoType.Normal)
                     {
-                        var subtype = Type.GetType(pro.RelatedField);
+                        var subtype = GetRelatedType(pro);
                         if (typeof(TopBasePoco).IsAssignableFrom(subtype) == false || subtype == typeof(FileAttachment))
                         {
                             continue;
@@ -1186,7 +1274,8 @@ namespace WalkingTec.Mvvm.Mvc
                     }
 
                     //生成普通字段定义
-                    var proType = modelType.GetSingleProperty(pro.FieldName);
+                    var proType = modelType.GetSingleProperty(pro.FieldName)
+                        ?? throw new InvalidOperationException($"Property '{pro.FieldName}' not found on model type '{modelType.Name}'.");
                     var display = proType.GetCustomAttribute<DisplayAttribute>();
                     if (display != null)
                     {
@@ -1194,7 +1283,7 @@ namespace WalkingTec.Mvvm.Mvc
         [Display(Name = ""{display.Name}"")]";
                     }
                     string typename = proType.PropertyType.Name;
-                    string proname = pro.GetField(DC, modelType);
+                    string proname = pro.GetField(GetDC(), modelType);
 
                     switch (pro.InfoType)
                     {
@@ -1209,7 +1298,7 @@ namespace WalkingTec.Mvvm.Mvc
                             }
                             break;
                         case FieldInfoType.One2Many:
-                            typename = pro.GetFKType(DC, modelType);
+                            typename = pro.GetFKType(GetDC(), modelType);
                             if (typename != "string")
                             {
                                 typename += "?";
@@ -1217,7 +1306,7 @@ namespace WalkingTec.Mvvm.Mvc
                             break;
                         case FieldInfoType.Many2Many:
                             proname = $@"Selected{pro.FieldName}IDs";
-                            typename = $"List<{pro.GetFKType(DC, modelType)}>";
+                            typename = $"List<{pro.GetFKType(GetDC(), modelType)}>";
                             break;
                         default:
                             break;
@@ -1262,14 +1351,14 @@ namespace WalkingTec.Mvvm.Mvc
                 }
 
                 var pros = FieldInfos.Where(x => x.IsListField == true).ToList();
-                Type modelType = Type.GetType(SelectedModel);
+                Type modelType = GetSelectedModelType();
                 List<PropertyInfo> existSubPro = new List<PropertyInfo>();
                 foreach (var pro in pros)
                 {
                     if (pro.InfoType == FieldInfoType.Normal)
                     {
                         // CG-08: read [ListColumn] attribute from model property.
-                        var modelProp = modelType?.GetSingleProperty(pro.FieldName);
+                        var modelProp = modelType.GetSingleProperty(pro.FieldName);
                         var listColAttr = modelProp?.GetCustomAttribute<ListColumnAttribute>();
                         string headerChain = BuildGridHeaderChain(pro.FieldName, modelProp, listColAttr);
                         headerstring += $@"
@@ -1282,11 +1371,11 @@ namespace WalkingTec.Mvvm.Mvc
                     }
                     else
                     {
-                        var subtype = Type.GetType(pro.RelatedField);
+                        var subtype = GetRelatedType(pro);
                         if (subtype == typeof(FileAttachment))
                         {
-                            var filefk = DC.GetFKName2(modelType, pro.FieldName);
-                            var fileProp = modelType?.GetSingleProperty(filefk);
+                            var filefk = GetDC().GetFKName2(modelType, pro.FieldName);
+                            var fileProp = modelType.GetSingleProperty(filefk);
                             var fileListColAttr = fileProp?.GetCustomAttribute<ListColumnAttribute>();
                             string fileHeaderChain = BuildGridHeaderChain(filefk, fileProp, fileListColAttr);
                             headerstring += $@"
@@ -1297,7 +1386,7 @@ namespace WalkingTec.Mvvm.Mvc
                         }
                         else
                         {
-                            var subpro = subtype.GetSingleProperty(pro.SubField);
+                            var subpro = GetRelatedProperty(subtype, pro);
                             existSubPro.Add(subpro);
                             string prefix = "";
                             int count = existSubPro.Where(x => x.Name == subpro.Name).Count();
@@ -1324,9 +1413,15 @@ namespace WalkingTec.Mvvm.Mvc
                             }
                             else
                             {
-                                var middleType = modelType.GetSingleProperty(pro.FieldName).PropertyType.GenericTypeArguments[0];
-                                var middlename = DC.GetPropertyNameByFk(middleType, pro.SubIdField);
-                                if (typeof(IPersistPoco).IsAssignableFrom(Type.GetType(pro.RelatedField)))
+                                var middlePro = modelType.GetSingleProperty(pro.FieldName)
+                                    ?? throw new InvalidOperationException($"Property '{pro.FieldName}' not found on model type '{modelType.Name}'.");
+                                var middleType = middlePro.PropertyType.GenericTypeArguments[0];
+                                // Reached only when pro.InfoType == Many2Many (the One2Many branch returns above),
+                                // and Many2Many requires a non-empty SubIdField — see FieldInfo.InfoType.
+                                var subIdField = pro.SubIdField
+                                    ?? throw new InvalidOperationException($"Field '{pro.FieldName}' has InfoType {pro.InfoType} but no SubIdField.");
+                                var middlename = GetDC().GetPropertyNameByFk(middleType, subIdField);
+                                if (typeof(IPersistPoco).IsAssignableFrom(GetRelatedType(pro)))
                                 {
                                     selectstring += $@"
                     {pro.SubField + "_view" + prefix} = x.{pro.FieldName}.Where(y=>y.{middlename}.IsValid==true).Select(y=>y.{middlename}.{pro.SubField}).ToSepratedString(null,"",""), ";
@@ -1362,7 +1457,7 @@ namespace WalkingTec.Mvvm.Mvc
                         case FieldInfoType.Normal:
                             // CG-09: resolve search operator — explicit [SearchField] wins,
                             // then smart-name heuristic (opt-in), then type-based Auto rule.
-                            var sfProp = modelType?.GetSingleProperty(pro.FieldName);
+                            var sfProp = modelType.GetSingleProperty(pro.FieldName);
                             var sfAttr = sfProp?.GetCustomAttribute<SearchFieldAttribute>();
                             SearchOperator resolvedOp = sfAttr?.Operator ?? SearchOperator.Auto;
 
@@ -1398,15 +1493,17 @@ namespace WalkingTec.Mvvm.Mvc
                             }
                             break;
                         case FieldInfoType.One2Many:
-                            var fk = DC.GetFKName2(modelType, pro.FieldName);
+                            var fk = GetDC().GetFKName2(modelType, pro.FieldName);
                             wherestring += $@"
                 .CheckEqual(Searcher.{fk}, x=>x.{fk})";
                             break;
                         case FieldInfoType.Many2Many:
-                            var subtype = Type.GetType(pro.RelatedField);
-                            var fk2 = DC.GetFKName(modelType, pro.FieldName);
+                            var subtype = GetRelatedType(pro);
+                            var fk2 = GetDC().GetFKName(modelType, pro.FieldName);
+                            var manyProType = proType
+                                ?? throw new InvalidOperationException($"Property '{pro.FieldName}' not found on model type '{modelType.Name}'.");
                             wherestring += $@"
-                .CheckWhere(Searcher.Selected{pro.FieldName}IDs,x=>DC.Set<{proType.GetGenericArguments()[0].Name}>().Where(y=>Searcher.Selected{pro.FieldName}IDs.Contains(y.{pro.SubIdField})).Select(z=>z.{fk2}).Contains(x.ID))";
+                .CheckWhere(Searcher.Selected{pro.FieldName}IDs,x=>DC.Set<{manyProType.GetGenericArguments()[0].Name}>().Where(y=>Searcher.Selected{pro.FieldName}IDs.Contains(y.{pro.SubIdField})).Select(z=>z.{fk2}).Contains(x.ID))";
                             break;
                         default:
                             break;
@@ -1435,7 +1532,7 @@ namespace WalkingTec.Mvvm.Mvc
                 var pros = FieldInfos.Where(x => x.IsFormField == true && string.IsNullOrEmpty(x.RelatedField) == false).ToList();
                 foreach (var pro in pros)
                 {
-                    var subtype = Type.GetType(pro.RelatedField);
+                    var subtype = GetRelatedType(pro);
                     if (typeof(TopBasePoco).IsAssignableFrom(subtype) == false || subtype == typeof(FileAttachment))
                     {
                         continue;
@@ -1453,8 +1550,9 @@ namespace WalkingTec.Mvvm.Mvc
 
                     if (pro.InfoType == FieldInfoType.Many2Many)
                     {
-                        Type modelType = Type.GetType(SelectedModel);
-                        var protype = modelType.GetSingleProperty(pro.FieldName);
+                        Type modelType = GetSelectedModelType();
+                        var protype = modelType.GetSingleProperty(pro.FieldName)
+                            ?? throw new InvalidOperationException($"Property '{pro.FieldName}' not found on model type '{modelType.Name}'.");
                         prostr += $@"
         [Display(Name = ""{protype.GetPropertyDisplayName()}"")]
         public List<string> Selected{pro.FieldName}IDs {{ get; set; }}";
@@ -1500,7 +1598,7 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 string prostring = "";
                 string initstr = "";
-                Type modelType = Type.GetType(SelectedModel);
+                Type modelType = GetSelectedModelType();
                 List<FieldInfo> pros = FieldInfos.Where(x => x.IsImportField == true).ToList();
                 foreach (var pro in pros)
                 {
@@ -1511,7 +1609,7 @@ namespace WalkingTec.Mvvm.Mvc
 
                     if (string.IsNullOrEmpty(pro.RelatedField) == false)
                     {
-                        var subtype = Type.GetType(pro.RelatedField);
+                        var subtype = GetRelatedType(pro);
                         if (typeof(TopBasePoco).IsAssignableFrom(subtype) == false || subtype == typeof(FileAttachment))
                         {
                             continue;
@@ -1520,9 +1618,10 @@ namespace WalkingTec.Mvvm.Mvc
             {pro.FieldName + "_Excel"}.DataType = ColumnDataType.ComboBox;
             {pro.FieldName + "_Excel"}.ListItems = DC.Set<{subtype.Name}>().GetSelectListItems(Wtm, y => y.{pro.SubField});";
                     }
-                    var proType = modelType.GetSingleProperty(pro.FieldName);
+                    var proType = modelType.GetSingleProperty(pro.FieldName)
+                        ?? throw new InvalidOperationException($"Property '{pro.FieldName}' not found on model type '{modelType.Name}'.");
                     var display = proType.GetCustomAttribute<DisplayAttribute>();
-                    var filefk = DC.GetFKName2(modelType, pro.FieldName);
+                    var filefk = GetDC().GetFKName2(modelType, pro.FieldName);
                     if (display != null)
                     {
                         prostring += $@"
@@ -1608,7 +1707,9 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 loc = $"WalkingTec.Mvvm.Mvc.GeneratorFiles.{subdir}.{fileName}";
             }
-            var textStreamReader = new StreamReader(assembly.GetManifestResourceStream(loc));
+            var resourceStream = assembly.GetManifestResourceStream(loc)
+                ?? throw new InvalidOperationException($"Embedded generator resource '{loc}' was not found.");
+            var textStreamReader = new StreamReader(resourceStream);
             string content = textStreamReader.ReadToEnd();
             textStreamReader.Close();
             return content;
@@ -1617,23 +1718,25 @@ namespace WalkingTec.Mvvm.Mvc
         private string GetRelatedNamespace(List<FieldInfo> pros, string s)
         {
             string otherns = @"";
-            Type modelType = Type.GetType(SelectedModel);
+            Type modelType = GetSelectedModelType();
             foreach (var pro in pros)
             {
-                Type proType = null;
+                Type? resolvedProType;
 
                 if (string.IsNullOrEmpty(pro.RelatedField))
                 {
-                    proType = modelType.GetSingleProperty(pro.FieldName)?.PropertyType;
+                    resolvedProType = modelType.GetSingleProperty(pro.FieldName)?.PropertyType;
                 }
                 else
                 {
-                    proType = Type.GetType(pro.RelatedField);
+                    resolvedProType = GetRelatedType(pro);
                 }
-                string prons = proType.Namespace;
+                var proType = resolvedProType
+                    ?? throw new InvalidOperationException($"Cannot resolve type for field '{pro.FieldName}'.");
+                string prons = proType.Namespace ?? "";
                 if (proType.IsNullable())
                 {
-                    prons = proType.GetGenericArguments()[0].Namespace;
+                    prons = proType.GetGenericArguments()[0].Namespace ?? "";
                 }
                 if (s.Contains($"using {prons};") == false && otherns.Contains($"using {prons};") == false)
                 {
@@ -1652,8 +1755,13 @@ namespace WalkingTec.Mvvm.Mvc
 
     public class FieldInfo
     {
-        public string FieldName { get; set; }
-        public string RelatedField { get; set; }
+        // Always populated: bound from the "FieldInfos[i].FieldName" hidden form field
+        // (see CodeGenListVM.cs) on every row, in generation code and in every test call site.
+        // Not `required` — that is source-breaking for external consumers constructing
+        // FieldInfo via object initializer (CS9035); use the same null-forgiving pattern as
+        // the sibling properties in this file instead.
+        public string FieldName { get; set; } = null!;
+        public string? RelatedField { get; set; }
 
         public bool IsSearcherField { get; set; }
 
@@ -1691,11 +1799,11 @@ namespace WalkingTec.Mvvm.Mvc
         /// <summary>
         /// 字段关联的类名
         /// </summary>
-        public string SubField { get; set; }
+        public string? SubField { get; set; }
         /// <summary>
         /// 多对多关系时，记录中间表关联到主表的字段名称
         /// </summary>
-        public string SubIdField { get; set; }
+        public string? SubIdField { get; set; }
 
         public string GetField(IDataContext DC, Type modelType)
         {
@@ -1712,16 +1820,18 @@ namespace WalkingTec.Mvvm.Mvc
 
         public string GetFKType(IDataContext DC, Type modelType)
         {
-            Type fktype = null;
+            Type? fktype = null;
             if (this.InfoType == FieldInfoType.One2Many)
             {
                 var fk = this.GetField(DC, modelType);
                 fktype = modelType.GetSingleProperty(fk)?.PropertyType;
             }
-            if (this.InfoType == FieldInfoType.Many2Many)
+            // Many2Many is only reachable when SubIdField is non-empty (see InfoType above),
+            // but the compiler can't see that invariant — guard explicitly rather than assume it.
+            if (this.InfoType == FieldInfoType.Many2Many && !string.IsNullOrEmpty(this.SubIdField))
             {
                 var middletype = modelType.GetSingleProperty(this.FieldName)?.PropertyType;
-                fktype = middletype.GetGenericArguments()[0].GetSingleProperty(this.SubIdField)?.PropertyType;
+                fktype = middletype?.GetGenericArguments()[0].GetSingleProperty(this.SubIdField)?.PropertyType;
             }
             var typename = "string";
 

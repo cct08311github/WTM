@@ -394,7 +394,9 @@ namespace WalkingTec.Mvvm.Mvc
             }
         }
 
-        public static IServiceCollection AddWtmContext(this IServiceCollection services, IConfiguration config, Action<WtmContextOption> options = null)
+#nullable enable
+        public static IServiceCollection AddWtmContext(this IServiceCollection services, IConfiguration config, Action<WtmContextOption>? options = null)
+#nullable restore
         {
             services.AddDUWENINKCaptcha();//使用验证码
             var conf = config.Get<Configs>();
@@ -735,7 +737,9 @@ namespace WalkingTec.Mvvm.Mvc
             return services;
         }
 
-        public static IServiceCollection AddWtmMultiLanguages(this IServiceCollection services, IConfiguration config, Action<WtmLocalizationOption> op = null)
+#nullable enable
+        public static IServiceCollection AddWtmMultiLanguages(this IServiceCollection services, IConfiguration config, Action<WtmLocalizationOption>? op = null)
+#nullable restore
         {
             var conf = config.Get<Configs>();
             services.AddLocalization(options => options.ResourcesPath = "Resources");

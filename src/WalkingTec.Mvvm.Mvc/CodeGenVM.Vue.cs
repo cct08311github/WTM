@@ -1,3 +1,4 @@
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -18,7 +19,7 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 apineeded = new List<string>();
             }
-            Type modelType = Type.GetType(SelectedModel);
+            Type modelType = GetSelectedModelType();
             if (name == "config")
             {
                 StringBuilder fieldstr = new StringBuilder();
@@ -31,7 +32,8 @@ namespace WalkingTec.Mvvm.Mvc
                 for (int i = 0; i < pros.Count; i++)
                 {
                     var item = pros[i];
-                    var mpro = modelType.GetSingleProperty(item.FieldName);
+                    var mpro = modelType.GetSingleProperty(item.FieldName)
+                        ?? throw new InvalidOperationException($"Property '{item.FieldName}' not found on model type '{modelType.Name}'.");
                     string label = mpro.GetPropertyDisplayName();
                     string render = "";
                     string newname = item.FieldName;
@@ -41,7 +43,7 @@ namespace WalkingTec.Mvvm.Mvc
                     }
                     if (string.IsNullOrEmpty(item.RelatedField) == false)
                     {
-                        var subtype = Type.GetType(item.RelatedField);
+                        var subtype = GetRelatedType(item);
                         string prefix = "";
                         if (subtype == typeof(FileAttachment))
                         {
@@ -54,12 +56,12 @@ namespace WalkingTec.Mvvm.Mvc
                             {
                                 render = "columnsRenderDownload";
                             }
-                            var fk = DC.GetFKName2(modelType, item.FieldName);
+                            var fk = GetDC().GetFKName2(modelType, item.FieldName);
                             newname = fk;
                         }
                         else
                         {
-                            var subpro = subtype.GetSingleProperty(item.SubField);
+                            var subpro = GetRelatedProperty(subtype, item);
                             existSubPro.Add(subpro);
                             int count = existSubPro.Where(x => x.Name == subpro.Name).Count();
                             if (count > 1)
@@ -72,7 +74,8 @@ namespace WalkingTec.Mvvm.Mvc
 
                     else
                     {
-                        var proType = modelType.GetSingleProperty(item.FieldName)?.PropertyType;
+                        var proType = modelType.GetSingleProperty(item.FieldName)?.PropertyType
+                            ?? throw new InvalidOperationException($"Property '{item.FieldName}' not found on model type '{modelType.Name}'.");
                         Type checktype = proType;
                         if (proType.IsNullable())
                         {
@@ -129,7 +132,7 @@ namespace WalkingTec.Mvvm.Mvc
                     var property = modelType.GetSingleProperty(item.FieldName);
                     string label = property.GetPropertyDisplayName();
                     bool isrequired = property.IsPropertyRequired();
-                    var fktest = DC.GetFKName2(modelType, item.FieldName);
+                    var fktest = GetDC().GetFKName2(modelType, item.FieldName);
                     if (string.IsNullOrEmpty(fktest) == false)
                     {
                         isrequired = modelType.GetSingleProperty(fktest).IsPropertyRequired();
@@ -141,7 +144,7 @@ namespace WalkingTec.Mvvm.Mvc
                     }
                     if (string.IsNullOrEmpty(item.RelatedField) == false && string.IsNullOrEmpty(item.SubIdField) == true)
                     {
-                        var fk = DC.GetFKName2(modelType, item.FieldName);
+                        var fk = GetDC().GetFKName2(modelType, item.FieldName);
                         fieldstr.AppendLine($@"             ""Entity.{fk}"":{{");
                     }
                     else
@@ -152,7 +155,7 @@ namespace WalkingTec.Mvvm.Mvc
                     fieldstr.AppendLine($@"                 {rules},");
                     if (string.IsNullOrEmpty(item.RelatedField) == false)
                     {
-                        var subtype = Type.GetType(item.RelatedField);
+                        var subtype = GetRelatedType(item);
                         if (item.SubField == "`file")
                         {
                             if (item.FieldName.ToLower().Contains("photo") || item.FieldName.ToLower().Contains("pic") || item.FieldName.ToLower().Contains("icon"))
@@ -202,7 +205,8 @@ namespace WalkingTec.Mvvm.Mvc
                     }
                     else
                     {
-                        var proType = modelType.GetSingleProperty(item.FieldName)?.PropertyType;
+                        var proType = modelType.GetSingleProperty(item.FieldName)?.PropertyType
+                            ?? throw new InvalidOperationException($"Property '{item.FieldName}' not found on model type '{modelType.Name}'.");
                         Type checktype = proType;
                         if (proType.IsNullable())
                         {
@@ -276,7 +280,8 @@ namespace WalkingTec.Mvvm.Mvc
                     var item = pros2[i];
                     if (item.IsListField == true)
                     {
-                        var mpro = modelType.GetSingleProperty(item.FieldName);
+                        var mpro = modelType.GetSingleProperty(item.FieldName)
+                            ?? throw new InvalidOperationException($"Property '{item.FieldName}' not found on model type '{modelType.Name}'.");
                         if (mpro.PropertyType.IsBoolOrNullableBool())
                         {
                             actions.AppendLine($@"      <template #{item.FieldName}=""rowData"">
@@ -286,8 +291,8 @@ namespace WalkingTec.Mvvm.Mvc
                         }
                         if (string.IsNullOrEmpty(item.RelatedField) == false)
                         {
-                            var subtype = Type.GetType(item.RelatedField);
-                            var fk = DC.GetFKName2(modelType, item.FieldName);
+                            var subtype = GetRelatedType(item);
+                            var fk = GetDC().GetFKName2(modelType, item.FieldName);
                             if (subtype == typeof(FileAttachment))
                             {
                                 if (item.FieldName.ToLower().Contains("photo") || item.FieldName.ToLower().Contains("pic") || item.FieldName.ToLower().Contains("icon"))
@@ -322,7 +327,7 @@ namespace WalkingTec.Mvvm.Mvc
                         {
                             if (string.IsNullOrEmpty(item.SubIdField) == true)
                             {
-                                var fk = DC.GetFKName2(modelType, item.FieldName);
+                                var fk = GetDC().GetFKName2(modelType, item.FieldName);
                                 fieldstr2.AppendLine($@"                ""{fk}"":{{");
                             }
                             else
@@ -338,7 +343,7 @@ namespace WalkingTec.Mvvm.Mvc
                         fieldstr2.AppendLine($@"                    {rules},");
                         if (string.IsNullOrEmpty(item.RelatedField) == false)
                         {
-                            var subtype = Type.GetType(item.RelatedField);
+                            var subtype = GetRelatedType(item);
                             if (string.IsNullOrEmpty(item.SubIdField) == true)
                             {
                                 fieldstr2.AppendLine($@"                    type: ""select"",
@@ -365,7 +370,8 @@ namespace WalkingTec.Mvvm.Mvc
                         }
                         else
                         {
-                            var proType = modelType.GetSingleProperty(item.FieldName)?.PropertyType;
+                            var proType = modelType.GetSingleProperty(item.FieldName)?.PropertyType
+                                ?? throw new InvalidOperationException($"Property '{item.FieldName}' not found on model type '{modelType.Name}'.");
                             Type checktype = proType;
                             if (proType.IsNullable())
                             {

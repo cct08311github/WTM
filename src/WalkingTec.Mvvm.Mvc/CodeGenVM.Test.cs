@@ -1,3 +1,4 @@
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -15,7 +16,7 @@ namespace WalkingTec.Mvvm.Mvc
             var rv = "";
             if (TestDir != null)
             {
-                Type modelType = Type.GetType(SelectedModel);
+                Type modelType = GetSelectedModelType();
                 if (UI == UIEnum.LayUI && IsApi == false)
                 {
                     if (typeof(IBasePoco).IsAssignableFrom(modelType) || typeof(IPersistPoco).IsAssignableFrom(modelType))
@@ -57,6 +58,10 @@ namespace WalkingTec.Mvvm.Mvc
                     if (pro.Value == "$fk$")
                     {
                         var fktype = modelType.GetSingleProperty(pro.Key[0..^2])?.PropertyType;
+                        // Mirror the null-guard used for the identical lookup in the loop below
+                        // (line ~69): a property that no longer resolves on the model is skipped
+                        // rather than passed into GenerateAddFKModel, which requires a non-null Type.
+                        if (fktype == null) continue;
                         add += GenerateAddFKModel(pro.Key[0..^2], fktype, addexist);
                     }
                 }
@@ -199,7 +204,8 @@ namespace WalkingTec.Mvvm.Mvc
                 v.{pro.Key} = {pro.Value};";
                 }
             }
-            var idpro = t.GetSingleProperty("ID");
+            var idpro = t.GetSingleProperty("ID")
+                ?? throw new InvalidOperationException($"Property 'ID' not found on model type '{t.Name}'.");
             rv += $@"
         private {idpro.PropertyType.Name} Add{t.Name}()
         {{

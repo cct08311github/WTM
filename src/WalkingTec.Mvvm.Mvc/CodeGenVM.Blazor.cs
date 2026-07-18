@@ -1,3 +1,4 @@
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -27,7 +28,7 @@ namespace WalkingTec.Mvvm.Mvc
                 .Replace("$des$", ModuleName)
                 .Replace("$controllername$", $"{ControllerNs},{ModelName}")
                 .Replace("$pagepath$", pagepath);
-            Type modelType = Type.GetType(SelectedModel);
+            Type modelType = GetSelectedModelType();
             if (name == "Index")
             {
                 StringBuilder fieldstr = new StringBuilder();
@@ -40,7 +41,8 @@ namespace WalkingTec.Mvvm.Mvc
                 for (int i = 0; i < pros.Count; i++)
                 {
                     var item = pros[i];
-                    var mpro = modelType.GetSingleProperty(item.FieldName);
+                    var mpro = modelType.GetSingleProperty(item.FieldName)
+                        ?? throw new InvalidOperationException($"Property '{item.FieldName}' not found on model type '{modelType.Name}'.");
                     string render = "";
                     string template = "";
                     string newname = item.FieldName;
@@ -62,7 +64,7 @@ namespace WalkingTec.Mvvm.Mvc
                     }
                     if (string.IsNullOrEmpty(item.RelatedField) == false)
                     {
-                        var subtype = Type.GetType(item.RelatedField);
+                        var subtype = GetRelatedType(item);
                         string prefix = "";
                         if (subtype == typeof(FileAttachment))
                         {
@@ -82,12 +84,12 @@ namespace WalkingTec.Mvvm.Mvc
                 }
             </Template>";
                             }
-                            var fk = DC.GetFKName2(modelType, item.FieldName);
+                            var fk = GetDC().GetFKName2(modelType, item.FieldName);
                             newname = fk;
                         }
                         else
                         {
-                            var subpro = subtype.GetSingleProperty(item.SubField);
+                            var subpro = GetRelatedProperty(subtype, item);
                             existSubPro.Add(subpro);
                             int count = existSubPro.Where(x => x.Name == subpro.Name).Count();
                             if (count > 1)
@@ -127,7 +129,7 @@ namespace WalkingTec.Mvvm.Mvc
                     {
                         if (string.IsNullOrEmpty(item.SubIdField) == true)
                         {
-                            var fk = DC.GetFKName2(modelType, item.FieldName);
+                            var fk = GetDC().GetFKName2(modelType, item.FieldName);
                             bindfield = fk;
                         }
                         else
@@ -141,7 +143,7 @@ namespace WalkingTec.Mvvm.Mvc
                     }
                     if (string.IsNullOrEmpty(item.RelatedField) == false)
                     {
-                        var subtype = Type.GetType(item.RelatedField);
+                        var subtype = GetRelatedType(item);
                         if (string.IsNullOrEmpty(item.SubIdField) == true)
                         {
                             controltype = "Select";
@@ -166,7 +168,8 @@ namespace WalkingTec.Mvvm.Mvc
                     }
                     else
                     {
-                        var proType = modelType.GetSingleProperty(item.FieldName)?.PropertyType;
+                        var proType = modelType.GetSingleProperty(item.FieldName)?.PropertyType
+                            ?? throw new InvalidOperationException($"Property '{item.FieldName}' not found on model type '{modelType.Name}'.");
                         Type checktype = proType;
                         if (proType.IsNullable())
                         {
@@ -247,7 +250,7 @@ namespace WalkingTec.Mvvm.Mvc
                     {
                         if (string.IsNullOrEmpty(item.SubIdField) == true)
                         {
-                            var fk = DC.GetFKName2(modelType, item.FieldName);
+                            var fk = GetDC().GetFKName2(modelType, item.FieldName);
                             bindfield = "Entity." + fk;
                         }
                         else
@@ -262,7 +265,7 @@ namespace WalkingTec.Mvvm.Mvc
 
                     if (string.IsNullOrEmpty(item.RelatedField) == false)
                     {
-                        var subtype = Type.GetType(item.RelatedField);
+                        var subtype = GetRelatedType(item);
                         if (item.SubField == "`file")
                         {
                             if (item.FieldName.ToLower().Contains("photo") || item.FieldName.ToLower().Contains("pic") || item.FieldName.ToLower().Contains("icon") || item.FieldName.ToLower().Contains("zhaopian") || item.FieldName.ToLower().Contains("tupian"))
@@ -302,7 +305,8 @@ namespace WalkingTec.Mvvm.Mvc
                     }
                     else
                     {
-                        var proType = modelType.GetSingleProperty(item.FieldName)?.PropertyType;
+                        var proType = modelType.GetSingleProperty(item.FieldName)?.PropertyType
+                            ?? throw new InvalidOperationException($"Property '{item.FieldName}' not found on model type '{modelType.Name}'.");
                         Type checktype = proType;
                         if (proType.IsNullable())
                         {
@@ -396,7 +400,7 @@ namespace WalkingTec.Mvvm.Mvc
                     {
                         if (string.IsNullOrEmpty(item.SubIdField) == true)
                         {
-                            var fk = DC.GetFKName2(modelType, item.FieldName);
+                            var fk = GetDC().GetFKName2(modelType, item.FieldName);
                             bindfield = "Entity." + fk;
                         }
                         else
@@ -410,7 +414,7 @@ namespace WalkingTec.Mvvm.Mvc
                     }
                     if (string.IsNullOrEmpty(item.RelatedField) == false)
                     {
-                        var subtype = Type.GetType(item.RelatedField);
+                        var subtype = GetRelatedType(item);
                         if (item.SubField == "`file")
                         {
                             if (item.FieldName.ToLower().Contains("photo") || item.FieldName.ToLower().Contains("pic") || item.FieldName.ToLower().Contains("icon") || item.FieldName.ToLower().Contains("zhaopian") || item.FieldName.ToLower().Contains("tupian"))
@@ -435,7 +439,8 @@ namespace WalkingTec.Mvvm.Mvc
                     }
                     else
                     {
-                        var proType = modelType.GetSingleProperty(item.FieldName)?.PropertyType;
+                        var proType = modelType.GetSingleProperty(item.FieldName)?.PropertyType
+                            ?? throw new InvalidOperationException($"Property '{item.FieldName}' not found on model type '{modelType.Name}'.");
                         Type checktype = proType;
                         if (proType.IsNullable())
                         {

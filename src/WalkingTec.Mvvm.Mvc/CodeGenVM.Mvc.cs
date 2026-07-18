@@ -1,3 +1,4 @@
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -17,7 +18,7 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 StringBuilder fieldstr = new StringBuilder();
                 string pre = "";
-                List<FieldInfo> pros = null;
+                List<FieldInfo> pros = new();
                 if (name == "BatchEditView")
                 {
                     pros = FieldInfos.Where(x => x.IsBatchField == true).ToList();
@@ -28,7 +29,7 @@ namespace WalkingTec.Mvvm.Mvc
                     pros = FieldInfos.Where(x => x.IsFormField == true).ToList();
                     pre = "Entity";
                 }
-                Type modelType = Type.GetType(SelectedModel);
+                Type modelType = GetSelectedModelType();
                 fieldstr.Append(Environment.NewLine);
                 fieldstr.Append(@"<wt:row items-per-row=""ItemsPerRowEnum.Two"">");
                 fieldstr.Append(Environment.NewLine);
@@ -47,7 +48,7 @@ namespace WalkingTec.Mvvm.Mvc
                                 string idname = item.FieldName;
                                 if (string.IsNullOrEmpty(item.RelatedField) == false && item.SubField == "`file")
                                 {
-                                    var filefk = DC.GetFKName2(modelType, item.FieldName);
+                                    var filefk = GetDC().GetFKName2(modelType, item.FieldName);
                                     idname = filefk;
                                 }
                                 fieldstr.Append($@"<wt:display field=""{pre}.{idname}"" />");
@@ -58,7 +59,7 @@ namespace WalkingTec.Mvvm.Mvc
                     {
                         if (string.IsNullOrEmpty(item.RelatedField) == false)
                         {
-                            var filefk = DC.GetFKName2(modelType, item.FieldName);
+                            var filefk = GetDC().GetFKName2(modelType, item.FieldName);
                             if (item.SubField == "`file")
                             {
                                 if (name != "BatchEditView")
@@ -92,7 +93,8 @@ namespace WalkingTec.Mvvm.Mvc
                         }
                         else
                         {
-                            var proType = modelType.GetSingleProperty(item.FieldName)?.PropertyType;
+                            var proType = modelType.GetSingleProperty(item.FieldName)?.PropertyType
+                                ?? throw new InvalidOperationException($"Property '{item.FieldName}' not found on model type '{modelType.Name}'.");
                             Type checktype = proType;
                             if (proType.IsNullable())
                             {
@@ -126,7 +128,7 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 StringBuilder fieldstr = new StringBuilder();
                 var pros = FieldInfos.Where(x => x.IsSearcherField == true).ToList();
-                Type modelType = Type.GetType(SelectedModel);
+                Type modelType = GetSelectedModelType();
                 fieldstr.Append(Environment.NewLine);
                 fieldstr.Append(@"<wt:row items-per-row=""ItemsPerRowEnum.Three"">");
                 fieldstr.Append(Environment.NewLine);
@@ -142,7 +144,7 @@ namespace WalkingTec.Mvvm.Mvc
                         var fk = "";
                         if (string.IsNullOrEmpty(item.SubIdField))
                         {
-                            fk = DC.GetFKName2(modelType, item.FieldName); ;
+                            fk = GetDC().GetFKName2(modelType, item.FieldName); ;
                         }
                         else
                         {
@@ -152,7 +154,8 @@ namespace WalkingTec.Mvvm.Mvc
                     }
                     else
                     {
-                        var proType = modelType.GetSingleProperty(item.FieldName)?.PropertyType;
+                        var proType = modelType.GetSingleProperty(item.FieldName)?.PropertyType
+                            ?? throw new InvalidOperationException($"Property '{item.FieldName}' not found on model type '{modelType.Name}'.");
                         Type checktype = proType;
                         if (proType.IsNullable())
                         {
