@@ -7,6 +7,7 @@ using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Extensions;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Options;
 
 namespace WalkingTec.Mvvm.TagHelpers.LayUI
@@ -14,6 +15,14 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     [HtmlTargetElement("wt:tree",  TagStructure = TagStructure.WithoutEndTag)]
     public class TreeTagHelper : BaseFieldTag
     {
+        // Issue #470 Slice G (the #633 miss): see ComboBoxTagHelper's
+        // _islandJsonOptions for the full rationale (same shared
+        // LoadComboItemsIslandAction DTO, defined there).
+        private static readonly JsonSerializerOptions _islandJsonOptions = new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        };
+
         public string EmptyText { get; set; }
         public ModelExpression Items { get; set; }
         public bool ShowLine { get; set; } = true;
@@ -131,11 +140,34 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     });
 
                 }
-                output.PostElement.AppendHtml($@"<script>
-ff.LoadComboItems('tree','{ItemUrl}','{Id}','{Field.Name}',{LayuiIslandJson.Serialize(vals)},function(){{
-}})
-
-</script>");
+                // Issue #470 Slice G (the #633 miss): reuse the SAME loadComboItems
+                // island ComboBoxTagHelper/CheckBoxTagHelper/RadioTagHelper/
+                // TransferTagHelper emit for their ItemUrl branch (#633/#470-F)
+                // instead of an inline <script> calling ff.LoadComboItems directly.
+                // The 'loadComboItems' DispatchAction case (framework_layui.js)
+                // already handles controlType 'tree' — see ff.LoadComboItems's
+                // `if (controltype === "tree")` branch — it was simply never wired
+                // up to a server emitter until now. `vals` (List<object>) is
+                // stringified to match LoadComboItemsIslandAction.SelectVal's
+                // List<string> shape, mirroring the other three emitters — matches
+                // ff.LoadComboItems's own `svals` parameter, which only ever does
+                // string comparisons/iteration on it, identical to what
+                // LayuiIslandJson.Serialize(vals) produced inline before. The
+                // legacy inline script always passed a no-op empty function as the
+                // 6th arg (cb); the 'loadComboItems' DispatchAction case hard-codes
+                // that same 6th positional arg to `undefined` for every caller —
+                // calling an empty function or not calling it at all is
+                // behaviourally identical, so this is byte-identical runtime
+                // behaviour.
+                var loadComboItemsAction = new LoadComboItemsIslandAction
+                {
+                    ControlType = "tree",
+                    Url = ItemUrl,
+                    Id = Id,
+                    Field = Field.Name,
+                    SelectVal = vals.Select(v => v?.ToString()).ToList()
+                };
+                output.PostElement.AppendHtml($@"<script type=""application/json"" class=""wtm-dialog-init"">{LayuiIslandJson.Serialize(loadComboItemsAction, _islandJsonOptions)}</script>");
             }
 
             var script = $@"

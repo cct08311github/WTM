@@ -13,8 +13,14 @@ using WalkingTec.Mvvm.TagHelpers.LayUI.Form;
 
 namespace WalkingTec.Mvvm.Core.Test.TagHelpers;
 
+/// <summary>
+/// Issue #470 Slice G: UEditorTagHelper's render script migrates off the
+/// inline &lt;script&gt;layui.use(['ueditorconfig'], function(){...})&lt;/script&gt;
+/// call onto an eval-free 'ueditor' wtm-dialog-init JSON island, replayed by
+/// the new 'ueditor' DispatchAction case (framework_layui.js).
+/// </summary>
 [TestClass]
-public class RichTextBoxTagHelperTests
+public class UEditorTagHelperTests
 {
     private sealed class DummyModel
     {
@@ -41,18 +47,18 @@ public class RichTextBoxTagHelperTests
         return new ModelExpression(propertyName, modelExplorer);
     }
 
-    // RichTextBoxTagHelper uses context.Items.ContainsKey("model") — safe with empty dict.
+    // UEditorTagHelper reads context.Items["model"] via the plain indexer
+    // (unlike RichTextBoxTagHelper's ContainsKey-guarded read) — the "model"
+    // key must be present (null is fine; it just falls back to the default
+    // "UploadForLayUIUEditor" url), or the indexer throws KeyNotFoundException.
     private static TagHelperContext MakeContext()
-        => new("wt:richtextbox", new TagHelperAttributeList(),
-               new Dictionary<object, object>(), "test-id");
+        => new("wt:ueditor", new TagHelperAttributeList(),
+               new Dictionary<object, object> { ["model"] = null! }, "test-id");
 
     private static TagHelperOutput MakeOutput()
-        => new("textarea", new TagHelperAttributeList(),
+        => new("div", new TagHelperAttributeList(),
                (_, __) => Task.FromResult<TagHelperContent>(new DefaultTagHelperContent()));
 
-    // Issue #470 Slice G: same island-JSON extraction helper as
-    // ComboBoxTagHelperTests/LoadComboItemsIsland633Tests — the layedit
-    // island is a bare (non-{actions:[...]}-wrapped) payload.
     private static string? ExtractJsonFromIsland(string html)
     {
         const string open = "\"wtm-dialog-init\">";
@@ -65,123 +71,95 @@ public class RichTextBoxTagHelperTests
         return html[start..end];
     }
 
-    // Issue #470 Slice G: RichTextBoxTagHelper's layedit render script now
-    // migrates off the inline
-    // &lt;script&gt;layui.use('layedit', function(){...})&lt;/script&gt; call onto an
-    // eval-free 'layedit' wtm-dialog-init JSON island, replayed by the new
-    // 'layedit' DispatchAction case (framework_layui.js). These tests replace
-    // the pre-#470 assertions that matched the legacy inline script text.
     [TestMethod]
     public void Process_EmitsJsonIslandNotInlineScript()
     {
         SetupLocalizer();
-        var helper = new RichTextBoxTagHelper { Field = MakeField("RichField"), Id = "rich_field_1" };
+        var helper = new UEditorTagHelper { Field = MakeField("RichField", "Hello <b>World</b>"), Id = "ueditor_1" };
         var output = MakeOutput();
         helper.Process(MakeContext(), output);
         var postHtml = output.PostElement.GetContent();
 
         StringAssert.Contains(postHtml, "class=\"wtm-dialog-init\"",
             "Must emit the wtm-dialog-init JSON island");
-        Assert.IsFalse(postHtml.Contains("layedit.build("),
-            "Must not emit the legacy inline layedit.build(...) call text anywhere");
-        Assert.IsFalse(postHtml.Contains("layui.use('layedit'"),
-            "Must not emit the legacy inline layui.use('layedit', ...) call text anywhere");
+        Assert.IsFalse(postHtml.Contains("layui.use(['ueditorconfig']"),
+            "Must not emit the legacy inline layui.use(['ueditorconfig'], ...) call text anywhere");
+        Assert.IsFalse(postHtml.Contains("loadEditor("),
+            "The legacy loadEditor(...).ready(...) call text must not appear inline");
 
         var json = ExtractJsonFromIsland(postHtml);
         Assert.IsNotNull(json, "Island must contain parseable JSON");
         using var doc = JsonDocument.Parse(json!);
         var root = doc.RootElement;
-        Assert.AreEqual("layedit", root.GetProperty("type").GetString());
-        Assert.AreEqual("rich_field_1", root.GetProperty("id").GetString());
-        Assert.IsFalse(root.TryGetProperty("height", out _),
-            "height must be omitted entirely when Height is not set");
-    }
-
-    [TestMethod]
-    public void Process_HeightSet_IslandContainsHeight()
-    {
-        SetupLocalizer();
-        var helper = new RichTextBoxTagHelper
-        {
-            Field = MakeField("RichField"),
-            Id = "rich_field_3",
-            Height = 300
-        };
-        var output = MakeOutput();
-        helper.Process(MakeContext(), output);
-        var postHtml = output.PostElement.GetContent();
-        var json = ExtractJsonFromIsland(postHtml);
-        Assert.IsNotNull(json);
-        using var doc = JsonDocument.Parse(json!);
-        Assert.AreEqual(300, doc.RootElement.GetProperty("height").GetInt32(),
-            "Island must contain height:300 when Height is set to 300");
-    }
-
-    [TestMethod]
-    public void Process_UploadUrl_IslandContainsUploadUrl()
-    {
-        SetupLocalizer();
-        var helper = new RichTextBoxTagHelper
-        {
-            Field = MakeField("RichField"),
-            Id = "rich_field_upload",
-            UploadUrl = "/Custom/Upload"
-        };
-        var output = MakeOutput();
-        helper.Process(MakeContext(), output);
-        var postHtml = output.PostElement.GetContent();
-        var json = ExtractJsonFromIsland(postHtml);
-        Assert.IsNotNull(json);
-        using var doc = JsonDocument.Parse(json!);
-        StringAssert.Contains(doc.RootElement.GetProperty("uploadUrl").GetString()!, "/Custom/Upload");
-    }
-
-    [TestMethod]
-    public void Process_IsrichAttributeIsSet()
-    {
-        SetupLocalizer();
-        var helper = new RichTextBoxTagHelper { Field = MakeField("RichField"), Id = "rich_field_4" };
-        var output = MakeOutput();
-        helper.Process(MakeContext(), output);
-        Assert.IsTrue(output.Attributes.ContainsName("isrich"),
-            "isrich attribute must be set on output element");
-        Assert.AreEqual("1", output.Attributes["isrich"].Value?.ToString());
-    }
-
-    [TestMethod]
-    public void Process_ModelWinsOverDefaultValue()
-    {
-        SetupLocalizer();
-        var helper = new RichTextBoxTagHelper
-        {
-            Field = MakeField("RichField", "saved content"),
-            Id = "rich_field_5",
-            DefaultValue = "default text"
-        };
-        var output = MakeOutput();
-        helper.Process(MakeContext(), output);
-        var contentHtml = output.Content.GetContent();
-        Assert.IsTrue(contentHtml.Contains("saved content"),
-            "Non-empty model must win over DefaultValue");
-        Assert.IsFalse(contentHtml.Contains("default text"),
-            "DefaultValue must not appear when model is non-empty");
+        Assert.AreEqual("ueditor", root.GetProperty("type").GetString());
+        Assert.AreEqual("ueditor_1", root.GetProperty("id").GetString());
+        Assert.AreEqual("Hello <b>World</b>", root.GetProperty("content").GetString(),
+            "The decoded content value must round-trip exactly — only the WIRE encoding changes");
     }
 
     [TestMethod]
     public void Process_NullModel_FallsBackToDefaultValue()
     {
         SetupLocalizer();
-        var helper = new RichTextBoxTagHelper
+        var helper = new UEditorTagHelper
         {
             Field = MakeField("RichField", null),
-            Id = "rich_field_6",
-            DefaultValue = "placeholder"
+            Id = "ueditor_2",
+            DefaultValue = "placeholder text"
         };
         var output = MakeOutput();
         helper.Process(MakeContext(), output);
-        var contentHtml = output.Content.GetContent();
-        Assert.IsTrue(contentHtml.Contains("placeholder"),
-            "Null model must fall back to DefaultValue");
+        var postHtml = output.PostElement.GetContent();
+        var json = ExtractJsonFromIsland(postHtml);
+        Assert.IsNotNull(json);
+        using var doc = JsonDocument.Parse(json!);
+        Assert.AreEqual("placeholder text", doc.RootElement.GetProperty("content").GetString());
+    }
+
+    [TestMethod]
+    public void Process_EmptyModelAndDefaultValue_ContentIsEmptyString()
+    {
+        SetupLocalizer();
+        var helper = new UEditorTagHelper { Field = MakeField("RichField", null), Id = "ueditor_3" };
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+        var postHtml = output.PostElement.GetContent();
+        var json = ExtractJsonFromIsland(postHtml);
+        Assert.IsNotNull(json);
+        using var doc = JsonDocument.Parse(json!);
+        Assert.AreEqual(string.Empty, doc.RootElement.GetProperty("content").GetString());
+    }
+
+    [TestMethod]
+    public void Process_IsrichAttributeIsSet()
+    {
+        SetupLocalizer();
+        var helper = new UEditorTagHelper { Field = MakeField("RichField"), Id = "ueditor_4" };
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+        Assert.IsTrue(output.Attributes.ContainsName("isrich"));
+        Assert.AreEqual("1", output.Attributes["isrich"].Value?.ToString());
+    }
+
+    [TestMethod]
+    public void Process_ContentWithScriptBreakoutPayload_CannotEscapeIsland()
+    {
+        SetupLocalizer();
+        var helper = new UEditorTagHelper
+        {
+            Field = MakeField("RichField", "</script><script>alert(1)</script>"),
+            Id = "ueditor_5"
+        };
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+        var postHtml = output.PostElement.GetContent();
+
+        Assert.IsFalse(postHtml.Contains("</script><script>alert(1)"),
+            "Raw </script><script> must never appear — JSON escaping must neutralize it");
+        var json = ExtractJsonFromIsland(postHtml);
+        Assert.IsNotNull(json);
+        Assert.IsFalse(json!.Contains("</script>"),
+            "JSON must Unicode-escape < and > to prevent script injection");
     }
 
     [TestCleanup]

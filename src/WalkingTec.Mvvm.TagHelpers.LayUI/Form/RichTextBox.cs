@@ -2,7 +2,8 @@ using Microsoft.AspNetCore.Razor.TagHelpers;
 using System;
 using System.Collections.Generic;
 using System.Text;
-using System.Text.Encodings.Web;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Extensions;
 
@@ -19,6 +20,13 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
         public string ConnectionString { get; set; }
         public string ExtraQuery { get; set; }
         public string UploadMode { get; set; }
+
+        // Issue #470 Slice G: see ComboBoxTagHelper's _islandJsonOptions for the
+        // full rationale (same shared eval-free island pattern).
+        private static readonly JsonSerializerOptions _islandJsonOptions = new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        };
 
         public override void Process(TagHelperContext context, TagHelperOutput output)
         {
@@ -76,23 +84,54 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
             }
             url = url.AppendQuery(ExtraQuery);
 
-            var encodedUrl = JavaScriptEncoder.Default.Encode(url ?? "");
-            output.PostElement.AppendHtml($@"
-<script>
-layui.use('layedit', function(){{
-  var layedit = layui.layedit;
-  layedit.set({{
-    uploadImage: {{
-      url: '{encodedUrl}'
-    }}
-  }});
-  var index = layedit.build('{Id}'{(Height.HasValue?$",{{height:{Height.Value}}}":"")});
-  $('#{Id}').attr('layeditindex',index);
-}});
-</script>
-");
+            // Issue #470 Slice G: eval-free JSON island — thin re-expression of
+            //   layui.use('layedit', function(){
+            //     var layedit = layui.layedit;
+            //     layedit.set({ uploadImage: { url: uploadUrl } });
+            //     var index = layedit.build(id[, {height:...}]);
+            //     $('#'+id).attr('layeditindex', index);
+            //   });
+            // which the new 'layedit' DispatchAction case (framework_layui.js)
+            // replays natively. RichTextBoxTagHelper exposes no developer-facing
+            // callback attribute at all — the build/layeditindex write-back is
+            // mandatory framework wiring, so this always safely migrates, no
+            // legacy-fallback branch needed (same rationale as RateTagHelper,
+            // #552). UploadUrl is server-composed (query-string builder above),
+            // not raw user data, but this still routes through
+            // LayuiIslandJson.Serialize (never raw JsonSerializer.Serialize) for
+            // the '$' escaping that closes the #651/#652 sentinel-collision
+            // stored-XSS class, matching every other island DTO in this project.
+            var action = new LayeditIslandAction
+            {
+                Id = Id,
+                UploadUrl = url,
+                Height = Height
+            };
+            var json = LayuiIslandJson.Serialize(action, _islandJsonOptions);
+            output.PostElement.AppendHtml(
+                $"<script type=\"application/json\" class=\"wtm-dialog-init\">{json}</script>");
+
             base.Process(context, output);
         }
     }
 
+    // Issue #470 Slice G: DTO for the bare (non-wrapped) layedit JSON island —
+    // {"type":"layedit","id":"...","uploadUrl":"...","height":123}.
+    // ff._normalizeIslandPayload (framework_layui.js) wraps this into the
+    // {actions:[...]} shape ff.DispatchAction expects; not part of the public
+    // API surface.
+    internal sealed class LayeditIslandAction
+    {
+        [JsonPropertyName("type")]
+        public string Type { get; set; } = "layedit";
+
+        [JsonPropertyName("id")]
+        public string Id { get; set; }
+
+        [JsonPropertyName("uploadUrl")]
+        public string UploadUrl { get; set; }
+
+        [JsonPropertyName("height")]
+        public int? Height { get; set; }
+    }
 }

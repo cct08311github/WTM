@@ -239,8 +239,16 @@ window.ff = {
     // plain window[] property write (CheckBoxTagHelper/RadioTagHelper's
     // back-compat default-selection global), no layui module and no DOM widget
     // involved at all, same rationale as 'tagInput'/'bindInput' above.
+    // Issue #470 Slice G: 'ueditor' / 'layedit' each call their own layui
+    // submodule ('ueditorconfig' / 'layedit'), same rationale as
+    // slider/rate/colorpicker above. Their own DispatchAction case bodies
+    // (_renderUEditorAction / _renderLayeditAction) ALSO wrap the render in
+    // their own layui.use([...], cb) call (mirroring the legacy inline
+    // <script>, which always did the same), so this entry is belt-and-
+    // suspenders defense-in-depth — same intentionally-redundant pattern as
+    // slider/rate/colorpicker (see the #576 comment above _renderSliderAction).
     _islandModulesFor: function (payload) {
-        var needed = { form: false, laydate: false, slider: false, rate: false, colorpicker: false };
+        var needed = { form: false, laydate: false, slider: false, rate: false, colorpicker: false, ueditorconfig: false, layedit: false };
         if (payload && payload.actions) {
             for (var i = 0; i < payload.actions.length; i++) {
                 var a = payload.actions[i];
@@ -260,6 +268,10 @@ window.ff = {
                     needed.rate = true;
                 } else if (a.type === 'colorpicker') {
                     needed.colorpicker = true;
+                } else if (a.type === 'ueditor') {
+                    needed.ueditorconfig = true;
+                } else if (a.type === 'layedit') {
+                    needed.layedit = true;
                 }
             }
         }
@@ -269,6 +281,8 @@ window.ff = {
         if (needed.slider) { mods.push('slider'); }
         if (needed.rate) { mods.push('rate'); }
         if (needed.colorpicker) { mods.push('colorpicker'); }
+        if (needed.ueditorconfig) { mods.push('ueditorconfig'); }
+        if (needed.layedit) { mods.push('layedit'); }
         return mods;
     },
 
@@ -557,6 +571,83 @@ window.ff = {
         } catch (e) {
             if (typeof console !== 'undefined' && console.warn) {
                 console.warn('[WTM] colorpicker action failed:', e);
+            }
+        }
+    },
+
+    // Issue #470 Slice G: shared render body for the 'ueditor' DispatchAction
+    // case. Mirrors the legacy inline <script> UEditorTagHelper emitted exactly:
+    //   layui.use(['ueditorconfig'], function () {
+    //     layui.ueditor.loadEditor(id).ready(function () { this.setContent(content); });
+    //   });
+    // Unlike _renderSliderAction/_renderRateAction/_renderColorpickerAction
+    // (which are called EITHER immediately or via a layui.use(...) deferral
+    // decided by their DispatchAction case), this function performs the
+    // layui.use(...) call ITSELF — matching the legacy inline script, which
+    // always called layui.use(['ueditorconfig'], ...) unconditionally too
+    // (layui.use is idempotent/safe to call even once the module is already
+    // loaded). No developer-facing callback attribute exists on
+    // UEditorTagHelper, so this always safely reproduces the legacy behaviour
+    // natively — no legacy-fallback branch needed (same rationale as
+    // RateTagHelper, #552).
+    _renderUEditorAction: function (action) {
+        try {
+            if (!action || !action.id || typeof layui === 'undefined' || typeof layui.use !== 'function') { return; }
+            layui.use(['ueditorconfig'], function () {
+                try {
+                    if (!layui.ueditor || typeof layui.ueditor.loadEditor !== 'function') { return; }
+                    layui.ueditor.loadEditor(action.id).ready(function () {
+                        this.setContent(action.content || '');
+                    });
+                } catch (e2) {
+                    if (typeof console !== 'undefined' && console.warn) {
+                        console.warn('[WTM] ueditor action failed:', e2);
+                    }
+                }
+            });
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] ueditor action failed:', e);
+            }
+        }
+    },
+
+    // Issue #470 Slice G: shared render body for the 'layedit' DispatchAction
+    // case. Mirrors the legacy inline <script> RichTextBoxTagHelper emitted
+    // exactly:
+    //   layui.use('layedit', function(){
+    //     var layedit = layui.layedit;
+    //     layedit.set({ uploadImage: { url: uploadUrl } });
+    //     var index = layedit.build(id[, {height:...}]);
+    //     $('#'+id).attr('layeditindex', index);
+    //   });
+    // Same self-contained layui.use(...) pattern as _renderUEditorAction above
+    // (the legacy inline script always called layui.use('layedit', ...)
+    // unconditionally too). RichTextBoxTagHelper exposes no developer-facing
+    // callback attribute, so this always safely migrates — no legacy-fallback
+    // branch needed. Uses document.getElementById + setAttribute instead of
+    // jQuery's .attr() — same DOM mutation, no jQuery dependency added here.
+    _renderLayeditAction: function (action) {
+        try {
+            if (!action || !action.id || typeof layui === 'undefined' || typeof layui.use !== 'function') { return; }
+            layui.use('layedit', function () {
+                try {
+                    var layedit = layui.layedit;
+                    if (!layedit || typeof layedit.set !== 'function' || typeof layedit.build !== 'function') { return; }
+                    layedit.set({ uploadImage: { url: action.uploadUrl || '' } });
+                    var opts = (typeof action.height === 'number') ? { height: action.height } : undefined;
+                    var index = layedit.build(action.id, opts);
+                    var el = document.getElementById(action.id);
+                    if (el) { el.setAttribute('layeditindex', index); }
+                } catch (e2) {
+                    if (typeof console !== 'undefined' && console.warn) {
+                        console.warn('[WTM] layedit action failed:', e2);
+                    }
+                }
+            });
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] layedit action failed:', e);
             }
         }
     },
@@ -1030,6 +1121,23 @@ window.ff = {
                     } else if (typeof layui.use === 'function') {
                         layui.use(['colorpicker'], function () { ff._renderColorpickerAction(action); });
                     }
+                    break;
+                // Issue #470 Slice G: thin JSON wrapper over
+                // layui.ueditor.loadEditor(id).ready(...).setContent(...). See
+                // _renderUEditorAction for the full rationale — that function
+                // performs its own layui.use(['ueditorconfig'], cb) call
+                // (mirroring the legacy inline <script> exactly), so this case
+                // just delegates straight through.
+                case 'ueditor':
+                    ff._renderUEditorAction(action);
+                    break;
+                // Issue #470 Slice G: thin JSON wrapper over
+                // layui.layedit.set/build(...). See _renderLayeditAction for the
+                // full rationale — that function performs its own
+                // layui.use('layedit', cb) call (mirroring the legacy inline
+                // <script> exactly), so this case just delegates straight through.
+                case 'layedit':
+                    ff._renderLayeditAction(action);
                     break;
                 // Issue #558 (#470-C): safe named-callback submit binding —
                 // mechanism only (FormTagHelper does not emit this yet). Mirrors
@@ -2656,9 +2764,24 @@ window.ff = {
                var item = null;
                if (controltype === "tree") {
                    var da = ff.getTreeItems(data.Data, svals);
-                   window[controlid].update({ data: da });
-                   if (cb !== undefined && cb != null) {
-                       cb();
+                   // Issue #470 (Slice G follow-up): same invariant as the combo
+                   // branch below — TreeTagHelper's ItemUrl path now routes
+                   // through this SAME island dispatch, but the widget's own
+                   // render call (xmSelect.render(...), TreeTagHelper) is still
+                   // a bare inline <script> that the #627 kill-switch can block,
+                   // leaving window[controlid] unset. Degrade with a diagnostic
+                   // instead of an uncaught throw when the widget was never
+                   // rendered; leave the normal (rendered) path byte-identical
+                   // to before.
+                   if (!window[controlid] || typeof window[controlid].update !== 'function') {
+                       if (typeof console !== 'undefined' && console.warn) {
+                           console.warn('[WTM] LoadComboItems: widget "' + controlid + '" was never rendered — its inline render script did not run. If DisableLegacyScriptRehydration is enabled (#627), this widget still emits a legacy inline render script and is not yet islandified (#470 hard blocker). Items were fetched but could not be applied.');
+                       }
+                   } else {
+                       window[controlid].update({ data: da });
+                       if (cb !== undefined && cb != null) {
+                           cb();
+                       }
                    }
                }
                if (controltype == "transfer") {
@@ -3745,6 +3868,38 @@ var wtmCounter = (function () {
     return { init: init };
 }());
 window.wtmCounter = wtmCounter;
+
+// Issue #470 Slice G: delegated wtmCounter wiring — TextAreaTagHelper
+// (ShowCounter) now emits a `data-wtm-counter="<counterId>"` attribute on the
+// textarea itself instead of a per-widget inline <script> calling
+// wtmCounter.init(id, counterId, maxLen). A SINGLE document-level delegated
+// 'input' listener (registered once, here) replaces per-widget
+// addEventListener('input', ...) wiring: because the listener is bound to
+// `document` itself (never the widget), it needs no re-scan/re-init when a
+// counter-enabled textarea is inserted later (OpenDialog/OpenDialog2
+// fragment, SPA-tab framework, …), unlike the wtm-dialog-init island
+// consumers above — this is what "no island needed for a one-liner" buys.
+// Keeps the counter working even when DisableLegacyScriptRehydration (#627)
+// blocks the legacy inline <script> path. Reads maxLen from the textarea's
+// own native `maxLength` DOM property (mirroring the `maxlength` HTML
+// attribute TextAreaTagHelper already emits alongside data-wtm-counter)
+// instead of threading a redundant second value through a data attribute —
+// identical to the value wtmCounter.init's caller always passed. The
+// original wtmCounter.init/update functions above are left byte-identical
+// for back-compat with any external caller.
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener('input', function (e) {
+        var field = e && e.target;
+        if (!field || typeof field.getAttribute !== 'function') { return; }
+        var counterId = field.getAttribute('data-wtm-counter');
+        if (!counterId) { return; }
+        var counter = document.getElementById(counterId);
+        if (!counter) { return; }
+        var maxLen = field.maxLength;
+        var len = (field.value || '').length;
+        counter.textContent = len + '/' + maxLen;
+    });
+}
 
 // Issue #556 (#470-B slice 1): idempotent page-ready consumer for
 // .wtm-dialog-init islands present in the MAIN document at initial page

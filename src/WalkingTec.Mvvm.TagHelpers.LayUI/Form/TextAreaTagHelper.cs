@@ -41,15 +41,26 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             }
             if (ShowCounter && maxLenVal.HasValue)
             {
-                var counterId = HtmlEncoder.Default.Encode(Id + "_counter");
+                // Issue #470 Slice G: data-attribute + document-level delegated
+                // 'input' handler (framework_layui.js) instead of a per-widget
+                // inline <script> calling wtmCounter.init(id, counterId, maxLen).
+                // No island needed for a one-liner — the delegated listener is
+                // registered exactly ONCE at script load and matches on
+                // data-wtm-counter regardless of when/how this textarea enters the
+                // DOM (full page, OpenDialog/OpenDialog2 fragment, SPA-tab
+                // framework, …), so it keeps working even when
+                // DisableLegacyScriptRehydration (#627) blocks a legacy inline
+                // <script>. maxLen is read from the textarea's own native
+                // `maxLength` DOM property at listener time — already reflecting
+                // the `maxlength` attribute set above — rather than threading a
+                // second, redundant value through the data attribute.
+                var rawCounterId = Id + "_counter";
+                var counterId = HtmlEncoder.Default.Encode(rawCounterId);
                 var currentLen = Field?.Model?.ToString()?.Length ?? 0;
+                output.Attributes.Add("data-wtm-counter", rawCounterId);
                 output.PostElement.AppendHtml(
                     $"<span id=\"{counterId}\" class=\"wtm-char-counter\" style=\"font-size:12px;color:#999;\">" +
                     $"{currentLen}/{maxLenVal.Value}</span>");
-                output.PostElement.AppendHtml(
-                    $"<script>if(typeof wtmCounter!=='undefined'){{" +
-                    $"wtmCounter.init('{JavaScriptEncoder.Default.Encode(Id)}'," +
-                    $"'{counterId}',{maxLenVal.Value});}}</script>");
             }
 
             base.Process(context, output);

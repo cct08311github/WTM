@@ -157,7 +157,9 @@ describe('#552 (#470-E) — source sweep', () => {
   });
 
   test('_islandModulesFor maps slider/rate/colorpicker to their own module', () => {
-    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,1600}?\n\s*\},/);
+    // Issue #470 Slice G: bound bumped 1600 -> 2200 — the function grew with
+    // the new 'ueditor'/'layedit' module-deferral branches.
+    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,2200}?\n\s*\},/);
     expect(block).not.toBeNull();
     expect(block[0]).toMatch(/a\.type\s*===\s*['"]slider['"]/);
     expect(block[0]).toMatch(/a\.type\s*===\s*['"]rate['"]/);
