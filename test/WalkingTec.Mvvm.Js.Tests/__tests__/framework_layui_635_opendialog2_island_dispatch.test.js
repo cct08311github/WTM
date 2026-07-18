@@ -35,21 +35,35 @@
 //           layer's own subtree, claim-before-dispatch idempotent, never a
 //           document-wide rescan.
 //
-// Server-response-island decision (documented in-source at the
-// `ff.SafeHtml(str)` call site in OpenDialog2): OpenDialog2's ajax response
-// is always the ONE fixed framework view (Views/_Framework/Selector.cshtml),
-// which renders only wt:container/wt:grid/wt:row/wt:button — none of which
-// are dialog-init island emitters (only the Form/ field TagHelpers and
-// <wt:dialog-init> emit them). So, unlike ff.OpenDialog (a GENERIC dialog
-// opener for arbitrary developer-authored forms), OpenDialog2 does NOT gain
-// a pre-SafeHtml server-response extraction step — there is no reachable
-// emitter for it today. Item 7 below proves the two halves of that decision
-// empirically: (a) a same-shaped island embedded in the raw response WOULD
-// be stripped by ff.SafeHtml's real FORBID_TAGS (so extracting it now would
-// have been necessary if this were wired up — it deliberately is not), and
-// (b) a bare <script> in the response is not newly executed by this change
-// (OpenDialog2 never touched `str`/`safeStr` script handling before #635 and
-// still does not after).
+// Server-response-island decision — UPDATED by Issue #722: at the time #635
+// landed, OpenDialog2's ajax response was believed to never need a
+// pre-SafeHtml extraction step, because Views/_Framework/Selector.cshtml
+// renders only wt:container/wt:grid/wt:row/wt:button — none of which are
+// dialog-init island emitters. That reasoning about ISLANDS was correct, but
+// it missed that Selector.cshtml's OWN top-level <script> block
+// (submitSelect/gridCheckedFunc) AND the wt:grid TagHelper's own inline
+// table.render(...) init script are real <script> ELEMENTS in that same
+// response body — and those were being unconditionally stripped by
+// ff.SafeHtml/DOMPurify with NO restoration path, so the picker dialog
+// opened but its grid never called table.render, so GetPagingData never
+// fired and the grid stayed empty (found live by the #681 e2e suite,
+// present with the #627 kill-switch both on and off).
+//
+// #722 fixes this by having OpenDialog2 call the SAME shared
+// ff._collectInitFromHtml/_replayInitFromHtml helper pair ff.OpenDialog
+// already uses (factored out by #587) on its own response body — collecting
+// BEFORE ff.SafeHtml sanitizes, replaying AFTER the sanitized content is in
+// the live DOM, gated by the same #627 kill-switch
+// (ff._isLegacyRehydrationDisabled). No new eval, no new execution path —
+// reuse of the existing, already-audited mechanism. Item 7 below is UPDATED
+// (not removed) to prove the corrected behavior: (a) a same-shaped island
+// embedded in the raw response is now collected and dispatched exactly like
+// a template-origin island (the harmless side effect of reusing a helper
+// that also collects islands — see the #722 update above test 7a), and (b) a
+// bare <script> in the response — the actual bug fixed by #722 — now DOES
+// execute. See framework_layui_722_opendialog2_selector_script.test.js for
+// the dedicated Selector.cshtml-shaped regression test (table.render +
+// submitSelect/gridCheckedFunc surviving OpenDialog2 end-to-end).
 
 'use strict';
 
@@ -536,9 +550,12 @@ describe('#635 ff.OpenDialog2 — template-origin island dispatch', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 7. Server-response-island decision — empirical proof of both halves.
+// 7. Server-response-island decision — UPDATED by #722: OpenDialog2 now
+// collects+replays its own response body's inline <script>s and islands via
+// the shared ff._collectInitFromHtml/_replayInitFromHtml helper. See the
+// file-header comment above for the full before/after.
 // ---------------------------------------------------------------------------
-describe('#635 ff.OpenDialog2 — server-response island decision (documented as out of scope)', () => {
+describe('#635/#722 ff.OpenDialog2 — server-response script/island collection (now wired up, was previously out of scope)', () => {
   const purifyPath = path.resolve(
     __dirname,
     '../../../src/WalkingTec.Mvvm.Mvc/dompurify.js'
@@ -564,7 +581,7 @@ describe('#635 ff.OpenDialog2 — server-response island decision (documented as
     document.body.innerHTML = '';
   });
 
-  test('7a. a wtm-dialog-init island embedded in the RAW server response would be stripped by real ff.SafeHtml (FORBID_TAGS) — proves extraction would be required IF this were wired up, and it deliberately is not', () => {
+  test('7a. #722 UPDATE: a wtm-dialog-init island embedded in the RAW server response is now collected+dispatched, exactly like a template-origin island — the markup itself is still stripped by real ff.SafeHtml (FORBID_TAGS), but the shared helper collects it BEFORE that sanitize step runs', () => {
     const realDomPurify = loadRealDomPurify();
     expect(realDomPurify && typeof realDomPurify.sanitize).toBe('function');
 
@@ -585,15 +602,26 @@ describe('#635 ff.OpenDialog2 — server-response island decision (documented as
     ff.OpenDialog2('/some/search/url', 'w635h', 'Title', 500, 400, '#Temp635h');
 
     const content = layui.layer.open.mock.calls[0][0].content;
-    // ff.SafeHtml's real FORBID_TAGS: ['script','style'] strips the island
-    // before it ever reaches `content` — it is inert-and-dropped, exactly
-    // like today, not newly dispatched by #635.
+    // ff.SafeHtml's real FORBID_TAGS: ['script','style'] still strips the
+    // island MARKUP before it ever reaches `content` — that half of the
+    // trust boundary is unchanged. But #722's ff._collectInitFromHtml(str)
+    // call runs BEFORE ff.SafeHtml, on the raw response, so it sees and
+    // collects this island the same way it would from a template-origin
+    // island, and ff._replayInitFromHtml dispatches it once the dialog is
+    // in the live DOM — the same safe, whitelist-only dispatch mechanism
+    // #635 already proved safe for template-origin islands (JSON.parse +
+    // ff._dispatchIslandWhenReady, never eval).
     expect(content).not.toContain('wtm-dialog-init');
-    expect(dispatchSpy).not.toHaveBeenCalled();
-    expect(layui.layer.alert).not.toHaveBeenCalled();
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actions: [expect.objectContaining({ message: 'server island' })]
+      })
+    );
+    expect(layui.layer.alert).toHaveBeenCalledWith('server island', { title: '' });
   });
 
-  test('7b. a bare <script> in the server response is NOT newly executed by the #635 change', () => {
+  test('7b. #722 fix: a bare <script> in the server response — the actual Selector.cshtml/wt:grid init-script shape — now DOES execute, via the same collect-before-sanitize/replay-after-insert mechanism ff.OpenDialog already used', () => {
     const realDomPurify = loadRealDomPurify();
 
     window.__635srv = 0;
@@ -610,11 +638,15 @@ describe('#635 ff.OpenDialog2 — server-response island decision (documented as
 
     ff.OpenDialog2('/some/search/url', 'w635i', 'Title', 500, 400, '#Temp635i');
 
-    // SafeHtml strips the bare <script> from the server response (unchanged,
-    // pre-existing #332 behavior); #635 never adds a new execution path for
-    // server-response script content — it only ever touches the LOCAL
-    // #Temp{Id} template text.
-    expect(window.__635srv).toBe(0);
+    // ff.SafeHtml still strips the bare <script> from the sanitized MARKUP
+    // (unchanged, pre-existing #332 behavior — the trust boundary that
+    // matters for arbitrary HTML injection is untouched). But #722 collects
+    // this same-origin, framework-owned script from the raw response BEFORE
+    // that sanitize step and replays it as a real <script> element after the
+    // dialog content is in the live DOM — fixing the #722 bug where
+    // Selector.cshtml's own init script (and the wt:grid TagHelper's
+    // table.render call) was silently dropped with no restoration path.
+    expect(window.__635srv).toBe(1);
     const content = layui.layer.open.mock.calls[0][0].content;
     expect(content).not.toContain('<script>window.__635srv');
 

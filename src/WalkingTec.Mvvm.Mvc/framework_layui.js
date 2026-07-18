@@ -1370,6 +1370,13 @@ window.ff = {
     // $$script$$/$$#script$$ selector search-panel template rehydration
     // (review follow-up to the original #627 commit, which gated only the
     // first three).
+    // Issue #722: ff.OpenDialog2 also now calls ff._replayInitFromHtml
+    // directly (to replay Selector.cshtml's own top-level init script and
+    // the wt:grid TagHelper's table.render call, collected from its ajax
+    // response body) — this is a NEW CALL SITE of the existing point 2
+    // (ff._replayInitFromHtml), not a new/fifth gated point: the gating
+    // logic itself is unchanged, OpenDialog2 just reuses it the same way
+    // ff.OpenDialog already does.
     // The common form-init paths (form init/submit/validate/error-highlight,
     // laydate, rate, taginput — plus slider/colorpicker in their
     // callback-free configurations) have been island-driven since
@@ -2178,28 +2185,42 @@ window.ff = {
             },
             success: function (str) {
                 var regGridVar = /wtVar_(.*)\s{0,}=\s{0,}table.render\([a-zA-Z0-9_]{1,}option\)/im;
+                // Issue #722: Selector.cshtml renders its OWN top-level inline
+                // <script> block (submitSelect/gridCheckedFunc) plus the
+                // wt:grid TagHelper's own inline table.render(...) init
+                // script, directly in this response body — same shape as any
+                // other same-origin partial ff.OpenDialog handles. Collect
+                // them from the RAW `str` BEFORE ff.SafeHtml/DOMPurify strips
+                // all <script> elements below, using the SAME shared
+                // extraction helper ff.OpenDialog uses (ff._collectInitFromHtml,
+                // factored out by #587) — no new parsing logic, no new eval.
+                // Previously nothing collected these, so DOMPurify silently
+                // dropped them with no restoration path: the dialog opened
+                // but the grid never called table.render, so GetPagingData
+                // never fired and the picker stayed empty. Replay happens via
+                // ff._replayInitFromHtml in the layer.open `success` callback
+                // below, once the sanitized content is actually in the live
+                // DOM — that helper is the same one that gates legacy script
+                // execution behind the #627 kill-switch
+                // (ff._isLegacyRehydrationDisabled), so this fix inherits the
+                // exact same kill-switch semantics ff.OpenDialog has.
+                //
+                // Issue #635 (#470 prerequisite) UPDATE: the helper also
+                // collects .wtm-dialog-init JSON islands, which this
+                // framework-owned view does not currently emit (only the
+                // Form/ field TagHelpers and <wt:dialog-init> emit them, and
+                // none appear in Selector.cshtml today) — so island
+                // collection is a harmless no-op here, not new island
+                // support. If a future change adds an island-emitting
+                // TagHelper to this view, it is now dispatched correctly
+                // instead of being unreachable, which is strictly safer than
+                // the prior stripped-and-dropped fate.
+                var _selectorInitCollected = ff._collectInitFromHtml(str);
                 // Issue #332: sanitize the server response via DOMPurify BEFORE
                 // extracting the grid-id or inserting into the DOM (stored XSS guard).
                 // The $$script$$/$$#script$$ escape tokens in the tempId template are
                 // rehydrated AFTER sanitization (they live in local DOM, not the server
                 // response, so they are trusted content).
-                //
-                // Issue #635 (#470 prerequisite): unlike ff.OpenDialog, this response
-                // (`str`, pre-SafeHtml) is deliberately NOT scanned for wtm-dialog-init
-                // islands here. OpenDialog is a generic dialog opener that can point at
-                // ANY controller action/view, including arbitrary developer-authored
-                // forms; `str` here is always the response of the ONE fixed, framework-
-                // owned view this function calls (Views/_Framework/Selector.cshtml),
-                // which renders only wt:container/wt:grid/wt:row/wt:button — none of
-                // which are dialog-init island emitters (only the Form/ field
-                // TagHelpers and <wt:dialog-init> emit them, and none appear in that
-                // view). Adding a pre-sanitize extraction step for a response shape that
-                // can never carry one would be unreachable code in a security-sensitive
-                // path. If a future change adds an island-emitting TagHelper to that
-                // view (or an app overrides it to include one), the island is simply
-                // stripped by ff.SafeHtml's FORBID_TAGS below (same inert-and-dropped
-                // fate as today, not a new gap) until this is revisited — see the #635
-                // PR description for the tracking note.
                 var safeStr = ff.SafeHtml(str);
                 if ($(tempId).length > 0 && regGridVar.test(str)) {
                     // Issue #332: replace brittle regex grid-id extraction with safe
@@ -2315,6 +2336,20 @@ window.ff = {
                     , id: windowid //设定一个id，防止重复弹出
                     , content: str
                     , success: function (layero) {
+                        // Issue #722: replay Selector.cshtml's own top-level inline
+                        // scripts (submitSelect/gridCheckedFunc) and the wt:grid
+                        // TagHelper's table.render(...) init script collected from the
+                        // RAW response above, now that the sanitized content is actually
+                        // in the live DOM. ff._replayInitFromHtml re-injects them as real
+                        // <script> elements in original document order (native global
+                        // scope, same technique as ff.OpenDialog's #522 rehydration loop)
+                        // and is gated by the same #627 kill-switch
+                        // (ff._isLegacyRehydrationDisabled) ff.OpenDialog uses — no new
+                        // eval, no new execution path. Must run BEFORE
+                        // ff.ConsumeIslandsIn below (scripts-before-islands ordering,
+                        // matching the #576 invariant): the grid's own table.render call
+                        // needs to run before anything reacts to the grid being present.
+                        ff._replayInitFromHtml(_selectorInitCollected);
                         // Issue #635 (#470 prerequisite): dispatch any wtm-dialog-init
                         // island(s) that just became part of the live DOM as this layer's
                         // content — e.g. a callback-free <wt:datetime> field inside the
@@ -2324,11 +2359,10 @@ window.ff = {
                         // (data-wtm-dispatched="1") before scheduling its dispatch, so this
                         // can never double-dispatch. Ordering: layer.open's own content
                         // insertion (the mechanism that turns a rehydrated bare
-                        // <script>...</script> segment into a running side effect — there
-                        // is no separate explicit re-injection loop here, unlike
-                        // ff.OpenDialog/#522) has already completed by the time `success`
-                        // fires, so a legacy $$script$$ segment (when the kill-switch is
-                        // OFF) always runs before this island dispatch.
+                        // <script>...</script> segment into a running side effect) and the
+                        // ff._replayInitFromHtml call above have already completed by the
+                        // time this line runs, so a legacy $$script$$ segment (when the
+                        // kill-switch is OFF) always runs before this island dispatch.
                         ff.ConsumeIslandsIn(layero);
                     }
                     , end: function () {
