@@ -50,12 +50,22 @@ public class EtlPipelineExecutor
     /// </summary>
     internal const int DefaultMaxDeadLetterRowsPerRun = 10_000;
 
+    /// <summary>
+    /// #700: default partial-flush threshold used when the caller does not supply one
+    /// explicitly. Mirrors <see cref="EtlOptions.DeadLetterFlushThreshold"/>'s default.
+    /// Only consulted when <see cref="_deadLetterFlushMode"/> is
+    /// <see cref="EtlDeadLetterFlushMode.Periodic"/>.
+    /// </summary>
+    internal const int DefaultDeadLetterFlushThreshold = 500;
+
     private readonly IEtlSource _source;
     private readonly IBulkLoader _loader;
     private readonly IProgress<EtlProgress>? _progress;
     private readonly ILogger? _logger;
     private readonly IEtlGovernanceStore _governance;
     private readonly int _maxDeadLetterRowsPerRun;
+    private readonly EtlDeadLetterFlushMode _deadLetterFlushMode;
+    private readonly int _deadLetterFlushThreshold;
 
     public EtlPipelineExecutor(
         IEtlSource source,
@@ -63,7 +73,9 @@ public class EtlPipelineExecutor
         IProgress<EtlProgress>? progress = null,
         ILogger? logger = null,
         IEtlGovernanceStore? governanceStore = null,
-        int? maxDeadLetterRowsPerRun = null)
+        int? maxDeadLetterRowsPerRun = null,
+        EtlDeadLetterFlushMode? deadLetterFlushMode = null,
+        int? deadLetterFlushThreshold = null)
     {
         _source = source;
         _loader = loader;
@@ -74,6 +86,13 @@ public class EtlPipelineExecutor
         // by EtlQuartzJob/EtlSchedulerService) takes precedence; falls back to the
         // pre-#700 hardcoded default for callers that don't pass one.
         _maxDeadLetterRowsPerRun = maxDeadLetterRowsPerRun ?? DefaultMaxDeadLetterRowsPerRun;
+        // #700: caller-supplied flush mode (normally EtlOptions.DeadLetterFlushMode)
+        // takes precedence; falls back to OncePerRun — the pre-#700 behaviour — for
+        // callers that don't pass one (e.g. direct construction outside DI, existing
+        // tests). Never silently changes default behaviour: OncePerRun is byte-for-byte
+        // the #673 flush-once-per-run design.
+        _deadLetterFlushMode = deadLetterFlushMode ?? EtlDeadLetterFlushMode.OncePerRun;
+        _deadLetterFlushThreshold = deadLetterFlushThreshold ?? DefaultDeadLetterFlushThreshold;
     }
 
     /// <summary>
@@ -97,16 +116,19 @@ public class EtlPipelineExecutor
         int qualityFailedRows = 0;
         var qualityFailureSamples = new List<string>();
         var warnings = new List<string>();
-        // ETL-004/#673: dead-letter entries accumulated for the ENTIRE run and flushed
-        // exactly once, after the run's outcome (success/abort/failure) is known — see
-        // FlushDeadLetterBufferAsync. Previously this flushed per-batch, which could
-        // persist rows from a run that later failed, before the caller (e.g. a rerun
-        // after a transient failure) had a chance to decide whether they were still
-        // relevant; buffering avoids writing partial-run diagnostics ahead of the
-        // final outcome. Bounded by _maxDeadLetterRowsPerRun (#700: configurable via
+        // ETL-004/#673: dead-letter entries accumulated for the run and flushed after
+        // the run's outcome (success/abort/failure) is known — see
+        // FlushDeadLetterBufferAsync. In the default OncePerRun mode, buffering avoids
+        // writing partial-run diagnostics ahead of the final outcome (a rerun after a
+        // transient failure would otherwise see stale rows before deciding they're no
+        // longer relevant). Bounded by _maxDeadLetterRowsPerRun (#700: configurable via
         // EtlOptions.MaxDeadLetterRowsPerRun; defaults to DefaultMaxDeadLetterRowsPerRun).
-        var deadLetterEntries = new List<EtlDeadLetterEntry>();
-        var deadLetterTruncated = false;
+        // #700: when _deadLetterFlushMode is Periodic, the buffer is ALSO flushed
+        // mid-run every _deadLetterFlushThreshold entries — see the periodic-flush
+        // check after each batch below and DeadLetterCapture's doc comment for why
+        // TotalAdded (not Buffer.Count) enforces the cap once partial flushes clear
+        // the buffer.
+        var deadLetterCapture = new DeadLetterCapture();
 
         try
         {
@@ -198,7 +220,7 @@ public class EtlPipelineExecutor
                 catch (Exception ex) when (config.EnableDeadLetter && ex is not OperationCanceledException)
                 {
                     TryCaptureBatchLevelDeadLetter(
-                        deadLetterEntries, ref deadLetterTruncated, batch, ex, EtlDeadLetterSource.TransformError);
+                        deadLetterCapture, batch, ex, EtlDeadLetterSource.TransformError);
                     throw;
                 }
 
@@ -242,7 +264,7 @@ public class EtlPipelineExecutor
                         {
                             foreach (var (row, reason) in droppedRows)
                             {
-                                TryAddDeadLetterEntry(deadLetterEntries, ref deadLetterTruncated,
+                                TryAddDeadLetterEntry(deadLetterCapture,
                                     new EtlDeadLetterEntry(
                                         SerializeRow(transformed, row),
                                         reason,
@@ -252,7 +274,7 @@ public class EtlPipelineExecutor
                     }
                     catch (EtlQualityRuleViolationException ex) when (config.EnableDeadLetter && ex.OffendingRow != null)
                     {
-                        TryAddDeadLetterEntry(deadLetterEntries, ref deadLetterTruncated,
+                        TryAddDeadLetterEntry(deadLetterCapture,
                             new EtlDeadLetterEntry(
                                 SerializeRow(transformed, ex.OffendingRow),
                                 ex.ViolationReason ?? ex.Message,
@@ -302,11 +324,41 @@ public class EtlPipelineExecutor
                 catch (Exception ex) when (config.EnableDeadLetter && ex is not OperationCanceledException)
                 {
                     TryCaptureBatchLevelDeadLetter(
-                        deadLetterEntries, ref deadLetterTruncated, transformed, ex, EtlDeadLetterSource.LoadError);
+                        deadLetterCapture, transformed, ex, EtlDeadLetterSource.LoadError);
                     throw;
                 }
 
                 totalLoaded += transformed.Rows.Count;
+
+                // #700: Periodic mode restores crash-durability by writing the buffer
+                // to the store mid-run instead of only once at the very end — see
+                // EtlOptions.DeadLetterFlushMode for the full rationale and why this is
+                // safe under the same RunId/RunSucceeded rerun-dedupe guarantee as the
+                // default OncePerRun mode. No-op (buffer keeps growing unbounded until
+                // the final flush, exactly like before #700) when
+                // _deadLetterFlushMode == OncePerRun — the default.
+                if (config.EnableDeadLetter &&
+                    _deadLetterFlushMode == EtlDeadLetterFlushMode.Periodic &&
+                    deadLetterCapture.Buffer.Count >= Math.Max(1, _deadLetterFlushThreshold))
+                {
+                    var flushed = await FlushDeadLetterBufferAsync(
+                        config, runId, deadLetterCapture.Buffer, runSucceeded: false, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (flushed)
+                    {
+                        // Only clear on a confirmed write — if the partial flush itself
+                        // failed (logged inside FlushDeadLetterBufferAsync), the entries
+                        // stay buffered so they aren't lost from BOTH memory and the DB;
+                        // the next threshold check or the run's final flush will retry.
+                        deadLetterCapture.Buffer.Clear();
+                        // Remember that at least one write for this RunId already landed,
+                        // so the end-of-run success path still marks it RunSucceeded=true
+                        // even if the buffer happens to be empty there (e.g. the entry
+                        // count divides evenly by the threshold) — see the success branch
+                        // in ExecuteAsync for why this matters.
+                        deadLetterCapture.AnyFlushed = true;
+                    }
+                }
 
                 // 更新 watermark 暫存
                 if (watermark.Type != EtlWatermarkType.FullLoad && !string.IsNullOrEmpty(watermark.Column))
@@ -375,14 +427,32 @@ public class EtlPipelineExecutor
                 }, cancellationToken).ConfigureAwait(false);
             }
 
-            // #673(d): flush the run's buffered dead-letter entries now that the
-            // outcome is known (success), then mark them RunSucceeded=true so the NEXT
-            // run's start-of-run cleanup never deletes them — this is a permanent
-            // Drop-path record for a window that loaded successfully, not stale retry
-            // noise. See FlushDeadLetterBufferAsync for why a flush failure here is
-            // logged, not propagated.
-            await FlushDeadLetterBufferAsync(config, runId, deadLetterEntries, runSucceeded: true, cancellationToken)
-                .ConfigureAwait(false);
+            // #673(d): flush the run's remaining buffered dead-letter entries now that
+            // the outcome is known (success), then mark ALL rows for this RunId
+            // (including any #700 Periodic-mode partial flushes written earlier in the
+            // run — MarkDeadLetterRunSucceededAsync is keyed by (JobId, RunId), not by
+            // which flush call wrote them) RunSucceeded=true so the NEXT run's
+            // start-of-run cleanup never deletes them — this is a permanent Drop-path
+            // record for a window that loaded successfully, not stale retry noise. See
+            // FlushDeadLetterBufferAsync for why a flush failure here is logged, not
+            // propagated.
+            if (deadLetterCapture.Buffer.Count > 0)
+            {
+                await FlushDeadLetterBufferAsync(config, runId, deadLetterCapture.Buffer, runSucceeded: true, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else if (config.EnableDeadLetter && deadLetterCapture.AnyFlushed)
+            {
+                // #700: Periodic mode may have already flushed every buffered entry
+                // mid-run (e.g. the total count divides evenly by the threshold),
+                // leaving nothing left to write here — but MarkDeadLetterRunSucceededAsync
+                // still needs to run so those earlier-flushed rows get promoted from
+                // RunSucceeded=false to true. Skipping it would leave a successful run's
+                // dead-letter rows looking like a failed run's, and the NEXT run's
+                // start-of-run cleanup would incorrectly delete them.
+                await MarkDeadLetterRunSucceededSafeAsync(config, runId, cancellationToken)
+                    .ConfigureAwait(false);
+            }
 
             sw.Stop();
             return new EtlExecutionResult
@@ -425,14 +495,17 @@ public class EtlPipelineExecutor
         catch (Exception ex)
         {
             watermark.DiscardPendingValue();
-            // #673(c): flush whatever was captured for this failed run — including a
-            // quality-rule Abort's offending row and/or earlier batches' Drop-path
+            // #673(c): flush whatever remains buffered for this failed run — including
+            // a quality-rule Abort's offending row and/or earlier batches' Drop-path
             // captures from before the failure. This is the diagnostic payoff of
             // buffering: the flush happens AFTER the outcome (failure) is known,
             // tagged with this run's RunId, instead of racing ahead of it per-batch.
             // runSucceeded: false — left for the NEXT run's start-of-run cleanup
-            // (ClearDeadLetterFromFailedRunsAsync) to remove once superseded.
-            await FlushDeadLetterBufferAsync(config, runId, deadLetterEntries, runSucceeded: false, cancellationToken)
+            // (ClearDeadLetterFromFailedRunsAsync) to remove once superseded. Under
+            // #700 Periodic mode, any entries already partial-flushed earlier in this
+            // run were ALSO written with RunSucceeded=false and are removed by that
+            // same next-run cleanup — no special handling needed here.
+            await FlushDeadLetterBufferAsync(config, runId, deadLetterCapture.Buffer, runSucceeded: false, cancellationToken)
                 .ConfigureAwait(false);
             sw.Stop();
             return new EtlExecutionResult
@@ -452,19 +525,54 @@ public class EtlPipelineExecutor
     }
 
     /// <summary>
-    /// #673(d): persists the run's buffered dead-letter entries in a single write,
-    /// tagged with <paramref name="runId"/>. No-op when dead-letter is disabled or the
-    /// buffer is empty. A failure to persist is logged but never propagated — by the
-    /// time this runs, the run's real outcome (success/failure) is already decided;
-    /// letting a diagnostics-write failure override that outcome would be worse than
-    /// losing the diagnostics (e.g. it would report an already-merged, successful load
-    /// as "Failed" and trigger an unnecessary rerun).
+    /// #673/#700: run-scoped dead-letter capture state. Wraps the in-memory buffer and
+    /// the run's cap-truncation flag, plus (for #700's Periodic flush mode) the
+    /// cumulative count of entries added THIS RUN — tracked separately from
+    /// <see cref="Buffer"/>.Count because Periodic mode clears <see cref="Buffer"/>
+    /// after each partial flush (see the periodic-flush check in
+    /// <see cref="ExecuteAsync"/>), so <see cref="Buffer"/>.Count alone can no longer
+    /// be used to enforce <see cref="_maxDeadLetterRowsPerRun"/> across the whole run.
+    /// In the default OncePerRun mode nothing ever clears <see cref="Buffer"/> mid-run,
+    /// so <see cref="TotalAdded"/> and <see cref="Buffer"/>.Count stay identical —
+    /// zero behaviour change from pre-#700.
     /// </summary>
-    private async Task FlushDeadLetterBufferAsync(
+    private sealed class DeadLetterCapture
+    {
+        public List<EtlDeadLetterEntry> Buffer { get; } = new();
+        public bool Truncated { get; set; }
+        public int TotalAdded { get; set; }
+
+        /// <summary>
+        /// #700: true once at least one Periodic-mode mid-run partial flush has
+        /// successfully written rows for this run. Lets the end-of-run success path
+        /// know it still needs to call MarkDeadLetterRunSucceededAsync even when
+        /// <see cref="Buffer"/> is empty at that point (all entries were already
+        /// flushed mid-run) — see the success branch in <see cref="ExecuteAsync"/>.
+        /// Always false in the default OncePerRun mode, where nothing is ever flushed
+        /// before the end of the run.
+        /// </summary>
+        public bool AnyFlushed { get; set; }
+    }
+
+    /// <summary>
+    /// #673(d)/#700: persists the given dead-letter buffer in a single write, tagged
+    /// with <paramref name="runId"/>. No-op (returns <c>true</c>) when dead-letter is
+    /// disabled or the buffer is empty. A failure to persist is logged, never
+    /// propagated, and reported via the <c>false</c> return value — by the time this
+    /// runs, the run's real outcome (success/failure) may already be decided (the
+    /// end-of-run calls) or not yet (a #700 Periodic mid-run partial flush); letting a
+    /// diagnostics-write failure override the run's outcome would be worse than losing
+    /// the diagnostics (e.g. it would report an already-merged, successful load as
+    /// "Failed" and trigger an unnecessary rerun). Callers that partially flush
+    /// mid-run use the return value to decide whether it's safe to clear the in-memory
+    /// buffer (only when the write actually landed) — see the periodic-flush check in
+    /// <see cref="ExecuteAsync"/>.
+    /// </summary>
+    private async Task<bool> FlushDeadLetterBufferAsync(
         EtlPipelineConfig config, Guid runId, List<EtlDeadLetterEntry> buffer,
         bool runSucceeded, CancellationToken cancellationToken)
     {
-        if (!config.EnableDeadLetter || buffer.Count == 0) { return; }
+        if (!config.EnableDeadLetter || buffer.Count == 0) { return true; }
 
         try
         {
@@ -474,49 +582,87 @@ public class EtlPipelineExecutor
 
             if (runSucceeded)
             {
-                // #673(d): flip RunSucceeded=true for the rows just written so a future
-                // run's ClearDeadLetterFromFailedRunsAsync never deletes them. A failure
-                // here is folded into the same best-effort logging as the write above —
-                // worst case the rows remain RunSucceeded=false and get cleaned up by the
-                // next run's cleanup pass, which is a false-negative (loses a legitimate
-                // historical record slightly early) rather than a false-positive
-                // (deleting something it shouldn't) — the safer failure mode.
+                // #673(d): flip RunSucceeded=true for ALL rows tagged with this RunId —
+                // not just the ones in `buffer` — so a future run's
+                // ClearDeadLetterFromFailedRunsAsync never deletes them. This also
+                // covers #700 Periodic-mode partial flushes written earlier in the run:
+                // MarkDeadLetterRunSucceededAsync is keyed by (JobId, RunId), so it
+                // flips every row this run ever wrote, regardless of which flush call
+                // wrote it. A failure here is folded into the same best-effort logging
+                // as the write above — worst case the rows remain RunSucceeded=false
+                // and get cleaned up by the next run's cleanup pass, which is a
+                // false-negative (loses a legitimate historical record slightly early)
+                // rather than a false-positive (deleting something it shouldn't) — the
+                // safer failure mode.
                 await _governance.MarkDeadLetterRunSucceededAsync(config.JobId, runId, cancellationToken)
                     .ConfigureAwait(false);
             }
+            return true;
         }
         catch (Exception ex)
         {
             _logger?.LogError(ex,
                 "ETL dead-letter flush failed for Job={JobId} Run={RunId}: {Count} buffered entries were NOT persisted",
                 config.JobId, runId, buffer.Count);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// #700: standalone RunSucceeded=true promotion for the case where Periodic mode's
+    /// mid-run partial flushes already wrote every buffered entry for this run, leaving
+    /// nothing left for the end-of-run success flush to write — see the success branch
+    /// in <see cref="ExecuteAsync"/> and <see cref="DeadLetterCapture.AnyFlushed"/>.
+    /// Same best-effort logging semantics as the write path in
+    /// <see cref="FlushDeadLetterBufferAsync"/>: a failure here is logged, not
+    /// propagated, and just means the rows remain RunSucceeded=false until the next
+    /// run's start-of-run cleanup — a false-negative, not a false-positive.
+    /// </summary>
+    private async Task MarkDeadLetterRunSucceededSafeAsync(
+        EtlPipelineConfig config, Guid runId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _governance.MarkDeadLetterRunSucceededAsync(config.JobId, runId, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex,
+                "ETL dead-letter RunSucceeded promotion failed for Job={JobId} Run={RunId} " +
+                "(entries were already flushed mid-run by Periodic mode; only the RunSucceeded flag update failed)",
+                config.JobId, runId);
         }
     }
 
     /// <summary>
     /// #673/#700: appends <paramref name="entry"/> to the run's dead-letter buffer,
     /// enforcing the configured <see cref="_maxDeadLetterRowsPerRun"/> cap (from
-    /// <see cref="EtlOptions.MaxDeadLetterRowsPerRun"/>). Once the cap is reached a
-    /// single truncation-marker entry is appended (once) and all further entries for
-    /// this run are dropped — bounds memory for a pathologically-misconfigured quality
-    /// rule without ever silently under-reporting (the marker documents that it
-    /// happened). Instance method (not static) so it can read the per-executor cap.
+    /// <see cref="EtlOptions.MaxDeadLetterRowsPerRun"/>) against
+    /// <see cref="DeadLetterCapture.TotalAdded"/> — the cumulative count for the whole
+    /// run — rather than <see cref="DeadLetterCapture.Buffer"/>.Count, which #700's
+    /// Periodic flush mode can reset to zero mid-run. Once the cap is reached a single
+    /// truncation-marker entry is appended (once) and all further entries for this run
+    /// are dropped — bounds memory for a pathologically-misconfigured quality rule
+    /// without ever silently under-reporting (the marker documents that it happened).
+    /// Instance method (not static) so it can read the per-executor cap.
     /// </summary>
-    private void TryAddDeadLetterEntry(
-        List<EtlDeadLetterEntry> buffer, ref bool truncated, EtlDeadLetterEntry entry)
+    private void TryAddDeadLetterEntry(DeadLetterCapture capture, EtlDeadLetterEntry entry)
     {
-        if (truncated) { return; }
-        if (buffer.Count >= _maxDeadLetterRowsPerRun)
+        if (capture.Truncated) { return; }
+        if (capture.TotalAdded >= _maxDeadLetterRowsPerRun)
         {
-            truncated = true;
-            buffer.Add(new EtlDeadLetterEntry(
+            capture.Truncated = true;
+            capture.Buffer.Add(new EtlDeadLetterEntry(
                 "{\"_marker\":\"dead-letter-capture-truncated\"}",
                 $"Dead-letter capture capped at {_maxDeadLetterRowsPerRun} entries for this run; " +
                 "further violations were not captured (bounds memory use for this run).",
                 EtlDeadLetterSource.QualityRule));
+            capture.TotalAdded++;
             return;
         }
-        buffer.Add(entry);
+        capture.Buffer.Add(entry);
+        capture.TotalAdded++;
     }
 
     /// <summary>
@@ -530,7 +676,7 @@ public class EtlPipelineExecutor
     /// <see cref="EtlErrorSanitizer"/> — never a raw provider message.
     /// </summary>
     private void TryCaptureBatchLevelDeadLetter(
-        List<EtlDeadLetterEntry> buffer, ref bool truncated, DataTable batch, Exception ex, string source)
+        DeadLetterCapture capture, DataTable batch, Exception ex, string source)
     {
         var marker = new Dictionary<string, object?>
         {
@@ -539,7 +685,7 @@ public class EtlPipelineExecutor
             ["note"] = "Per-row attribution is not available for this failure type; " +
                        "all rows in this batch are represented by this single dead-letter entry.",
         };
-        TryAddDeadLetterEntry(buffer, ref truncated, new EtlDeadLetterEntry(
+        TryAddDeadLetterEntry(capture, new EtlDeadLetterEntry(
             JsonSerializer.Serialize(marker),
             EtlErrorSanitizer.Sanitize(ex),
             source));

@@ -63,4 +63,67 @@ public sealed class EtlOptions
     /// </para>
     /// </summary>
     public int MaxDeadLetterRowsPerRun { get; set; } = 10_000;
+
+    /// <summary>
+    /// Dead-letter durability/dedup tradeoff (#700, follow-up to #673). Default
+    /// <see cref="EtlDeadLetterFlushMode.OncePerRun"/> preserves #673's behaviour
+    /// exactly: the whole run's buffer is written in a single flush after the run's
+    /// outcome is known, which enables the run-scoped dedupe in
+    /// <see cref="Governance.IEtlGovernanceStore.ClearDeadLetterFromFailedRunsAsync"/>
+    /// but means a hard process crash mid-run (kill -9, host reboot, OOM) loses ALL
+    /// dead-letter diagnostics buffered for that run — nothing was ever written.
+    /// <para>
+    /// Set to <see cref="EtlDeadLetterFlushMode.Periodic"/> to opt into
+    /// crash-durability: <see cref="Pipeline.EtlPipelineExecutor"/> writes the buffer
+    /// to the store every <see cref="DeadLetterFlushThreshold"/> entries instead of
+    /// only at the end. This does NOT reintroduce #673's duplicate-on-rerun bug —
+    /// partial flushes are written with the SAME <c>RunId</c> and
+    /// <c>RunSucceeded = false</c> as the final flush, so the existing
+    /// <see cref="Governance.IEtlGovernanceStore.ClearDeadLetterFromFailedRunsAsync"/>
+    /// start-of-run cleanup (which deletes by <c>JobId</c> + <c>RunSucceeded == false</c>,
+    /// not by flush-batch) removes every partially-flushed row from a crashed/failed
+    /// run exactly as it already removes a fully-buffered failed run's rows. On
+    /// success, <see cref="Governance.IEtlGovernanceStore.MarkDeadLetterRunSucceededAsync"/>
+    /// flips ALL rows for that <c>RunId</c> — not just the final batch — to
+    /// <c>RunSucceeded = true</c>, because it is keyed by <c>(JobId, RunId)</c>, not by
+    /// which flush call wrote them.
+    /// </para>
+    /// </summary>
+    public EtlDeadLetterFlushMode DeadLetterFlushMode { get; set; } = EtlDeadLetterFlushMode.OncePerRun;
+
+    /// <summary>
+    /// Number of buffered dead-letter entries that triggers a partial flush when
+    /// <see cref="DeadLetterFlushMode"/> = <see cref="EtlDeadLetterFlushMode.Periodic"/>.
+    /// Ignored when <see cref="DeadLetterFlushMode"/> = <see cref="EtlDeadLetterFlushMode.OncePerRun"/>
+    /// (the default). Default 500 — bounds the worst-case diagnostics loss on a crash
+    /// to at most this many not-yet-flushed entries, while keeping the extra DB
+    /// round-trips infrequent relative to <see cref="MaxDeadLetterRowsPerRun"/>'s
+    /// default of 10000. Values &lt;= 0 are treated as 1 by
+    /// <see cref="Pipeline.EtlPipelineExecutor"/> (flush after every entry) rather than
+    /// disabling periodic flushing outright.
+    /// </summary>
+    public int DeadLetterFlushThreshold { get; set; } = 500;
+}
+
+/// <summary>
+/// #700: dead-letter buffer flush strategy — see <see cref="EtlOptions.DeadLetterFlushMode"/>.
+/// </summary>
+public enum EtlDeadLetterFlushMode
+{
+    /// <summary>
+    /// Default (#673 behaviour, unchanged). The whole run's dead-letter buffer is
+    /// written in a single flush after the run's outcome is known. Maximizes the
+    /// run-scoped dedupe guarantee's simplicity; a hard crash mid-run loses all of
+    /// that run's buffered diagnostics (nothing was written yet).
+    /// </summary>
+    OncePerRun = 0,
+
+    /// <summary>
+    /// Opt-in crash-durability (#700). The buffer is flushed every
+    /// <see cref="EtlOptions.DeadLetterFlushThreshold"/> entries in addition to the
+    /// final flush. Rerun-dedupe is preserved — see
+    /// <see cref="EtlOptions.DeadLetterFlushMode"/> for why partial flushes are safe
+    /// under the existing <c>RunId</c>/<c>RunSucceeded</c> cleanup.
+    /// </summary>
+    Periodic = 1,
 }

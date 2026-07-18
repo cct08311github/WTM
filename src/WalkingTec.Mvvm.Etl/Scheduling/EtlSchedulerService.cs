@@ -267,11 +267,14 @@ public class EtlSchedulerService
             DryRunPreviewSampleSize = Math.Max(0, sampleSize),
         };
 
-        // #700: mirror the same EtlOptions.MaxDeadLetterRowsPerRun wiring as
-        // EtlQuartzJob.Execute, even though dry-run config never sets EnableDeadLetter
-        // today — keeps both executor construction sites consistent.
-        var maxDeadLetterRowsPerRun = _sp.GetService<IOptions<EtlOptions>>()?.Value?.MaxDeadLetterRowsPerRun;
-        var executor = new EtlPipelineExecutor(source, loader, maxDeadLetterRowsPerRun: maxDeadLetterRowsPerRun);
+        // #700: mirror the same EtlOptions wiring as EtlQuartzJob.Execute, even though
+        // dry-run config never sets EnableDeadLetter today — keeps both executor
+        // construction sites consistent.
+        var etlOptions = _sp.GetService<IOptions<EtlOptions>>()?.Value;
+        var executor = new EtlPipelineExecutor(source, loader,
+            maxDeadLetterRowsPerRun: etlOptions?.MaxDeadLetterRowsPerRun,
+            deadLetterFlushMode: etlOptions?.DeadLetterFlushMode,
+            deadLetterFlushThreshold: etlOptions?.DeadLetterFlushThreshold);
         return await executor.ExecuteAsync(config, watermark, cancellationToken).ConfigureAwait(false);
     }
 

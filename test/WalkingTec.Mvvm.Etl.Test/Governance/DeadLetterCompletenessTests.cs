@@ -417,6 +417,191 @@ public class DeadLetterCompletenessTests : IDisposable
     }
 
     // ────────────────────────────────────────────────────────────────────────
+    // #700(a)/(b) — Periodic dead-letter flush: crash-durability tradeoff (Issue #700)
+    // ────────────────────────────────────────────────────────────────────────
+
+    [TestMethod]
+    public async Task Periodic_mode_flushes_buffer_before_run_end_so_an_interrupted_run_does_not_lose_everything()
+    {
+        // 6 rows / batch size 1 → 6 batches, every row violates NotNull → 1 dead-letter
+        // entry per batch. flushThreshold = 2 → a partial flush fires once 2 entries
+        // have accumulated (after batch 2's violation is captured). The run is
+        // interrupted (token cancelled from MockBulkLoader.OnBatchLoaded, the same
+        // pattern CancellationTests.cs uses) right after batch 3's BulkLoad completes,
+        // but BEFORE batch 3's own violation reaches the threshold.
+        //
+        // This is the closest deterministic in-process approximation of a hard process
+        // crash: whatever already reached the DB via a COMPLETED partial flush
+        // survives; whatever was still only in memory does not.
+        // OperationCanceledException (not a thrown-from-inside exception) is used
+        // deliberately — EtlPipelineExecutor.ExecuteAsync's own success/failure catch
+        // blocks always get a chance to run their own end-of-run flush first, but the
+        // OperationCanceledException path is the one branch that, by #673 design,
+        // never flushes the remaining in-memory buffer — the correct stand-in for "the
+        // run never reached ANY of its own completion/failure flush logic".
+        var dt = SixRowsAllNullOrderNo();
+        var source = new MockEtlSource(); source.SetData(dt);
+        var loader = new MockBulkLoader();
+        var inner = new DbEtlGovernanceStore(_dc);
+        var spy = new SpyGovernanceStore(inner);
+        var cts = new CancellationTokenSource();
+        loader.OnBatchLoaded += (_, _) =>
+        {
+            if (loader.BatchCount == 3) { cts.Cancel(); }
+        };
+        var executor = new EtlPipelineExecutor(
+            source, loader, governanceStore: spy,
+            deadLetterFlushMode: EtlDeadLetterFlushMode.Periodic,
+            deadLetterFlushThreshold: 2);
+
+        var jobId = Guid.NewGuid();
+        var result = await executor.ExecuteAsync(PeriodicCrashConfig(jobId), FullLoadWatermark(), cts.Token);
+
+        result.Aborted.Should().BeTrue("the run was interrupted before it could reach batch 4");
+        spy.AddDeadLetterCallCount.Should().Be(1,
+            "only ONE partial flush (triggered after batch 2 crossed the threshold) had a " +
+            "chance to run before the interruption — the run never reached its own " +
+            "end-of-run flush logic");
+
+        var dlRows = await inner.QueryDeadLetterAsync(jobId);
+        dlRows.Should().HaveCount(2,
+            "batch 1 and batch 2's violations were already flushed to the DB before the " +
+            "interruption; batch 3's violation was still only in memory and is lost — " +
+            "bounded by the configured threshold, not the whole run");
+        dlRows.Should().OnlyContain(r => r.RunSucceeded == false,
+            "the run never completed successfully, so MarkDeadLetterRunSucceededAsync never ran");
+    }
+
+    [TestMethod]
+    public async Task OncePerRun_default_loses_all_dead_letter_rows_for_the_same_interrupted_run()
+    {
+        // Same interruption scenario as the Periodic test above, but constructed
+        // WITHOUT deadLetterFlushMode/deadLetterFlushThreshold args — proving the
+        // DEFAULT executor behaviour is byte-for-byte unchanged from pre-#700.
+        // Demonstrates the exact tradeoff Issue #700 exists to document: OncePerRun
+        // never writes anything until the run's own end-of-run flush logic runs, and
+        // interruption (cancellation) skips that logic entirely — so an interrupted
+        // run loses ALL of its buffered diagnostics, not just the un-flushed tail.
+        var dt = SixRowsAllNullOrderNo();
+        var source = new MockEtlSource(); source.SetData(dt);
+        var loader = new MockBulkLoader();
+        var inner = new DbEtlGovernanceStore(_dc);
+        var spy = new SpyGovernanceStore(inner);
+        var cts = new CancellationTokenSource();
+        loader.OnBatchLoaded += (_, _) =>
+        {
+            if (loader.BatchCount == 3) { cts.Cancel(); }
+        };
+        var executor = new EtlPipelineExecutor(source, loader, governanceStore: spy);
+
+        var jobId = Guid.NewGuid();
+        var result = await executor.ExecuteAsync(PeriodicCrashConfig(jobId), FullLoadWatermark(), cts.Token);
+
+        result.Aborted.Should().BeTrue();
+        spy.AddDeadLetterCallCount.Should().Be(0,
+            "OncePerRun never flushes until the run's own end-of-run logic — which the " +
+            "interruption skips entirely");
+        (await inner.QueryDeadLetterAsync(jobId)).Should().BeEmpty(
+            "the tradeoff #700 documents: a hard interruption in the default OncePerRun " +
+            "mode loses ALL of the run's buffered diagnostics, not just the tail");
+    }
+
+    [TestMethod]
+    public async Task Rerun_after_periodic_flush_interruption_still_dedupes_no_duplicate_rows()
+    {
+        // Continuation of the interruption scenario: run 1 (Periodic mode) is
+        // interrupted and leaves 2 partially-flushed rows behind (RunSucceeded=false).
+        // Run 2 is a normal, uninterrupted rerun of the SAME job — its start-of-run
+        // ClearDeadLetterFromFailedRunsAsync must remove those 2 stale rows before
+        // writing its own, exactly as it already does for a fully-buffered OncePerRun
+        // failure (see Rerun_after_failed_run_does_not_duplicate_dead_letter_rows
+        // above). This is what makes Periodic partial-flush safe: the existing
+        // RunSucceeded/RunId cleanup doesn't care HOW MANY separate flush calls wrote
+        // the stale rows, only that they belong to a run that never succeeded.
+        var jobId = Guid.NewGuid();
+        var governance = new DbEtlGovernanceStore(_dc);
+
+        var source1 = new MockEtlSource(); source1.SetData(SixRowsAllNullOrderNo());
+        var loader1 = new MockBulkLoader();
+        var cts1 = new CancellationTokenSource();
+        loader1.OnBatchLoaded += (_, _) =>
+        {
+            if (loader1.BatchCount == 3) { cts1.Cancel(); }
+        };
+        var executor1 = new EtlPipelineExecutor(
+            source1, loader1, governanceStore: governance,
+            deadLetterFlushMode: EtlDeadLetterFlushMode.Periodic,
+            deadLetterFlushThreshold: 2);
+        var result1 = await executor1.ExecuteAsync(PeriodicCrashConfig(jobId), FullLoadWatermark(), cts1.Token);
+        result1.Aborted.Should().BeTrue();
+
+        var afterRun1 = await governance.QueryDeadLetterAsync(jobId);
+        afterRun1.Should().HaveCount(2, "run 1's partial flush persisted 2 rows before being interrupted");
+        afterRun1.Should().OnlyContain(r => r.RunSucceeded == false);
+
+        // Run 2: fresh source/loader, no interruption, same job — start-of-run cleanup
+        // must remove run 1's stale rows before run 2 writes its own.
+        var source2 = new MockEtlSource(); source2.SetData(RerunTestData());
+        var loader2 = new MockBulkLoader();
+        var executor2 = new EtlPipelineExecutor(
+            source2, loader2, governanceStore: governance,
+            deadLetterFlushMode: EtlDeadLetterFlushMode.Periodic,
+            deadLetterFlushThreshold: 2);
+        var result2 = await executor2.ExecuteAsync(RerunConfig(jobId), FullLoadWatermark());
+
+        result2.Success.Should().BeTrue("load succeeds this time, no interruption");
+
+        var afterRun2 = await governance.QueryDeadLetterAsync(jobId);
+        afterRun2.Should().HaveCount(1,
+            "run 2's start-of-run cleanup removed run 1's 2 stale (partially-flushed, " +
+            "RunSucceeded=false) rows before writing its own single Drop-path capture — " +
+            "never 3 (2 stale + 1 new)");
+        afterRun2[0].RunId.Should().Be(result2.RunId);
+        afterRun2[0].RunSucceeded.Should().BeTrue("a successfully-completed run's captures are permanent history");
+    }
+
+    [TestMethod]
+    public void EtlOptions_DeadLetterFlushMode_defaults_to_OncePerRun_and_threshold_to_500()
+    {
+        var options = new EtlOptions();
+
+        options.DeadLetterFlushMode.Should().Be(EtlDeadLetterFlushMode.OncePerRun,
+            "the default must preserve #673's exact flush-once-per-run behaviour — " +
+            "crash-durability is opt-in, never silently on for existing deployments");
+        options.DeadLetterFlushThreshold.Should().Be(500);
+    }
+
+    [TestMethod]
+    public async Task Periodic_mode_with_no_interruption_still_flushes_once_per_run_worth_of_data_and_marks_succeeded()
+    {
+        // Sanity check that Periodic mode's mid-run partial flushes don't change the
+        // FINAL outcome for a run that completes normally — same row count and
+        // RunSucceeded=true end-state as OncePerRun, just delivered via more than one
+        // AddDeadLetterRowsAsync call.
+        var dt = SixRowsAllNullOrderNo();
+        var source = new MockEtlSource(); source.SetData(dt);
+        var loader = new MockBulkLoader();
+        var inner = new DbEtlGovernanceStore(_dc);
+        var spy = new SpyGovernanceStore(inner);
+        var executor = new EtlPipelineExecutor(
+            source, loader, governanceStore: spy,
+            deadLetterFlushMode: EtlDeadLetterFlushMode.Periodic,
+            deadLetterFlushThreshold: 2);
+
+        var jobId = Guid.NewGuid();
+        var result = await executor.ExecuteAsync(PeriodicCrashConfig(jobId), FullLoadWatermark());
+
+        result.Success.Should().BeTrue("Drop path never fails the run");
+        spy.AddDeadLetterCallCount.Should().BeGreaterThan(1,
+            "6 violations at threshold 2 must trigger multiple partial flushes plus the final one");
+
+        var dlRows = await inner.QueryDeadLetterAsync(jobId);
+        dlRows.Should().HaveCount(6, "all 6 violations across the whole run, regardless of how many flush calls wrote them");
+        dlRows.Should().OnlyContain(r => r.RunSucceeded == true,
+            "MarkDeadLetterRunSucceededAsync flips ALL rows for this RunId, not just the final flush's");
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
     // Helpers
     // ────────────────────────────────────────────────────────────────────────
 
@@ -431,6 +616,45 @@ public class DeadLetterCompletenessTests : IDisposable
         dt.Rows.Add(r2);
         return dt;
     }
+
+    /// <summary>6 rows, single "OrderNo" column, every value DBNull — used by the
+    /// #700 periodic-flush tests to produce exactly one NotNull dead-letter violation
+    /// per batch at BatchSize = 1.</summary>
+    private static DataTable SixRowsAllNullOrderNo()
+    {
+        var dt = new DataTable();
+        dt.Columns.Add("OrderNo", typeof(string));
+        for (int i = 0; i < 6; i++)
+        {
+            var r = dt.NewRow();
+            r["OrderNo"] = DBNull.Value;
+            dt.Rows.Add(r);
+        }
+        return dt;
+    }
+
+    /// <summary>Config for the #700 periodic-flush tests: BatchSize = 1 (one row per
+    /// batch, matching <see cref="SixRowsAllNullOrderNo"/>) and a NotNull/Drop quality
+    /// rule on OrderNo so every batch produces exactly one dead-letter entry without
+    /// ever failing the run.</summary>
+    private static EtlPipelineConfig PeriodicCrashConfig(Guid jobId) => new()
+    {
+        JobId = jobId,
+        JobName = "PeriodicCrash",
+        SourceConnectionString = "src=test",
+        TargetConnectionString = "tgt=test",
+        QueryTemplate = "SELECT * FROM t",
+        TargetTableName = "T",
+        MergeKeyColumn = "OrderNo",
+        BatchSize = 1,
+        StagingTable = new StagingTableSpec("stg_t", new StagingColumn("OrderNo", "NVARCHAR(50)")),
+        QualityRules = new List<EtlQualityRule>
+        {
+            new() { Column = "OrderNo", RuleType = EtlQualityRuleType.NotNull }
+        },
+        QualityRuleAction = EtlQualityRuleAction.Drop,
+        EnableDeadLetter = true,
+    };
 
     private static EtlPipelineConfig TestConfig(Guid jobId) => new()
     {

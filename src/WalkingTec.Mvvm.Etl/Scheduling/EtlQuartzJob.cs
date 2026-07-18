@@ -168,17 +168,20 @@ public class EtlQuartzJob : WtmJob
                 ? new DbEtlGovernanceStore(dc)
                 : NullEtlGovernanceStore.Instance;
 
-            // #700: cap comes from EtlOptions.MaxDeadLetterRowsPerRun (registered by
-            // AddWtmEtl for every app that uses the ETL module) — mirrors how
+            // #700: cap/flush-mode come from EtlOptions (registered by AddWtmEtl for
+            // every app that uses the ETL module) — mirrors how
             // EtlSchedulerService.PruneDeadLetterAsync resolves DeadLetterRetentionDays.
-            // Falls back to EtlPipelineExecutor's own default when EtlOptions somehow
-            // isn't registered.
-            var maxDeadLetterRowsPerRun = Sp.GetService<IOptions<EtlOptions>>()?.Value?.MaxDeadLetterRowsPerRun;
+            // Falls back to EtlPipelineExecutor's own defaults (cap 10000, mode
+            // OncePerRun — the pre-#700 behaviour) when EtlOptions somehow isn't
+            // registered.
+            var etlOptions = Sp.GetService<IOptions<EtlOptions>>()?.Value;
 
             var executor = new EtlPipelineExecutor(source, loader, progress,
                 Sp.GetService<ILogger<EtlPipelineExecutor>>(),
                 governance,
-                maxDeadLetterRowsPerRun);
+                etlOptions?.MaxDeadLetterRowsPerRun,
+                etlOptions?.DeadLetterFlushMode,
+                etlOptions?.DeadLetterFlushThreshold);
             result = await executor.ExecuteAsync(config, watermark, timeoutCts.Token);
 
             // 10. 成功 → 更新 watermark、重置連續失敗計數
