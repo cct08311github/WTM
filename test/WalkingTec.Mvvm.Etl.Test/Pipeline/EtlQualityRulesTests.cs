@@ -81,6 +81,18 @@ namespace WalkingTec.Mvvm.Etl.Test.Pipeline
         [TestMethod]
         public void Regex_rejects_invalid_email()
         {
+            // #703: under CI parallel load, the RegexOptions.Compiled pattern's
+            // first-call JIT emission competes for CPU with the 1s match-timeout
+            // budget, occasionally tipping a benign short-string match over the
+            // timeout and flaking this test. Pre-warm the cached compiled Regex
+            // with an untimed-relevance call before the timed assertion pass so
+            // the JIT cost is paid up front, not inside the budget we're testing.
+            // This does not weaken the assertions below in any way.
+            const string pattern = @"^[^@\s]+@[^@\s]+\.[^@\s]+$";
+            _ = EtlQualityRuleEvaluator.Evaluate(
+                new EtlQualityRule { Column = "Email", RuleType = EtlQualityRuleType.Regex, Pattern = pattern },
+                "warmup@example.com");
+
             var t = Table();
             AddRow(t, "a@x.com", 30, "OK", "C1");
             AddRow(t, "no-at-sign", 30, "OK", "C2");
@@ -92,7 +104,7 @@ namespace WalkingTec.Mvvm.Etl.Test.Pipeline
                 {
                     Column = "Email",
                     RuleType = EtlQualityRuleType.Regex,
-                    Pattern = @"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+                    Pattern = pattern,
                 },
             };
             var result = EtlQualityRuleEvaluator.Apply(
@@ -100,6 +112,28 @@ namespace WalkingTec.Mvvm.Etl.Test.Pipeline
 
             Assert.AreEqual(1, failed);
             Assert.AreEqual(2, result.Rows.Count);
+        }
+
+        [TestMethod]
+        public void Regex_match_timeout_is_treated_as_rejection_fail_closed()
+        {
+            // #703(b): a hostile or pathological stored regex pattern must never let
+            // RegexMatchTimeoutException propagate out of the quality-rule path — that
+            // would abort/crash the whole ETL run (a ReDoS-shaped DoS). The evaluator
+            // must fail CLOSED: a match timeout is treated as a rejection, same as a
+            // genuine mismatch. Uses a classic catastrophic-backtracking pattern
+            // against an input engineered to blow well past the 1s match timeout, so
+            // this test is deterministic (not a load-dependent flake) — it must
+            // reliably observe a timeout, not just "eventually reject".
+            const string pathologicalPattern = @"^(a+)+$";
+            var input = new string('a', 40) + "!"; // forces exponential backtracking, no match
+
+            string? violation = EtlQualityRuleEvaluator.Evaluate(
+                new EtlQualityRule { Column = "Email", RuleType = EtlQualityRuleType.Regex, Pattern = pathologicalPattern },
+                input);
+
+            Assert.IsNotNull(violation, "A regex match timeout must be treated as a rejection (fail-closed), not silently pass.");
+            StringAssert.Contains(violation, "Email");
         }
 
         [TestMethod]

@@ -220,11 +220,22 @@ public static class EtlQualityRuleEvaluator
                 var regex = _regexCache.GetOrAdd(rule.Pattern,
                     p => new Regex(p, RegexOptions.Compiled, TimeSpan.FromSeconds(1)));
                 var s = value.ToString() ?? string.Empty;
-                if (!regex.IsMatch(s))
+                try
                 {
-                    return $"{rule.Column}={Truncate(s)} fails Regex {Truncate(rule.Pattern)}";
+                    if (!regex.IsMatch(s))
+                    {
+                        return $"{rule.Column}={Truncate(s)} fails Regex {Truncate(rule.Pattern)}";
+                    }
+                    return null;
                 }
-                return null;
+                catch (RegexMatchTimeoutException)
+                {
+                    // Fail-closed: a hostile or pathological stored pattern (ReDoS) must
+                    // never let RegexMatchTimeoutException propagate out of the quality-rule
+                    // path and abort the whole ETL run. Treat the timeout as a non-match
+                    // (reject the row) — same posture as a genuine mismatch. #703
+                    return $"{rule.Column}={Truncate(s)} Regex match timed out (rule: Regex, treated as reject)";
+                }
 
             case EtlQualityRuleType.In:
                 if (rule.Allowed == null || rule.Allowed.Count == 0)
