@@ -55,7 +55,7 @@ namespace WalkingTec.Mvvm.WorkFlow.Engine;
 /// optional — null or a non-registered notifier is a silent no-op.  All notification
 /// calls are post-commit and surrounded by null-check + try/catch + LogError.</para>
 /// </summary>
-internal sealed partial class WorkflowTimerExecutor
+internal sealed partial class WorkflowTimerExecutor : IDisposable
 {
     private readonly IDataContext? _dc;
     // Test-path: direct DbContext (WfTestContext is DbContext but not IDataContext).
@@ -70,14 +70,37 @@ internal sealed partial class WorkflowTimerExecutor
     // supplied — production DI always supplies the process-wide singleton (see
     // ServiceCollectionExtensions.AddWtmWorkFlow).
     private readonly IWorkflowGraphProvider _graphProvider;
+    // #727: true when ServiceCollectionExtensions.AddWtmWorkFlowTimers's factory created _dc via
+    // IWtmDataContextFactory.CreateDC() — see WorkflowEngine._ownsDc for the full rationale.
+    private readonly bool _ownsDc;
 
+    /// <summary>Production constructor. Called by a factory lambda in
+    /// <see cref="ServiceCollectionExtensions.AddWtmWorkFlowTimers"/> — NOT by ASP.NET Core's
+    /// plain constructor-injection — so <paramref name="dc"/> arrives pre-resolved via
+    /// <see cref="ServiceCollectionExtensions.ResolveDataContext"/> (#727: a bare
+    /// <c>services.AddScoped&lt;WorkflowTimerExecutor&gt;()</c> registration would let DI inject
+    /// the raw <c>IDataContext</c> placeholder — <see cref="NullContext"/> in every real
+    /// deployment — and <see cref="GetDb"/> would throw on first use).
+    /// <para>#727: <paramref name="ownsDc"/> — true when the caller created <paramref name="dc"/>
+    /// specifically for this executor instance and this executor should dispose it. See
+    /// <see cref="Dispose"/>.</para>
+    /// <para>#727-followup: the production DI factory (<c>AddWtmWorkFlowTimers</c>) always passes
+    /// <c>ownsDc: false</c> now — <paramref name="dc"/> is resolved via the scoped
+    /// <c>ScopedWorkflowDataContextHolder</c>, which is the sole owner/disposer, so that this
+    /// executor and any <see cref="IWorkflowEngine"/> resolved from the same DI scope
+    /// (<c>WorkflowTimerHostedService.TickAsync</c>) share one DbContext/DB connection — required
+    /// for <c>HandleAutoActionAsync</c>'s in-transaction <c>SystemClaimTaskAsync</c> call to
+    /// actually run inside this executor's fire transaction instead of autocommitting on a
+    /// separate connection.</para>
+    /// </summary>
     public WorkflowTimerExecutor(
         IDataContext dc,
         IOptions<WorkFlowOptions> options,
         ILogger<WorkflowTimerExecutor> logger,
         IWorkflowEngine? engine = null,
         IWorkflowNotifier? notifier = null,
-        IWorkflowGraphProvider? graphProvider = null)
+        IWorkflowGraphProvider? graphProvider = null,
+        bool ownsDc = false)
     {
         _dc = dc;
         _dbDirect = null;
@@ -86,6 +109,7 @@ internal sealed partial class WorkflowTimerExecutor
         _engine = engine;
         _notifier = notifier;
         _graphProvider = graphProvider ?? new WorkflowGraphProvider();
+        _ownsDc = ownsDc;
     }
 
     /// <summary>Test / direct-DbContext constructor (mirrors WorkflowEngine's test path).
@@ -106,6 +130,22 @@ internal sealed partial class WorkflowTimerExecutor
         _engine = engine;
         _notifier = notifier;
         _graphProvider = graphProvider ?? new WorkflowGraphProvider();
+        _ownsDc = false; // Test caller owns and disposes `db` itself.
+    }
+
+    /// <summary>
+    /// #727: disposes the DataContext this executor created via
+    /// <see cref="ServiceCollectionExtensions.ResolveDataContext"/>. No-op for the DI-fallback
+    /// and direct-<see cref="DbContext"/> test constructor paths. See
+    /// <see cref="WorkflowEngine.Dispose"/> for why the DI container still auto-disposes this
+    /// even though it's resolved by concrete type, not by an <c>IDisposable</c>-typed interface.
+    /// </summary>
+    public void Dispose()
+    {
+        if (_ownsDc)
+        {
+            _dc?.Dispose();
+        }
     }
 
     // Returns the underlying DbContext from either the prod or test constructor path.

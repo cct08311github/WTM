@@ -415,6 +415,11 @@ namespace WalkingTec.Mvvm.Mvc
             DataContextFilter._csfunc = op.CsSelector;
             WtmFileProvider._subDirFunc = op.FileSubDirSelector;
             WTMContext.ReloadUserFunc = op.ReloadUserFunc;
+            // #721/#727 PITFALL GUARD: safe PLACEHOLDER only — never resolve IDataContext
+            // directly from DI (constructor injection or GetService<IDataContext>()) in any new
+            // framework service. See IServiceExtension.AddWtmContextForConsole's identical
+            // registration for the full rationale and the canonical WTMContext-first/
+            // IWtmDataContextFactory-first resolution pattern to copy.
             services.TryAddScoped<IDataContext, NullContext>();
             services.TryAddSingleton(TimeProvider.System);
             services.AddScoped<WTMContext>();

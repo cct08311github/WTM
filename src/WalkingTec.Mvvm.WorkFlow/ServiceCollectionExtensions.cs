@@ -75,8 +75,41 @@ public static class ServiceCollectionExtensions
             return new ProcessDefinitionPublisher(dc, options, logger);
         });
 
+        // #727-followup (review of #727): register the per-scope DataContext holder BEFORE any
+        // consumer factory needs it. TryAdd so AddWtmWorkFlowTimers (which also TryAdds it, in
+        // case a host calls it without AddWtmWorkFlow — not the documented order, but harmless)
+        // does not double-register. See ScopedWorkflowDataContextHolder for the full rationale.
+        services.TryAddScoped<ScopedWorkflowDataContextHolder>();
+
         // 3. WF-6/7: IWorkflowEngine.
-        services.AddScoped<IWorkflowEngine, WorkflowEngine>();
+        //    #727: WorkflowEngine's production constructor takes IDataContext directly, which
+        //    plain `AddScoped<IWorkflowEngine, WorkflowEngine>()` would let ASP.NET Core's
+        //    constructor-injection resolve straight off the DI container — i.e. NullContext in
+        //    every real deployment (see the IProcessDefinitionPublisher comment above for why).
+        //    Route through the same IWtmDataContextFactory-first / IDataContext-fallback
+        //    resolution as every other DC consumer in this file.
+        //
+        //    #727-followup: resolve via ScopedWorkflowDataContextHolder — NOT a direct
+        //    ResolveDataContext(sp) call — so that when WorkflowTimerExecutor's factory ALSO
+        //    resolves an engine from the same scope (WorkflowTimerHostedService.TickAsync), both
+        //    consumers share ONE DbContext/DB connection. ownsDc is always false here: the holder
+        //    (a scoped, IDisposable service) is the sole owner and is disposed by the DI container
+        //    at scope-end, whether or not this factory's dc was the one that created it.
+        services.AddScoped<IWorkflowEngine>(sp =>
+        {
+            var dc = sp.GetRequiredService<ScopedWorkflowDataContextHolder>().Resolve();
+            var dispatcher = sp.GetRequiredService<INodeKindDispatcher>();
+            var routingEvaluator = sp.GetRequiredService<IRoutingEvaluator>();
+            var options = sp.GetRequiredService<IOptions<WorkFlowOptions>>();
+            var logger = sp.GetRequiredService<ILogger<WorkflowEngine>>();
+            var notifier = sp.GetService<IWorkflowNotifier>();
+            var businessCalendar = sp.GetService<IBusinessCalendar>();
+            var graphProvider = sp.GetService<IWorkflowGraphProvider>();
+            var timeProvider = sp.GetService<TimeProvider>();
+            return new WorkflowEngine(
+                dc, dispatcher, routingEvaluator, options, logger,
+                notifier, businessCalendar, graphProvider, timeProvider, ownsDc: false);
+        });
 
         // 4. WF-8/9/10: IApproverResolver + IManagerChainProvider + approval mode handlers + dispatcher.
         //    All registered as scoped because handlers depend on IApproverResolver and
@@ -186,8 +219,42 @@ public static class ServiceCollectionExtensions
         // IBusinessCalendar: TryAdd so consumer override after this call wins.
         services.TryAddSingleton<IBusinessCalendar, PassThroughBusinessCalendar>();
 
+        // #727-followup: see the matching registration + rationale in AddWtmWorkFlow. TryAdd here
+        // too so AddWtmWorkFlowTimers() called without AddWtmWorkFlow() still gets a holder.
+        services.TryAddScoped<ScopedWorkflowDataContextHolder>();
+
         // WorkflowTimerExecutor: scoped — one per tick scope.
-        services.AddScoped<WorkflowTimerExecutor>();
+        //    #727: same NullContext trap as IWorkflowEngine above — WorkflowTimerExecutor's
+        //    production constructor also takes IDataContext directly. Route through the
+        //    IWtmDataContextFactory-first / IDataContext-fallback resolution.
+        //
+        //    #727-followup (CRITICAL fix): the naive #727 fix called ResolveDataContext(sp) here
+        //    AND let `sp.GetService<IWorkflowEngine>()` independently call ResolveDataContext(sp)
+        //    again inside its own factory — IWtmDataContextFactory.CreateDC() has no per-scope
+        //    caching, so that minted TWO separate DbContext/DB-connection instances within one
+        //    scope. WorkflowTimerExecutor.Fire.cs opens a transaction on `db` (this executor's
+        //    context) and, for AutoApprove/AutoReject, calls into the engine's
+        //    SystemClaimTaskAsync — which without this fix ran on the ENGINE's own, different,
+        //    NON-transactional connection (autocommit), breaking the documented
+        //    IN-TXN-claim / POST-COMMIT-continuation atomicity contract (see Fire.cs's FIX-C
+        //    comment and WorkflowEngine.System.cs's SystemClaimTaskAsync doc comment) and the
+        //    deadlock-retry idempotency contract in WorkflowTransactionExecutor. Resolving the dc
+        //    via the shared ScopedWorkflowDataContextHolder BEFORE resolving IWorkflowEngine
+        //    guarantees both this executor and any engine resolved later in the same scope share
+        //    the SAME DbContext — `sp.GetService<IWorkflowEngine>()` below hits the holder's cache
+        //    (set by the Resolve() call on the line above it), not a fresh CreateDC() call.
+        //    ownsDc is always false: the holder owns disposal (scope-end, container-driven).
+        services.AddScoped<WorkflowTimerExecutor>(sp =>
+        {
+            var dc = sp.GetRequiredService<ScopedWorkflowDataContextHolder>().Resolve();
+            var options = sp.GetRequiredService<IOptions<WorkFlowOptions>>();
+            var logger = sp.GetRequiredService<ILogger<WorkflowTimerExecutor>>();
+            var engine = sp.GetService<IWorkflowEngine>();
+            var notifier = sp.GetService<IWorkflowNotifier>();
+            var graphProvider = sp.GetService<IWorkflowGraphProvider>();
+            return new WorkflowTimerExecutor(
+                dc, options, logger, engine, notifier, graphProvider, ownsDc: false);
+        });
 
         // WorkflowTimerHostedService: BackgroundService; unconditionally validates DBType on first scope.
         services.AddHostedService<WorkflowTimerHostedService>();
@@ -329,6 +396,47 @@ public static class ServiceCollectionExtensions
             ThrowMemoryNotSupported();
     }
 
+    /// <summary>
+    /// #727 (audit of the #721 IDataContext→NullContext DI-resolution gap): the single
+    /// resolution helper every WorkFlow-module DC consumer in this file should route through.
+    /// <para>
+    /// WTM's <c>IDataContext</c> in DI is always <see cref="NullContext"/> — <c>AddWtmContext</c>
+    /// only ever registers <c>services.TryAddScoped&lt;IDataContext, NullContext&gt;()</c> as a
+    /// safe placeholder default; the real, connection-string/tenant-routed DataContext is
+    /// created transiently via <see cref="IWtmDataContextFactory.CreateDC"/> (the same mechanism
+    /// <c>WTMContext.DC</c> uses). Before #727, <see cref="WorkflowEngine"/> and
+    /// <see cref="WorkflowTimerExecutor"/> were registered with plain
+    /// <c>services.AddScoped&lt;T&gt;()</c>, which let ASP.NET Core's automatic
+    /// constructor-injection resolve their <c>IDataContext</c> parameter straight off the DI
+    /// container — i.e. <see cref="NullContext"/> in every real deployment, immediately throwing
+    /// <see cref="InvalidCastException"/> ("Unable to cast object of type 'NullContext' to type
+    /// 'DbContext'") the first time either type was constructed. This was masked because no
+    /// existing test constructed either type through a real ASP.NET Core DI container built by
+    /// <c>AddWtmWorkFlow()</c> — engine tests use the internal direct-<c>DbContext</c>
+    /// constructor and controller tests mock <see cref="IWorkflowEngine"/> entirely, so the
+    /// broken production registration itself was never exercised (see
+    /// <c>ProdDiRegressionTests</c>).
+    /// </para>
+    /// <para>
+    /// Returns <c>Owned = true</c> when this call created a fresh DataContext via the factory —
+    /// the caller must dispose it. Returns <c>Owned = false</c> for the DI-fallback path (hosts
+    /// or tests that explicitly re-register a real <c>IDataContext</c> without registering
+    /// <see cref="IWtmDataContextFactory"/>) — that instance's lifetime is owned by the caller's
+    /// DI scope, not by us.
+    /// </para>
+    /// </summary>
+    internal static (IDataContext Dc, bool Owned) ResolveDataContext(IServiceProvider sp)
+    {
+        var factory = sp.GetService<IWtmDataContextFactory>();
+        var dc = factory?.CreateDC();
+        if (dc != null)
+        {
+            return (dc, true);
+        }
+
+        return (sp.GetRequiredService<IDataContext>(), false);
+    }
+
     private static void ThrowMemoryNotSupported()
     {
         throw new InvalidOperationException(
@@ -337,6 +445,83 @@ public static class ServiceCollectionExtensions
             "ExecuteUpdateAsync for atomic guarded-CAS transitions, which EF InMemory cannot translate. " +
             "Configure a relational provider (SQLite, SqlServer, PgSql, MySql, Oracle, or DaMeng) " +
             "before calling AddWtmWorkFlow().");
+    }
+}
+
+/// <summary>
+/// #727-followup (review of #727's CRITICAL/HIGH regression): a scoped, per-DI-scope cache
+/// wrapping <see cref="ServiceCollectionExtensions.ResolveDataContext"/> so that every
+/// WorkFlow-module consumer resolved from the SAME DI scope that calls
+/// <see cref="Resolve"/> gets the exact same <see cref="IDataContext"/>/<see cref="DbContext"/>
+/// instance — i.e. the same DB connection — instead of a fresh one per call.
+///
+/// <para>
+/// <strong>Why this exists:</strong> <c>IWtmDataContextFactory.CreateDC()</c> is unconditionally
+/// non-caching — every call mints a brand-new <c>DbContext</c>. Before this fix,
+/// <c>IWorkflowEngine</c>'s and <c>WorkflowTimerExecutor</c>'s DI factories each called
+/// <c>ResolveDataContext(sp)</c> independently, so within one scope (the production
+/// <c>WorkflowTimerHostedService.TickAsync</c> path) they ended up on two separate DbContext
+/// instances / DB connections. <c>WorkflowTimerExecutor.Fire.cs</c> opens a transaction on its
+/// own DbContext and, for AutoApprove/AutoReject, calls into the engine's
+/// <c>SystemClaimTaskAsync</c> — which, on a different connection with no open transaction,
+/// autocommitted outside the executor's transaction, breaking the documented
+/// IN-TXN-claim / POST-COMMIT-continuation atomicity contract (see
+/// <c>WorkflowEngine.System.cs</c>'s <c>SystemClaimTaskAsync</c> doc comment: "MUST be called
+/// inside an open transaction") and the deadlock-retry idempotency contract that
+/// <c>WorkflowTransactionExecutor.ExecuteInTransactionAsync</c> depends on. This mirrors
+/// (and was caught by) the same cross-connection-atomicity failure mode the pre-existing
+/// <c>WorkflowTimerExecutor.Fire.cs</c> comment already assumed did NOT happen ("The engine
+/// resolved from the same DI scope shares this DbContext instance").
+/// </para>
+///
+/// <para>
+/// <strong>Lifetime/disposal:</strong> registered scoped (<c>TryAddScoped</c>) in both
+/// <see cref="ServiceCollectionExtensions.AddWtmWorkFlow"/> and
+/// <see cref="ServiceCollectionExtensions.AddWtmWorkFlowTimers"/>. Because this holder itself
+/// implements <see cref="IDisposable"/> and is resolved through the DI container, the container
+/// tracks and disposes it automatically at scope-end — which disposes the DataContext it created
+/// (factory path) exactly once. Consumers (<c>WorkflowEngine</c>, <c>WorkflowTimerExecutor</c>)
+/// are constructed with <c>ownsDc: false</c> — this holder is now the sole owner for the
+/// factory-created case; the DI-fallback case (a host/test that registered a real
+/// <c>IDataContext</c> directly, no <c>IWtmDataContextFactory</c>) is never disposed here either
+/// way, matching pre-existing behavior (that instance's lifetime belongs to its own
+/// <c>AddScoped&lt;IDataContext,...&gt;</c> registration).
+/// </para>
+/// </summary>
+internal sealed class ScopedWorkflowDataContextHolder : IDisposable
+{
+    private readonly IServiceProvider _sp;
+    private (IDataContext Dc, bool Owned)? _resolved;
+
+    public ScopedWorkflowDataContextHolder(IServiceProvider sp)
+    {
+        _sp = sp;
+    }
+
+    /// <summary>
+    /// Returns the shared <see cref="IDataContext"/> for the current DI scope, creating it via
+    /// <see cref="ServiceCollectionExtensions.ResolveDataContext"/> on the first call and caching
+    /// it for every subsequent call within the same scope (and therefore the same
+    /// <see cref="ScopedWorkflowDataContextHolder"/> instance).
+    /// </summary>
+    public IDataContext Resolve()
+    {
+        _resolved ??= ServiceCollectionExtensions.ResolveDataContext(_sp);
+        return _resolved.Value.Dc;
+    }
+
+    /// <summary>
+    /// Disposes the DataContext this holder created via the factory path
+    /// (<c>Owned == true</c>). No-op when <see cref="Resolve"/> was never called, or when it
+    /// returned the DI-fallback instance (<c>Owned == false</c> — that instance's lifetime is
+    /// owned by its own DI registration, not by us).
+    /// </summary>
+    public void Dispose()
+    {
+        if (_resolved is { Owned: true } resolved)
+        {
+            resolved.Dc.Dispose();
+        }
     }
 }
 

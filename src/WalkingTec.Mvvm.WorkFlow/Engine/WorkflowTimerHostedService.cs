@@ -144,11 +144,27 @@ public sealed class WorkflowTimerHostedService : BackgroundService
     private async Task RunStartupValidationAsync(CancellationToken ct)
     {
         using var scope = _sp.CreateScope();
-        var dc = scope.ServiceProvider.GetRequiredService<IDataContext>();
-
-        // UNCONDITIONAL — always check on first scope; exception escapes ExecuteAsync
-        // for Memory provider (StopHost). This is the design §1 requirement.
-        ServiceCollectionExtensions.ValidateDbType(dc);
+        // #727: raw scope.ServiceProvider.GetRequiredService<IDataContext>() always resolved
+        // NullContext in every real deployment (AddWtmContext only registers
+        // TryAddScoped<IDataContext, NullContext>() as a placeholder). dc.DBType then threw
+        // NotImplementedException — caught by ExecuteAsync's generic `catch (Exception ex)`
+        // (it is not the Memory-specific InvalidOperationException the StopHost path matches
+        // on), so the startup-validation retry loop never broke out and TickAsync — the actual
+        // timer-reaper work — was never reached in production; it just retried forever on a
+        // 5s/15s/60s backoff, logging warnings. Route through the same
+        // IWtmDataContextFactory-first / IDataContext-fallback resolution as the rest of the
+        // WorkFlow module (ServiceCollectionExtensions.ResolveDataContext).
+        var (dc, owned) = ServiceCollectionExtensions.ResolveDataContext(scope.ServiceProvider);
+        try
+        {
+            // UNCONDITIONAL — always check on first scope; exception escapes ExecuteAsync
+            // for Memory provider (StopHost). This is the design §1 requirement.
+            ServiceCollectionExtensions.ValidateDbType(dc);
+        }
+        finally
+        {
+            if (owned) { dc.Dispose(); }
+        }
 
         // One dummy await so async context is established (mirrors Etl pattern).
         await Task.CompletedTask;

@@ -65,7 +65,7 @@ namespace WalkingTec.Mvvm.WorkFlow.Engine;
 /// 会签 parallelism within a single Activation is supported via the ApprovedCount CAS
 /// without needing multiple active NodeInstances).</para>
 /// </summary>
-internal sealed partial class WorkflowEngine : IWorkflowEngine
+internal sealed partial class WorkflowEngine : IWorkflowEngine, IDisposable
 {
     private const int MaxRetries = 3;
 
@@ -77,6 +77,10 @@ internal sealed partial class WorkflowEngine : IWorkflowEngine
     // Null when the engine is constructed via the internal DbContext-only constructor (test path) —
     // in that case ValidateDbType is skipped (tests always use SQLite, never Memory).
     private readonly IDataContext? _dc;
+    // #727: true when ServiceCollectionExtensions.AddWtmWorkFlow's factory created _dc via
+    // IWtmDataContextFactory.CreateDC() (the DI-tracked NullContext fallback and the internal
+    // DbContext-only test constructor both leave this false — the caller owns that lifetime).
+    private readonly bool _ownsDc;
     private readonly INodeKindDispatcher _dispatcher;
     private readonly IRoutingEvaluator _routingEvaluator;
     private readonly WorkFlowOptions _options;
@@ -106,14 +110,30 @@ internal sealed partial class WorkflowEngine : IWorkflowEngine
     // Convenience alias — keeps all the engine body code readable.
     private DbContext Db => _db;
 
-    /// <summary>Production constructor: DI injects <see cref="IDataContext"/> which is always a
-    /// <see cref="DbContext"/> subclass at runtime.  The cast is validated at construction so any
-    /// mis-registration fails loudly at startup.
+    /// <summary>Production constructor. Called by a factory lambda in
+    /// <see cref="ServiceCollectionExtensions.AddWtmWorkFlow"/> — NOT by ASP.NET Core's plain
+    /// constructor-injection — so <paramref name="dc"/> arrives pre-resolved via
+    /// <see cref="ServiceCollectionExtensions.ResolveDataContext"/> and is always a
+    /// <see cref="DbContext"/> subclass at runtime (#727: a bare
+    /// <c>services.AddScoped&lt;IWorkflowEngine, WorkflowEngine&gt;()</c> registration would let
+    /// DI inject the raw <c>IDataContext</c> placeholder — <see cref="NullContext"/> in every
+    /// real deployment — and this cast would throw <see cref="InvalidCastException"/> the first
+    /// time the engine was constructed). The cast is validated at construction so any
+    /// mis-registration still fails loudly, on first use.
     /// <para><see cref="IWorkflowNotifier"/> is optional — injected when
     /// <see cref="ServiceCollectionExtensions.AddWtmWorkFlowNotifications"/> was called; null otherwise.</para>
     /// <para>#676: <paramref name="timeProvider"/> is optional — trailing-optional-parameter pattern
     /// (mirrors <paramref name="graphProvider"/> from #666). Defaults to <see cref="TimeProvider.System"/>
     /// so every existing call site / test compiles and behaves unchanged.</para>
+    /// <para>#727: <paramref name="ownsDc"/> — true when the caller created <paramref name="dc"/>
+    /// specifically for this engine instance (via <c>IWtmDataContextFactory.CreateDC()</c>) and
+    /// this engine should dispose it; false when the caller (DI fallback, or an ad-hoc caller)
+    /// owns that lifetime instead. See <see cref="Dispose"/>.</para>
+    /// <para>#727-followup: the production DI factory (<c>AddWtmWorkFlow</c>) always passes
+    /// <c>ownsDc: false</c> now — <paramref name="dc"/> is resolved via the scoped
+    /// <c>ScopedWorkflowDataContextHolder</c>, which is the sole owner/disposer, so that
+    /// <see cref="WorkflowEngine"/> and <c>WorkflowTimerExecutor</c> resolved from the same DI
+    /// scope share one DbContext/DB connection instead of each minting their own.</para>
     /// </summary>
     public WorkflowEngine(
         IDataContext dc,
@@ -124,11 +144,13 @@ internal sealed partial class WorkflowEngine : IWorkflowEngine
         IWorkflowNotifier? notifier = null,
         IBusinessCalendar? businessCalendar = null,
         IWorkflowGraphProvider? graphProvider = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        bool ownsDc = false)
     {
         if (dc is null) throw new ArgumentNullException(nameof(dc));
         _dc = dc;
         _db = (DbContext)dc;
+        _ownsDc = ownsDc;
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _routingEvaluator = routingEvaluator ?? throw new ArgumentNullException(nameof(routingEvaluator));
         _options = options?.Value ?? new WorkFlowOptions();
@@ -209,6 +231,7 @@ internal sealed partial class WorkflowEngine : IWorkflowEngine
     {
         _db = db ?? throw new ArgumentNullException(nameof(db));
         _dc = null; // No IDataContext in the direct-DbContext test path — ValidateDbTypeOnFirstUse skipped.
+        _ownsDc = false; // Test caller owns and disposes `db` itself.
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _routingEvaluator = routingEvaluator ?? throw new ArgumentNullException(nameof(routingEvaluator));
         _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -220,6 +243,23 @@ internal sealed partial class WorkflowEngine : IWorkflowEngine
         _graphProvider = graphProvider ?? new WorkflowGraphProvider();
         // #676: same default-to-System fallback as the production constructor.
         _timeProvider = timeProvider ?? TimeProvider.System;
+    }
+
+    /// <summary>
+    /// #727: disposes the DataContext this engine created via
+    /// <see cref="ServiceCollectionExtensions.ResolveDataContext"/> (i.e. through
+    /// <c>IWtmDataContextFactory.CreateDC()</c>). No-op for the DI-fallback and
+    /// direct-<see cref="DbContext"/> test constructor paths, whose caller owns that lifetime.
+    /// Safe for ASP.NET Core's scoped-service auto-dispose: <see cref="IWorkflowEngine"/> does
+    /// not itself declare <see cref="IDisposable"/>, but the DI container disposes any resolved
+    /// instance that implements it, regardless of which service type it was requested as.
+    /// </summary>
+    public void Dispose()
+    {
+        if (_ownsDc)
+        {
+            _dc?.Dispose();
+        }
     }
 
     // ── StartAsync ────────────────────────────────────────────────────────────

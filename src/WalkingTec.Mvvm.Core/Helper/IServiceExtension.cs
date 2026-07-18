@@ -32,6 +32,21 @@ namespace WalkingTec.Mvvm.Core
             services.AddHttpContextAccessor();
             services.AddSingleton(gd);
             WtmFileProvider._subDirFunc = fileSubDirSelector;
+            // #721/#727 PITFALL GUARD: this is a safe PLACEHOLDER default, not a usable
+            // DataContext. Real apps never touch it — they get their connection-string/
+            // tenant-routed DataContext via WTMContext.CreateDC() or IWtmDataContextFactory.
+            // Any framework service that resolves IDataContext directly from DI (constructor
+            // injection OR explicit GetService<IDataContext>()/GetRequiredService<IDataContext>())
+            // gets THIS NullContext instance in every real deployment — its members throw
+            // NotImplementedException, and `as DbContext`/explicit casts throw
+            // InvalidCastException, both usually swallowed or surfacing far from the call site.
+            // Before adding any new IDataContext-consuming service (especially a hosted
+            // service/BackgroundService/Quartz job with no per-request WTMContext), resolve the
+            // DataContext via WTMContext.CreateDC() or IWtmDataContextFactory.CreateDC() first,
+            // falling back to DI IDataContext only for host/test setups that register a real
+            // context directly — see TokenService.ResolveDataContext (#721) and
+            // WalkingTec.Mvvm.WorkFlow.ServiceCollectionExtensions.ResolveDataContext (#727) for
+            // the canonical pattern, and #727's audit table for the full list of sites checked.
             services.TryAddScoped<IDataContext, NullContext>();
             services.AddScoped<WTMContext>();
             services.AddScoped<WtmFileProvider>();

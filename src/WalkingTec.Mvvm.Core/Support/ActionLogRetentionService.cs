@@ -134,20 +134,26 @@ namespace WalkingTec.Mvvm.Core
             var result = new RetentionRunResult();
 
             using var scope = _services.CreateScope();
-            var dc = scope.ServiceProvider.GetService<IDataContext>()
-                      ?? throw new InvalidOperationException(
-                          "ActionLogRetentionService requires IDataContext in DI.");
-
-            // Per-LogType sweep; 0 or negative days disables retention for
-            // that type (keeps rows forever).
-            await DeleteOneType(dc, ActionLogTypesEnum.Normal, options.NormalDays, now, options.BatchSize, result, ct)
-                .ConfigureAwait(false);
-            await DeleteOneType(dc, ActionLogTypesEnum.Exception, options.ExceptionDays, now, options.BatchSize, result, ct)
-                .ConfigureAwait(false);
-            await DeleteOneType(dc, ActionLogTypesEnum.Debug, options.DebugDays, now, options.BatchSize, result, ct)
-                .ConfigureAwait(false);
-            await DeleteOneType(dc, ActionLogTypesEnum.Job, options.JobDays, now, options.BatchSize, result, ct)
-                .ConfigureAwait(false);
+            var (dc, owned) = ResolveDataContext(scope.ServiceProvider);
+            try
+            {
+                // Per-LogType sweep; 0 or negative days disables retention for
+                // that type (keeps rows forever).
+                await DeleteOneType(dc, ActionLogTypesEnum.Normal, options.NormalDays, now, options.BatchSize, result, ct)
+                    .ConfigureAwait(false);
+                await DeleteOneType(dc, ActionLogTypesEnum.Exception, options.ExceptionDays, now, options.BatchSize, result, ct)
+                    .ConfigureAwait(false);
+                await DeleteOneType(dc, ActionLogTypesEnum.Debug, options.DebugDays, now, options.BatchSize, result, ct)
+                    .ConfigureAwait(false);
+                await DeleteOneType(dc, ActionLogTypesEnum.Job, options.JobDays, now, options.BatchSize, result, ct)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                // Only dispose when we created this DataContext ourselves (see
+                // ResolveDataContext) — the DI-fallback instance's lifetime is owned by `scope`.
+                if (owned) { dc.Dispose(); }
+            }
 
             _logger.LogInformation(
                 "ActionLogRetention: sweep complete. Normal={Normal} Exception={Exception} Debug={Debug} Job={Job} total={Total}",
@@ -155,6 +161,45 @@ namespace WalkingTec.Mvvm.Core
                 result.TotalDeleted);
 
             return result;
+        }
+
+        /// <summary>
+        /// #727 follow-up to #721: resolves the app's real, connection-string/tenant-routed
+        /// DataContext for this hosted service's daily sweep.
+        /// <para>
+        /// <c>AddWtmContext</c> only ever registers
+        /// <c>services.TryAddScoped&lt;IDataContext, NullContext&gt;()</c> as a safe placeholder
+        /// default — apps obtain their real DataContext through <see cref="WTMContext.CreateDC"/>,
+        /// never through generic DI. Before this fix,
+        /// <c>scope.ServiceProvider.GetService&lt;IDataContext&gt;()</c> always resolved
+        /// <see cref="NullContext"/> in every real deployment (its members throw
+        /// <see cref="NotImplementedException"/>), so every daily sweep threw inside
+        /// <see cref="DeleteOneType"/>, was swallowed by <see cref="ExecuteAsync"/>'s
+        /// per-iteration <c>catch (Exception ex)</c>, and silently deleted zero rows forever —
+        /// masked because no prior test exercised this hosted service through a real ASP.NET
+        /// Core DI container built by <c>AddWtmContext</c> (mirrors the #721
+        /// <c>TokenTestFixture</c> masking pattern). Mirrors the WTMContext-first / DI-fallback
+        /// resolution <see cref="WalkingTec.Mvvm.Core.Support.Quartz.WtmJob"/> and the Etl
+        /// <c>EtlSchedulerService</c> already use for their own hosted-service DB access.
+        /// </para>
+        /// </summary>
+        private static (IDataContext Dc, bool Owned) ResolveDataContext(IServiceProvider scopedProvider)
+        {
+            // Primary path (real deployments): WTMContext.CreateDC() is the framework's
+            // connection-string/tenant-aware factory — the same one every other part of WTM
+            // (controllers, VMs, WtmJob, EtlSchedulerService) actually uses. This instance is
+            // NOT DI-tracked, so the caller must dispose it (Owned = true).
+            var wtm = scopedProvider.GetService<WTMContext>();
+            var dc = wtm?.CreateDC(isLog: false, logerror: true);
+            if (dc != null)
+            {
+                return (dc, true);
+            }
+
+            // Fallback: hosts/tests that explicitly re-register IDataContext against a real
+            // DataContext in DI without registering WTMContext itself. Lifetime is owned by
+            // the DI scope, not by us.
+            return (scopedProvider.GetRequiredService<IDataContext>(), false);
         }
 
         private async Task DeleteOneType(
