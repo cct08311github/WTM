@@ -25,6 +25,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Test.Mock;
 using WalkingTec.Mvvm.WorkFlow.Definition;
 using WalkingTec.Mvvm.WorkFlow.Engine;
 using WalkingTec.Mvvm.WorkFlow.Models;
@@ -60,6 +61,18 @@ public class Wf359StrandReaperTests : IDisposable
 
     private WfSequentialTestContext MakeDb() =>
         new($"{_dbName}?mode=memory&cache=shared");
+
+    /// <summary>
+    /// #709/#711 precedent (see T_ABBA_2902_CONC_01 in AbbaFixTests.cs): genuinely-racing
+    /// concurrency tests must not use the class's shared-cache in-memory <see cref="MakeDb"/>
+    /// — connection pooling + coarse table locking there are unsafe under real concurrent
+    /// contention. Only <see cref="T_WF359_05_ConcurrentTicks_SameStrand_AdvancesExactlyOnce"/>
+    /// (the sole test in this class that races two distinct executor contexts via
+    /// Task.WhenAll) uses this helper; every other test stays on <see cref="MakeDb"/> since it
+    /// only ever has one actor writing at a time.
+    /// </summary>
+    private static WfSequentialTestContext MakeFileWalDb(string dbPath) =>
+        new(dbPath, SqliteTestDbMode.FileWal);
 
     /// <summary>Build a real engine (Sequential handler wired).</summary>
     private IWorkflowEngine MakeEngine(WfSequentialTestContext db)
@@ -409,116 +422,143 @@ public class Wf359StrandReaperTests : IDisposable
         const string A2 = "race_bob";
         const string A3 = "race_carol";
 
-        // ── Seed: 3-approver Sequential so the advance is mid-chain (pointer 0→1, total=3) ──
-        await using var seedDb = MakeDb();
-
-        // Build a 3-approver version directly (SeedVersionAsync only supports 2 approvers).
-        var graphJson = WorkflowGraphSerializer.Serialize(new WorkflowGraph
+        // #709/#711 precedent (see T_ABBA_2902_CONC_01 in AbbaFixTests.cs): this test races
+        // two distinct executor contexts concurrently (Task.WhenAll below) against the same
+        // logical database — the T-CONC/T-ABBA-CONC pattern that #709 round 2 moved off
+        // shared-cache in-memory (this class's MakeDb(), still used by every OTHER — sequential,
+        // non-racing — test here) onto a dedicated per-test file-WAL database. See
+        // SqliteSharedMemoryFixture's remarks for why shared-cache in-memory's connection
+        // pooling + coarse table locking are unsafe under genuine concurrent contention.
+        // Seeding is inlined against the file-WAL database rather than through MakeDb().
+        var dbPath = SqliteSharedMemoryFixture.NewFileDbPath("Wf359Conc");
+        try
         {
-            Key = "Wf359RaceGraph",
-            Name = "Wf359RaceGraph",
-            Nodes = new List<NodeDef>
+            // ── Seed: 3-approver Sequential so the advance is mid-chain (pointer 0→1, total=3) ──
+            await using var seedDb = MakeFileWalDb(dbPath);
+            seedDb.Database.EnsureCreated();
+
+            // Build a 3-approver version directly (SeedVersionAsync only supports 2 approvers).
+            var graphJson = WorkflowGraphSerializer.Serialize(new WorkflowGraph
             {
-                new() { NodeKey = "start",     Kind = NodeKind.Start },
-                new()
+                Key = "Wf359RaceGraph",
+                Name = "Wf359RaceGraph",
+                Nodes = new List<NodeDef>
                 {
-                    NodeKey      = "approval1",
-                    Kind         = NodeKind.Approval,
-                    ApproveMode  = ApproveMode.Sequential,
-                    ApproverRule = new ApproverRuleDef
+                    new() { NodeKey = "start",    Kind = NodeKind.Start },
+                    new()
                     {
-                        Type  = "User",
-                        Value = $"{A1},{A2},{A3}",
+                        NodeKey      = "approval1",
+                        Kind         = NodeKind.Approval,
+                        ApproveMode  = ApproveMode.Sequential,
+                        ApproverRule = new ApproverRuleDef
+                        {
+                            Type  = "User",
+                            Value = $"{A1},{A2},{A3}",
+                        },
                     },
+                    new() { NodeKey = "end", Kind = NodeKind.End },
                 },
-                new() { NodeKey = "end", Kind = NodeKind.End },
-            },
-            Transitions = new List<TransitionDef>
+                Transitions = new List<TransitionDef>
+                {
+                    new() { From = "start",     To = "approval1" },
+                    new() { From = "approval1", To = "end"       },
+                },
+            });
+
+            var version = new ProcessDefinitionVersion
             {
-                new() { From = "start",     To = "approval1" },
-                new() { From = "approval1", To = "end"       },
-            },
-        });
+                ID              = Guid.NewGuid(),
+                DefinitionId    = Guid.NewGuid(),
+                VersionNo       = 1,
+                SchemaVersion   = 1,
+                GraphJson       = graphJson,
+                ContentHash     = "hash-wf359-race-" + Guid.NewGuid().ToString("N"),
+                PublishedAt     = DateTime.UtcNow,
+                PublishedBy     = "test",
+                IsValid         = true,
+            };
+            seedDb.Set<ProcessDefinitionVersion>().Add(version);
+            await seedDb.SaveChangesAsync();
 
-        var version = new ProcessDefinitionVersion
+            var engine  = MakeEngine(seedDb);
+            var instance = await engine.StartAsync(version.ID, null, "initiator", null);
+            Assert.AreEqual(InstanceState.Running, instance.State,
+                "T_WF359_05: instance must be Running after start");
+
+            // ── Read node (TotalRequired should be 3, pointer at 0) ─────────────────
+            await using var readDb = MakeFileWalDb(dbPath);
+            var nodeInst = await readDb.Set<NodeInstance>()
+                .AsNoTracking()
+                .SingleAsync(n => n.InstanceId == instance.ID && n.NodeKind == NodeKind.Approval);
+
+            Assert.AreEqual(3,                      nodeInst.TotalRequired,   "T_WF359_05: TotalRequired must be 3");
+            Assert.AreEqual(0,                      nodeInst.SequencePointer, "T_WF359_05: pointer must start at 0");
+            Assert.AreEqual(NodeState.Activated,    nodeInst.State,           "T_WF359_05: node must be Activated");
+
+            // ── Inject strand: task at P=0 marked AutoApproved, pointer stays at 0 ──
+            await using var strandDb = MakeFileWalDb(dbPath);
+            await InjectStrandAsync(strandDb, nodeInst.ID, pointerToStrand: 0);
+
+            // ── Build TWO executors on the same file-WAL DB ───────────────────────────
+            // Each actor opens its own distinct physical connection to the same file (see
+            // BuildFileWalConnectionString's Pooling=False remarks); WAL gives SQLite's own
+            // lock manager real headroom to serialize the two writers instead of racing a
+            // coarse shared-cache table lock (Task.WhenAll simulates two concurrent hosts
+            // ticking at the same wall-clock time).
+            var execDb1 = MakeFileWalDb(dbPath);
+            var execDb2 = MakeFileWalDb(dbPath);
+            try
+            {
+                var execEngine1 = MakeEngine(execDb1);
+                var executor1   = MakeExecutor(execDb1, execEngine1);
+
+                var execEngine2 = MakeEngine(execDb2);
+                var executor2   = MakeExecutor(execDb2, execEngine2);
+
+                var now = DateTime.UtcNow;
+
+                // ── Fire both ticks concurrently ─────────────────────────────────────
+                await Task.WhenAll(
+                    executor1.RunTickAsync(now, CancellationToken.None),
+                    executor2.RunTickAsync(now, CancellationToken.None));
+
+                // ── Assert: pointer advanced exactly once ────────────────────────────
+                await using var verifyDb = MakeFileWalDb(dbPath);
+
+                var afterNode = await verifyDb.Set<NodeInstance>()
+                    .AsNoTracking()
+                    .SingleAsync(n => n.ID == nodeInst.ID);
+
+                Assert.AreEqual(1, afterNode.SequencePointer,
+                    $"T_WF359_05: SequencePointer must be exactly 1 (P+1), not {afterNode.SequencePointer} — concurrent CAS must allow exactly one winner");
+
+                // Exactly one Pending task at order 1 (no orphan / no duplicate).
+                var pendingAtOne = await verifyDb.Set<ApprovalTask>()
+                    .AsNoTracking()
+                    .CountAsync(t => t.NodeInstanceId == nodeInst.ID
+                                      && t.SequenceOrder == 1
+                                      && t.State == TaskState.Pending);
+
+                Assert.AreEqual(1, pendingAtOne,
+                    $"T_WF359_05: exactly one Pending task must exist at order 1 (got {pendingAtOne})");
+
+                // Instance must still be Running (mid-chain — not prematurely Approved).
+                var afterInstance = await verifyDb.Set<ProcessInstance>()
+                    .AsNoTracking()
+                    .SingleAsync(i => i.ID == instance.ID);
+
+                Assert.AreEqual(InstanceState.Running, afterInstance.State,
+                    $"T_WF359_05: instance must still be Running (mid-chain advance); got {afterInstance.State}");
+            }
+            finally
+            {
+                await execDb1.DisposeAsync();
+                await execDb2.DisposeAsync();
+            }
+        }
+        finally
         {
-            ID              = Guid.NewGuid(),
-            DefinitionId    = Guid.NewGuid(),
-            VersionNo       = 1,
-            SchemaVersion   = 1,
-            GraphJson       = graphJson,
-            ContentHash     = "hash-wf359-race-" + Guid.NewGuid().ToString("N"),
-            PublishedAt     = DateTime.UtcNow,
-            PublishedBy     = "test",
-            IsValid         = true,
-        };
-        seedDb.Set<ProcessDefinitionVersion>().Add(version);
-        await seedDb.SaveChangesAsync();
-
-        var engine  = MakeEngine(seedDb);
-        var instance = await engine.StartAsync(version.ID, null, "initiator", null);
-        Assert.AreEqual(InstanceState.Running, instance.State,
-            "T_WF359_05: instance must be Running after start");
-
-        // ── Read node (TotalRequired should be 3, pointer at 0) ─────────────────
-        await using var readDb = MakeDb();
-        var nodeInst = await readDb.Set<NodeInstance>()
-            .AsNoTracking()
-            .SingleAsync(n => n.InstanceId == instance.ID && n.NodeKind == NodeKind.Approval);
-
-        Assert.AreEqual(3,                      nodeInst.TotalRequired,   "T_WF359_05: TotalRequired must be 3");
-        Assert.AreEqual(0,                      nodeInst.SequencePointer, "T_WF359_05: pointer must start at 0");
-        Assert.AreEqual(NodeState.Activated,    nodeInst.State,           "T_WF359_05: node must be Activated");
-
-        // ── Inject strand: task at P=0 marked AutoApproved, pointer stays at 0 ──
-        await using var strandDb = MakeDb();
-        await InjectStrandAsync(strandDb, nodeInst.ID, pointerToStrand: 0);
-
-        // ── Build TWO executors on the same shared-memory DB ─────────────────────
-        // Each builds its own WfSequentialTestContext connecting to the same named DB.
-        // The engine inside each also uses a fresh context (Task.WhenAll simulates two
-        // concurrent hosts ticking at the same wall-clock time).
-        await using var execDb1 = MakeDb();
-        var execEngine1 = MakeEngine(execDb1);
-        var executor1   = MakeExecutor(execDb1, execEngine1);
-
-        await using var execDb2 = MakeDb();
-        var execEngine2 = MakeEngine(execDb2);
-        var executor2   = MakeExecutor(execDb2, execEngine2);
-
-        var now = DateTime.UtcNow;
-
-        // ── Fire both ticks concurrently ─────────────────────────────────────────
-        await Task.WhenAll(
-            executor1.RunTickAsync(now, CancellationToken.None),
-            executor2.RunTickAsync(now, CancellationToken.None));
-
-        // ── Assert: pointer advanced exactly once ─────────────────────────────────
-        await using var verifyDb = MakeDb();
-
-        var afterNode = await verifyDb.Set<NodeInstance>()
-            .AsNoTracking()
-            .SingleAsync(n => n.ID == nodeInst.ID);
-
-        Assert.AreEqual(1, afterNode.SequencePointer,
-            $"T_WF359_05: SequencePointer must be exactly 1 (P+1), not {afterNode.SequencePointer} — concurrent CAS must allow exactly one winner");
-
-        // Exactly one Pending task at order 1 (no orphan / no duplicate).
-        var pendingAtOne = await verifyDb.Set<ApprovalTask>()
-            .AsNoTracking()
-            .CountAsync(t => t.NodeInstanceId == nodeInst.ID
-                              && t.SequenceOrder == 1
-                              && t.State == TaskState.Pending);
-
-        Assert.AreEqual(1, pendingAtOne,
-            $"T_WF359_05: exactly one Pending task must exist at order 1 (got {pendingAtOne})");
-
-        // Instance must still be Running (mid-chain — not prematurely Approved).
-        var afterInstance = await verifyDb.Set<ProcessInstance>()
-            .AsNoTracking()
-            .SingleAsync(i => i.ID == instance.ID);
-
-        Assert.AreEqual(InstanceState.Running, afterInstance.State,
-            $"T_WF359_05: instance must still be Running (mid-chain advance); got {afterInstance.State}");
+            SqliteSharedMemoryFixture.DeleteFileDatabase(dbPath);
+        }
     }
 }
