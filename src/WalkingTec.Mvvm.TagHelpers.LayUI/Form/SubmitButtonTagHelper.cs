@@ -1,7 +1,10 @@
 using Microsoft.AspNetCore.Razor.TagHelpers;
 using System;
 using System.Collections.Generic;
+using System.Net;
 using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.RegularExpressions;
 using WalkingTec.Mvvm.Core;
 
 namespace WalkingTec.Mvvm.TagHelpers.LayUI
@@ -10,6 +13,21 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     public class SubmitButtonTagHelper : BaseButtonTag
     {
         public string SubmitUrl { get; set; }
+
+        // Issue #470 Slice M: matches a bare no-arg function-call expression only
+        // (e.g. "myCheck()"). Deliberately STRICTER than the FormatFuncName +
+        // identifier-regex convention Slices J/K/L use for ChangeFunc-style
+        // callbacks (which truncate at the first '(' and accept whatever
+        // precedes it, discarding the rest). SubmitButtonTagHelper's
+        // Click/ConfirmTxt-driven 'innerclick' expression GATES form
+        // submission, so silently truncating a compound expression like
+        // "a() && b()" down to "a()" would silently change validation-gating
+        // semantics — a correctness/security concern, not just a dropped
+        // callback arg. Only a SELF-CONTAINED bare no-arg call is treated as
+        // island-safe; bare variable references, compound expressions, and
+        // calls with arguments all keep the exact legacy inline <script> path.
+        private static readonly Regex _bareCallRegex = new(@"^[A-Za-z_$][\w$]*\(\)$", RegexOptions.Compiled);
+
         public override void Process(TagHelperContext context, TagHelperOutput output)
         {
             string innerclick = Click;
@@ -35,9 +53,96 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             }
             if (string.IsNullOrEmpty(Click) == false || string.IsNullOrEmpty(ConfirmTxt) == false)
             {
-                Click = $"f_{this.Id}Click();";
+                // Issue #470 Slice M FIX2: the formid-context Id fallback above
+                // (lines 44-46) only runs when context.Items carries "formid".
+                // BaseButtonTag.Process's OWN Id fallback (base.cs) does not run
+                // until base.Process(context, output) below — i.e. AFTER this
+                // whole block, including the JavaScriptEncoder.Encode(this.Id)
+                // call a few lines down. A SubmitButtonTagHelper rendered
+                // without an explicit Id AND outside a "formid"-bearing context
+                // (e.g. not nested in wt:form) would therefore still have a null
+                // Id here. That's harmless for the flag-OFF legacy path below
+                // (string interpolation/concatenation of a null Id just yields
+                // an empty segment), but the flag-ON island path encodes Id via
+                // JavaScriptEncoder.Default.Encode, which throws
+                // ArgumentNullException on null — an unhandled exception during
+                // Razor rendering. Guard here, scoped to UseSelectIslandRender
+                // only, so the flag-OFF default path stays byte-identical.
+                if (UIConfig.UseSelectIslandRender && string.IsNullOrEmpty(this.Id))
+                {
+                    this.Id = Guid.NewGuid().ToString().Replace("-", "");
+                }
                 output.Attributes.SetAttribute("lay-filter", "f_"+this.Id + "filter");
-                output.PostElement.AppendHtml($@"
+
+                // Issue #470 Slice M: opt-in (WtmUIOptions.UseSelectIslandRender,
+                // default OFF — the SAME flag #470 Slices J/K/L use) delegated
+                // data-wtm-submit-* dispatch instead of a generated per-button
+                // <script>function f_{Id}Click(){...}</script>. Early-return-style
+                // branch so the flag-OFF path below is completely untouched
+                // (byte-identical to pre-Slice-M).
+                if (UIConfig.UseSelectIslandRender)
+                {
+                    var trimmedClick = (innerclick ?? "").Trim();
+                    var bareCallMatch = trimmedClick.Length > 0 && _bareCallRegex.IsMatch(trimmedClick);
+                    bool islandSafe = string.IsNullOrEmpty(innerclick) || bareCallMatch;
+
+                    if (islandSafe)
+                    {
+                        // Issue #470 Slice M: ff._submitButtonClick(id) is a FIXED
+                        // framework function (framework_layui.js) that replays the
+                        // EXACT SAME {formid}validate / #{formid}hidesubmit /
+                        // ff.PostForm handshake the legacy generated function used,
+                        // reading it off data-wtm-submit-* attributes (compile-time,
+                        // developer-authored Razor literals — never request/field
+                        // data) instead of a per-button generated closure.
+                        //
+                        // Passed as a STRING ID LITERAL, never `this`. BaseButtonTag.
+                        // Process (see ConfirmTxt handling) wraps Click inside a NEW
+                        // nested `function(index){ ... }` passed as layer.confirm's
+                        // 3rd argument whenever ConfirmTxt is also set — inside that
+                        // plain nested function `this` is NOT the clicked button (it's
+                        // window/undefined), so `ff._submitButtonClick(this)` would
+                        // silently short-circuit on its element guard and the form
+                        // would never submit, no error. The server-known id is
+                        // resolved via document.getElementById at call time instead,
+                        // which is correct regardless of call context (plain jQuery
+                        // binding OR nested inside layer.confirm's callback).
+                        Click = $"ff._submitButtonClick('{JavaScriptEncoder.Default.Encode(this.Id)}');";
+                        output.Attributes.SetAttribute("data-wtm-submit-formid", WebUtility.HtmlEncode(formid));
+                        output.Attributes.SetAttribute("data-wtm-submit-divid", WebUtility.HtmlEncode(vm?.ViewDivId ?? ""));
+                        if (bareCallMatch)
+                        {
+                            var checkFnName = trimmedClick[..^2];
+                            output.Attributes.SetAttribute("data-wtm-submit-checkfn", WebUtility.HtmlEncode(checkFnName));
+                        }
+                    }
+                    else
+                    {
+                        Click = $"f_{this.Id}Click();";
+                        var warn = $"console.warn('[WTM] SubmitButtonTagHelper #{Id}: Click \\'{JavaScriptEncoder.Default.Encode(innerclick)}\\' is not a bare no-arg function call — UseSelectIslandRender is ON but island render was skipped for this button; keeping the legacy inline script. See #470 Slice M.');\n";
+                        output.PostElement.AppendHtml($@"
+<script>
+{warn}function f_{this.Id}Click(){{
+    var check = {(string.IsNullOrEmpty(innerclick) ? "true" : innerclick)};
+    if(check == undefined || check == false){{return false;}}
+    try{{
+        {formid}validate = false;
+        $('#{formid}hidesubmit').trigger('click');
+    }}
+    catch(e){{ {formid}validate = true;}}
+    if({formid}validate == true){{
+    ff.PostForm('', '{formid}', '{vm?.ViewDivId}')
+    }}
+    return false;
+}}
+</script>
+");
+                    }
+                }
+                else
+                {
+                    Click = $"f_{this.Id}Click();";
+                    output.PostElement.AppendHtml($@"
 <script>
 function f_{this.Id}Click(){{
     var check = {(string.IsNullOrEmpty(innerclick) ? "true" : innerclick)};
@@ -54,6 +159,7 @@ function f_{this.Id}Click(){{
 }}
 </script>
 ");
+                }
             }
             base.Process(context, output);
         }

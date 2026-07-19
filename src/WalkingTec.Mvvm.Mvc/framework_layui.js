@@ -4574,6 +4574,134 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
     });
 }
 
+// Issue #470 Slice M: shared dispatch map for the delegated data-wtm-click
+// listener below. Each entry receives the clicked element (already resolved
+// via closest('[data-wtm-click]')) and invokes exactly ONE fixed framework
+// action (ff.OpenDialog / ff.RunAction / ff.BgRequest / ff.LoadPage /
+// layui.layer.photos / ff.SetGridCellDate / a guarded developer callback) —
+// no eval, no new Function, no per-button generated function. Mirrors the
+// #470 Slice L upload delegated listener above and DispatchAction's
+// whitelist philosophy: the data-wtm-click value and its accompanying
+// data-wtm-* attributes are compile-time, developer-authored output of
+// LayuiUIService.Make*/MakeDateTime (or, for 'scriptCall', a bare no-arg
+// identifier extracted from a developer-authored 'script' string at render
+// time) — never request/user data. Registered once, unconditionally; a
+// complete no-op on any page/click that never carries data-wtm-click, so
+// this contributes zero behavior change when UseSelectIslandRender is OFF
+// (LayuiUIService then never emits data-wtm-click at all).
+window.ff._buttonAction = {
+    openDialog: function (el) {
+        var url = el.getAttribute('data-wtm-url') || '';
+        var winid = el.getAttribute('data-wtm-winid') || '';
+        var title = el.getAttribute('data-wtm-title') || '';
+        var widthAttr = el.getAttribute('data-wtm-width');
+        var heightAttr = el.getAttribute('data-wtm-height');
+        var width = (widthAttr === null || widthAttr === '') ? undefined : Number(widthAttr);
+        var height = (heightAttr === null || heightAttr === '') ? undefined : Number(heightAttr);
+        var max = el.getAttribute('data-wtm-max') === 'true';
+        ff.OpenDialog(url, winid, title, width, height, undefined, max);
+    },
+    runAction: function (el) {
+        ff.RunAction(el.getAttribute('data-wtm-url') || '');
+    },
+    bgRequest: function (el) {
+        ff.BgRequest(el.getAttribute('data-wtm-url') || '', undefined, el.getAttribute('data-wtm-divid') || '');
+    },
+    loadPage: function (el) {
+        var newwindow = el.getAttribute('data-wtm-newwindow') === 'true';
+        ff.LoadPage(el.getAttribute('data-wtm-url') || '', newwindow, el.getAttribute('data-wtm-title') || '');
+    },
+    view: function (el) {
+        if (typeof layui === 'undefined' || !layui.layer || typeof layui.layer.photos !== 'function') { return; }
+        layui.layer.photos({ photos: { data: [{ src: el.getAttribute('data-wtm-url') || '' }] }, anim: 5 });
+    },
+    dateClick: function (el) {
+        var id = el.getAttribute('data-wtm-date-id') || el.id || '';
+        var dt = el.getAttribute('data-wtm-date-type') || '';
+        ff.SetGridCellDate(id, dt);
+    },
+    // MakeScriptButton's developer 'script' is the one exception in this
+    // dispatch map that is NOT a fixed framework call — only reached when the
+    // server already reduced 'script' to a bare no-arg identifier call (see
+    // LayuiUIService.MakeScriptButton), and even then resolved through the
+    // SAME guarded ff._resolveGuardedWindowFn(name) every other named-callback
+    // action in this file uses (identifier regex + denylist + own-property +
+    // typeof-function checks) before ever being invoked.
+    scriptCall: function (el) {
+        var fn = ff._resolveGuardedWindowFn(el.getAttribute('data-wtm-fn'));
+        if (fn) { fn(); }
+    }
+};
+
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener('click', function (e) {
+        var target = e && e.target;
+        if (!target || typeof target.closest !== 'function') { return; }
+        var el = target.closest('[data-wtm-click]');
+        if (!el) { return; }
+        var handler = ff._buttonAction[el.getAttribute('data-wtm-click')];
+        if (typeof handler === 'function') {
+            handler(el);
+        }
+    });
+}
+
+// Issue #470 Slice M: SubmitButtonTagHelper's f_{Id}Click handshake, expressed
+// as a fixed, reusable framework function instead of a generated per-button
+// <script>function f_{Id}Click(){...}</script>. Replays the EXACT SAME
+// {formid}validate / #{formid}hidesubmit / ff.PostForm sequence the legacy
+// generated function used, reading it off data-wtm-submit-* attributes
+// (compile-time, developer-authored Razor literals — never request/field
+// data) carried on the button element.
+//
+// Called as `ff._submitButtonClick('{Id}')` — a server-known STRING ID
+// LITERAL, never `this`. BaseButtonTag.Process's ConfirmTxt handling wraps
+// Click inside a NEW nested `function(index){ ... }` passed as layer.confirm's
+// 3rd argument whenever ConfirmTxt is also set; inside that plain nested
+// function `this` is NOT the clicked element, so resolving by `this` would
+// silently short-circuit the handshake below in that (very common,
+// confirm-before-submit) case. Resolving via document.getElementById works
+// identically regardless of call context. A DOM element is still accepted
+// (and preferred, skipping the lookup) for callers/tests that already hold
+// one.
+//
+// checkFnName resolution failure (missing/denylisted/not-a-function) falls
+// back to `check = true` (submit proceeds without the gate) rather than
+// throwing — this mirrors the SAME "unresolved guarded callback silently
+// skips that one gate, never blocks" precedent the 'bindSubmit' DispatchAction
+// case's beforeSubmit resolution already established (see the comment above
+// that case), not a new failure mode introduced here.
+window.ff._submitButtonClick = function (elOrId) {
+    var el = (typeof elOrId === 'string') ? document.getElementById(elOrId) : elOrId;
+    if (!el || typeof el.getAttribute !== 'function') { return false; }
+    var checkFnName = el.getAttribute('data-wtm-submit-checkfn');
+    var check = true;
+    if (checkFnName) {
+        var fn = ff._resolveGuardedWindowFn(checkFnName);
+        check = fn ? fn() : true;
+    }
+    // Intentionally loose (`==`) — NOT a typo. SubmitButtonTagHelper's legacy
+    // generated f_{Id}Click() used `check == undefined || check == false`
+    // (see SubmitButtonTagHelper.cs), so falsy-but-not-strictly-false check
+    // results (0, "", "0", null) must ALSO block submission here to be the
+    // "EXACT SAME" handshake this function claims to reproduce. Do not
+    // "fix" this to `===` — that would silently change gating semantics for
+    // any developer checkFn that returns one of those values.
+    if (check == undefined || check == false) { return false; }
+    var formid = el.getAttribute('data-wtm-submit-formid') || '';
+    var divid = el.getAttribute('data-wtm-submit-divid') || '';
+    try {
+        window[formid + 'validate'] = false;
+        $('#' + formid + 'hidesubmit').trigger('click');
+    } catch (e) {
+        window[formid + 'validate'] = true;
+    }
+    if (window[formid + 'validate'] === true) {
+        ff.PostForm('', formid, divid);
+    }
+    return false;
+};
+
 // ─── Header Column Filter ─────────────────────────────────────────────────────
 var wtmHeaderFilter = (function () {
     'use strict';

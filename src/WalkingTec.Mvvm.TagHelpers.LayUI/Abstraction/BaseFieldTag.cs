@@ -11,6 +11,7 @@ using System.Text.RegularExpressions;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.ConfigOptions;
 using WalkingTec.Mvvm.Core.Extensions;
+using WalkingTec.Mvvm.TagHelpers.LayUI.Common;
 
 namespace WalkingTec.Mvvm.TagHelpers.LayUI
 {
@@ -21,14 +22,17 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         /// <summary>
         /// Static UI options, initialized at startup via <see cref="SetUIOptions"/>.
         /// Defaults to LayUI-compatible values for zero-config backwards compatibility.
+        /// Issue #470 Slice M: backing storage moved to the shared
+        /// <see cref="WtmUIOptionsHolder"/> so <c>BaseButtonTag</c> can read the SAME
+        /// flag — this property's signature and the single startup call site
+        /// (<c>FrameworkServiceExtension.AddWtmContext</c>) are unchanged.
         /// </summary>
-        private static WtmUIOptions _uiOptions = new WtmUIOptions();
 
         /// <summary>Set the global UI options. Called once during app startup.</summary>
-        public static void SetUIOptions(WtmUIOptions options) => _uiOptions = options;
+        public static void SetUIOptions(WtmUIOptions options) => WtmUIOptionsHolder.Set(options);
 
         /// <summary>Resolved UI options (always non-null).</summary>
-        protected WtmUIOptions UIConfig => _uiOptions;
+        protected WtmUIOptions UIConfig => WtmUIOptionsHolder.Options;
 
         // Issue #552 adversarial-review fix (P0, pre-existing XSS): ColorPickerTagHelper's
         // 'color'/'PredefinedColors' and SliderTagHelper's 'Theme' are persisted field DATA
