@@ -2,9 +2,35 @@
 
 ## [Unreleased]
 
+## [10.16.0] - 2026-07-19
+
+LayUI eval-retirement epic (#470) advances: the entire form-widget + button/grid-cell family gains **opt-in, eval-free island rendering** — every migration is **default-off and byte-identical to before** (`WtmUIOptions.UseSelectIslandRender = false` by default), so this release ships **zero behaviour change** to existing deployments while giving security-conscious apps a path toward a strict, `unsafe-inline`/`unsafe-eval`-free Content-Security-Policy for their forms and dialogs. Guiding principle (#567): BMS-stability-first, compat over novelty. `framework_layui.js` stays at exactly **one** active-code `eval(` (the deprecated `IsScript` path). Also fixes a health-check that never probed a real database (#741, a #727 residual) and includes several defense-in-depth XSS/encoding hardenings surfaced along the way.
+
+### Security
+
+- **Grid-cell / upload markup now built with safe DOM APIs instead of raw HTML string concatenation (#470 Slices K/L, #332-class).** When the opt-in island render is enabled, Transfer's hidden-input building and Upload/MultiUpload's existing-file markup + delete handling construct nodes via `createElement`/`textContent`/`setAttribute`/`ff._makeInput` rather than concatenating the ajax-returned **file display name** (genuinely user-influenceable) and ids into an HTML string — closing the same attribute-breakout class #332 already fixed elsewhere, with an XSS-shaped-filename regression test. Flag-off legacy paths are unchanged.
+- **`TreeTagHelper` now `JavaScriptEncoder`-encodes `ItemUrl`/`TriggerUrl` in its inline scripts (#470 Slice J, #747).** These developer-authored attribute values were interpolated raw into JS string literals, unlike the sibling `ComboBoxTagHelper` which already encoded them. Defense-in-depth (values are compile-time Razor literals, not request data); brought to parity.
+- **Two latent `ff.ChainChange` `TypeError`s hardened (#470 Slice J).** `ChainChange`'s clear + apply steps called `window[comboid].update(...)` with no existence guard (unlike `ff.LoadComboItems`, hardened in #633/#645); a not-yet-rendered widget in a mixed-migration state now degrades with a `console.warn` instead of an uncaught exception.
+
 ### Fixed
 
 - **`WtmDataContextHealthCheck` (opt-in `AddWtmDataContextCheck`) previously always returned "Healthy (skipped)" in real deployments — it resolved WTM's `NullContext` DI placeholder instead of the app's real DataContext (#741, follow-up to #727).** It now resolves through the optional, DI-injected `WTMContext` first (`WTMContext.CreateDC()` — the same connection-string/tenant-aware factory every other part of WTM uses) and probes that real database with `Database.CanConnectAsync`, falling back to a directly DI-registered `IDataContext` only for hosts/tests that register one without also registering `WTMContext`. **Operator note:** a previously-always-green `/ready` readiness probe can now go **Unhealthy** when the underlying database is unreachable or the `default` connection is disabled — this is the intended fix, but multi-tenant apps whose `default` connection is intentionally disabled should scope or omit this opt-in check rather than relying on the prior (silently no-op) behaviour.
+
+### Added
+
+- **`WtmUIOptions.UseSelectIslandRender` (opt-in, default `false`) — eval-free island rendering for LayUI interactive widgets.** When enabled, ComboBox/Tree (`renderSelect`), Transfer (`renderTransfer`), Upload/MultiUpload (`upload`/`multiUpload`/`uploadExisting`), and the button/grid-cell wiring (`LayuiUIService.Make*`, `SubmitButton`) emit declarative JSON islands + `data-wtm-*` delegated handlers consumed by `ff.DispatchAction` — **no inline `<script>`, no `eval`, no per-widget global functions** — instead of the legacy inline scripts. Developer-authored callbacks (`ChangeFunc`, submit-click gates) are resolved through the existing `ff._resolveGuardedWindowFn` identifier guard when they are plain identifiers; a non-identifier callback keeps the exact legacy inline path plus a `console.warn` deprecation notice. Combined with the #627 kill-switch, this lets an app progress its dialog/form CSP toward `script-src 'self'`. **Default off = today's behaviour, byte-identical** — turn it on per app when ready to audit. (#470 Slices G–M)
+  - **Slice G**: tree `item-url` → `loadComboItems` island; `ueditor`/`layedit` actions; textarea counter → `data-wtm-counter` delegation.
+  - **Slice H**: `laydate` `ready`/`change`/`done` guarded-identifier callbacks + two-hidden-input range write-back island.
+  - **Slice I**: `slider` (`ChangeFunc`/`OnTipsFunc`) + `colorpicker` (`ChangeFunc`) callback islands.
+  - **Slice J** (the hard blocker): ComboBox/Tree `xmSelect.render` → `renderSelect` island (generic remote/template/data reconstruction, `window[id]` + `data-wtm-defaults` + cascading-chain + required-validation preserved). Gated opt-in because the full-page render-timing shift (parse-time → `DOMContentLoaded`) is a real, if narrow, behaviour change that must not be a silent default flip.
+  - **Slice K**: `layui.transfer` → `renderTransfer` island.
+  - **Slice L**: Upload/MultiUpload two inline scripts → `upload`/`multiUpload`/`uploadExisting` actions + a parameterized `ff.upload` namespace (eliminates the legacy per-widget global-function timing dependency) + delegated existing-file handlers.
+  - **Slice M**: `LayuiUIService.Make*` grid-cell buttons + `SubmitButton` handshake → `data-wtm-click`/`ff._submitButtonClick(id)` delegated dispatch of the fixed framework actions (prerequisite for the grid slice).
+
+### Known issues / gated
+
+- **#655 (nested `<wt:selector>` sentinel re-arm)** closes only once combo/tree island rendering is the **default** in selector panels (Slice P sentinel-retirement), which requires flipping `UseSelectIslandRender` on by default — gated on BMS staging validation (the same gate as the #567 LayUI-modernization Phase 2). Tracked; not silently deferred.
+- The full-page page-ready render-timing scope + a `wtm:comboRendered` migration event, plus a pre-existing `TreeTagHelper.ShowLine` dead property and a `SubmitButton` `f_Click`/random-id mismatch quirk, are tracked in **#747** for a future "Slice J2" / follow-up.
 
 ## [10.15.0] - 2026-07-18
 
