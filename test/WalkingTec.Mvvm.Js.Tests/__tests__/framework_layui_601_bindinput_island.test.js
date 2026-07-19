@@ -107,7 +107,10 @@ describe('#601 (#470-F) — source sweep', () => {
   });
 
   test('_islandModulesFor does NOT require any layui module for bindInput (pure DOM, like tagInput)', () => {
-    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,1800}?\n\s*\},/)[0];
+    // Issue #470 Slice K: bumped from 1800 — 'renderTransfer' added a new
+    // _islandModulesFor branch (layui.transfer IS a layui.use(...) module,
+    // unlike xm-select/tagInput/bindInput), growing the function body.
+    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,2200}?\n\s*\},/)[0];
     expect(block).not.toMatch(/a\.type\s*===\s*['"]bindInput['"]/);
   });
 

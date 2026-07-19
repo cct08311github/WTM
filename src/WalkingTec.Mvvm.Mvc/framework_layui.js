@@ -247,8 +247,17 @@ window.ff = {
     // <script>, which always did the same), so this entry is belt-and-
     // suspenders defense-in-depth — same intentionally-redundant pattern as
     // slider/rate/colorpicker (see the #576 comment above _renderSliderAction).
+    // Issue #470 Slice J: 'renderSelect' is intentionally ABSENT — xm-select
+    // is a plain <script src> global, not a layui.use(...) module (see
+    // _renderSelectAction's own comment).
+    // Issue #470 Slice K: 'renderTransfer' DOES need an entry — UNLIKE
+    // xm-select, layui.transfer IS a layui.use(...) module (the legacy inline
+    // <script> this island replaces always wrapped its call in
+    // `layui.use(['transfer'], function(){ ... })`), so — same rationale as
+    // laydate/slider/rate/colorpicker/ueditor/layedit above — dispatching
+    // before the module has finished loading would silently no-op.
     _islandModulesFor: function (payload) {
-        var needed = { form: false, laydate: false, slider: false, rate: false, colorpicker: false, ueditorconfig: false, layedit: false };
+        var needed = { form: false, laydate: false, slider: false, rate: false, colorpicker: false, ueditorconfig: false, layedit: false, transfer: false };
         if (payload && payload.actions) {
             for (var i = 0; i < payload.actions.length; i++) {
                 var a = payload.actions[i];
@@ -272,6 +281,8 @@ window.ff = {
                     needed.ueditorconfig = true;
                 } else if (a.type === 'layedit') {
                     needed.layedit = true;
+                } else if (a.type === 'renderTransfer') {
+                    needed.transfer = true;
                 }
             }
         }
@@ -283,6 +294,7 @@ window.ff = {
         if (needed.colorpicker) { mods.push('colorpicker'); }
         if (needed.ueditorconfig) { mods.push('ueditorconfig'); }
         if (needed.layedit) { mods.push('layedit'); }
+        if (needed.transfer) { mods.push('transfer'); }
         return mods;
     },
 
@@ -906,6 +918,147 @@ window.ff = {
         }
     },
 
+    // Issue #470 Slice K (#470-K): shared render body for the 'renderTransfer'
+    // DispatchAction case (below) — the opt-in (UseSelectIslandRender,
+    // default OFF — the SAME flag #470 Slice J's 'renderSelect' island uses)
+    // eval-free island render for <wt:transfer>. Reproduces the CURRENT
+    // legacy inline `layui.use(['transfer'], function(){ ... transfer.render(
+    // ...) })` <script> functionally: same defaultFunc write-back
+    // (layui.transfer.getData(id) -> remove existing hidden inputs named
+    // `name` inside the widget's #{id}div container -> append one fresh
+    // hidden input per currently-selected value), same onchange wiring
+    // (defaultFunc runs FIRST, then the resolved caller callback, same
+    // (data,index,transferIns) argument shape), same init-default-value
+    // hidden-input block, same Disabled post-render tweak (disable
+    // checkbox/form-control descendants of the widget + a no-arg
+    // transfer.render() call, matching the legacy script's own quirk).
+    //
+    // Issue #332 (deliberate, documented deviation from a literal
+    // byte-for-byte port): the legacy inline <script> builds each hidden
+    // input via raw HTML string concatenation
+    // (`container.append('<input ... value="'+selectVals[i].value+'"/>')`),
+    // the same unsafe pattern #332 already fixed for ff.LoadComboItems'
+    // checkbox/radio branches. This island instead uses the SAME ff._makeInput
+    // DOM-API builder those branches use — functionally identical (a hidden
+    // input carrying the selected value under `name`), but immune to the
+    // attribute-breakout class #332 closed. Reproducing the raw-concat
+    // pattern verbatim in new code would knowingly reintroduce a
+    // known-and-fixed vulnerability shape; using the codebase's own
+    // established-safe primitive here is the correct call, not a functional
+    // behavior change (a hidden input's `title` attribute, the only extra
+    // thing _makeInput sets, has no visible or functional effect on a
+    // type="hidden" element).
+    //
+    // Unlike xm-select (a plain <script src> global — see _renderSelectAction
+    // above), layui.transfer IS a layui.use(...) module — see
+    // _islandModulesFor's 'renderTransfer' entry — so this only ever
+    // dispatches once that module is confirmed loaded (deferred via
+    // ff._dispatchIslandWhenReady, mirroring laydate/slider/rate/colorpicker/
+    // ueditor/layedit), matching the legacy inline script's own
+    // layui.use(['transfer'], ...) wrap.
+    //
+    // TRUST BOUNDARY: action.changeFunc is ALWAYS a compile-time,
+    // developer-authored Razor literal (the TransferTagHelper ChangeFunc
+    // attribute value) — NEVER field/request/model data, the same trust
+    // class as #470 Slice J's renderSelect changeFunc / bindSubmit's
+    // beforeSubmit (#558). The emitter (TransferTagHelper.Process) only ever
+    // emits this action when ChangeFunc is absent or already a plain
+    // identifier; a non-identifier ChangeFunc keeps the legacy inline
+    // <script> instead (see TransferTagHelper.cs). Resolved through the SAME
+    // ff._resolveGuardedWindowFn guard every other named-callback action
+    // uses — identifier regex + denylist + own-property + typeof function;
+    // a failed resolution silently no-ops that one callback, never throws,
+    // never evals.
+    _renderTransferAction: function (action) {
+        try {
+            if (!action || !action.id || !action.el) { return; }
+            if (typeof layui === 'undefined' || !layui.transfer ||
+                typeof layui.transfer.render !== 'function') {
+                if (typeof console !== 'undefined' && console.warn) {
+                    console.warn('[WTM] renderTransfer action skipped: layui.transfer is not loaded (#470).');
+                }
+                return;
+            }
+
+            var name = action.name;
+            var _id = action.id;
+            var container = document.getElementById(_id + 'div');
+
+            // Mirrors the legacy inline <script>'s
+            // defaultFunc(data,index,transferIns) exactly (see the #332 note
+            // above for the ff._makeInput deviation).
+            function defaultFunc(data, index, transferIns) {
+                var selectVals = layui.transfer.getData(_id);
+                if (container) {
+                    var inputs = container.querySelectorAll('input[name="' + name + '"]');
+                    for (var i = 0; i < inputs.length; i++) {
+                        if (inputs[i].parentNode) { inputs[i].parentNode.removeChild(inputs[i]); }
+                    }
+                    for (var j = 0; j < selectVals.length; j++) {
+                        container.appendChild(ff._makeInput('hidden', name, selectVals[j].value));
+                    }
+                }
+            }
+
+            var defaultVal = Array.isArray(action.defaultValue) ? action.defaultValue : [];
+            var changeFn = ff._resolveGuardedWindowFn(action.changeFunc);
+            var transferIns;
+            var opts = {
+                elem: action.el,
+                id: _id,
+                title: Array.isArray(action.title) ? action.title : undefined,
+                data: Array.isArray(action.data) ? action.data : [],
+                text: { none: action.nonePlaceholder || '', searchNone: action.searchNonePlaceholder || '' },
+                // Mirrors the legacy inline render's
+                // `onchange: function(data,index){defaultFunc(data,index,transferIns);
+                // ChangeFunc(data,index,transferIns);}` — the built-in
+                // write-back above runs FIRST, then the resolved caller
+                // callback (if any) runs with the same (data,index,
+                // transferIns) argument shape.
+                onchange: function (data, index) {
+                    defaultFunc(data, index, transferIns);
+                    if (changeFn) { changeFn(data, index, transferIns); }
+                }
+            };
+            if (defaultVal.length > 0) { opts.value = defaultVal; }
+            if (action.showSearch === true) { opts.showSearch = true; }
+            if (typeof action.width === 'number') { opts.width = action.width; }
+            if (typeof action.height === 'number') { opts.height = action.height; }
+
+            transferIns = layui.transfer.render(opts);
+
+            // Mirrors the legacy inline render's "init default value" block
+            // exactly: append one hidden input per pre-selected value, so
+            // the form submits the field's initial selection even before
+            // the user interacts with the widget.
+            if (defaultVal.length > 0 && container) {
+                for (var k = 0; k < defaultVal.length; k++) {
+                    container.appendChild(ff._makeInput('hidden', name, defaultVal[k]));
+                }
+            }
+
+            // Mirrors the legacy inline render's Disabled post-render tweak
+            // exactly: disable every checkbox/form-control descendant of the
+            // widget's own container (`:checkbox` / `:input` in the legacy
+            // jQuery selectors), then re-invoke transfer.render() with no
+            // arguments — a layui quirk the legacy script also relied on.
+            if (action.disabled === true) {
+                var widgetEl = document.getElementById(_id);
+                if (widgetEl) {
+                    var checks = widgetEl.querySelectorAll('input[type="checkbox"]');
+                    for (var m = 0; m < checks.length; m++) { checks[m].disabled = true; }
+                    var formControls = widgetEl.querySelectorAll('input, select, textarea, button');
+                    for (var n = 0; n < formControls.length; n++) { formControls[n].disabled = true; }
+                }
+                layui.transfer.render();
+            }
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] renderTransfer action failed:', e);
+            }
+        }
+    },
+
     // Issue #571: native, dependency-free tag/chip input render body for the
     // 'tagInput' DispatchAction case (below). Unlike slider/rate/colorpicker
     // (#552), this widget has NO layui module dependency at all — it is built
@@ -1474,6 +1627,13 @@ window.ff = {
                 // 'ueditor'/'layedit' above.
                 case 'renderSelect':
                     ff._renderSelectAction(action);
+                    break;
+                // Issue #470 Slice K: thin JSON wrapper over
+                // layui.transfer.render() — the opt-in (UseSelectIslandRender,
+                // default OFF) eval-free island render for <wt:transfer>. See
+                // ff._renderTransferAction for the full rationale.
+                case 'renderTransfer':
+                    ff._renderTransferAction(action);
                     break;
                 // Issue #558 (#470-C): safe named-callback submit binding —
                 // mechanism only (FormTagHelper does not emit this yet). Mirrors

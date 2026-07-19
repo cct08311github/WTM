@@ -1,8 +1,10 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.Razor.TagHelpers;
 using WalkingTec.Mvvm.Core;
@@ -30,6 +32,16 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         {
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
         };
+
+        // Issue #470 Slice K: identifier check for the opt-in 'renderTransfer'
+        // island decision below — the SAME identifier class framework_layui.js's
+        // ff._resolveGuardedWindowFn enforces (a bare JS identifier, nothing
+        // else). Duplicated (not shared) per-TagHelper, mirroring
+        // ComboBoxTagHelper's/TreeTagHelper's #470 Slice J _identifierRegex
+        // exactly, including the `\z` (not `$`) end anchor — see those files'
+        // comments for why `$` would silently disagree with the client-side
+        // /^[A-Za-z_$][\w$]*$/ regex on a value ending in '\n'.
+        private static readonly Regex _identifierRegex = new(@"^[A-Za-z_$][\w$]*\z", RegexOptions.Compiled);
 
         /// <summary>
         /// 左侧穿梭框上方标题
@@ -159,15 +171,29 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     selectVal.Add(Field.Model.ToString());
                 }
             }
+            // Issue #470 Slice K: capture the SAME list this block already
+            // computes (previously only round-tripped through DefaultValue as
+            // a serialized JSON string for the legacy inline script) so the
+            // opt-in 'renderTransfer' island decision further down can reuse
+            // it directly as the island's defaultValue array, instead of
+            // re-parsing DefaultValue's JSON back out. Purely additive —
+            // DefaultValue's own value/serialization is unchanged.
+            List<string> effectiveDefaultValue;
             if(selectVal.Count > 0)
             {
+                effectiveDefaultValue = selectVal;
                 DefaultValue = LayuiIslandJson.Serialize(selectVal);
             }
             else
             {
                 if(string.IsNullOrEmpty(DefaultValue) == false)
                 {
-                    DefaultValue = LayuiIslandJson.Serialize(DefaultValue.Split(",").Select(x => x.Trim()).ToArray());
+                    effectiveDefaultValue = DefaultValue.Split(",").Select(x => x.Trim()).ToList();
+                    DefaultValue = LayuiIslandJson.Serialize(effectiveDefaultValue);
+                }
+                else
+                {
+                    effectiveDefaultValue = [];
                 }
             }
             if (string.IsNullOrEmpty(ItemUrl) == false)
@@ -208,11 +234,80 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 output.PostElement.AppendHtml($@"<script type=""application/json"" class=""wtm-dialog-init"">{LayuiIslandJson.Serialize(loadComboItemsAction, _islandJsonOptions)}</script>");
             }
 
-            var title = $"['{(string.IsNullOrEmpty(LeftTitle) ? THProgram._localizer["Sys.ForSelect"] : LeftTitle)}','{(string.IsNullOrEmpty(RightTitle) ? THProgram._localizer["Sys.Selected"] : RightTitle)}']";
-            var content = $@"
+            var leftTitleText = string.IsNullOrEmpty(LeftTitle) ? THProgram._localizer["Sys.ForSelect"].ToString() : LeftTitle;
+            var rightTitleText = string.IsNullOrEmpty(RightTitle) ? THProgram._localizer["Sys.Selected"].ToString() : RightTitle;
+            var title = $"['{leftTitleText}','{rightTitleText}']";
+
+            // Issue #470 Slice K: opt-in (UIConfig.UseSelectIslandRender,
+            // default OFF — the SAME flag #470 Slice J's 'renderSelect' island
+            // uses for <wt:combobox>/<wt:tree>) eval-free 'renderTransfer'
+            // island render — see WtmUIOptions.UseSelectIslandRender and
+            // ff._renderTransferAction (framework_layui.js) for the full
+            // rationale. changeFuncName/changeIsIdentifier mirror ComboBox-
+            // TagHelper's/TreeTagHelper's #470 Slice J 3-way decision exactly:
+            // a plain-identifier ChangeFunc name (or no ChangeFunc at all) is
+            // safe to carry as JSON island data (resolved client-side via the
+            // SAME guarded window[name] lookup every other named-callback
+            // action uses); a non-identifier name is NOT — it keeps the exact
+            // legacy inline render below, so a developer's arbitrary callback
+            // expression is never silently dropped.
+            //
+            // NOTE: unlike ComboBoxTagHelper/TreeTagHelper, TransferTagHelper
+            // is excluded from BaseFieldTag's required-validation block (see
+            // BaseFieldTag.Process's `!(this is ... || this is
+            // TransferTagHelper)` guard — transfer never gets a
+            // window[Id].update({{layVerify,...}}) script, island or legacy),
+            // so there is no required-validation state to carry into the
+            // island payload here.
+            string changeFuncName = string.IsNullOrEmpty(ChangeFunc) ? null : FormatFuncName(ChangeFunc, false);
+            bool changeIsIdentifier = changeFuncName != null && _identifierRegex.IsMatch(changeFuncName);
+            bool useTransferIsland = UIConfig.UseSelectIslandRender && (changeFuncName == null || changeIsIdentifier);
+
+            if (useTransferIsland)
+            {
+                var renderTransferAction = new RenderTransferIslandAction
+                {
+                    Id = Id,
+                    El = "#" + Id,
+                    Name = Field.Name,
+                    Title = [leftTitleText, rightTitleText],
+                    Data = data.Select(x => new TransferIslandItem
+                    {
+                        Value = x.Value,
+                        Title = x.Title,
+                        Disabled = x.Disabled,
+                        Checked = x.Checked
+                    }).ToList(),
+                    DefaultValue = effectiveDefaultValue,
+                    NonePlaceholder = NonePlaceholder,
+                    SearchNonePlaceholder = SearchNonePlaceholder,
+                    ShowSearch = EnableSearch,
+                    Width = Width,
+                    Height = Height,
+                    Disabled = Disabled,
+                    ChangeFunc = changeIsIdentifier ? changeFuncName : null
+                };
+                output.PostElement.AppendHtml($@"<script type=""application/json"" class=""wtm-dialog-init"">{LayuiIslandJson.Serialize(renderTransferAction, _islandJsonOptions)}</script>");
+            }
+            else
+            {
+                // Issue #470 Slice K: when the flag is ON but ChangeFunc is a
+                // non-identifier expression (island render skipped for this
+                // one field — see useTransferIsland above), surface a
+                // deprecation nudge in the browser console so the fallback is
+                // visible during migration. Mirrors ComboBoxTagHelper's #470
+                // Slice J deprecationWarn exactly, including the "contributes
+                // ZERO characters when empty" invariant that keeps the
+                // flag-OFF / identifier path byte-for-byte identical to the
+                // pre-Slice-K inline render.
+                var deprecationWarn = (UIConfig.UseSelectIslandRender && changeFuncName != null && !changeIsIdentifier)
+                    ? $"console.warn('[WTM] TransferTagHelper #{Id}: ChangeFunc \\'{JavaScriptEncoder.Default.Encode(ChangeFunc)}\\' is not a plain identifier — UseSelectIslandRender is ON but island render was skipped for this field; keeping the legacy inline script. See #470 Slice K.');\n"
+                    : "";
+
+                var content = $@"
 <script>
 layui.use(['transfer'],function(){{
-  var $ = layui.$;
+  {deprecationWarn}var $ = layui.$;
   var transfer = layui.transfer;
   var name = '{Field.Name}';
   var _id = '{Id}';
@@ -259,11 +354,93 @@ layui.use(['transfer'],function(){{
 }})
 </script>
 ";
-            output.PostElement.AppendHtml(content);
+                output.PostElement.AppendHtml(content);
+            }
             output.PostElement.AppendHtml($"<div id=\"{Id}div\"></div>");
             output.PostElement.AppendHtml($@"<input type=""hidden"" name=""_DONOTUSE_{Field.Name}"" value=""1"" />");
 
             base.Process(context, output);
         }
+    }
+
+    // Issue #470 Slice K: DTO for the bare (non-wrapped) 'renderTransfer' JSON
+    // island — the opt-in (WtmUIOptions.UseSelectIslandRender, default OFF —
+    // the SAME flag #470 Slice J's 'renderSelect' island uses) eval-free
+    // replacement for the inline `layui.use(['transfer'], function(){
+    // transfer.render(...) })` &lt;script&gt; TransferTagHelper otherwise emits.
+    // ff._renderTransferAction (framework_layui.js) is the sole consumer;
+    // ff._normalizeIslandPayload wraps this into the {actions:[...]} shape
+    // ff.DispatchAction expects. Not part of the public API surface.
+    //
+    // TRUST BOUNDARY: ChangeFunc is ALWAYS a compile-time, developer-authored
+    // Razor literal (the ChangeFunc TagHelper attribute value) — NEVER
+    // field/request/model data, the same trust class as bindSubmit's
+    // beforeSubmit (#558) / #470 Slice J's renderSelect ChangeFunc. The
+    // emitter (TransferTagHelper.Process) only ever sets this when the
+    // resolved name is already a plain identifier; a non-identifier name
+    // keeps the legacy inline &lt;script&gt; instead and this field stays null.
+    internal sealed class RenderTransferIslandAction
+    {
+        [JsonPropertyName("type")]
+        public string Type { get; set; } = "renderTransfer";
+
+        [JsonPropertyName("id")]
+        public string Id { get; set; }
+
+        [JsonPropertyName("el")]
+        public string El { get; set; }
+
+        [JsonPropertyName("name")]
+        public string Name { get; set; }
+
+        // Two-element [leftTitle, rightTitle] array — mirrors the legacy
+        // inline render's `title:['...','...']` literal.
+        [JsonPropertyName("title")]
+        public string[] Title { get; set; }
+
+        [JsonPropertyName("data")]
+        public List<TransferIslandItem> Data { get; set; }
+
+        [JsonPropertyName("defaultValue")]
+        public List<string> DefaultValue { get; set; }
+
+        [JsonPropertyName("nonePlaceholder")]
+        public string NonePlaceholder { get; set; }
+
+        [JsonPropertyName("searchNonePlaceholder")]
+        public string SearchNonePlaceholder { get; set; }
+
+        [JsonPropertyName("showSearch")]
+        public bool ShowSearch { get; set; }
+
+        [JsonPropertyName("width")]
+        public int? Width { get; set; }
+
+        [JsonPropertyName("height")]
+        public int? Height { get; set; }
+
+        [JsonPropertyName("disabled")]
+        public bool Disabled { get; set; }
+
+        [JsonPropertyName("changeFunc")]
+        public string ChangeFunc { get; set; }
+    }
+
+    // Issue #470 Slice K: item shape for RenderTransferIslandAction.Data —
+    // mirrors the legacy inline render's `data:` array item shape
+    // ({{value, title, disabled, checked}}, camelCase) exactly.
+    internal sealed class TransferIslandItem
+    {
+        [JsonPropertyName("value")]
+        public string Value { get; set; }
+
+        [JsonPropertyName("title")]
+        public string Title { get; set; }
+
+        [JsonPropertyName("disabled")]
+        public bool Disabled { get; set; }
+
+        [JsonPropertyName("checked")]
+        public bool Checked { get; set; }
     }
 }
