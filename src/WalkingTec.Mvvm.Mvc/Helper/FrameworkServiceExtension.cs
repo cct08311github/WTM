@@ -403,10 +403,21 @@ namespace WalkingTec.Mvvm.Mvc
             WtmContextOption op = new WtmContextOption();
             options?.Invoke(op);
             services.Configure<Configs>(config);
+            // Issue #753 (HIGH, split-brain flag read): register the appsettings
+            // "UIOptions" binding source here (unchanged) — but do NOT hand-parse a
+            // config-only snapshot and push it into WtmUIOptionsHolder from this
+            // service-registration phase. That snapshot bypasses the ASP.NET Core
+            // Options pipeline entirely, so a code-based
+            // `services.Configure<WtmUIOptions>(o => o.UseSelectIslandRender = true)`
+            // delegate (the documented mechanism per WtmUIOptions' XML doc) was
+            // silently ignored by every TagHelper (which reads
+            // WtmUIOptionsHolder.Options), while LayuiUIService — which reads the
+            // real IOptions<WtmUIOptions> — DID see it. UseWtmContext (below, at the
+            // app-build phase where the DI container already exists) now resolves
+            // the fully-merged IOptions<WtmUIOptions>.Value (appsettings binding +
+            // any code Configure delegates) and populates the SAME holder, so both
+            // consumers agree.
             services.Configure<WalkingTec.Mvvm.Core.ConfigOptions.WtmUIOptions>(config.GetSection("UIOptions"));
-            var uiOptions = config.GetSection("UIOptions").Get<WalkingTec.Mvvm.Core.ConfigOptions.WtmUIOptions>()
-                ?? new WalkingTec.Mvvm.Core.ConfigOptions.WtmUIOptions();
-            WalkingTec.Mvvm.TagHelpers.LayUI.BaseFieldTag.SetUIOptions(uiOptions);
             var gd = GetGlobalData();
             services.AddHttpContextAccessor();
             services.AddSingleton(gd);
@@ -791,6 +802,16 @@ namespace WalkingTec.Mvvm.Mvc
         public static IApplicationBuilder UseWtmContext(this IApplicationBuilder app, bool isspa = false)
         {
             var configs = app.ApplicationServices.GetRequiredService<IOptionsMonitor<Configs>>().CurrentValue;
+            // Issue #753 (HIGH, split-brain flag read): resolve WtmUIOptions through
+            // the real ASP.NET Core Options pipeline (IOptions<T>) — this reflects
+            // BOTH the appsettings "UIOptions" binding registered in AddWtmContext AND
+            // any services.Configure<WtmUIOptions>(o => ...) code delegate the host
+            // app registered — then push it into the SAME static holder every
+            // TagHelper (BaseFieldTag.UIConfig / BaseButton.UIConfig) reads, so
+            // TagHelpers and LayuiUIService (which already reads IOptions<WtmUIOptions>
+            // directly) see the identical, fully-merged value.
+            var uiOptions = app.ApplicationServices.GetRequiredService<IOptions<WalkingTec.Mvvm.Core.ConfigOptions.WtmUIOptions>>().Value;
+            WalkingTec.Mvvm.TagHelpers.LayUI.BaseFieldTag.SetUIOptions(uiOptions);
             var lg = app.ApplicationServices.GetRequiredService<LinkGenerator>();
             var gd = app.ApplicationServices.GetRequiredService<GlobalData>();
             var localfactory = app.ApplicationServices.GetRequiredService<IStringLocalizerFactory>();

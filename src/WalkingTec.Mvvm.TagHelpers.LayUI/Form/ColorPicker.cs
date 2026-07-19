@@ -171,6 +171,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             string changeFuncName = changePresent ? FormatFuncName(ChangeFunc, false) : null;
             bool changeIsIdentifier = changeFuncName != null && IsPlainIdentifier(changeFuncName);
             bool hasCallback = changePresent;
+            // Issue #753: Slice I shipped BEFORE WtmUIOptions.UseSelectIslandRender
+            // existed and migrated whenever ChangeFunc was a plain identifier,
+            // regardless of the flag — breaking the flag-OFF byte-identical
+            // guarantee #470 Slice J/K/L/M established. Gate on the SAME flag.
+            bool useColorIsland = UIConfig.UseSelectIslandRender && changeIsIdentifier;
 
             // Issue #552 adversarial-review fix (P0): each predefined-color token
             // is validated independently — an invalid token is dropped, valid ones
@@ -219,7 +224,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 ";
                 output.PostElement.AppendHtml(islandContent);
             }
-            else if (changeIsIdentifier)
+            else if (useColorIsland)
             {
                 // Issue #470 Slice I: the resolved ChangeFunc bare name is a
                 // plain identifier — migrate to the eval-free JSON island.
@@ -260,7 +265,14 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 // developer's handler, keep the EXACT legacy inline <script>,
                 // but surface a loud deprecation warning so they can migrate
                 // to a plain named function and get the eval-free island path.
-                var warnJs = BuildDeprecationWarnScript(nameof(ChangeFunc));
+                // Issue #753: only warn when the flag is actually ON and island
+                // render was skipped for a genuine non-identifier ChangeFunc — when
+                // the flag is OFF this branch is reached unconditionally (even for
+                // an identifier ChangeFunc), and must contribute ZERO characters to
+                // stay byte-identical to the pre-#470 base emission.
+                var warnJs = (UIConfig.UseSelectIslandRender && !changeIsIdentifier)
+                    ? BuildDeprecationWarnScript(nameof(ChangeFunc))
+                    : string.Empty;
 
                 var content = $@"
 <input type='hidden' id='{Id}' name='{Field.Name}' value='{encodedVal}' {requiredtext}/>

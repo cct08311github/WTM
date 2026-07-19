@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.Razor.TagHelpers;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using WalkingTec.Mvvm.Core.ConfigOptions;
 using WalkingTec.Mvvm.TagHelpers.LayUI;
 
 namespace WalkingTec.Mvvm.Core.Test.TagHelpers;
@@ -68,6 +69,7 @@ public class TextAreaCounterTagHelper470Tests
     [TestMethod]
     public void ShowCounter_EmitsDataAttributeNotInlineScript()
     {
+        BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = new TextAreaTagHelper
         {
             Field = MakeField("Bio", "hello"),
@@ -91,6 +93,7 @@ public class TextAreaCounterTagHelper470Tests
     [TestMethod]
     public void ShowCounter_EmitsCounterSpanWithInitialCount()
     {
+        BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = new TextAreaTagHelper
         {
             Field = MakeField("Bio", "hello"),
@@ -113,6 +116,7 @@ public class TextAreaCounterTagHelper470Tests
         // native maxLength DOM property — this attribute must still be
         // emitted (untouched by this slice) or the delegated listener would
         // have nothing to read.
+        BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = new TextAreaTagHelper
         {
             Field = MakeField("Bio", "hello"),
@@ -172,6 +176,7 @@ public class TextAreaCounterTagHelper470Tests
         // (output.Attributes.Add HTML-encodes automatically), while the
         // manually-built <span id="..."> markup still needs the explicit
         // encode call.
+        BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = new TextAreaTagHelper
         {
             Field = MakeField("Bio", "x"),
@@ -184,5 +189,50 @@ public class TextAreaCounterTagHelper470Tests
 
         Assert.IsFalse(postHtml.Contains("id=\"bio\"6_counter\""),
             "Raw quote must never break out of the span id attribute");
+    }
+
+    // ── Issue #753: flag-OFF byte-identical-to-base regression coverage ─────
+    // WtmUIOptions is process-wide static state (BaseFieldTag.SetUIOptions) —
+    // every test above that flips UseSelectIslandRender ON is paired with the
+    // [TestCleanup] reset below, so a later test class in the same run never
+    // inherits it.
+
+    [TestMethod]
+    public void ShowCounter_FlagOff_EmitsLegacyInlineScript_NoDataAttribute()
+    {
+        // Issue #753: Slice G shipped BEFORE UseSelectIslandRender existed and
+        // switched to the data-attribute + delegated-listener path
+        // UNCONDITIONALLY (no legacy fallback branch at all). With the flag
+        // OFF (default), it must restore the exact pre-Slice-G span + inline
+        // wtmCounter.init(...) <script> — byte-identical to base 947ecbc9 —
+        // and must NOT emit data-wtm-counter at all.
+        BaseFieldTag.SetUIOptions(new WtmUIOptions());
+        var helper = new TextAreaTagHelper
+        {
+            Field = MakeField("Bio", "hello"),
+            Id = "bio_flagoff",
+            ShowCounter = true
+        };
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+
+        Assert.IsFalse(output.Attributes.ContainsName("data-wtm-counter"),
+            "Flag OFF must never emit the data-wtm-counter attribute");
+
+        var postHtml = output.PostElement.GetContent();
+        StringAssert.Contains(postHtml, "id=\"bio_flagoff_counter\"",
+            "Flag OFF must still emit the counter span");
+        StringAssert.Contains(postHtml, "5/50");
+        StringAssert.Contains(postHtml, "wtmCounter.init(",
+            "Flag OFF must emit the legacy inline wtmCounter.init(...) call");
+        StringAssert.Contains(postHtml, "'bio_flagoff'");
+        StringAssert.Contains(postHtml, "'bio_flagoff_counter'");
+        StringAssert.Contains(postHtml, "50);");
+    }
+
+    [TestCleanup]
+    public void Cleanup()
+    {
+        BaseFieldTag.SetUIOptions(new WtmUIOptions());
     }
 }

@@ -262,6 +262,45 @@ describe('#470 Slice L — upload done callback builds delegated markup', () => 
     expect(btn.textContent).toBe('b.txt  Del');
   });
 
+  // Issue #753 (MEDIUM): the legacy inline UploadTagHelper.cs only ever
+  // resets the .layui-progress-bar width inside the delete-button click
+  // handler (see UploadTagHelper.cs ~lines 284-317) — NEVER unconditionally
+  // on upload completion. ff._renderUploadAction's done() previously reset
+  // it right after building the delete button (showPreview:false branch),
+  // regardless of whether the user ever clicked delete — extra behavior the
+  // legacy inline render never had. ff.upload.doDelete's single-mode branch
+  // already resets it correctly on click (mirrors legacy {Id}DoDelete), so
+  // done() must NOT also reset it.
+  test('showPreview false: done() does NOT reset the progress bar — only the delete-button click does', () => {
+    appendUploadDom('U5b');
+    const bar = document.createElement('div');
+    bar.className = 'layui-progress-bar';
+    bar.style.width = '42%';
+    const wrap = document.createElement('div');
+    wrap.className = 'layui-progress';
+    wrap.appendChild(bar);
+    document.body.appendChild(wrap);
+
+    const layui = makeUploadLayui({
+      upload: { render: jest.fn((opts) => { opts.before({}); return {}; }) }
+    });
+    const { ff } = loadFreshFf({ layui });
+
+    ff.DispatchAction({
+      actions: [{ type: 'upload', id: 'U5b', el: '#U5bbutton', url: '/u', size: 0, showPreview: false, deleteText: 'Del' }]
+    });
+    const cfg = layui.upload.render.mock.calls[0][0];
+    cfg.done({ Data: { Id: 'file2b', Name: 'b.txt' } });
+
+    // done() alone must leave the progress bar untouched.
+    expect(bar.style.width).toBe('42%');
+
+    // Only clicking the delete button (ff.upload.doDelete, single-mode
+    // branch) resets it — matching legacy {Id}DoDelete exactly.
+    ff.upload.doDelete('U5b', 'file2b');
+    expect(bar.style.width).toBe('0%');
+  });
+
   test('empty Data.Id: label cleared, layer.msg(uploadFailedText) called', () => {
     appendUploadDom('U6');
     const layui = makeUploadLayui({

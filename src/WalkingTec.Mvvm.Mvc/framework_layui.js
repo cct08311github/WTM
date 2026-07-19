@@ -1200,8 +1200,15 @@ window.ff = {
                             btn.setAttribute('data-wtm-file-id', res.Data.Id);
                             labelEl.appendChild(btn);
                         }
-                        var bars2 = document.querySelectorAll('.layui-progress .layui-progress-bar');
-                        for (var bj = 0; bj < bars2.length; bj++) { bars2[bj].style.width = '0%'; }
+                        // Issue #753 (MEDIUM): do NOT reset the progress bar here — the
+                        // legacy inline UploadTagHelper.cs only ever reset it inside the
+                        // delete-button click handler (UploadTagHelper.cs ~lines 284-317),
+                        // never unconditionally on upload completion. ff.upload.doDelete's
+                        // single-mode branch below already resets it on click, mirroring
+                        // the legacy {Id}DoDelete function exactly — resetting it again
+                        // here (immediately after every successful upload, regardless of
+                        // whether the user ever deletes) was extra behavior Slice L never
+                        // had in the flag-OFF path.
                     }
                 },
                 error: function () {

@@ -312,12 +312,18 @@ public class RenderSelectIsland470SliceJTests
         }
     }
 
-    // ── Tree ItemUrl still islands (Slice G, unaffected) ─────────────────────
+    // ── Tree ItemUrl islands only when the flag is ON (Issue #753) ──────────
+    // Correction (#753): this migration was originally believed flag-
+    // independent ("Slice G, unaffected") — that was itself the #753 HIGH
+    // defect. Base 947ecbc9 emitted a legacy inline
+    // <script>ff.LoadComboItems('tree',...)</script> here, so the island must
+    // be gated on UseSelectIslandRender like every other Slice G/H/I emitter.
 
     [TestMethod]
-    public void Tree_ItemUrl_StillEmitsLoadComboItemsIsland_NoBareInlineLoadComboItemsScript()
+    public void Tree_ItemUrl_FlagOn_EmitsLoadComboItemsIsland_NoBareInlineLoadComboItemsScript()
     {
         SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = CreateTreeHelper();
         helper.Field = MakeField("StringField", "1");
         helper.Id = "tree_j_itemurl";
@@ -328,7 +334,28 @@ public class RenderSelectIsland470SliceJTests
 
         StringAssert.Contains(postHtml, "\"type\":\"loadComboItems\"");
         Assert.IsFalse(postHtml.Contains("ff.LoadComboItems("),
-            "Tree ItemUrl must never emit a bare inline ff.LoadComboItems(...) call — already islandified by Slice G");
+            "Tree ItemUrl flag ON must never emit a bare inline ff.LoadComboItems(...) call — islandified by Slice G");
+    }
+
+    [TestMethod]
+    public void Tree_ItemUrl_FlagOff_EmitsLegacyInlineLoadComboItemsScript_NoIsland()
+    {
+        // Issue #753: flag OFF (default) must stay byte-identical to base
+        // 947ecbc9 — the legacy inline ff.LoadComboItems('tree', ...) call,
+        // not the loadComboItems JSON island.
+        SetupLocalizer();
+        var helper = CreateTreeHelper();
+        helper.Field = MakeField("StringField", "1");
+        helper.Id = "tree_j_itemurl_flagoff";
+        helper.ItemUrl = "/Home/GetTreeItems";
+        var output = MakeOutput();
+        helper.Process(MakeContext("wt:tree"), output);
+        var postHtml = output.PostElement.GetContent();
+
+        Assert.IsFalse(postHtml.Contains("\"type\":\"loadComboItems\""),
+            "Tree ItemUrl flag OFF must never emit the loadComboItems island");
+        StringAssert.Contains(postHtml, "ff.LoadComboItems('tree','/Home/GetTreeItems','tree_j_itemurl_flagoff','StringField',",
+            "Tree ItemUrl flag OFF must emit the exact legacy inline ff.LoadComboItems(...) call");
     }
 
     // ── TreeTagHelper TriggerUrl encoding (Part 1d) ──────────────────────────

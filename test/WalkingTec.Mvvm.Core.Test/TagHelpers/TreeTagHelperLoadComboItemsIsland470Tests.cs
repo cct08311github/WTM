@@ -9,6 +9,7 @@ using Microsoft.Extensions.Options;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Core.ConfigOptions;
 using WalkingTec.Mvvm.TagHelpers.LayUI;
 
 namespace WalkingTec.Mvvm.Core.Test.TagHelpers;
@@ -22,6 +23,16 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers;
 /// already handled controlType 'tree' (ff.LoadComboItems's own tree branch),
 /// just never had a server emitter wired up. Mirrors
 /// LoadComboItemsIsland633Tests' conventions exactly.
+///
+/// Issue #753 (found reviewing #753 itself): unlike its four #633 siblings —
+/// whose loadComboItems island for their own ItemUrl branch was ALREADY
+/// present in base 947ecbc9 (pre-#470, accepted baseline behavior) — this
+/// migration for Tree happened entirely inside Slice G/#470, so it must be
+/// gated on WtmUIOptions.UseSelectIslandRender (default OFF) for flag-off
+/// output to stay byte-identical to base. Every island-emitting test below
+/// now explicitly turns the flag ON; new flag-OFF tests assert the legacy
+/// inline &lt;script&gt;ff.LoadComboItems('tree',...)&lt;/script&gt; call survives
+/// byte-for-byte.
 /// </summary>
 [TestClass]
 public class TreeTagHelperLoadComboItemsIsland470Tests
@@ -83,6 +94,7 @@ public class TreeTagHelperLoadComboItemsIsland470Tests
     public void Tree_ItemUrl_EmitsJsonIslandNotInlineScript()
     {
         SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = CreateTreeHelper();
         helper.Field = MakeField("StringField", "1");
         helper.Id = "tree_470_1";
@@ -116,11 +128,19 @@ public class TreeTagHelperLoadComboItemsIsland470Tests
     }
 
     [TestMethod]
-    public void Tree_ItemUrl_StillEmitsUnconditionalXmSelectRenderScript()
+    public void Tree_ItemUrl_FlagOn_MainWidgetRendersViaSeparateRenderSelectIsland()
     {
-        // Red line: this slice must not touch the always-unconditional xmSelect
-        // render script — zero behaviour change for it.
+        // Issue #753: with the flag ON, Slice J's own (pre-existing, untouched
+        // by this fix) 'useSelectIsland' decision for the main widget render
+        // ALSO fires for this field (ItemUrl set, no ChangeFunc) — so the
+        // main widget moves off xmSelect.render(...) onto its own
+        // 'renderSelect' island, alongside (not instead of) the
+        // 'loadComboItems' island this test class covers. Both islands must
+        // be present and distinct; zero behaviour change to Slice J's own
+        // decision is the invariant here — see the sibling flag-OFF test for
+        // proof the ItemUrl gating itself doesn't touch the main render path.
         SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = CreateTreeHelper();
         helper.Field = MakeField("StringField", "1");
         helper.Id = "tree_470_2";
@@ -129,8 +149,12 @@ public class TreeTagHelperLoadComboItemsIsland470Tests
         helper.Process(MakeContext(), output);
         var postHtml = output.PostElement.GetContent();
 
-        StringAssert.Contains(postHtml, "xmSelect.render(",
-            "The unconditional xmSelect render script must still be emitted inline, untouched by this slice");
+        Assert.IsFalse(postHtml.Contains("xmSelect.render("),
+            "Flag ON: Slice J's own pre-existing decision replaces the main widget's inline xmSelect.render( with the renderSelect island");
+        StringAssert.Contains(postHtml, "\"type\":\"loadComboItems\"",
+            "The loadComboItems island (this slice's own concern) must still be present");
+        StringAssert.Contains(postHtml, "\"type\":\"renderSelect\"",
+            "The renderSelect island (Slice J's own, pre-existing concern) must still be present");
     }
 
     [TestMethod]
@@ -152,6 +176,7 @@ public class TreeTagHelperLoadComboItemsIsland470Tests
     public void Tree_ItemUrlWithScriptBreakoutPayload_CannotEscapeIsland()
     {
         SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = CreateTreeHelper();
         helper.Field = MakeField("StringField", "1");
         helper.Id = "tree_470_4";
@@ -168,10 +193,76 @@ public class TreeTagHelperLoadComboItemsIsland470Tests
             "JSON must Unicode-escape < and > to prevent script injection");
     }
 
+    // ── Issue #753: flag-OFF byte-identical-to-base regression coverage ─────
+    // WtmUIOptions is process-wide static state (BaseFieldTag.SetUIOptions) —
+    // every island-emitting test above now explicitly turns the flag ON, and
+    // [TestCleanup] resets it below so a later test class in the same run
+    // never inherits it (mirrors DateTimeTagHelperTests' convention).
+
+    [TestMethod]
+    public void Tree_ItemUrl_FlagOff_KeepsLegacyInlineScript_NoIsland()
+    {
+        // Issue #753: unlike the four #633 siblings, Tree's loadComboItems
+        // island migration happened entirely inside Slice G/#470 — with the
+        // flag OFF (default), it must fall through to the exact legacy
+        // inline ff.LoadComboItems('tree', ...) call, byte-identical to base
+        // 947ecbc9.
+        SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions());
+        var helper = CreateTreeHelper();
+        helper.Field = MakeField("StringField", "1");
+        helper.Id = "tree_753_flagoff_1";
+        helper.ItemUrl = "/Home/GetTreeItems";
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+        var postHtml = output.PostElement.GetContent();
+
+        Assert.IsFalse(postHtml.Contains("wtm-dialog-init"),
+            "Flag OFF must never emit the JSON island");
+        Assert.IsTrue(postHtml.Contains("ff.LoadComboItems('tree','/Home/GetTreeItems','tree_753_flagoff_1','StringField',"),
+            "Flag OFF must emit the exact legacy inline ff.LoadComboItems(...) call");
+    }
+
+    [TestMethod]
+    public void Tree_ItemUrl_FlagOff_StillEmitsUnconditionalXmSelectRenderScript()
+    {
+        // Red line: flag-gating the ItemUrl branch must not touch the
+        // always-unconditional xmSelect render script below it.
+        SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions());
+        var helper = CreateTreeHelper();
+        helper.Field = MakeField("StringField", "1");
+        helper.Id = "tree_753_flagoff_2";
+        helper.ItemUrl = "/Home/GetTreeItems";
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+        var postHtml = output.PostElement.GetContent();
+
+        StringAssert.Contains(postHtml, "xmSelect.render(",
+            "The unconditional xmSelect render script must still be emitted inline");
+    }
+
+    [TestMethod]
+    public void Tree_NoItemUrl_FlagOff_DoesNotEmitLoadComboItemsIslandOrLegacyScript()
+    {
+        SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions());
+        var helper = CreateTreeHelper();
+        helper.Field = MakeField("StringField", "1");
+        helper.Id = "tree_753_flagoff_3";
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+        var postHtml = output.PostElement.GetContent();
+
+        Assert.IsFalse(postHtml.Contains("wtm-dialog-init"), "No ItemUrl: no island");
+        Assert.IsFalse(postHtml.Contains("ff.LoadComboItems("), "No ItemUrl: no legacy call either");
+    }
+
     [TestCleanup]
     public void Cleanup()
     {
         THProgram._localizer = null!;
         CoreProgram._localizer = null!;
+        BaseFieldTag.SetUIOptions(new WtmUIOptions());
     }
 }

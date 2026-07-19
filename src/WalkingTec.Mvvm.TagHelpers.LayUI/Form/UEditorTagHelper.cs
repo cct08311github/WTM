@@ -1,3 +1,4 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Web;
@@ -80,29 +81,50 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
                 ? (DefaultValue ?? "")
                 : Field.Model.ToString();
 
-            // Issue #470 Slice G: eval-free JSON island — thin re-expression of
-            //   layui.use(['ueditorconfig'], function () {
-            //     layui.ueditor.loadEditor(id).ready(function () { this.setContent(content); });
-            //   });
-            // which the new 'ueditor' DispatchAction case (framework_layui.js)
-            // replays natively. UEditorTagHelper exposes no developer-facing
-            // callback attribute at all — the ready/setContent call is mandatory
-            // framework wiring (populates the editor with the field's current/
-            // default value), so this always safely migrates, no legacy-fallback
-            // branch needed (same rationale as RateTagHelper, #552). Content is
-            // Field.Model / DefaultValue — potentially stored, attacker-
-            // influenceable data, so this MUST go through LayuiIslandJson.Serialize
-            // (never raw JsonSerializer.Serialize) for the '$' escaping that closes
-            // the #651/#652 sentinel-collision stored-XSS class, same as every
-            // other island DTO in this project.
-            var action = new UEditorIslandAction
+            // Issue #753: Slice G shipped BEFORE WtmUIOptions.UseSelectIslandRender
+            // existed and migrated UNCONDITIONALLY (no legacy fallback branch at
+            // all), breaking the flag-OFF byte-identical guarantee #470 Slice
+            // J/K/L/M established for ComboBox/Tree/Transfer/Upload. Gate on the
+            // SAME flag — flag-off restores the exact pre-Slice-G inline <script>.
+            if (UIConfig.UseSelectIslandRender)
             {
-                Id = Id,
-                Content = contentValue
-            };
-            var json = LayuiIslandJson.Serialize(action, _islandJsonOptions);
-            output.PostElement.AppendHtml(
-                $"<script type=\"application/json\" class=\"wtm-dialog-init\">{json}</script>");
+                // Issue #470 Slice G: eval-free JSON island — thin re-expression of
+                //   layui.use(['ueditorconfig'], function () {
+                //     layui.ueditor.loadEditor(id).ready(function () { this.setContent(content); });
+                //   });
+                // which the new 'ueditor' DispatchAction case (framework_layui.js)
+                // replays natively. UEditorTagHelper exposes no developer-facing
+                // callback attribute at all — the ready/setContent call is mandatory
+                // framework wiring (populates the editor with the field's current/
+                // default value), so this always safely migrates once the flag is on
+                // (same rationale as RateTagHelper, #552). Content is Field.Model /
+                // DefaultValue — potentially stored, attacker-influenceable data, so
+                // this MUST go through LayuiIslandJson.Serialize (never raw
+                // JsonSerializer.Serialize) for the '$' escaping that closes the
+                // #651/#652 sentinel-collision stored-XSS class, same as every other
+                // island DTO in this project.
+                var action = new UEditorIslandAction
+                {
+                    Id = Id,
+                    Content = contentValue
+                };
+                var json = LayuiIslandJson.Serialize(action, _islandJsonOptions);
+                output.PostElement.AppendHtml(
+                    $"<script type=\"application/json\" class=\"wtm-dialog-init\">{json}</script>");
+            }
+            else
+            {
+                // Issue #753: pre-Slice-G legacy inline <script> — byte-identical to
+                // base 947ecbc9 (the commit immediately before #470 Slice G shipped).
+                var encodedContent = JavaScriptEncoder.Default.Encode(contentValue);
+                output.PostElement.AppendHtml($@"
+<script>
+  layui.use(['ueditorconfig'], function () {{
+    layui.ueditor.loadEditor('{Id}').ready(function(){{this.setContent('{encodedContent}')}});
+  }});
+</script>
+");
+            }
 
             base.Process(context, output);
         }

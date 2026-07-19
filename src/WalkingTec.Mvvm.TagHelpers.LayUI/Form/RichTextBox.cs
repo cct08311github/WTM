@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Razor.TagHelpers;
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using WalkingTec.Mvvm.Core;
@@ -84,32 +85,60 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
             }
             url = url.AppendQuery(ExtraQuery);
 
-            // Issue #470 Slice G: eval-free JSON island — thin re-expression of
-            //   layui.use('layedit', function(){
-            //     var layedit = layui.layedit;
-            //     layedit.set({ uploadImage: { url: uploadUrl } });
-            //     var index = layedit.build(id[, {height:...}]);
-            //     $('#'+id).attr('layeditindex', index);
-            //   });
-            // which the new 'layedit' DispatchAction case (framework_layui.js)
-            // replays natively. RichTextBoxTagHelper exposes no developer-facing
-            // callback attribute at all — the build/layeditindex write-back is
-            // mandatory framework wiring, so this always safely migrates, no
-            // legacy-fallback branch needed (same rationale as RateTagHelper,
-            // #552). UploadUrl is server-composed (query-string builder above),
-            // not raw user data, but this still routes through
-            // LayuiIslandJson.Serialize (never raw JsonSerializer.Serialize) for
-            // the '$' escaping that closes the #651/#652 sentinel-collision
-            // stored-XSS class, matching every other island DTO in this project.
-            var action = new LayeditIslandAction
+            // Issue #753: Slice G shipped BEFORE WtmUIOptions.UseSelectIslandRender
+            // existed and migrated UNCONDITIONALLY (no legacy fallback branch at
+            // all), breaking the flag-OFF byte-identical guarantee #470 Slice
+            // J/K/L/M established. Gate on the SAME flag — flag-off restores the
+            // exact pre-Slice-G inline <script>.
+            if (UIConfig.UseSelectIslandRender)
             {
-                Id = Id,
-                UploadUrl = url,
-                Height = Height
-            };
-            var json = LayuiIslandJson.Serialize(action, _islandJsonOptions);
-            output.PostElement.AppendHtml(
-                $"<script type=\"application/json\" class=\"wtm-dialog-init\">{json}</script>");
+                // Issue #470 Slice G: eval-free JSON island — thin re-expression of
+                //   layui.use('layedit', function(){
+                //     var layedit = layui.layedit;
+                //     layedit.set({ uploadImage: { url: uploadUrl } });
+                //     var index = layedit.build(id[, {height:...}]);
+                //     $('#'+id).attr('layeditindex', index);
+                //   });
+                // which the new 'layedit' DispatchAction case (framework_layui.js)
+                // replays natively. RichTextBoxTagHelper exposes no developer-facing
+                // callback attribute at all — the build/layeditindex write-back is
+                // mandatory framework wiring, so this always safely migrates once the
+                // flag is on (same rationale as RateTagHelper, #552). UploadUrl is
+                // server-composed (query-string builder above), not raw user data,
+                // but this still routes through LayuiIslandJson.Serialize (never raw
+                // JsonSerializer.Serialize) for the '$' escaping that closes the
+                // #651/#652 sentinel-collision stored-XSS class, matching every other
+                // island DTO in this project.
+                var action = new LayeditIslandAction
+                {
+                    Id = Id,
+                    UploadUrl = url,
+                    Height = Height
+                };
+                var json = LayuiIslandJson.Serialize(action, _islandJsonOptions);
+                output.PostElement.AppendHtml(
+                    $"<script type=\"application/json\" class=\"wtm-dialog-init\">{json}</script>");
+            }
+            else
+            {
+                // Issue #753: pre-Slice-G legacy inline <script> — byte-identical to
+                // base 947ecbc9 (the commit immediately before #470 Slice G shipped).
+                var encodedUrl = JavaScriptEncoder.Default.Encode(url ?? "");
+                output.PostElement.AppendHtml($@"
+<script>
+layui.use('layedit', function(){{
+  var layedit = layui.layedit;
+  layedit.set({{
+    uploadImage: {{
+      url: '{encodedUrl}'
+    }}
+  }});
+  var index = layedit.build('{Id}'{(Height.HasValue?$",{{height:{Height.Value}}}":"")});
+  $('#{Id}').attr('layeditindex',index);
+}});
+</script>
+");
+            }
 
             base.Process(context, output);
         }

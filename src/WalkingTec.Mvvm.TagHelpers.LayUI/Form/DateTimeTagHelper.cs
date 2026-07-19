@@ -404,8 +404,14 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                         (!readyPresent || readyIsIdentifier) &&
                         (!changePresent || changeIsIdentifier) &&
                         (!donePresent || doneIsIdentifier);
+                    // Issue #753: Slice H shipped BEFORE WtmUIOptions.UseSelectIslandRender
+                    // existed and migrated whenever callbacks were plain identifiers,
+                    // regardless of the flag — breaking the flag-OFF byte-identical
+                    // guarantee #470 Slice J/K/L/M established for ComboBox/Tree/
+                    // Transfer/Upload. Gate on the SAME flag those siblings use.
+                    bool useDateIsland = UIConfig.UseSelectIslandRender && allCallbacksMigratable;
 
-                    if (allCallbacksMigratable)
+                    if (useDateIsland)
                     {
                         // Issue #470 Slice H: every supplied callback is a plain
                         // identifier — migrate to the eval-free JSON island.
@@ -442,7 +448,14 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                         if (readyPresent && !readyIsIdentifier) { nonIdentifierAttrs.Add(nameof(ReadyFunc)); }
                         if (changePresent && !changeIsIdentifier) { nonIdentifierAttrs.Add(nameof(ChangeFunc)); }
                         if (donePresent && !doneIsIdentifier) { nonIdentifierAttrs.Add(nameof(DoneFunc)); }
-                        var warnJs = BuildDeprecationWarnScript(nonIdentifierAttrs);
+                        // Issue #753: only warn when the flag is actually ON and island
+                        // render was skipped for a genuine non-identifier callback — when
+                        // the flag is OFF this branch is reached unconditionally (even for
+                        // fully-migratable callbacks), and must contribute ZERO characters
+                        // to stay byte-identical to the pre-#470 base emission.
+                        var warnJs = (UIConfig.UseSelectIslandRender && nonIdentifierAttrs.Count > 0)
+                            ? BuildDeprecationWarnScript(nonIdentifierAttrs)
+                            : string.Empty;
 
                         var content = $@"
 <script>
@@ -504,8 +517,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     (!rangeReadyPresent || rangeReadyIsIdentifier) &&
                     (!rangeChangePresent || rangeChangeIsIdentifier) &&
                     (!rangeDonePresent || rangeDoneIsIdentifier);
+                // Issue #753: same gating as the single-field path above — Slice H's
+                // range island migrated unconditionally; require the flag.
+                bool useRangeIsland = UIConfig.UseSelectIslandRender && rangeAllCallbacksMigratable;
 
-                if (rangeAllCallbacksMigratable)
+                if (useRangeIsland)
                 {
                     // Issue #470 Slice H: the built-in start/end split is carried
                     // as island data (RangeStartId/RangeEndId/RangeSplitStr) —
@@ -535,7 +551,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     if (rangeReadyPresent && !rangeReadyIsIdentifier) { rangeNonIdentifierAttrs.Add(nameof(ReadyFunc)); }
                     if (rangeChangePresent && !rangeChangeIsIdentifier) { rangeNonIdentifierAttrs.Add(nameof(ChangeFunc)); }
                     if (rangeDonePresent && !rangeDoneIsIdentifier) { rangeNonIdentifierAttrs.Add(nameof(DoneFunc)); }
-                    var rangeWarnJs = BuildDeprecationWarnScript(rangeNonIdentifierAttrs);
+                    // Issue #753: same ZERO-characters-when-flag-off invariant as the
+                    // single-field path above.
+                    var rangeWarnJs = (UIConfig.UseSelectIslandRender && rangeNonIdentifierAttrs.Count > 0)
+                        ? BuildDeprecationWarnScript(rangeNonIdentifierAttrs)
+                        : string.Empty;
 
                     var rangeScript = $@"
 <script>

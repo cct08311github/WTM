@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Razor.TagHelpers;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Core.ConfigOptions;
 using WalkingTec.Mvvm.TagHelpers.LayUI;
 
 namespace WalkingTec.Mvvm.Core.Test.TagHelpers;
@@ -285,6 +286,7 @@ public class SliderTagHelperTests
         // emission paths, and the legacy path previously emitted Theme with
         // NO escaping at all (,theme: '{Theme}').
         SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = new SliderTagHelper
         {
             Field = MakeField("IntField"),
@@ -332,6 +334,7 @@ public class SliderTagHelperTests
     public void Process_WithNonIdentifierChangeFunc_LegitimateThemes_PassThroughLegacyScriptUnchanged()
     {
         SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         foreach (var theme in new[] { "#1a2b3c", "rgba(0,0,0,0.5)", "rebeccapurple" })
         {
             var helper = new SliderTagHelper
@@ -355,6 +358,7 @@ public class SliderTagHelperTests
         // Issue #470 Slice I: a plain-identifier ChangeFunc now migrates to the
         // island — Theme must still pass through unchanged there too.
         SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         foreach (var theme in new[] { "#1a2b3c", "rgba(0,0,0,0.5)", "rebeccapurple" })
         {
             var helper = new SliderTagHelper
@@ -422,6 +426,7 @@ public class SliderTagHelperTests
     public void Process_WithIdentifierChangeFunc_MigratesToJsonIsland()
     {
         SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = new SliderTagHelper
         {
             Field = MakeField("IntField"),
@@ -448,6 +453,7 @@ public class SliderTagHelperTests
     public void Process_WithIdentifierOnTipsFunc_MigratesToJsonIsland()
     {
         SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = new SliderTagHelper
         {
             Field = MakeField("IntField"),
@@ -472,6 +478,7 @@ public class SliderTagHelperTests
     public void Process_WithBothIdentifierCallbacks_MigratesToJsonIslandWithBoth()
     {
         SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = new SliderTagHelper
         {
             Field = MakeField("IntField"),
@@ -498,6 +505,7 @@ public class SliderTagHelperTests
         // dropping the developer's handler — but must surface a loud
         // deprecation console.warn.
         SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = new SliderTagHelper
         {
             Field = MakeField("IntField"),
@@ -520,6 +528,7 @@ public class SliderTagHelperTests
     public void Process_WithNonIdentifierOnTipsFunc_KeepsInlineScriptFallbackAndWarns()
     {
         SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = new SliderTagHelper
         {
             Field = MakeField("IntField"),
@@ -544,6 +553,7 @@ public class SliderTagHelperTests
         // — one non-identifier callback forces the ENTIRE field back to the
         // inline <script>, even though the other callback is a valid identifier.
         SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = new SliderTagHelper
         {
             Field = MakeField("IntField"),
@@ -565,6 +575,7 @@ public class SliderTagHelperTests
     public void Process_MinSet_WithNonIdentifierCallback_InlineScriptContainsMin()
     {
         SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = new SliderTagHelper
         {
             Field = MakeField("IntField"),
@@ -583,6 +594,7 @@ public class SliderTagHelperTests
     public void Process_MinSet_WithIdentifierCallback_JsonIslandContainsMin()
     {
         SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = new SliderTagHelper
         {
             Field = MakeField("IntField"),
@@ -640,10 +652,66 @@ public class SliderTagHelperTests
         Assert.IsFalse(part1Ok, "'abc' must not parse as double");
     }
 
+    // ── Issue #753: flag-OFF byte-identical-to-base regression coverage ─────
+    // WtmUIOptions is process-wide static state (BaseFieldTag.SetUIOptions) —
+    // every test above that flips UseSelectIslandRender ON is paired with the
+    // [TestCleanup] reset below, so a later test class in the same run never
+    // inherits it.
+
+    [TestMethod]
+    public void Process_FlagOff_WithIdentifierChangeFunc_KeepsLegacyInlineScript_NoWarnNoIsland()
+    {
+        // Issue #753: Slice I shipped BEFORE UseSelectIslandRender existed and
+        // migrated whenever ChangeFunc/OnTipsFunc were plain identifiers
+        // regardless of the flag. With the flag OFF (default), even a fully-
+        // migratable identifier callback must fall through to the exact
+        // legacy inline <script> — byte-identical to base 947ecbc9 — with
+        // ZERO warning text.
+        SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions());
+        var helper = new SliderTagHelper
+        {
+            Field = MakeField("IntField"),
+            Id = "slider_flagoff_changefunc",
+            ChangeFunc = "myChangeCallback"
+        };
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+        var postHtml = output.PostElement.GetContent();
+        Assert.IsFalse(postHtml.Contains("wtm-dialog-init"),
+            "Flag OFF must never emit the JSON island, even for a migratable identifier callback");
+        Assert.IsTrue(postHtml.Contains("slider.render("), "Flag OFF must emit the legacy slider.render(");
+        Assert.IsFalse(postHtml.Contains("console.warn("),
+            "Flag OFF must contribute ZERO warning characters — base never had this warning");
+        StringAssert.Contains(postHtml, "myChangeCallback");
+    }
+
+    [TestMethod]
+    public void Process_FlagOff_WithNonIdentifierChangeFunc_KeepsLegacyInlineScript_NoWarn()
+    {
+        SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions());
+        var helper = new SliderTagHelper
+        {
+            Field = MakeField("IntField"),
+            Id = "slider_flagoff_dotted",
+            ChangeFunc = "obj.myChangeCallback"
+        };
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+        var postHtml = output.PostElement.GetContent();
+        Assert.IsFalse(postHtml.Contains("wtm-dialog-init"), "Flag OFF must never emit the JSON island");
+        Assert.IsTrue(postHtml.Contains("slider.render("), "Flag OFF must emit the legacy slider.render(");
+        Assert.IsFalse(postHtml.Contains("console.warn("),
+            "Flag OFF must contribute ZERO warning characters — base never had this warning");
+        StringAssert.Contains(postHtml, "obj.myChangeCallback");
+    }
+
     [TestCleanup]
     public void Cleanup()
     {
         THProgram._localizer = null!;
         CoreProgram._localizer = null!;
+        BaseFieldTag.SetUIOptions(new WtmUIOptions());
     }
 }

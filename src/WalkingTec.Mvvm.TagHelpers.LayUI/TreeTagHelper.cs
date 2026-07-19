@@ -176,34 +176,57 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     });
 
                 }
-                // Issue #470 Slice G (the #633 miss): reuse the SAME loadComboItems
-                // island ComboBoxTagHelper/CheckBoxTagHelper/RadioTagHelper/
-                // TransferTagHelper emit for their ItemUrl branch (#633/#470-F)
-                // instead of an inline <script> calling ff.LoadComboItems directly.
-                // The 'loadComboItems' DispatchAction case (framework_layui.js)
-                // already handles controlType 'tree' — see ff.LoadComboItems's
-                // `if (controltype === "tree")` branch — it was simply never wired
-                // up to a server emitter until now. `vals` (List<object>) is
-                // stringified to match LoadComboItemsIslandAction.SelectVal's
-                // List<string> shape, mirroring the other three emitters — matches
-                // ff.LoadComboItems's own `svals` parameter, which only ever does
-                // string comparisons/iteration on it, identical to what
-                // LayuiIslandJson.Serialize(vals) produced inline before. The
-                // legacy inline script always passed a no-op empty function as the
-                // 6th arg (cb); the 'loadComboItems' DispatchAction case hard-codes
-                // that same 6th positional arg to `undefined` for every caller —
-                // calling an empty function or not calling it at all is
-                // behaviourally identical, so this is byte-identical runtime
-                // behaviour.
-                var loadComboItemsAction = new LoadComboItemsIslandAction
+                // Issue #753 (Slice-G miss found in review of #753 itself):
+                // unlike ComboBoxTagHelper/CheckBoxTagHelper/RadioTagHelper/
+                // TransferTagHelper — whose loadComboItems island for their own
+                // ItemUrl branch was ALREADY present in base 947ecbc9 (pre-#470,
+                // accepted baseline behaviour) — TreeTagHelper's ItemUrl branch
+                // in base emitted a legacy inline `<script>ff.LoadComboItems(...)`
+                // call, not a JSON island. So this migration must stay gated on
+                // UIConfig.UseSelectIslandRender (default OFF) for flag-off
+                // output to stay byte-identical to base, exactly like every
+                // other Slice-G/H/I emitter this issue exists to fix.
+                if (UIConfig.UseSelectIslandRender)
                 {
-                    ControlType = "tree",
-                    Url = ItemUrl,
-                    Id = Id,
-                    Field = Field.Name,
-                    SelectVal = vals.Select(v => v?.ToString()).ToList()
-                };
-                output.PostElement.AppendHtml($@"<script type=""application/json"" class=""wtm-dialog-init"">{LayuiIslandJson.Serialize(loadComboItemsAction, _islandJsonOptions)}</script>");
+                    // Issue #470 Slice G (the #633 miss): reuse the SAME loadComboItems
+                    // island ComboBoxTagHelper/CheckBoxTagHelper/RadioTagHelper/
+                    // TransferTagHelper emit for their ItemUrl branch (#633/#470-F)
+                    // instead of an inline <script> calling ff.LoadComboItems directly.
+                    // The 'loadComboItems' DispatchAction case (framework_layui.js)
+                    // already handles controlType 'tree' — see ff.LoadComboItems's
+                    // `if (controltype === "tree")` branch — it was simply never wired
+                    // up to a server emitter until now. `vals` (List<object>) is
+                    // stringified to match LoadComboItemsIslandAction.SelectVal's
+                    // List<string> shape, mirroring the other three emitters — matches
+                    // ff.LoadComboItems's own `svals` parameter, which only ever does
+                    // string comparisons/iteration on it, identical to what
+                    // LayuiIslandJson.Serialize(vals) produced inline before. The
+                    // legacy inline script always passed a no-op empty function as the
+                    // 6th arg (cb); the 'loadComboItems' DispatchAction case hard-codes
+                    // that same 6th positional arg to `undefined` for every caller —
+                    // calling an empty function or not calling it at all is
+                    // behaviourally identical, so this is byte-identical runtime
+                    // behaviour.
+                    var loadComboItemsAction = new LoadComboItemsIslandAction
+                    {
+                        ControlType = "tree",
+                        Url = ItemUrl,
+                        Id = Id,
+                        Field = Field.Name,
+                        SelectVal = vals.Select(v => v?.ToString()).ToList()
+                    };
+                    output.PostElement.AppendHtml($@"<script type=""application/json"" class=""wtm-dialog-init"">{LayuiIslandJson.Serialize(loadComboItemsAction, _islandJsonOptions)}</script>");
+                }
+                else
+                {
+                    // Flag-off legacy path: verbatim from base 947ecbc9 — do not
+                    // "clean up" this string, it must stay byte-identical.
+                    output.PostElement.AppendHtml($@"<script>
+ff.LoadComboItems('tree','{ItemUrl}','{Id}','{Field.Name}',{LayuiIslandJson.Serialize(vals)},function(){{
+}})
+
+</script>");
+                }
             }
 
             // Issue #470 Slice J: opt-in (UIConfig.UseSelectIslandRender,

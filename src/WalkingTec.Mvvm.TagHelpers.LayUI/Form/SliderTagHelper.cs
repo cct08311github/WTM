@@ -383,8 +383,13 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 bool allCallbacksMigratable =
                     (!changePresent || changeIsIdentifier) &&
                     (!onTipsPresent || onTipsIsIdentifier);
+                // Issue #753: Slice I shipped BEFORE WtmUIOptions.UseSelectIslandRender
+                // existed and migrated whenever callbacks were plain identifiers,
+                // regardless of the flag — breaking the flag-OFF byte-identical
+                // guarantee #470 Slice J/K/L/M established. Gate on the SAME flag.
+                bool useSliderIsland = UIConfig.UseSelectIslandRender && allCallbacksMigratable;
 
-                if (allCallbacksMigratable)
+                if (useSliderIsland)
                 {
                     // Issue #470 Slice I: every supplied callback is a plain
                     // identifier — migrate to the eval-free JSON island.
@@ -426,7 +431,14 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     var nonIdentifierAttrs = new List<string>();
                     if (changePresent && !changeIsIdentifier) { nonIdentifierAttrs.Add(nameof(ChangeFunc)); }
                     if (onTipsPresent && !onTipsIsIdentifier) { nonIdentifierAttrs.Add(nameof(OnTipsFunc)); }
-                    var warnJs = BuildDeprecationWarnScript(nonIdentifierAttrs);
+                    // Issue #753: only warn when the flag is actually ON and island
+                    // render was skipped for a genuine non-identifier callback — when
+                    // the flag is OFF this branch is reached unconditionally (even for
+                    // fully-migratable callbacks), and must contribute ZERO characters
+                    // to stay byte-identical to the pre-#470 base emission.
+                    var warnJs = (UIConfig.UseSelectIslandRender && nonIdentifierAttrs.Count > 0)
+                        ? BuildDeprecationWarnScript(nonIdentifierAttrs)
+                        : string.Empty;
 
                     var content = $@"
 <input type='hidden' name='{WebUtility.HtmlEncode(Field.Name)}' value='{WebUtility.HtmlEncode(value0 ?? "")}' class='layui-input'>

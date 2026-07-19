@@ -13,6 +13,11 @@
     <!-- Perf(#677): expose internal LayUiRegexes accessors to the Core test assembly for
          regex-parity tests (mirrors the InternalsVisibleTo pattern already used by Core/Mvc). -->
     <InternalsVisibleTo Include="WalkingTec.Mvvm.Core.Test" />
+    <!-- Issue #753: expose internal WtmUIOptionsHolder to the Api.Test assembly so the
+         split-brain-flag-read regression test can assert the holder's observed state
+         after a full DemoWebApplicationFactory host boot (AddWtmContext -> UseWtmContext),
+         which only that project can exercise end-to-end via DemoWebApplicationFactory. -->
+    <InternalsVisibleTo Include="WalkingTec.Mvvm.Api.Test" />
   </ItemGroup>
 
   <ItemGroup>

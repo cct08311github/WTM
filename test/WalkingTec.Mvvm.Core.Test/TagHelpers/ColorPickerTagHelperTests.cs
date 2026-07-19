@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Razor.TagHelpers;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Core.ConfigOptions;
 using WalkingTec.Mvvm.TagHelpers.LayUI;
 
 namespace WalkingTec.Mvvm.Core.Test.TagHelpers;
@@ -275,6 +276,7 @@ public class ColorPickerTagHelperTests
         // Issue #470 Slice I: a plain-identifier ChangeFunc now migrates to the
         // island — color must still pass through unchanged there too.
         SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         foreach (var color in new[] { "#1a2b3c", "rgba(0,0,0,0.5)", "rebeccapurple" })
         {
             var helper = new ColorPickerTagHelper
@@ -389,6 +391,7 @@ public class ColorPickerTagHelperTests
     public void Process_WithIdentifierChangeFunc_MigratesToJsonIsland()
     {
         SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = new ColorPickerTagHelper
         {
             Field = MakeField("ColorField"),
@@ -421,6 +424,7 @@ public class ColorPickerTagHelperTests
         // to the island too (dropping the caller's explicit arg text, exactly
         // as the legacy path already did).
         SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = new ColorPickerTagHelper
         {
             Field = MakeField("ColorField"),
@@ -440,6 +444,7 @@ public class ColorPickerTagHelperTests
     public void Process_WithIdentifierChangeFunc_PredefinedColorsStillInIsland()
     {
         SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = new ColorPickerTagHelper
         {
             Field = MakeField("ColorField"),
@@ -468,6 +473,7 @@ public class ColorPickerTagHelperTests
         // <script> fallback — never silently dropping the developer's
         // handler — but must surface a loud deprecation console.warn.
         SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = new ColorPickerTagHelper
         {
             Field = MakeField("ColorField"),
@@ -504,10 +510,68 @@ public class ColorPickerTagHelperTests
             "Legacy path must still emit the colors array exactly as before");
     }
 
+    // ── Issue #753: flag-OFF byte-identical-to-base regression coverage ─────
+    // WtmUIOptions is process-wide static state (BaseFieldTag.SetUIOptions) —
+    // every test above that flips UseSelectIslandRender ON is paired with the
+    // [TestCleanup] reset below, so a later test class in the same run never
+    // inherits it.
+
+    [TestMethod]
+    public void Process_FlagOff_WithIdentifierChangeFunc_KeepsLegacyInlineScript_NoWarnNoIsland()
+    {
+        // Issue #753: Slice I shipped BEFORE UseSelectIslandRender existed and
+        // migrated whenever the resolved ChangeFunc bare name was a plain
+        // identifier, regardless of the flag. With the flag OFF (default),
+        // even a fully-migratable identifier callback must fall through to
+        // the exact legacy inline <script> — byte-identical to base
+        // 947ecbc9 — with ZERO warning text.
+        SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions());
+        var helper = new ColorPickerTagHelper
+        {
+            Field = MakeField("ColorField"),
+            Id = "cp_flagoff_changefunc",
+            ChangeFunc = "myColorChanged"
+        };
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+        var postHtml = output.PostElement.GetContent();
+        Assert.IsFalse(postHtml.Contains("wtm-dialog-init"),
+            "Flag OFF must never emit the JSON island, even for a migratable identifier callback");
+        Assert.IsTrue(postHtml.Contains("colorpicker.render("),
+            "Flag OFF must emit the legacy colorpicker.render(");
+        Assert.IsFalse(postHtml.Contains("console.warn("),
+            "Flag OFF must contribute ZERO warning characters — base never had this warning");
+        StringAssert.Contains(postHtml, "myColorChanged");
+    }
+
+    [TestMethod]
+    public void Process_FlagOff_WithNonIdentifierChangeFunc_KeepsLegacyInlineScript_NoWarn()
+    {
+        SetupLocalizer();
+        BaseFieldTag.SetUIOptions(new WtmUIOptions());
+        var helper = new ColorPickerTagHelper
+        {
+            Field = MakeField("ColorField"),
+            Id = "cp_flagoff_dotted",
+            ChangeFunc = "obj.myColorChanged"
+        };
+        var output = MakeOutput();
+        helper.Process(MakeContext(), output);
+        var postHtml = output.PostElement.GetContent();
+        Assert.IsFalse(postHtml.Contains("wtm-dialog-init"), "Flag OFF must never emit the JSON island");
+        Assert.IsTrue(postHtml.Contains("colorpicker.render("),
+            "Flag OFF must emit the legacy colorpicker.render(");
+        Assert.IsFalse(postHtml.Contains("console.warn("),
+            "Flag OFF must contribute ZERO warning characters — base never had this warning");
+        StringAssert.Contains(postHtml, "obj.myColorChanged");
+    }
+
     [TestCleanup]
     public void Cleanup()
     {
         THProgram._localizer = null!;
         CoreProgram._localizer = null!;
+        BaseFieldTag.SetUIOptions(new WtmUIOptions());
     }
 }
