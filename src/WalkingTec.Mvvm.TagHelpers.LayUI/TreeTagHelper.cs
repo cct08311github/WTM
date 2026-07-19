@@ -6,8 +6,10 @@ using System.Net;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Extensions;
 using System.Linq;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 
 namespace WalkingTec.Mvvm.TagHelpers.LayUI
@@ -23,8 +25,28 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
         };
 
+        // Issue #470 Slice J: identifier check for the opt-in 'renderSelect'
+        // island decision below — same class/rationale as ComboBoxTagHelper's
+        // _identifierRegex (defined there; duplicated here rather than shared
+        // to keep each TagHelper self-contained, matching the existing
+        // per-TagHelper regex/JSON-options convention in this codebase).
+        private static readonly Regex _identifierRegex = new(@"^[A-Za-z_$][\w$]*\z", RegexOptions.Compiled);
+
         public string EmptyText { get; set; }
         public ModelExpression Items { get; set; }
+
+        // Issue #470 Slice J (#747): this property has NEVER been wired into
+        // the render options below — the xmSelect `tree: { showLine: ... }`
+        // option is hard-coded `true` unconditionally in both the legacy
+        // inline render and the island render, regardless of this property's
+        // value (unlike TreeContainerTagHelper's OWN ShowLine property, which
+        // IS wired into its render — a different TagHelper, `<wt:treecontainer>`,
+        // not this one). Wiring it now would be a silent behavior change for
+        // any caller who set ShowLine=false expecting (correctly, today) no
+        // effect — violating the "never silently change default behaviour"
+        // red line. Marked deprecated rather than fixed; the property is
+        // inert and does nothing. See docs/... and #747 for the audit finding.
+        [Obsolete("TreeTagHelper.ShowLine has no effect — the underlying xmSelect render always uses showLine:true (see TreeContainerTagHelper.ShowLine for the equivalent property that IS wired, on a different tag helper). This property is dead and will be removed in a future major version. See #747.")]
         public bool ShowLine { get; set; } = true;
         /// <summary>
         /// 勾选事件
@@ -84,9 +106,14 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             output.Attributes.Add("wtm-name", Field.Name);
             output.Attributes.Add("wtm-multi", MultiSelect.ToString().ToLower());
             Id = string.IsNullOrEmpty(Id) ? Guid.NewGuid().ToNoSplitString() : Id;
+            // Issue #470 Slice J: hoisted out of the `if` block (was a
+            // block-scoped `var linkto`) so the opt-in 'renderSelect' island
+            // decision further down can reuse the same value instead of
+            // re-deriving it — purely a scope widening, the attribute-add
+            // below is unchanged.
+            string linkto = null;
             if (LinkField != null || string.IsNullOrEmpty(LinkId) == false)
             {
-                var linkto = "";
                 if (string.IsNullOrEmpty(LinkId))
                 {
                     linkto = Core.Utils.GetIdByName(LinkField.ModelExplorer.Container.ModelType.Name + "." + LinkField.Name);
@@ -120,6 +147,15 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     vals.AddRange(DefaultValue.Split(','));
                 }
             }
+
+            // Issue #470 Slice J (always-on, flag-independent): the SAME
+            // data-wtm-defaults attribute CheckBoxTagHelper/RadioTagHelper/
+            // ComboBoxTagHelper already emit (#632/Slice J) — ff._readFieldDefaults
+            // (framework_layui.js) already prefers this attribute over the
+            // window[Id+'defaultvalues'] global. Present at HTML-parse time on
+            // every path, decoupled from the widget's own render timing. Value
+            // equals the existing global's value — behavior-preserving.
+            output.Attributes.Add("data-wtm-defaults", LayuiIslandJson.Serialize(vals.Select(v => v?.ToString()).ToList(), _islandJsonOptions));
 
             List<LayuiTreeItem> treeitems = [];
 
@@ -170,9 +206,73 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 output.PostElement.AppendHtml($@"<script type=""application/json"" class=""wtm-dialog-init"">{LayuiIslandJson.Serialize(loadComboItemsAction, _islandJsonOptions)}</script>");
             }
 
-            var script = $@"
+            // Issue #470 Slice J: opt-in (UIConfig.UseSelectIslandRender,
+            // default OFF) eval-free 'renderSelect' island render — see
+            // ComboBoxTagHelper's identical decision block for the full
+            // rationale (same DTO, same JS consumer).
+            string changeFuncName = string.IsNullOrEmpty(ChangeFunc) ? null : FormatFuncName(ChangeFunc, false);
+            bool changeIsIdentifier = changeFuncName != null && _identifierRegex.IsMatch(changeFuncName);
+            bool useSelectIsland = UIConfig.UseSelectIslandRender && (changeFuncName == null || changeIsIdentifier);
+
+            // Issue #470 Slice J follow-up (2nd HIGH defect fix): see
+            // ComboBoxTagHelper's identical assignment for the full
+            // rationale — tells BaseFieldTag.Process (base.Process(...) at
+            // the end of this method) whether this field's widget is being
+            // rendered via the island.
+            IsUsingSelectIslandRender = useSelectIsland;
+
+            if (useSelectIsland)
+            {
+                var renderSelectAction = new RenderSelectIslandAction
+                {
+                    Widget = "tree",
+                    Id = Id,
+                    El = "#" + Id,
+                    Name = Field.Name,
+                    Tips = EmptyText,
+                    Disabled = Disabled,
+                    Language = THProgram._localizer["Sys.LayuiDateLan"] == "CN" ? "zn" : "en",
+                    AutoRow = AutoRow,
+                    Filterable = EnableSearch == true,
+                    MultiSelect = MultiSelect,
+                    ShowToolbar = ShowToolbar.GetValueOrDefault(true),
+                    Height = "400px",
+                    LazyUrl = string.IsNullOrEmpty(LazyUrl) ? null : LazyUrl,
+                    Items = treeitems,
+                    ChangeFunc = changeIsIdentifier ? changeFuncName : null,
+                    LinkTo = linkto,
+                    TriggerUrl = TriggerUrl,
+                    ChainInitial = vals?.Count > 0 && linkto != null,
+                    DefaultValues = vals.Select(v => v?.ToString()).ToList()
+                };
+                // Issue #470 Slice J follow-up (2nd HIGH defect fix): see
+                // ComboBoxTagHelper's identical block for the full rationale
+                // (same DTO, same JS consumer).
+                if (IsFieldRequired())
+                {
+                    renderSelectAction.LayVerify = "required";
+                    renderSelectAction.LayReqText = $"{THProgram._localizer["Validate.{0}required", Field?.Metadata?.DisplayName ?? Field?.Metadata?.Name]}";
+                }
+                output.PostElement.AppendHtml($@"<script type=""application/json"" class=""wtm-dialog-init"">{LayuiIslandJson.Serialize(renderSelectAction, _islandJsonOptions)}</script>");
+            }
+            else
+            {
+                // Issue #470 Slice J: when the flag is ON but ChangeFunc is a
+                // non-identifier expression (island render skipped for this
+                // one field — see useSelectIsland above), surface a
+                // deprecation nudge in the browser console. See
+                // ComboBoxTagHelper's identical deprecationWarn for the
+                // byte-for-byte-when-empty rationale (the trailing "\n" is
+                // embedded IN the string, only present when the warning
+                // fires, so the flag-OFF path stays byte-identical to the
+                // pre-Slice-J inline render).
+                var deprecationWarn = (UIConfig.UseSelectIslandRender && changeFuncName != null && !changeIsIdentifier)
+                    ? $"console.warn('[WTM] TreeTagHelper #{Id}: ChangeFunc \\'{JavaScriptEncoder.Default.Encode(ChangeFunc)}\\' is not a plain identifier — UseSelectIslandRender is ON but island render was skipped for this field; keeping the legacy inline script. See #470 Slice J.');\n"
+                    : "";
+
+                var script = $@"
 <script>
-var {Id} = xmSelect.render({{
+{deprecationWarn}var {Id} = xmSelect.render({{
     el: '#{Id}',
     name:'{Field.Name}',
     tips:'{EmptyText}',
@@ -243,7 +343,7 @@ var {Id} = xmSelect.render({{
     on:function(data){{
         {((LinkField != null || string.IsNullOrEmpty(LinkId) == false) ? @$"
             if ({(string.IsNullOrEmpty(ChangeFunc) ? "true" : FormatFuncName(ChangeFunc))} != false) {{
-                var u = ""{(TriggerUrl ?? "")}"";
+                var u = ""{JavaScriptEncoder.Default.Encode(TriggerUrl ?? "")}"";
                 if (u.indexOf(""?"") == -1) {{
                     u += ""?t="" + new Date().getTime();
                 }}
@@ -257,7 +357,7 @@ var {Id} = xmSelect.render({{
 }});
      {Id}defaultvalues = {LayuiIslandJson.Serialize(vals)};
         {(vals?.Count > 0 && (LinkField != null || string.IsNullOrEmpty(LinkId) == false) ? @$"
-                var {Id}u = ""{(TriggerUrl ?? "")}"";
+                var {Id}u = ""{JavaScriptEncoder.Default.Encode(TriggerUrl ?? "")}"";
                 if ({Id}u.indexOf(""?"") == -1) {{
                     {Id}u += ""?t="" + new Date().getTime();
                 }}
@@ -273,6 +373,7 @@ var {Id} = xmSelect.render({{
 </script>
 ";
                 output.PostElement.AppendHtml(script);
+            }
                 string hidden = $"<p id='tree{Id}hidden'>";
                 if (Field?.Model != null)
                 {

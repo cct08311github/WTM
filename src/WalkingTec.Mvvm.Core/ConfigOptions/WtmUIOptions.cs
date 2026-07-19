@@ -105,6 +105,28 @@ namespace WalkingTec.Mvvm.Core.ConfigOptions
 
         #endregion
 
+        #region Select Island Render (CSP hardening, opt-in)
+
+        /// <summary>
+        /// When true, &lt;wt:combobox&gt;/&lt;wt:tree&gt; render via an eval-free
+        /// 'renderSelect' JSON island (dispatched by framework_layui.js's
+        /// ff.DispatchAction) instead of an inline &lt;script&gt; that calls
+        /// xmSelect.render(...) directly. This is purely a CSP-hardening /
+        /// #627-kill-switch-compatibility opt-in — it does not change the
+        /// rendered widget's behavior or markup. Default false (OFF): both
+        /// TagHelpers keep emitting today's inline xmSelect &lt;script&gt;,
+        /// byte-for-byte unchanged. When enabled, a field whose ChangeFunc is
+        /// not a plain identifier (e.g. a dotted or call-expression name) still
+        /// falls back to the legacy inline &lt;script&gt; for that one field —
+        /// an arbitrary developer callback expression can't be safely
+        /// JSON-expressed — and a console.warn deprecation notice naming the
+        /// ChangeFunc is emitted so the fallback is visible during migration.
+        /// See #470 Slice J.
+        /// </summary>
+        public bool UseSelectIslandRender { get; set; } = false;
+
+        #endregion
+
         #region Dark Mode / Theme
 
         /// <summary>

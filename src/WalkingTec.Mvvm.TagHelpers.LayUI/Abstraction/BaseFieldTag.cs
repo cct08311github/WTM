@@ -116,6 +116,45 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
         public string DefaultValue { get; set; }
 
+        // Issue #470 Slice J follow-up (2nd HIGH defect fix): the EXACT
+        // condition the required-validation block below gates on, extracted
+        // so ComboBoxTagHelper/TreeTagHelper can evaluate it BEFORE building
+        // their 'renderSelect' island action payload — the island must carry
+        // the SAME required state this method's caller would otherwise apply
+        // via the (now island-path-skipped) inline script below. Requires
+        // Field to be non-null; both callers (this class's Process, guarded
+        // by the throw a few lines below, and ComboBoxTagHelper/TreeTagHelper,
+        // which only ever run with `field=` bound — see their
+        // [HtmlTargetElement]/unconditional Field.Metadata access) already
+        // guarantee that.
+        protected bool IsFieldRequired()
+        {
+            return !(this is DisplayTagHelper) && ((Field.Metadata.IsRequired && Field.Name.Contains("[-1]") == false) || Required == true);
+        }
+
+        // Issue #470 Slice J follow-up (2nd HIGH defect fix): set by
+        // ComboBoxTagHelper/TreeTagHelper to true, BEFORE calling
+        // base.Process(...), precisely when this field's widget was rendered
+        // via the opt-in 'renderSelect' JSON island (WtmUIOptions.
+        // UseSelectIslandRender ON + a plain-identifier-or-absent ChangeFunc)
+        // rather than the legacy synchronous inline xmSelect.render <script>.
+        //
+        // When true, the required-validation block below must NOT emit its
+        // own window[Id].update({...}) script: window[Id] is set
+        // ASYNCHRONOUSLY under the island path (the 'renderSelect' island is
+        // DOMContentLoaded-deferred, see ff._consumePageReadyIslands), so an
+        // unguarded inline script here would race it (TypeError), while a
+        // guarded version would silently no-op ~100% of the time — the
+        // original bug this follow-up fixes. Instead, the island payload
+        // itself carries layVerify/layReqText (RenderSelectIslandAction) and
+        // ff._renderSelectAction applies them right after xmSelect.render(...)
+        // — correct ordering, no race, no double-application.
+        //
+        // Defaults to false: every OTHER field type, and the ComboBox/Tree
+        // flag-OFF / non-identifier-ChangeFunc fallback path, never sets this,
+        // so they keep emitting the (now unguarded, byte-identical to
+        // origin/dotnet10) inline script exactly as before.
+        protected bool IsUsingSelectIslandRender { get; set; }
 
         public override void Process(TagHelperContext context, TagHelperOutput output)
         {
@@ -186,7 +225,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 throw new InvalidOperationException(
                     $"The 'field' attribute is required on <{GetType().Name.Replace("TagHelper", string.Empty).ToLower()}>. Ensure the field= attribute is set.");
             }
-            if (!(this is DisplayTagHelper) && ((Field.Metadata.IsRequired && Field.Name.Contains("[-1]")==false) || Required == true))
+            if (IsFieldRequired())
             {
                 requiredDot = UIConfig.RequiredMarkerHtml;
                 output.Attributes.SetAttribute("aria-required", "true");
@@ -198,7 +237,31 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                         //combobox和tree用xmselect控件的验证
                         if (this is ComboBoxTagHelper combo || this is TreeTagHelper)
                         {
-                            var script = $@"
+                            // Issue #470 Slice J follow-up (2nd HIGH defect fix):
+                            // when this field rendered via the opt-in
+                            // 'renderSelect' island (IsUsingSelectIslandRender,
+                            // set by ComboBoxTagHelper/TreeTagHelper before
+                            // calling base.Process — see that property's doc
+                            // comment), the required state was already carried
+                            // inside the island payload
+                            // (RenderSelectIslandAction.LayVerify/LayReqText)
+                            // and is applied by ff._renderSelectAction right
+                            // after xmSelect.render(...) — nothing to emit here.
+                            // Emitting an inline script on this path would
+                            // either race window[Id] (unguarded) or silently
+                            // no-op ~100% of the time (guarded — the original
+                            // bug this follow-up fixes).
+                            //
+                            // On every OTHER path (flag off — the default; or
+                            // flag on but ChangeFunc is a non-identifier
+                            // expression, which keeps the legacy inline
+                            // xmSelect.render <script>), window[Id] is set
+                            // SYNCHRONOUSLY immediately before this script runs
+                            // — restored here byte-for-byte identical to
+                            // origin/dotnet10 (unguarded; no race is possible).
+                            if (!IsUsingSelectIslandRender)
+                            {
+                                var script = $@"
 <script>
     window['{this.Id}'].update({{
     layVerify:'required',
@@ -206,7 +269,8 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 }});
 </script>
 ";
-                            output.PostElement.AppendHtml(script);
+                                output.PostElement.AppendHtml(script);
+                            }
                         }
                         else
                         {

@@ -716,6 +716,196 @@ window.ff = {
         }
     },
 
+    // Issue #470 Slice J: shared xmSelect item-render template — reproduces
+    // the dropdown-item `template({item,sels,name,value})` xmSelect option
+    // AND the multi-select `model.label.block.template` option verbatim.
+    // Both are BYTE-IDENTICAL in the legacy inline <script> ComboBoxTagHelper
+    // / TreeTagHelper emit (all 4 combinations: combo/tree × single/multi) —
+    // both only ever read `item.icon`/`item.name`, ignoring the other
+    // arguments xmSelect passes, so one function safely serves both call
+    // sites. Kept as a plain top-level ff method (not a closure captured per
+    // action) since it has no per-call state — mirrors how the legacy inline
+    // <script> re-declared the identical function body at each call site.
+    _selectItemTemplate: function (item, sels, name, value) {
+        if (!item) { return ''; }
+        if (item.icon !== undefined && item.icon != '' && item.icon != null) {
+            return '<i class="' + item.icon + '"></i>' + item.name;
+        }
+        return item.name;
+    },
+
+    // Issue #470 Slice J: shared xmSelect single-select label template —
+    // reproduces the `model.label.abc.template` xmSelect option the legacy
+    // inline <script> emits for the `radio:true` (single-select) branch.
+    // Unlike _selectItemTemplate above, this one reads `sels[0]` (the
+    // currently-selected item), not `item` — a genuinely different function,
+    // also byte-identical across the combo/tree call sites.
+    _selectSingleLabelTemplate: function (item, sels) {
+        var s0 = sels && sels[0];
+        if (!s0) { return ''; }
+        if (s0.icon !== undefined && s0.icon != '' && s0.icon != null) {
+            return '<i class="' + s0.icon + '"></i>' + s0.name;
+        }
+        return s0.name;
+    },
+
+    // Issue #470 Slice J (#470-J): shared render body for the 'renderSelect'
+    // DispatchAction case (below) — the opt-in (UseSelectIslandRender, default
+    // OFF) eval-free island render for <wt:combobox>/<wt:tree>. Reproduces the
+    // CURRENT legacy inline xmSelect.render(...) <script> EXACTLY: same cfg
+    // shape, same remoteMethod/load closures (over action.remoteUrl/lazyUrl),
+    // same icon+name templates (_selectItemTemplate/_selectSingleLabelTemplate
+    // above), same on: handler wiring into ff.ChainChange, same
+    // window[action.id] / window[action.id+'defaultvalues'] globals, same
+    // chainInitial setTimeout(100) initial fire. xm-select is a plain
+    // <script src> global (NOT a layui.use(...) module), so — unlike
+    // slider/rate/colorpicker/ueditor/layedit — there is no module-load race
+    // to guard against and no _islandModulesFor entry; this dispatches
+    // synchronously, guarded only by its own existence check on `xmSelect`.
+    //
+    // TRUST BOUNDARY: action.changeFunc is ALWAYS a compile-time,
+    // developer-authored Razor literal (the ComboBoxTagHelper/TreeTagHelper
+    // ChangeFunc attribute value) — NEVER field/request/model data, the same
+    // trust class as bindSubmit's beforeSubmit (#558) / laydate's
+    // readyFn/changeFn/doneFn (#470 Slice H). The emitter (ComboBoxTagHelper/
+    // TreeTagHelper) only ever emits this action when ChangeFunc is absent or
+    // already a plain identifier; a non-identifier ChangeFunc keeps the legacy
+    // inline <script> instead (see the TagHelpers' Process methods). Resolved
+    // through the SAME ff._resolveGuardedWindowFn guard every other named-
+    // callback action uses — identifier regex + denylist + own-property +
+    // typeof function; a failed resolution silently no-ops that one callback,
+    // never throws, never evals.
+    _renderSelectAction: function (action) {
+        try {
+            if (!action || !action.id || !action.el) { return; }
+            if (typeof xmSelect === 'undefined' || typeof xmSelect.render !== 'function') {
+                if (typeof console !== 'undefined' && console.warn) {
+                    console.warn('[WTM] renderSelect action skipped: xmSelect is not loaded (#470).');
+                }
+                return;
+            }
+
+            var cfg = {
+                el: action.el,
+                name: action.name,
+                tips: action.tips,
+                disabled: action.disabled === true,
+                language: action.language === 'zn' ? 'zn' : 'en',
+                autoRow: action.autoRow === true,
+                filterable: action.filterable === true,
+                template: ff._selectItemTemplate,
+                height: (typeof action.height === 'string' && action.height) ? action.height : '400px',
+                data: Array.isArray(action.items) ? action.items : []
+            };
+
+            // combo: remote search — mirrors ComboBoxTagHelper's remoteMethod
+            // closure exactly (same ff.getComboItems(data.Data, []) call).
+            if (action.widget === 'combo' && typeof action.remoteUrl === 'string' && action.remoteUrl) {
+                cfg.remoteSearch = true;
+                cfg.remoteMethod = function (val, cb) {
+                    $.get(action.remoteUrl, { q: val }, function (data) {
+                        cb(ff.getComboItems(data.Data, []));
+                    });
+                };
+            }
+
+            // tree: lazy load — mirrors TreeTagHelper's load closure exactly
+            // (same ff.getTreeItems(data.Data, []) call).
+            if (action.widget === 'tree' && typeof action.lazyUrl === 'string' && action.lazyUrl) {
+                cfg.lazy = true;
+                cfg.load = function (node, cb) {
+                    $.get(action.lazyUrl, { id: node.value }, function (data) {
+                        cb(ff.getTreeItems(data.Data, []));
+                    });
+                };
+            }
+
+            if (action.widget === 'tree') {
+                cfg.tree = { strict: false, show: true, showFolderIcon: true, showLine: true, indent: 20 };
+            }
+
+            var showToolbar = action.showToolbar !== false;
+            if (action.multiSelect === false) {
+                cfg.radio = true;
+                cfg.clickClose = true;
+                cfg.model = { label: { type: 'abc', abc: { template: ff._selectSingleLabelTemplate } } };
+                cfg.toolbar = { show: showToolbar, list: ['CLEAR'] };
+            } else {
+                cfg.toolbar = { show: true, list: ['ALL', 'REVERSE', 'CLEAR'] };
+                cfg.model = { label: { block: { template: ff._selectItemTemplate } } };
+            }
+
+            var changeFn = ff._resolveGuardedWindowFn(action.changeFunc);
+            var chainSelfEl = document.getElementById(action.id);
+            cfg.on = function (data) {
+                if (action.linkTo) {
+                    var gate = true;
+                    if (changeFn) { gate = changeFn(data); }
+                    // #470 Slice J follow-up (2nd HIGH defect): LOOSE inequality
+                    // (`!=`), matching the legacy inline render's gate EXACTLY
+                    // (ComboBoxTagHelper.cs / TreeTagHelper.cs `on:` handler:
+                    // `if ({ChangeFunc} != false)`). Strict `!==` would fire the
+                    // chain for a ChangeFunc that returns 0, '', or '0' — every
+                    // one of which is `== false` but not `=== false` — diverging
+                    // from legacy, which blocks the chain for all three. Loose
+                    // `!=` blocks the chain for 0/''/'0'/false, exactly like
+                    // legacy, while still firing for null/undefined (JS: both
+                    // `null != false` and `undefined != false` are true) —
+                    // matching legacy's fallthrough for "no gate value returned".
+                    if (gate != false) {
+                        var u = action.triggerUrl || '';
+                        if (u.indexOf('?') === -1) { u += '?t=' + new Date().getTime(); }
+                        for (var i = 0; i < data.arr.length; i++) { u += '&id=' + data.arr[i].value; }
+                        ff.ChainChange(u, chainSelfEl);
+                    }
+                } else if (changeFn) {
+                    changeFn(data);
+                }
+            };
+
+            window[action.id] = xmSelect.render(cfg);
+            window[action.id + 'defaultvalues'] = Array.isArray(action.defaultValues) ? action.defaultValues : [];
+
+            // #470 Slice J follow-up (2nd HIGH defect): apply required-field
+            // validation as PART OF the island render, immediately after
+            // xmSelect.render(...) — the exact call BaseFieldTag.cs's
+            // (now island-path-skipped) inline <script> used to make:
+            // window[id].update({layVerify, layReqText}). Populated
+            // server-side (ComboBoxTagHelper/TreeTagHelper) ONLY when the
+            // field IsFieldRequired() AND this island path was taken, so
+            // this never double-applies alongside the (still-emitted, still
+            // unguarded) inline script on the flag-OFF / non-identifier-
+            // ChangeFunc fallback path. Runs synchronously right after
+            // render — correct ordering, no race with window[id]'s own
+            // (this line's) assignment above.
+            if (action.layVerify) {
+                window[action.id].update({ layVerify: action.layVerify, layReqText: action.layReqText });
+            }
+
+            // Reproduces the legacy inline render's initial-fire block EXACTLY
+            // (ComboBoxTagHelper.cs / TreeTagHelper.cs, the `{Id}u`/`{Id}data`
+            // setTimeout(100) branch): build the URL from action.triggerUrl,
+            // append '?t=<timestamp>' only when the URL has no query string
+            // yet, then append '&id=' for EACH of the field's own pre-selected
+            // values (action.defaultValues, wired from selectVal/vals) so the
+            // initial cascade request is scoped/filtered the same way the
+            // legacy render produces it — never the bare triggerUrl.
+            if (action.chainInitial && action.linkTo) {
+                setTimeout(function () {
+                    var initialUrl = action.triggerUrl || '';
+                    if (initialUrl.indexOf('?') === -1) { initialUrl += '?t=' + new Date().getTime(); }
+                    var initialVals = Array.isArray(action.defaultValues) ? action.defaultValues : [];
+                    for (var j = 0; j < initialVals.length; j++) { initialUrl += '&id=' + initialVals[j]; }
+                    ff.ChainChange(initialUrl, chainSelfEl, true);
+                }, 100);
+            }
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] renderSelect action failed:', e);
+            }
+        }
+    },
+
     // Issue #571: native, dependency-free tag/chip input render body for the
     // 'tagInput' DispatchAction case (below). Unlike slider/rate/colorpicker
     // (#552), this widget has NO layui module dependency at all — it is built
@@ -1274,6 +1464,16 @@ window.ff = {
                 // <script> exactly), so this case just delegates straight through.
                 case 'layedit':
                     ff._renderLayeditAction(action);
+                    break;
+                // Issue #470 Slice J: thin JSON wrapper over xmSelect.render(...)
+                // for <wt:combobox>/<wt:tree> — the opt-in (UseSelectIslandRender,
+                // default OFF) eval-free island render. See _renderSelectAction
+                // for the full rationale; that function performs its own
+                // existence/guard checks (xmSelect loaded, action shape), so this
+                // case just delegates straight through, same pattern as
+                // 'ueditor'/'layedit' above.
+                case 'renderSelect':
+                    ff._renderSelectAction(action);
                     break;
                 // Issue #558 (#470-C): safe named-callback submit binding —
                 // mechanism only (FormTagHelper does not emit this yet). Mirrors
@@ -2768,9 +2968,25 @@ window.ff = {
         }
         targetfilter += "div";
         //clear
+        // Issue #470 Slice J: existence-guard the combo/tree clear step —
+        // mirrors ff.LoadComboItems' combo/tree existence guard (#633/#645).
+        // window[comboid] is undefined until the widget's render call has
+        // actually run — for a legacy inline <script> render, blocked by the
+        // #627 kill-switch, or for an island-rendered widget (#470 Slice J
+        // opt-in UseSelectIslandRender) whose 'renderSelect' island dispatch
+        // (DOMContentLoaded-deferred) simply hasn't fired yet. Without this
+        // guard, window[comboid].update(...) throws an uncaught TypeError
+        // instead of degrading with a diagnostic — pure defense, no behavior
+        // change for any currently-working (already-rendered) config.
         switch (controltype) {
             case "combo":
-                window[comboid].update({ data: [] });
+                if (!window[comboid] || typeof window[comboid].update !== 'function') {
+                    if (typeof console !== 'undefined' && console.warn) {
+                        console.warn('[WTM] ChainChange: widget "' + comboid + '" was never rendered — skipping clear (#470).');
+                    }
+                } else {
+                    window[comboid].update({ data: [] });
+                }
                 break;
             case "checkbox":
                 target.html('');
@@ -2781,7 +2997,13 @@ window.ff = {
                 form.render('radio', targetfilter);
                 break;
             case "tree":
-                window[comboid].update({ data: [] });
+                if (!window[comboid] || typeof window[comboid].update !== 'function') {
+                    if (typeof console !== 'undefined' && console.warn) {
+                        console.warn('[WTM] ChainChange: widget "' + comboid + '" was never rendered — skipping clear (#470).');
+                    }
+                } else {
+                    window[comboid].update({ data: [] });
+                }
                 break;
             case "transfer":
                 layui.transfer.reload(targetid, {
@@ -2800,9 +3022,18 @@ window.ff = {
                         if (usedefaultvalue == true) {
                             df = ff._readFieldDefaults(target, comboid);
                         }
-                       window[comboid].update({ data: ff.getTreeItems(data.Data,df) });
-                        // Issue #645: claim the target — see the comment above ff.ChainChange.
-                        target.attr('data-wtm-chain-applied', '1');
+                        // Issue #470 Slice J: existence-guard the apply step — see
+                        // the comment above the clear-step switch for the full
+                        // rationale (same invariant as ff.LoadComboItems' guard).
+                        if (!window[comboid] || typeof window[comboid].update !== 'function') {
+                            if (typeof console !== 'undefined' && console.warn) {
+                                console.warn('[WTM] ChainChange: widget "' + comboid + '" was never rendered — items were fetched but could not be applied (#470).');
+                            }
+                        } else {
+                            window[comboid].update({ data: ff.getTreeItems(data.Data,df) });
+                            // Issue #645: claim the target — see the comment above ff.ChainChange.
+                            target.attr('data-wtm-chain-applied', '1');
+                        }
                     }
                     if (controltype === "transfer") {
                         layui.transfer.reload(targetid, {
@@ -2817,9 +3048,18 @@ window.ff = {
                         if (usedefaultvalue == true) {
                             df = ff._readFieldDefaults(target, comboid);
                       }
-                        window[comboid].update({ data: ff.getComboItems(data.Data, df, usedefaultvalue) });
-                        // Issue #645: claim the target — see the comment above ff.ChainChange.
-                        target.attr('data-wtm-chain-applied', '1');
+                        // Issue #470 Slice J: existence-guard the apply step — see
+                        // the comment above the clear-step switch for the full
+                        // rationale (same invariant as ff.LoadComboItems' guard).
+                        if (!window[comboid] || typeof window[comboid].update !== 'function') {
+                            if (typeof console !== 'undefined' && console.warn) {
+                                console.warn('[WTM] ChainChange: widget "' + comboid + '" was never rendered — items were fetched but could not be applied (#470).');
+                            }
+                        } else {
+                            window[comboid].update({ data: ff.getComboItems(data.Data, df, usedefaultvalue) });
+                            // Issue #645: claim the target — see the comment above ff.ChainChange.
+                            target.attr('data-wtm-chain-applied', '1');
+                        }
                     }
                     if (controltype === "checkbox") {
                         for (i = 0; i < data.Data.length; i++) {

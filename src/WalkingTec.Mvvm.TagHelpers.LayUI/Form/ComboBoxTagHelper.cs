@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.Encodings.Web;
+using System.Text.RegularExpressions;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Extensions;
 using System.Text.Json;
@@ -76,6 +77,15 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
         };
 
+        // Issue #470 Slice J: identifier check for the opt-in 'renderSelect'
+        // island decision below — the SAME identifier class framework_layui.js's
+        // ff._resolveGuardedWindowFn enforces (a bare JS identifier, nothing
+        // else). Mirrors TextBoxTagHelper's _identifierRegex (#601) exactly,
+        // including the `\z` (not `$`) end anchor — see that field's comment
+        // for why `$` would silently disagree with the client-side
+        // /^[A-Za-z_$][\w$]*$/ regex on a value ending in '\n'.
+        private static readonly Regex _identifierRegex = new(@"^[A-Za-z_$][\w$]*\z", RegexOptions.Compiled);
+
         private WTMContext _wtm;
         public ComboBoxTagHelper(IOptionsMonitor<Configs> configs, WTMContext wtm)
         {
@@ -118,9 +128,14 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             {
                 output.Attributes.Add("wtm-cf", FormatFuncName(ChangeFunc, false));
             }
+            // Issue #470 Slice J: hoisted out of the `if` block (was a
+            // block-scoped `var linkto`) so the opt-in 'renderSelect' island
+            // decision further down can reuse the same value instead of
+            // re-deriving it — purely a scope widening, the attribute-add
+            // below is unchanged.
+            string linkto = null;
             if (LinkField != null || string.IsNullOrEmpty(LinkId) == false)
             {
-                var linkto = "";
                 if (string.IsNullOrEmpty(LinkId))
                 {
                     linkto = Core.Utils.GetIdByName(LinkField.ModelExplorer.Container.ModelType.Name + "." + LinkField.Name);
@@ -176,6 +191,16 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 }
             }
 
+            // Issue #470 Slice J (always-on, flag-independent): the SAME
+            // data-wtm-defaults attribute CheckBoxTagHelper/RadioTagHelper
+            // already emit (#632) — ff._readFieldDefaults (framework_layui.js)
+            // already prefers this attribute over the window[Id+'defaultvalues']
+            // global. Present at HTML-parse time on every path (full page,
+            // dialog replay, fragment), decoupled from the widget's own render
+            // timing, unlike the legacy global which is only set once the
+            // (synchronous or island-deferred) render script actually runs.
+            // Value equals the existing global's value — behavior-preserving.
+            output.Attributes.Add("data-wtm-defaults", LayuiIslandJson.Serialize(selectVal, _islandJsonOptions));
 
             if (string.IsNullOrEmpty(ItemUrl) == false)
             {
@@ -279,9 +304,94 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 }
             }
 
-            var script = $@"
+            // Issue #470 Slice J: opt-in (UIConfig.UseSelectIslandRender,
+            // default OFF) eval-free 'renderSelect' island render — see
+            // WtmUIOptions.UseSelectIslandRender and
+            // ff._renderSelectAction (framework_layui.js) for the full
+            // rationale. ChangeFuncName mirrors TextBoxTagHelper's #601
+            // 3-way decision: FormatFuncName(..., appendparameter:false)
+            // truncates any explicit call-argument syntax down to the bare
+            // function name; a plain-identifier name (or no ChangeFunc at
+            // all) is safe to carry as JSON island data (resolved
+            // client-side via the SAME guarded window[name] lookup every
+            // other named-callback action uses), a non-identifier name is
+            // NOT — it keeps the exact legacy inline render below, so a
+            // developer's arbitrary callback expression is never silently
+            // dropped.
+            string changeFuncName = string.IsNullOrEmpty(ChangeFunc) ? null : FormatFuncName(ChangeFunc, false);
+            bool changeIsIdentifier = changeFuncName != null && _identifierRegex.IsMatch(changeFuncName);
+            bool useSelectIsland = UIConfig.UseSelectIslandRender && (changeFuncName == null || changeIsIdentifier);
+
+            // Issue #470 Slice J follow-up (2nd HIGH defect fix): tell
+            // BaseFieldTag.Process (called via base.Process(...) at the end
+            // of this method) whether this field's widget is being rendered
+            // via the island — see IsUsingSelectIslandRender's doc comment
+            // for why that changes how required-validation must be wired.
+            IsUsingSelectIslandRender = useSelectIsland;
+
+            if (useSelectIsland)
+            {
+                var renderSelectAction = new RenderSelectIslandAction
+                {
+                    Widget = "combo",
+                    Id = Id,
+                    El = "#" + Id,
+                    Name = Field.Name,
+                    Tips = EmptyText,
+                    Disabled = Disabled,
+                    Language = THProgram._localizer["Sys.LayuiDateLan"] == "CN" ? "zn" : "en",
+                    AutoRow = AutoRow,
+                    Filterable = string.IsNullOrEmpty(RemoteUrl) ? (EnableSearch == true) : true,
+                    MultiSelect = MultiSelect == true,
+                    ShowToolbar = true,
+                    Height = "400px",
+                    RemoteUrl = string.IsNullOrEmpty(RemoteUrl) ? null : RemoteUrl,
+                    Items = GetLayuiTree(listItems, selectVal),
+                    ChangeFunc = changeIsIdentifier ? changeFuncName : null,
+                    LinkTo = linkto,
+                    TriggerUrl = TriggerUrl,
+                    ChainInitial = selectVal?.Count > 0 && linkto != null,
+                    DefaultValues = selectVal
+                };
+                // Issue #470 Slice J follow-up (2nd HIGH defect fix): carry
+                // the required-validation state into the island payload —
+                // IsFieldRequired() is the EXACT condition BaseFieldTag.Process
+                // gates its required-validation block on. ff._renderSelectAction
+                // applies these right after xmSelect.render(...), the same
+                // window[Id].update({layVerify, layReqText}) call the
+                // (now island-path-skipped) inline script used to make.
+                if (IsFieldRequired())
+                {
+                    renderSelectAction.LayVerify = "required";
+                    renderSelectAction.LayReqText = $"{THProgram._localizer["Validate.{0}required", Field?.Metadata?.DisplayName ?? Field?.Metadata?.Name]}";
+                }
+                output.PostElement.AppendHtml($@"<script type=""application/json"" class=""wtm-dialog-init"">{LayuiIslandJson.Serialize(renderSelectAction, _islandJsonOptions)}</script>");
+            }
+            else
+            {
+                // Issue #470 Slice J: when the flag is ON but ChangeFunc is a
+                // non-identifier expression (island render skipped for this
+                // one field — see useSelectIsland above), surface a
+                // deprecation nudge in the browser console so the fallback
+                // is visible during migration. ChangeFunc is a compile-time,
+                // developer-authored Razor literal (never request/field
+                // data — same trust class as every other named-callback
+                // attribute in this file), but is still run through
+                // JavaScriptEncoder here as defense-in-depth since it is
+                // spliced into a JS string literal.
+                // Note: when empty, this contributes ZERO characters (not even
+                // a blank line) to `script` below, so the flag-OFF / identifier
+                // path stays byte-for-byte identical to the pre-Slice-J inline
+                // render — the trailing "\n" is embedded IN the string itself
+                // (only present when the warning fires) rather than as a
+                // separate literal line in the `script` template.
+                var deprecationWarn = (UIConfig.UseSelectIslandRender && changeFuncName != null && !changeIsIdentifier)
+                    ? $"console.warn('[WTM] ComboBoxTagHelper #{Id}: ChangeFunc \\'{JavaScriptEncoder.Default.Encode(ChangeFunc)}\\' is not a plain identifier — UseSelectIslandRender is ON but island render was skipped for this field; keeping the legacy inline script. See #470 Slice J.');\n"
+                    : "";
+
+                var script = $@"
 <script>
-var {Id} = xmSelect.render({{
+{deprecationWarn}var {Id} = xmSelect.render({{
     el: '#{Id}',
     name:'{Field.Name}',
     tips:'{EmptyText}',
@@ -374,7 +484,8 @@ var {Id} = xmSelect.render({{
         " : "")}
 </script>
 ";
-            output.PostElement.AppendHtml(script);
+                output.PostElement.AppendHtml(script);
+            }
             #endregion
 
 
@@ -442,6 +553,111 @@ var {Id} = xmSelect.render({{
         // leaves an omitted trailing arg `undefined`, same effective result).
         [JsonPropertyName("disabled")]
         public bool? Disabled { get; set; }
+    }
+
+    // Issue #470 Slice J: DTO for the bare (non-wrapped) 'renderSelect' JSON
+    // island — the opt-in (WtmUIOptions.UseSelectIslandRender, default OFF)
+    // eval-free replacement for the inline xmSelect.render(...) <script>
+    // ComboBoxTagHelper/TreeTagHelper otherwise emit. Shared by both
+    // TagHelpers (this file and TreeTagHelper.cs) — same shape, `Widget`
+    // discriminates 'combo' vs 'tree' the same way LoadComboItemsIslandAction's
+    // ControlType does. ff._renderSelectAction (framework_layui.js) is the
+    // sole consumer; ff._normalizeIslandPayload wraps this into the
+    // {actions:[...]} shape ff.DispatchAction expects. Not part of the public
+    // API surface.
+    //
+    // TRUST BOUNDARY: ChangeFunc is ALWAYS a compile-time, developer-authored
+    // Razor literal (the ChangeFunc TagHelper attribute value) — NEVER
+    // field/request/model data, the same trust class as bindSubmit's
+    // beforeSubmit (#558) / laydate's readyFn/changeFn/doneFn (#470 Slice H).
+    // The emitters only ever set this when the resolved name is already a
+    // plain identifier (see ComboBoxTagHelper/TreeTagHelper.Process); a
+    // non-identifier name keeps the legacy inline <script> instead and this
+    // field stays null for that field.
+    internal sealed class RenderSelectIslandAction
+    {
+        [JsonPropertyName("type")]
+        public string Type { get; set; } = "renderSelect";
+
+        [JsonPropertyName("widget")]
+        public string Widget { get; set; }
+
+        [JsonPropertyName("id")]
+        public string Id { get; set; }
+
+        [JsonPropertyName("el")]
+        public string El { get; set; }
+
+        [JsonPropertyName("name")]
+        public string Name { get; set; }
+
+        [JsonPropertyName("tips")]
+        public string Tips { get; set; }
+
+        [JsonPropertyName("disabled")]
+        public bool Disabled { get; set; }
+
+        [JsonPropertyName("language")]
+        public string Language { get; set; }
+
+        [JsonPropertyName("autoRow")]
+        public bool AutoRow { get; set; }
+
+        [JsonPropertyName("filterable")]
+        public bool Filterable { get; set; }
+
+        [JsonPropertyName("multiSelect")]
+        public bool MultiSelect { get; set; }
+
+        // Tree's single-select toolbar visibility is developer-configurable
+        // (TreeTagHelper.ShowToolbar); combo hard-codes true in the legacy
+        // inline render, reproduced the same way here.
+        [JsonPropertyName("showToolbar")]
+        public bool ShowToolbar { get; set; } = true;
+
+        [JsonPropertyName("height")]
+        public string Height { get; set; }
+
+        [JsonPropertyName("remoteUrl")]
+        public string RemoteUrl { get; set; }
+
+        [JsonPropertyName("lazyUrl")]
+        public string LazyUrl { get; set; }
+
+        [JsonPropertyName("items")]
+        public List<LayuiTreeItem> Items { get; set; }
+
+        [JsonPropertyName("changeFunc")]
+        public string ChangeFunc { get; set; }
+
+        [JsonPropertyName("linkTo")]
+        public string LinkTo { get; set; }
+
+        [JsonPropertyName("triggerUrl")]
+        public string TriggerUrl { get; set; }
+
+        [JsonPropertyName("chainInitial")]
+        public bool ChainInitial { get; set; }
+
+        [JsonPropertyName("defaultValues")]
+        public List<string> DefaultValues { get; set; }
+
+        // Issue #470 Slice J follow-up (2nd HIGH defect fix): carries the
+        // required-validation state into the island payload so
+        // ff._renderSelectAction can apply it right after
+        // xmSelect.render(...) — window[Id].update({layVerify, layReqText}),
+        // the SAME call BaseFieldTag's (now island-path-skipped) inline
+        // <script> used to make. Only ComboBoxTagHelper/TreeTagHelper ever
+        // set this (when IsFieldRequired() is true AND the island path is
+        // taken); every other emitter leaves it null, and
+        // _islandJsonOptions' WhenWritingNull omits it from the JSON
+        // entirely, matching LoadComboItemsIslandAction.Disabled's existing
+        // convention.
+        [JsonPropertyName("layVerify")]
+        public string LayVerify { get; set; }
+
+        [JsonPropertyName("layReqText")]
+        public string LayReqText { get; set; }
     }
 
     // Issue #651: ff.OpenDialog2 (the <wt:selector> search-panel dialog opener,
