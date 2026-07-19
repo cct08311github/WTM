@@ -117,7 +117,10 @@ describe('#632 (redesigned) — source sweep', () => {
   });
 
   test('_islandModulesFor does not gain a module entry for fieldDefaults (no layui dependency)', () => {
-    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,2000}?\n\s*\},/);
+    // Issue #470 Slice L: bumped the capture cap (2000 -> 2500) to fit the
+    // 'upload'/'multiUpload' additions to _islandModulesFor — same rationale
+    // as #470 Slice K's own bump of this class of hardcoded regex cap.
+    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,2500}?\n\s*\},/);
     expect(block).not.toBeNull();
     expect(block[0]).not.toMatch(/a\.type\s*===\s*['"]fieldDefaults['"]/);
   });

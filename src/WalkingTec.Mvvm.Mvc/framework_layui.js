@@ -256,8 +256,13 @@ window.ff = {
     // `layui.use(['transfer'], function(){ ... })`), so — same rationale as
     // laydate/slider/rate/colorpicker/ueditor/layedit above — dispatching
     // before the module has finished loading would silently no-op.
+    // Issue #470 Slice L: 'upload'/'multiUpload' likewise need an entry —
+    // layui.upload IS a layui.use(...) module (same rationale as
+    // 'renderTransfer' above). 'uploadExisting' is intentionally ABSENT —
+    // it is pure jQuery.ajax + DOM building with no layui module dependency
+    // at all, same rationale as 'loadComboItems'.
     _islandModulesFor: function (payload) {
-        var needed = { form: false, laydate: false, slider: false, rate: false, colorpicker: false, ueditorconfig: false, layedit: false, transfer: false };
+        var needed = { form: false, laydate: false, slider: false, rate: false, colorpicker: false, ueditorconfig: false, layedit: false, transfer: false, upload: false };
         if (payload && payload.actions) {
             for (var i = 0; i < payload.actions.length; i++) {
                 var a = payload.actions[i];
@@ -283,6 +288,8 @@ window.ff = {
                     needed.layedit = true;
                 } else if (a.type === 'renderTransfer') {
                     needed.transfer = true;
+                } else if (a.type === 'upload' || a.type === 'multiUpload') {
+                    needed.upload = true;
                 }
             }
         }
@@ -295,6 +302,7 @@ window.ff = {
         if (needed.ueditorconfig) { mods.push('ueditorconfig'); }
         if (needed.layedit) { mods.push('layedit'); }
         if (needed.transfer) { mods.push('transfer'); }
+        if (needed.upload) { mods.push('upload'); }
         return mods;
     },
 
@@ -1059,6 +1067,381 @@ window.ff = {
         }
     },
 
+    // Issue #470 Slice L: shared render body for the 'upload' DispatchAction
+    // case (below) — the opt-in (UseSelectIslandRender, default OFF — the
+    // SAME flag #470 Slices J/K use) eval-free island render for
+    // <wt:upload>. Reproduces the CURRENT legacy inline
+    // `layui.use(['upload'], function(){ layui.upload.render(...) })`
+    // <script> functionally: same xhr/progress wiring, same before/done/
+    // error handlers, same ShowPreview branch (layer preview thumbnail +
+    // delete icon, unless the icon/button was already produced by a prior
+    // upload — legacy re-derives this from `res` every time, so does this).
+    //
+    // The legacy inline <script> also declared TWO fresh globals per widget
+    // instance — window['{Id}DoDelete']/['{Id}DoPreview'] — and bound each
+    // built element's click handler directly to them. This island instead
+    // tags every clickable element with data-wtm-upload-action="delete"/
+    // "preview" + data-wtm-upload-id/data-wtm-file-id, resolved by a SINGLE
+    // document-level delegated click listener (registered once, near
+    // ff.upload below) that calls ff.upload.doDelete/doPreview. This is a
+    // genuine improvement, not just a refactor: the legacy per-widget
+    // globals only existed once THAT widget's own <script> block had
+    // executed (a window[Id]-shaped timing dependency, the same class #470
+    // Slice J's follow-up fix had to work around for xmSelect's required-
+    // validation wiring) — ff.upload's functions live on the always-
+    // available `ff` namespace, loaded with this file before any widget
+    // markup exists, so there is no such race to audit for here at all.
+    //
+    // layui.upload IS a layui.use(...) module (the legacy inline <script>
+    // this island replaces always wrapped its call in
+    // `layui.use(['upload'], function(){ ... })`), so — same rationale as
+    // laydate/slider/rate/colorpicker/ueditor/layedit/transfer above —
+    // _islandModulesFor's 'upload' entry defers dispatch until the module is
+    // confirmed loaded.
+    //
+    // UploadTagHelper has no developer-facing callback attribute at all
+    // (unlike ComboBox/Tree/Transfer's ChangeFunc) — so there is no
+    // identifier-vs-non-identifier 3-way decision to make here; the ONLY
+    // gate is UseSelectIslandRender itself (see UploadTagHelper.cs).
+    _renderUploadAction: function (action) {
+        try {
+            if (!action || !action.id || !action.el) { return; }
+            if (typeof layui === 'undefined' || !layui.upload ||
+                typeof layui.upload.render !== 'function') {
+                if (typeof console !== 'undefined' && console.warn) {
+                    console.warn('[WTM] upload action skipped: layui.upload is not loaded (#470).');
+                }
+                return;
+            }
+
+            var id = action.id;
+            var labelEl = document.getElementById(id + 'label');
+            var hiddenEl = document.getElementById(id);
+            var loadIndex = 0;
+            var previewObj;
+
+            // Mirrors the legacy inline <script>'s xhrOnProgress closure
+            // exactly (the `xhr:`/`progress:` wiring that drives the
+            // .layui-progress bar — a page-wide selector in the legacy
+            // script too, not scoped per-widget; reproduced identically,
+            // quirk and all).
+            var xhrOnProgress = function (fn) {
+                xhrOnProgress.onprogress = fn;
+                return function () {
+                    var xhr = $.ajaxSettings.xhr();
+                    if (typeof xhrOnProgress.onprogress !== 'function') { return xhr; }
+                    if (xhrOnProgress.onprogress && xhr.upload) {
+                        xhr.upload.onprogress = xhrOnProgress.onprogress;
+                    }
+                    return xhr;
+                };
+            };
+
+            var opts = {
+                elem: action.el,
+                url: action.url,
+                size: action.size,
+                accept: 'file',
+                xhr: xhrOnProgress,
+                progress: function (value) {
+                    var bars = document.querySelectorAll('.layui-progress .layui-progress-bar');
+                    for (var bi = 0; bi < bars.length; bi++) { bars[bi].style.width = value + '%'; }
+                },
+                before: function (obj) {
+                    loadIndex = layui.layer.load(2);
+                    previewObj = obj;
+                },
+                done: function (res) {
+                    layui.layer.close(loadIndex);
+                    if (!res || !res.Data || res.Data.Id === '') {
+                        if (labelEl) { labelEl.innerHTML = ''; }
+                        layui.layer.msg(action.uploadFailedText || '');
+                        return;
+                    }
+                    if (labelEl) { labelEl.innerHTML = ''; }
+                    if (hiddenEl) { hiddenEl.value = res.Data.Id; }
+                    if (action.showPreview) {
+                        if (previewObj && typeof previewObj.preview === 'function') {
+                            previewObj.preview(function (idx, file, result) {
+                                if (!labelEl) { return; }
+                                var img = document.createElement('img');
+                                img.src = result;
+                                img.alt = file.name;
+                                img.className = 'layui-upload-img';
+                                img.width = action.previewWidth;
+                                img.height = action.previewHeight;
+                                img.id = id + 'preview';
+                                img.style.cursor = 'pointer';
+                                img.setAttribute('data-wtm-upload-action', 'preview');
+                                img.setAttribute('data-wtm-upload-id', id);
+                                img.setAttribute('data-wtm-file-id', res.Data.Id);
+                                labelEl.appendChild(img);
+                                var del = document.createElement('i');
+                                del.className = 'layui-icon layui-icon-close';
+                                del.id = id + 'del';
+                                del.style.cssText = 'font-size: 20px;position:absolute;left:' +
+                                    (action.previewWidth - 10) + 'px;top:-10px;color: #ff0000;';
+                                del.setAttribute('data-wtm-upload-action', 'delete');
+                                del.setAttribute('data-wtm-upload-id', id);
+                                del.setAttribute('data-wtm-file-id', res.Data.Id);
+                                labelEl.appendChild(del);
+                            });
+                        }
+                    } else {
+                        if (labelEl) {
+                            var btn = document.createElement('button');
+                            btn.className = 'layui-btn layui-btn-sm layui-btn-danger';
+                            btn.type = 'button';
+                            btn.id = id + 'del';
+                            btn.style.color = 'white';
+                            btn.textContent = (res.Data.Name || '') + '  ' + (action.deleteText || '');
+                            btn.setAttribute('data-wtm-upload-action', 'delete');
+                            btn.setAttribute('data-wtm-upload-id', id);
+                            btn.setAttribute('data-wtm-file-id', res.Data.Id);
+                            labelEl.appendChild(btn);
+                        }
+                        var bars2 = document.querySelectorAll('.layui-progress .layui-progress-bar');
+                        for (var bj = 0; bj < bars2.length; bj++) { bars2[bj].style.width = '0%'; }
+                    }
+                },
+                error: function () {
+                    layui.layer.close(loadIndex);
+                }
+            };
+            if (action.exts) { opts.exts = action.exts; }
+
+            layui.upload.render(opts);
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] upload action failed:', e);
+            }
+        }
+    },
+
+    // Issue #470 Slice L: shared render body for the 'multiUpload'
+    // DispatchAction case (below) — the <wt:multiupload> sibling of
+    // _renderUploadAction above. Reproduces the legacy inline
+    // `{Id}selected` array + `{Id}SetValues()` write-back functionally via
+    // ff.upload's per-id state registry (ff.upload._getState) instead of a
+    // fresh window-scoped `{Id}selected` array per widget — see ff.upload
+    // below for the full rationale (same eliminated global-timing
+    // dependency as _renderUploadAction).
+    _renderMultiUploadAction: function (action) {
+        try {
+            if (!action || !action.id || !action.el) { return; }
+            if (typeof layui === 'undefined' || !layui.upload ||
+                typeof layui.upload.render !== 'function') {
+                if (typeof console !== 'undefined' && console.warn) {
+                    console.warn('[WTM] multiUpload action skipped: layui.upload is not loaded (#470).');
+                }
+                return;
+            }
+
+            var id = action.id;
+            var labelEl = document.getElementById(id + 'label');
+            var state = ff.upload._getState(id);
+            // Mirrors the legacy inline render's unconditional
+            // `{Id}SetValues();` call immediately after `{Id}selected` is
+            // seeded — reproduces the initial hidden-input write-back for
+            // any pre-existing selected files before the user interacts
+            // with the widget at all.
+            ff.upload.setValues(id);
+            var loadIndex = 0;
+
+            var opts = {
+                elem: action.el,
+                url: action.url,
+                size: action.size,
+                accept: 'file',
+                multiple: true,
+                number: typeof action.number === 'number' ? action.number : 0,
+                before: function () {
+                    loadIndex = layui.layer.load(2);
+                },
+                done: function (res) {
+                    layui.layer.close(loadIndex);
+                    if (!res || !res.Data || res.Data.Id === '') {
+                        layui.layer.msg(action.uploadFailedText || '');
+                        return;
+                    }
+                    state.selected.push(res.Data.Id);
+                    ff.upload.setValues(id);
+                    if (labelEl) {
+                        var label = document.createElement('label');
+                        label.id = 'label' + res.Data.Id;
+                        if (action.showPreview) {
+                            var img = document.createElement('img');
+                            img.alt = res.Data.Name || '';
+                            img.setAttribute('layer-src',
+                                '/_Framework/GetFile?id=' + res.Data.Id + '&_DONOT_USE_CS=' + state.cs);
+                            img.src = '/_Framework/GetFile?id=' + res.Data.Id + '&stream=true&width=' +
+                                action.previewWidth + '&height=' + action.previewHeight +
+                                '&_DONOT_USE_CS=' + state.cs;
+                            img.className = 'layui-upload-img';
+                            img.width = action.previewWidth;
+                            img.height = action.previewHeight;
+                            img.id = 'preview' + res.Data.Id;
+                            img.style.cssText = 'cursor:pointer;margin-bottom:5px';
+                            img.setAttribute('data-wtm-upload-action', 'preview');
+                            img.setAttribute('data-wtm-upload-id', id);
+                            img.setAttribute('data-wtm-file-id', res.Data.Id);
+                            label.appendChild(img);
+                            var del = document.createElement('i');
+                            del.className = 'layui-icon layui-icon-close';
+                            del.id = 'del' + res.Data.Id;
+                            del.style.cssText = 'font-size: 20px;position:relative;left:-10px;top:-27px;' +
+                                'color: #ff0000;cursor: pointer;';
+                            del.setAttribute('data-wtm-upload-action', 'delete');
+                            del.setAttribute('data-wtm-upload-id', id);
+                            del.setAttribute('data-wtm-file-id', res.Data.Id);
+                            label.appendChild(del);
+                        } else {
+                            var btn = document.createElement('button');
+                            btn.className = 'layui-btn layui-btn-sm layui-btn-danger';
+                            btn.type = 'button';
+                            btn.id = 'del' + res.Data.Id;
+                            btn.style.color = 'white';
+                            btn.style.marginLeft = '0px';
+                            btn.textContent = (res.Data.Name || '') + '  ' + (action.deleteText || '');
+                            btn.setAttribute('data-wtm-upload-action', 'delete');
+                            btn.setAttribute('data-wtm-upload-id', id);
+                            btn.setAttribute('data-wtm-file-id', res.Data.Id);
+                            label.appendChild(btn);
+                            label.appendChild(document.createElement('br'));
+                        }
+                        labelEl.appendChild(label);
+                    }
+                },
+                error: function () {
+                    layui.layer.close(loadIndex);
+                }
+            };
+            if (action.exts) { opts.exts = action.exts; }
+
+            layui.upload.render(opts);
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] multiUpload action failed:', e);
+            }
+        }
+    },
+
+    // Issue #470 Slice L: shared render body for the 'uploadExisting'
+    // DispatchAction case (below) — the opt-in eval-free replacement for
+    // UploadTagHelper's/MultiUploadTagHelper's "existing file" init
+    // <script> (the block that fetches a stored file's display name via
+    // /_Framework/GetFileName/<id> and builds the preview/delete markup for
+    // a field that already has a value when the form first renders).
+    // Reproduces the legacy $.ajax(...).success(...) markup building
+    // functionally, but via safe DOM APIs (createElement/textContent/
+    // setAttribute — see ff._buildUploadExistingEntry below) instead of raw
+    // HTML string concatenation splicing the ajax-returned file NAME
+    // directly into an HTML string. That raw-concat pattern is the SAME
+    // #332-class attribute/tag-breakout risk #470 Slice K's ff._makeInput
+    // deviation closed for Transfer's hidden inputs — applied here to a
+    // value that is genuinely user-influenceable (a previously-uploaded
+    // file's stored display name).
+    //
+    // No layui.use(...) module dependency at all (pure jQuery.ajax + DOM
+    // building) — same rationale as 'loadComboItems' — so this dispatches
+    // immediately; no _islandModulesFor entry needed.
+    _renderUploadExistingAction: function (action) {
+        try {
+            if (!action || !action.id || !Array.isArray(action.files) || action.files.length === 0) { return; }
+            var id = action.id;
+            var labelEl = document.getElementById(id + 'label');
+            if (!labelEl) { return; }
+            for (var i = 0; i < action.files.length; i++) {
+                (function (file) {
+                    if (!file || !file.fileId || !file.getUrl) { return; }
+                    $.ajax({
+                        cache: false,
+                        type: 'GET',
+                        url: file.getUrl,
+                        async: true,
+                        success: function (data) {
+                            ff._buildUploadExistingEntry(labelEl, id, file, data, action);
+                        }
+                    });
+                })(action.files[i]);
+            }
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] uploadExisting action failed:', e);
+            }
+        }
+    },
+
+    // Issue #470 Slice L: DOM-builder helper for _renderUploadExistingAction
+    // above — factored out so it can be unit-tested directly against a
+    // synchronous `data` value instead of only through the async $.ajax
+    // mock. Mirrors the legacy inline <script>'s 4-branch matrix EXACTLY
+    // (ShowPreview x Disabled): preview img (+ delete icon unless Disabled)
+    // / disabled download link / delete button. Single-mode markup appends
+    // straight into the widget's own #{id}label container; multi-mode
+    // markup wraps each entry in its own <label id="label{fileId}">, the
+    // same way the legacy MultiUpload inline script did (so
+    // ff.upload.doDelete's multi-mode branch can find and remove it by that
+    // id).
+    _buildUploadExistingEntry: function (labelEl, id, file, name, action) {
+        var mode = action.mode === 'multi' ? 'multi' : 'single';
+        var wrap = mode === 'multi' ? document.createElement('label') : null;
+        if (wrap) { wrap.id = 'label' + file.fileId; }
+        var target = wrap || labelEl;
+        var safeName = (name === undefined || name === null) ? '' : String(name);
+
+        if (action.showPreview) {
+            var img = document.createElement('img');
+            img.src = file.pictureUrl || '';
+            img.alt = safeName;
+            img.className = 'layui-upload-img';
+            img.width = action.previewWidth;
+            img.height = action.previewHeight;
+            img.id = mode === 'multi' ? 'preview' + file.fileId : id + 'preview';
+            img.style.cursor = 'pointer';
+            if (mode === 'multi') {
+                img.setAttribute('layer-src', file.downloadUrl || '');
+                img.style.marginBottom = '5px';
+            }
+            img.setAttribute('data-wtm-upload-action', 'preview');
+            img.setAttribute('data-wtm-upload-id', id);
+            img.setAttribute('data-wtm-file-id', file.fileId);
+            target.appendChild(img);
+            if (!action.disabled) {
+                var del = document.createElement('i');
+                del.className = 'layui-icon layui-icon-close';
+                del.id = mode === 'multi' ? 'del' + file.fileId : id + 'del';
+                del.style.cssText = mode === 'multi'
+                    ? 'font-size: 20px;position:relative;left:-10px;top:-27px;color: #ff0000;cursor:pointer;margin-bottom:5px'
+                    : ('font-size: 20px;position:absolute;left:' + (action.previewWidth - 10) + 'px;top:-10px;color: #ff0000;');
+                del.setAttribute('data-wtm-upload-action', 'delete');
+                del.setAttribute('data-wtm-upload-id', id);
+                del.setAttribute('data-wtm-file-id', file.fileId);
+                target.appendChild(del);
+            }
+        } else if (action.disabled) {
+            var link = document.createElement('a');
+            link.className = 'layui-btn layui-btn-primary layui-btn-xs';
+            link.style.cssText = 'margin:9px 0;width:unset width:300px;';
+            link.href = file.downloadUrl || '';
+            link.textContent = safeName;
+            target.appendChild(link);
+        } else {
+            var btn = document.createElement('button');
+            btn.className = 'layui-btn layui-btn-sm layui-btn-danger';
+            btn.type = 'button';
+            btn.id = mode === 'multi' ? 'del' + file.fileId : id + 'del';
+            btn.style.color = 'white';
+            btn.textContent = safeName + '  ' + (action.deleteText || '');
+            btn.setAttribute('data-wtm-upload-action', 'delete');
+            btn.setAttribute('data-wtm-upload-id', id);
+            btn.setAttribute('data-wtm-file-id', file.fileId);
+            target.appendChild(btn);
+            if (mode === 'multi') { target.appendChild(document.createElement('br')); }
+        }
+        if (wrap) { labelEl.appendChild(wrap); }
+    },
+
     // Issue #571: native, dependency-free tag/chip input render body for the
     // 'tagInput' DispatchAction case (below). Unlike slider/rate/colorpicker
     // (#552), this widget has NO layui module dependency at all — it is built
@@ -1634,6 +2017,28 @@ window.ff = {
                 // ff._renderTransferAction for the full rationale.
                 case 'renderTransfer':
                     ff._renderTransferAction(action);
+                    break;
+                // Issue #470 Slice L: thin JSON wrappers over
+                // layui.upload.render() — the opt-in (UseSelectIslandRender,
+                // default OFF) eval-free island render for <wt:upload>/
+                // <wt:multiupload>. See ff._renderUploadAction/
+                // ff._renderMultiUploadAction for the full rationale; those
+                // functions perform their own existence/guard checks (layui.
+                // upload loaded, action shape), so these cases just delegate
+                // straight through, same pattern as 'ueditor'/'layedit'/
+                // 'renderTransfer' above.
+                case 'upload':
+                    ff._renderUploadAction(action);
+                    break;
+                case 'multiUpload':
+                    ff._renderMultiUploadAction(action);
+                    break;
+                // Issue #470 Slice L: thin JSON wrapper over the "existing
+                // file" init ajax + markup build for <wt:upload>/
+                // <wt:multiupload>. See ff._renderUploadExistingAction for
+                // the full rationale.
+                case 'uploadExisting':
+                    ff._renderUploadExistingAction(action);
                     break;
                 // Issue #558 (#470-C): safe named-callback submit binding —
                 // mechanism only (FormTagHelper does not emit this yet). Mirrors
@@ -4002,6 +4407,172 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
         });
     }
 };
+
+// Issue #470 Slice L: ff.upload — shared, id-parameterized namespace
+// replacing the per-widget window['{Id}DoDelete']/['{Id}DoPreview']/
+// ['{Id}SetValues'] globals UploadTagHelper/MultiUploadTagHelper's legacy
+// inline <script> declared. Consumed by ff._renderUploadAction/
+// ff._renderMultiUploadAction/ff._buildUploadExistingEntry (above) AND by
+// the delegated click listener below.
+//
+// Per-instance data (connection string, field name, upload mode, the
+// multi-select's currently-selected file ids) is carried via data-wtm-*
+// attributes on the widget's own hidden `#{id}` input — UploadTagHelper.cs/
+// MultiUploadTagHelper.cs emit these ONLY when UseSelectIslandRender is ON
+// (see those files), present in the DOM at HTML-PARSE time (same technique
+// as ComboBoxTagHelper's data-wtm-defaults, #470 Slice J), independent of
+// the 'upload' layui module's own async load timing or the render island's
+// dispatch timing. ff.upload._getState lazily reads and caches those
+// attributes into a per-id in-memory registry on first access — whichever
+// caller asks first (a delegated click on an existing-file preview/delete
+// button, or the render island itself once its module has loaded) seeds
+// the SAME shared state object, so mutations (e.g. a MultiUpload delete
+// removing an id from `selected`) are visible to every subsequent caller
+// regardless of call order. This is what makes the existing-file delegated
+// handlers work "regardless of render timing": they never depend on the
+// 'upload' module or the render island having dispatched yet.
+window.ff.upload = {
+    _state: {},
+
+    _getState: function (id) {
+        if (ff.upload._state[id]) { return ff.upload._state[id]; }
+        var el = document.getElementById(id);
+        var state = {
+            mode: (el && el.getAttribute('data-wtm-upload-mode')) || 'single',
+            cs: (el && el.getAttribute('data-wtm-cs')) || '',
+            fieldName: (el && el.getAttribute('data-wtm-field-name')) || '',
+            selected: []
+        };
+        if (el) {
+            var raw = el.getAttribute('data-wtm-selected');
+            if (raw) {
+                try {
+                    var parsed = JSON.parse(raw);
+                    if (Array.isArray(parsed)) { state.selected = parsed; }
+                } catch (e) { /* malformed attribute -> empty selected, never throws */ }
+            }
+        }
+        ff.upload._state[id] = state;
+        return state;
+    },
+
+    // Mirrors the legacy inline <script>'s {Id}DoDelete(fileid) exactly, for
+    // both modes. Single mode: append a 'DeletedFileIds' hidden input (via
+    // ff._makeInput — the SAME DOM-safe builder #470 Slice K used for
+    // Transfer's hidden inputs, replacing the legacy's raw HTML string
+    // concatenation of `fileid`), clear the label, clear the hidden value,
+    // reset the (page-wide, same as legacy) progress bar. Multi mode: ajax
+    // DELETE round trip, then remove the '#label'+fileid element, filter
+    // `fileid` out of the shared selected-ids state, and re-run setValues.
+    doDelete: function (id, fileid) {
+        var state = ff.upload._getState(id);
+        if (state.mode === 'multi') {
+            $.ajax({
+                type: 'get',
+                url: '/api/_file/DeletedFile/' + fileid,
+                success: function () {
+                    var lbl = document.getElementById('label' + fileid);
+                    if (lbl && lbl.parentNode) { lbl.parentNode.removeChild(lbl); }
+                    state.selected = state.selected.filter(function (item) { return item != fileid; });
+                    ff.upload.setValues(id);
+                },
+                error: function () {
+                    if (typeof console !== 'undefined' && console.log) { console.log('failed'); }
+                }
+            });
+        } else {
+            var el = document.getElementById(id);
+            var form = (el && typeof el.closest === 'function') ? el.closest('form') : null;
+            if (form) {
+                var delInput = ff._makeInput('hidden', 'DeletedFileIds', fileid);
+                delInput.id = 'DeletedFileIds';
+                form.appendChild(delInput);
+            }
+            var label = document.getElementById(id + 'label');
+            if (label) { label.innerHTML = ''; }
+            if (el) { el.value = ''; }
+            var bars = document.querySelectorAll('.layui-progress .layui-progress-bar');
+            for (var i = 0; i < bars.length; i++) { bars[i].style.width = '0%'; }
+        }
+    },
+
+    // Mirrors the legacy inline <script>'s {Id}DoPreview(fileid) exactly,
+    // for both modes. Single mode: open a single-photo layer.photos view
+    // built from the connection-string-scoped GetFile URL (state.cs, read
+    // from data-wtm-cs). Multi mode: open the container-wide layer.photos
+    // gallery keyed by '#{id}label' (layui reads each descendant's
+    // layer-src attribute itself) — `fileid` is accepted for a uniform
+    // (id, fileid) call signature but unused here, matching the legacy
+    // {Id}DoPreview() being called with an (ignored) argument in the
+    // MultiUpload render/existing-file click bindings.
+    doPreview: function (id, fileid) {
+        if (typeof layui === 'undefined' || !layui.layer || typeof layui.layer.photos !== 'function') { return; }
+        var state = ff.upload._getState(id);
+        if (state.mode === 'multi') {
+            layui.layer.photos({ photos: '#' + id + 'label', anim: 5 });
+        } else {
+            layui.layer.photos({
+                photos: { data: [{ src: '/_Framework/GetFile/' + fileid + '?_DONOT_USE_CS=' + state.cs }] },
+                anim: 5
+            });
+        }
+    },
+
+    // Mirrors the legacy inline <script>'s {Id}SetValues() exactly: remove
+    // every previously-appended hidden input marked with the dynamic
+    // `{id}hidden="{id}"` attribute (the SAME dynamic-attribute-name trick
+    // the legacy jQuery selector used), then append one fresh hidden input
+    // per currently-selected file id (via ff._makeInput, same #332-class
+    // hardening as doDelete above), and set the visible `#{id}` hidden
+    // field to '1'/'' depending on whether anything is selected. Multi mode
+    // only — called from ff._renderMultiUploadAction's initial seed, its
+    // upload-done callback, and ff.upload.doDelete's multi-mode branch.
+    setValues: function (id) {
+        var state = ff.upload._getState(id);
+        var el = document.getElementById(id);
+        if (!el) { return; }
+        var form = typeof el.closest === 'function' ? el.closest('form') : null;
+        if (!form) { return; }
+        var stale = form.querySelectorAll('[' + id + 'hidden="' + id + '"]');
+        for (var si = 0; si < stale.length; si++) {
+            if (stale[si].parentNode) { stale[si].parentNode.removeChild(stale[si]); }
+        }
+        var count = 0;
+        for (count = 0; count < state.selected.length; count++) {
+            var name = state.fieldName + '[' + count + '].FileId';
+            var input = ff._makeInput('hidden', name, state.selected[count]);
+            input.setAttribute(id + 'hidden', id);
+            form.appendChild(input);
+        }
+        el.value = count > 0 ? '1' : '';
+    }
+};
+
+// Issue #470 Slice L: single document-level delegated click listener for
+// ff.upload's doDelete/doPreview — mirrors the #470 Slice G data-wtm-counter
+// delegation pattern above exactly (registered once, unconditionally; a
+// complete no-op on any page/click that never has the attribute, so this
+// contributes zero behavior change when UseSelectIslandRender is OFF, since
+// the TagHelpers then never emit data-wtm-upload-action at all). Handles
+// BOTH the freshly-uploaded-file markup ff._renderUploadAction/
+// ff._renderMultiUploadAction build and the existing-file markup
+// ff._buildUploadExistingEntry builds — one mechanism, not two — so it works
+// identically regardless of which of those built the clicked element, and
+// regardless of whether the click happens before or after the 'upload'
+// layui module (or the existing-file ajax round trip) has resolved.
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener('click', function (e) {
+        var target = e && e.target;
+        if (!target || typeof target.getAttribute !== 'function') { return; }
+        var act = target.getAttribute('data-wtm-upload-action');
+        if (!act) { return; }
+        var id = target.getAttribute('data-wtm-upload-id');
+        if (!id) { return; }
+        var fileId = target.getAttribute('data-wtm-file-id');
+        if (act === 'delete') { ff.upload.doDelete(id, fileId); }
+        else if (act === 'preview') { ff.upload.doPreview(id, fileId); }
+    });
+}
 
 // ─── Header Column Filter ─────────────────────────────────────────────────────
 var wtmHeaderFilter = (function () {

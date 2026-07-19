@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -13,6 +14,18 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     [HtmlTargetElement("wt:upload", Attributes = REQUIRED_ATTR_NAME, TagStructure = TagStructure.WithoutEndTag)]
     public class UploadTagHelper : BaseFieldTag
     {
+        // Issue #470 Slice L: same $-escaping invariant as ComboBoxTagHelper's/
+        // TransferTagHelper's own local _islandJsonOptions (#651/#652) —
+        // WhenWritingNull omits Exts/Number when unset, and every serialization
+        // of these DTOs MUST go through LayuiIslandJson.Serialize (never
+        // JsonSerializer.Serialize directly) so a stored value containing '$$'
+        // can never collide with SelectorTagHelper's $$dialoginit$$/$$script$$
+        // sentinel tokenization.
+        private static readonly JsonSerializerOptions _islandJsonOptions = new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        };
+
         /// <summary>
         /// 限定上传文件大小，单位K
         /// </summary>
@@ -168,10 +181,34 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 requiredtext = $" lay-verify=\"required\" lay-reqText=\"{THProgram._localizer["Validate.{0}required", Field?.Metadata?.DisplayName ?? Field?.Metadata?.Name]}\"";
             }
 
+            // Issue #470 Slice L: opt-in (UIConfig.UseSelectIslandRender,
+            // default OFF — the SAME flag #470 Slices J/K use) eval-free
+            // 'upload' island render — see WtmUIOptions.UseSelectIslandRender
+            // and ff._renderUploadAction (framework_layui.js) for the full
+            // rationale. UploadTagHelper has no developer-facing callback
+            // attribute at all (unlike ComboBox/Tree/Transfer's ChangeFunc),
+            // so there is no identifier-vs-non-identifier 3-way decision to
+            // make here — the ONLY gate is UseSelectIslandRender itself.
+            bool useUploadIsland = UIConfig.UseSelectIslandRender;
+            var cs = vm != null ? vm.CurrentCS : "";
+
+            // Issue #470 Slice L: the SAME data-wtm-* attribute technique
+            // ComboBoxTagHelper's data-wtm-defaults (#470 Slice J) uses —
+            // present at HTML-parse time on every path (full page, dialog
+            // replay, fragment), decoupled from the widget's own render
+            // timing. ff.upload._getState (framework_layui.js) reads this
+            // off the hidden `#{Id}` input on first access. Only emitted
+            // when the island path is active; contributes ZERO characters
+            // when the flag is OFF, so the flag-OFF markup below stays
+            // byte-for-byte identical to origin/dotnet10.
+            var uploadIslandAttrs = useUploadIsland
+                ? $@" data-wtm-upload-mode=""single"" data-wtm-cs=""{WebUtility.HtmlEncode(cs ?? string.Empty)}"""
+                : string.Empty;
+
             // Issue #108: Field.Model is a Guid stored in the DB but defensive HTML-encode
             // to prevent attribute injection if it were ever non-Guid (e.g. test data or tampering).
             output.PostElement.SetHtmlContent($@"
-<input type='hidden' id='{Id}' name='{Field.Name}' value='{WebUtility.HtmlEncode(Field.Model?.ToString() ?? string.Empty)}' {requiredtext} />
+<input type='hidden' id='{Id}' name='{Field.Name}' value='{WebUtility.HtmlEncode(Field.Model?.ToString() ?? string.Empty)}' {requiredtext}{uploadIslandAttrs} />
 ");
             if (ShowProgress != null)
             {
@@ -184,6 +221,26 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 ");
                 }
             }
+            if (useUploadIsland)
+            {
+                var uploadAction = new RenderUploadIslandAction
+                {
+                    Type = "upload",
+                    Id = Id,
+                    El = "#" + Id + "button",
+                    Url = url,
+                    Size = FileSize,
+                    Exts = string.IsNullOrEmpty(ext) ? null : ext,
+                    ShowPreview = ShowPreview == true,
+                    PreviewWidth = PreviewWidth ?? 64,
+                    PreviewHeight = PreviewHeight ?? 64,
+                    UploadFailedText = THProgram._localizer["Sys.UploadFailed"].ToString(),
+                    DeleteText = THProgram._localizer["Sys.Delete"].ToString()
+                };
+                output.PostElement.AppendHtml($@"<script type=""application/json"" class=""wtm-dialog-init"">{LayuiIslandJson.Serialize(uploadAction, _islandJsonOptions)}</script>");
+            }
+            else
+            {
             output.PostElement.AppendHtml($@"
 <script>
   function {Id}DoDelete(fileid){{
@@ -275,6 +332,7 @@ layui.use(['upload'],function(){{
     }}
 </script>
 ");
+            }
             if (Field.Model != null && Field.Model.ToString() != Guid.Empty.ToString())
             {
                 var geturl = $"/_Framework/GetFileName/{Field.Model}";
@@ -289,6 +347,32 @@ layui.use(['upload'],function(){{
                 {
                     picurl += $"&_DONOT_USE_CS={vm.CurrentCS}";
                 }
+                if (useUploadIsland)
+                {
+                    var existingAction = new RenderUploadExistingIslandAction
+                    {
+                        Id = Id,
+                        Mode = "single",
+                        Disabled = Disabled,
+                        ShowPreview = ShowPreview == true,
+                        PreviewWidth = PreviewWidth ?? 64,
+                        PreviewHeight = PreviewHeight ?? 64,
+                        DeleteText = THProgram._localizer["Sys.Delete"].ToString(),
+                        Files = new List<UploadExistingFileEntry>
+                        {
+                            new UploadExistingFileEntry
+                            {
+                                FileId = Field.Model.ToString(),
+                                GetUrl = geturl,
+                                DownloadUrl = downloadurl,
+                                PictureUrl = picurl
+                            }
+                        }
+                    };
+                    output.PostElement.AppendHtml($@"<script type=""application/json"" class=""wtm-dialog-init"">{LayuiIslandJson.Serialize(existingAction, _islandJsonOptions)}</script>");
+                }
+                else
+                {
                 output.PostElement.AppendHtml($@"
 <script>
 $.ajax({{
@@ -325,9 +409,124 @@ $.ajax({{
 }});
 </script>
 ");
+                }
             }
             base.Process(context, output);
 
         }
+    }
+
+    // Issue #470 Slice L: DTO for the bare (non-wrapped) 'upload'/
+    // 'multiUpload' JSON island — the opt-in (WtmUIOptions.
+    // UseSelectIslandRender, default OFF — the SAME flag #470 Slices J/K
+    // use) eval-free replacement for the inline
+    // `layui.use(['upload'], function(){ layui.upload.render(...) })`
+    // <script> UploadTagHelper/MultiUploadTagHelper otherwise emit. Shared
+    // by both TagHelpers (this file and MultiUploadTagHelper.cs) — `Type`
+    // discriminates 'upload' vs 'multiUpload'; `Number` is only ever set by
+    // MultiUploadTagHelper (NumFileOnce). ff._renderUploadAction/
+    // ff._renderMultiUploadAction (framework_layui.js) are the sole
+    // consumers; ff._normalizeIslandPayload wraps this into the
+    // {actions:[...]} shape ff.DispatchAction expects. Not part of the
+    // public API surface.
+    internal sealed class RenderUploadIslandAction
+    {
+        [JsonPropertyName("type")]
+        public string Type { get; set; } = "upload";
+
+        [JsonPropertyName("id")]
+        public string Id { get; set; }
+
+        [JsonPropertyName("el")]
+        public string El { get; set; }
+
+        [JsonPropertyName("url")]
+        public string Url { get; set; }
+
+        [JsonPropertyName("size")]
+        public int Size { get; set; }
+
+        [JsonPropertyName("exts")]
+        public string Exts { get; set; }
+
+        // MultiUploadTagHelper only (NumFileOnce). Omitted (WhenWritingNull)
+        // for UploadTagHelper, matching the legacy inline render's lack of a
+        // `number:` key for single-file upload.
+        [JsonPropertyName("number")]
+        public int? Number { get; set; }
+
+        [JsonPropertyName("showPreview")]
+        public bool ShowPreview { get; set; }
+
+        [JsonPropertyName("previewWidth")]
+        public int PreviewWidth { get; set; }
+
+        [JsonPropertyName("previewHeight")]
+        public int PreviewHeight { get; set; }
+
+        [JsonPropertyName("uploadFailedText")]
+        public string UploadFailedText { get; set; }
+
+        [JsonPropertyName("deleteText")]
+        public string DeleteText { get; set; }
+    }
+
+    // Issue #470 Slice L: one entry of RenderUploadExistingIslandAction.Files
+    // below — the URLs needed to fetch-and-render ONE already-uploaded file.
+    internal sealed class UploadExistingFileEntry
+    {
+        [JsonPropertyName("fileId")]
+        public string FileId { get; set; }
+
+        [JsonPropertyName("getUrl")]
+        public string GetUrl { get; set; }
+
+        [JsonPropertyName("downloadUrl")]
+        public string DownloadUrl { get; set; }
+
+        [JsonPropertyName("pictureUrl")]
+        public string PictureUrl { get; set; }
+    }
+
+    // Issue #470 Slice L: DTO for the bare (non-wrapped) 'uploadExisting'
+    // JSON island — the opt-in eval-free replacement for the "existing
+    // file" init <script> (fetches each stored file's display name via
+    // /_Framework/GetFileName/<id> and builds preview/delete markup) both
+    // UploadTagHelper (single-entry Files) and MultiUploadTagHelper
+    // (multi-entry Files) otherwise emit inline, once per pre-existing
+    // file. ff._renderUploadExistingAction (framework_layui.js) is the sole
+    // consumer. Not part of the public API surface.
+    internal sealed class RenderUploadExistingIslandAction
+    {
+        [JsonPropertyName("type")]
+        public string Type { get; set; } = "uploadExisting";
+
+        [JsonPropertyName("id")]
+        public string Id { get; set; }
+
+        // "single" (UploadTagHelper) or "multi" (MultiUploadTagHelper) —
+        // discriminates ff._buildUploadExistingEntry's markup shape (a bare
+        // append into #{id}label vs. one <label id="label{fileId}"> wrapper
+        // per file).
+        [JsonPropertyName("mode")]
+        public string Mode { get; set; }
+
+        [JsonPropertyName("disabled")]
+        public bool Disabled { get; set; }
+
+        [JsonPropertyName("showPreview")]
+        public bool ShowPreview { get; set; }
+
+        [JsonPropertyName("previewWidth")]
+        public int PreviewWidth { get; set; }
+
+        [JsonPropertyName("previewHeight")]
+        public int PreviewHeight { get; set; }
+
+        [JsonPropertyName("deleteText")]
+        public string DeleteText { get; set; }
+
+        [JsonPropertyName("files")]
+        public List<UploadExistingFileEntry> Files { get; set; }
     }
 }

@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Net;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Razor.TagHelpers;
 using WalkingTec.Mvvm.Core;
 using System.Linq;
@@ -14,6 +16,16 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     [HtmlTargetElement("wt:multiupload", Attributes = REQUIRED_ATTR_NAME, TagStructure = TagStructure.WithoutEndTag)]
     public class MultiUploadTagHelper : BaseFieldTag
     {
+        // Issue #470 Slice L: same $-escaping invariant as UploadTagHelper's
+        // own local _islandJsonOptions — see that file's comment for the full
+        // #651/#652 rationale. Every serialization of the island DTOs below
+        // MUST go through LayuiIslandJson.Serialize (never JsonSerializer.
+        // Serialize directly).
+        private static readonly JsonSerializerOptions _islandJsonOptions = new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        };
+
         /// <summary>
         /// 限定上传文件大小，单位K
         /// </summary>
@@ -169,8 +181,64 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             {
                 requiredtext = $" lay-verify=\"required\" lay-reqText=\"{THProgram._localizer["Validate.{0}required", Field?.Metadata?.DisplayName ?? Field?.Metadata?.Name]}\"";
             }
+
+            // Issue #470 Slice L: opt-in (UIConfig.UseSelectIslandRender,
+            // default OFF — the SAME flag #470 Slices J/K use, and the SAME
+            // flag UploadTagHelper's sibling 'upload' island uses) eval-free
+            // 'multiUpload' island render — see WtmUIOptions.
+            // UseSelectIslandRender and ff._renderMultiUploadAction
+            // (framework_layui.js) for the full rationale. MultiUploadTagHelper
+            // has no developer-facing callback attribute at all (unlike
+            // ComboBox/Tree/Transfer's ChangeFunc), so there is no
+            // identifier-vs-non-identifier 3-way decision to make here — the
+            // ONLY gate is UseSelectIslandRender itself.
+            bool useUploadIsland = UIConfig.UseSelectIslandRender;
+            var cs = vm != null ? vm.CurrentCS : "";
+            var selectedIds = idstring.Split('|', StringSplitOptions.RemoveEmptyEntries).ToList();
+
+            // Issue #470 Slice L: the SAME data-wtm-* attribute technique
+            // ComboBoxTagHelper's data-wtm-defaults (#470 Slice J) and
+            // UploadTagHelper's own data-wtm-cs/data-wtm-upload-mode use —
+            // present at HTML-parse time on every path (full page, dialog
+            // replay, fragment), decoupled from the widget's own render
+            // timing. ff.upload._getState (framework_layui.js) reads this
+            // off the hidden `#{Id}` input on first access — seeding the
+            // shared per-id state with the currently-selected file ids
+            // (data-wtm-selected) so delegated existing-file delete clicks
+            // work even before the 'upload' module or the render island has
+            // dispatched. Only emitted when the island path is active;
+            // contributes ZERO characters when the flag is OFF, so the
+            // flag-OFF markup below stays byte-for-byte identical to
+            // origin/dotnet10.
+            var uploadIslandAttrs = useUploadIsland
+                ? $@" data-wtm-upload-mode=""multi"" data-wtm-cs=""{WebUtility.HtmlEncode(cs ?? string.Empty)}"" data-wtm-field-name=""{WebUtility.HtmlEncode(Field.Name)}"" data-wtm-selected=""{WebUtility.HtmlEncode(LayuiIslandJson.Serialize(selectedIds, _islandJsonOptions))}"""
+                : string.Empty;
+
             output.PostElement.SetHtmlContent($@"
-<input type='hidden' id='{Id}'  {requiredtext} />
+<input type='hidden' id='{Id}'  {requiredtext}{uploadIslandAttrs} />
+");
+            if (useUploadIsland)
+            {
+                var multiUploadAction = new RenderUploadIslandAction
+                {
+                    Type = "multiUpload",
+                    Id = Id,
+                    El = "#" + Id + "button",
+                    Url = url,
+                    Size = FileSize,
+                    Exts = string.IsNullOrEmpty(ext) ? null : ext,
+                    Number = NumFileOnce,
+                    ShowPreview = ShowPreview == true,
+                    PreviewWidth = PreviewWidth ?? 64,
+                    PreviewHeight = PreviewHeight ?? 64,
+                    UploadFailedText = WalkingTec.Mvvm.TagHelpers.LayUI.THProgram._localizer["Sys.UploadFailed"].ToString(),
+                    DeleteText = WalkingTec.Mvvm.TagHelpers.LayUI.THProgram._localizer["Sys.Delete"].ToString()
+                };
+                output.PostElement.AppendHtml($@"<script type=""application/json"" class=""wtm-dialog-init"">{LayuiIslandJson.Serialize(multiUploadAction, _islandJsonOptions)}</script>");
+            }
+            else
+            {
+            output.PostElement.AppendHtml($@"
 <script>
   var {Id}selected = {initselected};
 {Id}SetValues();
@@ -260,10 +328,51 @@ layui.use(['upload'],function(){{
 }})
 </script>
 ");
+            }
             if (string.IsNullOrEmpty(idstring) == false)
             {
                 var allfileids = idstring.Split('|', StringSplitOptions.RemoveEmptyEntries);
 
+                if (useUploadIsland)
+                {
+                    var files = new List<UploadExistingFileEntry>();
+                    foreach (var fileId in allfileids)
+                    {
+                        var mGeturl = $"/_Framework/GetFileName/{fileId}";
+                        var mDownloadurl = $"/_Framework/GetFile/{fileId}";
+                        if (vm != null)
+                        {
+                            mGeturl += $"?_DONOT_USE_CS={vm.CurrentCS}";
+                            mDownloadurl += $"?_DONOT_USE_CS={vm.CurrentCS}";
+                        }
+                        var mPicurl = $"/_Framework/GetFile?id={fileId}&stream=true&width={PreviewWidth ?? 64}&height={PreviewHeight ?? 64}";
+                        if (vm != null)
+                        {
+                            mPicurl += $"&_DONOT_USE_CS={vm.CurrentCS}";
+                        }
+                        files.Add(new UploadExistingFileEntry
+                        {
+                            FileId = fileId,
+                            GetUrl = mGeturl,
+                            DownloadUrl = mDownloadurl,
+                            PictureUrl = mPicurl
+                        });
+                    }
+                    var existingAction = new RenderUploadExistingIslandAction
+                    {
+                        Id = Id,
+                        Mode = "multi",
+                        Disabled = Disabled,
+                        ShowPreview = ShowPreview == true,
+                        PreviewWidth = PreviewWidth ?? 64,
+                        PreviewHeight = PreviewHeight ?? 64,
+                        DeleteText = WalkingTec.Mvvm.TagHelpers.LayUI.THProgram._localizer["Sys.Delete"].ToString(),
+                        Files = files
+                    };
+                    output.PostElement.AppendHtml($@"<script type=""application/json"" class=""wtm-dialog-init"">{LayuiIslandJson.Serialize(existingAction, _islandJsonOptions)}</script>");
+                }
+                else
+                {
                 foreach (var fileId in allfileids)
                 {
                     var geturl = $"/_Framework/GetFileName/{fileId}";
@@ -317,7 +426,8 @@ $.ajax({{
 ");
                 }
 
-                
+
+                }
             }
             base.Process(context, output);
 
