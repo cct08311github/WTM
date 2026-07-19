@@ -32,7 +32,7 @@ WTM 設計為「快速 CRUD 開發框架」，**不**是高流量 SaaS 平台或
 - 單元測試：**~5,780 pass / 0 fail**（Core.Test ~4,313、WorkFlow.Test 564+23 skip、Etl.Test ~683+17 skip、Admin/Api/Mvc.Tests/S3.Test 等）— 較上一版評估的 1,647 增長約 3.5 倍
 - JS 測試：**~1,704 pass**（Jest + jsdom，涵蓋 framework_layui.js 的 island dispatch / kill-switch / sentinel-escape 路徑）
 - E2E 測試：**35 pass / 1 skip / 0 fail**（Playwright + Python，31→36 檢查；新增 JWT/combobox-cascade/selector/upload 流程 + **#627 kill-switch 專屬 CI matrix leg**）
-- CI（Gitea Actions）：build-and-test / js-test / e2e(baseline) / e2e(killswitch) / release-tooling-test / security-scan 全 green
+- CI（internal CI）：build-and-test / js-test / e2e(baseline) / e2e(killswitch) / release-tooling-test / security-scan 全 green
 - 安全 audit 歷史：v10.2.0 完整 audit + 其後連續多輪對抗式（cross-vendor + perspective-diverse）審計；本次批次期間對抗式審查在合併前攔下多個真實缺陷（見 § 品質保證機制）
 
 ### 架構評估
@@ -134,7 +134,7 @@ NPOI 2.7.6（也包含最新 2.8.0）transitive 拉 vulnerable `System.Security.
 | K8s 官方部署案例 | 缺 |
 | Distributed cache / session 文件 | 缺 |
 | Build 警告 | ~200–460（多為 nullable CS8632/CS8602、XML-doc cref 等風格警告，非錯誤；Mvc nullable 漸進中，#718） |
-| Open source 社群 | 小，主要溝通在 Gitea issues |
+| Open source 社群 | 小，主要溝通在 internal infrastructure issues |
 | 主流商業支援 | 無 SLA、無付費 support 管道 |
 
 ---
@@ -175,7 +175,7 @@ NPOI 2.7.6（也包含最新 2.8.0）transitive 拉 vulnerable `System.Security.
 
 - [`docs/dependency-management.md`](./dependency-management.md) — 套件版本政策、NU1510 雙意義警告、NPOI security pin 詳解
 - [`docs/csp-hardening.md`](./csp-hardening.md) — #470/#627 CSP 硬化 roadmap 與 kill-switch 分級啟用
-- [`docs/ci-operations.md`](./ci-operations.md) — Gitea Actions 已知不相容與排錯
+- [`docs/ci-operations.md`](./ci-operations.md) — internal CI 已知不相容與排錯
 - [`docs/wtm-developer-manual.md`](./wtm-developer-manual.md) — 完整開發手冊（§ 安全機制）
 - [`docs/structured-logging.md`](./structured-logging.md) — 結構化 log 整合方式
 - [`CHANGELOG.md`](../CHANGELOG.md) — 版本演進與每版 breaking changes（[Unreleased] 含本批次全部條目）
