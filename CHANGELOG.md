@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [10.16.1] - 2026-07-19
+
+Compatibility patch: restores v10.16.0's own "byte-identical when off" guarantee, which an independent aggregate code review (#753) found was violated for part of the #470 island-render work.
+
+### Fixed
+
+- **#470 Slices G/H/I now honor `WtmUIOptions.UseSelectIslandRender` (#753).** Seven emitters — `DateTimeTagHelper` (laydate ready/change/done + range), `SliderTagHelper` (ChangeFunc/OnTipsFunc), `ColorPicker` (ChangeFunc), `UEditorTagHelper`, `RichTextBox` (layedit), `TextAreaTagHelper` (counter), **and `TreeTagHelper`'s ItemUrl remote-lazy branch** — were migrated to the eval-free island / `data-wtm-*` path *unconditionally* in v10.16.0 (they predate the opt-in flag introduced in Slice J and were never retrofitted), so the default (flag-off) output was **not** byte-identical to before and silently shifted those widgets' render timing (parse-time → DOMContentLoaded). All seven are now gated behind `UseSelectIslandRender`: **flag-off restores the exact legacy inline `<script>` (byte-identical to pre-#470); flag-on keeps the island.** With the flag at its default `false`, v10.16.1 is genuinely zero-behaviour-change for the whole G–M family.
+- **`WtmUIOptions.UseSelectIslandRender` is now read from a single, consistent source (#753).** TagHelpers previously read `WtmUIOptionsHolder` (a static snapshot bound directly from the `"UIOptions"` config section, bypassing the ASP.NET Core Options pipeline), while `LayuiUIService` read `IOptions<WtmUIOptions>` — so a code-based `services.Configure<WtmUIOptions>(...)` (the mechanism `WtmUIOptions`'s own doc recommends) was honored only by the latter, causing a split partial rollout. The holder is now populated from the DI-resolved `IOptions<WtmUIOptions>.Value`, so both `appsettings.json` binding and code-based `Configure` are honored everywhere.
+- **Upload progress-bar reset placement (#753).** Under the opt-in island path, `ff._renderUploadAction`'s `done()` handler reset every `.layui-progress-bar` width to 0% on each successful non-preview upload; the legacy inline script only reset it inside the delete handler. Moved back into the delete handler to match legacy (prevents one upload widget's completion from visually zeroing another's bar).
+
 ## [10.16.0] - 2026-07-19
 
 LayUI eval-retirement epic (#470) advances: the entire form-widget + button/grid-cell family gains **opt-in, eval-free island rendering** — every migration is **default-off and byte-identical to before** (`WtmUIOptions.UseSelectIslandRender = false` by default), so this release ships **zero behaviour change** to existing deployments while giving security-conscious apps a path toward a strict, `unsafe-inline`/`unsafe-eval`-free Content-Security-Policy for their forms and dialogs. Guiding principle (#567): BMS-stability-first, compat over novelty. `framework_layui.js` stays at exactly **one** active-code `eval(` (the deprecated `IsScript` path). Also fixes a health-check that never probed a real database (#741, a #727 residual) and includes several defense-in-depth XSS/encoding hardenings surfaced along the way.
