@@ -51,7 +51,7 @@ jobs:
         dotnet-version: '10.0.x'
     # setup-dotnet's built-in `cache:` option requires a packages.lock.json, which this
     # repo does not commit — fall back to actions/cache keyed on the CPM version file and
-    # every csproj. continue-on-error so a cache-backend hiccup on the self-hosted Gitea
+    # every csproj. continue-on-error so a cache-backend hiccup on the self-hosted internal infrastructure
     # runner (same class of issue as actions/upload-artifact@v4, #11) can only skip the
     # speedup, never fail the job (#670).
     - name: Cache NuGet packages
