@@ -92,7 +92,7 @@ namespace WalkingTec.Mvvm.Mvc
         /// <summary>
         /// Optional <c>report-uri</c> endpoint appended to the policy string.
         /// When null the directive is omitted. See issue #807 (on this repo's
-        /// pre-Gitea-cutover GitHub tracker, now defunct) for tracking
+        /// pre-internal infrastructure-cutover GitHub tracker, now defunct) for tracking
         /// <c>report-to</c> + <c>Reporting-Endpoints</c> support (separate
         /// modern directive with different wire format; not wired here).
         /// </summary>
