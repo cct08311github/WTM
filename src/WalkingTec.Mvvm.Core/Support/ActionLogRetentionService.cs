@@ -70,7 +70,22 @@ namespace WalkingTec.Mvvm.Core
                 }
 
                 var now = _timeProvider.GetLocalNow();
-                var next = ComputeNextRun(now, options.RunAtLocalHour);
+                var configuredHour = options.RunAtLocalHour;
+                if (configuredHour < 0 || configuredHour > 23)
+                {
+                    // RunAtLocalHour is operator-supplied config (appsettings, possibly hot-reloaded
+                    // via IOptionsMonitor on every loop iteration) and is never validated at the
+                    // options-binding layer. An out-of-range value must never reach
+                    // ComputeNextRun's DateTimeOffset construction unguarded — that would throw
+                    // ArgumentOutOfRangeException outside any try/catch and, under the default
+                    // BackgroundServiceExceptionBehavior.StopHost (.NET 6+), take down the entire
+                    // host. Clamp defensively and tell the operator why the schedule doesn't match
+                    // what they configured.
+                    _logger.LogWarning(
+                        "ActionLogRetention: RunAtLocalHour={ConfiguredHour} is outside the valid 0-23 range; clamping to {ClampedHour}.",
+                        configuredHour, Math.Clamp(configuredHour, 0, 23));
+                }
+                var next = ComputeNextRun(now, configuredHour);
                 var wait = next - now;
                 _logger.LogInformation(
                     "ActionLogRetention: next sweep scheduled for {NextRun} (in {Wait})",
@@ -100,9 +115,25 @@ namespace WalkingTec.Mvvm.Core
         /// has not yet passed today, schedule for today; otherwise tomorrow.
         /// Exposed internal for testing.
         /// </summary>
+        /// <remarks>
+        /// <paramref name="hour"/> is clamped to the valid <c>DateTimeOffset</c>
+        /// hour range (0-23) before the schedule is built. <see cref="ActionLogRetentionOptions.RunAtLocalHour"/>
+        /// is operator-supplied config with no upstream validation (and is
+        /// re-read from <c>IOptionsMonitor.CurrentValue</c> every loop
+        /// iteration, so a live appsettings reload can introduce a bad value
+        /// mid-flight) — an out-of-range hour must never reach the
+        /// <see cref="DateTimeOffset"/> constructor unguarded, or it throws
+        /// <see cref="ArgumentOutOfRangeException"/> and, since this method
+        /// is called from <see cref="ExecuteAsync"/> outside the sweep's
+        /// try/catch, stops the whole host under the default
+        /// <c>BackgroundServiceExceptionBehavior.StopHost</c> (.NET 6+).
+        /// Clamping keeps the "the service never crashes the host" guarantee
+        /// true for every input, not just the documented 0-23 range.
+        /// </remarks>
         internal static DateTimeOffset ComputeNextRun(DateTimeOffset now, int hour)
         {
-            var target = new DateTimeOffset(now.Year, now.Month, now.Day, hour, 0, 0, now.Offset);
+            var clampedHour = Math.Clamp(hour, 0, 23);
+            var target = new DateTimeOffset(now.Year, now.Month, now.Day, clampedHour, 0, 0, now.Offset);
             if (target <= now) { target = target.AddDays(1); }
             return target;
         }

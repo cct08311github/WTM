@@ -19,6 +19,14 @@ namespace WalkingTec.Mvvm.Core
         /// Local-time hour of day (0–23) when the daily retention sweep
         /// runs. Default 3 (03:00 local). Runs exactly once per
         /// calendar day.
+        /// <para>
+        /// Not validated at bind time. Values outside 0-23 (including a
+        /// live appsettings reload picked up mid-run via
+        /// <c>IOptionsMonitor</c>) are clamped to the nearest valid hour by
+        /// <see cref="ActionLogRetentionService.ComputeNextRun"/> and
+        /// logged as a warning — the sweep still runs on a schedule, just
+        /// not the (invalid) one configured.
+        /// </para>
         /// </summary>
         public int RunAtLocalHour { get; set; } = 3;
 

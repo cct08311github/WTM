@@ -62,6 +62,45 @@ namespace WalkingTec.Mvvm.Core.Test.Support
             Assert.AreEqual(TimeSpan.FromHours(8), next.Offset);
         }
 
+        // ── ComputeNextRun — out-of-range hour never crashes the host ──────
+        // Regression coverage for the adversarial review finding on #757
+        // (identical bug pattern in this sibling service, tracked as #762):
+        // RunAtLocalHour is operator-supplied config with no upstream
+        // validation, re-read every loop iteration via IOptionsMonitor.
+        // Before the fix, hour=24 (or any value outside 0-23) threw
+        // ArgumentOutOfRangeException from the DateTimeOffset constructor,
+        // uncaught by ExecuteAsync's try/catch, which stops the whole host
+        // under the default BackgroundServiceExceptionBehavior.StopHost.
+
+        [TestMethod]
+        public void ComputeNextRun_hour_24_does_not_throw_and_clamps_to_23()
+        {
+            var now = new DateTimeOffset(2026, 4, 18, 1, 30, 0, TimeSpan.Zero);
+            var next = ActionLogRetentionService.ComputeNextRun(now, hour: 24);
+            Assert.AreEqual(new DateTimeOffset(2026, 4, 18, 23, 0, 0, TimeSpan.Zero), next);
+        }
+
+        [TestMethod]
+        public void ComputeNextRun_negative_hour_does_not_throw_and_clamps_to_0()
+        {
+            var now = new DateTimeOffset(2026, 4, 18, 1, 30, 0, TimeSpan.Zero);
+            var next = ActionLogRetentionService.ComputeNextRun(now, hour: -1);
+            Assert.AreEqual(new DateTimeOffset(2026, 4, 19, 0, 0, 0, TimeSpan.Zero), next);
+        }
+
+        [TestMethod]
+        public void ComputeNextRun_extreme_out_of_range_hour_does_not_throw()
+        {
+            var now = new DateTimeOffset(2026, 4, 18, 1, 30, 0, TimeSpan.Zero);
+            // int.MaxValue / int.MinValue must not overflow or throw when clamped.
+            Assert.AreEqual(
+                new DateTimeOffset(2026, 4, 18, 23, 0, 0, TimeSpan.Zero),
+                ActionLogRetentionService.ComputeNextRun(now, hour: int.MaxValue));
+            Assert.AreEqual(
+                new DateTimeOffset(2026, 4, 19, 0, 0, 0, TimeSpan.Zero),
+                ActionLogRetentionService.ComputeNextRun(now, hour: int.MinValue));
+        }
+
         // ── RunRetentionOnceAsync ─────────────────────────────────────────
 
         [TestMethod]
