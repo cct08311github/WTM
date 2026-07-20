@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [10.17.0] - 2026-07-21
+
+Field-feedback batch: everything in this release traces to the BMS 10.14.5→10.16.1 production upgrade report (BMS #295 → upstream issues #756–#759, follow-ups #761/#762). Two opt-in features close real downstream gaps (refresh-token retention, explicit rate-limit policy registration), two fixes kill host-crash / cache-poisoning hazards in framework background services, and the 10.15.0 Migration section was retroactively completed (#758, shipped ahead of this release).
+
+### Added
+
+- **`AddWtmRefreshTokenRetention()` — opt-in retention/purge for `FrameworkRefreshTokens` (#757).** After #721 made refresh-token persistence live, the table grew without bound (every login INSERTs a row, every rotation adds another; nothing ever deleted — and rows carry `ITCode`/`CreatedByIp` audit data, a retention surface for regulated deployments). The new service mirrors the ActionLogRetention pattern: daily batched `ExecuteDeleteAsync` sweeps at `RunAtLocalHour` (default 4, staggered from ActionLog's 3), `ExpiredDays`/`RevokedDays` (default 30, ≤0 disables the knob), `BatchSize` (default 5000). **Hard safety invariant:** the revoked sweep always ANDs `ExpiresUtc < nowUtc` — revoked-but-unexpired rows are the reuse-attack chain tripwire (`TokenService.RefreshTokenAsync` checks revoked-before-expiry to trigger descendant revocation) and are never deleted regardless of configuration. Purging old revoked rows downgrades chain containment to plain fail-closed rejection — defaults (30d ≫ 7d token lifetime) keep recent forensics; see XML docs. Opt-in only: nothing runs unless the app calls the extension.
+- **Explicit rate-limit policy registration — `WtmRateLimitingOptions.RegisterPolicy(permits, windowSeconds, queueLimit = 0)` + `RequireWtmRateLimit(...)` endpoint extension (#759).** Previously a `wtm_rl_*` named policy existed only if some controller carried the matching `[WtmRateLimit]` tuple — minimal-API endpoints (health checks) referencing a policy via `BuildPolicyName` were implicitly coupled to an unrelated controller action, and deleting/refactoring that action made the endpoint throw `InvalidOperationException` per request while build+tests stayed green (twice field-confirmed by BMS). `RegisterPolicy` guarantees the tuple independent of any attribute (validated by the same guards as the attribute ctor — shared `ValidateTuple`, no drift; HashSet-merged with scanned tuples so explicit+attribute duplicates are safe), and `RequireWtmRateLimit` attaches the canonical policy metadata to any `IEndpointConventionBuilder`. The extension attaches metadata only — pair it with `RegisterPolicy` (unregistered policies fail loudly at request time; no silent auto-registration).
+- **`ScanWtmRateLimitAttributes` per-member partial-load guard (#759).** Attribute materialization on members whose dependencies fail to load (`TypeLoadException`/`FileNotFoundException`) no longer aborts the whole scan — mirrors the existing `GetTypes()` guard; direct calls inside an MSTest host (downstream test pattern) no longer throw.
+
+### Fixed
+
+- **`LookupCacheWarmupService` now honors `CacheLookupAttribute.ConnectionKey` (#756).** Startup warmup resolved ONE default-connection DbContext and warmed every `[CacheLookup(WarmOnStartup=true)]` type against it — types mapped to non-default connections warm-failed every boot (log noise; BMS `Holiday_Orss` case). Worse, the lookup cache key has no connection component, so a default-DB warm that accidentally succeeded (same-named table in the default DB) cached wrong-database rows under the exact key the runtime `GetLookup` path serves, for the full TTL — a latent cache-poisoning/data-correctness hazard. Warmup now groups types by `ConnectionKey` and routes each group through `WTMContext.CreateDC(cskey:)`, exactly like the runtime `GetLookup`/`GetLookupAsync`/`RefreshLookupAsync` paths. Every failure path (unknown key, disabled connection, DI resolution throw, WTMContext-less host) degrades to a logged skip — nothing escapes `ExecuteAsync` (the .NET `BackgroundServiceExceptionBehavior.StopHost` hazard), including the pre-existing unguarded default-connection resolution. Downstream note: `WarmOnStartup = false` opt-outs added for this bug (e.g. BMS #295) can be removed after upgrading.
+- **`ActionLogRetentionOptions.RunAtLocalHour` (and the new `RefreshTokenRetentionOptions`) clamp out-of-range hours instead of crashing the host (#762).** An out-of-range hour (the classic midnight=24 typo) threw `ArgumentOutOfRangeException` from `ComputeNextRun` outside the fault barrier: at startup this faulted `Host.StartAsync` (app fails to boot); after a live appsettings reload it escaped `ExecuteAsync` and stopped the production host (`StopHost`). Hours are now clamped to [0,23] with an operator `LogWarning` on misconfiguration.
+
+### Known issues
+
+- `FrameworkRefreshTokens` has no indexes on `Token`/`ExpiresUtc`/`RevokedUtc` — the #757 retention sweeps and hot-path token lookups table-scan on large backlogs (pattern-parity with ActionLog). Tracked in #761 (schema change; needs existing-DB migration guidance).
+
+### Migration
+
+- No breaking changes; both new features are opt-in and all fixes preserve default behaviour. Deployments that worked around #756 with `WarmOnStartup = false` on non-default-connection lookup types can remove the opt-out. If you enable `AddWtmRefreshTokenRetention()` on an **existing** production DB, confirm the `FrameworkRefreshTokens` table exists first (see the 10.15.0 Migration section, amended in #758) and consider #761's index guidance for large backlogs.
+
 ## [10.16.1] - 2026-07-19
 
 Compatibility patch: restores v10.16.0's own "byte-identical when off" guarantee, which an independent aggregate code review (#753) found was violated for part of the #470 island-render work.
