@@ -1,5 +1,7 @@
 #nullable enable
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Reflection;
@@ -28,6 +30,20 @@ namespace WalkingTec.Mvvm.Core.Cache
     ///     <see cref="Microsoft.Extensions.Hosting.IHostedService"/> implementation
     ///     that iterates the tenant list and calls
     ///     <see cref="ILookupCacheService.GetAllAsync{T}"/> once per tenant.
+    ///   </item>
+    ///   <item>
+    ///     <strong>Per-<see cref="CacheLookupAttribute.ConnectionKey"/> routing (#756).</strong>
+    ///     Warm-up types are grouped by <see cref="CacheLookupAttribute.ConnectionKey"/> and each
+    ///     group is warmed against the connection it actually serves from at runtime — mirroring
+    ///     how <see cref="WTMContext.GetLookup{T}"/> / <see cref="WTMContext.GetLookupAsync{T}"/> /
+    ///     <see cref="WTMContext.RefreshLookupAsync{T}"/> resolve their DbContext via
+    ///     <c>WTMContext.CreateDC(cskey: attr.ConnectionKey)</c>. Types with no
+    ///     <see cref="CacheLookupAttribute.ConnectionKey"/> keep warming against the default
+    ///     connection (see <see cref="ResolveDataContext"/>). A group whose connection cannot be
+    ///     resolved (unknown key, disabled connection, or no <see cref="WTMContext"/> available)
+    ///     is skipped with a log — it is never warmed against the wrong connection, which would
+    ///     otherwise poison the shared <c>wtm:lookup:{FullName}:{tenant}</c> cache key for the
+    ///     full TTL with data read from the wrong database.
     ///   </item>
     /// </list>
     /// </para>
@@ -78,48 +94,228 @@ namespace WalkingTec.Mvvm.Core.Cache
             var method = typeof(ILookupCacheService).GetMethod(nameof(ILookupCacheService.GetAllAsync))
                          ?? throw new InvalidOperationException("GetAllAsync method not found on ILookupCacheService.");
 
+            // #756: group warm-up types by CacheLookupAttribute.ConnectionKey — the runtime paths
+            // (WTMContext.GetLookup/GetLookupAsync/RefreshLookupAsync) route each type through
+            // CreateDC(cskey: attr.ConnectionKey). Warming every type against a single default
+            // connection regardless of ConnectionKey (a) always fails for non-default types and
+            // (b) can silently populate the shared cache key with data read from the WRONG
+            // database when a same-named table happens to exist on the default connection too.
+            var defaultGroupTypes = new List<Type>();
+            var namedGroups = new Dictionary<string, List<Type>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var type in types)
+            {
+                var connectionKey = _cacheService.GetAttribute(type)?.ConnectionKey;
+                if (string.IsNullOrEmpty(connectionKey))
+                {
+                    defaultGroupTypes.Add(type);
+                }
+                else
+                {
+                    if (!namedGroups.TryGetValue(connectionKey, out var group))
+                    {
+                        group = [];
+                        namedGroups[connectionKey] = group;
+                    }
+                    group.Add(type);
+                }
+            }
+
             using var scope = _serviceProvider.CreateScope();
-            var (dc, owned) = ResolveDataContext(scope.ServiceProvider);
+
+            if (defaultGroupTypes.Count > 0)
+            {
+                await WarmDefaultGroupAsync(scope.ServiceProvider, defaultGroupTypes, method, stoppingToken)
+                    .ConfigureAwait(false);
+            }
+
+            if (namedGroups.Count > 0 && !stoppingToken.IsCancellationRequested)
+            {
+                await WarmNamedGroupsAsync(scope.ServiceProvider, namedGroups, method, stoppingToken)
+                    .ConfigureAwait(false);
+            }
+
+            _logger.LogInformation("[WTM] Lookup cache warm-up completed.");
+        }
+
+        /// <summary>
+        /// Warms the types that have no <see cref="CacheLookupAttribute.ConnectionKey"/> against
+        /// the default connection, resolved via <see cref="ResolveDataContext"/> — unchanged from
+        /// the pre-#756 behaviour, except the resolution call is now guarded so a known-but-disabled
+        /// default connection (which makes <c>WTMContext.CreateDC</c> throw
+        /// <see cref="InvalidOperationException"/>) cannot escape <see cref="ExecuteAsync"/> and
+        /// stop the host under <c>BackgroundServiceExceptionBehavior.StopHost</c>.
+        /// </summary>
+        private async Task WarmDefaultGroupAsync(
+            IServiceProvider scopedProvider,
+            List<Type> defaultGroupTypes,
+            MethodInfo method,
+            CancellationToken stoppingToken)
+        {
+            DbContext? dc = null;
+            bool owned = false;
+            try
+            {
+                (dc, owned) = ResolveDataContext(scopedProvider);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "[WTM] Lookup cache warm-up: resolving the default connection failed: {Message}. " +
+                    "{Count} default-connection type(s) will not be warmed; first request will populate the cache.",
+                    ex.Message, defaultGroupTypes.Count);
+                return;
+            }
 
             if (dc == null)
             {
-                _logger.LogWarning("[WTM] Lookup cache warm-up skipped: EF Core DbContext not available.");
+                _logger.LogWarning(
+                    "[WTM] Lookup cache warm-up skipped for {Count} default-connection type(s): EF Core DbContext not available.",
+                    defaultGroupTypes.Count);
                 return;
             }
 
             try
             {
-                foreach (var type in types)
-                {
-                    if (stoppingToken.IsCancellationRequested) break;
-                    try
-                    {
-                        var generic = method.MakeGenericMethod(type);
-                        var task = (Task?)generic.Invoke(_cacheService, new object?[] { dc, null, stoppingToken });
-                        if (task != null)
-                            await task.ConfigureAwait(false);
-
-                        _logger.LogInformation("[WTM] Lookup cache warmed: {TypeName}", type.Name);
-                    }
-                    catch (Exception ex)
-                    {
-                        // method.Invoke wraps exceptions in TargetInvocationException; unwrap for readable logs
-                        var inner = ex is TargetInvocationException tie ? tie.InnerException ?? tie : ex;
-                        _logger.LogWarning(
-                            inner,
-                            "[WTM] Lookup cache warm-up failed for {TypeName}: {Message}. First request will populate the cache.",
-                            type.Name, inner.Message);
-                    }
-                }
+                await WarmTypesAsync(defaultGroupTypes, dc, method, stoppingToken).ConfigureAwait(false);
             }
             finally
             {
                 // Only dispose when we created this DbContext ourselves (see
-                // ResolveDataContext) — the DI-fallback instance's lifetime is owned by `scope`.
+                // ResolveDataContext) — the DI-fallback instance's lifetime is owned by the scope.
                 if (owned) { dc.Dispose(); }
             }
+        }
 
-            _logger.LogInformation("[WTM] Lookup cache warm-up completed.");
+        /// <summary>
+        /// Warms each <see cref="CacheLookupAttribute.ConnectionKey"/> group against its own
+        /// connection, one <see cref="DbContext"/> per key (not per type). Requires a
+        /// <see cref="WTMContext"/> in the scope — DI-fallback-only hosts cannot resolve a named
+        /// connection key safely, so those types are skipped (never warmed against the wrong DB)
+        /// and left for the documented lazy cache-miss fallback.
+        /// <para>
+        /// The <c>GetService&lt;WTMContext&gt;()</c> lookup is guarded the same way
+        /// <see cref="ResolveDataContext"/> is guarded in <see cref="WarmDefaultGroupAsync"/> — a
+        /// throwing scoped-service factory (e.g. a consumer-supplied <see cref="WTMContext"/>
+        /// subclass whose constructor graph fails to resolve) must not escape and stop the host.
+        /// </para>
+        /// </summary>
+        private async Task WarmNamedGroupsAsync(
+            IServiceProvider scopedProvider,
+            Dictionary<string, List<Type>> namedGroups,
+            MethodInfo method,
+            CancellationToken stoppingToken)
+        {
+            WTMContext? wtm;
+            try
+            {
+                wtm = scopedProvider.GetService<WTMContext>();
+            }
+            catch (Exception ex)
+            {
+                var failedTypeNames = string.Join(", ", namedGroups.Values.SelectMany(g => g).Select(t => t.Name));
+                _logger.LogWarning(
+                    ex,
+                    "[WTM] Lookup cache warm-up: resolving WTMContext for ConnectionKey routing failed: {Message}. " +
+                    "ConnectionKey type(s) will not be warmed; first request will populate the cache. Type(s): {Types}",
+                    ex.Message, failedTypeNames);
+                return;
+            }
+
+            if (wtm == null)
+            {
+                var allNamedTypeNames = string.Join(", ", namedGroups.Values.SelectMany(g => g).Select(t => t.Name));
+                _logger.LogInformation(
+                    "[WTM] Lookup cache warm-up: ConnectionKey types cannot be warmed without WTMContext; " +
+                    "first request will populate the cache. Type(s): {Types}",
+                    allNamedTypeNames);
+                return;
+            }
+
+            foreach (var (connectionKey, groupTypes) in namedGroups)
+            {
+                if (stoppingToken.IsCancellationRequested) break;
+
+                if (!wtm.IsKnownConnectionKey(connectionKey))
+                {
+                    _logger.LogWarning(
+                        "[WTM] Lookup cache warm-up skipped for ConnectionKey '{ConnectionKey}': not a configured " +
+                        "connection. Type(s): {Types}",
+                        connectionKey, string.Join(", ", groupTypes.Select(t => t.Name)));
+                    continue;
+                }
+
+                DbContext? dc;
+                try
+                {
+                    dc = wtm.CreateDC(isLog: false, cskey: connectionKey, logerror: true) as DbContext;
+                }
+                catch (Exception ex)
+                {
+                    // A known-but-disabled connection makes CreateDC throw InvalidOperationException
+                    // (WTMContext.CreateDC.cs) — never let it escape and stop the host.
+                    _logger.LogWarning(
+                        ex,
+                        "[WTM] Lookup cache warm-up failed to resolve ConnectionKey '{ConnectionKey}': {Message}. " +
+                        "Type(s) will not be warmed; first request will populate the cache. Type(s): {Types}",
+                        connectionKey, ex.Message, string.Join(", ", groupTypes.Select(t => t.Name)));
+                    continue;
+                }
+
+                if (dc == null)
+                {
+                    _logger.LogWarning(
+                        "[WTM] Lookup cache warm-up skipped for ConnectionKey '{ConnectionKey}': EF Core DbContext " +
+                        "not available. Type(s): {Types}",
+                        connectionKey, string.Join(", ", groupTypes.Select(t => t.Name)));
+                    continue;
+                }
+
+                try
+                {
+                    await WarmTypesAsync(groupTypes, dc, method, stoppingToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    dc.Dispose();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Warms a batch of types (all sharing one already-resolved <see cref="DbContext"/>) via
+        /// reflection over <see cref="ILookupCacheService.GetAllAsync{T}"/>. Per-type failures are
+        /// logged as warnings and never propagate — a single broken type must not abort the rest
+        /// of the batch or the host's startup.
+        /// </summary>
+        private async Task WarmTypesAsync(
+            IReadOnlyList<Type> types,
+            DbContext dc,
+            MethodInfo method,
+            CancellationToken stoppingToken)
+        {
+            foreach (var type in types)
+            {
+                if (stoppingToken.IsCancellationRequested) break;
+                try
+                {
+                    var generic = method.MakeGenericMethod(type);
+                    var task = (Task?)generic.Invoke(_cacheService, new object?[] { dc, null, stoppingToken });
+                    if (task != null)
+                        await task.ConfigureAwait(false);
+
+                    _logger.LogInformation("[WTM] Lookup cache warmed: {TypeName}", type.Name);
+                }
+                catch (Exception ex)
+                {
+                    // method.Invoke wraps exceptions in TargetInvocationException; unwrap for readable logs
+                    var inner = ex is TargetInvocationException tie ? tie.InnerException ?? tie : ex;
+                    _logger.LogWarning(
+                        inner,
+                        "[WTM] Lookup cache warm-up failed for {TypeName}: {Message}. First request will populate the cache.",
+                        type.Name, inner.Message);
+                }
+            }
         }
 
         /// <summary>

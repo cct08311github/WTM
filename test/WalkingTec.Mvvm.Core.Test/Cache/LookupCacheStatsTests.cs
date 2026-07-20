@@ -164,8 +164,9 @@ namespace WalkingTec.Mvvm.Core.Test.Cache
             // Registered cacheable types in the test assembly:
             //   CityCode, StatusDict, NoWarmDict, TenantProduct, TenantCategory  (LookupCacheTests.cs)
             //   DCity, DStatus                                                    (DistributedLookupCacheTests.cs)
+            //   ConnKeyDefaultType, ConnKeyAltType                                (LookupCacheWarmupConnectionKeyTests.cs, #756)
             //   (OrderRecord, DOrder are NOT marked [CacheLookup])
-            Assert.AreEqual(7, all.Count, "Expected 7 registered cacheable types.");
+            Assert.AreEqual(9, all.Count, "Expected 9 registered cacheable types.");
             CollectionAssert.AllItemsAreNotNull((System.Collections.ICollection)all);
             // Sorted by FullName ascending
             var names = all.Select(s => s.EntityTypeName).ToArray();
