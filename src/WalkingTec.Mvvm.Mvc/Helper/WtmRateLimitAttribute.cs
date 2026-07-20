@@ -58,6 +58,26 @@ namespace WalkingTec.Mvvm.Mvc
 
         public WtmRateLimitAttribute(int permits, int windowSeconds, int queueLimit = 0)
         {
+            ValidateTuple(permits, windowSeconds, queueLimit);
+
+            Permits = permits;
+            WindowSeconds = windowSeconds;
+            QueueLimit = queueLimit;
+        }
+
+        /// <summary>
+        /// Shared validation for a <c>(permits, windowSeconds, queueLimit)</c>
+        /// config tuple. Issue #759: extracted so the attribute constructor
+        /// and <see cref="WtmRateLimitingOptions.RegisterPolicy"/> (explicit
+        /// programmatic policy registration, no controller attribute
+        /// required) enforce byte-identical guards and cannot drift apart.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// <paramref name="permits"/> is not positive, <paramref name="windowSeconds"/>
+        /// is not positive, or <paramref name="queueLimit"/> is negative.
+        /// </exception>
+        internal static void ValidateTuple(int permits, int windowSeconds, int queueLimit)
+        {
             if (permits <= 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(permits), permits,
@@ -73,10 +93,6 @@ namespace WalkingTec.Mvvm.Mvc
                 throw new ArgumentOutOfRangeException(nameof(queueLimit), queueLimit,
                     "[WtmRateLimit] QueueLimit must be >= 0.");
             }
-
-            Permits = permits;
-            WindowSeconds = windowSeconds;
-            QueueLimit = queueLimit;
         }
 
         /// <summary>
