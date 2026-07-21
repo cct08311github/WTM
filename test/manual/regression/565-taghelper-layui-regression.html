@@ -61,7 +61,8 @@
     3. laydate (range)             8. checkbox/radio +      13. colorPicker
     4. layer / OpenDialog             ff.LoadComboItems      14. tagInput (native, #571)
     5. table/grid                  9. transfer              15. richtextbox (layedit, #573)
-                                   10. upload (render only)
+                                   10. upload (render only)  16. renderGrid island (#470 O1)
+                                                              17. renderGrid templet family (#470 O1)
   ============================================================================
 
   #566 DUAL-TREE HEAD LOADER
@@ -155,7 +156,7 @@
 <p>See the HTML comment at the top of this file's &lt;head&gt; (view source) for the full explanation. Phase-1 gate for #566 (bundled-layui version bump), part of the #567 roadmap.</p>
 
 <div id="summary">
-  <strong id="summaryHeadline">Running&hellip; (<span id="summaryCount">0</span>/<span id="summaryTotal">15</span>)</strong>
+  <strong id="summaryHeadline">Running&hellip; (<span id="summaryCount">0</span>/<span id="summaryTotal">17</span>)</strong>
   <div id="summaryList"></div>
 </div>
 
@@ -357,11 +358,43 @@
   <div class="status" id="status-richtext">waiting…</div>
 </div>
 
+<!-- ============================== 16. renderGrid island (#470 Slice O1) ============================== -->
+<div class="box" id="sec-rendergrid">
+  <h2>16. renderGrid island (#470 Slice O1) — DataTableTagHelper's opt-in eval-free island render</h2>
+  <!-- Exactly the shape DataTableTagHelper.Island.cs emits for a flag-ON,
+       island-eligible grid: `data-wtm-grid-id` on the <table> (island-only —
+       never present flag-OFF) + one 'renderGrid' island action. autoSearch:
+       false so the driver script below never needs to stub $.ajax — the
+       dispatcher's own non-AutoSearch branch renders a real, empty,
+       local-only table immediately (mirrors ff.LoadLocalData's own
+       url:null/data:[] technique), same no-backend-needed convention as
+       section 5's hand-written table.render() above. This is a page-ready
+       island (not inside a dialog), so ff._consumePageReadyIslands
+       auto-dispatches it — no manual driver call needed, only polling. -->
+  <table id="regGridIsland1" lay-filter="regGridIsland1" data-wtm-grid-id="regGridIsland1"></table>
+  <script type="application/json" class="wtm-dialog-init">{"actions":[{"type":"renderGrid","gridId":"regGridIsland1","tableJsVar":"wtVar_regGridIsland1","elem":"#regGridIsland1","id":"regGridIsland1","text":{"none":"No Data"},"defaultToolbar":[],"totalRow":false,"method":"post","limit":0,"cols":[[{"field":"name","title":"Name"},{"field":"age","title":"Age"}]],"autoSearch":false,"done":{"heightAuto":true,"maxDepth":1}}]}</script>
+  <div class="status" id="status-rendergrid">waiting…</div>
+</div>
+
+<!-- ============================== 17. renderGrid templet registry (#470 Slice O1) ============================== -->
+<div class="box" id="sec-rendergrid-templets">
+  <h2>17. renderGrid templet registry (#470 Slice O1) — ff.gridTemplets family incl. __bgcolor/__forecolor + XSS neutralisation</h2>
+  <!-- Covers all 5 non-currencyRow tpl kinds in one grid (currencyRow is
+       functionally identical wiring, already unit/jsdom-tested; the point of
+       THIS browser-level section is proving the __bgcolor/__forecolor
+       nested-<script> trick — the one piece of behavior that can only be
+       verified against a REAL rendered DOM on a REAL layui tree, per the
+       #470 design brief §3 — actually applies on both vendored trees). -->
+  <table id="regGridIsland2" lay-filter="regGridIsland2" data-wtm-grid-id="regGridIsland2"></table>
+  <script type="application/json" class="wtm-dialog-init">{"actions":[{"type":"renderGrid","gridId":"regGridIsland2","tableJsVar":"wtVar_regGridIsland2","elem":"#regGridIsland2","id":"regGridIsland2","text":{"none":"No Data"},"defaultToolbar":[],"totalRow":false,"method":"post","limit":0,"cols":[[{"field":"plainField","title":"Plain","templet":{"tpl":"plain","field":"plainField","random":"reg17","hasFormat":false}},{"field":"tagField","title":"Tag","templet":{"tpl":"tag","field":"tagField","tagColor":"blue"}},{"field":"progField","title":"Progress","templet":{"tpl":"progress","field":"progField"}},{"field":"imgField","title":"Image","templet":{"tpl":"image","field":"imgField","imageSize":24}},{"field":"curField","title":"Currency","templet":{"tpl":"currency","field":"curField","currencyFormat":"0.00"}}]],"autoSearch":false,"done":{"heightAuto":true,"maxDepth":1}}]}</script>
+  <div class="status" id="status-rendergrid-templets">waiting…</div>
+</div>
+
 <script>
 (function () {
   'use strict';
 
-  var TOTAL_EXPECTED = 15;
+  var TOTAL_EXPECTED = 17;
   window.__regressionResults = [];
   window.__regressionDone = false;
 
@@ -413,6 +446,17 @@
     }
     tick();
   }
+
+  // Issue #470 Slice O1: registered here (this whole <script> runs
+  // synchronously during page parsing, BEFORE DOMContentLoaded fires) so it
+  // is guaranteed to be listening before ff._consumePageReadyIslands
+  // auto-dispatches section 16/17's page-ready renderGrid islands below —
+  // wtm:gridRendered is dispatched with bubbles:true, so ONE document-level
+  // listener catches every grid's done() firing.
+  window.__wtmGridRenderedEvents = [];
+  document.addEventListener('wtm:gridRendered', function (e) {
+    window.__wtmGridRenderedEvents.push(e.detail);
+  });
 
   // ---- 1. form.render -----------------------------------------------------
   pollUntil(function () {
@@ -985,6 +1029,152 @@
     setStatus('status-richtext', (pass ? '<span class="ok">OK</span>: ' : '<span class="bad">FAIL</span>: ') + detail);
     pushResult('richtextbox (layedit.build + round-trip)', pass, detail);
   }, 80, 150);
+
+  // ---- 16. renderGrid island (#470 Slice O1) ------------------------------
+  // Page-ready island — ff._consumePageReadyIslands auto-dispatches it once
+  // layui.table is confirmed loaded (_islandModulesFor's 'renderGrid'
+  // entry), no manual driver call needed. Proves, against the REAL layui
+  // table module: (a) .layui-table-view actually gets built from an island
+  // payload (not just a hand-written table.render() call, unlike section 5);
+  // (b) the compat globals (invariant 3) are really on window after render;
+  // (c) the wtm:gridRendered CustomEvent really fires.
+  pollUntil(function () {
+    return document.querySelector('#regGridIsland1 + .layui-table-view') !== null
+      ? { pass: true } : null;
+  }, function (result) {
+    var globalsOk = window.regGridIsland1option && typeof window.regGridIsland1option === 'object' &&
+      window.wtVar_regGridIsland1 && typeof window.wtVar_regGridIsland1 === 'object';
+    var eventOk = window.__wtmGridRenderedEvents.length > 0;
+    var pass = result.pass && globalsOk && eventOk;
+    var detail = '.layui-table-view built by the renderGrid island (page-ready auto-dispatch); ' +
+      (globalsOk ? 'compat globals (regGridIsland1option / wtVar_regGridIsland1) present on window (invariant 3)' : 'MISSING compat globals') + '; ' +
+      (eventOk ? 'wtm:gridRendered CustomEvent fired (' + window.__wtmGridRenderedEvents.length + 'x)' : 'wtm:gridRendered CustomEvent did NOT fire');
+    setStatus('status-rendergrid', (pass ? '<span class="ok">OK</span>: ' : '<span class="bad">FAIL</span>: ') + detail);
+    pushResult('renderGrid island (#470 Slice O1)', pass, detail);
+  }, 60, 150);
+
+  // ---- 17. renderGrid templet registry (#470 Slice O1) --------------------
+  pollUntil(function () {
+    return document.querySelector('#regGridIsland2 + .layui-table-view') !== null
+      ? { pass: true } : null;
+  }, function () {
+    // Manually feed one deterministic local row using the EXACT technique
+    // ff.LoadLocalData itself uses (mutate the SAME option object window
+    // holds — url:null/data:[...]/limit:9999 — then call layui.table.render()
+    // again, NOT table.reload — reload() only partial-merges onto layui's
+    // OWN internal already-remote-configured cache and does not reliably
+    // switch a table to local-data mode) — so the ACTUAL rendered cell
+    // markup on THIS layui tree can be inspected. This is harness-driving
+    // code (same category as section 4's dialog-open button click, section
+    // 5's own direct table.render() call), not a stand-in for
+    // TagHelper-emitted production markup.
+    var xssMarkerFired = false;
+    window.__wtmO1XssMarker = function () { xssMarkerFired = true; };
+    // Issue #470 Slice O1 FINDING — tracked separately as Issue #776 (out of
+    // scope for this O1 gate): layui 2.6.3 (the bundled/default
+    // tree) builds each <td>'s own `data-content="..."` attribute (an
+    // internal tooltip/truncation feature) by concatenating the RAW,
+    // un-templeted field value into that attribute string WITHOUT escaping
+    // embedded double-quotes — independent of ff.gridTemplets/getTemplate()
+    // entirely (it reads `d[field]` directly, bypassing whatever the
+    // configured templet returns). A field value containing a literal `"`
+    // can therefore break out of that attribute and inject a live,
+    // executing element — a genuine, pre-existing layui-internal
+    // vulnerability that affects the LEGACY grid path identically (any
+    // plain/format column, any templet or none) and is NOT specific to, or
+    // introduced by, the #470 O1 island work. layui-next (2.13.8) does not
+    // exhibit it. This payload therefore avoids embedded double-quotes so
+    // THIS section tests what it actually covers — ff.gridTemplets'/
+    // ff.EscapeText's OWN escaping of cell content — without being
+    // confounded by that separate, already-flagged issue.
+    var xssPayload = '<script>window.__wtmO1XssMarker()<\/script>';
+    var opt = window.regGridIsland2option;
+    opt.url = null;
+    opt.data = [{
+      LAY_INDEX: 0,
+      plainField: xssPayload,
+      plainField__bgcolor: 'rgb(255, 0, 170)',
+      plainField__forecolor: '#00ffaa',
+      tagField: 'Active',
+      progField: '73',
+      imgField: '',
+      curField: 1234.5
+    }];
+    opt.limit = 9999;
+    layui.table.render(opt);
+
+    pollUntil(function () {
+      var row = document.querySelector('#regGridIsland2 + .layui-table-view .layui-table-body tr');
+      return row ? { pass: true, row: row } : null;
+    }, function (result) {
+      var pass = true;
+      var notes = [];
+      var row = result.row;
+
+      // The authoritative XSS-safety signal is whether the payload actually
+      // EXECUTED (xssMarkerFired), not a DOM-shape scan of the whole <tr> —
+      // layui itself independently builds a `data-content="..."` attribute
+      // on each <td> from the RAW (un-templeted) field value for its own
+      // internal tooltip/truncation feature; unescaped quotes in a payload
+      // can make that attribute's own markup look odd (pre-existing layui
+      // behavior, identical for the LEGACY grid path — data-content is
+      // populated from cell text regardless of templet — and confirmed
+      // inert here too, matching this codebase's existing "innerHTML-set
+      // script tags don't auto-execute" invariant, #635/#722's own
+      // documented rationale), so scanning the whole row for `<script>`/
+      // `<img onerror>` elements would false-positive on that unrelated
+      // layui-internal quirk instead of testing what THIS section actually
+      // covers (ff.gridTemplets). Scoped instead to the templet's own
+      // rendered div (id="plainField..."), which is the only DOM this
+      // section's code path controls.
+      if (xssMarkerFired) {
+        pass = false;
+        notes.push('XSS PAYLOAD EXECUTED (regression!)');
+      } else {
+        notes.push('XSS payload neutralised (ff.EscapeText) — never executed');
+      }
+      var plainDiv = row.querySelector('#plainFieldreg17_0');
+      if (!plainDiv || plainDiv.querySelector('img[onerror]') ||
+          (plainDiv.querySelectorAll('script').length !== 1)) {
+        // Exactly ONE <script> is expected inside this div — the
+        // FRAMEWORK-AUTHORED __bgcolor trick's own nested script (see
+        // below); the XSS payload's <script>/<img onerror> must have been
+        // neutralised into inert entity-encoded TEXT, never a second live
+        // element.
+        pass = false;
+        notes.push('templet div did not neutralise the payload as expected (found ' +
+          (plainDiv ? plainDiv.querySelectorAll('script').length : 'no div') + ' <script> element(s), expected exactly 1 — the __bgcolor trick\'s own)');
+      }
+
+      // __bgcolor/__forecolor nested-<script> trick (getTemplate() parity,
+      // #470 design brief §3) — the concrete dual-tree verification: does
+      // the nested <script> the 'plain' templet emits actually EXECUTE and
+      // apply the background-color to the cell's closest <td> on THIS tree?
+      var plainCell = row.querySelector('td[data-field="plainField"]');
+      var bgApplied = !!(plainCell && /rgb\(255,\s*0,\s*170\)/.test(plainCell.style.backgroundColor));
+      if (!bgApplied) { pass = false; }
+      notes.push(bgApplied
+        ? '__bgcolor nested-script trick applied background-color to the cell (parity confirmed on this tree)'
+        : '__bgcolor nested-script trick did NOT apply background-color on this tree (see #470 design brief §3 fallback note)');
+
+      var tagCell = row.querySelector('td[data-field="tagField"]');
+      var tagOk = !!(tagCell && (tagCell.querySelector('.layui-badge') || tagCell.querySelector('.layui-badge-rim')));
+      if (!tagOk) { pass = false; notes.push('tag templet did not render a badge'); }
+
+      var progCell = row.querySelector('td[data-field="progField"]');
+      var progOk = !!(progCell && progCell.querySelector('.layui-progress-bar'));
+      if (!progOk) { pass = false; notes.push('progress templet did not render a progress bar'); }
+
+      var curCell = row.querySelector('td[data-field="curField"] .layui-table-cell');
+      var expectedCur = (1234.5).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      var curOk = !!(curCell && curCell.textContent.indexOf(expectedCur) !== -1);
+      if (!curOk) { pass = false; notes.push('currency templet expected "' + expectedCur + '", got "' + (curCell && curCell.textContent) + '"'); }
+
+      var detail = notes.join('; ');
+      setStatus('status-rendergrid-templets', (pass ? '<span class="ok">OK</span>: ' : '<span class="bad">FAIL</span>: ') + detail);
+      pushResult('renderGrid templet registry (#470 Slice O1)', pass, detail);
+    }, 40, 150);
+  }, 60, 150);
 
 })();
 </script>

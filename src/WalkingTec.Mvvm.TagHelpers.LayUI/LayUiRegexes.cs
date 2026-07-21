@@ -32,5 +32,17 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         // new Regex(@"(.*?)option = \{", RegexOptions.Compiled) (already static-cached).
         [GeneratedRegex(@"(.*?)option = \{")]
         internal static partial Regex GridOptionVarRegex();
+
+        // Issue #470 Slice O1 (N-prereq): TreeContainerTagHelper — island-aware probe.
+        // Locates the `data-wtm-grid-id="wtTable_..."` attribute DataTableTagHelper emits
+        // on its <table> element ONLY when it actually rendered via the opt-in renderGrid
+        // island (see DataTableTagHelper.Island.cs) — never on the legacy path, so this can
+        // never match legacy-rendered nested-grid markup. Tried BEFORE GridOptionVarRegex
+        // (island-then-legacy probe order): an island-rendered nested grid never emits the
+        // "{gridid}option = {" text at all, so without this probe running first, a nested
+        // grid that islandifies would silently break TreeContainer's tree-click filtering
+        // (#470 design brief comment-18118, risk register #3).
+        [GeneratedRegex(@"data-wtm-grid-id=""([A-Za-z0-9_]+)""")]
+        internal static partial Regex IslandGridIdRegex();
     }
 }

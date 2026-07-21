@@ -16,7 +16,7 @@ using WalkingTec.Mvvm.Core.Extensions;
 namespace WalkingTec.Mvvm.TagHelpers.LayUI
 {
     [HtmlTargetElement("wt:grid", Attributes = REQUIRED_ATTR_NAME, TagStructure = TagStructure.WithoutEndTag)]
-    public class DataTableTagHelper : TagHelper
+    public partial class DataTableTagHelper : TagHelper
     {
         private static readonly string _jsVersion =
             typeof(DataTableTagHelper).Assembly.GetName().Version?.ToString() ?? "0";
@@ -434,6 +434,15 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             _fixedLeftFieldSet = ParseFieldSet(FixedLeftFields);
             _fixedRightFieldSet = ParseFieldSet(FixedRightFields);
 
+            // Issue #470 Slice O1: opt-in island-render containment decision, computed
+            // early — every attribute it depends on (UseLocalData/EnableAnalysis/
+            // IsInSelector/DoneFunc/CheckedFunc + GetGridActions()'s OnClickFunc values)
+            // is already bound at this point — so the flag-ON-only `data-wtm-grid-id`
+            // attribute (never emitted when the flag is OFF, preserving flag-OFF byte
+            // identity — see DataTableTagHelper.Island.cs) can be added alongside the
+            // other always-emitted attributes below.
+            var islandDecision = DetermineGridIslandDecision(ListVM?.GetGridActions());
+
             var vmQualifiedName = Vm.Model.GetType().AssemblyQualifiedName;
             vmQualifiedName = vmQualifiedName.Substring(0, vmQualifiedName.LastIndexOf(", Version=", StringComparison.CurrentCulture));
 
@@ -442,6 +451,10 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             output.Attributes.Add("id", Id);
             output.Attributes.Add("lay-filter", Id);
             output.Attributes.Add("subpro", ListVM?.DetailGridPrix??"");
+            if (islandDecision.UseIsland)
+            {
+                output.Attributes.Add("data-wtm-grid-id", Id);
+            }
             output.TagMode = TagMode.StartTagAndEndTag;
 
             var config = ListVM.ConfigInfo;
@@ -512,7 +525,27 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 toolbardef = $" ,toolbar: '#{ToolBarId}2'";
             }
 
-            BuildTableOptionsScript(output, context, vmQualifiedName, maxDepth, layuiCols, aggregateFields, where, righttoolbar, toolbardef, lefttoolbarmergin, rowBtnStrBuilder, toolBarBtnStrBuilder, gridBtnEventStrBuilder, hasButtonGroup, page);
+            // Issue #470 Slice O1: XOR emission — exactly one of the island or the
+            // legacy path runs per grid, never both (invariant 6). Flag-OFF always
+            // takes the legacy branch with FlagOnFallbackReason == null (no
+            // console.warn emitted), so BuildTableOptionsScript's call shape/args are
+            // completely unchanged from pre-Slice-O1 — the byte-identity harness
+            // (DataTableByteIdentityTests) pins exactly that call.
+            if (islandDecision.UseIsland)
+            {
+                BuildTableIslandScript(output, maxDepth, aggregateFields, where, lefttoolbarmergin, rowBtnStrBuilder, toolBarBtnStrBuilder, gridBtnEventStrBuilder, hasButtonGroup, page);
+            }
+            else
+            {
+                BuildTableOptionsScript(output, context, vmQualifiedName, maxDepth, layuiCols, aggregateFields, where, righttoolbar, toolbardef, lefttoolbarmergin, rowBtnStrBuilder, toolBarBtnStrBuilder, gridBtnEventStrBuilder, hasButtonGroup, page);
+                if (islandDecision.FlagOnFallbackReason != null)
+                {
+                    // Slice J/N1 precedent: a visible migration nudge in the browser
+                    // console when the global flag is ON but THIS grid still fell back.
+                    output.PostElement.AppendHtml(
+                        $@"<script>console.warn('[WTM] DataTableTagHelper #{JsEnc(Id)}: {JsEnc(islandDecision.FlagOnFallbackReason)} — UseSelectIslandRender is ON but island render was skipped for this grid; keeping the legacy inline script. See #470 Slice O1.');</script>");
+                }
+            }
 
             base.Process(context, output);
         }

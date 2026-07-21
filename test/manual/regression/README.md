@@ -31,7 +31,7 @@ pre-existing vendored trees under `demo/WalkingTec.Mvvm.Demo/wwwroot/`
 
 ## What each harness section proves
 
-All 15 sections live in one combined harness page,
+All 17 sections live in one combined harness page,
 [`565-taghelper-layui-regression.html`](./565-taghelper-layui-regression.html),
 in clearly separated `<section>`-style `<div class="box">` blocks:
 
@@ -52,10 +52,12 @@ in clearly separated `<section>`-style `<div class="box">` blocks:
 | 13 | colorPicker | `ColorPickerTagHelper` | `colorpicker.render({elem, color, format, done})`; asserts `.layui-colorpicker` is built. |
 | 14 | tagInput | `TagInputTagHelper` | **No longer a gap — native widget assertion, gated on both trees (#581).** #571 reimplemented `TagInputTagHelper` as a plain-DOM, dependency-free chip widget with no `layui` module dependency at all, driven by `framework_layui.js`'s `_renderTagInputAction`. This section renders the real TagHelper markup (wrapper `<div>` + sibling hidden input pre-seeded `"apple,banana"` + the bare `{"type":"tagInput",...}` JSON island), lets the harness's normal page-ready island consumer dispatch it (same mechanism as sections 1-3), and asserts: the widget parses the hidden input's initial value into 2 chips (`apple`, `banana`) on init; a 3rd chip added through the widget's real entry-input+blur interaction path with an XSS payload (`<img src=x onerror=alert(1)>`) renders as inert chip *text* (`createTextNode`, no `<img>` element created); and the hidden field stays comma-joined in sync. Passes identically on `layui-263` and `layui-next` since the widget needs neither. |
 | 15 | richtextbox | `RichTextBoxTagHelper` | **New — #573 layedit-vendoring compat gate.** `layedit` was removed from layui upstream in 2.8 and is absent from `layui-next` (2.13.8); #573 vendors the 2.6.3 `layedit.js` (+ face images + a hand-extracted `layedit.css`) beside `layui-next` and registers it via `layui.extend({layedit: ...})` before this section's script runs (see the `<head>` loader). This section reproduces `RichTextBoxTagHelper`'s exact (non-island) markup — the `BaseFieldTag` wrapper divs + a pre-seeded `<textarea isrich="1">` + the TagHelper's own inline `<script>` calling `layui.use('layedit', ...)` — and asserts: `.layui-layedit` is built immediately after the textarea; the toolbar has `>0` tool items; the edit iframe exists and its document is initialized (`contenteditable="true"`); `layeditindex` is stamped on the textarea; **and** a functional round-trip — `layedit.setContent(index,'hello-573')` followed by `layedit.getContent(index)` — returns the same content, proving the module is not just present as DOM scaffolding but actually works, on both `layui-263` (builtin lazy-load) and `layui-next` (vendored + extended). |
+| 16 | renderGrid island | `DataTableTagHelper` | **New — #470 Slice O1.** A page-ready `{"actions":[{"type":"renderGrid",...}]}` island (`data-wtm-grid-id` on the `<table>`, `autoSearch:false` so no `$.ajax` stub is needed — the dispatcher's own non-AutoSearch branch renders a real, empty, local-only table immediately, same `url:null`/`data:[]` technique `ff.LoadLocalData` uses) gets auto-dispatched by `ff._consumePageReadyIslands`; asserts `.layui-table-view` is really built by `ff._renderGridAction` (not a hand-written `table.render()` call, unlike section 5), the compat globals (`{gridId}option` / `wtVar_{gridId}`, invariant 3) are really on `window` after render, and the `wtm:gridRendered` `CustomEvent` really fires. |
+| 17 | renderGrid templet registry | `DataTableTagHelper` | **New — #470 Slice O1.** Covers `ff.gridTemplets`' plain/tag/progress/image/currency builders in one grid, incl. the `__bgcolor`/`__forecolor` nested-`<script>` trick (`getTemplate()` parity, design brief §3) — the one piece of behavior that can only be verified against a REAL rendered DOM. After the island's initial (empty) render, the driver script mutates the SAME option object and calls `layui.table.render()` again with one deterministic local row (`ff.LoadLocalData`'s own technique — `table.reload()` does **not** reliably switch an already-remote-configured table to local-data mode) carrying an XSS payload; asserts the payload never executes (`ff.EscapeText`), the templet div contains exactly the framework's own `__bgcolor` script (no injected extra), the background-color actually applies to the cell on **both** trees, and the tag/progress/currency cells render as expected. **Finding along the way (Issue #776, out of scope for this gate):** layui 2.6.3's own internal `data-content` cell attribute is built from the raw field value without escaping embedded double-quotes — a pre-existing, layui-internal XSS unrelated to `ff.gridTemplets`/#470, not present on `layui-next`; the section's payload avoids embedded quotes so it tests what it's meant to test without being confounded by that separate issue. |
 
 Every section reports one `{ name, pass, detail, knownGap? }` entry into
 `window.__regressionResults`; `window.__regressionDone` flips to `true` once
-all 15 have reported.
+all 17 have reported.
 
 ## How to run
 
@@ -134,7 +136,10 @@ it is now a real, gated (must-pass) assertion on both trees, same as every
 other section. **#573 update:** section 15 (`richtextbox`) was added as a real,
 gated assertion on both trees from day one (vendoring the 2.6.3 `layedit`
 module beside `layui-next` rather than leaving it a gap) — see its row above.
-All 15 sections are green on both `layui-263` and `layui-next`, and the suite
+**#470 Slice O1 update:** sections 16 (`renderGrid` island) and 17
+(`renderGrid` templet registry, incl. `__bgcolor`/`__forecolor`) were added,
+also real gated assertions on both trees from day one — see their rows above.
+All 17 sections are green on both `layui-263` and `layui-next`, and the suite
 currently carries **zero** `knownGap` entries.
 Any future layui version bump should re-run `npx playwright test` from
 `test/regression/` and confirm both projects stay green (or fix

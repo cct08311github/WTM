@@ -333,3 +333,167 @@ describe('#722 ff.OpenDialog2 — Selector.cshtml own init scripts survive throu
     expect(layui.layer.open).toHaveBeenCalledTimes(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #470 Slice O1 — OpenDialog2's widened island-aware gate (design
+// brief comment 18118 §4). A flag-ON renderGrid island carries NO
+// `wtVar_...=table.render(...)` text at all — regGridVar alone would never
+// widen the :3922-region gate for an island-rendered selector grid response.
+// These tests reuse this file's EXISTING #722 harness (real ff.OpenDialog2,
+// real DOMPurify) end-to-end, extending its coverage to the island case
+// rather than re-deriving a parallel one. NOTE (per the design brief): with
+// IsInSelector grids forced legacy in O1 (DataTableTagHelper.Island.cs's
+// DetermineGridIslandDecision), this widened branch is DORMANT for
+// Selector.cshtml itself today — these tests exercise the mechanism directly
+// (a hand-crafted response shaped like a hypothetical future non-selector
+// dialog-hosted island grid) since the real Selector.cshtml never reaches it
+// yet.
+// ---------------------------------------------------------------------------
+describe('#470 Slice O1 — ff.OpenDialog2 widened island-aware gate + literal oldgridid rewrite', () => {
+  beforeEach(() => {
+    // makeOpenDialog2LayuiWithDomInsertion's layer.open mock ACTUALLY
+    // executes any JS-typed <script> found in the inserted content (mirrors
+    // real jQuery/browser behavior — see that helper's own comment above).
+    // Tests 2/3 below rewrite a `table.reload(...)` <script> fragment that
+    // then genuinely runs; `table` mirrors the `var table = layui.table;`
+    // global a real page's layui.use(['table'], ...) callback establishes —
+    // same fixture convention as this file's #722 `beforeEach` above.
+    window.table = { reload: jest.fn() };
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    document.body.innerHTML = '';
+    delete window.table;
+  });
+
+  // Response shaped like an island-rendered grid: the <table> carries
+  // data-wtm-grid-id (DataTableTagHelper.Island.cs, island path ONLY) and a
+  // renderGrid island — but crucially NO `wtVar_...=table.render(...)` text
+  // anywhere (unlike every other fixture in this file), so regGridVar alone
+  // can never detect it.
+  function makeIslandGridResponseHtml(gridId) {
+    return (
+      '<table id="' + gridId + '" lay-filter="' + gridId + '" data-wtm-grid-id="' + gridId + '"></table>' +
+      '<script type="application/json" class="wtm-dialog-init">' +
+      JSON.stringify({ type: 'renderGrid', gridId: gridId }) +
+      '</script>' +
+      '$$SearchPanel$$'
+    );
+  }
+
+  test('1. an island-only response (no wtVar_=table.render text) still substitutes $$SearchPanel$$ — the widened gate fires', () => {
+    makeOpenDialog2TempEl('TempO1a', '<div>panel <a id="btnO1a">Search</a></div>');
+    const realDomPurify = loadRealDomPurify();
+    const layui = makeOpenDialog2LayuiWithDomInsertion();
+    const ajax = makeAjaxSuccess(makeIslandGridResponseHtml('wtTable_o1a'), {});
+    const { ff } = loadFreshFf(layui, ajax, realDomPurify, makeSelectorJqueryFactory());
+
+    ff.OpenDialog2('/some/dialog/url', 'wO1a', 'Pick', 500, 400, '#TempO1a');
+
+    const content = layui.layer.open.mock.calls[0][0].content;
+    expect(content).not.toContain('$$SearchPanel$$');
+    expect(content).toContain('btnO1a');
+  });
+
+  test('2. old-gridid in the calling page\'s cached template is rewritten to the NEW island gridId (literal replace)', () => {
+    makeOpenDialog2TempEl(
+      'TempO1b',
+      '<div>panel</div><script>table.reload(\'oldgrid_g9\',{url:\'/x\'});</script>'
+    );
+    const realDomPurify = loadRealDomPurify();
+    const layui = makeOpenDialog2LayuiWithDomInsertion();
+    const ajax = makeAjaxSuccess(makeIslandGridResponseHtml('wtTable_o1b'), {});
+    const { ff } = loadFreshFf(layui, ajax, realDomPurify, makeSelectorJqueryFactory());
+
+    ff.OpenDialog2('/some/dialog/url', 'wO1b', 'Pick', 500, 400, '#TempO1b');
+
+    const content = layui.layer.open.mock.calls[0][0].content;
+    expect(content).toContain("table.reload('wtTable_o1b',{url:'/x'}");
+    expect(content).not.toContain('oldgrid_g9');
+  });
+
+  test('3. old-gridid rewrite is LITERAL (split/join), never a RegExp — a "." in the old id does not act as a wildcard', () => {
+    // Old code used `new RegExp(oldgridid, "gim")`, so an old id containing a
+    // regex metacharacter ('.') would ALSO match-and-replace unrelated
+    // substrings that merely LOOK similar (here: "gridXQ" would match the
+    // pattern /grid.Q/ derived from the literal id "grid.Q" with "." as a
+    // wildcard). With literal split/join, only the EXACT substring is ever
+    // touched — "gridXQ" must survive untouched.
+    makeOpenDialog2TempEl(
+      'TempO1c',
+      '<div>keep gridXQ untouched, and grid.Q also untouched here</div>' +
+      '<script>table.reload(\'grid.Q\',{url:\'/x\'});</script>'
+    );
+    const realDomPurify = loadRealDomPurify();
+    const layui = makeOpenDialog2LayuiWithDomInsertion();
+    const ajax = makeAjaxSuccess(makeIslandGridResponseHtml('wtTable_o1c'), {});
+    const { ff } = loadFreshFf(layui, ajax, realDomPurify, makeSelectorJqueryFactory());
+
+    ff.OpenDialog2('/some/dialog/url', 'wO1c', 'Pick', 500, 400, '#TempO1c');
+
+    const content = layui.layer.open.mock.calls[0][0].content;
+    // The exact literal "grid.Q" occurrence (inside table.reload(...)) IS replaced.
+    expect(content).toContain("table.reload('wtTable_o1c',{url:'/x'}");
+    // The unrelated "gridXQ" text — which a `/grid.Q/` REGEX would ALSO have
+    // matched (since "." wildcards any character) — must survive untouched.
+    expect(content).toContain('keep gridXQ untouched');
+  });
+
+  test('4. a response with NO grid at all (neither legacy nor island) leaves $$SearchPanel$$ un-substituted — no false positive', () => {
+    makeOpenDialog2TempEl('TempO1d', '<div>panel</div>');
+    const realDomPurify = loadRealDomPurify();
+    const layui = makeOpenDialog2LayuiWithDomInsertion();
+    // A non-grid island (e.g. a colorpicker) must NOT, by itself, widen the
+    // grid-substitution gate.
+    const responseNoGrid =
+      '<script type="application/json" class="wtm-dialog-init">' +
+      JSON.stringify({ type: 'colorpicker', opts: { elem: '#cp1' } }) +
+      '</script>' +
+      '$$SearchPanel$$';
+    const ajax = makeAjaxSuccess(responseNoGrid, {});
+    const { ff } = loadFreshFf(layui, ajax, realDomPurify, makeSelectorJqueryFactory());
+
+    expect(() => {
+      ff.OpenDialog2('/some/dialog/url', 'wO1d', 'Pick', 500, 400, '#TempO1d');
+    }).not.toThrow();
+    const content = layui.layer.open.mock.calls[0][0].content;
+    expect(content).toContain('$$SearchPanel$$');
+  });
+
+  test('5. an island renderGrid action with a malformed (non wtTable_-shaped) gridId does not widen the gate', () => {
+    makeOpenDialog2TempEl('TempO1e', '<div>panel</div>');
+    const realDomPurify = loadRealDomPurify();
+    const layui = makeOpenDialog2LayuiWithDomInsertion();
+    // gridId shape validation (design brief §4 point 2): only a
+    // /^wtTable_[0-9a-zA-Z_]+$/-shaped island gridId is trusted as a
+    // widening signal.
+    const responseMalformedId =
+      '<table id="not-a-wttable-id" lay-filter="f"></table>' +
+      '<script type="application/json" class="wtm-dialog-init">' +
+      JSON.stringify({ type: 'renderGrid', gridId: 'not-a-wttable-id' }) +
+      '</script>' +
+      '$$SearchPanel$$';
+    const ajax = makeAjaxSuccess(responseMalformedId, {});
+    const { ff } = loadFreshFf(layui, ajax, realDomPurify, makeSelectorJqueryFactory());
+
+    ff.OpenDialog2('/some/dialog/url', 'wO1e', 'Pick', 500, 400, '#TempO1e');
+
+    const content = layui.layer.open.mock.calls[0][0].content;
+    expect(content).toContain('$$SearchPanel$$');
+  });
+
+  test('6. #627 kill-switch ON still opens the dialog with an island-only grid response (island dispatch is data, ungated)', () => {
+    makeOpenDialog2TempEl('TempO1f', '<div>panel</div>');
+    const realDomPurify = loadRealDomPurify();
+    const layui = makeOpenDialog2LayuiWithDomInsertion();
+    const ajax = makeAjaxSuccess(makeIslandGridResponseHtml('wtTable_o1f'), {});
+    const { ff } = loadFreshFf(layui, ajax, realDomPurify, makeSelectorJqueryFactory());
+
+    ff.DisableLegacyScriptRehydration = true;
+    expect(() => {
+      ff.OpenDialog2('/some/dialog/url', 'wO1f', 'Pick', 500, 400, '#TempO1f');
+    }).not.toThrow();
+    expect(layui.layer.open).toHaveBeenCalledTimes(1);
+  });
+});

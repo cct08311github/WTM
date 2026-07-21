@@ -270,8 +270,12 @@ window.ff = {
     // tag, exactly like xm-select), NOT a layui.use(...) module — same
     // rationale as 'renderSelect' above (see _renderChartAction's own
     // comment).
+    // Issue #470 Slice O1: 'renderGrid' DOES need an entry — layui.table IS a
+    // layui.use(...) module (the legacy inline <script> this island replaces
+    // always wrapped its call in `layui.use(['table'], function(){ ... })`),
+    // same rationale as 'renderTreeContainer'/'renderTransfer'/'upload' above.
     _islandModulesFor: function (payload) {
-        var needed = { form: false, laydate: false, slider: false, rate: false, colorpicker: false, ueditorconfig: false, layedit: false, transfer: false, upload: false, tree: false };
+        var needed = { form: false, laydate: false, slider: false, rate: false, colorpicker: false, ueditorconfig: false, layedit: false, transfer: false, upload: false, tree: false, table: false };
         if (payload && payload.actions) {
             for (var i = 0; i < payload.actions.length; i++) {
                 var a = payload.actions[i];
@@ -301,6 +305,8 @@ window.ff = {
                     needed.upload = true;
                 } else if (a.type === 'renderTreeContainer') {
                     needed.tree = true;
+                } else if (a.type === 'renderGrid') {
+                    needed.table = true;
                 }
             }
         }
@@ -315,6 +321,7 @@ window.ff = {
         if (needed.transfer) { mods.push('transfer'); }
         if (needed.upload) { mods.push('upload'); }
         if (needed.tree) { mods.push('tree'); }
+        if (needed.table) { mods.push('table'); }
         return mods;
     },
 
@@ -1974,6 +1981,333 @@ window.ff = {
         }
     },
 
+    // Issue #470 Slice O1: framework-internal templet REGISTRY — the O1
+    // design brief (comment 18118 §3) resolution to the "JS-text templet"
+    // problem. Each entry is a FACTORY: ff.gridTemplets[descriptor.tpl](descriptor)
+    // returns a real JS function(d){...} — the actual layui `templet` callback
+    // — built from data, never from eval/new Function/string-to-code. The
+    // bodies below are moved VERBATIM from DataTableTagHelper.cs's
+    // getTemplate()/GetRichTemplate()/BuildCurrencyTemplate() (server-side
+    // JS-text builders), just re-expressed as closures over descriptor fields
+    // instead of C# string interpolation — same escaping helpers
+    // (ff.EscapeText/ff.EscapeAttr), same cell markup, same behavior.
+    //
+    // 'plain'/'bool' — the __bgcolor/__forecolor nested-<script> trick
+    // (getTemplate() :1415) is reproduced EXACTLY as the legacy server-built
+    // function did — the O1 design brief §3 offered a done()-pass alternative
+    // (data-driven, no nested script) but only IF proven behaviorally
+    // equivalent on BOTH layui trees via the dual-tree Playwright harness;
+    // exact string/behavior reproduction is the brief's own explicitly-stated
+    // fallback when that verification hasn't been completed, so that is what
+    // ships here. 'bool' is byte-for-byte the same builder as 'plain' — the
+    // server only differentiates the two for descriptor clarity (isBoolColumn
+    // always sets hasFormat=true; the actual templet body never branches on
+    // tpl name, only on hasFormat/encodeFormat), so they intentionally alias.
+    gridTemplets: {
+        plain: function (descriptor) {
+            var field = (descriptor && typeof descriptor.field === 'string') ? descriptor.field : '';
+            var random = (descriptor && typeof descriptor.random === 'string') ? descriptor.random : '';
+            var hasFormat = !!(descriptor && descriptor.hasFormat);
+            var encodeFormat = !!(descriptor && descriptor.encodeFormat);
+            var bgField = field + '__bgcolor';
+            var fgField = field + '__forecolor';
+            return function (d) {
+                var sty = '';
+                var bg = '';
+                var did = field + random + '_' + d.LAY_INDEX;
+                if (d[bgField] != undefined) {
+                    bg = "<script>$('#" + did + "').closest('td').css('background-color','" + d[bgField] + "');</s" + "cript>";
+                }
+                if (d[fgField] != undefined) {
+                    sty = 'color:' + d[fgField] + ';';
+                }
+                var cellVal = (hasFormat && !encodeFormat) ? d[field] : ff.EscapeText(d[field]);
+                return '<div style="' + sty + '" id="' + did + '">' + cellVal + bg + '</div>';
+            };
+        },
+        // 'bool' intentionally delegates to 'plain' at CALL time (not aliased by
+        // reference at object-literal-construction time, since `ff` isn't fully
+        // assigned yet while this literal is still being built) — see the class
+        // doc above gridTemplets for why the two tpl names share one builder body.
+        bool: function (descriptor) {
+            return ff.gridTemplets.plain(descriptor);
+        },
+        progress: function (descriptor) {
+            var field = (descriptor && typeof descriptor.field === 'string') ? descriptor.field : '';
+            return function (d) {
+                return '<div class="layui-progress" lay-filter=""><div class="layui-progress-bar" lay-percent="' + ff.EscapeAttr(d[field]) + '%"></div></div>';
+            };
+        },
+        tag: function (descriptor) {
+            var field = (descriptor && typeof descriptor.field === 'string') ? descriptor.field : '';
+            var tagColor = (descriptor && typeof descriptor.tagColor === 'string' && descriptor.tagColor) ? descriptor.tagColor : null;
+            return function (d) {
+                return tagColor
+                    ? '<span class="layui-badge layui-bg-' + tagColor + '">' + ff.EscapeText(d[field]) + '</span>'
+                    : '<span class="layui-badge-rim">' + ff.EscapeText(d[field]) + '</span>';
+            };
+        },
+        image: function (descriptor) {
+            var field = (descriptor && typeof descriptor.field === 'string') ? descriptor.field : '';
+            var size = (descriptor && typeof descriptor.imageSize === 'number') ? descriptor.imageSize : 32;
+            return function (d) {
+                return d[field]
+                    ? '<img src="' + ff.EscapeAttr(d[field]) + '" style="width:' + size + 'px;height:' + size + 'px;object-fit:cover;"/>'
+                    : '';
+            };
+        },
+        currency: function (descriptor) {
+            var field = (descriptor && typeof descriptor.field === 'string') ? descriptor.field : '';
+            var hasFixedFormat = !!(descriptor && descriptor.currencyFormat);
+            return function (d) {
+                if (d[field] === null || d[field] === undefined) { return ''; }
+                var num = Number(d[field]);
+                return hasFixedFormat
+                    ? num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                    : num.toLocaleString();
+            };
+        },
+        currencyRow: function (descriptor) {
+            var field = (descriptor && typeof descriptor.field === 'string') ? descriptor.field : '';
+            var codeField = (descriptor && typeof descriptor.currencyCodeField === 'string') ? descriptor.currencyCodeField : '';
+            return function (d) {
+                if (d[field] === null || d[field] === undefined) { return ''; }
+                var cc = d[codeField];
+                var num = Number(d[field]);
+                if (typeof cc === 'string' && /^[A-Za-z]{3}$/.test(cc)) {
+                    try {
+                        return new Intl.NumberFormat(undefined, { style: 'currency', currency: cc }).format(num);
+                    } catch (e) {
+                        return ff.EscapeText(String(num));
+                    }
+                }
+                return ff.EscapeText(String(num));
+            };
+        }
+    },
+
+    // Issue #470 Slice O1: shared render body for the 'renderGrid' DispatchAction
+    // case (below) — the opt-in (UseSelectIslandRender, default OFF — the SAME
+    // flag Slices J/K/L/M/N1 use) eval-free island render for <wt:grid>/
+    // DataTableTagHelper. Design authority: Gitea issue #470 comment 18118.
+    //
+    // Reproduces BuildTableOptionsScript's option-object assembly, done()
+    // callback (A4), post-render wiring (A9/A10), and compat-global writes
+    // (A5) functionally — cols[].templet DESCRIPTORS are rebuilt into real
+    // templet functions via ff.gridTemplets (see above) instead of arriving
+    // as pre-built JS-text function strings.
+    //
+    // INVARIANT 3 (#470 Slice O1): the compat globals window[gridId+'option'/
+    // 'defaultfilter'/'filterback'/'url'] and window[action.tableJsVar] are
+    // written SYNCHRONOUSLY, in the SAME relative order the legacy inline
+    // script used, before/around table.render — wtmColVis, Selector.cshtml's
+    // gridCheckedFunc, TreeContainer's 'grid' clickMode, and SearchPanel all
+    // read these as plain globals, some of them from a click handler that can
+    // fire the instant the page is interactive.
+    //
+    // layui.table IS a layui.use(...) module — see _islandModulesFor's
+    // 'renderGrid' entry (needed.table) — so this is only ever invoked once
+    // layui.table has finished loading (mirrors the legacy inline script's own
+    // `layui.use(['table'], function(){ ... })` wrapper).
+    _renderGridAction: function (action) {
+        try {
+            if (!action || !action.gridId || typeof layui === 'undefined' || !layui.table ||
+                typeof layui.table.render !== 'function') {
+                if (typeof console !== 'undefined' && console.warn) {
+                    console.warn('[WTM] renderGrid action skipped: layui.table is not loaded (#470).');
+                }
+                return;
+            }
+            var gridId = action.gridId;
+            var table = layui.table;
+            var doneCfg = action.done || {};
+
+            // ── cols: rebuild templet descriptors into real functions ──────
+            var cols = Array.isArray(action.cols) ? action.cols : [];
+            for (var ri = 0; ri < cols.length; ri++) {
+                var row = cols[ri];
+                if (!Array.isArray(row)) { continue; }
+                for (var ci = 0; ci < row.length; ci++) {
+                    var col = row[ci];
+                    if (col && col.templet && typeof col.templet === 'object' &&
+                        typeof col.templet.tpl === 'string' &&
+                        typeof ff.gridTemplets[col.templet.tpl] === 'function') {
+                        col.templet = ff.gridTemplets[col.templet.tpl](col.templet);
+                    }
+                }
+            }
+
+            // ── option assembly (mirrors BuildTableOptionsScript's {Id}option) ─
+            var opt = {
+                elem: action.elem,
+                id: action.id,
+                text: action.text || { none: '' },
+                // Constant across every grid — mirrors the legacy inline
+                // script's own unconditional `headers: {layuisearch:'true'}`
+                // (BuildTableOptionsScript :725) — never carried in the
+                // island payload since it never varies.
+                headers: { layuisearch: 'true' },
+                method: action.method || 'post',
+                totalRow: action.totalRow === true,
+                // Always present (possibly []) — mirrors BuildDefaultToolbar,
+                // which ALWAYS emits `defaultToolbar:[...]` (never omits it).
+                // Omitting this when toolbar is enabled but no built-in icon
+                // is wanted would let layui fall back to ITS OWN default icon
+                // set instead of showing none — a real behavior regression.
+                defaultToolbar: Array.isArray(action.defaultToolbar) ? action.defaultToolbar : [],
+                cols: cols,
+                limit: (typeof action.limit === 'number') ? action.limit : 0
+            };
+            if (action.request) { opt.request = action.request; }
+            if (action.toolbar) { opt.toolbar = action.toolbar; }
+            if (action.where) { opt.where = action.where; }
+            if (action.loading === false) { opt.loading = false; }
+            if (action.page && typeof action.page === 'object') {
+                opt.page = {
+                    rpptext: action.page.rpptext, totaltext: action.page.totaltext,
+                    recordtext: action.page.recordtext, gototext: action.page.gototext,
+                    pagetext: action.page.pagetext, oktext: action.page.oktext
+                };
+            } else {
+                opt.page = false;
+            }
+            if (Array.isArray(action.limits) && action.limits.length) { opt.limits = action.limits; }
+            if (typeof action.width === 'number') { opt.width = action.width; }
+            if (action.heightMode === 'fixed') { opt.height = action.heightValue; }
+            else if (action.heightMode === 'full') { opt.height = 'full' + action.heightValue; }
+            if (typeof action.skin === 'string') { opt.skin = action.skin; }
+            if (action.even === false) { opt.even = false; }
+            if (typeof action.size === 'string') { opt.size = action.size; }
+
+            // ── done() callback — reproduces A4 verbatim ────────────────────
+            opt.done = function (res, curr, count) {
+                window[gridId + 'filterback'] = this;
+                if (res.Code == 401) {
+                    layui.layer.confirm(res.Msg, { title: doneCfg.titleError }, function (index) {
+                        window.location.reload();
+                        layer.close(index);
+                    });
+                }
+                if (res.Code != undefined && res.Code != 200) {
+                    layui.layer.alert(res.Msg, { title: doneCfg.titleError });
+                }
+                var tab = $('#' + gridId + ' + .layui-table-view');
+                tab.find('table').css('border-collapse', 'separate');
+                if (doneCfg.heightAuto) {
+                    tab.css('overflow', 'hidden').addClass('donotuse_fill donotuse_pdiv');
+                    tab.children('.layui-table-box').addClass('donotuse_fill donotuse_pdiv').css('height', '100px');
+                    tab.find('.layui-table-main').addClass('donotuse_fill');
+                    tab.find('.layui-table-header').css('min-height', (doneCfg.maxDepth * 38) + 'px');
+                    ff.triggerResize();
+                }
+                if (doneCfg.lineHeight != null) {
+                    tab.find('td .layui-table-cell').css('height', doneCfg.lineHeight + 'px');
+                }
+                if (doneCfg.multiLine === true) {
+                    tab.find('.layui-table-cell').css('height', 'auto').css('white-space', 'normal');
+                }
+                tab.find('div [lay-event=\'LAYTABLE_COLS\']').attr('title', doneCfg.titleColumnFilter);
+                tab.find('div [lay-event=\'LAYTABLE_PRINT\']').attr('title', doneCfg.titlePrint);
+                // Guarded named-callback resolution — same
+                // ff._resolveGuardedWindowFn every other #470 slice's
+                // developer-callback field uses. DoneFunc is ALREADY
+                // guaranteed to be a bare identifier server-side (or the
+                // whole grid falls back to legacy — see
+                // DataTableTagHelper.Island.cs's DetermineGridIslandDecision),
+                // this is defense-in-depth on top of that invariant.
+                var doneFn = ff._resolveGuardedWindowFn(doneCfg.doneFn);
+                if (doneFn) { doneFn(res, curr, count); }
+                if (doneCfg.enableHeaderFilter && typeof wtmHeaderFilter !== 'undefined') {
+                    wtmHeaderFilter.refresh(gridId);
+                }
+                if (typeof wtmColVis !== 'undefined') { wtmColVis.init(gridId); }
+                // Aggregate footer (#431 BuildAggregateFooterScript, reproduced verbatim).
+                if (Array.isArray(doneCfg.aggregateFields) && doneCfg.aggregateFields.length && res.Aggregates) {
+                    var tfoot = tab.find('.layui-table-total');
+                    for (var afi = 0; afi < doneCfg.aggregateFields.length; afi++) {
+                        var af = doneCfg.aggregateFields[afi];
+                        tfoot.find('[data-field="' + af + '"] .layui-table-cell').text(res.Aggregates[af] || '');
+                    }
+                }
+                // Issue #470 Slice O1: migration ergonomics — a page-owned
+                // script can listen for this instead of relying on the
+                // (opt-in, guarded-identifier-only) doneFn hook.
+                var tableEl = document.getElementById(gridId);
+                if (tableEl && typeof CustomEvent === 'function') {
+                    tableEl.dispatchEvent(new CustomEvent('wtm:gridRendered', {
+                        detail: { res: res, curr: curr, count: count },
+                        bubbles: true
+                    }));
+                }
+            };
+
+            // ── compat globals (invariant 3) — written SYNCHRONOUSLY, same
+            // relative order as the legacy inline script (A5/A7) ────────────
+            window[gridId + 'option'] = opt;
+            window[gridId + 'defaultfilter'] = {};
+            window[gridId + 'filterback'] = {};
+            window[gridId + 'url'] = action.url || '';
+            $.extend(true, window[gridId + 'defaultfilter'], opt);
+            if (doneCfg.enableHeaderFilter && typeof wtmHeaderFilter !== 'undefined') {
+                wtmHeaderFilter.init(gridId);
+            }
+            if (action.tableJsVar) { window[action.tableJsVar] = table.render(opt); }
+            else { table.render(opt); }
+
+            // ── post-render wiring (A9) — mirrors the non-UseLocalData branch
+            // exactly (UseLocalData always falls back to legacy in O1 — see
+            // DetermineGridIslandDecision — so that branch is never reached
+            // here) ──────────────────────────────────────────────────────────
+            if (action.mobileLayout && opt.page && typeof document !== 'undefined' &&
+                document.body && document.body.clientWidth < 500) {
+                opt.page.layout = ['count', 'prev', 'page', 'next'];
+                opt.page.groups = 1;
+            }
+            if (action.autoSearch) {
+                setTimeout(function () {
+                    var tempwhere = {};
+                    $.extend(tempwhere, window[gridId + 'defaultfilter'].where);
+                    table.reload(gridId, {
+                        url: action.url || '',
+                        where: $.extend(tempwhere, ff.GetSearchFormData(action.searchPanelId, action.fieldPre))
+                    });
+                }, 100);
+            } else {
+                var optEmpty = Object.assign({}, opt);
+                optEmpty.url = null;
+                optEmpty.data = [];
+                layui.table.render(optEmpty);
+            }
+
+            // ── table.on(...) wiring (A10) ──────────────────────────────────
+            var toolFn = window['wtToolBarFunc_' + gridId];
+            if (typeof toolFn === 'function') {
+                table.on('tool(' + gridId + ')', toolFn);
+            }
+            var checkedFn = ff._resolveGuardedWindowFn(doneCfg.checkedFn);
+            if (checkedFn) {
+                table.on('checkbox(' + gridId + ')', checkedFn);
+            }
+            table.on('sort(' + gridId + ')', function (obj) {
+                var sortfilter = {};
+                var prefix = action.isInSelector === true ? 'Searcher.' : '';
+                sortfilter[prefix + 'SortInfo.Property'] = obj.field;
+                sortfilter[prefix + 'SortInfo.Direction'] = obj.type.replace(obj.type[0], obj.type[0].toUpperCase());
+                var w = $.extend(window[gridId + 'option'].where, sortfilter, ff.GetSearchFormData(action.searchPanelId, action.fieldPre));
+                table.reload(gridId, { initSort: obj, where: w });
+            });
+            if (action.enableClientExport) {
+                table.on('exportData(' + gridId + ')', function (obj) {
+                    obj.filename = action.exportFileName || gridId;
+                });
+            }
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] renderGrid action failed:', e);
+            }
+        }
+    },
+
     // Issue #789 Phase 3C: CSP-safe JSON action dispatcher. The server returns
     // a WtmActionResult payload (X-WTM-Action: application/json header set) and
     // this function walks the whitelisted action types. Unknown action types
@@ -2389,6 +2723,17 @@ window.ff = {
                 // xm-select, so this dispatches immediately.
                 case 'renderChart':
                     ff._renderChartAction(action);
+                    break;
+                // Issue #470 Slice O1: thin JSON wrapper over
+                // layui.table.render() — the opt-in (UseSelectIslandRender,
+                // default OFF) eval-free island render for <wt:grid>/
+                // DataTableTagHelper. See ff._renderGridAction for the full
+                // rationale; it performs its own existence/guard checks
+                // (layui.table loaded, action shape), so this case just
+                // delegates straight through, same pattern as
+                // 'renderTreeContainer'/'renderTransfer' above.
+                case 'renderGrid':
+                    ff._renderGridAction(action);
                     break;
                 // Issue #558 (#470-C): safe named-callback submit binding —
                 // mechanism only (FormTagHelper does not emit this yet). Mirrors
@@ -3581,15 +3926,66 @@ window.ff = {
                 // rehydrated AFTER sanitization (they live in local DOM, not the server
                 // response, so they are trusted content).
                 var safeStr = ff.SafeHtml(str);
-                if ($(tempId).length > 0 && regGridVar.test(str)) {
+                // Issue #470 Slice O1: island-aware detection — a flag-ON renderGrid
+                // island carries NO `wtVar_...=table.render(...)` text at all (see
+                // DataTableTagHelper.Island.cs), so `regGridVar` alone would never
+                // widen the gate below for an island-rendered response.
+                // `_selectorInitCollected` (above) already holds normalized island
+                // payloads collected from the SAME raw response BEFORE DOMPurify
+                // strips them — probe those instead of any new parsing. gridId is
+                // response DATA — strict-validated against WTM's own
+                // TABLE_ID_PREFIX shape before it is trusted for anything.
+                // NOTE: with IsInSelector grids forced legacy in O1 (see
+                // DetermineGridIslandDecision), this widened branch is DORMANT for
+                // Selector.cshtml itself today — it exists for correctness of any
+                // future non-selector dialog-hosted island grid (O2+ lifting the
+                // IsInSelector containment) and is exercised directly by the jsdom
+                // test suite.
+                var _wtTableIdRe = /^wtTable_[0-9a-zA-Z_]+$/;
+                var _hasIslandGrid = false;
+                if (_selectorInitCollected && Array.isArray(_selectorInitCollected.islandPayloads)) {
+                    for (var _ipi = 0; _ipi < _selectorInitCollected.islandPayloads.length && !_hasIslandGrid; _ipi++) {
+                        var _ip = _selectorInitCollected.islandPayloads[_ipi];
+                        var _ipActions = (_ip && Array.isArray(_ip.actions)) ? _ip.actions : [];
+                        for (var _iai = 0; _iai < _ipActions.length; _iai++) {
+                            var _ia = _ipActions[_iai];
+                            if (_ia && _ia.type === 'renderGrid' && typeof _ia.gridId === 'string' && _wtTableIdRe.test(_ia.gridId)) {
+                                _hasIslandGrid = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if ($(tempId).length > 0 && (regGridVar.test(str) || _hasIslandGrid)) {
                     // Issue #332: replace brittle regex grid-id extraction with safe
                     // DOM query. Parse a throwaway element, find the table with a
-                    // lay-filter attribute, and read its id.
+                    // lay-filter attribute, and read its id. Works identically for a
+                    // legacy OR an island-rendered grid — DataTableTagHelper always
+                    // emits `id`/`lay-filter` on the <table> element regardless of
+                    // flag/decision (Process() sets them before the island/legacy
+                    // branch point).
                     var _tmpDiv = document.createElement('div');
                     _tmpDiv.innerHTML = safeStr;
                     var _gridTable = _tmpDiv.querySelector('table[lay-filter]');
+                    // Issue #470 Slice O1: NOT strict-shape-validated against
+                    // `_wtTableIdRe` — unlike the island payload's gridId (used only
+                    // as a widening TRIGGER above), this value is read from the
+                    // table's OWN `id` attribute in the sanitized DOM (existing,
+                    // pre-#470 extraction technique) and DataTableTagHelper.Id
+                    // accepts an arbitrary developer-set string (no `wtTable_`
+                    // prefix required) — the same custom-id grids the pre-#470 test
+                    // suite already exercises. It is never used as a RegExp source
+                    // (split/join below is literal), so no injection risk turns on
+                    // its shape.
                     var gridId = _gridTable ? _gridTable.id : null;
-                    var gridVar = gridId ? ('wtVar_' + regGridVar.exec(str)[1]) : null;
+                    // Issue #470 Slice O1 ground-truth correction: the legacy
+                    // `gridVar` local (`'wtVar_' + regGridVar.exec(str)[1]`) that
+                    // used to be computed here was DEAD CODE — never read by
+                    // anything below (confirmed: no other reference in this file) —
+                    // so it is dropped rather than cargo-culted into the widened
+                    // gate (calling `regGridVar.exec(str)[1]` would additionally
+                    // throw for an island-only response, where `regGridVar` never
+                    // matches at all).
                     if (gridId) {
                         var template = $(tempId)[0].innerHTML;
                         // Issue #635 (#470 prerequisite): rehydrate wtm-dialog-init JSON
@@ -3656,8 +4052,24 @@ window.ff = {
                         //get old gridid
                         try {
                             var oldgridid = /table[.]reload\('(.*)',\s{0,}{/img.exec(template)[1];
-                            //替换gridId
-                            template = template.replace(new RegExp(oldgridid, "gim"), gridId);
+                            // Issue #470 Slice O1: literal split/join replacement — NEVER
+                            // `new RegExp(oldgridid, ...)`. oldgridid is template-extracted
+                            // text (today: from the legacy SearchPanel's own
+                            // `table.reload('...'` refreshgridjs script — local
+                            // developer/framework-authored DOM, not server response data),
+                            // but building a live RegExp from unescaped extracted text was a
+                            // regex-injection + catastrophic-backtracking hazard the
+                            // island-aware widening above must not inherit or propagate.
+                            // split/join treats oldgridid as a LITERAL string regardless of
+                            // its shape (no `wtTable_` prefix requirement here — a
+                            // DataTableTagHelper Id is an arbitrary developer-set string,
+                            // same as gridId above), so no separate shape gate is needed for
+                            // safety; the injection risk is eliminated by construction, not
+                            // by validating the input first. Legacy regGridVar detection is
+                            // kept as-is above as the fallback trigger for non-island (or
+                            // mixed-version) responses — this replacement logic is shared by
+                            // both.
+                            template = template.split(oldgridid).join(gridId);
                         }
                         catch (e) { }
                         // Issue #652: insert the restored template via a REPLACER FUNCTION, not a

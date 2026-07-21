@@ -159,21 +159,43 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                         }
                         else
                         {
-                            var m = _regGridOptionVar.Match(insideContent);
-                            if (m.Success)
+                            // Issue #470 Slice O1 (N-prereq): island-then-legacy probe
+                            // order — try the island attribute FIRST. A nested
+                            // DataTableTagHelper grid that rendered via the opt-in
+                            // renderGrid island never emits the legacy "{gridid}option
+                            // = {" text at all (see DataTableTagHelper.Island.cs), so
+                            // _regGridOptionVar below would silently fail to detect it.
+                            var mIsland = LayUiRegexes.IslandGridIdRegex().Match(insideContent);
+                            if (mIsland.Success)
                             {
                                 clickMode = "grid";
-                                gridId = m.Groups[1].Value.Trim();
-                                Regex r2 = new Regex($"(.*?) = table.render\\({gridId}option\\)", RegexOptions.Compiled);
-                                gridExtendWhere = r2.IsMatch(insideContent);
-                            }
-                            else if (string.IsNullOrEmpty(insideContent))
-                            {
-                                clickMode = "loadPage";
+                                gridId = mIsland.Groups[1].Value.Trim();
+                                // Invariant 3 (#470 Slice O1): island render ALWAYS
+                                // writes window[gridId+'defaultfilter'] synchronously
+                                // before table.render — the SAME guarantee the legacy
+                                // "wtVar_ = table.render({gridid}option)" match below
+                                // detects for the legacy path — so an island match is
+                                // always the "extend" case.
+                                gridExtendWhere = true;
                             }
                             else
                             {
-                                clickMode = "default";
+                                var m = _regGridOptionVar.Match(insideContent);
+                                if (m.Success)
+                                {
+                                    clickMode = "grid";
+                                    gridId = m.Groups[1].Value.Trim();
+                                    Regex r2 = new Regex($"(.*?) = table.render\\({gridId}option\\)", RegexOptions.Compiled);
+                                    gridExtendWhere = r2.IsMatch(insideContent);
+                                }
+                                else if (string.IsNullOrEmpty(insideContent))
+                                {
+                                    clickMode = "loadPage";
+                                }
+                                else
+                                {
+                                    clickMode = "default";
+                                }
                             }
                         }
                     }
@@ -243,6 +265,23 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                         }
                         else
                         {
+                            // Issue #470 Slice O1 (N-prereq): NO island-aware probe is
+                            // added here (unlike the island-branch clickMode analysis
+                            // above) — it would be unreachable dead code. This whole
+                            // `if (string.IsNullOrEmpty(ClickFunc))` block only executes
+                            // when TreeContainer ITSELF took the top-level legacy `else`
+                            // branch (see the `useTreeContainerIsland` check above) WITH
+                            // ClickFunc also empty — and `useTreeContainerIsland` is true
+                            // whenever the flag is ON and ClickFunc is empty, so those two
+                            // conditions together are only simultaneously true when the
+                            // flag is OFF. A nested DataTableTagHelper grid never emits
+                            // `data-wtm-grid-id` when the flag is OFF (see
+                            // DataTableTagHelper.Island.cs), so an island-aware probe here
+                            // could never match in practice. (When ClickFunc is non-empty
+                            // — the OTHER way to reach TreeContainer's legacy branch while
+                            // the flag is ON — this whole block is skipped entirely in
+                            // favor of the `else` custom-click branch below, so it can't
+                            // reach here either.)
                             var m = _regGridOptionVar.Match(insideContent);
                             if (m.Success)
                             {
