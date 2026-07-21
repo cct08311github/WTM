@@ -1,14 +1,18 @@
 version: '3.8'
 services:
   mssql:
-    image: mcr.microsoft.com/mssql/server:2022-latest
+    # Issue #767/#773: mcr.microsoft.com/mssql/server is x64-only and crashes
+    # under QEMU on Apple Silicon; azure-sql-edge is the CI-verified swap.
+    image: mcr.microsoft.com/azure-sql-edge:latest
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: "EtlTest@2026!"
     ports:
       - "1433:1433"
     healthcheck:
-      test: /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "EtlTest@2026!" -Q "SELECT 1" -C
+      # azure-sql-edge ships no sqlcmd; confirm TCP accept instead
+      # (bash -c because /dev/tcp is a bashism, not POSIX sh).
+      test: bash -c '(echo > /dev/tcp/127.0.0.1/1433) 2>/dev/null' || exit 1
       interval: 10s
       retries: 10
       start_period: 30s
