@@ -24,7 +24,9 @@ import { test, expect } from './fixtures.mjs';
 const HARNESS_PATH = '/test/manual/regression/565-taghelper-layui-regression.html';
 // #470 Slice O1: +2 sections (16. renderGrid island, 17. renderGrid templet
 // registry incl. __bgcolor/__forecolor + XSS neutralisation parity).
-const TOTAL_EXPECTED = 17;
+// #776: +1 section (18. data-content attribute escaping — pins the vendored
+// layui 2.6.3 table.js fix; independent of sections 16/17's #470 O1 coverage).
+const TOTAL_EXPECTED = 18;
 
 test.describe('#565 TagHelper <-> LayUI regression suite', () => {
   test('every non-knownGap widget section initializes correctly', async ({ page, layuiVariant }) => {

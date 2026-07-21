@@ -871,6 +871,24 @@ namespace WalkingTec.Mvvm.Mvc
             // instead of silently swallowing exceptions in bare catch blocks.
             Core.CoreProgram._loggerFactory = app.ApplicationServices.GetService<ILoggerFactory>();
 
+            // Issue #776: Layui:Asset=legacy selects the deprecated vendored layui 2.6.3
+            // asset tree, whose table.js historically built <td data-content="..."> from
+            // the raw cell value with no double-quote escaping (attribute-breakout XSS).
+            // The vendored copy in this repo now carries the upstream-parity fix, but
+            // "legacy" remains a real downstream rollback path — a future re-vendor of the
+            // 2.6.3 tree could silently reintroduce the unpatched construction. Warn once
+            // at startup (not per page render — LayuiAssets.ResolveLayuiBase is called on
+            // every render and must stay warning-free) so operators see the recommendation
+            // to use the default /layui-next (2.13.8) tree, which does not have this issue.
+            if (LayuiAssets.ResolveLayuiBase(app.ApplicationServices.GetService<IConfiguration>()) == "/layui")
+            {
+                Core.CoreProgram.GetLogger("FrameworkServiceExtension")?.LogWarning(
+                    "[WTM Security] Layui:Asset=legacy is configured, selecting the deprecated " +
+                    "vendored layui 2.6.3 asset tree. See Issue #776 (data-content attribute XSS " +
+                    "in that tree's table.js, patched upstream-parity in this build). Consider " +
+                    "migrating off Layui:Asset=legacy to the default /layui-next (2.13.8) tree.");
+            }
+
             var controllers = gd.GetTypesAssignableFrom<IBaseController>();
             var test = app.ApplicationServices.GetService<ISpaStaticFileProvider>();
             gd.IsSpa = isspa == true || test != null;

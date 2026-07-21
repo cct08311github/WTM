@@ -52,7 +52,11 @@
   below); the `knownGap` mechanism itself is left in place for any future
   gap, it just has nothing to flag right now. #573 added section 15
   (richtextbox) as a real, gated assertion from day one — see the DUAL-TREE
-  HEAD LOADER comment below for how it vendors layedit onto layui-next.
+  HEAD LOADER comment below for how it vendors layedit onto layui-next. #776
+  added section 18 (data-content attribute escaping) as a real, gated
+  assertion pinning the vendored-layui table.js fix — see that section's own
+  comment for why it is a layui-internal code path, independent of sections
+  16/17's #470 O1 coverage.
 
   WIDGET COVERAGE (see the on-page PASS/FAIL banner list + README for the
   one-line-per-widget summary):
@@ -63,6 +67,7 @@
     5. table/grid                  9. transfer              15. richtextbox (layedit, #573)
                                    10. upload (render only)  16. renderGrid island (#470 O1)
                                                               17. renderGrid templet family (#470 O1)
+                                                              18. data-content escaping (#776)
   ============================================================================
 
   #566 DUAL-TREE HEAD LOADER
@@ -156,7 +161,7 @@
 <p>See the HTML comment at the top of this file's &lt;head&gt; (view source) for the full explanation. Phase-1 gate for #566 (bundled-layui version bump), part of the #567 roadmap.</p>
 
 <div id="summary">
-  <strong id="summaryHeadline">Running&hellip; (<span id="summaryCount">0</span>/<span id="summaryTotal">17</span>)</strong>
+  <strong id="summaryHeadline">Running&hellip; (<span id="summaryCount">0</span>/<span id="summaryTotal">18</span>)</strong>
   <div id="summaryList"></div>
 </div>
 
@@ -390,11 +395,50 @@
   <div class="status" id="status-rendergrid-templets">waiting…</div>
 </div>
 
+<!-- ============================== 18. data-content attribute escaping (#776) ============================== -->
+<div class="box" id="sec-datacontent-xss">
+  <h2>18. data-content attribute escaping (#776) — table.js's own internal tooltip attribute, independent of any WTM templet</h2>
+  <!-- Regression pin for #776: layui's table.js builds each cell's OWN
+       internal `data-content="..."` attribute (a tooltip/truncation
+       feature, populated for any column whose config carries a truthy
+       `templet`) directly from the RAW field value — `d[field]` read
+       straight off the row, bypassing whatever the templet itself returns.
+       The vendored 2.6.3 tree historically did this with NO double-quote
+       escaping: a field value containing a literal `"` followed by markup
+       could break the attribute open and inject a real, executing DOM
+       element (confirmed live via Playwright — see #776). This is a
+       layui-internal code path, entirely independent of WTM's own
+       ff.gridTemplets/ff.EscapeText cell-templet guard (#108) and of the
+       #470 O1 renderGrid island (sections 16/17 above) — section 17's own
+       driver script deliberately avoids embedded double-quotes in its XSS
+       payload to stay scoped to what IT covers (see that section's comment)
+       precisely because this is a separate bug. A plain, hand-written
+       table.render() call with any templet-bearing column reaches the
+       vulnerable construction identically to a WTM-rendered grid, so this
+       section (like section 5) needs no WTM TagHelper/island involvement at
+       all — it tests layui's own "table" module directly, through whatever
+       file this tree ACTUALLY loads at runtime for it (that's the point —
+       this section never hardcodes a file path). layui-next (2.13.8)
+       already escapes via util.escape. The vulnerable construction
+       historically existed in TWO on-disk locations depending on the
+       vendored tree: the monolithic layui.js bundle (Demo/Vue3Demo, which
+       inline the "table" module — and which _Layout.cshtml actually loads
+       in production) and the standalone lay/modules/table.js file (fetched
+       on demand by trees, like BlazorDemo, that ship layui.js as a thin
+       loader instead). The vendored copies now carry the same
+       upstream-parity fix in every such location a tree's own layui.js
+       actually resolves the "table" module from. If a future re-vendor
+       drops that fix from ANY of them, this section fails loudly instead of
+       silently reintroducing the XSS. -->
+  <table id="regDataContentXss1" lay-filter="regDataContentXss1"></table>
+  <div class="status" id="status-datacontent-xss">waiting…</div>
+</div>
+
 <script>
 (function () {
   'use strict';
 
-  var TOTAL_EXPECTED = 17;
+  var TOTAL_EXPECTED = 18;
   window.__regressionResults = [];
   window.__regressionDone = false;
 
@@ -1174,6 +1218,74 @@
       setStatus('status-rendergrid-templets', (pass ? '<span class="ok">OK</span>: ' : '<span class="bad">FAIL</span>: ') + detail);
       pushResult('renderGrid templet registry (#470 Slice O1)', pass, detail);
     }, 40, 150);
+  }, 60, 150);
+
+  // ---- 18. data-content attribute escaping (#776) --------------------------
+  // See the HTML comment on #sec-datacontent-xss above for the full
+  // rationale. A plain layui.table.render() call — no WTM island/TagHelper
+  // involvement — with a single templet-bearing column is enough to reach
+  // table.js's own data-content attribute builder. The payload breaks the
+  // attribute open with a literal `"` and lands a real <img onerror> element
+  // as sibling markup; onerror fires natively on image-load failure
+  // (asynchronous — this section polls for the marker instead of assuming a
+  // fixed delay) if-and-only-if the attribute-breakout construction is still
+  // unescaped. Must NOT fire on EITHER tree: layui-next (2.13.8) already
+  // escapes via util.escape; the vendored 2.6.3 copy now carries the same
+  // upstream-parity fix.
+  //
+  // IMPORTANT: the templet function's OWN return value becomes the cell's
+  // visible innerHTML verbatim — that is layui's normal, always-raw-by-design
+  // templet contract on every version (the reason WTM built its own
+  // ff.gridTemplets/ff.EscapeText escaping layer on top), completely separate
+  // from table.js's data-content attribute builder, which reads the RAW row
+  // field value (`d[field]`) directly and never even looks at the templet's
+  // return value. Returning the payload from the templet here would inject
+  // it via THAT well-known, unrelated raw-HTML sink and falsely blame #776
+  // for a completely different (and non-bug) code path — so the templet
+  // below returns a fixed, inert string, keeping the payload confined to the
+  // row's raw `val` field, which is what data-content actually reads.
+  pollUntil(function () {
+    return window.__wtmHarnessCoreReady ? { pass: true } : null;
+  }, function () {
+    window.__xss776 = false;
+    // Real `"` + markup payload, matching #776's own reproduction shape
+    // (data-content="<payload up to the embedded quote>" then the remainder
+    // becomes literal sibling markup — here a real <img onerror> element).
+    var payload776 = '"><img src=x onerror=window.__xss776=true>';
+    layui.use(['table'], function () {
+      layui.table.render({
+        elem: '#regDataContentXss1',
+        id: 'regDataContentXss1',
+        cols: [[
+          // A truthy `templet` is required to reach table.js's data-content
+          // builder at all (`r.templet && e.push('data-content="'+...)`).
+          // The return value is deliberately inert/fixed — see the comment
+          // above for why it must NOT echo d.val.
+          { field: 'val', title: 'Value', templet: function () { return 'cell'; } }
+        ]],
+        data: [{ val: payload776 }]
+      });
+      pollUntil(function () {
+        return document.querySelector('#regDataContentXss1 + .layui-table-view .layui-table-body tr') !== null
+          ? { pass: true } : null;
+      }, function () {
+        // Bounded poll for the async onerror marker (image-load failure is
+        // not synchronous with row insertion, unlike a <script> tag). A
+        // timeout here is the EXPECTED, passing outcome for this negative
+        // assertion — it means the payload never executed.
+        pollUntil(function () {
+          return window.__xss776 === true ? { pass: true } : null;
+        }, function (markerResult) {
+          var fired = !!markerResult.pass;
+          var pass = !fired;
+          var detail = fired
+            ? 'XSS PAYLOAD EXECUTED (regression! data-content attribute breakout reintroduced — see #776)'
+            : 'data-content attribute-breakout payload did not execute (window.__xss776 stayed false after the poll window) — #776 fix holds';
+          setStatus('status-datacontent-xss', (pass ? '<span class="ok">OK</span>: ' : '<span class="bad">FAIL</span>: ') + detail);
+          pushResult('data-content attribute escaping (#776)', pass, detail);
+        }, 20, 100);
+      }, 40, 150);
+    });
   }, 60, 150);
 
 })();

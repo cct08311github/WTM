@@ -228,6 +228,45 @@ Recommended rollout for level 3: switch `Mode = WtmCspMode.ReportOnly` with the 
   for apps that have **not** opted in — the kill-switch changes your app's runtime
   behaviour, not the framework's compatibility guarantee.
 
+## Related: `Layui:Asset=legacy` vendored-tree XSS (#776)
+
+A separate, narrower issue from the CSP campaign above, but worth knowing if you are
+deciding which vendored layui tree to serve: the **default** vendored tree
+(`Layui:Asset` absent or any value other than `"legacy"`, selecting `/layui-next`,
+layui 2.13.8) is not affected. Setting `Layui:Asset=legacy` (selecting the older,
+deprecated `/layui`, layui 2.6.3 tree) historically was — that tree's `table.js` built
+each grid cell's `<td data-content="...">` attribute (an internal tooltip/truncation
+feature) directly from the raw field value, with **no double-quote escaping**. A cell
+value containing a literal `"` followed by markup could break out of the attribute and
+inject real DOM, entirely independent of WTM's own `ff.EscapeText` cell-templet guard
+(#108), which never runs on this code path — it affects grids regardless of templet
+configuration.
+
+The vulnerable construction physically existed in **two** on-disk locations: the
+monolithic `layui.js` bundle (which the Demo and Vue3Demo vendored trees ship with the
+"table" module inlined — and which `_Layout.cshtml` actually loads in production, so
+this is the one that mattered at runtime for those trees) and the standalone
+`lay/modules/table.js` module file (fetched on demand by trees, like BlazorDemo, that
+ship `layui.js` as a thin loader instead of a bundle). Both needed the identical
+one-line fix — patching only the standalone module file would have left the bundled
+trees exploitable. The vendored copies in this repo now carry an upstream-parity fix in
+every such location (escapes via `layui.util.escape`, matching what 2.13.8 already
+did). Two things to know if you use `legacy`:
+
+- A **future re-vendor** of the 2.6.3 tree (e.g. pulling a fresh copy from upstream to
+  pick up an unrelated fix) could silently reintroduce the unpatched construction in
+  either location — `legacy` is a real downstream rollback path back to vulnerable
+  code, not just a historical footnote.
+- This is one more reason `Layui:Asset=legacy` is deprecated (see
+  `LayuiAssets.ResolveLayuiBase`'s XML doc); prefer the default `/layui-next`. As
+  defense in depth, a strict `script-src` (level 3 above, no `'unsafe-inline'`) would
+  also block the injected inline event handler / `<script>` this class of bug produces
+  — another reason to work toward the graduated recipe above regardless of which layui
+  tree you serve.
+
+WTM emits one `LogWarning` at startup (`UseWtmContext`) when `Layui:Asset=legacy` is
+detected, naming #776.
+
 ## Reference
 
 | Knob | Where | Default |

@@ -38,6 +38,29 @@ namespace WalkingTec.Mvvm.Mvc
         /// </param>
         /// <returns>Either the fixed literal "/layui" or the fixed literal "/layui-next" — never
         /// a value derived from concatenating <paramref name="config"/> into a path.</returns>
+        /// <remarks>
+        /// <strong>SECURITY (#776):</strong> the vendored layui 2.6.3 tree selected by
+        /// <c>"legacy"</c> historically built each grid cell's <c>&lt;td data-content="..."&gt;</c>
+        /// attribute (an internal tooltip/truncation feature, part of the "table" module's cell
+        /// renderer) from the raw, un-templeted field value with no double-quote escaping — a
+        /// field value containing a literal <c>"</c> followed by markup could break out of the
+        /// attribute and execute as real DOM, independent of WTM's own <c>ff.EscapeText</c>
+        /// cell-templet guard (#108), which never runs on this code path. The vulnerable
+        /// construction physically existed in <strong>two</strong> on-disk locations per vendored
+        /// tree — the monolithic <c>layui.js</c> bundle (which several vendored trees ship with
+        /// the "table" module inlined, and which production <c>_Layout.cshtml</c> pages actually
+        /// load) and the standalone <c>lay/modules/table.js</c> module file (fetched on demand by
+        /// trees that ship <c>layui.js</c> as a thin AMD-style loader instead of a bundle) — both
+        /// needed the fix; a re-vendor that only patches one is still vulnerable via the other.
+        /// The vendored copies in this repo now carry an upstream-parity fix (escapes via
+        /// <c>layui.util.escape</c>, matching what the 2.13.8 tree already does) in every such
+        /// location, but <c>"legacy"</c> is a real downstream rollback path to that
+        /// historically-vulnerable tree — a future re-vendor of 2.6.3 could silently reintroduce
+        /// the unpatched construction in either location. This is one more reason <c>"legacy"</c>
+        /// is deprecated (see the DEPRECATED note above); the default 2.13.8 tree never exhibited
+        /// this issue. <see cref="WalkingTec.Mvvm.Mvc.FrameworkServiceExtension.UseWtmContext"/>
+        /// emits a one-time startup <c>LogWarning</c> when <c>Layui:Asset=legacy</c> is configured.
+        /// </remarks>
         public static string ResolveLayuiBase(IConfiguration config)
             => string.Equals(config?["Layui:Asset"], "legacy", System.StringComparison.Ordinal) ? "/layui" : "/layui-next";
     }
