@@ -1,6 +1,12 @@
 # WTM 開發與使用手冊
 
-> **版本**：10.14.5 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-07-11
+> **版本**：10.17.0 | **目標框架**：.NET 10 (LTS) | **最後更新**：2026-07-21
+>
+> **10.17.0 重點**（BMS 實戰回饋批次，#756–#762；預設零行為變更，兩個 opt-in 新功能＋兩個框架服務修復）：**新增** `AddWtmRefreshTokenRetention()`——`FrameworkRefreshTokens` 的每日 opt-in 清理（#721 後每次登入真寫一列、無界成長；revoked-but-unexpired 列受硬性不變量保護永不刪除,§10.2）；**新增** rate-limit 顯式註冊 `WtmRateLimitingOptions.RegisterPolicy(p,w,q)` + `RequireWtmRateLimit()` 端點擴充——minimal-API 端點不再隱式依賴「某 controller 恰好掛同 tuple attribute」（刪 action 連帶炸 health 端點的下游實案,§10.9）,並修 `ScanWtmRateLimitAttributes` 逐成員 partial-load 防護。**修復** `LookupCacheWarmupService` 不 honor `ConnectionKey`——非 default 連線型別每 boot warm-fail,且 cache key 無 connection 成分、打錯庫可能毒化 runtime 快取整個 TTL（§12.6）；**修復** 兩個 retention 服務的 `RunAtLocalHour` 超界（如 midnight=24 typo）會 fault `Host.StartAsync` 或觸發 `StopHost` 全站停機——現 clamp [0,23] + warning。另 `FrameworkRefreshTokens` 內建三索引（fresh DB 自動生效;既有 DB 需手動 CREATE INDEX）。**升級自 ≤10.14.5 者必讀** `CHANGELOG.md` `[10.15.0]` Migration 段（CPM pin ≥10.0.9 / 既有 DB 建表 / 刪 action 的 attribute 連帶）。詳見 `CHANGELOG.md` `[10.17.0]`。
+>
+> **10.16.0/10.16.1 重點**（#470 Slices G–M LayUI islandification,全 opt-in）：新 `WtmUIOptions.UseSelectIslandRender`（**預設 `false`**）讓 ComboBox/Tree/Transfer/Upload/laydate/slider/colorpicker/ueditor/textarea-counter/grid-cell 按鈕改以 eval-free JSON island + `data-wtm-*` delegated dispatch 渲染——表單/對話框 CSP 可推向 `script-src 'self'`（§6.11）。**flag-off＝逐位元組舊輸出**——但此保證在 10.15.0/10.16.0 因 #753 迴歸（G/H/I 七個 emitter 未上 gate）並不成立,**10.16.1 才恢復**：回滾/bisect 應在 10.14.5 ↔ 10.16.1 之間直跳。10.16.0 另修復 `WtmDataContextHealthCheck` 從未真探 DB 的 #727 殘留（#741,§14A——過去恆綠的 `/ready` 從此可能真的轉 Unhealthy,operator 需知）,及數項 XSS/encoding 深度防禦。詳見 `CHANGELOG.md` `[10.16.0]`/`[10.16.1]`。
+>
+> **10.15.0 重點**（"final optimization" 批次,40+ issues；**升級必讀 Migration**）：**安全** P0 —— #721 refresh-token 身分繞過修復：`api/_account/refreshtoken` 從此**強制驗證**出示的 refresh token（舊行為憑有效 AT 即可無限換發）；client 必須送真 `refresh_token`,抄過 demo `RefreshToken` action 的專案必須刪除（含 attribute 連帶檢查）,**既有 DB 必須先有 `FrameworkRefreshTokens` 表**（缺表＝升級後全站登入失敗,fresh staging 測不出,§10.2）。**正確性** —— 四個框架服務（`IWorkflowEngine` timer、`ActionLogRetentionService`、`LookupCacheWarmupService`、`ITokenService` 持久化）先前在所有真實部署中因 `NullContext` DI gap **靜默失能**,#721/#727 修復後首次真跑（注意各自的「首次真跑副作用」：寫哪張表、走哪條連線、對外語意）。**WorkFlow** —— #667 引擎交易全面相容 `EnableRetryOnFailure`,死鎖重試耗盡統一回 `WorkflowActionCode.DeadlockRetryExhausted`（§18.6）。**ETL** —— 欄名 identifier 驗證、REST 分頁預設收緊（`MaxPages=1000`/跨 host 拒絕）、dead-letter 有界化、ReDoS timeout（§8.20）。另含 evidence-based 效能批次與 .NET 10 現代化。詳見 `CHANGELOG.md` `[10.15.0]`（含 Migration 段全文）。
 >
 > **10.14.5 重點**（安全 patch，#652 修復；預設零行為變更）：修復 #651 的追蹤殘留 #652 —— `<wt:selector>` 搜尋面板的 `$$script$$`/`$$dialoginit$$` sentinel 除了先前已修的 JSON island/inline script 外,也可被**伺服器端渲染的 plaintext**（`WebUtility.HtmlEncode` 不轉義 `$`）偽造：radio/checkbox 選項標籤與值、tree 節點、taginput 標籤、slider/rate/upload/hidden 值等欄位 TagHelper 的 model 衍生純文字,含字面 `$$script$$…$$#script$$` 時會在 `ff.OpenDialog2` 全域還原時被注入為可執行 `<script>`（stored XSS,預設、kill-switch-off 路徑）。修復於單一 tokenization chokepoint：`SelectorTagHelper` 在 tokenize 真實標籤**之前**先將面板內容中每個字面 `$` 轉義為 Private-Use 佔位字元（U+E000）,`ff.OpenDialog2` 在 un-tokenize **之後**才將佔位字元還原為 `$`——偽造的 `$$script$$…` 序列還原後仍是惰性文字,開發者腳本中的真實 jQuery `$` 往返不受影響；同一修復也堵住姊妹 `$$dialoginit$$` island 偽造向量,並將 `$$SearchPanel$$` 模板插入改為 replacer function,防止 `String.prototype.replace` 的 `$$`/`$&` 特殊處理造成二次咬字（連帶修復一個既有的 `Save $$10$$` 類標籤失真 bug）。**已知殘留**：巢狀 `<wt:selector>`（一個 selector 巢狀在另一 selector 的 `<wt:searchpanel>` 內,無 demo 實際使用此組合)在 #627 kill-switch **關閉**時,外層還原仍可能重新啟動內層 sentinel——字串 sentinel 方案無法對任意巢狀深度做到 composition-safe（這正是 #470/#627 退役要解決的問題）；**#627 kill-switch 開啟時可完全緩解**,追蹤於 #655。無需遷移,預設與 kill-switch 路徑皆行為保留。詳見 §6.1.1、§10.7 及 `CHANGELOG.md` `[10.14.5]`。
 >
@@ -1214,6 +1220,19 @@ protected override IEnumerable<IGridColumn<Employee_View>> InitGridHeader()
 | `multi-select` | 多選（出現 checkbox） | `true`（預設） |
 | `auto-search` | 頁面載入時自動搜尋 | `true`（預設） |
 
+### 6.11 Island Render（opt-in，10.16.0+/10.16.1，#470 Slices G–M）
+
+`WtmUIOptions.UseSelectIslandRender`（**預設 `false`**）啟用後，LayUI 互動元件（ComboBox/Tree 的 `xmSelect`、Transfer、Upload/MultiUpload、laydate、slider/colorpicker、ueditor/layedit、textarea counter、grid-cell 按鈕與 `SubmitButton`）改以**宣告式 JSON island + `data-wtm-*` delegated handler**（由 `ff.DispatchAction` 消費）渲染——**無 inline `<script>`、無 `eval`、無 per-widget 全域函式**，是把表單/對話框 CSP 推向 `script-src 'self'` 的路徑（搭配 §10.7 CSP 與 #627 kill-switch）。
+
+```csharp
+services.Configure<WtmUIOptions>(o => o.UseSelectIslandRender = true);   // 或 appsettings "UIOptions" 節
+```
+
+**要點**：
+- **預設關閉＝與舊版逐位元組相同輸出**（zero behaviour change）。注意版本邊界：10.15.0/10.16.0 有部分 emitter 未上 gate（#753 迴歸），**10.16.1 才恢復完整保證**——回滾/bisect 不要落在中間兩版。
+- 開啟後渲染時機由 parse-time 移到 `DOMContentLoaded`（真實但窄的行為差異，這正是它必須 opt-in 的原因）；開發者自寫 callback（`ChangeFunc` 等）若是純識別字會走 `ff._resolveGuardedWindowFn` 守門，非識別字則保留舊 inline 路徑並 `console.warn`。
+- 建議在 staging 全頁面回歸後再開；每 app 一次性決策。
+
 ---
 
 ## 7. Analysis Mode 分析模式
@@ -2248,6 +2267,15 @@ builder.Services.AddWtmEtlAlerts(opt =>
 
 > **Migration**：啟用 `DbEtlGovernanceStore` 或 per-tenant job 隔離會引入新的 EF Core 實體（dead-letter、lineage、`EtlJobDefinition` 含 `TenantCode`）。**啟用前需先產生並套用 EF Core migration。** 不啟用則完全不受影響。
 
+### 8.20 10.15.0 安全/資源 guardrails（#680/#703/#700 等）
+
+10.15.0 對 ETL 加了一批 fail-closed guardrails，多數零設定即生效、少數改了預設值（**升級必讀** `CHANGELOG.md` `[10.15.0]` Migration 段）：
+
+- **來源欄名驗證（identifier-injection 硬化）**：source 欄名必須符合 `^[\p{L}\p{N}_#$]+$`（Unicode 字母/數字、`_`、`#`、`$`——CJK 欄名不受影響），不合格（空白、引號、`;`、`--`、emoji 等）在 extraction 期即失敗。解法：用 `ColumnMappings`（§8.12）改名到合格 target。
+- **`RestEtlSourceConfig` 分頁預設收緊**：`NextLink` 跨 host 分頁預設拒絕（需顯式 `AllowCrossHostPagination = true`）；爬頁上限新預設 `MaxPages = 1000`（要無限爬需顯式 `MaxPages = 0`）。
+- **Dead-letter 有界化**：`EtlOptions.MaxDeadLetterRowsPerRun`（預設 10000，超出丟棄並標記截斷）；`DeadLetterFlushMode = Periodic`（opt-in，#700）提供 bounded crash-durability，預設 `OncePerRun` 維持原行為。
+- **ReDoS 防護（#703）**：使用者供給的 regex 加 timeout 防護。
+
 ---
 
 ## 9. Dashboard 模組
@@ -2865,6 +2893,13 @@ const refreshRes = await fetch('/api/_account/refreshtoken', {
 const newTokens = await refreshRes.json();
 ```
 
+**10.15.0 起：上述契約是「強制」的（#721 修復）。** 10.15.0 之前 `WTMContext.RefreshTokenAsync()` 從不驗證 caller 送來的 refresh token（憑仍有效的 Bearer AT 即可無限換發新 pair）；10.15.0 起 refresh 必須出示登入時取得的**真** `refresh_token`，否則 `401`。連帶注意：
+
+- **刪除 app-copy 的 `RefreshToken` action**：若你的專案抄過 demo 的 `_Admin/AccountController.RefreshToken`，必須刪除（與框架端點同路由會 `AmbiguousMatchException`）——**刪除前先確認該 action 上的 attributes**（範本掛著 `[WtmRateLimit(100, 60)]`；若它是你唯一的該 tuple 註冊源，刪除會連帶取消具名 policy 的註冊，引用它的 minimal-API 端點會每請求 500——10.17.0 起可改用 `RegisterPolicy` 顯式註冊，見 §10.9）。
+- **既有資料庫必須先有 `FrameworkRefreshTokens` 表**：#721 使 token 持久化首次真正寫入（每次成功登入 INSERT 一列、rotation 再一列，寫入失敗＝登入失敗）。舊版 `EnsureCreated()` 建立的 DB **沒有**這張表，升級後全站登入失敗；fresh DB 自動建表，staging/e2e 測不出來。欄位對照與 idempotent DDL 指引見 `CHANGELOG.md` `[10.15.0]` Migration 段。
+- **表無界成長 → opt-in retention（10.17.0，#757）**：`services.AddWtmRefreshTokenRetention()` 啟用每日清理（預設 04:00 本地時間，與 ActionLog 的 03:00 錯開；`ExpiredDays`/`RevokedDays` 預設 30 天、`BatchSize` 5000、任一 knob ≤0 停用該類）。**硬性安全不變量**：revoked-but-unexpired 的列（reuse-attack 鏈式撤銷的 tripwire）無論設定為何都不會被刪。未註冊擴充方法＝完全不啟用（零預設行為變更）。
+- **索引（10.17.0，#761）**：`Token` / `ExpiresUtc` / `(RevokedUtc, ExpiresUtc)` 三個索引隨 entity 內建——僅對 fresh DB 自動生效；既有 DB 需手動 `CREATE INDEX`（`EnsureCreated` 不回填索引）。
+
 ### 10.3 權限模型
 
 WTM 採用 **RBAC（角色存取控制）** + **列級資料權限** 雙層模型：
@@ -3221,6 +3256,20 @@ var r6 = await client.GetAsync("/Login");  // 429 ⛔ quota 用罄
 - 只支援 fixed-window（非 sliding / token-bucket）— 簡單、低延遲、足夠擋 brute-force
 - Per-IP 分區；未支援 per-user / per-tenant 分區（後者可透過 `WtmRateLimitingOptions.CustomConfig` 自行加 policy）
 - Controller 類別與 action 同時貼 `[WtmRateLimit]` 時 **action 層優先**
+
+**10.17.0 起：minimal-API 端點的顯式註冊（#759）。** 10.17.0 之前，具名 policy **只**從 attribute 掃描產生——minimal-API 端點（health check 等）想套 rate limit 只能引用「恰好有某個 controller 掛著同 tuple」的 policy，重構/刪掉那個 action 就會讓不相干的端點**每請求 500**（build 與測試全綠照樣漏抓；下游兩次實證）。新 API 消除這個隱式耦合：
+
+```csharp
+services.AddWtmRateLimiting(opt => {
+    opt.RegisterPolicy(100, 60);          // 顯式保證 wtm_rl_100_60_0 存在（與 attribute ctor 同一套驗證）
+});
+...
+app.MapGet("/live", ...).RequireWtmRateLimit(100, 60);   // 掛 canonical policy metadata
+```
+
+- `RegisterPolicy` 的 tuple 與掃描到的 attribute tuple 以 HashSet 合併去重——顯式＋attribute 同 tuple 不會重複 `AddPolicy`
+- `RequireWtmRateLimit` **只掛 metadata、不自動註冊**——tuple 必須由 `RegisterPolicy` 或某個 `[WtmRateLimit]` 提供，否則首個請求即拋 `InvalidOperationException`（大聲失敗，不會靜默）
+- 同版並修復 `ScanWtmRateLimitAttributes` 的逐成員 partial-load 防護（MSTest host 內直呼不再因 test-adapter assembly 拋 `TypeLoadException`）
 
 ### 10.10 X-Correlation-Id middleware（opt-in，10.4.0+）
 
@@ -3928,6 +3977,8 @@ var depts = cache.GetAll<Department>(defaultDc);
 var depts2 = cache.GetAll<Department>(secondaryDc);
 ```
 
+**`ConnectionKey` 與啟動預熱（10.17.0 修復，#756）**：`[CacheLookup(ConnectionKey = "orss")]` 可將型別綁定到非 default 連線——runtime 的 `GetLookup`/`GetLookupAsync`/`RefreshLookupAsync` 一直都會依此路由到正確 DB，但 10.17.0 之前**啟動預熱不會**：warmup 一律打 default 連線，非 default 型別每次開機 warm-fail（log noise）；更糟的是若 default DB 恰好有同名表，會把**錯誤資料庫**的列寫進 runtime 讀的同一把 cache key，毒化整個 TTL。10.17.0 起 warmup 依 `ConnectionKey` 分組、與 runtime 相同路由；unknown key / 停用連線 / 無 `WTMContext` 的 host 等一律降級為 logged skip（絕不讓例外逃出 BackgroundService）。曾為此 bug 加 `WarmOnStartup = false` opt-out 的下游（如 BMS `Holiday_Orss`）升級後可移除。
+
 ### 12.7 使用場景
 
 #### 場景 1：下拉選單加速
@@ -4265,6 +4316,8 @@ services.AddWtmHealthChecks(checks =>
 
 Unhealthy 時加 `exception` 欄位（sanitize 過的 message，不含 stack trace）。
 
+> **10.16.0 修復（#741，#727 殘留）**：10.16.0 之前 `WtmDataContextHealthCheck` 在真實部署中解析到的是 `NullContext` DI 佔位符，**從未真的探過 DB**——永遠回報 "Healthy (skipped)"。現在它優先透過 DI 注入的 `WTMContext.CreateDC()`（與框架其他部分同一條 connection-string/tenant-aware 工廠）對真 DB 跑 `CanConnectAsync`。**Operator 注意**：過去恆綠的 `/ready` 從此在 DB 不可達或 `default` 連線停用時會真的轉 **Unhealthy**——這是修復的本意；多租戶且刻意停用 `default` 連線的應用應改 scope 或不掛這個 opt-in check。
+
 ### 14A.3 JSON 回應格式
 
 `useJsonResponse` 預設 `false`（保留原本 plain-text 行為避免 silent breaking change）。要換成結構化 JSON 請明確 opt-in：
@@ -4583,6 +4636,9 @@ public class Order : BasePoco
 | `DashboardSnapshotOptions` | — | 排程快照 cron / 匯出格式（`AddWtmDashboardSnapshots`，10.8.0+） |
 | `EtlAlertOptions.EnableWebhookAlerts` | `false` | ETL 失敗/SLA webhook 告警卡開關（10.8.0+，§8.19） |
 | `WtmWebhookOptions` | — | 共用 webhook sink（钉钉/企微/飞书/Slack/Teams）provider 設定（`AddWtmWebhookSink`，10.8.0+，§10.10） |
+| `UIOptions.UseSelectIslandRender` | `false` | LayUI 互動元件 eval-free island render（10.16.0+，#470 G–M；預設關＝逐位元組舊輸出；10.16.1 起 gate 完整。`appsettings` 綁定與 code-based `Configure<WtmUIOptions>` 皆生效，§6.11） |
+| `RefreshTokenRetentionOptions` | —（未註冊＝不啟用） | `AddWtmRefreshTokenRetention()` 的每日清理設定：`Enabled=true`、`RunAtLocalHour=4`（clamp [0,23] + 超界 warning）、`ExpiredDays=30`、`RevokedDays=30`、`BatchSize=5000`（10.17.0，#757，§10.2） |
+| `ActionLogRetentionOptions.RunAtLocalHour` | `3` | 10.17.0 起超出 [0,23] 會 clamp 並 log warning（先前的 midnight=24 typo 會讓 host 開機失敗或停機，#762） |
 
 ### 17.4 version.props
 
@@ -4733,6 +4789,7 @@ dotnet ef migrations add WorkFlowInitialCreate \
 - **`DBTypeEnum.Memory` 不支援**：EF InMemory 不支援 `ExecuteUpdateAsync`，啟動時立即拋 `InvalidOperationException`。請使用 SQLite、SQL Server、PostgreSQL、MySQL、Oracle 或達夢。
 - **沙盒路由**：欄位存取採正向白名單，非白名單欄位在 publish 和 runtime 雙層 fail-closed。
 - **通知不阻塞**：所有通知在引擎 transaction commit 後發送，投遞失敗記 Error log，不回滾審批決定。
+- **`EnableRetryOnFailure` 相容 + 統一死鎖結果碼（10.15.0，#667）**：引擎所有交易改走 execution-strategy 包裹，EF Core `EnableRetryOnFailure` 開啟時不再拋 `InvalidOperationException`。曾用 try/catch 包 `StartAsync`/`ApproveTaskAsync`/`RejectTaskAsync` 攔死鎖類例外的 caller，改檢查 `result.Code == WorkflowActionCode.DeadlockRetryExhausted`（與其他引擎路徑一致；本來就檢查 result code 的 caller 無需變更）。
 
 ### 18.7 稽核機制
 
