@@ -111,7 +111,9 @@ describe('#564 (#470-D) — bindValidate source sweep', () => {
   test('_islandModulesFor maps bindValidate -> the form module', () => {
     // Issue #470 Slice G: bound bumped 1400 -> 2200 — the function grew with
     // the new 'ueditor'/'layedit' module-deferral branches.
-    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,2200}?\n\s*\},/);
+    // Issue #470 Slice N1: bound bumped 2200 -> 2600 — the function grew with
+    // the new 'renderTreeContainer' module-deferral branch.
+    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,2600}?\n\s*\},/);
     expect(block).not.toBeNull();
     expect(block[0]).toMatch(/a\.type\s*===\s*['"]bindValidate['"][\s\S]{0,80}needed\.form\s*=\s*true/);
   });

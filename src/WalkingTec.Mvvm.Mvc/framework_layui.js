@@ -261,8 +261,17 @@ window.ff = {
     // 'renderTransfer' above). 'uploadExisting' is intentionally ABSENT —
     // it is pure jQuery.ajax + DOM building with no layui module dependency
     // at all, same rationale as 'loadComboItems'.
+    // Issue #470 Slice N1: 'renderTreeContainer' DOES need an entry —
+    // layui.tree IS a layui.use(...) module (the legacy inline <script> this
+    // island replaces always wrapped its call in `layui.use(['tree'],
+    // function(){ ... })`), same rationale as 'renderTransfer'/'upload'
+    // above. 'renderChart' is intentionally ABSENT — echarts is a plain
+    // <script src> global (loaded via a top-level <script src="echarts...">
+    // tag, exactly like xm-select), NOT a layui.use(...) module — same
+    // rationale as 'renderSelect' above (see _renderChartAction's own
+    // comment).
     _islandModulesFor: function (payload) {
-        var needed = { form: false, laydate: false, slider: false, rate: false, colorpicker: false, ueditorconfig: false, layedit: false, transfer: false, upload: false };
+        var needed = { form: false, laydate: false, slider: false, rate: false, colorpicker: false, ueditorconfig: false, layedit: false, transfer: false, upload: false, tree: false };
         if (payload && payload.actions) {
             for (var i = 0; i < payload.actions.length; i++) {
                 var a = payload.actions[i];
@@ -290,6 +299,8 @@ window.ff = {
                     needed.transfer = true;
                 } else if (a.type === 'upload' || a.type === 'multiUpload') {
                     needed.upload = true;
+                } else if (a.type === 'renderTreeContainer') {
+                    needed.tree = true;
                 }
             }
         }
@@ -303,6 +314,7 @@ window.ff = {
         if (needed.layedit) { mods.push('layedit'); }
         if (needed.transfer) { mods.push('transfer'); }
         if (needed.upload) { mods.push('upload'); }
+        if (needed.tree) { mods.push('tree'); }
         return mods;
     },
 
@@ -1449,6 +1461,315 @@ window.ff = {
         if (wrap) { labelEl.appendChild(wrap); }
     },
 
+    // Issue #470 Slice N1: shared render body for the 'renderTreeContainer'
+    // DispatchAction case (below) — the opt-in (UseSelectIslandRender,
+    // default OFF — the SAME flag Slices J/K/L/M use) eval-free island
+    // render for <wt:treecontainer>. Reproduces the CURRENT legacy inline
+    // `layui.use(['tree'], function(){ layui.tree.render(...) })` <script>
+    // functionally:
+    //   - creates window['top'+id+'selected'] (EXACT name — ff.GetSearchFormData
+    //     reads window[tc[0].id+'selected']) with the initial selected node's
+    //     id/level fields pre-populated, same as the legacy inline script.
+    //   - renders the tree into the SAME elem with the SAME options the
+    //     inline used (onlyIconControl:true, showCheckbox:false, showLine
+    //     from action data), calling .config.setSelected(...) for a
+    //     pre-selected node exactly like the legacy inline script does.
+    //     window['treecontainer'+id] itself is NOT a reproduction of a
+    //     legacy global: legacy's `treecontainer{id}` var was declared
+    //     inside the layui.use(['tree'], fn) closure and never touched
+    //     `window` (only `top{id}selected`, declared outside that closure,
+    //     did); this island deliberately assigns the instance to
+    //     window['treecontainer'+id] as a new, intentional public handle.
+    //   - wires node click/setSelected to the SAME highlight toggling the
+    //     legacy inline script performed (background-color/text-color swap
+    //     tracked via a closure-local "last highlighted element", not a
+    //     window global — the legacy script's own last{id} was itself just
+    //     a closure-local var inside its layui.use(...) callback, never a
+    //     window property, so this is a faithful port, not a behavior
+    //     change).
+    //   - dispatches the node click to one of FIVE modes, computed
+    //     server-side (TreeContainerTagHelper.ProcessAsync) from the SAME
+    //     regex analysis the legacy inline script's cusmtomclick decision
+    //     used, against the SAME nested-content markup:
+    //       'custom'       — call the resolved ClickFunc(data) (a compile-
+    //                        time developer literal, resolved through the
+    //                        SAME guarded window[name] lookup every other
+    //                        named-callback action uses — see
+    //                        ff._resolveGuardedWindowFn). Resolved LATE, at
+    //                        each click, not once at island-dispatch time —
+    //                        matching the legacy inline handler, where the
+    //                        callback name was looked up fresh on every
+    //                        click, so a function defined after page load
+    //                        still resolves correctly.
+    //       'searchButton' — write the id/level fields onto
+    //                        window['top'+id+'selected'], then click the
+    //                        nested grid's own search button by id.
+    //       'grid'         — either $.extend the nested grid's own
+    //                        window[gridId+'defaultfilter'].where with the
+    //                        id/level fields (action.gridExtendWhere===true,
+    //                        mirrors the legacy $.extend branch) OR write
+    //                        them onto window['top'+id+'selected'] instead
+    //                        (action.gridExtendWhere===false, mirrors the
+    //                        legacy branch that left cusmtomclick's default
+    //                        top{id}selected assignment untouched) — EITHER
+    //                        way, then layui.table.reload(gridId,{url:...,
+    //                        where:...}), reading window[gridId+'url'] /
+    //                        window[gridId+'defaultfilter'] AT EVENT TIME
+    //                        (never captured at render time — these are
+    //                        parse-time legacy globals until #470 Slice O).
+    //       'loadPage'     — ff.LoadPage1(data.data.href, gridDivId) when
+    //                        the clicked node carries an href (mirrors the
+    //                        legacy inline script's empty-nested-content
+    //                        fallback).
+    //       'default'      — just write the id/level fields onto
+    //                        window['top'+id+'selected'] (mirrors the
+    //                        legacy inline script's final fallback — no
+    //                        button, no grid, non-empty nested content).
+    //   - fires ff.LoadPage1(action.autoLoadUrl, gridDivId) once at render
+    //     time when the server determined an AutoLoadUrl applies (no
+    //     pre-selected node) — same gate as the legacy inline script.
+    //
+    // layui.tree IS a layui.use(...) module (the legacy inline <script>
+    // this island replaces always wrapped its call in `layui.use(['tree'],
+    // function(){ ... })`), so — same rationale as
+    // laydate/slider/rate/colorpicker/ueditor/layedit/transfer/upload above
+    // — _islandModulesFor's 'renderTreeContainer' entry defers dispatch
+    // until the module is confirmed loaded.
+    _renderTreeContainerAction: function (action) {
+        try {
+            if (!action || !action.id || !action.elemId) { return; }
+            if (typeof layui === 'undefined' || !layui.tree ||
+                typeof layui.tree.render !== 'function') {
+                if (typeof console !== 'undefined' && console.warn) {
+                    console.warn('[WTM] renderTreeContainer action skipped: layui.tree is not loaded (#470).');
+                }
+                return;
+            }
+
+            var selectedGlobalName = 'top' + action.id + 'selected';
+            var selectedObj = {};
+            if (action.selectedItem) {
+                if (action.idFieldName) { selectedObj[action.idFieldName] = action.selectedItem.id; }
+                if (action.levelFieldName) { selectedObj[action.levelFieldName] = action.selectedItem.level; }
+            }
+            window[selectedGlobalName] = selectedObj;
+
+            var lastEl = null;
+
+            function highlight(data) {
+                var ele = null;
+                if (data.elem != undefined) {
+                    ele = data.elem.find('.layui-tree-main:first');
+                } else if (typeof $ !== 'undefined') {
+                    ele = $('#' + action.elemId).find("div[data-id='" + data.data.id + "']").find('.layui-tree-main:first');
+                }
+                if (lastEl != null) {
+                    lastEl.css('background-color', '');
+                    lastEl.find('.layui-tree-txt').css('color', '');
+                }
+                if (lastEl === ele) {
+                    lastEl = null;
+                } else if (ele) {
+                    ele.css('background-color', '#5fb878');
+                    ele.find('.layui-tree-txt').css('color', '#fff');
+                    lastEl = ele;
+                }
+            }
+
+            function runClick(data) {
+                var sel = window[selectedGlobalName];
+                switch (action.clickMode) {
+                    case 'custom':
+                        // Re-resolve on every click (not once at island-dispatch
+                        // time) — see the 'custom' clickMode note in the doc
+                        // comment above _renderTreeContainerAction for why this
+                        // matters (late-bound callback parity with legacy).
+                        var clickFn = ff._resolveGuardedWindowFn(action.clickFunc);
+                        if (clickFn) { clickFn(data); }
+                        break;
+                    case 'searchButton':
+                        if (sel && action.idFieldName) { sel[action.idFieldName] = data.data.id; }
+                        if (sel && action.levelFieldName) { sel[action.levelFieldName] = data.data.level; }
+                        if (typeof $ !== 'undefined' && action.searchButtonId) {
+                            $('#' + action.searchButtonId).click();
+                        }
+                        break;
+                    case 'grid':
+                        if (action.gridExtendWhere === true) {
+                            var filter = window[action.gridId + 'defaultfilter'];
+                            if (filter) {
+                                if (!filter.where) { filter.where = {}; }
+                                if (action.idFieldName) { filter.where[action.idFieldName] = data.data.id; }
+                                if (action.levelFieldName) { filter.where[action.levelFieldName] = data.data.level; }
+                            }
+                        } else {
+                            if (sel && action.idFieldName) { sel[action.idFieldName] = data.data.id; }
+                            if (sel && action.levelFieldName) { sel[action.levelFieldName] = data.data.level; }
+                        }
+                        if (action.gridId && typeof layui !== 'undefined' && layui.table &&
+                            typeof layui.table.reload === 'function') {
+                            var gf = window[action.gridId + 'defaultfilter'];
+                            layui.table.reload(action.gridId, {
+                                url: window[action.gridId + 'url'],
+                                where: gf ? gf.where : undefined
+                            });
+                        }
+                        break;
+                    case 'loadPage':
+                        if (data.data && data.data.href && typeof ff.LoadPage1 === 'function') {
+                            ff.LoadPage1(data.data.href, action.gridDivId);
+                        }
+                        break;
+                    default:
+                        if (sel && action.idFieldName) { sel[action.idFieldName] = data.data.id; }
+                        if (sel && action.levelFieldName) { sel[action.levelFieldName] = data.data.level; }
+                        break;
+                }
+            }
+
+            var treeInstance = layui.tree.render({
+                id: 'tree' + action.id,
+                elem: '#' + action.elemId,
+                onlyIconControl: true,
+                showCheckbox: false,
+                showLine: action.showLine === true,
+                data: Array.isArray(action.data) ? action.data : [],
+                click: function (data) {
+                    try {
+                        highlight(data);
+                        runClick(data);
+                    } catch (e) {
+                        if (typeof console !== 'undefined' && console.warn) {
+                            console.warn('[WTM] renderTreeContainer click handler failed:', e);
+                        }
+                    }
+                },
+                setSelected: function (data) {
+                    try {
+                        highlight(data);
+                    } catch (e) {
+                        if (typeof console !== 'undefined' && console.warn) {
+                            console.warn('[WTM] renderTreeContainer setSelected handler failed:', e);
+                        }
+                    }
+                }
+            });
+            window['treecontainer' + action.id] = treeInstance;
+
+            if (action.selectedItem && treeInstance && treeInstance.config &&
+                typeof treeInstance.config.setSelected === 'function') {
+                treeInstance.config.setSelected({ data: action.selectedItem });
+            }
+
+            if (action.autoLoadUrl && typeof ff.LoadPage1 === 'function') {
+                ff.LoadPage1(action.autoLoadUrl, action.gridDivId);
+            }
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] renderTreeContainer action failed:', e);
+            }
+        }
+    },
+
+    // Issue #470 Slice N1: shared render body for the 'renderChart'
+    // DispatchAction case (below) — the opt-in (UseSelectIslandRender,
+    // default OFF — the SAME flag Slices J/K/L/M/N1's renderTreeContainer
+    // use) eval-free island render for <wt:chart>. Reproduces the CURRENT
+    // legacy inline `{Id}Chart = echarts.init(...); {Id}Chart.setOption(...)`
+    // <script> functionally, preserving the EXACT global-name contract the
+    // legacy inline script established: window[id+'Chart'] (the echarts
+    // instance — ff.ResizeChart/ff.RefreshChart both read this),
+    // window[id+'ChartType'] (the raw `"type":"..."` JSON fragment
+    // ff.RefreshChart regex-substitutes into the fetched series data),
+    // window[id+'ChartLegend'] (the STRING 'true'/'false' —
+    // ff.RefreshChart compares with `== 'true'`, so this MUST be a string,
+    // never a real boolean), and window[id+'ChartUrl'] (the data endpoint
+    // ff.RefreshChart POSTs to). The opt-in window[id+'ChartSeriesParser']
+    // registry (#332) is untouched here — it is a developer-set global
+    // ff.RefreshChart itself reads directly, with no ChartTagHelper
+    // involvement at either render time.
+    //
+    // echarts is a plain <script src="echarts.min.js"> global (see the demo
+    // Layout's <script> tags) — NOT a layui.use(...) module — same
+    // acquisition path as the legacy inline script's bare `echarts.init(...)`
+    // call, so this degrades with a console.warn (never throws) when
+    // `echarts` is undefined, exactly like _renderSelectAction degrades when
+    // xm-select hasn't loaded yet.
+    _renderChartAction: function (action) {
+        try {
+            if (!action || !action.id) { return; }
+            if (typeof echarts === 'undefined' || typeof echarts.init !== 'function') {
+                if (typeof console !== 'undefined' && console.warn) {
+                    console.warn('[WTM] renderChart action skipped: echarts is not loaded (#470).');
+                }
+                return;
+            }
+            var el = document.getElementById(action.id);
+            if (!el) {
+                if (typeof console !== 'undefined' && console.warn) {
+                    console.warn('[WTM] renderChart action skipped: element #' + action.id + ' not found (#470).');
+                }
+                return;
+            }
+
+            var themeTemp = (typeof action.theme === 'string' && action.theme) ? action.theme : 'default';
+            var chartInstance = echarts.init(el, themeTemp);
+            window[action.id + 'Chart'] = chartInstance;
+            window[action.id + 'ChartType'] = typeof action.chartType === 'string' ? action.chartType : '';
+            window[action.id + 'ChartLegend'] = action.legend === true ? 'true' : 'false';
+            window[action.id + 'ChartUrl'] = typeof action.url === 'string' ? action.url : '';
+
+            var opt = {};
+            if (action.title) { opt.title = { text: action.title }; }
+            if (action.showTooltip === true) {
+                if (action.chartTypeName === 'scatter') {
+                    var nameX = action.nameX || '';
+                    var nameY = action.nameY || '';
+                    var nameAddition = action.nameAddition || '';
+                    var nameCategory = action.nameCategory || '';
+                    opt.tooltip = {
+                        formatter: function (params) {
+                            var xl = nameX ? (nameX + ':') : '';
+                            var yl = nameY ? (nameY + ':') : '';
+                            var al = nameAddition ? (nameAddition + ':') : '';
+                            var cl = nameCategory ? (nameCategory + ':') : '';
+                            return params.seriesName + ' <br/>'
+                                + xl + params.value[0] + ' <br/>'
+                                + yl + params.value[1] + ' <br/>'
+                                + al + params.value[2] + ' <br/>'
+                                + cl + params.value[3] + ' <br/>';
+                        }
+                    };
+                } else if (action.chartTypeName === 'line') {
+                    opt.tooltip = { trigger: 'axis' };
+                } else {
+                    opt.tooltip = {};
+                }
+            }
+            if (action.noCartesianAxes !== true) {
+                if (action.chartTypeName === 'scatter') {
+                    opt.xAxis = { name: action.nameX || '', type: 'value', splitLine: { lineStyle: { type: 'dashed' } } };
+                    opt.yAxis = { name: action.nameY || '', splitLine: { lineStyle: { type: 'dashed' } }, scale: true };
+                } else if (action.isHorizontal === true) {
+                    opt.xAxis = { name: action.nameY || '' };
+                    opt.yAxis = { name: action.nameX || '', type: 'category' };
+                } else {
+                    opt.xAxis = { name: action.nameX || '', type: 'category' };
+                    opt.yAxis = { name: action.nameY || '' };
+                }
+            }
+            chartInstance.setOption(opt);
+
+            setTimeout(function () {
+                if (typeof ff.RefreshChart === 'function') { ff.RefreshChart(action.id); }
+            }, 100);
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] renderChart action failed:', e);
+            }
+        }
+    },
+
     // Issue #571: native, dependency-free tag/chip input render body for the
     // 'tagInput' DispatchAction case (below). Unlike slider/rate/colorpicker
     // (#552), this widget has NO layui module dependency at all — it is built
@@ -2046,6 +2367,28 @@ window.ff = {
                 // the full rationale.
                 case 'uploadExisting':
                     ff._renderUploadExistingAction(action);
+                    break;
+                // Issue #470 Slice N1: thin JSON wrapper over
+                // layui.tree.render() — the opt-in (UseSelectIslandRender,
+                // default OFF) eval-free island render for
+                // <wt:treecontainer>. See ff._renderTreeContainerAction for
+                // the full rationale; it performs its own existence/guard
+                // checks (layui.tree loaded, action shape), so this case
+                // just delegates straight through, same pattern as
+                // 'renderTransfer'/'upload' above.
+                case 'renderTreeContainer':
+                    ff._renderTreeContainerAction(action);
+                    break;
+                // Issue #470 Slice N1: thin JSON wrapper over
+                // echarts.init(...) + setOption(...) — the opt-in
+                // (UseSelectIslandRender, default OFF) eval-free island
+                // render for <wt:chart>. See ff._renderChartAction for the
+                // full rationale; echarts is a plain <script src> global
+                // (NOT a layui.use(...) module — see _islandModulesFor's
+                // comment), same acquisition path as 'renderSelect'/
+                // xm-select, so this dispatches immediately.
+                case 'renderChart':
+                    ff._renderChartAction(action);
                     break;
                 // Issue #558 (#470-C): safe named-callback submit binding —
                 // mechanism only (FormTagHelper does not emit this yet). Mirrors

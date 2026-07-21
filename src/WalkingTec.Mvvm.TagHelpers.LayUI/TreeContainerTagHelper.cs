@@ -3,7 +3,9 @@ using Microsoft.AspNetCore.Razor.TagHelpers;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using WalkingTec.Mvvm.Core;
@@ -22,6 +24,23 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         private static readonly Regex _regStripSearcherPrefix = LayUiRegexes.SearcherPrefixStripRegex();
         private static readonly Regex _regSearchButtonId = LayUiRegexes.SearchButtonIdRegex();
         private static readonly Regex _regGridOptionVar = LayUiRegexes.GridOptionVarRegex();
+
+        // Issue #470 Slice N1: identifier check for the opt-in 'renderTreeContainer'
+        // island decision below — the SAME identifier class framework_layui.js's
+        // ff._resolveGuardedWindowFn enforces (a bare JS identifier, nothing else).
+        // Duplicated (not shared) per-TagHelper, mirroring ComboBoxTagHelper's/
+        // TreeTagHelper's/TransferTagHelper's #470 Slice J/K _identifierRegex
+        // exactly, including the `\z` (not `$`) end anchor.
+        private static readonly Regex _identifierRegex = new(@"^[A-Za-z_$][\w$]*\z", RegexOptions.Compiled);
+
+        // Issue #470 Slice N1 (mirrors ComboBoxTagHelper's _islandJsonOptions):
+        // island DTOs omit null members so optional fields (clickFunc,
+        // searchButtonId, gridId, autoLoadUrl) contribute zero JSON when unused.
+        private static readonly JsonSerializerOptions _islandJsonOptions = new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        };
+
         public ModelExpression Items { get; set; }
         /// <summary>
         /// 加载页面之前执行
@@ -90,48 +109,170 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 var levelfieldname = LevelField?.Name ?? "notsetlevel";
                 levelfieldname = _regStripSearcherPrefix.Replace(levelfieldname, "");
 
-                string cusmtomclick = $"top{Id}selected.{idfieldname}=data.data.id;top{Id}selected.{levelfieldname}=data.data.level;";
-                if (string.IsNullOrEmpty(ClickFunc))
+                // Issue #470 Slice N1: opt-in (WtmUIOptions.UseSelectIslandRender,
+                // default OFF — the SAME flag Slices J/K/L/M use) eval-free
+                // 'renderTreeContainer' island decision. ClickFunc is ALWAYS a
+                // compile-time, developer-authored Razor literal (same trust class
+                // as bindSubmit's beforeSubmit / Slice J's renderSelect ChangeFunc)
+                // — a plain-identifier ClickFunc (or none at all) is safe to carry
+                // as JSON island data, resolved client-side via the SAME guarded
+                // window[name] lookup every other named-callback action uses. A
+                // non-identifier ClickFunc keeps the exact legacy inline render
+                // below (never silently dropped) — mirrors ComboBoxTagHelper's/
+                // TreeTagHelper's/TransferTagHelper's 3-way decision exactly.
+                //
+                // The OTHER click-wiring branches below (search-button click,
+                // nested-grid table.reload, empty-content LoadPage1) never involve
+                // a developer-authored JS expression — they are derived purely
+                // from server-side regex analysis of the ALREADY-RENDERED nested
+                // markup (search button id / grid option var name), so they carry
+                // no additional trust concern and are always island-eligible.
+                string clickFuncName = string.IsNullOrEmpty(ClickFunc) ? null : FormatFuncName(ClickFunc, false);
+                bool clickIsIdentifier = clickFuncName != null && _identifierRegex.IsMatch(clickFuncName);
+                bool useTreeContainerIsland = UIConfig.UseSelectIslandRender && (clickFuncName == null || clickIsIdentifier);
+
+                if (useTreeContainerIsland)
                 {
-                    var m3 = _regSearchButtonId.Match(insideContent);
-                    if (m3.Success)
+                    // Issue #470 Slice N1: click-mode analysis for the island —
+                    // mirrors the legacy cusmtomclick decision in the `else`
+                    // branch below EXACTLY (same regexes, same precedence,
+                    // same insideContent input), but captures the RESULT as
+                    // structured data instead of building a JS string. The
+                    // island renderer (ff._renderTreeContainerAction in
+                    // framework_layui.js) executes the equivalent client-side
+                    // logic from this data.
+                    string clickMode;
+                    string searchButtonId = null;
+                    string gridId = null;
+                    bool gridExtendWhere = false;
+                    if (!string.IsNullOrEmpty(ClickFunc))
                     {
-                        cusmtomclick += $@"
-    $('#{m3.Groups[1].Value.Trim()}').click();
-";
+                        clickMode = "custom";
                     }
                     else
                     {
-                        var m = _regGridOptionVar.Match(insideContent);
-                        if (m.Success)
+                        var m3 = _regSearchButtonId.Match(insideContent);
+                        if (m3.Success)
                         {
-                            var gridid = m.Groups[1].Value.Trim();
-                            Regex r2 = new Regex($"(.*?) = table.render\\({gridid}option\\)", RegexOptions.Compiled);
-                            var m2 = r2.Match(insideContent);
-                            if (m2.Success)
-                            {
-                                var gridvar = m2.Groups[1].Value.Trim();
-                                cusmtomclick = $@"
-    $.extend({gridid}defaultfilter.where,{{'{idfieldname}':data.data.id, '{levelfieldname}':data.data.level }});
-";
-                            }
-                            cusmtomclick += $@"
-    layui.table.reload('{gridid}',{{url:{gridid}url, where: {gridid}defaultfilter.where}});
-";
-
+                            clickMode = "searchButton";
+                            searchButtonId = m3.Groups[1].Value.Trim();
                         }
-                        else if (string.IsNullOrEmpty(insideContent))
+                        else
                         {
-                            cusmtomclick = $"if(data.data.href!=null && data.data.href!=''){{ff.LoadPage1(data.data.href,'div_{Id}');}}";
+                            var m = _regGridOptionVar.Match(insideContent);
+                            if (m.Success)
+                            {
+                                clickMode = "grid";
+                                gridId = m.Groups[1].Value.Trim();
+                                Regex r2 = new Regex($"(.*?) = table.render\\({gridId}option\\)", RegexOptions.Compiled);
+                                gridExtendWhere = r2.IsMatch(insideContent);
+                            }
+                            else if (string.IsNullOrEmpty(insideContent))
+                            {
+                                clickMode = "loadPage";
+                            }
+                            else
+                            {
+                                clickMode = "default";
+                            }
                         }
                     }
+
+                    var islandTreeItems = GetLayuiTree(mm);
+                    var islandSelectedItem = GetSelectedItem(islandTreeItems);
+                    // Mirrors the legacy inline render's AutoLoadUrl gate exactly:
+                    // only auto-navigate when there IS an AutoLoadUrl and no node
+                    // is already selected (a selected node's own click/setSelected
+                    // wiring takes precedence).
+                    string effectiveAutoLoadUrl = (string.IsNullOrEmpty(AutoLoadUrl) || islandSelectedItem != null)
+                        ? null
+                        : AutoLoadUrl;
+
+                    var renderTreeContainerAction = new RenderTreeContainerIslandAction
+                    {
+                        Id = Id,
+                        ElemId = "div" + Id,
+                        GridDivId = "div_" + Id,
+                        ShowLine = ShowLine,
+                        IdFieldName = idfieldname,
+                        LevelFieldName = levelfieldname,
+                        Data = islandTreeItems,
+                        SelectedItem = islandSelectedItem,
+                        AutoLoadUrl = effectiveAutoLoadUrl,
+                        ClickMode = clickMode,
+                        ClickFunc = clickMode == "custom" ? clickFuncName : null,
+                        SearchButtonId = clickMode == "searchButton" ? searchButtonId : null,
+                        GridId = clickMode == "grid" ? gridId : null,
+                        GridExtendWhere = gridExtendWhere
+                    };
+
+                    var islandContent = $@"
+<div id=""div{Id}outer"" class=""layui-col-md2 donotuse_pdiv"" style=""padding-right:10px;border-right:solid 1px #aaa;"">
+<div id=""div{Id}"" class=""donotuse_fill"" style=""overflow:auto;height:10px;"">
+</div>
+</div>
+<div id=""div_{Id}"" style=""box-sizing:border-box"" class=""layui-col-md10 donotuse_pdiv"">{insideContent}</div>
+<script type=""application/json"" class=""wtm-dialog-init"">{LayuiIslandJson.Serialize(renderTreeContainerAction, _islandJsonOptions)}</script>
+";
+                    output.Content.SetHtmlContent(islandContent);
                 }
                 else
                 {
-                    cusmtomclick = $"{FormatFuncName(ClickFunc)};";
-                }
-                List<LayuiTreeItem2> treeitems = GetLayuiTree(mm);
-                var onclick = $@"
+                    // Issue #470 Slice N1: when the flag is ON but ClickFunc is a
+                    // non-identifier expression (island render skipped for this
+                    // one field — see useTreeContainerIsland above), surface a
+                    // deprecation nudge in the browser console so the fallback is
+                    // visible during migration. Mirrors ComboBoxTagHelper's/
+                    // TransferTagHelper's deprecationWarn exactly, including the
+                    // "contributes ZERO characters when empty" invariant that
+                    // keeps the flag-OFF / identifier path byte-for-byte identical
+                    // to the pre-Slice-N1 inline render.
+                    var deprecationWarn = (UIConfig.UseSelectIslandRender && clickFuncName != null && !clickIsIdentifier)
+                        ? $"console.warn('[WTM] TreeContainerTagHelper #{Id}: ClickFunc \\'{JavaScriptEncoder.Default.Encode(ClickFunc)}\\' is not a plain identifier — UseSelectIslandRender is ON but island render was skipped for this field; keeping the legacy inline script. See #470 Slice N1.');\n"
+                        : "";
+
+                    string cusmtomclick = $"top{Id}selected.{idfieldname}=data.data.id;top{Id}selected.{levelfieldname}=data.data.level;";
+                    if (string.IsNullOrEmpty(ClickFunc))
+                    {
+                        var m3 = _regSearchButtonId.Match(insideContent);
+                        if (m3.Success)
+                        {
+                            cusmtomclick += $@"
+    $('#{m3.Groups[1].Value.Trim()}').click();
+";
+                        }
+                        else
+                        {
+                            var m = _regGridOptionVar.Match(insideContent);
+                            if (m.Success)
+                            {
+                                var gridid = m.Groups[1].Value.Trim();
+                                Regex r2 = new Regex($"(.*?) = table.render\\({gridid}option\\)", RegexOptions.Compiled);
+                                var m2 = r2.Match(insideContent);
+                                if (m2.Success)
+                                {
+                                    var gridvar = m2.Groups[1].Value.Trim();
+                                    cusmtomclick = $@"
+    $.extend({gridid}defaultfilter.where,{{'{idfieldname}':data.data.id, '{levelfieldname}':data.data.level }});
+";
+                                }
+                                cusmtomclick += $@"
+    layui.table.reload('{gridid}',{{url:{gridid}url, where: {gridid}defaultfilter.where}});
+";
+
+                            }
+                            else if (string.IsNullOrEmpty(insideContent))
+                            {
+                                cusmtomclick = $"if(data.data.href!=null && data.data.href!=''){{ff.LoadPage1(data.data.href,'div_{Id}');}}";
+                            }
+                        }
+                    }
+                    else
+                    {
+                        cusmtomclick = $"{FormatFuncName(ClickFunc)};";
+                    }
+                    List<LayuiTreeItem2> treeitems = GetLayuiTree(mm);
+                    var onclick = $@"
                 ,click: function(data){{
                     var ele = null;
                     if(data.elem != undefined){{
@@ -176,17 +317,17 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     }}
                   }}";
 
-                var selecteditem = GetSelectedItem(treeitems);
+                    var selecteditem = GetSelectedItem(treeitems);
 
 
-                var script = $@"
+                    var script = $@"
 <div id=""div{Id}outer"" class=""layui-col-md2 donotuse_pdiv"" style=""padding-right:10px;border-right:solid 1px #aaa;"">
 <div id=""div{Id}"" class=""donotuse_fill"" style=""overflow:auto;height:10px;"">
 </div>
 </div>
 <div id=""div_{Id}"" style=""box-sizing:border-box"" class=""layui-col-md10 donotuse_pdiv"">{insideContent}</div>
 <script>
-var top{Id}selected = {{}};
+{deprecationWarn}var top{Id}selected = {{}};
 {
     (selecteditem==null?"": @$"
     top{Id}selected.{idfieldname} = '{selecteditem.Id}';
@@ -207,7 +348,8 @@ layui.use(['tree'],function(){{
 }})
 </script>
 ";
-                output.Content.SetHtmlContent(script);
+                    output.Content.SetHtmlContent(script);
+                }
             }
             else
             {
@@ -267,5 +409,80 @@ layui.use(['tree'],function(){{
             return null;
         }
 
+    }
+
+    // Issue #470 Slice N1: DTO for the bare (non-wrapped) 'renderTreeContainer'
+    // JSON island — the opt-in (WtmUIOptions.UseSelectIslandRender, default OFF
+    // — the SAME flag #470 Slices J/K/L/M use) eval-free replacement for the
+    // inline `layui.use(['tree'], function(){ layui.tree.render(...) })`
+    // &lt;script&gt; TreeContainerTagHelper otherwise emits.
+    // ff._renderTreeContainerAction (framework_layui.js) is the sole consumer;
+    // ff._normalizeIslandPayload wraps this into the {actions:[...]} shape
+    // ff.DispatchAction expects. Not part of the public API surface.
+    //
+    // TRUST BOUNDARY: ClickFunc is ALWAYS a compile-time, developer-authored
+    // Razor literal (the ClickFunc TagHelper attribute value) — NEVER
+    // field/request/model data, the same trust class as bindSubmit's
+    // beforeSubmit (#558) / #470 Slice J's renderSelect ChangeFunc. The emitter
+    // (TreeContainerTagHelper.ProcessAsync) only ever sets this when the
+    // resolved name is already a plain identifier; a non-identifier name keeps
+    // the legacy inline &lt;script&gt; instead and this field stays null.
+    //
+    // clickMode/searchButtonId/gridId/gridExtendWhere are NEVER developer/
+    // request data — they are derived purely from server-side regex analysis
+    // of the already-rendered nested markup (search-button id, grid option var
+    // name), the same analysis the legacy inline render performs inline.
+    internal sealed class RenderTreeContainerIslandAction
+    {
+        [JsonPropertyName("type")]
+        public string Type { get; set; } = "renderTreeContainer";
+
+        [JsonPropertyName("id")]
+        public string Id { get; set; }
+
+        // "div{Id}" — the element the layui tree itself renders into.
+        [JsonPropertyName("elemId")]
+        public string ElemId { get; set; }
+
+        // "div_{Id}" — wraps the nested child content (grid/searchpanel/etc.)
+        // and doubles as the ff.LoadPage1 navigation target (both the initial
+        // AutoLoadUrl load and the per-node 'loadPage' click mode).
+        [JsonPropertyName("gridDivId")]
+        public string GridDivId { get; set; }
+
+        [JsonPropertyName("showLine")]
+        public bool ShowLine { get; set; }
+
+        [JsonPropertyName("idFieldName")]
+        public string IdFieldName { get; set; }
+
+        [JsonPropertyName("levelFieldName")]
+        public string LevelFieldName { get; set; }
+
+        [JsonPropertyName("data")]
+        public List<LayuiTreeItem2> Data { get; set; }
+
+        [JsonPropertyName("selectedItem")]
+        public LayuiTreeItem2 SelectedItem { get; set; }
+
+        [JsonPropertyName("autoLoadUrl")]
+        public string AutoLoadUrl { get; set; }
+
+        // One of: "custom" | "searchButton" | "grid" | "loadPage" | "default".
+        // See ff._renderTreeContainerAction for what each mode does.
+        [JsonPropertyName("clickMode")]
+        public string ClickMode { get; set; }
+
+        [JsonPropertyName("clickFunc")]
+        public string ClickFunc { get; set; }
+
+        [JsonPropertyName("searchButtonId")]
+        public string SearchButtonId { get; set; }
+
+        [JsonPropertyName("gridId")]
+        public string GridId { get; set; }
+
+        [JsonPropertyName("gridExtendWhere")]
+        public bool GridExtendWhere { get; set; }
     }
 }

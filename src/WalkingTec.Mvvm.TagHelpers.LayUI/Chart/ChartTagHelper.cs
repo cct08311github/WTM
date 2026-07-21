@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Razor.TagHelpers;
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using WalkingTec.Mvvm.Core;
 using System.Linq;
 
@@ -182,7 +184,39 @@ formatter: function (params) {{
             //{
             //    scatterlegend = "true";
             //}
-            output.PostElement.AppendHtml($@"
+
+            // Issue #470 Slice N1: opt-in (WtmUIOptions.UseSelectIslandRender,
+            // default OFF — the SAME flag Slices J/K/L/M/N1's renderTreeContainer
+            // use) eval-free 'renderChart' island render. ChartTagHelper has no
+            // developer-facing callback attribute at all (unlike ComboBox/Tree/
+            // Transfer's ChangeFunc or TreeContainer's ClickFunc) — so there is
+            // no identifier-vs-non-identifier 3-way decision to make here; the
+            // ONLY gate is UseSelectIslandRender itself (same as UploadTagHelper,
+            // #470 Slice L).
+            if (UIConfig.UseSelectIslandRender)
+            {
+                var renderChartAction = new RenderChartIslandAction
+                {
+                    Id = Id,
+                    Theme = Theme?.ToString(),
+                    ChartType = typeSeries,
+                    Legend = ShowLegend == true,
+                    Url = TriggerUrl,
+                    Title = string.IsNullOrEmpty(Title) ? null : Title,
+                    ShowTooltip = ShowTooltip == true,
+                    ChartTypeName = Type.ToString().ToLower(),
+                    IsHorizontal = IsHorizontal,
+                    NoCartesianAxes = noCartesianAxes,
+                    NameX = NameX,
+                    NameY = NameY,
+                    NameAddition = NameAddition,
+                    NameCategory = NameCategory
+                };
+                output.PostElement.AppendHtml($@"<script type=""application/json"" class=""wtm-dialog-init"">{LayuiIslandJson.Serialize(renderChartAction, _islandJsonOptions)}</script>");
+            }
+            else
+            {
+                output.PostElement.AppendHtml($@"
 <script>
 var {Id}Chart;
 var themeTemp ={(Theme == null ? "'default'" : $"'{Theme.ToString()}'")};
@@ -203,7 +237,79 @@ ff.RefreshChart('{Id}');
 
 </script>
 ");
+            }
             base.Process(context, output);
         }
+
+        // Issue #470 Slice N1 (mirrors ComboBoxTagHelper's/TransferTagHelper's
+        // _islandJsonOptions): island DTOs omit null members so the optional
+        // Theme/Title fields contribute zero JSON when unset.
+        private static readonly JsonSerializerOptions _islandJsonOptions = new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        };
+    }
+
+    // Issue #470 Slice N1: DTO for the bare (non-wrapped) 'renderChart' JSON
+    // island — the opt-in (WtmUIOptions.UseSelectIslandRender, default OFF —
+    // the SAME flag #470 Slices J/K/L/M/N1's renderTreeContainer use) eval-free
+    // replacement for the inline `{Id}Chart = echarts.init(...);
+    // {Id}Chart.setOption(...)` &lt;script&gt; ChartTagHelper otherwise emits.
+    // ff._renderChartAction (framework_layui.js) is the sole consumer;
+    // ff._normalizeIslandPayload wraps this into the {actions:[...]} shape
+    // ff.DispatchAction expects. Not part of the public API surface.
+    internal sealed class RenderChartIslandAction
+    {
+        [JsonPropertyName("type")]
+        public string Type { get; set; } = "renderChart";
+
+        [JsonPropertyName("id")]
+        public string Id { get; set; }
+
+        // Lowercase ChartThemeEnum name (e.g. "dark"), or null for the legacy
+        // inline render's 'default' fallback.
+        [JsonPropertyName("theme")]
+        public string Theme { get; set; }
+
+        // Raw `"type":"..."` JSON fragment — mirrors window[id+'ChartType']
+        // exactly (ff.RefreshChart regex-substitutes this into fetched series
+        // data; NOT itself valid standalone JSON).
+        [JsonPropertyName("chartType")]
+        public string ChartType { get; set; }
+
+        [JsonPropertyName("legend")]
+        public bool Legend { get; set; }
+
+        [JsonPropertyName("url")]
+        public string Url { get; set; }
+
+        [JsonPropertyName("title")]
+        public string Title { get; set; }
+
+        [JsonPropertyName("showTooltip")]
+        public bool ShowTooltip { get; set; }
+
+        // Lowercase ChartTypeEnum name (e.g. "scatter", "line", "bar") — the
+        // renderer's tooltip/axis variant selector.
+        [JsonPropertyName("chartTypeName")]
+        public string ChartTypeName { get; set; }
+
+        [JsonPropertyName("isHorizontal")]
+        public bool IsHorizontal { get; set; }
+
+        [JsonPropertyName("noCartesianAxes")]
+        public bool NoCartesianAxes { get; set; }
+
+        [JsonPropertyName("nameX")]
+        public string NameX { get; set; }
+
+        [JsonPropertyName("nameY")]
+        public string NameY { get; set; }
+
+        [JsonPropertyName("nameAddition")]
+        public string NameAddition { get; set; }
+
+        [JsonPropertyName("nameCategory")]
+        public string NameCategory { get; set; }
     }
 }

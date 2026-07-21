@@ -110,7 +110,9 @@ describe('#601 (#470-F) — source sweep', () => {
     // Issue #470 Slice K: bumped from 1800 — 'renderTransfer' added a new
     // _islandModulesFor branch (layui.transfer IS a layui.use(...) module,
     // unlike xm-select/tagInput/bindInput), growing the function body.
-    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,2200}?\n\s*\},/)[0];
+    // Issue #470 Slice N1: bound bumped 2200 -> 2600 — 'renderTreeContainer'
+    // added a new _islandModulesFor branch, growing the function body further.
+    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,2600}?\n\s*\},/)[0];
     expect(block).not.toMatch(/a\.type\s*===\s*['"]bindInput['"]/);
   });
 

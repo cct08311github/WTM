@@ -1,9 +1,19 @@
 using Microsoft.AspNetCore.Razor.TagHelpers;
+using WalkingTec.Mvvm.Core.ConfigOptions;
+using WalkingTec.Mvvm.TagHelpers.LayUI.Common;
 
 namespace WalkingTec.Mvvm.TagHelpers.LayUI
 {
     public abstract class BaseElementTag : TagHelper
     {
+        // Issue #470 Slice N1: same shared WtmUIOptionsHolder BaseFieldTag.UIConfig /
+        // BaseButtonTag.UIConfig read — gives TreeContainerTagHelper/ChartTagHelper
+        // (and any future BaseElementTag subclass that doesn't go through
+        // BaseFieldTag/BaseButtonTag) access to WtmUIOptions.UseSelectIslandRender
+        // without a second startup wiring call. Purely additive — no existing
+        // BaseElementTag consumer reads this, so it changes nothing for them.
+        protected WtmUIOptions UIConfig => WtmUIOptionsHolder.Options;
+
         public int? Colspan { get; set; }
         public string Id { get; set; }
 

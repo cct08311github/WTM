@@ -24,15 +24,16 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         /// Defaults to LayUI-compatible values for zero-config backwards compatibility.
         /// Issue #470 Slice M: backing storage moved to the shared
         /// <see cref="WtmUIOptionsHolder"/> so <c>BaseButtonTag</c> can read the SAME
-        /// flag — this property's signature and the single startup call site
+        /// flag — this method's signature and the single startup call site
         /// (<c>FrameworkServiceExtension.AddWtmContext</c>) are unchanged.
+        /// Issue #470 Slice N1 polish: the <c>UIConfig</c> accessor itself now lives
+        /// once on <see cref="BaseElementTag"/> (this class's base type) and is
+        /// inherited here unchanged — the duplicate declaration that used to shadow
+        /// it (CS0108) was removed.
         /// </summary>
 
         /// <summary>Set the global UI options. Called once during app startup.</summary>
         public static void SetUIOptions(WtmUIOptions options) => WtmUIOptionsHolder.Set(options);
-
-        /// <summary>Resolved UI options (always non-null).</summary>
-        protected WtmUIOptions UIConfig => WtmUIOptionsHolder.Options;
 
         // Issue #552 adversarial-review fix (P0, pre-existing XSS): ColorPickerTagHelper's
         // 'color'/'PredefinedColors' and SliderTagHelper's 'Theme' are persisted field DATA

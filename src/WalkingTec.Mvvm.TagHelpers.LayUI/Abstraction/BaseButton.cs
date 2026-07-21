@@ -10,11 +10,12 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     public enum ButtonThemeEnum { Primary, Normal, Warm, Danger, Disabled }
     public abstract class BaseButtonTag : BaseElementTag
     {
-        // Issue #470 Slice M: same shared WtmUIOptionsHolder BaseFieldTag.UIConfig
-        // reads — gives SubmitButtonTagHelper (and any future BaseButtonTag
-        // subclass) access to WtmUIOptions.UseSelectIslandRender without a
-        // second startup wiring call.
-        protected WtmUIOptions UIConfig => WtmUIOptionsHolder.Options;
+        // Issue #470 Slice M: SubmitButtonTagHelper (and any future BaseButtonTag
+        // subclass) gets WtmUIOptions.UseSelectIslandRender via the inherited
+        // UIConfig accessor without a second startup wiring call.
+        // Issue #470 Slice N1 polish: the accessor now lives once on
+        // BaseElementTag (this class's base type); the duplicate declaration
+        // that used to shadow it here (CS0108) was removed.
 
         /// <summary>
         /// 按钮尺寸,默认为Normal
