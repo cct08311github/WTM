@@ -22,18 +22,33 @@ jobs:
   integration-test:
     runs-on: ubuntu-latest
     services:
+      # Issue #767: mcr.microsoft.com/mssql/server has no linux/arm64 build, so on the
+      # self-hosted ARM64 (Apple Silicon) mac-mini runner it ran under QEMU x64 emulation.
+      # That emulation doesn't just make startup slow — on this host it crashes the
+      # engine outright on every launch (jemalloc/QEMU VA-space mapping failure: "Invalid
+      # mapping of address ... in reserved address space below 0x400000000000"), so the
+      # container exits before ever opening port 1433. That's why every prior run
+      # (5383/5390/5397/5407/5432/5435) failed at "Wait for MSSQL ready": the 30-attempt/
+      # 60s loop wasn't racing a slow boot, it was polling a dead container for its
+      # entire budget, every single time. azure-sql-edge ships a native linux/arm64
+      # image (same TDS-compatible SQL Server engine) and was verified to boot cleanly
+      # and accept connections in ~6s on this exact runner host. The integration test
+      # suite (test/WalkingTec.Mvvm.Integration.Test) only does plain EF Core CRUD via
+      # DBTypeEnum.SqlServer — no full-text search, CLR, temporal tables, or other
+      # features azure-sql-edge lacks — so the swap is compatible.
       mssql:
-        image: mcr.microsoft.com/mssql/server:2022-CU16-ubuntu-22.04
+        image: mcr.microsoft.com/azure-sql-edge:latest
         env:
           ACCEPT_EULA: Y
           MSSQL_SA_PASSWORD: YourStr0ng!Pass
         ports:
           - 1433:1433
         options: >-
-          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'YourStr0ng!Pass' -No -Q 'SELECT 1'"
-          --health-interval 10s
+          --health-cmd "bash -c '(echo > /dev/tcp/127.0.0.1/1433) 2>/dev/null'"
+          --health-interval 5s
           --health-timeout 5s
-          --health-retries 10
+          --health-retries 60
+          --health-start-period 5s
     steps:
       - uses: actions/checkout@v5
 
@@ -44,15 +59,25 @@ jobs:
       - name: Wait for MSSQL ready
         run: |
           echo "Waiting for MSSQL to accept connections..."
-          for i in $(seq 1 30); do
+          # Issue #767: azure-sql-edge boots in ~6s on this runner in normal
+          # conditions, but the loop stays generous (up to 10 min) to absorb a
+          # cold image pull plus a busy self-hosted runner without flaking.
+          ATTEMPTS=200
+          SLEEP=3
+          for i in $(seq 1 $ATTEMPTS); do
             if (echo > /dev/tcp/mssql/1433) 2>/dev/null; then
-              echo "MSSQL is ready (attempt $i)"
+              echo "MSSQL is ready (attempt $i/$ATTEMPTS, ~$((i * SLEEP))s elapsed)"
               exit 0
             fi
-            echo "  attempt $i/30..."
-            sleep 2
+            echo "  attempt $i/$ATTEMPTS..."
+            sleep $SLEEP
           done
-          echo "MSSQL did not become ready" >&2
+          echo "MSSQL did not become ready after ~$((ATTEMPTS * SLEEP))s" >&2
+          echo "--- Diagnostics (best-effort: this runner has privileged: false and no docker socket, so docker commands may be unavailable here) ---" >&2
+          getent hosts mssql || echo "DNS resolution for 'mssql' failed"
+          curl -v --max-time 5 "telnet://mssql:1433" || true
+          docker ps -a || echo "docker CLI/socket not available in this job container"
+          docker logs mssql || true
           exit 1
 
       - name: Run integration tests
