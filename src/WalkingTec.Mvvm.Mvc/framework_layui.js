@@ -274,8 +274,18 @@ window.ff = {
     // layui.use(...) module (the legacy inline <script> this island replaces
     // always wrapped its call in `layui.use(['table'], function(){ ... })`),
     // same rationale as 'renderTreeContainer'/'renderTransfer'/'upload' above.
+    // Issue #470 Slice N2: 'searchPanelInit' DOES need an entry —
+    // layui.element IS a layui.use(...) module (the legacy inline <script>
+    // this island replaces always wrapped its collapse wiring in
+    // `layui.use(['table','element'], function(){ ... })`), same rationale
+    // as 'renderGrid' above. Only 'element' is listed here (not 'table') —
+    // searchPanelInit's own body never touches layui.table; the search
+    // button's click/myclick grid refresh is a SEPARATE, always-registered
+    // document-level delegated listener (ff._searchPanelClick), which does
+    // its own layui.table readiness guard at click time instead of a
+    // dispatch-time deferral (see that function's comment).
     _islandModulesFor: function (payload) {
-        var needed = { form: false, laydate: false, slider: false, rate: false, colorpicker: false, ueditorconfig: false, layedit: false, transfer: false, upload: false, tree: false, table: false };
+        var needed = { form: false, laydate: false, slider: false, rate: false, colorpicker: false, ueditorconfig: false, layedit: false, transfer: false, upload: false, tree: false, table: false, element: false };
         if (payload && payload.actions) {
             for (var i = 0; i < payload.actions.length; i++) {
                 var a = payload.actions[i];
@@ -307,6 +317,8 @@ window.ff = {
                     needed.tree = true;
                 } else if (a.type === 'renderGrid') {
                     needed.table = true;
+                } else if (a.type === 'searchPanelInit') {
+                    needed.element = true;
                 }
             }
         }
@@ -322,6 +334,7 @@ window.ff = {
         if (needed.upload) { mods.push('upload'); }
         if (needed.tree) { mods.push('tree'); }
         if (needed.table) { mods.push('table'); }
+        if (needed.element) { mods.push('element'); }
         return mods;
     },
 
@@ -2308,6 +2321,160 @@ window.ff = {
         }
     },
 
+    // Issue #470 Slice N2: shared render body for the 'searchPanelInit'
+    // DispatchAction case (below) — the opt-in (UseSelectIslandRender,
+    // default OFF — the SAME flag Slices J-O1 use) eval-free island for the
+    // collapse-handlers / reset-button binding / IsExpanded-hidden-input
+    // pieces of SearchPanelTagHelper's legacy inline <script>. Design
+    // authority: Gitea issue #470 comment 18118 §5 ("SearchPanel N2
+    // co-design"). Reproduces the legacy script's sequence and selectors
+    // EXACTLY — including the second `collapse(titleId)` listener (no 'x'
+    // suffix) that targets a lay-filter no element in the emitted markup
+    // actually carries (dead in practice today; kept for byte-for-byte
+    // behavioural parity — see SearchPanelTagHelper.cs's
+    // SearchPanelInitIslandAction comment).
+    //
+    // Adversarial-review fix (post-merge, #470 Slice N2): the search button's
+    // native 'click' refresh IS handled here — bound DIRECTLY on the search
+    // button below — NOT solely via the document-level delegated listener.
+    // Root cause of the original regression: the stopPropagation binding two
+    // lines below (`$('#'+titleId+' .layui-btn').on('click', ...)`, needed so
+    // clicking Search/Reset never toggles the enclosing layui collapse
+    // panel) is bound DIRECTLY on the same button. A real native click's
+    // stopPropagation() call halts DOM bubbling before it ever reaches
+    // document — so a document-delegated listener can never observe a
+    // genuine user click on this button (jQuery custom events like 'myclick'
+    // are unaffected: they are simulated by jQuery's own .trigger() walk,
+    // which only inspects handlers actually registered for that event type —
+    // the stopPropagation handler above is registered for 'click' only, so it
+    // never runs during a 'myclick' walk and never sets the "stop" flag
+    // jQuery's own trigger loop checks). The fix mirrors the legacy inline
+    // script's OWN pattern exactly: both the stopPropagation guard and the
+    // refresh handler are bound to the SAME element (the button), so
+    // same-node handler execution (unaffected by stopPropagation, which only
+    // blocks propagation to ANCESTORS) guarantees the refresh handler still
+    // runs. 'myclick' deliberately stays document-delegated-only below (see
+    // the $(document).on('click myclick', ...) comment) — binding a direct
+    // 'myclick' handler here too would double-fire ff._searchPanelClick for
+    // ff.RefreshGrid's sb.trigger('myclick', true) path (real native clicks
+    // never produce a 'myclick' event, so there is no equivalent double-fire
+    // risk on the 'click' side: the direct handler below always runs, and
+    // the document-delegated 'click' half is unreachable in practice for
+    // this button because of the SAME stopPropagation call — harmless,
+    // intentionally kept for defense-in-depth / invariant parity, see that
+    // listener's own comment).
+    //
+    // layui.element IS a layui.use(...) module — the legacy inline script
+    // always wrapped its collapse wiring in `layui.use(['table','element'],
+    // function(){ ... })` — so this needs a deferral entry (see
+    // _islandModulesFor's 'searchPanelInit' -> needed.element), same
+    // rationale as 'renderTreeContainer'/'renderGrid' above.
+    _renderSearchPanelInitAction: function (action) {
+        try {
+            if (!action || !action.titleId) { return; }
+            if (typeof layui !== 'undefined' && layui.element && typeof layui.element.init === 'function') {
+                layui.element.init();
+            }
+            var titleId = action.titleId;
+            $('#' + titleId + ' .layui-btn').on('click', function (e) { e.stopPropagation(); });
+            $('#' + titleId + ' a[IsSearchButton][data-wtm-search]').on('click', function () {
+                ff._searchPanelClick(this, null);
+            });
+            $('#' + action.resetBtnId).on('click', function () { ff.resetForm(this.form.id); });
+            var showVal = action.show === true;
+            $('#' + titleId).parents('form').append("<input type='hidden' name='IsExpanded' value='" + showVal + "' />");
+            if (typeof layui !== 'undefined' && layui.element && typeof layui.element.on === 'function') {
+                layui.element.on('collapse(' + titleId + 'x)', function (data) {
+                    $('#' + titleId).parents('form').find("input[name='IsExpanded']").val(data.show + '');
+                    ff.triggerResize();
+                });
+                layui.element.on('collapse(' + titleId + ')', function () { ff.triggerResize(); });
+            }
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] searchPanelInit action failed:', e);
+            }
+        }
+    },
+
+    // Issue #470 Slice N2: reproduces SearchPanelTagHelper's legacy
+    // refreshgridjs/refreshchartjs inline script VERBATIM, driven by the
+    // data-wtm-search-* attributes N2 stamps on the search button (flag ON,
+    // non-OldPost, non-selector-hosted) instead of a per-panel <script>.
+    // Called from TWO places (adversarial-review fix — see
+    // ff._renderSearchPanelInitAction's comment for the full writeup): the
+    // same-node direct 'click' binding registered there (real native user
+    // clicks — keeppage=null) and the document-level delegated 'myclick'
+    // listener below (ff.RefreshGrid's sb.trigger('myclick', true) path —
+    // keeppage=true). btnEl is the search button DOM element (`this` in both
+    // callers).
+    //
+    // Reads window[gridId+'defaultfilter'/'filterback'/'url'] AT EVENT TIME
+    // — these compat globals are written synchronously by BOTH the legacy
+    // inline grid script AND the #470 Slice O1 renderGrid island (see
+    // _renderGridAction's invariant 3 comment), so this works identically
+    // regardless of which one rendered each linked grid.
+    //
+    // Deliberately does NOT defensively fall back window[gridId+'filterback']
+    // or its .page property to {} — the legacy inline script
+    // (`{item}filterback.page`) has the exact same "throws if the grid
+    // hasn't rendered yet" characteristic; masking that here would be a
+    // silent behaviour change, not a bug fix (out of scope for a byte-for-
+    // byte verbatim reproduction).
+    //
+    // keeppage mirrors the legacy PER-BINDING hardwired constant EXACTLY:
+    // the old $('#btn').on('click', ...) handler always used keeppage=null;
+    // .bind('myclick', ...) always used keeppage=true. ff.RefreshGrid's own
+    // sb.trigger('myclick', true) extra argument was NEVER read by the
+    // legacy handler body, so this intentionally keeps ignoring it too —
+    // see the delegated listener below, which derives keeppage from
+    // e.type, not from any trigger argument.
+    _searchPanelClick: function (btnEl, keeppage) {
+        try {
+            if (!btnEl || typeof btnEl.getAttribute !== 'function') { return; }
+            var formId = btnEl.getAttribute('data-wtm-form') || '';
+            var fieldPre = btnEl.getAttribute('data-wtm-fieldpre') || '';
+            var gridsAttr = btnEl.getAttribute('data-wtm-search-grids');
+            if (gridsAttr) {
+                if (typeof layui === 'undefined' || !layui.table || typeof layui.table.reload !== 'function') {
+                    if (typeof console !== 'undefined' && console.warn) {
+                        console.warn('[WTM] searchPanel click skipped grid reload: layui.table is not loaded (#470).');
+                    }
+                } else {
+                    var gridIds = gridsAttr.split(',');
+                    for (var gi = 0; gi < gridIds.length; gi++) {
+                        var gid = gridIds[gi];
+                        if (!gid) { continue; }
+                        var tempwhere = {};
+                        $.extend(tempwhere, window[gid + 'defaultfilter'].where);
+                        var page = window[gid + 'filterback'].page;
+                        if (keeppage == null) { page.curr = 1; }
+                        layui.table.reload(gid, {
+                            page: page,
+                            url: window[gid + 'url'],
+                            where: $.extend(tempwhere, ff.GetSearchFormData(formId, fieldPre))
+                        });
+                    }
+                }
+            }
+            var chartsAttr = btnEl.getAttribute('data-wtm-search-charts');
+            if (chartsAttr) {
+                var chartPrefix = btnEl.getAttribute('data-wtm-chart-prefix');
+                var chartIds = chartsAttr.split(',');
+                for (var ci = 0; ci < chartIds.length; ci++) {
+                    if (!chartIds[ci]) { continue; }
+                    if (typeof ff.RefreshChart === 'function') {
+                        ff.RefreshChart(chartIds[ci], chartPrefix || undefined);
+                    }
+                }
+            }
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] searchPanel click failed:', e);
+            }
+        }
+    },
+
     // Issue #789 Phase 3C: CSP-safe JSON action dispatcher. The server returns
     // a WtmActionResult payload (X-WTM-Action: application/json header set) and
     // this function walks the whitelisted action types. Unknown action types
@@ -2734,6 +2901,19 @@ window.ff = {
                 // 'renderTreeContainer'/'renderTransfer' above.
                 case 'renderGrid':
                     ff._renderGridAction(action);
+                    break;
+                // Issue #470 Slice N2: thin JSON wrapper over the
+                // collapse-handlers/reset-button/IsExpanded-hidden-input
+                // init for <wt:searchpanel> — the opt-in
+                // (UseSelectIslandRender, default OFF) eval-free island
+                // replacing SearchPanelTagHelper's legacy inline <script>.
+                // See ff._renderSearchPanelInitAction for the full
+                // rationale; it performs its own existence/guard checks
+                // (layui.element loaded, action shape), so this case just
+                // delegates straight through, same pattern as
+                // 'renderTreeContainer'/'renderGrid' above.
+                case 'searchPanelInit':
+                    ff._renderSearchPanelInitAction(action);
                     break;
                 // Issue #558 (#470-C): safe named-callback submit binding —
                 // mechanism only (FormTagHelper does not emit this yet). Mirrors
@@ -5333,6 +5513,52 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
         var fileId = target.getAttribute('data-wtm-file-id');
         if (act === 'delete') { ff.upload.doDelete(id, fileId); }
         else if (act === 'preview') { ff.upload.doPreview(id, fileId); }
+    });
+}
+
+// Issue #470 Slice N2: single document-level, JQUERY-DELEGATED (not
+// document.addEventListener — see the invariant below) click+myclick
+// listener for the search button's flag-ON delegated wiring. Registered
+// once, unconditionally; a complete no-op on any click/myclick that never
+// carries data-wtm-search (so this contributes zero behavior change when
+// UseSelectIslandRender is OFF — SearchPanelTagHelper then never emits
+// data-wtm-search at all — mirrors the #470 Slice G/L/M delegated-listener
+// pattern's "registered once, unconditionally" shape exactly, even though
+// the binding mechanism itself must differ, see below).
+//
+// HARD INVARIANT (#470 comment-18118 §5 / N2 task invariant 2): this MUST be
+// a jQuery delegated binding, never document.addEventListener. ff.RefreshGrid
+// (above) refreshes a search-panel-backed grid by firing jQuery CUSTOM
+// events on the search button itself — sb.trigger('click') for OldPost forms,
+// sb.trigger('myclick', true) otherwise. jQuery's 'myclick' is not a native
+// DOM event type; a native addEventListener('click', ...) would only ever
+// observe the native 'click' branch and would silently miss every
+// sb.trigger('myclick', true) call, breaking ff.RefreshGrid for island-wired
+// search buttons. keeppage is derived from e.type — NOT from the trigger's
+// own extra argument, which the legacy handler never read either (see
+// ff._searchPanelClick's comment) — reproducing the exact legacy per-binding
+// constants: click => keeppage=null, myclick => keeppage=true.
+//
+// Adversarial-review correction (post-merge): a real native user click on
+// the search button is now handled by a SEPARATE, SAME-NODE direct binding
+// added in ff._renderSearchPanelInitAction (see its comment for the full
+// root-cause writeup) — NOT by this document-delegated listener's 'click'
+// half, which a same-element stopPropagation() call renders unreachable for
+// genuine clicks (stopPropagation halts bubbling before it ever reaches
+// document). The 'click' half is kept here regardless — harmless, since it
+// can never double-fire alongside the direct handler (the same
+// stopPropagation call that blocks it from reaching document also means it
+// never coexists with an unblocked bubble) — for invariant-2 parity and as a
+// defensive fallback should some future caller synthesize a 'click' on this
+// selector from outside the normal DOM bubble path. The 'myclick' half
+// remains this listener's sole, load-bearing responsibility: it is the ONLY
+// binding for that event (ff._renderSearchPanelInitAction intentionally does
+// not also bind 'myclick' directly — see its comment for why that would
+// double-fire ff._searchPanelClick).
+if (typeof $ === 'function' && $.fn && typeof $.fn.on === 'function') {
+    $(document).on('click myclick', 'a[IsSearchButton][data-wtm-search]', function (e) {
+        var keeppage = (e.type === 'myclick') ? true : null;
+        ff._searchPanelClick(this, keeppage);
     });
 }
 

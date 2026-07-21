@@ -120,7 +120,11 @@ describe('#632 (redesigned) — source sweep', () => {
     // Issue #470 Slice L: bumped the capture cap (2000 -> 2500) to fit the
     // 'upload'/'multiUpload' additions to _islandModulesFor — same rationale
     // as #470 Slice K's own bump of this class of hardcoded regex cap.
-    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,2500}?\n\s*\},/);
+    // Issue #470 Slice N2: bumped again (2500 -> 3500) to fit the
+    // 'searchPanelInit' -> needed.element additions (source is 2634 chars at
+    // time of bump; 3500 leaves headroom for at least one more slice before
+    // the next bump is needed).
+    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,3500}?\n\s*\},/);
     expect(block).not.toBeNull();
     expect(block[0]).not.toMatch(/a\.type\s*===\s*['"]fieldDefaults['"]/);
   });
