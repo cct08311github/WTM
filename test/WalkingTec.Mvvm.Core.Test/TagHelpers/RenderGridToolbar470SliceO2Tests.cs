@@ -550,8 +550,16 @@ public class RenderGridToolbar470SliceO2Tests
         Assert.IsFalse(post.Contains("data-wtm-click"));
     }
 
+    // Historical note: through O1/O2, UseLocalData forced the whole grid
+    // (toolbar included) to legacy — this test asserted that. Slice O3 (comment
+    // 18118 §2 O3 point 1) lifts the UseLocalData containment entirely, so an
+    // ActionsMatrixListVM grid with UseLocalData=true now gets BOTH the O2
+    // island toolbar AND the O3 localData island field. See
+    // RenderGridLocalData470SliceO3Tests.cs for the dedicated O3 coverage; the
+    // assertion below replaces the retired one in place (same rationale as the
+    // other ActionsMatrix_FlagOn_* rewrites in this file/RenderGridIsland470SliceO1Tests.cs).
     [TestMethod]
-    public void ActionsMatrix_UseLocalData_FlagOn_KeepsFullLegacyToolbar()
+    public void ActionsMatrix_UseLocalData_FlagOn_GetsIslandToolbarAndLocalData()
     {
         SetupLocalizer();
         BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
@@ -559,10 +567,12 @@ public class RenderGridToolbar470SliceO2Tests
         helper.UseLocalData = true;
         var (_, attrs, post) = Render(helper);
 
-        Assert.IsFalse(post.Contains("\"type\":\"renderGrid\""));
-        Assert.IsFalse(attrs.Contains("data-wtm-grid-id"));
-        StringAssert.Contains(post, "function wtToolBarFunc_wtTable_O2(obj)");
-        Assert.IsFalse(post.Contains("data-wtm-click"));
+        Assert.IsTrue(post.Contains("\"type\":\"renderGrid\""));
+        StringAssert.Contains(attrs, "data-wtm-grid-id=wtTable_O2");
+        Assert.IsFalse(post.Contains("function wtToolBarFunc_wtTable_O2(obj)"));
+        StringAssert.Contains(post, "\"gridActions\":[");
+        StringAssert.Contains(post, "\"toolbarHtml\":");
+        StringAssert.Contains(post, "\"localData\":[");
     }
 
     [TestMethod]
@@ -618,9 +628,12 @@ public class RenderGridToolbar470SliceO2Tests
         selectorHelper.IsInSelector = true;
         AssertXor(selectorHelper, "fallback-IsInSelector");
 
+        // #470 Slice O3: UseLocalData now gets the island toolbar too (see
+        // RenderGridLocalData470SliceO3Tests.cs) — XOR must still hold either
+        // way, so only the label is updated for accuracy.
         var localDataHelper = CreateHelper(new ActionsMatrixListVM(), NewWtm(), "wtTable_O2Xor3");
         localDataHelper.UseLocalData = true;
-        AssertXor(localDataHelper, "fallback-UseLocalData");
+        AssertXor(localDataHelper, "island-UseLocalData");
 
         var analysisHelper = CreateHelper(new ActionsMatrixListVM(), NewWtm(), "wtTable_O2Xor4");
         analysisHelper.EnableAnalysis = true;

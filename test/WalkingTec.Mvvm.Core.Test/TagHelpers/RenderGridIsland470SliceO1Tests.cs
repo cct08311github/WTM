@@ -373,8 +373,17 @@ public class RenderGridIsland470SliceO1Tests
         StringAssert.Contains(post, "IsInSelector");
     }
 
+    // Historical note: through O1/O2, UseLocalData was in the fallback-trigger
+    // matrix below (this test asserted the SAME legacy-fallback-with-warn shape
+    // as IsInSelector/EnableAnalysis/etc.). Slice O3 (comment 18118 §2 O3 point
+    // 1) LIFTS that containment — a flag-ON UseLocalData grid now islandifies
+    // via the `localData` island field instead. See
+    // RenderGridLocalData470SliceO3Tests.cs for the full O3 coverage; the
+    // assertion below replaces the retired one in place (same rationale as the
+    // O2 ActionsMatrix_FlagOn_* rewrite above — a same-named test now asserting
+    // the opposite of what ships would be confusing kept side-by-side).
     [TestMethod]
-    public void UseLocalData_FlagOn_FallsBackToLegacy_WithWarn()
+    public void UseLocalData_FlagOn_NoLongerFallsBackToLegacy_Islandifies()
     {
         SetupLocalizer();
         BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
@@ -382,11 +391,11 @@ public class RenderGridIsland470SliceO1Tests
         helper.UseLocalData = true;
         var (_, attrs, post) = Render(helper);
 
-        Assert.IsFalse(post.Contains("\"type\":\"renderGrid\""));
-        Assert.IsFalse(attrs.Contains("data-wtm-grid-id"));
-        StringAssert.Contains(post, "ff.LoadLocalData(");
-        StringAssert.Contains(post, "console.warn('[WTM] DataTableTagHelper #wtTable_O1:");
-        StringAssert.Contains(post, "UseLocalData");
+        Assert.IsTrue(post.Contains("\"type\":\"renderGrid\""), "#470 Slice O3: UseLocalData must islandify, not fall back");
+        StringAssert.Contains(attrs, "data-wtm-grid-id=wtTable_O1");
+        Assert.IsFalse(post.Contains("ff.LoadLocalData("), "the inline ff.LoadLocalData(...) call text must not be emitted on the island path");
+        Assert.IsFalse(post.Contains("console.warn('[WTM] DataTableTagHelper #wtTable_O1:"), "an island-eligible grid must not emit the fallback console.warn");
+        StringAssert.Contains(post, "\"localData\":[");
     }
 
     [TestMethod]
@@ -476,9 +485,14 @@ public class RenderGridIsland470SliceO1Tests
         selectorHelper.IsInSelector = true;
         AssertXor(selectorHelper, "fallback-IsInSelector");
 
+        // #470 Slice O3: UseLocalData now islandifies (see
+        // RenderGridLocalData470SliceO3Tests.cs) — XOR must still hold either
+        // way (this helper doesn't assert WHICH branch is taken, only that
+        // exactly one is), so the label is updated for accuracy but the shared
+        // AssertXor body is unchanged.
         var localDataHelper = CreateHelper(new PlainColumnsListVM(), NewWtm(), "wtTable_Xor4");
         localDataHelper.UseLocalData = true;
-        AssertXor(localDataHelper, "fallback-UseLocalData");
+        AssertXor(localDataHelper, "island-UseLocalData");
     }
 
     // ── TreeContainer island-aware probe (invariant/brief §2 point 3) ────────

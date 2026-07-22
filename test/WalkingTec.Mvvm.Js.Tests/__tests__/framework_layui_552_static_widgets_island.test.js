@@ -161,7 +161,9 @@ describe('#552 (#470-E) — source sweep', () => {
     // the new 'ueditor'/'layedit' module-deferral branches.
     // Issue #470 Slice N1: bound bumped 2200 -> 2600 — the function grew with
     // the new 'renderTreeContainer' module-deferral branch.
-    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,2600}?\n\s*\},/);
+    // Issue #470 Slice O3: bound bumped 2600 -> 3300 — the function grew
+    // with the new 'foldPanel' module-deferral branch (comment 18118 §2 O3).
+    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,3300}?\n\s*\},/);
     expect(block).not.toBeNull();
     expect(block[0]).toMatch(/a\.type\s*===\s*['"]slider['"]/);
     expect(block[0]).toMatch(/a\.type\s*===\s*['"]rate['"]/);

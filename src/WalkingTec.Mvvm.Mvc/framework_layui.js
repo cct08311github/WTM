@@ -284,6 +284,9 @@ window.ff = {
     // document-level delegated listener (ff._searchPanelClick), which does
     // its own layui.table readiness guard at click time instead of a
     // dispatch-time deferral (see that function's comment).
+    // Issue #470 Slice O3: 'foldPanel' likewise needs an 'element' entry —
+    // its whole body is one layui.element.fold(...) call, same rationale as
+    // 'searchPanelInit' immediately above.
     _islandModulesFor: function (payload) {
         var needed = { form: false, laydate: false, slider: false, rate: false, colorpicker: false, ueditorconfig: false, layedit: false, transfer: false, upload: false, tree: false, table: false, element: false };
         if (payload && payload.actions) {
@@ -318,6 +321,8 @@ window.ff = {
                 } else if (a.type === 'renderGrid') {
                     needed.table = true;
                 } else if (a.type === 'searchPanelInit') {
+                    needed.element = true;
+                } else if (a.type === 'foldPanel') {
                     needed.element = true;
                 }
             }
@@ -2361,29 +2366,45 @@ window.ff = {
             if (action.tableJsVar) { window[action.tableJsVar] = table.render(opt); }
             else { table.render(opt); }
 
-            // ── post-render wiring (A9) — mirrors the non-UseLocalData branch
-            // exactly (UseLocalData always falls back to legacy in O1 — see
-            // DetermineGridIslandDecision — so that branch is never reached
-            // here) ──────────────────────────────────────────────────────────
-            if (action.mobileLayout && opt.page && typeof document !== 'undefined' &&
-                document.body && document.body.clientWidth < 500) {
-                opt.page.layout = ['count', 'prev', 'page', 'next'];
-                opt.page.groups = 1;
-            }
-            if (action.autoSearch) {
-                setTimeout(function () {
-                    var tempwhere = {};
-                    $.extend(tempwhere, window[gridId + 'defaultfilter'].where);
-                    table.reload(gridId, {
-                        url: action.url || '',
-                        where: $.extend(tempwhere, ff.GetSearchFormData(action.searchPanelId, action.fieldPre))
-                    });
-                }, 100);
+            // ── post-render wiring (A9) — mirrors BuildTableOptionsScript's own
+            // top-level `UseLocalData ? ff.LoadLocalData(...) : (mobileLayout
+            // tweak; autoSearch/emptyRender)` split EXACTLY (#470 Slice O3 lifts
+            // the UseLocalData containment O1 held — see
+            // DetermineGridIslandDecision's own comment) ─────────────────────
+            if (action.localData) {
+                // Issue #470 Slice O3: routes through the SAME ff.LoadLocalData
+                // framework function the legacy inline
+                // `ff.LoadLocalData("{Id}",{Id}option,{EscapeLocalDataJson(...)},
+                // {isnormaltable})` call invokes — cache-mutation/cell-markup
+                // behavior is therefore shared code, not a reimplementation (see
+                // LoadLocalData's own #470 Slice O3 comment). isNormalTable
+                // mirrors DataTableTagHelper.Island.cs's
+                // `string.IsNullOrEmpty(ListVM.DetailGridPrix)` computation
+                // exactly (DetailGridPrix present => a detail/sub grid => NOT a
+                // normal table).
+                var isNormalTable = !action.detailGridPrix;
+                ff.LoadLocalData(gridId, opt, action.localData, isNormalTable);
             } else {
-                var optEmpty = Object.assign({}, opt);
-                optEmpty.url = null;
-                optEmpty.data = [];
-                layui.table.render(optEmpty);
+                if (action.mobileLayout && opt.page && typeof document !== 'undefined' &&
+                    document.body && document.body.clientWidth < 500) {
+                    opt.page.layout = ['count', 'prev', 'page', 'next'];
+                    opt.page.groups = 1;
+                }
+                if (action.autoSearch) {
+                    setTimeout(function () {
+                        var tempwhere = {};
+                        $.extend(tempwhere, ff.grid.state(gridId).defaultfilter.where);
+                        table.reload(gridId, {
+                            url: action.url || '',
+                            where: $.extend(tempwhere, ff.GetSearchFormData(action.searchPanelId, action.fieldPre))
+                        });
+                    }, 100);
+                } else {
+                    var optEmpty = Object.assign({}, opt);
+                    optEmpty.url = null;
+                    optEmpty.data = [];
+                    layui.table.render(optEmpty);
+                }
             }
 
             // ── table.on(...) wiring (A10) ──────────────────────────────────
@@ -2416,7 +2437,7 @@ window.ff = {
                 var prefix = action.isInSelector === true ? 'Searcher.' : '';
                 sortfilter[prefix + 'SortInfo.Property'] = obj.field;
                 sortfilter[prefix + 'SortInfo.Direction'] = obj.type.replace(obj.type[0], obj.type[0].toUpperCase());
-                var w = $.extend(window[gridId + 'option'].where, sortfilter, ff.GetSearchFormData(action.searchPanelId, action.fieldPre));
+                var w = $.extend(ff.grid.state(gridId).option.where, sortfilter, ff.GetSearchFormData(action.searchPanelId, action.fieldPre));
                 table.reload(gridId, { initSort: obj, where: w });
             });
             if (action.enableClientExport) {
@@ -2492,7 +2513,7 @@ window.ff = {
                 // `item.addRowJson` directly across repeated clicks would
                 // progressively corrupt its string fields instead.
                 var freshRow = JSON.parse(JSON.stringify(item.addRowJson || {}));
-                ff.AddGridRow(gridId, window[gridId + 'option'], freshRow);
+                ff.AddGridRow(gridId, ff.grid.state(gridId).option, freshRow);
                 return;
             }
             if (item.paramType === 'removeRow') {
@@ -2571,7 +2592,7 @@ window.ff = {
                     return;
                 }
                 if (item.export) {
-                    ff.DownloadExcelOrPdf(tempUrl, reg.searchPanelId, (window[gridId + 'defaultfilter'] || {}).where, ids);
+                    ff.DownloadExcelOrPdf(tempUrl, reg.searchPanelId, (ff.grid.state(gridId).defaultfilter || {}).where, ids);
                     return;
                 }
                 if (item.redirect) {
@@ -2676,6 +2697,35 @@ window.ff = {
         }
     },
 
+    // Issue #470 Slice O3: shared render body for the 'foldPanel' DispatchAction
+    // case (below) — replaces the SearcherExpanded fold <script>
+    // BuildTableIslandScript (DataTableTagHelper.Island.cs) previously
+    // duplicated verbatim from BuildTableOptionsScript's own copy. Reproduces
+    // `layui.element.fold(filter, fold)` exactly, including the setTimeout(…,0)
+    // deferral (the SearchPanel's `.layui-collapse[lay-filter]` markup may not
+    // exist in the DOM yet at dispatch time — same reason the legacy script
+    // deferred it). layui.element IS a layui.use(...) module — see
+    // _islandModulesFor's 'foldPanel' entry, same rationale as
+    // 'searchPanelInit' above — so by the time this runs, layui.element is
+    // already guaranteed loaded and this needs no additional layui.use(...) wrap
+    // of its own.
+    _renderFoldPanelAction: function (action) {
+        try {
+            if (!action || !action.searchPanelId) { return; }
+            if (typeof layui === 'undefined' || !layui.element || typeof layui.element.fold !== 'function') { return; }
+            var searchPanelId = action.searchPanelId;
+            var fold = action.fold === true;
+            setTimeout(function () {
+                var filter = $('#' + searchPanelId + ' .layui-collapse').attr('lay-filter');
+                if (filter) { layui.element.fold(filter, fold); }
+            }, 0);
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] foldPanel action failed:', e);
+            }
+        }
+    },
+
     // Issue #470 Slice N2: reproduces SearchPanelTagHelper's legacy
     // refreshgridjs/refreshchartjs inline script VERBATIM, driven by the
     // data-wtm-search-* attributes N2 stamps on the search button (flag ON,
@@ -2724,13 +2774,14 @@ window.ff = {
                     for (var gi = 0; gi < gridIds.length; gi++) {
                         var gid = gridIds[gi];
                         if (!gid) { continue; }
+                        var gridState = ff.grid.state(gid);
                         var tempwhere = {};
-                        $.extend(tempwhere, window[gid + 'defaultfilter'].where);
-                        var page = window[gid + 'filterback'].page;
+                        $.extend(tempwhere, gridState.defaultfilter.where);
+                        var page = gridState.filterback.page;
                         if (keeppage == null) { page.curr = 1; }
                         layui.table.reload(gid, {
                             page: page,
-                            url: window[gid + 'url'],
+                            url: gridState.url,
                             where: $.extend(tempwhere, ff.GetSearchFormData(formId, fieldPre))
                         });
                     }
@@ -3193,6 +3244,18 @@ window.ff = {
                 // 'renderTreeContainer'/'renderGrid' above.
                 case 'searchPanelInit':
                     ff._renderSearchPanelInitAction(action);
+                    break;
+                // Issue #470 Slice O3: thin JSON wrapper over
+                // layui.element.fold(filter, fold) — the opt-in
+                // (UseSelectIslandRender, default OFF) eval-free island
+                // replacing DataTableTagHelper's SearcherExpanded fold
+                // <script>. See ff._renderFoldPanelAction for the full
+                // rationale; it performs its own existence/guard checks
+                // (layui.element loaded, action shape), so this case just
+                // delegates straight through, same pattern as
+                // 'searchPanelInit'/'renderGrid' above.
+                case 'foldPanel':
+                    ff._renderFoldPanelAction(action);
                     break;
                 // Issue #558 (#470-C): safe named-callback submit binding —
                 // mechanism only (FormTagHelper does not emit this yet). Mirrors
@@ -5342,6 +5405,59 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
         }
     },
 
+    // Issue #470 Slice O3: internal grid-state namespace.
+    //
+    // state(gridId) centralizes READS of the four legacy compat globals
+    // (window[gridId+'option'/'defaultfilter'/'filterback'/'url']) — the
+    // WRITES stay exactly as they are everywhere else in this file (the
+    // legacy inline script AND ff._renderGridAction both assign
+    // `window[gridId+'...'] = ...` directly) because they are public API:
+    // Selector.cshtml's gridCheckedFunc and third-party user code read these
+    // globals directly and must keep working indefinitely (invariant 4,
+    // comment 18118 §2 O3 point 4). Only INTERNAL readers migrate onto this
+    // accessor — a pure passthrough, so migrating a call site is behavior-
+    // identical, never a functional change.
+    //
+    // isIsland(gridId) is the feature-detection AddGridRow/LoadLocalData/
+    // RemoveGridRow (below) use to decide whether newly-built/reindexed cell
+    // HTML carries data-wtm-cellchange markup (island grids) or the legacy
+    // onchange="ff.gridcellchange(...)" attribute (flag-off, byte-for-byte
+    // unchanged) — it reads the SAME data-wtm-grid-id attribute
+    // DataTableTagHelper.Process() has stamped on island-eligible <table>
+    // elements since Slice O1 (also TreeContainerTagHelper's own island-aware
+    // probe uses this exact attribute server-side, brief §2 point 3), so a
+    // flag-OFF grid (no such attribute) is unconditionally treated as legacy.
+    grid: {
+        state: function (gridId) {
+            return {
+                option: window[gridId + 'option'],
+                defaultfilter: window[gridId + 'defaultfilter'],
+                filterback: window[gridId + 'filterback'],
+                url: window[gridId + 'url']
+            };
+        },
+        isIsland: function (gridId) {
+            if (typeof document === 'undefined' || !gridId || typeof document.getElementById !== 'function') { return false; }
+            var el = document.getElementById(gridId);
+            return !!(el && typeof el.getAttribute === 'function' && el.getAttribute('data-wtm-grid-id') === gridId);
+        }
+    },
+
+    // Issue #470 Slice O3: builds the data-wtm-cellchange-* attribute markup
+    // that replaces the legacy onchange="ff.gridcellchange(...)" attribute on
+    // island grids — AddGridRow/LoadLocalData stamp this onto freshly-built
+    // cell HTML, the SAME four values (gridid/row/col/celltype) the legacy
+    // markup embedded, just carried as attributes instead of inline JS text.
+    // Consumed by the single document-level delegated 'change' listener
+    // (below ff._buttonAction), which reads them back and calls
+    // ff.gridcellchange(el, gridid, row, col, celltype) — the byte-for-byte
+    // same call the legacy onchange attribute made.
+    _cellChangeMarkup: function (gridid, row, col, celltype) {
+        return ' data-wtm-cellchange="1" data-wtm-cellchange-grid="' + gridid +
+            '" data-wtm-cellchange-row="' + row + '" data-wtm-cellchange-col="' + col +
+            '" data-wtm-cellchange-celltype="' + celltype + '"';
+    },
+
     AddGridRow: function (gridid, option, data) {
         var loaddata = layui.table.cache[gridid];
         for (val in data) {
@@ -5352,12 +5468,21 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
         var re = /(<input .*?)\s*\/>(.*?)/ig;
         var re2 = /(<select .*?)\s*>(.*?<\/select>)/ig;
         var re3 = /(.*?)<input hidden name='(.*?)\.id' .*?\/>(.*?)/ig;
+        // Issue #470 Slice O3: computed ONCE per call — every cell in the same
+        // AddGridRow invocation belongs to the same grid, so the island/legacy
+        // markup choice cannot vary row-to-row within one call.
+        var isIsland = ff.grid.isIsland(gridid);
         for (val in data) {
             if (typeof (data[val]) == 'string') {
                 data[val] = data[val].replace(/\[\d+\]/ig, "[" + loaddata.length + "]");
                 data[val] = data[val].replace(/_\d+_/ig, "_" + loaddata.length + "_");
-                data[val] = data[val].replace(re, "$1 onchange=\"ff.gridcellchange(this,'" + gridid + "'," + loaddata.length + ",'" + val + "',0)\" />$2");
-                data[val] = data[val].replace(re2, "$1 onchange=\"ff.gridcellchange(this,'" + gridid + "'," + loaddata.length + ",'" + val + "',1)\" >$2");
+                if (isIsland) {
+                    data[val] = data[val].replace(re, "$1" + ff._cellChangeMarkup(gridid, loaddata.length, val, 0) + " />$2");
+                    data[val] = data[val].replace(re2, "$1" + ff._cellChangeMarkup(gridid, loaddata.length, val, 1) + " >$2");
+                } else {
+                    data[val] = data[val].replace(re, "$1 onchange=\"ff.gridcellchange(this,'" + gridid + "'," + loaddata.length + ",'" + val + "',0)\" />$2");
+                    data[val] = data[val].replace(re2, "$1 onchange=\"ff.gridcellchange(this,'" + gridid + "'," + loaddata.length + ",'" + val + "',1)\" >$2");
+                }
                 data[val] = data[val].replace(re3, "$1 <input hidden name=\"$2.id\" value='" + data["ID"] + "'/> $3");
             }
         }
@@ -5377,8 +5502,36 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
                 , show: true
                 , closeStop: '#' + id
                 , done: function (value, date, endDate) {
-                    document.getElementById(id).value = value;
-                    document.getElementById(id).onchange();
+                    var el = document.getElementById(id);
+                    if (!el) { return; }
+                    el.value = value;
+                    // Issue #470 Slice O3 polish (review): gate the dispatch
+                    // mechanism by island feature-detection instead of always
+                    // dispatching a real bubbling 'change' Event. A genuine
+                    // dispatchEvent() is observably DIFFERENT from a direct
+                    // `.onchange()` call — it also invokes any
+                    // addEventListener('change', ...) handlers bound to this
+                    // element or an ancestor (event bubbling), which a direct
+                    // `.onchange()` call never did. Unconditionally switching
+                    // to dispatchEvent() would put flag-OFF (legacy) grids on
+                    // a new code path they never exercised before, breaking
+                    // the campaign's flag-OFF-byte/behavior-IDENTICAL
+                    // invariant. So: a NON-island cell (no data-wtm-cellchange
+                    // markup — stamped only when ff.grid.isIsland(gridid) was
+                    // true at render time, see AddGridRow/LoadLocalData/
+                    // _cellChangeMarkup above) keeps the EXACT legacy direct
+                    // `.onchange()` call; an island cell (carries the markup)
+                    // dispatches the bubbling Event so the document-level
+                    // delegated data-wtm-cellchange 'change' listener (below)
+                    // fires — that listener already gates on the SAME
+                    // attribute, matching the AddGridRow/LoadLocalData
+                    // feature-detection convention.
+                    var isIslandCell = typeof el.hasAttribute === 'function' && el.hasAttribute('data-wtm-cellchange');
+                    if (isIslandCell && typeof Event === 'function') {
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    } else if (typeof el.onchange === 'function') {
+                        el.onchange();
+                    }
                 }
             });
         });
@@ -5392,13 +5545,25 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
         // without any client-side string surgery here.
         var re = /(<input .*?)\s*\/>/ig;
         var re2 = /(<select .*?)\s*>(.*?<\/select>)/ig;
+        // Issue #470 Slice O3: computed ONCE per call, same rationale as
+        // AddGridRow above. Called both from the legacy inline
+        // `ff.LoadLocalData(...)` text (flag-off) AND from
+        // ff._renderGridAction's `action.localData` handling (flag-on island
+        // grids) — this is the SAME function either way, so the markup choice
+        // is made HERE, not duplicated at each call site.
+        var isIsland = ff.grid.isIsland(gridid);
         for (var i = 0; i < datas.length; i++) {
             var data = datas[i];
             for (val in data) {
                 if (typeof (data[val]) == 'string') {
                     if (isnormaltable === false) {
-                        data[val] = data[val].replace(re, "$1 onchange=\"ff.gridcellchange(this,'" + gridid + "'," + i + ",'" + val + "',0)\" />");
-                        data[val] = data[val].replace(re2, "$1 onchange=\"ff.gridcellchange(this,'" + gridid + "'," + i + ",'" + val + "',1)\" >$2");
+                        if (isIsland) {
+                            data[val] = data[val].replace(re, "$1" + ff._cellChangeMarkup(gridid, i, val, 0) + " />");
+                            data[val] = data[val].replace(re2, "$1" + ff._cellChangeMarkup(gridid, i, val, 1) + " >$2");
+                        } else {
+                            data[val] = data[val].replace(re, "$1 onchange=\"ff.gridcellchange(this,'" + gridid + "'," + i + ",'" + val + "',0)\" />");
+                            data[val] = data[val].replace(re2, "$1 onchange=\"ff.gridcellchange(this,'" + gridid + "'," + i + ",'" + val + "',1)\" >$2");
+                        }
                     }
                 }
             }
@@ -5412,16 +5577,31 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
     RemoveGridRow: function (gridid, option, index) {
         var loaddata = layui.table.cache[gridid];
         loaddata.splice(index - 1, 1);
+        // Issue #470 Slice O3: computed ONCE per call, same rationale as
+        // AddGridRow/LoadLocalData above.
+        var isIsland = ff.grid.isIsland(gridid);
         for (var i = 0; i < loaddata.length; i++) {
             for (val in loaddata[i]) {
                 if (typeof (loaddata[i][val]) == 'string') {
                     loaddata[i][val] = loaddata[i][val].replace(/\[\d+\]/ig, "[" + i + "]");
                     loaddata[i][val] = loaddata[i][val].replace(/_\d+_/ig, "_" + i + "_");
-                    if (/<input .*?\s*\/>.*?/.test(loaddata[i][val])) {
-                        loaddata[i][val] = loaddata[i][val].replace(/onchange=\".*?\"/ig, "onchange=\"ff.gridcellchange(this,'" + gridid + "'," + i + ",'" + val + "',0)\"");
-                    }
-                    if (/<select .*?\s*>.*?<\/select>/.test(loaddata[i][val])) {
-                        loaddata[i][val] = loaddata[i][val].replace(/onchange=\".*?\"/ig, "onchange=\"ff.gridcellchange(this,'" + gridid + "'," + i + ",'" + val + "',1)\"");
+                    if (isIsland) {
+                        // Only the row index ever changes on a splice-driven
+                        // reindex (grid/col/celltype are fixed per cell) — a
+                        // single attribute-value replace reproduces the SAME
+                        // observable result the legacy two-branch full-onchange
+                        // rebuild achieved, uniformly for both input and select
+                        // cells (data-wtm-cellchange-row is present on either).
+                        if (/data-wtm-cellchange-row="\d*"/.test(loaddata[i][val])) {
+                            loaddata[i][val] = loaddata[i][val].replace(/data-wtm-cellchange-row="\d*"/ig, 'data-wtm-cellchange-row="' + i + '"');
+                        }
+                    } else {
+                        if (/<input .*?\s*\/>.*?/.test(loaddata[i][val])) {
+                            loaddata[i][val] = loaddata[i][val].replace(/onchange=\".*?\"/ig, "onchange=\"ff.gridcellchange(this,'" + gridid + "'," + i + ",'" + val + "',0)\"");
+                        }
+                        if (/<select .*?\s*>.*?<\/select>/.test(loaddata[i][val])) {
+                            loaddata[i][val] = loaddata[i][val].replace(/onchange=\".*?\"/ig, "onchange=\"ff.gridcellchange(this,'" + gridid + "'," + i + ",'" + val + "',1)\"");
+                        }
                     }
                 }
             }
@@ -5922,7 +6102,7 @@ window.ff._buttonAction = {
         var idxAttr = el.getAttribute('data-wtm-row-index');
         var idx = idxAttr === null ? NaN : Number(idxAttr);
         if (!gridId || isNaN(idx)) { return; }
-        ff.RemoveGridRow(gridId, window[gridId + 'option'], idx);
+        ff.RemoveGridRow(gridId, ff.grid.state(gridId).option, idx);
     },
     // Issue #470 Slice O2: replaces the legacy EnableAnalysis toggle button's
     // inline `onclick="wtmAnalysis.toggle('{gridId}','{vmFullName}')"`. NOT
@@ -5993,6 +6173,87 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
         var handler = ff._buttonAction[el.getAttribute('data-wtm-click')];
         if (typeof handler === 'function') {
             handler(el);
+        }
+    });
+}
+
+// Issue #470 Slice O3: single document-level delegated 'change' listener for
+// the grid-cell family (ff.AddGridRow/ff.LoadLocalData/ff.RemoveGridRow,
+// above) — replaces the per-cell inline onchange="ff.gridcellchange(...)"
+// attribute those functions used to regex-inject, for island grids ONLY
+// (ff.grid.isIsland gates which markup those functions stamp in the first
+// place — see their own comments). Registered once, unconditionally; a
+// complete no-op on any change event whose target never carries
+// data-wtm-cellchange, so this contributes zero behavior change when
+// UseSelectIslandRender is OFF (flag-off grids never carry the attribute at
+// all — same "byte-inert flag-off" pattern every other #470 slice's
+// data-wtm-* delegation uses). The target IS the changed <input>/<select>
+// itself (the attribute is stamped directly on it, not a wrapper), so a
+// direct e.target check is used rather than .closest() — matching how the
+// legacy onchange attribute was likewise bound directly on the element.
+// Calls ff.gridcellchange with the SAME (element, gridid, row, col, celltype)
+// signature the legacy onchange attribute invoked it with — cache-mutation
+// behavior inside gridcellchange itself is completely untouched. Wrapped in
+// try/catch (ff.gridcellchange itself has none) — defense-in-depth matching
+// ff._gridToolDispatch/ff._renderGridAction/ff._renderFoldPanelAction's own
+// top-level try/catch, so an unexpected DOM/cache shape can never propagate
+// out of a 'change' dispatch and abort sibling listeners/callers. A
+// containment guard (confused-deputy hardening, review polish) additionally
+// requires the target actually sit inside the rendered `.layui-table-view`
+// for the grid it claims — see the guard's own inline comment for the
+// DOM-shape rationale (including the lay-id/lay-table-id split across WTM's
+// two vendored layui trees).
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener('change', function (e) {
+        try {
+            var target = e && e.target;
+            if (!target || typeof target.getAttribute !== 'function' || typeof target.hasAttribute !== 'function') { return; }
+            if (!target.hasAttribute('data-wtm-cellchange')) { return; }
+            var gridid = target.getAttribute('data-wtm-cellchange-grid');
+            var col = target.getAttribute('data-wtm-cellchange-col');
+            var row = Number(target.getAttribute('data-wtm-cellchange-row'));
+            var celltype = Number(target.getAttribute('data-wtm-cellchange-celltype'));
+            if (!gridid || !col || isNaN(row) || isNaN(celltype)) { return; }
+            // Issue #470 Slice O3 polish (review): containment guard against a
+            // confused-deputy forgery — without it, ANY element anywhere in
+            // the document carrying forged data-wtm-cellchange-* attributes
+            // could fire a 'change' event and mutate an arbitrary grid's
+            // layui.table.cache, regardless of whether it actually belongs to
+            // that grid. document.getElementById(gridid) is NOT the right
+            // anchor: layui restructures the DOM at render time — the
+            // original `<table id={gridid}>` element is left in place
+            // (hidden) and the ACTUAL rendered rows live inside a SIBLING
+            // `.layui-table-view` div inserted via `l.after(o)` (layui's
+            // table module Init(): `a.id = a.id || a.elem.attr('id')`) — the
+            // rendered cell is never a descendant of
+            // document.getElementById(gridid) itself. Empirically confirmed
+            // against BOTH vendored layui trees WTM ships (see the regression
+            // harness's `#regGridIsland4 + .layui-table-view` selector, run
+            // against both): the bundled 2.6.3 tree stamps the id-back
+            // attribute as `lay-id="{gridid}"`, but the opt-in vendored
+            // 2.13.8 tree (layui-next, `?layui=next`) renamed it to
+            // `lay-table-id="{gridid}"` (`W="table",L="lay-"+W+"-id"` in its
+            // table module) — the class name (`layui-table-view`) is
+            // unchanged across both, only the attribute name differs, so
+            // both are checked. Attribute values are read back and compared
+            // with plain equality (never concatenated into a selector
+            // string) so a forged gridid value can only ever fail to match,
+            // never break out of a query.
+            var views = document.getElementsByClassName('layui-table-view');
+            var contained = false;
+            for (var vi = 0; vi < views.length; vi++) {
+                var viewGridId = views[vi].getAttribute('lay-id') || views[vi].getAttribute('lay-table-id');
+                if (viewGridId === gridid && views[vi].contains(target)) {
+                    contained = true;
+                    break;
+                }
+            }
+            if (!contained) { return; }
+            ff.gridcellchange(target, gridid, row, col, celltype);
+        } catch (ex) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] delegated cellchange dispatch failed:', ex);
+            }
         }
     });
 }

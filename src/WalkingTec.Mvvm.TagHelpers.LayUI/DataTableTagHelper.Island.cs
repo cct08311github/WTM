@@ -28,11 +28,13 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     // the EXACT legacy BuildTableOptionsScript path (+ a console.warn naming the
     // reason) when any of: IsInSelector (Selector.cshtml grids stay legacy in O1 —
     // smaller blast radius, matches the brief's "recommended" containment),
-    // UseLocalData (localData island deferred to O3), EnableAnalysis (inline
-    // onclick toggle button until O2/O3), or a developer-authored
-    // DoneFunc/CheckedFunc/GridAction.OnClickFunc that is not a bare JS identifier
-    // (an arbitrary call/dotted expression can't be safely JSON-expressed — same
-    // 3-way decision Slices J/K/L/N1 already use).
+    // EnableAnalysis (inline onclick toggle button — out of scope through O3),
+    // or a developer-authored DoneFunc/CheckedFunc/GridAction.OnClickFunc that is
+    // not a bare JS identifier (an arbitrary call/dotted expression can't be
+    // safely JSON-expressed — same 3-way decision Slices J/K/L/N1 already use).
+    // UseLocalData was ALSO in this list through O1/O2 ("localData island
+    // deferred to Slice O3") — Slice O3 (below) lifts that containment; see
+    // DetermineGridIslandDecision's own comment.
     //
     // GridActions toolbar/row-button (brief §2 O1 point 4, invariant 7): even when
     // a grid islandifies, the wtToolBarFunc_{Id} inline dispatcher + the two laytpl
@@ -71,6 +73,51 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     // ALREADY dead code today. Since O2 never emits either laytpl block for island
     // grids, this failure mode cannot occur on the island path: dialog-hosted
     // island-toolbar buttons WORK where their legacy equivalent silently didn't.
+    //
+    // Issue #470 Slice O3 (this file, continued — LAST grid slice): completes the
+    // grid islandification campaign. Design authority: comment 18118 §2 O3.
+    //   1. UseLocalData containment LIFTED — DetermineGridIslandDecision no
+    //      longer forces UseLocalData grids to legacy. BuildRenderGridAction
+    //      populates a `localData` field (a data island field — an OBJECT-typed
+    //      RenderGridIslandAction member holding the JSON array, never a bare
+    //      top-level array and never named `actions`/`gridActions` — the O2
+    //      incident's collision guard, see RenderGridIslandAction.Actions'
+    //      comment) carrying the SAME payload the legacy path serializes via
+    //      ListVM.GetDataJson(). EscapeLocalDataJson (DataTableTagHelper.cs)
+    //      stays legacy-path-only: LayuiIslandJson.Serialize's underlying
+    //      JsonSerializer already HTML-encodes '<'/'>'/'&' by default (no
+    //      Encoder override in _jsonOptions), so a `</script>` substring inside
+    //      row data can never break out of the island's own
+    //      `<script type="application/json">` element — the #490 hardening
+    //      applies transparently to the island path without needing its own copy.
+    //   2. Grid-cell delegation — ff.AddGridRow/ff.LoadLocalData/ff.RemoveGridRow
+    //      (framework_layui.js) now stamp `data-wtm-cellchange*` attributes
+    //      instead of a literal `onchange="ff.gridcellchange(...)"` attribute
+    //      when (and ONLY when) `ff.grid.isIsland(gridId)` reports true — that
+    //      helper feature-detects island rendering from the `data-wtm-grid-id`
+    //      attribute this Process() override already stamps on island-eligible
+    //      `<table>` elements (unconditionally, since O1) — so a flag-OFF page's
+    //      cell markup is emitted by the EXACT SAME code path, unchanged. The
+    //      `layui.table.cache[gridid]` mutation + `[n]`/`_n_` index-rewrite
+    //      semantics inside those three functions are NOT touched — only the
+    //      wiring mechanism (attribute name / dispatch route) changes. See each
+    //      function's own comment in framework_layui.js for the byte-for-byte
+    //      parity argument.
+    //   3. SearcherExpanded fold — BuildTableIslandScript's own copy of the
+    //      trailing fold `<script>` (an island-only duplicate O1/O2 left as raw
+    //      script text, unlike the rest of the island path) is replaced by a
+    //      dedicated `foldPanel` island action, dispatched via
+    //      ff._renderFoldPanelAction. The LEGACY BuildTableOptionsScript's own
+    //      copy (DataTableTagHelper.cs) is untouched — flag-OFF byte-identity is
+    //      unaffected either way, since this method is only ever reached on the
+    //      island (flag-ON) path.
+    //   4. ff.grid namespace (framework_layui.js) — `state(gridId)` centralizes
+    //      reads of the four legacy compat globals for INTERNAL callers; the
+    //      globals' WRITES (window[gridId+'option'/'defaultfilter'/'filterback'/
+    //      'url'], written by both the legacy inline script and
+    //      ff._renderGridAction) are UNCHANGED — Selector.cshtml's
+    //      gridCheckedFunc and third-party user code read them directly and must
+    //      keep working indefinitely (invariant 4).
     public partial class DataTableTagHelper
     {
         // Same identifier class ff._resolveGuardedWindowFn (framework_layui.js) and
@@ -102,10 +149,14 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             {
                 return new GridIslandDecision(false, "IsInSelector grids stay legacy in O1 (Selector.cshtml / #655 blast-radius containment)");
             }
-            if (UseLocalData)
-            {
-                return new GridIslandDecision(false, "UseLocalData (localData island deferred to Slice O3)");
-            }
+            // Issue #470 Slice O3: the UseLocalData containment O1/O2 held (brief
+            // §2 O1 point 3(b), invariant "localData island deferred to Slice O3")
+            // is LIFTED here — UseLocalData grids now island-ify via the
+            // `localData` field BuildRenderGridAction populates below, with
+            // ff._renderGridAction consuming it through the SAME ff.LoadLocalData
+            // function the legacy path calls (see that method's own #470 Slice O3
+            // comment for the cache-mutation/cell-markup details). EnableAnalysis
+            // and IsInSelector remain OUT of O3 scope — untouched above/below.
             if (EnableAnalysis)
             {
                 return new GridIslandDecision(false, "EnableAnalysis (inline analysis-toggle button is legacy until Slice O2/O3)");
@@ -196,17 +247,23 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 {(string.IsNullOrEmpty(ListVM.DetailGridPrix) ? string.Empty : $"<input type=\"hidden\" name=\"{Vm.Name}.DetailGridPrix\" value=\"{ListVM.DetailGridPrix}\"/>")}
 ");
 
+            // Issue #470 Slice O3: replaces the island-only inline fold <script>
+            // (O1/O2 duplicated BuildTableOptionsScript's own copy verbatim here,
+            // one of the few remaining raw-<script> emissions on the island path)
+            // with a `foldPanel` island action — ff._renderFoldPanelAction
+            // (framework_layui.js) reproduces the SAME layui.element.fold(filter,
+            // fold) call. `fold` mirrors the legacy `foldBool` computation exactly
+            // (SearcherExpanded==true -> expanded -> fold:false).
             if (SearcherExpanded.HasValue)
             {
-                var foldBool = SearcherExpanded.Value ? "false" : "true";
-                output.PostElement.AppendHtml($@"<script>
-layui.use(['element'], function() {{
-  setTimeout(function() {{
-    var filter = $('#{SearchPanelId} .layui-collapse').attr('lay-filter');
-    if (filter) {{ layui.element.fold(filter, {foldBool}); }}
-  }}, 0);
-}});
-</script>");
+                var foldAction = new FoldPanelIslandAction
+                {
+                    SearchPanelId = SearchPanelId,
+                    Fold = !SearcherExpanded.Value,
+                };
+                output.PostElement.AppendHtml($@"
+<script type=""application/json"" class=""wtm-dialog-init"">{LayuiIslandJson.Serialize(foldAction, _jsonOptions)}</script>
+");
             }
         }
 
@@ -265,6 +322,28 @@ layui.use(['element'], function() {{
                 };
             }
 
+            // Issue #470 Slice O3: island-native replacement for the legacy
+            // `ff.LoadLocalData("{Id}",{Id}option,{EscapeLocalDataJson(...)},...)`
+            // inline call (BuildTableOptionsScript :821-ish) — the SAME
+            // ListVM.GetDataJson() payload, parsed into a JsonElement so it is
+            // carried as structured JSON on the island object (never a raw JS-text
+            // string, never EscapeLocalDataJson — that helper stays legacy-path
+            // only; LayuiIslandJson.Serialize's underlying JsonSerializer already
+            // HTML-encodes '<'/'>'/'&' by default, so a `</script>` substring in
+            // row data can't break out of the island's own <script> element, the
+            // SAME #490 protection the legacy path achieves a different way — see
+            // this file's class doc). Named `localData`: an OBJECT-typed member
+            // holding a nested JSON array — never a bare top-level array, never
+            // `actions`/`gridActions` — so it cannot collide with
+            // ff._normalizeIslandPayload's `Array.isArray(parsed.actions)`
+            // batch-shape probe (the O2 incident this campaign learned from).
+            JsonElement? localData = null;
+            if (UseLocalData)
+            {
+                using var localDataDoc = JsonDocument.Parse(ListVM!.GetDataJson());
+                localData = localDataDoc.RootElement.Clone();
+            }
+
             var action = new RenderGridIslandAction
             {
                 GridId = Id,
@@ -311,7 +390,18 @@ layui.use(['element'], function() {{
                 Method = Method == null ? "post" : Method.Value.ToString().ToLower(),
                 Loading = (Loading ?? true) == false ? (bool?)false : null,
                 Page = pageOptions,
-                Limit = page ? Limit!.Value : 0,
+                // Mirrors BuildTableOptionsScript's own ternary exactly
+                // (`page ? Limit : (UseLocalData ? entityCount : 0)`) — UseLocalData
+                // always implies page==false (Process() forces ListVM.NeedPage=false
+                // before `page` is read), so this and the legacy formula can never
+                // disagree. The array length is read off the JSON already built
+                // above (localData) rather than re-querying
+                // ListVM.GetEntityList().Count() a second time — provably the same
+                // count (GetDataJson() emits exactly one JSON object per entity) and
+                // avoids a redundant DB round-trip. ff.LoadLocalData overwrites this
+                // to 9999 client-side regardless, so the exact value is cosmetic —
+                // reproduced for fixture/schema fidelity only.
+                Limit = page ? Limit!.Value : (UseLocalData ? localData!.Value.GetArrayLength() : 0),
                 Limits = page && Limits != null && Limits.Length > 0 ? Limits : null,
                 Width = Width,
                 HeightMode = heightMode,
@@ -348,6 +438,7 @@ layui.use(['element'], function() {{
                 },
                 Actions = islandActions.Count > 0 ? islandActions : null,
                 ActionMsgs = actionMsgs,
+                LocalData = localData,
             };
             return action;
         }
@@ -978,6 +1069,22 @@ layui.use(['element'], function() {{
 
         [JsonPropertyName("actionMsgs")]
         public GridActionMsgs? ActionMsgs { get; set; }
+
+        // Issue #470 Slice O3: the UseLocalData payload — same shape/content as
+        // legacy's ListVM.GetDataJson() output, parsed into structured JSON.
+        // Deliberately named `localData` (an OBJECT-typed member holding a
+        // nested JSON array), NOT `actions`/`gridActions` — see the
+        // <see cref="Actions"/> comment above for the full O2-collision incident
+        // this naming choice avoids repeating. ff._renderGridAction hands this
+        // straight to ff.LoadLocalData(gridId, opt, action.localData,
+        // isNormalTable) — the SAME framework function the legacy inline
+        // `ff.LoadLocalData(...)` call invokes, so cache-mutation/index-rewrite
+        // behavior is byte-for-byte shared between the two paths, not
+        // reimplemented. Null for every non-UseLocalData grid (the overwhelming
+        // majority) — DefaultIgnoreCondition.WhenWritingNull (_jsonOptions) omits
+        // the property entirely rather than serializing `"localData":null`.
+        [JsonPropertyName("localData")]
+        public JsonElement? LocalData { get; set; }
     }
 
     internal sealed class GridTextOptions
@@ -1278,5 +1385,31 @@ layui.use(['element'], function() {{
 
         [JsonPropertyName("infoTitle")]
         public string? InfoTitle { get; set; }
+    }
+
+    /// <summary>
+    /// Issue #470 Slice O3: standalone island action replacing the SearcherExpanded
+    /// fold <c>&lt;script&gt;</c> BuildTableIslandScript previously duplicated
+    /// verbatim from BuildTableOptionsScript (DataTableTagHelper.cs) — a real,
+    /// separate <c>&lt;script type="application/json" class="wtm-dialog-init"&gt;</c>
+    /// element (not a field nested on <see cref="RenderGridIslandAction"/>), since
+    /// each such element is dispatched independently by
+    /// <c>ff._consumePageReadyIslands</c> and the brief explicitly calls for "a
+    /// foldPanel island action (ff.DispatchAction case)". <c>ff._renderFoldPanelAction</c>
+    /// (framework_layui.js) reproduces <c>layui.element.fold(filter, fold)</c>
+    /// exactly, reading the <c>lay-filter</c> attribute off
+    /// <c>#{searchPanelId} .layui-collapse</c> at dispatch time (unchanged from
+    /// legacy — the filter value isn't known until the SearchPanel markup exists).
+    /// </summary>
+    internal sealed class FoldPanelIslandAction
+    {
+        [JsonPropertyName("type")]
+        public string Type { get; set; } = "foldPanel";
+
+        [JsonPropertyName("searchPanelId")]
+        public string? SearchPanelId { get; set; }
+
+        [JsonPropertyName("fold")]
+        public bool Fold { get; set; }
     }
 }

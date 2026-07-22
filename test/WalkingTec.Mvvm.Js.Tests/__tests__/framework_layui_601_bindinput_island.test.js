@@ -112,7 +112,9 @@ describe('#601 (#470-F) — source sweep', () => {
     // unlike xm-select/tagInput/bindInput), growing the function body.
     // Issue #470 Slice N1: bound bumped 2200 -> 2600 — 'renderTreeContainer'
     // added a new _islandModulesFor branch, growing the function body further.
-    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,2600}?\n\s*\},/)[0];
+    // Issue #470 Slice O3: bound bumped 2600 -> 3300 — the function grew
+    // with the new 'foldPanel' module-deferral branch (comment 18118 §2 O3).
+    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,3300}?\n\s*\},/)[0];
     expect(block).not.toMatch(/a\.type\s*===\s*['"]bindInput['"]/);
   });
 

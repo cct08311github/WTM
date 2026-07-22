@@ -110,7 +110,9 @@ describe('#470 Slice G — source sweep', () => {
   test('_islandModulesFor maps ueditor -> ueditorconfig module and layedit -> layedit module', () => {
     // Issue #470 Slice N1: bound bumped 2200 -> 2600 — the function grew with
     // the new 'renderTreeContainer' module-deferral branch.
-    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,2600}?\n\s*\},/);
+    // Issue #470 Slice O3: bound bumped 2600 -> 3300 — the function grew
+    // with the new 'foldPanel' module-deferral branch (comment 18118 §2 O3).
+    const block = active.match(/_islandModulesFor\s*:\s*function[\s\S]{0,3300}?\n\s*\},/);
     expect(block).not.toBeNull();
     expect(block[0]).toMatch(/a\.type\s*===\s*['"]ueditor['"][\s\S]{0,60}needed\.ueditorconfig\s*=\s*true/);
     expect(block[0]).toMatch(/a\.type\s*===\s*['"]layedit['"][\s\S]{0,60}needed\.layedit\s*=\s*true/);

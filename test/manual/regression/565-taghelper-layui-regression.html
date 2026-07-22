@@ -61,6 +61,13 @@
   DOM-mutation round trip (toolbar Add -> row Remove) driven entirely by
   island descriptors, proving invariant 7's retirement (no legacy
   wtToolBarFunc_/laytpl <script type="text/html"> for an island grid).
+  #470 Slice O3 (LAST grid slice) added section 20 (renderGrid localData +
+  delegated cellchange) — a UseLocalData island (no backend, no inline
+  ff.LoadLocalData(...) call text) whose editable cell round-trips through a
+  REAL user interaction (set .value, dispatch a genuine 'change' event) ->
+  the document-level data-wtm-cellchange listener -> ff.gridcellchange ->
+  layui.table.cache mutation, proving the O3 grid-cell delegation end-to-end
+  on both vendored layui trees.
 
   WIDGET COVERAGE (see the on-page PASS/FAIL banner list + README for the
   one-line-per-widget summary):
@@ -73,6 +80,7 @@
                                                               17. renderGrid templet family (#470 O1)
                                                               18. data-content escaping (#776)
                                                               19. renderGrid toolbar/row-button (#470 O2)
+                                                              20. renderGrid localData + cellchange (#470 O3)
   ============================================================================
 
   #566 DUAL-TREE HEAD LOADER
@@ -471,11 +479,33 @@
   <div class="status" id="status-rendergrid-toolbar">waiting…</div>
 </div>
 
+<!-- ============================== 20. renderGrid localData + delegated cellchange (#470 Slice O3) ============================== -->
+<div class="box" id="sec-rendergrid-localdata">
+  <h2>20. renderGrid localData + delegated cellchange (#470 Slice O3, LAST grid slice) — UseLocalData island (no inline ff.LoadLocalData call text), data-wtm-cellchange dispatch</h2>
+  <!-- Exactly the shape DataTableTagHelper.Island.cs emits for a flag-ON,
+       island-eligible UseLocalData grid with a detail-grid-style editable
+       cell: `localData` carries the row inline (the SAME payload
+       ListVM.GetDataJson() would serialize legacy-side) and
+       `detailGridPrix` is set (=> isnormaltable:false in
+       ff._renderGridAction's ff.LoadLocalData call => the grid-cell family
+       stamps data-wtm-cellchange markup on this island grid instead of a
+       literal onchange attribute). The 'plain' templet's hasFormat:true
+       renders the cell's HTML verbatim (framework-generated markup, same
+       trust level as a SetFormat callback's editable-input HTML). No
+       backend needed — localData ships the row inline, same no-backend
+       convention as sections 5/16/17/19; if the row below renders at all,
+       it can only have come from ff.LoadLocalData (there is no server on
+       this page to have supplied it any other way). -->
+  <table id="regGridIsland4" lay-filter="regGridIsland4" data-wtm-grid-id="regGridIsland4"></table>
+  <script type="application/json" class="wtm-dialog-init">{"type":"renderGrid","gridId":"regGridIsland4","tableJsVar":"wtVar_regGridIsland4","elem":"#regGridIsland4","id":"regGridIsland4","text":{"none":"No Data"},"defaultToolbar":[],"totalRow":false,"method":"post","limit":1,"cols":[[{"field":"cellField","title":"Cell","templet":{"tpl":"plain","field":"cellField","random":"reg20","hasFormat":true}}]],"detailGridPrix":"Detail_Reg20","autoSearch":false,"localData":[{"ID":"reg-o3-row-1","cellField":"<input value='seed' />"}],"done":{"heightAuto":true,"maxDepth":1}}</script>
+  <div class="status" id="status-rendergrid-localdata">waiting…</div>
+</div>
+
 <script>
 (function () {
   'use strict';
 
-  var TOTAL_EXPECTED = 19;
+  var TOTAL_EXPECTED = 20;
   window.__regressionResults = [];
   window.__regressionDone = false;
 
@@ -1413,6 +1443,71 @@
         setStatus('status-rendergrid-toolbar', (pass ? '<span class="ok">OK</span>: ' : '<span class="bad">FAIL</span>: ') + detail);
         pushResult('renderGrid toolbar/row-button island (#470 Slice O2)', pass, detail);
       }, 40, 150);
+    }, 40, 150);
+  }, 60, 150);
+
+  // ---- 20. renderGrid localData + delegated cellchange (#470 Slice O3) ----
+  // Page-ready island — ff._consumePageReadyIslands auto-dispatches it once
+  // layui.table is confirmed loaded, same as sections 16/17/19. Proves,
+  // against the REAL layui table module + the REAL document-level
+  // data-wtm-cellchange 'change' listener: (a) the rendered row can only
+  // have come from the `localData` island field (there is no backend on
+  // this page — ff.LoadLocalData, the SAME framework function the legacy
+  // inline ff.LoadLocalData(...) call invokes, is the only possible
+  // source); (b) the cell's <input> carries data-wtm-cellchange-*
+  // attributes, NOT a literal onchange="ff.gridcellchange(...)" attribute
+  // (ff.grid.isIsland(gridId)-gated island wiring); (c) a REAL user
+  // interaction — set .value, dispatch a genuine 'change' event, never a
+  // direct ff.gridcellchange(...) call — updates layui.table.cache[gridId]
+  // through the delegated listener, proving the full O3 grid-cell
+  // delegation chain end-to-end on both vendored layui trees.
+  pollUntil(function () {
+    return document.querySelector('#regGridIsland4 + .layui-table-view') !== null
+      ? { pass: true } : null;
+  }, function () {
+    var notes = [];
+    var pass = true;
+
+    var cell = document.querySelector('#regGridIsland4 + .layui-table-view input');
+    if (!cell) {
+      pass = false;
+      notes.push('REGRESSION: no <input> cell found — the localData row did not render (ff.LoadLocalData never invoked, or the hasFormat:true templet did not round-trip the raw HTML)');
+      setStatus('status-rendergrid-localdata', '<span class="bad">FAIL</span>: ' + notes.join('; '));
+      pushResult('renderGrid localData + delegated cellchange (#470 Slice O3)', pass, notes.join('; '));
+      return;
+    }
+    notes.push('row rendered from the localData island field (no backend on this page — ff.LoadLocalData was the only possible source)');
+
+    var hasCellChangeAttrs = cell.getAttribute('data-wtm-cellchange') === '1' &&
+      cell.getAttribute('data-wtm-cellchange-grid') === 'regGridIsland4' &&
+      cell.getAttribute('data-wtm-cellchange-col') === 'cellField';
+    var hasLegacyOnchange = cell.hasAttribute('onchange');
+    var markupOk = hasCellChangeAttrs && !hasLegacyOnchange;
+    if (!markupOk) { pass = false; }
+    notes.push(markupOk
+      ? 'cell carries data-wtm-cellchange-* attributes (island mode), no legacy onchange attribute'
+      : 'REGRESSION: expected data-wtm-cellchange-* attributes with no onchange attribute (got data-wtm-cellchange=' + cell.getAttribute('data-wtm-cellchange') + ', onchange=' + hasLegacyOnchange + ')');
+
+    // Real user interaction through the document-level delegated 'change'
+    // listener — never a direct ff.gridcellchange(...) call.
+    cell.value = 'edited-o3';
+    cell.dispatchEvent(new Event('change', { bubbles: true }));
+
+    pollUntil(function () {
+      var rows = (window.layui && window.layui.table && window.layui.table.cache) ? window.layui.table.cache.regGridIsland4 : null;
+      return (rows && rows[0] && typeof rows[0].cellField === 'string' && rows[0].cellField.indexOf('edited-o3') !== -1)
+        ? { pass: true } : null;
+    }, function () {
+      var rows = window.layui.table.cache.regGridIsland4;
+      var cacheOk = !!(rows && rows[0] && rows[0].cellField.indexOf("value='edited-o3'") !== -1);
+      if (!cacheOk) { pass = false; }
+      notes.push(cacheOk
+        ? 'delegated change listener -> ff.gridcellchange updated layui.table.cache[gridId] with the new value'
+        : 'REGRESSION: layui.table.cache[gridId] was not updated after the change event');
+
+      var detail = notes.join('; ');
+      setStatus('status-rendergrid-localdata', (pass ? '<span class="ok">OK</span>: ' : '<span class="bad">FAIL</span>: ') + detail);
+      pushResult('renderGrid localData + delegated cellchange (#470 Slice O3)', pass, detail);
     }, 40, 150);
   }, 60, 150);
 

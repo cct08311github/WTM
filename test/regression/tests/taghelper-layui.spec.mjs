@@ -30,7 +30,11 @@ const HARNESS_PATH = '/test/manual/regression/565-taghelper-layui-regression.htm
 // full click -> ff._gridToolDispatch -> DOM-mutation round trip, invariant 7
 // retirement: no legacy wtToolBarFunc_/laytpl <script type="text/html"> for
 // an island grid with GridActions).
-const TOTAL_EXPECTED = 19;
+// #470 Slice O3 (LAST grid slice): +1 section (20. renderGrid localData +
+// delegated cellchange — a UseLocalData island with no backend, whose
+// editable cell round-trips a real 'change' event through the
+// data-wtm-cellchange delegated listener into layui.table.cache).
+const TOTAL_EXPECTED = 20;
 
 test.describe('#565 TagHelper <-> LayUI regression suite', () => {
   test('every non-knownGap widget section initializes correctly', async ({ page, layuiVariant }) => {
