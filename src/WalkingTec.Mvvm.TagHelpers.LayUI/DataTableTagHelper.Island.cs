@@ -1,12 +1,15 @@
 #nullable enable
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Razor.TagHelpers;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Core.Extensions;
 using WalkingTec.Mvvm.TagHelpers.LayUI.Common;
 
 namespace WalkingTec.Mvvm.TagHelpers.LayUI
@@ -36,6 +39,38 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     // <script type="text/html"> templates are STILL emitted verbatim (character-for-
     // character identical to the legacy chunk) — O1 only islandifies the table
     // RENDER core; toolbar/row-button descriptor islandification is O2 scope.
+    //
+    // Issue #470 Slice O2 (this file, continued): completes the toolbar/row-button
+    // islandification O1 deferred. For island-eligible grids ONLY (containment
+    // unchanged from O1 — DetermineGridIslandDecision is not touched by O2), the
+    // legacy wtToolBarFunc_{Id} inline dispatcher AND both laytpl
+    // <script type="text/html"> templates are now RETIRED, replaced by:
+    //   - a `gridActions[]` descriptor array on the renderGrid island (dispatch
+    //     info for every GridAction leaf, keyed by its `event` = Area+Controller+
+    //     Action+QueryString — the SAME string legacy used as the `lay-event`/
+    //     `case` key) — named `gridActions`, NOT `actions`, to avoid colliding
+    //     with ff._normalizeIslandPayload's `Array.isArray(parsed.actions)`
+    //     batch-shape check (see the Actions property's own comment below for
+    //     the full incident writeup — a regression that shipped once already);
+    //   - a server-rendered `toolbarHtml` string (the toolbar buttons, with
+    //     data-wtm-click/data-wtm-grid/data-wtm-event attributes replacing inline
+    //     onclick — Slice M's ff._buttonAction infra) assigned DIRECTLY to layui's
+    //     `toolbar` option as literal HTML (never a `<script type="text/html">`
+    //     selector — see BuildIslandActions's doc for why this is not just a
+    //     cosmetic difference);
+    //   - the row-action column's `toolbar: '#{ToolBarId}'` selector replaced by a
+    //     `templet: {tpl:'actionCol'}` descriptor — ff.gridTemplets.actionCol
+    //     (framework_layui.js) rebuilds each row's action anchors client-side,
+    //     reproducing the retired laytpl `{{# if(d.{visibleField}) }}` conditional
+    //     exactly (see AddIslandActionDescriptor's row-descriptor comment).
+    // Real improvement (brief §2 O2, worth calling out): today, a
+    // <script type="text/html"> template rendered INTO a dialog (e.g. a grid whose
+    // markup arrives via ff.OpenDialog) is silently stripped by DOMPurify —
+    // _collectInitFromHtml (framework_layui.js) only replays JS `<script>` blocks,
+    // never non-JS-typed ones — so a dialog-hosted grid's toolbar/row buttons are
+    // ALREADY dead code today. Since O2 never emits either laytpl block for island
+    // grids, this failure mode cannot occur on the island path: dialog-hosted
+    // island-toolbar buttons WORK where their legacy equivalent silently didn't.
     public partial class DataTableTagHelper
     {
         // Same identifier class ff._resolveGuardedWindowFn (framework_layui.js) and
@@ -124,66 +159,42 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         /// </summary>
         private void BuildTableIslandScript(
             TagHelperOutput output,
+            string vmQualifiedName,
             int maxDepth,
             List<string> aggregateFields,
             Dictionary<string, object> where,
             int lefttoolbarmergin,
-            StringBuilder rowBtnStrBuilder,
-            StringBuilder toolBarBtnStrBuilder,
-            StringBuilder gridBtnEventStrBuilder,
-            bool hasButtonGroup,
             bool page)
         {
-            var action = BuildRenderGridAction(maxDepth, aggregateFields, where, page, toolBarBtnStrBuilder);
+            var action = BuildRenderGridAction(vmQualifiedName, maxDepth, aggregateFields, where, lefttoolbarmergin, page);
 
-            // Invariant 7 / brief §2 O1 point 4: toolbar dispatcher + laytpl
-            // templates stay legacy, byte-for-byte identical in SHAPE to the
-            // corresponding fragment of BuildTableOptionsScript (only the
-            // surrounding `<script>var {Id}option=null; layui.use(...){...}</script>`
-            // render wrapper is replaced by the JSON island below).
+            // Issue #470 Slice O2: the legacy wtToolBarFunc_{Id} inline dispatcher +
+            // the two laytpl <script type="text/html"> templates (O1's accepted
+            // interim, invariant 7) are RETIRED for island grids — see the class
+            // doc's O2 section for the full rationale (incl. the DOMPurify-dialog
+            // fix). Toolbar/row-button dispatch is now driven entirely by the
+            // `gridActions`/`toolbarHtml` fields on the renderGrid island below
+            // (ff._gridToolDispatch / ff.gridTemplets.actionCol, framework_layui.js).
             output.PostElement.AppendHtml($@"
-<script>
-function wtToolBarFunc_{Id}(obj){{ //注：tool是工具条事件名，test是table原始容器的属性 lay-filter=""对应的值""
-var data = obj.data, layEvent = obj.event, tr = obj.tr; //获得当前行 tr 的DOM对象
-{(gridBtnEventStrBuilder.Length == 0 ? string.Empty : $@"var ids; var objs;switch(layEvent){{{gridBtnEventStrBuilder}default:break;}}")}
-return;
-}}
-</script>
-<script type=""text / html"" id=""{ToolBarId}2"" >
-<div  id=""{Id}buttons""style=""text-align:right;margin-right:{lefttoolbarmergin}px"">{toolBarBtnStrBuilder}</div>
-</script>
-<!-- Grid 行内按钮 -->
-<script type=""text/html"" id=""{ToolBarId}"">{rowBtnStrBuilder}</script>
 <script type=""application/json"" class=""wtm-dialog-init"">{LayuiIslandJson.Serialize(action, _jsonOptions)}</script>
 ");
 
             // Trailing blocks — copied verbatim from BuildTableOptionsScript's own
-            // trailing-block emission (DetailGridPrix / button-group / SearcherExpanded).
+            // trailing-block emission (DetailGridPrix / SearcherExpanded).
             // EnableAnalysis's own trailing block is intentionally OMITTED here: that
             // condition forces the whole grid to the legacy path (see
             // DetermineGridIslandDecision), so this method is never reached with
-            // EnableAnalysis == true.
+            // EnableAnalysis == true. The button-group wiring script is likewise
+            // omitted (O1 kept it per-grid; O2 retires it) — replaced by ONE
+            // always-registered, `[data-wtm-btngroup]`-scoped delegated binding in
+            // framework_layui.js. The island button markup deliberately does NOT
+            // carry the legacy "downpanel" class (see that binding's comment and
+            // AddIslandActionDescriptor's button-group branch, above) so a
+            // coexisting legacy-fallback grid's own unscoped `.downpanel` per-render
+            // script has nothing of the island's to match.
             output.PostElement.AppendHtml($@"
 {(string.IsNullOrEmpty(ListVM.DetailGridPrix) ? string.Empty : $"<input type=\"hidden\" name=\"{Vm.Name}.DetailGridPrix\" value=\"{ListVM.DetailGridPrix}\"/>")}
 ");
-            if (hasButtonGroup == true)
-            {
-                output.PostElement.AppendHtml($@"<script>
-                        setTimeout(function(){{
-                            var form = layui.form, $ = layui.jquery;
-                            $("".downpanel"").on(""click"", "".layui-select-title"", function(e) {{
-                                $("".layui-form-select"").not($(this).parents("".layui-form-select"")).removeClass(""layui-form-selected"");
-                                $(this).parents("".layui-form-select"").toggleClass(""layui-form-selected"");
-                                            e.stopPropagation();
-                                        }});
-                            $(document).click(function(event) {{
-                            var _con2 = $("".downpanel"");
-                            if (!_con2.is (event.target) && (_con2.has(event.target).length === 0)) {{
-                            _con2.removeClass(""layui-form-selected"");
-                            }}
-                            }});
-                            }},500);</script>");
-            }
 
             if (SearcherExpanded.HasValue)
             {
@@ -200,16 +211,24 @@ layui.use(['element'], function() {{
         }
 
         private RenderGridIslandAction BuildRenderGridAction(
+            string vmQualifiedName,
             int maxDepth,
             List<string> aggregateFields,
             Dictionary<string, object> where,
-            bool page,
-            StringBuilder toolBarBtnStrBuilder)
+            int lefttoolbarmergin,
+            bool page)
         {
+            // Issue #470 Slice O2: island-native toolbar/row-button descriptor build
+            // — see BuildIslandActions's own doc for the full rationale. Replaces O1's
+            // dependency on the legacy toolBarBtnStrBuilder (still computed by
+            // Process()'s unconditional BuildToolbarButtons() call for the LEGACY
+            // path, but no longer consulted here).
+            var (islandActions, toolBarHtmlRaw, actionMsgs) = BuildIslandActions(vmQualifiedName);
+
             // Mirrors Process()'s own `toolbardef` gate exactly (:510) — a grid gets a
             // toolbar element when it has row/toolbar buttons OR any of the three
             // built-in defaultToolbar icons (filter/print/client-export).
-            bool hasToolbar = toolBarBtnStrBuilder.Length > 0 || NeedShowFilter == true || NeedShowPrint == true || EnableClientExport;
+            bool hasToolbar = toolBarHtmlRaw.Length > 0 || NeedShowFilter == true || NeedShowPrint == true || EnableClientExport;
 
             var defaultToolbar = new List<string>(3);
             if (NeedShowFilter == true) defaultToolbar.Add("filter");
@@ -260,7 +279,18 @@ layui.use(['element'], function() {{
                 // island path today — kept conditional for schema/forward-compat
                 // correctness once O2/O3 lift the IsInSelector containment.
                 Request = IsInSelector ? null : new GridRequestOptions(),
-                Toolbar = hasToolbar ? $"#{ToolBarId}2" : null,
+                // Issue #470 Slice O2: the `#{ToolBarId}2` laytpl-<script>-selector
+                // form (O1) is retired for island grids — Toolbar is intentionally
+                // left null (schema kept for forward/backward compat; nothing sets
+                // it anymore on the island path). ToolbarHtml (below) carries the
+                // SAME button markup as a literal HTML string, assigned directly to
+                // layui's `toolbar` option client-side — this is NOT cosmetic: a
+                // literal string never touches a `<script type="text/html">` DOM
+                // element, so it cannot be stripped by DOMPurify in dialog contexts
+                // (see the class doc's O2 section).
+                ToolbarHtml = hasToolbar
+                    ? $@"<div id=""{Id}buttons"" style=""text-align:right;margin-right:{lefttoolbarmergin}px"">{toolBarHtmlRaw}</div>"
+                    : null,
                 // Always the (possibly EMPTY) list — never coerced to null. Mirrors
                 // BuildDefaultToolbar, which ALWAYS emits `,defaultToolbar: [...]`
                 // (never omits it), explicitly disabling layui's own built-in
@@ -316,8 +346,267 @@ layui.use(['element'], function() {{
                     DoneFn = string.IsNullOrEmpty(DoneFunc) ? null : DoneFunc,
                     CheckedFn = string.IsNullOrEmpty(CheckedFunc) ? null : CheckedFunc,
                 },
+                Actions = islandActions.Count > 0 ? islandActions : null,
+                ActionMsgs = actionMsgs,
             };
             return action;
+        }
+
+        /// <summary>
+        /// Issue #470 Slice O2: island-native replacement for the legacy
+        /// <c>BuildToolbarButtons</c>/<c>AddSubButton</c> pair (DataTableTagHelper.cs)
+        /// — walks the SAME <c>ListVM.GetGridActions()</c> tree, but instead of
+        /// building laytpl-template text (rowBtnStrBuilder) and a
+        /// <c>switch(layEvent)</c> JS-text case body (gridBtnEventStrBuilder), it
+        /// produces a flat <see cref="GridActionIslandDescriptor"/> list (one entry
+        /// per dispatchable leaf action, keyed by its <c>event</c> string — the SAME
+        /// value legacy used as the <c>lay-event</c> attribute / switch case label)
+        /// plus a SERVER-RENDERED toolbar HTML string.
+        ///
+        /// Toolbar buttons remain server-rendered markup (mirrors AddSubButton's own
+        /// HTML-building almost verbatim — only the onclick attribute is replaced by
+        /// data-wtm-click/data-wtm-grid/data-wtm-event, Slice M's ff._buttonAction
+        /// infra) — deliberately NOT rebuilt from descriptors client-side, unlike the
+        /// row-action column (see AddIslandActionDescriptor's comment on why row
+        /// buttons MUST be client-built instead). The resulting string is assigned
+        /// directly to layui's <c>toolbar</c> option as literal HTML by
+        /// ff._renderGridAction, never routed through a
+        /// <c>&lt;script type="text/html"&gt;</c> element — this is what makes the
+        /// toolbar immune to the DOMPurify dialog-stripping failure mode documented
+        /// in the class doc's O2 section.
+        /// </summary>
+        private (List<GridActionIslandDescriptor> Actions, StringBuilder ToolbarHtmlRaw, GridActionMsgs? ActionMsgs) BuildIslandActions(string vmQualifiedName)
+        {
+            var actionCol = ListVM?.GetGridActions();
+            var actions = new List<GridActionIslandDescriptor>();
+            var toolBarHtmlBuilder = new StringBuilder();
+
+            if (actionCol != null && actionCol.Count > 0)
+            {
+                var vm = Vm.Model as BaseVM;
+                foreach (var item in actionCol)
+                {
+                    AddIslandActionDescriptor(vmQualifiedName, toolBarHtmlBuilder, actions, vm, item);
+                }
+            }
+
+            // Issue #470 Slice O2: EnableAnalysis's toolbar button
+            // (BuildToolbarButtons, DataTableTagHelper.cs) is intentionally NOT
+            // reproduced here — EnableAnalysis forces the whole grid to the legacy
+            // path (DetermineGridIslandDecision, invariant 2 unchanged by O2), so
+            // this method is never reached with EnableAnalysis == true. The
+            // ff._buttonAction.analysisToggle handler (framework_layui.js) exists
+            // regardless, ready for a future slice that lifts the EnableAnalysis
+            // containment — see that handler's own comment.
+
+            var actionMsgs = actions.Count == 0
+                ? null
+                : new GridActionMsgs
+                {
+                    SelectOneRow = THProgram._localizer["Sys.SelectOneRow"],
+                    SelectOneRowMax = THProgram._localizer["Sys.SelectOneRowMax"],
+                    SelectOneRowMin = THProgram._localizer["Sys.SelectOneRowMin"],
+                    InfoTitle = THProgram._localizer["Sys.Info"],
+                };
+
+            return (actions, toolBarHtmlBuilder, actionMsgs);
+        }
+
+        /// <summary>
+        /// Issue #470 Slice O2: per-<see cref="GridAction"/> descriptor/markup build
+        /// — the island-native sibling of AddSubButton (DataTableTagHelper.cs
+        /// ~1038-1289), reproducing its EXACT structure (auth gate, ShowInRow-first
+        /// ordering, HideOnToolBar/ActionsGroup branching, SubActions recursion,
+        /// ParameterType-driven dispatch fields, the `_Framework/GetExportExcel`
+        /// URL-suffix special case, the `IsExport`-OR-that-same-special-case
+        /// `export` flag) so <c>ff._gridToolDispatch</c> (framework_layui.js) is a
+        /// byte-for-byte behavioral mirror of AddSubButton's generated JS, just
+        /// data-driven instead of text-generated.
+        ///
+        /// Row-action-column visibility (invariant 5, brief §2 O2): a ShowInRow
+        /// action gets ONE descriptor added to <paramref name="actions"/> regardless
+        /// of whether it ALSO renders on the toolbar (mirrors AddSubButton's own
+        /// ordering — the ShowInRow block runs unconditionally, before the
+        /// HideOnToolBar/group branch) — <c>ff.gridTemplets.actionCol</c> filters
+        /// <c>actions</c> by <c>showInRow</c> at row-build time, reproducing the
+        /// retired laytpl <c>{{# if(d.{visibleField} == true || ... ) }}</c>
+        /// conditional with the SAME three-way string/bool comparison. Row buttons
+        /// MUST be rebuilt client-side per row (never server-pre-rendered like the
+        /// toolbar) because the visibility check and the RemoveRow row-index both
+        /// depend on per-row data (<c>d</c>) that only exists once layui renders
+        /// each row.
+        /// </summary>
+        private void AddIslandActionDescriptor(
+            string vmQualifiedName,
+            StringBuilder toolBarHtmlBuilder,
+            List<GridActionIslandDescriptor> actions,
+            BaseVM? vm,
+            GridAction item,
+            bool isSub = false)
+        {
+            if (!(string.IsNullOrEmpty(item.Url) || vm?.Wtm?.IsUrlPublic(item.Url) == true || vm?.Wtm?.IsAccessable(item.Url) == true ||
+                  item.ParameterType == GridActionParameterTypesEnum.AddRow ||
+                  item.ParameterType == GridActionParameterTypesEnum.RemoveRow))
+            {
+                return;
+            }
+
+            var eventKey = item.Area + item.ControllerName + item.ActionName + item.QueryString;
+            var isRemoveRow = item.ParameterType == GridActionParameterTypesEnum.RemoveRow;
+
+            GridActionIslandDescriptor? rowDescriptor = null;
+            if (item.ShowInRow)
+            {
+                rowDescriptor = new GridActionIslandDescriptor
+                {
+                    Event = eventKey,
+                    Name = item.Name,
+                    ButtonClass = item.ButtonClass,
+                    ShowInRow = true,
+                    RemoveRow = isRemoveRow,
+                    // BindVisiableColName is meaningless for RemoveRow (legacy never
+                    // wraps the RemoveRow anchor in a laytpl conditional — it is
+                    // always shown; only non-RemoveRow row buttons respect it).
+                    VisibleField = isRemoveRow ? null : item.BindVisiableColName,
+                };
+            }
+
+            if (!item.HideOnToolBar)
+            {
+                if (item.ActionName?.Equals("ActionsGroup") == true && item.SubActions != null && item.SubActions.Count > 0)
+                {
+                    var subBarBtnStrList = new StringBuilder();
+                    foreach (var subItem in item.SubActions)
+                    {
+                        var subBarBtnStr = new StringBuilder();
+                        AddIslandActionDescriptor(vmQualifiedName, subBarBtnStr, actions, vm, subItem, true);
+                        if (subBarBtnStr.Length > 0)
+                        {
+                            subBarBtnStrList.AppendFormat("<dd style=\"padding: 0 0px;margin-bottom:1px;line-height: initial;\">{0}</dd>", subBarBtnStr.ToString());
+                        }
+                    }
+                    if (subBarBtnStrList.Length == 0)
+                    {
+                        if (rowDescriptor != null) { actions.Add(rowDescriptor); }
+                        return;
+                    }
+                    // Issue #470 Slice O2 review polish: the island button-group
+                    // trigger deliberately does NOT carry the legacy "downpanel"
+                    // class. That class has zero CSS footprint (it exists purely as
+                    // a JS behavior marker, both here and in the legacy
+                    // AddSubButton/BuildTableOptionsScript emission — grep the repo,
+                    // there is no ".downpanel" stylesheet rule anywhere), so dropping
+                    // it costs nothing visually. It is dropped because keeping it was
+                    // a ONE-DIRECTIONAL hazard: a coexisting legacy-fallback grid on
+                    // the SAME page (e.g. EnableAnalysis, which always takes the
+                    // legacy branch per DetermineGridIslandDecision) emits its own
+                    // per-render `$(".downpanel").on(...)` script (BuildTableOptionsScript's
+                    // hasButtonGroup branch) with an UNSCOPED class selector — it
+                    // would happily bind onto this island button too if it still
+                    // carried that class, shadowing/racing framework_layui.js's own
+                    // document-level `[data-wtm-btngroup]`-scoped delegated handler
+                    // depending on setTimeout/DOM-mutation timing. data-wtm-btngroup="1"
+                    // (island-only marker) is now the SOLE selector surface for the
+                    // open/close binding on both sides — see that binding's comment
+                    // in framework_layui.js.
+                    toolBarHtmlBuilder.Append($@"<button type=""button"" class=""layui-btn {(string.IsNullOrEmpty(item.ButtonClass) ? "" : $"{item.ButtonClass}")} layui-btn-sm layui-unselect layui-form-select"" data-wtm-btngroup=""1"" style=""z-index:9999;"" id=""btn_{item.ButtonId}"">
+                                 <div class=""layui-select-title"" style=""padding-right:20px;"">
+                                        {WebUtility.HtmlEncode(item.Name)}
+                                 <i class=""layui-edge""></i>
+                                 </div>
+                                 <dl class=""layui-anim layui-anim-upbit"" style=""top: initial;padding:1px 0px 0px 0px;"" >
+                                    {subBarBtnStrList}
+                                 </dl>
+                                 </button>");
+                    if (rowDescriptor != null) { actions.Add(rowDescriptor); }
+                    // Group containers never get their own dispatch descriptor —
+                    // matches AddSubButton's own early `return;` after building the
+                    // dropdown (only leaf SubActions, recursed above, get one).
+                    return;
+                }
+
+                var icon = $@"<i class=""{item.IconCls}""></i>";
+                var substyle = "style=\"" + (isSub ? "width: 100%;" : "") + "\"";
+                toolBarHtmlBuilder.Append($@"<a href=""javascript:void(0)"" data-wtm-click=""toolbarButton"" data-wtm-grid=""{Id}"" data-wtm-event=""{WebUtility.HtmlEncode(eventKey)}"" class=""layui-btn {(string.IsNullOrEmpty(item.ButtonClass) ? "" : $"{item.ButtonClass}")} layui-btn-sm"" {substyle}>{icon}{WebUtility.HtmlEncode(item.Name)}</a>");
+            }
+
+            var url = item.Url;
+            if (item.ControllerName == "_Framework" && item.ActionName == "GetExportExcel")
+            {
+                url = $"{url}&_DONOT_USE_VMNAME={vmQualifiedName}";
+            }
+
+            var descriptor = rowDescriptor ?? new GridActionIslandDescriptor
+            {
+                Event = eventKey,
+                Name = item.Name,
+                ButtonClass = item.ButtonClass,
+                RemoveRow = isRemoveRow,
+            };
+            descriptor.ParamType = item.ParameterType;
+            descriptor.Url = url;
+            descriptor.WhereStr = item.whereStr;
+            descriptor.IconCls = item.IconCls;
+
+            if (item.ParameterType == GridActionParameterTypesEnum.AddRow)
+            {
+                // Issue #470 Slice O2 (brief §2 O2): island JSON escaping replaces
+                // the legacy ScriptBlockRegex strip (LayUiRegexes.cs) — parsing into
+                // a JsonElement and letting LayuiIslandJson.Serialize's default
+                // JavaScriptEncoder re-emit it HTML-encodes any embedded `<`/`>`
+                // (e.g. from a stray `<script>` in a formatted cell value) as
+                // `<`/`>`, which is STRICTLY safer than the old strip (no
+                // silent content loss, and — unlike the strip — it also protects
+                // against the enclosing `<script type="application/json">` island
+                // itself being closed early by a literal `</script>` substring).
+                using var doc = JsonDocument.Parse(ListVM!.GetSingleDataJson(null!, false));
+                descriptor.AddRowJson = doc.RootElement.Clone();
+            }
+            else if (!isRemoveRow)
+            {
+                if (string.IsNullOrEmpty(item.OnClickFunc))
+                {
+                    descriptor.Download = item.IsDownload;
+                    descriptor.ShowDialog = item.ShowDialog;
+                    descriptor.Redirect = item.IsRedirect;
+                    descriptor.ForcePost = item.ForcePost;
+                    descriptor.Max = item.Max;
+                    descriptor.DialogWidth = item.DialogWidth;
+                    descriptor.DialogHeight = item.DialogHeight;
+                    descriptor.DialogTitle = item.DialogTitle;
+                    descriptor.Export = (item.Area == string.Empty && item.ControllerName == "_Framework" && item.ActionName == "GetExportExcel") || item.IsExport;
+                    if (item.ShowDialog && !item.IsRedirect)
+                    {
+                        // Fixed at RENDER time, matching AddSubButton's own
+                        // Guid.NewGuid().ToNoSplitString() call — a NEW guid per
+                        // dispatch (i.e. regenerated on every click) would break
+                        // ff.OpenDialog's window-id bookkeeping (SetCookie
+                        // "windowids" tracks open dialogs by this id across the
+                        // dialog's whole lifetime, not just the opening click).
+                        descriptor.DialogGuid = Guid.NewGuid().ToNoSplitString();
+                    }
+                }
+                else
+                {
+                    // Guaranteed a bare identifier — a non-identifier OnClickFunc
+                    // forces the whole grid to the legacy path before this method is
+                    // ever reached (DetermineGridIslandDecision / FindNonIdentifierOnClickFunc).
+                    descriptor.OnClickFn = item.OnClickFunc;
+                }
+
+                if (!string.IsNullOrEmpty(item.PromptMessage))
+                {
+                    descriptor.Prompt = item.PromptMessage;
+                }
+            }
+
+            // Reached only by the HideOnToolBar==true (row-only) and the
+            // non-group-toolbar-button paths — the ActionsGroup branch above
+            // always returns before this point, adding `rowDescriptor` (if any)
+            // itself. Add exactly once, whether `descriptor` is the reused
+            // `rowDescriptor` (ShowInRow merged with dispatch fields) or a fresh
+            // dispatch-only descriptor (ShowInRow == false).
+            actions.Add(descriptor);
         }
 
         /// <summary>
@@ -489,7 +778,15 @@ layui.use(['element'], function() {{
                         tempCol.Type = LayuiColumnTypeEnum.Space;
                         break;
                     case GridColumnTypeEnum.Action:
-                        tempCol.Toolbar = $"#{ToolBarId}";
+                        // Issue #470 Slice O2: the `#{ToolBarId}` laytpl-<script>-
+                        // selector form (O1) is retired — 'actionCol' is a MARKER
+                        // descriptor only (no extra fields needed here): ff._renderGridAction
+                        // special-cases this tpl name at column-rebuild time, passing it
+                        // the grid's gridId + the SAME action.gridActions list (filtered to
+                        // showInRow entries) that also drives ff._gridToolDispatch — a
+                        // single source of truth instead of duplicating the row-action
+                        // list onto every column descriptor.
+                        tempCol.Templet = new GridTempletDescriptor { Tpl = "actionCol" };
                         break;
                 }
                 if (item.Children != null && item.Children.Any())
@@ -637,6 +934,50 @@ layui.use(['element'], function() {{
 
         [JsonPropertyName("done")]
         public GridDoneOptions? Done { get; set; }
+
+        // Issue #470 Slice O2 additions ─────────────────────────────────────
+
+        /// <summary>
+        /// Server-rendered toolbar button markup (mirrors AddSubButton's own HTML
+        /// build, onclick replaced by data-wtm-click/data-wtm-grid/data-wtm-event).
+        /// <c>ff._renderGridAction</c> assigns this DIRECTLY to layui's
+        /// <c>toolbar</c> option as a literal HTML string (wrapped in one extra
+        /// <c>&lt;div&gt;</c> so jQuery's <c>.html()</c> unwrap semantics land on
+        /// the SAME <c>&lt;div id="{gridId}buttons"&gt;</c> the legacy
+        /// <c>&lt;script type="text/html"&gt;</c> selector form produced) — never a
+        /// selector, never a <c>&lt;script type="text/html"&gt;</c> DOM element, so
+        /// it cannot be stripped by DOMPurify in dialog contexts (class doc's O2
+        /// section). Deliberately NOT rebuilt from <see cref="Actions"/>
+        /// client-side, unlike the row-action column: the toolbar's structure
+        /// (button-group nesting, icon markup, HideOnToolBar filtering) is exactly
+        /// what AddSubButton already computes server-side, so re-deriving it in JS
+        /// would duplicate that logic for no benefit — only the ROW column needs a
+        /// client builder, because row content depends on per-row data that does
+        /// not exist until layui renders each row.
+        /// </summary>
+        [JsonPropertyName("toolbarHtml")]
+        public string? ToolbarHtml { get; set; }
+
+        // Issue #470 Slice O2 CRITICAL FIX (review-caught regression): this field
+        // was originally serialized as "actions" — but ff._normalizeIslandPayload
+        // (framework_layui.js) checks `Array.isArray(parsed.actions)` BEFORE it
+        // checks `parsed.type`, to recognize the pre-existing BATCH island shape
+        // {"actions":[{type:...},...]} emitted by DialogInitTagHelper/
+        // FormTagHelper. Since renderGrid's OWN descriptor array is ALSO named
+        // `actions`, the entire renderGrid payload was misclassified as an
+        // already-batched payload and passed through unwrapped — DispatchAction
+        // then iterated the descriptor list looking for a `.type` field none of
+        // them have, so `case 'renderGrid'` was NEVER reached and the grid never
+        // rendered. Renamed to "gridActions" to eliminate the collision (never
+        // rename back to "actions" without also re-verifying
+        // ff._normalizeIslandPayload's shape detection). Every JS reader of this
+        // field (ff._renderGridAction, ff._buildGridActionRegistry) must read
+        // `action.gridActions`, not `action.actions`.
+        [JsonPropertyName("gridActions")]
+        public List<GridActionIslandDescriptor>? Actions { get; set; }
+
+        [JsonPropertyName("actionMsgs")]
+        public GridActionMsgs? ActionMsgs { get; set; }
     }
 
     internal sealed class GridTextOptions
@@ -773,12 +1114,15 @@ layui.use(['element'], function() {{
     /// framework-internal templet registry replacement for a raw JS function
     /// string. <c>tpl</c> selects the <c>ff.gridTemplets[tpl]</c> builder
     /// (framework_layui.js) — 'plain' | 'bool' | 'progress' | 'tag' | 'image' |
-    /// 'currency' | 'currencyRow'. Action columns (GridColumnTypeEnum.Action) do
-    /// NOT get a templet descriptor at all — they keep the legacy
-    /// <c>toolbar: '#{ToolBarId}'</c> column property (see
-    /// <c>generateColHeaderCoreDescriptors</c>'s Action case), so 'actionCol' is
-    /// documented here for schema completeness but never actually emitted by O1
-    /// (toolbar/row-button descriptor islandification is O2 scope, invariant 7).
+    /// 'currency' | 'currencyRow' | 'actionCol'. Issue #470 Slice O2: Action
+    /// columns (GridColumnTypeEnum.Action) now DO get a templet descriptor —
+    /// <c>{tpl:'actionCol'}</c> (see <c>generateColHeaderCoreDescriptors</c>'s
+    /// Action case) — retiring the legacy <c>toolbar: '#{ToolBarId}'</c> column
+    /// property for island grids. No extra fields are carried on the descriptor
+    /// itself for 'actionCol': <c>ff._renderGridAction</c> special-cases it at
+    /// column-rebuild time, supplying the gridId + the SAME
+    /// <see cref="RenderGridIslandAction.Actions"/> list (filtered to
+    /// <c>showInRow</c> entries) that also drives <c>ff._gridToolDispatch</c>.
     /// </summary>
     internal sealed class GridTempletDescriptor
     {
@@ -808,5 +1152,131 @@ layui.use(['element'], function() {{
 
         [JsonPropertyName("currencyCodeField")]
         public string? CurrencyCodeField { get; set; }
+    }
+
+    /// <summary>
+    /// Issue #470 Slice O2: one flat entry per dispatchable <see cref="GridAction"/>
+    /// leaf, keyed by <c>event</c> (= Area+ControllerName+ActionName+QueryString —
+    /// the SAME string legacy used as the <c>lay-event</c> attribute / switch case
+    /// label). Serves DOUBLE duty, matching the #470 comment-18118 design brief §2
+    /// O2's unified descriptor shape:
+    ///   - tool DISPATCH (<c>ff._gridToolDispatch</c>, framework_layui.js) — every
+    ///     field except <see cref="ShowInRow"/>/<see cref="VisibleField"/>/
+    ///     <see cref="IconCls"/> reproduces one branch of AddSubButton's decision
+    ///     tree (DataTableTagHelper.cs ~1130-1289);
+    ///   - ROW rendering (<c>ff.gridTemplets.actionCol</c>) — entries with
+    ///     <see cref="ShowInRow"/> true are filtered out (in declaration order) and
+    ///     rebuilt into per-row anchor HTML, using <see cref="Name"/>/
+    ///     <see cref="ButtonClass"/>/<see cref="VisibleField"/>/<see cref="RemoveRow"/>.
+    /// A pure ActionsGroup container (brief's <c>group:[…]</c>) never gets an entry
+    /// of its own — only its SubActions do, added by the SAME recursive
+    /// AddIslandActionDescriptor call that walks the group — so this list is
+    /// intentionally flat, not tree-shaped; the group's own toolbar markup (the
+    /// dropdown `&lt;button&gt;`/`&lt;dl&gt;`) is server-rendered directly into
+    /// <see cref="RenderGridIslandAction.ToolbarHtml"/> instead (see that field's
+    /// doc for why the toolbar is not client-rebuilt from descriptors the way the
+    /// row-action column is).
+    ///
+    /// <see cref="Redirect"/> is a TOP-LEVEL field (not nested under a `dialog`
+    /// object, despite the brief's illustrative `dialog:{w,h,title,max,redirect}`
+    /// grouping) because AddSubButton branches on <c>IsRedirect</c> both INSIDE and
+    /// OUTSIDE the <c>ShowDialog</c> branch (with a different <c>newwindow</c> flag
+    /// each time — see <c>ff._gridToolDispatch</c>'s <c>run()</c> closure) — a
+    /// nested shape would obscure that the same flag governs both branches.
+    /// </summary>
+    internal sealed class GridActionIslandDescriptor
+    {
+        [JsonPropertyName("event")]
+        public string? Event { get; set; }
+
+        [JsonPropertyName("paramType")]
+        public GridActionParameterTypesEnum ParamType { get; set; }
+
+        [JsonPropertyName("url")]
+        public string? Url { get; set; }
+
+        [JsonPropertyName("whereStr")]
+        public string[]? WhereStr { get; set; }
+
+        [JsonPropertyName("download")]
+        public bool Download { get; set; }
+
+        [JsonPropertyName("export")]
+        public bool Export { get; set; }
+
+        [JsonPropertyName("showDialog")]
+        public bool ShowDialog { get; set; }
+
+        [JsonPropertyName("dialogWidth")]
+        public int? DialogWidth { get; set; }
+
+        [JsonPropertyName("dialogHeight")]
+        public int? DialogHeight { get; set; }
+
+        [JsonPropertyName("dialogTitle")]
+        public string? DialogTitle { get; set; }
+
+        [JsonPropertyName("dialogGuid")]
+        public string? DialogGuid { get; set; }
+
+        [JsonPropertyName("max")]
+        public bool Max { get; set; }
+
+        [JsonPropertyName("redirect")]
+        public bool Redirect { get; set; }
+
+        [JsonPropertyName("forcePost")]
+        public bool ForcePost { get; set; }
+
+        [JsonPropertyName("prompt")]
+        public string? Prompt { get; set; }
+
+        [JsonPropertyName("onClickFn")]
+        public string? OnClickFn { get; set; }
+
+        [JsonPropertyName("addRowJson")]
+        public JsonElement? AddRowJson { get; set; }
+
+        [JsonPropertyName("removeRow")]
+        public bool RemoveRow { get; set; }
+
+        [JsonPropertyName("visibleField")]
+        public string? VisibleField { get; set; }
+
+        [JsonPropertyName("name")]
+        public string? Name { get; set; }
+
+        [JsonPropertyName("class")]
+        public string? ButtonClass { get; set; }
+
+        [JsonPropertyName("iconCls")]
+        public string? IconCls { get; set; }
+
+        [JsonPropertyName("showInRow")]
+        public bool ShowInRow { get; set; }
+    }
+
+    /// <summary>
+    /// Issue #470 Slice O2: the localized strings <c>ff._gridToolDispatch</c>'s
+    /// selection guards / PromptMessage confirm need — hoisted ONCE onto the grid
+    /// (rather than repeated per <see cref="GridActionIslandDescriptor"/>) since
+    /// they never vary across a single grid's actions. Mirrors AddSubButton's own
+    /// per-ParameterType localizer lookups (<c>Sys.SelectOneRow</c>/
+    /// <c>Sys.SelectOneRowMax</c>/<c>Sys.SelectOneRowMin</c>) plus the PromptMessage
+    /// confirm dialog's title (<c>Sys.Info</c>).
+    /// </summary>
+    internal sealed class GridActionMsgs
+    {
+        [JsonPropertyName("selectOneRow")]
+        public string? SelectOneRow { get; set; }
+
+        [JsonPropertyName("selectOneRowMax")]
+        public string? SelectOneRowMax { get; set; }
+
+        [JsonPropertyName("selectOneRowMin")]
+        public string? SelectOneRowMin { get; set; }
+
+        [JsonPropertyName("infoTitle")]
+        public string? InfoTitle { get; set; }
     }
 }

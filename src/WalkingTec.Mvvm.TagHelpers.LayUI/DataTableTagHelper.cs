@@ -517,14 +517,6 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
             var (layuiCols, maxDepth, aggregateFields) = BuildColumns();
 
-            var (rowBtnStrBuilder, toolBarBtnStrBuilder, gridBtnEventStrBuilder, hasButtonGroup) = BuildToolbarButtons(vmQualifiedName);
-
-            var toolbardef = "";
-            if(toolBarBtnStrBuilder.Length > 0 || NeedShowFilter == true || NeedShowPrint == true || EnableClientExport)
-            {
-                toolbardef = $" ,toolbar: '#{ToolBarId}2'";
-            }
-
             // Issue #470 Slice O1: XOR emission — exactly one of the island or the
             // legacy path runs per grid, never both (invariant 6). Flag-OFF always
             // takes the legacy branch with FlagOnFallbackReason == null (no
@@ -533,10 +525,34 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             // (DataTableByteIdentityTests) pins exactly that call.
             if (islandDecision.UseIsland)
             {
-                BuildTableIslandScript(output, maxDepth, aggregateFields, where, lefttoolbarmergin, rowBtnStrBuilder, toolBarBtnStrBuilder, gridBtnEventStrBuilder, hasButtonGroup, page);
+                BuildTableIslandScript(output, vmQualifiedName, maxDepth, aggregateFields, where, lefttoolbarmergin, page);
             }
             else
             {
+                // Issue #470 Slice O2 review polish: BuildToolbarButtons/AddSubButton
+                // (row/toolbar/event StringBuilders + hasButtonGroup) and the
+                // toolbardef gate derived from it are consumed ONLY by
+                // BuildTableOptionsScript below — the island path rebuilds its own
+                // toolbar/row-button descriptors separately (BuildIslandActions /
+                // AddIslandActionDescriptor, DataTableTagHelper.Island.cs) and never
+                // reads either. Hoisted here (from an unconditional call before the
+                // branch) so island grids skip this redundant legacy string-building
+                // walk entirely. Verified side-effect-free to skip: AddSubButton's
+                // only external reads are vm.Wtm.IsUrlPublic/IsAccessable (pure
+                // permission checks — the island path re-derives the same checks via
+                // its own GetGridActions() walk regardless) and THProgram._localizer
+                // (pure read); its only writes are the three StringBuilders and
+                // hasButtonGroup returned here — unlike BuildColumns() (still called
+                // unconditionally, above) it has no NeedShowTotal-style side effect
+                // the island path depends on.
+                var (rowBtnStrBuilder, toolBarBtnStrBuilder, gridBtnEventStrBuilder, hasButtonGroup) = BuildToolbarButtons(vmQualifiedName);
+
+                var toolbardef = "";
+                if (toolBarBtnStrBuilder.Length > 0 || NeedShowFilter == true || NeedShowPrint == true || EnableClientExport)
+                {
+                    toolbardef = $" ,toolbar: '#{ToolBarId}2'";
+                }
+
                 BuildTableOptionsScript(output, context, vmQualifiedName, maxDepth, layuiCols, aggregateFields, where, righttoolbar, toolbardef, lefttoolbarmergin, rowBtnStrBuilder, toolBarBtnStrBuilder, gridBtnEventStrBuilder, hasButtonGroup, page);
                 if (islandDecision.FlagOnFallbackReason != null)
                 {

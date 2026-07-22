@@ -31,7 +31,7 @@ pre-existing vendored trees under `demo/WalkingTec.Mvvm.Demo/wwwroot/`
 
 ## What each harness section proves
 
-All 17 sections live in one combined harness page,
+All 19 sections live in one combined harness page,
 [`565-taghelper-layui-regression.html`](./565-taghelper-layui-regression.html),
 in clearly separated `<section>`-style `<div class="box">` blocks:
 
@@ -54,10 +54,12 @@ in clearly separated `<section>`-style `<div class="box">` blocks:
 | 15 | richtextbox | `RichTextBoxTagHelper` | **New — #573 layedit-vendoring compat gate.** `layedit` was removed from layui upstream in 2.8 and is absent from `layui-next` (2.13.8); #573 vendors the 2.6.3 `layedit.js` (+ face images + a hand-extracted `layedit.css`) beside `layui-next` and registers it via `layui.extend({layedit: ...})` before this section's script runs (see the `<head>` loader). This section reproduces `RichTextBoxTagHelper`'s exact (non-island) markup — the `BaseFieldTag` wrapper divs + a pre-seeded `<textarea isrich="1">` + the TagHelper's own inline `<script>` calling `layui.use('layedit', ...)` — and asserts: `.layui-layedit` is built immediately after the textarea; the toolbar has `>0` tool items; the edit iframe exists and its document is initialized (`contenteditable="true"`); `layeditindex` is stamped on the textarea; **and** a functional round-trip — `layedit.setContent(index,'hello-573')` followed by `layedit.getContent(index)` — returns the same content, proving the module is not just present as DOM scaffolding but actually works, on both `layui-263` (builtin lazy-load) and `layui-next` (vendored + extended). |
 | 16 | renderGrid island | `DataTableTagHelper` | **New — #470 Slice O1.** A page-ready `{"actions":[{"type":"renderGrid",...}]}` island (`data-wtm-grid-id` on the `<table>`, `autoSearch:false` so no `$.ajax` stub is needed — the dispatcher's own non-AutoSearch branch renders a real, empty, local-only table immediately, same `url:null`/`data:[]` technique `ff.LoadLocalData` uses) gets auto-dispatched by `ff._consumePageReadyIslands`; asserts `.layui-table-view` is really built by `ff._renderGridAction` (not a hand-written `table.render()` call, unlike section 5), the compat globals (`{gridId}option` / `wtVar_{gridId}`, invariant 3) are really on `window` after render, and the `wtm:gridRendered` `CustomEvent` really fires. |
 | 17 | renderGrid templet registry | `DataTableTagHelper` | **New — #470 Slice O1.** Covers `ff.gridTemplets`' plain/tag/progress/image/currency builders in one grid, incl. the `__bgcolor`/`__forecolor` nested-`<script>` trick (`getTemplate()` parity, design brief §3) — the one piece of behavior that can only be verified against a REAL rendered DOM. After the island's initial (empty) render, the driver script mutates the SAME option object and calls `layui.table.render()` again with one deterministic local row (`ff.LoadLocalData`'s own technique — `table.reload()` does **not** reliably switch an already-remote-configured table to local-data mode) carrying an XSS payload; asserts the payload never executes (`ff.EscapeText`), the templet div contains exactly the framework's own `__bgcolor` script (no injected extra), the background-color actually applies to the cell on **both** trees, and the tag/progress/currency cells render as expected. **Finding along the way (Issue #776, out of scope for this gate):** layui 2.6.3's own internal `data-content` cell attribute is built from the raw field value without escaping embedded double-quotes — a pre-existing, layui-internal XSS unrelated to `ff.gridTemplets`/#470, not present on `layui-next`; the section's payload avoids embedded quotes so it tests what it's meant to test without being confounded by that separate issue. |
+| 18 | data-content attribute escaping | (layui `table.js`, no TagHelper) | **New — #776.** A plain, hand-written `table.render()` call with a single templet-bearing column (no WTM island/TagHelper involvement at all — layui's own "table" module builds each cell's `data-content="..."` tooltip attribute directly from the raw, un-templeted field value) carries a `"><img src=x onerror=...>` attribute-breakout payload; asserts the `onerror` marker never fires on either vendored tree, pinning the upstream-parity fix applied to every on-disk location a tree's own `layui.js` resolves the "table" module from. |
+| 19 | renderGrid toolbar/row-button island | `DataTableTagHelper` | **New — #470 Slice O2.** Extends section 16/17's `renderGrid` island with `toolbarHtml` (server-rendered button markup, `data-wtm-click` attrs instead of inline `onclick`) + an `actions[]` array (one `addRow` toolbar-only entry, one `removeRow` row-only entry) + an `actionCol` templet column — completing the toolbar/row-button islandification O1 deferred (invariant 7). Asserts structurally that NO legacy `wtToolBarFunc_{gridId}` global is defined and NO `<script type="text/html">` laytpl block is emitted for this grid (the DOMPurify-dialog fix — a dialog-hosted island toolbar can no longer be silently stripped), **and** functionally drives a full click round trip through the REAL document-level `data-wtm-click` listener: clicking the toolbar "Add" button reaches `ff._gridToolDispatch` and adds a row via `ff.AddGridRow`; the `actionCol` registry builds a real `data-wtm-click="removeGridRow"` anchor for that row; clicking it removes the row via `ff.RemoveGridRow`. Both actions are pure client-side (no `$.ajax` needed), so — like sections 5/16/17 — this section needs no backend. |
 
 Every section reports one `{ name, pass, detail, knownGap? }` entry into
 `window.__regressionResults`; `window.__regressionDone` flips to `true` once
-all 17 have reported.
+all 19 have reported.
 
 ## How to run
 
@@ -139,7 +141,12 @@ module beside `layui-next` rather than leaving it a gap) — see its row above.
 **#470 Slice O1 update:** sections 16 (`renderGrid` island) and 17
 (`renderGrid` templet registry, incl. `__bgcolor`/`__forecolor`) were added,
 also real gated assertions on both trees from day one — see their rows above.
-All 17 sections are green on both `layui-263` and `layui-next`, and the suite
+**#776 update:** section 18 (`data-content` attribute escaping) was added,
+pinning the vendored-layui `table.js` fix independently of sections 16/17's
+`#470` O1 coverage. **#470 Slice O2 update:** section 19 (`renderGrid`
+toolbar/row-button island) was added, a full click round trip proving
+invariant 7's retirement — see its row above.
+All 19 sections are green on both `layui-263` and `layui-next`, and the suite
 currently carries **zero** `knownGap` entries.
 Any future layui version bump should re-run `npx playwright test` from
 `test/regression/` and confirm both projects stay green (or fix

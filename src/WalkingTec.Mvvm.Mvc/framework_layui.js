@@ -2096,6 +2096,61 @@ window.ff = {
                 }
                 return ff.EscapeText(String(num));
             };
+        },
+
+        // Issue #470 Slice O2: registry builder for the row-action column —
+        // retires the laytpl `{{# if(d.{visibleField} == true || ...) }}`
+        // conditional (DataTableTagHelper.cs's AddSubButton ShowInRow branch)
+        // by reproducing the SAME three-way string/bool comparison in JS,
+        // driven by `descriptor.rowActions` (a filtered, declaration-order
+        // slice of the grid's `gridActions[]` list — see ff._renderGridAction's
+        // col-rebuild loop for how `gridId`/`rowActions` are supplied).
+        // RemoveRow entries dispatch via data-wtm-click="removeGridRow"
+        // (ff._buttonAction, below) carrying the row index computed HERE (at
+        // per-row build time, from the real `d.LAY_INDEX` — the laytpl
+        // equivalent of `{{d.LAY_INDEX}}`); every other entry keeps `lay-event`
+        // so layui's OWN row-button click delegation feeds ff._gridToolDispatch
+        // via `table.on('tool', ...)`, exactly like a toolbar-independent
+        // legacy row button did.
+        actionCol: function (descriptor) {
+            var gridId = (descriptor && typeof descriptor.gridId === 'string') ? descriptor.gridId : '';
+            var rowActions = (descriptor && Array.isArray(descriptor.rowActions)) ? descriptor.rowActions : [];
+            return function (d) {
+                var html = '';
+                for (var i = 0; i < rowActions.length; i++) {
+                    var ra = rowActions[i];
+                    if (!ra) { continue; }
+                    var cls = 'layui-btn ' + (ra.class ? ra.class : 'layui-btn-primary') + ' layui-btn-xs';
+                    if (ra.removeRow) {
+                        // AddSubButton's RemoveRow branch (DataTableTagHelper.cs)
+                        // is a SEPARATE code path that never even looks at
+                        // BindVisiableColName — the visibility conditional only
+                        // wraps the non-RemoveRow anchor. Checking `ra.removeRow`
+                        // BEFORE `ra.visibleField` reproduces that same structural
+                        // guarantee: a RemoveRow row button is ALWAYS shown,
+                        // regardless of what (if anything) visibleField carries.
+                        html += '<a class="' + ff.EscapeAttr(cls) + '" data-wtm-click="removeGridRow" data-wtm-grid="' +
+                            ff.EscapeAttr(gridId) + '" data-wtm-row-index="' + d.LAY_INDEX + '">' + ff.EscapeText(ra.name) + '</a>';
+                        continue;
+                    }
+                    if (ra.visibleField) {
+                        var v = d[ra.visibleField];
+                        // Issue #470 Slice O2 review polish: LOOSE (`==`), not strict
+                        // (`===`) — DataTableTagHelper.cs's retired laytpl conditional
+                        // was `d.{field} == true || d.{field} == 'true' || d.{field}
+                        // == 'True'` (AddSubButton's ShowInRow branch, line ~1062),
+                        // itself loose. Same fidelity class as the Slice N1/O1 fixes:
+                        // a numeric 1 is loosely `1 == true` (shows) but not strictly
+                        // `1 === true`/`'true'`/`'True'` (would hide) — a
+                        // BindVisiableColName field serialized as a JSON number would
+                        // silently diverge from legacy under strict equality. Do not
+                        // "fix" this to `===` — see framework_layui_470_sliceO2_grid_toolbar.test.js.
+                        if (!(v == true || v == 'true' || v == 'True')) { continue; }
+                    }
+                    html += '<a class="' + ff.EscapeAttr(cls) + '" lay-event="' + ff.EscapeAttr(ra.event) + '">' + ff.EscapeText(ra.name) + '</a>';
+                }
+                return html;
+            };
         }
     },
 
@@ -2136,6 +2191,22 @@ window.ff = {
             var doneCfg = action.done || {};
 
             // ── cols: rebuild templet descriptors into real functions ──────
+            // Issue #470 Slice O2: 'actionCol' is special-cased — unlike the
+            // other tpl names (which are pure functions of their OWN
+            // descriptor), the row-action column needs the GRID-level
+            // `action.gridActions` list (filtered to showInRow entries, in
+            // declaration order) plus gridId — supplied here at rebuild time
+            // rather than duplicated onto every column descriptor server-side
+            // (single source of truth; ff._gridToolDispatch, below, reads the
+            // SAME action.gridActions list by event). NOTE: this field is
+            // named `gridActions`, NOT `actions` — see the CRITICAL FIX
+            // comment on RenderGridIslandAction.Actions
+            // (DataTableTagHelper.Island.cs) for why: `actions` collides with
+            // ff._normalizeIslandPayload's `Array.isArray(parsed.actions)`
+            // batch-shape probe and silently made the whole grid dead code.
+            var rowActions = Array.isArray(action.gridActions)
+                ? action.gridActions.filter(function (a) { return a && a.showInRow === true; })
+                : [];
             var cols = Array.isArray(action.cols) ? action.cols : [];
             for (var ri = 0; ri < cols.length; ri++) {
                 var row = cols[ri];
@@ -2143,9 +2214,12 @@ window.ff = {
                 for (var ci = 0; ci < row.length; ci++) {
                     var col = row[ci];
                     if (col && col.templet && typeof col.templet === 'object' &&
-                        typeof col.templet.tpl === 'string' &&
-                        typeof ff.gridTemplets[col.templet.tpl] === 'function') {
-                        col.templet = ff.gridTemplets[col.templet.tpl](col.templet);
+                        typeof col.templet.tpl === 'string') {
+                        if (col.templet.tpl === 'actionCol') {
+                            col.templet = ff.gridTemplets.actionCol({ gridId: gridId, rowActions: rowActions });
+                        } else if (typeof ff.gridTemplets[col.templet.tpl] === 'function') {
+                            col.templet = ff.gridTemplets[col.templet.tpl](col.templet);
+                        }
                     }
                 }
             }
@@ -2172,7 +2246,27 @@ window.ff = {
                 limit: (typeof action.limit === 'number') ? action.limit : 0
             };
             if (action.request) { opt.request = action.request; }
-            if (action.toolbar) { opt.toolbar = action.toolbar; }
+            // Issue #470 Slice O2: toolbarHtml (server-rendered button markup,
+            // data-wtm-click attrs instead of onclick) is assigned DIRECTLY as
+            // a literal HTML string — layui's own toolbar-content resolver
+            // (`t(a.toolbar).html()`) treats ANY string as a jQuery constructor
+            // argument: a selector string queries the DOM for a matching
+            // element (legacy: the `<script type="text/html">` block), while an
+            // HTML-looking string (starts with `<`) is parsed into DOM nodes
+            // directly WITHOUT ever touching a `<script type="text/html">`
+            // element — this is what makes the O2 toolbar immune to the
+            // DOMPurify dialog-stripping failure mode (class doc's O2 section
+            // in DataTableTagHelper.Island.cs). Wrapped in one extra <div> so
+            // jQuery's `.html()` unwrap lands on the SAME
+            // `<div id="{gridId}buttons">` the legacy selector form produced
+            // (jQuery($html).html() returns the INNER content of the FIRST
+            // parsed node — without the extra wrapper, the id="...buttons" div
+            // itself would be consumed as that first node and never appear in
+            // the final DOM). action.toolbar (the legacy selector-string form)
+            // is kept as a fallback for forward/backward schema compat, though
+            // O2 never populates it.
+            if (action.toolbarHtml) { opt.toolbar = '<div>' + action.toolbarHtml + '</div>'; }
+            else if (action.toolbar) { opt.toolbar = action.toolbar; }
             if (action.where) { opt.where = action.where; }
             if (action.loading === false) { opt.loading = false; }
             if (action.page && typeof action.page === 'object') {
@@ -2293,9 +2387,25 @@ window.ff = {
             }
 
             // ── table.on(...) wiring (A10) ──────────────────────────────────
-            var toolFn = window['wtToolBarFunc_' + gridId];
-            if (typeof toolFn === 'function') {
-                table.on('tool(' + gridId + ')', toolFn);
+            // Issue #470 Slice O2: island grids drive row-button clicks through
+            // ff._gridToolDispatch (built from action.gridActions) instead of the
+            // retired per-grid wtToolBarFunc_{gridId} global. The
+            // window['wtToolBarFunc_'+gridId] fallback is kept for schema/back-
+            // compat (a page that still defines that global manually, outside
+            // DataTableTagHelper, keeps working) — O2 never emits BOTH on the
+            // same grid (action.gridActions is only populated when there ARE
+            // GridActions, in which case ff._gridToolDispatch is always the one
+            // registered).
+            if (Array.isArray(action.gridActions) && action.gridActions.length) {
+                ff._gridActionRegistry[gridId] = ff._buildGridActionRegistry(action);
+                table.on('tool(' + gridId + ')', function (obj) {
+                    ff._gridToolDispatch(gridId, obj.event, obj.data, obj.tr);
+                });
+            } else {
+                var toolFn = window['wtToolBarFunc_' + gridId];
+                if (typeof toolFn === 'function') {
+                    table.on('tool(' + gridId + ')', toolFn);
+                }
             }
             var checkedFn = ff._resolveGuardedWindowFn(doneCfg.checkedFn);
             if (checkedFn) {
@@ -2317,6 +2427,175 @@ window.ff = {
         } catch (e) {
             if (typeof console !== 'undefined' && console.warn) {
                 console.warn('[WTM] renderGrid action failed:', e);
+            }
+        }
+    },
+
+    // Issue #470 Slice O2: per-gridId registry of { searchPanelId, fieldPre,
+    // msgs, byEvent } built once by ff._buildGridActionRegistry (called from
+    // ff._renderGridAction) and consulted by ff._gridToolDispatch on every
+    // row/toolbar click. A plain object keyed by gridId — grids are never
+    // garbage-collected mid-session in practice (same lifetime assumption
+    // window[gridId+'option'] etc. already make), so no eviction logic.
+    _gridActionRegistry: {},
+
+    // Issue #470 Slice O2: builds one ff._gridActionRegistry[gridId] entry
+    // from a 'renderGrid' island action — a flat event->descriptor lookup
+    // (action.gridActions, keyed by each entry's `event` field) plus the
+    // shared localized messages/searchPanelId/fieldPre ff._gridToolDispatch
+    // needs.
+    _buildGridActionRegistry: function (action) {
+        var byEvent = {};
+        var list = Array.isArray(action.gridActions) ? action.gridActions : [];
+        for (var i = 0; i < list.length; i++) {
+            var a = list[i];
+            if (a && typeof a.event === 'string' && a.event) {
+                byEvent[a.event] = a;
+            }
+        }
+        return {
+            searchPanelId: action.searchPanelId || '',
+            fieldPre: action.fieldPre || '',
+            msgs: action.actionMsgs || {},
+            byEvent: byEvent
+        };
+    },
+
+    // Issue #470 Slice O2: fixed framework dispatcher registered on
+    // `table.on('tool(gridId)', ...)` for island grids (ff._renderGridAction)
+    // AND invoked directly (data undefined/tr undefined) by the
+    // ff._buttonAction.toolbarButton delegated handler, below — reproducing
+    // BOTH surfaces AddSubButton's generated `wtToolBarFunc_{gridId}` switch
+    // body served (row buttons via layui's own lay-event/tool mechanism,
+    // toolbar buttons via a direct call with no row data), VERBATIM behavior
+    // parity with AddSubButton (DataTableTagHelper.cs ~1038-1289): every
+    // ParameterType selection guard (with the SAME localized messages),
+    // AddRow/Download/OpenDialog/LoadPage/DownloadExcelOrPdf/BgRequest, the
+    // guarded-identifier OnClickFunc call, and the PromptMessage layer.confirm
+    // wrap. No eval, no new Function — every branch is a direct, fixed
+    // framework call driven by descriptor DATA (action.gridActions, compile-time
+    // developer-authored Razor literals — never request/row data, invariant 8).
+    _gridToolDispatch: function (gridId, layEvent, data, tr) {
+        try {
+            var reg = ff._gridActionRegistry[gridId];
+            if (!reg) { return; }
+            var item = reg.byEvent[layEvent];
+            if (!item) { return; }
+
+            if (item.paramType === 'addRow') {
+                // Issue #470 Slice O2: deep-clone item.addRowJson before every
+                // call — ff.AddGridRow MUTATES the object it receives (ID
+                // reassignment + cumulative [n]/_n_ regex reindexing on the
+                // SAME string values). AddSubButton's legacy generated case
+                // body re-evaluated a FRESH `{...}` object literal on every
+                // click (inline JS source, not a stored reference); reusing
+                // `item.addRowJson` directly across repeated clicks would
+                // progressively corrupt its string fields instead.
+                var freshRow = JSON.parse(JSON.stringify(item.addRowJson || {}));
+                ff.AddGridRow(gridId, window[gridId + 'option'], freshRow);
+                return;
+            }
+            if (item.paramType === 'removeRow') {
+                // Row buttons dispatch via data-wtm-click="removeGridRow"
+                // (ff._buttonAction, below) directly — never through here. A
+                // not-hidden-on-toolbar RemoveRow toolbar click landing here
+                // is a legacy no-op (AddSubButton's own `case '...':{};break;`
+                // for RemoveRow has an empty body) — reproduced verbatim.
+                return;
+            }
+
+            var ids, objs;
+            var tempUrl = item.url || '';
+            var whereStr = Array.isArray(item.whereStr) ? item.whereStr : [];
+            var isPost = false;
+
+            switch (item.paramType) {
+                case 'noId':
+                    break;
+                case 'singleId':
+                    if (data == undefined || data == null || data.ID == undefined || data.ID == null) {
+                        ids = ff.GetSelections(gridId);
+                        if (ids.length == 0) { layui.layer.msg(reg.msgs.selectOneRow); return; }
+                        else if (ids.length > 1) { layui.layer.msg(reg.msgs.selectOneRowMax); return; }
+                        else {
+                            tempUrl = tempUrl + '&id=' + ids[0];
+                            objs = ff.GetSelectionData(gridId);
+                            if (objs != null && objs.length > 0) { tempUrl = ff.concatWhereStr(tempUrl, whereStr, objs[0]); }
+                        }
+                    } else {
+                        ids = [data.ID]; objs = [data];
+                        tempUrl = tempUrl + '&id=' + data.ID;
+                        tempUrl = ff.concatWhereStr(tempUrl, whereStr, data);
+                    }
+                    break;
+                case 'multiIds':
+                    isPost = true;
+                    ids = ff.GetSelections(gridId);
+                    if (ids.length == 0) { layui.layer.msg(reg.msgs.selectOneRowMin); return; }
+                    break;
+                case 'singleIdWithNull':
+                    ids = []; objs = [];
+                    if (data != null && data.ID != null) {
+                        ids.push(data.ID);
+                        tempUrl = ff.concatWhereStr(tempUrl, whereStr, data);
+                    } else {
+                        ids = ff.GetSelections(gridId);
+                        objs = ff.GetSelectionData(gridId);
+                        if (objs != null && objs.length > 0) { tempUrl = ff.concatWhereStr(tempUrl, whereStr, objs[0]); }
+                    }
+                    if (ids.length > 1) { layui.layer.msg(reg.msgs.selectOneRowMax); return; }
+                    else if (ids.length == 1) { tempUrl = tempUrl + '&id=' + ids[0]; }
+                    break;
+                case 'multiIdWithNull':
+                    ids = ff.GetSelections(gridId);
+                    isPost = true;
+                    break;
+                default:
+                    break;
+            }
+
+            var run = function () {
+                if (item.onClickFn) {
+                    var fn = ff._resolveGuardedWindowFn(item.onClickFn);
+                    if (fn) { fn(ids, ff.GetSelectionData(gridId)); }
+                    return;
+                }
+                if (item.download) { ff.Download(tempUrl, ids); return; }
+                if (item.showDialog) {
+                    if (item.redirect) {
+                        ff.LoadPage(tempUrl, true, item.dialogTitle, (isPost === true && ids !== null && ids !== undefined) ? { Ids: ids } : undefined);
+                    } else {
+                        ff.OpenDialog(tempUrl, item.dialogGuid, item.dialogTitle, item.dialogWidth, item.dialogHeight,
+                            (isPost === true && ids !== null && ids !== undefined) ? { Ids: ids } : undefined, item.max === true);
+                    }
+                    return;
+                }
+                if (item.export) {
+                    ff.DownloadExcelOrPdf(tempUrl, reg.searchPanelId, (window[gridId + 'defaultfilter'] || {}).where, ids);
+                    return;
+                }
+                if (item.redirect) {
+                    ff.LoadPage(tempUrl, false, item.dialogTitle, (isPost === true && ids !== null && ids !== undefined) ? { Ids: ids } : undefined);
+                    return;
+                }
+                if (item.forcePost) {
+                    ff.BgRequest(tempUrl, (ids !== null && ids !== undefined) ? { Ids: ids } : undefined);
+                    return;
+                }
+                ff.BgRequest(tempUrl, (isPost === true && ids !== null && ids !== undefined) ? { Ids: ids } : undefined);
+            };
+
+            if (item.prompt) {
+                layer.confirm(item.prompt, { title: reg.msgs.infoTitle }, function (index) {
+                    run();
+                    layer.close(index);
+                });
+            } else {
+                run();
+            }
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] grid tool dispatch failed:', e);
             }
         }
     },
@@ -5618,8 +5897,92 @@ window.ff._buttonAction = {
     scriptCall: function (el) {
         var fn = ff._resolveGuardedWindowFn(el.getAttribute('data-wtm-fn'));
         if (fn) { fn(); }
+    },
+    // Issue #470 Slice O2: island grid toolbar button — reads the descriptor's
+    // gridId/event straight off the clicked element's data-wtm-grid/
+    // data-wtm-event attributes (compile-time, developer-authored Razor
+    // literals — DataTableTagHelper.Island.cs's AddIslandActionDescriptor —
+    // never request/row data) and dispatches through the SAME
+    // ff._gridToolDispatch a row-button `table.on('tool')` click uses, with
+    // `data`/`tr` undefined — exactly matching AddSubButton's legacy toolbar
+    // onclick, which called `wtToolBarFunc_{gridId}({event:'...'})` (no row
+    // data either).
+    toolbarButton: function (el) {
+        var gridId = el.getAttribute('data-wtm-grid') || '';
+        var evt = el.getAttribute('data-wtm-event') || '';
+        ff._gridToolDispatch(gridId, evt, undefined, undefined);
+    },
+    // Issue #470 Slice O2: island grid row RemoveRow button — replaces the
+    // legacy inline `onclick="ff.RemoveGridRow('{gridId}',{gridId}option,{{d.LAY_INDEX}})"`.
+    // The row index is read from data-wtm-row-index, computed once per row by
+    // ff.gridTemplets.actionCol at build time (the real `d.LAY_INDEX`, the
+    // laytpl placeholder's exact JS-side equivalent).
+    removeGridRow: function (el) {
+        var gridId = el.getAttribute('data-wtm-grid') || '';
+        var idxAttr = el.getAttribute('data-wtm-row-index');
+        var idx = idxAttr === null ? NaN : Number(idxAttr);
+        if (!gridId || isNaN(idx)) { return; }
+        ff.RemoveGridRow(gridId, window[gridId + 'option'], idx);
+    },
+    // Issue #470 Slice O2: replaces the legacy EnableAnalysis toggle button's
+    // inline `onclick="wtmAnalysis.toggle('{gridId}','{vmFullName}')"`. NOT
+    // currently emitted by DataTableTagHelper.Island.cs — EnableAnalysis
+    // forces the whole grid to the legacy path (DetermineGridIslandDecision,
+    // invariant 2, unchanged by O2) — this handler exists so a future slice
+    // that lifts that containment only needs to start emitting the
+    // data-wtm-click="analysisToggle" attribute, not add new dispatch plumbing.
+    analysisToggle: function (el) {
+        var gridId = el.getAttribute('data-wtm-grid') || '';
+        var vmName = el.getAttribute('data-wtm-vmname') || '';
+        if (typeof wtmAnalysis !== 'undefined' && typeof wtmAnalysis.toggle === 'function') {
+            wtmAnalysis.toggle(gridId, vmName);
+        }
     }
 };
+
+// Issue #470 Slice O2: one-time delegated binding for the grid toolbar
+// button-group dropdown open/close behavior — replaces the legacy PER-GRID
+// setTimeout-bound <script> (DataTableTagHelper's hasButtonGroup branch) with
+// a single document-level registration. Scoped to `[data-wtm-btngroup]` — an
+// attribute ONLY the O2 island toolbar emits (AddIslandActionDescriptor) —
+// so this is a complete no-op on flag-OFF pages.
+//
+// Issue #470 Slice O2 review polish: this selector is DELIBERATELY
+// attribute-only, with NO ".downpanel" class in it, and the island button
+// markup itself (DataTableTagHelper.Island.cs) was changed to NOT carry the
+// "downpanel" class either (that class has zero CSS footprint — it is a pure
+// JS marker on both sides — so dropping it here costs nothing visually).
+// This is NOT cosmetic: a PREVIOUS version of this comment claimed the old
+// `.downpanel[data-wtm-btngroup]` scoping meant this binding could "never
+// double-fire alongside a legacy grid's own per-render script" — that claim
+// was only true in ONE direction. A coexisting legacy-fallback grid on the
+// SAME page (e.g. EnableAnalysis, which always takes the legacy branch per
+// DetermineGridIslandDecision) emits its own unscoped `$(".downpanel").on(...)`
+// per-render script (BuildTableOptionsScript's hasButtonGroup branch,
+// DataTableTagHelper.cs — untouched here, its output is pinned byte-for-byte
+// by DataTableByteIdentityTests) that would have bound directly onto the
+// island's OWN downpanel element too, as long as it still carried the
+// "downpanel" class — a real risk, since jQuery delegation attaches natively
+// at the ".downpanel" node itself and fires (and stopPropagation()s) BEFORE
+// the event ever reaches this document-level handler, silently shadowing it
+// depending on setTimeout/render-order timing. Removing the class from the
+// island markup entirely (rather than trying to out-race or out-scope the
+// legacy selector) closes that hazard structurally: the legacy grid's
+// unscoped ".downpanel" selector simply has nothing of the island's to match
+// anymore, in either direction.
+if (typeof $ === 'function' && $.fn && typeof $.fn.on === 'function') {
+    $(document).on('click', '[data-wtm-btngroup] .layui-select-title', function (e) {
+        $('.layui-form-select').not($(this).parents('.layui-form-select')).removeClass('layui-form-selected');
+        $(this).parents('.layui-form-select').toggleClass('layui-form-selected');
+        e.stopPropagation();
+    });
+    $(document).on('click', function (event) {
+        var _con2 = $('[data-wtm-btngroup]');
+        if (!_con2.is(event.target) && (_con2.has(event.target).length === 0)) {
+            _con2.removeClass('layui-form-selected');
+        }
+    });
+}
 
 if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
     document.addEventListener('click', function (e) {

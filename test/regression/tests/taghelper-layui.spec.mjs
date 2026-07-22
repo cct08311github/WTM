@@ -26,7 +26,11 @@ const HARNESS_PATH = '/test/manual/regression/565-taghelper-layui-regression.htm
 // registry incl. __bgcolor/__forecolor + XSS neutralisation parity).
 // #776: +1 section (18. data-content attribute escaping — pins the vendored
 // layui 2.6.3 table.js fix; independent of sections 16/17's #470 O1 coverage).
-const TOTAL_EXPECTED = 18;
+// #470 Slice O2: +1 section (19. renderGrid toolbar/row-button island — a
+// full click -> ff._gridToolDispatch -> DOM-mutation round trip, invariant 7
+// retirement: no legacy wtToolBarFunc_/laytpl <script type="text/html"> for
+// an island grid with GridActions).
+const TOTAL_EXPECTED = 19;
 
 test.describe('#565 TagHelper <-> LayUI regression suite', () => {
   test('every non-knownGap widget section initializes correctly', async ({ page, layuiVariant }) => {

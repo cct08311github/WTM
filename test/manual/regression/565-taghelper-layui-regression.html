@@ -56,7 +56,11 @@
   added section 18 (data-content attribute escaping) as a real, gated
   assertion pinning the vendored-layui table.js fix — see that section's own
   comment for why it is a layui-internal code path, independent of sections
-  16/17's #470 O1 coverage.
+  16/17's #470 O1 coverage. #470 Slice O2 added section 19 (renderGrid
+  toolbar/row-button island) — a full click -> ff._gridToolDispatch ->
+  DOM-mutation round trip (toolbar Add -> row Remove) driven entirely by
+  island descriptors, proving invariant 7's retirement (no legacy
+  wtToolBarFunc_/laytpl <script type="text/html"> for an island grid).
 
   WIDGET COVERAGE (see the on-page PASS/FAIL banner list + README for the
   one-line-per-widget summary):
@@ -68,6 +72,7 @@
                                    10. upload (render only)  16. renderGrid island (#470 O1)
                                                               17. renderGrid templet family (#470 O1)
                                                               18. data-content escaping (#776)
+                                                              19. renderGrid toolbar/row-button (#470 O2)
   ============================================================================
 
   #566 DUAL-TREE HEAD LOADER
@@ -434,11 +439,43 @@
   <div class="status" id="status-datacontent-xss">waiting…</div>
 </div>
 
+<!-- ============================== 19. renderGrid toolbar/row-button island (#470 Slice O2) ============================== -->
+<div class="box" id="sec-rendergrid-toolbar">
+  <h2>19. renderGrid toolbar/row-button island (#470 Slice O2) — gridActions[]/toolbarHtml/actionCol dispatch, no legacy wtToolBarFunc_/laytpl</h2>
+  <!-- Exactly the shape DataTableTagHelper.Island.cs emits for a flag-ON,
+       island-eligible grid WITH GridActions: `toolbarHtml` (server-rendered
+       button markup, data-wtm-click attrs instead of onclick) + `gridActions[]`
+       (one 'addRow' toolbar-only entry, one 'removeRow' row-only entry) +
+       an actionCol templet column. Both dispatchable actions here
+       (AddRow/RemoveRow) are pure client-side — no $.ajax needed — so this
+       section needs no backend, same no-backend-needed convention as
+       sections 5/16/17. autoSearch:false so the page-ready dispatch renders
+       an empty local table immediately (ff._renderGridAction's own
+       non-autoSearch branch), same as those sections.
+       CRITICAL FIX (review-caught regression, #470 Slice O2): this island is
+       deliberately BARE (non-actions-wrapped), same convention as the laydate
+       islands above — this is the ACTUAL shape DataTableTagHelper.Island.cs's
+       BuildTableIslandScript emits (a single object, never pre-wrapped in
+       {"actions":[...]}). The descriptor array is named `gridActions`, NOT
+       `actions` — a field literally named `actions` here would collide with
+       ff._normalizeIslandPayload's `Array.isArray(parsed.actions)` batch-shape
+       probe and silently swallow the whole grid (see
+       RenderGridIslandAction.Actions's CRITICAL FIX comment,
+       DataTableTagHelper.Island.cs). This section previously pre-wrapped the
+       payload in {"actions":[{...}]} by hand, which accidentally bypassed
+       ff._normalizeIslandPayload's own wrap decision and masked exactly this
+       collision — the same real-browser blind spot that let the bug ship in
+       the first place. -->
+  <table id="regGridIsland3" lay-filter="regGridIsland3" data-wtm-grid-id="regGridIsland3"></table>
+  <script type="application/json" class="wtm-dialog-init">{"type":"renderGrid","gridId":"regGridIsland3","tableJsVar":"wtVar_regGridIsland3","elem":"#regGridIsland3","id":"regGridIsland3","text":{"none":"No Data"},"defaultToolbar":[],"totalRow":false,"method":"post","limit":0,"cols":[[{"field":"name","title":"Name"},{"field":"","title":"Op","templet":{"tpl":"actionCol"}}]],"autoSearch":false,"toolbarHtml":"<div id=\"regGridIsland3buttons\"><a href=\"javascript:void(0)\" id=\"regO2AddBtn\" data-wtm-click=\"toolbarButton\" data-wtm-grid=\"regGridIsland3\" data-wtm-event=\"ActAdd\">Add Row</a></div>","gridActions":[{"event":"ActAdd","paramType":"addRow","name":"Add","addRowJson":{"ID":"reg-o2-row-1","name":"New Row"},"showInRow":false},{"event":"ActRemove","paramType":"removeRow","removeRow":true,"name":"Remove","showInRow":true}],"actionMsgs":{"selectOneRow":"Select one","selectOneRowMax":"Select only one","selectOneRowMin":"Select at least one","infoTitle":"Info"},"done":{"heightAuto":true,"maxDepth":1}}</script>
+  <div class="status" id="status-rendergrid-toolbar">waiting…</div>
+</div>
+
 <script>
 (function () {
   'use strict';
 
-  var TOTAL_EXPECTED = 18;
+  var TOTAL_EXPECTED = 19;
   window.__regressionResults = [];
   window.__regressionDone = false;
 
@@ -1286,6 +1323,97 @@
         }, 20, 100);
       }, 40, 150);
     });
+  }, 60, 150);
+
+  // ---- 19. renderGrid toolbar/row-button island (#470 Slice O2) -----------
+  // Page-ready island — ff._consumePageReadyIslands auto-dispatches it once
+  // layui.table is confirmed loaded, same as sections 16/17. Proves, against
+  // the REAL layui table module + the REAL document-level data-wtm-click
+  // listener: (a) NO legacy wtToolBarFunc_{gridId} global is ever defined
+  // for an island grid (invariant 7 retirement); (b) NO
+  // `<script type="text/html">` element exists for this grid's toolbar/row
+  // templates (the DOMPurify-dialog fix documented in the class doc's O2
+  // section — proven structurally, not just behaviorally); (c) clicking the
+  // server-rendered toolbar button (data-wtm-click="toolbarButton") reaches
+  // ff._gridToolDispatch and actually adds a row via ff.AddGridRow; (d) the
+  // actionCol registry builds a REAL data-wtm-click="removeGridRow" anchor
+  // for that new row; (e) clicking IT actually removes the row via
+  // ff.RemoveGridRow. This is the one section in the whole suite that
+  // exercises a full click -> dispatch -> DOM-mutation round trip driven
+  // entirely by island descriptors, on both vendored layui trees.
+  pollUntil(function () {
+    return document.querySelector('#regGridIsland3 + .layui-table-view') !== null
+      ? { pass: true } : null;
+  }, function () {
+    var notes = [];
+    var pass = true;
+
+    var noLegacyToolbarFn = typeof window.wtToolBarFunc_regGridIsland3 !== 'function';
+    if (!noLegacyToolbarFn) { pass = false; }
+    notes.push(noLegacyToolbarFn
+      ? 'no legacy wtToolBarFunc_regGridIsland3 global defined (island toolbar dispatch only)'
+      : 'REGRESSION: legacy wtToolBarFunc_regGridIsland3 global is defined');
+
+    var legacyScriptBlocks = document.querySelectorAll(
+      '#regGridIsland3 ~ script[type="text/html"], #regGridIsland3 ~ script[type="text / html"]'
+    );
+    var noLaytplBlocks = legacyScriptBlocks.length === 0;
+    if (!noLaytplBlocks) { pass = false; }
+    notes.push(noLaytplBlocks
+      ? 'no <script type="text/html"> laytpl block emitted for this grid (DOMPurify-dialog fix, structurally confirmed)'
+      : 'REGRESSION: ' + legacyScriptBlocks.length + ' laytpl <script type="text/html"> block(s) found');
+
+    var addBtn = document.getElementById('regO2AddBtn');
+    if (!addBtn) {
+      pass = false;
+      notes.push('REGRESSION: toolbar Add button (data-wtm-click) was not found in the DOM');
+      setStatus('status-rendergrid-toolbar', '<span class="bad">FAIL</span>: ' + notes.join('; '));
+      pushResult('renderGrid toolbar/row-button island (#470 Slice O2)', pass, notes.join('; '));
+      return;
+    }
+
+    // Real click through the document-level delegated listener (Slice M
+    // infra) — proves the FULL wiring, not just ff._gridToolDispatch called
+    // directly.
+    addBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+    pollUntil(function () {
+      var row = document.querySelector('#regGridIsland3 + .layui-table-view .layui-table-body tr');
+      return row ? { pass: true, row: row } : null;
+    }, function (addResult) {
+      var row = addResult.row;
+      var removeBtn = row.querySelector('a[data-wtm-click="removeGridRow"]');
+      var addOk = !!removeBtn;
+      if (!addOk) { pass = false; }
+      notes.push(addOk
+        ? 'toolbar Add click -> ff.AddGridRow added a row, actionCol rendered a data-wtm-click="removeGridRow" anchor'
+        : 'REGRESSION: after the Add click, no row (or no removeGridRow anchor) was found');
+
+      if (!removeBtn) {
+        setStatus('status-rendergrid-toolbar', (pass ? '<span class="ok">OK</span>: ' : '<span class="bad">FAIL</span>: ') + notes.join('; '));
+        pushResult('renderGrid toolbar/row-button island (#470 Slice O2)', pass, notes.join('; '));
+        return;
+      }
+
+      removeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+      pollUntil(function () {
+        var stillThere = document.querySelector('#regGridIsland3 + .layui-table-view .layui-table-body tr[data-index]');
+        var rows = document.querySelectorAll('#regGridIsland3 + .layui-table-view .layui-table-body tr');
+        return rows.length === 0 ? { pass: true } : (stillThere ? null : { pass: true });
+      }, function () {
+        var rowsAfterRemove = document.querySelectorAll('#regGridIsland3 + .layui-table-view .layui-table-body tr');
+        var removeOk = rowsAfterRemove.length === 0;
+        if (!removeOk) { pass = false; }
+        notes.push(removeOk
+          ? 'row Remove click -> ff.RemoveGridRow removed the row (0 rows remain)'
+          : 'REGRESSION: after the Remove click, ' + rowsAfterRemove.length + ' row(s) still remain');
+
+        var detail = notes.join('; ');
+        setStatus('status-rendergrid-toolbar', (pass ? '<span class="ok">OK</span>: ' : '<span class="bad">FAIL</span>: ') + detail);
+        pushResult('renderGrid toolbar/row-button island (#470 Slice O2)', pass, detail);
+      }, 40, 150);
+    }, 40, 150);
   }, 60, 150);
 
 })();

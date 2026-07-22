@@ -210,16 +210,29 @@ public class RenderGridIsland470SliceO1Tests
         Assert.AreEqual("Name", cols[3].GetProperty("field").GetString());
     }
 
-    // ── Toolbar/laytpl interim (invariant 7 / brief §2 O1 point 4) ──────────
+    // ── Toolbar/laytpl chunk retired for island grids (Slice O2, brief §2 O2) ──
+    // Historical note: under O1, this class's precursor tests
+    // (ActionsMatrix_FlagOn_IslandPlusLegacyToolbarChunk_BothPresent /
+    // ActionsMatrix_FlagOn_RowAndToolbarTemplatesEmitted) asserted that the
+    // legacy wtToolBarFunc_{Id} dispatcher + both laytpl
+    // <script type="text/html"> templates were STILL emitted verbatim even for
+    // island-eligible grids (O1's accepted interim, invariant 7). Slice O2
+    // completes the toolbar/row-button islandification those tests were
+    // documenting as deferred — island grids now emit an `actions[]` descriptor
+    // array + `toolbarHtml` + a `templet:{tpl:'actionCol'}` row-action column
+    // instead, and NEITHER legacy artifact is emitted anymore. See
+    // RenderGridToolbar470SliceO2Tests.cs for the full O2 coverage; the two
+    // assertions below replace the retired ones in place (same test names would
+    // now assert the opposite of what O2 ships, so they are rewritten rather
+    // than duplicated).
 
     [TestMethod]
-    public void ActionsMatrix_FlagOn_IslandPlusLegacyToolbarChunk_BothPresent()
+    public void ActionsMatrix_FlagOn_EmitsIslandActionsInsteadOfLegacyToolbarChunk()
     {
         // ActionsMatrixListVM's one OnClickFunc ("myGridOnClickHandler") is a bare
-        // identifier, so the grid itself is island-eligible — but O1 keeps the
-        // toolbar dispatcher + laytpl templates on the legacy path even for
-        // island grids (accepted O1 interim, invariant 7). This is NOT an XOR
-        // violation: XOR governs the render/option script, not the toolbar chunk.
+        // identifier, so the grid itself is island-eligible. Slice O2: the legacy
+        // toolbar dispatcher + laytpl templates are retired for island grids —
+        // toolbar/row-button dispatch is now carried entirely by the island JSON.
         SetupLocalizer();
         BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = CreateHelper(new ActionsMatrixListVM(), NewWtm());
@@ -229,20 +242,25 @@ public class RenderGridIsland470SliceO1Tests
         StringAssert.Contains(post, "\"type\":\"renderGrid\"");
         Assert.IsFalse(post.Contains("table.render(wtTable_O1option)"));
 
-        StringAssert.Contains(post, "function wtToolBarFunc_wtTable_O1(obj)");
-        StringAssert.Contains(post, "id=\"wtToolBar_wtTable_O12\"");
+        Assert.IsFalse(post.Contains("function wtToolBarFunc_wtTable_O1(obj)"), "Slice O2 retires the legacy toolbar dispatcher for island grids");
+        Assert.IsFalse(post.Contains("id=\"wtToolBar_wtTable_O12\""), "Slice O2 retires the legacy toolbar laytpl <script> for island grids");
+        StringAssert.Contains(post, "\"gridActions\":[");
+        StringAssert.Contains(post, "\"toolbarHtml\":");
+        StringAssert.Contains(post, "data-wtm-click=\\u0022toolbarButton\\u0022");
     }
 
     [TestMethod]
-    public void ActionsMatrix_FlagOn_RowAndToolbarTemplatesEmitted()
+    public void ActionsMatrix_FlagOn_NoLaytplScriptBlocksEmitted()
     {
         SetupLocalizer();
         BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = CreateHelper(new ActionsMatrixListVM(), NewWtm());
         var (_, _, post) = Render(helper);
 
-        StringAssert.Contains(post, "<script type=\"text / html\" id=\"wtToolBar_wtTable_O12\" >");
-        StringAssert.Contains(post, "<script type=\"text/html\" id=\"wtToolBar_wtTable_O1\">");
+        Assert.IsFalse(post.Contains("<script type=\"text / html\" id=\"wtToolBar_wtTable_O12\" >"), "Slice O2 retires the toolbar laytpl <script> for island grids");
+        Assert.IsFalse(post.Contains("<script type=\"text/html\" id=\"wtToolBar_wtTable_O1\">"), "Slice O2 retires the row-button laytpl <script> for island grids");
+        Assert.IsFalse(post.Contains("{{#"), "Slice O2 retires the laytpl {{# if }} row-visibility conditional for island grids");
+        StringAssert.Contains(post, "\"tpl\":\"actionCol\"");
     }
 
     // ── Rich/aggregate/bool templet descriptor parity ───────────────────────
