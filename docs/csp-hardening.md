@@ -2,7 +2,7 @@
 
 > Added in 10.14.3 (#627, a slice of the #470 epic). Rewritten for #470 Slice Q
 > (2026-07, the G→O island campaign's deprecation & docs endgame — design authority:
-> Gitea issue #470 comment 16357 "Completion plan: Slice G → Q") once Slices
+> internal infrastructure issue #470 comment 16357 "Completion plan: Slice G → Q") once Slices
 > G/H/I/J/K/L/M/N1/N2/O1/O2/O3 had all shipped (v10.16.0 + follow-on). Explains how far
 > a WTM app can tighten `Content-Security-Policy` today, exactly which knobs unlock each
 > level, and — just as important — which framework configurations are **still** not
@@ -35,7 +35,7 @@ legacy rendering.
 ## Background: what is and is not eval-free today
 
 The `framework_layui.js` eval-removal effort (originally tracked as #789 on this repo's
-pre-Gitea-cutover GitHub tracker, now defunct, phases 1–3D; continued locally as
+pre-internal infrastructure-cutover GitHub tracker, now defunct, phases 1–3D; continued locally as
 #470/#552/#556/#558/#561/#564/#576/#587, then the #470 Slice G→O campaign) stands at:
 
 - **The common form-init paths are JSON-island-driven unconditionally** (v10.13.12+,
@@ -228,7 +228,7 @@ cover it. Your options, in increasing order of effort:
   message).
 - **Nonce-based CSP**: not currently provided by `WtmCspMiddleware` (a per-request nonce
   needs middleware↔Razor cooperation) — tracked separately under #807 (nonce/report-to
-  futures epic, on this repo's pre-Gitea-cutover GitHub tracker, now defunct — see
+  futures epic, on this repo's pre-internal infrastructure-cutover GitHub tracker, now defunct — see
   § Reference below). Do not hand-roll a static "nonce": a fixed value defeats the
   mechanism.
 
@@ -339,7 +339,7 @@ detected, naming #776.
 Related: `docs/wtm-developer-manual.md` § security middleware; issue #470 (epic — the
 G→O island slices and the residual-blocker inventory above both live there), #789 (eval
 removal epic) and #807 (nonce/report-to futures, unsafe-inline removal epic) — both on
-this repo's pre-Gitea-cutover GitHub tracker, now defunct — #627 (this kill-switch),
+this repo's pre-internal infrastructure-cutover GitHub tracker, now defunct — #627 (this kill-switch),
 #655/#567 (Slice P / selector-default-on gate), and #784 (residual non-flag-gated
 emitters found during the Slice Q sweep: `BaseElementTag`'s change-event bindings,
 `BaseButtonTag`'s click-wiring wrapper, `<wt:tab>`/`<wt:panel>`).

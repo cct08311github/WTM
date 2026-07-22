@@ -1,4 +1,4 @@
-name: Publish NuGet to Gitea Packages
+name: Publish NuGet to internal package registry
 
 on:
   workflow_dispatch:
@@ -18,7 +18,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     env:
-      PACKAGE_SOURCE: https://mac-mini.tailde842d.ts.net/api/packages/chiu0831/nuget/index.json
+      PACKAGE_SOURCE: https://internal.registry.invalid/api/packages/chiu0831/nuget/index.json
 
     steps:
       - uses: actions/checkout@v5
@@ -80,8 +80,8 @@ jobs:
       # SourceLink map) alongside each *.nupkg in nupkgs/. No separate push step is
       # needed for it: `dotnet nuget push` auto-detects the adjacent *.snupkg for each
       # *.nupkg it pushes and publishes it to the source's SymbolPackagePublish
-      # resource unless `--no-symbols` is passed (see `dotnet nuget push` docs). Gitea's
-      # NuGet service index (https://mac-mini.tailde842d.ts.net/api/packages/chiu0831/nuget/index.json)
+      # resource unless `--no-symbols` is passed (see `dotnet nuget push` docs). internal infrastructure's
+      # NuGet service index (https://internal.registry.invalid/api/packages/chiu0831/nuget/index.json)
       # advertises `SymbolPackagePublish/4.9.0`, and this was confirmed live: pushing
       # `*.nupkg` here also ships the matching `*.snupkg`. A prior revision added a
       # dedicated "Push symbol packages" step on the (incorrect) premise that the glob
@@ -89,10 +89,10 @@ jobs:
       # (harmless only via --skip-duplicate) and was removed. Do not re-add it; if the
       # symbol endpoint ever needs independent failure isolation from the primary
       # publish, that must be done via `--no-symbols` on this step plus a separate
-      # explicit `*.snupkg` push, verified end-to-end against Gitea before merging —
+      # explicit `*.snupkg` push, verified end-to-end against internal infrastructure before merging —
       # not by re-adding a step that runs after (and depends on) this one having
       # already pushed the symbols implicitly.
-      - name: Push to Gitea Packages
+      - name: Push to internal package registry
         run: |
           dotnet nuget push "nupkgs/*.nupkg" \
             --api-key ${{ secrets.PAT_TOKEN }} \
@@ -102,12 +102,12 @@ jobs:
       # ── GitHub mirror sync ─────────────────────────────────────────────────
       # Required secret: GH_MIRROR_PAT — a Personal Access Token for account
       # `cct08311github` with scopes: repo, workflow, write:packages, read:packages.
-      # Add it in Gitea repo Settings → Secrets → GH_MIRROR_PAT.
-      # (must NOT start with GITHUB_ — Gitea reserves that prefix)
+      # Add it in internal infrastructure repo Settings → Secrets → GH_MIRROR_PAT.
+      # (must NOT start with GITHUB_ — internal infrastructure reserves that prefix)
       #
       # These steps run only on real tag pushes (not workflow_dispatch without
       # a tag ref). If any step here fails the job exits non-zero, which means
-      # the GitHub sync failed — but the Gitea publish above has already
+      # the GitHub sync failed — but the internal infrastructure publish above has already
       # succeeded unconditionally.
       #
       # Security: all github.ref_name / steps.* values are passed through env:
@@ -184,8 +184,8 @@ jobs:
 
       # ── Apply .sync/ manifest to produce a filtered tree for GitHub ──────────
       # All three steps operate on a temporary local branch `sync-to-github-tmp`
-      # so that the Gitea working tree is never modified.  One commit bundles all
-      # manifest changes; that commit (not the raw Gitea HEAD) is what gets
+      # so that the internal infrastructure working tree is never modified.  One commit bundles all
+      # manifest changes; that commit (not the raw internal infrastructure HEAD) is what gets
       # pushed to GitHub's dotnet10 and tagged.
       # Order matches README.md: replace → exclude → sanitize.
 
@@ -214,7 +214,7 @@ jobs:
           set -euo pipefail
           _M="mac""-mini"          # rewrites via full-host rule in .sed
           _G="GITEA""_"            # rewrites via \bGITEA_TOKEN/HOST/USER\b rules
-          _T="tailde842d"          # rewrites: s|tailde842d|internal-tailnet|g
+          _T="internal-tailnet"          # rewrites: s|internal-tailnet|internal-tailnet|g
           _N="\.ts\.net"           # rewrites as part of full-host rule in .sed
           # #696: `git grep` exits 1 for "no match" (expected — the tree is
           # clean) but exits >1 for a real failure (bad pattern, I/O error,
@@ -341,18 +341,18 @@ jobs:
           if git push github HEAD:refs/heads/dotnet10; then
             echo "Fast-forward push succeeded."
           else
-            echo "Non-fast-forward detected; attempting merge (Gitea is authoritative — -X ours)."
+            echo "Non-fast-forward detected; attempting merge (internal infrastructure is authoritative — -X ours)."
             git fetch github dotnet10
             # -X ours resolves content conflicts but leaves modify/delete conflicts
             # unresolved (merge exits non-zero). We handle those explicitly below.
             git merge github/dotnet10 \
               -X ours \
               --allow-unrelated-histories \
-              -m "merge: sync Gitea release to GitHub (auto-resolve excludes)" \
+              -m "merge: sync release to GitHub (auto-resolve excludes)" \
               --no-edit || MERGE_EXIT=$?
 
             # Resolve any remaining modify/delete conflicts deterministically.
-            # Gitea/HEAD is authoritative: files deleted here (excluded from mirror)
+            # internal infrastructure/HEAD is authoritative: files deleted here (excluded from mirror)
             # stay deleted; files deleted on the mirror but present here stay present.
             UNMERGED=$(git ls-files -u | wc -l | tr -d ' ')
             if [ "${UNMERGED}" -gt 0 ]; then
@@ -387,7 +387,7 @@ jobs:
               fi
 
               git commit --no-edit \
-                -m "merge: sync Gitea release to GitHub (auto-resolve excludes)"
+                -m "merge: sync release to GitHub (auto-resolve excludes)"
             fi
 
             # Leak-gate: re-scan after merge resolution (#659), using the same
@@ -412,7 +412,7 @@ jobs:
         run: |
           set -euo pipefail
           # Re-tag at the filtered sync commit so GitHub's tag SHA matches what
-          # GitHub has in its dotnet10 history (not the raw Gitea commit).
+          # GitHub has in its dotnet10 history (not the raw internal infrastructure commit).
           git tag -f "$TAG" HEAD
           git push github "$TAG" --force
 
@@ -516,7 +516,7 @@ jobs:
           ls -lh nupkgs-github/
 
       # Issue #678: deliberately `*.nupkg` only here — GitHub Packages' NuGet registry
-      # has never supported symbol packages (no snupkg endpoint), unlike Gitea. Do not
+      # has never supported symbol packages (no snupkg endpoint), unlike internal infrastructure. Do not
       # add a matching *.snupkg push for this source; it has nowhere to land.
       - name: Push NuGet packages to GitHub Packages
         if: startsWith(github.ref, 'refs/tags/')
@@ -528,7 +528,7 @@ jobs:
             --source "https://nuget.pkg.github.com/cct08311github/index.json" \
             --skip-duplicate
 
-      # ── Smoke test (runs after both Gitea and GitHub publish stages) ────────
+      # ── Smoke test (runs after both internal infrastructure and GitHub publish stages) ────────
 
       - name: Smoke test package install
         env:

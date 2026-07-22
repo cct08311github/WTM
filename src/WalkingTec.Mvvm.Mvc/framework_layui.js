@@ -2188,7 +2188,7 @@ window.ff = {
     // Issue #470 Slice O1: shared render body for the 'renderGrid' DispatchAction
     // case (below) — the opt-in (UseSelectIslandRender, default OFF — the SAME
     // flag Slices J/K/L/M/N1 use) eval-free island render for <wt:grid>/
-    // DataTableTagHelper. Design authority: Gitea issue #470 comment 18118.
+    // DataTableTagHelper. Design authority: internal infrastructure issue #470 comment 18118.
     //
     // Reproduces BuildTableOptionsScript's option-object assembly, done()
     // callback (A4), post-render wiring (A9/A10), and compat-global writes
@@ -2652,7 +2652,7 @@ window.ff = {
     // default OFF — the SAME flag Slices J-O1 use) eval-free island for the
     // collapse-handlers / reset-button binding / IsExpanded-hidden-input
     // pieces of SearchPanelTagHelper's legacy inline <script>. Design
-    // authority: Gitea issue #470 comment 18118 §5 ("SearchPanel N2
+    // authority: internal infrastructure issue #470 comment 18118 §5 ("SearchPanel N2
     // co-design"). Reproduces the legacy script's sequence and selectors
     // EXACTLY — including the second `collapse(titleId)` listener (no 'x'
     // suffix) that targets a lay-filter no element in the emitted markup

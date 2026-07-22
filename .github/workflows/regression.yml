@@ -51,7 +51,7 @@ jobs:
         working-directory: test/regression
 
       # Cache Playwright's downloaded browser binaries. Best-effort only —
-      # cache misses/failures must never fail the job (Gitea act_runner
+      # cache misses/failures must never fail the job (internal infrastructure act_runner
       # portability caveat, same rationale as the artifact-upload workaround
       # below).
       - name: Cache Playwright browsers
@@ -70,7 +70,7 @@ jobs:
         run: npx playwright test
         working-directory: test/regression
 
-      # actions/upload-artifact@v4 is incompatible with the local Gitea
+      # actions/upload-artifact@v4 is incompatible with the local internal infrastructure
       # Actions API (see docs/ci-operations.md, Issue #11) — the job can
       # report conclusion: failure at this step even though the suite
       # itself passed. continue-on-error keeps that quirk from masking a
