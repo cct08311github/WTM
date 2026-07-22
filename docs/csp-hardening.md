@@ -1,76 +1,104 @@
 # CSP Hardening Guide — the Dialog-Flow Strict-CSP Recipe
 
-> Added in 10.14.3 (#627, a slice of the #470 epic). Explains how far a WTM app can
-> tighten `Content-Security-Policy` today, exactly which knob unlocks each level, and —
-> just as important — which framework widgets are **not yet** ready for the strictest
-> levels.
+> Added in 10.14.3 (#627, a slice of the #470 epic). Rewritten for #470 Slice Q
+> (2026-07, the G→O island campaign's deprecation & docs endgame — design authority:
+> Gitea issue #470 comment 16357 "Completion plan: Slice G → Q") once Slices
+> G/H/I/J/K/L/M/N1/N2/O1/O2/O3 had all shipped (v10.16.0 + follow-on). Explains how far
+> a WTM app can tighten `Content-Security-Policy` today, exactly which knobs unlock each
+> level, and — just as important — which framework configurations are **still** not
+> eligible for the strictest levels, and why.
+
+## Recommended target: Level 2 or Level 3
+
+As of the #470 G→O campaign, the **entire form-widget + grid + dialog-init family**
+supports eval-free, island-driven rendering as an opt-in. For any app whose dialogs
+don't hit one of the honest residual blockers in the table below, **Level 2 (kill-switch
+flipped) or Level 3 (strict `script-src`) is now the recommended target**, not an
+aspirational one. Two switches get you there:
+
+```csharp
+// Program.cs / Startup — opt in to island rendering for the whole form/grid/dialog family
+services.Configure<WtmUIOptions>(o => o.UseSelectIslandRender = true);
+```
+
+```html
+<!-- _Layout.cshtml <head> — opt in to the #627 kill-switch -->
+<meta name="wtm-disable-legacy-script-rehydration" content="true">
+```
+
+Both default OFF; both are additive opt-ins with zero effect on apps that don't set
+them. Read the rest of this guide before flipping either in production — Level 1's audit
+step still matters, and the residual-blocker table tells you up front whether your
+dialogs contain something that will fall back to (safely warned, never silently broken)
+legacy rendering.
 
 ## Background: what is and is not eval-free today
 
 The `framework_layui.js` eval-removal effort (originally tracked as #789 on this repo's
 pre-Gitea-cutover GitHub tracker, now defunct, phases 1–3D; continued locally as
-#470/#552/#556/#558/#561/#564/#576/#587) ended with:
+#470/#552/#556/#558/#561/#564/#576/#587, then the #470 Slice G→O campaign) stands at:
 
-- **The common form-init paths are JSON-island-driven** (v10.13.12+): form init/submit/
-  validate/error-highlight, laydate (non-range, callback-free), rate, taginput, and the
-  callback-free slider/colorpicker configurations travel as
+- **The common form-init paths are JSON-island-driven unconditionally** (v10.13.12+,
+  predates and is independent of `UseSelectIslandRender`): `<wt:form>`'s AJAX submit
+  binding (`bindSubmit`), the auto-validate handshake (`bindValidate`), and
+  ModelState error highlighting (`highlightErrors`) always travel as
   `<script type="application/json">` islands consumed by the `ff.DispatchAction`
-  whitelist — `JSON.parse`, never code execution.
-- **Exactly one `eval(` remains** in `framework_layui.js`: `ff._legacyScriptEval`, the
-  back-compat fallback for the deprecated `IsScript` response-header protocol.
-- **Three dynamic `<script>`-injection paths remain** for AJAX-loaded content:
-  `ff.OpenDialog` (#522) and `ff._replayInitFromHtml` (#587) re-run inline `<script>`
-  extracted from partials; `ff.OpenDialog2` rehydrates the Selector search-panel's
-  `$$script$$` template tokens (#332).
-- **Many framework TagHelper configurations still emit executable inline `<script>`**
-  (tracked under the #470 hard blockers — xmSelect's global-`var` sharing needs a
-  dedicated declarative action). The list below is **indicative, not exhaustive** — the
-  authoritative audit is the grep + staging-flip procedure in level 1:
-  - *Unconditional*: `<wt:combobox>` / `<wt:tree>` (the `xmSelect.render` block — every
-    combobox), `<wt:transfer>` (`layui.transfer.render`), `<wt:ueditor>`,
-    `<wt:upload>` / `<wt:multiupload>` (per-widget `DoDelete`/`DoPreview` helpers),
-    `<wt:grid>`/data tables rendered inside AJAX-loaded partials,
-    `<wt:selector>` (the whole `$$script$$`-tokenized search-panel template), the
-    SearchPanel `OldPost` click handler, and `<wt:checkbox>` / `<wt:radio>`. The
-    field's default selection travels as a `data-wtm-defaults` HTML attribute
-    (race-free; `ff.ChainChange` reads only this, never a script), and the legacy
-    `{Id}defaultvalues` global is *also* published via an unconditional inline
-    `<script>` write, for app-authored JS that reads it synchronously right after the
-    widget markup (#646: an earlier redesign (#632) made a `wtm-dialog-init` JSON
-    island — type `fieldDefaults` — the *only* publisher of that global; on a full
-    page the island is consumed at DOMContentLoaded, which silently broke that
-    parse-time back-compat guarantee). checkbox/radio therefore rejoined this
-    unconditional inline-script list in #646.
-    **#649 correction:** #646's fix kept the island alongside the restored inline
-    write, which reintroduced a *different* bug — on a default full-page load the
-    island's DOMContentLoaded dispatch unconditionally re-published the *original
-    server* values, silently clobbering any mutation app-authored JS made to the
-    global in between. checkbox/radio no longer emit the `fieldDefaults` island at
-    all; the inline write is now the **sole** publisher of the global. Consequence:
-    under the #627 kill-switch (strict CSP), the browser blocks this inline script
-    and, since #649, nothing else republishes the global for these two widgets — an
-    app that needs the value under strict CSP must read the `data-wtm-defaults`
-    attribute instead (exactly what `ff.ChainChange` already does). The global is
-    therefore no longer CSP-clean-capable via a deferred island; it is inline-only,
-    synchronous-or-absent.
-    (An earlier #632 draft made the island the authoritative source for
-    `ff.ChainChange` itself; review found a real dispatch-ordering race — see the
-    #632 commit message. That part of #632 stands; only the app-facing global's
-    publisher changed.)
-  - *Conditional*: `item-url` on combobox/transfer/checkbox/radio (`ff.LoadComboItems`);
-    `<wt:datetime>` **callback and range** branches (the range configuration emits the
-    inline script even with zero callbacks); `<wt:slider>` / `<wt:colorpicker>` when a
-    `change-func`/`on-tips-func` callback is set; `<wt:form>` when `BeforeSubmit` is not
-    a plain identifier.
+  whitelist — `JSON.parse`, never code execution. laydate (non-range, callback-free),
+  rate, and taginput likewise predate the flag and are always island-driven.
+- **Exactly one `eval(` remains** in `framework_layui.js`: `ff._legacyScriptEval` (line
+  ~3663), the back-compat fallback for the deprecated `IsScript` response-header
+  protocol. **Deprecated** — see "Deprecating the legacy paths" below.
+- **Four dynamic execution points remain, all gated by the #627 kill-switch**
+  (`ff._isLegacyRehydrationDisabled()`, exactly 4 call sites verified by grep):
+  `ff._legacyScriptEval` itself, `ff.OpenDialog`'s inline-`<script>` rehydration (#522),
+  `ff._replayInitFromHtml`'s SPA-fragment/PostForm replay (#587), and
+  `ff.OpenDialog2`'s Selector search-panel `$$script$$` template rehydration (#332).
+- **The entire form-widget + grid + dialog-init family is now island-capable behind
+  `WtmUIOptions.UseSelectIslandRender=true`** (default **OFF** — byte-identical to
+  pre-#470-G when unset). Coverage by slice, all reusing the SAME flag and the SAME
+  "guarded bare-identifier or legacy+`console.warn`" 3-way decision for any
+  developer-authored callback:
 
-The four legacy execution points exist for BOTH app-authored inline scripts **and** the
-framework widget configurations above. That distinction drives the honest audit in
-level 1 below.
+  | Slice | Covers | Island mechanism | Falls back to legacy when |
+  |---|---|---|---|
+  | **G** | `<wt:tree>` `item-url`, `<wt:ueditor>`, `<wt:textarea ShowCounter>` | `loadComboItems` island reuse; `ueditor` action; `data-wtm-counter` attr (no script at all) | never (all callback-free) |
+  | **H** | `<wt:datetime>` (laydate), incl. the **range** configuration | island (`ready`/`change`/`done` + native range write-back) | any non-identifier callback |
+  | **I** | `<wt:slider>`, `<wt:colorpicker>` | island (`bindChange`/`autocomplete`/`verify` actions) | non-identifier `change-func`/`on-tips-func` |
+  | **J** | `<wt:combobox>`, `<wt:tree>` **render** (the `xmSelect.render` hard blocker) | `renderSelect` island | non-identifier `ChangeFunc` |
+  | **K** | `<wt:transfer>` | `renderTransfer` island | non-identifier `ChangeFunc` |
+  | **L** | `<wt:upload>`, `<wt:multiupload>` | island (`ff.upload` namespace: `DoDelete`/`DoPreview`/`SetValues`) | non-identifier callback |
+  | **M** | Grid-cell/dialog-action buttons (`LayuiUIService.MakeDialogButton`/`MakeButton`/`MakeViewButton`/`MakeDateTime`/`MakeScriptButton`); `<wt:submitbutton>`'s **click body** | `data-wtm-click` delegated dispatch (zero inline script for `Make*`); fixed `ff._submitButtonClick(id)` call for SubmitButton (still wrapped in one inline `<script>` — see residual table) | non-bare-call `Click`/`script` expression |
+  | **N1** | `<wt:treecontainer>`, `<wt:chart>` | island | non-identifier `ClickFunc` (treecontainer) |
+  | **N2** | `<wt:searchpanel>` (AJAX/non-`OldPost` mode) | `searchPanelInit` island + delegated `click`/`myclick` | `OldPost=true` or `IsInSelector=true` |
+  | **O1** | `<wt:grid>` render core (`table.render`, templet registry replacing the `_raw_`-function-string injection) | `renderGrid` island | `IsInSelector`, `EnableAnalysis`, non-identifier `DoneFunc`/`CheckedFunc`/`GridAction.OnClickFunc` |
+  | **O2** | Grid toolbar + row-action buttons (retires the `wtToolBarFunc_{Id}` dispatcher and both laytpl `<script type="text/html">` templates) | `gridActions[]` + `toolbarHtml` descriptors on the same island | same gate as O1 (grid-level, not per-button) |
+  | **O3** | `UseLocalData`, grid-cell `onchange` delegation, the `SearcherExpanded` fold script | `localData` island field; `data-wtm-cellchange*` delegation; `foldPanel` island action | same gate as O1 |
 
-**Scope note:** the kill-switch gates the framework's *dynamic* execution paths — i.e.
-scripts inside **AJAX-loaded** dialogs and fragments. Inline scripts in a normal
-full-page load execute natively by the browser and are unaffected by the switch (they
-become relevant only at level 3, where the CSP itself starts blocking them).
+  `UseLocalData` was itself a legacy-forcing condition through O1/O2 and was lifted in
+  O3 — a local-data grid is now island-eligible under the same O1 gate as every other
+  grid.
+
+## Honest residual blockers (verified by grep against the current tree, not carried
+forward from the pre-Slice-Q version of this doc)
+
+Even with `UseSelectIslandRender=true` **and** the kill-switch flipped, the following
+still emit — or can still execute — inline script. Each row states *why*, and whether
+it is expected to close.
+
+| Blocker | Why it's still legacy | Status |
+|---|---|---|
+| `<wt:checkbox>` / `<wt:radio>` `{Id}defaultvalues` global write | Intentionally **not** islandifiable — #632 tried an island, #646 and #649 (two separate pre-release adversarial reviews) both found it broke the synchronous parse-time back-compat contract app code relies on. The inline write is now the *sole* publisher, unconditionally, regardless of the flag. The CSP-safe read path is the `data-wtm-defaults` attribute (`ff.ChainChange` already reads only that). | **Permanent by design** — will never be islandified; deprecation is "use `data-wtm-defaults`", not "wait for a future slice". |
+| `<wt:selector>` `$$script$$`-tokenized search-panel template (`<script type="text/template" id="Temp{Id}">`) | Slice P (sentinel retirement — replace the string-token sentinel with a native `<template>` element) has **not shipped**. The sentinel itself is inert markup (`type="text/template"` never executes), but `ff.OpenDialog2` rehydrates its `$$script$$` segments back into a live `<script>` on dialog open — one of the kill-switch's 4 gated points. | Tracked: #655, gated on the same BMS staging-validation gate as #567 Phase 2 (flipping `UseSelectIslandRender` to default-**on** in selector panels). |
+| Grid `IsInSelector=true` | O1's `DetermineGridIslandDecision` forces these to legacy — smaller blast radius, same containment reasoning as the selector sentinel above. | Tracked: #655 (same gate as the row above — Slice P lifts both together). |
+| Grid `EnableAnalysis=true` | The inline analysis-toggle button and `framework_analysis.js`/`sortable.min.js` `<script src>` includes are only emitted on the legacy path; O1's decision function forces these grids to legacy permanently ("out of scope through O3" per `DataTableTagHelper.Island.cs`'s own class doc). | Out of scope for the grid campaign; would need a dedicated slice. |
+| `<wt:checkbox>`/`<wt:switch>`/`<wt:radio>` `ChangeFunc` → `layui.form.on(...)` change-event binding; `<wt:textbox SearchUrl>` autocomplete render | `Abstraction/BaseElementTag.cs`'s `Process()` switch emits these as unconditional inline `<script>` — **no `UseSelectIslandRender` check exists in this file at all**. Distinct from the widgets' own *render* islandification (J/K did the render half; this change-event wiring was never touched by any slice). | **Newly identified during this Slice Q sweep** — not on any prior hard-blocker inventory. Tracked: #784. |
+| `<wt:button click="...">` / `<wt:submitbutton>` click-wiring `<script>` wrapper | `Abstraction/BaseButton.cs`'s `BaseButtonTag.Process()` always emits `$('#{Id}').on('click', function(){...});` inside an inline `<script>` tag, with no flag check in that file. Slice M's `SubmitButtonTagHelper` flag-ON path only swaps the closure *body* to a fixed `ff._submitButtonClick(id)` call when `Click` is island-safe — the wrapping `<script>` element itself is unconditional. Contrast with `LayuiUIService.Make*` (Slice M, same commit) which built genuinely zero-script `data-wtm-click` anchors for C#-generated buttons — that gap is why grid-cell/dialog-action buttons are CSP-clean today but hand-authored `<wt:button>`/`<wt:submitbutton>` markup is not. | **Newly identified during this Slice Q sweep**. Tracked: #784. |
+| `<wt:tab>` / `<wt:panel>` wiring | `TabTagHelper`/`PanelTagHelper` always emit a fixed-shape inline `<script>` (tab-selection + chart-resize; collapse-resize respectively). Nominally listed under Slice N's original scope ("searchPanel + tab/panel/treeContainer/chart wiring", 2026-07-12 plan) but only TreeContainer/Chart (N1) and SearchPanel (N2) actually shipped. | **Newly identified during this Slice Q sweep** — dropped silently from N's delivered scope. Tracked: #784. |
+| `EnableAutoVerify`'s `[Phone]`/`[RegularExpression]` `layui.form.verify()` registration | `Abstraction/BaseFieldTag.cs` — gated behind the **separate**, narrower `WtmUIOptions.EnableAutoVerify` opt-in (default off); when that flag is on, it always emits inline script regardless of `UseSelectIslandRender`. No island alternative exists yet. | Low priority — already double-opt-in; noted for completeness, not a hard blocker for the mainstream recipe. |
+| Non-identifier developer callbacks (any widget: `ChangeFunc`/`DoneFunc`/`CheckedFunc`/`OnClickFunc`/`BeforeSubmit`/`Click`/`script`/…) | By design — an arbitrary call/dotted/compound expression cannot be safely re-expressed as JSON data for `ff.DispatchAction` to run, so every slice keeps the exact legacy inline script for that one field/button/grid and emits a `console.warn` naming the offending attribute. | **Inherent, not a bug.** Rewrite the callback as a bare no-arg (or single-arg, widget-dependent) named function to become island-eligible. |
+| `<wt:form>` with non-identifier `BeforeSubmit`; `<wt:searchpanel OldPost="true">`'s submit-click handler | The AJAX-submit *island* (`bindSubmit`) only fires for an absent or bare-identifier `BeforeSubmit` — a non-identifier expression keeps the legacy `layui.form.on('submit(...)')` script so the submit gate still runs, per the "never silently change default behaviour" red line (#561). `OldPost=true` forms post natively — no JS binding is needed or emitted at all beyond the one inline click handler. | By design; `BeforeSubmit` closes the same way as any other non-identifier callback above. `OldPost` is inherent (native post, not a gap). |
+| The single `eval(` — `ff._legacyScriptEval` (`IsScript` response-header protocol) | Back-compat for controllers still returning the deprecated script-body response shape. | **Deprecated.** See below — migrate to `FFResultJson()`; removal stays gated on downstream `IsScript` usage reaching zero (tracked on the #789/#807 futures epics). |
+| `ff.OpenDialog` / `ff._replayInitFromHtml` / `ff.OpenDialog2` rehydration of AJAX-loaded partials | These exist so a partial/dialog response can still carry a hand-authored inline `<script>` (app code, not framework-generated) and have it execute after DOMPurify sanitization. Closing this permanently would require every app-authored dialog script to migrate off inline `<script>` too — outside the framework's control. | Close it **per-app** via the #627 kill-switch once your own dialog partials are script-free (Level 2 below). The framework side stays available indefinitely for apps that have not opted in. |
 
 ## The kill-switch (opt-in, default OFF)
 
@@ -103,8 +131,8 @@ can be toggled at runtime (useful in SPA shells, staging audits, and tests). Whe
 Script **extraction** from dialog markup is unchanged — it happens before
 `ff.SafeHtml`/DOMPurify sanitization and is part of the markup-safety pipeline. Only
 **execution** is gated. The diagnostics are deliberately loud: any warning in staging
-means something still rides a legacy path — your own partial *or* one of the framework
-widget configurations listed above.
+means something still rides a legacy path — your own partial, a developer callback that
+isn't a bare identifier, or one of the residual blockers in the table above.
 
 ## The graduated recipe
 
@@ -121,55 +149,57 @@ this default and nothing breaks, you are at level 0. (See `WtmCspOptions` for ev
 directive; `Mode = WtmCspMode.ReportOnly` gives a non-blocking trial run, and `ReportUri`
 collects violation reports.)
 
-### Level 1 — audit: is your AJAX-loaded content script-free?
+### Level 1 — audit: is your app eligible for the recommended target?
 
-The kill-switch only pays off if nothing in your dialogs/fragments depends on the legacy
-paths. Two categories to audit:
+Two things to check before flipping `UseSelectIslandRender` + the kill-switch in
+production:
 
-1. **Framework widgets that still emit inline scripts.** If any AJAX-loaded dialog or
-   fragment contains a widget configuration from the inventory above (combobox, tree,
-   transfer, ueditor, upload, checkbox/radio, embedded grids, selector, range or
-   callback datetimes, callback sliders/colorpickers, non-identifier `BeforeSubmit`
-   forms — **non-exhaustively**), that content **requires** the legacy rehydration today
-   and will break (loudly) with the switch on. These are #470 hard-blocker territory —
-   most CRUD apps with comboboxes in create/edit dialogs are **not yet eligible** and
-   should stay at level 0/1 until those widgets get island-driven variants. Because the
-   list is not exhaustive, do not audit by widget list alone: the staging flip in step 3
-   below is the authoritative check.
-2. **Your own inline `<script>` blocks** in anything loaded via `ff.OpenDialog` /
-   `ff.OpenDialog2` / SPA fragments. Migrate them to `<wt:dialog-init>` JSON islands (or
-   the `ff.DispatchAction` action vocabulary); for genuinely custom logic, move it into
-   an external `.js` file invoked via a whitelisted island action or a delegated event
-   handler.
+1. **Do your dialogs/pages hit a residual blocker?** Walk the table above. A grid with
+   `EnableAnalysis` or `IsInSelector`, a `<wt:selector>`, checkbox/radio defaultvalues,
+   or a non-identifier developer callback anywhere will fall back to the exact legacy
+   script for *that one configuration* — loudly (`console.warn`), never silently. That
+   is usually fine (most pages mix a handful of legacy-only widgets with many
+   island-eligible ones); it only blocks Level 3 (see below) for the specific
+   page/dialog that contains it.
+2. **Your own hand-authored inline `<script>` blocks** in anything loaded via
+   `ff.OpenDialog` / `ff.OpenDialog2` / SPA fragments. Migrate them to
+   `<wt:dialog-init>` JSON islands (or the `ff.DispatchAction` action vocabulary); for
+   genuinely custom logic, move it into an external `.js` file invoked via a
+   whitelisted island action or a delegated event handler.
 
 How to audit in practice:
 
-- **Grep your views** for the widget list above inside dialog partials, and for
-  hand-written `<script>` in AJAX-loaded content.
-- **Watch the browser console in staging** for
-  `[WTM] IsScript script-body response is deprecated` — each occurrence is a controller
-  action still on the legacy script-body protocol; migrate it to `FFResultJson()`.
+- **Turn on `UseSelectIslandRender` in staging** and watch the browser console: every
+  `[WTM] … UseSelectIslandRender is ON but island render was skipped … See #470 Slice
+  {G..O}.` warning pinpoints a straggler by TagHelper Id/attribute name, not just a
+  widget class.
+- **Watch for** `[WTM] IsScript script-body response is deprecated` — each occurrence is
+  a controller action still on the legacy script-body protocol; migrate it to
+  `FFResultJson()`.
 - **Enable the kill-switch in staging** and exercise every dialog-heavy flow: each
   `[WTM] … NOT executed (DisableLegacyScriptRehydration)` warning pinpoints a straggler
-  with the count of skipped scripts. Silence across full regression coverage = eligible.
+  with the count of skipped scripts. Silence across full regression coverage = eligible
+  for Level 2.
 
-### Level 2 — flip the kill-switch in production
+### Level 2 — flip the kill-switch in production (recommended target)
 
-Only after a clean level-1 audit. Add the `<meta>` tag to your layout. Rollback is
-deleting one line — no server restart, no config change. From this point the dialog/
-fragment flow performs **zero** `eval` and **zero** dynamic script injection across all
-four gated paths, deterministically (instead of relying on the browser's CSP blocking
-with noisy violation reports).
+After a clean level-1 audit. Add the `<meta>` tag to your layout, and set
+`UseSelectIslandRender = true` in `WtmUIOptions`. Rollback is deleting one line / one
+config flip each — no server restart beyond the config reload, no schema change. From
+this point the dialog/fragment flow performs **zero** `eval` and **zero** dynamic script
+injection across all four gated paths, deterministically (instead of relying on the
+browser's CSP blocking with noisy violation reports) — for every widget configuration
+that isn't in the residual-blocker table above.
 
-### Level 3 — tighten `script-src` toward `'self'`
+### Level 3 — tighten `script-src` toward `'self'` (recommended target for eligible pages)
 
-With the kill-switch on, the framework no longer needs `'unsafe-inline'` for the dialog
-flow. What *usually still needs it*:
+With the kill-switch on and `UseSelectIslandRender` on, most pages no longer need
+`'unsafe-inline'`. What *still* needs it, page by page:
 
-- **Framework widgets on full-page loads.** The same widget list from level 1 emits
-  inline `<script>` into normal page loads too, where the browser executes it natively.
-  Dropping `'unsafe-inline'` blocks those — so level 3 additionally requires that your
-  *pages* (not just dialogs) avoid the still-script-based widget configurations.
+- **Any of the residual blockers above**, if present on that page — checkbox/radio
+  defaultvalues, a selector, an `EnableAnalysis`/`IsInSelector` grid, a non-identifier
+  callback, `<wt:tab>`/`<wt:panel>`/`<wt:button>` (see #784), or `EnableAutoVerify`
+  Phone/RegularExpression rules.
 - **Your own layout bootstrap** — e.g. the demo's:
 
 ```html
@@ -186,7 +216,9 @@ cover it. Your options, in increasing order of effort:
 
 - **Stay at `'self' 'unsafe-inline'`** (level 2). Already a real win: the *dynamic*
   injection surface is gone; `'unsafe-inline'` only covers scripts present in the initial
-  server-rendered HTML, which your Razor layer controls.
+  server-rendered HTML, which your Razor layer controls, and — once
+  `UseSelectIslandRender` is on — that set is now small and enumerable via the
+  residual-blocker table above instead of "most of the widget catalog".
 - **Externalize the bootstrap**: move the values into `<meta>`/`data-*` attributes
   (markup, not script — e.g. `<meta name="wtm-cookie-pre" content="@ViewData[...]">`)
   and read them from a small app-owned external `.js` file; generate the per-window GUID
@@ -204,21 +236,47 @@ Recommended rollout for level 3: switch `Mode = WtmCspMode.ReportOnly` with the 
 `ScriptSrc`, run staging + a production canary until the violation reports are quiet, then
 `Enforce`.
 
-### Honest limits
+## Deprecating the legacy paths
 
-- **Partially-islandified widgets degrade, they do not work.** Islandification lands one
-  widget concern at a time. A widget whose *data-loading* half is an island but whose
-  *render* half is still a legacy inline `<script>` (today: `<wt:combobox>`/`<wt:tree>`'s
-  `xmSelect.render`, `<wt:transfer>`'s `transfer.render`) behaves asymmetrically with the
-  kill-switch ON: the island still dispatches, the render script does not. The framework
-  detects this and emits one actionable `console.warn` naming the widget instead of
-  throwing — items are fetched but cannot be applied. That warning means "this widget is
-  not yet eligible", not "your page is broken beyond this point". It disappears when the
-  widget's render half is islandified (tracked under #470).
-- **Most WTM apps cannot reach level 2/3 yet** if their dialogs use comboboxes/selectors —
-  that is a framework limitation (the #470 xmSelect hard blocker), not an app defect.
-  The switch still has value there as a *staging audit tool*: flip it in a test
-  environment to enumerate exactly what would break.
+`UseSelectIslandRender=false` (the default) and the kill-switch OFF (the default) remain
+fully supported — this is a **documentation-level deprecation**, not a behaviour change.
+Nothing here alters a default, logs a startup warning, or nags at runtime; the framework
+stays silent unless you opt in and then hit a residual blocker (in which case you get a
+targeted `console.warn`, not a generic nag).
+
+- **Prefer `UseSelectIslandRender=true`** for new projects and during planned migrations
+  of existing ones. It is additive: flipping it on only changes rendering for the
+  configurations in the slice-coverage table above; every residual blocker keeps working
+  exactly as before, with a warning instead of a silent gap.
+- **Avoid the `IsScript` response-header protocol** in new controller code — return
+  `FFResultJson()` instead. `IsScript` is what keeps `ff._legacyScriptEval` (the codebase's
+  one remaining `eval(`) alive; it is not removed yet because downstream apps still use
+  it, and removing it would be a breaking change requiring a major-version migration path,
+  not a docs update. Track migration progress via the `console.error` the kill-switch
+  emits when it blocks an `IsScript` response.
+- **`WtmUIOptions.UseSelectIslandRender`**'s XML doc (`Core/ConfigOptions/WtmUIOptions.cs`)
+  now points here for the current, full scope of what the flag covers — it originally
+  documented only Slice J's combobox/tree behaviour and has been kept up to date as later
+  slices reused the same flag.
+- **Kill-switch default-ON** is explicitly **out of scope** for this deprecation pass — it
+  is a next-major-version topic (a real behaviour change: it stops re-executing
+  app-authored inline scripts in AJAX partials by default), not something a docs slice can
+  schedule.
+
+### Honest limits (updated)
+
+- **Partially-islandified widgets degrade, they do not break.** A configuration this doc
+  lists as "falls back to legacy" (a non-identifier callback, an `EnableAnalysis` grid, a
+  selector, …) keeps working exactly as it did before `UseSelectIslandRender` existed —
+  the framework detects the condition and emits one actionable `console.warn` naming the
+  TagHelper/attribute instead of throwing or silently degrading.
+- **The residual-blocker table above is the current, exhaustive list** — it replaces the
+  older "indicative, not exhaustive" hard-blocker inventory from before Slice Q, which
+  predates the G→O campaign and listed combobox/tree/transfer/ueditor/upload/grid/
+  selector/checkbox/radio as uniformly still-legacy. That was accurate at the time; it is
+  stale now. Do not audit by widget class alone regardless — the staging-flip procedure in
+  level 1 is still the authoritative check, since new app code or a future framework
+  change could add to the table above before this doc is updated again.
 - `style-src` keeps `'unsafe-inline'`: layui and several TagHelpers set inline styles.
   Tightening style-src is out of scope here.
 - Third-party or legacy pages you cannot audit (hand-written admin partials, vendored
@@ -271,13 +329,17 @@ detected, naming #776.
 
 | Knob | Where | Default |
 |---|---|---|
-| `<meta name="wtm-disable-legacy-script-rehydration" content="true">` | app layout markup | absent (OFF) |
+| `WtmUIOptions.UseSelectIslandRender` | `services.Configure<WtmUIOptions>(...)` | `false` (OFF) — recommended `true` for the strict-CSP target |
+| `<meta name="wtm-disable-legacy-script-rehydration" content="true">` | app layout markup | absent (OFF) — recommended present for the strict-CSP target |
 | `ff.DisableLegacyScriptRehydration` | JS, strict `=== true` | `undefined` (OFF) |
 | `WtmCspOptions.ScriptSrc` | `UseWtmContentSecurityPolicy(...)` | `'self' 'unsafe-inline'` |
 | `WtmCspOptions.Mode` | same | `Enforce` (`ReportOnly` for trials, `Disabled` for kill) |
 | `WtmCspOptions.ReportUri` | same | `null` |
 
-Related: `docs/wtm-developer-manual.md` § security middleware; issues #470 (epic — the
-xmSelect/widget islandification hard blockers live there), #789 (eval removal epic) and
-#807 (nonce/report-to futures, unsafe-inline removal epic) — both on this repo's
-pre-Gitea-cutover GitHub tracker, now defunct — and #627 (this kill-switch).
+Related: `docs/wtm-developer-manual.md` § security middleware; issue #470 (epic — the
+G→O island slices and the residual-blocker inventory above both live there), #789 (eval
+removal epic) and #807 (nonce/report-to futures, unsafe-inline removal epic) — both on
+this repo's pre-Gitea-cutover GitHub tracker, now defunct — #627 (this kill-switch),
+#655/#567 (Slice P / selector-default-on gate), and #784 (residual non-flag-gated
+emitters found during the Slice Q sweep: `BaseElementTag`'s change-event bindings,
+`BaseButtonTag`'s click-wiring wrapper, `<wt:tab>`/`<wt:panel>`).

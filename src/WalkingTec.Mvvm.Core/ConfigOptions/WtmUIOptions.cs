@@ -123,6 +123,31 @@ namespace WalkingTec.Mvvm.Core.ConfigOptions
         /// ChangeFunc is emitted so the fallback is visible during migration.
         /// See #470 Slice J.
         /// </summary>
+        /// <remarks>
+        /// <para>
+        /// This flag has grown beyond ComboBox/Tree since Slice J: Slices
+        /// K/L/M/N1/N2/O1/O2/O3 reuse the SAME opt-in for Transfer, Upload/
+        /// MultiUpload, grid-cell/dialog buttons + SubmitButton, TreeContainer,
+        /// Chart, SearchPanel, and the whole &lt;wt:grid&gt; render/toolbar/
+        /// local-data pipeline — each with the identical guarded-identifier-or-
+        /// legacy-fallback contract described above, and each independently
+        /// byte-identical when this flag is OFF (the default). Slices G/H/I
+        /// (Tree item-url, laydate, Slider/ColorPicker) also read it.
+        /// </para>
+        /// <para>
+        /// Setting this to <c>true</c> — together with the #627 kill-switch
+        /// (<c>ff.DisableLegacyScriptRehydration</c> /
+        /// <c>&lt;meta name="wtm-disable-legacy-script-rehydration"&gt;</c>) — is
+        /// the recommended path toward a strict <c>Content-Security-Policy</c>
+        /// (no <c>'unsafe-inline'</c> for the covered widget family). See
+        /// <c>docs/csp-hardening.md</c> for the full graduated recipe, the
+        /// per-slice coverage table, and the honestly-documented residual
+        /// blockers (checkbox/radio defaultvalues, selector-hosted grids/panels,
+        /// EnableAnalysis grids, non-identifier developer callbacks, and a few
+        /// TagHelpers this flag does not yet cover — tracked in Gitea issue
+        /// #784).
+        /// </para>
+        /// </remarks>
         public bool UseSelectIslandRender { get; set; } = false;
 
         #endregion
