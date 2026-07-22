@@ -39,7 +39,7 @@ jobs:
     steps:
     - uses: actions/checkout@v5
     - name: Validate release script syntax
-      run: bash -n scripts/release-gitea-package.sh
+      run: bash -n scripts/release-internal-package.sh
     - name: Run release script smoke tests
       run: bash test/release-script-tests.sh
   build-and-test:
