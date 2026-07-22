@@ -287,8 +287,25 @@ window.ff = {
     // Issue #470 Slice O3: 'foldPanel' likewise needs an 'element' entry —
     // its whole body is one layui.element.fold(...) call, same rationale as
     // 'searchPanelInit' immediately above.
+    // Issue #784 (#470 residual): 'formChange' DOES need a 'form' entry —
+    // layui.form.on IS a layui.use(...) module call (the legacy inline
+    // <script> BaseElementTag.cs's checkbox/switch/radio ChangeFunc wiring
+    // replaces always wrapped its call in `layui.use(['form'], function(){
+    // ... })`), same rationale as 'bindSubmit'/'bindValidate' above.
+    // 'autocomplete' likewise needs its OWN entry — layui.autocomplete IS a
+    // layui.use(...) module (TextBoxTagHelper's legacy inline <script>
+    // always wrapped its call in `layui.use(['autocomplete'], function(){
+    // ... })`), same rationale, different module name.
+    // 'tabInit'/'panelInit' DO need an 'element' entry — layui.element IS a
+    // layui.use(...) module (PanelTagHelper's legacy inline <script> already
+    // wrapped its call in `layui.use(['element'], ...)`; TabTagHelper's own
+    // legacy script never wrapped its layui.element.on(...) call, but every
+    // WTM page loads 'element' via a top-level layui.use(...) in the master
+    // layout well before any per-tab script runs today — this island entry
+    // is strictly SAFER than that implicit assumption, same
+    // belt-and-suspenders rationale 'searchPanelInit'/'foldPanel' above use).
     _islandModulesFor: function (payload) {
-        var needed = { form: false, laydate: false, slider: false, rate: false, colorpicker: false, ueditorconfig: false, layedit: false, transfer: false, upload: false, tree: false, table: false, element: false };
+        var needed = { form: false, laydate: false, slider: false, rate: false, colorpicker: false, ueditorconfig: false, layedit: false, transfer: false, upload: false, tree: false, table: false, element: false, autocomplete: false };
         if (payload && payload.actions) {
             for (var i = 0; i < payload.actions.length; i++) {
                 var a = payload.actions[i];
@@ -301,6 +318,8 @@ window.ff = {
                 } else if (a.type === 'bindSubmit') {
                     needed.form = true;
                 } else if (a.type === 'bindValidate') {
+                    needed.form = true;
+                } else if (a.type === 'formChange') {
                     needed.form = true;
                 } else if (a.type === 'slider') {
                     needed.slider = true;
@@ -324,6 +343,12 @@ window.ff = {
                     needed.element = true;
                 } else if (a.type === 'foldPanel') {
                     needed.element = true;
+                } else if (a.type === 'tabInit') {
+                    needed.element = true;
+                } else if (a.type === 'panelInit') {
+                    needed.element = true;
+                } else if (a.type === 'autocomplete') {
+                    needed.autocomplete = true;
                 }
             }
         }
@@ -340,6 +365,7 @@ window.ff = {
         if (needed.tree) { mods.push('tree'); }
         if (needed.table) { mods.push('table'); }
         if (needed.element) { mods.push('element'); }
+        if (needed.autocomplete) { mods.push('autocomplete'); }
         return mods;
     },
 
@@ -2805,6 +2831,161 @@ window.ff = {
         }
     },
 
+    // Issue #784 (#470 residual): shared render body for the 'formChange'
+    // DispatchAction case (below) — the opt-in (UseSelectIslandRender,
+    // default OFF) eval-free island replacing BaseElementTag.cs's checkbox/
+    // switch/radio ChangeFunc -> layui.form.on(kind(filter), ...) inline
+    // <script>. layui.form IS a layui.use(...) module — see
+    // _islandModulesFor's 'formChange' entry — so by the time this runs,
+    // layui.form is already guaranteed loaded and this needs no additional
+    // layui.use(...) wrap of its own (mirroring 'bindSubmit'/'bindValidate'
+    // above).
+    //
+    // TRUST BOUNDARY: action.changeFunc is ALWAYS a compile-time,
+    // developer-authored Razor literal (the ChangeFunc TagHelper attribute
+    // value) — NEVER field/request/model data, the same trust class as
+    // bindSubmit's beforeSubmit (#558) / Slice I's Slider/ColorPicker
+    // ChangeFunc. BaseElementTag.cs only ever emits this action for a name
+    // that is already a plain identifier; a non-identifier ChangeFunc keeps
+    // the legacy inline <script> instead. Resolved through the SAME
+    // ff._resolveGuardedWindowFn guard every other #470 slice's named
+    // callback uses — a failed resolution silently skips the callback,
+    // never throws, never evals.
+    _renderFormChangeAction: function (action) {
+        try {
+            if (!action || !action.kind || !action.filter) { return; }
+            if (typeof layui === 'undefined' || !layui.form || typeof layui.form.on !== 'function') {
+                if (typeof console !== 'undefined' && console.warn) {
+                    console.warn('[WTM] formChange action skipped: layui.form is not loaded (#784).');
+                }
+                return;
+            }
+            var changeFn = ff._resolveGuardedWindowFn(action.changeFunc);
+            layui.form.on(action.kind + '(' + action.filter + ')', function (data) {
+                if (changeFn) { changeFn(data); }
+            });
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] formChange action failed:', e);
+            }
+        }
+    },
+
+    // Issue #784 (#470 residual): shared render body for the 'autocomplete'
+    // DispatchAction case (below) — the opt-in (UseSelectIslandRender,
+    // default OFF) eval-free island replacing TextBoxTagHelper's SearchUrl/
+    // TriggerUrl -> layui.autocomplete.render(...) inline <script>.
+    // layui.autocomplete IS a layui.use(...) module — see
+    // _islandModulesFor's 'autocomplete' entry — so by the time this runs,
+    // layui.autocomplete is already guaranteed loaded.
+    //
+    // TRUST BOUNDARY: same class as _renderFormChangeAction above —
+    // action.changeFunc is ALWAYS a compile-time, developer-authored Razor
+    // literal, never field/request/model data. Resolved through the SAME
+    // ff._resolveGuardedWindowFn guard; a failed resolution silently skips
+    // the callback.
+    _renderAutocompleteAction: function (action) {
+        try {
+            if (!action || !action.id || !action.url) { return; }
+            if (typeof layui === 'undefined' || !layui.autocomplete || typeof layui.autocomplete.render !== 'function') {
+                if (typeof console !== 'undefined' && console.warn) {
+                    console.warn('[WTM] autocomplete action skipped: layui.autocomplete is not loaded (#784).');
+                }
+                return;
+            }
+            var el = document.getElementById(action.id);
+            if (!el) { return; }
+            var changeFn = ff._resolveGuardedWindowFn(action.changeFunc);
+            layui.autocomplete.render({
+                elem: el,
+                url: action.url,
+                cache: false,
+                template_val: '{{d.Value}}',
+                template_txt: '{{d.Text}}',
+                onselect: function (data) {
+                    $('#' + action.id).val(data.Value);
+                    if (changeFn) { changeFn(data); }
+                    if (action.triggerUrl) {
+                        ff.ChainChange(action.triggerUrl + '/' + data.Value, data.elem);
+                    }
+                }
+            });
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] autocomplete action failed:', e);
+            }
+        }
+    },
+
+    // Issue #784 (#470 residual): shared render body for the 'tabInit'
+    // DispatchAction case (below) — the opt-in (UseSelectIslandRender,
+    // default OFF) eval-free island reproducing TabTagHelper's fixed
+    // tab-selection + chart-resize wiring EXACTLY. No developer callback is
+    // involved at all (selectedIndex is a plain number, id/filter are
+    // server-generated GUIDs), so there is no guarded-resolver step here —
+    // every field is unconditionally safe to use. layui.element IS a
+    // layui.use(...) module — see _islandModulesFor's 'tabInit' entry.
+    _renderTabInitAction: function (action) {
+        try {
+            if (!action || !action.id || !action.filter) { return; }
+            if (typeof layui === 'undefined' || !layui.element || typeof layui.element.on !== 'function') {
+                if (typeof console !== 'undefined' && console.warn) {
+                    console.warn('[WTM] tabInit action skipped: layui.element is not loaded (#784).');
+                }
+                return;
+            }
+            var idx = (typeof action.selectedIndex === 'number') ? action.selectedIndex : 0;
+            $('#' + action.id + ' ul li').eq(idx).addClass('layui-this');
+            $('#' + action.id + ' .layui-tab-item').eq(idx).addClass('layui-show');
+            layui.element.on('tab(' + action.filter + ')', function (data) {
+                $('#' + action.id).find("div[ischart='1']").each(function (index) {
+                    var _chart = window[$(this).attr('id') + 'Chart'];
+                    if (_chart && typeof _chart.resize === 'function') { _chart.resize(); }
+                });
+            });
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] tabInit action failed:', e);
+            }
+        }
+    },
+
+    // Issue #784 (#470 residual): shared render body for the 'panelInit'
+    // DispatchAction case (below) — the opt-in (UseSelectIslandRender,
+    // default OFF) eval-free island reproducing PanelTagHelper's fixed
+    // collapse-resize wiring EXACTLY (including the element.init() call the
+    // legacy inline <script> made on every panel render). No developer
+    // callback is involved at all (filter is a server-generated GUID).
+    // layui.element IS a layui.use(...) module — see _islandModulesFor's
+    // 'panelInit' entry.
+    _renderPanelInitAction: function (action) {
+        try {
+            if (!action || !action.filter) { return; }
+            if (typeof layui === 'undefined' || !layui.element) {
+                if (typeof console !== 'undefined' && console.warn) {
+                    console.warn('[WTM] panelInit action skipped: layui.element is not loaded (#784).');
+                }
+                return;
+            }
+            layui.element.init();
+            layui.element.on('collapse(' + action.filter + ')', function (data) {
+                setTimeout(function () {
+                    if (typeof (Event) === 'function') {
+                        window.dispatchEvent(new Event('resize'));
+                    } else {
+                        var evt = window.document.createEvent('UIEvents');
+                        evt.initUIEvent('resize', true, false, window, 0);
+                        window.dispatchEvent(evt);
+                    }
+                }, 10);
+            });
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[WTM] panelInit action failed:', e);
+            }
+        }
+    },
+
     // Issue #789 Phase 3C: CSP-safe JSON action dispatcher. The server returns
     // a WtmActionResult payload (X-WTM-Action: application/json header set) and
     // this function walks the whitelisted action types. Unknown action types
@@ -3256,6 +3437,39 @@ window.ff = {
                 // 'searchPanelInit'/'renderGrid' above.
                 case 'foldPanel':
                     ff._renderFoldPanelAction(action);
+                    break;
+                // Issue #784 (#470 residual): thin JSON wrapper over
+                // layui.form.on(kind(filter), ...) — the opt-in
+                // (UseSelectIslandRender, default OFF) eval-free island
+                // replacing BaseElementTag.cs's checkbox/switch/radio
+                // ChangeFunc wiring. See ff._renderFormChangeAction for the
+                // full rationale.
+                case 'formChange':
+                    ff._renderFormChangeAction(action);
+                    break;
+                // Issue #784 (#470 residual): thin JSON wrapper over
+                // layui.autocomplete.render(...) — the opt-in
+                // (UseSelectIslandRender, default OFF) eval-free island
+                // replacing TextBoxTagHelper's SearchUrl/TriggerUrl wiring.
+                // See ff._renderAutocompleteAction for the full rationale.
+                case 'autocomplete':
+                    ff._renderAutocompleteAction(action);
+                    break;
+                // Issue #784 (#470 residual): thin JSON wrapper over the
+                // fixed tab-selection + chart-resize wiring — the opt-in
+                // (UseSelectIslandRender, default OFF) eval-free island
+                // replacing TabTagHelper's inline <script>. See
+                // ff._renderTabInitAction for the full rationale.
+                case 'tabInit':
+                    ff._renderTabInitAction(action);
+                    break;
+                // Issue #784 (#470 residual): thin JSON wrapper over the
+                // fixed collapse-resize wiring — the opt-in
+                // (UseSelectIslandRender, default OFF) eval-free island
+                // replacing PanelTagHelper's inline <script>. See
+                // ff._renderPanelInitAction for the full rationale.
+                case 'panelInit':
+                    ff._renderPanelInitAction(action);
                     break;
                 // Issue #558 (#470-C): safe named-callback submit binding —
                 // mechanism only (FormTagHelper does not emit this yet). Mirrors
@@ -6021,6 +6235,34 @@ if (typeof $ === 'function' && $.fn && typeof $.fn.on === 'function') {
     });
 }
 
+// Issue #784 (#470 residual): shared ConfirmTxt -> layer.confirm(...) gate
+// for the 'button'/'submit' delegated click actions below — reproduces
+// BaseButtonTag.Process's legacy inline wrap EXACTLY:
+//   layer.confirm(ConfirmTxt, {icon:3,title:Sys.Info}, function(index){
+//     <click body>; layer.close(index);
+//   })
+// data-wtm-confirm / data-wtm-confirm-title are compile-time,
+// developer-authored (the ConfirmTxt TagHelper attribute) / server-localized
+// (Sys.Info) Razor literals — never request/field data — read back via
+// getAttribute, which HTML-decodes entities automatically, so the value seen
+// here is identical to what the legacy inline script embedded directly. No
+// ConfirmTxt -> runFn() executes immediately, matching the unwrapped legacy
+// onclick body.
+window.ff._confirmThenRun = function (el, runFn) {
+    var confirmTxt = el.getAttribute('data-wtm-confirm');
+    if (confirmTxt) {
+        if (typeof layer !== 'undefined' && typeof layer.confirm === 'function') {
+            var title = el.getAttribute('data-wtm-confirm-title') || '';
+            layer.confirm(confirmTxt, { icon: 3, title: title }, function (index) {
+                runFn();
+                layer.close(index);
+            });
+        }
+        return;
+    }
+    runFn();
+};
+
 // Issue #470 Slice M: shared dispatch map for the delegated data-wtm-click
 // listener below. Each entry receives the clicked element (already resolved
 // via closest('[data-wtm-click]')) and invokes exactly ONE fixed framework
@@ -6117,6 +6359,76 @@ window.ff._buttonAction = {
         if (typeof wtmAnalysis !== 'undefined' && typeof wtmAnalysis.toggle === 'function') {
             wtmAnalysis.toggle(gridId, vmName);
         }
+    },
+    // Issue #784 (#470 residual): generic <wt:button>/<wt:linkbutton>/etc.
+    // (any BaseButtonTag subclass EXCEPT SubmitButtonTagHelper, which uses
+    // its own 'submit' action below) delegated click dispatch — replaces
+    // BaseButtonTag.Process's unconditional
+    // `$('#{Id}').on('click',function(){...})` wrapper <script> for the
+    // subset of Click expressions that are safe to resolve by name: empty
+    // (no click behavior) or a bare no-arg developer function call.
+    // Reproduces the EXACT SAME ConfirmTxt -> layer.confirm(...) gate the
+    // legacy wrapper built, sharing ff._confirmThenRun with 'submit' below
+    // so both stay byte-for-byte in sync.
+    //
+    // Issue #784 REVIEW FIX (CRITICAL, correctness): `e` is the native click
+    // event (passed through by the document-level listener below), and is
+    // preventDefault()-ed UNCONDITIONALLY here, matching the legacy wrapper's
+    // `return false;` — which jQuery's `.on('click', fn)` always translates
+    // into BOTH preventDefault() and stopPropagation() whenever that legacy
+    // wrapper was reached at all (see BaseButtonTag.Process: the wrapper is
+    // only emitted when there is actual Click/ConfirmTxt content, exactly the
+    // condition under which the delegated 'button' island is wired too).
+    // Without this, a <button> with no explicit type="..." attribute
+    // (BaseButtonTag.Process never sets one for the generic path) defaults to
+    // type="submit" per the HTML spec — inside a <wt:form>, clicking it would
+    // trigger a native full-page form submission that nothing else in this
+    // delegated-dispatch chain suppresses (layui's own `[lay-submit]` click
+    // handler only preventDefault()s when a MATCHING `form.on('submit(...)')`
+    // callback is registered, which a plain button's lay-filter never has).
+    // `e` may be undefined when a caller invokes this dispatch-map entry
+    // directly (e.g. existing unit tests) rather than via a real DOM click —
+    // guarded accordingly, matching ff._confirmThenRun's own defensive style.
+    button: function (el, e) {
+        if (e && typeof e.preventDefault === 'function') { e.preventDefault(); }
+        ff._confirmThenRun(el, function () {
+            var fn = ff._resolveGuardedWindowFn(el.getAttribute('data-wtm-clickfn'));
+            if (fn) { fn(); }
+        });
+    },
+    // Issue #784 (#470 residual, completes #470 Slice M): SubmitButtonTagHelper's
+    // delegated click — replaces BOTH the f_{Id}Click() generated-function
+    // handshake AND the wrapping <script> BaseButtonTag.Process used to
+    // always emit around it. Sets the form's action attribute first (mirrors
+    // the legacy $('#{formid}').attr('action', SubmitUrl) snippet
+    // BaseButtonTag.Process built for SubmitUrl-bearing buttons), then hands
+    // off to the EXISTING ff._submitButtonClick(el) handshake (#470 Slice M)
+    // unchanged — el is the actual clicked DOM element (never `this`/a
+    // developer-controlled id string), same this-binding-safety rationale
+    // ff._submitButtonClick's own comment documents.
+    //
+    // Issue #784 REVIEW FIX (CRITICAL, correctness): preventDefault()s the
+    // native click UNCONDITIONALLY, same rationale as 'button' above — this
+    // button IS type="submit" (SubmitButtonTagHelper always sets it), so
+    // without this the browser performs its OWN default action for the click
+    // (submitting the form natively) the instant the event finishes
+    // dispatching, immediately for the ConfirmTxt case (layer.confirm is
+    // async — the page would navigate away mid-dialog) and as a full-page
+    // POST racing the AJAX ff.PostForm for the bare-call Click case. Legacy
+    // achieved this via the generated f_{Id}Click() function's own trailing
+    // `return false;`, always reached unconditionally, plus a SECOND
+    // `;return false;` BaseButtonTag.Process's own wrapper appended around
+    // the call — this single preventDefault() replaces both.
+    submit: function (el, e) {
+        if (e && typeof e.preventDefault === 'function') { e.preventDefault(); }
+        ff._confirmThenRun(el, function () {
+            var url = el.getAttribute('data-wtm-submit-url');
+            var formid = el.getAttribute('data-wtm-submit-formid');
+            if (url && formid) {
+                $('#' + formid).attr('action', url);
+            }
+            ff._submitButtonClick(el);
+        });
     }
 };
 
@@ -6172,7 +6484,13 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
         if (!el) { return; }
         var handler = ff._buttonAction[el.getAttribute('data-wtm-click')];
         if (typeof handler === 'function') {
-            handler(el);
+            // Issue #784 REVIEW FIX (CRITICAL, correctness): pass the native
+            // click event through so 'button'/'submit' can preventDefault()
+            // the browser's own default action (native form submission) —
+            // see their own comments. Every OTHER entry in ff._buttonAction
+            // already ignores any argument beyond `el`, so this is a no-op
+            // for them.
+            handler(el, e);
         }
     });
 }

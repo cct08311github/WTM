@@ -88,26 +88,42 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
                     if (islandSafe)
                     {
-                        // Issue #470 Slice M: ff._submitButtonClick(id) is a FIXED
-                        // framework function (framework_layui.js) that replays the
-                        // EXACT SAME {formid}validate / #{formid}hidesubmit /
-                        // ff.PostForm handshake the legacy generated function used,
-                        // reading it off data-wtm-submit-* attributes (compile-time,
+                        // Issue #470 Slice M / Issue #784 (#470 residual, completes
+                        // Slice M): ff._submitButtonClick(id) is a FIXED framework
+                        // function (framework_layui.js) that replays the EXACT SAME
+                        // {formid}validate / #{formid}hidesubmit / ff.PostForm
+                        // handshake the legacy generated function used, reading it
+                        // off data-wtm-submit-* attributes (compile-time,
                         // developer-authored Razor literals — never request/field
                         // data) instead of a per-button generated closure.
                         //
-                        // Passed as a STRING ID LITERAL, never `this`. BaseButtonTag.
-                        // Process (see ConfirmTxt handling) wraps Click inside a NEW
-                        // nested `function(index){ ... }` passed as layer.confirm's
-                        // 3rd argument whenever ConfirmTxt is also set — inside that
-                        // plain nested function `this` is NOT the clicked button (it's
-                        // window/undefined), so `ff._submitButtonClick(this)` would
-                        // silently short-circuit on its element guard and the form
-                        // would never submit, no error. The server-known id is
-                        // resolved via document.getElementById at call time instead,
-                        // which is correct regardless of call context (plain jQuery
-                        // binding OR nested inside layer.confirm's callback).
-                        Click = $"ff._submitButtonClick('{JavaScriptEncoder.Default.Encode(this.Id)}');";
+                        // #784 completes the gate: rather than assigning Click to a
+                        // string BaseButtonTag.Process would still wrap in its OWN
+                        // unconditional `$('#{Id}').on('click',function(){...})`
+                        // <script> (leaving that wrapper itself non-eval-free), this
+                        // sets data-wtm-click="submit" — BaseButtonTag.Process
+                        // recognizes the attribute and skips its wrapper entirely,
+                        // letting the document-level delegated listener
+                        // (ff._buttonAction.submit) drive the SAME
+                        // ff._submitButtonClick(el) handshake, resolved by DOM
+                        // element (never `this`/an id string built from developer
+                        // text) — same this-binding-safety rationale as before (see
+                        // the ConfirmTxt tests): BaseButtonTag.Process's ConfirmTxt
+                        // handling wraps clicks in a nested function(index){...}
+                        // where `this` is not the clicked button, so resolving by
+                        // element/id must never depend on it.
+                        // Issue #784 REVIEW FIX (CRITICAL, security): signal
+                        // "I already wired my own delegated dispatch" to
+                        // BaseButtonTag.Process via context.Items, NOT via the
+                        // presence of the data-wtm-click OUTPUT attribute
+                        // itself — output.Attributes begins pre-populated
+                        // from raw source markup and a developer-authored
+                        // `data-wtm-click="..."` attribute on the tag would
+                        // otherwise spoof this signal regardless of flag
+                        // state. See BaseButtonTag.SubclassDelegatedClickItemKey's
+                        // own comment for the full rationale.
+                        context.Items[BaseButtonTag.SubclassDelegatedClickItemKey] = true;
+                        output.Attributes.SetAttribute("data-wtm-click", "submit");
                         output.Attributes.SetAttribute("data-wtm-submit-formid", WebUtility.HtmlEncode(formid));
                         output.Attributes.SetAttribute("data-wtm-submit-divid", WebUtility.HtmlEncode(vm?.ViewDivId ?? ""));
                         if (bareCallMatch)

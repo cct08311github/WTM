@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Razor.TagHelpers;
 
@@ -17,6 +19,13 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         public string Title { get; set; }
 
         public PanelType PanelType { get; set; }
+
+        // Issue #784 (#470 residual): island DTO omits null members, matching
+        // every other #470 slice's _islandJsonOptions convention.
+        private static readonly JsonSerializerOptions _islandJsonOptions = new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        };
 
         public override async Task ProcessAsync(TagHelperContext context, TagHelperOutput output)
         {
@@ -49,7 +58,25 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 ");
 
             }
-            output.PostElement.AppendHtml($@"
+
+            // Issue #784 (#470 residual): opt-in (WtmUIOptions.UseSelectIslandRender,
+            // default OFF — the SAME flag #470 Slices G-O3 use) eval-free
+            // 'panelInit' island — thin JSON wrapper over the fixed
+            // collapse-resize wiring in the else branch below. No developer
+            // callback is involved at all (tid is a server-generated GUID) —
+            // trivially island-safe, plain flag check. Flag OFF keeps the
+            // EXACT legacy inline <script> below, byte-identical to pre-#784
+            // (the #754 gate).
+            if (UIConfig.UseSelectIslandRender)
+            {
+                var action = new PanelInitIslandAction { Filter = tid };
+                output.PostElement.AppendHtml($@"
+<script type=""application/json"" class=""wtm-dialog-init"">{LayuiIslandJson.Serialize(action, _islandJsonOptions)}</script>
+");
+            }
+            else
+            {
+                output.PostElement.AppendHtml($@"
 <script>
 layui.use(['element'],function(){{
   var element = layui.element;
@@ -68,7 +95,21 @@ layui.use(['element'],function(){{
 }})
 </script>
 ");
+            }
             base.Process(context, output);
         }
+    }
+
+    // Issue #784 (#470 residual): DTO for the bare 'panelInit' JSON island.
+    // ff._normalizeIslandPayload (framework_layui.js) wraps this into the
+    // {actions:[...]} shape ff.DispatchAction expects; not part of the public
+    // API surface.
+    internal sealed class PanelInitIslandAction
+    {
+        [JsonPropertyName("type")]
+        public string Type { get; set; } = "panelInit";
+
+        [JsonPropertyName("filter")]
+        public string Filter { get; set; }
     }
 }

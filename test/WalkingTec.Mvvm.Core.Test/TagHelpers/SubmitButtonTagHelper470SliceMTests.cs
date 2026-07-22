@@ -249,16 +249,18 @@ public class SubmitButtonTagHelper470SliceMTests
     // ═══════════ Flag ON + ConfirmTxt — the this-binding HIGH regression ═══
 
     [TestMethod]
-    public void FlagOn_ConfirmTxtSet_IslandClick_UsesStringIdLiteral_NeverThis()
+    public void FlagOn_ConfirmTxtSet_IslandClick_DelegatesViaDataAttributes_NoInlineScript()
     {
-        // Regression for the #470 Slice M HIGH: BaseButtonTag.Process wraps
-        // Click inside a NEW nested function(index){...} passed as
-        // layer.confirm's 3rd argument whenever ConfirmTxt is set. Inside
-        // that nested plain function `this` is NOT the clicked button, so
-        // the island Click MUST be a server-known string id literal
-        // ("ff._submitButtonClick('sb12')"), never "ff._submitButtonClick(this)"
-        // — resolving by id works regardless of the this-binding of whatever
-        // function ultimately invokes it.
+        // Issue #784 (#470 residual, completes Slice M): the wrapping
+        // <script> BaseButtonTag.Process used to unconditionally emit around
+        // Click is now ALSO delegated — data-wtm-click="submit" plus
+        // data-wtm-confirm/data-wtm-confirm-title carry everything
+        // ff._buttonAction.submit (via ff._confirmThenRun) needs client-side;
+        // no server-rendered layer.confirm(...)/ff._submitButtonClick(...)
+        // text at all. This-binding safety is now structural (the delegated
+        // listener always passes the REAL clicked DOM element, never a
+        // developer-controlled id string), not something the server needs to
+        // encode into a Click expression.
         SetupLocalizer();
         BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = new SubmitButtonTagHelper { Id = "sb12", Click = "myCheck()", ConfirmTxt = "Are you sure?" };
@@ -268,26 +270,24 @@ public class SubmitButtonTagHelper470SliceMTests
         var postHtml = output.PostElement.GetContent();
 
         // Island attributes still emitted — ConfirmTxt doesn't disable islandification.
+        Assert.AreEqual("submit", output.Attributes["data-wtm-click"].Value);
         Assert.AreEqual("form12", output.Attributes["data-wtm-submit-formid"].Value);
         Assert.AreEqual("myCheck", output.Attributes["data-wtm-submit-checkfn"].Value);
+        Assert.AreEqual("Are you sure?", output.Attributes["data-wtm-confirm"].Value);
+        Assert.IsTrue(output.Attributes.ContainsName("data-wtm-confirm-title"));
 
-        // The button's own click-wiring script (emitted by BaseButtonTag.Process,
-        // which wraps Click in layer.confirm's nested function(index){...} since
-        // ConfirmTxt is set) must call ff._submitButtonClick with the STRING id,
-        // never `this`.
-        StringAssert.Contains(postHtml, "layer.confirm(");
-        StringAssert.Contains(postHtml, "ff._submitButtonClick('sb12')");
-        Assert.IsFalse(postHtml.Contains("ff._submitButtonClick(this)"),
-            "Island Click must never depend on `this` — it is not the clicked " +
-            "element inside layer.confirm's nested function(index){...} callback.");
+        // No wrapper <script> at all — the click-wiring is fully delegated.
+        Assert.IsFalse(postHtml.Contains("layer.confirm("));
+        Assert.IsFalse(postHtml.Contains("ff._submitButtonClick("));
+        Assert.IsFalse(postHtml.Contains($"$('#sb12').on('click'"));
     }
 
     [TestMethod]
-    public void FlagOn_NoConfirmTxt_IslandClick_AlsoUsesStringIdLiteral_NeverThis()
+    public void FlagOn_NoConfirmTxt_IslandClick_DelegatesViaDataAttributes_NoInlineScript()
     {
-        // Same assertion without ConfirmTxt, to pin down that the id-literal
-        // form is used unconditionally (not only when ConfirmTxt forces it) —
-        // one Click-generation path, robust in every call context.
+        // Same assertion without ConfirmTxt, to pin down that the delegated
+        // dispatch is used unconditionally (not only when ConfirmTxt forces
+        // it) — one Click-generation path, robust in every call context.
         SetupLocalizer();
         BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = new SubmitButtonTagHelper { Id = "sb13", Click = "myCheck()" };
@@ -296,8 +296,11 @@ public class SubmitButtonTagHelper470SliceMTests
         helper.Process(MakeContext("form13"), output);
         var postHtml = output.PostElement.GetContent();
 
-        StringAssert.Contains(postHtml, "ff._submitButtonClick('sb13')");
-        Assert.IsFalse(postHtml.Contains("ff._submitButtonClick(this)"));
+        Assert.AreEqual("submit", output.Attributes["data-wtm-click"].Value);
+        Assert.AreEqual("myCheck", output.Attributes["data-wtm-submit-checkfn"].Value);
+        Assert.IsFalse(output.Attributes.ContainsName("data-wtm-confirm"));
+        Assert.IsFalse(postHtml.Contains("ff._submitButtonClick("));
+        Assert.IsFalse(postHtml.Contains($"$('#sb13').on('click'"));
     }
 
     // ═══════ FIX2 regression: no formid context + no explicit Id (HIGH) ════
@@ -312,18 +315,20 @@ public class SubmitButtonTagHelper470SliceMTests
         // explicit Id, rendered outside a "formid"-bearing context, hit
         // JavaScriptEncoder.Default.Encode(null) -> unhandled
         // ArgumentNullException, crashing the page. Must not throw, and must
-        // still produce a usable (non-null, non-empty) island Click id.
+        // still produce a usable (non-null, non-empty) Id — Issue #784
+        // completes the gate, so the assertion now targets the
+        // data-wtm-click="submit" delegated attributes instead of a
+        // server-rendered ff._submitButtonClick('...') string.
         SetupLocalizer();
         BaseFieldTag.SetUIOptions(new WtmUIOptions { UseSelectIslandRender = true });
         var helper = new SubmitButtonTagHelper { ConfirmTxt = "Are you sure?" };
         var output = MakeOutput();
 
         helper.Process(MakeContextNoFormId(), output);
-        var postHtml = output.PostElement.GetContent();
 
         Assert.IsFalse(string.IsNullOrEmpty(helper.Id), "Id must be populated before use, not left null");
-        StringAssert.Contains(postHtml, $"ff._submitButtonClick('{helper.Id}')");
-        Assert.IsFalse(postHtml.Contains("ff._submitButtonClick(this)"));
+        Assert.AreEqual("submit", output.Attributes["data-wtm-click"].Value);
+        Assert.AreEqual("Are you sure?", output.Attributes["data-wtm-confirm"].Value);
     }
 
     [TestMethod]
@@ -336,11 +341,10 @@ public class SubmitButtonTagHelper470SliceMTests
         var output = MakeOutput();
 
         helper.Process(MakeContextNoFormId(), output);
-        var postHtml = output.PostElement.GetContent();
 
         Assert.IsFalse(string.IsNullOrEmpty(helper.Id), "Id must be populated before use, not left null");
         Assert.AreEqual("myCheck", output.Attributes["data-wtm-submit-checkfn"].Value);
-        StringAssert.Contains(postHtml, $"ff._submitButtonClick('{helper.Id}')");
+        Assert.AreEqual("submit", output.Attributes["data-wtm-click"].Value);
     }
 
     [TestMethod]
