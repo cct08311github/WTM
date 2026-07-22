@@ -5,7 +5,7 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers;
 /// output for each DataTableByteIdentityTests matrix config, frozen at dotnet10 @
 /// the pre-island commit (the flag-off byte-identity baseline). Regenerate ONLY by
 /// re-capturing from the actual unmodified TagHelper output (see
-/// DataTableByteIdentityTests.Normalize for the three documented, anchored
+/// DataTableByteIdentityTests.Normalize for the four documented, anchored
 /// normalizations applied before comparison) — never hand-edit these strings.
 ///
 /// DataTableTagHelper.cs is CRLF-encoded on disk, and its multi-line
@@ -402,7 +402,7 @@ setTimeout(function(){
 <script type="text/html" id="wtToolBar_wtTable_Fixed470O1"></script>
 
 
-<div id="analysis-panel-wtTable_Fixed470O1" style="display:none;margin-top:10px;"></div><link rel="stylesheet" href="/_js/framework_analysis.css?v=10.17.0.0" /><script src="/_js/lib/sortablejs/sortable.min.js?v=10.17.0.0"></script><script src="/_js/framework_analysis.js?v=10.17.0.0"></script>
+<div id="analysis-panel-wtTable_Fixed470O1" style="display:none;margin-top:10px;"></div><link rel="stylesheet" href="/_js/framework_analysis.css?v=<<VER>>" /><script src="/_js/lib/sortablejs/sortable.min.js?v=<<VER>>"></script><script src="/_js/framework_analysis.js?v=<<VER>>"></script>
 """;
 
     public const string ActionsMatrix = """

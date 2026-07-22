@@ -2,6 +2,46 @@
 
 ## [Unreleased]
 
+## [10.18.0] - 2026-07-22
+
+The **LayUI eval-retirement epic (#470) reaches the whole form + grid + dialog family.** Slices G→O plus the docs endgame (Q) complete the opt-in, eval-free island-render migration begun in 10.16.0: every interactive LayUI widget — combobox/tree, transfer, upload, laydate, slider/colorpicker, ueditor/richtext, textarea counters, tree-container, chart, search-panel, and the full data grid (render core, toolbar/row-button dispatch, local-data, and cell editing) — now renders through declarative JSON islands + `data-wtm-*` delegated handlers when `WtmUIOptions.UseSelectIslandRender = true`, instead of inline `<script>`. **Every migration is default-off and byte-identical to before** — this release ships **zero behaviour change** to existing deployments while making a strict, `unsafe-inline`/`unsafe-eval`-free Content-Security-Policy achievable for the whole form/grid/dialog surface. `framework_layui.js` stays at exactly **one** active-code `eval(` (the deprecated `IsScript` path). Also: a vendored-layui XSS fix (opt-in-legacy only), refresh-token table indexes, and CI/compose ARM64 fixes.
+
+### Security
+
+- **`System.Security.Cryptography.Xml` bumped 10.0.9 → 10.0.10 (#788).** Five high-severity advisories (GHSA-23rf-6693-g89p, GHSA-8q5v-6pqq-x66h, GHSA-cvvh-rhrc-wg4q, GHSA-g8r8-53c2-pm3f, GHSA-mmjf-rqrv-855v) were published against `10.0.9` — the version WTM directly pins to override NPOI's vulnerable transitive pull — after v10.17.0 shipped with a clean scan. `10.0.10` is the patched servicing build; the pre-tag LOCAL vulnerability scan is back to **0 NU1903**. The `NU1510` "override working" note on this pin is unchanged and still expected.
+- **Vendored layui 2.6.3 `data-content` attribute XSS — escaped (opt-in-legacy only) (#776).** The bundled/reference layui 2.6.3 tree's `table.js` built each grid cell's `<td data-content="...">` from the raw field value with no double-quote escaping, allowing attribute-breakout XSS on essentially every grid cell — independent of WTM's own `ff.EscapeText` cell guard (#108), which never runs on that layui-internal path. **The default `/layui-next` (2.13.8) tree was never affected** — it already escapes via `util.escape` — and only `Layui:Asset=legacy` serves the vulnerable 2.6.3 tree; the framework NuGet packages ship no layui at all (it is vendored only in demo/scaffold `wwwroot`). The upstream-parity `layui.util.escape` fix is applied to **all** on-disk copies of the vulnerable construction — both the standalone `lay/modules/table.js` and the monolithic `layui.js` bundle that production `_Layout.cshtml` actually loads (patching only one leaves the other exploitable). A one-time startup `LogWarning` now fires when `Layui:Asset=legacy` is configured, and `docs/csp-hardening.md` documents it. Severity: **Medium** (opt-in-legacy-only; not reachable by default config).
+
+### Added
+
+- **`WtmUIOptions.UseSelectIslandRender` (opt-in, default `false`) now covers the entire form + grid + dialog family — eval-free island rendering (#470 Slices G–Q).** Building on 10.16.0's form-widget/button slices, this release islandifies the remaining interactive surface, all behind the same default-off flag and all byte-identical when off:
+  - **N1** — `<wt:treecontainer>` (`renderTreeContainer`) and `<wt:chart>` (`renderChart`) islands (grid-linked tree filtering and echarts init without inline `<script>`).
+  - **N2** — `<wt:searchpanel>` delegated `click`/`myclick` wiring + `searchPanelInit` island (jQuery-custom-event contract preserved so `ff.RefreshGrid` still drives grid reloads; `OldPost` and selector-hosted panels stay legacy).
+  - **O1** — `<wt:grid>` render core: `renderGrid` island + a client-side templet-descriptor registry replacing the `_raw_`-function-string injection. Compat globals (`{id}option`/`defaultfilter`/`filterback`/`url`) are written synchronously for `wtmColVis`/selector `gridCheckedFunc`/user code.
+  - **O2** — grid toolbar + row-action buttons: `gridActions[]` descriptors + `ff._gridToolDispatch` (reusing the Slice-M `data-wtm-click` delegated dispatch) + a `tpl:'actionCol'` row-action templet retiring the `laytpl {{# if }}` conditionals. Also fixes a pre-existing case where dialog-hosted grid toolbars were dead because DOMPurify strips `<script type="text/html">` templates.
+  - **O3** — grid local-data island (`localData`), delegated `data-wtm-cellchange` cell editing (replacing regex-injected `onchange`, with `layui.table.cache` index-rewrite semantics preserved verbatim), and a `foldPanel` island for `SearcherExpanded`. Lifts the O1 `UseLocalData` legacy-fallback (such grids now islandify); `EnableAnalysis` and `IsInSelector` grids still fall back to legacy.
+  - **#784** — the residual inline-`<script>` emitters a per-emitter sweep surfaced (`<wt:button>`/`<wt:submitbutton>` click-wiring, checkbox/radio/switch `ChangeFunc` + textbox `SearchUrl` autocomplete, `<wt:tab>`/`<wt:panel>` wiring) are now gated too, completing `SubmitButton`'s Slice-M treatment.
+  - **Q** — `docs/csp-hardening.md` rewritten (grounded in a per-emitter grep sweep) to make **Level 2/3 strict CSP the recommended target**, with an honest residual-blocker table.
+  - Developer-authored callbacks are resolved through the `ff._resolveGuardedWindowFn` identifier guard when they are plain identifiers; a non-identifier callback keeps the exact legacy inline path plus a `console.warn`. Combined with the #627 kill-switch, an app can now progress its dialog/form/grid CSP toward `script-src 'self'`. **Default off = today's behaviour, byte-identical.**
+
+### Improved
+
+- **`FrameworkRefreshTokens` is now indexed (#761).** Added `Token`, `ExpiresUtc`, and composite `(RevokedUtc, ExpiresUtc)` indexes — the token-refresh hot path and the 10.17.0 `AddWtmRefreshTokenRetention` sweeps were full table scans on an unbounded-growth table. The `Token` index is deliberately **non-unique** (compat-first — never risk a failed index build on existing data). See Migration for existing databases.
+
+### Fixed
+
+- **CI: `integration-test` MSSQL readiness on the ARM runner (#767).** The x64-only `mcr.microsoft.com/mssql/server` image crashes under QEMU on the Apple-Silicon self-hosted runner (jemalloc VA-space mapping) — every prior run failed at "Wait for MSSQL ready" polling a dead container. Switched CI and the local dev/test compose files to the native-arm64 `mcr.microsoft.com/azure-sql-edge` image (#773).
+
+### Migration
+
+- **`FrameworkRefreshTokens` indexes on an existing database (#761).** `EnsureCreated()` does not add indexes to a pre-existing table, so databases created before this release will not get the new indexes automatically. On a large/long-lived `FrameworkRefreshTokens` table, add them manually (provider-appropriate): a non-unique index on `Token`, an index on `ExpiresUtc`, and a composite index on `(RevokedUtc, ExpiresUtc)`. New/fresh databases get them automatically. No action needed if the table is small or you do not use `AddWtmRefreshTokenRetention`.
+- **No breaking changes.** The entire #470 island family is opt-in behind `WtmUIOptions.UseSelectIslandRender` (default `false`) and byte-identical when off. Turn it on per app once you have audited your dialogs against the residual-blocker table in `docs/csp-hardening.md`.
+
+### Known issues / gated
+
+- **`<wt:linkbutton>` / `<wt:closebutton>` still emit a legacy inline-`<script>` wrapper + `console.warn` when the island flag is on**, because their `Click` is a dotted framework call (`ff.OpenDialog(...)`/`ff.CloseDialog()`) that cannot pass the plain-identifier callback guard — so dialog pages using them still carry inline script + per-page console noise under `UseSelectIslandRender=true`. A descriptor-based island for these fixed framework actions is tracked in #787.
+- **#655 (selector sentinel retirement / default flip)** remains gated on BMS staging validation (the same gate as #567 LayUI-modernization Phase 2) — the whole G→Q family stays opt-in until that flip.
+- CI overflow-runner image-pull instability (`docker.gitea.com` timeouts) tracked in #783.
+
 ## [10.17.0] - 2026-07-21
 
 Field-feedback batch: everything in this release traces to the BMS 10.14.5→10.16.1 production upgrade report (BMS #295 → upstream issues #756–#759, follow-ups #761/#762). Two opt-in features close real downstream gaps (refresh-token retention, explicit rate-limit policy registration), two fixes kill host-crash / cache-poisoning hazards in framework background services, and the 10.15.0 Migration section was retroactively completed (#758, shipped ahead of this release).

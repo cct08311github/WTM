@@ -32,7 +32,7 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers;
 /// TableJSVar getters), and <see cref="IBaseVM.ViewDivId"/> is pinned via its
 /// public setter, so <c>UniqueId</c> never leaks into any fixture.
 ///
-/// Three components have NO public seam to pin (documented last-resort
+/// Four components have NO public seam to pin (documented last-resort
 /// regex normalization, per the #470 comment-18118 design brief §6):
 ///   A. The per-(fixed-group) `random` suffix
 ///      (<c>Guid.NewGuid().ToString().Replace("-","")</c>,
@@ -49,7 +49,14 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers;
 ///      <c>"UniqueId":"{guid}"</c> (or <c>"Searcher.UniqueId":"{guid}"</c>
 ///      when IsInSelector) whenever <c>where</c> is non-empty (every config
 ///      except UseLocalData, which short-circuits <c>where</c> to empty).
-/// All three are anchored to their exact known emission sites (see
+///   D. The EnableAnalysis asset include <c>?v=</c> query string
+///      (<c>typeof(DataTableTagHelper).Assembly.GetName().Version</c>,
+///      DataTableTagHelper.cs's <c>_jsVersion</c>) appended to
+///      <c>framework_analysis.css</c>/<c>sortable.min.js</c>/
+///      <c>framework_analysis.js</c> — this is the framework's own
+///      <c>version.props</c> value and changes on every version bump, so it
+///      cannot be pinned to a literal without breaking on the next release.
+/// All four are anchored to their exact known emission sites (see
 /// <see cref="Normalize"/>) so the regex cannot silently swallow an
 /// unrelated future change elsewhere in the emitted script.
 /// </summary>
@@ -134,6 +141,19 @@ public class DataTableByteIdentityTests
         // emitted `where:` JSON as "UniqueId":"{guid}" (or
         // "Searcher.UniqueId":"{guid}" when IsInSelector).
         raw = Regex.Replace(raw, "\"(Searcher\\.)?UniqueId\":\"[0-9a-f]{32}\"", "\"$1UniqueId\":\"<<SEARCHER_UNIQUEID>>\"");
+
+        // Component D: DataTableTagHelper.cs's _jsVersion —
+        //   typeof(DataTableTagHelper).Assembly.GetName().Version?.ToString()
+        // appended as `?v={_jsVersion}` to the three EnableAnalysis asset
+        // includes (framework_analysis.css, sortable.min.js,
+        // framework_analysis.js). This is the framework's own release
+        // version (version.props) and changes on every version bump, so the
+        // literal cannot be pinned — anchored to the known asset filenames
+        // rather than a specific version string.
+        raw = Regex.Replace(
+            raw,
+            "(framework_analysis\\.css|sortablejs/sortable\\.min\\.js|framework_analysis\\.js)\\?v=\\d+\\.\\d+\\.\\d+(\\.\\d+)?",
+            "$1?v=<<VER>>");
 
         return raw;
     }

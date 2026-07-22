@@ -20,9 +20,13 @@
       - Test packages: aligned with test/Directory.Build.props
 
     Security overrides:
-      System.Security.Cryptography.Xml — direct pin at 10.0.9 to override
+      System.Security.Cryptography.Xml — direct pin at 10.0.10 to override
       NPOI's transitive pull of 8.0.2 (GHSA-37gx-xxp4-5rgx, GHSA-w3x6-4m5h-cxqf),
       kept >= the Microsoft runtime/EF Core group above.
+      Bumped 10.0.9 -> 10.0.10 for Issue #788: five advisories
+      (GHSA-23rf-6693-g89p, GHSA-8q5v-6pqq-x66h, GHSA-cvvh-rhrc-wg4q,
+      GHSA-g8r8-53c2-pm3f, GHSA-mmjf-rqrv-855v) were published against 10.0.9
+      itself after v10.17.0 shipped clean; 10.0.10 is the patched servicing build.
       NU1510 on this entry is EXPECTED (override working). See Issue #13
       (originally introduced as #816/#817 on this repo's pre-Gitea-cutover GitHub
       tracker, now defunct).
@@ -105,7 +109,7 @@
       dependency-management.md § "Known Scenario B".)
       See dependency-management.md § NU1510 section before removing this.
     -->
-    <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.9" />
+    <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.10" />
     <!--
       NPOI 1.2.3 (legacy compat shim) transitively pulls Common.Logging 1.2.0 which has
       a malformed TFM that newer NuGet rejects with NU1202. Pinned to 3.4.1 (netstandard2.0).
