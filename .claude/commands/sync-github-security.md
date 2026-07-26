@@ -17,7 +17,15 @@ The companion `/sync-dependabot` skill handles auto-generated Dependabot *PRs* (
 
 ## 2. Discovery
 
-Always `source $HOME/.gitea-token` before Gitea API calls. The `gh` CLI targets the GitHub mirror (`-R cct08311github/WTM`).
+Read the Gitea token and set the host before any Gitea API call — **never `source` the
+token file** (see the note under "Port to Gitea" below):
+
+```bash
+GITEA_TOKEN=$(grep -oE '[a-f0-9]{40}' "$HOME/.gitea-token")
+GITEA_HOST="mac-mini.tailde842d.ts.net"
+```
+
+The `gh` CLI targets the GitHub mirror (`-R cct08311github/WTM`).
 
 ### 2a. Dependabot alerts
 
@@ -67,14 +75,27 @@ Print all results, grouped by type. For `all` mode, triage in the order: **secre
 
 ## 4. Port to Gitea
 
-All steps use the Gitea API (`source $HOME/.gitea-token` first, exports `GITEA_TOKEN`, `GITEA_HOST`, `GITEA_USER`).
+All steps use the Gitea API. Each block below reads the token and sets the host itself:
+
+```bash
+GITEA_TOKEN=$(grep -oE '[a-f0-9]{40}' "$HOME/.gitea-token")
+GITEA_HOST="mac-mini.tailde842d.ts.net"
+```
+
+**Never `source $HOME/.gitea-token`.** It is a bare token file (one 40-hex line, no
+`export`, no `=`), so `source` makes the shell execute the token as a command and the
+resulting `command not found: <token>` writes the credential in clear text into the
+session transcript. That fired for real twice on 2026-07-11. `grep -oE` works whatever
+the file format is, so it cannot break if an external process rewrites the file.
+Never `echo` or `cat` the value.
 
 **HARD RULE — Sonnet delegation for code edits:** the global agent model rule prohibits the Opus session from directly editing `.cs`, `.ts`, `.js`, or any other source/test file. CodeQL fixes and any fix that modifies source code MUST be delegated to a Sonnet subagent. The Opus session handles git, Gitea API calls, documentation edits (`.md`), and config-only changes (`.csproj` version bumps, `common.props`, `global.json`).
 
 ### 4a. Open Gitea issue
 
 ```bash
-source $HOME/.gitea-token
+GITEA_TOKEN=$(grep -oE '[a-f0-9]{40}' "$HOME/.gitea-token")   # never `source` it — see below
+GITEA_HOST="mac-mini.tailde842d.ts.net"
 curl -s -X POST \
   "https://$GITEA_HOST/api/v1/repos/chiu0831/WTM/issues" \
   -H "Authorization: token $GITEA_TOKEN" \
@@ -137,7 +158,8 @@ git push -u origin fix/security-alert-<alert-n>
 ### 4f. Open Gitea PR
 
 ```bash
-source $HOME/.gitea-token
+GITEA_TOKEN=$(grep -oE '[a-f0-9]{40}' "$HOME/.gitea-token")   # never `source` it — see below
+GITEA_HOST="mac-mini.tailde842d.ts.net"
 curl -s -X POST \
   "https://$GITEA_HOST/api/v1/repos/chiu0831/WTM/pulls" \
   -H "Authorization: token $GITEA_TOKEN" \
@@ -161,7 +183,8 @@ Note the returned `number` — this is `<gitea-pr>`.
 Poll Gitea CI. The canonical check: look for `Test Run Successful` in the build-and-test log and `PASS: N | FAIL: 0` in the e2e log — do NOT rely on job `conclusion` alone (known infra quirk documented in `docs/ci-operations.md`). Gate on the full required-context set, never the combined state field alone — see `/sync-dependabot` §4a (Issue #605) for the reference loop; note e2e only triggers for diffs touching `src/**`, `demo/**`, or `test/e2e/**` (paths filter), so require the e2e context only when the diff touches those paths.
 
 ```bash
-source $HOME/.gitea-token
+GITEA_TOKEN=$(grep -oE '[a-f0-9]{40}' "$HOME/.gitea-token")   # never `source` it — see below
+GITEA_HOST="mac-mini.tailde842d.ts.net"
 curl -s "https://$GITEA_HOST/api/v1/repos/chiu0831/WTM/actions/runs?branch=fix/security-alert-<alert-n>&limit=5" \
   -H "Authorization: token $GITEA_TOKEN" \
   --jq '.workflow_runs[] | [.id, .status, .conclusion] | @tsv'
@@ -182,7 +205,8 @@ git push --force-with-lease origin fix/security-alert-<alert-n>
 ### 5c. Squash-merge when CI green
 
 ```bash
-source $HOME/.gitea-token
+GITEA_TOKEN=$(grep -oE '[a-f0-9]{40}' "$HOME/.gitea-token")   # never `source` it — see below
+GITEA_HOST="mac-mini.tailde842d.ts.net"
 curl -s -X POST \
   "https://$GITEA_HOST/api/v1/repos/chiu0831/WTM/pulls/<gitea-pr>/merge" \
   -H "Authorization: token $GITEA_TOKEN" \
