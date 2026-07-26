@@ -87,7 +87,19 @@ git apply --check --index /tmp/dependabot-<n>.patch
 
 ## 3. Port to Gitea
 
-All steps use the Gitea API. Always `source $HOME/.gitea-token` first (exports `GITEA_TOKEN`, `GITEA_HOST`, `GITEA_USER`).
+All steps use the Gitea API. Read the token and set the host first:
+
+```bash
+GITEA_TOKEN=$(grep -oE '[a-f0-9]{40}' "$HOME/.gitea-token")
+GITEA_HOST="mac-mini.tailde842d.ts.net"
+```
+
+**Never `source $HOME/.gitea-token`.** It is a bare token file (one 40-hex line, no
+`export`, no `=`), so `source` makes the shell execute the token as a command and the
+resulting `command not found: <token>` writes the credential in clear text into the
+session transcript. That fired for real twice on 2026-07-11. `grep -oE` works whatever
+the file format is, so it cannot break if an external process rewrites the file.
+Never `echo` or `cat` the value.
 
 ### 3a. Open Gitea issue
 
@@ -101,7 +113,8 @@ gh pr view <n> -R cct08311github/WTM --json title,body \
 Open the issue:
 
 ```bash
-source $HOME/.gitea-token
+GITEA_TOKEN=$(grep -oE '[a-f0-9]{40}' "$HOME/.gitea-token")   # never `source` it — see below
+GITEA_HOST="mac-mini.tailde842d.ts.net"
 curl -s -X POST \
   "https://$GITEA_HOST/api/v1/repos/chiu0831/WTM/issues" \
   -H "Authorization: token $GITEA_TOKEN" \
@@ -153,7 +166,8 @@ git push -u origin deps/sync-github-pr-<n>
 ### 3f. Open Gitea PR
 
 ```bash
-source $HOME/.gitea-token
+GITEA_TOKEN=$(grep -oE '[a-f0-9]{40}' "$HOME/.gitea-token")   # never `source` it — see below
+GITEA_HOST="mac-mini.tailde842d.ts.net"
 curl -s -X POST \
   "https://$GITEA_HOST/api/v1/repos/chiu0831/WTM/pulls" \
   -H "Authorization: token $GITEA_TOKEN" \
@@ -194,7 +208,8 @@ Poll Gitea PR-level commit status with **explicit max-iterations AND hard timeou
 > monitor notifications are all unreliable.
 
 ```bash
-source $HOME/.gitea-token
+GITEA_TOKEN=$(grep -oE '[a-f0-9]{40}' "$HOME/.gitea-token")   # never `source` it — see below
+GITEA_HOST="mac-mini.tailde842d.ts.net"
 
 # Bounds (do NOT remove — silent infinite polling burned 17 min on a non-existent PR once)
 MAX_ATTEMPTS=50          # 50 × 30 s = 25 min ceiling
@@ -269,7 +284,8 @@ git push --force-with-lease origin deps/sync-github-pr-<n>
 ### 4c. Squash-merge when CI green
 
 ```bash
-source $HOME/.gitea-token
+GITEA_TOKEN=$(grep -oE '[a-f0-9]{40}' "$HOME/.gitea-token")   # never `source` it — see below
+GITEA_HOST="mac-mini.tailde842d.ts.net"
 curl -s -X POST \
   "https://$GITEA_HOST/api/v1/repos/chiu0831/WTM/pulls/<gitea-pr>/merge" \
   -H "Authorization: token $GITEA_TOKEN" \
