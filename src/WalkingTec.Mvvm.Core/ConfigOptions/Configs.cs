@@ -677,5 +677,31 @@ namespace WalkingTec.Mvvm.Core
 
         #endregion
 
+        #region File-access hook enforcement (Issue #796 / #814)
+
+        /// <summary>
+        /// Opt-in, configuration-only switch for
+        /// <c>WalkingTec.Mvvm.Mvc._FrameworkController.CanAccessFile</c>.
+        /// <c>FileAttachment</c> carries no owner/uploader column, so the framework cannot
+        /// enforce row-level file ownership by default without a schema migration.
+        /// <para>
+        /// <b>Default: <c>false</c></b> (unchanged pre-#796 behaviour — any authenticated caller
+        /// who knows a file id can fetch it). Set to <c>true</c> to make the un-overridden hook
+        /// deny every file access (fail-closed) until the hosting application overrides
+        /// <c>CanAccessFile</c> with a real ownership scheme (e.g. a join table, or an uploader id
+        /// stashed in <c>FileAttachment.ExtraInfo</c>). Combine with
+        /// <see cref="FileUploadOptions.EnforceTenantFileScope"/> for the tenant-boundary half of
+        /// this gap.
+        /// </para>
+        /// <para>
+        /// See Issue #814 for the current gated endpoint list (<c>GetFile</c>,
+        /// <c>GetFileName</c>, <c>ViewFile</c>, <c>DoImport</c>'s uploaded-template read/delete)
+        /// and Issue #811 for the real per-caller ownership fix this flag stands in for.
+        /// </para>
+        /// </summary>
+        public bool EnforceFileAccessAuthorization { get; set; } = false;
+
+        #endregion
+
     }
 }

@@ -152,6 +152,66 @@ namespace WalkingTec.Mvvm.Mvc
         protected virtual bool CanExportVm(Type vmType) => !(Wtm?.ConfigInfo?.EnforceVmExportAuthorization ?? false);
 
         /// <summary>
+        /// #814: Extension hook for per-caller authorization of the <see cref="FileAttachment"/>
+        /// targeted by <see cref="GetFile"/>, <see cref="GetFileName"/>, <see cref="ViewFile"/>,
+        /// and <see cref="DoImport"/>'s uploaded-template (<c>UploadFileId</c>) read/delete.
+        /// <c>FileAttachment</c> carries no owner/uploader column, so the framework cannot
+        /// enforce row-level ownership by default without a schema migration; override this in a
+        /// derived controller to plug in your own scheme (e.g. a join table, or an uploader id
+        /// you stash in <c>FileAttachment.ExtraInfo</c>) if your deployment needs it. Combine with
+        /// <see cref="WalkingTec.Mvvm.Core.ConfigOptions.FileUploadOptions.EnforceTenantFileScope"/>
+        /// for the tenant-boundary half of this gap.
+        /// <para>
+        /// <b>Known gap, not covered here:</b> <c>DoImport</c> only authorizes <c>UploadFileId</c>.
+        /// <c>BaseVM.DeletedFileIds</c> — processed first inside <c>BatchSaveData</c>, and able to
+        /// delete arbitrary <see cref="FileAttachment"/> rows through the same request — is not
+        /// gated by this hook at all; tracked as Issue #815. Whether the caller may invoke the
+        /// import VM in the first place (VM-level authorization, as opposed to which file id it
+        /// touches) is likewise separate and tracked as Issue #818.
+        /// </para>
+        /// <para>
+        /// When not overridden, the default answer is driven by
+        /// <see cref="WalkingTec.Mvvm.Core.Configs.EnforceFileAccessAuthorization"/>
+        /// (default <c>false</c> → <c>true</c>/allow, unchanged pre-#796 behaviour); setting that
+        /// flag to <c>true</c> flips the un-overridden default to deny (fail-closed) with no code
+        /// change. See Issue #796 for the original analysis and Issue #814 for the complete
+        /// gated-endpoint list.
+        /// </para>
+        /// <para>
+        /// <paramref name="fileId"/> is always the caller-supplied id normalized to a canonical
+        /// <see cref="Guid"/> "D"-format string (see <see cref="TryNormalizeFileId"/>) before this
+        /// hook is invoked, so an override that string-compares ids sees the same representation
+        /// regardless of which endpoint called it.
+        /// </para>
+        /// </summary>
+        /// <param name="fileId">The caller-supplied <see cref="FileAttachment"/> id, normalized to
+        /// a canonical <see cref="Guid"/> "D"-format string.</param>
+        /// <returns><c>true</c> if access is allowed; <c>false</c> to deny.</returns>
+        protected virtual bool CanAccessFile(string fileId) => !(Wtm?.ConfigInfo?.EnforceFileAccessAuthorization ?? false);
+
+        /// <summary>
+        /// #814: normalizes a caller-supplied file id to a canonical <see cref="Guid"/>
+        /// "D"-format string before it reaches <see cref="CanAccessFile"/>. Without this,
+        /// <see cref="GetFileName"/> passes a <see cref="Guid"/>'s already-canonical
+        /// <c>ToString()</c> while <see cref="GetFile"/>/<see cref="ViewFile"/> pass the raw,
+        /// unparsed request string (any case, with or without braces/dashes) — a
+        /// string-comparing <see cref="CanAccessFile"/> override keyed on the canonical form
+        /// would silently never match the raw form, making the guard bypassable simply by
+        /// varying the id's textual representation. Returns <c>false</c> (reject) for an id that
+        /// does not parse as a <see cref="Guid"/> at all.
+        /// </summary>
+        private static bool TryNormalizeFileId(string? rawId, out string normalizedId)
+        {
+            if (Guid.TryParse(rawId, out var guid))
+            {
+                normalizedId = guid.ToString();
+                return true;
+            }
+            normalizedId = string.Empty;
+            return false;
+        }
+
+        /// <summary>
         /// #796: Extension hook for per-caller authorization of the VM type targeted by
         /// <see cref="GetDeletePreview"/>. Without this hook, any authenticated caller can supply
         /// an arbitrary VM type name plus up to 10 GUIDs and get back a confirmed-existence
@@ -860,6 +920,39 @@ namespace WalkingTec.Mvvm.Mvc
             rawVm.FC = fc;
             RedoUpdateModel(rawVm);
 
+            // #814: UploadFileId arrives through model binding (RedoUpdateModel above), not as
+            // an action parameter, so it cannot be checked before this point. Without this guard
+            // BatchSaveData() below both READS the FileAttachment at this id (SetTemplateData)
+            // and, on a successful non-ValidateOnly run, DELETES it — entirely unauthorized, even
+            // with EnforceFileAccessAuthorization=true, since nothing on this path called
+            // CanAccessFile. An id that is present but doesn't resolve to a real Guid is denied
+            // outright rather than silently ignored; a genuinely absent UploadFileId is left to
+            // BatchSaveData's own "please upload template" validation error.
+            //
+            // Read via reflection off the concrete VM rather than adding a member to
+            // IWtmImportable: BaseImportVM<T,P> already exposes a public settable UploadFileId,
+            // and putting it on the interface instead would be a source-breaking change for any
+            // downstream type that implements IWtmImportable directly (this repo's Compatibility
+            // red line) — see the PR body's Compatibility section.
+            //
+            // Scope: this guard covers UploadFileId (the uploaded import template) only.
+            // BaseVM.DeletedFileIds — processed FIRST inside BatchSaveData, and able to delete
+            // arbitrary FileAttachment rows through the very same request — is NOT covered here;
+            // that gap is tracked separately as #815. DoImport's own VM-level authorization
+            // (whether the caller may run this import VM at all, as opposed to which file it may
+            // touch) is likewise out of scope for this file-access guard and is tracked as #818.
+            string? uploadFileId = rawVm.GetType().GetProperty("UploadFileId")?.GetValue(rawVm) as string;
+            if (!string.IsNullOrEmpty(uploadFileId))
+            {
+                if (!TryNormalizeFileId(uploadFileId, out var normalizedUploadFileId) || !CanAccessFile(normalizedUploadFileId))
+                {
+                    HttpContext.RequestServices.GetService<ILogger<_FrameworkController>>()?.LogWarning(
+                        "DoImport denied: user {UserId} was refused access to uploaded file {FileId}",
+                        Wtm.LoginUserInfo?.ITCode, uploadFileId);
+                    return Forbid();
+                }
+            }
+
             // Apply the dry-run flag before BatchSaveData runs.
             importVm.ValidateOnly = validateOnly;
 
@@ -1087,6 +1180,22 @@ namespace WalkingTec.Mvvm.Mvc
             // MVC-010: reject unknown connection-string keys to prevent lateral DB reads
             if (!IsKnownConnectionKey(_DONOT_USE_CS))
                 return BadRequest("Unknown connection string key");
+            // #814: opt-in ownership/authorization hook — see CanAccessFile for why this
+            // cannot enforce true ownership by default (FileAttachment has no owner column).
+            // Denies with Forbid() (not EmptyResult()), even though an existence oracle DOES
+            // technically exist here too: WtmFileProvider.GetFileName returns the literal string
+            // "unknown" for a missing id, so a caller can already tell "no such file" apart from
+            // a real name. That oracle is accepted for this endpoint specifically because it only
+            // ever exposes a sanitized file NAME, never file contents — unlike GetFile/ViewFile,
+            // which expose contents and therefore get the indistinguishable-EmptyResult treatment
+            // (see GetFile's comment) so a denial can't be told apart from a genuine miss.
+            if (!CanAccessFile(id.ToString()))
+            {
+                HttpContext.RequestServices.GetService<ILogger<_FrameworkController>>()?.LogWarning(
+                    "GetFileName denied: user {UserId} was refused access to file {FileId}",
+                    Wtm.LoginUserInfo?.ITCode, id);
+                return Forbid();
+            }
             return Ok(fp.GetFileName(id.ToString(), Wtm.CreateDC(cskey: _DONOT_USE_CS)));
         }
 
@@ -1096,6 +1205,23 @@ namespace WalkingTec.Mvvm.Mvc
             // MVC-010: reject unknown connection-string keys to prevent lateral DB reads
             if (!IsKnownConnectionKey(_DONOT_USE_CS))
                 return new EmptyResult();
+            // #814: opt-in ownership/authorization hook — see CanAccessFile for why this
+            // cannot enforce true ownership by default (FileAttachment has no owner column).
+            // An id that doesn't even parse as a Guid is rejected outright (TryNormalizeFileId
+            // returns false) rather than reaching CanAccessFile with an empty string, which
+            // would let a malformed-but-"allowed" id sail through unnoticed.
+            // Deliberately returns EmptyResult() (HTTP 200, empty body) rather than Forbid() on
+            // denial: a distinguishable "denied" response would let a caller probing file ids
+            // tell "exists but denied" apart from "does not exist" — an existence oracle.
+            // GetFileName returns Forbid() instead because it does not expose file contents, so
+            // there is no equivalent oracle to protect against there.
+            if (!TryNormalizeFileId(id, out var normalizedId) || !CanAccessFile(normalizedId))
+            {
+                HttpContext.RequestServices.GetService<ILogger<_FrameworkController>>()?.LogWarning(
+                    "GetFile denied: user {UserId} was refused access to file {FileId}",
+                    Wtm.LoginUserInfo?.ITCode, id);
+                return new EmptyResult();
+            }
             var file = fp.GetFile(id, true, Wtm.CreateDC(cskey: _DONOT_USE_CS));
             if (file == null)
             {
@@ -1179,7 +1305,29 @@ namespace WalkingTec.Mvvm.Mvc
             // MVC-010: reject unknown connection-string keys to prevent lateral DB reads
             if (!IsKnownConnectionKey(_DONOT_USE_CS))
                 return new EmptyResult();
+            // #814: ViewFile is a third file-id-driven endpoint on this controller (alongside
+            // GetFile/GetFileName) and must share the same CanAccessFile guard — otherwise the
+            // fail-closed flag only closes two of the three, leaving this one exploitable at
+            // default settings and, worse, unconditionally with the flag enabled too. Same
+            // EmptyResult()-not-Forbid() choice as GetFile: a distinguishable denial would turn
+            // file-id probing here into an existence oracle.
+            if (!TryNormalizeFileId(id, out var normalizedId) || !CanAccessFile(normalizedId))
+            {
+                HttpContext.RequestServices.GetService<ILogger<_FrameworkController>>()?.LogWarning(
+                    "ViewFile denied: user {UserId} was refused access to file {FileId}",
+                    Wtm.LoginUserInfo?.ITCode, id);
+                return new EmptyResult();
+            }
             var file = fp.GetFile(id, false, Wtm.CreateDC(cskey: _DONOT_USE_CS));
+            if (file == null)
+            {
+                // #814: miss path — no such file (or IgnoreQueryFilters() found nothing).
+                // Previously fell through to file.FileExt.ToLower() and NREd into an
+                // unhandled 500, which is itself a hit-vs-miss existence oracle (a 500 for a
+                // missing id vs. rendered HTML for a real one). EmptyResult() matches the
+                // denied-path response above so a miss and a denial are indistinguishable.
+                return new EmptyResult();
+            }
             string html = string.Empty;
             var ext = file.FileExt.ToLower();
             // HTML-encode all user input to prevent XSS

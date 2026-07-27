@@ -582,4 +582,62 @@ public class MvcAuthHolesTests
             $"#796: the redirect must NOT be the login-challenge path — that would mean the " +
             $"caller was treated as unauthenticated rather than denied by CanExportVm. Location: {location}");
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // #814: pin the actual wire status of a CanAccessFile denial. Forbid() under the
+    // default cookie auth scheme is a 302 redirect to AccessDeniedPath, not a literal 403 —
+    // framework_layui.js's AJAX callers see a redirect-to-HTML response. This is kept
+    // consistent with every other Forbid() already in _FrameworkController (e.g.
+    // BatchAssignRoles' CallerIsAdmin() checks) rather than special-cased; this test exists
+    // so a future auth-scheme change (or a switch to StatusCode(403)) trips a test instead of
+    // silently changing what callers see.
+    //
+    // The EnforceFileAccessAuthorization=true factory variant is built lazily, inside this
+    // one test, rather than eagerly in ClassInitialize alongside _factory/_strictFactory: a
+    // third WebApplicationFactory booted for every test in this class (most of which never
+    // touch it) was found to occasionally race the shared demo.db schema sync during
+    // ClassInitialize, an intermittent flake unrelated to what any individual test exercises.
+    // Building it on demand, scoped to (and disposed by) the single test that needs it,
+    // removes that shared-state window entirely.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// #814: GetFileName's un-overridden CanAccessFile denial (flag enabled, no override)
+    /// must surface as the SAME 302 redirect every other Forbid() in this controller produces
+    /// under the default cookie auth scheme — not a literal HTTP 403.
+    /// </summary>
+    [TestMethod]
+    public async Task GetFileName_EnforceFlagEnabled_Forbid_Is302RedirectNotLiteral403()
+    {
+        using var fileAccessEnforcedFactory = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["EnforceFileAccessAuthorization"] = "true",
+                });
+            });
+        });
+
+        var client = fileAccessEnforcedFactory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+            HandleCookies = true,
+        });
+        var loginForm = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["ITCode"] = "admin",
+            ["Password"] = "000000",
+        });
+        await client.PostAsync("/Login/Login", loginForm);
+
+        var resp = await client.GetAsync($"/_Framework/GetFileName?id={Guid.NewGuid()}&_DONOT_USE_CS=");
+
+        Assert.AreEqual(HttpStatusCode.Redirect, resp.StatusCode,
+            $"#814: With EnforceFileAccessAuthorization=true and no CanAccessFile override, " +
+            $"GetFileName's Forbid() is expected to wire up as a 302 redirect to AccessDeniedPath " +
+            $"(ASP.NET Core cookie auth's Forbid() behaviour), not a literal 403. " +
+            $"Got {(int)resp.StatusCode} ({resp.StatusCode}).");
+    }
 }
