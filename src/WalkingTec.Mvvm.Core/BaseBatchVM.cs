@@ -280,7 +280,13 @@ namespace WalkingTec.Mvvm.Core
                     var fp = Wtm!.ServiceProvider.GetRequiredService<WtmFileProvider>();
                     foreach (var item in fileids)
                     {
-                        fp.DeleteFile(item.ToString(), DC!.ReCreate());
+                        // #815 rework: fileids above is read straight off the DB row's FK
+                        // scalar (no navigation load, no RejectUnresolvableFileAttachmentReferences
+                        // gate at all), so this is the sole control for this sink — tenant scope
+                        // must be kept ON unconditionally, regardless of
+                        // FileUploadOptions.EnforceTenantFileScope. See
+                        // WtmFileProvider.DeleteFileTenantScoped's doc comment.
+                        fp.DeleteFileTenantScoped(item.ToString(), DC!.ReCreate());
                     }
                 }
                 catch (Exception e)
@@ -452,7 +458,10 @@ namespace WalkingTec.Mvvm.Core
                         var fp = Wtm!.ServiceProvider.GetRequiredService<WtmFileProvider>();
                         foreach (var item in fileids)
                         {
-                            fp.DeleteFile(item.ToString(), DC!.ReCreate());
+                            // #815 rework: same DeleteFileTenantScoped primary control as the
+                            // sync DoBatchDelete above — fileids here is likewise read straight
+                            // off the DB row's FK scalar with no gate at write time.
+                            fp.DeleteFileTenantScoped(item.ToString(), DC!.ReCreate());
                         }
                     }
                     catch (Exception e)

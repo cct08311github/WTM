@@ -1078,15 +1078,38 @@ namespace WalkingTec.Mvvm.Core
         /// <returns>成功返回True，失败返回False</returns>
         public virtual bool BatchSaveData(IProgress<ImportProgress>? progress = null)
         {
-            //删除不必要的附件
-            if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm!.ServiceProvider != null)
+            // #815: BaseVM.DeletedFileIds is model-bound (arrives from the posted form) and
+            // previously let a caller name ANY FileAttachment id here, deleted with no validation
+            // whatsoever.
+            //
+            // Correction: an earlier version of this comment claimed "the only producer,
+            // UploadTagHelper, is never bound to a bulk-import view in this repo — grep for
+            // wt:upload under demo/**/Import.cshtml confirms none reference it". That claim was
+            // FALSE — `find demo -path "*/Views/*/Import.cshtml" | xargs grep -l "wt:upload"` shows
+            // it IS used, in 17 generated Import views total, e.g.
+            // demo/WalkingTec.Mvvm.Demo/Views/Student/Import.cshtml:8 and City/Import.cshtml:8
+            // (`<wt:upload field="UploadFileId" .../>`). The
+            // real reason this input has no legitimate producer here is narrower: UploadTagHelper's
+            // generic "delete" JS (UploadTagHelper.cs ~246-247) fires regardless of which field it
+            // is bound to, but on an Import view it is always bound to `UploadFileId`, which starts
+            // empty on every fresh Import request — so the only DeletedFileIds entry it can ever
+            // produce here is the id of the file JUST uploaded in this same browser session (the
+            // "cancel this upload before submitting" affordance, `{Id}DoDelete(res.Data.Id)` at
+            // UploadTagHelper.cs ~298/~308), never a pre-existing entity's FK. This ran BEFORE
+            // SetEntityList() below even populates EntityList, so — unlike BaseCRUDVM.DoEdit, which
+            // has a pre-edit snapshot of the one entity being saved to validate against — there was
+            // never an "entity being saved" here to check a posted id against: BatchSaveData always
+            // creates brand-new rows (the same "nothing pre-exists yet" situation as
+            // BaseCRUDVM.DoAdd, where the equivalent fix also yields no legitimate ids), even in
+            // IsOverWriteExistData mode, since the existing-row match happens later, per-row,
+            // inside the loop below — not against a single id list posted up front. There is
+            // therefore no safe, non-empty allow-list obtainable at this point in the method, so
+            // this dead/dangerous input is still not processed. See Issue #815.
+            if (DeletedFileIds != null && DeletedFileIds.Count > 0)
             {
-                var fp = Wtm!.ServiceProvider.GetRequiredService<WtmFileProvider>();
-
-                foreach (var item in DeletedFileIds)
-                {
-                    fp.DeleteFile(item.ToString(), Wtm!.CreateDC(false));
-                }
+                CoreProgram.GetLogger("BaseImportVM")?.LogWarning(
+                    "BatchSaveData: ignoring {Count} posted DeletedFileIds — bulk import has no pre-existing entity to validate them against (Issue #815)",
+                    DeletedFileIds.Count);
             }
 
             //进行赋值
@@ -1281,7 +1304,14 @@ namespace WalkingTec.Mvvm.Core
             if (!ValidateOnly && string.IsNullOrEmpty(UploadFileId) == false && Wtm!.ServiceProvider != null)
             {
                 var fp = Wtm!.ServiceProvider.GetRequiredService<WtmFileProvider>();
-                fp.DeleteFile(UploadFileId, Wtm!.CreateDC(false, "default"));
+                // #815/#821: UploadFileId is model-bound the same way DeletedFileIds is. The
+                // base _FrameworkController.DoImport action gates it behind CanAccessFile (#814),
+                // but the code generator's own per-entity Import($modelname$ImportVM, ...) action
+                // (GeneratorFiles/Mvc/Controller.txt) does not inherit that guard and model-binds
+                // straight to BatchSaveData — tracked separately as #816, not fixed here. This
+                // fix's tenant-scoped resolution is applied regardless, as a bonus: it keeps this
+                // delete confined to the caller's own tenant even on the ungated generated path.
+                fp.DeleteFileTenantScoped(UploadFileId, Wtm!.CreateDC(false, "default"));
             }
 
             return true;

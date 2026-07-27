@@ -189,14 +189,37 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
 
         public void DeleteFile(string id, IDataContext? dc = null)
         {
+            // WTM-SEC-003: see GetFile for flag semantics.
+            DeleteFileCore(id, dc, _wtm.ConfigInfo.FileUploadOptions.EnforceTenantFileScope);
+        }
+
+        /// <summary>
+        /// #815/#821: same as <see cref="DeleteFile(string, IDataContext?)"/>, but resolves the
+        /// <see cref="FileAttachment"/> with the global <c>ITenant</c> query filter always kept
+        /// ON — unconditionally, regardless of
+        /// <see cref="WalkingTec.Mvvm.Core.ConfigOptions.FileUploadOptions.EnforceTenantFileScope"/>.
+        /// Every caller that resolves an id taken from untrusted, model-bound input (
+        /// <see cref="BaseVM.DeletedFileIds"/>, <c>BaseImportVM.UploadFileId</c>) must use this
+        /// overload rather than the plain <see cref="DeleteFile(string, IDataContext?)"/>, so
+        /// cross-tenant deletion is blocked even when the operator has not opted into
+        /// <c>EnforceTenantFileScope=true</c>. This is deliberately the PRIMARY control at those
+        /// call sites — an entity-reference check on top (where one is possible) is defence in
+        /// depth, not a substitute: relying on entity-reference alone let a caller forge the
+        /// reference in one request and delete it in the next (Issue #815 rework). See Issue #815.
+        /// </summary>
+        public void DeleteFileTenantScoped(string id, IDataContext? dc = null)
+        {
+            DeleteFileCore(id, dc, enforceTenantScope: true);
+        }
+
+        private void DeleteFileCore(string id, IDataContext? dc, bool enforceTenantScope)
+        {
             FileAttachment? file = null;
             if (dc == null)
             {
                 dc = _wtm.CreateDC();
             }
-            // WTM-SEC-003: see GetFile for flag semantics.
-            var tenantScopeDelete = _wtm.ConfigInfo.FileUploadOptions.EnforceTenantFileScope;
-            file = (tenantScopeDelete
+            file = (enforceTenantScope
                 ? dc.Set<FileAttachment>()
                 : dc.Set<FileAttachment>().IgnoreQueryFilters())
                 .CheckID(id)

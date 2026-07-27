@@ -162,12 +162,31 @@ namespace WalkingTec.Mvvm.Mvc
         /// <see cref="WalkingTec.Mvvm.Core.ConfigOptions.FileUploadOptions.EnforceTenantFileScope"/>
         /// for the tenant-boundary half of this gap.
         /// <para>
-        /// <b>Known gap, not covered here:</b> <c>DoImport</c> only authorizes <c>UploadFileId</c>.
-        /// <c>BaseVM.DeletedFileIds</c> — processed first inside <c>BatchSaveData</c>, and able to
-        /// delete arbitrary <see cref="FileAttachment"/> rows through the same request — is not
-        /// gated by this hook at all; tracked as Issue #815. Whether the caller may invoke the
-        /// import VM in the first place (VM-level authorization, as opposed to which file id it
-        /// touches) is likewise separate and tracked as Issue #818.
+        /// <b>Issue #815 status (resolved at the source for <c>BaseCRUDVM</c>, resolved for
+        /// <c>BaseImportVM.BatchSaveData</c>, still a known gap for generated Import
+        /// controllers):</b> the underlying primitive — a caller writing a
+        /// <see cref="FileAttachment"/>-typed navigation property's FK scalar (e.g.
+        /// <c>PhotoId</c>) to a file they cannot access, which then resolves both for reads
+        /// (<c>GetById</c>) and, via <c>BaseVM.DeletedFileIds</c>, for deletes — is now rejected
+        /// at write time in <c>BaseCRUDVM.DoAdd(Async)/DoEdit(Async)/DoDelete(Async)</c>
+        /// (<c>RejectUnresolvableFileAttachmentReferences</c>: a posted FK that does not resolve
+        /// for the caller's own tenant, query filter kept ON unconditionally regardless of
+        /// <c>EnforceTenantFileScope</c>, is reverted before <c>SaveChanges</c>). This is the
+        /// PRIMARY control. <c>WtmFileProvider.DeleteFileTenantScoped</c> (same unconditional
+        /// tenant scoping) at every <c>DeletedFileIds</c>/<c>DoRealDelete(Async)</c>/
+        /// <c>BaseBatchVM.DoBatchDelete(Async)</c> sink, plus the pre-save entity-reference
+        /// check, remain as defence in depth. <c>BaseImportVM.BatchSaveData</c> never had a
+        /// legitimate reference to validate against, so it still ignores
+        /// <c>DeletedFileIds</c> entirely rather than deleting unchecked. This hook
+        /// (<c>CanAccessFile</c>) is unrelated to that fix — it is only consulted by
+        /// <c>DoImport</c> (this base controller's generic import action) for
+        /// <c>UploadFileId</c>. <b>The remaining known gap is the code generator's own
+        /// per-entity Import($modelname$ImportVM, ...) action</b> (<c>GeneratorFiles/Mvc/
+        /// Controller.txt</c>), which does not inherit from this hook at all and model-binds
+        /// <c>UploadFileId</c> straight into <c>BatchSaveData</c> unauthorized — tracked as
+        /// Issue #816. Whether the caller may invoke the import VM in the first place (VM-level
+        /// authorization, as opposed to which file id it touches) is likewise separate and
+        /// tracked as Issue #818.
         /// </para>
         /// <para>
         /// When not overridden, the default answer is driven by
@@ -257,11 +276,15 @@ namespace WalkingTec.Mvvm.Mvc
         /// <b>Scope:</b> this hook covers VM-level authorization only — whether the caller may
         /// invoke this import VM at all. It does not cover the uploaded template file
         /// (<c>UploadFileId</c>, gated separately by <see cref="CanAccessFile"/>), nor
-        /// <c>BaseVM.DeletedFileIds</c> — processed inside <c>BatchSaveData</c> and able to
-        /// delete arbitrary <see cref="FileAttachment"/> rows through the same request — which is
-        /// not gated by any hook here and is tracked as Issue #815. The declarative per-VM
-        /// authorization tier meant to eventually replace all of these hooks is tracked as
-        /// Issue #811.
+        /// <c>BaseVM.DeletedFileIds</c> — read at the top of <c>BatchSaveData</c>. Neither of
+        /// those needs a hook here: Issue #815 already fixed <c>DeletedFileIds</c> at the source
+        /// (<c>BaseCRUDVM.RejectUnresolvableFileAttachmentReferences</c> rejects an unresolvable
+        /// posted FK at write time; <c>BatchSaveData</c> itself ignores <c>DeletedFileIds</c>
+        /// entirely, since bulk import has no pre-existing entity to validate it against) — see
+        /// the fuller status note on <see cref="CanAccessFile"/> above. The real remaining
+        /// <c>UploadFileId</c> gap is the generated per-entity Import controllers, tracked as
+        /// Issue #816. The declarative per-VM authorization tier meant to eventually replace all
+        /// of these hooks is tracked as Issue #811.
         /// </para>
         /// </summary>
         /// <param name="vmType">The resolved type of the VM the caller asked to import into.</param>
@@ -1007,11 +1030,22 @@ namespace WalkingTec.Mvvm.Mvc
             // red line) — see the PR body's Compatibility section.
             //
             // Scope: this guard covers UploadFileId (the uploaded import template) only.
-            // BaseVM.DeletedFileIds — processed FIRST inside BatchSaveData, and able to delete
-            // arbitrary FileAttachment rows through the very same request — is NOT covered here;
-            // that gap is tracked separately as #815. DoImport's own VM-level authorization
-            // (whether the caller may run this import VM at all, as opposed to which file it may
-            // touch) is likewise out of scope for this file-access guard and is tracked as #818.
+            // BaseVM.DeletedFileIds — read at the top of BatchSaveData — was the #815 hole; that
+            // is now fixed at the source in BaseCRUDVM (a posted FileAttachment FK that does not
+            // resolve for the caller's own tenant is rejected at write time — see
+            // BaseCRUDVM.RejectUnresolvableFileAttachmentReferences — with
+            // WtmFileProvider.DeleteFileTenantScoped and the pre-save entity-reference check as
+            // defence in depth at every DeletedFileIds/DoRealDelete/DoBatchDelete sink) and at
+            // the BaseImportVM level (BatchSaveData still ignores DeletedFileIds entirely rather
+            // than deleting unchecked, since bulk import has no pre-existing entity to validate
+            // against), so it needs no guard here. The real remaining UploadFileId
+            // gap is NOT this action — DoImport DOES call CanAccessFile below — it is the code
+            // generator's own per-entity Import($modelname$ImportVM, ...) action
+            // (GeneratorFiles/Mvc/Controller.txt), which doesn't inherit from _FrameworkController
+            // at all and so never reaches this guard; tracked as #816. DoImport's own VM-level
+            // authorization (whether the caller may run this import VM at all, as opposed to
+            // which file it may touch) is likewise out of scope for this file-access guard and is
+            // tracked as #818.
             string? uploadFileId = rawVm.GetType().GetProperty("UploadFileId")?.GetValue(rawVm) as string;
             if (!string.IsNullOrEmpty(uploadFileId))
             {

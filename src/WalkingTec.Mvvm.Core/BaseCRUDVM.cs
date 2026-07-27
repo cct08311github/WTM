@@ -423,7 +423,16 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         public virtual void DoAdd()
         {
-            DoAddPrepare();
+            if (!DoAddPrepare())
+            {
+                // #815 sixth/seventh round: a FileAttachment FK whose column EF Core's own model
+                // says is required (e.g. ISubFile's Guid FileId used as TModel's own scalar, or a
+                // [Required] Guid? FK) with no legitimate prior value to revert to was rejected at
+                // the request level — see the doc comment on ApplyFileAttachmentResolution. MSD
+                // already carries the model error; nothing was staged for insertion, so there is
+                // nothing to save.
+                return;
+            }
             AppendChangeLog("Add", null, SerializeScalarProps(Entity));
             // Persist to DB first; only delete orphaned files after a successful save
             // so that a failed insert does not leave files permanently deleted (Issue #104, Bug 3).
@@ -432,16 +441,35 @@ namespace WalkingTec.Mvvm.Core
             {
                 var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
 
-                foreach (var item in DeletedFileIds)
+                // #815: Add creates a brand-new row, so there is no pre-existing DB state it
+                // could have legitimately referenced yet — FilterLegitimateDeletedFileIds(null)
+                // always yields nothing. See the method doc comment for the full rationale.
+                // Accurately: this loop is PROVABLY UNREACHABLE, not an active defence layer —
+                // it is kept only for structural symmetry with the other three DeletedFileIds
+                // call sites (so all four look identical and a future refactor cannot
+                // accidentally drop the guard from just this one). DeleteFileTenantScoped never
+                // actually executes here.
+                // Known consequence: "upload then cancel before saving" now leaves a permanent
+                // orphan FileAttachment row + blob on this path (pre-#815 cleanup here was
+                // insecure — any id could be named). Documented in
+                // docs/production-readiness.md; reaper tracked as Issue #822.
+                foreach (var item in FilterLegitimateDeletedFileIds(null))
                 {
-                    fp.DeleteFile(item.ToString(), DC!);
+                    fp.DeleteFileTenantScoped(item, DC!);
                 }
             }
         }
 
         public virtual async Task DoAddAsync()
         {
-            DoAddPrepare();
+            // #815 fifth round: the async variant of DoAddPrepare — uses the awaited batched
+            // file-reference resolution instead of the sync one, so this async request path
+            // never blocks a ThreadPool thread on it.
+            if (!await DoAddPrepareAsync())
+            {
+                // #815 sixth round: see the sync DoAdd's matching guard above.
+                return;
+            }
             AppendChangeLog("Add", null, SerializeScalarProps(Entity));
             // Persist to DB first; only delete orphaned files after a successful save
             // so that a failed insert does not leave files permanently deleted (Issue #104, Bug 3).
@@ -450,14 +478,79 @@ namespace WalkingTec.Mvvm.Core
             {
                 var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
 
-                foreach (var item in DeletedFileIds)
+                // #815: see DoAdd — a brand-new row has no pre-existing file reference to
+                // validate DeletedFileIds against. This loop is likewise provably unreachable,
+                // kept only for structural symmetry with the other three call sites.
+                foreach (var item in FilterLegitimateDeletedFileIds(null))
                 {
-                    fp.DeleteFile(item.ToString(), DC!.ReCreate());
+                    fp.DeleteFileTenantScoped(item, DC!.ReCreate());
                 }
             }
         }
 
-        private void DoAddPrepare()
+        /// <summary>
+        /// Sync entry point used by <see cref="DoAdd"/>. Runs <see cref="DoAddPrepareCore"/>,
+        /// then the SYNC file-reference gate (<see cref="RejectUnresolvableFileAttachmentReferences"/>),
+        /// then stages <see cref="Entity"/> for insertion. See
+        /// <see cref="DoAddPrepareAsync"/> for the async counterpart used by
+        /// <see cref="DoAddAsync"/> (Issue #815 fifth round — batching + async).
+        /// </summary>
+        /// <returns>
+        /// <see langword="false"/> when the file-reference gate rejected the whole request
+        /// (Issue #815 sixth/seventh round — the FK's column does not accept NULL, per EF
+        /// Core's own model, and there is no legitimate prior value to revert to) — in that case
+        /// <see cref="Entity"/> is deliberately NOT staged for insertion, and the caller
+        /// (<see cref="DoAdd"/>/<see cref="DoAddAsync"/>) must not call <c>SaveChanges</c>.
+        /// <see langword="true"/> otherwise.
+        /// </returns>
+        private bool DoAddPrepare()
+        {
+            DoAddPrepareCore();
+
+            // #815 rework: reject a posted FileAttachment FK the caller cannot resolve for
+            // their own tenant BEFORE it is ever written — see the method doc comment on
+            // RejectUnresolvableFileAttachmentReferences. Add has no pre-existing DB state
+            // (preSaveSnapshot: null), so an unresolvable reference reverts to null, UNLESS EF
+            // Core's own model says the FK's column is required (#815 sixth/seventh round), in
+            // which case there is no safe "null" to revert to and the whole request is rejected
+            // instead.
+            if (RejectUnresolvableFileAttachmentReferences(null))
+            {
+                return false;
+            }
+
+            //添加数据
+            DC!.Set<TModel>().Add(Entity);
+            return true;
+        }
+
+        /// <summary>
+        /// Async counterpart of <see cref="DoAddPrepare"/> used by <see cref="DoAddAsync"/> —
+        /// same <see cref="DoAddPrepareCore"/> call, but awaits the ASYNC batched file-reference
+        /// gate (<see cref="RejectUnresolvableFileAttachmentReferencesAsync"/>) instead of
+        /// running it synchronously, so the async request path never blocks a ThreadPool thread
+        /// on it (Issue #815 fifth round). See <see cref="DoAddPrepare"/> for the meaning of the
+        /// returned <see cref="bool"/> (Issue #815 sixth round).
+        /// </summary>
+        private async Task<bool> DoAddPrepareAsync()
+        {
+            DoAddPrepareCore();
+            if (await RejectUnresolvableFileAttachmentReferencesAsync(null))
+            {
+                return false;
+            }
+            DC!.Set<TModel>().Add(Entity);
+            return true;
+        }
+
+        /// <summary>
+        /// Shared preparation logic for both <see cref="DoAddPrepare"/> and
+        /// <see cref="DoAddPrepareAsync"/> — everything EXCEPT the file-reference gate and the
+        /// final <c>Add</c>, which the two callers run themselves (sync vs. async) so the
+        /// file-reference resolution query can be sync or awaited without duplicating this whole
+        /// method.
+        /// </summary>
+        private void DoAddPrepareCore()
         {
             var pros = typeof(TModel).GetAllProperties();
             //将所有TopBasePoco的属性赋空值，防止添加关联的重复内容
@@ -592,11 +685,6 @@ namespace WalkingTec.Mvvm.Core
                 }
             }
             #endregion
-
-
-            //添加数据
-            DC!.Set<TModel>().Add(Entity);
-
         }
 
         /// <summary>
@@ -606,7 +694,15 @@ namespace WalkingTec.Mvvm.Core
         public virtual void DoEdit(bool updateAllFields = false)
         {
             var _auditSnapshot = LoadEntitySnapshot();
-            DoEditPrepare(updateAllFields);
+            if (!DoEditPrepare(updateAllFields, _auditSnapshot))
+            {
+                // #815 sixth/seventh round: the file-reference gate rejected the whole request (a
+                // required FK column, per EF Core's own model, with no legitimate prior value to
+                // revert to) — MSD already carries the model error; the sub-table diff/update in
+                // DoEditPreparePart2 never ran, so nothing was staged and there is nothing to
+                // save. See ApplyFileAttachmentResolution's doc comment.
+                return;
+            }
             AppendChangeLog("Edit", SerializeScalarProps(_auditSnapshot), SerializeScalarProps(Entity));
 
             // Track whether SaveChanges succeeded so we only delete files on success
@@ -631,9 +727,19 @@ namespace WalkingTec.Mvvm.Core
             {
                 var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
 
-                foreach (var item in DeletedFileIds)
+                // #815: validated against _auditSnapshot — the entity's DB state as it existed
+                // BEFORE this edit — never against Entity's own posted (attacker-controlled)
+                // properties. See FilterLegitimateDeletedFileIds' doc comment.
+                // #815 rework: FilterLegitimateDeletedFileIds alone is not sufficient — a caller
+                // can forge the entity's own FK to a foreign file in a first request, then name
+                // that same id in DeletedFileIds in a second request, and the pre-edit snapshot
+                // used above legitimately (but wrongly) contains it. DeleteFileTenantScoped is the
+                // primary control that actually closes the cross-tenant version of that bypass by
+                // refusing to resolve a FileAttachment outside the caller's own tenant, regardless
+                // of FileUploadOptions.EnforceTenantFileScope.
+                foreach (var item in FilterLegitimateDeletedFileIds(_auditSnapshot))
                 {
-                    fp.DeleteFile(item.ToString(), DC!.ReCreate());
+                    fp.DeleteFileTenantScoped(item, DC!.ReCreate());
                 }
             }
 
@@ -642,7 +748,14 @@ namespace WalkingTec.Mvvm.Core
         public virtual async Task DoEditAsync(bool updateAllFields = false)
         {
             var _auditSnapshot = await LoadEntitySnapshotAsync();
-            DoEditPrepare(updateAllFields);
+            // #815 fifth round: the async variant of DoEditPrepare — uses the awaited batched
+            // file-reference resolution instead of the sync one, so this async request path
+            // never blocks a ThreadPool thread on it.
+            if (!await DoEditPrepareAsync(updateAllFields, _auditSnapshot))
+            {
+                // #815 sixth round: see the sync DoEdit's matching guard above.
+                return;
+            }
             AppendChangeLog("Edit", SerializeScalarProps(_auditSnapshot), SerializeScalarProps(Entity));
 
             // Track whether SaveChangesAsync succeeded so we only delete files on success
@@ -667,14 +780,80 @@ namespace WalkingTec.Mvvm.Core
             {
                 var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
 
-                foreach (var item in DeletedFileIds)
+                // #815: same pre-edit-snapshot validation as the sync DoEdit above.
+                // #815 rework: same DeleteFileTenantScoped primary control as the sync DoEdit
+                // above — see its comment for why FilterLegitimateDeletedFileIds alone is not
+                // sufficient.
+                foreach (var item in FilterLegitimateDeletedFileIds(_auditSnapshot))
                 {
-                    fp.DeleteFile(item.ToString(), DC!);
+                    fp.DeleteFileTenantScoped(item, DC!);
                 }
             }
         }
 
-        private void DoEditPrepare(bool updateAllFields)
+        /// <summary>
+        /// Sync entry point used by <see cref="DoEdit"/> (and <see cref="DoDelete"/>'s
+        /// soft-delete path). Runs <see cref="DoEditPreparePart1"/>, then the SYNC
+        /// file-reference gate (<see cref="RejectUnresolvableFileAttachmentReferences"/>), then
+        /// <see cref="DoEditPreparePart2"/>. See <see cref="DoEditPrepareAsync"/> for the async
+        /// counterpart used by <see cref="DoEditAsync"/>/<see cref="DoDeleteAsync"/> (Issue #815
+        /// fifth round — batching + async).
+        /// </summary>
+        /// <returns>
+        /// <see langword="false"/> when the file-reference gate rejected the whole request
+        /// (Issue #815 sixth round) — <see cref="DoEditPreparePart2"/> deliberately does NOT
+        /// run, so no sub-table diff/update or scalar <c>UpdateProperty</c> is staged, and the
+        /// caller must not call <c>SaveChanges</c>. <see langword="true"/> otherwise.
+        /// </returns>
+        private bool DoEditPrepare(bool updateAllFields, TModel? preSaveSnapshot)
+        {
+            var pros = DoEditPreparePart1();
+
+            // #815 rework: reject a posted FileAttachment FK the caller cannot resolve for
+            // their own tenant BEFORE it is written by the UpdateProperty/UpdateEntity calls
+            // below — see the method doc comment on RejectUnresolvableFileAttachmentReferences.
+            // Must run after the navigation-property nulling above (Entity's posted FK scalars
+            // are already in their final pre-save form by this point) and before every write
+            // path further down in this method.
+            if (RejectUnresolvableFileAttachmentReferences(preSaveSnapshot))
+            {
+                return false;
+            }
+
+            DoEditPreparePart2(updateAllFields, pros);
+            return true;
+        }
+
+        /// <summary>
+        /// Async counterpart of <see cref="DoEditPrepare"/> used by
+        /// <see cref="DoEditAsync"/>/<see cref="DoDeleteAsync"/> — same
+        /// <see cref="DoEditPreparePart1"/>/<see cref="DoEditPreparePart2"/> calls, but awaits
+        /// the ASYNC batched file-reference gate
+        /// (<see cref="RejectUnresolvableFileAttachmentReferencesAsync"/>) instead of running it
+        /// synchronously, so the async request path never blocks a ThreadPool thread on it
+        /// (Issue #815 fifth round). See <see cref="DoEditPrepare"/> for the meaning of the
+        /// returned <see cref="bool"/> (Issue #815 sixth round).
+        /// </summary>
+        private async Task<bool> DoEditPrepareAsync(bool updateAllFields, TModel? preSaveSnapshot)
+        {
+            var pros = DoEditPreparePart1();
+            if (await RejectUnresolvableFileAttachmentReferencesAsync(preSaveSnapshot))
+            {
+                return false;
+            }
+            DoEditPreparePart2(updateAllFields, pros);
+            return true;
+        }
+
+        /// <summary>
+        /// First half of the shared <c>DoEditPrepare</c> logic — everything BEFORE the
+        /// file-reference gate: <c>UpdateTime</c>/<c>UpdateBy</c> stamping and nulling
+        /// <see cref="TopBasePoco"/> navigation properties (so their FK scalars are in final
+        /// pre-save form before <see cref="RejectUnresolvableFileAttachmentReferences"/> reads
+        /// them). Returns the cached property list so
+        /// <see cref="DoEditPreparePart2"/> does not need to look it up again.
+        /// </summary>
+        private List<PropertyInfo> DoEditPreparePart1()
         {
             if (typeof(IBasePoco).IsAssignableFrom(typeof(TModel)))
             {
@@ -709,6 +888,19 @@ namespace WalkingTec.Mvvm.Core
                     }
                 }
             }
+            return pros;
+        }
+
+        /// <summary>
+        /// Second half of the shared <c>DoEditPrepare</c> logic — everything AFTER the
+        /// file-reference gate: the 更新子表 (sub-table diff/update) block and the final
+        /// scalar-field <c>UpdateProperty</c>/<c>UpdateEntity</c> calls. Takes
+        /// <paramref name="pros"/> from <see cref="DoEditPreparePart1"/> instead of
+        /// recomputing it (the lookup is cached either way, but this keeps the two halves using
+        /// literally the same list).
+        /// </summary>
+        private void DoEditPreparePart2(bool updateAllFields, List<PropertyInfo> pros)
+        {
             #region 更新子表
             foreach (var pro in pros)
             {
@@ -902,10 +1094,29 @@ namespace WalkingTec.Mvvm.Core
                                 continue;
                             }
                             var itemPros = ftype.GetAllProperties();
+                            // #815 eighth round: fkname (resolved above via DC.GetFKName) can name an
+                            // EF shadow property that has no backing CLR property on ftype — the same
+                            // shape LoadExistingSubItemFileIds already fails closed on. Round 8's own
+                            // parent-scoped drop in ApplyFileAttachmentResolution can turn a
+                            // previously non-empty posted collection into an empty one for exactly
+                            // this shape, routing here for the first time. Expression.MakeMemberAccess
+                            // below throws ArgumentNullException when handed a null MemberInfo, so
+                            // guard it: there is no CLR property to build a parent-scoped delete query
+                            // against, so skip the cascade-delete instead of crashing. This leaves any
+                            // existing children of this parent untouched rather than guessing at a
+                            // query this method cannot safely construct.
+                            var fkProperty = ftype.GetSingleProperty(fkname);
+                            if (fkProperty == null)
+                            {
+                                Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(
+                                    "DoEditPreparePart2: could not resolve FK property '{FkName}' on {ItemType} (EF shadow property) while clearing sub-table {Property}; skipping cascade-delete for this parent to avoid an unhandled exception (Issue #815)",
+                                    fkname, ftype.Name, pro.Name);
+                                continue;
+                            }
                             var set = EfSetMethodCache.GetClosedSetMethod(DC!.GetType(), ftype);
                             var dataquery = set.Invoke(DC!, null) as IQueryable<TopBasePoco>;
                             ParameterExpression pe = Expression.Parameter(ftype);
-                            Expression member = Expression.MakeMemberAccess(pe, ftype.GetSingleProperty(fkname)!);
+                            Expression member = Expression.MakeMemberAccess(pe, fkProperty);
                             //member = Expression.Call(member, "ToString", new Type[] { });
                             Expression right = Expression.Constant(string.IsNullOrEmpty(softkey) ? Entity.GetID() : Entity.GetPropertyValue(softkey), member.Type);
                             Expression condition = Expression.Equal(member, right);
@@ -1048,15 +1259,21 @@ namespace WalkingTec.Mvvm.Core
                     f.SetValue(Entity, f.PropertyType.GetConstructor(Type.EmptyTypes)!.Invoke(null));
                 }
 
-                DoEditPrepare(false);
-                AppendChangeLog("Delete", SerializeScalarProps(_auditSnapshot), null);
-                try
+                // #815 sixth/seventh round: DoEditPrepare can reject the whole request (a
+                // required FileAttachment FK column, per EF Core's own model, with no legitimate
+                // prior value) — when it does, DoEditPreparePart2 never ran, so there is nothing
+                // staged to save. MSD already carries the model error from the gate.
+                if (DoEditPrepare(false, _auditSnapshot))
                 {
-                    DC!.SaveChanges();
-                }
-                catch (DbUpdateException)
-                {
-                    MSD?.AddModelError("", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DeleteFailed"] ?? "" : "");
+                    AppendChangeLog("Delete", SerializeScalarProps(_auditSnapshot), null);
+                    try
+                    {
+                        DC!.SaveChanges();
+                    }
+                    catch (DbUpdateException)
+                    {
+                        MSD?.AddModelError("", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DeleteFailed"] ?? "" : "");
+                    }
                 }
             }
             //如果是普通的TopBasePoco，则进行物理删除
@@ -1086,15 +1303,21 @@ namespace WalkingTec.Mvvm.Core
                 {
                     f.SetValue(Entity, null);
                 }
-                DoEditPrepare(false);
-                AppendChangeLog("Delete", SerializeScalarProps(_auditSnapshot), null);
-                try
+                // #815 fifth round: DoDeleteAsync is itself an async request-path method — use
+                // the awaited batched file-reference gate here too, not the sync one.
+                // #815 sixth round: see the sync DoDelete's matching guard above for why the
+                // return value is checked before saving.
+                if (await DoEditPrepareAsync(false, _auditSnapshot))
                 {
-                    await DC!.SaveChangesAsync();
-                }
-                catch (DbUpdateException)
-                {
-                    MSD?.AddModelError("", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DeleteFailed"] ?? "" : "");
+                    AppendChangeLog("Delete", SerializeScalarProps(_auditSnapshot), null);
+                    try
+                    {
+                        await DC!.SaveChangesAsync();
+                    }
+                    catch (DbUpdateException)
+                    {
+                        MSD?.AddModelError("", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DeleteFailed"] ?? "" : "");
+                    }
                 }
             }
             //如果是普通的TopBasePoco，则进行物理删除
@@ -1161,7 +1384,14 @@ namespace WalkingTec.Mvvm.Core
                     var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
                     foreach (var item in fileids)
                     {
-                        fp.DeleteFile(item.ToString(), DC!.ReCreate());
+                        // #815 rework: fileids above is read off Entity's own FileAttachment /
+                        // ISubFile properties, which RejectUnresolvableFileAttachmentReferences
+                        // now keeps free of foreign-tenant references on write — but this call
+                        // site is defence in depth, same as every other DeleteFile sink: an id
+                        // must still resolve for the caller's own tenant scope, unconditionally,
+                        // regardless of FileUploadOptions.EnforceTenantFileScope. See
+                        // WtmFileProvider.DeleteFileTenantScoped's doc comment.
+                        fp.DeleteFileTenantScoped(item.ToString(), DC!.ReCreate());
                     }
                 }
             }
@@ -1228,7 +1458,14 @@ namespace WalkingTec.Mvvm.Core
                     var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
                     foreach (var item in fileids)
                     {
-                        fp.DeleteFile(item.ToString(), DC!.ReCreate());
+                        // #815 rework: fileids above is read off Entity's own FileAttachment /
+                        // ISubFile properties, which RejectUnresolvableFileAttachmentReferences
+                        // now keeps free of foreign-tenant references on write — but this call
+                        // site is defence in depth, same as every other DeleteFile sink: an id
+                        // must still resolve for the caller's own tenant scope, unconditionally,
+                        // regardless of FileUploadOptions.EnforceTenantFileScope. See
+                        // WtmFileProvider.DeleteFileTenantScoped's doc comment.
+                        fp.DeleteFileTenantScoped(item.ToString(), DC!.ReCreate());
                     }
                 }
             }
@@ -1294,6 +1531,820 @@ namespace WalkingTec.Mvvm.Core
             {
                 return null;
             }
+        }
+
+        /// <summary>
+        /// #815: <see cref="BaseVM.DeletedFileIds"/> is model-bound — it arrives straight from
+        /// the posted form. Its most common producer is <c>UploadTagHelper.cs</c> (~247 emits the
+        /// hidden input the browser posts) but it is not the ONLY one: the Blazor equivalents
+        /// <c>WTUploadFile.razor</c>/<c>WTUploadImage.razor</c> (<c>OnAvatarDelete</c> →
+        /// <c>SetDeletedIds</c>, ~161/~199 and ~172/~213) add to the same list, and
+        /// <c>BasePage.cs</c> (~109, <c>PostsForm</c>) copies it onto the posted <c>BaseVM</c>
+        /// before every submit — see the sub-table paragraph below for why their multi-file branch
+        /// does not widen what this method allows. Without validation a caller could name ANY GUID
+        /// for <c>WtmFileProvider.DeleteFile</c> to remove. <c>WtmFileProvider</c> resolved by id
+        /// with <c>IgnoreQueryFilters()</c> whenever <c>FileUploadOptions.EnforceTenantFileScope</c>
+        /// is false (the default), so an unvalidated id could belong to any tenant's
+        /// <see cref="FileAttachment"/> row — arbitrary cross-tenant file deletion.
+        /// <para>
+        /// <see cref="FileAttachment"/> carries no owner column, but there is a narrower invariant
+        /// that needs no schema change: a caller should only be able to delete a file THIS record
+        /// actually referenced. This filters <see cref="BaseVM.DeletedFileIds"/> down to the ids
+        /// that <paramref name="preSaveSnapshot"/> — a fresh, untracked copy of <typeparamref
+        /// name="TModel"/> read from the database BEFORE this save touched anything (both callers
+        /// capture it ahead of <c>DoAddPrepare</c>/<c>DoEditPrepare</c> and <c>SaveChanges</c>; the
+        /// Add path passes <c>null</c>, since a not-yet-existing row has never legitimately
+        /// referenced any file) — actually held in its own <see cref="FileAttachment"/>-typed
+        /// properties.
+        /// </para>
+        /// <para>
+        /// <b>This is a second, defence-in-depth layer only — it is NOT sufficient on its own.</b>
+        /// A caller can forge the entity's own FK to point at a victim file in one request (saved
+        /// with no validation), then name that same id in <see cref="BaseVM.DeletedFileIds"/> in a
+        /// follow-up request: the pre-save snapshot legitimately (but wrongly) now contains it, so
+        /// this filter alone would pass it through (Issue #815 rework — this is why checking
+        /// against <c>Entity</c>'s own in-memory posted properties in the SAME request would be
+        /// even weaker: an attacker would not even need two requests). The PRIMARY control against
+        /// arbitrary/cross-tenant deletion is <c>WtmFileProvider.DeleteFileTenantScoped</c>, called
+        /// at every site that iterates this method's result — it refuses to resolve a
+        /// <see cref="FileAttachment"/> outside the caller's own tenant, unconditionally,
+        /// regardless of <c>FileUploadOptions.EnforceTenantFileScope</c>. The residual gap this
+        /// filter does not close — the two-request forge-then-delete bypass WITHIN the same tenant
+        /// — is a smaller, accepted risk (see Issue #815's PR discussion): it requires an
+        /// authenticated user already inside the victim's tenant.
+        /// </para>
+        /// <para>
+        /// An id that fails this check is silently skipped, not reported as an error —
+        /// <c>WtmFileProvider.DeleteFile</c>/<c>DeleteFileTenantScoped</c> already no-op for an id
+        /// that does not resolve to a row they are willing to remove, so the caller-visible
+        /// behaviour is unchanged: the file named simply is not deleted. The one legitimate flow
+        /// this narrows is <c>UploadTagHelper</c>'s "cancel a just-selected replacement before
+        /// submitting" affordance, which posts the id of the file JUST uploaded in this same
+        /// session (never any persisted entity's FK, before or after this save) rather than the
+        /// pre-edit <c>Field.Model</c> value — that id was never a legitimate reference of ANY
+        /// entity either, so skipping it only leaves an already-orphaned
+        /// <see cref="FileAttachment"/> row uncleaned; it does not block or alter the save itself.
+        /// </para>
+        /// <para>
+        /// Sub-table (list) entities' own <see cref="FileAttachment"/>-typed properties are
+        /// intentionally NOT covered by <see cref="GetOwnFileIds"/> (it only inspects TModel's own
+        /// scalar <see cref="FileAttachment"/>-typed properties, never a collection). This DOES
+        /// matter for the Blazor multi-file producers named above: <c>WTUploadFile.razor</c>'s
+        /// <c>IsMultiple</c> branch (bound to a <c>List&lt;ISubFile&gt;</c> property) also calls
+        /// <c>SetDeletedIds</c>, so ids from that branch DO reach
+        /// <see cref="BaseVM.DeletedFileIds"/> — but because <see cref="GetOwnFileIds"/> never
+        /// matches them, they are unconditionally filtered out here, same as any other
+        /// non-matching id: no security regression (they were never a legitimate match), but also
+        /// no cleanup for that flow — a pre-existing gap, not introduced by this fix. See Issue
+        /// #815.
+        /// </para>
+        /// </summary>
+        private IEnumerable<string> FilterLegitimateDeletedFileIds(TModel? preSaveSnapshot)
+        {
+            if (DeletedFileIds == null || DeletedFileIds.Count == 0)
+            {
+                yield break;
+            }
+            var legitimateIds = GetOwnFileIds(preSaveSnapshot);
+            if (legitimateIds.Count == 0)
+            {
+                yield break;
+            }
+            foreach (var item in DeletedFileIds)
+            {
+                if (item != null && Guid.TryParse(item, out var parsed) && legitimateIds.Contains(parsed))
+                {
+                    yield return item;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Collects the <see cref="FileAttachment"/> ids <paramref name="snapshot"/> actually
+        /// holds via its own <see cref="FileAttachment"/>-typed properties (resolved to their
+        /// backing FK scalar column the same way the auto-Include block above does). See
+        /// <see cref="FilterLegitimateDeletedFileIds"/> for why this is read from a pre-save
+        /// snapshot rather than the live <c>Entity</c>.
+        /// <para>
+        /// Known narrowing: if <c>DC.GetFKName2</c> resolves the FK to an EF shadow property (no
+        /// corresponding CLR property — e.g. a model that declares only <c>public FileAttachment
+        /// Photo</c> with no explicit <c>PhotoId</c> scalar), <c>GetSingleProperty</c> below
+        /// cannot read its value off a plain (untracked, reflection-only) snapshot instance, so
+        /// that property is skipped and its file is excluded from the legitimate-ids set. This
+        /// only narrows what <see cref="FilterLegitimateDeletedFileIds"/> allows to be deleted (a
+        /// legitimately-orphaned file for that property becomes uncleanable via
+        /// <see cref="BaseVM.DeletedFileIds"/>), never widens it — logged below so the narrowing
+        /// is observable rather than a silent surprise. See Issue #815.
+        /// </para>
+        /// </summary>
+        private HashSet<Guid> GetOwnFileIds(TModel? snapshot)
+        {
+            var result = new HashSet<Guid>();
+            if (snapshot == null || DC == null)
+            {
+                return result;
+            }
+            var pros = typeof(TModel).GetAllProperties();
+            foreach (var f in pros.Where(x => x.PropertyType == typeof(FileAttachment)))
+            {
+                var fkname = DC.GetFKName2<TModel>(f.Name);
+                if (string.IsNullOrEmpty(fkname))
+                {
+                    continue;
+                }
+                var fidpro = typeof(TModel).GetSingleProperty(fkname);
+                if (fidpro == null)
+                {
+                    Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(
+                        "GetOwnFileIds: FK '{FkName}' for {Model}.{Property} is an EF shadow property with no matching CLR property; excluded from DeletedFileIds validation (Issue #815)",
+                        fkname, typeof(TModel).Name, f.Name);
+                    continue;
+                }
+                var fid = fidpro.GetValue(snapshot);
+                if (fid != null && Guid.TryParse(fid.ToString(), out var parsed) && parsed != Guid.Empty)
+                {
+                    result.Add(parsed);
+                }
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// #815 rework — Option A, kill the primitive at its source. Round 1/2 patched
+        /// individual sinks that DELETE a <see cref="FileAttachment"/> named in
+        /// <see cref="BaseVM.DeletedFileIds"/>; a reviewer bypassed both by never touching
+        /// <c>DeletedFileIds</c> at all: POST 1 edits the caller's OWN row and sets a
+        /// <see cref="FileAttachment"/>-typed property's backing FK scalar (e.g. <c>PhotoId</c>)
+        /// to a file the caller has no relationship to — <see cref="DoEditPrepare"/> only ever
+        /// nulled the NAVIGATION property, never the posted FK scalar, so it landed in the DB
+        /// unvalidated. POST 2 then reached the victim's file through ANY path that derives file
+        /// ids from the entity — <see cref="DoRealDelete"/>/<see cref="DoRealDeleteAsync"/>,
+        /// <c>BaseBatchVM.DoBatchDelete(Async)</c>, or simply a plain read: <c>GetById</c>
+        /// resolves the navigation via <c>WtmFileProvider.GetFile</c>, which uses
+        /// <c>IgnoreQueryFilters()</c> whenever <c>FileUploadOptions.EnforceTenantFileScope</c> is
+        /// false (the default) — so a forged FK is a READ primitive, not only a delete one.
+        /// <para>
+        /// This closes BOTH at the one place they share: the FK scalar is never allowed to point
+        /// at a <see cref="FileAttachment"/> the caller cannot resolve for their OWN tenant — the
+        /// <c>ITenant</c> global query filter is kept ON here UNCONDITIONALLY, regardless of
+        /// <c>EnforceTenantFileScope</c>, mirroring
+        /// <see cref="WtmFileProvider.DeleteFileTenantScoped"/>'s resolution rule. A caller who
+        /// posts a foreign id through <see cref="DoAddPrepare"/>/<see cref="DoEditPrepare"/> (this
+        /// method's only two callers — their scalar loop above and the <see cref="ISubFile"/>
+        /// collection loop below, both walked here) simply never gets it written, so POST 2 has
+        /// nothing left to reach through <see cref="DoRealDelete"/>/<see cref="DoRealDeleteAsync"/>,
+        /// <c>BaseBatchVM.DoBatchDelete(Async)</c>, or a plain read via that SAME two-call-site
+        /// gate. <b>This claim is scoped to those two call sites, not "any sink whatsoever"</b> —
+        /// #815's own first-round review already proved <c>BasePagedListVM.UpdateEntityList</c>,
+        /// <c>BaseBatchVM.DoBatchEdit</c>/<c>Async</c>, <c>BaseImportVM.BatchSaveData</c>'s Excel
+        /// mapping, and direct <c>DbSet</c> saves never call <see cref="DoAddPrepare"/>/
+        /// <see cref="DoEditPrepare"/> at all, so this gate does not cover them — those write
+        /// paths remain open and are tracked as <b>Issue #824</b>, which enforces the invariant at
+        /// the <c>EmptyContext.SaveChanges</c> boundary instead of adding yet another per-path
+        /// gate call site here.
+        /// </para>
+        /// <para>
+        /// Round 2's sink-level tenant scoping (<see cref="WtmFileProvider.DeleteFileTenantScoped"/>)
+        /// stays as defence in depth — this does not replace it, it removes the primitive both
+        /// rounds were chasing downstream.
+        /// </para>
+        /// <para>
+        /// An id that fails resolution is silently reverted to <paramref name="preSaveSnapshot"/>'s
+        /// value for that same FK (the entity's own legitimate pre-edit reference, possibly
+        /// <see langword="null"/>), or to <see langword="null"/> when <paramref
+        /// name="preSaveSnapshot"/> is itself <see langword="null"/> (the Add path — a brand-new
+        /// row has no prior legitimate value to revert to). This mirrors how an unresolvable id
+        /// already no-ops at the <c>WtmFileProvider</c> delete sinks rather than surfacing as a
+        /// user-visible error. Ordinary usage is unaffected: a just-uploaded file always resolves
+        /// for its uploader, because <c>WtmFileProvider.Upload</c> stamps its
+        /// <c>TenantCode</c> from that same caller's <c>LoginUserInfo.CurrentTenant</c>.
+        /// </para>
+        /// <para>
+        /// <b>Known narrowing, same as <see cref="GetOwnFileIds"/></b>: when <c>DC.GetFKName2</c>
+        /// resolves to an EF shadow property with no matching CLR property, there is no scalar to
+        /// read the posted value from (or write a safe value back to), so that property is
+        /// skipped. This is not a gap in practice — a shadow FK has no CLR property for model
+        /// binding to target either, so a caller cannot post to it through this path at all.
+        /// </para>
+        /// <para>
+        /// <b>Caveat — single-tenant deployments</b>: the <c>ITenant</c> global filter compares
+        /// <c>FileAttachment.TenantCode == DC.TenantCode</c>. Where multi-tenancy is not in use,
+        /// every row (including one belonging to a different USER of the same, often
+        /// <see langword="null"/>, tenant) shares that same TenantCode, so this check resolves
+        /// every file and provides no isolation between two users. This closes the CROSS-TENANT
+        /// version of the primitive; the narrower "any authenticated user vs. any other user's
+        /// file, same tenant" threat is not addressed by tenant scoping and remains open — see
+        /// Issue #815's PR discussion.
+        /// </para>
+        /// <para>
+        /// <b>#815 third round — <see cref="ISubFile"/> collections covered too.</b> The
+        /// scalar-only version of this method left an identical, unvalidated write reachable
+        /// through any <c>List&lt;T&gt;</c>-typed property whose item type implements
+        /// <see cref="ISubFile"/> (e.g. a <c>Product.Attachments</c> collection): posting
+        /// <c>Attachments = [ new ProductAttachment { FileId = &lt;victim file GUID&gt; } ]</c>
+        /// through <c>DoAddPrepare</c>/<c>DoEditPrepare</c> wrote <c>FileId</c> with no check at
+        /// all — worse than the scalar case, since <see cref="GetOwnFileIds"/>/<see
+        /// cref="FilterLegitimateDeletedFileIds"/> never covered sub-item collections either
+        /// (see that method's doc comment), so this had neither layer. The loop below walks the
+        /// same <c>IEnumerable&lt;ISubFile&gt;</c> properties <see cref="DoRealDelete"/>/<see
+        /// cref="DoRealDeleteAsync"/> already walk on the delete side, and applies the identical
+        /// tenant-scoped resolution check shared with the scalar loop above (originally a
+        /// per-id helper, now the batched <see cref="ResolveFileAttachmentIdsForCaller"/> — see
+        /// the "batched resolution, sync and async" doc paragraph below).
+        /// </para>
+        /// <para>
+        /// <b>#815 fourth round — drop the item, never write <see cref="Guid.Empty"/> into
+        /// <c>ISubFile.FileId</c>.</b> <see cref="ISubFile"/> mandates a non-nullable <c>Guid
+        /// FileId</c> plus a <c>FileAttachment?</c> navigation, and
+        /// <c>DataContext.OnModelCreating</c> explicitly leaves <see cref="ISubFile"/> types on
+        /// EF's default convention (it <c>continue</c>s past them), so a real FK constraint to
+        /// <see cref="FileAttachment"/> always exists on any FK-enforcing provider.
+        /// <see cref="Guid.Empty"/> matches no row, so clearing to it — the earlier round's
+        /// behaviour — did not "controlledly reject" anything: on <c>DoEdit</c> it rolled back
+        /// the ENTIRE save (losing the legitimate parent edit too) and on <c>DoAdd</c> it threw
+        /// an unhandled <see cref="Microsoft.EntityFrameworkCore.DbUpdateException"/>. Instead,
+        /// an unresolvable sub-item is removed from the very <c>List&lt;T&gt;</c> instance
+        /// <paramref name="preSaveSnapshot"/>-independent <c>Entity</c> already holds (mutated in
+        /// place via the non-generic <see cref="IList"/> the model-bound collection is backed by
+        /// — every in-repo <see cref="ISubFile"/> collection property is a concrete
+        /// <c>List&lt;T&gt;</c>), so the later 更新子表 (<c>DoAddPrepare</c>'s cascade-add /
+        /// <c>DoEditPrepare</c>'s <c>Utils.CheckDifference</c>+<c>toadd</c> loop) never sees the
+        /// forged item at all — it is not added. <b>Correction (#815 seventh round):</b> "any
+        /// existing DB row for a different sub-item id is left completely untouched" only holds
+        /// when at least one item remains in the posted collection after the drop. When the drop
+        /// empties the collection entirely, <c>DoEditPreparePart2</c>'s <c>else if (... .Count()
+        /// == 0)</c> branch runs instead of the <c>Utils.CheckDifference</c> path and physically
+        /// deletes EVERY existing child row for this parent — the same behaviour an omitted
+        /// child collection already gets from base <c>DoEdit</c> semantics with no gate involved
+        /// at all, so this is not a NEW data-loss mode the gate introduces, just a premise this
+        /// paragraph originally overstated. A collection property that is not a mutable
+        /// <see cref="IList"/> (e.g. a fixed-size
+        /// array) cannot have a single element removed from it in place; that narrow case fails
+        /// closed by clearing the WHOLE property instead of leaving the unresolved reference
+        /// behind — over-broad relative to the common <c>List&lt;T&gt;</c> path, but never a
+        /// silent invalid-FK write, and never observed in this codebase's own models.
+        /// </para>
+        /// <para>
+        /// <b>#815 fifth round — batched resolution, sync and async.</b> Each candidate id used
+        /// to cost its own synchronous <c>.Any()</c> round-trip, issued from inside this method —
+        /// an N+1 query pattern when a posted <see cref="ISubFile"/> collection has more than one
+        /// item, and a sync-over-async hazard on the <c>DoAddAsync</c>/<c>DoEditAsync</c> request
+        /// path (the #128 ThreadPool-starvation lesson —
+        /// <c>.claude/rules/dotnet-conventions.md</c>). <see cref="CollectFileAttachmentCandidates"/>
+        /// now gathers every distinct candidate id up front (no DB access), a single query
+        /// resolves all of them at once (<see cref="ResolveFileAttachmentIdsForCaller"/> /
+        /// <see cref="ResolveFileAttachmentIdsForCallerAsync"/>), and
+        /// <see cref="ApplyFileAttachmentResolution"/> applies the same rejection rules as before
+        /// against the resolved id set. The async overload
+        /// (<see cref="RejectUnresolvableFileAttachmentReferencesAsync"/>) is used by
+        /// <c>DoAddPrepareAsync</c>/<c>DoEditPrepareAsync</c>, called from
+        /// <c>DoAddAsync</c>/<c>DoEditAsync</c>/<c>DoDeleteAsync</c>.
+        /// </para>
+        /// <para>
+        /// <b>#815 sixth round — the scalar branch had the identical <see cref="Guid.Empty"/>
+        /// defect the fourth round fixed for <see cref="ISubFile"/> collections, one branch
+        /// over.</b> The "revert to <paramref name="preSaveSnapshot"/>'s value, or
+        /// <see langword="null"/> on Add" rule above assumes the FK property can actually HOLD
+        /// <see langword="null"/>. When the posted scalar navigation's backing FK is a
+        /// non-nullable value type (e.g. a plain <c>Guid FileId</c> — reachable whenever
+        /// <typeparamref name="TModel"/> is itself an <see cref="ISubFile"/> shape, such as
+        /// <c>ProductAttachment</c> used directly as a CRUD VM's model, or any code-generator-
+        /// produced sub-table VM), <c>PropertyInfo.SetValue(Entity, null)</c> does not throw and
+        /// does not leave the property alone — reflection silently coerces the <see
+        /// langword="null"/> to <c>default(T)</c>, i.e. <see cref="Guid.Empty"/>. That is exactly
+        /// the unresolvable-FK write this whole method exists to prevent: on <c>DoEdit</c> it
+        /// throws inside <c>SaveChanges</c> (only caught there, not prevented), and on
+        /// <c>DoAdd</c> — which has no such try/catch — it surfaces as an unhandled
+        /// <see cref="Microsoft.EntityFrameworkCore.DbUpdateException"/> straight out of
+        /// <see cref="DoAdd"/>. <see cref="ApplyFileAttachmentResolution"/> now checks whether
+        /// the FK property is a non-nullable value type AND whether <paramref
+        /// name="preSaveSnapshot"/> actually carries a non-default prior value for it; only when
+        /// both a safe revert target exists does it write <c>safeValue</c> as before. Otherwise —
+        /// Add (<paramref name="preSaveSnapshot"/> is <see langword="null"/>), or an Edit whose
+        /// snapshot's own FK is already at its type's default — there is nothing safe to write,
+        /// so the WHOLE request is rejected via <c>MSD.AddModelError</c> instead: this method now
+        /// returns <see langword="true"/> to its two callers
+        /// (<see cref="DoAddPrepare"/>/<see cref="DoAddPrepareAsync"/> and
+        /// <see cref="DoEditPrepare"/>/<see cref="DoEditPrepareAsync"/>), which skip staging
+        /// <see cref="Entity"/> / running <see cref="DoEditPreparePart2"/> and never call
+        /// <c>SaveChanges</c> at all — a controlled, caller-visible failure rather than either an
+        /// unhandled exception or a silent success with a mangled FK.
+        /// </para>
+        /// <para>
+        /// <b>#815 seventh round — the rejection predicate above was still CLR-type-only.</b>
+        /// "the FK property is a non-nullable value type" (previous paragraph) infers whether
+        /// writing <see langword="null"/> is safe from the FK property's own CLR type. But
+        /// <c>[Required] Guid? PhotoId</c> (or an equivalent fluent <c>IsRequired()</c>) makes a
+        /// CLR-<em>nullable</em> FK a NOT NULL column at the database while still being a
+        /// CLR-nullable type — that shape's CLR type check said "safe to write null", so it fell
+        /// through to <c>SetValue(Entity, null)</c> and threw the same unhandled
+        /// <see cref="Microsoft.EntityFrameworkCore.DbUpdateException"/> the previous paragraph
+        /// describes, out of <c>DoAdd</c>/<c>DoAddAsync</c>. <see
+        /// cref="ApplyFileAttachmentResolution"/> now asks EF Core's own model instead —
+        /// <c>DC.Model.FindEntityType(typeof(TModel))?.FindProperty(fkProperty.Name)?.IsNullable</c>
+        /// — whether the COLUMN accepts NULL, and rejects the whole request under the same rule
+        /// as before when it does not, regardless of what the CLR type alone would have allowed.
+        /// A property this method cannot find in the EF model at all (e.g. reached through a
+        /// NotMapped/soft-key FK) fails closed: treated as required, same as if EF had reported
+        /// it non-nullable. The FK's CLR type is still used, unchanged, to decide what "no
+        /// reference" looks like for the <em>legitimate-prior-value</em> check (default(fkType)
+        /// for a non-nullable value type, <see langword="null"/> for anything else) — only the
+        /// "is writing null acceptable at all" question moved from the CLR type to the EF model.
+        /// </para>
+        /// <para>
+        /// <b>#815 sixth round — Edit-path sub-item drop could delete an untouched sibling row.</b>
+        /// The fourth round's "drop the forged item out of the posted collection" fix is correct
+        /// for a BRAND-NEW forged sub-item, but not when the rejected item's id matches an
+        /// EXISTING child row: dropping it removes that id from the list <see
+        /// cref="DoEditPreparePart2"/>'s <c>Utils.CheckDifference</c> diffs against the DB state,
+        /// so the untouched row is classified <c>toremove</c> and <c>DC.DeleteEntity</c>
+        /// physically deletes it — a re-post that forges ONE sub-item's <c>FileId</c> silently
+        /// deletes a completely unrelated, legitimate child row, with <c>DoEdit</c> reporting
+        /// success. <see cref="ApplyFileAttachmentResolution"/> now looks up, in a single
+        /// per-property batched query (<see cref="LoadExistingSubItemFileIds"/>), which of the
+        /// rejected items' ids already exist as a DB row for that same sub-table; a match gets
+        /// its <see cref="ISubFile.FileId"/> restored in place from that row's actual stored
+        /// value (kept in the posted list, so <c>Utils.CheckDifference</c> still sees it as
+        /// present and unrelated to removal) instead of being dropped. The drop behaviour is kept
+        /// only for items with no existing DB counterpart — a genuinely brand-new forged item,
+        /// where dropping cannot lose any pre-existing row.
+        /// </para>
+        /// <para>
+        /// <b>#815 seventh round — the restore above was wrong on TWO axes.</b> (1) The
+        /// justification for restoring-instead-of-dropping is that <c>Utils.CheckDifference</c>
+        /// will see the restored id and treat it as untouched — but <c>CheckDifference</c> only
+        /// ever runs on the EDIT path (<see cref="DoEditPreparePart2"/>, never
+        /// <c>DoAddPreparePart2</c>'s cascade-add). On ADD, restoring a rejected item that
+        /// happens to share an id with an existing DB row keeps that item in the posted list,
+        /// which the cascade-add then inserts — a PK violation, since a row with that id already
+        /// exists. <see cref="ApplyFileAttachmentResolution"/> now only calls
+        /// <see cref="LoadExistingSubItemFileIds"/> when <paramref name="preSaveSnapshot"/> is
+        /// non-<see langword="null"/> (the Edit path); Add always falls through to the drop
+        /// path, same as the fourth round's original behaviour. (2) The lookup itself was not
+        /// scoped to the parent being edited, so a rejected item whose id belonged to a
+        /// DIFFERENT parent's child row was also restored and kept — invisible to
+        /// <c>DoEditPreparePart2</c>'s own PARENT-SCOPED <c>CheckDifference</c> query, so it was
+        /// classified <c>toadd</c> and PK-violated there too, aborting the whole edit (including
+        /// the request's own legitimate scalar change). <see
+        /// cref="LoadExistingSubItemFileIds"/>'s own doc comment has the fix and the fail-closed
+        /// fallback when parent-scoping isn't resolvable for a given relationship shape.
+        /// </para>
+        /// </summary>
+        /// <returns>
+        /// <see langword="true"/> when a posted FileAttachment reference had to be rejected at
+        /// the REQUEST level (Issue #815 sixth/seventh round: a scalar FK whose column EF Core's
+        /// own model says is required, with no legitimate prior value to revert to) — the caller
+        /// must not persist anything from this request. <see langword="false"/> otherwise
+        /// (nothing was posted, everything resolved, or every rejection could be handled by
+        /// reverting/dropping/restoring in place).
+        /// </returns>
+        private bool RejectUnresolvableFileAttachmentReferences(TModel? preSaveSnapshot)
+        {
+            if (DC == null || typeof(TModel) == typeof(FileAttachment))
+            {
+                return false;
+            }
+            var candidates = CollectFileAttachmentCandidates();
+            var resolvedIds = ResolveFileAttachmentIdsForCaller(candidates.CandidateIds);
+            return ApplyFileAttachmentResolution(preSaveSnapshot, candidates.ScalarRefs, candidates.SubFileProperties, resolvedIds);
+        }
+
+        /// <summary>
+        /// Async counterpart of <see cref="RejectUnresolvableFileAttachmentReferences"/> — same
+        /// candidate collection and application logic, but the batched resolution query is
+        /// awaited instead of run synchronously. See the "batched resolution, sync and async"
+        /// doc paragraph above. See <see cref="RejectUnresolvableFileAttachmentReferences"/> for
+        /// the meaning of the returned <see cref="bool"/> (Issue #815 sixth round).
+        /// </summary>
+        private async Task<bool> RejectUnresolvableFileAttachmentReferencesAsync(TModel? preSaveSnapshot)
+        {
+            if (DC == null || typeof(TModel) == typeof(FileAttachment))
+            {
+                return false;
+            }
+            var candidates = CollectFileAttachmentCandidates();
+            var resolvedIds = await ResolveFileAttachmentIdsForCallerAsync(candidates.CandidateIds);
+            return ApplyFileAttachmentResolution(preSaveSnapshot, candidates.ScalarRefs, candidates.SubFileProperties, resolvedIds);
+        }
+
+        /// <summary>
+        /// A posted scalar <see cref="FileAttachment"/>-typed property's backing FK scalar,
+        /// captured before resolution so <see cref="ApplyFileAttachmentResolution"/> does not
+        /// need to repeat the <c>DC.GetFKName2</c>/reflection lookup.
+        /// </summary>
+        private readonly record struct ScalarFileAttachmentRef(PropertyInfo FkProperty, string FkName, Guid PostedId);
+
+        /// <summary>
+        /// Pure, DB-free first pass shared by <see cref="RejectUnresolvableFileAttachmentReferences"/>
+        /// and its async counterpart: walks <typeparamref name="TModel"/>'s scalar
+        /// <see cref="FileAttachment"/> properties and its <see cref="ISubFile"/> collection
+        /// properties, and returns every distinct non-empty posted <see cref="FileAttachment"/>
+        /// id found, alongside enough context to apply the rejection afterwards without
+        /// re-walking the entity.
+        /// </summary>
+        private (List<ScalarFileAttachmentRef> ScalarRefs, List<PropertyInfo> SubFileProperties, HashSet<Guid> CandidateIds) CollectFileAttachmentCandidates()
+        {
+            var scalarRefs = new List<ScalarFileAttachmentRef>();
+            var subFileProperties = new List<PropertyInfo>();
+            var candidateIds = new HashSet<Guid>();
+            var pros = typeof(TModel).GetAllProperties();
+
+            foreach (var f in pros.Where(x => x.PropertyType == typeof(FileAttachment)))
+            {
+                var fkname = DC!.GetFKName2<TModel>(f.Name);
+                if (string.IsNullOrEmpty(fkname))
+                {
+                    continue;
+                }
+                var fidpro = typeof(TModel).GetSingleProperty(fkname);
+                if (fidpro == null)
+                {
+                    continue; // EF shadow property — see doc comment above.
+                }
+                var posted = fidpro.GetValue(Entity);
+                if (posted == null || Guid.TryParse(posted.ToString(), out var postedGuid) == false || postedGuid == Guid.Empty)
+                {
+                    continue; // clearing/leaving the reference empty is always allowed.
+                }
+                scalarRefs.Add(new ScalarFileAttachmentRef(fidpro, fkname, postedGuid));
+                candidateIds.Add(postedGuid);
+            }
+
+            foreach (var f in pros.Where(x => typeof(IEnumerable<ISubFile>).IsAssignableFrom(x.PropertyType)))
+            {
+                if (f.GetValue(Entity) is not IEnumerable<ISubFile> subs)
+                {
+                    continue;
+                }
+                var hasCandidate = false;
+                foreach (var sub in subs)
+                {
+                    if (sub.FileId == Guid.Empty)
+                    {
+                        continue; // clearing/leaving the reference empty is always allowed.
+                    }
+                    candidateIds.Add(sub.FileId);
+                    hasCandidate = true;
+                }
+                if (hasCandidate)
+                {
+                    subFileProperties.Add(f);
+                }
+            }
+
+            return (scalarRefs, subFileProperties, candidateIds);
+        }
+
+        /// <summary>
+        /// Resolves every id in <paramref name="candidateIds"/> to the set of ids that exist as a
+        /// <see cref="FileAttachment"/> row under the CALLER's own tenant scope — the
+        /// <c>ITenant</c> global query filter kept ON unconditionally (no
+        /// <c>IgnoreQueryFilters()</c>), regardless of
+        /// <c>FileUploadOptions.EnforceTenantFileScope</c> — in a SINGLE query (Issue #815 fifth
+        /// round: previously one query per candidate id). A resolution failure (thrown exception
+        /// from the underlying query) treats every candidate as unresolvable, not rethrown, so a
+        /// transient/unexpected DB error fails closed rather than admitting an unverified FK.
+        /// </summary>
+        private HashSet<Guid> ResolveFileAttachmentIdsForCaller(ICollection<Guid> candidateIds)
+        {
+            if (candidateIds.Count == 0)
+            {
+                return [];
+            }
+            try
+            {
+                return [.. DC!.Set<FileAttachment>().Where(x => candidateIds.Contains(x.ID)).Select(x => x.ID)];
+            }
+            catch (Exception ex)
+            {
+                Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(ex,
+                    "RejectUnresolvableFileAttachmentReferences: batched resolution check failed for {Count} candidate FileAttachment id(s); treating all as unresolvable (Issue #815)",
+                    candidateIds.Count);
+                return [];
+            }
+        }
+
+        /// <summary>
+        /// Async counterpart of <see cref="ResolveFileAttachmentIdsForCaller"/> — same single
+        /// batched query, awaited instead of run synchronously so
+        /// <c>DoAddAsync</c>/<c>DoEditAsync</c>/<c>DoDeleteAsync</c> never block a ThreadPool
+        /// thread on it.
+        /// </summary>
+        private async Task<HashSet<Guid>> ResolveFileAttachmentIdsForCallerAsync(ICollection<Guid> candidateIds)
+        {
+            if (candidateIds.Count == 0)
+            {
+                return [];
+            }
+            try
+            {
+                return [.. await DC!.Set<FileAttachment>().Where(x => candidateIds.Contains(x.ID)).Select(x => x.ID).ToListAsync()];
+            }
+            catch (Exception ex)
+            {
+                Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(ex,
+                    "RejectUnresolvableFileAttachmentReferences: batched resolution check failed for {Count} candidate FileAttachment id(s); treating all as unresolvable (Issue #815)",
+                    candidateIds.Count);
+                return [];
+            }
+        }
+
+        /// <summary>
+        /// Second, DB-free-EXCEPT-for-<see cref="LoadExistingSubItemFileIds"/> pass shared by
+        /// <see cref="RejectUnresolvableFileAttachmentReferences"/> and its async counterpart:
+        /// given the resolved set of ids the caller may legitimately reference, reverts/rejects
+        /// every scalar candidate that did NOT resolve, and restores/drops every rejected
+        /// <see cref="ISubFile"/> item. See the "drop the item, never write Guid.Empty" and
+        /// "sixth round" doc paragraphs on <see cref="RejectUnresolvableFileAttachmentReferences"/>.
+        /// </summary>
+        /// <returns>
+        /// <see langword="true"/> when a scalar FK had to be rejected at the request level
+        /// (Issue #815 sixth/seventh round — the column is required per EF Core's own model, and
+        /// there is no legitimate prior value); <see langword="false"/> otherwise.
+        /// </returns>
+        private bool ApplyFileAttachmentResolution(TModel? preSaveSnapshot, List<ScalarFileAttachmentRef> scalarRefs, List<PropertyInfo> subFileProperties, HashSet<Guid> resolvedIds)
+        {
+            var requestRejected = false;
+
+            foreach (var scalar in scalarRefs)
+            {
+                if (resolvedIds.Contains(scalar.PostedId))
+                {
+                    continue;
+                }
+
+                var fkType = scalar.FkProperty.PropertyType;
+                // CLR-nullability of fkType is used ONLY to know what "no reference" looks like
+                // for this property's own type — default(fkType) (e.g. Guid.Empty) for a
+                // non-nullable value type, vs null for anything else (Nullable<T> or a reference
+                // type). It is NOT used to decide whether writing null is acceptable — see
+                // isColumnRequired below (#815 seventh round).
+                var fkTypeHasNoNullRepresentation = fkType.IsValueType && Nullable.GetUnderlyingType(fkType) == null;
+
+                object? safeValue = null;
+                var hasLegitimatePriorValue = false;
+                if (preSaveSnapshot != null)
+                {
+                    safeValue = scalar.FkProperty.GetValue(preSaveSnapshot);
+                    hasLegitimatePriorValue = fkTypeHasNoNullRepresentation
+                        // A non-nullable value type has no way to represent "no reference" — its
+                        // own type default (e.g. Guid.Empty) means the snapshot never had a real
+                        // one either, so there is nothing legitimate to revert to.
+                        ? !Equals(safeValue, Activator.CreateInstance(fkType))
+                        : safeValue != null;
+                }
+
+                // #815 seventh round: ask EF Core's own model whether the COLUMN tolerates NULL,
+                // instead of inferring it from the FK property's CLR type. `[Required] Guid?
+                // PhotoId` (or an equivalent fluent `IsRequired()`) makes a CLR-nullable FK a NOT
+                // NULL column at the database — the old `fkType`-only check let that shape fall
+                // through to `SetValue(Entity, null)` below, producing an unhandled
+                // DbUpdateException out of DoAdd/DoAddAsync instead of the same request-level
+                // rejection a non-nullable-value-type FK already gets. This also covers a
+                // hypothetical non-Nullable reference-type FK marked required — same hazard, no
+                // such shape lives in this repo today.
+                var efFkProperty = DC?.Model.FindEntityType(typeof(TModel))?.FindProperty(scalar.FkProperty.Name);
+                var isColumnRequired = efFkProperty != null
+                    ? !efFkProperty.IsNullable
+                    // The property isn't in the EF model at all (e.g. reached through a
+                    // NotMapped/soft-key FK — see DC.GetFKName2's NotMappedAttribute branch). EF
+                    // gives no authoritative answer about NULL-ability there. Fail closed: treat
+                    // it as required rather than risk a silent null write into a column this
+                    // method cannot verify.
+                    : true;
+
+                if (isColumnRequired && !hasLegitimatePriorValue)
+                {
+                    // #815 sixth/seventh round: writing safeValue here (null on Add, or the
+                    // snapshot's own already-default/null value on Edit) into a column that does
+                    // not accept NULL would either reflection-coerce to default(fkType) (a
+                    // non-nullable value type) or throw a DbUpdateException out of SaveChanges (a
+                    // required CLR-nullable FK) — see the doc comments above. Reject the whole
+                    // request instead of writing anything.
+                    requestRejected = true;
+                    MSD?.AddModelError(GetValidationFieldName(scalar.FkProperty)[0], Localizer?["Sys.FileNotFound"] ?? "File is not found");
+                    Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(
+                        "RejectUnresolvableFileAttachmentReferences: rejected FK '{FkName}'={PostedId} on {Model} — not resolvable under the caller's own tenant scope and no legitimate prior value to revert to on a required FK column; rejecting the whole request (Issue #815)",
+                        scalar.FkName, scalar.PostedId, typeof(TModel).Name);
+                    continue;
+                }
+
+                scalar.FkProperty.SetValue(Entity, safeValue);
+                Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(
+                    "RejectUnresolvableFileAttachmentReferences: rejected FK '{FkName}'={PostedId} on {Model} — not resolvable under the caller's own tenant scope; reverted to the prior value (Issue #815)",
+                    scalar.FkName, scalar.PostedId, typeof(TModel).Name);
+            }
+
+            foreach (var f in subFileProperties)
+            {
+                if (f.GetValue(Entity) is not IEnumerable<ISubFile> subs)
+                {
+                    continue;
+                }
+                List<ISubFile>? rejected = null;
+                foreach (var sub in subs)
+                {
+                    if (sub.FileId != Guid.Empty && !resolvedIds.Contains(sub.FileId))
+                    {
+                        (rejected ??= []).Add(sub);
+                    }
+                }
+                if (rejected == null || rejected.Count == 0)
+                {
+                    continue;
+                }
+
+                // #815 sixth round: a rejected item whose id matches an EXISTING DB child must be
+                // restored in place, not dropped — dropping it makes Utils.CheckDifference (run
+                // later by DoEditPreparePart2) treat the untouched row as removed. See the "Edit-
+                // path sub-item drop" doc paragraph above.
+                // #815 seventh round: this restore is only correct on the EDIT path — Edit is the
+                // only caller where Utils.CheckDifference (DoEditPreparePart2) runs at all and can
+                // recognize the restored id as "still present, unrelated to removal". On Add
+                // (preSaveSnapshot == null) there is no CheckDifference diff — a kept item is
+                // cascade-inserted by DoAddPreparePart2's straight Add loop even though a DB row
+                // with that same id may already exist, PK-violating. Skip the lookup entirely on
+                // Add so every rejected item falls through to the drop path below, same as before
+                // this round.
+                var existingFileIdsById = preSaveSnapshot != null
+                    ? LoadExistingSubItemFileIds(f, rejected)
+                    : [];
+                List<ISubFile>? toDrop = null;
+                foreach (var sub in rejected)
+                {
+                    var subId = (sub as TopBasePoco)?.GetID()?.ToString();
+                    if (subId != null && existingFileIdsById.TryGetValue(subId, out var priorFileId))
+                    {
+                        sub.FileId = priorFileId;
+                        Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(
+                            "RejectUnresolvableFileAttachmentReferences: sub-item {SubItemId} on {Model}.{Property} posted an unresolvable FileId — restored its existing prior FileId instead of dropping the item (Issue #815)",
+                            subId, typeof(TModel).Name, f.Name);
+                        continue;
+                    }
+                    (toDrop ??= []).Add(sub);
+                }
+                if (toDrop == null || toDrop.Count == 0)
+                {
+                    continue;
+                }
+
+                if (f.GetValue(Entity) is IList mutableList && !mutableList.IsFixedSize && !mutableList.IsReadOnly)
+                {
+                    foreach (var sub in toDrop)
+                    {
+                        mutableList.Remove(sub);
+                        Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(
+                            "RejectUnresolvableFileAttachmentReferences: dropped sub-item FileId={PostedId} on {Model}.{Property} from the posted collection — not resolvable under the caller's own tenant scope and no existing DB row to restore (Issue #815)",
+                            sub.FileId, typeof(TModel).Name, f.Name);
+                    }
+                }
+                else
+                {
+                    // Not a mutable IList (e.g. a fixed-size array) — cannot drop a single
+                    // element in place. Fail closed by clearing the whole property rather than
+                    // leaving an unresolved FK reference behind. See the doc comment above.
+                    f.SetValue(Entity, null);
+                    Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(
+                        "RejectUnresolvableFileAttachmentReferences: {Model}.{Property} holds an unresolvable sub-item FileId but its runtime collection type is not a mutable IList; cleared the whole property (Issue #815)",
+                        typeof(TModel).Name, f.Name);
+                }
+            }
+
+            return requestRejected;
+        }
+
+        /// <summary>
+        /// #815 sixth round: given a <see cref="ISubFile"/> collection property and the items
+        /// within it that <see cref="ApplyFileAttachmentResolution"/> is about to reject, looks
+        /// up which of those items' ids already exist as a row in that same sub-table — an
+        /// EXISTING child of some parent that a re-post is trying to overwrite with a forged
+        /// <see cref="ISubFile.FileId"/>, as opposed to a brand-new item with no DB counterpart
+        /// at all. A single batched query per <paramref name="subFileProperty"/> (never one per
+        /// rejected item — the #815 fifth round N+1 lesson applies here too), built the same way
+        /// <see cref="DoEditPreparePart2"/> already builds its own sub-table query: resolve the
+        /// concrete item CLR type from the property's generic argument, get a closed <c>Set&lt;T&gt;</c>
+        /// via <see cref="EfSetMethodCache"/>, and apply <see cref="Extensions.DCExtension.CheckIDs"/>'s
+        /// id-membership expression against it — <c>AsNoTracking()</c> so this lookup can never
+        /// collide with the change tracker over the SAME rows <c>DoEditPreparePart2</c> loads
+        /// moments later.
+        /// <para>
+        /// This does NOT read through <paramref name="rejectedItems"/>' own DB-loaded snapshot
+        /// (i.e. through a hypothetical <c>preSaveSnapshot.SomeCollection</c>) because that
+        /// collection is never eager-loaded in the first place — <c>LoadEntitySnapshot</c>'s
+        /// plain <c>Set&lt;TModel&gt;().AsNoTracking().CheckID(id).FirstOrDefault()</c> carries no
+        /// <c>Include</c>, exactly why <see cref="DoEditPreparePart2"/> and
+        /// <see cref="DoRealDelete"/> each run their own separate sub-table query instead of
+        /// reading a snapshot's navigation property. A direct query is the only way to see the
+        /// row's actual current <see cref="ISubFile.FileId"/>.
+        /// </para>
+        /// <para>
+        /// <b>#815 seventh round — scoped to the parent being edited.</b> An earlier round left
+        /// this lookup deliberately unscoped, reasoning that <see cref="Utils.CheckDifference"/>
+        /// (run afterwards by <see cref="DoEditPreparePart2"/>) matches purely by
+        /// <see cref="TopBasePoco.GetID"/>, so a match here already means "there IS a real DB
+        /// row with this id, restore ITS actual FileId". That reasoning missed that
+        /// <c>CheckDifference</c> only ever diffs against <c>DoEditPreparePart2</c>'s OWN
+        /// sub-table query, which IS parent-scoped (filtered by the same FK this method now
+        /// filters by). A rejected item whose id belongs to a DIFFERENT parent's child row was
+        /// kept (restored) here but invisible to that parent-scoped diff, so
+        /// <c>Utils.CheckDifference</c> classified it <c>toadd</c> — a cascade-insert of a row
+        /// whose primary key already exists, PK-violating and rolling back the WHOLE edit
+        /// (including the request's own legitimate scalar change). Filtering by the same FK
+        /// <see cref="DoEditPreparePart2"/> uses (resolved the identical way:
+        /// <see cref="Extensions.DCExtension.GetFKName{T}"/> against <paramref
+        /// name="subFileProperty"/>'s name) keeps the match set consistent with what
+        /// <c>CheckDifference</c> will actually see, so a same-parent match still restores in
+        /// place and a cross-parent id falls through to the caller's drop path instead of
+        /// PK-violating.
+        /// </para>
+        /// <para>
+        /// When the FK cannot be resolved this way (empty <c>fkname</c> — e.g. a many-to-many or
+        /// soft-keyed relationship <see cref="Extensions.DCExtension.GetFKName{T}"/> cannot
+        /// express as a single EF-navigated FK property — or the resolved name has no matching
+        /// CLR property on <paramref name="subFileProperty"/>'s item type, e.g. an EF shadow
+        /// property), parent-scoping is not possible at all: this method returns an empty result
+        /// rather than fall back to the old unscoped lookup, so every rejected item in that shape
+        /// falls through to the caller's drop path. An aborted edit that PK-violates and loses a
+        /// legitimate same-request change is worse than dropping a forged item that ends up
+        /// being a false negative for "restore".
+        /// </para>
+        /// </summary>
+        private Dictionary<string, Guid> LoadExistingSubItemFileIds(PropertyInfo subFileProperty, List<ISubFile> rejectedItems)
+        {
+            var result = new Dictionary<string, Guid>();
+            if (DC == null || Entity == null || rejectedItems.Count == 0)
+            {
+                return result;
+            }
+
+            var itemType = subFileProperty.PropertyType.GenericTypeArguments.FirstOrDefault();
+            if (itemType == null || !typeof(TopBasePoco).IsAssignableFrom(itemType))
+            {
+                // Not a shape Utils.CheckDifference can match by id either — nothing to restore
+                // against; the caller falls back to dropping these items, same as before.
+                return result;
+            }
+
+            // #815 seventh round: resolve the same parent FK DoEditPreparePart2's own sub-table
+            // query filters by, so this lookup's match set stays consistent with what
+            // Utils.CheckDifference will actually see — see the "scoped to the parent being
+            // edited" doc paragraph above.
+            var fkname = DC.GetFKName<TModel>(subFileProperty.Name);
+            var fkProperty = string.IsNullOrEmpty(fkname) ? null : itemType.GetSingleProperty(fkname);
+            if (fkProperty == null)
+            {
+                // Parent-scoping is not possible for this relationship shape — fail closed by
+                // restoring nothing (never fall back to the unscoped lookup that could restore a
+                // different parent's row); every rejected item falls through to the drop path.
+                Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(
+                    "RejectUnresolvableFileAttachmentReferences: could not resolve a parent-scoping FK for {Model}.{Property}; rejected items with no resolved match fall back to being dropped (Issue #815)",
+                    typeof(TModel).Name, subFileProperty.Name);
+                return result;
+            }
+
+            var ids = rejectedItems
+                .Select(x => (x as TopBasePoco)?.GetID()?.ToString())
+                .Where(x => !string.IsNullOrEmpty(x))
+                .Distinct()
+                .ToList();
+            if (ids.Count == 0)
+            {
+                return result;
+            }
+
+            try
+            {
+                var setMethod = EfSetMethodCache.GetClosedSetMethod(DC.GetType(), itemType);
+                var dataquery = setMethod.Invoke(DC, null) as IQueryable<TopBasePoco>;
+                ParameterExpression pe = Expression.Parameter(itemType);
+                var idsLambda = ids.GetContainIdExpression(itemType, pe);
+                Expression fkMember = Expression.MakeMemberAccess(pe, fkProperty);
+                Expression fkRight = Expression.Constant(Entity.GetID(), fkMember.Type);
+                Expression fkCondition = Expression.Equal(fkMember, fkRight);
+                Expression body = Expression.AndAlso(idsLambda.Body, fkCondition);
+                var lambda = Expression.Lambda(body, pe);
+                var exp = Expression.Call(
+                      typeof(Queryable),
+                      "Where",
+                      new Type[] { itemType },
+                      dataquery!.Expression,
+                      lambda);
+                var q = dataquery.Provider.CreateQuery(exp) as IQueryable<TopBasePoco>;
+                foreach (var row in q!.AsNoTracking())
+                {
+                    if (row is ISubFile subRow)
+                    {
+                        result[row.GetID().ToString()!] = subRow.FileId;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(ex,
+                    "RejectUnresolvableFileAttachmentReferences: failed looking up existing sub-item rows for {Model}.{Property}; rejected items with no resolved match fall back to being dropped (Issue #815)",
+                    typeof(TModel).Name, subFileProperty.Name);
+            }
+            return result;
         }
 
         /// <summary>
