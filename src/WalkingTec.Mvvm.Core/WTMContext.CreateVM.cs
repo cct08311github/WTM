@@ -296,6 +296,37 @@ namespace WalkingTec.Mvvm.Core
         }
 
         /// <summary>
+        /// #818: resolves a caller-supplied VM type name to its <see cref="Type"/> WITHOUT
+        /// constructing an instance. Extracted out of <see cref="CreateVM(string, object, object[], bool)"/>
+        /// so callers that need to authorize the resolved type BEFORE any constructor,
+        /// <c>SetSubVm</c>, or DB query runs on it (e.g. <c>_FrameworkController.DoImport</c>'s
+        /// <c>CanImportVm</c> hook) can call the exact same resolution this method uses, instead
+        /// of keeping an independent copy that could silently resolve a different type than the
+        /// one this method goes on to construct — see Issue #818's review discussion.
+        /// </summary>
+        /// <param name="vmFullName">the fullname of the viewmodel's type</param>
+        /// <returns>The resolved <see cref="Type"/>, or <c>null</c> if it could not be resolved
+        /// or does not derive from <see cref="BaseVM"/>.</returns>
+        public Type? TryResolveVmType(string? vmFullName)
+        {
+            // First try Type.GetType (handles assembly-qualified names and same-assembly types).
+            // Then fall back to scanning GlobaInfo.AllAssembly (covers types in the host app
+            // and other loaded assemblies that Type.GetType cannot resolve by short name).
+            // Guard: reject unresolvable or non-BaseVM types (#767)
+            var vmType = Type.GetType(vmFullName ?? "");
+            if (vmType == null && GlobaInfo?.AllAssembly != null)
+            {
+                foreach (var asm in GlobaInfo.AllAssembly)
+                {
+                    vmType = asm.GetType(vmFullName ?? "");
+                    if (vmType != null) break;
+                }
+            }
+
+            return (vmType != null && typeof(BaseVM).IsAssignableFrom(vmType)) ? vmType : null;
+        }
+
+        /// <summary>
         /// Create a ViewModel, and pass Session,cache,dc...etc to the viewmodel
         /// </summary>
         /// <param name="VmFullName">the fullname of the viewmodel's type</param>
@@ -305,21 +336,9 @@ namespace WalkingTec.Mvvm.Core
         /// <returns>ViewModel</returns>
         public BaseVM CreateVM(string? VmFullName, object? Id = null, object[]? Ids = null, bool passInit = false)
         {
-            // First try Type.GetType (handles assembly-qualified names and same-assembly types).
-            // Then fall back to scanning GlobaInfo.AllAssembly (covers types in the host app
-            // and other loaded assemblies that Type.GetType cannot resolve by short name).
-            // Guard: reject unresolvable or non-BaseVM types (#767)
-            var vmType = Type.GetType(VmFullName ?? "");
-            if (vmType == null && GlobaInfo?.AllAssembly != null)
-            {
-                foreach (var asm in GlobaInfo.AllAssembly)
-                {
-                    vmType = asm.GetType(VmFullName ?? "");
-                    if (vmType != null) break;
-                }
-            }
+            var vmType = TryResolveVmType(VmFullName);
 
-            if (vmType == null || !typeof(BaseVM).IsAssignableFrom(vmType))
+            if (vmType == null)
             {
                 throw new ArgumentException($"Invalid or unregistered ViewModel type: {VmFullName}");
             }

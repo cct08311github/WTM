@@ -703,5 +703,36 @@ namespace WalkingTec.Mvvm.Core
 
         #endregion
 
+        #region VM import hook enforcement (Issue #818)
+
+        /// <summary>
+        /// Opt-in, configuration-only switch for
+        /// <c>WalkingTec.Mvvm.Mvc._FrameworkController.CanImportVm</c>.
+        /// <c>DoImport</c> accepts a caller-supplied VM type name and, if it implements
+        /// <c>IWtmImportable</c>, calls <c>BatchSaveData()</c> to bulk-insert into whatever entity
+        /// that VM imports; there is no built-in mapping from an arbitrary VM type back to the
+        /// menu/<c>FunctionPrivilege</c> that gates the page the VM normally belongs to (the same
+        /// VM type can be reused by more than one controller, or by none), so the framework
+        /// cannot safely derive that mapping on its own.
+        /// <para>
+        /// <b>Default: <c>false</c></b> (unchanged pre-#818 behaviour — the un-overridden hook
+        /// allows every import). Set to <c>true</c> to flip the un-overridden hook's default
+        /// answer to "deny", turning this into a fail-closed kill switch that can be enabled from
+        /// <c>appsettings.json</c> with no code change: every import through the shared endpoint
+        /// returns 403 until the hosting application overrides <c>CanImportVm</c> with real
+        /// per-VM policy. Same rationale and the same "cannot be safely auto-derived" limitation
+        /// as <see cref="EnforceVmExportAuthorization"/>. See Issue #818.
+        /// </para>
+        /// <para>
+        /// This flag covers VM-level authorization only. It does not cover the uploaded template
+        /// file (<c>UploadFileId</c>, gated separately by <see cref="EnforceFileAccessAuthorization"/>
+        /// / <c>CanAccessFile</c>, tracked as Issue #814), nor <c>BaseVM.DeletedFileIds</c> —
+        /// processed inside <c>BatchSaveData</c> and not gated by any hook, tracked as Issue #815.
+        /// </para>
+        /// </summary>
+        public bool EnforceVmImportAuthorization { get; set; } = false;
+
+        #endregion
+
     }
 }

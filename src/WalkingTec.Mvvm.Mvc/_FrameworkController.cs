@@ -232,6 +232,42 @@ namespace WalkingTec.Mvvm.Mvc
         // Note: the file-access hook (CanAccessFile, gating GetFile/GetFileName/ViewFile) was
         // carved out of the #796 work to issue #814 and lives there.
 
+        /// <summary>
+        /// #818: Extension hook for per-caller authorization of the VM type targeted by
+        /// <see cref="DoImport"/>. Without this hook, any authenticated caller can supply an
+        /// arbitrary VM type name that implements <see cref="IWtmImportable"/> and have
+        /// <c>BatchSaveData()</c> bulk-insert into whatever entity that VM imports — a WRITE,
+        /// strictly more severe than the read-only export/preview disclosures gated by
+        /// <see cref="CanExportVm"/> and <see cref="CanPreviewDelete"/>. As with those hooks,
+        /// there is no built-in mapping from an arbitrary VM type back to the menu /
+        /// FunctionPrivilege that normally gates the page it belongs to (the same VM type can be
+        /// reused by more than one controller, or by none), so this cannot be derived
+        /// automatically without risking false negatives on custom deployments. Override this in
+        /// a controller that inherits from <c>_FrameworkController</c> to enforce your own
+        /// per-VM policy.
+        /// <para>
+        /// When not overridden, the default answer is driven by
+        /// <see cref="WalkingTec.Mvvm.Core.Configs.EnforceVmImportAuthorization"/>
+        /// (default <c>false</c> → <c>true</c>/allow, unchanged pre-#818 behaviour). Setting that
+        /// config flag to <c>true</c> flips the un-overridden default to deny (fail-closed) — a
+        /// no-code kill switch, same shape as <see cref="CanExportVm"/>. See Issue #818 for the
+        /// full analysis.
+        /// </para>
+        /// <para>
+        /// <b>Scope:</b> this hook covers VM-level authorization only — whether the caller may
+        /// invoke this import VM at all. It does not cover the uploaded template file
+        /// (<c>UploadFileId</c>, gated separately by <see cref="CanAccessFile"/>), nor
+        /// <c>BaseVM.DeletedFileIds</c> — processed inside <c>BatchSaveData</c> and able to
+        /// delete arbitrary <see cref="FileAttachment"/> rows through the same request — which is
+        /// not gated by any hook here and is tracked as Issue #815. The declarative per-VM
+        /// authorization tier meant to eventually replace all of these hooks is tracked as
+        /// Issue #811.
+        /// </para>
+        /// </summary>
+        /// <param name="vmType">The resolved type of the VM the caller asked to import into.</param>
+        /// <returns><c>true</c> if the import is allowed; <c>false</c> to return 403.</returns>
+        protected virtual bool CanImportVm(Type vmType) => !(Wtm?.ConfigInfo?.EnforceVmImportAuthorization ?? false);
+
         // MVC-006 (BREAKING): Selector was previously [Public] (unauthenticated).
         // Changed to [AllRights] so an authenticated session is required.
         // To restore the old open behaviour (e.g. for public kiosk deployments),
@@ -894,6 +930,31 @@ namespace WalkingTec.Mvvm.Mvc
 
             Wtm.CurrentCS = _DONOT_USE_CS;
 
+            // #818: resolve the Type WITHOUT constructing anything, so CanImportVm can deny
+            // before a single constructor/DoInit()/DB query runs on the caller-named VM. Uses
+            // WTMContext.TryResolveVmType directly — the same resolution CreateVM(string, ...)
+            // below goes on to construct — so there is exactly ONE implementation of the
+            // name-to-Type lookup and the authorized type can never diverge from the constructed
+            // one (see the #818 review discussion; a passInit:true CreateVM probe, the shape used
+            // by GetExportExcel/GetDeletePreview, is not enough for this endpoint specifically —
+            // WTMContext.CreateVM's IBaseImport<BaseTemplateVM> branch calls
+            // tvm.Template.DoInit() unconditionally, so even a passInit:true probe would still run
+            // that DoInit() and whatever DB queries it performs before an authorization decision).
+            var vmType = Wtm.TryResolveVmType(_DONOT_USE_VMNAME);
+            if (vmType == null || !typeof(IWtmImportable).IsAssignableFrom(vmType))
+                return BadRequest(MvcProgram._localizer?["Sys.InvalidVM"] ?? "Not an import VM");
+
+            // #818: authorize the target VM type before constructing anything — without this,
+            // any authenticated caller could bulk-insert into any importable entity by supplying
+            // its type name. See CanImportVm.
+            if (!CanImportVm(vmType))
+            {
+                HttpContext.RequestServices.GetService<ILogger<_FrameworkController>>()?.LogWarning(
+                    "DoImport denied: user {UserId} was refused authorization to import VM {VmType}",
+                    Wtm.LoginUserInfo?.ITCode, vmType.FullName);
+                return Forbid();
+            }
+
             // Resolve the import VM; return 400 on an unknown or non-import VM type.
             BaseVM rawVm;
             try
@@ -904,6 +965,16 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 return BadRequest(MvcProgram._localizer?["Sys.InvalidVM"] ?? "Invalid Vm Name");
             }
+
+            // #818 defense-in-depth: the type CanImportVm just authorized (vmType) and the type
+            // CreateVM just constructed (rawVm.GetType()) both come from the same
+            // TryResolveVmType call now, so they cannot structurally diverge — but this guard
+            // costs one line and directly encodes that invariant, so it stays even after the
+            // resolvers were unified: a future refactor that reintroduces a second resolution
+            // path (or a caller that swaps in a different CreateVM overload) trips this instead
+            // of silently authorizing type A while constructing type B.
+            if (rawVm.GetType() != vmType)
+                return Forbid();
 
             if (rawVm is not IWtmImportable importVm)
                 return BadRequest(MvcProgram._localizer?["Sys.InvalidVM"] ?? "Not an import VM");
