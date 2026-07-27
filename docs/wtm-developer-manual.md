@@ -1601,10 +1601,19 @@ var resp = engine.Execute(req);
 // Program.cs（一次設定）
 WalkingTec.Mvvm.Core.Analysis.AnalysisLimits.MaxResultRows     = 50_000;
 WalkingTec.Mvvm.Core.Analysis.AnalysisLimits.MaxMaterializeRows = 200_000;
+WalkingTec.Mvvm.Core.Analysis.AnalysisLimits.MaxFilterClauses   = 100;
+WalkingTec.Mvvm.Core.Analysis.AnalysisLimits.MaxGroupByFields   = 64;
 ```
 
 - `MaxResultRows` 同時作為 `TopN` 驗證上限 — 兩者永遠對齊同一維度
-- 預設值（10,000 / 50,000）= 10.4.x 行為，沒動程式碼就完全相同
+- `MaxFilterClauses`（預設 50，#795）：`Filters` / `HavingFilters` / `Sort` /
+  `CompareWith.Filters` 各自的條款數上限，enforced 在
+  `AnalysisQueryEngine.ValidateFields` 本身 —— 每個呼叫端（含 Dashboard
+  analysis widget）都自動繼承，不必個別 controller 各自檢查一次
+- `MaxGroupByFields`（預設 32，#795）：`Dimensions` / `Measures` 各自的欄位
+  數上限，同樣 enforced 在引擎層；`_AnalysisController` 自己另有更嚴格的
+  「最多 3 個維度 / 度量」UX 前置檢查，兩者並存、互不取代
+- 預設值（10,000 / 50,000 / 50 / 32）= 沒動程式碼就完全相同的既有行為
 - 測試裡用 `try / finally` 在單測逐筆 override
 
 ### 7.17 CompareWith 期間對比（10.5.0+）

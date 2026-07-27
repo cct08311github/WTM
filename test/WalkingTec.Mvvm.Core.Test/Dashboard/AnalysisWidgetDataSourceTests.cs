@@ -12,6 +12,7 @@ using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Analysis;
 using WalkingTec.Mvvm.Core.Dashboard;
 using WalkingTec.Mvvm.Core.Support.Json;
+using WalkingTec.Mvvm.Core.Test.Extensions;
 using WalkingTec.Mvvm.Test.Mock;
 
 namespace WalkingTec.Mvvm.Core.Test.Dashboard
@@ -128,6 +129,141 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
 
             await Assert.ThrowsExceptionAsync<InvalidOperationException>(
                 () => source.GetDataAsync(request));
+        }
+
+        /// <summary>
+        /// #795: MaxFilterClauses used to be enforced only by _AnalysisController's own
+        /// pre-checks. AnalysisWidgetDataSource — a second HTTP path into the same
+        /// _engine.ExecuteDynamicAsync — had no cap at all, so an oversized Filters list would
+        /// reach ApplyFilters and build an unbounded left-deep Expression.AndAlso tree (a
+        /// StackOverflowException risk that .NET cannot catch). The guard now lives in the
+        /// engine's ValidateFields, so this second caller must inherit it without any
+        /// widget-specific code change.
+        /// </summary>
+        [TestMethod]
+        public async Task GetDataAsync_throws_when_filters_exceed_MaxFilterClauses()
+        {
+            var oversized = Enumerable.Range(0, AnalysisLimits.MaxFilterClauses + 1)
+                .Select(i => new FilterCondition { Field = "Region", Operator = FilterOperator.Eq, Value = $"R{i}" })
+                .ToList();
+
+            var source = CreateSource();
+            var request = new WidgetDataRequest
+            {
+                Parameters = new Dictionary<string, string>
+                {
+                    ["listVmType"] = typeof(DashSaleRecordListVM).FullName!,
+                    ["dimensions"] = JsonSerializer.Serialize(new[] { "Region" }),
+                    ["measures"] = JsonSerializer.Serialize(new[]
+                    {
+                        new { Field = "Amount", Func = AggregateFunc.Sum }
+                    }),
+                    ["filters"] = JsonSerializer.Serialize(oversized)
+                }
+            };
+
+            await Assert.ThrowsExceptionAsync<AnalysisException>(
+                () => source.GetDataAsync(request));
+        }
+
+        /// <summary>
+        /// #795 HIGH: <c>Dimensions</c>/<c>Measures</c> were still capped only in
+        /// <c>_AnalysisController</c>'s own pre-checks, so the widget path — whose caller can
+        /// override the stored widget's <c>dimensions</c>/<c>measures</c> via the request body
+        /// (<c>EfCoreDashboardService.GetWidgetDataAsync</c> merges saved values only when the
+        /// key is absent) — remained unbounded on exactly these two lists. Proves
+        /// <see cref="AnalysisLimits.MaxGroupByFields"/> is now enforced at the engine boundary
+        /// for this second caller too.
+        /// </summary>
+        [TestMethod]
+        public async Task GetDataAsync_throws_when_dimensions_exceed_MaxGroupByFields()
+        {
+            // Count-only cap: ValidateClauseCounts runs before the per-field whitelist check,
+            // so repeating a single valid field name is enough to exercise the cap in isolation.
+            var oversizedDimensions = Enumerable.Repeat("Region", AnalysisLimits.MaxGroupByFields + 1).ToList();
+
+            var source = CreateSource();
+            var request = new WidgetDataRequest
+            {
+                Parameters = new Dictionary<string, string>
+                {
+                    ["listVmType"] = typeof(DashSaleRecordListVM).FullName!,
+                    ["dimensions"] = JsonSerializer.Serialize(oversizedDimensions),
+                    ["measures"] = JsonSerializer.Serialize(new[]
+                    {
+                        new { Field = "Amount", Func = AggregateFunc.Sum }
+                    })
+                }
+            };
+
+            await Assert.ThrowsExceptionAsync<AnalysisException>(
+                () => source.GetDataAsync(request));
+        }
+
+        /// <summary>
+        /// #795 MEDIUM: the widget path used to build its aggregation over the
+        /// unfiltered <c>GetSearchQuery()</c> result regardless of the caller's row-level
+        /// <c>DataPrivilege</c> — <c>_AnalysisController</c> applied
+        /// <c>DCExtension.ApplyDataPrivilegeForAnalysis</c> as defense-in-depth but
+        /// <c>AnalysisWidgetDataSource</c> did not, so a dashboard widget returned fully
+        /// unscoped data to a user whose row-level privilege only grants access to a
+        /// single record. This proves the widget path's <c>GetDataAsync</c> now aggregates
+        /// only the row the caller's <c>DataPrivileges</c> grant access to.
+        /// </summary>
+        [TestMethod]
+        public async Task GetDataAsync_applies_DataPrivilege_row_filtering()
+        {
+            var allowedRow = _testData.Single(x => x.Region == "North" && x.Amount == 100m);
+
+            var dpSettings = new List<IDataPrivilege>
+            {
+                new DPTestPrivilegeInfo
+                {
+                    ModelName = nameof(DashSaleRecord),
+                    PrivillegeName = nameof(DashSaleRecord),
+                    ModelType = typeof(TopBasePoco)
+                }
+            };
+            var wtm = new WTMContext(null, new GlobalData(), null, null, dpSettings);
+            wtm.MSD = new BasicMSD();
+            wtm.DC = new EmptyContext(Guid.NewGuid().ToString(), DBTypeEnum.Memory);
+            wtm.LoginUserInfo = new LoginUserInfo
+            {
+                ITCode = "scopeduser",
+                DataPrivileges = new List<SimpleDataPri>
+                {
+                    new SimpleDataPri
+                    {
+                        ID = Guid.NewGuid(),
+                        TableName = nameof(DashSaleRecord),
+                        RelateId = allowedRow.ID.ToString(),
+                        UserCode = "scopeduser"
+                    }
+                }
+            };
+
+            var source = CreateSourceWithWtm(wtm);
+            var request = new WidgetDataRequest
+            {
+                Parameters = new Dictionary<string, string>
+                {
+                    ["listVmType"] = typeof(DashSaleRecordListVM).FullName!,
+                    ["dimensions"] = JsonSerializer.Serialize(new[] { "Region" }),
+                    ["measures"] = JsonSerializer.Serialize(new[]
+                    {
+                        new { Field = "Amount", Func = AggregateFunc.Sum }
+                    })
+                }
+            };
+
+            var result = await source.GetDataAsync(request);
+
+            Assert.AreEqual(1, result.Rows.Count,
+                "only the single row this user's DataPrivilege grants access to should be aggregated");
+            var row = result.Rows.Single();
+            Assert.AreEqual("North", row["Region"]?.ToString());
+            Assert.AreEqual(100m, Convert.ToDecimal(row["Amount_Sum"]),
+                "the North/200 row must be excluded — it is not covered by the granted RelateId");
         }
 
         [TestMethod]

@@ -823,6 +823,8 @@ public int CustomerId { get; set; }
 // Program.cs（一次性設定）
 WalkingTec.Mvvm.Core.Analysis.AnalysisLimits.MaxResultRows = 50_000;
 WalkingTec.Mvvm.Core.Analysis.AnalysisLimits.MaxMaterializeRows = 200_000;
+WalkingTec.Mvvm.Core.Analysis.AnalysisLimits.MaxFilterClauses = 100;
+WalkingTec.Mvvm.Core.Analysis.AnalysisLimits.MaxGroupByFields = 64;
 ```
 
 - `MaxResultRows`（預設 10,000）：群組結果硬上限，同步影響：
@@ -831,6 +833,20 @@ WalkingTec.Mvvm.Core.Analysis.AnalysisLimits.MaxMaterializeRows = 200_000;
   - `TopN` 驗證上限
 - `MaxMaterializeRows`（預設 50,000）：In-process strategy 載入原始
   資料的上限。Server-side strategy 不受此限
+- `MaxFilterClauses`（預設 50）：`Filters` / `HavingFilters` / `Sort` /
+  `CompareWith.Filters` 四個清單各自的條款數上限。每一條款都會疊進一個
+  left-deep `Expression.AndAlso` 樹；夠深時 CLR expression-tree evaluator
+  會丟出無法 catch 的 `StackOverflowException`，等於一個已通過驗證的請求
+  就能打死整個 worker process（#795）。**Enforced by the engine itself**
+  （`AnalysisQueryEngine.ValidateFields` 內部的 `ValidateClauseCounts`），
+  不是個別 controller 的前置檢查，所以每一個現在／未來呼叫
+  `Execute`/`ExecuteAsync`/`ExecuteDynamic*` 的呼叫端（包含 Dashboard
+  analysis widget）都會自動繼承這個上限，超過會拋出 `AnalysisException`
+- `MaxGroupByFields`（預設 32）：`Dimensions` / `Measures` 兩個清單各自的
+  欄位數上限，同樣 enforced 在引擎層，理由與範圍與 `MaxFilterClauses`
+  相同。`_AnalysisController` 自己的端點另外有一個較嚴格的「最多 3 個維度
+  / 3 個度量」UX 友善檢查（先擋、回傳 400），兩者互不取代——UX 檢查是給
+  使用者的即時回饋，這個引擎層上限才是每個呼叫端都逃不掉的安全底線
 - **Set-once-at-startup**：mutating at runtime 是支援的但有 race 風險，
   測試以 `try / finally` 還原
 

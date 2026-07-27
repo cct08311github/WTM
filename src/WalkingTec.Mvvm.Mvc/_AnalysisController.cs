@@ -109,10 +109,13 @@ namespace WalkingTec.Mvvm.Mvc
         /// POST /_analysis/query
         /// 執行分析查詢。
         /// </summary>
-        // M2: generous caps on unbounded clause lists that feed Expression.AndAlso trees.
-        // 50 is generous for real dashboards and prevents stack-overflow DoS from deeply
-        // nested expression trees built by ApplyFilters / ApplyHavingFilters / ApplySortAndTopN.
-        private const int MaxFilterClauses = 50;
+        // M2 / #795: pre-flight caps on unbounded clause lists that feed Expression.AndAlso
+        // trees, so an oversized request gets a friendly 400 before VM creation / EF query
+        // building even runs. AnalysisLimits.MaxFilterClauses (default 50) is the single
+        // source of truth — AnalysisQueryEngine.ValidateFields enforces the same cap
+        // unconditionally for every caller, so this check is a fast-path convenience, not the
+        // only line of defence (that used to be the bug: only this controller checked it).
+        private static int MaxFilterClauses => AnalysisLimits.MaxFilterClauses;
 
         // L20: per-user cap on saved queries.  Prevents unbounded row growth in
         // AnalysisSavedQuery when a user (or script) calls SaveQuery repeatedly.
@@ -604,18 +607,15 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
             var hierarchyError = ValidateDimensionHierarchies(req.DimensionHierarchies, fields);
             if (hierarchyError != null) return BadRequest(hierarchyError);
 
-            // M4: include a deterministic fingerprint of the user's DataPrivileges so that
-            // a narrowed privilege set (e.g. row-level access removed) invalidates the cache.
-            // The fingerprint is stable (sorted) and empty-string when no privileges exist.
-            // identityKey stays null when LoginUserInfo is null (preserves M29 behaviour).
-            string? identityKey = null;
-            if (Wtm?.LoginUserInfo != null)
-            {
-                var tenant = Wtm.LoginUserInfo.CurrentTenant ?? string.Empty;
-                var userId = Wtm.LoginUserInfo.UserId ?? string.Empty;
-                var dpHash = BuildDataPrivilegeFingerprint(Wtm.LoginUserInfo.DataPrivileges);
-                identityKey = $"{tenant}_{userId}_{dpHash}";
-            }
+            // #795: identityKey (tenant + user + DataPrivilege fingerprint, with a fallback to
+            // ITCode when UserId is null) is now derived entirely by the engine — see
+            // AnalysisQueryEngine.BuildIdentityKey. Previously this controller was the only
+            // caller building the string by hand, which is exactly why a second caller
+            // (the Dashboard analysis widget data source) shipped without the DataPrivilege
+            // fingerprint. The ITCode fallback also closes the cross-user cache collision where
+            // two distinct principals with a null UserId and no DataPrivileges used to collapse
+            // onto the same key (#795 item 3).
+            string? identityKey = AnalysisQueryEngine.BuildIdentityKey(Wtm?.LoginUserInfo);
 
             ctx = new PreparedAnalysisContext(baseQuery, fields.ToList(), identityKey);
             return null;
@@ -828,34 +828,6 @@ result = await _engine.ExecutePivotDynamicAsync(ctx!.BaseQuery, req, ctx.Fields,
         /// <summary>
         /// 提供相容舊版前端的日期格式化轉換。
         /// </summary>
-        /// <summary>
-        /// M4: Build a short, stable fingerprint of the user's <see cref="WalkingTec.Mvvm.Core.Support.Json.SimpleDataPri"/>
-        /// collection so that adding or removing row-level data privileges causes a cache-key
-        /// change and invalidates any cached analysis result for that user.
-        /// Returns a constant empty-string fingerprint when the collection is null or empty
-        /// (preserves M29 — identityKey itself is null only when LoginUserInfo is absent).
-        /// The sort is required for cache stability: the server may return privileges in
-        /// different order across requests.
-        /// </summary>
-        private static string BuildDataPrivilegeFingerprint(
-            System.Collections.Generic.List<WalkingTec.Mvvm.Core.Support.Json.SimpleDataPri>? privileges)
-        {
-            if (privileges == null || privileges.Count == 0)
-                return string.Empty;
-
-            // Project each privilege to a stable string, then sort + join before hashing.
-            var parts = privileges
-                .Select(p => $"{p.TableName ?? ""}:{p.RelateId ?? ""}:{p.UserCode ?? ""}:{p.GroupCode ?? ""}")
-                .OrderBy(s => s, System.StringComparer.Ordinal)
-                .ToArray();
-
-            var raw = string.Join(",", parts);
-            Span<byte> hash = stackalloc byte[32];
-            System.Security.Cryptography.SHA256.HashData(
-                System.Text.Encoding.UTF8.GetBytes(raw), hash);
-            return Convert.ToHexString(hash)[..8];
-        }
-
         private class DateTimeConverter : JsonConverter<DateTime>
         {
             private static readonly string[] Formats = { "yyyy-MM-ddTHH:mm:ss", "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd", "yyyy/MM/dd", "yyyy/MM/dd HH:mm", "yyyy.MM.dd" };

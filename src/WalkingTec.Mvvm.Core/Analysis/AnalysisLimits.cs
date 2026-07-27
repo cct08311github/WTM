@@ -53,5 +53,37 @@ namespace WalkingTec.Mvvm.Core.Analysis
         /// in-process should leave it conservative.
         /// </summary>
         public static int MaxMaterializeRows { get; set; } = 50_000;
+
+        /// <summary>
+        /// Maximum number of clauses allowed in <see cref="AnalysisQueryRequest.Filters"/>,
+        /// <see cref="AnalysisQueryRequest.HavingFilters"/>, <see cref="AnalysisQueryRequest.Sort"/>,
+        /// and <see cref="AnalysisQueryRequest.CompareWith"/>'s <c>Filters</c>. Enforced by
+        /// <see cref="AnalysisQueryEngine"/> itself (see its private <c>ValidateFields</c>) so
+        /// every caller of <c>Execute</c>/<c>ExecuteAsync</c>/<c>ExecuteDynamic*</c> inherits the
+        /// guard — this used to be a check only <c>_AnalysisController</c> performed, which let a
+        /// second HTTP path (the Dashboard analysis widget data source) reach the engine with an
+        /// unbounded clause list. Each clause feeds a left-deep <c>Expression.AndAlso</c> tree;
+        /// deep enough and the CLR expression-tree evaluator throws
+        /// <see cref="StackOverflowException"/>, which .NET cannot catch — one authenticated
+        /// request would otherwise terminate the whole worker process (#795). Default 50 is
+        /// generous for real dashboards.
+        /// </summary>
+        public static int MaxFilterClauses { get; set; } = 50;
+
+        /// <summary>
+        /// Maximum number of fields allowed in <see cref="AnalysisQueryRequest.Dimensions"/>
+        /// and <see cref="AnalysisQueryRequest.Measures"/>. Enforced by
+        /// <see cref="AnalysisQueryEngine"/> itself (see its private <c>ValidateClauseCounts</c>)
+        /// so every caller inherits the guard, not just <c>_AnalysisController</c>'s own
+        /// friendly pre-flight checks (which additionally cap at 3 for UX reasons on the
+        /// controller's own endpoints — that cap is unrelated to this one and stays put).
+        /// <c>AnalysisWidgetDataSource</c> — a second HTTP path into the same engine whose
+        /// caller can override the stored widget's <c>dimensions</c>/<c>measures</c> via the
+        /// request body — had neither the controller's UX cap nor any other bound on these two
+        /// lists, so a large-enough list reached <c>GroupBy</c>/projection with an unbounded
+        /// column count (#795). Default 32 is far above any real dashboard's dimension/measure
+        /// count and far below the point where a wide GroupBy projection becomes a DoS vector.
+        /// </summary>
+        public static int MaxGroupByFields { get; set; } = 32;
     }
 }

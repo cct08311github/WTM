@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Analysis;
+using WalkingTec.Mvvm.Core.Support.Json;
 
 namespace WalkingTec.Mvvm.Core.Analysis
 {
@@ -68,6 +69,68 @@ namespace WalkingTec.Mvvm.Core.Analysis
             {
                 ArrayPool<byte>.Shared.Return(rented);
             }
+        }
+
+        /// <summary>
+        /// 建立傳給 <see cref="ComputeHash"/> 的 identityKey，一次到位折入 tenant、user、
+        /// DataPrivilege 指紋（#795）。
+        /// <list type="bullet">
+        ///   <item>DataPrivilege 收窄（移除某筆列級授權）會改變指紋，使該使用者既有的快取結果
+        ///     立刻失效，不再於 TTL 視窗內繼續回傳已被撤銷的列。</item>
+        ///   <item><see cref="LoginUserInfo.UserId"/> 為 null 時退回
+        ///     <see cref="LoginUserInfo.ITCode"/> 而非直接留空 —— 避免兩個不同 principal
+        ///     （UserId 皆為 null、皆無 DataPrivilege）collapse 成同一把 identityKey 而互相讀到
+        ///     對方的快取結果。</item>
+        /// </list>
+        /// 集中在引擎這一層，是為了讓每一個現在／未來呼叫 Execute 系列方法、且能提供
+        /// <see cref="LoginUserInfo"/> 的呼叫端都自動拿到這兩項保護，不必自己手刻字串再記得
+        /// 串上指紋 —— 這正是 <c>AnalysisWidgetDataSource</c> 當初漏掉 DataPrivilege 指紋的成因：
+        /// 沒有東西強制它與 <c>_AnalysisController</c> 保持同一份邏輯。
+        /// 回傳 <c>null</c> 於 <paramref name="loginUserInfo"/> 為 null 時，維持
+        /// <see cref="ComputeHash"/>「無身份的請求絕不共用快取」的既有規則（M29）。
+        /// </summary>
+        /// <remarks>
+        /// Components are length-prefixed (<c>"{len}:{value}"</c>) rather than joined with a
+        /// plain <c>_</c> delimiter: <paramref name="loginUserInfo"/>'s <c>CurrentTenant</c> and
+        /// the <c>UserId</c>/<c>ITCode</c> fallback are both free-form text a tenant admin or IdP
+        /// controls, and this key is the tenant/user isolation boundary for both the engine's
+        /// own query cache (folded into <see cref="ComputeHash"/>) and the widget cache
+        /// (<c>AnalysisWidgetDataSource.BuildCacheKey</c>). A plain <c>_</c> join let
+        /// <c>("T1_u", "2")</c> and <c>("T1", "u_2")</c> collide on the same key
+        /// (<c>"T1_u_2_"</c>) — a real risk once <c>UserId ?? ITCode</c> admits arbitrary login
+        /// text instead of only a GUID (which can never contain <c>_</c>).
+        /// </remarks>
+        public static string? BuildIdentityKey(LoginUserInfo? loginUserInfo)
+        {
+            if (loginUserInfo == null) return null;
+
+            var tenant = loginUserInfo.CurrentTenant ?? string.Empty;
+            var userId = loginUserInfo.UserId ?? loginUserInfo.ITCode ?? string.Empty;
+            var dpHash = BuildDataPrivilegeFingerprint(loginUserInfo.DataPrivileges);
+            return $"{tenant.Length}:{tenant}|{userId.Length}:{userId}|{dpHash}";
+        }
+
+        /// <summary>
+        /// 產生使用者 <see cref="SimpleDataPri"/> 集合的短穩定指紋，供 <see cref="BuildIdentityKey"/>
+        /// 折入 identityKey：新增/移除任一筆列級資料權限都會改變指紋。集合為 null 或空時回傳
+        /// 空字串（維持 identityKey 本身只在 <see cref="LoginUserInfo"/> 為 null 時才是 null 的既
+        /// 有邏輯）。排序是為了讓 hash 穩定 —— 伺服器每次回傳的權限清單順序不保證一致。
+        /// </summary>
+        internal static string BuildDataPrivilegeFingerprint(List<SimpleDataPri>? privileges)
+        {
+            if (privileges == null || privileges.Count == 0)
+                return string.Empty;
+
+            var parts = privileges
+                .Select(p => $"{p.TableName ?? ""}:{p.RelateId ?? ""}:{p.UserCode ?? ""}:{p.GroupCode ?? ""}")
+                .OrderBy(s => s, StringComparer.Ordinal)
+                .ToArray();
+
+            var raw = string.Join(",", parts);
+            Span<byte> hash = stackalloc byte[32];
+            System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(raw), hash);
+            return Convert.ToHexString(hash)[..8];
         }
 
         /// <summary>

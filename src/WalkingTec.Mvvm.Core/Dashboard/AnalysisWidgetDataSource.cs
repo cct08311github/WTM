@@ -11,6 +11,7 @@ using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core.Analysis;
+using WalkingTec.Mvvm.Core.Extensions;
 using WalkingTec.Mvvm.Core.Support.Json;
 
 namespace WalkingTec.Mvvm.Core.Dashboard;
@@ -92,6 +93,12 @@ public class AnalysisWidgetDataSource : IWidgetDataSource
         // 4. Get base query via reflection
         var baseQuery = AnalysisVmInvoker.GetSearchQuery(vm, vmType);
 
+        // #795: apply row-level DataPrivilege filtering — mirrors _AnalysisController's
+        // defense-in-depth call to the same helper (#554). This was missing entirely here:
+        // the widget path returned full, unscoped data regardless of the caller's row-level
+        // privileges, independent of anything wrong with the cache key below.
+        baseQuery = DCExtension.ApplyDataPrivilegeForAnalysis(baseQuery, wtm);
+
         // 5. Get analysis field whitelist
         var fields = AnalysisVmInvoker.GetAnalysisFields(vm, vmType);
 
@@ -111,10 +118,19 @@ public class AnalysisWidgetDataSource : IWidgetDataSource
         // Key includes: widgetId/listVmType, tenant, userId (user-scoped if policy present), filter params.
         // Including tenant in the key is the primary tenant-isolation guarantee —
         // a cross-tenant caller will always produce a different key and read from a separate cache entry.
-        string? identityKey = wtm?.LoginUserInfo != null ? $"{wtm.LoginUserInfo.CurrentTenant}_{wtm.LoginUserInfo.UserId}" : null;
+        // #795: previously hand-rolled as "{tenant}_{userId}" with no DataPrivilege fingerprint,
+        // unlike _AnalysisController — a revoked row-level privilege kept serving cached rows
+        // for the TTL window. AnalysisQueryEngine.BuildIdentityKey centralizes the fingerprint
+        // (and the null-UserId-falls-back-to-ITCode fix) so every caller gets it for free.
+        string? identityKey = AnalysisQueryEngine.BuildIdentityKey(wtm?.LoginUserInfo);
         var ttl = _options.AnalysisWidgetCacheTtlSeconds;
 
-        if (ttl > 0)
+        // #795: mirror the engine's own M29 rule — identity-less requests never share a
+        // cache entry. BuildIdentityKey returns null precisely when there is no
+        // LoginUserInfo to scope the entry to, so caching here would let unrelated
+        // identity-less callers read each other's cached rows. Skip the widget cache
+        // entirely rather than bucketing them all under a shared placeholder key.
+        if (ttl > 0 && identityKey != null)
         {
             var cacheKey = BuildCacheKey(request, listVmType, identityKey);
             if (_cache.TryGetValue(cacheKey, out WidgetDataResult? cached) && cached != null)
@@ -155,16 +171,24 @@ public class AnalysisWidgetDataSource : IWidgetDataSource
     /// <summary>
     /// Builds a cache key that is unique per (listVmType, tenant+user identity, filter params).
     /// Tenant isolation: <paramref name="identityKey"/> always includes the tenant code
-    /// (format: <c>{tenant}_{userId}</c>), so cross-tenant callers produce separate cache entries.
+    /// (length-prefixed ahead of the user id — see <see cref="AnalysisQueryEngine.BuildIdentityKey"/>),
+    /// so cross-tenant callers produce separate cache entries.
     /// </summary>
-    internal static string BuildCacheKey(WidgetDataRequest request, string listVmType, string? identityKey)
+    /// <remarks>
+    /// <paramref name="identityKey"/> must be non-null — <see cref="GetDataAsync"/> only calls
+    /// this method inside the <c>identityKey != null</c> branch. There is no <c>"_anon"</c> (or
+    /// similar) fallback here on purpose: identity-less requests must never share a cache entry
+    /// (mirrors the engine's own M29 rule), so the caller skips the widget cache entirely rather
+    /// than bucketing them all under one shared key.
+    /// </remarks>
+    internal static string BuildCacheKey(WidgetDataRequest request, string listVmType, string identityKey)
     {
         // Stable serialization of the filter sub-dictionary so key is order-independent.
         // We only include parameters that influence the query result, not request metadata.
         var filterPart = request.Parameters.TryGetValue("dimensions", out var dims) ? dims : "";
         var measurePart = request.Parameters.TryGetValue("measures", out var meas) ? meas : "";
         var filtersPart = request.Parameters.TryGetValue("filters", out var filt) ? filt : "";
-        return $"AnalysisWidget::{listVmType}::{identityKey ?? "_anon"}::{filterPart}::{measurePart}::{filtersPart}";
+        return $"AnalysisWidget::{listVmType}::{identityKey}::{filterPart}::{measurePart}::{filtersPart}";
     }
 
     /// <summary>

@@ -257,16 +257,14 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         }
 
         // ─── M4: DataPrivilege fingerprint → different identity key ───────────
+        // #795: BuildDataPrivilegeFingerprint moved from a private static method on
+        // _AnalysisController to an internal static method on AnalysisQueryEngine (accessible
+        // here via InternalsVisibleTo), so every engine caller — not just this controller —
+        // can fold the fingerprint into its identityKey via AnalysisQueryEngine.BuildIdentityKey.
 
         [TestMethod]
         public void M4_Different_DataPrivileges_produce_different_identityKey()
         {
-            // Access BuildDataPrivilegeFingerprint via reflection (private static method on controller)
-            var method = typeof(_AnalysisController).GetMethod(
-                "BuildDataPrivilegeFingerprint",
-                BindingFlags.NonPublic | BindingFlags.Static);
-            Assert.IsNotNull(method, "BuildDataPrivilegeFingerprint must exist as a private static method");
-
             var privA = new List<SimpleDataPri>
             {
                 new SimpleDataPri { ID = Guid.NewGuid(), TableName = "Order", RelateId = "1", UserCode = "alice" }
@@ -277,8 +275,8 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
                 new SimpleDataPri { ID = Guid.NewGuid(), TableName = "Order", RelateId = "2", UserCode = "alice" }
             };
 
-            var fpA = (string?)method!.Invoke(null, new object?[] { privA });
-            var fpB = (string?)method!.Invoke(null, new object?[] { privB });
+            var fpA = AnalysisQueryEngine.BuildDataPrivilegeFingerprint(privA);
+            var fpB = AnalysisQueryEngine.BuildDataPrivilegeFingerprint(privB);
 
             Assert.IsNotNull(fpA);
             Assert.IsNotNull(fpB);
@@ -289,13 +287,8 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         [TestMethod]
         public void M4_Empty_DataPrivileges_produce_stable_empty_fingerprint()
         {
-            var method = typeof(_AnalysisController).GetMethod(
-                "BuildDataPrivilegeFingerprint",
-                BindingFlags.NonPublic | BindingFlags.Static);
-            Assert.IsNotNull(method, "BuildDataPrivilegeFingerprint must exist");
-
-            var fpNull  = (string?)method!.Invoke(null, new object?[] { null });
-            var fpEmpty = (string?)method!.Invoke(null, new object?[] { new List<SimpleDataPri>() });
+            var fpNull  = AnalysisQueryEngine.BuildDataPrivilegeFingerprint(null);
+            var fpEmpty = AnalysisQueryEngine.BuildDataPrivilegeFingerprint(new List<SimpleDataPri>());
 
             Assert.AreEqual(string.Empty, fpNull,  "null privileges → empty fingerprint");
             Assert.AreEqual(string.Empty, fpEmpty, "empty list → empty fingerprint");
@@ -306,19 +299,103 @@ namespace WalkingTec.Mvvm.Core.Test.Analysis
         [TestMethod]
         public void M4_Same_DataPrivileges_different_order_produce_same_fingerprint()
         {
-            var method = typeof(_AnalysisController).GetMethod(
-                "BuildDataPrivilegeFingerprint",
-                BindingFlags.NonPublic | BindingFlags.Static);
-            Assert.IsNotNull(method, "BuildDataPrivilegeFingerprint must exist");
-
             var pri1 = new SimpleDataPri { ID = Guid.NewGuid(), TableName = "Order",   RelateId = "1", UserCode = "alice" };
             var pri2 = new SimpleDataPri { ID = Guid.NewGuid(), TableName = "Product", RelateId = "2", UserCode = "alice" };
 
-            var fpForward  = (string?)method!.Invoke(null, new object?[] { new List<SimpleDataPri> { pri1, pri2 } });
-            var fpReversed = (string?)method!.Invoke(null, new object?[] { new List<SimpleDataPri> { pri2, pri1 } });
+            var fpForward  = AnalysisQueryEngine.BuildDataPrivilegeFingerprint(new List<SimpleDataPri> { pri1, pri2 });
+            var fpReversed = AnalysisQueryEngine.BuildDataPrivilegeFingerprint(new List<SimpleDataPri> { pri2, pri1 });
 
             Assert.AreEqual(fpForward, fpReversed,
                 "Privilege order must not affect the fingerprint — sort ensures stability");
+        }
+
+        // ─── #795 item 3: BuildIdentityKey falls back to ITCode when UserId is null ───
+
+        [TestMethod]
+        public void BuildIdentityKey_falls_back_to_ITCode_when_UserId_null()
+        {
+            // Two distinct principals, same tenant, both with a null UserId and no
+            // DataPrivileges, used to collapse onto the same identityKey ("T1__") and
+            // therefore the same cache entry. Falling back to ITCode keeps them distinct.
+            var userA = new LoginUserInfo { CurrentTenant = "T1", UserId = null, ITCode = "alice" };
+            var userB = new LoginUserInfo { CurrentTenant = "T1", UserId = null, ITCode = "bob" };
+
+            var keyA = AnalysisQueryEngine.BuildIdentityKey(userA);
+            var keyB = AnalysisQueryEngine.BuildIdentityKey(userB);
+
+            Assert.IsNotNull(keyA);
+            Assert.IsNotNull(keyB);
+            Assert.AreNotEqual(keyA, keyB,
+                "Two principals with null UserId must not collapse onto the same identityKey (#795 item 3)");
+        }
+
+        [TestMethod]
+        public void BuildIdentityKey_returns_null_when_loginUserInfo_null()
+        {
+            Assert.IsNull(AnalysisQueryEngine.BuildIdentityKey(null),
+                "identityKey must stay null when LoginUserInfo is absent (preserves M29)");
+        }
+
+        [TestMethod]
+        public void BuildIdentityKey_prefers_UserId_over_ITCode_when_both_present()
+        {
+            var userA = new LoginUserInfo { CurrentTenant = "T1", UserId = "u1", ITCode = "alice" };
+            var userB = new LoginUserInfo { CurrentTenant = "T1", UserId = "u2", ITCode = "alice" };
+
+            var keyA = AnalysisQueryEngine.BuildIdentityKey(userA);
+            var keyB = AnalysisQueryEngine.BuildIdentityKey(userB);
+
+            Assert.AreNotEqual(keyA, keyB, "UserId must still take precedence over ITCode when present");
+        }
+
+        /// <summary>
+        /// #795 MEDIUM: identityKey is the tenant/user isolation boundary for both the
+        /// engine's own query cache (folded into ComputeHash) and the widget cache
+        /// (AnalysisWidgetDataSource.BuildCacheKey). A plain "_" join between components let
+        /// two distinct (tenant, userId) pairs collapse onto the same key whenever the tenant
+        /// code or the UserId/ITCode fallback itself contains an underscore — which the old
+        /// GUID-only UserId could never do, but the new ITCode fallback (arbitrary login text)
+        /// can. Length-prefixing each component removes the ambiguity.
+        /// </summary>
+        [TestMethod]
+        public void BuildIdentityKey_length_prefixing_prevents_tenant_userId_boundary_collision()
+        {
+            // ("T1_u", "2") vs ("T1", "u_2") both naively join to "T1_u_2_" under a plain
+            // "_" delimiter (both have an empty DataPrivilege fingerprint) — two different
+            // tenant/user pairs reading each other's cached, tenant-scoped query results.
+            var userA = new LoginUserInfo { CurrentTenant = "T1_u", UserId = "2" };
+            var userB = new LoginUserInfo { CurrentTenant = "T1", UserId = "u_2" };
+
+            var keyA = AnalysisQueryEngine.BuildIdentityKey(userA);
+            var keyB = AnalysisQueryEngine.BuildIdentityKey(userB);
+
+            Assert.IsNotNull(keyA);
+            Assert.IsNotNull(keyB);
+            Assert.AreNotEqual(keyA, keyB,
+                "different (tenant, userId) pairs must never collapse onto the same identityKey, " +
+                "even when the tenant code or userId contains the '_' join character (#795)");
+        }
+
+        [TestMethod]
+        public void BuildIdentityKey_folds_DataPrivilege_fingerprint()
+        {
+            var baseUser = new LoginUserInfo { CurrentTenant = "T1", UserId = "u1" };
+            var scopedUser = new LoginUserInfo
+            {
+                CurrentTenant = "T1",
+                UserId = "u1",
+                DataPrivileges = new List<SimpleDataPri>
+                {
+                    new SimpleDataPri { ID = Guid.NewGuid(), TableName = "Order", RelateId = "1", UserCode = "u1" }
+                }
+            };
+
+            var keyBase = AnalysisQueryEngine.BuildIdentityKey(baseUser);
+            var keyScoped = AnalysisQueryEngine.BuildIdentityKey(scopedUser);
+
+            Assert.AreNotEqual(keyBase, keyScoped,
+                "Adding a DataPrivilege must change the identityKey so a narrowed/widened " +
+                "privilege set invalidates any cached result (#795 item 2)");
         }
 
         // ─── M5: ServerSideGroupByStrategy 4-measure guard ───────────────────

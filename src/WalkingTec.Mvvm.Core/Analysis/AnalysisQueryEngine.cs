@@ -562,6 +562,7 @@ namespace WalkingTec.Mvvm.Core.Analysis
 
         private static void ValidateFields(AnalysisQueryRequest req, Dictionary<string, AnalysisFieldMeta> whitelist)
         {
+            ValidateClauseCounts(req);
             foreach (var d in req.Dimensions)
             {
                 if (!whitelist.TryGetValue(d, out var meta) || meta.Kind != AnalysisFieldKind.Dimension)
@@ -576,6 +577,36 @@ namespace WalkingTec.Mvvm.Core.Analysis
             }
             ValidateSortAndTopN(req);
             ValidateHavingFilters(req);
+        }
+
+        /// <summary>
+        /// Engine-boundary cap on clause-list and field-list sizes (#795). See
+        /// <see cref="AnalysisLimits.MaxFilterClauses"/> / <see cref="AnalysisLimits.MaxGroupByFields"/>
+        /// for the rationale — these used to be enforced only by <c>_AnalysisController</c>'s own
+        /// pre-checks, so any other caller of this engine (e.g. the Dashboard analysis widget data
+        /// source, whose caller can override the stored widget's <c>Dimensions</c>/<c>Measures</c>
+        /// via the request body) reached <see cref="ApplyFilters"/> / <see cref="ApplyHavingFilters"/>
+        /// / <see cref="ApplySortAndTopN"/> / the GroupBy projection with unbounded lists. Running
+        /// it here means every current and future caller is covered without having to remember to
+        /// copy the check.
+        /// </summary>
+        private static void ValidateClauseCounts(AnalysisQueryRequest req)
+        {
+            var max = AnalysisLimits.MaxFilterClauses;
+            if (req.Filters?.Count > max)
+                throw new AnalysisException($"Filters must not exceed {max} clauses.");
+            if (req.HavingFilters?.Count > max)
+                throw new AnalysisException($"HavingFilters must not exceed {max} clauses.");
+            if (req.Sort?.Count > max)
+                throw new AnalysisException($"Sort must not exceed {max} clauses.");
+            if (req.CompareWith?.Filters?.Count > max)
+                throw new AnalysisException($"CompareWith.Filters must not exceed {max} clauses.");
+
+            var maxFields = AnalysisLimits.MaxGroupByFields;
+            if (req.Dimensions?.Count > maxFields)
+                throw new AnalysisException($"Dimensions must not exceed {maxFields} fields.");
+            if (req.Measures?.Count > maxFields)
+                throw new AnalysisException($"Measures must not exceed {maxFields} fields.");
         }
 
         /// <summary>

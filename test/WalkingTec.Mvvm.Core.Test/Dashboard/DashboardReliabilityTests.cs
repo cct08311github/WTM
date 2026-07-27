@@ -389,8 +389,15 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         [TestMethod]
         public async Task GetDataAsync_returns_cached_result_on_second_call()
         {
-            // Arrange: single shared cache — same request → same object reference on hit
+            // Arrange: single shared cache — same request → same object reference on hit.
+            // #795: an identityKey is required for the widget cache to be used at all (the
+            // engine's M29 rule — identity-less requests never share a cache entry — so a
+            // WTMContext with LoginUserInfo must be registered or this call never hits the
+            // cache branch regardless of TTL).
+            var wtm = MockWtmContext.CreateWtmContext();
+            wtm.LoginUserInfo = new LoginUserInfo { ITCode = "user1", CurrentTenant = "tenantA" };
             var services = new ServiceCollection();
+            services.AddSingleton(wtm);
             var sp = services.BuildServiceProvider();
             var cache = new MemoryCache(new MemoryCacheOptions());
             var opts = Options.Create(new DashboardOptions { AnalysisWidgetCacheTtlSeconds = 30 });
@@ -405,6 +412,33 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             // Assert: same object reference → cache hit
             result1.Should().NotBeNull();
             result2.Should().BeSameAs(result1, "second call within TTL should return the cached object");
+        }
+
+        // ── Q8e: identity-less callers never hit the widget cache (#795 LOW finding) ────
+
+        [TestMethod]
+        public async Task GetDataAsync_does_not_cache_when_no_LoginUserInfo_present()
+        {
+            // No WTMContext registered → wtm is null inside GetDataAsync → identityKey is null.
+            // Before the fix this used to fall back to a shared "_anon" cache key, so any two
+            // identity-less callers (or the same caller called twice) would read/write the same
+            // entry. The engine's own M29 rule says identity-less requests must never share a
+            // cache entry — the widget cache must therefore be skipped entirely, not bucketed.
+            var services = new ServiceCollection();
+            var sp = services.BuildServiceProvider();
+            var cache = new MemoryCache(new MemoryCacheOptions());
+            var opts = Options.Create(new DashboardOptions { AnalysisWidgetCacheTtlSeconds = 30 });
+            var source = new AnalysisWidgetDataSource(_registry, sp, _engine, cache: cache, options: opts);
+
+            var request = MakeRequest();
+
+            var result1 = await source.GetDataAsync(request);
+            var result2 = await source.GetDataAsync(request);
+
+            result1.Should().NotBeNull();
+            result2.Should().NotBeNull();
+            result2.Should().NotBeSameAs(result1,
+                "identity-less requests must never share a cache entry, even under a positive TTL");
         }
 
         // ── Q8b: tenant isolation of cache key ───────────────────────────────────
