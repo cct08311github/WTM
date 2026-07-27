@@ -30,6 +30,14 @@ public class MvcAuthHolesTests
     // Used for tests that validate 401/redirect behaviour for unauthenticated requests.
     private static WebApplicationFactory<WalkingTec.Mvvm.Demo.Program> _strictFactory = null!;
 
+    // Factory variant with EnforceVmExportAuthorization=true (#796 fail-closed kill switch) and
+    // a distinct AccessDeniedPath (demo's default AccessDeniedPath is the same as LoginPath —
+    // "/Login/Login" — so without this override a redirect there is ambiguous between an
+    // AccessDenied challenge and an unauthenticated-login challenge). Used to pin the actual
+    // wire status of the un-overridden CanExportVm hook's Forbid() denial — see
+    // GetExportExcel_EnforceFlagEnabled_Forbid_Is302RedirectToAccessDenied below.
+    private static WebApplicationFactory<WalkingTec.Mvvm.Demo.Program> _vmExportEnforcedFactory = null!;
+
     private const string StudentListVm =
         "WalkingTec.Mvvm.Demo.ViewModels.StudentVMs.StudentListVM";
 
@@ -50,11 +58,24 @@ public class MvcAuthHolesTests
                 });
             });
         });
+
+        _vmExportEnforcedFactory = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["EnforceVmExportAuthorization"] = "true",
+                    ["CookieOptions:AccessDeniedPath"] = "/AccessDenied796Test",
+                });
+            });
+        });
     }
 
     [ClassCleanup]
     public static void ClassCleanup()
     {
+        _vmExportEnforcedFactory.Dispose();
         _strictFactory.Dispose();
         _factory.Dispose();
     }
@@ -505,4 +526,60 @@ public class MvcAuthHolesTests
     private static bool resp200ContainsStudentData(string body) =>
         body.Contains("StudentId", StringComparison.OrdinalIgnoreCase) &&
         body.Contains("layui-table", StringComparison.OrdinalIgnoreCase);
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // #796 (review round 2/3, LOW): pin the actual wire status of a CanExportVm denial.
+    // Forbid() under the default cookie auth scheme is a 302 redirect to AccessDeniedPath,
+    // not a literal 403 — framework_layui.js's AJAX callers see a redirect-to-HTML response.
+    // This is kept consistent with every other Forbid() already in _FrameworkController
+    // (e.g. BatchAssignRoles' CallerIsAdmin() checks) rather than special-cased; this test
+    // exists so a future auth-scheme change (or a switch to StatusCode(403)) trips a test
+    // instead of silently changing what callers see. Round 3 strengthens the assertion from
+    // status-code-only to also checking the Location header: demo's default AccessDeniedPath
+    // equals LoginPath ("/Login/Login"), so a bare 302 status cannot by itself distinguish an
+    // AccessDenied challenge from an unauthenticated-login challenge — _vmExportEnforcedFactory
+    // configures a distinct AccessDeniedPath so the two are actually distinguishable here.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// #796: GetExportExcel's un-overridden CanExportVm denial (flag enabled, no override)
+    /// must surface as the SAME 302 redirect every other Forbid() in this controller produces
+    /// under the default cookie auth scheme — not a literal HTTP 403 — and that redirect must
+    /// actually point at the configured AccessDeniedPath, not the login-challenge path.
+    /// </summary>
+    [TestMethod]
+    public async Task GetExportExcel_EnforceFlagEnabled_Forbid_Is302RedirectToAccessDenied()
+    {
+        var client = _vmExportEnforcedFactory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+            HandleCookies = true,
+        });
+        var loginForm = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["ITCode"] = "admin",
+            ["Password"] = "000000",
+        });
+        await client.PostAsync("/Login/Login", loginForm);
+
+        var form = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["_DONOT_USE_VMNAME"] = StudentListVm,
+        });
+        var resp = await client.PostAsync("/_Framework/GetExportExcel", form);
+
+        Assert.AreEqual(HttpStatusCode.Redirect, resp.StatusCode,
+            $"#796: With EnforceVmExportAuthorization=true and no CanExportVm override, " +
+            $"GetExportExcel's Forbid() is expected to wire up as a 302 redirect (ASP.NET Core " +
+            $"cookie auth's Forbid() behaviour), not a literal 403. " +
+            $"Got {(int)resp.StatusCode} ({resp.StatusCode}).");
+
+        var location = resp.Headers.Location?.ToString() ?? string.Empty;
+        Assert.IsTrue(location.Contains("/AccessDenied796Test", StringComparison.OrdinalIgnoreCase),
+            $"#796: the redirect must target the configured AccessDeniedPath, proving this is an " +
+            $"authorization denial and not an unauthenticated-login challenge. Location: {location}");
+        Assert.IsFalse(location.Contains("/Login/Login", StringComparison.OrdinalIgnoreCase),
+            $"#796: the redirect must NOT be the login-challenge path — that would mean the " +
+            $"caller was treated as unauthenticated rather than denied by CanExportVm. Location: {location}");
+    }
 }

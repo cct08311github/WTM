@@ -113,9 +113,64 @@ namespace WalkingTec.Mvvm.Mvc
                 r.RoleCode, "Admin", StringComparison.OrdinalIgnoreCase));
         }
 
+        // #796: a bare Forbid() on these two hooks' denied path does NOT put a literal HTTP
+        // 403 on the wire when the default cookie auth scheme is in effect — cookie auth
+        // (FrameworkServiceExtension.cs, AddCookie(...).AccessDeniedPath) turns Forbid() into a
+        // 302 redirect to AccessDeniedPath, same as every other Forbid() call already in this
+        // controller (e.g. BatchAssignRoles' CallerIsAdmin() checks). These AJAX-called endpoints
+        // (framework_layui.js) therefore see a redirect-to-HTML response, not a clean denial, on
+        // this path — kept consistent with the controller's existing convention rather than
+        // special-cased, so a denial here does not read differently from every other denial in
+        // this file. See MvcAuthHolesTests.GetExportExcel_EnforceFlagEnabled_Forbid_Is302RedirectToAccessDenied,
+        // which pins the actual wire status (including the Location header) so a future
+        // auth-scheme change cannot silently flip it.
 
+        /// <summary>
+        /// #796: Extension hook for per-caller authorization of the VM type targeted by
+        /// <see cref="GetExportExcel"/> / <see cref="GetExportExcelStream"/>. Both endpoints
+        /// accept a caller-supplied VM type name and, without this hook, run that VM's own
+        /// <c>GetSearchQuery()</c> and hand the resulting file to ANY authenticated caller —
+        /// there is no built-in mapping from an arbitrary VM type back to the menu /
+        /// FunctionPrivilege that normally gates the page the VM belongs to (the same VM type
+        /// can be reused by more than one controller, or by none), so this cannot be derived
+        /// automatically without risking false negatives on custom deployments. Override this
+        /// in a controller that inherits from <c>_FrameworkController</c> to enforce your own
+        /// per-VM policy (e.g. checking <see cref="WTMContext.IsAccessable(string?)"/> for the
+        /// VM's known page URL, or restricting specific VM types to specific roles).
+        /// <para>
+        /// When not overridden, the default answer is driven by
+        /// <see cref="WalkingTec.Mvvm.Core.ConfigOptions.Configs.EnforceVmExportAuthorization"/>
+        /// (default <c>false</c> → <c>true</c>/allow, unchanged pre-#796 behaviour). Setting that
+        /// config flag to <c>true</c> flips the un-overridden default to deny (fail-closed) — a
+        /// no-code kill switch for deployments that want every export blocked until they write a
+        /// real per-VM policy. See Issue #796 for the full analysis and the residual exposure
+        /// with the flag left at its default.
+        /// </para>
+        /// </summary>
+        /// <param name="vmType">The resolved type of the VM the caller asked to export.</param>
+        /// <returns><c>true</c> if the export is allowed; <c>false</c> to return 403.</returns>
+        protected virtual bool CanExportVm(Type vmType) => !(Wtm?.ConfigInfo?.EnforceVmExportAuthorization ?? false);
 
+        /// <summary>
+        /// #796: Extension hook for per-caller authorization of the VM type targeted by
+        /// <see cref="GetDeletePreview"/>. Without this hook, any authenticated caller can supply
+        /// an arbitrary VM type name plus up to 10 GUIDs and get back a confirmed-existence
+        /// oracle and a human-readable label for every row that exists, regardless of whether
+        /// they hold any privilege over that VM.
+        /// <para>
+        /// When not overridden, the default answer is driven by
+        /// <see cref="WalkingTec.Mvvm.Core.ConfigOptions.Configs.EnforceDeletePreviewAuthorization"/>
+        /// (default <c>false</c> → <c>true</c>/allow, unchanged behaviour), for the same
+        /// compatibility reason and the same no-code fail-closed opt-in as
+        /// <see cref="CanExportVm"/>.
+        /// </para>
+        /// </summary>
+        /// <param name="vmType">The resolved type of the VM the caller is previewing a delete for.</param>
+        /// <returns><c>true</c> if the preview is allowed; <c>false</c> to return 403.</returns>
+        protected virtual bool CanPreviewDelete(Type vmType) => !(Wtm?.ConfigInfo?.EnforceDeletePreviewAuthorization ?? false);
 
+        // Note: the file-access hook (CanAccessFile, gating GetFile/GetFileName/ViewFile) was
+        // carved out of the #796 work to issue #814 and lives there.
 
         // MVC-006 (BREAKING): Selector was previously [Public] (unauthenticated).
         // Changed to [AllRights] so an authenticated session is required.
@@ -524,21 +579,38 @@ namespace WalkingTec.Mvvm.Mvc
             // MVC-013: CreateVM throws ArgumentException for unresolvable/unregistered VM names
             // (and the `as` cast returns null for valid VMs that aren't IBasePagedListVM).
             // Wrap both failure modes so they produce a clean 400 instead of an unhandled 500.
-            IBasePagedListVM<TopBasePoco, ISearcher>? listVM;
+            //
+            // #796 (round 3, LOW): resolve + authorize via a cheap, uninitialized probe VM
+            // first (passInit: true) — the exact defect round 2 already fixed for
+            // GetDeletePreview's up-front Type resolution. This skips the caller-named VM's
+            // DoInit()/InitVM() and, for a IBasePagedListVM, searcher.DoInit() before the
+            // CanExportVm deny decision; WtmVmFactory.CreateVM still calls lvm.DoInitListVM()
+            // unconditionally (it is not gated behind passInit), so that one call still runs
+            // on the probe ahead of authorization.
             Type? instanceType;
             try
             {
-                var rawVm = Wtm.CreateVM(_DONOT_USE_VMNAME);
-                listVM = rawVm as IBasePagedListVM<TopBasePoco, ISearcher>;
+                var probeVm = Wtm.CreateVM(_DONOT_USE_VMNAME, null, null, true);
+                if (probeVm is not IBasePagedListVM<TopBasePoco, ISearcher>)
+                    return BadRequest(MvcProgram._localizer?["Sys.InvalidVM"] ?? "Invalid Vm Name");
                 // MVC-011: derive filename from the created VM instance — Type.GetType fails
                 // for unqualified names so always prefer the instance type when available.
-                instanceType = rawVm?.GetType() ?? Type.GetType(_DONOT_USE_VMNAME);
+                instanceType = probeVm.GetType();
             }
             catch (ArgumentException)
             {
                 return BadRequest(MvcProgram._localizer?["Sys.InvalidVM"] ?? "Invalid Vm Name");
             }
 
+            // #796: authorize the target VM type — without this, any authenticated user could
+            // Excel-export any ListVM registered in the application by supplying its type name.
+            if (!CanExportVm(instanceType))
+            {
+                return Forbid();
+            }
+
+            // Only now do we pay for a fully initialized instance (DoInit()/InitVM()).
+            var listVM = Wtm.CreateVM(_DONOT_USE_VMNAME) as IBasePagedListVM<TopBasePoco, ISearcher>;
             if (listVM == null)
                 return BadRequest(MvcProgram._localizer?["Sys.InvalidVM"] ?? "Invalid Vm Name");
 
@@ -603,19 +675,34 @@ namespace WalkingTec.Mvvm.Mvc
             Wtm.CurrentCS = _DONOT_USE_CS;
 
             // MVC-013: wrap CreateVM to return 400 on bad VM name
-            IBasePagedListVM<TopBasePoco, ISearcher>? listVM;
+            //
+            // #796 (round 3, LOW): same eager-init defect and fix as GetExportExcel — resolve
+            // + authorize via a cheap, uninitialized probe VM (passInit: true) before ever
+            // running the caller-named VM's DoInit()/InitVM() and searcher.DoInit();
+            // lvm.DoInitListVM() still runs unconditionally on the probe (see GetExportExcel's
+            // comment above for why).
             Type? instanceType;
             try
             {
-                var rawVm = Wtm.CreateVM(_DONOT_USE_VMNAME);
-                listVM = rawVm as IBasePagedListVM<TopBasePoco, ISearcher>;
-                instanceType = rawVm?.GetType() ?? Type.GetType(_DONOT_USE_VMNAME);
+                var probeVm = Wtm.CreateVM(_DONOT_USE_VMNAME, null, null, true);
+                if (probeVm is not IBasePagedListVM<TopBasePoco, ISearcher>)
+                    return BadRequest(MvcProgram._localizer?["Sys.InvalidVM"] ?? "Invalid Vm Name");
+                instanceType = probeVm.GetType();
             }
             catch (ArgumentException)
             {
                 return BadRequest(MvcProgram._localizer?["Sys.InvalidVM"] ?? "Invalid Vm Name");
             }
 
+            // #796: authorize the target VM type — same gap as GetExportExcel, since this is
+            // the same shared, VM-name-driven endpoint with a different serialization format.
+            if (!CanExportVm(instanceType))
+            {
+                return Forbid();
+            }
+
+            // Only now do we pay for a fully initialized instance (DoInit()/InitVM()).
+            var listVM = Wtm.CreateVM(_DONOT_USE_VMNAME) as IBasePagedListVM<TopBasePoco, ISearcher>;
             if (listVM == null)
                 return BadRequest(MvcProgram._localizer?["Sys.InvalidVM"] ?? "Invalid Vm Name");
 
@@ -669,7 +756,43 @@ namespace WalkingTec.Mvvm.Mvc
             if (!IsKnownConnectionKey(_DONOT_USE_CS))
                 return BadRequest("Unknown connection string key");
             //Wtm.CurrentCS = _DONOT_USE_CS ?? "default";
-            var importVM = Wtm.CreateVM(_DONOT_USE_VMNAME) as IBaseImport<BaseTemplateVM>;
+            //
+            // #796 (residual-risk follow-up): GetExcelTemplate is a caller-VM-named
+            // file-generation endpoint with the same shape of exposure as GetExportExcel /
+            // GetExportExcelStream — it discloses an arbitrary registered VM's column layout
+            // to any authenticated caller — so it is gated with the same CanExportVm hook.
+            // Default (flag off, no override) is unaffected. Also wraps VM resolution
+            // (previously an unhandled ArgumentException / 500 for an unresolvable VM name,
+            // and an unguarded null-cast NRE for a resolvable-but-non-import VM name) the
+            // same way the MVC-013 fix already does for GetExportExcel/GetExportExcelStream.
+            //
+            // Same probe-then-authorize shape as GetExportExcel/GetExportExcelStream
+            // (passInit: true) so the caller-named VM's own DoInit() does not run before the
+            // CanExportVm deny decision. This is only a partial fix: WtmVmFactory.CreateVM's
+            // IBaseImport<BaseTemplateVM> branch calls tvm.Template.DoInit() unconditionally
+            // (it is not gated behind the passInit flag the way the plain-VM DoInit() and the
+            // ListVM searcher.DoInit() are), so the probe below still runs the template VM's
+            // DoInit() — and whatever DB queries that performs — before authorization. There is
+            // no passInit-only way to avoid that from this call site.
+            IBaseImport<BaseTemplateVM>? importVM;
+            try
+            {
+                importVM = Wtm.CreateVM(_DONOT_USE_VMNAME, null, null, true) as IBaseImport<BaseTemplateVM>;
+            }
+            catch (ArgumentException)
+            {
+                return BadRequest(MvcProgram._localizer?["Sys.InvalidVM"] ?? "Invalid Vm Name");
+            }
+            if (importVM == null)
+                return BadRequest(MvcProgram._localizer?["Sys.InvalidVM"] ?? "Invalid Vm Name");
+            if (!CanExportVm(importVM.GetType()))
+                return Forbid();
+
+            // Only now do we pay for the fully initialized instance (DoInit()).
+            importVM = Wtm.CreateVM(_DONOT_USE_VMNAME) as IBaseImport<BaseTemplateVM>;
+            if (importVM == null)
+                return BadRequest(MvcProgram._localizer?["Sys.InvalidVM"] ?? "Invalid Vm Name");
+
             var qs = new Dictionary<string, string>();
             foreach (var item in Request.Query.Keys)
             {
@@ -1305,11 +1428,24 @@ namespace WalkingTec.Mvvm.Mvc
         [Public]
         public IActionResult SetTenant(string tenant)
         {
-            Wtm.SetCurrentTenant(tenant == "" ? null : tenant);
+            var switched = Wtm.SetCurrentTenant(tenant == "" ? null : tenant);
             // #538: guard against NRE for anonymous callers — LoginUserInfo is null when unauthenticated.
             if (Wtm.LoginUserInfo == null)
             {
                 return Unauthorized();
+            }
+            // #796: SetCurrentTenant returns false when the caller has no claim to the requested
+            // tenant (it is neither their own TenantCode nor a child tenant of it). That bool was
+            // previously discarded, so a rejected switch still re-signed the (unchanged)
+            // principal and told the caller Reload — the page reloaded still showing the OLD
+            // tenant with no error, and the refusal was never logged. Surface it as 403 and log
+            // it (security events must be logged).
+            if (!switched)
+            {
+                HttpContext.RequestServices.GetService<ILogger<_FrameworkController>>()?.LogWarning(
+                    "SetTenant refused: user {UserId} in tenant {CurrentTenant} attempted to switch to unauthorized tenant {RequestedTenant}",
+                    Wtm.LoginUserInfo.ITCode, Wtm.LoginUserInfo.TenantCode, tenant);
+                return Forbid();
             }
             var principal = Wtm.LoginUserInfo.CreatePrincipal();
             HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal, null);
@@ -1365,6 +1501,31 @@ namespace WalkingTec.Mvvm.Mvc
         {
             if (ids == null || ids.Length == 0)
                 return JsonMore(Array.Empty<object>());
+
+            // #796: authorize the target VM type before returning any entity label to the
+            // caller — without this, any authenticated user could supply an arbitrary VM type
+            // name and up to 10 GUIDs and get back a confirmed-existence oracle plus a
+            // human-readable label for every row that exists, regardless of privilege.
+            // passInit: true here — this call only needs the VM's Type for the CanPreviewDelete
+            // check below, not an initialized instance. Without it, Wtm.CreateVM would run the
+            // full DoInit()/InitVM() (and, for a IBasePagedListVM, searcher.DoInit()) on the
+            // caller-named VM on EVERY request to this endpoint, including when the flag is off
+            // and before the deny decision — a standard generated CRUD VM's InitVM() commonly
+            // issues its own DB queries (e.g. GetSelectListItems). This matches the passInit:
+            // true already used for the real per-row VM instances created in the loop below.
+            Type? previewVmType;
+            try
+            {
+                previewVmType = Wtm.CreateVM(_DONOT_USE_VMNAME, null, null, true)?.GetType();
+            }
+            catch (ArgumentException)
+            {
+                return BadRequest(MvcProgram._localizer?["Sys.InvalidVM"] ?? "Invalid Vm Name");
+            }
+            if (previewVmType == null || !CanPreviewDelete(previewVmType))
+            {
+                return Forbid();
+            }
 
             List<object> results = [];
             foreach (var idStr in ids.Take(10))

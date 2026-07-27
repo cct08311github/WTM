@@ -630,5 +630,52 @@ namespace WalkingTec.Mvvm.Core
 
         #endregion
 
+        #region RBAC hook enforcement (Issue #796)
+
+        /// <summary>
+        /// Opt-in, configuration-only switch for
+        /// <c>WalkingTec.Mvvm.Mvc._FrameworkController.CanExportVm</c>.
+        /// <para>
+        /// <c>GetExportExcel</c>/<c>GetExportExcelStream</c> accept a caller-supplied VM type
+        /// name and export ANY registered <c>ListVM</c>; there is no built-in mapping from an
+        /// arbitrary VM type back to the menu/<c>FunctionPrivilege</c> that gates the page the
+        /// VM normally belongs to (the same VM type can be reused by more than one controller,
+        /// or by none), so the framework cannot safely derive that mapping on its own.
+        /// </para>
+        /// <para>
+        /// <b>Default: <c>false</c></b> (unchanged pre-#796 behaviour — the un-overridden hook
+        /// allows every export). Set to <c>true</c> to flip the un-overridden hook's default
+        /// answer to "deny", turning this into a fail-closed kill switch that can be enabled from
+        /// <c>appsettings.json</c> with no code change: every export through the shared endpoint
+        /// returns 403 until the hosting application overrides <c>CanExportVm</c> with real
+        /// per-VM policy (e.g. <c>WTMContext.IsAccessable</c> against the VM's own page URL).
+        /// This flag does not — and cannot, without a VM-to-URL registry the framework does not
+        /// have — grant fine-grained per-VM access by itself; it only changes what "no override"
+        /// means. See Issue #796.
+        /// </para>
+        /// </summary>
+        public bool EnforceVmExportAuthorization { get; set; } = false;
+
+        /// <summary>
+        /// Opt-in, configuration-only switch for
+        /// <c>WalkingTec.Mvvm.Mvc._FrameworkController.CanPreviewDelete</c>.
+        /// <c>GetDeletePreview</c> accepts a caller-supplied VM type name plus up to 10 ids and
+        /// returns a confirmed-existence oracle and a human-readable label for every row that
+        /// exists, for any registered VM, regardless of the caller's privilege over it.
+        /// <para>
+        /// <b>Default: <c>false</c></b> (unchanged pre-#796 behaviour). Set to <c>true</c> to make
+        /// the un-overridden hook deny every preview (fail-closed) until the hosting application
+        /// overrides <c>CanPreviewDelete</c> with real per-VM policy. Same rationale and the same
+        /// "cannot be safely auto-derived" limitation as
+        /// <see cref="EnforceVmExportAuthorization"/> — see Issue #796.
+        /// </para>
+        /// </summary>
+        public bool EnforceDeletePreviewAuthorization { get; set; } = false;
+
+        // Note: the file-access half of #796 (CanAccessFile / EnforceFileAccessAuthorization /
+        // GetFile-GetFileName-ViewFile guards) was carved out to issue #814 and lives there.
+
+        #endregion
+
     }
 }
