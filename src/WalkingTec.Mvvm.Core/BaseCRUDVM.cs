@@ -87,6 +87,20 @@ namespace WalkingTec.Mvvm.Core
 
         void Validate();
         IModelStateService? MSD { get; }
+
+        /// <summary>
+        /// #809: Runs only <see cref="BaseCRUDVM{TModel}.ValidateDuplicateData"/> — the
+        /// duplicate-key check — without invoking the rest of the user-overridable
+        /// <see cref="Validate"/> chain. See the implementation for the full rationale.
+        /// </summary>
+        List<object> ValidateDuplicateDataOnly();
+
+        /// <summary>
+        /// #809: Appends an "Edit" audit ChangeLog row for callers that persist a change
+        /// without going through <c>DoEdit</c>/<c>DoEditPrepare</c>. See the implementation
+        /// for the required call ordering.
+        /// </summary>
+        void AppendEditChangeLog();
     }
 
     /// <summary>
@@ -1576,6 +1590,93 @@ namespace WalkingTec.Mvvm.Core
                 }
             }
             return count;
+        }
+
+        /// <summary>
+        /// #797/#809: Runs only the duplicate-key check (<see cref="ValidateDuplicateData"/>),
+        /// without the rest of the <see cref="Validate"/> override chain.
+        ///
+        /// <see cref="Validate"/> is user-overridable, and several in-tree generated CRUD VMs
+        /// override it to require state that only <c>InitVM()</c> populates — e.g.
+        /// <c>FrameworkMenuVM.Validate()</c> adds a "Module required" error whenever
+        /// <c>SelectedModule</c> is empty, and <c>SelectedModule</c> is only ever set by
+        /// <c>InitVM()</c>. <c>_FrameworkController.UpdateModelProperty</c> builds its VM with
+        /// <c>passInit: true</c> (it only needs <see cref="Entity"/> loaded, not the
+        /// VM's full init pipeline), so calling the full <see cref="Validate"/> there would
+        /// reject requests a bound-VM Edit action would have accepted. MVC-004 only ever
+        /// promised the duplicate check — this exposes exactly that piece, respecting
+        /// <see cref="ByPassBaseValidation"/> the same way <see cref="Validate"/> does.
+        ///
+        /// #797 (round 3): <see cref="ValidateDuplicateData"/> is not side-effect-free. To
+        /// build its uniqueness query it unconditionally overwrites <c>Entity.TenantCode</c>
+        /// (to the caller's current tenant) and/or <c>Entity.IsValid</c> (to <c>true</c>)
+        /// whenever <typeparamref name="TModel"/> is <see cref="ITenant"/> / <see
+        /// cref="IPersistPoco"/> and the duplicate-check group does not already cover that
+        /// field. That mutation is harmless inside the full <c>Validate()</c> →
+        /// <c>DoAdd()</c>/<c>DoEdit()</c> pipeline — <c>DoAddPrepare()</c> unconditionally
+        /// re-forces both fields for Add, and <c>DoEdit()</c>'s Attach()-based save only
+        /// persists properties <c>DoEditPrepare</c> explicitly marks Modified, so the scratch
+        /// value never reaches <c>SaveChanges()</c> for Edit either. But this method is also
+        /// called directly by <c>_FrameworkController.UpdateModelProperty</c>, which persists
+        /// exactly one client-chosen property via a narrow <c>UpdateProperty()</c> call and
+        /// logs an audit ChangeLog row from Entity's live state (<see
+        /// cref="AppendEditChangeLog"/>) — for that caller, letting the mutation leak into
+        /// <see cref="Entity"/> would either silently discard the client's own edit (if
+        /// <c>TenantCode</c>/<c>IsValid</c> is the field being edited) or record a ChangeLog
+        /// transition that never happened (if some other field is being edited; see #797).
+        /// Snapshot both fields before the check and restore them after, so this method is
+        /// side-effect-free from the caller's point of view — it only ever returns the
+        /// duplicate-id list, exactly as its contract promises.
+        /// </summary>
+        public List<object> ValidateDuplicateDataOnly()
+        {
+            if (ByPassBaseValidation)
+            {
+                return [];
+            }
+
+            var tenantEntity = Entity as ITenant;
+            var originalTenantCode = tenantEntity?.TenantCode;
+            var persistEntity = Entity as IPersistPoco;
+            var originalIsValid = persistEntity?.IsValid;
+
+            try
+            {
+                return ValidateDuplicateData();
+            }
+            finally
+            {
+                if (tenantEntity != null)
+                {
+                    tenantEntity.TenantCode = originalTenantCode;
+                }
+                if (persistEntity != null)
+                {
+                    persistEntity.IsValid = originalIsValid!.Value;
+                }
+            }
+        }
+
+        /// <summary>
+        /// #797/#809: Appends an "Edit" audit <see cref="ChangeLog"/> row (only when
+        /// <typeparamref name="TModel"/> carries <see cref="AuditChangesAttribute"/>) for
+        /// callers that persist a change without going through
+        /// <see cref="DoEdit"/>/<see cref="DoEditPrepare"/> — namely
+        /// <c>_FrameworkController.UpdateModelProperty</c>'s single-property save path, which
+        /// deliberately bypasses DoEdit to avoid its collateral-write side effects (#797) but
+        /// must not silently drop the RBAC audit trail as a result.
+        ///
+        /// Must be called after <see cref="Entity"/> has been mutated with the new
+        /// value(s) but BEFORE the caller's <c>SaveChanges()</c> commits them, so the DB
+        /// snapshot loaded here still reflects the pre-edit values — mirroring
+        /// <see cref="DoEdit"/>'s own snapshot-before-SaveChanges ordering. This method only
+        /// adds the ChangeLog row to <see cref="BaseVM.DC"/>'s change tracker; the caller's own
+        /// SaveChanges() call is what actually persists it (atomically with the property edit).
+        /// </summary>
+        public void AppendEditChangeLog()
+        {
+            var auditSnapshot = LoadEntitySnapshot();
+            AppendChangeLog("Edit", SerializeScalarProps(auditSnapshot), SerializeScalarProps(Entity));
         }
 
 

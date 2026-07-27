@@ -411,6 +411,12 @@
   <data name="Sys.EditFailed" xml:space="preserve">
     <value>修改失败</value>
   </data>
+  <data name="Sys.NoDbContext" xml:space="preserve">
+    <value>没有可用的数据库上下文</value>
+  </data>
+  <data name="Sys.ConcurrencyConflict" xml:space="preserve">
+    <value>该记录已被其他用户修改，请刷新后重试</value>
+  </data>
   <data name="Sys.Enable" xml:space="preserve">
     <value>启用</value>
   </data>

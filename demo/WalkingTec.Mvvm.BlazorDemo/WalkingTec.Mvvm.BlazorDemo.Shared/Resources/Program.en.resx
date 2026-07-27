@@ -417,6 +417,12 @@
   <data name="Sys.EditFailed" xml:space="preserve">
     <value>Edit failed</value>
   </data>
+  <data name="Sys.NoDbContext" xml:space="preserve">
+    <value>No database context available</value>
+  </data>
+  <data name="Sys.ConcurrencyConflict" xml:space="preserve">
+    <value>The record was modified by another user. Please reload and try again.</value>
+  </data>
   <data name="Sys.Enable" xml:space="preserve">
     <value>Enable</value>
   </data>

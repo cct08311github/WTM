@@ -366,6 +366,16 @@ namespace WalkingTec.Mvvm.Mvc
                 return BadRequest("Entity not found");
             }
 
+            // #809: resolve the DataContext once and use it for every DB operation below
+            // (the null guard, both UpdateProperty invocations, and SaveChanges) instead of
+            // unconditionally reaching for Wtm.DC. Entity was already loaded through vm.DC
+            // inside SetEntityById() above (BaseVM.DC returns the VM's own _dc when the VM
+            // assigns one — the framework's supported multi-connection-string pattern —
+            // falling back to Wtm.DC otherwise). Saving through Wtm.DC instead for such a VM
+            // would silently write to the wrong database, or throw an EF tracking exception
+            // (the entity is attached to a different DbContext instance) surfacing as a 500.
+            var dc = (vm as BaseVM)?.DC ?? Wtm.DC;
+
             // Verify the property exists and is writable on the entity type
             var entityType = vm.Entity.GetType();
             var prop = entityType.GetProperty(field, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
@@ -382,29 +392,98 @@ namespace WalkingTec.Mvvm.Mvc
 
             vm.Entity.SetPropertyValue(field, value);
 
-            // #532: the entity is loaded AsNoTracking (detached), and DoEdit(false) only
-            // marks a property modified when the form collection carries an "entity.<field>"
-            // prefixed key. This endpoint's own field/value/id/_DONOT_USE_VMNAME keys never
-            // match that prefix, so without this the reflected value above was silently
-            // discarded — SaveChanges persisted only UpdateTime/UpdateBy while the endpoint
-            // still returned Success. Explicitly mark the field modified (it has already
-            // passed the navigation-path guard, the sensitive-field blocklist, the
-            // writable-property check, and the CanEditProperty authz hook above) so DoEdit's
-            // SaveChanges call actually writes it.
-            if (Wtm.DC != null)
+            if (dc == null)
             {
-                var closedUpdatePropertyMethod = s_updatePropertyMethodCache.GetOrAdd(
-                    entityType,
-                    t => s_updatePropertyMethod.MakeGenericMethod(t));
-                // Use prop.Name (the exact CLR-cased property name resolved above), not the
-                // raw client-supplied 'field', because EF Core's EntityEntry.Property(string)
-                // lookup is case-sensitive.
-                closedUpdatePropertyMethod.Invoke(Wtm.DC, [vm.Entity, prop.Name]);
+                // Before #797, a null DC here was not actually tolerated: the code
+                // unconditionally fell through to vm.DoEdit(false), which dereferences DC via
+                // a null-forgiving `DC!.SaveChanges()` and would throw an unhandled
+                // NullReferenceException (an opaque 500) instead of a clean 400. Returning a
+                // 400 here is a deliberate hardening of that path, not a new restriction — no
+                // caller could previously depend on a null-DC request succeeding.
+                return BadRequest(Wtm.Localizer?["Sys.NoDbContext"] ?? "No database context available");
             }
 
-            // MVC-004: route the save through DoEdit() so VM-level Validate() and
-            // DuplicateCheck() apply, exactly as the normal edit endpoint does.
-            vm.DoEdit(false);
+            // #809: run only the duplicate-key check (ValidateDuplicateData(), the
+            // "DuplicateCheck" MVC-004 refers to), not the full user-overridable Validate().
+            // Several in-tree generated CRUD VMs override Validate() to require state that
+            // only InitVM() populates (e.g. FrameworkMenuVM.Validate() requires
+            // SelectedModule, which only InitVM() sets), and this endpoint builds its VM with
+            // passInit: true — InitVM() never runs, since this action only needs Entity
+            // loaded, not the VM's full init pipeline. Calling the full Validate() here would
+            // 400 requests that a bound-VM Edit action would have accepted. BaseCRUDVM's own
+            // Validate() override is only base.Validate() (a no-op in BaseVM) plus
+            // ValidateDuplicateData(), so this is the whole of what MVC-004 ever promised. Run
+            // this before any DC mutation below so a failed validation never touches the
+            // database — mirroring the standard Edit action's
+            // "if (!ModelState.IsValid) return ... else vm.DoEdit()" ordering.
+            vm.ValidateDuplicateDataOnly();
+            if (!vm.MSD.IsValid)
+            {
+                var validationError = vm.MSD.GetFirstError();
+                return BadRequest(string.IsNullOrEmpty(validationError) ? "Validation failed" : validationError);
+            }
+
+            // #532/#797: the entity is loaded AsNoTracking (detached) via GetById(), and
+            // routing the save through vm.DoEdit(false) — as this endpoint originally did —
+            // runs DoEditPrepare's full edit-mutation pass unconditionally. That pass nulls
+            // every TopBasePoco-typed navigation on the entity (BaseCRUDVM.DoEditPrepare's
+            // 更新子表 region), and for the standard generated CRUD VM shape — whose
+            // constructor calls SetInclude() for its navigations, and whose generated
+            // DoEdit() override resyncs child collections from a "Selected<X>IDs" property
+            // that is only ever populated by InitVM() — resyncs or deletes DB-loaded child
+            // rows, none of which this single-field inline edit ever intended to touch.
+            // #532 originally fixed "the value never persists" by Attach()-ing the entity
+            // ahead of that pass, but Attach() tracks the whole reachable graph, so the
+            // untouched pass above then got applied to tracked entities and its collateral
+            // mutations were actually persisted on SaveChanges.
+            //
+            // Fix: never run DoEdit()/DoEditPrepare for this endpoint. Persist only the one
+            // requested property (plus the standard UpdateTime/UpdateBy audit fields, which
+            // DoEditPrepare would otherwise have set) by marking exactly those properties
+            // Modified on the entity, so nothing else in the tracked graph can be written.
+            var closedUpdatePropertyMethod = s_updatePropertyMethodCache.GetOrAdd(
+                entityType,
+                t => s_updatePropertyMethod.MakeGenericMethod(t));
+
+            if (vm.Entity is IBasePoco auditEntity)
+            {
+                auditEntity.UpdateTime = Wtm.TimeProvider.GetLocalNow().DateTime;
+                auditEntity.UpdateBy = Wtm.LoginUserInfo?.ITCode;
+            }
+
+            // #809: emit the "Edit" audit ChangeLog row (only written when TModel carries
+            // [AuditChanges]) before SaveChanges, so the DB snapshot it loads for OldValues
+            // still reflects the pre-edit row, and so it commits atomically with the property
+            // write below. Bypassing DoEdit() above to avoid its collateral writes (#797) also
+            // dropped DoEdit()'s own AppendChangeLog() call — this restores the audit trail for
+            // inline edits of RBAC entities (FrameworkUser, FrameworkRole, ...) going through
+            // this [AllRights] endpoint.
+            vm.AppendEditChangeLog();
+
+            // Use prop.Name (the exact CLR-cased property name resolved above), not the
+            // raw client-supplied 'field', because EF Core's EntityEntry.Property(string)
+            // lookup is case-sensitive. The first call attaches the entity (see
+            // IDataContext.UpdateProperty); subsequent calls reuse the same tracked entry.
+            closedUpdatePropertyMethod.Invoke(dc, [vm.Entity, prop.Name]);
+            if (vm.Entity is IBasePoco)
+            {
+                closedUpdatePropertyMethod.Invoke(dc, [vm.Entity, nameof(IBasePoco.UpdateTime)]);
+                closedUpdatePropertyMethod.Invoke(dc, [vm.Entity, nameof(IBasePoco.UpdateBy)]);
+            }
+
+            try
+            {
+                dc.SaveChanges();
+            }
+            catch (Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException)
+            {
+                vm.MSD?.AddModelError(" ", Wtm.Localizer?["Sys.ConcurrencyConflict"] ?? "The record was modified by another user. Please reload and try again.");
+            }
+            catch
+            {
+                vm.MSD?.AddModelError(" ", Wtm.Localizer?["Sys.EditFailed"] ?? "Edit failed");
+            }
+
             if (!vm.MSD.IsValid)
             {
                 var firstError = vm.MSD.GetFirstError();
