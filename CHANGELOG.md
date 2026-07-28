@@ -2,9 +2,58 @@
 
 ## [Unreleased]
 
+### Corrected — retractions of claims made in shipped releases (#835)
+
+A cross-vendor adversarial review of the 2026-07-21…07-28 work found four classes of
+claim in merged commit messages, PR bodies and this changelog that do not hold. Nothing
+below changes behaviour; the code is as it was. These are corrections to the record,
+published because a false claim causes the next reviewer to skip verification — which is
+how the underlying defects propagated in the first place.
+
+- **"default-OFF byte-identical" is retracted** (commits `178b5b4b`, `8bb06f82`,
+  `46380763`, `26881b2d`, and the 10.18.0 summary below). `DataTableTagHelper.Process()`
+  now calls `ListVM.GetGridActions()` at `:444`, *before* the `UseSelectIslandRender`
+  check; the pre-island code's first call was at `:699` inside the toolbar build
+  (`git show 178b5b4b^` has exactly one call site, at `:650`). `GetGridActions()`
+  memoises into `_gridActions`, so `InitGridAction()` does not run twice — but its
+  *execution timing* changed for every grid. The observable difference requires
+  `UseLocalData == true` (the only ListVM state mutated between those two points is
+  `ListVM.NeedPage = false` at `:511`, inside `if (UseLocalData)`) **and** a downstream
+  `InitGridAction()` override that reads `NeedPage`. Under those conditions the rendered
+  output can differ with the flag OFF.
+- **"preventDefault matches legacy `return false`" is retracted** (commit `46380763`).
+  The `button:` and `submit:` handlers (`framework_layui.js:6393`, `:6423`) call only
+  `preventDefault()`. jQuery's `return false` also calls `stopPropagation()` — the
+  code's own comment at `:6374-6378` says so — and the delegated listener is on
+  `document` in the bubble phase (`:6480`, no `{capture:true}`), so every ancestor
+  handler has already run by the time it fires. Restoring parity needs capture-phase
+  interception, not a `stopPropagation()` added at `document`.
+- **"DataPrivilege fingerprint enforced at the engine boundary" is retracted**
+  (commit `b444c4464`). The clause/field caps *are* enforced unconditionally by the
+  engine. The fingerprint is not: **eight** public signatures still accept an optional
+  caller-supplied `string? identityKey = null` — `AnalysisQueryEngine.cs:49`, `:193`,
+  `:304`, `:374`, and the four `*Dynamic` overloads at `:438`, `:470`, `:502`, `:534`.
+  The two in-tree callers do pass it; no future or downstream caller is protected
+  automatically. (The `*Dynamic` overloads are the caller-driven dashboard-widget path.)
+- **"Override the hook in a derived controller" is retracted** as guidance
+  (`_FrameworkController.cs:160`, and the equivalent wording on the other hooks at
+  `:480` and on the flags at `Configs.cs:650`). `_FrameworkController` is the concrete
+  class MVC routes `/_Framework/*` to (declared at `:35`); subclassing it produces a
+  second controller the front end never calls. The repo has no
+  `ControllerFeatureProvider`/`IApplicationFeatureProvider` usage, and all three demo
+  `Startup` files route `{controller=Home}/{action=Index}/{id?}`, so a derived class only
+  ever adds `/MyFramework/*`. A DI-resolved authorization seam is tracked in #827.
+- **"Cross-tenant file DELETION has no remaining exit"** (PR #821 body) is retracted
+  in place on that PR. The supporting grep covered `src/` only; three demo
+  `FileApiController` copies still call the non-tenant-scoped `DeleteFile` (#830).
+
+Standing rule adopted as a result: **a commit message may not claim more than the same
+change's entry in `docs/production-readiness.md`.** That file was consistently more
+honest than the commit messages describing the same work.
+
 ## [10.18.0] - 2026-07-22
 
-The **LayUI eval-retirement epic (#470) reaches the whole form + grid + dialog family.** Slices G→O plus the docs endgame (Q) complete the opt-in, eval-free island-render migration begun in 10.16.0: every interactive LayUI widget — combobox/tree, transfer, upload, laydate, slider/colorpicker, ueditor/richtext, textarea counters, tree-container, chart, search-panel, and the full data grid (render core, toolbar/row-button dispatch, local-data, and cell editing) — now renders through declarative JSON islands + `data-wtm-*` delegated handlers when `WtmUIOptions.UseSelectIslandRender = true`, instead of inline `<script>`. **Every migration is default-off and byte-identical to before** — this release ships **zero behaviour change** to existing deployments while making a strict, `unsafe-inline`/`unsafe-eval`-free Content-Security-Policy achievable for the whole form/grid/dialog surface. `framework_layui.js` stays at exactly **one** active-code `eval(` (the deprecated `IsScript` path). Also: a vendored-layui XSS fix (opt-in-legacy only), refresh-token table indexes, and CI/compose ARM64 fixes.
+The **LayUI eval-retirement epic (#470) reaches the whole form + grid + dialog family.** Slices G→O plus the docs endgame (Q) complete the opt-in, eval-free island-render migration begun in 10.16.0: every interactive LayUI widget — combobox/tree, transfer, upload, laydate, slider/colorpicker, ueditor/richtext, textarea counters, tree-container, chart, search-panel, and the full data grid (render core, toolbar/row-button dispatch, local-data, and cell editing) — now renders through declarative JSON islands + `data-wtm-*` delegated handlers when `WtmUIOptions.UseSelectIslandRender = true`, instead of inline `<script>`. **Every migration is default-off and byte-identical to before** — this release ships **zero behaviour change** to existing deployments ⚠️ *(the byte-identical and zero-behaviour-change claims in this sentence are **retracted** — see "Corrected" under [Unreleased] and #835)* while making a strict, `unsafe-inline`/`unsafe-eval`-free Content-Security-Policy achievable for the whole form/grid/dialog surface. `framework_layui.js` stays at exactly **one** active-code `eval(` (the deprecated `IsScript` path). Also: a vendored-layui XSS fix (opt-in-legacy only), refresh-token table indexes, and CI/compose ARM64 fixes.
 
 ### Security
 
