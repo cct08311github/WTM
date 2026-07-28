@@ -2,21 +2,23 @@ name: Mutation Gate
 
 # Issue #834: proves a security fix's tests actually detect the guard they claim to
 # guard, by applying a repository-owned mutant patch and machine-checking that the
-# designated test goes red for the expected reason. See test/mutants/manifest.json
-# and test/mutants/run_mutant.py for the full mechanism and rationale.
+# designated test goes red for the expected reason. See test/mutants/entries/*.json
+# (one file per mutant -- test/mutants/manifest.json holds only shared registry
+# metadata, issue #854) and test/mutants/run_mutant.py for the full mechanism and
+# rationale.
 #
 # HISTORY: as originally filed for issue #834, the seed mutant
 # (mvc004-blocklist-empty-http-blindspot) was EXPECTED to survive against
 # MvcAuthHolesTests.cs:274/297/320 -- those tests used a ListVM and a fake id, so they
 # could not detect the guard's absence, and this job's own failure was the
 # demonstration issue #834 asked for. Issue #837 (PR #845, merged as f148a1383) fixed
-# that fixture; every "security" mutant in test/mutants/manifest.json is now expected
+# that fixture; every "security" mutant under test/mutants/entries/ is now expected
 # to report KILLED, and this workflow is a required status check on dotnet10 (see
-# test/mutants/manifest.json's per-entry descriptions for what changed and why). A red
-# run here now means a real regression -- either a security guard was weakened, or a
-# test that used to detect it stopped being able to -- not a known, accepted gap. Do
-# not "fix" a red run by loosening the manifest, the runner, or an existing test; open
-# an issue on whatever guard or test actually regressed.
+# each entry file's own description for what changed and why). A red run here now
+# means a real regression -- either a security guard was weakened, or a test that
+# used to detect it stopped being able to -- not a known, accepted gap. Do not "fix"
+# a red run by loosening a mutant entry, the runner, or an existing test; open an
+# issue on whatever guard or test actually regressed.
 #
 # Also note (see CLAUDE.md "CI red does not mean failed"): actions/upload-artifact@v4
 # is incompatible with this Gitea Actions server and can flip a job's conclusion to
@@ -32,30 +34,35 @@ name: Mutation Gate
 # objects (`matrix.entry`) resolved to an empty string for every leg, so every job
 # "ran" against mutant id '' and failed for the wrong reason (caught only because
 # run_mutant.py itself rejects an unknown/empty id). Rather than trust matrix
-# expansion via cross-job JSON outputs on this runner again, each job below reads the
-# manifest directly and loops over ids with a plain bash `while read` loop in a
+# expansion via cross-job JSON outputs on this runner again, each job below discovers
+# entries directly and loops over ids with a plain bash `while read` loop in a
 # single step. One job that iterates and can be read straight out of its own log is
 # strictly better here than N matrix legs that can silently no-op.
 
 on:
   workflow_dispatch:
-  # NOT path-filtered, not even with paths-ignore. This workflow's "gate" job is a
-  # required status check (issue #834 rule #7): ANY filter at the trigger level --
-  # an allowlist of two paths, or a docs-only paths-ignore -- means the workflow does
-  # not run at all for a PR outside that set, "gate" never posts a status, and Gitea
-  # (like GitHub) shows the required context as permanently "expected, waiting" and
-  # blocks the merge button forever. A docs-only PR hit exactly this with the
-  # paths-ignore version of this trigger (would have hung #838/#844). The workflow
-  # itself must always fire; path-based cost control instead happens inside the
-  # workflow (see the `changes` job below), where a job that determines "nothing
-  # gated changed" can still let `gate` post a real, unconditional success.
+  # NOT path-filtered, not even with paths-ignore, on EITHER trigger below. This
+  # workflow's "gate" job is a required status check (issue #834 rule #7): ANY filter
+  # at the trigger level -- an allowlist of paths, or a docs-only paths-ignore --
+  # means the workflow does not run at all for a PR/push outside that set, "gate"
+  # never posts a status, and Gitea (like GitHub) shows the required context as
+  # permanently "expected, waiting" and blocks the merge button forever. A docs-only
+  # PR hit exactly this with the paths-ignore version of this trigger (would have hung
+  # #838/#844). The `push` trigger used to carry its own hardcoded `paths:` allowlist
+  # (only `_FrameworkController.cs` and `test/mutants/**`) that suffered the mirror-
+  # image failure: a push to dotnet10 touching only a *different* registered mutant's
+  # target file -- e.g. the #830 review round's demo FileApiController.cs, which this
+  # allowlist did not know about -- would never even trigger the workflow, so a future
+  # regression against that file could not be caught post-merge either (a review
+  # finding on PR #850, before this comment). Both triggers must always fire;
+  # path-based cost control instead happens inside the workflow (see the `changes`
+  # job below, which derives its allowlist from test/mutants/entries/*.json itself
+  # rather than hardcoding a second, driftable copy), where a job that determines
+  # "nothing gated changed" can still let `gate` post a real, unconditional success.
   pull_request:
     branches: [ dotnet10 ]
   push:
     branches: [ dotnet10 ]
-    paths:
-      - 'src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs'
-      - 'test/mutants/**'
 
 permissions:
   contents: read
@@ -118,13 +125,54 @@ jobs:
         fi
         echo "$CHANGED" | sed 's/^/  - /'
 
-        if echo "$CHANGED" | grep -qE '^(src/WalkingTec\.Mvvm\.Mvc/_FrameworkController\.cs|test/mutants/)'; then
+        # Relevant paths are DERIVED from every test/mutants/entries/*.json file's own
+        # target_file field, not a second, hand-maintained list. A hardcoded allowlist here
+        # previously listed only _FrameworkController.cs, so registering a mutant against a
+        # different file (the #830 review round's demo FileApiController.cs, three entries)
+        # computed relevant=false for a change touching only that file: `mutants` would be
+        # silently skipped and `gate` would post a real, unconditional success without ever
+        # having evaluated the mutant that exists specifically to catch that regression.
+        # Reading target_file straight out of the entry files means registering a new
+        # mutant can never again silently fail to arm itself here. (Issue #854: mutants
+        # used to live in one array inside manifest.json; each is now its own file under
+        # test/mutants/entries/, discovered by globbing -- see run_mutant.py's
+        # discover_entries() for the same discovery logic and its fail-loud guards.)
+        MUTANT_TARGET_FILES="$(python3 -c "
+        import glob, json
+        files = set()
+        for path in sorted(glob.glob('test/mutants/entries/*.json')):
+            with open(path, encoding='utf-8') as f:
+                entry = json.load(f)
+            target_file = entry.get('target_file')
+            if target_file:
+                files.add(target_file)
+        for f in sorted(files):
+            print(f)
+        ")"
+
+        echo "Mutant target files (from entries/*.json):"
+        echo "$MUTANT_TARGET_FILES" | sed 's/^/  - /'
+
+        RELEVANT=false
+        if echo "$CHANGED" | grep -qE '^test/mutants/'; then
+          RELEVANT=true
+        fi
+        if [ "$RELEVANT" != true ] && [ -n "$MUTANT_TARGET_FILES" ]; then
+          while IFS= read -r TARGET_FILE; do
+            if [ -n "$TARGET_FILE" ] && echo "$CHANGED" | grep -qxF "$TARGET_FILE"; then
+              RELEVANT=true
+              break
+            fi
+          done <<< "$MUTANT_TARGET_FILES"
+        fi
+
+        if [ "$RELEVANT" = true ]; then
           echo "relevant=true" >> "$GITHUB_OUTPUT"
         else
           echo "relevant=false" >> "$GITHUB_OUTPUT"
         fi
 
-  # The gate itself: every "security" mutant in test/mutants/manifest.json must be
+  # The gate itself: every "security" mutant under test/mutants/entries/ must be
   # reported KILLED (patch applies in-scope, compiles, positive control stays green,
   # designated red test fails with the expected assertion message). Any other verdict
   # -- SURVIVED, UNEXPECTED_RED, a build failure, an out-of-scope patch, or a broken
@@ -163,21 +211,44 @@ jobs:
         set -o pipefail
         mkdir -p mutant-results
 
+        # Issue #854: mutants are discovered by globbing test/mutants/entries/*.json,
+        # not by reading one shared array from manifest.json (that array was a
+        # guaranteed conflict generator for concurrent security PRs). The python
+        # helper itself exits non-zero -- distinct from "ran fine, found zero
+        # security-kind entries" below -- if the glob matches nothing at all, or if
+        # any discovered file is missing its own 'id': a directory that silently
+        # resolves to "nothing here" must never be treated as "nothing to do, pass".
         MUTANT_IDS="$(python3 -c "
-        import json
-        with open('test/mutants/manifest.json', encoding='utf-8') as f:
-            manifest = json.load(f)
-        for m in manifest['mutants']:
-            if m.get('kind') == 'security':
-                print(m['id'])
+        import glob, json, sys
+        paths = sorted(glob.glob('test/mutants/entries/*.json'))
+        if not paths:
+            print('No mutant entry files found under test/mutants/entries/ (glob matched nothing).', file=sys.stderr)
+            sys.exit(1)
+        ids = []
+        for path in paths:
+            with open(path, encoding='utf-8') as f:
+                entry = json.load(f)
+            entry_id = entry.get('id')
+            if not entry_id:
+                print('Mutant entry file ' + path + ' has no (or an empty) id field.', file=sys.stderr)
+                sys.exit(1)
+            if entry.get('kind') == 'security':
+                ids.append(entry_id)
+        for i in ids:
+            print(i)
         ")"
+        PY_RC=$?
+        if [ "$PY_RC" -ne 0 ]; then
+          echo "::error::Failed to discover mutant ids from test/mutants/entries/ -- see the error printed above (an empty directory or an entry file missing its id)."
+          exit 1
+        fi
 
-        # Guard against this exact class of failure recurring silently: if the
-        # manifest has no security mutants (or the python one-liner above produced
-        # nothing for any other reason), that must be a loud CI failure, not a
-        # green no-op run that never evaluated anything.
+        # Guard against this exact class of failure recurring silently: if no
+        # discovered entry has kind='security' (or the python helper above produced
+        # nothing for any other reason it didn't already hard-fail on), that must be
+        # a loud CI failure, not a green no-op run that never evaluated anything.
         if [ -z "$MUTANT_IDS" ]; then
-          echo "::error::No 'security' mutants were discovered in test/mutants/manifest.json. Refusing to report a pass without evaluating anything."
+          echo "::error::No 'security' mutants were discovered under test/mutants/entries/. Refusing to report a pass without evaluating anything."
           exit 1
         fi
 
@@ -264,19 +335,44 @@ jobs:
         set -o pipefail
         mkdir -p mutant-results
 
+        # Same discovery mechanism as the mutants job (issue #854): glob
+        # test/mutants/entries/*.json rather than reading manifest.json's old shared
+        # array. The python helper exits non-zero on an empty glob or a file missing
+        # 'id'/'expect_verdict' -- distinct from "ran fine, found zero selftest-kind
+        # entries" below.
         SELFTEST_ENTRIES="$(python3 -c "
-        import json
-        with open('test/mutants/manifest.json', encoding='utf-8') as f:
-            manifest = json.load(f)
-        for m in manifest['mutants']:
-            if m.get('kind') == 'selftest':
-                print(m['id'] + '\t' + m['expect_verdict'])
+        import glob, json, sys
+        paths = sorted(glob.glob('test/mutants/entries/*.json'))
+        if not paths:
+            print('No mutant entry files found under test/mutants/entries/ (glob matched nothing).', file=sys.stderr)
+            sys.exit(1)
+        entries = []
+        for path in paths:
+            with open(path, encoding='utf-8') as f:
+                entry = json.load(f)
+            entry_id = entry.get('id')
+            if not entry_id:
+                print('Mutant entry file ' + path + ' has no (or an empty) id field.', file=sys.stderr)
+                sys.exit(1)
+            if entry.get('kind') == 'selftest':
+                expect_verdict = entry.get('expect_verdict')
+                if not expect_verdict:
+                    print('Selftest entry ' + entry_id + ' (' + path + ') has no expect_verdict field.', file=sys.stderr)
+                    sys.exit(1)
+                entries.append(entry_id + '\t' + expect_verdict)
+        for e in entries:
+            print(e)
         ")"
+        PY_RC=$?
+        if [ "$PY_RC" -ne 0 ]; then
+          echo "::error::Failed to discover selftest ids from test/mutants/entries/ -- see the error printed above (an empty directory or an entry file missing its id/expect_verdict)."
+          exit 1
+        fi
 
         # Same guard as the mutants job: zero selftest entries discovered must be a
         # loud failure, never a silent green no-op.
         if [ -z "$SELFTEST_ENTRIES" ]; then
-          echo "::error::No 'selftest' entries were discovered in test/mutants/manifest.json. Refusing to report a pass without evaluating anything."
+          echo "::error::No 'selftest' entries were discovered under test/mutants/entries/. Refusing to report a pass without evaluating anything."
           exit 1
         fi
 

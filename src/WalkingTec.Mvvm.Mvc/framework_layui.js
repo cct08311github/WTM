@@ -6082,19 +6082,47 @@ window.ff.upload = {
     doDelete: function (id, fileid) {
         var state = ff.upload._getState(id);
         if (state.mode === 'multi') {
-            $.ajax({
-                type: 'get',
-                url: '/api/_file/DeletedFile/' + fileid,
-                success: function () {
-                    var lbl = document.getElementById('label' + fileid);
-                    if (lbl && lbl.parentNode) { lbl.parentNode.removeChild(lbl); }
-                    state.selected = state.selected.filter(function (item) { return item != fileid; });
-                    ff.upload.setValues(id);
-                },
-                error: function () {
-                    if (typeof console !== 'undefined' && console.log) { console.log('failed'); }
-                }
-            });
+            // #830 review finding 1 (PR #850): DeletedFile moved from GET to POST — a GET
+            // performing a delete is itself a CSRF/prefetch hazard, separate from the
+            // tenant-scoping fix that motivated the endpoint change. This file is an
+            // <EmbeddedResource> shipped inside the WalkingTec.Mvvm.Mvc NuGet package, so it
+            // reaches EVERY downstream app on a package upgrade regardless of whether that
+            // app's own scaffolded FileApiController copy was updated to match — a downstream
+            // copies FileApiController once, at scaffold time, and a package upgrade does not
+            // touch that copy. An un-migrated downstream's copy still has [HttpGet] only, so
+            // always sending POST here would 405 and silently break its delete button on
+            // every upgrade (see CHANGELOG.md's "Migration notes" for the full compatibility
+            // rationale). Try POST first — the secure, current-template behaviour, and what a
+            // migrated controller (including this repo's own demo) expects — and ONLY on a
+            // 405 specifically (never any other error, so this can never mask an unrelated
+            // failure as a compatibility fallback) retry the exact same call with GET, which
+            // an un-migrated controller still accepts.
+            //
+            // TEMPORARY, TRACKED at #853: this fallback is a deliberate compromise, not the
+            // intended end state — a GET that performs a delete remains a CSRF/prefetch hazard
+            // for every downstream that never migrates. Remove it (POST-only again) at WTM's
+            // next MAJOR version bump (version.props rolling to 11.0.0+); see #853 for the
+            // full rationale and acceptance criteria. Do not remove it before that trigger.
+            var doDeleteRequest = function (method) {
+                $.ajax({
+                    type: method,
+                    url: '/api/_file/DeletedFile/' + fileid,
+                    success: function () {
+                        var lbl = document.getElementById('label' + fileid);
+                        if (lbl && lbl.parentNode) { lbl.parentNode.removeChild(lbl); }
+                        state.selected = state.selected.filter(function (item) { return item != fileid; });
+                        ff.upload.setValues(id);
+                    },
+                    error: function (jqXHR) {
+                        if (method === 'post' && jqXHR && jqXHR.status === 405) {
+                            doDeleteRequest('get');
+                            return;
+                        }
+                        if (typeof console !== 'undefined' && console.log) { console.log('failed'); }
+                    }
+                });
+            };
+            doDeleteRequest('post');
         } else {
             var el = document.getElementById(id);
             var form = (el && typeof el.closest === 'function') ? el.closest('form') : null;

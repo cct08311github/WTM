@@ -6,6 +6,136 @@
 
 - **LayUI demo: anonymous POST could create a `FrameworkMenu` row and turn any URL into an anonymous endpoint (#840, P0).** `FrameworkMenuController.Create` (`demo/WalkingTec.Mvvm.Demo/Areas/_Admin/Controllers/FrameworkMenuController.cs`) carried `[Public]`, which `IAllowAnonymous` makes `PrivilegeFilter` return on unconditionally — before both the `LoginUserInfo == null` check and the class-level `[MainTenantOnly]` check. An unauthenticated caller could POST a `FrameworkMenu` row with `IsPublic=true` pointing at any endpoint; `WTMContext.IsUrlPublic`, consulted by `PrivilegeFilter` on every request, then treated that endpoint as anonymous too. Fixed by removing `[Public]`; the action now requires authentication like every other write action in the controller. **Scope: LayUI demo template only** — Vue3Demo, BlazorDemo, and the same demo's API-style `FrameworkMenuController` never had `[Public]` on this action, and the vulnerable code is not part of any published NuGet package. Inherited from upstream WTM since 2020-12-12; not introduced by this fork.
 
+### Security — demo `FileApiController` hardening, all three copies (#830)
+
+The three demo `FileApiController` copies (LayUI `demo/WalkingTec.Mvvm.Demo`, Vue3
+`demo/WalkingTec.Mvvm.Vue3Demo`, Blazor `demo/WalkingTec.Mvvm.BlazorDemo`) had nine holes
+across four categories, all fixed in this same PR:
+
+- **Five `[Public]` (unauthenticated) endpoints removed** — `GetFileName`, `GetFile`,
+  `GetFileInfo`, `GetUserPhoto`, `DownloadFile`. Combined with
+  `FileUploadOptions.EnforceTenantFileScope` defaulting to `false` (`WtmFileProvider`
+  uses `IgnoreQueryFilters()` in that mode), any unauthenticated caller who could
+  guess/enumerate a `FileAttachment` GUID could read another tenant's file content with
+  no login at all. The class-level `[AuthorizeJwtWithCookie]` + `[AllRights]` now
+  applies uniformly: any authenticated user can still reach these actions (no per-page
+  privilege required), only anonymous access is removed. **Vue3 companion fix**: Vue3
+  is JWT-only (`AccountController.LoginJwt` never calls `SignInAsync`, so there is no
+  auth cookie; the axios interceptor in `ClientApp/src/utils/request.ts` attaches the
+  bearer token to axios calls only). Several places rendered `GetFile` output through a
+  raw, unauthenticated URL bound directly to a browser-native `<img>`/`el-image` `src`
+  (`stores/userInfo.ts`'s avatar URL, `components/uploadImage/index.vue`'s previews, and
+  `components/table/index.vue`'s image-typed grid columns) — a browser's own image fetch
+  carries neither the bearer header nor a cookie, so removing `[Public]` would have 401'd
+  every one of those images. Reviewed and reproduced by inspection before shipping; all
+  three call sites now fetch through the existing `fileApi().getFile()` helper (an
+  authenticated axios request returning a blob object URL) instead of binding the raw
+  endpoint URL. **Blob URL lifecycle**: `URL.createObjectURL` calls already existed in
+  this ClientApp (one pre-existing call site) with no matching `revokeObjectURL`
+  anywhere; routing three more call sites through the same helper multiplies that latent
+  leak — `table/index.vue` in particular now creates one blob URL per image column per
+  row on every search/page/filter change. All three call sites (and the pre-existing
+  one in `uploadImage/index.vue`'s upload-success preview) now revoke the URL they are
+  about to replace before creating its successor, and revoke whatever they are still
+  holding on component unmount; `stores/userInfo.ts` additionally re-resolves the avatar
+  from a cached `photoId` on a sessionStorage hit rather than trusting the cached blob
+  URL, which does not survive a page reload.
+- **`DeletedFile` now calls `WtmFileProvider.DeleteFileTenantScoped`, not
+  `DeleteFile`**, and is now `[HttpPost]`, not `[HttpGet]`. The non-tenant-scoped
+  overload let any authenticated caller in tenant A delete tenant B's `FileAttachment`
+  row by GUID; a GET performing a delete was a separate CSRF/prefetch hazard.
+  `framework_layui.js`'s and `MultiUploadTagHelper.cs`'s delete calls try POST first and
+  fall back to GET only on a 405 — see "Compatibility" below for why.
+- **`csName` is now validated against `WTMContext.IsKnownConnectionKey` on all eight
+  actions** before it reaches `Wtm.CreateDC(cskey:)` — the same guard
+  `_FrameworkController` already applies at nine call sites; the demo template had none.
+- **`GetFileInfo` now goes through `WtmFileProvider.GetFile(..., withData: false, ...)`**
+  instead of querying `dc.Set<FileAttachment>()` directly, and returns a projected
+  `{ Id, FileName, FileExt, Length, UploadTime, ExtraInfo }` instead of the whole entity
+  (dropping `Path`/`HandlerInfo`/`TenantCode`, which the caller has no need for). This
+  also means `GetFileInfo` now goes through the same seam #827's planned
+  provider-level authorization check will land on, instead of bypassing it structurally.
+
+**`WtmFileProvider.DeleteFile(string, IDataContext?)` is marked `[Obsolete]`**,
+pointing callers at `DeleteFileTenantScoped`. It remains a public framework API and is
+non-tenant-scoped by default (`FileUploadOptions.EnforceTenantFileScope = false`), so a
+downstream application's own hand-written call to it is equally exposed to
+cross-tenant deletion — this fix does nothing for that call site. `[Obsolete]` is a
+compiler-warning signal only: it fires solely for downstream code that (a) is C#,
+(b) calls `WtmFileProvider.DeleteFile` at compile time, and (c) recompiles against
+this package version with warnings surfaced. It does nothing at runtime, for
+already-compiled binaries, or for callers who never rebuild.
+
+#### Compatibility
+
+**Corrected (this section originally claimed, incorrectly, that this item does not
+change the behaviour of any already-deployed application — that was false and is
+retracted; the actual mechanics are below.)**
+
+The demo `FileApiController` copies themselves are templates copied by
+`dotnet new wtm`/scaffolding — fixing them in this repo changes nothing for an
+application that already copied the old controller into its own source tree, and
+`WtmFileProvider.DeleteFile` remaining callable (with an `[Obsolete]` warning) means no
+downstream build breaks either. **But `framework_layui.js` and
+`MultiUploadTagHelper.cs`'s inline-script fallback are not templates** — they are
+shared, shipped assets (`framework_layui.js` is an `<EmbeddedResource>` in the
+`WalkingTec.Mvvm.Mvc` package; `MultiUploadTagHelper.cs` ships in
+`WalkingTec.Mvvm.TagHelpers.LayUI`) that reach **every** downstream application on a
+plain NuGet package upgrade, regardless of whether that application's own scaffolded
+`FileApiController` copy is touched. A downstream copies `FileApiController` once, at
+scaffold time; a package upgrade does not — and cannot — update that copy for them.
+
+Before this fix, changing those two shared assets to send only `POST` would have meant:
+a downstream that upgrades the package and changes nothing gets the new
+POST-only delete call shipped straight into their still-`[HttpGet]`-only scaffolded
+controller, which returns `405 Method Not Allowed` — the multi-upload delete button
+silently stops working, with no error surfaced anywhere a developer would look during
+the upgrade itself. That is a real, reproduced compatibility break (confirmed via
+review), not a hypothetical one.
+
+**Fix applied**: `framework_layui.js`'s `ff.upload.doDelete` and
+`MultiUploadTagHelper.cs`'s inline-script `{Id}DoDelete` now try `POST` first and, only
+on a `405` response specifically (never on any other error, so this can never mask an
+unrelated failure as a compatibility fallback), retry the identical call with `GET`.
+This is a deliberate compromise against this repo's stated priority order —
+**Compatibility → Security → Quality → Performance** — for a defect (a GET performing a
+delete is itself a CSRF/prefetch hazard) whose severity is lower than the tenant-scoping
+fix above it: an un-migrated downstream's delete button keeps working exactly as it did
+before this release (same GET-based CSRF exposure it already had, not a new one), and a
+downstream that has updated its own copied controller to `[HttpPost]`-only gets the full
+hardening immediately, since POST succeeds on the first try and the GET fallback is
+never reached.
+
+**This fallback is temporary, not permanent framework behaviour, and is tracked as
+such**: #853 has this repo's word that it gets removed (POST-only, no GET retry) at
+WTM's next **major** version bump (`version.props`' `VersionPrefix` rolling from `10.x`
+to `11.0.0+`) — a deliberately stricter, rarer trigger than this repo's usual
+minor-version breaking-change vehicle, chosen precisely so this doesn't join the list of
+things gated behind a condition that quietly never gets checked again (see the
+"Corrected" section below on `#470`/`#567`'s island-render flag, default-off since
+2026-06 with no commit ever flipping it — the same failure shape at a larger scale).
+
+#### Migration notes
+
+- **If your app scaffolded `FileApiController` from an earlier WTM template**, apply
+  the same four fixes to your own copy — diff against
+  `demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs` (or the
+  Vue3/Blazor equivalents) in this commit. This is the only step required to pick up the
+  actual security fixes ([Public] removal, tenant-scoped delete, csName validation,
+  projected GetFileInfo) — your delete button keeps working during and after this step
+  either way, because of the compatibility fallback described above.
+- **You do not need to change your own front end.** `framework_layui.js` and
+  `MultiUploadTagHelper.cs` (the framework's shared upload widgets) already send POST
+  first and fall back to GET automatically; there is no `/api/_file/DeletedFile/{id}`
+  caller left in framework-owned code that only sends GET. If you wrote your **own**
+  custom caller of that route (outside the framework's upload widgets), switch it to
+  POST — your copied controller now only exposes `[HttpPost]` once you apply the fix
+  above, and a hand-rolled GET caller will start receiving a 405 at that point.
+- **If you call `WtmFileProvider.DeleteFile(string, IDataContext?)` directly**, switch
+  to `DeleteFileTenantScoped` unless you have deliberately opted into
+  `FileUploadOptions.EnforceTenantFileScope = true` and understand the non-tenant-scoped
+  overload's blast radius.
+
 ### Corrected — retractions of claims made in shipped releases (#835)
 
 A cross-vendor adversarial review of the 2026-07-21…07-28 work found four classes of

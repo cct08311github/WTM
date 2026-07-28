@@ -1,0 +1,21 @@
+{
+  "id": "mvc004-blocklist-empty-direct-crud-kill",
+  "kind": "security",
+  "description": "The SAME production patch as mvc004-blocklist-empty-http-blindspot, checked instead against test/WalkingTec.Mvvm.Admin.Test/FrameworkControllerUpdateModelPropertyPersistTests.cs's UpdateModelProperty_BlockedField_StillRejectedAndNotPersisted, which calls _FrameworkController.UpdateModelProperty directly against a real BaseCRUDVM<Major> and a real seeded row. This entry is included specifically to prove the runner's KILLED path (red-for-the-expected-reason) is exercised against real production code in this same PR, not merely implemented and never run: the same mutation that the HTTP-layer tests structurally cannot see IS caught here, because this test reaches the actual guarded code path.",
+  "target_file": "src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs",
+  "target_symbol": "_FrameworkController.UpdateModelProperty(string,Guid,string,string) -- the `blockedFields` HashSet<string> initializer, lines ~519-524",
+  "patch": "patches/mvc004-blocklist-empty.patch",
+  "test_project": "test/WalkingTec.Mvvm.Admin.Test/WalkingTec.Mvvm.Admin.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Admin.Test.FrameworkControllerUpdateModelPropertyPersistTests.UpdateModelProperty_BlockedField_StillRejectedAndNotPersisted",
+  "red_tests": [
+    "WalkingTec.Mvvm.Admin.Test.FrameworkControllerUpdateModelPropertyPersistTests.UpdateModelProperty_BlockedField_StillRejectedAndNotPersisted"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Admin.Test.FrameworkControllerUpdateModelPropertyPersistTests.UpdateModelProperty_BlockedField_StillRejectedAndNotPersisted": "MVC-004: CreateBy is on the sensitive-field blocklist and must be rejected"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Admin.Test.FrameworkControllerUpdateModelPropertyPersistTests.UpdateModelProperty_ValidField_ActuallyPersists",
+  "green_tests": [
+    "WalkingTec.Mvvm.Admin.Test.FrameworkControllerUpdateModelPropertyPersistTests.UpdateModelProperty_ValidField_ActuallyPersists"
+  ]
+}

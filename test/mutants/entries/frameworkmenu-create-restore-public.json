@@ -1,0 +1,22 @@
+{
+  "id": "frameworkmenu-create-restore-public",
+  "kind": "security",
+  "description": "Restores the [Public] attribute issue #840's fix removes from FrameworkMenuController.Create (compile-preserving operator per issue #834: adds back a valid C# attribute, does not delete a statement). [Public] implements IAllowAnonymous; PrivilegeFilter.cs's `if (isPublic == true) { base.OnActionExecuting(context); return; }` (:147-151) is a full early return BEFORE both the LoginUserInfo==null check (:153) and the class-level [MainTenantOnly] check (:18/:215), so restoring it lets an unauthenticated POST reach FrameworkMenuVM.DoAdd() and actually create the row. Checked against FrameworkMenuController_Create_UnauthenticatedRejected_AuthenticatedAdminSucceeds, which asserts (as its FIRST, load-bearing check) the ABSENCE of the X-WTM-Action response header WtmActionResult.ExecuteResultAsync sets on every real Create success (Helper/WtmActionResult.cs) -- a signal that only becomes true once the request reaches past the write, so it cannot be satisfied by a coincidental unrelated 200 the way a bare status-code assertion could be. Manually confirmed (see PR #840's description for the transcript): with the mutant applied, the unauthenticated request returns 200 'application/json' WITH the FrameworkMenu Create action actually executing (server log: 'Executed action ...FrameworkMenuController.Create ... Executed endpoint ...', 'Request finished ... POST ... - 200 - application/json'), and the test fails on exactly the IsFalse(X-WTM-Action) assertion below -- not a later, unrelated assertion.",
+  "target_file": "demo/WalkingTec.Mvvm.Demo/Areas/_Admin/Controllers/FrameworkMenuController.cs",
+  "target_symbol": "FrameworkMenuController.Create(FrameworkMenuVM) -- restores the [Public] attribute removed by issue #840, ~line 68",
+  "patch": "patches/frameworkmenu-create-restore-public.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.FrameworkMenuController_Create_UnauthenticatedRejected_AuthenticatedAdminSucceeds",
+  "red_tests": [
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.FrameworkMenuController_Create_UnauthenticatedRejected_AuthenticatedAdminSucceeds"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.FrameworkMenuController_Create_UnauthenticatedRejected_AuthenticatedAdminSucceeds": "#840: unauthenticated POST to FrameworkMenu/Create must be rejected by PrivilegeFilter before FrameworkMenuVM\\.DoAdd\\(\\) runs"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against a clean checkout (stale demo.db under bin/ removed first) with the mutant patch applied: 'Assert.IsFalse failed. #840: unauthenticated POST to FrameworkMenu/Create must be rejected by PrivilegeFilter before FrameworkMenuVM.DoAdd() runs. The X-WTM-Action response header is present, meaning the request reached the real Create success path (WtmActionResult) -- the [Public]/isPublic early-return guard did not block it.'",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.Selector_AuthenticatedRequest_Succeeds",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.Selector_AuthenticatedRequest_Succeeds"
+  ]
+}

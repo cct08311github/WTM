@@ -53,7 +53,10 @@
                 var idstr = files.Select(x => x.Key);
                 foreach (var id in idstr)
                 {
-                    _ = await WtmBlazor.Api.CallAPI($"/api/_file/DeletedFile/{idstr}");
+                    // #830: DeletedFile moved from GET to POST (a GET performing a delete is
+                    // itself a CSRF/prefetch hazard, separate from the tenant-scoping fix that
+                    // motivated it).
+                    _ = await WtmBlazor.Api.CallAPI($"/api/_file/DeletedFile/{idstr}", HttpMethodEnum.POST, (HttpContent)null);
                     files.Remove(id);
 
                 }
@@ -74,7 +77,9 @@
         var idstr = files.Where(x => x.Value == file.OriginFileName).Select(x => x.Key).FirstOrDefault();
         if (idstr != null)
         {
-            var rv = await WtmBlazor.Api.CallAPI($"/api/_file/DeletedFile/{idstr}");
+            // #830: DeletedFile moved from GET to POST (a GET performing a delete is itself a
+            // CSRF/prefetch hazard, separate from the tenant-scoping fix that motivated it).
+            var rv = await WtmBlazor.Api.CallAPI($"/api/_file/DeletedFile/{idstr}", HttpMethodEnum.POST, (HttpContent)null);
             files.Remove(idstr);
         }
         return true;

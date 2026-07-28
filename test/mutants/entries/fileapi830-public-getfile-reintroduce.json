@@ -1,0 +1,23 @@
+{
+  "id": "fileapi830-public-getfile-reintroduce",
+  "kind": "security",
+  "description": "Issue #830: re-adds [Public] (IAllowAnonymous) to the demo FileApiController's GetFile action -- a compile-preserving attribute add, not a statement delete -- reproducing the pre-fix state where any unauthenticated caller could read another tenant's FileAttachment content by GUID (WtmFileProvider.GetFile uses IgnoreQueryFilters() whenever FileUploadOptions.EnforceTenantFileScope is false, the default). Checked against FileApiControllerHardeningTests830.GetFile_Unauthenticated_RejectedAndDoesNotLeakContent_AuthenticatedSucceeds, which seeds a FileAttachment with a random marker string as its content and asserts both that an unauthenticated GET returns 401 AND that the response body never contains the marker -- not a status-code-only check, since a redirect or error page that happened to echo bytes back would also need to be caught. Only this GetFile action is mutated; the class's other actions (GetFileName, DownloadFile, etc.) are untouched by this specific patch, which is why the sibling DeletedFile-focused tests in the same class are used as the positive control below rather than every [Public] removal being re-verified by one shared mutant.",
+  "target_file": "demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs",
+  "target_symbol": "FileApiController.GetFile(WtmFileProvider,string,string,int?,int?) -- the [Public] attribute (absent after #830, this mutant re-adds it), line ~108",
+  "patch": "patches/fileapi830-public-getfile-reintroduce.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.GetFile_Unauthenticated_RejectedAndDoesNotLeakContent_AuthenticatedSucceeds",
+  "red_tests": [
+    "WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.GetFile_Unauthenticated_RejectedAndDoesNotLeakContent_AuthenticatedSucceeds"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.GetFile_Unauthenticated_RejectedAndDoesNotLeakContent_AuthenticatedSucceeds": "#830: an unauthenticated caller must get 401 from GetFile \\(the endpoint was \\[Public\\] before this fix\\)\\. Got 200\\."
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against a clean checkout (stale demo.db under bin/ removed first) with the mutant patch applied: 'Assert.AreEqual failed. Expected:<Unauthorized>. Actual:<OK>. #830: an unauthenticated caller must get 401 from GetFile (the endpoint was [Public] before this fix). Got 200.'",
+  "green_test_filter": "(FullyQualifiedName=WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.DeletedFile_CrossTenant_DoesNotDeleteOtherTenantsFile_SameTenantDeleteSucceeds)|(FullyQualifiedName=WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.DeletedFile_UnknownCsName_RejectedWithGuardMessage_KnownCsNameSucceeds)",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.DeletedFile_CrossTenant_DoesNotDeleteOtherTenantsFile_SameTenantDeleteSucceeds",
+    "WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.DeletedFile_UnknownCsName_RejectedWithGuardMessage_KnownCsNameSucceeds"
+  ]
+}

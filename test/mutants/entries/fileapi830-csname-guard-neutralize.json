@@ -1,0 +1,23 @@
+{
+  "id": "fileapi830-csname-guard-neutralize",
+  "kind": "security",
+  "description": "Issue #830: neutralizes DeletedFile's IsKnownConnectionKey guard condition with a compile-preserving operator (`&& false`, not a deletion) so it can never reject a request, reproducing the pre-fix state where csName flowed straight into Wtm.CreateDC(cskey:) with zero validation. Checked against FileApiControllerHardeningTests830.DeletedFile_UnknownCsName_RejectedWithGuardMessage_KnownCsNameSucceeds, which asserts BOTH the status code (400) AND that the response body contains the guard's own message text ('Unknown connection string key') -- not status-code-only. This distinction matters: 'EVIL_LATERAL_DB' is not a real configured connection either way, so with the guard neutralized the request does not simply succeed -- it falls through and fails downstream for an unrelated reason, which a status-code-only assertion could not distinguish from a genuine guard rejection (the exact tautology #837 already found twice in MvcAuthHolesTests' GetPagingData/GetExportExcel csKey tests). Confirmed empirically: with the guard neutralized the request instead returns 200 (DeletedFile always returns Ok(true)), which is what this mutant's red assertion actually observes.",
+  "target_file": "demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs",
+  "target_symbol": "FileApiController.DeletedFile(WtmFileProvider,string,string) -- the `if (!IsKnownConnectionKey(csName))` guard condition, line ~258",
+  "patch": "patches/fileapi830-csname-guard-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.DeletedFile_UnknownCsName_RejectedWithGuardMessage_KnownCsNameSucceeds",
+  "red_tests": [
+    "WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.DeletedFile_UnknownCsName_RejectedWithGuardMessage_KnownCsNameSucceeds"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.DeletedFile_UnknownCsName_RejectedWithGuardMessage_KnownCsNameSucceeds": "#830: DeletedFile must reject an unrecognised csName\\. Got 200"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against a clean checkout (stale demo.db under bin/ removed first) with the mutant patch applied: 'Assert.AreEqual failed. Expected:<BadRequest>. Actual:<OK>. #830: DeletedFile must reject an unrecognised csName. Got 200: true'",
+  "green_test_filter": "(FullyQualifiedName=WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.DeletedFile_CrossTenant_DoesNotDeleteOtherTenantsFile_SameTenantDeleteSucceeds)|(FullyQualifiedName=WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.GetFile_Unauthenticated_RejectedAndDoesNotLeakContent_AuthenticatedSucceeds)",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.DeletedFile_CrossTenant_DoesNotDeleteOtherTenantsFile_SameTenantDeleteSucceeds",
+    "WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.GetFile_Unauthenticated_RejectedAndDoesNotLeakContent_AuthenticatedSucceeds"
+  ]
+}

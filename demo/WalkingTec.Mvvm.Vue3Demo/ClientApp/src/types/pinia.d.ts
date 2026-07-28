@@ -7,6 +7,10 @@ declare interface UserInfosState<T = any> {
 	userInfos: {
 		authBtnList: string[];
 		photo: string;
+		// #830 review round 3: the raw file id `photo` (a blob: object URL) was resolved
+		// from -- needed to re-resolve a fresh blob URL on a sessionStorage cache hit, since
+		// blob: URLs do not survive being read back out of storage after a reload.
+		photoId?: string | null;
 		roles: string[];
 		time: number;
 		isDebug:boolean;

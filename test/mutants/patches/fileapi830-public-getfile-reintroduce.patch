@@ -1,0 +1,15 @@
+diff --git a/demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs b/demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs
+index f7955ffc3..f9598462f 100644
+--- a/demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs
++++ b/demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs
+@@ -106,6 +106,10 @@ namespace WalkingTec.Mvvm.Admin.Api
+ 
+         [HttpGet("[action]/{id}")]
+         [ActionDescription("GetFile")]
++        // MUTANT test/mutants fileapi830-public-getfile-reintroduce: re-adds [Public]
++        // (compile-preserving: an attribute add, not a statement delete) so the endpoint is
++        // reachable by an unauthenticated caller again. See test/mutants/manifest.json.
++        [Public]
+         public async Task<IActionResult> GetFile([FromServices] WtmFileProvider fp, string id, string csName = null, int? width = null, int? height = null)
+         {
+             if (!IsKnownConnectionKey(csName))

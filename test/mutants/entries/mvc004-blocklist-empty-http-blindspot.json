@@ -1,0 +1,25 @@
+{
+  "id": "mvc004-blocklist-empty-http-blindspot",
+  "kind": "security",
+  "description": "Empties the UpdateModelProperty inline-edit sensitive-field blocklist (compile-preserving operator: HashSet literal emptied, not deleted) and checks it against the HTTP-layer MvcAuthHolesTests that guard MVC-004's blockedFields HashSet specifically: Password and ITCode. HISTORY: as originally filed for issue #834, these tests used StudentListVM (a ListVM) and a fake Guid id, so `vm as IBaseCRUDVM<TopBasePoco>` was null and _FrameworkController.cs:540 returned the same 400 ('Entity not found') whether or not the blocklist existed -- this entry's red filter used to include the dot-notation test too and the whole set SURVIVED, which was the demonstration issue #834 asked for (see PR #839 history for that transcript). Issue #837 (PR #845, merged as f148a1383) rewrote the fixture to seed a real FrameworkUser via a real CRUD VM (FrameworkUserVM) and assert on the endpoint's own custom message text, so Password and ITCode now correctly reach the blockedFields check and this entry is KILLED. UpdateModelProperty_DotNotationField_ReturnsBadRequest was removed from this entry's red_tests: it pins a DIFFERENT, earlier, unconditional guard (`field.Contains('.')` at _FrameworkController.cs:513) that emptying blockedFields has no bearing on -- see mvc004-dotnotation-guard-neutralize below for its own mutant. It remains in this entry's green_tests instead, as a positive control proving emptying blockedFields has no effect on that sibling guard.",
+  "target_file": "src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs",
+  "target_symbol": "_FrameworkController.UpdateModelProperty(string,Guid,string,string) -- the `blockedFields` HashSet<string> initializer, lines ~519-524",
+  "patch": "patches/mvc004-blocklist-empty.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "(FullyQualifiedName=WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_PasswordField_ReturnsBadRequest)|(FullyQualifiedName=WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_ITCodeField_ReturnsBadRequest)",
+  "red_tests": [
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_PasswordField_ReturnsBadRequest",
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_ITCodeField_ReturnsBadRequest"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_PasswordField_ReturnsBadRequest": "MVC-004: Password field must be blocked\\. Got 200\\.",
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_ITCodeField_ReturnsBadRequest": "MVC-004: ITCode field must be blocked\\. Got 200\\."
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against a clean checkout (stale demo.db under bin/ removed first -- see run_mutant.py's clean_stale_demo_db, added after this exact capture was corrupted by leftover row state on the first attempt) with the mutant patch applied and #845's fixture in place: 'Assert.AreEqual failed. Expected:<BadRequest>. Actual:<OK>. MVC-004: Password field must be blocked. Got 200.' and 'Assert.AreEqual failed. Expected:<BadRequest>. Actual:<OK>. MVC-004: ITCode field must be blocked. Got 200.' respectively.",
+  "green_test_filter": "(FullyQualifiedName=WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_DotNotationField_ReturnsBadRequest)|(FullyQualifiedName=WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.GetExportExcel_UnknownCsKey_ReturnsBadRequest)",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_DotNotationField_ReturnsBadRequest",
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.GetExportExcel_UnknownCsKey_ReturnsBadRequest"
+  ]
+}

@@ -257,9 +257,29 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         f.find(""#{Id}"").val("""");
     }}
   }}
+  // #830 review finding 1 (PR #850): DeletedFile moved from GET to POST — a GET performing a
+  // delete is itself a CSRF/prefetch hazard, separate from the tenant-scoping fix that
+  // motivated the endpoint change. This inline-script fallback (rendered when
+  // WtmUIOptions.UseSelectIslandRender is off) ships inside the WalkingTec.Mvvm.TagHelpers.LayUI
+  // NuGet package and is emitted into every downstream app's pages on a package upgrade,
+  // regardless of whether that app's own scaffolded FileApiController copy was updated to
+  // match — a downstream copies FileApiController once, at scaffold time; a package upgrade
+  // does not touch that copy. An un-migrated downstream's copy still has [HttpGet] only, so
+  // always sending POST would 405 and silently break this delete button on every upgrade (see
+  // CHANGELOG.md's Migration notes for the full compatibility rationale). Try POST first —
+  // the secure, current-template behaviour — and ONLY on a 405 specifically (never any other
+  // error, so this can never mask an unrelated failure as a compatibility fallback) retry the
+  // exact same call with GET, which an un-migrated controller still accepts.
+  //
+  // TEMPORARY, TRACKED at #853: this fallback is a deliberate compromise, not the intended
+  // end state -- a GET that performs a delete remains a CSRF/prefetch hazard for every
+  // downstream that never migrates. Remove it (POST-only again) at WTM's next MAJOR version
+  // bump (version.props rolling to 11.0.0+); see #853 for the full rationale and acceptance
+  // criteria. Do not remove it before that trigger.
   function {Id}DoDelete(fileid){{
-    $.ajax({{
-            type: 'get',
+    var {Id}doDeleteRequest = function(method){{
+        $.ajax({{
+            type: method,
             url: '/api/_file/DeletedFile/' + fileid,
             success: function () {{
                 $('#label'+fileid).remove();
@@ -268,10 +288,16 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                  }});
                 {Id}SetValues();
             }},
-            error: function () {{
+            error: function (jqXHR) {{
+                if (method === 'post' && jqXHR && jqXHR.status === 405) {{
+                    {Id}doDeleteRequest('get');
+                    return;
+                }}
                 console.log('failed');
             }}
         }});
+    }};
+    {Id}doDeleteRequest('post');
 }}
 function {Id}DoPreview(){{
 		layui.layer.photos({{

@@ -78,7 +78,7 @@ grep -rniE 'EnforceTenantFileScope|EnforceVmExportAuthorization|EnforceFileAcces
 
 **你要做什麼**：移除五個 `[Public]`；`DeletedFile` 改用 `DeleteFileTenantScoped` 並改為 `[HttpPost]`；每個吃 `csName` 的 action 加上 `IsKnownConnectionKey` 驗證；`GetFileInfo` 改走 `WtmFileProvider` 而非直接查 `DbSet`。
 
-> 具體 patch（三種樣板各一份）：**TBD** —— 待 #830／#833 的修復落地後補上。
+> **#830 已修復（upstream 樣板，三份全改）**：見 CHANGELOG.md `[Unreleased]` 的「demo `FileApiController` hardening」條目與其 Migration notes。**這只改變新從樣板複製出的程式** —— 已複製並部署的應用**不會**因為升級 package 而自動拿到這個修復，必須按 CHANGELOG 的遷移說明手動比對、套用（diff 對象：`demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs` 與另兩份樣板）。`WtmFileProvider.DeleteFile`（framework 層、非樣板）同時標了 `[Obsolete]` 指向 `DeleteFileTenantScoped` —— 這只是編譯期警告，不影響已編譯的二進位檔，也不是 runtime 防護；它保持非 tenant-scoped 的舊行為以維持相容，見該 attribute 的訊息文字。**例外**：`framework_layui.js` 與 `MultiUploadTagHelper.cs` 的刪除呼叫**不是**樣板，是隨套件出貨給所有下游的共用資產；這兩處已改為「先送 POST，只在收到 405 時才 retry GET」，所以即使你完全不套用上述遷移，升級套件後刪除按鈕也不會 405（詳見 CHANGELOG 的 Compatibility 段落）——但這不等於你已修好安全問題，csName 驗證／tenant-scoped 刪除／`[Public]` 移除仍需你自己動手套用樣板 diff。
 
 ### 2b. LayUI 樣板的 `FrameworkMenuController.Create`（#840）
 
@@ -125,7 +125,7 @@ curl -i -X POST https://<your-host>/_Admin/FrameworkMenu/Create \
 | 項目 | Affected | Fixed in |
 |---|---|---|
 | 第一類 1–7（預設組態） | 所有版本含 10.18.0 | **不適用** —— 這些是預設值選擇，需組態變更或等 #827 提供可注入接縫 |
-| 2a 三份 `FileApiController` | 所有版本的樣板 | TBD（#830） |
+| 2a 三份 `FileApiController` | 所有版本的樣板；已複製部署的應用維持受影響，見下方遷移說明 | 下一版（#830，樣板端）— 已複製的應用需自行套用，不因升級 package 而修復 |
 | 2b `FrameworkMenuController` | LayUI 樣板，2020-12-12 起 | TBD（#840）—— **但你可以自己先修，不必等** |
 | 第三類 8 | ≤ 10.18.0 | TBD（#843） |
 | 第三類 9 | ≤ 10.18.0 | TBD（#832） |

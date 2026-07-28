@@ -125,7 +125,7 @@
 
 
 <script setup lang="ts" name="netxTable">
-    import { reactive, computed, nextTick, ref, getCurrentInstance, onMounted } from 'vue';
+    import { reactive, computed, nextTick, ref, getCurrentInstance, onMounted, onUnmounted } from 'vue';
     import { ElMessage } from 'element-plus';
     import table2excel from 'js-table2excel';
     import Sortable from 'sortablejs';
@@ -312,6 +312,15 @@
         state.comboData = rv;
     });
 
+    // #830 review round 3: revoke any blob: URLs still held in state.picList when this table
+    // instance is destroyed (e.g. navigating away from the page) -- otherwise whatever was on
+    // screen at that moment leaks for the rest of the document's lifetime.
+    onUnmounted(() => {
+        state.picList.forEach((url) => {
+            if (url.startsWith('blob:')) { URL.revokeObjectURL(url); }
+        });
+    });
+
     const doSearch = (api: any = null, para: any = null, isTree: any = null, parentKey: string = 'ParentId') => {
 
         if (para !== null) {
@@ -325,21 +334,38 @@
         }
 
         let pro: Promise<AxiosResponse<any, any>> = searchApi(state.searcher);
-        return pro.then(res => {
+        return pro.then(async res => {
             const datatemp: any[] = [];
             const imageHeaders = props.header.filter((v) => v.isCheck && v.type === 'image');
             let index = 0;
-            res.Data.forEach((element: EmptyObjectType<any>) => {
-                imageHeaders.forEach((ih) => {
+            // #830 review finding 2: GetFile requires auth now (correctly -- it used to allow
+            // any caller to read another tenant's file by guessing the GUID). el-image's :src
+            // is a native browser image fetch, which carries neither the axios interceptor's
+            // Authorization header nor a cookie (Vue3 is JWT-only). Fetch each thumbnail through
+            // fileapi().getFile() -- an authenticated axios request that returns an object URL
+            // -- instead of binding the raw endpoint URL directly.
+            //
+            // #830 review round 3: each of those is a blob: object URL, held in memory until
+            // explicitly revoked. state.picList was never reset between searches (a
+            // pre-existing gap this fetch made real: every page/filter/sort change used to just
+            // grow the array with plain, harmless string URLs -- now it grows it with URLs that
+            // pin actual blob memory). Revoke the previous batch and reset the list before
+            // fetching the new one, since a fresh search always fully replaces the row set.
+            state.picList.forEach((url) => {
+                if (url.startsWith('blob:')) { URL.revokeObjectURL(url); }
+            });
+            state.picList = [];
+            for (const element of res.Data as EmptyObjectType<any>[]) {
+                for (const ih of imageHeaders) {
                     element[ih.key + "__localurl__"] = "";
                     if (element[ih.key]) {
-                        element[ih.key + "__localurl__"] = '/api/_file/getfile/' + element[ih.key] + "?width=150&height=150";
+                        element[ih.key + "__localurl__"] = await fileapi().getFile(element[ih.key], 150, 150);
                         element[ih.key + "__preview__"] = index++;
                         state.picList.push(element[ih.key + "__localurl__"]);
                     }
-                })
+                }
                 datatemp.push(element);
-            });
+            }
             if (isTreeState !== true) {
                 state.data = datatemp;
                 props.config.total = res.Count;

@@ -10,7 +10,6 @@ using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Support.FileHandlers;
 using WalkingTec.Mvvm.Mvc;
 using WalkingTec.Mvvm.Core.Extensions;
-using System.Linq;
 
 namespace WalkingTec.Mvvm.Admin.Api
 {
@@ -21,10 +20,23 @@ namespace WalkingTec.Mvvm.Admin.Api
     [ActionDescription("_Admin.FileApi")]
     public class FileApiController : BaseApiController
     {
+        // #830: validates a client-supplied csName BEFORE it reaches Wtm.CreateDC(cskey:) —
+        // same guard _FrameworkController applies at every one of its CreateDC call sites (see
+        // _FrameworkController.cs's private IsKnownConnectionKey wrapper and
+        // WTMContext.IsKnownConnectionKey's own doc comment: "Use to validate a client-supplied
+        // connection-string key BEFORE CreateDC(cskey:) ... to prevent cross-DB access"). This
+        // demo controller is scaffolded into every downstream app; before #830 none of its eight
+        // csName parameters were checked here at all.
+        private bool IsKnownConnectionKey(string csName) => Wtm.IsKnownConnectionKey(csName);
+
         [HttpPost("[action]")]
         [ActionDescription("UploadFile")]
         public IActionResult Upload([FromServices] WtmFileProvider fp, string sm = null, string groupName = null, string subdir = null, string extra = null, string csName = null)
         {
+            if (!IsKnownConnectionKey(csName))
+            {
+                return BadRequest("Unknown connection string key");
+            }
             var FileData = Request.Form.Files[0];
             var file = fp.Upload(FileData.FileName, FileData.Length, FileData.OpenReadStream(), groupName, subdir, extra, sm, Wtm.CreateDC(cskey: csName));
             return Ok(new { Id = file.GetID(), Name = file.FileName });
@@ -34,6 +46,10 @@ namespace WalkingTec.Mvvm.Admin.Api
         [ActionDescription("UploadPic")]
         public IActionResult UploadImage([FromServices] WtmFileProvider fp, int? width = null, int? height = null, string sm = null, string groupName = null, string subdir = null, string extra = null, string csName = null)
         {
+            if (!IsKnownConnectionKey(csName))
+            {
+                return BadRequest("Unknown connection string key");
+            }
             if (width == null && height == null)
             {
                 return Upload(fp, sm, groupName, csName);
@@ -69,19 +85,33 @@ namespace WalkingTec.Mvvm.Admin.Api
 
         }
 
+        // #830: [Public] removed — GetFileName/GetFile/GetFileInfo/GetUserPhoto/DownloadFile
+        // were all unauthenticated (IAllowAnonymous). Combined with
+        // FileUploadOptions.EnforceTenantFileScope defaulting to false (WtmFileProvider.GetFile
+        // uses IgnoreQueryFilters() in that mode), any caller who could guess or enumerate a
+        // FileAttachment GUID could read another tenant's file content with no login at all.
+        // The class-level [AuthorizeJwtWithCookie] + [AllRights] now applies uniformly: any
+        // authenticated user (regardless of per-page privilege) can reach these actions, but an
+        // anonymous caller cannot.
         [HttpGet("[action]/{id}")]
         [ActionDescription("GetFileName")]
-        [Public]
         public IActionResult GetFileName([FromServices] WtmFileProvider fp, string id, string csName = null)
         {
+            if (!IsKnownConnectionKey(csName))
+            {
+                return BadRequest("Unknown connection string key");
+            }
             return Ok(fp.GetFileName(id, Wtm.CreateDC(cskey: csName)));
         }
 
         [HttpGet("[action]/{id}")]
         [ActionDescription("GetFile")]
-        [Public]
         public async Task<IActionResult> GetFile([FromServices] WtmFileProvider fp, string id, string csName = null, int? width = null, int? height = null)
         {
+            if (!IsKnownConnectionKey(csName))
+            {
+                return BadRequest("Unknown connection string key");
+            }
             var file = fp.GetFile(id, true, Wtm.CreateDC(cskey: csName));
 
 
@@ -109,9 +139,9 @@ namespace WalkingTec.Mvvm.Admin.Api
                         oimage.SaveAsJpeg(ms);
                         ms.Position = 0;
                         // Security (#563, port of #530): the resized output is always re-encoded
-                        // as JPEG here, but this endpoint is [Public] and previously sent no
-                        // Content-Type header at all, letting the browser MIME-sniff the response
-                        // body. Pin the Content-Type explicitly and set nosniff.
+                        // as JPEG here, but this endpoint used to be [Public] and previously sent
+                        // no Content-Type header at all, letting the browser MIME-sniff the
+                        // response body. Pin the Content-Type explicitly and set nosniff.
                         Response.ContentType = "image/jpeg";
                         Response.Headers["X-Content-Type-Options"] = "nosniff";
                         await ms?.CopyToAsync(Response.Body);
@@ -131,12 +161,13 @@ namespace WalkingTec.Mvvm.Admin.Api
             }
             else
             {
-                // Security (#563, port of #530): this [Public] endpoint streamed the raw upload
-                // bytes with no Content-Type header, letting the browser MIME-sniff an uploaded
-                // file (e.g. text/html or image/svg+xml) as active content in the app's origin
-                // (stored XSS). GetSafeStreamContentType forces anything outside the image
-                // whitelist to application/octet-stream, and nosniff pins the browser to that
-                // value — same hardening as WalkingTec.Mvvm.Mvc._FrameworkController.GetFile.
+                // Security (#563, port of #530): this endpoint used to be [Public] and streamed
+                // the raw upload bytes with no Content-Type header, letting the browser
+                // MIME-sniff an uploaded file (e.g. text/html or image/svg+xml) as active
+                // content in the app's origin (stored XSS). GetSafeStreamContentType forces
+                // anything outside the image whitelist to application/octet-stream, and nosniff
+                // pins the browser to that value — same hardening as
+                // WalkingTec.Mvvm.Mvc._FrameworkController.GetFile.
                 var provider = new FileExtensionContentTypeProvider();
                 if (!provider.TryGetContentType(file.FileName, out var contenttype))
                 {
@@ -151,36 +182,60 @@ namespace WalkingTec.Mvvm.Admin.Api
         }
 
         [HttpGet("[action]/{id}")]
-        [ActionDescription("GetFileName")]
-        [Public]
+        [ActionDescription("GetFileInfo")]
         public IActionResult GetFileInfo([FromServices] WtmFileProvider fp, string id, string csName = null)
         {
-            FileAttachment rv = new FileAttachment();
-            using (var dc = Wtm.CreateDC(cskey: csName))
+            if (!IsKnownConnectionKey(csName))
             {
-                rv = dc.Set<FileAttachment>().CheckID(id).FirstOrDefault();
+                return BadRequest("Unknown connection string key");
             }
-            return Ok(rv);
+            // #830: previously queried dc.Set<FileAttachment>() directly, bypassing
+            // WtmFileProvider entirely — and with it, the same tenant-scope handling every other
+            // read in this controller goes through (see WtmFileProvider.GetFile's WTM-SEC-003
+            // comment) and the provider-level authorization seam #827 plans to add there. It also
+            // returned the WHOLE FileAttachment entity (Path/HandlerInfo/TenantCode — internal
+            // storage details a caller asking "does this file exist / what is it called" has no
+            // need for). Route the read through WtmFileProvider.GetFile(..., withData: false,
+            // ...) — the same call every other metadata-only read in this controller uses — and
+            // project only the fields a caller of "file info" actually needs.
+            var file = fp.GetFile(id, false, Wtm.CreateDC(cskey: csName));
+            if (file == null)
+            {
+                return BadRequest(Localizer["Sys.FileNotFound"]);
+            }
+            return Ok(new
+            {
+                Id = file.GetID(),
+                file.FileName,
+                file.FileExt,
+                file.Length,
+                file.UploadTime,
+                file.ExtraInfo
+            });
         }
 
         [HttpGet("[action]/{id}")]
         [ActionDescription("GetUserPhoto")]
-        [Public]
         public async Task<IActionResult> GetUserPhoto([FromServices] WtmFileProvider fp, string id, string csName = null, int? width = null, int? height = null)
         {
             if (ConfigInfo.HasMainHost && Wtm.LoginUserInfo?.CurrentTenant == null)
             {
                 return Redirect(Wtm.ConfigInfo.MainHost+ Request.Path);
             }
+            // csName is validated inside GetFile before it reaches Wtm.CreateDC(cskey:) — no
+            // separate check needed here since every path through this method ends up there.
             return await this.GetFile(fp,id, csName, width, height);
         }
 
 
         [HttpGet("[action]/{id}")]
         [ActionDescription("DownloadFile")]
-        [Public]
         public IActionResult DownloadFile([FromServices] WtmFileProvider fp, string id, string csName = null)
         {
+            if (!IsKnownConnectionKey(csName))
+            {
+                return BadRequest("Unknown connection string key");
+            }
             var file = fp.GetFile(id, true, Wtm.CreateDC(cskey:csName));
             if (file == null)
             {
@@ -196,11 +251,22 @@ namespace WalkingTec.Mvvm.Admin.Api
             return File(file.DataStream, contentType, file.FileName ?? (Guid.NewGuid().ToString() + ext));
         }
 
-        [HttpGet("[action]/{id}")]
+        [HttpPost("[action]/{id}")]
         [ActionDescription("DeleteFile")]
         public IActionResult DeletedFile([FromServices] WtmFileProvider fp, string id, string csName = null)
         {
-            fp.DeleteFile(id, Wtm.CreateDC(cskey: csName));
+            if (!IsKnownConnectionKey(csName))
+            {
+                return BadRequest("Unknown connection string key");
+            }
+            // #830: DeleteFileTenantScoped, not DeleteFile — see its doc comment in
+            // WtmFileProvider.cs. This is the PRIMARY control that stops a caller authenticated
+            // as tenant A from deleting tenant B's FileAttachment row, independent of
+            // FileUploadOptions.EnforceTenantFileScope's default (false). Also switched from
+            // [HttpGet] to [HttpPost]: a GET performing a delete is itself a defect (CSRF via a
+            // plain <img>/<a> tag, browser prefetch, link scanners) separate from the
+            // authorization gap.
+            fp.DeleteFileTenantScoped(id, Wtm.CreateDC(cskey: csName));
             return Ok(true);
         }
     }

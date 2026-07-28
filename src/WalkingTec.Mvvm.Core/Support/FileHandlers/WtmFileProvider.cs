@@ -187,6 +187,21 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
 
         }
 
+        /// <summary>
+        /// #830: obsoleted in favour of <see cref="DeleteFileTenantScoped(string, IDataContext?)"/>.
+        /// This overload deletes by <see cref="FileAttachment"/> id honouring
+        /// <see cref="WalkingTec.Mvvm.Core.ConfigOptions.FileUploadOptions.EnforceTenantFileScope"/>
+        /// — which defaults to <c>false</c> — so a hand-written downstream call site that resolves
+        /// <paramref name="id"/> from caller-controlled input (a route/query/form value) is exposed
+        /// to the exact same cross-tenant deletion this issue fixed in the three demo
+        /// <c>FileApiController</c> copies: any authenticated caller can delete ANY tenant's
+        /// <see cref="FileAttachment"/> row by GUID, not just their own. This is a compiler-warning
+        /// signal only — it does nothing for a downstream binary that does not recompile against
+        /// this package version, does not fire at runtime, and will not be seen by a caller who
+        /// never rebuilds with warnings surfaced. See the #830 CHANGELOG entry for the full
+        /// reach/limits statement.
+        /// </summary>
+        [Obsolete("Deletes without tenant scoping by default (FileUploadOptions.EnforceTenantFileScope defaults to false), allowing cross-tenant deletion when id comes from caller-controlled input. Use DeleteFileTenantScoped instead. See issue #830.")]
         public void DeleteFile(string id, IDataContext? dc = null)
         {
             // WTM-SEC-003: see GetFile for flag semantics.

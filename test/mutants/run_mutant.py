@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """Mutation-gate runner for issue #834.
 
-For ONE mutant declared in test/mutants/manifest.json, this script:
+Mutants are declared one-per-file under test/mutants/entries/<id>.json (issue #854:
+a single shared 'mutants' array in manifest.json made every registering PR conflict at
+the same insertion point). test/mutants/manifest.json itself now holds only shared
+registry metadata (schema_version, $comment) -- see load_manifest()/discover_entries()
+below for how the two are combined back into one in-memory manifest dict.
+
+For ONE mutant declared under test/mutants/entries/, this script:
 
   1. Validates the mutant's patch is scoped to its declared production file only
      (rejects anything touching test/, appsettings*.json, or seed data -- belt and
@@ -34,7 +40,7 @@ Usage:
     python3 test/mutants/run_mutant.py --mutant <id> [--manifest test/mutants/manifest.json]
     python3 test/mutants/run_mutant.py --mutant <id> --expect-verdict INVALID_MUTANT_BUILD_FAILURE
 
---expect-verdict is for the meta-selftest job only (see manifest.json "kind":
+--expect-verdict is for the meta-selftest job only (see entries/*.json's "kind":
 "selftest" entries): it asserts on the RUNNER's own verdict instead of enforcing
 that the verdict is KILLED, so the runner's own invalid-mutant / survived /
 killed detection logic can be regression-tested without touching real security
@@ -120,9 +126,58 @@ def run(cmd: list[str], cwd: Path, timeout: int = 900) -> subprocess.CompletedPr
     )
 
 
+def discover_entries(entries_dir: Path) -> list[dict]:
+    """Glob test/mutants/entries/*.json and load each as one mutant entry.
+
+    Fails loudly (SystemExit) rather than returning an empty/partial list on any of
+    the ways this could go silently wrong: the directory not existing, the glob
+    matching nothing, a file that isn't valid JSON, or an entry missing its own 'id'.
+    A directory listing that resolves to "found nothing" must never be mistaken for
+    "no mutants configured, nothing to do, pass" -- that is exactly the failure mode
+    the old single-array manifest could not have (an empty array was at least always
+    present and explicit), so the directory-based replacement has to guard against it
+    deliberately.
+    """
+    if not entries_dir.is_dir():
+        raise SystemExit(
+            f"Mutant entries directory '{entries_dir}' does not exist. Expected one "
+            "JSON file per mutant at test/mutants/entries/<id>.json (issue #854)."
+        )
+    paths = sorted(entries_dir.glob("*.json"))
+    if not paths:
+        raise SystemExit(
+            f"No mutant entry files found under '{entries_dir}' (glob '*.json' matched "
+            "nothing). Refusing to proceed as if zero mutants were intentional."
+        )
+    entries: list[dict] = []
+    for path in paths:
+        with path.open("r", encoding="utf-8") as f:
+            try:
+                entry = json.load(f)
+            except json.JSONDecodeError as e:
+                raise SystemExit(f"Failed to parse mutant entry file '{path}': {e}")
+        entry_id = entry.get("id")
+        if not entry_id:
+            raise SystemExit(
+                f"Mutant entry file '{path}' has no (or an empty) 'id' field -- "
+                "refusing to silently skip it."
+            )
+        if entry_id != path.stem:
+            raise SystemExit(
+                f"Mutant entry file '{path}' declares id '{entry_id}', but its filename "
+                f"stem is '{path.stem}'. The filename must equal the id so a mutant can "
+                "always be found by id alone -- rename the file or fix the id."
+            )
+        entries.append(entry)
+    return entries
+
+
 def load_manifest(manifest_path: Path) -> dict:
     with manifest_path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+        manifest = json.load(f)
+    entries_dir = manifest_path.parent / "entries"
+    manifest["mutants"] = discover_entries(entries_dir)
+    return manifest
 
 
 def find_mutant(manifest: dict, mutant_id: str) -> dict:
@@ -450,11 +505,17 @@ def evaluate_mutant(repo_root: Path, mutant: dict, trx_dir: Path) -> MutantResul
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mutant", required=True, help="Mutant id from manifest.json")
+    parser.add_argument(
+        "--mutant", required=True, help="Mutant id (see test/mutants/entries/*.json)"
+    )
     parser.add_argument(
         "--manifest",
         default="test/mutants/manifest.json",
-        help="Path to the mutant manifest (relative to repo root or absolute)",
+        help=(
+            "Path to the registry's shared metadata file (schema_version/$comment). "
+            "Mutants themselves are discovered by globbing '<manifest's directory>/"
+            "entries/*.json', relative to repo root or absolute."
+        ),
     )
     parser.add_argument(
         "--repo-root",

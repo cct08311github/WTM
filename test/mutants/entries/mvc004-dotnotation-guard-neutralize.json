@@ -1,0 +1,23 @@
+{
+  "id": "mvc004-dotnotation-guard-neutralize",
+  "kind": "security",
+  "description": "Neutralizes the dot-notation traversal guard at _FrameworkController.cs:513-516 (`if (field.Contains('.')) return BadRequest(\"Navigation property paths are not allowed for inline editing\");`) with a compile-preserving operator (`field.Contains('.') && false`, not a deletion) so the condition can never be true. Checked against UpdateModelProperty_DotNotationField_ReturnsBadRequest, which submits field=\"Photo.FileName\" against a real seeded FrameworkUser. With the guard neutralized, the request still returns 400 -- 'Photo.FileName' is not a legal CLR member name, so it falls through to the unrelated property-existence check a few lines later (_FrameworkController.cs, `entityType.GetProperty(field, ...)` returning null) and gets 'Field not found or not writable' instead. Status-code-only assertions cannot tell those two 400s apart; the test's second assertion (the response body must contain 'Navigation property paths are not allowed') is what actually pins this guard, and is exactly what goes red here. green_tests are UpdateModelProperty_PasswordField_ReturnsBadRequest and UpdateModelProperty_ITCodeField_ReturnsBadRequest, proving blast-radius scoping in the other direction from mvc004-blocklist-empty-http-blindspot: neutralizing the dot-notation guard has no effect on the independent blockedFields check.",
+  "target_file": "src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs",
+  "target_symbol": "_FrameworkController.UpdateModelProperty(string,Guid,string,string) -- the dot-notation guard condition `field.Contains('.')`, line ~513",
+  "patch": "patches/mvc004-dotnotation-guard-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_DotNotationField_ReturnsBadRequest",
+  "red_tests": [
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_DotNotationField_ReturnsBadRequest"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_DotNotationField_ReturnsBadRequest": "the 400 must come from the dot-notation guard specifically.*Got body: Field not found or not writable"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against a clean checkout with the mutant patch applied: 'Assert.IsTrue failed. MVC-004: the 400 must come from the dot-notation guard specifically (its message), not from the unrelated property-existence check that would ALSO 400 a literal \"Photo.FileName\" property lookup if the dot-notation guard were deleted. Got body: Field not found or not writable'.",
+  "green_test_filter": "(FullyQualifiedName=WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_PasswordField_ReturnsBadRequest)|(FullyQualifiedName=WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_ITCodeField_ReturnsBadRequest)",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_PasswordField_ReturnsBadRequest",
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_ITCodeField_ReturnsBadRequest"
+  ]
+}

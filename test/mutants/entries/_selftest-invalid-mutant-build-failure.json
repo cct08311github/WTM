@@ -1,0 +1,19 @@
+{
+  "id": "_selftest-invalid-mutant-build-failure",
+  "kind": "selftest",
+  "expect_verdict": "INVALID_MUTANT_BUILD_FAILURE",
+  "description": "Meta test for the runner itself (issue #834 acceptance criterion: 'gate 本身有一支 meta 測試：invalid mutant（編譯失敗）不得被判為通過'). The patch introduces a deliberate C# syntax error next to the same blockedFields symbol. Proves run_mutant.py treats a non-compiling patch as an invalid mutant / gate FAILURE, never a pass -- run_mutant.py --expect-verdict is used to assert on the runner's own verdict, not on any real security behaviour. Never included in the main 'mutants' job.",
+  "target_file": "src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs",
+  "target_symbol": "_FrameworkController.UpdateModelProperty -- deliberately broken `blockedFields` declaration (does not compile, by design)",
+  "patch": "_selftest/broken-syntax.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_PasswordField_ReturnsBadRequest",
+  "red_tests": [
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_PasswordField_ReturnsBadRequest"
+  ],
+  "red_expected_assertion_patterns": {},
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.GetExportExcel_UnknownCsKey_ReturnsBadRequest",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.GetExportExcel_UnknownCsKey_ReturnsBadRequest"
+  ]
+}

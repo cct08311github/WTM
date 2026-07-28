@@ -1,0 +1,23 @@
+{
+  "id": "fileapi830-deletedfile-tenant-scope-revert",
+  "kind": "security",
+  "description": "Issue #830: swaps DeletedFile's fp.DeleteFileTenantScoped(...) call back to the non-tenant-scoped fp.DeleteFile(...) overload -- a compile-preserving method-name swap (both overloads exist on WtmFileProvider; DeleteFile is marked [Obsolete] as of this same PR, which this mutant patch also exercises does not fail the build). Checked against FileApiControllerHardeningTests830.DeletedFile_CrossTenant_DoesNotDeleteOtherTenantsFile_SameTenantDeleteSucceeds, which seeds two tenants with EnableTenant=true (mirroring MultiTenantSeedFixtureTests), logs in as tenant A's user, and asserts tenant B's FileAttachment row still physically exists (a real database read-back with ignoreQueryFilters:true) after tenant A's caller POSTs DeletedFile for tenant B's id. The controller always returns 200 either way (WtmFileProvider.DeleteFileCore treats a miss as a silent no-op), so the status code is asserted separately and is NOT what detects this mutant -- the read-back is.",
+  "target_file": "demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs",
+  "target_symbol": "FileApiController.DeletedFile(WtmFileProvider,string,string) -- the fp.DeleteFileTenantScoped(...) call, line ~269",
+  "patch": "patches/fileapi830-deletedfile-tenant-scope-revert.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.DeletedFile_CrossTenant_DoesNotDeleteOtherTenantsFile_SameTenantDeleteSucceeds",
+  "red_tests": [
+    "WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.DeletedFile_CrossTenant_DoesNotDeleteOtherTenantsFile_SameTenantDeleteSucceeds"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.DeletedFile_CrossTenant_DoesNotDeleteOtherTenantsFile_SameTenantDeleteSucceeds": "tenant B's FileAttachment must still physically exist after tenant A's caller attempted to delete it by GUID"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against a clean checkout (stale demo.db under bin/ removed first) with the mutant patch applied: \"Assert.IsNotNull failed. #830: tenant B's FileAttachment must still physically exist after tenant A's caller attempted to delete it by GUID — DeleteFileTenantScoped must have resolved it via a tenant-A-scoped query (which cannot see tenant B's row) and found nothing to delete.\"",
+  "green_test_filter": "(FullyQualifiedName=WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.GetFile_Unauthenticated_RejectedAndDoesNotLeakContent_AuthenticatedSucceeds)|(FullyQualifiedName=WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.DeletedFile_UnknownCsName_RejectedWithGuardMessage_KnownCsNameSucceeds)",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.GetFile_Unauthenticated_RejectedAndDoesNotLeakContent_AuthenticatedSucceeds",
+    "WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.DeletedFile_UnknownCsName_RejectedWithGuardMessage_KnownCsNameSucceeds"
+  ]
+}
