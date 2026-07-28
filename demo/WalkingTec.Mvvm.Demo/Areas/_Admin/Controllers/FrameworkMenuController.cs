@@ -56,8 +56,15 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
             return PartialView(vm);
         }
 
+        // SECURITY (#840): this action used to carry [Public] (IAllowAnonymous), which
+        // PrivilegeFilter.cs treats as an unconditional early return BEFORE both the
+        // LoginUserInfo==null check and the class-level [MainTenantOnly] check. An
+        // unauthenticated caller could POST a FrameworkMenu row with IsPublic=true pointing at
+        // any URL, and WTMContext.IsUrlPublic (consulted on every request) would then treat
+        // that URL as anonymous too — an unauthenticated privilege-escalation primitive. This
+        // action must require authentication and the class's normal RBAC/tenant checks like
+        // every other write action in this controller (Edit/Delete already had none).
         [HttpPost]
-        [Public]
         [ActionDescription("Sys.Create")]
         public ActionResult Create(FrameworkMenuVM vm)
         {

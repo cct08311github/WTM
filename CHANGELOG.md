@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Security
+
+- **LayUI demo: anonymous POST could create a `FrameworkMenu` row and turn any URL into an anonymous endpoint (#840, P0).** `FrameworkMenuController.Create` (`demo/WalkingTec.Mvvm.Demo/Areas/_Admin/Controllers/FrameworkMenuController.cs`) carried `[Public]`, which `IAllowAnonymous` makes `PrivilegeFilter` return on unconditionally — before both the `LoginUserInfo == null` check and the class-level `[MainTenantOnly]` check. An unauthenticated caller could POST a `FrameworkMenu` row with `IsPublic=true` pointing at any endpoint; `WTMContext.IsUrlPublic`, consulted by `PrivilegeFilter` on every request, then treated that endpoint as anonymous too. Fixed by removing `[Public]`; the action now requires authentication like every other write action in the controller. **Scope: LayUI demo template only** — Vue3Demo, BlazorDemo, and the same demo's API-style `FrameworkMenuController` never had `[Public]` on this action, and the vulnerable code is not part of any published NuGet package. Inherited from upstream WTM since 2020-12-12; not introduced by this fork.
+
 ### Corrected — retractions of claims made in shipped releases (#835)
 
 A cross-vendor adversarial review of the 2026-07-21…07-28 work found four classes of

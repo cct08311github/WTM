@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -959,4 +960,150 @@ public class MvcAuthHolesTests
             $"(ASP.NET Core cookie auth's Forbid() behaviour), not a literal 403. " +
             $"Got {(int)resp.StatusCode} ({resp.StatusCode}).");
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // #840 [P0]: FrameworkMenuController.Create used to carry [Public] (IAllowAnonymous).
+    // PrivilegeFilter.cs's `if (isPublic == true) { base.OnActionExecuting(context); return; }`
+    // (:147-151) is a FULL early return, BEFORE both the `LoginUserInfo == null` check (:153)
+    // and the class-level [MainTenantOnly] check (:18 / :215 `isHostOnly`). An unauthenticated
+    // caller could therefore POST a FrameworkMenu row with IsPublic=true pointing at ANY URL —
+    // WTMContext.cs:809 (`if (menu != null && menu.IsPublic == true)`), consulted by
+    // PrivilegeFilter.cs:143-146 (`isPublic = controller.Wtm.IsUrlPublic(u)`) on every
+    // subsequent request, would then treat that URL as anonymous too: an unauthenticated
+    // privilege-escalation primitive. Fixed by removing [Public] from Create.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// #840: both halves live in ONE test method (per the issue's acceptance criteria) — a
+    /// negative assertion with no positive control in the same method can't tell "the guard
+    /// works" apart from "the request never reached the controller at all" (a routing typo, a
+    /// broken login fixture, etc.).
+    ///
+    /// <para>
+    /// <b>Part A</b> (unauthenticated): the POST must be rejected by PrivilegeFilter BEFORE
+    /// <c>FrameworkMenuVM.DoAdd()</c> ever runs. WTM's non-API MVC controllers return HTTP 200
+    /// for BOTH an unauthenticated login-redirect AND a successful Create (see
+    /// <c>PrivilegeFilter_UnauthenticatedUser_RedirectsOrReturns401</c>'s doc comment above), so
+    /// a bare status-code assertion is exactly the tautology #834's mutation gate exists to
+    /// catch. The primary, guard-specific signal used here is the ABSENCE of the
+    /// <c>X-WTM-Action</c> response header: <c>WtmActionResult.ExecuteResultAsync</c>
+    /// (<c>Helper/WtmActionResult.cs</c>) sets that header on every real
+    /// <c>FFResultJson().CloseDialog().RefreshGrid()</c> success return
+    /// (<c>FrameworkMenuController.cs:78</c>), which only executes AFTER
+    /// <c>vm.DoAdd()</c> — its presence means the write path was reached. Backed up by the
+    /// database read-back showing no row landed, which is the acceptance criteria's actual
+    /// bottom line.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Part B</b> (positive control, same method): the exact same endpoint and form shape,
+    /// through <see cref="NewAuthClientAsync"/> (admin), must succeed and the row must exist —
+    /// proving Part A's rejection is PrivilegeFilter's own doing and not a broken fixture that
+    /// would reject every caller regardless of authentication.
+    /// </para>
+    ///
+    /// <para>
+    /// Proven by restoring <c>[Public]</c> on <c>Create</c> (see
+    /// <c>test/mutants/patches/frameworkmenu-create-restore-public.patch</c> /
+    /// <c>test/mutants/manifest.json</c>'s <c>frameworkmenu-create-restore-public</c> entry) and
+    /// confirming this test goes RED on the X-WTM-Action assertion below — see the PR
+    /// description for the transcript.
+    /// </para>
+    /// </summary>
+    [TestMethod]
+    public async Task FrameworkMenuController_Create_UnauthenticatedRejected_AuthenticatedAdminSucceeds()
+    {
+        var unauthMarker = $"Issue840Unauth_{Guid.NewGuid():N}";
+        var adminMarker = $"Issue840Admin_{Guid.NewGuid():N}";
+
+        // ── Part A: unauthenticated POST must be rejected, no row created ──────────────
+        var unauthClient = NewUnauthClient();
+        var unauthResp = await unauthClient.PostAsync("/_Admin/FrameworkMenu/Create", BuildFrameworkMenuCreateForm(unauthMarker));
+        var unauthBody = await unauthResp.Content.ReadAsStringAsync();
+
+        Assert.IsFalse(unauthResp.Headers.Contains("X-WTM-Action"),
+            "#840: unauthenticated POST to FrameworkMenu/Create must be rejected by " +
+            "PrivilegeFilter before FrameworkMenuVM.DoAdd() runs. The X-WTM-Action response " +
+            "header is present, meaning the request reached the real Create success path " +
+            "(WtmActionResult) — the [Public]/isPublic early-return guard did not block it.");
+
+        if (unauthResp.StatusCode == HttpStatusCode.OK)
+        {
+            var isLoginRedirect = unauthBody.Contains("window.location.href", StringComparison.OrdinalIgnoreCase)
+                && unauthBody.Contains("/Login/Login", StringComparison.OrdinalIgnoreCase);
+            Assert.IsTrue(isLoginRedirect,
+                $"#840: a 200 for an unauthenticated Create must be the framework's login-redirect " +
+                $"script (PrivilegeFilter.cs's LoginUserInfo==null branch), not any other 200 body. " +
+                $"Body: {unauthBody[..Math.Min(300, unauthBody.Length)]}");
+        }
+        else
+        {
+            Assert.IsTrue(
+                unauthResp.StatusCode == HttpStatusCode.Unauthorized ||
+                unauthResp.StatusCode == HttpStatusCode.Redirect ||
+                unauthResp.StatusCode == HttpStatusCode.Found ||
+                unauthResp.StatusCode == HttpStatusCode.Forbidden,
+                $"#840: unexpected status {(int)unauthResp.StatusCode} for unauthenticated Create. " +
+                $"Body: {unauthBody[..Math.Min(200, unauthBody.Length)]}");
+        }
+
+        var unauthScope = DbTestHelpers.OpenScopedContext(_strictFactory, tenantCode: null);
+        using (unauthScope.Scope)
+        {
+            var rows = unauthScope.Dc.Set<FrameworkMenu>().AsNoTracking()
+                .Where(x => x.PageName == unauthMarker).ToList();
+            Assert.AreEqual(0, rows.Count,
+                $"#840: unauthenticated POST to FrameworkMenu/Create must not create a row — " +
+                $"found {rows.Count} row(s) with marker '{unauthMarker}'. This is the actual " +
+                $"exploit primitive #840 describes: an anonymous caller writing a FrameworkMenu " +
+                $"row (here with IsPublic=true) to make an arbitrary URL anonymous.");
+        }
+
+        // ── Part B (positive control, same method): admin must still be able to do this ──
+        var adminClient = await NewAuthClientAsync();
+        var adminResp = await adminClient.PostAsync("/_Admin/FrameworkMenu/Create", BuildFrameworkMenuCreateForm(adminMarker));
+        var adminBody = await adminResp.Content.ReadAsStringAsync();
+
+        Assert.AreEqual(HttpStatusCode.OK, adminResp.StatusCode,
+            $"#840: authenticated admin Create should succeed. Got {(int)adminResp.StatusCode}: {adminBody}");
+        Assert.IsTrue(adminResp.Headers.Contains("X-WTM-Action"),
+            $"#840: positive control failed — an authenticated admin Create must reach the real " +
+            $"WtmActionResult success path (X-WTM-Action header). Its absence would mean " +
+            $"NewAuthClientAsync's login silently failed, making Part A's rejection meaningless " +
+            $"(a broken fixture rejects everyone, not just the unauthenticated caller). " +
+            $"Body: {adminBody}");
+
+        var adminScope = DbTestHelpers.OpenScopedContext(_strictFactory, tenantCode: null);
+        using (adminScope.Scope)
+        {
+            var rows = adminScope.Dc.Set<FrameworkMenu>().AsNoTracking()
+                .Where(x => x.PageName == adminMarker).ToList();
+            Assert.AreEqual(1, rows.Count,
+                $"#840: authenticated admin Create must persist exactly one row with marker " +
+                $"'{adminMarker}' — found {rows.Count}.");
+        }
+    }
+
+    /// <summary>
+    /// #840: builds the same FrameworkMenuVM Create form for both the unauthenticated and
+    /// authenticated-admin requests above — field names match Create.cshtml's wt:* bindings
+    /// exactly (Entity.IsInside, Entity.Url, Entity.PageName, Entity.DisplayOrder,
+    /// Entity.ShowOnMenu, Entity.FolderOnly, Entity.IsInherit, Entity.IsPublic).
+    /// IsInside=false keeps FrameworkMenuVM.DoAdd() on its simplest path (the external-URL
+    /// branch, FrameworkMenuVM.cs:276-289) so the test doesn't also need to seed a real
+    /// module/action pair — it targets exactly the same field (IsPublic) and exactly the same
+    /// "write an arbitrary URL" primitive the issue describes.
+    /// </summary>
+    private static FormUrlEncodedContent BuildFrameworkMenuCreateForm(string pageNameMarker) =>
+        new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["Entity.IsInside"] = "false",
+            ["Entity.Url"] = "/SomeArbitraryEndpoint840",
+            ["Entity.PageName"] = pageNameMarker,
+            ["Entity.DisplayOrder"] = "0",
+            ["Entity.ShowOnMenu"] = "true",
+            ["Entity.FolderOnly"] = "false",
+            ["Entity.IsInherit"] = "false",
+            ["Entity.IsPublic"] = "true",
+        });
 }

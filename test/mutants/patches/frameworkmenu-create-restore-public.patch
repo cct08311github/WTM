@@ -1,0 +1,12 @@
+diff --git a/demo/WalkingTec.Mvvm.Demo/Areas/_Admin/Controllers/FrameworkMenuController.cs b/demo/WalkingTec.Mvvm.Demo/Areas/_Admin/Controllers/FrameworkMenuController.cs
+index 241368b3a..2c7ac04b3 100644
+--- a/demo/WalkingTec.Mvvm.Demo/Areas/_Admin/Controllers/FrameworkMenuController.cs
++++ b/demo/WalkingTec.Mvvm.Demo/Areas/_Admin/Controllers/FrameworkMenuController.cs
+@@ -65,6 +65,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.Controllers
+         // action must require authentication and the class's normal RBAC/tenant checks like
+         // every other write action in this controller (Edit/Delete already had none).
+         [HttpPost]
++        [Public]
+         [ActionDescription("Sys.Create")]
+         public ActionResult Create(FrameworkMenuVM vm)
+         {
