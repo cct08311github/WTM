@@ -1,0 +1,14 @@
+diff --git a/demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs b/demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs
+index cc79681f7..03cc1716e 100644
+--- a/demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs
++++ b/demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs
+@@ -102,6 +102,9 @@ namespace WalkingTec.Mvvm.Admin.Api
+         // anonymous caller cannot.
+         [HttpGet("[action]/{id}")]
+         [ActionDescription("GetFileName")]
++        // MUTANT test/mutants fileapi857-public-getfilename-reintroduce: re-adds [Public]
++        // (compile-preserving: an attribute add, not a statement delete). See test/mutants/manifest.json.
++        [Public]
+         public IActionResult GetFileName([FromServices] WtmFileProvider fp, string id, string csName = null)
+         {
+             if (!IsKnownConnectionKey(csName))

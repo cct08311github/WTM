@@ -53,7 +53,14 @@ namespace WalkingTec.Mvvm.Admin.Api
             }
             if (width == null && height == null)
             {
-                return Upload(fp, sm, groupName, csName);
+                // #851: Upload's signature is (fp, sm, groupName, subdir, extra, csName) -- a
+                // positional call here previously bound the caller's csName to Upload's 4th
+                // parameter (subdir), not its 6th (csName), so a caller who asked for a named
+                // connection silently had the upload land on the DEFAULT connection instead
+                // (Upload's own csName fell back to null) while the csName string was fed into
+                // subdir's path-sanitization logic. Named arguments pin each value to its real
+                // parameter regardless of declaration order.
+                return Upload(fp, sm: sm, groupName: groupName, csName: csName);
             }
             var FileData = Request.Form.Files[0];
 

@@ -1,0 +1,22 @@
+{
+  "id": "fileapi857-public-getuserphoto-reintroduce",
+  "kind": "security",
+  "description": "Issue #857: re-adds [Public] (IAllowAnonymous) to the demo FileApiController's GetUserPhoto action -- a compile-preserving attribute add, not a statement delete -- reproducing the pre-#830 state where any unauthenticated caller could read another tenant's FileAttachment content by GUID (GetUserPhoto delegates straight to GetFile). This action's HTTP coverage was one of the four docs/production-readiness.md:67 claimed existed but did not: FileApiControllerHardeningTests830.cs had zero test methods for GetUserPhoto before #857. Checked against the new GetUserPhoto_Unauthenticated_RejectedAndDoesNotLeakContent_AuthenticatedSucceeds, which seeds a FileAttachment whose CONTENT embeds a random marker and asserts both that an unauthenticated GET returns 401 AND that the response body never contains the marker.",
+  "target_file": "demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs",
+  "target_symbol": "FileApiController.GetUserPhoto(WtmFileProvider,string,string,int?,int?) -- the [Public] attribute (absent after #830, this mutant re-adds it), line ~226",
+  "patch": "patches/fileapi857-public-getuserphoto-reintroduce.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.GetUserPhoto_Unauthenticated_RejectedAndDoesNotLeakContent_AuthenticatedSucceeds",
+  "red_tests": [
+    "WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.GetUserPhoto_Unauthenticated_RejectedAndDoesNotLeakContent_AuthenticatedSucceeds"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.GetUserPhoto_Unauthenticated_RejectedAndDoesNotLeakContent_AuthenticatedSucceeds": "#857/#830: an unauthenticated caller must get 401 from GetUserPhoto \\(the endpoint was \\[Public\\] before #830\\)\\. Got 200\\."
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against a clean checkout (stale demo.db under bin/ removed first) with the mutant patch applied via test/mutants/run_mutant.py: VERDICT: KILLED, matched pattern against the actual GetUserPhoto 401-vs-200 assertion failure.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.GetFile_Unauthenticated_RejectedAndDoesNotLeakContent_AuthenticatedSucceeds",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.GetFile_Unauthenticated_RejectedAndDoesNotLeakContent_AuthenticatedSucceeds"
+  ]
+}

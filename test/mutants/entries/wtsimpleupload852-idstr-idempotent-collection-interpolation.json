@@ -1,0 +1,22 @@
+{
+  "id": "wtsimpleupload852-idstr-idempotent-collection-interpolation",
+  "kind": "security",
+  "description": "Issue #852: reverts WTSimpleUpload.razor's OnAvatarUpload batch-delete loop from interpolating the loop variable {id} back to interpolating the whole collection {idstr} (files.Select(x => x.Key), an IEnumerable<string>). Before this fix, every DeletedFile call in this loop sent the stringified enumerable/iterator type name instead of a real file GUID, so replacing an avatar never actually deleted the previous file's FileAttachment row/blob server-side -- only the client-side `files` dictionary bookkeeping worked. Checked against WTSimpleUploadBatchDeleteTests852.OnAvatarUpload_ReplacingExistingFile_DeletesThePreviousFileById_NotTheCollection, which instantiates the compiled component directly (no bUnit dependency exists in this repo), drives OnAvatarUpload through a fake HttpMessageHandler, and asserts the actual DeletedFile request path equals /api/_file/DeletedFile/<the pre-existing file's real GUID> -- not merely that a DeletedFile call was made, since the buggy code also makes exactly one call, just to the wrong path.",
+  "target_file": "demo/WalkingTec.Mvvm.BlazorDemo/WalkingTec.Mvvm.BlazorDemo.Shared/WtmBlazorUtils/WTSimpleUpload.razor",
+  "target_symbol": "WTSimpleUpload<TValue>.OnAvatarUpload(UploadFile) -- the batch-delete loop's DeletedFile URL interpolation, line ~59",
+  "patch": "patches/wtsimpleupload852-idstr-idempotent-collection-interpolation.patch",
+  "test_project": "test/WalkingTec.Mvvm.BlazorDemo.Shared.Test/WalkingTec.Mvvm.BlazorDemo.Shared.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.BlazorDemo.Shared.Test.WTSimpleUploadBatchDeleteTests852.OnAvatarUpload_ReplacingExistingFile_DeletesThePreviousFileById_NotTheCollection",
+  "red_tests": [
+    "WalkingTec.Mvvm.BlazorDemo.Shared.Test.WTSimpleUploadBatchDeleteTests852.OnAvatarUpload_ReplacingExistingFile_DeletesThePreviousFileById_NotTheCollection"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.BlazorDemo.Shared.Test.WTSimpleUploadBatchDeleteTests852.OnAvatarUpload_ReplacingExistingFile_DeletesThePreviousFileById_NotTheCollection": "#852: OnAvatarUpload's batch-delete loop interpolated \\{idstr\\}"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against a clean checkout (stale demo.db under bin/ removed first) with the mutant patch applied: \"Assert.AreEqual failed. Expected:</api/_file/DeletedFile/77157b3d-0bb8-47a5-ad0d-329d8ae91872>. Actual:</api/_file/DeletedFile/System.Linq.Enumerable+IEnumerableSelectIterator`2[System.Collections.Generic.KeyValuePair`2[System.String,System.String],System.String]>. #852: OnAvatarUpload's batch-delete loop interpolated {idstr} -- the whole IEnumerable<string> collection -- instead of the loop variable {id}, so the DeletedFile request never actually named the real file id and this loop deleted nothing server-side.\"",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.BlazorDemo.Shared.Test.WTSimpleUploadBatchDeleteTests852.OnAvatarDelete_ExistingFile_DeletesByRealId",
+  "green_tests": [
+    "WalkingTec.Mvvm.BlazorDemo.Shared.Test.WTSimpleUploadBatchDeleteTests852.OnAvatarDelete_ExistingFile_DeletesByRealId"
+  ]
+}

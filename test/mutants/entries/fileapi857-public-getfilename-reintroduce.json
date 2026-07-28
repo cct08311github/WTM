@@ -1,0 +1,22 @@
+{
+  "id": "fileapi857-public-getfilename-reintroduce",
+  "kind": "security",
+  "description": "Issue #857: re-adds [Public] (IAllowAnonymous) to the demo FileApiController's GetFileName action -- a compile-preserving attribute add, not a statement delete -- reproducing the pre-#830 state where any unauthenticated caller could read another tenant's FileAttachment name by GUID. This action's HTTP coverage was one of the four docs/production-readiness.md:67 claimed existed but did not: FileApiControllerHardeningTests830.cs had zero test methods for GetFileName before #857. Checked against the new GetFileName_Unauthenticated_RejectedAndDoesNotLeakContent_AuthenticatedSucceeds, which seeds a FileAttachment whose FILE NAME embeds a random marker and asserts both that an unauthenticated GET returns 401 AND that the response body never contains the marker.",
+  "target_file": "demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs",
+  "target_symbol": "FileApiController.GetFileName(WtmFileProvider,string,string) -- the [Public] attribute (absent after #830, this mutant re-adds it), line ~105",
+  "patch": "patches/fileapi857-public-getfilename-reintroduce.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.GetFileName_Unauthenticated_RejectedAndDoesNotLeakContent_AuthenticatedSucceeds",
+  "red_tests": [
+    "WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.GetFileName_Unauthenticated_RejectedAndDoesNotLeakContent_AuthenticatedSucceeds"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.GetFileName_Unauthenticated_RejectedAndDoesNotLeakContent_AuthenticatedSucceeds": "#857/#830: an unauthenticated caller must get 401 from GetFileName \\(the endpoint was \\[Public\\] before #830\\)\\. Got 200\\."
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against a clean checkout (stale demo.db under bin/ removed first) with the mutant patch applied: 'Assert.AreEqual failed. Expected:<Unauthorized>. Actual:<OK>. #857/#830: an unauthenticated caller must get 401 from GetFileName (the endpoint was [Public] before #830). Got 200.'",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.GetFile_Unauthenticated_RejectedAndDoesNotLeakContent_AuthenticatedSucceeds",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.FileApiControllerHardeningTests830.GetFile_Unauthenticated_RejectedAndDoesNotLeakContent_AuthenticatedSucceeds"
+  ]
+}

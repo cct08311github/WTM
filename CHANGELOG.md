@@ -65,10 +65,17 @@ across four categories, all fixed in this same PR:
   leak — `table/index.vue` in particular now creates one blob URL per image column per
   row on every search/page/filter change. All three call sites (and the pre-existing
   one in `uploadImage/index.vue`'s upload-success preview) now revoke the URL they are
-  about to replace before creating its successor, and revoke whatever they are still
-  holding on component unmount; `stores/userInfo.ts` additionally re-resolves the avatar
-  from a cached `photoId` on a sessionStorage hit rather than trusting the cached blob
-  URL, which does not survive a page reload.
+  about to replace before creating its successor. **Correction (#857):** an earlier
+  version of this entry claimed all three call sites also revoke on component unmount —
+  that only holds for the two that are actual Vue components,
+  `components/uploadImage/index.vue` and `components/table/index.vue` (both wire an
+  `onUnmounted` hook). `stores/userInfo.ts` is a Pinia **store**, which has no component
+  lifecycle to hook into, so it only ever revokes the previous blob URL at the point of
+  replacement inside `setUserInfos()` — a held avatar blob URL is not revoked when the
+  session/store itself goes away. `stores/userInfo.ts` additionally re-resolves the
+  avatar from a cached `photoId` on a sessionStorage hit rather than trusting the cached
+  blob URL, which does not survive a page reload. See #856 for the open follow-up on
+  this store's lifecycle gap.
 - **`DeletedFile` now calls `WtmFileProvider.DeleteFileTenantScoped`, not
   `DeleteFile`**, and is now `[HttpPost]`, not `[HttpGet]`. The non-tenant-scoped
   overload let any authenticated caller in tenant A delete tenant B's `FileAttachment`

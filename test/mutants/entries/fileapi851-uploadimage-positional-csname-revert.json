@@ -1,0 +1,22 @@
+{
+  "id": "fileapi851-uploadimage-positional-csname-revert",
+  "kind": "security",
+  "description": "Issue #851: reverts UploadImage's no-resize fast path from named arguments back to the original positional call Upload(fp, sm, groupName, csName). Upload's own signature is (fp, sm, groupName, subdir, extra, csName) -- the 4th positional slot is subdir, not csName -- so this mutant reproduces the pre-fix bug where a caller's csName silently lands in Upload's subdir parameter while Upload's own csName parameter falls back to null (the default connection), so a caller who explicitly asked for a named connection has their upload written to the default connection instead. Checked against FileApiControllerUploadImageCsNameTests851.UploadImage_NoResizeFastPath_ForwardsCallersCsNameToUpload_NotIntoSubdirSlot, which records every cskey value forwarded to Wtm.CreateDC and asserts the caller's original csName ('wtmtest2') is among them -- not merely that the request returns 200, since the buggy code path also returns 200 (it silently uses the wrong connection rather than erroring).",
+  "target_file": "demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs",
+  "target_symbol": "FileApiController.UploadImage(WtmFileProvider,int?,int?,string,string,string,string,string) -- the no-resize fast path's Upload(...) call, line ~55",
+  "patch": "patches/fileapi851-uploadimage-positional-csname-revert.patch",
+  "test_project": "test/WalkingTec.Mvvm.Admin.Test/WalkingTec.Mvvm.Admin.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Admin.Test.FileApiControllerUploadImageCsNameTests851.UploadImage_NoResizeFastPath_ForwardsCallersCsNameToUpload_NotIntoSubdirSlot",
+  "red_tests": [
+    "WalkingTec.Mvvm.Admin.Test.FileApiControllerUploadImageCsNameTests851.UploadImage_NoResizeFastPath_ForwardsCallersCsNameToUpload_NotIntoSubdirSlot"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Admin.Test.FileApiControllerUploadImageCsNameTests851.UploadImage_NoResizeFastPath_ForwardsCallersCsNameToUpload_NotIntoSubdirSlot": "#851: UploadImage's no-resize fast path called Upload\\(fp, sm, groupName, csName\\) POSITIONALLY"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against a clean checkout (stale demo.db under bin/ removed first) with the mutant patch applied: \"Assert.IsTrue failed. #851: UploadImage's no-resize fast path called Upload(fp, sm, groupName, csName) POSITIONALLY -- Upload's own 4th parameter is `subdir`, not `csName`, so the caller-supplied csName ('wtmtest2') landed in Upload's subdir slot while Upload's own csName parameter silently fell back to null (the default connection). Wtm.CreateDC(cskey:) must be called with the caller's ORIGINAL csName, not null -- otherwise the upload silently lands on the wrong connection. Recorded CreateDC cskey calls: [<null>].\"",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Admin.Test.FileApiControllerUploadImageCsNameTests851.UploadImage_ResizeBranch_AlreadyForwardsCsNameToCreateDC",
+  "green_tests": [
+    "WalkingTec.Mvvm.Admin.Test.FileApiControllerUploadImageCsNameTests851.UploadImage_ResizeBranch_AlreadyForwardsCsNameToCreateDC"
+  ]
+}

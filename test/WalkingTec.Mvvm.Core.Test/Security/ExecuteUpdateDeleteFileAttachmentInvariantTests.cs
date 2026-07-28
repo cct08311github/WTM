@@ -43,6 +43,27 @@ namespace WalkingTec.Mvvm.Core.Test.Security
     /// it does not close out Issue #824's own recommended fix (a SaveChanges-boundary guard, still
     /// outstanding — see the remarks above and the PR description).
     /// </para>
+    ///
+    /// <para>
+    /// <b>#857 — known scope limit, stated honestly rather than left implicit:</b> the statement-
+    /// boundary walk-back (<see cref="LastStatementBoundary"/>) only looks backward from the
+    /// <c>.ExecuteUpdate</c>/<c>.ExecuteDelete</c> call to the nearest preceding <c>;</c> or
+    /// <c>{</c> — i.e. it only catches <see cref="FileAttachment"/> and the bulk call appearing in
+    /// the SAME source statement. A query assigned to a local first and mutated on a later,
+    /// separate statement evades it entirely:
+    /// <code>
+    /// var files = DC.Set&lt;FileAttachment&gt;();
+    /// files.ExecuteDeleteAsync();
+    /// </code>
+    /// contains no single statement whose text mentions both <c>FileAttachment</c> and
+    /// <c>ExecuteDelete</c>, so this test would not flag it. This is not a false invariant — the
+    /// test genuinely fails whenever a real violation is written the direct, same-statement way,
+    /// and the sanity-check test below proves the detector actually fires — but it is a literal
+    /// source-text scan, not a data/alias-flow analysis, and must not be read as a complete proof
+    /// that no <c>ExecuteUpdate</c>/<c>ExecuteDelete</c> call anywhere in <c>src/</c> can reach
+    /// <see cref="FileAttachment"/> through an intermediate variable. See the same caveat recorded
+    /// in <c>docs/production-readiness.md</c>.
+    /// </para>
     /// </summary>
     [TestClass]
     public class ExecuteUpdateDeleteFileAttachmentInvariantTests

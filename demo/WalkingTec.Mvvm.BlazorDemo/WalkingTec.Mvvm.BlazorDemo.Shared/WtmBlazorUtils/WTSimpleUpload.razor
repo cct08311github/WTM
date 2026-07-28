@@ -56,7 +56,11 @@
                     // #830: DeletedFile moved from GET to POST (a GET performing a delete is
                     // itself a CSRF/prefetch hazard, separate from the tenant-scoping fix that
                     // motivated it).
-                    _ = await WtmBlazor.Api.CallAPI($"/api/_file/DeletedFile/{idstr}", HttpMethodEnum.POST, (HttpContent)null);
+                    // #852: this used to interpolate {idstr} -- the whole IEnumerable<string>,
+                    // not the loop variable {id} -- so every call in this loop sent the
+                    // collection's stringified type name instead of a real file id, and this
+                    // batch-delete loop never actually deleted anything server-side.
+                    _ = await WtmBlazor.Api.CallAPI($"/api/_file/DeletedFile/{id}", HttpMethodEnum.POST, (HttpContent)null);
                     files.Remove(id);
 
                 }

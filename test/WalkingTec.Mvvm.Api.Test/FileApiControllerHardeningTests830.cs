@@ -216,6 +216,181 @@ public class FileApiControllerHardeningTests830
     }
 
     // ═══════════════════════════════════════════════════════════════════════
+    // Category 1 (continued) — #857: docs/production-readiness.md claimed the remaining four
+    // [Public] removals (GetFileName, GetFileInfo, GetUserPhoto, DownloadFile — GetFile above was
+    // the only one actually pinned by an HTTP test) were "covered by HTTP tests" when this file
+    // in fact had none for them. These four close that gap, same rigor as GetFile above: a
+    // negative assertion that the unauthenticated response never contains the marker, paired with
+    // a positive control proving the marker IS reachable when authenticated.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Seeds a <see cref="FileAttachment"/> whose MARKER lives in its FILE NAME rather than its
+    /// content — <see cref="GetFileName"/> and <see cref="GetFileInfo"/> below only ever return
+    /// metadata (never <c>FileData</c>), so a content marker like <see cref="SeedMarkerFile"/>'s
+    /// would never appear in their responses even on the legitimate authenticated path, making
+    /// the positive control vacuous. <see cref="WalkingTec.Mvvm.Core.Support.FileHandlers.WtmFileProvider.GetFileName"/>
+    /// strips <c>&lt;</c>/<c>&gt;</c>/space from the name, so the marker format below avoids all three.
+    /// </summary>
+    private static (Guid Id, string Marker) SeedMarkerNamedFile(WebApplicationFactory<WalkingTec.Mvvm.Demo.Program> factory, string? tenantCode)
+    {
+        var marker = $"wtm-857-secret-{Guid.NewGuid():N}";
+        var file = DbTestHelpers.Seed(factory, new FileAttachment
+        {
+            ID = Guid.NewGuid(),
+            FileName = $"{marker}.txt",
+            FileExt = "txt",
+            Length = 1,
+            UploadTime = DateTime.UtcNow,
+            SaveMode = "database",
+            FileData = Encoding.UTF8.GetBytes("x"),
+            TenantCode = tenantCode,
+        });
+        return (file.ID, marker);
+    }
+
+    [TestMethod]
+    public async Task GetFileName_Unauthenticated_RejectedAndDoesNotLeakContent_AuthenticatedSucceeds()
+    {
+        using var factory = new DemoWebApplicationFactory();
+        using var strictFactory = NewStrictFactory(factory);
+
+        var (id, marker) = SeedMarkerNamedFile(strictFactory, tenantCode: null);
+
+        var unauthClient = strictFactory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+            HandleCookies = false,
+        });
+        var unauthResp = await unauthClient.GetAsync($"/api/_file/GetFileName/{id}");
+        var unauthBody = await unauthResp.Content.ReadAsStringAsync();
+
+        Assert.AreEqual(HttpStatusCode.Unauthorized, unauthResp.StatusCode,
+            $"#857/#830: an unauthenticated caller must get 401 from GetFileName (the endpoint " +
+            $"was [Public] before #830). Got {(int)unauthResp.StatusCode}.");
+        Assert.IsFalse(unauthBody.Contains(marker, StringComparison.Ordinal),
+            $"#857/#830: the unauthenticated response body must NOT contain the seeded file's " +
+            $"name. Body excerpt: {unauthBody[..Math.Min(200, unauthBody.Length)]}");
+
+        var authClient = await AdminLoginAsync(strictFactory);
+        var authResp = await authClient.GetAsync($"/api/_file/GetFileName/{id}");
+        var authBody = await authResp.Content.ReadAsStringAsync();
+
+        Assert.AreEqual(HttpStatusCode.OK, authResp.StatusCode,
+            $"#857/#830: an authenticated caller must still be able to read the file name. " +
+            $"Got {(int)authResp.StatusCode}: {authBody[..Math.Min(200, authBody.Length)]}");
+        Assert.IsTrue(authBody.Contains(marker, StringComparison.Ordinal),
+            "#857/#830: the authenticated positive control must actually contain the marker — " +
+            "otherwise the unauthenticated test's absence check above would be meaningless.");
+    }
+
+    [TestMethod]
+    public async Task GetFileInfo_Unauthenticated_RejectedAndDoesNotLeakContent_AuthenticatedSucceeds()
+    {
+        using var factory = new DemoWebApplicationFactory();
+        using var strictFactory = NewStrictFactory(factory);
+
+        var (id, marker) = SeedMarkerNamedFile(strictFactory, tenantCode: null);
+
+        var unauthClient = strictFactory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+            HandleCookies = false,
+        });
+        var unauthResp = await unauthClient.GetAsync($"/api/_file/GetFileInfo/{id}");
+        var unauthBody = await unauthResp.Content.ReadAsStringAsync();
+
+        Assert.AreEqual(HttpStatusCode.Unauthorized, unauthResp.StatusCode,
+            $"#857/#830: an unauthenticated caller must get 401 from GetFileInfo (the endpoint " +
+            $"was [Public] before #830). Got {(int)unauthResp.StatusCode}.");
+        Assert.IsFalse(unauthBody.Contains(marker, StringComparison.Ordinal),
+            $"#857/#830: the unauthenticated response body must NOT contain the seeded file's " +
+            $"metadata. Body excerpt: {unauthBody[..Math.Min(200, unauthBody.Length)]}");
+
+        var authClient = await AdminLoginAsync(strictFactory);
+        var authResp = await authClient.GetAsync($"/api/_file/GetFileInfo/{id}");
+        var authBody = await authResp.Content.ReadAsStringAsync();
+
+        Assert.AreEqual(HttpStatusCode.OK, authResp.StatusCode,
+            $"#857/#830: an authenticated caller must still be able to read file info. " +
+            $"Got {(int)authResp.StatusCode}: {authBody[..Math.Min(200, authBody.Length)]}");
+        Assert.IsTrue(authBody.Contains(marker, StringComparison.Ordinal),
+            "#857/#830: the authenticated positive control must actually contain the marker — " +
+            "otherwise the unauthenticated test's absence check above would be meaningless.");
+    }
+
+    [TestMethod]
+    public async Task GetUserPhoto_Unauthenticated_RejectedAndDoesNotLeakContent_AuthenticatedSucceeds()
+    {
+        using var factory = new DemoWebApplicationFactory();
+        using var strictFactory = NewStrictFactory(factory);
+
+        var (id, marker) = SeedMarkerFile(strictFactory, tenantCode: null);
+
+        var unauthClient = strictFactory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+            HandleCookies = false,
+        });
+        var unauthResp = await unauthClient.GetAsync($"/api/_file/GetUserPhoto/{id}");
+        var unauthBody = await unauthResp.Content.ReadAsStringAsync();
+
+        Assert.AreEqual(HttpStatusCode.Unauthorized, unauthResp.StatusCode,
+            $"#857/#830: an unauthenticated caller must get 401 from GetUserPhoto (the endpoint " +
+            $"was [Public] before #830). Got {(int)unauthResp.StatusCode}.");
+        Assert.IsFalse(unauthBody.Contains(marker, StringComparison.Ordinal),
+            $"#857/#830: regardless of status code, the unauthenticated response body must NOT " +
+            $"contain the seeded file's content. Body excerpt: {unauthBody[..Math.Min(200, unauthBody.Length)]}");
+
+        var authClient = await AdminLoginAsync(strictFactory);
+        var authResp = await authClient.GetAsync($"/api/_file/GetUserPhoto/{id}");
+        var authBody = await authResp.Content.ReadAsStringAsync();
+
+        Assert.AreEqual(HttpStatusCode.OK, authResp.StatusCode,
+            $"#857/#830: an authenticated caller must still be able to read GetUserPhoto (no " +
+            $"per-page privilege required — [AllRights]). Got {(int)authResp.StatusCode}: " +
+            $"{authBody[..Math.Min(200, authBody.Length)]}");
+        Assert.IsTrue(authBody.Contains(marker, StringComparison.Ordinal),
+            "#857/#830: the authenticated positive control must actually contain the marker — " +
+            "otherwise the unauthenticated test's absence check above would be meaningless.");
+    }
+
+    [TestMethod]
+    public async Task DownloadFile_Unauthenticated_RejectedAndDoesNotLeakContent_AuthenticatedSucceeds()
+    {
+        using var factory = new DemoWebApplicationFactory();
+        using var strictFactory = NewStrictFactory(factory);
+
+        var (id, marker) = SeedMarkerFile(strictFactory, tenantCode: null);
+
+        var unauthClient = strictFactory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+            HandleCookies = false,
+        });
+        var unauthResp = await unauthClient.GetAsync($"/api/_file/DownloadFile/{id}");
+        var unauthBody = await unauthResp.Content.ReadAsStringAsync();
+
+        Assert.AreEqual(HttpStatusCode.Unauthorized, unauthResp.StatusCode,
+            $"#857/#830: an unauthenticated caller must get 401 from DownloadFile (the endpoint " +
+            $"was [Public] before #830). Got {(int)unauthResp.StatusCode}.");
+        Assert.IsFalse(unauthBody.Contains(marker, StringComparison.Ordinal),
+            $"#857/#830: regardless of status code, the unauthenticated response body must NOT " +
+            $"contain the seeded file's content. Body excerpt: {unauthBody[..Math.Min(200, unauthBody.Length)]}");
+
+        var authClient = await AdminLoginAsync(strictFactory);
+        var authResp = await authClient.GetAsync($"/api/_file/DownloadFile/{id}");
+        var authBody = await authResp.Content.ReadAsStringAsync();
+
+        Assert.AreEqual(HttpStatusCode.OK, authResp.StatusCode,
+            $"#857/#830: an authenticated caller must still be able to download the file. " +
+            $"Got {(int)authResp.StatusCode}: {authBody[..Math.Min(200, authBody.Length)]}");
+        Assert.IsTrue(authBody.Contains(marker, StringComparison.Ordinal),
+            "#857/#830: the authenticated positive control must actually contain the marker — " +
+            "otherwise the unauthenticated test's absence check above would be meaningless.");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
     // Category 2 — DeletedFile → DeleteFileTenantScoped: a caller authenticated as tenant A must
     // not be able to delete tenant B's FileAttachment row.
     // ═══════════════════════════════════════════════════════════════════════

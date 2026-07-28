@@ -1,0 +1,14 @@
+diff --git a/demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs b/demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs
+index cc79681f7..ab0d4830f 100644
+--- a/demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs
++++ b/demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs
+@@ -190,6 +190,9 @@ namespace WalkingTec.Mvvm.Admin.Api
+ 
+         [HttpGet("[action]/{id}")]
+         [ActionDescription("GetFileInfo")]
++        // MUTANT test/mutants fileapi857-public-getfileinfo-reintroduce: re-adds [Public]
++        // (compile-preserving: an attribute add, not a statement delete). See test/mutants/manifest.json.
++        [Public]
+         public IActionResult GetFileInfo([FromServices] WtmFileProvider fp, string id, string csName = null)
+         {
+             if (!IsKnownConnectionKey(csName))
