@@ -558,6 +558,44 @@ namespace WalkingTec.Mvvm.Mvc
                 return BadRequest("Field not found or not writable");
             }
 
+            // #824 Part 1 / B1.1: unconditionally refuse to edit any FK whose principal is
+            // FileAttachment, regardless of tenant. This closes ONE of Issue #824's write-path
+            // sinks — the UpdateModelProperty exploit chain: without this gate, any [AllRights]
+            // caller could set e.g. FrameworkUser.PhotoId to another tenant's FileAttachment GUID
+            // through this endpoint — #815's FK gate
+            // (BaseCRUDVM.RejectUnresolvableFileAttachmentReferences) never runs here because
+            // #797 deliberately routes this endpoint around DoEdit()/DoEditPrepare(), and the
+            // blockedFields HashSet above has no attachment-FK entry (and should not gain one — a
+            // hardcoded field-name list would miss any downstream-defined attachment FK; see
+            // DCExtension.IsFileAttachmentForeignKeyProperty's doc comment. Driving this off EF
+            // relationship metadata instead of a name list follows the same principle Issue #824
+            // states for its own recommended fix).
+            //
+            // IMPORTANT — this is NOT the fix Issue #824 asks for. The issue's own conclusion
+            // (after five review rounds on #815) is that per-sink placement is "structurally
+            // doomed" and it explicitly recommends a single guard at the
+            // EmptyContext.SaveChanges/SaveChangesAsync boundary instead, so every write path is
+            // covered by construction rather than one sink at a time (see the issue body's
+            // "suggested implementation" section and docs/production-readiness.md). Gating only
+            // this one endpoint was a scope decision made by the orchestrating session for this
+            // PR — to close the live, already-reachable UpdateModelProperty chain quickly — not
+            // something the issue itself asked for. The SaveChanges-boundary work Issue #824
+            // describes REMAINS OUTSTANDING, and so do the other write-path sinks it lists
+            // (BasePagedListVM.UpdateEntityList, BaseBatchVM.DoBatchEdit/Async,
+            // BaseImportVM.BatchSaveData, grandchild IEnumerable<ISubFile>, direct DbSet writers).
+            // This gate is defence in depth at one sink, not the architectural fix.
+            //
+            // Deny is unconditional, not tenant-conditional — a decision made for this PR, not
+            // dictated by the issue: inline grid cell edit can only POST a bare GUID string,
+            // never upload a file, so legitimate same-tenant use of
+            // this path is ~nil — and a tenant-conditional check would drag tenant-resolution
+            // logic into an endpoint that should not touch files at all. This means a same-tenant
+            // attachment FK edit is ALSO rejected, on purpose.
+            if (dc.IsFileAttachmentForeignKeyProperty(entityType, prop.Name))
+            {
+                return BadRequest("This field is a FileAttachment foreign key and cannot be edited inline");
+            }
+
             // MVC-004: honour the opt-in per-property authz hook
             if (!CanEditProperty(vm.Entity, field))
             {

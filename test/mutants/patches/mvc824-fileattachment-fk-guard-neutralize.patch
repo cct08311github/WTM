@@ -1,0 +1,16 @@
+diff --git a/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs b/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs
+index 5cf730ab5..48bfa48c3 100644
+--- a/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs
++++ b/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs
+@@ -574,7 +574,10 @@ namespace WalkingTec.Mvvm.Mvc
+             // this path is ~nil — and a tenant-conditional check would drag tenant-resolution
+             // logic into an endpoint that should not touch files at all. This means a same-tenant
+             // attachment FK edit is ALSO rejected, on purpose.
+-            if (dc.IsFileAttachmentForeignKeyProperty(entityType, prop.Name))
++            // MUTANT test/mutants mvc824-fileattachment-fk-guard-neutralize: condition
++            // neutralized (compile-preserving, `&& false`) so the guard can never fire. See
++            // test/mutants/manifest.json for the mutant record.
++            if (dc.IsFileAttachmentForeignKeyProperty(entityType, prop.Name) && false)
+             {
+                 return BadRequest("This field is a FileAttachment foreign key and cannot be edited inline");
+             }

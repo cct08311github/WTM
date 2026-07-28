@@ -516,5 +516,112 @@ namespace WalkingTec.Mvvm.Admin.Test
                     "that was never actually persisted to the database");
             }
         }
+
+        // ─── #824 Part 1 / B1.1: FileAttachment FK must be rejected unconditionally ───
+
+        /// <summary>
+        /// Regression test for Issue #824 Part 1 / B1.1 — the live exploit chain: without a
+        /// dedicated gate, <see cref="_FrameworkController.UpdateModelProperty"/> would let any
+        /// caller set <see cref="FrameworkUser.PhotoId"/> (a scalar FK whose principal is
+        /// <see cref="FileAttachment"/>) to ANY <see cref="FileAttachment"/> id — including one
+        /// belonging to a different tenant — because #815's FK gate
+        /// (<c>BaseCRUDVM.RejectUnresolvableFileAttachmentReferences</c>) only hangs off
+        /// <c>DoAddPrepare</c>/<c>DoEditPrepare</c>, and #797 deliberately routes this endpoint
+        /// around both. The posted id here is a REAL, persisted <see cref="FileAttachment"/> row
+        /// (not a garbage GUID) specifically so that reverting the new guard would let the
+        /// request through to a genuine 200 — a garbage/non-existent id could instead be caught
+        /// by an unrelated DB-level FK-constraint failure and produce a DIFFERENT 400 ("Edit
+        /// failed"), which would make this test SURVIVE the guard's removal instead of detecting
+        /// it. Asserting the guard's own message text (not just the status code) is what actually
+        /// pins this guard, same convention as the sibling MVC-004 tests above.
+        ///
+        /// Both halves live in the SAME test method by design: the negative assertion (PhotoId
+        /// rejected) proves the deny-list catches an attachment FK; the positive control (Name
+        /// still succeeds) proves the guard is scoped to attachment FKs and does not over-block.
+        /// Per Issue #824's explicit "unconditional deny" decision, the positive control is
+        /// deliberately a NON-attachment field — a same-tenant (or any-tenant) attachment FK edit
+        /// is expected to fail too, so it cannot serve as a positive control here.
+        /// </summary>
+        [TestMethod]
+        public void UpdateModelProperty_FileAttachmentForeignKey_RejectedButNonAttachmentFieldStillSucceeds()
+        {
+            var frameworkUserVmFullName = typeof(FrameworkUserVM).AssemblyQualifiedName!;
+            const string itCode = "u824";
+            Guid userId;
+            Guid fileId;
+
+            using (var seedDc = new DataContext(_seed, DBTypeEnum.Memory))
+            {
+                var user = new FrameworkUser
+                {
+                    ITCode = itCode,
+                    Password = "pwd12345678901234567890123456789",
+                    Name = "Issue824User",
+                    IsValid = true,
+                };
+                seedDc.Set<FrameworkUser>().Add(user);
+
+                var file = new FileAttachment
+                {
+                    FileName = "victim.png",
+                    FileExt = ".png",
+                    Length = 42,
+                    UploadTime = DateTime.UtcNow,
+                    TenantCode = "TENANT_VICTIM_824",
+                };
+                seedDc.Set<FileAttachment>().Add(file);
+                seedDc.SaveChanges();
+                userId = user.ID;
+                fileId = file.ID;
+            }
+
+            // Negative: PhotoId is a FileAttachment FK and must be rejected unconditionally,
+            // regardless of whether the posted id resolves to a real (even cross-tenant) row.
+            using (var editDc = new DataContext(_seed, DBTypeEnum.Memory))
+            {
+                var controller = CreateController(editDc);
+
+                var result = controller.UpdateModelProperty(frameworkUserVmFullName, userId, "PhotoId", fileId.ToString());
+
+                Assert.IsInstanceOfType(
+                    result,
+                    typeof(BadRequestObjectResult),
+                    "#824: PhotoId is a FileAttachment FK and must be rejected");
+                var body = (result as BadRequestObjectResult)?.Value?.ToString() ?? string.Empty;
+                StringAssert.Contains(
+                    body,
+                    "FileAttachment foreign key",
+                    "#824: the 400 must come from the FileAttachment-FK guard specifically (its " +
+                    "message), not from an unrelated 400 (e.g. a DB-level FK-constraint failure) " +
+                    $"that a garbage id could ALSO produce. Got body: {body}");
+            }
+
+            using (var verifyDc = new DataContext(_seed, DBTypeEnum.Memory))
+            {
+                var reloaded = verifyDc.Set<FrameworkUser>().Single(u => u.ID == userId);
+                Assert.IsNull(reloaded.PhotoId, "#824: the rejected PhotoId edit must not be persisted");
+            }
+
+            // Positive control: a non-attachment field on the SAME entity must still succeed —
+            // proves the new guard is scoped to attachment FKs, not a blanket denial.
+            using (var editDc2 = new DataContext(_seed, DBTypeEnum.Memory))
+            {
+                var controller = CreateController(editDc2);
+
+                var result = controller.UpdateModelProperty(frameworkUserVmFullName, userId, "Name", "Updated824");
+
+                Assert.IsNotInstanceOfType(
+                    result,
+                    typeof(BadRequestObjectResult),
+                    $"#824: a non-attachment field must still succeed. Got: {(result as BadRequestObjectResult)?.Value}");
+            }
+
+            using (var verifyDc2 = new DataContext(_seed, DBTypeEnum.Memory))
+            {
+                var reloaded = verifyDc2.Set<FrameworkUser>().Single(u => u.ID == userId);
+                Assert.AreEqual("Updated824", reloaded.Name,
+                    "#824: the positive control's edit must actually persist");
+            }
+        }
     }
 }

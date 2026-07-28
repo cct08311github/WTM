@@ -1,0 +1,22 @@
+{
+  "id": "mvc824-fileattachment-fk-guard-direct-crud-kill",
+  "kind": "security",
+  "description": "The SAME production patch as mvc824-fileattachment-fk-guard-http, checked instead against test/WalkingTec.Mvvm.Admin.Test/FrameworkControllerUpdateModelPropertyPersistTests.cs's UpdateModelProperty_FileAttachmentForeignKey_RejectedButNonAttachmentFieldStillSucceeds, which calls _FrameworkController.UpdateModelProperty directly against a real BaseCRUDVM (FrameworkUserVM) and a real seeded FrameworkUser + FileAttachment pair. Included specifically to prove the runner's KILLED path is exercised against real production code in this same PR (mirrors mvc004-blocklist-empty-direct-crud-kill's rationale): the same mutation the HTTP-layer test structurally cannot see IS caught here because this test reaches the actual guarded code path directly. green_tests is the pre-existing UpdateModelProperty_ValidField_ActuallyPersists sibling test, proving this mutation does not collaterally break an ordinary (non-attachment) field edit.",
+  "target_file": "src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs",
+  "target_symbol": "_FrameworkController.UpdateModelProperty(string,Guid,string,string) -- the IsFileAttachmentForeignKeyProperty guard condition, line ~577",
+  "patch": "patches/mvc824-fileattachment-fk-guard-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Admin.Test/WalkingTec.Mvvm.Admin.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Admin.Test.FrameworkControllerUpdateModelPropertyPersistTests.UpdateModelProperty_FileAttachmentForeignKey_RejectedButNonAttachmentFieldStillSucceeds",
+  "red_tests": [
+    "WalkingTec.Mvvm.Admin.Test.FrameworkControllerUpdateModelPropertyPersistTests.UpdateModelProperty_FileAttachmentForeignKey_RejectedButNonAttachmentFieldStillSucceeds"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Admin.Test.FrameworkControllerUpdateModelPropertyPersistTests.UpdateModelProperty_FileAttachmentForeignKey_RejectedButNonAttachmentFieldStillSucceeds": "#824: PhotoId is a FileAttachment FK and must be rejected"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against a clean checkout (stale demo.db under bin/ removed first) with the mutant patch applied: 'Assert.IsInstanceOfType failed. #824: PhotoId is a FileAttachment FK and must be rejected Expected type:<Microsoft.AspNetCore.Mvc.BadRequestObjectResult>. Actual type:<Microsoft.AspNetCore.Mvc.OkObjectResult>.'.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Admin.Test.FrameworkControllerUpdateModelPropertyPersistTests.UpdateModelProperty_ValidField_ActuallyPersists",
+  "green_tests": [
+    "WalkingTec.Mvvm.Admin.Test.FrameworkControllerUpdateModelPropertyPersistTests.UpdateModelProperty_ValidField_ActuallyPersists"
+  ]
+}

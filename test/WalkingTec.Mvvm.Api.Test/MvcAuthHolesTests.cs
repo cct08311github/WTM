@@ -576,6 +576,96 @@ public class MvcAuthHolesTests
     }
 
     // ═══════════════════════════════════════════════════════════════════════
+    // #824 Part 1 / B1.1: UpdateModelProperty must refuse to write a FileAttachment FK.
+    //
+    // This is the live exploit chain Issue #824 opens with: POST /_Framework/UpdateModelProperty
+    // (an [AllRights] endpoint) could set FrameworkUser.PhotoId to ANY FileAttachment's GUID —
+    // including one belonging to a different tenant — because #815's FK gate
+    // (BaseCRUDVM.RejectUnresolvableFileAttachmentReferences) only hangs off
+    // DoAddPrepare/DoEditPrepare, and #797 deliberately routes this endpoint around both.
+    // Decision (this PR, not dictated by Issue #824 — the issue's own recommended fix is a
+    // SaveChanges-boundary guard, still outstanding): deny unconditionally, not
+    // tenant-conditionally — inline grid cell edit can only POST a bare GUID string, never
+    // upload a file, so legitimate same-tenant use of this path is ~nil.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// #824: Attempting to inline-edit "PhotoId" (a scalar FK whose principal is
+    /// <see cref="FileAttachment"/>) must return 400 FROM THE NEW GUARD SPECIFICALLY, not from
+    /// some other coincidental 400. The posted value is a REAL, persisted
+    /// <see cref="FileAttachment"/> id (seeded under a DIFFERENT tenant) rather than a garbage
+    /// GUID: a garbage id would, if this guard were deleted, still likely 400 downstream from a
+    /// DB-level FK-constraint failure (caught by the endpoint's generic "Edit failed" handler) —
+    /// a status-code-only assertion (or one keyed to the wrong body text) could not tell that
+    /// coincidental 400 apart from this guard's own rejection. A REAL FileAttachment id makes the
+    /// FK constraint itself satisfied, so deleting the guard would let the request through to a
+    /// genuine 200 — proving this test actually depends on the guard.
+    ///
+    /// Both the negative assertion (PhotoId rejected) and its positive control (a non-attachment
+    /// field, "Name", still succeeds) live in this ONE test method: per this PR's "unconditional
+    /// deny" decision (see the class-header comment above — Issue #824 itself does not dictate
+    /// this), a same-tenant (or any-tenant) attachment FK edit is ALSO expected to fail, so it
+    /// cannot serve as the positive control — only a non-attachment field can prove the guard does
+    /// not over-block.
+    /// </summary>
+    [TestMethod]
+    public async Task UpdateModelProperty_FileAttachmentForeignKey_RejectedButNonAttachmentFieldSucceeds()
+    {
+        var user = SeedFrameworkUser();
+        var file = DbTestHelpers.Seed(_strictFactory, new FileAttachment
+        {
+            ID = Guid.NewGuid(),
+            FileName = "victim-824.png",
+            FileExt = ".png",
+            Length = 42,
+            UploadTime = DateTime.UtcNow,
+            TenantCode = "TENANT_VICTIM_824",
+        });
+        var client = await NewAuthClientAsync();
+
+        // Negative: PhotoId is a FileAttachment FK and must be rejected unconditionally.
+        var negForm = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["_DONOT_USE_VMNAME"] = FrameworkUserVm,
+            ["id"] = user.ID.ToString(),
+            ["field"] = "PhotoId",
+            ["value"] = file.ID.ToString(),
+        });
+        var negResp = await client.PostAsync("/_Framework/UpdateModelProperty", negForm);
+        var negBody = await negResp.Content.ReadAsStringAsync();
+
+        Assert.AreEqual(HttpStatusCode.BadRequest, negResp.StatusCode,
+            $"#824: a FileAttachment FK (PhotoId) must be rejected. Got {(int)negResp.StatusCode}: {negBody}");
+        Assert.IsTrue(negBody.Contains("FileAttachment foreign key", StringComparison.OrdinalIgnoreCase),
+            $"#824: the 400 must come from the FileAttachment-FK guard specifically (its message), " +
+            $"not from an unrelated 400 (e.g. a DB-level FK-constraint failure) that a garbage id " +
+            $"could ALSO produce even without this guard. Got body: {negBody}");
+
+        var persistedUser = DbTestHelpers.ReadBack<FrameworkUser>(_strictFactory, user.ID);
+        Assert.IsNotNull(persistedUser, "#824: the seeded row must still exist.");
+        Assert.IsNull(persistedUser!.PhotoId, "#824: the rejected PhotoId edit must not be persisted");
+
+        // Positive control: a non-attachment field on the SAME entity must still succeed.
+        var posForm = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["_DONOT_USE_VMNAME"] = FrameworkUserVm,
+            ["id"] = user.ID.ToString(),
+            ["field"] = "Name",
+            ["value"] = "Updated By Issue #824 Test",
+        });
+        var posResp = await client.PostAsync("/_Framework/UpdateModelProperty", posForm);
+        var posBody = await posResp.Content.ReadAsStringAsync();
+
+        Assert.AreEqual(HttpStatusCode.OK, posResp.StatusCode,
+            $"#824: a non-attachment field must still succeed — the FK guard must not over-block. " +
+            $"Got {(int)posResp.StatusCode}: {posBody}");
+
+        var persistedAfterPositive = DbTestHelpers.ReadBack<FrameworkUser>(_strictFactory, user.ID);
+        Assert.AreEqual("Updated By Issue #824 Test", persistedAfterPositive!.Name,
+            "#824: the positive control's edit must actually persist");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
     // GAP-01: PrivilegeFilter RBAC — unauthenticated → redirect/401,
     //         authenticated admin → 200
     // ═══════════════════════════════════════════════════════════════════════

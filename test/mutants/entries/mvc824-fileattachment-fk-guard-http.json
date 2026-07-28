@@ -1,0 +1,22 @@
+{
+  "id": "mvc824-fileattachment-fk-guard-http",
+  "kind": "security",
+  "description": "Issue #824 Part 1 / B1.1: neutralizes UpdateModelProperty's new FileAttachment-FK guard condition (compile-preserving operator: `dc.IsFileAttachmentForeignKeyProperty(entityType, prop.Name) && false`, never a deletion) so it can never fire, and checks it against MvcAuthHolesTests' HTTP-layer regression test. The posted value in that test is a REAL, persisted FileAttachment id (seeded under a DIFFERENT tenant) rather than a garbage GUID -- with the guard neutralized, the FK constraint is satisfied and the request succeeds (200), so the test's own status-code + message assertions on the negative half go red for the guard's absence specifically, not for an unrelated DB-level FK-constraint failure a garbage id could also produce. green_tests is a sibling MVC-004 test (Password blocklist) proving this mutation's blast radius is scoped to the new guard and does not collaterally affect the independent blockedFields check.",
+  "target_file": "src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs",
+  "target_symbol": "_FrameworkController.UpdateModelProperty(string,Guid,string,string) -- the IsFileAttachmentForeignKeyProperty guard condition, line ~577",
+  "patch": "patches/mvc824-fileattachment-fk-guard-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_FileAttachmentForeignKey_RejectedButNonAttachmentFieldSucceeds",
+  "red_tests": [
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_FileAttachmentForeignKey_RejectedButNonAttachmentFieldSucceeds"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_FileAttachmentForeignKey_RejectedButNonAttachmentFieldSucceeds": "#824: a FileAttachment FK \\(PhotoId\\) must be rejected\\. Got 200"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against a clean checkout (stale demo.db under bin/ removed first) with the mutant patch applied: 'Assert.AreEqual failed. Expected:<BadRequest>. Actual:<OK>. #824: a FileAttachment FK (PhotoId) must be rejected. Got 200: {\"Msg\":\"success\",\"Code\":\"200\",\"Data\":\"Success\"}'.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_PasswordField_ReturnsBadRequest",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_PasswordField_ReturnsBadRequest"
+  ]
+}

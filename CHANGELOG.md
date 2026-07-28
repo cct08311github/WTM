@@ -185,6 +185,57 @@ Standing rule adopted as a result: **a commit message may not claim more than th
 change's entry in `docs/production-readiness.md`.** That file was consistently more
 honest than the commit messages describing the same work.
 
+### Security
+
+- **`_FrameworkController.UpdateModelProperty` now refuses to write any `FileAttachment`
+  foreign key, unconditionally, even same-tenant (#824 Part 1 / B1.1).** This inline-grid
+  cell-edit endpoint is `[AllRights]` and, prior to this fix, had no gate on FK-typed
+  fields at all: a request could set e.g. `FrameworkUser.PhotoId` to *any*
+  `FileAttachment`'s GUID, including a different tenant's, because #815's FK gate
+  (`BaseCRUDVM.RejectUnresolvableFileAttachmentReferences`) only runs from
+  `DoAddPrepare`/`DoEditPrepare`, and #797 deliberately routes this endpoint around both.
+  Writing the FK alone grants no new *read* capability: `GetFile` is `[AllRights]` and
+  ignores the tenant query filter by default (`EnforceTenantFileScope=false`), so any
+  caller who already knows a `FileAttachment` GUID could fetch it both before and after
+  this fix — the forged FK does not unlock anything `GetFile` did not already allow.
+  **It also does not reopen #815's deletion surface, and an earlier draft of this entry
+  was wrong to claim it did.** There is no automatic orphan-file cleanup: every deletion
+  path is gated on the client having POSTed `DeletedFileIds` (`BaseCRUDVM.cs:440`, `:477`,
+  and their two async twins), so a legitimate edit that posts nothing deletes nothing —
+  and even when that path does run, it resolves the id through `DeleteFileTenantScoped` →
+  `DeleteFileCore(id, dc, enforceTenantScope: true)`, which queries
+  `dc.Set<FileAttachment>()` **without** `IgnoreQueryFilters()` (`WtmFileProvider.cs:222`).
+  `FileAttachment` implements `ITenant`, so the global `TenantCode` filter applies and a
+  cross-tenant id simply fails to resolve — the delete is a no-op regardless of whether
+  the FK was forged. What this gate actually buys is **data integrity**: it stops an
+  unauthorized cross-tenant reference from being persisted at all — the write is
+  unauthorized on its own terms, independent of whether anything downstream ever reads or
+  deletes through it — and it closes this one sink's gap in the same-tenant-FK invariant
+  #815 already enforces on the Add/Edit VM path
+  (`BaseCRUDVM.RejectUnresolvableFileAttachmentReferences`); before this fix,
+  `UpdateModelProperty` was the one write path where that invariant did not hold. This is
+  hardening, not the closure of a live read- or delete-exploit chain.
+  **Behaviour narrowing (opt-out not available):** any inline edit of a FileAttachment FK
+  field through this endpoint — including one previously accepted because the id
+  belonged to the caller's own tenant — now returns `400 Bad Request` instead of
+  succeeding. No config flag gates this; the decision for this PR is that legitimate use
+  of this path is effectively nil (inline grid cell edit can only POST a bare GUID
+  string, never upload a file), and a tenant-conditional carve-out would require dragging
+  tenant-resolution logic into an endpoint that should not touch files at all.
+  **Migration:** if any integration relied on setting an attachment FK via this endpoint,
+  switch to the normal Add/Edit VM flow (which resolves and validates the attachment
+  properly) or the file upload API instead. The predicate driving this gate —
+  `WalkingTec.Mvvm.Core.Extensions.DCExtension.IsFileAttachmentForeignKeyProperty`,
+  EF relationship-metadata–driven so it also covers downstream-defined attachment FKs —
+  is shared infrastructure for the rest of Issue #824's write-path sinks
+  (`BasePagedListVM.UpdateEntityList`, `BaseBatchVM.DoBatchEdit`/`Async`,
+  `BaseImportVM.BatchSaveData`, grandchild `IEnumerable<ISubFile>`, direct `DbSet`
+  writers), which remain open as follow-up work on the same issue. **Issue #824's own
+  recommended fix — a single guard at the `EmptyContext.SaveChanges`/`SaveChangesAsync`
+  boundary, covering every write path by construction instead of one sink at a time (see
+  the issue body and `docs/production-readiness.md`) — remains outstanding.** This entry
+  gates one sink as defence in depth, not the architectural fix.
+
 ## [10.18.0] - 2026-07-22
 
 The **LayUI eval-retirement epic (#470) reaches the whole form + grid + dialog family.** Slices G→O plus the docs endgame (Q) complete the opt-in, eval-free island-render migration begun in 10.16.0: every interactive LayUI widget — combobox/tree, transfer, upload, laydate, slider/colorpicker, ueditor/richtext, textarea counters, tree-container, chart, search-panel, and the full data grid (render core, toolbar/row-button dispatch, local-data, and cell editing) — now renders through declarative JSON islands + `data-wtm-*` delegated handlers when `WtmUIOptions.UseSelectIslandRender = true`, instead of inline `<script>`. **Every migration is default-off and byte-identical to before** — this release ships **zero behaviour change** to existing deployments ⚠️ *(the byte-identical and zero-behaviour-change claims in this sentence are **retracted** — see "Corrected" under [Unreleased] and #835)* while making a strict, `unsafe-inline`/`unsafe-eval`-free Content-Security-Policy achievable for the whole form/grid/dialog surface. `framework_layui.js` stays at exactly **one** active-code `eval(` (the deprecated `IsScript` path). Also: a vendored-layui XSS fix (opt-in-legacy only), refresh-token table indexes, and CI/compose ARM64 fixes.
