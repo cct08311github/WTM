@@ -1,0 +1,16 @@
+diff --git a/src/WalkingTec.Mvvm.Core/BaseCRUDVM.cs b/src/WalkingTec.Mvvm.Core/BaseCRUDVM.cs
+index 00d32fc56..4c8270089 100644
+--- a/src/WalkingTec.Mvvm.Core/BaseCRUDVM.cs
++++ b/src/WalkingTec.Mvvm.Core/BaseCRUDVM.cs
+@@ -1943,7 +1943,10 @@ namespace WalkingTec.Mvvm.Core
+             }
+             var candidates = CollectFileAttachmentCandidates();
+             var resolution = ResolveFileAttachmentIdsForCaller(candidates.CandidateIds);
+-            if (!resolution.Succeeded)
++            // MUTANT test/mutants fileattach828-resolution-failure-guard-neutralize: condition
++            // neutralized (compile-preserving, `&& false`) so the whole-request rejection can
++            // never fire. See test/mutants/manifest.json for the mutant record.
++            if (!resolution.Succeeded && false)
+             {
+                 return RejectWholeRequestForResolutionFailure(candidates.CandidateIds.Count);
+             }

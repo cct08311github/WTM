@@ -17,6 +17,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Test.Mock;
@@ -34,7 +35,33 @@ namespace WalkingTec.Mvvm.Core.Test.VM
         public DbSet<Product> Products { get; set; } = null!;
         public DbSet<ProductAttachment> ProductAttachments { get; set; } = null!;
 
-        public ProductSubFileContext(string cs, DBTypeEnum dbType) : base(cs, dbType) { }
+        private readonly IInterceptor[] _interceptors;
+
+        public ProductSubFileContext(string cs, DBTypeEnum dbType) : base(cs, dbType)
+        {
+            _interceptors = Array.Empty<IInterceptor>();
+        }
+
+        /// <summary>
+        /// Issue #828: accepts optional EF Core interceptors for test-seam fault injection —
+        /// e.g. simulating a FileAttachment resolution query failure (provider parameter cap,
+        /// timeout, transient connection loss, ...) that has nothing to do with whether the
+        /// candidate ids are legitimate. Additive only: every existing call site using the
+        /// two-arg constructor above is unaffected.
+        /// </summary>
+        public ProductSubFileContext(string cs, DBTypeEnum dbType, params IInterceptor[] interceptors) : base(cs, dbType)
+        {
+            _interceptors = interceptors;
+        }
+
+        protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+        {
+            base.OnConfiguring(optionsBuilder);
+            if (_interceptors.Length > 0)
+            {
+                optionsBuilder.AddInterceptors(_interceptors);
+            }
+        }
     }
 
     /// <summary>

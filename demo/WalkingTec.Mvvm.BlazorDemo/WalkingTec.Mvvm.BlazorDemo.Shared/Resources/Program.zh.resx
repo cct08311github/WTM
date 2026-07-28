@@ -456,6 +456,9 @@
   <data name="Sys.FileNotFound" xml:space="preserve">
     <value>没有找到文件</value>
   </data>
+  <data name="Sys.FileResolutionFailed" xml:space="preserve">
+    <value>无法验证部分文件关联，请稍后重试</value>
+  </data>
   <data name="Sys.ForSelect" xml:space="preserve">
     <value>待选择</value>
   </data>

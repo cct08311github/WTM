@@ -1889,13 +1889,50 @@ namespace WalkingTec.Mvvm.Core
         /// cref="LoadExistingSubItemFileIds"/>'s own doc comment has the fix and the fail-closed
         /// fallback when parent-scoping isn't resolvable for a given relationship shape.
         /// </para>
+        /// <para>
+        /// <b>Issue #828 — a resolution QUERY failure is not the same fact as "these ids don't
+        /// exist".</b> Every round above assumes <see cref="ResolveFileAttachmentIdsForCaller"/>
+        /// reliably tells apart "the caller may reference these ids" from "the caller may NOT
+        /// reference these ids". Before this fix it did not: a thrown exception from the batched
+        /// resolution query (SQL Server's hard 2100-parameter-per-query cap — real again under
+        /// EF Core 10's default <c>Contains()</c> translation, which reverted from EF8/9's single
+        /// JSON/<c>OPENJSON</c> parameter back to one scalar parameter PER candidate id, see
+        /// <see cref="ResolveFileAttachmentIdsForCaller"/>'s own doc comment — a query timeout, a
+        /// transient connection drop, ...) was caught and treated identically to "the query
+        /// succeeded and none of these ids exist": an EMPTY resolved set, fed straight into
+        /// <see cref="ApplyFileAttachmentResolution"/>'s per-item narrowing. For a posted <see
+        /// cref="ISubFile"/> collection whose every item happens to be a candidate — the ORDINARY
+        /// case, since a caller re-posting an entity normally re-posts its own unchanged children
+        /// too — every item was dropped, emptying the WHOLE posted collection, which routes
+        /// straight into the <c>else if (... .Count() == 0)</c> branch documented on the "fourth
+        /// round" paragraph above: <c>DoEditPreparePart2</c> then physically deletes EVERY
+        /// existing child row for that parent, and <c>DoEdit</c> reports success. A dependency
+        /// failure that has nothing to do with any candidate id's legitimacy must never be able to
+        /// reach that branch. <see cref="ResolveFileAttachmentIdsForCaller"/> and its async twin
+        /// now return a <c>Succeeded</c> flag alongside the resolved set; when resolution itself
+        /// failed, <see cref="RejectUnresolvableFileAttachmentReferences"/> rejects the WHOLE
+        /// request the same way the required-FK-with-no-legitimate-prior-value case already does
+        /// (sixth/seventh round above) — <c>MSD.AddModelError</c>, <see langword="true"/> to the
+        /// caller, nothing staged, <c>SaveChanges</c> never called — instead of ever handing an
+        /// ambiguous empty set to <see cref="ApplyFileAttachmentResolution"/>'s per-item rules.
+        /// This closes the actual data-loss hole regardless of what turns out to trigger a
+        /// resolution failure in practice. Separately, and only to remove the SPECIFIC
+        /// 2100-parameter trigger as a routine failure mode for a large but entirely legitimate
+        /// form (<c>FormOptions.ValueCountLimit</c> is 5000 — see
+        /// <c>FrameworkServiceExtension.cs</c>), the resolution query is now also split into
+        /// <see cref="FileAttachmentResolutionBatchSize"/>-sized batches well under the hard cap;
+        /// this is defense in depth, not the fix for the data-loss hole itself — a batch failure
+        /// still goes through the same whole-request rejection above rather than being narrowed.
+        /// </para>
         /// </summary>
         /// <returns>
         /// <see langword="true"/> when a posted FileAttachment reference had to be rejected at
-        /// the REQUEST level (Issue #815 sixth/seventh round: a scalar FK whose column EF Core's
-        /// own model says is required, with no legitimate prior value to revert to) — the caller
-        /// must not persist anything from this request. <see langword="false"/> otherwise
-        /// (nothing was posted, everything resolved, or every rejection could be handled by
+        /// the REQUEST level — either the batched resolution QUERY itself failed (Issue #828: the
+        /// caller must not have any candidate narrowed on an ambiguous empty result), or a scalar
+        /// FK whose column EF Core's own model says is required had no legitimate prior value to
+        /// revert to (Issue #815 sixth/seventh round). Either way the caller must not persist
+        /// anything from this request. <see langword="false"/> otherwise (nothing was posted,
+        /// everything resolved, or every rejection could be handled by
         /// reverting/dropping/restoring in place).
         /// </returns>
         private bool RejectUnresolvableFileAttachmentReferences(TModel? preSaveSnapshot)
@@ -1905,8 +1942,12 @@ namespace WalkingTec.Mvvm.Core
                 return false;
             }
             var candidates = CollectFileAttachmentCandidates();
-            var resolvedIds = ResolveFileAttachmentIdsForCaller(candidates.CandidateIds);
-            return ApplyFileAttachmentResolution(preSaveSnapshot, candidates.ScalarRefs, candidates.SubFileProperties, resolvedIds);
+            var resolution = ResolveFileAttachmentIdsForCaller(candidates.CandidateIds);
+            if (!resolution.Succeeded)
+            {
+                return RejectWholeRequestForResolutionFailure(candidates.CandidateIds.Count);
+            }
+            return ApplyFileAttachmentResolution(preSaveSnapshot, candidates.ScalarRefs, candidates.SubFileProperties, resolution.ResolvedIds);
         }
 
         /// <summary>
@@ -1914,7 +1955,7 @@ namespace WalkingTec.Mvvm.Core
         /// candidate collection and application logic, but the batched resolution query is
         /// awaited instead of run synchronously. See the "batched resolution, sync and async"
         /// doc paragraph above. See <see cref="RejectUnresolvableFileAttachmentReferences"/> for
-        /// the meaning of the returned <see cref="bool"/> (Issue #815 sixth round).
+        /// the meaning of the returned <see cref="bool"/> (Issue #815 sixth round; Issue #828).
         /// </summary>
         private async Task<bool> RejectUnresolvableFileAttachmentReferencesAsync(TModel? preSaveSnapshot)
         {
@@ -1923,8 +1964,37 @@ namespace WalkingTec.Mvvm.Core
                 return false;
             }
             var candidates = CollectFileAttachmentCandidates();
-            var resolvedIds = await ResolveFileAttachmentIdsForCallerAsync(candidates.CandidateIds);
-            return ApplyFileAttachmentResolution(preSaveSnapshot, candidates.ScalarRefs, candidates.SubFileProperties, resolvedIds);
+            var resolution = await ResolveFileAttachmentIdsForCallerAsync(candidates.CandidateIds);
+            if (!resolution.Succeeded)
+            {
+                return RejectWholeRequestForResolutionFailure(candidates.CandidateIds.Count);
+            }
+            return ApplyFileAttachmentResolution(preSaveSnapshot, candidates.ScalarRefs, candidates.SubFileProperties, resolution.ResolvedIds);
+        }
+
+        /// <summary>
+        /// Issue #828: a resolution QUERY failure (thrown exception — provider parameter cap,
+        /// timeout, transient connection loss, ...) is not the same fact as "none of these
+        /// candidate ids exist for this caller". Before this method existed,
+        /// <see cref="ResolveFileAttachmentIdsForCaller"/> collapsed both into an empty resolved
+        /// set, and <see cref="ApplyFileAttachmentResolution"/> applied its per-item narrowing
+        /// rules (revert scalar to prior value / drop-or-restore sub-item) to EVERY candidate as
+        /// if each one had genuinely failed to resolve — which, for a posted <see cref="ISubFile"/>
+        /// collection where every item's id happened to be a candidate (the ordinary case), could
+        /// drop the WHOLE posted collection and route into <c>DoEditPreparePart2</c>'s
+        /// empty-collection branch, physically deleting every EXISTING child row for the parent.
+        /// Rejecting the whole request here — the same "nothing persisted, MSD carries the error"
+        /// contract <see cref="ApplyFileAttachmentResolution"/>'s required-FK path already uses —
+        /// is a strict superset of what per-item narrowing could safely do anyway: without a
+        /// trustworthy resolved set there is no safe per-item decision left to make.
+        /// </summary>
+        private bool RejectWholeRequestForResolutionFailure(int candidateCount)
+        {
+            MSD?.AddModelError(" ", Localizer?["Sys.FileResolutionFailed"] ?? "Could not verify one or more file references; please try again.");
+            Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(
+                "RejectUnresolvableFileAttachmentReferences: batched resolution query failed for {Count} candidate FileAttachment id(s) on {Model}; rejecting the whole request instead of narrowing (Issue #828)",
+                candidateCount, typeof(TModel).Name);
+            return true;
         }
 
         /// <summary>
@@ -1996,56 +2066,110 @@ namespace WalkingTec.Mvvm.Core
         }
 
         /// <summary>
+        /// Issue #828: SQL Server's hard per-query parameter cap is 2100 (see
+        /// <see href="https://learn.microsoft.com/sql/sql-server/maximum-capacity-specifications-for-sql-server"/>).
+        /// EF Core 8/9 sidestepped that entirely by translating a parameterized <c>Contains()</c>
+        /// collection into a SINGLE JSON-array parameter unpacked with <c>OPENJSON</c> — but EF
+        /// Core 10 reverted the DEFAULT translation back to one scalar SQL parameter PER element
+        /// (padded to reduce plan-cache churn) specifically because the OPENJSON form produced
+        /// bad query plans for a minority of real workloads (see
+        /// <see href="https://learn.microsoft.com/ef/core/what-is-new/ef-core-10.0/breaking-changes#parameterized-collections-now-use-multiple-parameters-by-default"/>).
+        /// This repo is pinned to EF Core 10.0.9 (<c>Directory.Packages.props</c>), so a
+        /// <see cref="FileAttachment"/> resolution query built from more candidate ids than this
+        /// can throw a provider exception purely from its own size, on a request that posted
+        /// nothing malicious — the trigger Issue #828 describes really does apply here, though it
+        /// would NOT have applied on EF Core 8 or 9. Splitting into batches well under the hard
+        /// cap removes that as a routine failure mode for a large but legitimate form; it is
+        /// defense in depth ONLY — it does not by itself make an unrelated resolution failure
+        /// (timeout, connection drop, a future EF/provider change, ...) safe. That safety comes
+        /// from <see cref="RejectUnresolvableFileAttachmentReferences"/> rejecting the whole
+        /// request when resolution does not succeed, regardless of why.
+        /// </summary>
+        private const int FileAttachmentResolutionBatchSize = 500;
+
+        /// <summary>
+        /// Issue #828: the result of a batched <see cref="FileAttachment"/> resolution attempt.
+        /// <see cref="Succeeded"/> is <see langword="false"/> only when the resolution QUERY
+        /// itself threw — never when it ran fine and simply found fewer rows than candidates.
+        /// Callers must treat a failed resolution as "unknown", not "unresolvable": see
+        /// <see cref="RejectUnresolvableFileAttachmentReferences"/>'s doc comment for why
+        /// conflating the two used to let a dependency failure delete data.
+        /// </summary>
+        private readonly record struct FileAttachmentResolutionResult(bool Succeeded, HashSet<Guid> ResolvedIds);
+
+        /// <summary>
         /// Resolves every id in <paramref name="candidateIds"/> to the set of ids that exist as a
         /// <see cref="FileAttachment"/> row under the CALLER's own tenant scope — the
         /// <c>ITenant</c> global query filter kept ON unconditionally (no
         /// <c>IgnoreQueryFilters()</c>), regardless of
-        /// <c>FileUploadOptions.EnforceTenantFileScope</c> — in a SINGLE query (Issue #815 fifth
-        /// round: previously one query per candidate id). A resolution failure (thrown exception
-        /// from the underlying query) treats every candidate as unresolvable, not rethrown, so a
-        /// transient/unexpected DB error fails closed rather than admitting an unverified FK.
+        /// <c>FileUploadOptions.EnforceTenantFileScope</c> — batched into
+        /// <see cref="FileAttachmentResolutionBatchSize"/>-sized queries (Issue #828; previously a
+        /// single unbounded query — Issue #815 fifth round: before that, one query per candidate
+        /// id). On the FIRST batch that throws, resolution stops immediately and reports failure
+        /// — see <see cref="FileAttachmentResolutionResult"/>'s doc comment: a partially-resolved
+        /// set from the batches that happened to succeed before the failure is deliberately
+        /// discarded rather than returned, because <see
+        /// cref="RejectUnresolvableFileAttachmentReferences"/> never uses it when
+        /// <c>Succeeded</c> is <see langword="false"/> anyway, and keeping it around risks a
+        /// future caller mistakenly treating "resolved so far" as "resolved, full stop".
         /// </summary>
-        private HashSet<Guid> ResolveFileAttachmentIdsForCaller(ICollection<Guid> candidateIds)
+        private FileAttachmentResolutionResult ResolveFileAttachmentIdsForCaller(ICollection<Guid> candidateIds)
         {
             if (candidateIds.Count == 0)
             {
-                return [];
+                return new FileAttachmentResolutionResult(true, []);
             }
+            var resolved = new HashSet<Guid>();
             try
             {
-                return [.. DC!.Set<FileAttachment>().Where(x => candidateIds.Contains(x.ID)).Select(x => x.ID)];
+                foreach (var batch in candidateIds.Chunk(FileAttachmentResolutionBatchSize))
+                {
+                    foreach (var id in DC!.Set<FileAttachment>().Where(x => batch.Contains(x.ID)).Select(x => x.ID))
+                    {
+                        resolved.Add(id);
+                    }
+                }
+                return new FileAttachmentResolutionResult(true, resolved);
             }
             catch (Exception ex)
             {
                 Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(ex,
-                    "RejectUnresolvableFileAttachmentReferences: batched resolution check failed for {Count} candidate FileAttachment id(s); treating all as unresolvable (Issue #815)",
+                    "RejectUnresolvableFileAttachmentReferences: batched resolution query failed for {Count} candidate FileAttachment id(s); resolution FAILED, not narrowed (Issue #828)",
                     candidateIds.Count);
-                return [];
+                return new FileAttachmentResolutionResult(false, []);
             }
         }
 
         /// <summary>
-        /// Async counterpart of <see cref="ResolveFileAttachmentIdsForCaller"/> — same single
-        /// batched query, awaited instead of run synchronously so
+        /// Async counterpart of <see cref="ResolveFileAttachmentIdsForCaller"/> — same batched
+        /// queries, awaited instead of run synchronously so
         /// <c>DoAddAsync</c>/<c>DoEditAsync</c>/<c>DoDeleteAsync</c> never block a ThreadPool
         /// thread on it.
         /// </summary>
-        private async Task<HashSet<Guid>> ResolveFileAttachmentIdsForCallerAsync(ICollection<Guid> candidateIds)
+        private async Task<FileAttachmentResolutionResult> ResolveFileAttachmentIdsForCallerAsync(ICollection<Guid> candidateIds)
         {
             if (candidateIds.Count == 0)
             {
-                return [];
+                return new FileAttachmentResolutionResult(true, []);
             }
+            var resolved = new HashSet<Guid>();
             try
             {
-                return [.. await DC!.Set<FileAttachment>().Where(x => candidateIds.Contains(x.ID)).Select(x => x.ID).ToListAsync()];
+                foreach (var batch in candidateIds.Chunk(FileAttachmentResolutionBatchSize))
+                {
+                    foreach (var id in await DC!.Set<FileAttachment>().Where(x => batch.Contains(x.ID)).Select(x => x.ID).ToListAsync())
+                    {
+                        resolved.Add(id);
+                    }
+                }
+                return new FileAttachmentResolutionResult(true, resolved);
             }
             catch (Exception ex)
             {
                 Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(ex,
-                    "RejectUnresolvableFileAttachmentReferences: batched resolution check failed for {Count} candidate FileAttachment id(s); treating all as unresolvable (Issue #815)",
+                    "RejectUnresolvableFileAttachmentReferences: batched resolution query failed for {Count} candidate FileAttachment id(s); resolution FAILED, not narrowed (Issue #828)",
                     candidateIds.Count);
-                return [];
+                return new FileAttachmentResolutionResult(false, []);
             }
         }
 

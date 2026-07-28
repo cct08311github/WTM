@@ -453,6 +453,9 @@
   <data name="Sys.FileNotFound" xml:space="preserve">
     <value>File is not found</value>
   </data>
+  <data name="Sys.FileResolutionFailed" xml:space="preserve">
+    <value>Could not verify one or more file references; please try again.</value>
+  </data>
   <data name="Sys.ForSelect" xml:space="preserve">
     <value>For selection</value>
   </data>
