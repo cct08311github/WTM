@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core.ConfigOptions;
@@ -79,5 +81,47 @@ public class UIOptionsSplitBrainTests
         Assert.IsFalse(WtmUIOptionsHolder.Options.UseSelectIslandRender,
             "Without any code-based Configure override, UseSelectIslandRender must stay at its " +
             "documented default (OFF) — the appsettings-only path must be unaffected by this fix.");
+    }
+
+    /// <summary>
+    /// Issue #837 patch 4 — proves the exact mechanism <c>.github/workflows/e2e-test.yml</c>'s
+    /// new "island" matrix leg relies on: an environment variable named
+    /// <c>UIOptions__UseSelectIslandRender</c> (ASP.NET Core's standard double-underscore
+    /// convention for the nested config key <c>"UIOptions:UseSelectIslandRender"</c>) flips the
+    /// REAL flag every LayUI TagHelper reads — not just <c>IOptions&lt;WtmUIOptions&gt;</c>,
+    /// but <see cref="WtmUIOptionsHolder"/> too, via the same <c>UseWtmContext</c> path
+    /// <see cref="CodeBasedConfigure_IsSeenByWtmUIOptionsHolder_AfterHostStartup"/> above
+    /// proves for a code-based <c>Configure</c> delegate. This test uses
+    /// <c>AddInMemoryCollection</c> with the colon-separated key rather than a real OS
+    /// environment variable (there is no supported way to set one scoped to a single
+    /// <see cref="WebApplicationFactory{TEntryPoint}"/> instance's in-process host), but that is
+    /// exactly what ASP.NET Core's environment-variable configuration provider itself does
+    /// internally — translate <c>UIOptions__UseSelectIslandRender</c> into the
+    /// <c>IConfiguration</c> key <c>"UIOptions:UseSelectIslandRender"</c> — so this is a faithful
+    /// proxy for what the real env var does when the e2e workflow sets it on the demo app's
+    /// actual OS process.
+    /// </summary>
+    [TestMethod]
+    public void EnvironmentVariableStyleOverride_IsSeenByWtmUIOptionsHolder_AfterHostStartup()
+    {
+        using var factory = new DemoWebApplicationFactory();
+        using var configuredFactory = factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["UIOptions:UseSelectIslandRender"] = "true",
+                });
+            });
+        });
+
+        using var client = configuredFactory.CreateClient();
+
+        Assert.IsTrue(WtmUIOptionsHolder.Options.UseSelectIslandRender,
+            "#837: an env-var-style 'UIOptions:UseSelectIslandRender' config override must be " +
+            "visible through WtmUIOptionsHolder after host startup — this is the exact " +
+            "mechanism the e2e-test.yml 'island' matrix leg's UIOptions__UseSelectIslandRender " +
+            "environment variable relies on to actually exercise island-render TagHelper paths.");
     }
 }

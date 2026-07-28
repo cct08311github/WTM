@@ -38,7 +38,28 @@ jobs:
         # direct-navigation/API checks unaffected by the switch either way, and the
         # #681-added dialog-driven checks (tc_32+) branch their own assertions on
         # WTM_E2E_KILLSWITCH so neither leg produces a false failure.
-        leg: [baseline, killswitch]
+        #
+        # Issue #837: third leg exercises the #470 island-render opt-in
+        # (WtmUIOptions.UseSelectIslandRender, default OFF — demo's own appsettings.json
+        # never sets it, so every e2e run before this leg only ever exercised the legacy
+        # inline-script path across the whole #470/#567/#655 campaign). "island" sets
+        # UIOptions__UseSelectIslandRender=true — the standard ASP.NET Core
+        # double-underscore environment-variable convention for the nested config key
+        # "UIOptions:UseSelectIslandRender" — for THIS matrix leg's demo process only.
+        # Same mechanism/shape as WTM_E2E_KILLSWITCH (a leg-scoped env var, read via
+        # IConfiguration, with zero effect on any other leg or any non-e2e run), but
+        # routed through the option's own already-documented, already-tested config path
+        # (services.Configure<WtmUIOptions>(config.GetSection("UIOptions")) in
+        # FrameworkServiceExtension.cs, the same binding UIOptionsSplitBrainTests.cs
+        # exercises) rather than adding a second, parallel ad-hoc flag — no _Layout.cshtml
+        # or Program.cs change needed. Runs the full suite (not a curated subset like
+        # killswitch): UseSelectIslandRender's opt-in gates are spread across nearly every
+        # LayUI TagHelper (grid, combobox, transfer, upload, tree, chart, date, color,
+        # slider, richtext, submit button, panel, tab, search panel — see
+        # .claude/rules/security-invariants.md and the TagHelper doc comments for the
+        # full list), so a curated subset would defeat the point of adding this leg: making
+        # the previously-unexercised state actually exercised, not narrowing it again.
+        leg: [baseline, killswitch, island]
     env:
       # PEP 668: allow pip into the disposable runner container's system Python when setup-python degrades (issue #292)
       PIP_BREAK_SYSTEM_PACKAGES: "1"
@@ -47,6 +68,7 @@ jobs:
       WTM_E2E_TIMEOUT: "20000"
       WTM_E2E_REPORT: test/e2e/results/junit.xml
       WTM_E2E_KILLSWITCH: ${{ matrix.leg == 'killswitch' && '1' || '0' }}
+      UIOptions__UseSelectIslandRender: ${{ matrix.leg == 'island' && 'true' || 'false' }}
 
     steps:
       - uses: actions/checkout@v5
@@ -67,6 +89,12 @@ jobs:
           # than relying on job-level env inheritance alone) so the intent is visible
           # at the point the ASP.NET Core process actually starts.
           WTM_E2E_KILLSWITCH: ${{ env.WTM_E2E_KILLSWITCH }}
+          # #837: same reasoning — explicitly re-declared so it's visible at the point
+          # the ASP.NET Core process starts. Binds into Configs.UIOptions.UseSelectIslandRender
+          # via the standard ASP.NET Core environment-variable configuration provider
+          # (double underscore -> nested key), the same "UIOptions" section
+          # FrameworkServiceExtension.cs's services.Configure<WtmUIOptions>(...) binds from.
+          UIOptions__UseSelectIslandRender: ${{ env.UIOptions__UseSelectIslandRender }}
         run: |
           dotnet run -c Release --no-build \
             --urls http://0.0.0.0:52837 \
@@ -127,6 +155,22 @@ jobs:
         run: |
           python wtm_e2e_tests.py \
             --tc 1,4,6,7,26,32,33,34,35,36 \
+            --headless \
+            --report results/junit.xml
+
+      - name: Run E2E tests (island)
+        if: matrix.leg == 'island'
+        working-directory: test/e2e
+        # Issue #837: full suite, not a curated subset — see the matrix comment above for
+        # why (UseSelectIslandRender's opt-in gates are spread across nearly every LayUI
+        # TagHelper, unlike killswitch's narrow CSP-only surface). No wtm_e2e_tests.py
+        # check currently branches its own assertions on this flag the way the #681
+        # dialog checks (32-36) branch on WTM_E2E_KILLSWITCH — this leg's job is to make
+        # the island-render path exercised at all, per #837's fixture-first mandate;
+        # island-render-aware assertions are follow-up work, not something this leg's
+        # first run is expected to have solved.
+        run: |
+          python wtm_e2e_tests.py \
             --headless \
             --report results/junit.xml
 
