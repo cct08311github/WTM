@@ -1,0 +1,16 @@
+diff --git a/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs b/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs
+index 90d99e93c..f5de6c628 100644
+--- a/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs
++++ b/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs
+@@ -510,7 +510,10 @@ namespace WalkingTec.Mvvm.Mvc
+             }
+ 
+             // Block navigation paths (dot-notation) to prevent traversal to related entities (#766)
+-            if (field.Contains('.'))
++            // MUTANT test/mutants mvc004-dotnotation-guard-neutralize: condition neutralized
++            // (compile-preserving, `&& false`) so the guard can never fire. See
++            // test/mutants/manifest.json for the mutant record.
++            if (field.Contains('.') && false)
+             {
+                 return BadRequest("Navigation property paths are not allowed for inline editing");
+             }

@@ -1,0 +1,367 @@
+name: Mutation Gate
+
+# Issue #834: proves a security fix's tests actually detect the guard they claim to
+# guard, by applying a repository-owned mutant patch and machine-checking that the
+# designated test goes red for the expected reason. See test/mutants/manifest.json
+# and test/mutants/run_mutant.py for the full mechanism and rationale.
+#
+# HISTORY: as originally filed for issue #834, the seed mutant
+# (mvc004-blocklist-empty-http-blindspot) was EXPECTED to survive against
+# MvcAuthHolesTests.cs:274/297/320 -- those tests used a ListVM and a fake id, so they
+# could not detect the guard's absence, and this job's own failure was the
+# demonstration issue #834 asked for. Issue #837 (PR #845, merged as f148a1383) fixed
+# that fixture; every "security" mutant in test/mutants/manifest.json is now expected
+# to report KILLED, and this workflow is a required status check on dotnet10 (see
+# test/mutants/manifest.json's per-entry descriptions for what changed and why). A red
+# run here now means a real regression -- either a security guard was weakened, or a
+# test that used to detect it stopped being able to -- not a known, accepted gap. Do
+# not "fix" a red run by loosening the manifest, the runner, or an existing test; open
+# an issue on whatever guard or test actually regressed.
+#
+# Also note (see CLAUDE.md "CI red does not mean failed"): actions/upload-artifact@v4
+# is incompatible with this Gitea Actions server and can flip a job's conclusion to
+# failure even when every step it ran genuinely succeeded (issue #11). The artifact
+# upload steps below are `continue-on-error: true` and `if: always()` specifically so
+# that quirk can never be the reason THIS job is red -- when in doubt, read the
+# "MUTANT ... VERDICT" / "GATE: PASS|FAIL" lines a step prints, not the badge.
+#
+# NOTE ON SHAPE: an earlier version of this workflow used a `discover` job that read
+# test/mutants/manifest.json and fanned mutant ids out into a matrix via
+# `fromJson(needs.discover.outputs.*)`. On this repo's Gitea act_runner that matrix
+# never expanded -- both a flat string array (`matrix.mutant_id`) and an array of
+# objects (`matrix.entry`) resolved to an empty string for every leg, so every job
+# "ran" against mutant id '' and failed for the wrong reason (caught only because
+# run_mutant.py itself rejects an unknown/empty id). Rather than trust matrix
+# expansion via cross-job JSON outputs on this runner again, each job below reads the
+# manifest directly and loops over ids with a plain bash `while read` loop in a
+# single step. One job that iterates and can be read straight out of its own log is
+# strictly better here than N matrix legs that can silently no-op.
+
+on:
+  workflow_dispatch:
+  # NOT path-filtered, not even with paths-ignore. This workflow's "gate" job is a
+  # required status check (issue #834 rule #7): ANY filter at the trigger level --
+  # an allowlist of two paths, or a docs-only paths-ignore -- means the workflow does
+  # not run at all for a PR outside that set, "gate" never posts a status, and Gitea
+  # (like GitHub) shows the required context as permanently "expected, waiting" and
+  # blocks the merge button forever. A docs-only PR hit exactly this with the
+  # paths-ignore version of this trigger (would have hung #838/#844). The workflow
+  # itself must always fire; path-based cost control instead happens inside the
+  # workflow (see the `changes` job below), where a job that determines "nothing
+  # gated changed" can still let `gate` post a real, unconditional success.
+  pull_request:
+    branches: [ dotnet10 ]
+  push:
+    branches: [ dotnet10 ]
+    paths:
+      - 'src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs'
+      - 'test/mutants/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Cheap, unconditional (no path filter, no `if:`) cost-control gate for the two
+  # expensive jobs below. Computes whether the PR/push actually touched a mutant's
+  # target file or the registry itself; `mutants`/`meta-selftest` are skipped (not
+  # run) when it did not, so a docs-only or unrelated-code PR is not taxed with four
+  # full dotnet builds just to let the required check post a status.
+  #
+  # Fails OPEN toward "relevant=true" (run the real gate) whenever the diff can't be
+  # computed for any reason -- an unexpected event payload, a missing SHA, a git
+  # error. The two failure directions here are not symmetric: a wrongly-skipped real
+  # mutant run is a silent security-gate regression; a wrongly-run mutant job on an
+  # unrelated PR only costs a few minutes of CI time. Default to the safe, expensive
+  # answer, never to the cheap, unsafe one.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.check.outputs.relevant }}
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+    - name: Determine whether a gated path changed
+      id: check
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        PUSH_BEFORE: ${{ github.event.before }}
+        PUSH_AFTER: ${{ github.event.after }}
+      run: |
+        set -uo pipefail
+
+        CHANGED=""
+        DIFF_OK=0
+        if [ "$EVENT_NAME" = "pull_request" ] && [ -n "$BASE_SHA" ] && [ -n "$HEAD_SHA" ]; then
+          CHANGED="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")" && DIFF_OK=1
+        elif [ "$EVENT_NAME" = "push" ] && [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ]; then
+          CHANGED="$(git diff --name-only "$PUSH_BEFORE" "$PUSH_AFTER")" && DIFF_OK=1
+        fi
+
+        if [ "$DIFF_OK" -ne 1 ]; then
+          echo "Could not compute a path diff for event '$EVENT_NAME' (missing SHA, unsupported event, or git error) -- defaulting to relevant=true so the real gate runs."
+          echo "relevant=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        if [ "$EVENT_NAME" = "pull_request" ]; then
+          echo "Changed files ($EVENT_NAME, $BASE_SHA..$HEAD_SHA):"
+        else
+          echo "Changed files ($EVENT_NAME, $PUSH_BEFORE..$PUSH_AFTER):"
+        fi
+        echo "$CHANGED" | sed 's/^/  - /'
+
+        if echo "$CHANGED" | grep -qE '^(src/WalkingTec\.Mvvm\.Mvc/_FrameworkController\.cs|test/mutants/)'; then
+          echo "relevant=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "relevant=false" >> "$GITHUB_OUTPUT"
+        fi
+
+  # The gate itself: every "security" mutant in test/mutants/manifest.json must be
+  # reported KILLED (patch applies in-scope, compiles, positive control stays green,
+  # designated red test fails with the expected assertion message). Any other verdict
+  # -- SURVIVED, UNEXPECTED_RED, a build failure, an out-of-scope patch, or a broken
+  # positive control -- fails this job. All mutants run even after one fails, so one
+  # mutant's result never hides another's; the loop tracks failures itself instead of
+  # relying on `set -e` to stop at the first one.
+  #
+  # Skipped (not failed) when the `changes` job found nothing gated -- `gate` below
+  # treats a skip here as a pass, not a failure.
+  mutants:
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: '10.0.x'
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    # See ci-build.yml for the rationale on this cache shape (no packages.lock.json
+    # committed, so setup-dotnet's built-in cache: option cannot be used).
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      continue-on-error: true
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('Directory.Packages.props', '**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+
+    - name: Run every security mutant
+      shell: bash
+      run: |
+        set -o pipefail
+        mkdir -p mutant-results
+
+        MUTANT_IDS="$(python3 -c "
+        import json
+        with open('test/mutants/manifest.json', encoding='utf-8') as f:
+            manifest = json.load(f)
+        for m in manifest['mutants']:
+            if m.get('kind') == 'security':
+                print(m['id'])
+        ")"
+
+        # Guard against this exact class of failure recurring silently: if the
+        # manifest has no security mutants (or the python one-liner above produced
+        # nothing for any other reason), that must be a loud CI failure, not a
+        # green no-op run that never evaluated anything.
+        if [ -z "$MUTANT_IDS" ]; then
+          echo "::error::No 'security' mutants were discovered in test/mutants/manifest.json. Refusing to report a pass without evaluating anything."
+          exit 1
+        fi
+
+        echo "Discovered security mutant ids:"
+        echo "$MUTANT_IDS" | sed 's/^/  - /'
+        echo
+
+        OVERALL_FAILED=0
+        while IFS= read -r MUTANT_ID; do
+          if [ -z "$MUTANT_ID" ]; then
+            # Must never happen given the guard above, but if manifest parsing or
+            # the loop itself ever produces a blank line, treat it exactly like the
+            # original incident: a loud, hard failure, not a silently skipped mutant.
+            echo "::error::Encountered an empty mutant id while iterating the manifest -- this must never be silently skipped."
+            OVERALL_FAILED=1
+            continue
+          fi
+
+          echo "=================================================="
+          echo "Running mutant: $MUTANT_ID"
+          echo "=================================================="
+          mkdir -p "mutant-results/$MUTANT_ID"
+          if python3 test/mutants/run_mutant.py \
+              --mutant "$MUTANT_ID" \
+              --trx-dir "mutant-results/$MUTANT_ID" \
+              2>&1 | tee "mutant-results/$MUTANT_ID/console.log"; then
+            echo "mutant '$MUTANT_ID': gate step passed"
+          else
+            echo "::error::mutant '$MUTANT_ID' did not pass the gate -- see mutant-results/$MUTANT_ID/console.log"
+            OVERALL_FAILED=1
+          fi
+          echo
+        done <<< "$MUTANT_IDS"
+
+        if [ "$OVERALL_FAILED" -ne 0 ]; then
+          echo "MUTATION_GATE_RESULT: FAIL"
+          exit 1
+        fi
+        echo "MUTATION_GATE_RESULT: PASS"
+
+    - name: Upload mutant artifacts (head SHA, diff, TRX, console log per mutant)
+      uses: actions/upload-artifact@v4
+      if: always()
+      continue-on-error: true
+      with:
+        name: mutants
+        path: mutant-results/
+
+  # Meta test for the runner itself (issue #834 acceptance criterion): proves
+  # run_mutant.py reports a non-compiling patch as an invalid mutant / gate FAILURE
+  # and never as a pass. Uses --expect-verdict so this job asserts on the RUNNER's
+  # correctness, not on any real security property -- it is intentionally a separate
+  # job from `mutants` so a selftest fixture can never be mistaken for a real mutant
+  # in the pass/fail decision, while still being required to be green itself: a green
+  # meta-selftest is the load-bearing proof that an invalid mutant is never mistaken
+  # for a pass.
+  #
+  # Skipped (not failed) when the `changes` job found nothing gated -- `gate` below
+  # treats a skip here as a pass, not a failure.
+  meta-selftest:
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: '10.0.x'
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      continue-on-error: true
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('Directory.Packages.props', '**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+
+    - name: Run every selftest fixture
+      shell: bash
+      run: |
+        set -o pipefail
+        mkdir -p mutant-results
+
+        SELFTEST_ENTRIES="$(python3 -c "
+        import json
+        with open('test/mutants/manifest.json', encoding='utf-8') as f:
+            manifest = json.load(f)
+        for m in manifest['mutants']:
+            if m.get('kind') == 'selftest':
+                print(m['id'] + '\t' + m['expect_verdict'])
+        ")"
+
+        # Same guard as the mutants job: zero selftest entries discovered must be a
+        # loud failure, never a silent green no-op.
+        if [ -z "$SELFTEST_ENTRIES" ]; then
+          echo "::error::No 'selftest' entries were discovered in test/mutants/manifest.json. Refusing to report a pass without evaluating anything."
+          exit 1
+        fi
+
+        echo "Discovered selftest entries (id, expected verdict):"
+        echo "$SELFTEST_ENTRIES" | sed 's/^/  - /'
+        echo
+
+        OVERALL_FAILED=0
+        while IFS=$'\t' read -r SELFTEST_ID EXPECT_VERDICT; do
+          if [ -z "$SELFTEST_ID" ] || [ -z "$EXPECT_VERDICT" ]; then
+            echo "::error::Encountered an empty selftest id or expected verdict while iterating the manifest -- this must never be silently skipped."
+            OVERALL_FAILED=1
+            continue
+          fi
+
+          echo "=================================================="
+          echo "Running selftest: $SELFTEST_ID (expect $EXPECT_VERDICT)"
+          echo "=================================================="
+          mkdir -p "mutant-results/$SELFTEST_ID"
+          if python3 test/mutants/run_mutant.py \
+              --mutant "$SELFTEST_ID" \
+              --expect-verdict "$EXPECT_VERDICT" \
+              --trx-dir "mutant-results/$SELFTEST_ID" \
+              2>&1 | tee "mutant-results/$SELFTEST_ID/console.log"; then
+            echo "selftest '$SELFTEST_ID': runner produced the expected verdict"
+          else
+            echo "::error::selftest '$SELFTEST_ID' did NOT produce the expected verdict ($EXPECT_VERDICT) -- see mutant-results/$SELFTEST_ID/console.log"
+            OVERALL_FAILED=1
+          fi
+          echo
+        done <<< "$SELFTEST_ENTRIES"
+
+        if [ "$OVERALL_FAILED" -ne 0 ]; then
+          echo "META_SELFTEST_RESULT: FAIL"
+          exit 1
+        fi
+        echo "META_SELFTEST_RESULT: PASS"
+
+    - name: Upload selftest artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      continue-on-error: true
+      with:
+        name: selftest
+        path: mutant-results/
+
+  # Single pass/fail summary (issue #834 rule #6: "CI ... reports a single pass/fail")
+  # and the required status check for dotnet10 (issue #834 rule #7). This job carries
+  # NO path filter and NO `if:` condition of its own (`if: always()` only, so it also
+  # runs when an upstream job failed) -- it is the one job in this workflow that must
+  # ALWAYS post a status, because Gitea's required-check evaluation for a PR hangs
+  # forever on a context that never arrives. `mutants`/`meta-selftest` being SKIPPED
+  # (the `changes` job found nothing gated) is treated as a pass here, not a failure
+  # -- only an actual `failure`/`cancelled` result fails the gate.
+  #
+  # Judge this job's own log, not the Gitea badge, for the same reason as every other
+  # workflow in this repo (see CLAUDE.md "CI red does not mean failed") -- but see the
+  # header comment above: for THIS workflow, a red `gate` step now means a real
+  # regression, not the known upload-artifact quirk and not an accepted, documented
+  # gap. Read the step output either way.
+  gate:
+    needs: [changes, mutants, meta-selftest]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+    - name: Summarize mutation gate result
+      env:
+        CHANGES_RESULT: ${{ needs.changes.result }}
+        CHANGES_RELEVANT: ${{ needs.changes.outputs.relevant }}
+        MUTANTS_RESULT: ${{ needs.mutants.result }}
+        SELFTEST_RESULT: ${{ needs.meta-selftest.result }}
+      run: |
+        echo "changes job result:       $CHANGES_RESULT (relevant=$CHANGES_RELEVANT)"
+        echo "mutants job result:       $MUTANTS_RESULT"
+        echo "meta-selftest job result: $SELFTEST_RESULT"
+
+        is_ok() {
+          case "$1" in
+            success|skipped) return 0 ;;
+            *) return 1 ;;
+          esac
+        }
+
+        if ! is_ok "$CHANGES_RESULT" || ! is_ok "$MUTANTS_RESULT" || ! is_ok "$SELFTEST_RESULT"; then
+          echo "MUTATION_GATE_RESULT: FAIL"
+          exit 1
+        fi
+        echo "MUTATION_GATE_RESULT: PASS"

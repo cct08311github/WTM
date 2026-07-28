@@ -1,0 +1,18 @@
+diff --git a/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs b/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs
+index 90d99e93c..e191b8e06 100644
+--- a/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs
++++ b/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs
+@@ -516,7 +516,12 @@ namespace WalkingTec.Mvvm.Mvc
+             }
+ 
+             // Block known sensitive/infrastructure fields from inline editing
+-            var blockedFields = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
++            // MUTANT test/mutants _selftest/broken-syntax: intentionally does not compile —
++            // this fixture exists only so the mutation-gate runner's own meta test can prove
++            // that a build failure is reported as an invalid mutant / gate FAILURE, never a
++            // pass. It is never applied to the "security" mutant list. See
++            // test/mutants/manifest.json ("_selftest-invalid-mutant-build-failure").
++            var blockedFields SELFTEST_DELIBERATE_SYNTAX_ERROR = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+             {
+                 "ID", "Password", "PasswordHash", "Salt",
+                 "TenantCode", "CreateTime", "CreateBy",

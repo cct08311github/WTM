@@ -1,0 +1,19 @@
+diff --git a/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs b/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs
+index 90d99e93c..2509cbd82 100644
+--- a/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs
++++ b/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs
+@@ -516,11 +516,11 @@ namespace WalkingTec.Mvvm.Mvc
+             }
+ 
+             // Block known sensitive/infrastructure fields from inline editing
++            // MUTANT test/mutants mvc004-blocklist-empty: blocklist emptied (compile-preserving
++            // operator per issue #834) so every field is treated as allowed. See
++            // test/mutants/manifest.json for the mutant record.
+             var blockedFields = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+             {
+-                "ID", "Password", "PasswordHash", "Salt",
+-                "TenantCode", "CreateTime", "CreateBy",
+-                "UpdateTime", "UpdateBy", "ITCode",
+             };
+             if (blockedFields.Contains(field))
+             {
