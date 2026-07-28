@@ -11,6 +11,7 @@ using WalkingTec.Mvvm.Core.Implement;
 using System.IO;
 using System.Text.RegularExpressions;
 using System.Text;
+using System.Text.Encodings.Web;
 using Microsoft.Extensions.Localization;
 using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Core.Support.Json;
@@ -391,7 +392,21 @@ namespace WalkingTec.Mvvm.Mvc.Filters
             if (context.Result is PartialViewResult pvr)
             {
                 model = pvr.Model as BaseVM;
-                context.HttpContext.Response.WriteAsync($"<script>try{{ff.ResizeChart('{model?.ViewDivId}')}}catch{{}}</script>");
+                // #799: ViewDivId is request-taintable - it round-trips through the FC
+                // dictionary (populated straight from Request.Form/Request.Query above and
+                // in WTMContext.CreateVM) and RedoUpdateModel writes it onto the VM via raw
+                // reflection (PropertyHelper.SetPropertyValue), bypassing normal MVC binder
+                // attributes. It was previously interpolated here unescaped into an inline
+                // <script> body - an authenticated caller could break out of the JS string
+                // literal and inject arbitrary script (no antiforgery gate exists in this
+                // codebase, and the default CSP's ScriptSrc allows 'unsafe-inline', so neither
+                // mitigates it). JavaScriptEncoder (not HtmlEncode) is required because the
+                // sink is a JS string literal, not HTML - it escapes the quote/backslash
+                // characters that would let an attacker close the literal, which HtmlEncode
+                // does not. Matches the encoder already used for this exact sink shape
+                // elsewhere (DataTableTagHelper.cs, PrivilegeFilter.cs's jsRedirect/jsLp).
+                var safeViewDivId = JavaScriptEncoder.Default.Encode(model?.ViewDivId ?? string.Empty);
+                context.HttpContext.Response.WriteAsync($"<script>try{{ff.ResizeChart('{safeViewDivId}')}}catch{{}}</script>");
             }
 
             //如果是来自Error，则已经记录过日志，跳过

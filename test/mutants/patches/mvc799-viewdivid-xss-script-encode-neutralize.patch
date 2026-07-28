@@ -1,0 +1,16 @@
+diff --git a/src/WalkingTec.Mvvm.Mvc/Filters/FrameworkFilter.cs b/src/WalkingTec.Mvvm.Mvc/Filters/FrameworkFilter.cs
+index 729ff7a7c..9a2285173 100644
+--- a/src/WalkingTec.Mvvm.Mvc/Filters/FrameworkFilter.cs
++++ b/src/WalkingTec.Mvvm.Mvc/Filters/FrameworkFilter.cs
+@@ -405,7 +405,10 @@ namespace WalkingTec.Mvvm.Mvc.Filters
+                 // characters that would let an attacker close the literal, which HtmlEncode
+                 // does not. Matches the encoder already used for this exact sink shape
+                 // elsewhere (DataTableTagHelper.cs, PrivilegeFilter.cs's jsRedirect/jsLp).
+-                var safeViewDivId = JavaScriptEncoder.Default.Encode(model?.ViewDivId ?? string.Empty);
++                // MUTANT test/mutants mvc799-viewdivid-xss-script-encode: encoding call
++                // neutralized (compile-preserving identity passthrough) so the sink can never
++                // actually encode. See test/mutants/manifest.json for the mutant record.
++                var safeViewDivId = (model?.ViewDivId ?? string.Empty);
+                 context.HttpContext.Response.WriteAsync($"<script>try{{ff.ResizeChart('{safeViewDivId}')}}catch{{}}</script>");
+             }
+ 

@@ -1,0 +1,22 @@
+{
+  "id": "mvc799-viewdivid-xss-script-encode",
+  "kind": "security",
+  "description": "Issue #799: FrameworkFilter.OnResultExecuted interpolated the unescaped BaseVM.ViewDivId into an inline <script> body it writes for every PartialViewResult whose model is a BaseVM. ViewDivId is request-taintable (WTMContext.CreateVM copies Request.Form/.Query keys verbatim into the VM's FC dictionary; BaseController.RedoUpdateModel, called by the [AllRights] _FrameworkController.Selector endpoint before PartialView(listVM), reflects each FC entry onto the matching VM property via PropertyHelper.SetPropertyValue), and neither of this codebase's usual mitigations apply (no antiforgery layer anywhere in src/; WtmCspOptions.ScriptSrc defaults to 'self' 'unsafe-inline'). Fixed with JavaScriptEncoder.Default.Encode. This mutant neutralizes that encode call back to a compile-preserving identity passthrough -- the exact pre-fix behaviour -- to prove FrameworkFilterViewDivIdXssTests799's hostile-payload assertion is load-bearing, not decorative.",
+  "target_file": "src/WalkingTec.Mvvm.Mvc/Filters/FrameworkFilter.cs",
+  "target_symbol": "FrameworkFilter.OnResultExecuted(ResultExecutedContext) -- the JavaScriptEncoder.Default.Encode(...) call feeding safeViewDivId, line ~408",
+  "patch": "patches/mvc799-viewdivid-xss-script-encode-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Admin.Test/WalkingTec.Mvvm.Admin.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Admin.Test.FrameworkFilterViewDivIdXssTests799.Selector_HostileViewDivId_ScriptSinkEncodesPayload_NoRawBreakout",
+  "red_tests": [
+    "WalkingTec.Mvvm.Admin.Test.FrameworkFilterViewDivIdXssTests799.Selector_HostileViewDivId_ScriptSinkEncodesPayload_NoRawBreakout"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Admin.Test.FrameworkFilterViewDivIdXssTests799.Selector_HostileViewDivId_ScriptSinkEncodesPayload_NoRawBreakout": "does not contain string 'ff.ResizeChart"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against a clean checkout (stale demo.db under bin/ removed first) with the mutant patch applied: \"StringAssert.Contains failed. String '<script>try{ff.ResizeChart('x');alert(document.cookie);//')}catch{}</script>' does not contain string 'ff.ResizeChart('x\\u0027);alert(document.cookie);//')'. The response must contain the ENCODED payload inside the JS string literal - proving the fix's JavaScriptEncoder.Default.Encode call actually ran, not just that the raw payload is somehow absent..\" -- i.e. the response reverts to the exact pre-fix unescaped breakout (';alert(document.cookie);// sitting outside any string literal).",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Admin.Test.FrameworkFilterViewDivIdXssTests799.Selector_NormalViewDivId_ScriptSinkRendersUnchanged",
+  "green_tests": [
+    "WalkingTec.Mvvm.Admin.Test.FrameworkFilterViewDivIdXssTests799.Selector_NormalViewDivId_ScriptSinkRendersUnchanged"
+  ]
+}

@@ -20,7 +20,13 @@ namespace WalkingTec.Mvvm.Test.Mock
 {
     public static class MockWtmContext
     {
-        public static WTMContext CreateWtmContext(IDataContext dataContext= null, string usercode = null)
+        // #799: optional `form` lets a caller simulate an attacker-controlled
+        // Request.Form so tests can drive WTMContext.CreateVM's FC-population loop
+        // (WTMContext.CreateVM.cs) — the real source of the FC dictionary that
+        // BaseController.RedoUpdateModel reflects onto a VM — through this same mock
+        // HttpContext, without touching every other CreateWtmContext caller's behaviour
+        // (default null preserves the pre-existing HasFormContentType=false mock).
+        public static WTMContext CreateWtmContext(IDataContext dataContext= null, string usercode = null, IFormCollection form = null)
         {
             GlobalData gd = new GlobalData();
             gd.AllAccessUrls = new List<string>();
@@ -37,6 +43,11 @@ namespace WalkingTec.Mvvm.Test.Mock
             // WTMContext.LoginUserInfo's anonymous/_remotetoken branch — don't NRE on an
             // unconfigured Moq member (#538).
             mockHttpRequest.Setup(x => x.Query).Returns(new QueryCollection());
+            if (form != null)
+            {
+                mockHttpRequest.Setup(x => x.HasFormContentType).Returns(true);
+                mockHttpRequest.Setup(x => x.Form).Returns(form);
+            }
             var cache = new MemoryDistributedCache(Options.Create<MemoryDistributedCacheOptions>(new MemoryDistributedCacheOptions()));
             var res = new ResourceManagerStringLocalizerFactory(Options.Create<LocalizationOptions>(new LocalizationOptions { ResourcesPath = "Resources" }), new Microsoft.Extensions.Logging.LoggerFactory());
             var mockTenantService = new Mock<IWtmTenantService>();
