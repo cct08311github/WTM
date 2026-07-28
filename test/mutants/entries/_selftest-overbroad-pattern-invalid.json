@@ -1,0 +1,21 @@
+{
+  "id": "_selftest-overbroad-pattern-invalid",
+  "kind": "selftest",
+  "expect_verdict": "INVALID_MUTANT_OVERBROAD_ASSERTION_PATTERN",
+  "description": "Issue #855 defect 3 (tighten what counts as a proper red, part 1): red_expected_assertion_patterns['...'] = '.*' would match ANY failure message via re.search() -- a NullReferenceException, a fixture crash, a completely unrelated assertion -- not the mutant's own guard specifically, defeating the entire point of pinning the guard's assertion text. Uses the SAME real production patch as mvc004-blocklist-empty-http-blindspot (blockedFields emptied, so PasswordField genuinely goes red) specifically so the danger is concrete, not hypothetical: before the fix, run_mutant.py had no check for this at all, and this exact combination (a real mutation + an unconditionally-matching pattern) let evaluate_red()'s `re.search('.*', o.message or '')` count the failure as KILLED regardless of whether the message actually said anything about the guard -- i.e. this pattern would have just as happily accepted a completely unrelated NullReferenceException as 'proof' the guard was hit. After the fix, validate_assertion_patterns_not_overbroad() rejects the pattern before the patch is even applied (re.search(pattern, '') succeeding is a precise, mechanical definition of 'unconditionally satisfiable' -- no non-trivial required substring can ever match '').",
+  "target_file": "src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs",
+  "target_symbol": "_FrameworkController.UpdateModelProperty(string,Guid,string,string) -- the `blockedFields` HashSet<string> initializer, lines ~519-524 (same production mutation as mvc004-blocklist-empty-http-blindspot; this entry only swaps in an over-broad red_expected_assertion_pattern to prove the overbroad-pattern check)",
+  "patch": "patches/mvc004-blocklist-empty.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_PasswordField_ReturnsBadRequest",
+  "red_tests": [
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_PasswordField_ReturnsBadRequest"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_PasswordField_ReturnsBadRequest": ".*"
+  },
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.GetExportExcel_UnknownCsKey_ReturnsBadRequest",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.GetExportExcel_UnknownCsKey_ReturnsBadRequest"
+  ]
+}

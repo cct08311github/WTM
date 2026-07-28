@@ -1,0 +1,21 @@
+{
+  "id": "_selftest-undeclared-trx-failure-invalid",
+  "kind": "selftest",
+  "expect_verdict": "UNEXPECTED_RED",
+  "description": "Issue #855 defect 3 (tighten what counts as a proper red, part 2): 'undeclared failures elsewhere in the TRX should not silently pass'. Uses the SAME real production patch as mvc004-blocklist-empty-http-blindspot (blockedFields emptied), but red_test_filter is deliberately broadened with an OR clause to also match MutationGateSelftestFixtures.AlwaysFails_MutationGateBaselineSelftestFixture (permanently [Ignore]-d, reports TRX outcome=NotExecuted -- never Passed) -- while red_tests only DECLARES UpdateModelProperty_PasswordField_ReturnsBadRequest, simulating a red_test_filter whose blast radius is accidentally broader than what the entry actually declares. Before the fix: evaluate_red() only ever looked up outcomes for names in the declared red_tests list, found PasswordField correctly went red matching its expected pattern, and reported KILLED -- completely ignoring that the SAME TRX also contains an undeclared test that did not pass. After the fix, evaluate_red() additionally scans every outcome in the TRX that is NOT in the declared red_tests and treats any of them that did not pass as UNEXPECTED_RED, exactly like a declared red test that failed for the wrong reason.",
+  "target_file": "src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs",
+  "target_symbol": "_FrameworkController.UpdateModelProperty(string,Guid,string,string) -- the `blockedFields` HashSet<string> initializer, lines ~519-524 (same production mutation as mvc004-blocklist-empty-http-blindspot; this entry only broadens the red_test_filter to prove the undeclared-TRX-failure check)",
+  "patch": "patches/mvc004-blocklist-empty.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "(FullyQualifiedName=WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_PasswordField_ReturnsBadRequest)|(FullyQualifiedName=WalkingTec.Mvvm.Api.Test.MutationGateSelftestFixtures.AlwaysFails_MutationGateBaselineSelftestFixture)",
+  "red_tests": [
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_PasswordField_ReturnsBadRequest"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_PasswordField_ReturnsBadRequest": "MVC-004: Password field must be blocked\\. Got 200\\."
+  },
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_DotNotationField_ReturnsBadRequest",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_DotNotationField_ReturnsBadRequest"
+  ]
+}

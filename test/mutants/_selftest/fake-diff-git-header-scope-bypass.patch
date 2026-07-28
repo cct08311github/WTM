@@ -1,0 +1,13 @@
+diff --git a/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs b/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs
+index 90d99e93c..2509cbd82 100644
+--- a/test/WalkingTec.Mvvm.Api.Test/MvcAuthHolesTests.cs
++++ b/test/WalkingTec.Mvvm.Api.Test/MvcAuthHolesTests.cs
+@@ -454,7 +454,7 @@ public async Task UpdateModelProperty_PasswordField_ReturnsBadRequest()
+         var form = new FormUrlEncodedContent(new Dictionary<string, string>
+         {
+             ["_DONOT_USE_VMNAME"] = FrameworkUserVm,
+             ["id"] = user.ID.ToString(),
+-            ["field"] = "Password",
++            ["field"] = "Nickname",
+             ["value"] = "hacked",
+         });

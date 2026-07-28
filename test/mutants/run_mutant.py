@@ -9,18 +9,40 @@ below for how the two are combined back into one in-memory manifest dict.
 
 For ONE mutant declared under test/mutants/entries/, this script:
 
-  1. Validates the mutant's patch is scoped to its declared production file only
-     (rejects anything touching test/, appsettings*.json, or seed data -- belt and
-     suspenders on top of the single-file allowlist check).
-  2. Applies the patch to the working tree.
-  3. Asserts the patched tree still COMPILES. A mutant that breaks the build is an
+  1. Rejects a mutant with an empty (or missing) red_tests list outright -- with
+     nothing to check, the evaluation loop below can neither detect a survivor nor
+     an unexpected failure, and used to fall through to KILLED for having proven
+     nothing (issue #855 defect 2). Also rejects any red_expected_assertion_pattern
+     that is over-broad enough to match an empty string, or a representative
+     unrelated failure message (NullReferenceException-style text, a cancelled
+     operation, an unrelated assertion) -- a pattern that loose would match
+     essentially any failure, not the guard's own assertion text specifically
+     (issue #855 defect 3).
+  2. Validates the mutant's patch is scoped to its declared production file only,
+     using the paths **git itself** resolves when applying the patch (`git apply
+     --numstat`, driven by the `---`/`+++` hunk headers) -- not a text-level parse
+     of the patch's `diff --git a/<path> b/<path>` summary line, which a hostile or
+     malformed patch can make disagree with what git will actually touch (issue
+     #855 defect 1, reproduced and fixed: a patch whose `diff --git` line names a
+     production file while its `---`/`+++` headers name a test file used to sail
+     through this check and then silently rewrite the test). Also independently
+     rejects anything touching test/, appsettings*.json, or seed data -- belt and
+     suspenders on top of the single-file allowlist check.
+  3. Runs the mutant's declared red tests on the CLEAN, unmutated tree (the
+     baseline) and requires every one of them to already be green there, BEFORE
+     the patch is applied. Without this, a test that was already failing for a
+     reason that has nothing to do with the mutant would get reported KILLED once
+     the (irrelevant) patch was applied too -- proving the test is red, not that
+     the mutant is what turned it red (issue #855 defect 3).
+  4. Applies the patch to the working tree.
+  5. Asserts the patched tree still COMPILES. A mutant that breaks the build is an
      "invalid mutant" and is reported as a gate FAILURE, never a pass (it proves
      nothing about test effectiveness -- see issue #834 rule #3).
-  4. Runs the mutant's "green" test filter (the positive control) and asserts it
+  6. Runs the mutant's "green" test filter (the positive control) and asserts it
      stays green. A positive control failure means either the mutation had broader
      effects than declared, or the environment itself is broken -- either way the
      result is untrustworthy and is reported as a gate FAILURE.
-  5. Runs the mutant's "red" test filter and, for each declared test, checks:
+  7. Runs the mutant's "red" test filter and, for each declared test, checks:
        - did it fail at all? If it stayed green, the mutant SURVIVED (the test
          cannot detect the guard's absence) -- gate FAILURE.
        - if it failed, does the failure message match the manifest's expected
@@ -29,12 +51,23 @@ For ONE mutant declared under test/mutants/entries/, this script:
          of detection -- it is reported as UNEXPECTED_RED, also a gate FAILURE.
        - only a failure whose message matches the expected pattern counts as
          KILLED (the test genuinely detected the mutant).
-  6. ALWAYS reverts the patch before exiting, even on error, so the working tree is
+     Also scans the SAME TRX for any undeclared test that also did not pass -- a
+     red_test_filter whose blast radius is broader than the entry's declared
+     red_tests must not let an extra, silent failure ride along unexamined (issue
+     #855 defect 3): that too is reported as UNEXPECTED_RED, a gate FAILURE.
+  8. ALWAYS reverts the patch before exiting, even on error, so the working tree is
      left exactly as it was found.
+
+Entries are also rejected at load time (before any of the above runs) if their
+declared `kind` is not one of `security`/`selftest` (issue #855 defect 4): an
+unrecognized kind used to load without complaint and then simply never be selected
+by either CI job in .github/workflows/mutation-gate.yml, leaving the entry
+registered but permanently unexecuted while the rest of the gate stayed green.
 
 Exit code is 0 only when every check above resolves to the expected outcome
 (normally: KILLED). Everything else -- SURVIVED, UNEXPECTED_RED, a build failure,
-a scope violation, or a positive-control failure -- exits non-zero.
+a scope violation, a non-green baseline, an empty red_tests list, an over-broad
+assertion pattern, or a positive-control failure -- exits non-zero.
 
 Usage:
     python3 test/mutants/run_mutant.py --mutant <id> [--manifest test/mutants/manifest.json]
@@ -87,9 +120,39 @@ VERDICT_INVALID_SCOPE = "INVALID_MUTANT_SCOPE"
 VERDICT_PATCH_DID_NOT_APPLY = "INVALID_MUTANT_PATCH_DID_NOT_APPLY"
 VERDICT_BUILD_FAILURE = "INVALID_MUTANT_BUILD_FAILURE"
 VERDICT_FILTER_MATCHED_NOTHING = "INVALID_MUTANT_FILTER_MATCHED_NO_TESTS"
+# issue #855 defect 2: a mutant with nothing declared in red_tests can never produce a
+# survivor or an unexpected result, so it used to fall through evaluate_red() straight
+# to KILLED -- reported before any test ever ran.
+VERDICT_EMPTY_RED_TESTS = "INVALID_MUTANT_EMPTY_RED_TESTS"
+# issue #855 defect 3: a red_expected_assertion_patterns regex loose enough to match an
+# empty string, OR a representative unrelated failure message (see PROBE_MESSAGES
+# below), would match essentially any failure, defeating the entire point of pinning
+# the guard's own assertion text.
+VERDICT_OVERBROAD_PATTERN = "INVALID_MUTANT_OVERBROAD_ASSERTION_PATTERN"
+# issue #855 defect 3: the declared red tests must already be green on the clean,
+# unmutated tree -- otherwise a KILLED verdict cannot distinguish "the mutant broke
+# this test" from "this test was already broken".
+VERDICT_BASELINE_NOT_GREEN = "INVALID_MUTANT_BASELINE_NOT_GREEN"
 
 # The only verdict that represents a genuinely effective, correctly-scoped test.
 PASSING_VERDICTS = {VERDICT_KILLED}
+
+# issue #855 defect 4: entries.json's `kind` field selects which CI job
+# (.github/workflows/mutation-gate.yml's `mutants` vs `meta-selftest`) ever executes an
+# entry. Any value outside this set must be rejected at load time -- see
+# discover_entries() -- so a typo can never leave an entry registered but silently
+# excluded from both jobs.
+VALID_KINDS = {"security", "selftest"}
+
+# issue #855 defect 3 (see validate_assertion_patterns_not_overbroad): representative,
+# realistic MSTest/.NET failure text that has nothing to do with any guard this
+# registry pins. A properly-scoped red_expected_assertion_pattern must NOT match any of
+# these -- if it does, it is loose enough to also match an unrelated crash.
+PROBE_MESSAGES = [
+    "Object reference not set to an instance of an object.",
+    "The operation was canceled.",
+    "Assert.Fail failed. Totally unrelated assertion text for probe purposes only.",
+]
 
 
 class GateError(Exception):
@@ -168,6 +231,18 @@ def discover_entries(entries_dir: Path) -> list[dict]:
                 f"stem is '{path.stem}'. The filename must equal the id so a mutant can "
                 "always be found by id alone -- rename the file or fix the id."
             )
+        kind = entry.get("kind", "security")
+        if kind not in VALID_KINDS:
+            raise SystemExit(
+                f"Mutant entry file '{path}' (id '{entry_id}') declares kind='{kind}', "
+                f"which is not one of {sorted(VALID_KINDS)}. issue #855 defect 4: an "
+                "unrecognized kind used to load without complaint and then simply never "
+                "be selected by either CI job (mutation-gate.yml's 'mutants' job selects "
+                "kind=='security', 'meta-selftest' selects kind=='selftest') -- leaving "
+                "the entry registered but permanently unexecuted while everything else "
+                "stayed green. Fix the typo, or add the new kind to VALID_KINDS here AND "
+                "give it a job in mutation-gate.yml that actually runs it."
+            )
         entries.append(entry)
     return entries
 
@@ -233,35 +308,60 @@ def assert_target_file_clean(repo_root: Path, target_file: str) -> None:
         )
 
 
-def touched_paths(patch_text: str) -> list[str]:
+def git_apply_touched_paths(repo_root: Path, patch_path: Path) -> list[str]:
+    """Return the file path(s) `git apply` will ACTUALLY modify when applying this patch.
+
+    issue #855 defect 1 (fixed here): the function this replaced parsed only the
+    `diff --git a/<path> b/<path>` summary line out of the patch TEXT. `git apply` does
+    NOT use that line to decide what to modify -- it resolves the path from the
+    `---`/`+++` hunk headers. Those two can disagree, and `git apply` always honours the
+    latter. Reproduced against this exact repo with a patch whose `diff --git` line names
+    a production file while its `---`/`+++` headers name a test file:
+
+        $ git apply --check --verbose fake-header.patch
+        Checking patch test/WalkingTec.Mvvm.Api.Test/MvcAuthHolesTests.cs...
+
+    i.e. git silently modifies the test file while a `diff --git`-only parse reports the
+    production file's name and a scope check built on that text parse never notices. So
+    this asks git itself which paths it will touch (`git apply --numstat`, confirmed
+    empirically to report the same `---`/`+++`-resolved path `git apply` itself uses, for
+    every patch in this registry) instead of re-deriving it from a line a hostile or
+    malformed patch can make disagree with reality.
+    """
+    result = run(["git", "apply", "--numstat", str(patch_path)], cwd=repo_root)
+    if result.returncode != 0:
+        raise GateError(
+            VERDICT_PATCH_DID_NOT_APPLY,
+            f"git apply --numstat could not parse {patch_path} (so the path(s) it would "
+            f"touch cannot even be determined):\n{result.stderr}",
+        )
     paths = []
-    for line in patch_text.splitlines():
-        if line.startswith("diff --git a/"):
-            # "diff --git a/<path> b/<path>"
-            rest = line[len("diff --git a/"):]
-            # split on " b/" -- safe because git always re-quotes paths containing
-            # a literal " b/" sequence; a plain split is fine for this repo's paths.
-            a_path = rest.split(" b/", 1)[0]
-            paths.append(a_path)
+    for line in result.stdout.splitlines():
+        # numstat format: "<added>\t<removed>\t<path>" (added/removed are '-' for a
+        # binary file). maxsplit=2 so a path containing a literal tab is never truncated.
+        parts = line.split("\t", 2)
+        if len(parts) == 3:
+            paths.append(parts[2])
     return paths
 
 
-def validate_scope(mutant: dict, patch_text: str) -> None:
+def validate_scope(repo_root: Path, mutant: dict, patch_path: Path) -> None:
     target_file = mutant["target_file"]
-    paths = touched_paths(patch_text)
+    paths = git_apply_touched_paths(repo_root, patch_path)
     if not paths:
         raise GateError(
             VERDICT_INVALID_SCOPE,
-            f"Patch for mutant '{mutant['id']}' does not touch any file "
-            "(no 'diff --git' header found) -- refusing to apply.",
+            f"Patch for mutant '{mutant['id']}' does not touch any file according to "
+            "`git apply --numstat` -- refusing to apply.",
         )
     for p in paths:
         if p != target_file:
             raise GateError(
                 VERDICT_INVALID_SCOPE,
-                f"Mutant '{mutant['id']}' patch touches '{p}', but its manifest "
-                f"entry declares target_file='{target_file}'. A mutant patch must be "
-                "constrained to exactly its declared production file.",
+                f"Mutant '{mutant['id']}' patch touches '{p}' (per `git apply "
+                "--numstat`, i.e. the path git itself will actually modify), but its "
+                f"manifest entry declares target_file='{target_file}'. A mutant patch "
+                "must be constrained to exactly its declared production file.",
             )
         for pattern in DENYLIST_PATTERNS:
             if pattern.search(p):
@@ -293,7 +393,23 @@ def revert_patch(repo_root: Path, patch_path: Path) -> None:
     if result.returncode != 0:
         # Last-resort fallback: hard-reset just the target file(s) named in the
         # patch, so a partially-applied patch can never be left dirtying the tree.
-        for p in touched_paths(patch_path.read_text(encoding="utf-8")):
+        # Uses the same git-resolved path list as validate_scope() (issue #855 defect
+        # 1) rather than a text-level parse, so the fallback checkout targets whatever
+        # git actually modified, not whatever the patch's summary line merely claimed.
+        # This runs from a `finally` block during cleanup -- git_apply_touched_paths()
+        # can itself raise GateError if --numstat fails, which must never replace/mask
+        # whatever real error is already propagating, so it is caught and downgraded to
+        # the same WARNING this fallback already prints on any other failure mode.
+        try:
+            fallback_paths = git_apply_touched_paths(repo_root, patch_path)
+        except GateError as e:
+            fallback_paths = []
+            print(
+                f"WARNING: could not determine which paths to fall back to for revert "
+                f"({e.message}); working tree may still be dirty.",
+                file=sys.stderr,
+            )
+        for p in fallback_paths:
             run(["git", "checkout", "--", p], cwd=repo_root)
         remaining = run(["git", "status", "--porcelain"], cwd=repo_root)
         if remaining.stdout.strip():
@@ -384,6 +500,89 @@ def run_tests(
     return outcomes
 
 
+def validate_red_tests_declared(mutant: dict) -> None:
+    # issue #855 defect 2: an empty (or missing) red_tests list gives evaluate_red()
+    # nothing to iterate -- it can produce neither a `survived` nor an `unexpected`
+    # entry, and used to fall straight through to KILLED, so a comment-only/no-op
+    # mutant with red_tests=[] could pass the gate while proving nothing at all.
+    if not (mutant.get("red_tests") or []):
+        raise GateError(
+            VERDICT_EMPTY_RED_TESTS,
+            f"Mutant '{mutant['id']}' declares an empty (or missing) red_tests list. "
+            "A mutant must name at least one test that is expected to detect it; "
+            "otherwise there is nothing for this gate to check.",
+        )
+
+
+def validate_assertion_patterns_not_overbroad(mutant: dict) -> None:
+    # issue #855 defect 3: a red_expected_assertion_patterns regex that matches the
+    # EMPTY string would match essentially any failure message via re.search() --
+    # including one from a completely unrelated bug -- so it can never actually pin the
+    # mutant's own guard. re.search(pattern, "") succeeding is a precise, mechanical
+    # definition of "this pattern is unconditionally satisfiable": no non-trivial
+    # required substring (e.g. "abc.*", "#830: .*") can ever match "".
+    #
+    # The empty-string check alone is NOT enough, though (caught in code review):
+    # a pattern requiring exactly one arbitrary character ('.', '\w', '\S', '.+',
+    # '[\s\S]', ...) never matches '' but is exactly as useless in practice -- it
+    # matches virtually any real (non-empty) failure message, including a totally
+    # unrelated NullReferenceException or fixture crash. PROBE_MESSAGES are
+    # representative non-empty failure text that has nothing to do with any guard
+    # this registry pins; a pattern is over-broad if it matches ANY of them via
+    # re.search(), since a properly-scoped pattern requires specific literal text (an
+    # issue number, a guard's own message) that generic probe text cannot contain.
+    for name, pattern in (mutant.get("red_expected_assertion_patterns") or {}).items():
+        if not pattern:
+            raise GateError(
+                VERDICT_OVERBROAD_PATTERN,
+                f"Mutant '{mutant['id']}': red_expected_assertion_patterns[{name!r}] "
+                "is empty, which means it would match essentially any failure "
+                "message, not the mutant's own guard specifically. Tighten the "
+                "pattern so it can only match the guard's own assertion text.",
+            )
+        for probe in PROBE_MESSAGES:
+            if re.search(pattern, probe) is not None:
+                raise GateError(
+                    VERDICT_OVERBROAD_PATTERN,
+                    f"Mutant '{mutant['id']}': red_expected_assertion_patterns[{name!r}] "
+                    f"= {pattern!r} matches an unrelated probe failure message "
+                    f"({probe!r}) that has nothing to do with this mutant's own "
+                    "guard, which means it would also match essentially any real "
+                    "failure message. Tighten the pattern so it can only match the "
+                    "guard's own assertion text.",
+                )
+
+
+def evaluate_baseline(mutant: dict, outcomes: dict[str, TestOutcome]) -> None:
+    # issue #855 defect 3: run BEFORE apply_patch() -- proves the declared red tests are
+    # green on the tree as it exists right now, before any mutant patch touches it. A
+    # KILLED verdict computed without this baseline cannot distinguish "the mutant broke
+    # this test" from "this test was already broken for an unrelated reason", so an
+    # already-red test would previously be reported as a valid kill.
+    expected = mutant.get("red_tests") or []
+    not_green: list[tuple[str, str]] = []
+    for name in expected:
+        o = outcomes.get(name)
+        if o is None or not o.ran:
+            raise GateError(
+                VERDICT_FILTER_MATCHED_NOTHING,
+                f"Designated red test '{name}' did not appear in the BASELINE TRX "
+                "results (clean tree, before the mutant patch was applied) for filter "
+                f"'{mutant['red_test_filter']}' -- the filter is not matching the test "
+                "the manifest declares.",
+            )
+        if not o.passed:
+            not_green.append((name, o.message or "(outcome recorded as not Passed)"))
+    if not_green:
+        lines = "; ".join(f"'{n}': {m}" for n, m in not_green)
+        raise GateError(
+            VERDICT_BASELINE_NOT_GREEN,
+            f"Mutant '{mutant['id']}': the following declared red test(s) are NOT "
+            "green on the clean, unmutated tree (baseline, before the patch was "
+            f"applied) -- a KILLED verdict here would prove nothing: {lines}",
+        )
+
+
 def evaluate_green(mutant: dict, outcomes: dict[str, TestOutcome]) -> list[TestOutcome]:
     expected = mutant.get("green_tests") or []
     results = []
@@ -442,6 +641,23 @@ def evaluate_red(mutant: dict, outcomes: dict[str, TestOutcome]) -> tuple[str, s
         else:
             unexpected.append((name, o.message, pattern))
 
+    # issue #855 defect 3: an undeclared test elsewhere in this SAME TRX that also did
+    # not pass must not be silently dropped. If the red_test_filter's blast radius is
+    # (accidentally or otherwise) broader than this entry's declared red_tests, a
+    # failure in that extra test is not proof the DECLARED test detected the mutant for
+    # the declared reason -- it is evidence something else in the filter's reach is
+    # broken too, and that has to fail the gate exactly like any other UNEXPECTED_RED.
+    for full_name, o in outcomes.items():
+        if full_name in expected:
+            continue
+        if o.ran and not o.passed:
+            unexpected.append((
+                full_name,
+                o.message,
+                "(undeclared: not in this mutant's red_tests, but present in the same "
+                "TRX and not Passed)",
+            ))
+
     if survived:
         detail = "; ".join(
             f"'{n}' stayed GREEN under the mutant" for n in survived
@@ -467,10 +683,29 @@ def evaluate_red(mutant: dict, outcomes: dict[str, TestOutcome]) -> tuple[str, s
 
 def evaluate_mutant(repo_root: Path, mutant: dict, trx_dir: Path) -> MutantResult:
     mutant_id = mutant["id"]
-    patch_path = repo_root / "test" / "mutants" / mutant["patch"]
-    patch_text = patch_path.read_text(encoding="utf-8")
 
-    validate_scope(mutant, patch_text)
+    # issue #855 defect 2 & 3: cheap, static checks on the manifest data itself, before
+    # anything is applied or built.
+    validate_red_tests_declared(mutant)
+    validate_assertion_patterns_not_overbroad(mutant)
+
+    patch_path = repo_root / "test" / "mutants" / mutant["patch"]
+    validate_scope(repo_root, mutant, patch_path)
+
+    # issue #855 defect 3: baseline -- run the declared red tests on the CLEAN,
+    # unmutated tree (exactly the tree as it exists right now; apply_patch() below has
+    # not run yet) and require them all to already be green, before spending any more
+    # effort evaluating the mutant itself.
+    build_project(repo_root, mutant["test_project"])
+    baseline_outcomes = run_tests(
+        repo_root,
+        mutant["test_project"],
+        mutant["red_test_filter"],
+        trx_dir,
+        f"{mutant_id}-baseline.trx",
+    )
+    evaluate_baseline(mutant, baseline_outcomes)
+
     apply_patch(repo_root, patch_path)
     try:
         build_project(repo_root, mutant["test_project"])

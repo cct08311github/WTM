@@ -1,0 +1,13 @@
+diff --git a/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs b/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs
+index 90d99e93c..1111111f1 100644
+--- a/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs
++++ b/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs
+@@ -515,6 +515,8 @@ namespace WalkingTec.Mvvm.Mvc
+                 return BadRequest("Navigation property paths are not allowed for inline editing");
+             }
+
++            // MUTANT test/mutants: no-op comment-only patch shared by several issue #855
++            // mutation-gate runner selftest fixtures. Changes no behaviour.
+             // Block known sensitive/infrastructure fields from inline editing
+             var blockedFields = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+             {

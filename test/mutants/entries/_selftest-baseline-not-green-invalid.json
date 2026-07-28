@@ -1,0 +1,19 @@
+{
+  "id": "_selftest-baseline-not-green-invalid",
+  "kind": "selftest",
+  "expect_verdict": "INVALID_MUTANT_BASELINE_NOT_GREEN",
+  "description": "Issue #855 defect 3 (no unmutated baseline): run_mutant.py used to never run the declared red tests on a clean tree before applying the mutant patch, so it could not distinguish 'the mutant broke this test' from 'this test was already broken'. This fixture's declared red test is MutationGateSelftestFixtures.AlwaysFails_MutationGateBaselineSelftestFixture, which is permanently [Ignore]-d (see that class's doc comment) and therefore reports TRX outcome=NotExecuted -- never Passed -- both before AND after any patch is applied; the patch itself (a shared no-op, comment-only change to _FrameworkController.cs) is irrelevant to it. Before the fix: run_mutant.py applied the patch, built, ran the red filter, saw the (already-not-green) test fail to pass, found no red_expected_assertion_pattern on record for it, and reported UNEXPECTED_RED -- a FAILURE, but for the wrong diagnostic reason, and only by accident of the old evaluate_red() fallback for 'no pattern on record'; a mutant whose red test had SOME leftover pattern that happened to match a NotExecuted/blank message could have slipped through as KILLED with the old code, which is exactly the gap this defect describes. After the fix, evaluate_mutant() runs the red_test_filter on the CLEAN tree first (evaluate_baseline()) and rejects it deterministically as INVALID_MUTANT_BASELINE_NOT_GREEN before the patch is ever applied, regardless of what pattern is or isn't on record.",
+  "target_file": "src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs",
+  "target_symbol": "N/A -- the patch is a no-op (comment-only); this fixture exists to prove a red test that is not green on a clean tree is rejected as an invalid mutant, not to mutate real behaviour",
+  "patch": "_selftest/noop-comment-only-fixture.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.MutationGateSelftestFixtures.AlwaysFails_MutationGateBaselineSelftestFixture",
+  "red_tests": [
+    "WalkingTec.Mvvm.Api.Test.MutationGateSelftestFixtures.AlwaysFails_MutationGateBaselineSelftestFixture"
+  ],
+  "red_expected_assertion_patterns": {},
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.GetExportExcel_UnknownCsKey_ReturnsBadRequest",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.GetExportExcel_UnknownCsKey_ReturnsBadRequest"
+  ]
+}

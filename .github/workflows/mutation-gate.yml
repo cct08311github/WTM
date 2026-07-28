@@ -88,6 +88,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       relevant: ${{ steps.check.outputs.relevant }}
+      total_entries: ${{ steps.check.outputs.total_entries }}
     steps:
     - uses: actions/checkout@v5
       with:
@@ -115,6 +116,7 @@ jobs:
         if [ "$DIFF_OK" -ne 1 ]; then
           echo "Could not compute a path diff for event '$EVENT_NAME' (missing SHA, unsupported event, or git error) -- defaulting to relevant=true so the real gate runs."
           echo "relevant=true" >> "$GITHUB_OUTPUT"
+          echo "total_entries=" >> "$GITHUB_OUTPUT"
           exit 0
         fi
 
@@ -125,52 +127,42 @@ jobs:
         fi
         echo "$CHANGED" | sed 's/^/  - /'
 
-        # Relevant paths are DERIVED from every test/mutants/entries/*.json file's own
-        # target_file field, not a second, hand-maintained list. A hardcoded allowlist here
-        # previously listed only _FrameworkController.cs, so registering a mutant against a
-        # different file (the #830 review round's demo FileApiController.cs, three entries)
-        # computed relevant=false for a change touching only that file: `mutants` would be
-        # silently skipped and `gate` would post a real, unconditional success without ever
-        # having evaluated the mutant that exists specifically to catch that regression.
-        # Reading target_file straight out of the entry files means registering a new
-        # mutant can never again silently fail to arm itself here. (Issue #854: mutants
-        # used to live in one array inside manifest.json; each is now its own file under
+        # issue #855 defect 5: relevance is computed by test/mutants/gate_lib.py's
+        # is_change_relevant() -- the SAME function
+        # test/mutants/_selftest/selftest_relevance_covers_tests_and_workflow.py
+        # exercises directly -- instead of a second, hand-copied inline python block.
+        # It covers every entry's declared target_file AND test_project (.csproj --
+        # e.g. a <Compile Remove="..."> that silently excludes a declared test's source
+        # from the build would otherwise go unnoticed), test/mutants/** (the runner,
+        # this module, every entry/patch/selftest fixture), every source file that
+        # DECLARES a class referenced by any entry's red_tests/green_tests, and
+        # .github/workflows/mutation-gate.yml itself. Before this fix, only
+        # target_file and test/mutants/** were covered: a PR touching ONLY a red-test's
+        # .cs file (e.g. weakening MvcAuthHolesTests.cs), or ONLY this workflow file,
+        # computed relevant=false, `mutants`/`meta-selftest` were skipped, and `gate`
+        # below still posted a real, unconditional success -- meaning either a red test
+        # or the gate's own workflow could be weakened under a green required check.
+        # (Issue #854 history, unchanged: mutants live one-per-file under
         # test/mutants/entries/, discovered by globbing -- see run_mutant.py's
-        # discover_entries() for the same discovery logic and its fail-loud guards.)
-        MUTANT_TARGET_FILES="$(python3 -c "
-        import glob, json
-        files = set()
-        for path in sorted(glob.glob('test/mutants/entries/*.json')):
-            with open(path, encoding='utf-8') as f:
-                entry = json.load(f)
-            target_file = entry.get('target_file')
-            if target_file:
-                files.add(target_file)
-        for f in sorted(files):
-            print(f)
-        ")"
-
-        echo "Mutant target files (from entries/*.json):"
-        echo "$MUTANT_TARGET_FILES" | sed 's/^/  - /'
-
-        RELEVANT=false
-        if echo "$CHANGED" | grep -qE '^test/mutants/'; then
-          RELEVANT=true
-        fi
-        if [ "$RELEVANT" != true ] && [ -n "$MUTANT_TARGET_FILES" ]; then
-          while IFS= read -r TARGET_FILE; do
-            if [ -n "$TARGET_FILE" ] && echo "$CHANGED" | grep -qxF "$TARGET_FILE"; then
-              RELEVANT=true
-              break
-            fi
-          done <<< "$MUTANT_TARGET_FILES"
-        fi
-
-        if [ "$RELEVANT" = true ]; then
-          echo "relevant=true" >> "$GITHUB_OUTPUT"
+        # discover_entries(), which gate_lib.py itself calls, for the same discovery
+        # logic and its fail-loud guards, including issue #855 defect 4's kind
+        # validation.)
+        if RELEVANT_OUT="$(echo "$CHANGED" | python3 test/mutants/gate_lib.py relevant)"; then
+          echo "gate_lib.py relevant -> $RELEVANT_OUT"
         else
-          echo "relevant=false" >> "$GITHUB_OUTPUT"
+          echo "test/mutants/gate_lib.py failed to compute relevance (see error above, e.g. an entry with an unrecognized kind) -- defaulting to relevant=true so the real gate runs; it will fail loudly for the same underlying reason."
+          RELEVANT_OUT=true
         fi
+
+        # issue #855 defect 4: total discovered entries, consumed by the `gate` job's
+        # reconciliation against (mutants job's security_count + meta-selftest job's
+        # selftest_count). A mismatch means an entry existed but was not executed by
+        # either job -- this must never be a silent green pass.
+        TOTAL_OUT="$(python3 test/mutants/gate_lib.py count || true)"
+        echo "total_entries -> $TOTAL_OUT"
+
+        echo "relevant=$RELEVANT_OUT" >> "$GITHUB_OUTPUT"
+        echo "total_entries=$TOTAL_OUT" >> "$GITHUB_OUTPUT"
 
   # The gate itself: every "security" mutant under test/mutants/entries/ must be
   # reported KILLED (patch applies in-scope, compiles, positive control stays green,
@@ -186,6 +178,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
+    outputs:
+      security_count: ${{ steps.run.outputs.security_count }}
     steps:
     - uses: actions/checkout@v5
     - uses: actions/setup-dotnet@v5
@@ -206,40 +200,28 @@ jobs:
           ${{ runner.os }}-nuget-
 
     - name: Run every security mutant
+      id: run
       shell: bash
       run: |
         set -o pipefail
         mkdir -p mutant-results
 
-        # Issue #854: mutants are discovered by globbing test/mutants/entries/*.json,
-        # not by reading one shared array from manifest.json (that array was a
-        # guaranteed conflict generator for concurrent security PRs). The python
-        # helper itself exits non-zero -- distinct from "ran fine, found zero
-        # security-kind entries" below -- if the glob matches nothing at all, or if
-        # any discovered file is missing its own 'id': a directory that silently
-        # resolves to "nothing here" must never be treated as "nothing to do, pass".
-        MUTANT_IDS="$(python3 -c "
-        import glob, json, sys
-        paths = sorted(glob.glob('test/mutants/entries/*.json'))
-        if not paths:
-            print('No mutant entry files found under test/mutants/entries/ (glob matched nothing).', file=sys.stderr)
-            sys.exit(1)
-        ids = []
-        for path in paths:
-            with open(path, encoding='utf-8') as f:
-                entry = json.load(f)
-            entry_id = entry.get('id')
-            if not entry_id:
-                print('Mutant entry file ' + path + ' has no (or an empty) id field.', file=sys.stderr)
-                sys.exit(1)
-            if entry.get('kind') == 'security':
-                ids.append(entry_id)
-        for i in ids:
-            print(i)
-        ")"
-        PY_RC=$?
-        if [ "$PY_RC" -ne 0 ]; then
-          echo "::error::Failed to discover mutant ids from test/mutants/entries/ -- see the error printed above (an empty directory or an entry file missing its id)."
+        # issue #855 defects 4/5: mutant ids are discovered via
+        # `python3 test/mutants/gate_lib.py ids --kind security`, which calls
+        # run_mutant.py's own discover_entries() -- the same loader run_mutant.py uses
+        # for every `--mutant` invocation below, kind validation (issue #855 defect 4:
+        # an unrecognized kind is now rejected at load time, not silently excluded)
+        # included. This replaced a second, hand-copied inline python block that had
+        # no such validation, so a typo'd kind used to load fine and simply produce a
+        # shorter (but never checked against the total) id list. gate_lib.py itself
+        # exits non-zero -- distinct from "ran fine, found zero security-kind entries"
+        # below -- if the glob matches nothing at all, if any discovered file is
+        # missing its own 'id', or if any discovered file's kind is not one of
+        # security/selftest: a directory that silently resolves to "nothing here", or
+        # to "fewer entries than actually exist", must never be treated as "nothing to
+        # do, pass".
+        if ! MUTANT_IDS="$(python3 test/mutants/gate_lib.py ids --kind security)"; then
+          echo "::error::Failed to discover mutant ids from test/mutants/entries/ -- see the error printed above (an empty directory, an entry file missing its id, or an entry with an unrecognized kind -- issue #855 defect 4)."
           exit 1
         fi
 
@@ -255,6 +237,11 @@ jobs:
         echo "Discovered security mutant ids:"
         echo "$MUTANT_IDS" | sed 's/^/  - /'
         echo
+
+        # issue #855 defect 4: this job's own count of ids it is about to execute,
+        # consumed by the `gate` job's discovered-vs-executed reconciliation.
+        SECURITY_COUNT="$(echo "$MUTANT_IDS" | grep -c .)"
+        echo "security_count=$SECURITY_COUNT" >> "$GITHUB_OUTPUT"
 
         OVERALL_FAILED=0
         while IFS= read -r MUTANT_ID; do
@@ -312,6 +299,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
+    outputs:
+      selftest_count: ${{ steps.run.outputs.selftest_count }}
     steps:
     - uses: actions/checkout@v5
     - uses: actions/setup-dotnet@v5
@@ -330,42 +319,20 @@ jobs:
           ${{ runner.os }}-nuget-
 
     - name: Run every selftest fixture
+      id: run
       shell: bash
       run: |
         set -o pipefail
         mkdir -p mutant-results
 
-        # Same discovery mechanism as the mutants job (issue #854): glob
-        # test/mutants/entries/*.json rather than reading manifest.json's old shared
-        # array. The python helper exits non-zero on an empty glob or a file missing
-        # 'id'/'expect_verdict' -- distinct from "ran fine, found zero selftest-kind
-        # entries" below.
-        SELFTEST_ENTRIES="$(python3 -c "
-        import glob, json, sys
-        paths = sorted(glob.glob('test/mutants/entries/*.json'))
-        if not paths:
-            print('No mutant entry files found under test/mutants/entries/ (glob matched nothing).', file=sys.stderr)
-            sys.exit(1)
-        entries = []
-        for path in paths:
-            with open(path, encoding='utf-8') as f:
-                entry = json.load(f)
-            entry_id = entry.get('id')
-            if not entry_id:
-                print('Mutant entry file ' + path + ' has no (or an empty) id field.', file=sys.stderr)
-                sys.exit(1)
-            if entry.get('kind') == 'selftest':
-                expect_verdict = entry.get('expect_verdict')
-                if not expect_verdict:
-                    print('Selftest entry ' + entry_id + ' (' + path + ') has no expect_verdict field.', file=sys.stderr)
-                    sys.exit(1)
-                entries.append(entry_id + '\t' + expect_verdict)
-        for e in entries:
-            print(e)
-        ")"
-        PY_RC=$?
-        if [ "$PY_RC" -ne 0 ]; then
-          echo "::error::Failed to discover selftest ids from test/mutants/entries/ -- see the error printed above (an empty directory or an entry file missing its id/expect_verdict)."
+        # issue #855 defects 4/5: same discovery mechanism as the mutants job --
+        # `python3 test/mutants/gate_lib.py selftests`, which calls run_mutant.py's
+        # own discover_entries() (kind validation included) instead of a second,
+        # hand-copied inline python block. Exits non-zero on an empty glob, a file
+        # missing 'id'/'expect_verdict', or an entry with an unrecognized kind --
+        # distinct from "ran fine, found zero selftest-kind entries" below.
+        if ! SELFTEST_ENTRIES="$(python3 test/mutants/gate_lib.py selftests)"; then
+          echo "::error::Failed to discover selftest ids from test/mutants/entries/ -- see the error printed above (an empty directory, an entry file missing its id/expect_verdict, or an entry with an unrecognized kind -- issue #855 defect 4)."
           exit 1
         fi
 
@@ -379,6 +346,11 @@ jobs:
         echo "Discovered selftest entries (id, expected verdict):"
         echo "$SELFTEST_ENTRIES" | sed 's/^/  - /'
         echo
+
+        # issue #855 defect 4: this job's own count of ids it is about to execute,
+        # consumed by the `gate` job's discovered-vs-executed reconciliation.
+        SELFTEST_COUNT="$(echo "$SELFTEST_ENTRIES" | grep -c .)"
+        echo "selftest_count=$SELFTEST_COUNT" >> "$GITHUB_OUTPUT"
 
         OVERALL_FAILED=0
         while IFS=$'\t' read -r SELFTEST_ID EXPECT_VERDICT; do
@@ -442,12 +414,15 @@ jobs:
       env:
         CHANGES_RESULT: ${{ needs.changes.result }}
         CHANGES_RELEVANT: ${{ needs.changes.outputs.relevant }}
+        TOTAL_ENTRIES: ${{ needs.changes.outputs.total_entries }}
         MUTANTS_RESULT: ${{ needs.mutants.result }}
+        SECURITY_COUNT: ${{ needs.mutants.outputs.security_count }}
         SELFTEST_RESULT: ${{ needs.meta-selftest.result }}
+        SELFTEST_COUNT: ${{ needs.meta-selftest.outputs.selftest_count }}
       run: |
-        echo "changes job result:       $CHANGES_RESULT (relevant=$CHANGES_RELEVANT)"
-        echo "mutants job result:       $MUTANTS_RESULT"
-        echo "meta-selftest job result: $SELFTEST_RESULT"
+        echo "changes job result:       $CHANGES_RESULT (relevant=$CHANGES_RELEVANT, total_entries=$TOTAL_ENTRIES)"
+        echo "mutants job result:       $MUTANTS_RESULT (security_count=$SECURITY_COUNT)"
+        echo "meta-selftest job result: $SELFTEST_RESULT (selftest_count=$SELFTEST_COUNT)"
 
         is_ok() {
           case "$1" in
@@ -460,4 +435,23 @@ jobs:
           echo "MUTATION_GATE_RESULT: FAIL"
           exit 1
         fi
+
+        # issue #855 defect 4: "entries discovered != entries executed" is itself a
+        # gate failure condition, checked here independently of issue #855 defect 4's
+        # load-time kind validation (test/mutants/gate_lib.py, run_mutant.py's
+        # discover_entries()) -- so a future regression in the selection/counting logic
+        # is still caught even if the load-time check is ever weakened. Only meaningful
+        # when mutants/meta-selftest actually ran (CHANGES_RELEVANT=true); when the
+        # `changes` job found nothing gated and both were skipped, there is nothing to
+        # reconcile.
+        if [ "$CHANGES_RELEVANT" = "true" ]; then
+          EXECUTED=$(( ${SECURITY_COUNT:-0} + ${SELFTEST_COUNT:-0} ))
+          if [ -n "$TOTAL_ENTRIES" ] && [ "$TOTAL_ENTRIES" != "$EXECUTED" ]; then
+            echo "::error::entries discovered ($TOTAL_ENTRIES) != entries executed ($EXECUTED = security $SECURITY_COUNT + selftest $SELFTEST_COUNT). issue #855 defect 4: an entry exists under test/mutants/entries/ but was not executed by either CI job -- this must never be a silent pass."
+            echo "MUTATION_GATE_RESULT: FAIL"
+            exit 1
+          fi
+          echo "entries discovered ($TOTAL_ENTRIES) == entries executed ($EXECUTED) -- OK"
+        fi
+
         echo "MUTATION_GATE_RESULT: PASS"

@@ -1,0 +1,17 @@
+{
+  "id": "_selftest-empty-red-tests-invalid",
+  "kind": "selftest",
+  "expect_verdict": "INVALID_MUTANT_EMPTY_RED_TESTS",
+  "description": "Issue #855 defect 2: an entry with red_tests=[] gives evaluate_red() nothing to iterate -- it can produce neither a `survived` nor an `unexpected` result, and used to fall straight through the (now-removed) old code path to a bare KILLED, without ever running a single assertion. That meant a comment-only/no-op mutant patch (this fixture's patch: adds one comment line, changes no behaviour) registered with red_tests=[] could pass the gate while proving nothing about any test's effectiveness. Before the fix: run_mutant.py --mutant _selftest-empty-red-tests-invalid --expect-verdict INVALID_MUTANT_EMPTY_RED_TESTS actually applied this no-op patch, built successfully (nothing changed), ran the (empty) red filter set, and reported KILLED -- proving the old code's blind spot for real, not just in theory. After the fix, validate_red_tests_declared() rejects the empty red_tests list before the patch is even applied.",
+  "target_file": "src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs",
+  "target_symbol": "N/A -- the patch is a no-op (comment-only); this fixture exists to prove an empty red_tests list is rejected, not to mutate real behaviour",
+  "patch": "_selftest/noop-comment-only-fixture.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_PasswordField_ReturnsBadRequest",
+  "red_tests": [],
+  "red_expected_assertion_patterns": {},
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.GetExportExcel_UnknownCsKey_ReturnsBadRequest",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.GetExportExcel_UnknownCsKey_ReturnsBadRequest"
+  ]
+}

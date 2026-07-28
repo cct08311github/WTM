@@ -1,0 +1,19 @@
+{
+  "id": "_selftest-scope-bypass-fake-diff-git-header",
+  "kind": "selftest",
+  "expect_verdict": "INVALID_MUTANT_SCOPE",
+  "description": "Issue #855 defect 1 (verified, most severe): touched_paths() used to parse ONLY the patch's 'diff --git a/<path> b/<path>' summary line, but `git apply` resolves the path it actually modifies from the '---'/'+++' hunk headers -- which can disagree. This fixture's 'diff --git' line names the production file this repo's mutants normally target (_FrameworkController.cs, matching target_file below so the pre-fix scope check saw a match), while its '---'/'+++' headers actually point at test/WalkingTec.Mvvm.Api.Test/MvcAuthHolesTests.cs -- reproduced against this exact repo: `git apply --check --verbose` reports 'Checking patch test/WalkingTec.Mvvm.Api.Test/MvcAuthHolesTests.cs...'. Before the fix, run_mutant.py's touched_paths()/validate_scope() read only the 'diff --git' line, reported denylist_match=False, and let this patch through scope validation -- meaning a mutant's patch could claim to touch only a production file while actually rewriting the very test that is supposed to catch it. After the fix, validate_scope() asks git itself (`git apply --numstat`) which path it will touch, sees 'test/WalkingTec.Mvvm.Api.Test/MvcAuthHolesTests.cs' != the declared target_file, and rejects it as INVALID_MUTANT_SCOPE before the patch is ever applied. red_tests/green_tests below are never reached (scope validation runs first) -- they reuse the same real, currently-green MvcAuthHolesTests methods as the _selftest-invalid-mutant-build-failure fixture purely so this entry's own red_tests/red_expected_assertion_patterns validation (issue #855 defects 2/3) passes trivially and does not mask which check actually fires.",
+  "target_file": "src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs",
+  "target_symbol": "N/A -- this fixture's patch never legitimately targets this file; its 'diff --git' line only CLAIMS to, to reproduce issue #855 defect 1",
+  "patch": "_selftest/fake-diff-git-header-scope-bypass.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_PasswordField_ReturnsBadRequest",
+  "red_tests": [
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.UpdateModelProperty_PasswordField_ReturnsBadRequest"
+  ],
+  "red_expected_assertion_patterns": {},
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.GetExportExcel_UnknownCsKey_ReturnsBadRequest",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.MvcAuthHolesTests.GetExportExcel_UnknownCsKey_ReturnsBadRequest"
+  ]
+}
