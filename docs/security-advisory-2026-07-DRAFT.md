@@ -1,150 +1,135 @@
-# 安全公告草稿（尚未發布）— 2026-07
+# 安全公告草稿 — 2026-07（WTM 10.19.0）
 
 > [!WARNING]
 > **狀態：草稿。未發布。** 追蹤於 #833。
-> 「Fixed in」欄位目前多數為 TBD——修復尚未完成。**在所有 TBD 填實之前不得發布**，否則下游會拿到一份無法據以行動的公告。
 > 發布通道（Gitea issue／GitHub Security Advisory／兩者）尚未裁決。
+> 標為「仍未修」的項目就是真的還沒修，不是待補欄位。
 
 ---
 
-## 為什麼需要這份公告，而不只是修 framework
+## 一分鐘速判
 
-WTM 以 NuGet package 出貨（Gitea 私有 registry 與 `nuget.pkg.github.com/cct08311github`，見 `.github/workflows/publish-nuget.yml:21` 與 `:526`），**同時**以 demo 專案作為樣板供下游**複製**。
-
-分階段修 framework 只能觸及：未來發佈的 package、未來由樣板複製出的程式、以及願意升級且仍走相同 framework seam 的應用。它**碰不到**：已 pin 舊版 package 的部署、已複製並改過 controller 的應用、以及不會自己去註冊 opt-in policy 的既有部署。
-
-因此下面每一條都標了**「你要自己檢查什麼」**，而不只是「升級到某版」。
-
----
-
-## 適用範圍速判
-
-先跑這三條命令。**任何一條有輸出，就往下讀對應章節。**
+在你的應用根目錄跑這四條。**有輸出就往下讀對應章節。**
 
 ```bash
-# A. 你的應用有沒有複製 demo 的 FileApiController？
-grep -rn 'Route("api/_file")' --include='*.cs' . 
+# A. 你的組態有沒有把框架的檔案端點開成匿名？（最嚴重）
+grep -rn '"IsFilePublic"' --include='appsettings*.json' .
 
-# B. 你的應用有沒有複製 LayUI demo 的 FrameworkMenuController？
-grep -rn -B3 'ActionResult Create(FrameworkMenuVM' --include='*.cs' . | grep -i 'public\]'
+# B. 你有沒有複製過 demo 的 FileApiController？
+grep -rn 'Route("api/_file")' --include='*.cs' .
 
-# C. 你的組態有沒有明確開啟這五個旗標？（沒有輸出＝全部使用不安全的預設值）
+# C. 你有沒有複製過 LayUI demo 的 FrameworkMenuController？
+grep -rn -B4 'ActionResult Create(FrameworkMenuVM' --include='*.cs' . | grep -i 'public\]'
+
+# D. 你有沒有明確設定過這些授權旗標？（無輸出 = 全部使用預設）
 grep -rniE 'EnforceTenantFileScope|EnforceVmExportAuthorization|EnforceFileAccessAuthorization|EnforceDeletePreviewAuthorization|EnforceVmImportAuthorization' \
   --include='appsettings*.json' --include='*.cs' .
 ```
 
 ---
 
-## 第一類：預設組態即生效（升級 package 不會自動改變，必須改組態）
+## 第一類 —— 升級到 10.19.0 就會拿到（不需要你改任何程式碼）
 
-這些不是 bug，是**預設值選擇**。它們在所有版本都是這個行為，包含最新版。
+**這一類在 10.19.0 之前是空的。** 先前所有標記為安全修復的變更，要嘛在你複製走的樣板裡，要嘛在預設關閉的旗標後面。
 
-| # | 行為 | 預設值出處 | 你要做什麼 |
+| # | 修好了什麼 | 機制 | Fixed in |
 |---|---|---|---|
-| 1 | **任何已認證的呼叫者，只要知道 GUID，就能讀取或刪除任何租戶的檔案** | `FileUploadOptions.cs:37` `EnforceTenantFileScope = false` → `WtmFileProvider.cs:159-161`／`:222-224`／`:265-267` 走 `IgnoreQueryFilters()` | 多租戶部署**必須**設為 `true`。設定前先確認自己沒有合法的跨租戶檔案引用（見下方「NULL-tenant 舊檔」） |
-| 2 | 任何已認證的呼叫者可對**任何**已註冊 VM 匯出 Excel／取得範本 | `Configs.cs:657` `EnforceVmExportAuthorization = false` | 見「關於這四個旗標的重要警告」 |
-| 3 | 同上，delete-preview | `Configs.cs:673` | 同上 |
-| 4 | 同上，檔案存取 | `Configs.cs:702` | 同上 |
-| 5 | 同上，匯入 | `Configs.cs:733` | 同上 |
-| 6 | 任何已認證的呼叫者可對**任何** analysis-enabled ListVM 下查詢並匯出 | `EnableAnalysisAttribute.cs:14` 的 `AllowedRoles` 無初值 → `null` → `_AnalysisController.cs:627` 首行 `return true` | 在每個 `[EnableAnalysis]` 上明確填 `AllowedRoles` |
-| 7 | `GetPagingData`／`GetEmptyData`／`Selector` **完全沒有** per-VM 閘門 | 設計如此，無旗標 | 目前無 framework 層解法（追蹤於 #827／#836）。若你的 ListVM 含敏感資料，需自行在 VM 層加控制 |
+| 1 | **任何已認證的呼叫者，只要知道 GUID，就能讀取或刪除任何租戶的檔案** | `FileUploadOptions.EnforceTenantFileScope` 預設由 `false` 改為 `true`。`WtmFileProvider` 因此讓 `FileAttachment` 的 `ITenant` global query filter 生效，不再呼叫 `IgnoreQueryFilters()`。**你複製走的 `FileApiController` 也是呼叫套件的 `WtmFileProvider` 來解析檔案的，所以它一併被修好** | **10.19.0**（#859） |
+| 2 | inline 編輯可寫入任意 `FileAttachment` 外鍵 | `/_Framework/UpdateModelProperty` 依 EF relationship metadata 拒絕任何 principal 為 `FileAttachment` 的 FK。無旗標、預設生效 | **10.19.0**（#824 的一個 sink） |
+| 3 | `IsFilePublic=true` 現在會在啟動時告警 | 非 Development 環境下發出 `LogCritical`，指名被開放的路由 | **10.19.0**（#859） |
 
-### 關於旗標 2–5 的重要警告
+### 第 1 項的相容性
 
-**把它們設為 `true` 不等於「變安全」，而是「全部拒絕」。** 它們自己的文件就這麼寫（`Configs.cs:645-655`）：
+這是**預設行為變更**。單租戶部署零影響（兩邊 `TenantCode` 都是 `null`）。
 
-> every export through the shared endpoint returns 403 **until the hosting application overrides `CanExportVm` with real per-VM policy**
+**多租戶部署請先確認**：若你的記錄合法引用了多租戶啟用前（或經 main host）上傳的 `TenantCode = NULL` 舊檔，升級後這些檔案將無法解析。這是刻意的 —— 放寬它會重開 #815 關掉的同一個 primitive。需要保留舊行為者可設 `FileUploadOptions.EnforceTenantFileScope = false` 明確 opt out，但那會恢復跨租戶讀取。
 
-而**覆寫 hook 的官方做法在生產環境不生效** —— `_FrameworkController` 是 MVC 路由到的具體類別（`:35`），繼承它只會產生第二個 controller，前端硬編的 `/_Framework/*` 永遠打不到。可注入的授權接縫追蹤於 **#827**，尚未提供。
+### 第 2 項的相容性
 
-**所以現階段這四個旗標的實際選項只有：維持 `false`（不強制），或設 `true`（該端點全面停用）。** 這是誠實的現況，不是建議。
+inline grid cell 編輯無法上傳檔案、只能手打 GUID，因此合法用途趨近於零 —— 但這是我們的推論，若你有反例請開 issue。無 opt-out。
 
 ---
 
-## 第二類：你若複製過 demo 樣板
+## 第二類 —— 你必須改自己的**組態**
 
-樣板不是被引用的，是被**複製**的。修 upstream 樣板**不會**改變你已部署的程式。
+| # | 問題 | 你要做什麼 |
+|---|---|---|
+| 4 | **`IsFilePublic: true` 讓 `/_Framework/GetFile` 與 `/_Framework/ViewFile` 變成未認證可存取** | 設為 `false`，除非你確實要對外公開所有檔案 |
 
-### 2a. 三份 `FileApiController`（`Route("api/_file")`）
+樣板已於 10.19.0 改為 `false`，但**你自己的 `appsettings.json` 不會被升級改動**。
 
-若「適用範圍速判 A」有輸出，你的應用含有以下全部或部分：
+`PrivilegeFilter` 在 `IsFilePublic == true` 時把這兩個 action 標為 public 並提前 return，**跳過身分檢查**；而 `_FrameworkController` 沒有任何 `[Authorize]` 家族屬性，所以那個 filter 是唯一關卡。
 
-| 端點 | 問題 |
+在 10.19.0 之前，這與第一類第 1 項疊加的結果是**未認證的任意跨租戶檔案內容讀取**。10.19.0 修好了租戶那一半（升級即得），但**匿名那一半在你自己的組態裡** —— 若你維持 `IsFilePublic: true`，任何人仍可讀取你自己租戶的所有檔案。
+
+> 三份樣板原本都預設 `true`。若你是從樣板 scaffold 出來的，**你極可能有這個值**，即使你從未主動設定過它。
+
+---
+
+## 第三類 —— 你必須改自己**複製走的程式碼**
+
+樣板是被複製的，不是被引用的。升級套件永遠不會更新這些檔案。
+
+### 3a. 三份 `FileApiController`（速判 B 有輸出時適用）
+
+| 問題 | 修法 |
 |---|---|
-| `GetFileName` / `GetFile` / `GetFileInfo` / `GetUserPhoto` / `DownloadFile` | 標記 `[Public]`（實作 `IAllowAnonymous`）→ **未認證即可依 GUID 讀取任意檔案內容**；配合第一類第 1 項的預設值，跨租戶 |
-| `GetFileInfo` | 直接 `dc.Set<FileAttachment>().CheckID(id).FirstOrDefault()` 並**回傳整個 entity** |
-| `DeletedFile` | 呼叫非 tenant-scoped 的 `DeleteFile`（而非 `DeleteFileTenantScoped`）；且是 **HTTP GET** |
-| 全部 8 個 action | `csName` 直接進 `Wtm.CreateDC(cskey: csName)`，**零驗證** —— `WTMContext.IsKnownConnectionKey`（`:694`）存在但樣板未使用 |
+| `GetFileName` / `GetFile` / `GetFileInfo` / `GetUserPhoto` / `DownloadFile` 標記 `[Public]`（`IAllowAnonymous`）→ **未認證讀取** | 移除這五個 `[Public]` |
+| `DeletedFile` 呼叫非 tenant-scoped 的 `DeleteFile`，且是 **HTTP GET** | 改用 `DeleteFileTenantScoped`，並改為 `[HttpPost]` |
+| 八個 action 的 `csName` 直通 `Wtm.CreateDC(cskey:)`，**零驗證** | 每一處加上 `WTMContext.IsKnownConnectionKey` 驗證 |
+| `GetFileInfo` 直接查 `dc.Set<FileAttachment>()` 並回傳整個 entity | 改走 `WtmFileProvider`，只回傳呼叫端需要的欄位 |
 
-**你要做什麼**：移除五個 `[Public]`；`DeletedFile` 改用 `DeleteFileTenantScoped` 並改為 `[HttpPost]`；每個吃 `csName` 的 action 加上 `IsKnownConnectionKey` 驗證；`GetFileInfo` 改走 `WtmFileProvider` 而非直接查 `DbSet`。
+**canonical 修法**：`git diff 50d26c7b5^ 50d26c7b5 -- demo/` 對照你的副本。
 
-> **#830 已修復（upstream 樣板，三份全改）**：見 CHANGELOG.md `[Unreleased]` 的「demo `FileApiController` hardening」條目與其 Migration notes。**這只改變新從樣板複製出的程式** —— 已複製並部署的應用**不會**因為升級 package 而自動拿到這個修復，必須按 CHANGELOG 的遷移說明手動比對、套用（diff 對象：`demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs` 與另兩份樣板）。`WtmFileProvider.DeleteFile`（framework 層、非樣板）同時標了 `[Obsolete]` 指向 `DeleteFileTenantScoped` —— 這只是編譯期警告，不影響已編譯的二進位檔，也不是 runtime 防護；它保持非 tenant-scoped 的舊行為以維持相容，見該 attribute 的訊息文字。**例外**：`framework_layui.js` 與 `MultiUploadTagHelper.cs` 的刪除呼叫**不是**樣板，是隨套件出貨給所有下游的共用資產；這兩處已改為「先送 POST，只在收到 405 時才 retry GET」，所以即使你完全不套用上述遷移，升級套件後刪除按鈕也不會 405（詳見 CHANGELOG 的 Compatibility 段落）——但這不等於你已修好安全問題，csName 驗證／tenant-scoped 刪除／`[Public]` 移除仍需你自己動手套用樣板 diff。
+**Vue3 特別注意**：移除 `GetFile` 的 `[Public]` 會讓所有 `<img>`／`el-image` 變成 401，因為 Vue3 是純 JWT（沒有 cookie），而瀏覽器發出的圖片請求帶不到 `Authorization` header。10.19.0 的樣板已把圖片載入改走 axios + blob URL；對應的前端變更是 `git diff 50d26c7b5^ 50d26c7b5 -- demo/WalkingTec.Mvvm.Vue3Demo/ClientApp/`。**只套 controller 而不套前端，你的圖片會全部壞掉。**
 
-### 2b. LayUI 樣板的 `FrameworkMenuController.Create`（#840）
+**GET → POST 的相容性**：10.19.0 起，框架的上傳 widget（`framework_layui.js`、`MultiUploadTagHelper`）先送 POST，**只在收到 405 時**退回 GET。所以在你改自己的 controller 之前，刪除按鈕仍然可用。那個 fallback 會在下一個 major 移除（#853）。
 
-若「適用範圍速判 B」有輸出：
+### 3b. LayUI 樣板的 `FrameworkMenuController.Create`（速判 C 有輸出時適用）
 
-```csharp
-[HttpPost]
-[Public]                                    // ← 問題所在
-[ActionDescription("Sys.Create")]
-public ActionResult Create(FrameworkMenuVM vm)   // → vm.DoAdd()
-```
-
-`PrivilegeFilter.cs:147-151` 對 `isPublic == true` 是完整 early return，發生在身分檢查（`:153`）與 `isHostOnly`（`:215`）**之前** —— 類別上的 `[MainTenantOnly]` 也一併被繞過。而 `FrameworkMenu.IsPublic` 正是 `WTMContext.cs:809` 判定任意 URL 是否匿名的依據。
+該 action 標記 `[HttpPost] [Public]` 並呼叫 `vm.DoAdd()`。`PrivilegeFilter` 對 public 的提前 return 發生在身分檢查與 `[MainTenantOnly]` 使用點之前，兩者一併被繞過。而 `FrameworkMenu.IsPublic` 正是框架判定任意 URL 是否匿名的依據。
 
 → **未認證者可寫入一筆 `IsPublic=true` 的 menu，把任意端點開成匿名。**
 
-**你要做什麼**：立即移除該 `[Public]`。**這一條不需要等 upstream 修復，也不需要升級 package** —— 那個檔案在你自己的 repo 裡。
+**移除那個 `[Public]` 即可。不需要升級，那個檔案在你自己的 repo 裡。** 可追溯至 2020-12-12，繼承自上游 WTM。僅 LayUI 樣板受影響（Vue3、Blazor、以及同 demo 的 `ApiControllers` 版本皆無）。
 
-**適用範圍**：僅 LayUI 樣板。Vue3Demo、BlazorDemo、以及同 demo 的 `ApiControllers/FrameworkMenuController.cs` 皆無此問題（`[Public]` 計數為 0）。此缺陷可追溯至 2020-12-12（commit `d5a3e7535`），從上游 WTM 繼承。
-
-**部署後驗證**：
+驗證：
 ```bash
 curl -i -X POST https://<your-host>/_Admin/FrameworkMenu/Create \
   -d 'Entity.PageName=probe&Entity.Url=/probe&Entity.IsPublic=true'
-# 預期：401 或 403，且資料庫無新列。若回 200 或看到 dialog HTML，你仍受影響。
+# 預期 401/403 且資料庫無新列。回 200 或看到 dialog HTML 表示仍受影響。
 ```
 
 ---
 
-## 第三類：背景執行路徑（無論組態如何）
+## 第四類 —— 仍未修（升級不會改變，也沒有組態可設）
 
-| # | 行為 | 追蹤 |
+| # | 問題 | 追蹤 |
 |---|---|---|
-| 8 | Dashboard snapshot／alert 背景 job 執行使用者持久化的 widget 設定時，**列級 DataPrivilege 完全被跳過** —— `DCExtension.cs:298` 對 `LoginUserInfo == null` 是 `return baseQuery`（fail-open） | #843 |
-| 9 | 多租戶 ETL job 在重啟後**不會被排程**（`JobDataMap` 只帶 job ID，背景 scope 無 tenant） | #832 |
-| 10 | `EtlRunLog` **沒有實作 `ITenant`** → global query filter 不對它生成述詞 → `_EtlRunLogController` 的所有查詢跨租戶，且該 controller 缺角色閘門 | #841 |
+| 5 | 四個 `Enforce*` 授權旗標（export／delete-preview／file-access／import）**預設不強制**，而設為 `true` 的意思是「全部 403，直到你覆寫對應 hook」—— 那個覆寫路徑在生產路由上不生效（`_FrameworkController` 是被路由的具體類別，繼承只會產生第二個 controller） | #827 |
+| 6 | `GetPagingData`／`GetEmptyData`／`Selector` **完全沒有** per-VM 閘門。#796 修的是 Excel 匯出，`GetPagingData` 是同一份資料的 JSON 版 | #812 |
+| 7 | `[EnableAnalysis]` 的 `AllowedRoles` 無初值 → `CheckAccess` 首行即放行；`_DashboardController`／`_DashboardDesignerController` 的三個端點連 `CheckAccess` 都沒呼叫 | #842 |
+| 8 | Dashboard viewer 可覆寫持久化 widget 的 query 結構（`listVmType`／dimensions／measures／filters） | #831 |
+| 9 | 背景 job 的列級 DataPrivilege **fail-open** —— 無 `LoginUserInfo` 時直接回傳未過濾查詢 | #843 |
+| 10 | 多租戶 ETL job 重啟後不會被排程；`EtlRunLog` 沒有實作 `ITenant`，因此不受 global filter 保護；三個 ETL controller 缺角色閘門 | #832、#841 |
 
-第 8 項的關鍵在於：**寫入時的閘門 ≠ 執行時的閘門。** 使用者建立 widget 時受約束；同一個 widget 在背景重跑時不受。
-
----
-
-## 版本矩陣
-
-| 項目 | Affected | Fixed in |
-|---|---|---|
-| 第一類 1–7（預設組態） | 所有版本含 10.18.0 | **不適用** —— 這些是預設值選擇，需組態變更或等 #827 提供可注入接縫 |
-| 2a 三份 `FileApiController` | 所有版本的樣板；已複製部署的應用維持受影響，見下方遷移說明 | 下一版（#830，樣板端）— 已複製的應用需自行套用，不因升級 package 而修復 |
-| 2b `FrameworkMenuController` | LayUI 樣板，2020-12-12 起 | TBD（#840）—— **但你可以自己先修，不必等** |
-| 第三類 8 | ≤ 10.18.0 | TBD（#843） |
-| 第三類 9 | ≤ 10.18.0 | TBD（#832） |
-| 第三類 10 | ≤ 10.18.0 | TBD（#841） |
+第 5 項對已認證使用者的影響最廣。**目前沒有可用的緩解措施** —— 把旗標設為 `true` 會讓對應端點對所有人回 403。
 
 ---
 
 ## 這份公告不宣稱什麼
 
-- **不宣稱清單完整。** 依據是 #836 的 entrypoint→sink 窮舉表，該表自己標註了未驗證的列，且明確指出**以 entrypoint 為 key 的表看不見「實體型別有沒有 `ITenant`」與「路徑有沒有繞過 global query filter」這兩個維度** —— 第三類第 10 項就是這樣被漏掉的。
-- **不宣稱升級 package 就能解決。** 第一類完全靠組態；第二類完全靠你自己的 repo。
-- **不宣稱這些是新缺陷。** 多數可追溯到 2020–2026 的既有設計；2026-07 的工作是**發現**它們，不是**造成**它們。唯一的例外是：2026-07 有數則 commit message 宣稱了程式碼不支援的保護，那些宣稱已於 #835 撤回。
+- **不宣稱清單完整。** 依據是 #836 的 entrypoint→sink 窮舉表，而該表自己指出：以 entrypoint 為 key 的表看不見「sink 實體有沒有實作 `ITenant`」與「路徑有沒有繞過 global query filter」這兩個維度 —— 第四類第 10 項就是這樣被漏掉的。而第一類第 1 項（本公告最嚴重的一條）是在十七輪審查之後才被找到的。
+- **不宣稱這些是新缺陷。** 多數可追溯到 2020–2026 的既有設計。2026-07 的工作是**發現**它們，不是造成它們。
+- **不宣稱升級就足夠。** 只有第一類是。第二、三類需要你動手，第四類目前無解。
 
 ---
 
 ## 發布前檢查清單（#833）
 
-- [ ] 所有 TBD 的 Fixed-in 已填實際版本
-- [ ] 三份樣板的具體 patch 已附上（不是「參考 upstream」）
-- [ ] 每一條的「部署後驗證」命令都已實跑過
-- [ ] `docs/production-readiness.md` 與本文件無矛盾（該文件是本 repo 最誠實的紀錄，衝突時以它為準）
-- [ ] 發布通道已裁決
+- [x] **四條速判命令實跑過** —— 在本 repo（已修）回傳預期的 0／已修值，並用 `git archive` 取出 `679e4358b^` 與 `50d26c7b5^` 的檔案重跑，確認在**受影響的樹**上分別回 1 個 `[Public]`（速判 C）與 Route + 7 個 `[Public]`（速判 B）。命令在兩種狀態下的行為都正確。
+- [x] **兩條 `git diff` 命令實跑過** —— `demo/` 得 11 檔／478+／165−，`Vue3Demo/ClientApp/` 得 5 檔／201+／95−，皆可用作對照。
+- [ ] `curl` 驗證命令實跑過 —— **尚未**，需要一個實際部署的 host。發布前必須在真實環境確認回傳 401/403 且無新列。
+- [ ] 與 `docs/production-readiness.md` 逐條比對無矛盾（衝突時以它為準）
+- [ ] 發布通道已裁決（Gitea issue／GitHub Security Advisory／兩者）
+- [ ] 決定是否為第一類第 1 項的相容性影響（NULL-tenant 舊檔）提供一個一次性稽核指令，讓下游升級前能自查有沒有中招
