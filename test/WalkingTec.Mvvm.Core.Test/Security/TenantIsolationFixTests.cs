@@ -291,12 +291,77 @@ namespace WalkingTec.Mvvm.Core.Test.Security
         }
 
         /// <summary>
-        /// When EnforceTenantFileScope = false (default), GetFile resolves files
-        /// across tenants by GUID — backward-compatible behavior unchanged.
+        /// #859: GetFile with NO explicit <c>EnforceTenantFileScope</c> override — i.e. reading
+        /// the actual compiled default from <c>FileUploadOptions.cs</c> — must block cross-tenant
+        /// GUID resolution. Before #859 this default was <c>false</c> (tenant-agnostic by ID,
+        /// asserted by the sibling <see cref="GetFile_ExplicitOptOut_CrossTenantGuid_ReturnsFile"/>
+        /// below, which now opts OUT explicitly instead of relying on the default). This test
+        /// exists specifically so that reverting the default in <c>FileUploadOptions.cs</c> turns
+        /// it red — the same mutant <see cref="GetFile_EnforceTenantScope_CrossTenantGuid_ReturnsNull"/>
+        /// above already catches via an explicit <c>= true</c>, but this one does not set the flag
+        /// at all, so it is the one that actually pins the DEFAULT rather than the flag's effect
+        /// when set.
         /// </summary>
         [TestMethod]
-        [Description("WTM-SEC-003: EnforceTenantFileScope=false (default) resolves file across tenants")]
-        public void GetFile_DefaultScope_CrossTenantGuid_ReturnsFile()
+        [Description("WTM-SEC-003/#859: EnforceTenantFileScope=true (new default) blocks cross-tenant file GUID resolution when left unset")]
+        public void GetFile_DefaultScope_CrossTenantGuid_ReturnsNull()
+        {
+            var dbName = Guid.NewGuid().ToString("N");
+
+            Guid fileId;
+
+            using (var seedCtx = new FileAttachmentTestContext(dbName))
+            {
+                seedCtx.Database.EnsureCreated();
+                var fa = new FileAttachment
+                {
+                    ID = Guid.NewGuid(),
+                    FileName = "secret.pdf",
+                    FileExt = "pdf",
+                    TenantCode = "TENANT_B",
+                    SaveMode = "database",
+                    UploadTime = DateTime.UtcNow,
+                    Length = 100
+                };
+                fileId = fa.ID;
+                seedCtx.Add(fa);
+                seedCtx.SaveChanges();
+            }
+
+            // Deliberately NOT setting FileUploadOptions.EnforceTenantFileScope here — this test's
+            // whole point is to exercise the compiled default (true as of #859).
+            var wtm = MockWtmContext.CreateWtmContext(
+                new FileAttachmentTestContext(dbName), "user_a");
+            wtm.ConfigInfo!.EnableTenant = true;
+            wtm.LoginUserInfo!.CurrentTenant = "TENANT_A";
+
+            var tenantADc = new FileAttachmentTestContext(dbName);
+            tenantADc.SetTenantCode("TENANT_A");
+
+            var fp = new WtmFileProvider(wtm);
+            var result = fp.GetFile(fileId.ToString(), withData: false, dc: tenantADc);
+
+            tenantADc.Dispose();
+
+            // Assert: #859's new default blocks cross-tenant resolution with no explicit opt-in.
+            Assert.IsNull(result,
+                "#859: with FileUploadOptions.EnforceTenantFileScope left at its compiled default " +
+                "(true as of #859), a file belonging to TenantB must NOT be returned to a " +
+                "TenantA-scoped DataContext. If this fails, the default in FileUploadOptions.cs " +
+                "has regressed back to false.");
+        }
+
+        /// <summary>
+        /// #859: the pre-#859 backward-compatible behavior (tenant-agnostic file lookup by GUID)
+        /// remains available as an EXPLICIT opt-out — <c>EnforceTenantFileScope = false</c> — for
+        /// deployments that deliberately want it. This used to be the DEFAULT (see this test's
+        /// pre-#859 name, <c>GetFile_DefaultScope_CrossTenantGuid_ReturnsFile</c>, and its
+        /// sibling <see cref="GetFile_DefaultScope_CrossTenantGuid_ReturnsNull"/> above, which now
+        /// covers what the default actually does).
+        /// </summary>
+        [TestMethod]
+        [Description("WTM-SEC-003/#859: explicit EnforceTenantFileScope=false opt-out still resolves file across tenants")]
+        public void GetFile_ExplicitOptOut_CrossTenantGuid_ReturnsFile()
         {
             var dbName = Guid.NewGuid().ToString("N");
 
@@ -320,11 +385,11 @@ namespace WalkingTec.Mvvm.Core.Test.Security
                 seedCtx.SaveChanges();
             }
 
-            // Default config: EnforceTenantFileScope = false (backward-compatible default)
             var wtm = MockWtmContext.CreateWtmContext(
                 new FileAttachmentTestContext(dbName), "user_a");
             wtm.ConfigInfo!.EnableTenant = true;
-            // EnforceTenantFileScope is false by default — no change required
+            // #859: explicit opt-out — this is no longer the default, so it must be set here.
+            wtm.ConfigInfo!.FileUploadOptions.EnforceTenantFileScope = false;
             wtm.LoginUserInfo!.CurrentTenant = "TENANT_A";
 
             var tenantADc = new FileAttachmentTestContext(dbName);
@@ -335,10 +400,12 @@ namespace WalkingTec.Mvvm.Core.Test.Security
 
             tenantADc.Dispose();
 
-            // Assert: default behavior unchanged — file resolves cross-tenant by GUID
+            // Assert: the opt-out still works — cross-tenant resolution by GUID is preserved for
+            // deployments that deliberately choose it.
             Assert.IsNotNull(result,
-                "When EnforceTenantFileScope=false (default), cross-tenant file resolution " +
-                "by GUID must still work for backward compatibility (WTM-SEC-003)");
+                "#859: with FileUploadOptions.EnforceTenantFileScope explicitly set to false, " +
+                "cross-tenant file resolution by GUID must still work (the backward-compatible " +
+                "opt-out, no longer the default, must remain available).");
         }
 
         // ═════════════════════════════════════════════════════════════════════

@@ -26,15 +26,33 @@ namespace WalkingTec.Mvvm.Core.ConfigOptions
         /// will NOT call <c>IgnoreQueryFilters()</c> on <c>FileAttachment</c> queries, so the
         /// EF Core global ITenant query filter is honoured and cross-tenant file access is blocked.
         ///
-        /// Default is <c>false</c> (backward-compatible: file lookup is tenant-agnostic by ID).
+        /// <para>
+        /// <strong>Default is <c>true</c> as of Issue #859 (was <c>false</c> through 10.18.x).</strong>
+        /// With the old default, <c>WtmFileProvider.GetFile</c> bypassed the tenant filter
+        /// (<c>IgnoreQueryFilters()</c>) for every caller, so any request that could reach the
+        /// framework's own <c>/_Framework/GetFile</c>/<c>ViewFile</c> routes — including an
+        /// unauthenticated one, on any template that also ships <c>IsFilePublic: true</c> — could
+        /// read any tenant's file content by GUID. See the CHANGELOG's #859 entry for the full
+        /// migration note, including the one deployment shape this flip does NOT protect
+        /// (<c>IsFilePublic=true</c> combined with a genuinely cross-tenant "public" file that was
+        /// uploaded with a real, non-null <c>TenantCode</c> — such a file stops resolving for an
+        /// anonymous caller after the flip; re-upload it through a null-tenant/main-host context,
+        /// or keep it on a dedicated public file store, to preserve that specific use).
+        /// </para>
         ///
-        /// <para><strong>Trade-off:</strong> Setting this to <c>true</c> means a file uploaded by
-        /// tenant A cannot be resolved by tenant B even if the caller has the correct GUID.  Enable
-        /// this flag only when all file uploads are strictly tenant-scoped and you want the database
-        /// layer to enforce that boundary.  Leave it <c>false</c> (default) when files are shared
-        /// across tenants or when the caller already enforces access control at a higher layer.</para>
+        /// <para><strong>Trade-off:</strong> With this <c>true</c>, a file uploaded by tenant A
+        /// cannot be resolved by tenant B even if the caller has the correct GUID — including a
+        /// file whose <c>TenantCode</c> is <c>NULL</c> (a pre-multi-tenancy legacy row, or one
+        /// uploaded via a main-host/no-identity context): the EF Core null-safe equality translation
+        /// of the global <c>ITenant</c> filter only resolves a <c>NULL</c>-tenant row for a caller
+        /// whose own resolved tenant is ALSO <c>NULL</c>, matching the precedent
+        /// <c>WtmFileProvider.DeleteFileTenantScoped</c> already established for Issue #815 (see
+        /// <c>docs/production-readiness.md</c>'s #815 entry) — deliberately not widened here, since
+        /// doing so would reopen the exact cross-tenant primitive #815 closed. Set this back to
+        /// <c>false</c> only when every file upload is genuinely meant to be tenant-agnostic by ID
+        /// and access control is fully enforced at a higher layer.</para>
         /// </summary>
-        public bool EnforceTenantFileScope { get; set; } = false;
+        public bool EnforceTenantFileScope { get; set; } = true;
 
         // ─── Opt-in upload validation (Issue #407) ───────────────────────────────
         // All fields default to "allow everything" so existing apps are unaffected.

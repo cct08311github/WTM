@@ -1,0 +1,22 @@
+{
+  "id": "wtmsec-fileuploadoptions-enforcetenantfilescope-default-revert",
+  "kind": "security",
+  "description": "Issue #859: reverts FileUploadOptions.EnforceTenantFileScope's default from true back to false (its pre-#859 value) -- a one-line value change, not a statement delete -- reproducing the exact pre-fix package behaviour: WtmFileProvider.GetFile calls IgnoreQueryFilters() on FileAttachment queries whenever the flag is left at its (mutated) default, so a file resolves by GUID regardless of which tenant uploaded it. This is the package half of #859's fix -- the part that reaches an existing deployment that upgrades and changes no config, independent of the demo template's IsFilePublic setting. Checked against FrameworkControllerFileScopeTests859.GetFile_Unauthenticated_IsFilePublicTrue_TenantOwnedFileBlocked_NullTenantFileServed, which deliberately opens the _Framework/GetFile route with an explicit IsFilePublic=true override (simulating an existing deployment that has NOT changed its own config after upgrading) while leaving FileUploadOptions:EnforceTenantFileScope unset so the test reads the actual compiled default -- with the mutant applied, the anonymous negative-control request for a tenant-owned FileAttachment succeeds and its body contains the seeded marker instead of being absent. The green control, GetFile_Unauthenticated_TemplateDefaultConfig_RejectedAndDoesNotLeakContent, seeds a NULL-tenant file and relies entirely on the template-half fix (IsFilePublic=false blocking the route via PrivilegeFilter before WtmFileProvider.GetFile is ever reached) -- a control genuinely orthogonal to this mutant's scope, not merely a different assertion on the same code path.",
+  "target_file": "src/WalkingTec.Mvvm.Core/ConfigOptions/FileUploadOptions.cs",
+  "target_symbol": "FileUploadOptions.EnforceTenantFileScope get/set property initializer (default value), line 55",
+  "patch": "patches/wtmsec-fileuploadoptions-enforcetenantfilescope-default-revert.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.FrameworkControllerFileScopeTests859.GetFile_Unauthenticated_IsFilePublicTrue_TenantOwnedFileBlocked_NullTenantFileServed",
+  "red_tests": [
+    "WalkingTec.Mvvm.Api.Test.FrameworkControllerFileScopeTests859.GetFile_Unauthenticated_IsFilePublicTrue_TenantOwnedFileBlocked_NullTenantFileServed"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Api.Test.FrameworkControllerFileScopeTests859.GetFile_Unauthenticated_IsFilePublicTrue_TenantOwnedFileBlocked_NullTenantFileServed": "#859: even with IsFilePublic=true \\(an existing deployment that has not changed its config\\), an anonymous caller must NOT be able to read a tenant-owned file by GUID"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured verbatim against the committed baseline (stale demo.db under bin/ removed first; mutant patch applied via git apply, test run, then reverted via git apply -R): 'Assert.IsFalse failed. #859: even with IsFilePublic=true (an existing deployment that has not changed its config), an anonymous caller must NOT be able to read a tenant-owned file by GUID — FileUploadOptions.EnforceTenantFileScope's new default (true) must still block it at the DB layer, independent of the route-level IsFilePublic gate. Status 200, body excerpt: WTM-859-SECRET-tenant-5a7350f4b6094d24b362568d677cae4d'. Confirmed via python3 test/mutants/run_mutant.py --mutant wtmsec-fileuploadoptions-enforcetenantfilescope-default-revert: 'VERDICT: KILLED' / 'GATE: PASS'.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.FrameworkControllerFileScopeTests859.GetFile_Unauthenticated_TemplateDefaultConfig_RejectedAndDoesNotLeakContent",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.FrameworkControllerFileScopeTests859.GetFile_Unauthenticated_TemplateDefaultConfig_RejectedAndDoesNotLeakContent"
+  ]
+}

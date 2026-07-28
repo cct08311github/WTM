@@ -21,13 +21,20 @@ namespace WalkingTec.Mvvm.Api.Test;
 /// <remarks>
 /// <list type="number">
 /// <item>Five <c>[Public]</c> (unauthenticated) endpoints, combined with
-/// <c>FileUploadOptions.EnforceTenantFileScope</c> defaulting to false (<c>IgnoreQueryFilters()</c>
+/// <c>FileUploadOptions.EnforceTenantFileScope</c> defaulting to false at the time (<c>IgnoreQueryFilters()</c>
 /// in <see cref="WalkingTec.Mvvm.Core.Support.FileHandlers.WtmFileProvider.GetFile"/>) —
-/// unauthenticated arbitrary cross-tenant file content read.</item>
+/// unauthenticated arbitrary cross-tenant file content read. <b>#859 update:</b> that default
+/// flipped to <c>true</c> — see the class-level <c>EnforceTenantFileScope</c> remarks and
+/// <see cref="NewTenantEnabledStrictFactory"/>'s doc comment below for what that changed about
+/// this file's own tests.</item>
 /// <item><c>DeletedFile</c> called the non-tenant-scoped
 /// <see cref="WalkingTec.Mvvm.Core.Support.FileHandlers.WtmFileProvider.DeleteFile"/> instead of
 /// <see cref="WalkingTec.Mvvm.Core.Support.FileHandlers.WtmFileProvider.DeleteFileTenantScoped"/>,
-/// and was an HTTP GET performing a delete.</item>
+/// and was an HTTP GET performing a delete. <b>#859 update:</b> <c>DeleteFile</c> is
+/// flag-dependent (<c>WtmFileProvider.cs:208</c>) while <c>DeleteFileTenantScoped</c> is
+/// unconditional (<c>:227</c>) — see <see cref="NewTenantEnabledStrictFactory"/> for why that
+/// distinction now requires an explicit <c>EnforceTenantFileScope=false</c> to stay
+/// observable/testable.</item>
 /// <item><c>csName</c> flowed into <c>Wtm.CreateDC(cskey:)</c> on all eight actions with zero
 /// validation against <see cref="WTMContext.IsKnownConnectionKey"/>.</item>
 /// <item><c>GetFileInfo</c> queried <c>dc.Set&lt;FileAttachment&gt;()</c> directly, bypassing
@@ -62,6 +69,19 @@ public class FileApiControllerHardeningTests830
             });
         });
 
+    // #859 CI follow-up: this factory's one consumer (DeletedFile_CrossTenant_...) exists to pin
+    // WtmFileProvider.DeleteFileTenantScoped's UNCONDITIONAL tenant scoping — the property that
+    // makes it strictly better than the flag-dependent WtmFileProvider.DeleteFile
+    // (WtmFileProvider.cs:208 vs :227). #859 flipped FileUploadOptions.EnforceTenantFileScope's
+    // default from false to true, which means DeleteFile is now ALSO tenant-scoped by default —
+    // the two call paths became observably identical under the default config, and the #830
+    // mutant that reverts DeletedFile from DeleteFileTenantScoped back to DeleteFile stopped
+    // being detectable (it changed nothing observable, so the test stayed green: SURVIVED, caught
+    // by the #834 mutation gate on this exact PR). EnforceTenantFileScope=false is set here
+    // EXPLICITLY, not left at the default, so the test keeps exercising the one configuration
+    // where DeleteFileTenantScoped's unconditional property is actually distinguishable from
+    // DeleteFile's opt-out-able one — the same correction already applied to the #815 tests in
+    // TenantIsolationFixTests.cs/DeletedFileIdsAuthorizationTests815.cs for the identical reason.
     private static WebApplicationFactory<WalkingTec.Mvvm.Demo.Program> NewTenantEnabledStrictFactory(DemoWebApplicationFactory factory) =>
         factory.WithWebHostBuilder(builder =>
         {
@@ -71,6 +91,7 @@ public class FileApiControllerHardeningTests830
                 {
                     ["EnableTenant"] = "true",
                     ["IsQuickDebug"] = "false",
+                    ["FileUploadOptions:EnforceTenantFileScope"] = "false",
                 });
             });
         });

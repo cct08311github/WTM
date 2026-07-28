@@ -836,6 +836,29 @@ namespace WalkingTec.Mvvm.Mvc
                     "Set IsQuickDebug=false in your production configuration.");
             }
 
+            // WTM-SEC-0xx (#859): IsFilePublic=true makes PrivilegeFilter.cs treat
+            // /_Framework/GetFile and /_Framework/ViewFile as anonymous (isPublic short-circuit,
+            // before the LoginUserInfo==null check). Unlike IsQuickDebug above, this does NOT
+            // throw: IsFilePublic has a legitimate use (a genuinely public file store) and some
+            // operators may have turned it on deliberately — an upgrade that crashes on boot is a
+            // worse outcome than one that shouts. LogCritical only, so the operator can make an
+            // informed call. Combined with FileUploadOptions.EnforceTenantFileScope=false (opt-out
+            // as of #859; it was the pre-#859 default), this also exposes every OTHER tenant's file
+            // content to the same unauthenticated caller — the log message says so explicitly.
+            if (configs.IsFilePublic == true && env != null && !env.IsDevelopment())
+            {
+                var logger = app.ApplicationServices.GetService<ILoggerFactory>()
+                    ?.CreateLogger("WTM.Security");
+                logger?.LogCritical(
+                    "[WTM Security] IsFilePublic=true in a non-Development environment. " +
+                    "This makes /_Framework/GetFile and /_Framework/ViewFile accessible without " +
+                    "authentication — any caller who knows or guesses a FileAttachment GUID can " +
+                    "read its content. If FileUploadOptions.EnforceTenantFileScope is also set to " +
+                    "false, this includes files belonging to OTHER tenants, not just your own. " +
+                    "Verify this is intentional (a genuinely public file store) before deploying; " +
+                    "otherwise set IsFilePublic=false.");
+            }
+
             //获取所有程序集
             //var mvc = GetRuntimeAssembly("WalkingTec.Mvvm.Mvc");
             //if (mvc != null && gd.AllAssembly.Contains(mvc) == false)

@@ -4,7 +4,10 @@
 // caller could name ANY FileAttachment GUID and have it deleted, regardless of whether the
 // entity being saved ever referenced it — including a file belonging to a different tenant
 // (WtmFileProvider resolves by id with IgnoreQueryFilters() when
-// FileUploadOptions.EnforceTenantFileScope is false, the default).
+// FileUploadOptions.EnforceTenantFileScope is false — the pre-#859 default; as of #859 the
+// default is true, so this specific IgnoreQueryFilters() behaviour now requires an explicit
+// opt-out. DeleteFileTenantScoped, this file's actual PRIMARY control, has always honoured the
+// tenant filter unconditionally regardless of that flag — see its own doc comment).
 //
 // These tests assert on the SURVIVING FileAttachment row in the database, not on a status
 // code or an exception, per the issue's instructions.
@@ -301,8 +304,12 @@ namespace WalkingTec.Mvvm.Core.Test.VM
         //            NAVIGATION property, never the posted FK scalar.
         //   POST 2 — ANY path that derives file ids from the entity: DeletedFileIds,
         //            DoRealDelete(Async), DoBatchDelete(Async), or a plain read (GetById
-        //            resolves the navigation via WtmFileProvider.GetFile, which uses
-        //            IgnoreQueryFilters() by default) — all reach the victim's file this way.
+        //            resolves the navigation via WtmFileProvider.GetFile, which — at the time
+        //            of this rework — used IgnoreQueryFilters() by default) — all reach the
+        //            victim's file this way. As of #859, GetFile's default flipped to honour the
+        //            tenant filter, so GetById's navigation load no longer reaches a cross-tenant
+        //            file with NO config change — but this write-time gate remains the PRIMARY
+        //            control, unconditional and independent of that (or any) opt-in/opt-out flag.
         // RejectUnresolvableFileAttachmentReferences (BaseCRUDVM.DoAddPrepare / DoEditPrepare)
         // now rejects POST 1 itself: a posted FileAttachment FK that does not resolve under the
         // caller's own tenant scope (ITenant query filter kept ON unconditionally) is reverted
@@ -537,9 +544,21 @@ namespace WalkingTec.Mvvm.Core.Test.VM
                 "#815 defence in depth async: the victim's file must survive");
         }
 
+        // #859 note: before #859, FileUploadOptions.EnforceTenantFileScope defaulted to false,
+        // so GetById's automatic FileAttachment-property resolution (BaseCRUDVM.GetById calling
+        // WtmFileProvider.GetFile — see the "SECOND REWORK" comment block above) loaded a
+        // pre-existing forged cross-tenant FK into Entity.Photo by default, and the two tests
+        // below proved DeleteFileTenantScoped blocked the deletion anyway. As of #859 that is no
+        // longer the default: GetFile itself now refuses to resolve the cross-tenant file, so
+        // Entity.Photo comes back null before DoRealDelete ever runs, one layer earlier than
+        // before. The two tests below now opt OUT explicitly (EnforceTenantFileScope=false) to
+        // keep exercising the exact original scenario (DeleteFileTenantScoped as the thing that
+        // blocks it); the pair after them proves the new default (left unset) blocks it even
+        // earlier, at the read/navigation-load step, so neither layer goes untested.
+
         [TestMethod]
-        [Description("#815 defence in depth: DoRealDelete must not delete a victim's cross-tenant file even when a pre-existing forged FK resolves it via GetById's navigation load")]
-        public void DoRealDelete_PreExistingForgedCrossTenantPhotoFK_VictimFileSurvives()
+        [Description("#815 defence in depth: DoRealDelete must not delete a victim's cross-tenant file even when a pre-existing forged FK resolves it via GetById's navigation load (explicit EnforceTenantFileScope=false opt-out, #859)")]
+        public void DoRealDelete_PreExistingForgedCrossTenantPhotoFK_ExplicitOptOut_VictimFileSurvives()
         {
             var seed = Guid.NewGuid().ToString("N");
             Guid studentId, victimFileId;
@@ -559,13 +578,19 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             {
                 Wtm = MockWtmContext.CreateWtmContext(attackerDc, "attacker")
             };
-            // GetById resolves the Photo navigation via WtmFileProvider.GetFile, which uses
-            // IgnoreQueryFilters() by default (FileUploadOptions.EnforceTenantFileScope=false),
-            // so the forged cross-tenant reference DOES load into Entity.Photo here — this is
-            // the "read primitive" half of #815; DoRealDelete then reads fileids off that
-            // navigation property.
+            // #859: explicit opt-out — no longer the default. With it set, GetById resolves the
+            // Photo navigation via WtmFileProvider.GetFile using IgnoreQueryFilters(), so the
+            // forged cross-tenant reference DOES load into Entity.Photo here — this is the "read
+            // primitive" half of #815; DoRealDelete then reads fileids off that navigation
+            // property, and DeleteFileTenantScoped (unconditional, independent of this flag) is
+            // what actually blocks the delete below.
+            vm.Wtm!.ConfigInfo!.FileUploadOptions.EnforceTenantFileScope = false;
             vm.SetEntityById(studentId);
             Assert.IsNotNull(vm.Entity, "the entity itself must load");
+            Assert.IsNotNull(vm.Entity!.Photo,
+                "#859: with the explicit opt-out, Entity.Photo must actually load the forged " +
+                "cross-tenant reference — otherwise the assertion below would be vacuous (proving " +
+                "nothing about DeleteFileTenantScoped specifically).");
 
             vm.DoRealDelete();
 
@@ -578,8 +603,8 @@ namespace WalkingTec.Mvvm.Core.Test.VM
         }
 
         [TestMethod]
-        [Description("#815 defence in depth async: same as the sync DoRealDelete version above")]
-        public async Task DoRealDeleteAsync_PreExistingForgedCrossTenantPhotoFK_VictimFileSurvives()
+        [Description("#815 defence in depth async: same as the sync DoRealDelete version above (explicit EnforceTenantFileScope=false opt-out, #859)")]
+        public async Task DoRealDeleteAsync_PreExistingForgedCrossTenantPhotoFK_ExplicitOptOut_VictimFileSurvives()
         {
             var seed = Guid.NewGuid().ToString("N");
             Guid studentId, victimFileId;
@@ -599,14 +624,60 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             {
                 Wtm = MockWtmContext.CreateWtmContext(attackerDc, "attacker")
             };
+            // #859: explicit opt-out — see the sync version above for the full rationale.
+            vm.Wtm!.ConfigInfo!.FileUploadOptions.EnforceTenantFileScope = false;
             vm.SetEntityById(studentId);
             Assert.IsNotNull(vm.Entity, "the entity itself must load");
+            Assert.IsNotNull(vm.Entity!.Photo,
+                "#859: with the explicit opt-out, Entity.Photo must actually load the forged " +
+                "cross-tenant reference — otherwise the assertion below would be vacuous.");
 
             await vm.DoRealDeleteAsync();
 
             using var checkCtx = new DataContext(seed, DBTypeEnum.Memory);
             Assert.IsTrue(checkCtx.Set<FileAttachment>().IgnoreQueryFilters().Any(x => x.ID == victimFileId),
                 "#815 defence in depth async: the victim's cross-tenant file must survive");
+            Assert.IsFalse(checkCtx.Set<Student>().IgnoreQueryFilters().Any(x => x.ID == studentId),
+                "sanity check: the Student row itself must actually have been deleted");
+        }
+
+        [TestMethod]
+        [Description("#859: with EnforceTenantFileScope left at its new default (true), GetById never loads a pre-existing forged cross-tenant Photo FK into the navigation property at all — the deletion attempt in DoRealDelete never even reaches DeleteFileTenantScoped for this file")]
+        public void DoRealDelete_PreExistingForgedCrossTenantPhotoFK_DefaultScope_PhotoNeverLoads_VictimFileSurvives()
+        {
+            var seed = Guid.NewGuid().ToString("N");
+            Guid studentId, victimFileId;
+
+            using (var seedCtx = new DataContext(seed, DBTypeEnum.Memory))
+            {
+                seedCtx.Database.EnsureCreated();
+                var victim = SeedFile(seedCtx, "TENANT_VICTIM");
+                victimFileId = victim.ID;
+                var student = SeedStudent(seedCtx, victim.ID);
+                studentId = student.ID;
+            }
+
+            var attackerDc = new DataContext(seed, DBTypeEnum.Memory);
+            attackerDc.SetTenantCode("TENANT_ATTACKER");
+            var vm = new BaseCRUDVM<Student>
+            {
+                Wtm = MockWtmContext.CreateWtmContext(attackerDc, "attacker")
+            };
+            // Deliberately NOT setting FileUploadOptions.EnforceTenantFileScope — this test's
+            // whole point is the compiled default (true as of #859).
+            vm.SetEntityById(studentId);
+            Assert.IsNotNull(vm.Entity, "the entity itself must load");
+            Assert.IsNull(vm.Entity!.Photo,
+                "#859: with EnforceTenantFileScope at its new default (true), GetById's " +
+                "WtmFileProvider.GetFile call must NOT resolve a cross-tenant FileAttachment into " +
+                "the Photo navigation property — this is a full layer earlier than the pre-#859 " +
+                "behaviour, which loaded it and relied on DeleteFileTenantScoped at delete time.");
+
+            vm.DoRealDelete();
+
+            using var checkCtx = new DataContext(seed, DBTypeEnum.Memory);
+            Assert.IsTrue(checkCtx.Set<FileAttachment>().IgnoreQueryFilters().Any(x => x.ID == victimFileId),
+                "#859: the victim's cross-tenant file must survive under the new default too.");
             Assert.IsFalse(checkCtx.Set<Student>().IgnoreQueryFilters().Any(x => x.ID == studentId),
                 "sanity check: the Student row itself must actually have been deleted");
         }

@@ -1,0 +1,13 @@
+diff --git a/src/WalkingTec.Mvvm.Core/ConfigOptions/FileUploadOptions.cs b/src/WalkingTec.Mvvm.Core/ConfigOptions/FileUploadOptions.cs
+index 11a61d56a..b33e468f2 100644
+--- a/src/WalkingTec.Mvvm.Core/ConfigOptions/FileUploadOptions.cs
++++ b/src/WalkingTec.Mvvm.Core/ConfigOptions/FileUploadOptions.cs
+@@ -52,7 +52,7 @@ namespace WalkingTec.Mvvm.Core.ConfigOptions
+         /// <c>false</c> only when every file upload is genuinely meant to be tenant-agnostic by ID
+         /// and access control is fully enforced at a higher layer.</para>
+         /// </summary>
+-        public bool EnforceTenantFileScope { get; set; } = true;
++        public bool EnforceTenantFileScope { get; set; } = false;
+
+         // ─── Opt-in upload validation (Issue #407) ───────────────────────────────
+         // All fields default to "allow everything" so existing apps are unaffected.

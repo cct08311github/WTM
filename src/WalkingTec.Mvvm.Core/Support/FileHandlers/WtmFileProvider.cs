@@ -151,10 +151,12 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
             {
                 dc = _wtm.CreateDC();
             }
-            // WTM-SEC-003: when EnforceTenantFileScope is false (default), bypass the global
-            // ITenant query filter so that a file can be resolved by its GUID regardless of
-            // which tenant originally uploaded it (backward-compatible, tenant-agnostic by ID).
-            // When true, the global filter is honoured and cross-tenant file access is blocked.
+            // WTM-SEC-003 (#859): when EnforceTenantFileScope is true (default as of #859; was
+            // false through 10.18.x), the global ITenant query filter is honoured and a file
+            // cannot be resolved by GUID outside the caller's own tenant. When false (opt-out),
+            // IgnoreQueryFilters() bypasses that boundary so a file can be resolved by its GUID
+            // regardless of which tenant originally uploaded it (the pre-#859 backward-compatible
+            // behaviour: tenant-agnostic by ID).
             var tenantScope = _wtm.ConfigInfo.FileUploadOptions.EnforceTenantFileScope;
             rv = (tenantScope
                 ? dc.Set<FileAttachment>()
@@ -191,17 +193,19 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
         /// #830: obsoleted in favour of <see cref="DeleteFileTenantScoped(string, IDataContext?)"/>.
         /// This overload deletes by <see cref="FileAttachment"/> id honouring
         /// <see cref="WalkingTec.Mvvm.Core.ConfigOptions.FileUploadOptions.EnforceTenantFileScope"/>
-        /// — which defaults to <c>false</c> — so a hand-written downstream call site that resolves
-        /// <paramref name="id"/> from caller-controlled input (a route/query/form value) is exposed
-        /// to the exact same cross-tenant deletion this issue fixed in the three demo
-        /// <c>FileApiController</c> copies: any authenticated caller can delete ANY tenant's
-        /// <see cref="FileAttachment"/> row by GUID, not just their own. This is a compiler-warning
-        /// signal only — it does nothing for a downstream binary that does not recompile against
-        /// this package version, does not fire at runtime, and will not be seen by a caller who
-        /// never rebuilds with warnings surfaced. See the #830 CHANGELOG entry for the full
-        /// reach/limits statement.
+        /// — which defaults to <c>true</c> as of #859 (was <c>false</c> through 10.18.x) — so a
+        /// downstream deployment that has explicitly opted BACK to <c>EnforceTenantFileScope=false</c>
+        /// re-exposes a hand-written call site that resolves <paramref name="id"/> from
+        /// caller-controlled input (a route/query/form value) to the exact same cross-tenant
+        /// deletion this issue fixed in the three demo <c>FileApiController</c> copies: any
+        /// authenticated caller can delete ANY tenant's <see cref="FileAttachment"/> row by GUID,
+        /// not just their own. Kept <c>[Obsolete]</c> because the risk is still real whenever the
+        /// flag is turned off — this is a compiler-warning signal only, so it does nothing for a
+        /// downstream binary that does not recompile against this package version, does not fire
+        /// at runtime, and will not be seen by a caller who never rebuilds with warnings surfaced.
+        /// See the #830 CHANGELOG entry for the full reach/limits statement.
         /// </summary>
-        [Obsolete("Deletes without tenant scoping by default (FileUploadOptions.EnforceTenantFileScope defaults to false), allowing cross-tenant deletion when id comes from caller-controlled input. Use DeleteFileTenantScoped instead. See issue #830.")]
+        [Obsolete("Deletes without tenant scoping whenever FileUploadOptions.EnforceTenantFileScope is set to false (default is now true as of #859), allowing cross-tenant deletion when id comes from caller-controlled input. Use DeleteFileTenantScoped instead. See issue #830.")]
         public void DeleteFile(string id, IDataContext? dc = null)
         {
             // WTM-SEC-003: see GetFile for flag semantics.
