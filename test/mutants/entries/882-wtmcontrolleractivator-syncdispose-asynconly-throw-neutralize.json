@@ -1,0 +1,24 @@
+{
+  "id": "882-wtmcontrolleractivator-syncdispose-asynconly-throw-neutralize",
+  "kind": "security",
+  "description": "PR #882 review, third round: WtmControllerActivator.Dispose()'s sync path used to fall straight through and do nothing for an inner IControllerActivator that implements ONLY IAsyncDisposable (not IDisposable) -- no dispose, no exception. Before this wrapper existed, a DI container's own sync scope.Dispose() throws InvalidOperationException for a tracked service in that exact shape (verified against the real installed Microsoft.Extensions.DependencyInjection 10.0.9 assembly: ServiceProviderEngineScope.Dispose()'s message is literally \"'{0}' type only implements IAsyncDisposable. Use DisposeAsync to dispose the container.\") -- a loud signal telling the caller to use DisposeAsync instead. The fix makes Dispose() reproduce that same InvalidOperationException itself when the inner is async-only, rather than silently succeeding. This mutant neutralizes exactly that: it replaces the throw with a plain `return;`, reproducing the pre-fix silent-skip behaviour. No prior mutant on this branch touches disposal/ownsInner/Implementation* at all (verified via `rg -i 'dispose|ownsInner|ImplementationFactory|ImplementationInstance' test/mutants/entries test/mutants/patches` before this entry existed), so all other mutants being KILLED said nothing about this code path.",
+  "target_file": "src/WalkingTec.Mvvm.Mvc/Helper/WtmControllerActivator.cs",
+  "target_symbol": "WtmControllerActivator.Dispose -- the `throw new InvalidOperationException(...)` for an inner that is IAsyncDisposable but not IDisposable",
+  "patch": "patches/882-wtmcontrolleractivator-syncdispose-asynconly-throw-neutralize.patch",
+  "test_project": "src/WalkingTec.Mvvm.Mvc.Tests/WalkingTec.Mvvm.Mvc.Tests.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Mvc.Tests.Security.WtmControllerActivatorDisposalTests.Dispose_OwnsInnerTrue_InnerIsAsyncDisposableOnly_ThrowsInsteadOfSilentlySkipping|FullyQualifiedName=WalkingTec.Mvvm.Mvc.Tests.Security.WtmControllerActivatorDisposalTests.AddWtmContext_SyncScopeDispose_ThrowsForAsyncOnlyInnerActivator_InsteadOfSilentlySkipping",
+  "red_tests": [
+    "WalkingTec.Mvvm.Mvc.Tests.Security.WtmControllerActivatorDisposalTests.Dispose_OwnsInnerTrue_InnerIsAsyncDisposableOnly_ThrowsInsteadOfSilentlySkipping",
+    "WalkingTec.Mvvm.Mvc.Tests.Security.WtmControllerActivatorDisposalTests.AddWtmContext_SyncScopeDispose_ThrowsForAsyncOnlyInnerActivator_InsteadOfSilentlySkipping"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Mvc.Tests.Security.WtmControllerActivatorDisposalTests.Dispose_OwnsInnerTrue_InnerIsAsyncDisposableOnly_ThrowsInsteadOfSilentlySkipping": "Expected a <System\\.InvalidOperationException> to be thrown, but no exception was thrown\\.",
+    "WalkingTec.Mvvm.Mvc.Tests.Security.WtmControllerActivatorDisposalTests.AddWtmContext_SyncScopeDispose_ThrowsForAsyncOnlyInnerActivator_InsteadOfSilentlySkipping": "Expected a <System\\.InvalidOperationException> to be thrown because a sync scope\\.Dispose\\(\\) must not silently skip disposing an async-only-disposable inner activator, but no exception was thrown\\."
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured verbatim by manually neutralizing the throw to `return;`, building, and running just these two tests (stale demo.db removed first): Dispose_OwnsInnerTrue_InnerIsAsyncDisposableOnly_ThrowsInsteadOfSilentlySkipping -- 'Expected a <System.InvalidOperationException> to be thrown, but no exception was thrown.'; AddWtmContext_SyncScopeDispose_ThrowsForAsyncOnlyInnerActivator_InsteadOfSilentlySkipping -- 'Expected a <System.InvalidOperationException> to be thrown because a sync scope.Dispose() must not silently skip disposing an async-only-disposable inner activator, but no exception was thrown.' Both failed as expected (Failed: 2, Passed: 0). Mutation reverted immediately after capture.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Mvc.Tests.Security.WtmControllerActivatorDisposalTests.Dispose_OwnsInnerTrue_DisposesTheDisposableInner",
+  "green_tests": [
+    "WalkingTec.Mvvm.Mvc.Tests.Security.WtmControllerActivatorDisposalTests.Dispose_OwnsInnerTrue_DisposesTheDisposableInner"
+  ]
+}

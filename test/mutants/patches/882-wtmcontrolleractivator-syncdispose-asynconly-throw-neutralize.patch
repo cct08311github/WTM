@@ -1,0 +1,14 @@
+diff --git a/src/WalkingTec.Mvvm.Mvc/Helper/WtmControllerActivator.cs b/src/WalkingTec.Mvvm.Mvc/Helper/WtmControllerActivator.cs
+index b6a6c15c3..51597398f 100644
+--- a/src/WalkingTec.Mvvm.Mvc/Helper/WtmControllerActivator.cs
++++ b/src/WalkingTec.Mvvm.Mvc/Helper/WtmControllerActivator.cs
+@@ -221,8 +221,7 @@ namespace WalkingTec.Mvvm.Mvc.Helper
+ 
+             if (_inner is IAsyncDisposable)
+             {
+-                throw new InvalidOperationException(
+-                    $"'{_inner.GetType()}' (the inner IControllerActivator {nameof(WtmControllerActivator)} wraps) only implements IAsyncDisposable. Use DisposeAsync to dispose the container.");
++                return;
+             }
+         }
+ 
