@@ -29,6 +29,32 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # Issue #885: run the three legs one at a time instead of letting the matrix
+      # fan them out concurrently. Measured on this host (2026-07-29): the Gitea
+      # act_runner's Docker backend has a hard ceiling of 4 CPUs / 3.8GiB RAM
+      # (`docker info`) — independent of the Mac mini host's real 10 CPU / 16GB,
+      # because act_runner drives job containers through the Docker Desktop VM's
+      # own daemon (docker.sock bind-mount), not the host's. A live
+      # workflow_dispatch run of this exact workflow (run 5835) started all
+      # three legs' containers within 6 seconds of each other and kept them
+      # running concurrently for the full ~3.3min duration, despite the
+      # act_runner's own config.yaml capping `capacity: 2` (#319) — so that
+      # runner-level setting alone does not stop this matrix's 3 jobs from
+      # overlapping. `docker stats` during that run captured baseline+island's
+      # two containers (dotnet demo app + headless Chromium each) alone using
+      # up to ~360% of the VM's 400% CPU budget and ~2.85GiB (~75%) of its
+      # 3.8GiB RAM, without killswitch's simultaneous third container counted.
+      # That is the same failure shape #885 catalogs: Page.screenshot timeouts
+      # (CPU-starved compositing) and "Target crashed" (Chromium OOM-killed)
+      # under concurrent load, not a test-logic bug. This repo's own matrix is
+      # the one concurrency knob #885 can turn from within the WTM repo (the
+      # runner's capacity is host infra, shared instance-wide with an unrelated
+      # repo, out of this PR's scope). Cost: the three legs now run back to
+      # back instead of overlapping, adding roughly one leg's wall-clock time
+      # (~3 min) to the workflow's total duration. See #885 for the full
+      # measurements and the two alternatives considered (per-test timing
+      # fixes, raising timeouts) and why this was picked over both.
+      max-parallel: 1
       matrix:
         # Issue #681: second leg exercises the #627 legacy-script-rehydration
         # kill-switch (docs/csp-hardening.md). "killswitch" sets WTM_E2E_KILLSWITCH=1,

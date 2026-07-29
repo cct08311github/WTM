@@ -161,6 +161,45 @@ pull_request-event 的 job。修正後 feature 分支只會有 pull_request-even
 
 ---
 
+## e2e 三條 matrix leg 並行導致的時序性失敗（#885，2026-07-29 修正）
+
+`#837` 為 `e2e-test.yml` 加了第三條 matrix leg（`island`）之後，同一天內出現五種不同的
+時序敏感失敗（`Page.screenshot` timeout、`Target crashed`、並行競態測試、TOCTOU 測試、
+testhost 崩潰），分散在互不相關的 PR 上——形狀都一樣：**一個對時間做了假設的測試，在
+資源競爭下假設破裂**，不是測試邏輯壞掉。
+
+**量測**（本票在 `ci/885-runner-capacity` 分支上用 `workflow_dispatch` 對 `e2e-test.yml`
+觸發的即時 run 5835，`docker stats` 現場觀察；另對照 PR #881 當天的 e2e run 5833）：
+
+- act_runner 背後的 Docker Desktop VM 硬上限是 **4 CPU / 3.8GiB RAM**（`docker info`），
+  與 Mac mini 主機實際的 10 CPU / 16GB **無關**——act_runner 透過 bind-mount 的
+  `docker.sock` 用 Docker Desktop VM 自己的 daemon 開 job 容器，不是主機的。
+- run 5835 三條 leg 的 job container 在 6 秒內全部啟動，並行跑滿全程約 3.3 分鐘——即使
+  `local-runner` 的 `config.yaml` 寫著 `capacity: 2`（#319），這個 runner 層級設定並沒有擋下
+  同一個 matrix 的 3 個 job 疊在一起執行。`docker stats` 抓到的只是其中兩個容器
+  （`baseline` + `island`，各自跑一個 dotnet demo process + 一個 headless Chromium）——
+  光這兩個就在啟動後 30 秒內吃到約 **360% CPU**（VM 400% 上限的 9 成）與 **2.85GiB 記憶體**
+  （3.8GiB 上限的 75%），還沒算上同時在跑的第三個 `killswitch` 容器。這就是 #885 列的失敗
+  形狀：`Page.screenshot` timeout（CPU 被搶到來不及 compositing）與 `Target crashed`
+  （Chromium 被 OOM kill）。
+- e2e 測試腳本（`test/e2e/wtm_e2e_tests.py`）目前對每個 TC 都無條件拍照（79 處
+  `page.screenshot(...)`，其中 13 處 `full_page=True`），不分成功失敗——這會放大每條 leg
+  的資源用量，但量測顯示真正的瓶頸是「同時幾個瀏覽器+dotnet process 在跑」而非拍照本身；
+  改成只在失敗時拍照是可考慮的後續優化，未在本票處理範圍內（另開 issue 追蹤）。
+
+**修法**：`.github/workflows/e2e-test.yml` 的 `strategy.matrix` 加 `max-parallel: 1`，讓三條
+leg 依序跑而非搶著並行。代價是 workflow 總時長增加約一條 leg 的時間（2–4 分鐘），換取
+可預測、不再被資源競爭污染的結果。**沒有**調大 timeout——那只會延後問題、讓 CI 變慢
+（issue 本文已排除）；也沒有逐支修測試的時間假設——除了已經修好的 TC-33（`ccbcbe532`，
+拿掉 `force=True` 讓 Playwright 自己等 layout 穩定）之外，其餘四種失敗的根因是資源競爭
+本身，逐支修無法解決同時開太多瀏覽器這件事。
+
+**SOP 影響**：e2e workflow 現在會比 #837 之前慢；不要因為「怎麼變慢了」重新把三條 leg
+改回並行——那正是 #885 五種失敗的共同觸發器。若未來 host 容量提升或 `local-runner`
+`capacity` 調整，可重新評估這個 `max-parallel` 值。
+
+---
+
 ## 排錯 SOP
 
 當 PR 的 CI conclusion 是 failure：
