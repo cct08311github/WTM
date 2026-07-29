@@ -1,0 +1,13 @@
+diff --git a/src/WalkingTec.Mvvm.Mvc/Helper/WtmControllerActivator.cs b/src/WalkingTec.Mvvm.Mvc/Helper/WtmControllerActivator.cs
+index 0000000..0000000 100644
+--- a/src/WalkingTec.Mvvm.Mvc/Helper/WtmControllerActivator.cs
++++ b/src/WalkingTec.Mvvm.Mvc/Helper/WtmControllerActivator.cs
+@@ -62,7 +62,7 @@ namespace WalkingTec.Mvvm.Mvc.Helper
+         {
+             var controllerType = context.ActionDescriptor.ControllerTypeInfo.AsType();
+             var controller = ActivatorUtilities.CreateInstance(context.HttpContext.RequestServices, controllerType);
+-            if (controller is IBaseController baseController && baseController.Wtm == null)
++            if (controller is IBaseController baseController && false)
+             {
+                 baseController.Wtm = context.HttpContext.RequestServices.GetRequiredService<WTMContext>();
+             }

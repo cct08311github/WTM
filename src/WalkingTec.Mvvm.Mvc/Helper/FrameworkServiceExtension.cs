@@ -18,6 +18,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Localization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.AspNetCore.Routing;
 using Asp.Versioning;
 using Microsoft.AspNetCore.SpaServices.ReactDevelopmentServer;
@@ -435,6 +436,15 @@ namespace WalkingTec.Mvvm.Mvc
             services.TryAddSingleton(TimeProvider.System);
             services.AddScoped<WTMContext>();
             services.AddScoped<WtmFileProvider>();
+            // Issue #876: replace the default IControllerActivator so WTMContext.Wtm is
+            // populated at controller-CONSTRUCTION time, before any filter runs -- ASP.NET
+            // Core's own controller-owned ControllerActionFilter is hard-coded to
+            // Order = int.MinValue and always runs before DataContextFilter/PrivilegeFilter/
+            // FrameworkFilter (global MvcOptions.Filters) regardless of any Order given to
+            // them, so those filters can never be "first" for a controller that reads Wtm from
+            // its own OnActionExecuting override. See WtmControllerActivator's doc comment for
+            // the full root-cause writeup.
+            services.Replace(ServiceDescriptor.Singleton<IControllerActivator, WalkingTec.Mvvm.Mvc.Helper.WtmControllerActivator>());
 
             // Issue #407: register the default no-op upload validator.
             // Hosts can override by calling services.AddScoped<IUploadValidator, MyValidator>()

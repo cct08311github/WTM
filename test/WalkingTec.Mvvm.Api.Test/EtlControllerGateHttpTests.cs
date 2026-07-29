@@ -16,55 +16,46 @@ namespace WalkingTec.Mvvm.Api.Test;
 /// <c>_EtlSchemaController</c>) had no <c>OnActionExecuting</c> role gate of their own, unlike
 /// <c>_EtlJobController</c>/<c>_EtlDashboardController</c> (<c>grep -c OnActionExecuting</c>
 /// returned 0 for the first three, 3 for the other two). This class provides the REAL-HTTP
-/// negative control (non-admin authenticated caller is rejected) for all three; the paired
-/// positive control (an Admin/ETLAdmin caller passes the gate) lives as a unit test in
-/// <c>test/WalkingTec.Mvvm.Etl.Test/Controllers/EtlRbacTests.cs</c> instead of here -- see the
-/// "Known limitation" note below for why a real-HTTP positive control is not currently
-/// achievable for ANY controller in the WalkingTec.Mvvm.Etl assembly, not just these three.
+/// negative control (non-admin authenticated caller is rejected) AND, since issue #876 fixed
+/// the defect described below, the REAL-HTTP positive control (an Admin/ETLAdmin caller passes
+/// the gate and reaches the action) for all three.
 ///
 /// <para>
-/// <b>Known limitation, found while building this test (filed as a new, separate P0 issue --
-/// this defect predates #841/#862 and is not introduced by either): <c>WalkingTec.Mvvm.Etl</c>
-/// assembly controllers never receive WTM's three global action filters</b>
-/// (<c>DataContextFilter</c>/<c>PrivilegeFilter</c>/<c>FrameworkFilter</c>, registered in
-/// <c>MvcOptionExtension.UseWtmMvcOptions</c>) when reached via a real ASP.NET Core MVC request.
-/// Confirmed empirically: instrumenting <c>DataContextFilter.OnActionExecuting</c> to
-/// short-circuit on any request path containing "Etl" (case-insensitive) never triggers for
-/// <c>/_EtlJob/Index</c> (a PRE-EXISTING controller, untouched by this PR) even from a genuinely
-/// authenticated client, while the identical instrumentation correctly triggers for
-/// <c>/_Framework/GetVerifyCode</c> (a <c>WalkingTec.Mvvm.Mvc</c>-assembly controller). Because
-/// <c>DataContextFilter</c> is what populates <c>BaseController.Wtm</c>
-/// (<c>ActionExecutingContextExtension.SetWtmContext</c>), <c>Wtm</c> is <c>null</c> inside
-/// <em>every</em> ETL controller's <c>OnActionExecuting</c>/action body reached via real HTTP --
-/// confirmed directly: a diagnostic response from inside <c>_EtlMonitorController.Running</c>'s
-/// gate showed <c>wtmIsNull=true</c>, <c>loginUserInfoIsNull=true</c>,
-/// <c>httpContextIsNull=true</c> for a real, successfully-authenticated ETLAdmin-role session.
-/// The practical effect: every <c>Wtm.LoginUserInfo.Roles</c>-based role gate on this assembly's
-/// controllers (the pre-existing ones on <c>_EtlJobController</c>/<c>_EtlDashboardController</c>,
-/// and the three this PR adds) currently fails CLOSED for every caller, including a genuine
-/// Admin/ETLAdmin -- not because the gate LOGIC is wrong (it is not; the unit tests in
-/// <c>EtlRbacTests.cs</c> prove the logic correctly distinguishes admin from non-admin once
-/// <c>Wtm</c>/<c>Roles</c> are populated), but because the surrounding pipeline never gives it
-/// the data to decide with. This also means any ETL controller action that reads
-/// <c>Wtm.XXX</c> in its own body (e.g. <c>_EtlRunLogController.Index</c>'s
-/// <c>Wtm.CreateVM&lt;EtlRunLogListVM&gt;()</c>, <c>_EtlSchemaController.Tables</c>'s
-/// <c>Wtm.ConfigInfo.Connections</c>) throws <c>NullReferenceException</c> the moment it is
-/// reached via a real request, independent of authorization. This is a defect in the shared
-/// <c>WalkingTec.Mvvm.Etl</c> controller-assembly wiring, not in any single controller or in
-/// this PR's own added gates -- root-causing WHY the global filters never apply to this specific
-/// assembly's controllers is out of scope for #841/#862 and needs its own dedicated
-/// investigation; see the issue this finding was filed under for the reproduction steps above.
+/// <b>Issue #876 (fixed): <c>WalkingTec.Mvvm.Etl</c> assembly controllers never received WTM's
+/// three global action filters' effect in time</b> (<c>DataContextFilter</c>/
+/// <c>PrivilegeFilter</c>/<c>FrameworkFilter</c>, registered in
+/// <c>MvcOptionExtension.UseWtmMvcOptions</c>) — found while building this test, filed as a new,
+/// separate P0 issue (predates #841/#862, not introduced by either). Root cause: ASP.NET Core's
+/// own <c>ControllerActionFilter</c> (the internal wrapper that invokes a controller's own
+/// <c>OnActionExecuting</c> override, added automatically because every <c>Controller</c>
+/// subclass implements <see cref="Microsoft.AspNetCore.Mvc.Filters.IActionFilter"/>) is
+/// hard-coded by the framework to <c>Order = int.MinValue</c> — it always runs before ANY
+/// custom filter, including WTM's three global ones, no matter what <c>Order</c> those are
+/// given (confirmed empirically: giving <c>DataContextFilter</c> <c>Order = -1000</c> made no
+/// difference). <c>DataContextFilter</c> is what populates <c>BaseController.Wtm</c>
+/// (<c>ActionExecutingContextExtension.SetWtmContext</c>) — so for the five
+/// <c>WalkingTec.Mvvm.Etl</c> controllers, which are the ONLY controllers anywhere in the
+/// codebase that read <c>Wtm</c> directly inside their own <c>OnActionExecuting</c> override
+/// (every other WTM controller uses <c>PrivilegeFilter</c>'s declarative, URL-based
+/// authorization instead), <c>Wtm</c> was always <c>null</c> at the point the gate read it. The
+/// null-conditional operators throughout the gate (<c>Wtm?.LoginUserInfo?.Roles</c>) turned that
+/// into a silently-empty role list rather than a <see cref="NullReferenceException"/>, so
+/// <c>context.Result = Forbid()</c> fired unconditionally — denying EVERY caller, including a
+/// genuine Admin, with a clean 403/redirect. Because setting <c>context.Result</c> inside
+/// <c>OnActionExecuting</c> short-circuits the rest of the filter pipeline, <c>DataContextFilter</c>/
+/// <c>PrivilegeFilter</c>/<c>FrameworkFilter</c> never got a turn at all for these five actions —
+/// so this was an availability defect (100% lockout of the ETL admin UI for everyone), not the
+/// framework silently letting unauthorized callers through.
 /// </para>
 ///
 /// <para>
-/// <b>What IS still meaningfully tested here despite that limitation:</b> the negative-control
-/// tests below still exercise the REAL HTTP pipeline end-to-end and still genuinely kill a
-/// mutant that removes the gate -- with the gate present, EVERY caller (admin or not) is
-/// rejected (a symptom of the Wtm-population defect above); with the gate deleted entirely, the
-/// action runs unguarded and either succeeds (<c>_EtlMonitorController.Running</c>, which never
-/// touches <c>Wtm</c>) or throws (the two controllers whose action bodies use <c>Wtm</c>) --
-/// either way, a materially different, non-403/redirect response, which is exactly what proves
-/// the gate's presence still matters today, independent of the deeper defect.
+/// <b>Fix</b>: <c>WtmControllerActivator</c>
+/// (<c>src/WalkingTec.Mvvm.Mvc/Helper/WtmControllerActivator.cs</c>) replaces the default
+/// <c>IControllerActivator</c> and populates <c>Wtm</c> at controller CONSTRUCTION time —
+/// before any filter, including the hard-coded-first <c>ControllerActionFilter</c>, ever runs.
+/// This is a framework-level fix (registered once in <c>AddWtmContext</c>) that applies
+/// uniformly to every controller/assembly, not a per-controller patch to the five affected Etl
+/// controllers.
 /// </para>
 ///
 /// <para>
@@ -84,6 +75,13 @@ public class EtlControllerGateHttpTests
 
     private const string NonAdminItCode = "etlgate-nonadmin-841";
     private const string NonAdminPassword = "Passw0rd!841b";
+
+    // #876: real ETLAdmin caller, used for the positive-control (admin succeeds) tests below.
+    // RoleCode must be exactly "ETLAdmin" (case-insensitive) -- the gate compares with
+    // string.Equals, not Contains.
+    private const string AdminItCode = "etlgate-admin-876";
+    private const string AdminPassword = "Passw0rd!876a";
+    private const string AdminRoleCode = "ETLAdmin";
 
     [ClassInitialize]
     public static void ClassInit(TestContext _)
@@ -117,6 +115,68 @@ public class EtlControllerGateHttpTests
             Password = PasswordHashHelper.HashPassword(NonAdminPassword),
             Name = "Issue #841 ETL non-admin",
             IsValid = true,
+        });
+
+        // #876: a real ETLAdmin-role user, wired up exactly the way a real deployment would --
+        // FrameworkUser + FrameworkRole + FrameworkUserRole linking them by RoleCode, matching
+        // the reproduction the issue itself verified with (see class doc comment). The gate
+        // checks Wtm.LoginUserInfo.Roles; the surrounding PrivilegeFilter separately checks
+        // Wtm.IsAccessable(BaseUrl) via FrameworkMenu/FunctionPrivilege, so a menu grant per URL
+        // is also seeded below -- both layers must agree for the action to actually be reached,
+        // exactly as a real admin's browser session would need.
+        DbTestHelpers.Seed(_strictFactory, new FrameworkUser
+        {
+            ID = Guid.NewGuid(),
+            ITCode = AdminItCode,
+            Password = PasswordHashHelper.HashPassword(AdminPassword),
+            Name = "Issue #876 ETL admin",
+            IsValid = true,
+        });
+        DbTestHelpers.Seed(_strictFactory, new FrameworkRole
+        {
+            ID = Guid.NewGuid(),
+            RoleCode = AdminRoleCode,
+            RoleName = "ETL Admin (#876 test)",
+        });
+        DbTestHelpers.Seed(_strictFactory, new FrameworkUserRole
+        {
+            ID = Guid.NewGuid(),
+            UserCode = AdminItCode,
+            RoleCode = AdminRoleCode,
+        });
+
+        // Page-level URL-RBAC grants (PrivilegeFilter), one FrameworkMenu + FunctionPrivilege
+        // per action under test -- matching MvcAuthHolesTests' precedent (see that class's doc
+        // comment on why Url must be the LinkGenerator-reverse-routed BaseUrl, not the literal
+        // request path: default action "Index" is omitted from the generated URL).
+        GrantMenuAccess(_strictFactory, "EtlMonitorRunning876", "/_EtlMonitor/Running", AdminRoleCode);
+        GrantMenuAccess(_strictFactory, "EtlRunLogIndex876", "/_EtlRunLog", AdminRoleCode);
+        GrantMenuAccess(_strictFactory, "EtlSchemaTables876", "/_EtlSchema/Tables", AdminRoleCode);
+        DbTestHelpers.InvalidateMenuCache(_strictFactory);
+    }
+
+    private static void GrantMenuAccess(
+        WebApplicationFactory<WalkingTec.Mvvm.Demo.Program> factory, string pageName, string url, string roleCode)
+    {
+        var menu = DbTestHelpers.Seed(factory, new FrameworkMenu
+        {
+            ID = Guid.NewGuid(),
+            PageName = pageName,
+            Url = url,
+            FolderOnly = false,
+            IsInherit = false,
+            ShowOnMenu = true,
+            IsPublic = false,
+            DisplayOrder = 0,
+            IsInside = true,
+            TenantAllowed = true,
+        });
+        DbTestHelpers.Seed(factory, new FunctionPrivilege
+        {
+            ID = Guid.NewGuid(),
+            RoleCode = roleCode,
+            MenuItemId = menu.ID,
+            Allowed = true,
         });
     }
 
@@ -226,5 +286,74 @@ public class EtlControllerGateHttpTests
         var client = await NewAuthClientAsync(NonAdminItCode, NonAdminPassword);
         var resp = await client.GetAsync("/_EtlSchema/Tables?csKey=default&dbType=SQLite");
         AssertForbidden(resp, "_EtlSchemaController");
+    }
+
+    // ─── #876 positive controls: a genuine ETLAdmin caller must SUCCEED ─────────────────
+    //
+    // Before #876, EVERY caller was rejected here, including a real Admin/ETLAdmin -- Wtm was
+    // always null when the gate read it, so the "no roles" branch fired unconditionally. These
+    // tests are the strongest evidence #876 is fixed: they can only pass if (1) Wtm is actually
+    // non-null and correctly populated with this specific user's real roles by the time the
+    // gate runs (proving DataContextFilter's effect now reaches these controllers), and (2) the
+    // rest of the real HTTP pipeline -- PrivilegeFilter's separate page-level URL-RBAC check --
+    // also runs and is satisfied by the FrameworkMenu/FunctionPrivilege grants seeded above.
+    // #841 could only verify this half at the unit level (EtlRbacTests.cs) because of #876;
+    // this is that gap closed with a real HTTP call.
+
+    /// <summary>
+    /// <b>Mutant target</b>: this is the positive control for
+    /// <c>etl841-monitorcontroller-gate-neutralize</c>'s green_tests slot is a different,
+    /// unrelated test (see that mutant's rationale for why); this test instead directly proves
+    /// the #876 fix by succeeding where, before the fix, every caller including this real
+    /// ETLAdmin was unconditionally forbidden.
+    /// </summary>
+    [TestMethod]
+    public async Task EtlMonitorController_Running_Admin_Succeeds()
+    {
+        var client = await NewAuthClientAsync(AdminItCode, AdminPassword);
+        var resp = await client.GetAsync("/_EtlMonitor/Running");
+        Assert.AreEqual(HttpStatusCode.OK, resp.StatusCode,
+            $"#876: a genuine ETLAdmin caller must pass _EtlMonitorController's role gate and " +
+            $"reach the action -- this can only succeed if Wtm was populated with this user's " +
+            $"real roles before the gate ran. Got {(int)resp.StatusCode} {resp.StatusCode}.");
+    }
+
+    [TestMethod]
+    public async Task EtlRunLogController_Index_Admin_Succeeds()
+    {
+        var client = await NewAuthClientAsync(AdminItCode, AdminPassword);
+        var resp = await client.GetAsync("/_EtlRunLog/Index");
+        Assert.AreEqual(HttpStatusCode.OK, resp.StatusCode,
+            $"#876: a genuine ETLAdmin caller must pass _EtlRunLogController's role gate, reach " +
+            $"the action, and have Wtm.CreateVM<EtlRunLogListVM>() succeed (it dereferences Wtm " +
+            $"directly, so this also proves Wtm is populated, not just the gate's null-safe " +
+            $"read). Got {(int)resp.StatusCode} {resp.StatusCode}.");
+    }
+
+    [TestMethod]
+    public async Task EtlSchemaController_Tables_Admin_Succeeds()
+    {
+        var client = await NewAuthClientAsync(AdminItCode, AdminPassword);
+        // dbType=SQLite deliberately: EtlSchemaServiceFactory.Create only implements
+        // SqlServer/Oracle schema introspection today (demo's only real connection is SQLite,
+        // and this test environment has no SqlServer/Oracle available) -- so a genuinely
+        // reached action body returns 501 NotSupportedException, not 200. That 501 is itself
+        // the proof: Tables() first does `Wtm.ConfigInfo.Connections?.FirstOrDefault(...)`
+        // (a direct Wtm dereference -- NRE if Wtm were still null) and only reaches
+        // CreateSchemaService/the 501 branch once that lookup and the role gate both succeed.
+        // Before #876 this request never got past the gate at all (302/403), so seeing the
+        // *specific* NotSupportedException message -- not a gate denial -- is what proves the
+        // fix, not incidentally a fragile assertion on unimplemented functionality.
+        var resp = await client.GetAsync("/_EtlSchema/Tables?csKey=default&dbType=SQLite");
+        Assert.AreEqual(HttpStatusCode.NotImplemented, resp.StatusCode,
+            $"#876: a genuine ETLAdmin caller must pass _EtlSchemaController's role gate and " +
+            $"reach the action body (Wtm.ConfigInfo.Connections lookup succeeds, then " +
+            $"CreateSchemaService(SQLite) throws NotSupportedException, mapped to 501) -- not " +
+            $"be rejected by the gate (302/403). Got {(int)resp.StatusCode} {resp.StatusCode}.");
+        var body = await resp.Content.ReadAsStringAsync();
+        StringAssert.Contains(body, "not yet implemented",
+            $"#876: expected EtlSchemaServiceFactory's NotSupportedException message for an " +
+            $"unsupported dbType, proving the action body (which reads Wtm.ConfigInfo.Connections) " +
+            $"actually ran. Got: {body[..Math.Min(300, body.Length)]}");
     }
 }
