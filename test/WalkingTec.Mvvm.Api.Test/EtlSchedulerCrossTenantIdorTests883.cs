@@ -106,6 +106,7 @@ public class EtlSchedulerCrossTenantIdorTests883
         GrantMenuAccess("EtlJobAbort883", "/_EtlJob/Abort");
         GrantMenuAccess("EtlRunLogRerun883", "/_EtlRunLog/Rerun");
         GrantMenuAccess("EtlMonitorRunning883", "/_EtlMonitor/Running");
+        GrantMenuAccess("EtlDashboardStats883", "/_EtlDashboard/Stats");
         DbTestHelpers.InvalidateMenuCache(_strictFactory);
     }
 
@@ -458,6 +459,58 @@ public class EtlSchedulerCrossTenantIdorTests883
         {
             tracker.Remove(jobIdA);
             tracker.Remove(jobIdB);
+        }
+    }
+
+    /// <summary>
+    /// #883 review round 2: <c>_EtlDashboardController.Stats</c> called
+    /// <c>EtlProgressTracker.GetAll()</c> (parameterless) directly -- missed by the first pass
+    /// because <c>_EtlMonitorController</c> was fixed and this sibling controller, reading the
+    /// SAME tracker, was not. Worse than a plain leak: with the tracker's old default
+    /// (<c>callerTenantCode == null</c>), this resolved to "host/null-tenant entries only" --
+    /// tenant A could see a host-scope job's id/name/phase/rate on its OWN dashboard, while its
+    /// OWN running jobs were invisible to it (a leak and a functional regression, in opposite
+    /// directions, at the same call site). Real HTTP end to end: seeds a host-scope (no tenant)
+    /// running entry and a tenant-A-scope one, hits <c>/_EtlDashboard/Stats</c> authenticated as
+    /// tenant A, and asserts both halves.
+    /// </summary>
+    [TestMethod]
+    public async Task DashboardStats_ReturnsOnlyCallersOwnTenantsRunningJobs_NotHostScope()
+    {
+        using var scope = _strictFactory.Services.CreateScope();
+        var tracker = scope.ServiceProvider.GetRequiredService<EtlProgressTracker>();
+        var hostJobId = Guid.NewGuid();
+        var tenantAJobId = Guid.NewGuid();
+        tracker.Update(new EtlProgress
+        {
+            JobId = hostJobId, JobName = "HostScopeJob883", TenantCode = null, StartedAt = DateTime.UtcNow,
+        });
+        tracker.Update(new EtlProgress
+        {
+            JobId = tenantAJobId, JobName = "TenantAJob883", TenantCode = _tenantA.Tenant.TCode, StartedAt = DateTime.UtcNow,
+        });
+        try
+        {
+            var client = await NewAuthClientAsync(_tenantA.User.ITCode, _tenantA.Tenant.TCode);
+            var resp = await client.GetAsync("/_EtlDashboard/Stats");
+            var body = await resp.Content.ReadAsStringAsync();
+            Assert.AreEqual(HttpStatusCode.OK, resp.StatusCode,
+                $"#883: tenant A's ETLAdmin must be able to load its own dashboard. Got " +
+                $"{(int)resp.StatusCode} {resp.StatusCode}: {body}");
+
+            StringAssert.Contains(body, tenantAJobId.ToString(),
+                "#883: tenant A's OWN running job must appear in tenant A's dashboard -- this is " +
+                "the functional-regression half: before this fix, the tracker's default resolved " +
+                "to host-scope entries only, so a real tenant saw NONE of its own running jobs here.");
+            StringAssert.DoesNotMatch(body, new System.Text.RegularExpressions.Regex(
+                System.Text.RegularExpressions.Regex.Escape(hostJobId.ToString())),
+                "#883: a host/null-tenant-scope running job must NOT appear on tenant A's " +
+                "dashboard -- this is the leak half.");
+        }
+        finally
+        {
+            tracker.Remove(hostJobId);
+            tracker.Remove(tenantAJobId);
         }
     }
 }

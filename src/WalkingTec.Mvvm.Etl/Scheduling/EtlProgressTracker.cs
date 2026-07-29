@@ -24,6 +24,17 @@ namespace WalkingTec.Mvvm.Etl.Scheduling;
 /// <c>EtlSchedulerService</c> uses -- a caller must pass its own tenant code, or explicitly
 /// declare a system query, to see anything at all.
 /// </remarks>
+/// <remarks>
+/// #883 review round 2: <paramref name="callerTenantCode"/> (renamed here for brevity, applies
+/// to both <see cref="Get"/> and <see cref="GetAll"/>) is deliberately a REQUIRED parameter with
+/// no default -- it originally defaulted to <c>null</c>, and exactly that default was how
+/// <c>EtlDashboardService.BuildSummary</c> silently called the parameterless overload and leaked
+/// host/null-tenant job metadata to every tenant while showing tenant callers none of their own
+/// running jobs (found in review, fixed in the same commit as this doc comment). A defaultable
+/// parameter here is a foot-gun for exactly the class of bug this whole issue exists to close;
+/// requiring every call site to explicitly decide is the point, not an oversight. This is a
+/// binary-breaking signature change from the shape #883 first shipped with -- see CHANGELOG.
+/// </remarks>
 public class EtlProgressTracker
 {
     private readonly ConcurrentDictionary<Guid, EtlProgress> _progress = new();
@@ -35,13 +46,15 @@ public class EtlProgressTracker
 
     /// <param name="jobId">Job ID to look up.</param>
     /// <param name="callerTenantCode">
-    /// #883: caller's own tenant. When the tracked entry's <see cref="EtlProgress.TenantCode"/>
-    /// does not match (and <paramref name="declaredSystemQuery"/> is false), this returns
-    /// <c>null</c> -- indistinguishable from "not currently running" -- rather than leaking
-    /// another tenant's progress.
+    /// #883: caller's own tenant. Required, no default (see class remarks) -- pass the real
+    /// caller's tenant explicitly, or <see langword="null"/> for a genuine null-tenant/host
+    /// caller. When the tracked entry's <see cref="EtlProgress.TenantCode"/> does not match
+    /// (and <paramref name="declaredSystemQuery"/> is false), this returns <c>null</c> --
+    /// indistinguishable from "not currently running" -- rather than leaking another tenant's
+    /// progress.
     /// </param>
     /// <param name="declaredSystemQuery">#843-style explicit escape hatch. Defaults false.</param>
-    public EtlProgress? Get(Guid jobId, string? callerTenantCode = null, bool declaredSystemQuery = false)
+    public EtlProgress? Get(Guid jobId, string? callerTenantCode, bool declaredSystemQuery = false)
     {
         if (!_progress.TryGetValue(jobId, out var p))
             return null;
@@ -50,9 +63,9 @@ public class EtlProgressTracker
         return p.TenantCode == callerTenantCode ? p : null;
     }
 
-    /// <param name="callerTenantCode">#883: caller's own tenant -- see <see cref="Get"/>.</param>
+    /// <param name="callerTenantCode">#883: caller's own tenant, required -- see <see cref="Get"/>.</param>
     /// <param name="declaredSystemQuery">#843-style explicit escape hatch. Defaults false.</param>
-    public IReadOnlyList<EtlProgress> GetAll(string? callerTenantCode = null, bool declaredSystemQuery = false)
+    public IReadOnlyList<EtlProgress> GetAll(string? callerTenantCode, bool declaredSystemQuery = false)
     {
         var values = _progress.Values;
         return (declaredSystemQuery ? values : values.Where(p => p.TenantCode == callerTenantCode))
