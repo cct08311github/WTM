@@ -1,4 +1,6 @@
 #nullable enable
+using System;
+using Microsoft.Extensions.Options;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
 
@@ -16,15 +18,29 @@ namespace WalkingTec.Mvvm.Core.Test.Helper
     /// <c>WalkingTec.Mvvm.Api.Test.RequestBindingScopeHttpTests867</c>.
     ///
     /// <para>
-    /// <b>PR #884 cross-vendor review finding.</b> The version that first shipped checked
-    /// <c>member.DeclaringType</c> plus a curated NAME set — a denylist, not a positive allowlist.
-    /// A downstream VM could legally re-expose <c>Configs</c>/<c>GlobalData</c> under a name (or
-    /// declaring class) the policy had never heard of and sail straight through. The "five shapes"
-    /// tests below (<c>AliasProperty</c>/<c>NewShadowing</c>/<c>InterfaceTypedMember</c>/
-    /// <c>IntermediateBaseClass</c>/<c>GenericTypeParameter</c>) each construct exactly one such
-    /// bypass and assert it is now rejected — their absence from the original PR is why that
-    /// version shipped with the hole. See <c>RequestBindingPolicy</c>'s own class doc comment for
-    /// the fixed rule (reject by the TYPE each hop resolves to, not by name or declaring type).
+    /// <b>PR #884 cross-vendor review finding (round 1).</b> The version that first shipped
+    /// checked <c>member.DeclaringType</c> plus a curated NAME set — a denylist, not a positive
+    /// allowlist. A downstream VM could legally re-expose <c>Configs</c>/<c>GlobalData</c> under a
+    /// name (or declaring class) the policy had never heard of and sail straight through. The
+    /// "five shapes" tests below (<c>AliasProperty</c>/<c>NewShadowing</c>/
+    /// <c>InterfaceTypedMember</c>/<c>IntermediateBaseClass</c>/<c>GenericTypeParameter</c>) each
+    /// construct exactly one such bypass and assert it is now rejected — their absence from the
+    /// original PR is why that version shipped with the hole. See <c>RequestBindingPolicy</c>'s
+    /// own class doc comment for the fixed rule (reject by the TYPE each hop resolves to, not by
+    /// name or declaring type).
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Round 3: a declared type that IS itself a gateway but was missing from the list.</b>
+    /// The "options family" tests below (<c>OptionsMonitorCurrentValue</c>/
+    /// <c>OptionsSnapshotValue</c>/<c>OptionsValue</c>/<c>ServiceProvider</c>) cover a DIFFERENT
+    /// failure mode than round 2's forwarding-setter finding: a plain, uncustomized getter typed
+    /// <c>IOptionsMonitor&lt;ActionLogRetentionOptions&gt;</c> reached that options cache's own
+    /// process-wide <c>CurrentValue</c> — no custom setter needed at all — because
+    /// <c>IOptionsMonitor&lt;&gt;</c> was simply absent from <c>BannedGatewayTypes</c>. See
+    /// <c>RequestBindingPolicy</c>'s own class doc comment ("Known, documented limitation") for
+    /// why this is a structurally different, and structurally still-open, failure mode from
+    /// round 2's.
     /// </para>
     /// </summary>
     [TestClass]
@@ -316,6 +332,92 @@ namespace WalkingTec.Mvvm.Core.Test.Helper
                 "OPEN generic GenericGatewayBase<TGateway>, but ConcreteGenericVM closes TGateway " +
                 "over Configs — member.GetMemberType() resolves the SUBSTITUTED closed type " +
                 "(Configs), not the open parameter, so the gateway-type check must still reject it.");
+        }
+
+        // ── options family / IServiceProvider (PR #884 review round 3) ──────
+
+        // Sanity check on the .NET reflection API itself, BEFORE trusting IsBannedGatewayType's
+        // open-generic branch to matter at all: Type.IsAssignableFrom does NOT relate an open
+        // generic type DEFINITION to any of its closed constructions. Naively adding
+        // typeof(IOptionsMonitor<>) to BannedGatewayTypes and leaving the existing
+        // IsAssignableFrom-only loop unchanged would silently do nothing — this is exactly what
+        // the review warned "do not assume the open generic works" about, and it was verified
+        // empirically (not assumed) before IsOrImplementsOpenGenericDefinition was written.
+        [TestMethod]
+        public void OpenGenericTypeAssignability_ConfirmsIsAssignableFromDoesNotRelateOpenToClosedGenerics()
+        {
+            var openGeneric = typeof(IOptionsMonitor<>);
+            var closedGeneric = typeof(IOptionsMonitor<ActionLogRetentionOptions>);
+
+            Assert.IsFalse(openGeneric.IsAssignableFrom(closedGeneric),
+                "Sanity check on the .NET reflection API itself: Type.IsAssignableFrom must NOT " +
+                "relate an open generic type definition to a closed construction of it — if this " +
+                "ever starts returning true (a .NET runtime behavior change), " +
+                "IsOrImplementsOpenGenericDefinition becomes redundant but still correct, so this " +
+                "assertion failing would mean the runtime changed, not that the policy broke.");
+        }
+
+        // A downstream VM exposing four different gateway types via plain, uncustomized getters —
+        // no custom setter needed for any of them. The exact shape the round-3 review named:
+        // "public IOptionsMonitor<ActionLogRetentionOptions> Retention => Wtm!.ServiceProvider!
+        // .GetRequiredService<...>();" reaches IOptionsMonitor<T>'s own process-wide cached
+        // CurrentValue through a 3-segment key that, before this round, never touched any type on
+        // BannedGatewayTypes at all.
+        private class OptionsFamilyVM : BaseVM
+        {
+            public IOptionsMonitor<ActionLogRetentionOptions>? Retention { get; set; }
+            public IOptionsSnapshot<ActionLogRetentionOptions>? Snapshot { get; set; }
+            public IOptions<ActionLogRetentionOptions>? Opt { get; set; }
+            public IServiceProvider? Sp { get; set; }
+        }
+
+        [TestMethod]
+        public void IsPathAllowed_OptionsMonitorCurrentValue_ReturnsFalse()
+        {
+            // The issue's own round-3 exploit shape (ActionLogRetentionOptions.NormalDays — site-
+            // wide ActionLog-retention destruction via one form field): "Retention" resolves to
+            // IOptionsMonitor<ActionLogRetentionOptions>, a closed construction of the open
+            // generic IOptionsMonitor<>, matched via IsOrImplementsOpenGenericDefinition.
+            var vm = new OptionsFamilyVM();
+            Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "Retention.CurrentValue.NormalDays"),
+                "#867/PR#884 review round 3: 'Retention' resolves to " +
+                "IOptionsMonitor<ActionLogRetentionOptions> — a closed construction of the open " +
+                "generic IOptionsMonitor<> — and must be rejected via " +
+                "IsOrImplementsOpenGenericDefinition, since Type.IsAssignableFrom cannot relate " +
+                "the open generic definition to this closed form.");
+        }
+
+        [TestMethod]
+        public void IsPathAllowed_OptionsSnapshotValue_ReturnsFalse()
+        {
+            var vm = new OptionsFamilyVM();
+            Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "Snapshot.Value.NormalDays"),
+                "#867/PR#884 review round 3: 'Snapshot' resolves to " +
+                "IOptionsSnapshot<ActionLogRetentionOptions> — must be rejected the same way as " +
+                "IOptionsMonitor<>.");
+        }
+
+        [TestMethod]
+        public void IsPathAllowed_OptionsValue_ReturnsFalse()
+        {
+            var vm = new OptionsFamilyVM();
+            Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "Opt.Value.NormalDays"),
+                "#867/PR#884 review round 3: 'Opt' resolves to IOptions<ActionLogRetentionOptions> " +
+                "— must be rejected the same way as IOptionsMonitor<>/IOptionsSnapshot<>.");
+        }
+
+        [TestMethod]
+        public void IsPathAllowed_ServiceProvider_ReturnsFalse()
+        {
+            // IServiceProvider is a gateway to the entire DI container — listed for the same
+            // reason as WTMContext itself. Not generic, so this exercises the ordinary
+            // IsAssignableFrom branch, not IsOrImplementsOpenGenericDefinition — and therefore
+            // also serves as the positive control that isolates the open-generic mutant below
+            // (neutralizing IsOrImplementsOpenGenericDefinition must not affect this test).
+            var vm = new OptionsFamilyVM();
+            Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "Sp"),
+                "#867/PR#884 review round 3: 'Sp' resolves to type IServiceProvider — a banned " +
+                "gateway type.");
         }
 
         // ── ambiguous resolution: fail closed, independent of gateway typing ──

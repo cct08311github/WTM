@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Localization;
+using Microsoft.Extensions.Options;
 
 namespace WalkingTec.Mvvm.Core
 {
@@ -40,10 +41,13 @@ namespace WalkingTec.Mvvm.Core
     /// declared, named, or reached. <see cref="PropertyHelper.SetPropertyValue"/>'s own traversal
     /// (<c>PropertyHelper.cs:523-551</c>) already resolves the next hop's type this same way — via
     /// <c>member.GetMemberType()</c>, not <c>member.DeclaringType</c> — so checking the resolved
-    /// type at every hop against <see cref="BannedGatewayTypes"/> inspects exactly what the actual
-    /// write would traverse, and cannot be defeated by any renaming/hiding/re-declaring trick: see
+    /// type at every hop against <see cref="BannedGatewayTypes"/> cannot be defeated by any of the
+    /// renaming/hiding/re-declaring tricks that defeated the earlier declaring-type/name check: see
     /// <c>RequestBindingPolicyTests867</c>'s alias/shadowing/interface/intermediate-base/generic
-    /// tests, each built to prove one specific such trick no longer works.
+    /// tests, each built to prove one specific such trick no longer works. <b>This proves only
+    /// that those tricks are closed — it is not a claim that <see cref="BannedGatewayTypes"/>'s
+    /// own coverage is complete.</b> See "Known, documented limitation" below for the two
+    /// independent ways a type denylist itself can still be incomplete.
     /// </para>
     ///
     /// <para>
@@ -96,27 +100,50 @@ namespace WalkingTec.Mvvm.Core
     /// </para>
     ///
     /// <para>
-    /// <b>Known, documented limitation (PR #884 review, round 2): a forwarding property whose
-    /// DECLARED type is not banned can still launder a write into a banned type's shared state
-    /// through its setter's body.</b> Example: <c>public List&lt;string&gt; SharedPublicUrls {
-    /// get =&gt; Wtm!.GlobaInfo!.AllAccessUrls; set =&gt; Wtm!.GlobaInfo!.AllAccessUrls = value; }
-    /// </c> — <c>SharedPublicUrls</c>'s resolved type is <c>List&lt;string&gt;</c>, not itself a
-    /// banned type, so a single-segment key naming it passes this policy; its setter then
-    /// overwrites <see cref="GlobalData"/>'s own <c>AllAccessUrls</c> — a real, live,
-    /// process-wide singleton mutation with the same severity as the original finding. This is a
-    /// fundamental limit of ANY policy that inspects reflection metadata (a type, a name, a
-    /// declaring class) rather than executing or statically analyzing a setter's actual body: the
-    /// setter's logic is opaque to <c>Type.GetMember</c>/<c>PropertyInfo.PropertyType</c>, and
-    /// there is no such forwarding property anywhere in this repository today (confirmed by
-    /// <c>git grep</c> in both review rounds) for this policy to have missed — but nothing stops
-    /// a downstream <see cref="BaseVM"/>/<see cref="BaseSearcher"/> subclass from adding one. This
-    /// PR does not attempt to close that gap: doing so needs either a real positive
-    /// binding-contract (explicit per-VM annotation of which members <c>RedoUpdateModel</c> may
-    /// write, a breaking change of a different magnitude) or making <c>Configs</c>/
-    /// <see cref="GlobalData"/> immutable at the DI boundary after startup (the architectural fix
-    /// Issue #867's own original analysis already identified and deliberately deferred to a
-    /// separate issue, precisely so this narrower fix could ship first). See the CHANGELOG's #867
-    /// entry for the same disclosure and the tracking issue for the deferred architectural fix.
+    /// <b>Known, documented limitation, widened after PR #884 review round 3.</b> A type denylist
+    /// cannot enumerate every gateway a downstream VM may surface. It fails in two independent
+    /// ways:
+    /// </para>
+    /// <para>
+    /// <b>(a) An innocuous declared type whose setter's BODY writes into shared state anyway</b>
+    /// (found in round 2). Example: <c>public List&lt;string&gt; SharedPublicUrls { get =&gt;
+    /// Wtm!.GlobaInfo!.AllAccessUrls; set =&gt; Wtm!.GlobaInfo!.AllAccessUrls = value; }</c> —
+    /// <c>SharedPublicUrls</c>'s resolved type is <c>List&lt;string&gt;</c>, not itself a banned
+    /// type, so a single-segment key naming it passes this policy; its setter then overwrites
+    /// <see cref="GlobalData"/>'s own <c>AllAccessUrls</c> directly. The setter's logic is opaque
+    /// to <c>Type.GetMember</c>/<c>PropertyInfo.PropertyType</c> no matter how large
+    /// <see cref="BannedGatewayTypes"/> grows — extending the list cannot close this failure mode,
+    /// because the danger lives in code the list was never going to inspect.
+    /// </para>
+    /// <para>
+    /// <b>(b) A declared type that IS itself a gateway but was not yet on the list</b> — this one
+    /// needs no custom setter at all, a plain uncustomized getter is enough (found and its
+    /// concrete instance closed in round 3). Example:
+    /// <c>public IOptionsMonitor&lt;ActionLogRetentionOptions&gt; Retention =&gt;
+    /// Wtm!.ServiceProvider!.GetRequiredService&lt;IOptionsMonitor&lt;ActionLogRetentionOptions&gt;&gt;();
+    /// </c> — the 3-segment key <c>Retention.CurrentValue.NormalDays</c> walked as
+    /// <c>IOptionsMonitor&lt;ActionLogRetentionOptions&gt;</c> → <c>ActionLogRetentionOptions</c>
+    /// → <c>int</c>, none of which were on <see cref="BannedGatewayTypes"/> before round 3, and
+    /// landed on <c>IOptionsMonitor&lt;T&gt;</c>'s own process-wide cached <c>CurrentValue</c> —
+    /// site-wide ActionLog-retention destruction via one form field. <c>IOptionsMonitor&lt;&gt;</c>/
+    /// <c>IOptionsSnapshot&lt;&gt;</c>/<c>IOptions&lt;&gt;</c>/<see cref="IServiceProvider"/> are
+    /// now on the list — but this closes only THIS instance of failure mode (b), not the failure
+    /// mode itself: a downstream VM, or a future dependency of this framework, can always
+    /// introduce a new gateway type this list has not yet been told about. There is no known
+    /// finite type list that provably enumerates every such gateway.
+    /// </para>
+    /// <para>
+    /// No forwarding-property or gateway-typed alias of either shape exists anywhere in this
+    /// repository today (confirmed by <c>git grep</c> across all three review rounds) — but
+    /// nothing stops a downstream <see cref="BaseVM"/>/<see cref="BaseSearcher"/> subclass from
+    /// adding one of either kind. This PR does not attempt to close either failure mode
+    /// structurally: doing so needs either a real positive binding-contract (explicit per-VM
+    /// annotation of which members <c>RedoUpdateModel</c> may write, a breaking change of a
+    /// different magnitude) or making <c>Configs</c>/<see cref="GlobalData"/>/the DI container's
+    /// own options cache immutable at the DI boundary after startup (the architectural fix Issue
+    /// #867's own original analysis already identified and deliberately deferred, precisely so
+    /// this narrower fix could ship first). See the CHANGELOG's #867 entry and Issue #889
+    /// (widened in round 3 to cover both failure modes) for the same disclosure.
     /// </para>
     /// </summary>
     public static partial class RequestBindingPolicy
@@ -136,6 +163,28 @@ namespace WalkingTec.Mvvm.Core
         /// never part of the framework's designed request-binding surface — regardless of the
         /// segment's name or which class declares it. See the class doc comment for the PR #884
         /// review finding this replaced a declaring-type/name check to close.
+        /// <para>
+        /// <b>Open generic entries (PR #884 review, round 3):</b> <c>IOptionsMonitor&lt;&gt;</c>,
+        /// <c>IOptionsSnapshot&lt;&gt;</c>, and <c>IOptions&lt;&gt;</c> are generic type
+        /// DEFINITIONS, not closed types — a downstream VM exposing
+        /// <c>IOptionsMonitor&lt;ActionLogRetentionOptions&gt;</c> as a plain, uncustomized getter
+        /// (no setter needed at all) reaches <c>IOptionsMonitor&lt;T&gt;</c>'s own
+        /// <c>CurrentValue</c> — a process-wide cached singleton for every options type, not just
+        /// <see cref="Configs"/> — and none of <c>ActionLogRetentionOptions</c>'s own properties
+        /// need to be on this list for that write to land on shared state. <see cref="Type.IsAssignableFrom"/>
+        /// does NOT relate an open generic type definition to any of its closed constructions
+        /// (verified empirically — <c>typeof(IOptionsMonitor&lt;&gt;).IsAssignableFrom(typeof(IOptionsMonitor&lt;Configs&gt;))</c>
+        /// returns <see langword="false"/>), so these three entries are matched by
+        /// <see cref="IsOrImplementsOpenGenericDefinition"/> instead of the plain
+        /// <see cref="Type.IsAssignableFrom"/> loop the rest of this list uses — see
+        /// <see cref="IsBannedGatewayType"/>. <see cref="IServiceProvider"/> is listed alongside
+        /// them for the same reason as <see cref="WTMContext"/> itself: it is a gateway to the
+        /// entire DI container (any registered service, not merely the options types explicitly
+        /// listed here), and no VM-local/Searcher-local binding surface legitimately needs it —
+        /// confirmed by <c>grep -rn "IOptionsMonitor&lt;\|IOptionsSnapshot&lt;\|IOptions&lt;\|IServiceProvider" src/ demo/ test/</c>
+        /// finding no <see cref="BaseVM"/>/<see cref="BaseSearcher"/> subclass anywhere in this
+        /// repository that exposes any of them.
+        /// </para>
         /// </summary>
         private static readonly Type[] BannedGatewayTypes =
         {
@@ -149,6 +198,10 @@ namespace WalkingTec.Mvvm.Core
             typeof(IDistributedCache),
             typeof(IStringLocalizer),
             typeof(IUIService),
+            typeof(IServiceProvider),
+            typeof(IOptionsMonitor<>),
+            typeof(IOptionsSnapshot<>),
+            typeof(IOptions<>),
         };
 
         [GeneratedRegex(@"\[[^\]]*\]")]
@@ -263,6 +316,14 @@ namespace WalkingTec.Mvvm.Core
         /// interfaces in the set. This is what makes the check alias/shadowing/interface/
         /// intermediate-base/generic-parameter-proof: none of those tricks can change what TYPE
         /// the getter's declared return type actually is.
+        /// <para>
+        /// Entries that are open generic type DEFINITIONS (<see cref="Type.IsGenericTypeDefinition"/>,
+        /// e.g. <c>typeof(IOptionsMonitor&lt;&gt;)</c>) are matched via
+        /// <see cref="IsOrImplementsOpenGenericDefinition"/> instead of
+        /// <see cref="Type.IsAssignableFrom"/> — the latter does not relate an open generic
+        /// definition to any of its closed constructions (verified empirically; see the
+        /// <see cref="BannedGatewayTypes"/> doc comment).
+        /// </para>
         /// </summary>
         private static bool IsBannedGatewayType(Type? memberType)
         {
@@ -270,7 +331,53 @@ namespace WalkingTec.Mvvm.Core
 
             foreach (var banned in BannedGatewayTypes)
             {
-                if (banned.IsAssignableFrom(memberType)) return true;
+                if (banned.IsGenericTypeDefinition)
+                {
+                    if (IsOrImplementsOpenGenericDefinition(memberType, banned)) return true;
+                }
+                else if (banned.IsAssignableFrom(memberType))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// True when <paramref name="type"/> is itself a closed construction of
+        /// <paramref name="openGenericDefinition"/> (covers a member DECLARED as the generic
+        /// interface/class directly, e.g. a property typed <c>IOptionsMonitor&lt;T&gt;</c>), OR
+        /// implements it via one of its interfaces (covers a concrete class implementing
+        /// <c>IOptionsMonitor&lt;T&gt;</c> without being it), OR derives from a closed
+        /// construction of it somewhere in its base-type chain (covers a class deriving from a
+        /// generic base). <see cref="Type.IsAssignableFrom"/> cannot express any of these three
+        /// relationships when <paramref name="openGenericDefinition"/> is an open generic type
+        /// definition — it always returns <see langword="false"/> — which is why this exists as a
+        /// separate check rather than folding into the ordinary <see cref="IsBannedGatewayType"/>
+        /// loop.
+        /// </summary>
+        private static bool IsOrImplementsOpenGenericDefinition(Type type, Type openGenericDefinition)
+        {
+            if (type.IsGenericType && type.GetGenericTypeDefinition() == openGenericDefinition)
+            {
+                return true;
+            }
+
+            foreach (var iface in type.GetInterfaces())
+            {
+                if (iface.IsGenericType && iface.GetGenericTypeDefinition() == openGenericDefinition)
+                {
+                    return true;
+                }
+            }
+
+            for (var baseType = type.BaseType; baseType != null; baseType = baseType.BaseType)
+            {
+                if (baseType.IsGenericType && baseType.GetGenericTypeDefinition() == openGenericDefinition)
+                {
+                    return true;
+                }
             }
 
             return false;
