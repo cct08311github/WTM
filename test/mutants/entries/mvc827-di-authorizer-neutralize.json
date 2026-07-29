@@ -1,0 +1,22 @@
+{
+  "id": "mvc827-di-authorizer-neutralize",
+  "kind": "security",
+  "description": "Issue #827: short-circuits _FrameworkController.CanExportVm's DI resolution to a compile-preserving `((IWtmFrameworkEndpointAuthorizer?)null)?.CanExportVm(...)` cast, so a registered IWtmFrameworkEndpointAuthorizer is never consulted -- the switch always falls through to the pre-existing Enforce* flag answer, exactly as if no seam existed at all. red_test asserts that a DI-registered policy returning Deny is actually consulted on a real, routed /_Framework/GetExportExcel request even though EnforceVmExportAuthorization is left at its permissive default (false) -- with the mutation applied, the request is allowed (200) instead of denied (302 redirect), because the registered policy is never asked. green_test is this file's sibling default-behaviour-pinning test (no policy registered, no flag set) -- it must stay green because the mutation only removes DI consultation, which that test never exercises in the first place (it already expects the Inherit/flag-driven answer).",
+  "target_file": "src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs",
+  "target_symbol": "_FrameworkController.CanExportVm(Type) -- the ResolveEndpointAuthorizer() call, line ~179",
+  "patch": "patches/mvc827-di-authorizer-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.FrameworkAuthorizationSeamTests.GetExportExcel_CustomDIPolicy_DenyIsConsultedOnRealRoute_OverridesPermissiveFlagDefault",
+  "red_tests": [
+    "WalkingTec.Mvvm.Api.Test.FrameworkAuthorizationSeamTests.GetExportExcel_CustomDIPolicy_DenyIsConsultedOnRealRoute_OverridesPermissiveFlagDefault"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Api.Test.FrameworkAuthorizationSeamTests.GetExportExcel_CustomDIPolicy_DenyIsConsultedOnRealRoute_OverridesPermissiveFlagDefault": "#827: a DI-registered IWtmFrameworkEndpointAuthorizer returning Deny must be"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against a clean checkout (stale demo.db under bin/ removed first) with the mutant patch applied: 'Assert.AreEqual failed. Expected:<Found>. Actual:<OK>. #827: a DI-registered IWtmFrameworkEndpointAuthorizer returning Deny must be consulted by the real, routed _FrameworkController and must override the permissive default (EnforceVmExportAuthorization is deliberately left at its default false here) — proving the seam is reachable on a production route, which a subclass override never was.'",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.FrameworkAuthorizationSeamTests.GetExportExcel_NoPolicyNoFlag_DefaultAllowsExport",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.FrameworkAuthorizationSeamTests.GetExportExcel_NoPolicyNoFlag_DefaultAllowsExport"
+  ]
+}

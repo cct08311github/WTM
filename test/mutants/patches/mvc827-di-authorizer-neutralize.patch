@@ -1,0 +1,16 @@
+diff --git a/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs b/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs
+index fb83ee02c..5f2643695 100644
+--- a/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs
++++ b/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs
+@@ -176,7 +176,10 @@ namespace WalkingTec.Mvvm.Mvc
+         /// at all) falls through to exactly the flag-driven answer below -- unregistered, this
+         /// changes nothing.
+         /// </remarks>
+-        protected virtual bool CanExportVm(Type vmType) => ResolveEndpointAuthorizer()?.CanExportVm(Wtm, vmType) switch
++        // MUTANT test/mutants mvc827-di-authorizer-neutralize: DI resolution short-circuited to
++        // a compile-preserving null cast so any registered IWtmFrameworkEndpointAuthorizer is
++        // never consulted. See test/mutants/manifest.json for the mutant record.
++        protected virtual bool CanExportVm(Type vmType) => ((IWtmFrameworkEndpointAuthorizer?)null)?.CanExportVm(Wtm, vmType) switch
+         {
+             WtmAuthorizationDecision.Allow => true,
+             WtmAuthorizationDecision.Deny => false,
