@@ -1,0 +1,17 @@
+diff --git a/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs b/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
+index 63c4fbd86..4ea1ee668 100644
+--- a/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
++++ b/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
+@@ -185,7 +185,11 @@ namespace WalkingTec.Mvvm.Core
+                     // hop) or no-op (final hop) too, so there is nothing dangerous to reject.
+                     break;
+                 }
+-                if (members.Length > 1)
++                // MUTANT test/mutants wtmsec867-ambiguous-resolution-guard-neutralize: condition
++                // neutralized (compile-preserving `&& false`) so the ambiguous-resolution guard
++                // can never reject a path. See test/mutants/entries/
++                // wtmsec867-ambiguous-resolution-guard-neutralize.json for the mutant record.
++                if (members.Length > 1 && false)
+                 {
+                     // Ambiguous resolution (e.g. new-hiding) — fail closed rather than trust
+                     // members[0] to be the safe one. See the class doc comment.
