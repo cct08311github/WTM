@@ -1,0 +1,22 @@
+{
+  "id": "mvc829-getexportexcel-reintroduce-preauthz-construction",
+  "kind": "security",
+  "description": "Issue #829: reintroduces the construction-before-authorization defect in _FrameworkController.GetExportExcel by inserting a discarded `Wtm.CreateVM(_DONOT_USE_VMNAME, null, null, true);` probe call between the TryResolveVmType resolution and the CanExportVm deny decision -- the exact shape the pre-#829 code had, minus even using the result (compile-preserving: the statement's return value is simply discarded, so the surrounding control flow and the eventual response are unaffected). red_test denies via EnforceVmExportAuthorization=true with no override and asserts the deny-path counting VM's ConstructorCallCount/InitListVMCallCount/GetSearchQueryCallCount are all still 0 after the request -- with the mutant applied, the probe call constructs the VM (and, since it is a IBasePagedListVM, unconditionally runs InitListVM()) before the deny decision, so ConstructorCallCount/InitListVMCallCount become nonzero and the assertions go red. green_test is the sibling positive-control test on the ALLOWED path (default config, no flag), which already expects construction to happen and is unaffected by an extra, harmless probe call ahead of it.",
+  "target_file": "src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs",
+  "target_symbol": "_FrameworkController.GetExportExcel(string,string) -- inserted probe call between TryResolveVmType and the CanExportVm check, around line 820",
+  "patch": "patches/mvc829-getexportexcel-reintroduce-preauthz-construction.patch",
+  "test_project": "test/WalkingTec.Mvvm.Admin.Test/WalkingTec.Mvvm.Admin.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Admin.Test.FrameworkControllerVmConstructionOrderingTest.GetExportExcel_EnforceFlagEnabled_DeniesBeforeConstructingVm",
+  "red_tests": [
+    "WalkingTec.Mvvm.Admin.Test.FrameworkControllerVmConstructionOrderingTest.GetExportExcel_EnforceFlagEnabled_DeniesBeforeConstructingVm"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Admin.Test.FrameworkControllerVmConstructionOrderingTest.GetExportExcel_EnforceFlagEnabled_DeniesBeforeConstructingVm": "#829: GetExportExcel must not construct the caller-named VM at all before the CanExportVm deny decision\\."
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against a clean checkout (stale demo.db under bin/ removed first) with the mutant patch applied: 'Assert.AreEqual failed. Expected:<0>. Actual:<1>. #829: GetExportExcel must not construct the caller-named VM at all before the CanExportVm deny decision.'",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Admin.Test.FrameworkControllerVmConstructionOrderingTest.GetExportExcel_DefaultConfig_AllowedPath_StillConstructsVm",
+  "green_tests": [
+    "WalkingTec.Mvvm.Admin.Test.FrameworkControllerVmConstructionOrderingTest.GetExportExcel_DefaultConfig_AllowedPath_StillConstructsVm"
+  ]
+}

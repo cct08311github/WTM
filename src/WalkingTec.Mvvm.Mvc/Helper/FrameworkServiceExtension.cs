@@ -1380,6 +1380,41 @@ namespace WalkingTec.Mvvm.Mvc
             return services;
         }
 
+        /// <summary>
+        /// Issue #827: registers a host-supplied per-caller authorization policy for
+        /// <c>_FrameworkController</c>'s five resource hooks (<c>CanExportVm</c>,
+        /// <c>CanAccessFile</c>, <c>CanPreviewDelete</c>, <c>CanImportVm</c>,
+        /// <c>CanEditProperty</c>) — see <see cref="IWtmFrameworkEndpointAuthorizer"/>'s own
+        /// doc comment for why a DI-resolved policy, rather than a subclass override, is the
+        /// only way to reach a production <c>/_Framework/*</c> request.
+        /// <para>
+        /// Registered <c>AddScoped</c>, deliberately not <c>AddSingleton</c>: a real policy will
+        /// typically query <see cref="WalkingTec.Mvvm.Core.WTMContext.LoginUserInfo"/> and/or the
+        /// database, and a singleton registration would create a captive dependency on that
+        /// request-scoped state (the same shape <see cref="IWtmAuthorizationService"/>
+        /// deliberately does NOT need, since it takes all of its inputs as explicit parameters).
+        /// </para>
+        /// <para>
+        /// Calling this method is entirely OPT-IN. Not calling it (the default) leaves every
+        /// hook's decision exactly where it was before Issue #827: driven solely by the matching
+        /// <c>Enforce*Authorization</c> config flag (or, for <c>CanEditProperty</c>, an
+        /// unconditional allow — it has no flag). Must be called after <c>AddWtmContext()</c>.
+        /// </para>
+        /// <example>
+        /// <code>
+        /// // Program.cs
+        /// builder.Services.AddWtmContext(config);
+        /// builder.Services.AddWtmFrameworkEndpointAuthorizer&lt;MyFrameworkPolicy&gt;();
+        /// </code>
+        /// </example>
+        /// </summary>
+        public static IServiceCollection AddWtmFrameworkEndpointAuthorizer<T>(this IServiceCollection services)
+            where T : class, IWtmFrameworkEndpointAuthorizer
+        {
+            services.AddScoped<IWtmFrameworkEndpointAuthorizer, T>();
+            return services;
+        }
+
     }
 
 

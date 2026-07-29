@@ -338,6 +338,29 @@ namespace WalkingTec.Mvvm.Admin.Test
                 "A deployment-supplied CanPreviewDelete override must be able to deny the preview.");
         }
 
+        /// <summary>
+        /// #881 review (P2): base behaviour returns <c>BadRequest</c> for an unresolvable/
+        /// unregistered VM name (<c>Wtm.CreateVM(string, ...)</c>'s <c>ArgumentException</c>,
+        /// caught in the pre-#829 code). The #829 refactor to
+        /// <see cref="WTMContext.TryResolveVmType"/> initially merged that case into the same
+        /// <c>Forbid()</c> branch as an actual <c>CanPreviewDelete</c> denial — a real wire-
+        /// contract change (400 → 302 under cookie auth) that a comment on the same lines
+        /// incorrectly claimed was "unchanged". This pins the restored, original contract: an
+        /// unresolvable name must still be <c>BadRequest</c>, not <c>Forbid()</c>.
+        /// </summary>
+        [TestMethod]
+        public void GetDeletePreview_UnknownVmName_ReturnsBadRequestNotForbid()
+        {
+            var controller = CreateController(new ImportEndpointDataContext(_seed, DBTypeEnum.Memory));
+
+            var result = controller.GetDeletePreview("Totally.Unregistered.Nonexistent.VmType, NoSuchAssembly", new[] { Guid.NewGuid().ToString() });
+
+            Assert.IsInstanceOfType(result, typeof(BadRequestObjectResult),
+                "#881: an unresolvable/unregistered VM name must return BadRequest — the same " +
+                "contract GetDeletePreview had before the #829 TryResolveVmType refactor — not " +
+                "Forbid(), which would be indistinguishable from an actual CanPreviewDelete denial.");
+        }
+
         [TestMethod]
         public void GetDeletePreview_EmptyIds_UnaffectedByFlag_ReturnsEmptyOk()
         {

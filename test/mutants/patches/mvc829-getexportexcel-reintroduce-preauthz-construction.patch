@@ -1,0 +1,16 @@
+diff --git a/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs b/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs
+index fb83ee02c..10efceae6 100644
+--- a/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs
++++ b/src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs
+@@ -820,6 +820,11 @@ namespace WalkingTec.Mvvm.Mvc
+             if (instanceType == null || !typeof(IBasePagedListVM<TopBasePoco, ISearcher>).IsAssignableFrom(instanceType))
+                 return BadRequest(MvcProgram._localizer?["Sys.InvalidVM"] ?? "Invalid Vm Name");
+ 
++            // MUTANT test/mutants mvc829-getexportexcel-reintroduce-preauthz-construction:
++            // reintroduces #829's construction-before-authorization defect by probing (and
++            // discarding) a full instance before CanExportVm runs. See test/mutants/manifest.json.
++            Wtm.CreateVM(_DONOT_USE_VMNAME, null, null, true);
++
+             // #796: authorize the target VM type — without this, any authenticated user could
+             // Excel-export any ListVM registered in the application by supplying its type name.
+             if (!CanExportVm(instanceType))
