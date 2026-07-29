@@ -77,12 +77,68 @@ namespace WalkingTec.Mvvm.Core.Test.Helper
         }
 
         [TestMethod]
-        public void IsPathAllowed_UnresolvableKey_ReturnsTrue()
+        public void IsPathAllowed_UnresolvableSingleSegmentKey_ReturnsFalse()
         {
-            // No member named this exists anywhere on the path — PropertyHelper.SetPropertyValue
-            // would break/no-op too, so there is nothing dangerous to reject.
+            // PR #884 review round 2: a single-segment key that resolves to nothing IS a genuine
+            // PropertyHelper.SetPropertyValue no-op (its final-segment lookup also finds nothing
+            // and returns without writing) — so rejecting it here is more conservative than
+            // strictly necessary, not a functional behavior change (nothing was ever going to be
+            // written either way). Kept conservative rather than special-cased, because the
+            // dangerous case (an intermediate segment failing to resolve, see the "Missing.*"
+            // tests below) looks identical from this policy's point of view until you already know
+            // the answer — better to have one uniform "unresolved anywhere ⇒ reject" rule than a
+            // rule that has to first prove a failure is "the safe kind" before allowing it through.
             var vm = new FixtureVM();
-            Assert.IsTrue(RequestBindingPolicy.IsPathAllowed(vm, "ThisPropertyDoesNotExistAnywhere"));
+            Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "ThisPropertyDoesNotExistAnywhere"));
+        }
+
+        // ── zero-resolution at an INTERMEDIATE segment (PR #884 review round 2) ──
+
+        [TestMethod]
+        public void MissingIntermediateSegment_ActuallyWritesFinalSegmentOnVm_WhenPolicyIsIgnored()
+        {
+            // Not just "the policy says no" — proves the guard is load-bearing, per this review's
+            // own repro. PropertyHelper.SetPropertyValue's intermediate loop (PropertyHelper.cs:
+            // 523-551) `break`s on an unresolved middle segment WITHOUT resetting tempType/temp —
+            // they stay at the ORIGINAL source (or the last hop that DID resolve) — and execution
+            // falls through to resolve and WRITE the final segment against that frozen type
+            // (PropertyHelper.cs:553-559). So "Missing.StaticSecret" against a FixtureVM: "Missing"
+            // fails to resolve (nothing by that name on FixtureVM), the loop breaks with tempType
+            // still FixtureVM's own type, and the final segment "StaticSecret" — which DOES exist
+            // there — gets resolved and written. Confirmed here BEFORE asserting the policy blocks
+            // it, so this test cannot pass by coincidence.
+            var vm = new FixtureVM();
+            PropertyHelper.SetPropertyValue(vm, "Missing.StaticSecret", "hostile-via-missing-prefix", null, true);
+            Assert.AreEqual("hostile-via-missing-prefix", FixtureVM.StaticSecret,
+                "Sanity check: PropertyHelper.SetPropertyValue really does write the FINAL segment " +
+                "onto the ORIGINAL type when an INTERMEDIATE segment fails to resolve — this is the " +
+                "primitive that let 'Missing.StaticSecret' bypass the static-member guard entirely " +
+                "when this policy incorrectly treated any unresolved segment as a safe no-op.");
+
+            Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "Missing.StaticSecret"),
+                "#867/PR#884 review round 2: a nonexistent intermediate segment must not let the " +
+                "final segment bypass every later guard (static, ambiguity, gateway-type) by being " +
+                "evaluated against the frozen original type.");
+        }
+
+        [TestMethod]
+        public void IsPathAllowed_MissingIntermediateSegmentThenStaticFinal_ReturnsFalse()
+        {
+            // The exact key the review named.
+            var vm = new FixtureVM();
+            Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "Missing.StaticSecret"));
+        }
+
+        [TestMethod]
+        public void IsPathAllowed_MissingIntermediateSegmentThenAmbiguousFinal_ReturnsFalse()
+        {
+            // The exact shape the review named ("Missing.<ambiguous-name>"), using the same
+            // AmbiguousShadowVM fixture the dedicated ambiguity test below uses. Zero-resolution
+            // fails closed before the walk ever reaches "Label", so this is also, incidentally, a
+            // second independent reason this specific key is rejected — belt and suspenders,
+            // exactly what the review asked this policy to be.
+            var vm = new AmbiguousShadowVM();
+            Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "Missing.Label"));
         }
 
         // ── gateway-TYPE guard: the direct, undisguised paths ────────────────

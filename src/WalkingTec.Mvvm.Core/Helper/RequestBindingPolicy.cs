@@ -67,12 +67,20 @@ namespace WalkingTec.Mvvm.Core
     ///
     /// <para>
     /// <b>Ambiguous resolution.</b> <c>Type.GetMember(name)</c> can return more than one member
-    /// for the same name (most concretely: <c>new</c>-hiding). <see cref="PropertyHelper"/>'s own
-    /// traversal unconditionally takes <c>members[0]</c>, so this policy's check and the actual
-    /// write always agree with each other on WHICH member is used — but "which one metadata
-    /// ordering happens to put first" is not a security boundary either of them should rely on.
-    /// Any segment with more than one resolved member is rejected outright (fail closed) rather
-    /// than trusting <c>[0]</c> to be the safe one.
+    /// for the same name. Verified empirically which shape actually causes that (not assumed):
+    /// same-kind hiding — a property hidden by a <c>new</c> property of the same name — does
+    /// NOT; .NET's reflection resolves that down to the single most-derived member before this
+    /// policy (or <see cref="PropertyHelper"/>) ever sees it. Hiding ACROSS member kinds — a base
+    /// class field hidden by a derived class property of the same name, or vice versa — does:
+    /// confirmed via <c>typeof(...).GetMember(name).Length == 2</c> in
+    /// <c>RequestBindingPolicyTests867.IsPathAllowed_FieldHiddenByPropertyOfSameName_ReturnsFalse</c>.
+    /// <see cref="PropertyHelper"/>'s own traversal (<c>PropertyHelper.cs:528</c>,
+    /// <c>PropertyHelper.cs:559</c>) unconditionally takes <c>members[0]</c> whenever this
+    /// happens, so this policy's check and the actual write always agree with each other on WHICH
+    /// member that is — but "whichever one metadata ordering happens to put first" is not a
+    /// security boundary either of them should rely on. Any segment with more than one resolved
+    /// member is rejected outright (fail closed) rather than trusting <c>[0]</c> to be the safe
+    /// one.
     /// </para>
     ///
     /// <para>
@@ -85,6 +93,30 @@ namespace WalkingTec.Mvvm.Core
     /// Selector-mode grids add the <c>Searcher.</c> prefix — verified against
     /// <c>framework_layui.js</c>/<c>DataTableTagHelper.cs</c>), so paths longer than 3 segments are
     /// still rejected outright regardless of what they resolve to.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Known, documented limitation (PR #884 review, round 2): a forwarding property whose
+    /// DECLARED type is not banned can still launder a write into a banned type's shared state
+    /// through its setter's body.</b> Example: <c>public List&lt;string&gt; SharedPublicUrls {
+    /// get =&gt; Wtm!.GlobaInfo!.AllAccessUrls; set =&gt; Wtm!.GlobaInfo!.AllAccessUrls = value; }
+    /// </c> — <c>SharedPublicUrls</c>'s resolved type is <c>List&lt;string&gt;</c>, not itself a
+    /// banned type, so a single-segment key naming it passes this policy; its setter then
+    /// overwrites <see cref="GlobalData"/>'s own <c>AllAccessUrls</c> — a real, live,
+    /// process-wide singleton mutation with the same severity as the original finding. This is a
+    /// fundamental limit of ANY policy that inspects reflection metadata (a type, a name, a
+    /// declaring class) rather than executing or statically analyzing a setter's actual body: the
+    /// setter's logic is opaque to <c>Type.GetMember</c>/<c>PropertyInfo.PropertyType</c>, and
+    /// there is no such forwarding property anywhere in this repository today (confirmed by
+    /// <c>git grep</c> in both review rounds) for this policy to have missed — but nothing stops
+    /// a downstream <see cref="BaseVM"/>/<see cref="BaseSearcher"/> subclass from adding one. This
+    /// PR does not attempt to close that gap: doing so needs either a real positive
+    /// binding-contract (explicit per-VM annotation of which members <c>RedoUpdateModel</c> may
+    /// write, a breaking change of a different magnitude) or making <c>Configs</c>/
+    /// <see cref="GlobalData"/> immutable at the DI boundary after startup (the architectural fix
+    /// Issue #867's own original analysis already identified and deliberately deferred to a
+    /// separate issue, precisely so this narrower fix could ship first). See the CHANGELOG's #867
+    /// entry for the same disclosure and the tracking issue for the deferred architectural fix.
     /// </para>
     /// </summary>
     public static partial class RequestBindingPolicy
@@ -127,11 +159,15 @@ namespace WalkingTec.Mvvm.Core
         /// <c>RedoUpdateModel</c> form/query key, optionally dotted) must be rejected because
         /// resolving it against <paramref name="source"/>'s actual type would traverse through a
         /// segment whose resolved type is one of <see cref="BannedGatewayTypes"/>, a
-        /// <c>static</c> member, an ambiguously-resolved member name, or a path exceeding
-        /// <see cref="MaxDepth"/> segments. Mirrors
+        /// <c>static</c> member, an ambiguously-resolved member name, a segment that fails to
+        /// resolve at all, or a path exceeding <see cref="MaxDepth"/> segments. The normalization
+        /// (indexer strip, dot-split, prefix insert) and the per-hop TYPE progression on a
+        /// successfully-resolved segment match
         /// <see cref="PropertyHelper.SetPropertyValue(object, string, object, string, bool)"/>'s
-        /// own path normalization and per-hop type resolution exactly, so what is inspected here
-        /// is what would actually be traversed there.
+        /// own exactly. They deliberately do NOT match on a resolution FAILURE: SetPropertyValue
+        /// leaves its traversal type frozen and falls through to evaluate the final segment
+        /// against it (see the zero-resolution branch below for why replicating that exactly
+        /// would be both harder to keep correct and less safe than simply rejecting outright).
         /// </summary>
         public static bool IsPathAllowed(object? source, string? property, string? prefix = null)
         {
@@ -167,9 +203,11 @@ namespace WalkingTec.Mvvm.Core
             if (level.Count > MaxDepth) return false;
 
             // Starts as the caller's own type; advanced to member.GetMemberType() (the resolved
-            // TYPE, not the declaring type) after each hop below — same progression
-            // PropertyHelper.SetPropertyValue itself uses to decide what the next hop resolves
-            // against, so this walk and the real write are always looking at the same thing.
+            // TYPE, not the declaring type) after each hop that resolves cleanly below — same
+            // progression PropertyHelper.SetPropertyValue itself uses to decide what the next hop
+            // resolves against. This only matches on the SUCCESS path; see the zero-resolution
+            // branch below for where this walk deliberately diverges (more conservatively) from
+            // what SetPropertyValue itself does when a segment fails to resolve.
             Type? tempType = sourceType;
             foreach (var segment in level)
             {
@@ -181,14 +219,28 @@ namespace WalkingTec.Mvvm.Core
                 var members = tempType.GetMember(segment);
                 if (members.Length == 0)
                 {
-                    // Nothing resolves here — SetPropertyValue's own traversal would stop (middle
-                    // hop) or no-op (final hop) too, so there is nothing dangerous to reject.
-                    break;
+                    // PR #884 review, round 2: this used to `break` and fall through to `return
+                    // true` — WRONG. PropertyHelper.SetPropertyValue's intermediate loop
+                    // (PropertyHelper.cs:523-551) also `break`s when a middle segment fails to
+                    // resolve, but it does NOT stop the write there: tempType/temp are simply
+                    // left at whatever they were before this failed hop (the ORIGINAL source, if
+                    // it is the very first segment that fails), and execution falls through to
+                    // resolve and WRITE the FINAL segment against that frozen type
+                    // (PropertyHelper.cs:553-559). A key like "Missing.StaticSecret" therefore
+                    // still writes StaticSecret onto the VM itself even though "Missing" never
+                    // resolved to anything — verified empirically, see
+                    // RequestBindingPolicyTests867.MissingIntermediateSegment_ActuallyWritesFinalSegmentOnVm_WhenPolicyIsIgnored.
+                    // This policy cannot safely allow a key it failed to fully resolve, so it
+                    // fails closed here instead of trying to replicate that frozen-type fallback
+                    // (which would also have to be kept in lockstep with PropertyHelper forever).
+                    return false;
                 }
                 if (members.Length > 1)
                 {
-                    // Ambiguous resolution (e.g. new-hiding) — fail closed rather than trust
-                    // members[0] to be the safe one. See the class doc comment.
+                    // Ambiguous resolution (verified concrete cause: a field hidden by a
+                    // differently-kinded property of the same name — see the class doc comment
+                    // for why plain same-kind new-hiding does NOT trigger this) — fail closed
+                    // rather than trust members[0] to be the safe one.
                     return false;
                 }
                 var member = members[0];
