@@ -51,12 +51,17 @@ on:
 # measurements and the two alternatives considered (per-test timing fixes, raising
 # timeouts) and why concurrency was picked over both.
 #
-# Each downstream job carries `if: always()` so one leg failing doesn't skip the next —
-# matching the matrix's old `fail-fast: false` (independent legs; every leg always gets a
-# chance to run and report its own result). Measured cost: before-fix run 5835
-# (concurrent) took ~3m20s total; after-fix run 5837 (this needs:-chained version, live
-# workflow_dispatch) took ~8m58s — roughly +5.5min, since the three legs no longer
-# overlap at all (their durations now sum instead of overlapping).
+# Each downstream job carries `if: ${{ !cancelled() }}` so one leg failing doesn't skip
+# the next — matching the matrix's old `fail-fast: false` (independent legs; every leg
+# always gets a chance to run and report its own result) — WITHOUT also keeping the job
+# alive through a cancellation the way `always()` would (cross-vendor review on PR #887
+# caught this: job conditions are re-evaluated when the workflow is cancelled, e.g. by
+# the concurrency block above on a superseded PR push, and `always()` stays true through
+# that, silently defeating the concurrency group; `!cancelled()` does not). Measured
+# cost: before-fix run 5835 (concurrent) took ~3m20s total; after-fix run 5837 (this
+# needs:-chained version, live workflow_dispatch) took ~8m58s — roughly +5.5min, since
+# the three legs no longer overlap at all (their durations now sum instead of
+# overlapping).
 
 env:
   # PEP 668: allow pip into the disposable runner container's system Python when setup-python degrades (issue #292)
@@ -157,7 +162,15 @@ jobs:
   e2e-killswitch:
     name: e2e (killswitch)
     needs: e2e-baseline
-    if: always()
+    # !cancelled(), not always(): a job condition is re-evaluated when the workflow is
+    # cancelled (e.g. a superseded PR run via the concurrency block above), and
+    # always() stays true through a cancellation — so an always()-gated downstream job
+    # would keep starting/running even after the run it belongs to was supposed to be
+    # cancelled, defeating the concurrency group entirely. !cancelled() still runs this
+    # job when the previous leg merely failed (preserving fail-fast: false's old
+    # semantics — every leg still gets a chance to run and report), but stops once the
+    # run itself is cancelled.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     env:
       # Issue #681: second leg exercises the #627 legacy-script-rehydration kill-switch
@@ -258,7 +271,8 @@ jobs:
   e2e-island:
     name: e2e (island)
     needs: e2e-killswitch
-    if: always()
+    # !cancelled(), not always() — same reasoning as e2e-killswitch above.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     env:
       # Issue #837: third leg exercises the #470 island-render opt-in

@@ -157,7 +157,14 @@ jobs:
     # as failed and skips this job too. Require only build-and-test to have succeeded, but
     # keep both entries in `needs` so this job still waits for release-tooling-test to finish
     # (ordering) wherever it does run (#658).
-    if: always() && needs.build-and-test.result == 'success'
+    # !cancelled(), not always() (#885 cross-vendor review, PR #887): this workflow has a
+    # concurrency block with cancel-in-progress on pull_request — a job condition is
+    # re-evaluated when the run is cancelled (e.g. a superseded PR push), and always()
+    # stays true through that, so an always()-gated job could still start after the run
+    # it belongs to was supposed to be cancelled. !cancelled() preserves the "run even if
+    # release-tooling-test was skipped" behavior this condition exists for, while actually
+    # stopping on cancellation.
+    if: ${{ !cancelled() && needs.build-and-test.result == 'success' }}
     steps:
     - uses: actions/checkout@v5
     - uses: actions/setup-dotnet@v5

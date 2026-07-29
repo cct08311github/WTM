@@ -407,7 +407,15 @@ jobs:
   # gap. Read the step output either way.
   gate:
     needs: [changes, mutants, meta-selftest]
-    if: always()
+    # !cancelled(), not always() (#885 cross-vendor review, PR #887): this workflow has a
+    # concurrency block with cancel-in-progress on pull_request — a job condition is
+    # re-evaluated when the run is cancelled (e.g. a superseded PR push), and always()
+    # stays true through that, so an always()-gated job could still start after the run
+    # it belongs to was supposed to be cancelled. !cancelled() preserves the "run even if
+    # mutants/meta-selftest were skipped (changes.outputs.relevant == 'false')" behavior
+    # this condition exists for — skipped is not cancelled — while actually stopping on
+    # cancellation.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
     - name: Summarize mutation gate result
