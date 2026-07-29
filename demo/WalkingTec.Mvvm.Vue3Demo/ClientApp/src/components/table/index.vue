@@ -221,6 +221,12 @@
     });
     let searchApi: Function = function (a: any = null, b: any = null) { };
     let isTreeState: any = null;
+    // #856: bumped on every doSearch() call; an in-flight fetch batch compares its own
+    // captured value against the current one before touching shared state, so a search
+    // that gets superseded (new page/filter/sort, or another doSearch() call) never
+    // applies its results or leaks its blob URLs -- see doSearch() below.
+    let searchToken = 0;
+    let isComponentMounted = true;
     // 设置边框显示/隐藏
     const setBorder = computed(() => {
         return Object.hasOwn(props.config, "isBorder") ? props.config.isBorder : false;
@@ -316,6 +322,9 @@
     // instance is destroyed (e.g. navigating away from the page) -- otherwise whatever was on
     // screen at that moment leaks for the rest of the document's lifetime.
     onUnmounted(() => {
+        // #856: stop any in-flight doSearch() batch from applying results or creating
+        // more blob URLs after this point -- see the token/mounted check in doSearch().
+        isComponentMounted = false;
         state.picList.forEach((url) => {
             if (url.startsWith('blob:')) { URL.revokeObjectURL(url); }
         });
@@ -333,11 +342,19 @@
             isTreeState = isTree
         }
 
+        // #856: capture this call's generation before awaiting anything. If another
+        // doSearch() runs while this one is still in flight (page/filter/sort change, or a
+        // fresh call), searchToken moves on and every check below treats this call as stale.
+        const myToken = ++searchToken;
         let pro: Promise<AxiosResponse<any, any>> = searchApi(state.searcher);
         return pro.then(async res => {
+            if (myToken !== searchToken || !isComponentMounted) {
+                // Superseded before we even got a response, or the component is already
+                // gone -- do not touch state.data/state.picList/props.config for a dead search.
+                return;
+            }
             const datatemp: any[] = [];
             const imageHeaders = props.header.filter((v) => v.isCheck && v.type === 'image');
-            let index = 0;
             // #830 review finding 2: GetFile requires auth now (correctly -- it used to allow
             // any caller to read another tenant's file by guessing the GUID). el-image's :src
             // is a native browser image fetch, which carries neither the axios interceptor's
@@ -345,27 +362,69 @@
             // fileapi().getFile() -- an authenticated axios request that returns an object URL
             // -- instead of binding the raw endpoint URL directly.
             //
-            // #830 review round 3: each of those is a blob: object URL, held in memory until
-            // explicitly revoked. state.picList was never reset between searches (a
-            // pre-existing gap this fetch made real: every page/filter/sort change used to just
-            // grow the array with plain, harmless string URLs -- now it grows it with URLs that
-            // pin actual blob memory). Revoke the previous batch and reset the list before
-            // fetching the new one, since a fresh search always fully replaces the row set.
-            state.picList.forEach((url) => {
-                if (url.startsWith('blob:')) { URL.revokeObjectURL(url); }
-            });
-            state.picList = [];
+            // #856: the row/column visit order below (and the __preview__ index it assigns)
+            // has to stay deterministic even though the fetches now run concurrently, so it is
+            // computed synchronously, up front, before any awaiting starts.
+            const tasks: { element: EmptyObjectType<any>; key: string; previewIndex: number }[] = [];
+            let previewIndex = 0;
             for (const element of res.Data as EmptyObjectType<any>[]) {
                 for (const ih of imageHeaders) {
                     element[ih.key + "__localurl__"] = "";
                     if (element[ih.key]) {
-                        element[ih.key + "__localurl__"] = await fileapi().getFile(element[ih.key], 150, 150);
-                        element[ih.key + "__preview__"] = index++;
-                        state.picList.push(element[ih.key + "__localurl__"]);
+                        element[ih.key + "__preview__"] = previewIndex;
+                        tasks.push({ element, key: ih.key, previewIndex: previewIndex++ });
                     }
                 }
                 datatemp.push(element);
             }
+
+            // #856: the previous version awaited fileapi().getFile() one row/column at a
+            // time inside this nested loop -- with up to 200 rows on this page, the whole
+            // table stalled behind a fully serial chain of network round trips before any
+            // row rendered. A single Promise.all over every task would instead fire up to
+            // (rows * image columns) requests at once, trading a serial stall for a request
+            // storm. Run them through a small worker pool instead: bounded concurrency, same
+            // total work, no unbounded burst.
+            const IMAGE_FETCH_CONCURRENCY = 6;
+            const newPicList: string[] = new Array(tasks.length).fill('');
+            let cursor = 0;
+            const workers = Array.from({ length: Math.min(IMAGE_FETCH_CONCURRENCY, tasks.length) }, async () => {
+                while (cursor < tasks.length) {
+                    const task = tasks[cursor++];
+                    const url = await fileapi().getFile(task.element[task.key], 150, 150);
+                    if (myToken !== searchToken || !isComponentMounted) {
+                        // #856: this search was superseded (or the component unmounted)
+                        // while this fetch was in flight. Nothing will ever revoke this blob
+                        // URL through the normal picList/onUnmounted paths below, because it
+                        // is not going into either one -- revoke it right here instead.
+                        if (url && url.startsWith('blob:')) { URL.revokeObjectURL(url); }
+                        continue;
+                    }
+                    task.element[task.key + "__localurl__"] = url;
+                    newPicList[task.previewIndex] = url;
+                }
+            });
+            await Promise.all(workers);
+
+            if (myToken !== searchToken || !isComponentMounted) {
+                // Superseded (or unmounted) while the batch was fetching -- discard it.
+                // staleness is monotonic (searchToken only moves forward, isComponentMounted
+                // only moves to false), so every slot still holding a real URL here was
+                // fetched before that happened and was never revoked by the per-task check
+                // above; revoke them all now so nothing outlives its search.
+                newPicList.forEach((url) => {
+                    if (url && url.startsWith('blob:')) { URL.revokeObjectURL(url); }
+                });
+                return;
+            }
+
+            // #830 review round 3: each of those is a blob: object URL, held in memory until
+            // explicitly revoked. Revoke the previous batch before installing the new one,
+            // since a fresh search always fully replaces the row set.
+            state.picList.forEach((url) => {
+                if (url.startsWith('blob:')) { URL.revokeObjectURL(url); }
+            });
+            state.picList = newPicList;
             if (isTreeState !== true) {
                 state.data = datatemp;
                 props.config.total = res.Count;
@@ -381,7 +440,9 @@
                 props.config.loading = false;
             }
         }).catch(e => {
-            props.config.loading = false;
+            if (myToken === searchToken) {
+                props.config.loading = false;
+            }
         });
     }
 

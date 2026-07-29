@@ -90,6 +90,15 @@ const header = computed(() => {
 watch(filevalue, async () => {
 
 if(!filevalue.value){
+  // #856: clearing modelValue used to only reset `files`, leaving `imageUrl` and
+  // `previewUrlList` pointing at blob: URLs nothing would ever revoke -- before blob URLs
+  // this was just a stale preview, now it is a real memory leak plus a capability
+  // (createObjectURL access to that file's bytes) that outlives the value it was for.
+  revokeIfBlob(imageUrl.value);
+  imageUrl.value = '';
+  previewUrlList.value.forEach(revokeIfBlob);
+  previewUrlList.value = [];
+  (files.value ?? []).forEach((item: any) => revokeIfBlob(item.url));
   files.value = [];
   return;
 }
