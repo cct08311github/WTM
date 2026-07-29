@@ -2815,9 +2815,20 @@ async def run_tests(tc_nums=None, headless=None, slow_mo=0, report_path=None):
         # "can't be wrapped line-by-line" — it can, by moving the guard to
         # wrap the whole `async with` statement instead of just its body.
         async with async_playwright() as p:
+            # issue #907: /dev/shm is Docker's default 64MB on BOTH
+            # local-runner and azure-overflow-runner (ShmSize == 67108864 on
+            # each) — azure's better e2e stability is capacity/CPU/RAM, not
+            # a bigger /dev/shm. This launch call previously had no `args`;
+            # --disable-dev-shm-usage (Chromium uses /tmp instead) removes
+            # /dev/shm exhaustion as a *possible* cause of `Target crashed`
+            # / `TargetClosedError` (PR #881). NOT established that it was
+            # the actual cause: a control run of the unmodified script
+            # showed the same 0KB /dev/shm usage and also didn't crash.
+            # Don't remove this flag without re-reading #907.
             browser = await p.chromium.launch(
                 headless=headless,
                 slow_mo=slow_mo,
+                args=["--disable-dev-shm-usage"],
             )
 
             for tc_num in tc_nums:
