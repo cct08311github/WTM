@@ -463,7 +463,21 @@ namespace WalkingTec.Mvvm.Mvc
             // real Startup.cs files already call them in that order. Failing fast here instead
             // of silently installing some fallback means a future call-order regression breaks
             // at startup, not as a silently-undone security fix in production.
-            var existingActivatorDescriptor = services.LastOrDefault(d => d.ServiceType == typeof(IControllerActivator));
+            //
+            // #882 review, second round: only consider UNKEYED descriptors here. .NET 8+ keyed
+            // services (ServiceDescriptor.IsKeyedService) can register an IControllerActivator
+            // under a key -- its ImplementationType/ImplementationFactory/ImplementationInstance
+            // getters all throw for a keyed descriptor (KeyedImplementationType/-Factory/
+            // -Instance are the ones that apply instead; verified against the real
+            // Microsoft.Extensions.DependencyInjection.Abstractions 10.0.9 assembly). An
+            // unkeyed sp.GetRequiredService<IControllerActivator>() call -- which is what this
+            // activator, and MVC itself, actually performs -- never resolves a keyed
+            // registration regardless of where it sits in registration order, so picking the
+            // last KEYED one here (as the previous version did, with no IsKeyedService check)
+            // would both wrap the wrong thing and throw at first resolution.
+            var existingActivatorDescriptor = services
+                .Where(d => d.ServiceType == typeof(IControllerActivator) && !d.IsKeyedService)
+                .LastOrDefault();
             if (existingActivatorDescriptor == null)
             {
                 throw new InvalidOperationException(
@@ -476,14 +490,25 @@ namespace WalkingTec.Mvvm.Mvc
                 typeof(IControllerActivator),
                 sp =>
                 {
-                    IControllerActivator inner = existingActivatorDescriptor switch
+                    // #882 review, second round: AddWtmContext builds `inner` itself here,
+                    // bypassing the DI container's own creation path -- which is what normally
+                    // enrolls a freshly-created disposable instance into the current scope's
+                    // disposables list. `ownsInner` tracks whether THIS code is the one that
+                    // "created" inner (ImplementationFactory/ImplementationType: yes, nothing
+                    // else will ever dispose it, so WtmControllerActivator must) or whether
+                    // inner is a pre-built, possibly cross-request-shared ImplementationInstance
+                    // (no -- the container does not auto-dispose ImplementationInstance
+                    // registrations either, by original design, and disposing a shared instance
+                    // from a single per-resolution wrapper's teardown would break every other
+                    // resolution still using it). See WtmControllerActivator's doc comment.
+                    (IControllerActivator inner, bool ownsInner) = existingActivatorDescriptor switch
                     {
-                        { ImplementationInstance: IControllerActivator instance } => instance,
-                        { ImplementationFactory: not null } => (IControllerActivator)existingActivatorDescriptor.ImplementationFactory!(sp),
-                        { ImplementationType: not null } => (IControllerActivator)ActivatorUtilities.CreateInstance(sp, existingActivatorDescriptor.ImplementationType!),
+                        { ImplementationInstance: IControllerActivator instance } => (instance, false),
+                        { ImplementationFactory: not null } => ((IControllerActivator)existingActivatorDescriptor.ImplementationFactory!(sp), true),
+                        { ImplementationType: not null } => ((IControllerActivator)ActivatorUtilities.CreateInstance(sp, existingActivatorDescriptor.ImplementationType!), true),
                         _ => throw new InvalidOperationException("Unable to resolve the existing IControllerActivator registration to wrap it."),
                     };
-                    return new WalkingTec.Mvvm.Mvc.Helper.WtmControllerActivator(inner);
+                    return new WalkingTec.Mvvm.Mvc.Helper.WtmControllerActivator(inner, ownsInner);
                 },
                 existingActivatorDescriptor.Lifetime));
 

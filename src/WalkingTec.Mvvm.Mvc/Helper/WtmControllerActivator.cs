@@ -77,14 +77,40 @@ namespace WalkingTec.Mvvm.Mvc.Helper
     /// double-dispose a controller the container also owns. Decorating instead of replacing
     /// means <c>Release</c>/<c>ReleaseAsync</c> simply delegate to whichever inner activator
     /// was already in play, so its disposal contract — whatever it is — is preserved exactly,
-    /// and <c>.AddControllersAsServices()</c> keeps working. <b>Both <c>DefaultControllerActivator</c>
-    /// and <c>ServiceBasedControllerActivator</c> are <c>internal sealed</c> types (verified via
-    /// reflection against the real installed SDK) — the review's suggested alternative,
+    /// and <c>.AddControllersAsServices()</c> keeps working. <b><c>DefaultControllerActivator</c>
+    /// is an <c>internal sealed</c> type (verified via <c>ilspycmd</c> against the real installed
+    /// 10.0.10 assembly — corrected here from an earlier, wrong version of this comment that also
+    /// called <c>ServiceBasedControllerActivator</c> <c>internal sealed</c>: it is actually
+    /// <c>public class</c>, not sealed, not internal; the design is unaffected either way, since
+    /// this class never needs to name either type). The review's suggested alternative,
     /// implementing <see cref="Microsoft.AspNetCore.Mvc.Controllers.IControllerPropertyActivator"/>
-    /// instead, is not viable: that interface is also <c>internal</c> and is not resolvable or
-    /// implementable from outside <c>Microsoft.AspNetCore.Mvc.Core</c>. Wrapping the existing
-    /// <see cref="IControllerActivator"/> registration is the only extension point this
-    /// assembly can actually reach.</b>
+    /// instead, is not viable: that interface is `internal` (also confirmed via <c>ilspycmd</c>)
+    /// and is not resolvable or implementable from outside <c>Microsoft.AspNetCore.Mvc.Core</c>.
+    /// Wrapping the existing <see cref="IControllerActivator"/> registration is the only
+    /// extension point this assembly can actually reach.</b>
+    /// </para>
+    ///
+    /// <para>
+    /// <b>#882 review, second round — the inner activator's own disposal ownership.</b> The
+    /// decorator paragraph above covers the CONTROLLER's disposal (delegated to <c>_inner</c>
+    /// unchanged); it does not by itself cover disposal of the <c>_inner</c> ACTIVATOR INSTANCE.
+    /// <c>FrameworkServiceExtension.AddWtmContext</c> builds that instance itself — by invoking
+    /// the captured original descriptor's <c>ImplementationFactory</c>, or via
+    /// <c>ActivatorUtilities.CreateInstance</c> against its <c>ImplementationType</c> — bypassing
+    /// the DI container's own creation path, which is what normally enrolls a newly-created
+    /// disposable instance into the owning scope's disposables list. A third-party, disposable
+    /// <c>IControllerActivator</c> built that way would previously have been disposed by the
+    /// container and now silently would not be, since only the OUTER <c>WtmControllerActivator</c>
+    /// gets returned to (and tracked by) the container, and this class implemented neither
+    /// <see cref="IDisposable"/> nor <see cref="IAsyncDisposable"/> at all. Neither built-in
+    /// activator is itself disposable, which is why the HTTP test suite never caught this.
+    /// Fixed: this class now implements both, and the <c>ownsInner</c> constructor flag —
+    /// <c>true</c> when <c>AddWtmContext</c> built <c>_inner</c> itself (the
+    /// <c>ImplementationFactory</c>/<c>ImplementationType</c> cases), <c>false</c> when
+    /// <c>_inner</c> is a pre-built, potentially-shared <c>ImplementationInstance</c> the
+    /// container was never going to dispose on its own either — disposing THAT one here, on
+    /// every per-resolution wrapper's teardown, would tear down a singleton the next request
+    /// still needs — decides whether disposing this wrapper also disposes <c>_inner</c>.
     /// </para>
     ///
     /// <para>
@@ -112,13 +138,25 @@ namespace WalkingTec.Mvvm.Mvc.Helper
     /// null-<c>Wtm</c> state instead of a fail-fast 500, which is a worse outcome.
     /// </para>
     /// </summary>
-    public class WtmControllerActivator : IControllerActivator
+    public class WtmControllerActivator : IControllerActivator, IDisposable, IAsyncDisposable
     {
         private readonly IControllerActivator _inner;
+        private readonly bool _ownsInner;
 
-        public WtmControllerActivator(IControllerActivator inner)
+        /// <param name="inner">The <see cref="IControllerActivator"/> this instance decorates.</param>
+        /// <param name="ownsInner">
+        /// Whether disposing this wrapper should also dispose <paramref name="inner"/>. Pass
+        /// <see langword="true"/> when the caller constructed <paramref name="inner"/> itself
+        /// outside the DI container's own tracked creation path (so nothing else will dispose
+        /// it); pass <see langword="false"/> when <paramref name="inner"/> is a pre-built,
+        /// possibly-shared instance (e.g. a DI <c>ImplementationInstance</c> registration) whose
+        /// lifetime this wrapper does not own. Defaults to <see langword="true"/>, matching the
+        /// common case of wrapping a freshly-constructed inner activator.
+        /// </param>
+        public WtmControllerActivator(IControllerActivator inner, bool ownsInner = true)
         {
             _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+            _ownsInner = ownsInner;
         }
 
         public object Create(ControllerContext context)
@@ -139,6 +177,41 @@ namespace WalkingTec.Mvvm.Mvc.Helper
         public ValueTask ReleaseAsync(ControllerContext context, object controller)
         {
             return _inner.ReleaseAsync(context, controller);
+        }
+
+        /// <summary>
+        /// Disposes <c>_inner</c> when (and only when) this wrapper owns its lifetime — see the
+        /// <c>ownsInner</c> constructor parameter and the #882 review addendum above. This is
+        /// about the ACTIVATOR instance, not the controllers it creates (those are released via
+        /// <see cref="Release"/>/<see cref="ReleaseAsync"/>, delegated to <c>_inner</c> exactly
+        /// as before, unaffected by this).
+        /// </summary>
+        public void Dispose()
+        {
+            if (_ownsInner && _inner is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+        }
+
+        /// <inheritdoc cref="Dispose"/>
+        public async ValueTask DisposeAsync()
+        {
+            if (!_ownsInner)
+            {
+                return;
+            }
+
+            if (_inner is IAsyncDisposable asyncDisposable)
+            {
+                await asyncDisposable.DisposeAsync();
+                return;
+            }
+
+            if (_inner is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
         }
     }
 }

@@ -2182,7 +2182,11 @@ ETL 模組單頁總覽，view 路徑 `/_EtlDashboard/Index`：
 ```csharp
 public class EtlDashboardService
 {
-    public EtlDashboardSummary BuildSummary(IDataContext dc, int windowDays = 7, int topN = 10);
+    // #883 (10.21.0, BREAKING): callerTenantCode is REQUIRED (no default) -- the #882
+    // review found the dashboard reading every tenant's running jobs (host-scope leak +
+    // the caller's own jobs going invisible) traced to exactly an omittable tenant
+    // parameter here. Pass the caller's own Wtm.LoginUserInfo?.CurrentTenant.
+    public EtlDashboardSummary BuildSummary(IDataContext dc, string? callerTenantCode, int windowDays = 7, int topN = 10);
 }
 ```
 
