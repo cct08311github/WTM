@@ -11,7 +11,7 @@ export function wtmBuildPlugin(): Plugin {
 
         // 代码转译，这个函数的功能类似于 `webpack` 的 `loader`
         buildStart(option) {
-            var files = readDir(__dirname + "\\src\\views")
+            var files = readDir(path.join(__dirname, "src", "views"))
             var views = {}
             files.forEach((val) => {
                 const content = fs.readFileSync(val).toString();
@@ -37,7 +37,7 @@ export function wtmBuildPlugin(): Plugin {
                     }
                 }
             })
-            fs.writeFile(__dirname + "\\public\\menu.json", JSON.stringify(views), function err() { })
+            fs.writeFile(path.join(__dirname, "public", "menu.json"), JSON.stringify(views), function err() { })
         }
     }
 }
