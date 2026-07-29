@@ -1,0 +1,13 @@
+diff --git a/src/WalkingTec.Mvvm.Etl/Controllers/_EtlRunLogController.cs b/src/WalkingTec.Mvvm.Etl/Controllers/_EtlRunLogController.cs
+index 30b40dea1..dce98524f 100644
+--- a/src/WalkingTec.Mvvm.Etl/Controllers/_EtlRunLogController.cs
++++ b/src/WalkingTec.Mvvm.Etl/Controllers/_EtlRunLogController.cs
+@@ -45,7 +45,7 @@ public class _EtlRunLogController : BaseController
+             string.Equals(r, "Admin", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(r, "ETLAdmin", StringComparison.OrdinalIgnoreCase));
+ 
+-        if (!isAdmin)
++        if (false)
+         {
+             context.Result = Forbid();
+             return;

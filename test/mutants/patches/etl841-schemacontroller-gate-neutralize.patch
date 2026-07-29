@@ -1,0 +1,13 @@
+diff --git a/src/WalkingTec.Mvvm.Etl/Controllers/_EtlSchemaController.cs b/src/WalkingTec.Mvvm.Etl/Controllers/_EtlSchemaController.cs
+index d4819f81a..03fce2832 100644
+--- a/src/WalkingTec.Mvvm.Etl/Controllers/_EtlSchemaController.cs
++++ b/src/WalkingTec.Mvvm.Etl/Controllers/_EtlSchemaController.cs
+@@ -78,7 +78,7 @@ public class _EtlSchemaController : BaseController
+             string.Equals(r, "Admin", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(r, "ETLAdmin", StringComparison.OrdinalIgnoreCase));
+ 
+-        if (!isAdmin)
++        if (false)
+         {
+             context.Result = Forbid();
+             return;

@@ -1,8 +1,10 @@
 #nullable enable
 using System;
+using System.Linq.Expressions;
 using System.Net.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Etl.Alerting;
 using WalkingTec.Mvvm.Etl.Dashboard;
 using WalkingTec.Mvvm.Etl.Models;
@@ -145,9 +147,75 @@ public static class ServiceCollectionExtensions
 public static class EtlDbContextExtensions
 {
     /// <summary>
-    /// 在 DataContext.OnModelCreating 中呼叫以註冊 ETL 表
+    /// 在 DataContext.OnModelCreating 中呼叫以註冊 ETL 表，並套用 <see cref="ITenant"/>
+    /// 全域查詢過濾器（多租戶隔離）。
     /// </summary>
+    /// <remarks>
+    /// <b>Issue #862 root cause, fixed here:</b> the (now obsolete)
+    /// <see cref="ApplyEtlModels(ModelBuilder)"/> zero-argument overload registers ETL entity
+    /// types via <c>modelBuilder.Entity&lt;T&gt;()</c>, but every documented call site (see
+    /// <c>docs/etl-module.md</c>, <c>demo/WalkingTec.Mvvm.Demo/DataContext.cs</c>) invokes it
+    /// from the consumer's own <c>DataContext.OnModelCreating</c> AFTER
+    /// <c>base.OnModelCreating(modelBuilder)</c> returns. By the time that base call returns,
+    /// <c>FrameworkContext.OnModelCreating</c>'s own Pass 2 loop
+    /// (<c>src/WalkingTec.Mvvm.Core/DataContext.cs</c>) has ALREADY finished iterating
+    /// <c>modelBuilder.Model.GetEntityTypes()</c> and applying the <see cref="ITenant"/> /
+    /// <c>IPersistPoco</c> global query filters for every entity type known to the model AT
+    /// THAT POINT — it can never retroactively see an entity type registered afterward. This
+    /// means <see cref="EtlJobDefinition"/>'s <see cref="ITenant"/> implementation (added for
+    /// ETL-006) has never actually been enforced through a standard
+    /// <c>FrameworkContext</c>-derived app: a context scoped to tenant A could read tenant B's
+    /// <see cref="EtlJobDefinition"/> row by id with no filter applied at all (confirmed
+    /// empirically — the generated SQL carried no <c>TenantCode</c> predicate whatsoever, not
+    /// merely a wrong one). Same root cause as #841/#862's headline claim about
+    /// <see cref="EtlRunLog"/> lacking <see cref="ITenant"/> entirely, but one layer deeper: even
+    /// the ETL entity that DOES implement the interface was never actually isolated.
+    /// This overload closes that gap by re-applying the identical query-filter pattern
+    /// <c>DataContext.cs</c>'s Pass 2 uses (<c>TenantCode == this.TenantCode</c>, EF Core's
+    /// documented "reference the current DbContext instance in a query filter" idiom), scoped
+    /// to exactly the ETL entity types that implement <see cref="ITenant"/>, immediately after
+    /// registering them in THIS method — so ordering can no longer defeat it.
+    /// </remarks>
+    /// <param name="builder">ModelBuilder from your DataContext.OnModelCreating.</param>
+    /// <param name="context">
+    /// Pass <c>this</c> from your DataContext.OnModelCreating override. Required so the
+    /// TenantCode filter binds to the CURRENT context instance's TenantCode at query time
+    /// (EF Core's supported "DbContext instance access in query filters" idiom) instead of a
+    /// value that would otherwise be impossible to obtain from a ModelBuilder-only extension
+    /// method.
+    /// </param>
+    public static ModelBuilder ApplyEtlModels(this ModelBuilder builder, EmptyContext context)
+    {
+        ApplyEtlModelsCore(builder);
+
+        // #862: apply the ITenant filter for every ETL entity that implements it, right here,
+        // instead of relying on FrameworkContext.OnModelCreating's Pass 2 (which never sees
+        // these types -- see remarks above).
+        ApplyEtlTenantFilter<EtlJobDefinition>(builder, context);
+        ApplyEtlTenantFilter<EtlDeadLetterRow>(builder, context);
+        ApplyEtlTenantFilter<EtlLineageRecord>(builder, context);
+        ApplyEtlTenantFilter<EtlRunLog>(builder, context);
+
+        return builder;
+    }
+
+    /// <summary>
+    /// 舊版多載（無 <see cref="EmptyContext"/> 參數）— 僅為向下相容保留，行為與升級前完全
+    /// 一致：只註冊資料表結構，<b>不會</b>套用 <see cref="ITenant"/> 全域查詢過濾器。
+    /// 這正是 #862 描述的問題本身——本多載沒有管道可以取得目前的 context 執行個體，因此無法
+    /// 修正。請改用 <see cref="ApplyEtlModels(ModelBuilder, EmptyContext)"/>。
+    /// </summary>
+    [Obsolete("ApplyEtlModels() without a DbContext instance can never apply the ITenant global " +
+              "query filter to EtlJobDefinition/EtlRunLog/EtlDeadLetterRow/EtlLineageRecord " +
+              "(issue #862) -- table/column/index registration is unchanged and still runs, but " +
+              "tenant isolation for these tables does not. Call " +
+              "ApplyEtlModels(this) from your DataContext.OnModelCreating instead.")]
     public static ModelBuilder ApplyEtlModels(this ModelBuilder builder)
+    {
+        return ApplyEtlModelsCore(builder);
+    }
+
+    private static ModelBuilder ApplyEtlModelsCore(ModelBuilder builder)
     {
         builder.Entity<EtlJobDefinition>(e =>
         {
@@ -164,6 +232,9 @@ public static class EtlDbContextExtensions
             e.HasIndex(x => x.JobId);
             e.HasIndex(x => x.StartedAt);
             e.HasOne(x => x.Job).WithMany().HasForeignKey(x => x.JobId);
+            // #841/#862: TenantCode index for multi-tenant isolation queries (new column --
+            // see this type's own doc comment and the #862 migration notes in CHANGELOG.md).
+            e.HasIndex(x => x.TenantCode);
         });
 
         // ETL-004: Dead-letter / quarantine store
@@ -187,8 +258,30 @@ public static class EtlDbContextExtensions
             e.HasIndex(x => x.JobId);
             e.HasIndex(x => x.RunId);
             e.HasIndex(x => x.RecordedAt);
+            // #862: TenantCode index for multi-tenant isolation queries (new column -- see
+            // this type's own doc comment and the #862 migration notes in CHANGELOG.md).
+            e.HasIndex(x => x.TenantCode);
         });
 
         return builder;
+    }
+
+    /// <summary>
+    /// Applies the same <c>TenantCode == this.TenantCode</c> global query filter
+    /// <c>DataContext.cs</c>'s Pass 2 loop uses, scoped to a single entity type known (at
+    /// compile time, via the <c>where T : ITenant</c> constraint) to implement
+    /// <see cref="ITenant"/>. See the remarks on
+    /// <see cref="ApplyEtlModels(ModelBuilder, EmptyContext)"/> for why this needs to live here
+    /// rather than relying on the base context's own filter application.
+    /// </summary>
+    private static void ApplyEtlTenantFilter<T>(ModelBuilder builder, EmptyContext context)
+        where T : class, ITenant
+    {
+        var pe = Expression.Parameter(typeof(T));
+        var exp = Expression.Equal(
+            Expression.Property(pe, nameof(ITenant.TenantCode)),
+            Expression.PropertyOrField(Expression.Constant(context), nameof(EmptyContext.TenantCode)));
+        var lambda = Expression.Lambda<Func<T, bool>>(exp, pe);
+        builder.Entity<T>().HasQueryFilter(lambda);
     }
 }

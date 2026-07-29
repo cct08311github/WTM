@@ -1,0 +1,22 @@
+{
+  "id": "etl862-applyetlmodels-tenantfilter-neutralize",
+  "kind": "security",
+  "description": "Issue #862 root cause: EtlJobDefinition has implemented ITenant since ETL-006, but ApplyEtlModels() registers ETL entity types into the EF model AFTER FrameworkContext.OnModelCreating's Pass 2 loop (DataContext.cs) has already finished applying the ITenant query filter -- so the filter was never actually enforced. This mutant deletes the ApplyEtlTenantFilter<EtlJobDefinition>(builder, context) call added to ApplyEtlModels(ModelBuilder, EmptyContext) to fix that, reproducing the exact pre-fix behaviour: a context scoped to tenant A can read tenant B's EtlJobDefinition row by id, with the generated SQL carrying no TenantCode predicate at all. Checked against EtlTenantIsolationTests.EtlJobDefinition_TenantA_CannotReadTenantB_Job, which seeds two EtlJobDefinition rows under two different tenants and asserts a context scoped to tenant A cannot resolve tenant B's row -- with the mutant applied, that read succeeds and the assertion fails. The green control, EtlJobDefinition_TenantA_CanReadOwnJob, seeds the same tenant pair and asserts tenant A can still read its OWN EtlJobDefinition row -- proving the mutation does not have broader collateral effects (e.g. breaking the EtlJobDefinitions table registration itself).",
+  "target_file": "src/WalkingTec.Mvvm.Etl/ServiceCollectionExtensions.cs",
+  "target_symbol": "EtlDbContextExtensions.ApplyEtlModels(ModelBuilder, EmptyContext) -- the ApplyEtlTenantFilter<EtlJobDefinition>(builder, context) call",
+  "patch": "patches/etl862-applyetlmodels-tenantfilter-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlJobDefinition_TenantA_CannotReadTenantB_Job",
+  "red_tests": [
+    "WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlJobDefinition_TenantA_CannotReadTenantB_Job"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlJobDefinition_TenantA_CannotReadTenantB_Job": "#862: a context scoped to tenant A must NOT resolve tenant B's EtlJobDefinition by GUID"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured verbatim against the committed baseline (stale demo.db under bin/ removed first; mutant patch applied via git apply, test run, then reverted via git apply -R): 'Assert.IsNull failed. #862: a context scoped to tenant A must NOT resolve tenant B's EtlJobDefinition by GUID. If this fails, ApplyEtlModels(ModelBuilder, EmptyContext) is no longer applying the ITenant query filter for EtlJobDefinition.' Confirmed via python3 test/mutants/run_mutant.py --mutant etl862-applyetlmodels-tenantfilter-neutralize: 'VERDICT: KILLED' / 'GATE: PASS'.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlJobDefinition_TenantA_CanReadOwnJob",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlJobDefinition_TenantA_CanReadOwnJob"
+  ]
+}

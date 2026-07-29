@@ -1,0 +1,12 @@
+diff --git a/src/WalkingTec.Mvvm.Etl/ServiceCollectionExtensions.cs b/src/WalkingTec.Mvvm.Etl/ServiceCollectionExtensions.cs
+index 2a1b1ed5a..52807d110 100644
+--- a/src/WalkingTec.Mvvm.Etl/ServiceCollectionExtensions.cs
++++ b/src/WalkingTec.Mvvm.Etl/ServiceCollectionExtensions.cs
+@@ -194,7 +194,6 @@ public static class EtlDbContextExtensions
+         ApplyEtlTenantFilter<EtlJobDefinition>(builder, context);
+         ApplyEtlTenantFilter<EtlDeadLetterRow>(builder, context);
+         ApplyEtlTenantFilter<EtlLineageRecord>(builder, context);
+-        ApplyEtlTenantFilter<EtlRunLog>(builder, context);
+ 
+         return builder;
+     }

@@ -1,0 +1,22 @@
+{
+  "id": "etl862-applyetlmodels-lineagerecord-tenantfilter-neutralize",
+  "kind": "security",
+  "description": "Issue #862: EtlLineageRecord now implements ITenant with a new TenantCode column. This mutant deletes the ApplyEtlTenantFilter<EtlLineageRecord>(builder, context) call in ApplyEtlModels(ModelBuilder, EmptyContext), reproducing the pre-fix behaviour: a context scoped to tenant A can read tenant B's per-run lineage record (source kind, target table, column mappings, row counts) by id. Checked against EtlTenantIsolationTests.EtlLineageRecord_TenantA_CannotReadTenantB_Record, which seeds two EtlLineageRecord rows under two different tenants and asserts a context scoped to tenant A cannot resolve tenant B's row -- with the mutant applied, that read succeeds and the assertion fails. The green control, EtlLineageRecord_TenantA_CanReadOwnRecord, asserts tenant A can still read its OWN record, proving the mutation has no broader collateral effect on the EtlLineageRecords table registration.",
+  "target_file": "src/WalkingTec.Mvvm.Etl/ServiceCollectionExtensions.cs",
+  "target_symbol": "EtlDbContextExtensions.ApplyEtlModels(ModelBuilder, EmptyContext) -- the ApplyEtlTenantFilter<EtlLineageRecord>(builder, context) call",
+  "patch": "patches/etl862-applyetlmodels-lineagerecord-tenantfilter-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlLineageRecord_TenantA_CannotReadTenantB_Record",
+  "red_tests": [
+    "WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlLineageRecord_TenantA_CannotReadTenantB_Record"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlLineageRecord_TenantA_CannotReadTenantB_Record": "#862: a context scoped to tenant A must NOT resolve tenant B's EtlLineageRecord by GUID"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured verbatim against the committed baseline (stale demo.db under bin/ removed first; mutant patch applied via git apply, test run, then reverted via git apply -R): 'Assert.IsNull failed. #862: a context scoped to tenant A must NOT resolve tenant B's EtlLineageRecord by GUID.' Confirmed via python3 test/mutants/run_mutant.py --mutant etl862-applyetlmodels-lineagerecord-tenantfilter-neutralize: 'VERDICT: KILLED' / 'GATE: PASS'.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlLineageRecord_TenantA_CanReadOwnRecord",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlLineageRecord_TenantA_CanReadOwnRecord"
+  ]
+}

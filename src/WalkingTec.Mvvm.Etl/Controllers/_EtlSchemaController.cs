@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Core;
@@ -29,6 +30,16 @@ namespace WalkingTec.Mvvm.Mvc;
 /// (<see cref="CachingEtlSchemaService.DefaultTtlSeconds"/>) to reduce
 /// repeated round-trips to the source DB during the "browse tables"
 /// UX flow. Behavior without <c>IMemoryCache</c> is unchanged (opt-in, 10.6+).
+///
+/// <b>Issue #841:</b> <see cref="Tables"/>/<see cref="Columns"/> do native ADO connections for
+/// cross-DB schema enumeration, entirely bypassing <c>CreateDC</c> -- until this fix the
+/// controller carried no role gate of its own, only page-level URL-RBAC. Reuses the same
+/// admin gate as <c>_EtlJobController</c>/<c>_EtlDashboardController</c>:
+/// <c>RoleCode = Admin</c> or <c>ETLAdmin</c>; <c>IsQuickDebug</c> bypasses RBAC the same way.
+/// #841 separately flags that <c>:83</c>'s connection-key lookup does not check
+/// <see cref="CS.Enabled"/> (unlike <c>Utils.GetCS</c>/<c>CreateDC</c>), so a disabled
+/// connection can still be introspected by an admin who reaches this gate -- that is a
+/// distinct defect, not fixed by this gate, and is tracked separately.
 /// </remarks>
 [ActionDescription("ETL Schema")]
 public class _EtlSchemaController : BaseController
@@ -49,6 +60,31 @@ public class _EtlSchemaController : BaseController
     {
         _logger = logger;
         _cache = cache;
+    }
+
+    // ─── Authorization gate (#841) ─────────────────────────────────────────────
+
+    public override void OnActionExecuting(ActionExecutingContext context)
+    {
+        // IsQuickDebug bypasses all RBAC (framework-wide convention).
+        if (Wtm?.ConfigInfo?.IsQuickDebug == true)
+        {
+            base.OnActionExecuting(context);
+            return;
+        }
+
+        var roles = Wtm?.LoginUserInfo?.Roles?.Select(r => r.RoleCode).ToArray() ?? Array.Empty<string>();
+        var isAdmin = roles.Any(r =>
+            string.Equals(r, "Admin", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(r, "ETLAdmin", StringComparison.OrdinalIgnoreCase));
+
+        if (!isAdmin)
+        {
+            context.Result = Forbid();
+            return;
+        }
+
+        base.OnActionExecuting(context);
     }
 
     /// <summary>

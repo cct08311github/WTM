@@ -1,0 +1,12 @@
+diff --git a/src/WalkingTec.Mvvm.Etl/ServiceCollectionExtensions.cs b/src/WalkingTec.Mvvm.Etl/ServiceCollectionExtensions.cs
+index 2a1b1ed5a..3eb4e2e26 100644
+--- a/src/WalkingTec.Mvvm.Etl/ServiceCollectionExtensions.cs
++++ b/src/WalkingTec.Mvvm.Etl/ServiceCollectionExtensions.cs
+@@ -191,7 +191,6 @@ public static class EtlDbContextExtensions
+         // #862: apply the ITenant filter for every ETL entity that implements it, right here,
+         // instead of relying on FrameworkContext.OnModelCreating's Pass 2 (which never sees
+         // these types -- see remarks above).
+-        ApplyEtlTenantFilter<EtlJobDefinition>(builder, context);
+         ApplyEtlTenantFilter<EtlDeadLetterRow>(builder, context);
+         ApplyEtlTenantFilter<EtlLineageRecord>(builder, context);
+         ApplyEtlTenantFilter<EtlRunLog>(builder, context);

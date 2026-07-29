@@ -1,0 +1,22 @@
+{
+  "id": "etl862-scheduler-rerunsnapshot-ignorequeryfilters-neutralize",
+  "kind": "security",
+  "description": "Issue #862 correction, second instance: EtlSchedulerService.RerunFromSnapshotAsync resolves its own background WTMContext with no HTTP identity (TenantCode always null there -- see EtlSchedulerService's class-level remarks). This mutant removes the IgnoreQueryFilters() call from the EtlRunLog lookup at the top of RerunFromSnapshotAsync, reproducing the regression: a tenant-scoped EtlRunLog is no longer found by id, so the method's `if (runLog == null) return;` guard makes it silently no-op instead of restoring the job's watermark from the snapshot. Checked against EtlTenantIsolationTests.EtlScheduler_RerunFromSnapshot_FindsTenantScopedRunLog_DespiteNoAmbientTenantIdentity, which seeds a tenant-scoped EtlJobDefinition + EtlRunLog with a WatermarkSnapshot, calls RerunFromSnapshotAsync, and asserts the job's LastWatermarkValue was updated to the snapshot value -- with the mutant applied, the run log is never found so LastWatermarkValue stays unset (null) and the assertion fails. The green control, EtlDeadLetterRow_TenantA_CanReadOwnRow, is unrelated to the scheduler and proves the mutation's build/test environment itself is not broken.",
+  "target_file": "src/WalkingTec.Mvvm.Etl/Scheduling/EtlSchedulerService.cs",
+  "target_symbol": "EtlSchedulerService.RerunFromSnapshotAsync -- the .IgnoreQueryFilters() call on the runLog lookup",
+  "patch": "patches/etl862-scheduler-rerunsnapshot-ignorequeryfilters-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlScheduler_RerunFromSnapshot_FindsTenantScopedRunLog_DespiteNoAmbientTenantIdentity",
+  "red_tests": [
+    "WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlScheduler_RerunFromSnapshot_FindsTenantScopedRunLog_DespiteNoAmbientTenantIdentity"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlScheduler_RerunFromSnapshot_FindsTenantScopedRunLog_DespiteNoAmbientTenantIdentity": "#862: RerunFromSnapshotAsync must still find a tenant-scoped EtlRunLog by id"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured verbatim against the committed baseline (stale demo.db under bin/ removed first; mutant patch applied via git apply, test run, then reverted via git apply -R): 'Assert.AreEqual failed. Expected:<WM-b4c14e02>. Actual:<(null)>. #862: RerunFromSnapshotAsync must still find a tenant-scoped EtlRunLog by id and write its WatermarkSnapshot back onto the job, despite the scheduler's own background context having no ambient tenant identity (TenantCode == null there).' Confirmed via python3 test/mutants/run_mutant.py --mutant etl862-scheduler-rerunsnapshot-ignorequeryfilters-neutralize: 'VERDICT: KILLED' / 'GATE: PASS'.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlDeadLetterRow_TenantA_CanReadOwnRow",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlDeadLetterRow_TenantA_CanReadOwnRow"
+  ]
+}

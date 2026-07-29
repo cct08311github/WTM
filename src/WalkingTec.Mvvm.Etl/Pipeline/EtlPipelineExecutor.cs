@@ -424,6 +424,13 @@ public class EtlPipelineExecutor
                     LoadedRows       = totalLoaded,
                     QualityFailedRows = qualityFailedRows,
                     RecordedAt       = DateTime.UtcNow,
+                    // #862: same source EtlDeadLetterRow uses below -- despite the name,
+                    // DeadLetterTenantCode carries the executing job's tenant code generally,
+                    // not a dead-letter-specific value (see EtlPipelineConfig's doc comment).
+                    // Without this, EtlLineageRecord.TenantCode would stay null forever even
+                    // after #862's ITenant fix, making every future lineage record invisible
+                    // to every real (non-null) tenant once the global query filter applies.
+                    TenantCode       = config.DeadLetterTenantCode,
                 }, cancellationToken).ConfigureAwait(false);
             }
 

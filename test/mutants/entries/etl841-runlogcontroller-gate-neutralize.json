@@ -1,0 +1,22 @@
+{
+  "id": "etl841-runlogcontroller-gate-neutralize",
+  "kind": "security",
+  "description": "Issue #841: _EtlRunLogController had no OnActionExecuting role gate at all (grep -c OnActionExecuting == 0), only page-level URL-RBAC -- and its Rerun action starts a real pipeline re-execution from a watermark snapshot. This mutant neutralizes the newly-added gate's `if (!isAdmin)` check to `if (false)`, so context.Result = Forbid() is never reached and every caller passes through unconditionally, reproducing the pre-fix behaviour. Checked against EtlControllerGateHttpTests.EtlRunLogController_Index_NonAdmin_Forbidden, which authenticates as a real user with zero FrameworkRole grants and asserts the response is the gate's AccessDenied redirect -- with the mutant applied, the assertion fails because the response is no longer that redirect. The green control is an unrelated test in the same test_project (EtlTenantIsolationTests.EtlDeadLetterRow_TenantA_CanReadOwnRow), proving the mutation's build/test environment itself is not broken -- the positive control for the GATE LOGIC specifically lives as a unit test in a different project, EtlRbacTests.EtlRunLogController_OnActionExecuting_ETLAdmin_role_is_allowed, which run_mutant.py's single test_project field cannot reference from this same entry; see EtlControllerGateHttpTests.cs's class-level doc comment for why a real-HTTP positive control is not currently achievable for any WalkingTec.Mvvm.Etl controller (a separate, pre-existing, already-filed defect).",
+  "target_file": "src/WalkingTec.Mvvm.Etl/Controllers/_EtlRunLogController.cs",
+  "target_symbol": "_EtlRunLogController.OnActionExecuting -- the `if (!isAdmin)` guard before context.Result = Forbid()",
+  "patch": "patches/etl841-runlogcontroller-gate-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.EtlControllerGateHttpTests.EtlRunLogController_Index_NonAdmin_Forbidden",
+  "red_tests": [
+    "WalkingTec.Mvvm.Api.Test.EtlControllerGateHttpTests.EtlRunLogController_Index_NonAdmin_Forbidden"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Api.Test.EtlControllerGateHttpTests.EtlRunLogController_Index_NonAdmin_Forbidden": "#841: a non-Admin/ETLAdmin authenticated caller must be rejected by _EtlRunLogController's role gate"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured verbatim against the committed baseline (stale demo.db under bin/ removed first; mutant patch applied via git apply, test run, then reverted via git apply -R): 'Assert.AreEqual failed. Expected:<Found>. Actual:<Forbidden>. #841: a non-Admin/ETLAdmin authenticated caller must be rejected by _EtlRunLogController's role gate (a 302 to AccessDeniedPath, from ControllerBase.Forbid()'s cookie-auth challenge). Got 403 Forbidden.' Confirmed via python3 test/mutants/run_mutant.py --mutant etl841-runlogcontroller-gate-neutralize: 'VERDICT: KILLED' / 'GATE: PASS'.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlDeadLetterRow_TenantA_CanReadOwnRow",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlDeadLetterRow_TenantA_CanReadOwnRow"
+  ]
+}

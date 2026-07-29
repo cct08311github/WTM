@@ -21,6 +21,16 @@ namespace WalkingTec.Mvvm.Etl.Governance;
 /// <see cref="EtlErrorSanitizer.SanitizeRaw"/> to redact connection-string credentials
 /// that could appear in values originating from configuration columns.
 /// </remarks>
+/// <remarks>
+/// #862: the only real construction site (<c>EtlQuartzJob.cs</c>) passes the Quartz-triggered
+/// background <c>Wtm.DC</c>, which has no HTTP identity and therefore always resolves
+/// <c>TenantCode == null</c> (see <c>EtlSchedulerService</c>'s class-level remarks for the
+/// full rationale). <see cref="MarkDeadLetterRunSucceededAsync"/> and
+/// <see cref="ClearDeadLetterFromFailedRunsAsync"/> key their updates by
+/// <c>(JobId, RunId)</c>/<c>(JobId, RunSucceeded)</c>, not by an ambient tenant scope, so both
+/// call <c>IgnoreQueryFilters()</c> explicitly -- without it, #862's <see cref="EtlDeadLetterRow"/>
+/// ITenant fix would silently stop these updates from matching any tenant-scoped row.
+/// </remarks>
 public sealed class DbEtlGovernanceStore : IEtlGovernanceStore
 {
     private readonly IDataContext _dc;
@@ -68,7 +78,9 @@ public sealed class DbEtlGovernanceStore : IEtlGovernanceStore
     public async Task MarkDeadLetterRunSucceededAsync(
         Guid jobId, Guid runId, CancellationToken cancellationToken = default)
     {
+        // #862: IgnoreQueryFilters() -- see class remarks.
         await _dc.Set<EtlDeadLetterRow>()
+            .IgnoreQueryFilters()
             .Where(r => r.JobId == jobId && r.RunId == runId)
             .ExecuteUpdateAsync(s => s.SetProperty(r => r.RunSucceeded, true), cancellationToken)
             .ConfigureAwait(false);
@@ -81,7 +93,9 @@ public sealed class DbEtlGovernanceStore : IEtlGovernanceStore
         // RunSucceeded == false only — never null (legacy rows) or true (permanent
         // successful-run history). See EtlDeadLetterRow.RunSucceeded for the state
         // machine this enforces.
+        // #862: IgnoreQueryFilters() -- see class remarks.
         await _dc.Set<EtlDeadLetterRow>()
+            .IgnoreQueryFilters()
             .Where(r => r.JobId == jobId && r.RunSucceeded == false)
             .ExecuteDeleteAsync(cancellationToken)
             .ConfigureAwait(false);

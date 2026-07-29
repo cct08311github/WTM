@@ -1,0 +1,22 @@
+{
+  "id": "etl862-applyetlmodels-deadletterrow-tenantfilter-neutralize",
+  "kind": "security",
+  "description": "Issue #862: EtlDeadLetterRow now implements ITenant (its TenantCode column was already populated by the pipeline but never used for filtering). This mutant deletes the ApplyEtlTenantFilter<EtlDeadLetterRow>(builder, context) call in ApplyEtlModels(ModelBuilder, EmptyContext), reproducing the exact pre-fix behaviour: a context scoped to tenant A can read tenant B's EtlDeadLetterRow (including RowJson, the actual quarantined source data) by id. Checked against EtlTenantIsolationTests.EtlDeadLetterRow_TenantA_CannotReadTenantB_Row, which seeds two EtlDeadLetterRow rows under two different tenants and asserts a context scoped to tenant A cannot resolve tenant B's row -- with the mutant applied, that read succeeds and the assertion fails. The green control, EtlDeadLetterRow_TenantA_CanReadOwnRow, asserts tenant A can still read its OWN row, proving the mutation has no broader collateral effect (e.g. breaking the EtlDeadLetterRows table registration itself).",
+  "target_file": "src/WalkingTec.Mvvm.Etl/ServiceCollectionExtensions.cs",
+  "target_symbol": "EtlDbContextExtensions.ApplyEtlModels(ModelBuilder, EmptyContext) -- the ApplyEtlTenantFilter<EtlDeadLetterRow>(builder, context) call",
+  "patch": "patches/etl862-applyetlmodels-deadletterrow-tenantfilter-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlDeadLetterRow_TenantA_CannotReadTenantB_Row",
+  "red_tests": [
+    "WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlDeadLetterRow_TenantA_CannotReadTenantB_Row"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlDeadLetterRow_TenantA_CannotReadTenantB_Row": "#862: a context scoped to tenant A must NOT resolve tenant B's EtlDeadLetterRow by GUID"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured verbatim against the committed baseline (stale demo.db under bin/ removed first; mutant patch applied via git apply, test run, then reverted via git apply -R): 'Assert.IsNull failed. #862: a context scoped to tenant A must NOT resolve tenant B's EtlDeadLetterRow by GUID -- RowJson holds the actual source rows that failed, so this is a real cross-tenant data-content read if it succeeds.' Confirmed via python3 test/mutants/run_mutant.py --mutant etl862-applyetlmodels-deadletterrow-tenantfilter-neutralize: 'VERDICT: KILLED' / 'GATE: PASS'.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlDeadLetterRow_TenantA_CanReadOwnRow",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlDeadLetterRow_TenantA_CanReadOwnRow"
+  ]
+}

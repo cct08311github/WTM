@@ -287,4 +287,126 @@ public class EtlRbacTests
             "IsQuickDebug=false 時仍應執行角色檢查");
     }
 
+    // ─── 8. OnActionExecuting — 新增三個 controller 的角色守衛（Issue #841）────
+    //
+    // _EtlRunLogController/_EtlMonitorController/_EtlSchemaController 原本 grep -c
+    // OnActionExecuting 為 0（只剩頁面級 URL-RBAC）。這裡的正面案例（Admin/ETLAdmin 通過）
+    // 是這三個新守衛目前唯一可行的驗證方式 —— test/WalkingTec.Mvvm.Api.Test/
+    // EtlControllerGateHttpTests.cs 的類別文件記錄了一個更深層、獨立於 #841/#862 的既有缺陷：
+    // WalkingTec.Mvvm.Etl 組件的 controller 透過真實 HTTP 請求時，從未接到 WTM 的三個全域
+    // action filter（DataContextFilter/PrivilegeFilter/FrameworkFilter），導致 Wtm 在
+    // OnActionExecuting 時恆為 null，讓這裡驗證的角色判斷邏輯即使正確，也對『真實 Admin 呼叫
+    // 應該成功』這件事無效 —— 該檔案的負面案例（非 Admin 被拒）仍然是有意義的真實 HTTP 測試，
+    // 因為 Wtm 恆為 null 剛好造成『每個人都被拒絕』，非 Admin 的期望結果不受影響；但『Admin
+    // 應該通過』只能在這裡、以這種方式驗證。
+
+    private static _EtlMonitorController CreateEtlMonitorControllerWithRoles(params string[] roleCodes)
+    {
+        var controller = new _EtlMonitorController(new EtlProgressTracker());
+        controller.Wtm = MockWtmContext.CreateWtmContext();
+        controller.Wtm.LoginUserInfo!.Roles = roleCodes
+            .Select(r => new SimpleRole { RoleCode = r })
+            .ToList();
+        return controller;
+    }
+
+    private static _EtlRunLogController CreateEtlRunLogControllerWithRoles(params string[] roleCodes)
+    {
+        var controller = new _EtlRunLogController(null!);
+        controller.Wtm = MockWtmContext.CreateWtmContext();
+        controller.Wtm.LoginUserInfo!.Roles = roleCodes
+            .Select(r => new SimpleRole { RoleCode = r })
+            .ToList();
+        return controller;
+    }
+
+    private static _EtlSchemaController CreateEtlSchemaControllerWithRoles(params string[] roleCodes)
+    {
+        var controller = new _EtlSchemaController(NullLogger<_EtlSchemaController>.Instance);
+        controller.Wtm = MockWtmContext.CreateWtmContext();
+        controller.Wtm.LoginUserInfo!.Roles = roleCodes
+            .Select(r => new SimpleRole { RoleCode = r })
+            .ToList();
+        return controller;
+    }
+
+    private static ActionExecutingContext MakeActionContext(ControllerBase controller)
+    {
+        var httpContext = new DefaultHttpContext();
+        var actionContext = new ActionContext(httpContext, new RouteData(), new ActionDescriptor());
+        return new ActionExecutingContext(
+            actionContext,
+            new List<IFilterMetadata>(),
+            new Dictionary<string, object?>(),
+            controller);
+    }
+
+    [TestMethod]
+    public void EtlMonitorController_OnActionExecuting_ETLAdmin_role_is_allowed()
+    {
+        var controller = CreateEtlMonitorControllerWithRoles("ETLAdmin");
+        var context = MakeActionContext(controller);
+        controller.OnActionExecuting(context);
+        Assert.IsNull(context.Result, "#841: ETLAdmin 角色應允許通過 _EtlMonitorController 的守衛");
+    }
+
+    [TestMethod]
+    public void EtlMonitorController_OnActionExecuting_non_admin_role_is_forbidden()
+    {
+        var controller = CreateEtlMonitorControllerWithRoles("Manager");
+        var context = MakeActionContext(controller);
+        controller.OnActionExecuting(context);
+        Assert.IsInstanceOfType(context.Result, typeof(ForbidResult),
+            "#841: 非 Admin/ETLAdmin 角色應被 _EtlMonitorController 的守衛回傳 ForbidResult");
+    }
+
+    [TestMethod]
+    public void EtlRunLogController_OnActionExecuting_ETLAdmin_role_is_allowed()
+    {
+        var controller = CreateEtlRunLogControllerWithRoles("ETLAdmin");
+        var context = MakeActionContext(controller);
+        controller.OnActionExecuting(context);
+        Assert.IsNull(context.Result, "#841: ETLAdmin 角色應允許通過 _EtlRunLogController 的守衛");
+    }
+
+    [TestMethod]
+    public void EtlRunLogController_OnActionExecuting_non_admin_role_is_forbidden()
+    {
+        var controller = CreateEtlRunLogControllerWithRoles("Manager");
+        var context = MakeActionContext(controller);
+        controller.OnActionExecuting(context);
+        Assert.IsInstanceOfType(context.Result, typeof(ForbidResult),
+            "#841: 非 Admin/ETLAdmin 角色應被 _EtlRunLogController 的守衛回傳 ForbidResult");
+    }
+
+    [TestMethod]
+    public void EtlSchemaController_OnActionExecuting_ETLAdmin_role_is_allowed()
+    {
+        var controller = CreateEtlSchemaControllerWithRoles("ETLAdmin");
+        var context = MakeActionContext(controller);
+        controller.OnActionExecuting(context);
+        Assert.IsNull(context.Result, "#841: ETLAdmin 角色應允許通過 _EtlSchemaController 的守衛");
+    }
+
+    [TestMethod]
+    public void EtlSchemaController_OnActionExecuting_non_admin_role_is_forbidden()
+    {
+        var controller = CreateEtlSchemaControllerWithRoles("Manager");
+        var context = MakeActionContext(controller);
+        controller.OnActionExecuting(context);
+        Assert.IsInstanceOfType(context.Result, typeof(ForbidResult),
+            "#841: 非 Admin/ETLAdmin 角色應被 _EtlSchemaController 的守衛回傳 ForbidResult");
+    }
+
+    [TestMethod]
+    public void EtlSchemaController_OnActionExecuting_IsQuickDebug_true_bypasses_role_check()
+    {
+        var controller = CreateEtlSchemaControllerWithRoles("Manager");
+        controller.Wtm!.ConfigInfo!.IsQuickDebug = true;
+        var context = MakeActionContext(controller);
+        controller.OnActionExecuting(context);
+        Assert.IsNull(context.Result,
+            "#841: IsQuickDebug=true 時應繞過 _EtlSchemaController 的角色守衛");
+    }
+
 }

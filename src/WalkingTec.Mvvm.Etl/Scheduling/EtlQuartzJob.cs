@@ -42,7 +42,15 @@ public class EtlQuartzJob : WtmJob
         var tracker = Sp.GetService<EtlProgressTracker>();
 
         // 1. 讀 EtlJobDefinition
-        var jobDef = await dc.Set<EtlJobDefinition>().FindAsync(jobDefId);
+        // #862: IgnoreQueryFilters() -- Quartz-triggered background execution has no HTTP
+        // identity, so dc.TenantCode is always null (see EtlSchedulerService's class-level
+        // remarks for the full rationale, which applies identically here). Without this, the
+        // ITenant filter added for EtlJobDefinition would make every tenant-scoped job
+        // silently stop executing -- FindAsync cannot bypass filters, so FirstOrDefaultAsync
+        // is used instead.
+        var jobDef = await dc.Set<EtlJobDefinition>()
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(j => j.ID == jobDefId);
         if (jobDef == null) return;
 
         // 2. 檢查 SkipCount
@@ -57,7 +65,10 @@ public class EtlQuartzJob : WtmJob
                 Trigger = trigger,
                 Result = EtlRunResult.Skipped,
                 StartedAt = Wtm.TimeProvider.GetUtcNow().UtcDateTime,
-                FinishedAt = Wtm.TimeProvider.GetUtcNow().UtcDateTime
+                FinishedAt = Wtm.TimeProvider.GetUtcNow().UtcDateTime,
+                // #841/#862: inherit the owning job's tenant -- see the identical comment in
+                // EtlSchedulerService.ResetGhostRunningJobsAsync.
+                TenantCode = jobDef.TenantCode,
             });
 
             await dc.SaveChangesAsync();
@@ -74,7 +85,9 @@ public class EtlQuartzJob : WtmJob
         // Keep jobDef.Status in memory so the finally-block Update picks up the correct value.
         jobDef.Status = EtlJobStatus.Running;
         var runningUpdateTime = Wtm.TimeProvider.GetLocalNow().DateTime;
+        // #862: IgnoreQueryFilters() -- see the comment on the FindAsync replacement above.
         await dc.Set<EtlJobDefinition>()
+            .IgnoreQueryFilters()
             .Where(j => j.ID == jobDefId)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(j => j.Status, EtlJobStatus.Running)
@@ -259,7 +272,10 @@ public class EtlQuartzJob : WtmJob
                 ErrorMessage = result?.ErrorMessage,
                 StartedAt = startedAt,
                 FinishedAt = Wtm.TimeProvider.GetUtcNow().UtcDateTime,
-                WatermarkSnapshot = jobDef.LastWatermarkValue
+                WatermarkSnapshot = jobDef.LastWatermarkValue,
+                // #841/#862: inherit the owning job's tenant -- see the identical comment in
+                // EtlSchedulerService.ResetGhostRunningJobsAsync.
+                TenantCode = jobDef.TenantCode,
             };
             dc.Set<EtlRunLog>().Add(runLog);
 

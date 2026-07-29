@@ -11,7 +11,18 @@ namespace WalkingTec.Mvvm.Etl.Models;
 /// allowing operators to inspect and optionally replay failures.
 /// Only persisted when <see cref="Pipeline.EtlPipelineConfig.EnableDeadLetter"/> is true.
 /// </summary>
-public class EtlDeadLetterRow : BasePoco
+/// <remarks>
+/// Issue #862: implements <see cref="ITenant"/> so the DataContext global query filter
+/// (applied via <c>EtlDbContextExtensions.ApplyEtlModels(ModelBuilder, EmptyContext)</c> --
+/// see that method's remarks for why the extra parameter is required) scopes dead-letter rows
+/// to the current tenant when multi-tenancy is enabled. <see cref="TenantCode"/> already
+/// existed and was already populated by the pipeline before this change (see its own doc
+/// comment) -- the interface declaration is the entire fix, no migration required. In
+/// single-tenant deployments (<c>EnableTenant = false</c>) the filter still applies (it is
+/// unconditional in <c>DataContext.cs</c>) but has no observable effect, since a context's own
+/// TenantCode is null there and this column was already null for every row in that mode.
+/// </remarks>
+public class EtlDeadLetterRow : BasePoco, ITenant
 {
     [Required]
     public Guid JobId { get; set; }

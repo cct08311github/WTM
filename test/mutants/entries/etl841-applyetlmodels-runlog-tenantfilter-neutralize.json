@@ -1,0 +1,22 @@
+{
+  "id": "etl841-applyetlmodels-runlog-tenantfilter-neutralize",
+  "kind": "security",
+  "description": "Issue #841 (#841's original subject entity): EtlRunLog now implements ITenant with a new TenantCode column, populated from the owning EtlJobDefinition at every write site. This mutant deletes the ApplyEtlTenantFilter<EtlRunLog>(builder, context) call in ApplyEtlModels(ModelBuilder, EmptyContext), reproducing the pre-fix behaviour: a context scoped to tenant A can read tenant B's ETL run history (JobId, trigger, result, row counts, error messages, watermark snapshots) by id -- the exact hole #841 describes as making _EtlRunLogController's authorization gate meaningless no matter how the gate itself is fixed. Checked against EtlTenantIsolationTests.EtlRunLog_TenantA_CannotReadTenantB_Log, which seeds two EtlRunLog rows under two different tenants and asserts a context scoped to tenant A cannot resolve tenant B's row -- with the mutant applied, that read succeeds and the assertion fails. The green control, EtlRunLog_TenantA_CanReadOwnLog, asserts tenant A can still read its OWN run log, proving the mutation has no broader collateral effect on the EtlRunLogs table registration.",
+  "target_file": "src/WalkingTec.Mvvm.Etl/ServiceCollectionExtensions.cs",
+  "target_symbol": "EtlDbContextExtensions.ApplyEtlModels(ModelBuilder, EmptyContext) -- the ApplyEtlTenantFilter<EtlRunLog>(builder, context) call",
+  "patch": "patches/etl841-applyetlmodels-runlog-tenantfilter-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlRunLog_TenantA_CannotReadTenantB_Log",
+  "red_tests": [
+    "WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlRunLog_TenantA_CannotReadTenantB_Log"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlRunLog_TenantA_CannotReadTenantB_Log": "#841/#862: a context scoped to tenant A must NOT resolve tenant B's EtlRunLog by GUID"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured verbatim against the committed baseline (stale demo.db under bin/ removed first; mutant patch applied via git apply, test run, then reverted via git apply -R): 'Assert.IsNull failed. #841/#862: a context scoped to tenant A must NOT resolve tenant B's EtlRunLog by GUID.' Confirmed via python3 test/mutants/run_mutant.py --mutant etl841-applyetlmodels-runlog-tenantfilter-neutralize: 'VERDICT: KILLED' / 'GATE: PASS'.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlRunLog_TenantA_CanReadOwnLog",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlRunLog_TenantA_CanReadOwnLog"
+  ]
+}

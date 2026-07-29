@@ -1,8 +1,5 @@
 #nullable enable
-using System;
-using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Etl;
 using WalkingTec.Mvvm.Etl.Models;
@@ -27,17 +24,13 @@ internal class GovernanceTestDataContext : EmptyContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
-        modelBuilder.ApplyEtlModels();
-
-        // Explicitly apply the ITenant global query filter for EtlJobDefinition.
-        // Utils.GetAllModels() relies on a static cache that may not include
-        // EtlJobDefinition when tests run in isolation; applying it here ensures
-        // tenant isolation works correctly regardless of assembly scan order.
-        var pe = Expression.Parameter(typeof(EtlJobDefinition));
-        var exp = Expression.Equal(
-            Expression.Property(pe, "TenantCode"),
-            Expression.PropertyOrField(Expression.Constant(this), "TenantCode"));
-        var lambda = Expression.Lambda<Func<EtlJobDefinition, bool>>(exp, pe);
-        modelBuilder.Entity<EtlJobDefinition>().HasQueryFilter(lambda);
+        // #862: ApplyEtlModels(this) both registers the ETL tables AND applies the ITenant
+        // query filter for every ETL entity that implements it -- see that method's remarks in
+        // WalkingTec.Mvvm.Etl/ServiceCollectionExtensions.cs for why passing the context
+        // instance is required. This used to be done by hand here (a workaround the doc
+        // comment attributed to Utils.GetAllModels()'s static cache); the real cause was
+        // ApplyEtlModels()'s zero-arg overload never being able to reach a context instance at
+        // all, and the hand-applied filter only ever covered EtlJobDefinition.
+        modelBuilder.ApplyEtlModels(this);
     }
 }

@@ -18,6 +18,27 @@ namespace WalkingTec.Mvvm.Etl.Scheduling;
 /// ETL 排程管理服務 — 封裝 Quartz IScheduler 操作，提供 UI 層呼叫的方法。
 /// 使用 DB state + RAMJobStore 混合方案。
 /// </summary>
+/// <remarks>
+/// #862: every method here resolves its OWN <see cref="WTMContext"/> from a fresh
+/// <c>_sp.CreateScope()</c>, never the calling controller's per-request <c>Wtm</c> — even
+/// when invoked synchronously from a controller action (e.g. <see cref="TriggerNowAsync"/>).
+/// That freshly-resolved context has no HTTP identity, so its <c>TenantCode</c> is always
+/// null (see <c>WTMContext.CreateDC</c>: <c>tenantCode</c> only resolves from
+/// <c>LoginUserInfo.CurrentTenant</c>, which requires an authenticated request). This service
+/// is the single shared, app-wide job scheduler/executor — like a cron daemon, it must see and
+/// operate on every tenant's <see cref="EtlJobDefinition"/>/<see cref="EtlRunLog"/>/
+/// <see cref="EtlDeadLetterRow"/> rows regardless of which tenant they belong to; the caller
+/// only ever identifies a specific row by id (<c>jobId</c>/<c>runLogId</c>), never by an
+/// ambient tenant scope. Every <see cref="ITenant"/>-filtered read below therefore calls
+/// <c>IgnoreQueryFilters()</c> explicitly -- without it, #862's ITenant fix would silently
+/// stop the scheduler from ever finding a tenant-scoped job again (confirmed empirically while
+/// building this fix: a <c>FindAsync</c> for a real tenant's job returned null once the ITenant
+/// filter started applying). This is deliberately DIFFERENT from the VM layer
+/// (<c>EtlJobListVM</c>, <c>EtlRunLogListVM</c>, <c>EtlJobDefinitionVM</c>) and
+/// <c>EtlDashboardService.BuildSummary</c>, both of which correctly use the calling
+/// controller's own <c>Wtm.DC</c> and SHOULD stay tenant-scoped -- that is the actual security
+/// fix #841/#862 exist to deliver for the admin UI.
+/// </remarks>
 public class EtlSchedulerService
 {
     private IScheduler? _scheduler;
@@ -40,7 +61,10 @@ public class EtlSchedulerService
         using var scope = _sp.CreateScope();
         var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
 
+        // #862: IgnoreQueryFilters() -- see class remarks. Must find every tenant's
+        // stuck-Running job, not just null-tenant ones.
         var ghostJobs = await wtm.DC.Set<EtlJobDefinition>()
+            .IgnoreQueryFilters()
             .Where(j => j.Status == EtlJobStatus.Running)
             .ToListAsync();
 
@@ -61,6 +85,10 @@ public class EtlSchedulerService
                 ErrorMessage = "Process restarted while job was running — previous execution incomplete.",
                 StartedAt  = now,
                 FinishedAt = now,
+                // #841/#862: inherit the owning job's tenant so this run log is visible to
+                // that tenant once the ITenant filter applies -- without this it would stay
+                // permanently null and invisible to every real tenant.
+                TenantCode = job.TenantCode,
             });
         }
 
@@ -74,7 +102,10 @@ public class EtlSchedulerService
 
         using var scope = _sp.CreateScope();
         var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
+        // #862: IgnoreQueryFilters() -- see class remarks. Startup must load every tenant's
+        // enabled jobs, not just null-tenant ones.
         var jobs = await wtm.DC.Set<EtlJobDefinition>()
+            .IgnoreQueryFilters()
             .Where(j => j.Status == EtlJobStatus.Enabled || j.Status == EtlJobStatus.Failed)
             .ToListAsync();
 
@@ -101,7 +132,12 @@ public class EtlSchedulerService
             // Job 可能是 Disabled 狀態，臨時建立一次性觸發
             using var scope = _sp.CreateScope();
             var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
-            var jobDef = await wtm.DC.Set<EtlJobDefinition>().FindAsync(jobId);
+            // #862: IgnoreQueryFilters() -- see class remarks. FindAsync() cannot be used
+            // here because DbSet.FindAsync always respects global query filters with no way
+            // to opt out; FirstOrDefaultAsync is the IgnoreQueryFilters-compatible equivalent.
+            var jobDef = await wtm.DC.Set<EtlJobDefinition>()
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(j => j.ID == jobId);
             if (jobDef == null)
                 throw new InvalidOperationException($"Job {jobId} not found.");
             await ScheduleJobAsync(jobDef);
@@ -146,7 +182,10 @@ public class EtlSchedulerService
         // 同步更新 DB
         using var scope = _sp.CreateScope();
         var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
-        var jobDef = await wtm.DC.Set<EtlJobDefinition>().FindAsync(jobId);
+        // #862: IgnoreQueryFilters() -- see class remarks; FindAsync cannot bypass filters.
+        var jobDef = await wtm.DC.Set<EtlJobDefinition>()
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(j => j.ID == jobId);
         if (jobDef != null)
         {
             jobDef.CronExpression = newCron;
@@ -177,7 +216,9 @@ public class EtlSchedulerService
         // SkipCount is incremented server-side (j => j.SkipCount + 1) to eliminate
         // the read-then-write ABA race present in the old FindAsync + ++ + SaveChangesAsync path.
         var now = (_sp.GetService<TimeProvider>() ?? TimeProvider.System).GetLocalNow().DateTime;
+        // #862: IgnoreQueryFilters() -- see class remarks.
         await wtm.DC.Set<EtlJobDefinition>()
+            .IgnoreQueryFilters()
             .Where(j => j.ID == jobId)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(j => j.SkipCount, j => j.SkipCount + 1)
@@ -189,7 +230,10 @@ public class EtlSchedulerService
     {
         using var scope = _sp.CreateScope();
         var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
-        var jobDef = await wtm.DC.Set<EtlJobDefinition>().FindAsync(jobId);
+        // #862: IgnoreQueryFilters() -- see class remarks; FindAsync cannot bypass filters.
+        var jobDef = await wtm.DC.Set<EtlJobDefinition>()
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(j => j.ID == jobId);
         if (jobDef == null) return;
 
         jobDef.Status = EtlJobStatus.Enabled;
@@ -231,7 +275,10 @@ public class EtlSchedulerService
         using var scope = _sp.CreateScope();
         var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
 
-        var jobDef = await wtm.DC.Set<EtlJobDefinition>().FindAsync(new object[] { jobId }, cancellationToken);
+        // #862: IgnoreQueryFilters() -- see class remarks; FindAsync cannot bypass filters.
+        var jobDef = await wtm.DC.Set<EtlJobDefinition>()
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(j => j.ID == jobId, cancellationToken);
         if (jobDef == null)
             throw new InvalidOperationException($"Job {jobId} not found.");
 
@@ -287,10 +334,15 @@ public class EtlSchedulerService
     {
         using var scope = _sp.CreateScope();
         var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
-        var runLog = await wtm.DC.Set<EtlRunLog>().FindAsync(runLogId);
+        // #862: IgnoreQueryFilters() -- see class remarks; FindAsync cannot bypass filters.
+        var runLog = await wtm.DC.Set<EtlRunLog>()
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(r => r.ID == runLogId);
         if (runLog == null) return;
 
-        var jobDef = await wtm.DC.Set<EtlJobDefinition>().FindAsync(runLog.JobId);
+        var jobDef = await wtm.DC.Set<EtlJobDefinition>()
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(j => j.ID == runLog.JobId);
         if (jobDef == null) return;
 
         // Guard 1: 拒絕在 Job 執行中觸發重跑。
@@ -341,7 +393,11 @@ public class EtlSchedulerService
 
         try
         {
+            // #862: IgnoreQueryFilters() -- see class remarks. Retention pruning is a global
+            // housekeeping policy and must delete every tenant's old logs, not just
+            // null-tenant ones.
             var deleted = await wtm.DC.Set<EtlRunLog>()
+                .IgnoreQueryFilters()
                 .Where(r => r.StartedAt < cutoff)
                 .ExecuteDeleteAsync(cancellationToken);
 
@@ -391,7 +447,11 @@ public class EtlSchedulerService
 
         try
         {
+            // #862: IgnoreQueryFilters() -- see class remarks. Retention pruning is a global
+            // housekeeping policy and must delete every tenant's old rows, not just
+            // null-tenant ones.
             var deleted = await wtm.DC.Set<EtlDeadLetterRow>()
+                .IgnoreQueryFilters()
                 .Where(r => r.QuarantinedAt < cutoff)
                 .ExecuteDeleteAsync(cancellationToken);
 
@@ -466,7 +526,9 @@ public class EtlSchedulerService
 
         using var scope = _sp.CreateScope();
         var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
+        // #862: IgnoreQueryFilters() -- see class remarks.
         await wtm.DC.Set<EtlJobDefinition>()
+            .IgnoreQueryFilters()
             .Where(j => j.ID == jobDefId)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(j => j.NextFireAt, nextFireAt)
@@ -485,7 +547,9 @@ public class EtlSchedulerService
         // (null parity with the old SaveChanges path — the interceptor also leaves UpdateBy
         // as-is when there is no active HTTP session).
         var now = (_sp.GetService<TimeProvider>() ?? TimeProvider.System).GetLocalNow().DateTime;
+        // #862: IgnoreQueryFilters() -- see class remarks.
         await wtm.DC.Set<EtlJobDefinition>()
+            .IgnoreQueryFilters()
             .Where(j => j.ID == jobId)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(j => j.Status, status)

@@ -1,0 +1,14 @@
+diff --git a/src/WalkingTec.Mvvm.Etl/Scheduling/EtlSchedulerService.cs b/src/WalkingTec.Mvvm.Etl/Scheduling/EtlSchedulerService.cs
+index 5d6ada039..0d72d0598 100644
+--- a/src/WalkingTec.Mvvm.Etl/Scheduling/EtlSchedulerService.cs
++++ b/src/WalkingTec.Mvvm.Etl/Scheduling/EtlSchedulerService.cs
+@@ -334,9 +334,7 @@ public class EtlSchedulerService
+     {
+         using var scope = _sp.CreateScope();
+         var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
+-        // #862: IgnoreQueryFilters() -- see class remarks; FindAsync cannot bypass filters.
+         var runLog = await wtm.DC.Set<EtlRunLog>()
+-            .IgnoreQueryFilters()
+             .FirstOrDefaultAsync(r => r.ID == runLogId);
+         if (runLog == null) return;
+ 

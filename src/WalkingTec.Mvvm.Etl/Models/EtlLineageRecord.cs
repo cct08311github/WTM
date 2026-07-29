@@ -12,13 +12,32 @@ namespace WalkingTec.Mvvm.Etl.Models;
 /// Written at the end of every successful run when
 /// <see cref="Pipeline.EtlPipelineConfig.EnableLineage"/> is true.
 /// </summary>
-public class EtlLineageRecord : BasePoco
+/// <remarks>
+/// Issue #862: implements <see cref="ITenant"/> so the DataContext global query filter
+/// (applied via <c>EtlDbContextExtensions.ApplyEtlModels(ModelBuilder, EmptyContext)</c>)
+/// scopes lineage records to the current tenant when multi-tenancy is enabled.
+/// <see cref="TenantCode"/> is a NEW column (unlike <see cref="EtlDeadLetterRow.TenantCode"/>,
+/// which already existed) -- see the #862 migration notes in CHANGELOG.md and
+/// docs/production-readiness.md for the ALTER TABLE + backfill-from-EtlJobDefinitions script
+/// existing deployments need to run, and the resulting visibility change for pre-existing rows.
+/// </remarks>
+public class EtlLineageRecord : BasePoco, ITenant
 {
     [Required]
     public Guid JobId { get; set; }
 
     [Required]
     public Guid RunId { get; set; }
+
+    /// <summary>
+    /// Tenant discriminator for multi-tenant isolation (#862). Populated by
+    /// <c>EtlPipelineExecutor</c> from the executing job's tenant code (the same value
+    /// <see cref="Pipeline.EtlPipelineConfig.DeadLetterTenantCode"/> carries for dead-letter
+    /// rows -- despite the name, it is the current job's tenant code generally, not
+    /// dead-letter-specific). Null in single-tenant deployments.
+    /// </summary>
+    [StringLength(50)]
+    public string? TenantCode { get; set; }
 
     /// <summary>Source kind identifier (e.g. "SqlServer", "Oracle", "CSV", "rest").</summary>
     [StringLength(50)]

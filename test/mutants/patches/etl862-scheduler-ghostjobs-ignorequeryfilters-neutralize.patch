@@ -1,0 +1,15 @@
+diff --git a/src/WalkingTec.Mvvm.Etl/Scheduling/EtlSchedulerService.cs b/src/WalkingTec.Mvvm.Etl/Scheduling/EtlSchedulerService.cs
+index e0a6e9e3d..515844afc 100644
+--- a/src/WalkingTec.Mvvm.Etl/Scheduling/EtlSchedulerService.cs
++++ b/src/WalkingTec.Mvvm.Etl/Scheduling/EtlSchedulerService.cs
+@@ -61,10 +61,7 @@ public class EtlSchedulerService
+         using var scope = _sp.CreateScope();
+         var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
+ 
+-        // #862: IgnoreQueryFilters() -- see class remarks. Must find every tenant's
+-        // stuck-Running job, not just null-tenant ones.
+         var ghostJobs = await wtm.DC.Set<EtlJobDefinition>()
+-            .IgnoreQueryFilters()
+             .Where(j => j.Status == EtlJobStatus.Running)
+             .ToListAsync();
+ 

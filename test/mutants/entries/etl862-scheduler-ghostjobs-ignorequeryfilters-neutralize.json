@@ -1,0 +1,22 @@
+{
+  "id": "etl862-scheduler-ghostjobs-ignorequeryfilters-neutralize",
+  "kind": "security",
+  "description": "Issue #862 correction: EtlSchedulerService/EtlQuartzJob/DbEtlGovernanceStore resolve their own background WTMContext with no HTTP identity, so TenantCode is always null there. Once EtlJobDefinition's ITenant filter is enforced, every read in this shared, app-wide scheduler must call IgnoreQueryFilters() or it silently stops seeing every tenant-scoped row. This mutant removes the IgnoreQueryFilters() call from EtlSchedulerService.ResetGhostRunningJobsAsync's ghostJobs query, reproducing the exact regression found while building this fix: a tenant-scoped EtlJobDefinition stuck in Running after a crash is no longer found by the startup ghost-job-reset sweep and its Status never flips to Failed. Checked against EtlTenantIsolationTests.EtlScheduler_ResetGhostRunningJobs_FindsTenantScopedJob_DespiteNoAmbientTenantIdentity, which seeds a tenant-scoped job with Status=Running, calls ResetGhostRunningJobsAsync, and asserts the job's Status is Failed afterward -- with the mutant applied, the job is never found so its Status stays Running and the assertion fails. The green control, EtlDeadLetterRow_TenantA_CanReadOwnRow, is unrelated to the scheduler and proves the mutation's build/test environment itself is not broken.",
+  "target_file": "src/WalkingTec.Mvvm.Etl/Scheduling/EtlSchedulerService.cs",
+  "target_symbol": "EtlSchedulerService.ResetGhostRunningJobsAsync -- the .IgnoreQueryFilters() call on the ghostJobs query",
+  "patch": "patches/etl862-scheduler-ghostjobs-ignorequeryfilters-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlScheduler_ResetGhostRunningJobs_FindsTenantScopedJob_DespiteNoAmbientTenantIdentity",
+  "red_tests": [
+    "WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlScheduler_ResetGhostRunningJobs_FindsTenantScopedJob_DespiteNoAmbientTenantIdentity"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlScheduler_ResetGhostRunningJobs_FindsTenantScopedJob_DespiteNoAmbientTenantIdentity": "#862: the background ghost-job-reset sweep must still find and reset a tenant-scoped job stuck in Running"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured verbatim against the committed baseline (stale demo.db under bin/ removed first; mutant patch applied via git apply, test run, then reverted via git apply -R) -- and independently, while first building this fix, by manually reverting the same IgnoreQueryFilters() call and re-running: 'Assert.AreEqual failed. Expected:<Failed>. Actual:<Running>. #862: the background ghost-job-reset sweep must still find and reset a tenant-scoped job stuck in Running, despite the sweep's own background context having no ambient tenant identity (TenantCode == null there).' Confirmed via python3 test/mutants/run_mutant.py --mutant etl862-scheduler-ghostjobs-ignorequeryfilters-neutralize: 'VERDICT: KILLED' / 'GATE: PASS'.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlDeadLetterRow_TenantA_CanReadOwnRow",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.EtlTenantIsolationTests.EtlDeadLetterRow_TenantA_CanReadOwnRow"
+  ]
+}

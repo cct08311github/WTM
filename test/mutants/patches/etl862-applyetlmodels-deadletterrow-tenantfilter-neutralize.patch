@@ -1,0 +1,12 @@
+diff --git a/src/WalkingTec.Mvvm.Etl/ServiceCollectionExtensions.cs b/src/WalkingTec.Mvvm.Etl/ServiceCollectionExtensions.cs
+index 2a1b1ed5a..4fefd2811 100644
+--- a/src/WalkingTec.Mvvm.Etl/ServiceCollectionExtensions.cs
++++ b/src/WalkingTec.Mvvm.Etl/ServiceCollectionExtensions.cs
+@@ -192,7 +192,6 @@ public static class EtlDbContextExtensions
+         // instead of relying on FrameworkContext.OnModelCreating's Pass 2 (which never sees
+         // these types -- see remarks above).
+         ApplyEtlTenantFilter<EtlJobDefinition>(builder, context);
+-        ApplyEtlTenantFilter<EtlDeadLetterRow>(builder, context);
+         ApplyEtlTenantFilter<EtlLineageRecord>(builder, context);
+         ApplyEtlTenantFilter<EtlRunLog>(builder, context);
+ 

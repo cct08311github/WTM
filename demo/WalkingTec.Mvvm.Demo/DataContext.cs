@@ -347,7 +347,11 @@ namespace WalkingTec.Mvvm.Demo
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
-            modelBuilder.ApplyEtlModels();
+            // #862: must pass `this` so ApplyEtlModels can bind its ITenant query filters to the
+            // current context instance -- the zero-arg overload can never do this (see its
+            // [Obsolete] message and ApplyEtlModels's own remarks in
+            // WalkingTec.Mvvm.Etl/ServiceCollectionExtensions.cs).
+            modelBuilder.ApplyEtlModels(this);
             // FIX-B2: register WorkFlow models so the designer store can use this DB context.
             modelBuilder.ApplyWorkFlowModels();
         }
