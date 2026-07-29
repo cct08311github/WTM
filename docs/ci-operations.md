@@ -205,8 +205,10 @@ testhost 崩潰），分散在互不相關的 PR 上——形狀都一樣：**�
 用 `needs:` 串接——這是本 repo 其他 workflow 已經在用、確定有效的基本功能（`ci-build.yml`
 的 `security-scan` needs `build-and-test`；`mutation-gate.yml` 的 `mutants` needs
 `changes`），現場重跑驗證確實會依序執行而非並行。下游兩個 job 都帶 `if: always()`，維持
-原本 matrix `fail-fast: false` 的語意——某條 leg 失敗不會連帶跳過後面的 leg。代價是
-workflow 總時長增加約一條 leg 的時間（2–4 分鐘），換取可預測、不再被資源競爭污染的結果。
+原本 matrix `fail-fast: false` 的語意——某條 leg 失敗不會連帶跳過後面的 leg。實測代價：
+修法前 run 5835（並行）總時長約 3 分 20 秒；修法後 run 5837（這個 `needs:` 串接版本，
+`workflow_dispatch` 現場跑）總時長約 8 分 58 秒——多了約 5.5 分鐘，因為三條 leg 不再
+重疊，時長變成三者相加。換取的是可預測、不再被資源競爭污染的結果。
 **沒有**調大 timeout——那只會延後問題、讓 CI 變慢（issue 本文已排除）；也沒有逐支修測試的
 時間假設——除了已經修好的 TC-33（`ccbcbe532`，拿掉 `force=True` 讓 Playwright 自己等
 layout 穩定）之外，其餘四種失敗的根因是資源競爭本身，逐支修無法解決同時開太多瀏覽器這

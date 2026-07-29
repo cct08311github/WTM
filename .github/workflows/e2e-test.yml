@@ -53,9 +53,10 @@ on:
 #
 # Each downstream job carries `if: always()` so one leg failing doesn't skip the next —
 # matching the matrix's old `fail-fast: false` (independent legs; every leg always gets a
-# chance to run and report its own result). Cost: the three legs now run back to back
-# instead of overlapping, adding roughly one leg's wall-clock time (~3 min) to the
-# workflow's total duration.
+# chance to run and report its own result). Measured cost: before-fix run 5835
+# (concurrent) took ~3m20s total; after-fix run 5837 (this needs:-chained version, live
+# workflow_dispatch) took ~8m58s — roughly +5.5min, since the three legs no longer
+# overlap at all (their durations now sum instead of overlapping).
 
 env:
   # PEP 668: allow pip into the disposable runner container's system Python when setup-python degrades (issue #292)
