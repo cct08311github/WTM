@@ -9,11 +9,23 @@ namespace WalkingTec.Mvvm.Core.Test.Helper
     /// the allowlist <c>BaseController.RedoUpdateModel</c>/<c>BaseApiController.RedoUpdateModel</c>
     /// now consult before writing a caller-supplied form/query key onto a VM via
     /// <see cref="PropertyHelper.SetPropertyValue"/>. These tests exercise the policy function
-    /// directly (no HTTP pipeline) so each guard — the curated gateway-name/declaring-type check,
-    /// the static-member check, and the depth cap — can be pinned in isolation. The end-to-end
-    /// proof that this actually stops the real <c>ConfigInfo.IsQuickDebug</c> exploit through a
-    /// live <c>/_Framework/GetPagingData</c> request lives in
+    /// directly (no HTTP pipeline) so each guard — the gateway-TYPE check, the static-member
+    /// check, the ambiguous-resolution check, and the depth cap — can be pinned in isolation. The
+    /// end-to-end proof that this actually stops the real <c>ConfigInfo.IsQuickDebug</c> exploit
+    /// through a live <c>/_Framework/GetPagingData</c> request lives in
     /// <c>WalkingTec.Mvvm.Api.Test.RequestBindingScopeHttpTests867</c>.
+    ///
+    /// <para>
+    /// <b>PR #884 cross-vendor review finding.</b> The version that first shipped checked
+    /// <c>member.DeclaringType</c> plus a curated NAME set — a denylist, not a positive allowlist.
+    /// A downstream VM could legally re-expose <c>Configs</c>/<c>GlobalData</c> under a name (or
+    /// declaring class) the policy had never heard of and sail straight through. The "five shapes"
+    /// tests below (<c>AliasProperty</c>/<c>NewShadowing</c>/<c>InterfaceTypedMember</c>/
+    /// <c>IntermediateBaseClass</c>/<c>GenericTypeParameter</c>) each construct exactly one such
+    /// bypass and assert it is now rejected — their absence from the original PR is why that
+    /// version shipped with the hole. See <c>RequestBindingPolicy</c>'s own class doc comment for
+    /// the fixed rule (reject by the TYPE each hop resolves to, not by name or declaring type).
+    /// </para>
     /// </summary>
     [TestClass]
     public class RequestBindingPolicyTests867
@@ -28,8 +40,9 @@ namespace WalkingTec.Mvvm.Core.Test.Helper
 
         // A downstream BaseVM subclass, the same shape as a real ListVM: adds its own Searcher
         // property plus, for the static-member test, a public static field that is NOT one of
-        // the curated gateway names — isolating the static-member guard from the
-        // gateway-name/declaring-type guard (both of which fire on "Wtm").
+        // the banned gateway types and is declared on a type that is not BaseVM/BaseSearcher/
+        // WTMContext — isolating the static-member guard from the gateway-type guard, which would
+        // not otherwise fire here.
         private class FixtureVM : BaseVM
         {
             public static string StaticSecret = "unchanged";
@@ -72,14 +85,14 @@ namespace WalkingTec.Mvvm.Core.Test.Helper
             Assert.IsTrue(RequestBindingPolicy.IsPathAllowed(vm, "ThisPropertyDoesNotExistAnywhere"));
         }
 
-        // ── gateway-name / declaring-type guard ──────────────────────────────
+        // ── gateway-TYPE guard: the direct, undisguised paths ────────────────
 
         [TestMethod]
         public void IsPathAllowed_BareWtm_ReturnsFalse()
         {
             var vm = new FixtureVM();
             Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "Wtm"),
-                "#867: 'Wtm' is declared on BaseVM and is the gateway to the whole WTMContext graph.");
+                "#867: 'Wtm' resolves to type WTMContext — a banned gateway type.");
         }
 
         [TestMethod]
@@ -89,33 +102,32 @@ namespace WalkingTec.Mvvm.Core.Test.Helper
             // reachable without ever naming "Wtm".
             var vm = new FixtureVM();
             Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "ConfigInfo.IsQuickDebug"),
-                "#867: 'ConfigInfo' is declared on BaseVM — must be rejected at the first hop.");
+                "#867: 'ConfigInfo' resolves to type Configs — must be rejected at the first hop.");
         }
 
         [TestMethod]
         public void IsPathAllowed_WtmDotConfigInfoDotIsQuickDebug_ReturnsFalse()
         {
-            // 3 segments — within MaxDepth, so this is rejected by the declaring-type/gateway
-            // check specifically, not by the depth cap. Isolates that guard from the depth cap
-            // for mutation-testing purposes.
+            // 3 segments — within MaxDepth, so this is rejected by the gateway-type check
+            // specifically, not by the depth cap. Isolates that guard from the depth cap for
+            // mutation-testing purposes.
             var vm = new FixtureVM();
             Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "Wtm.ConfigInfo.IsQuickDebug"),
-                "#867: 'Wtm' is declared on BaseVM — must be rejected at the first hop, well " +
-                "within the 3-segment depth cap.");
+                "#867: 'Wtm' resolves to type WTMContext — must be rejected at the first hop, " +
+                "well within the 3-segment depth cap.");
         }
 
         [TestMethod]
         public void IsPathAllowed_AliasedSearcherDotWtmDotConfigInfoDotIsQuickDebug_ReturnsFalse()
         {
-            // The issue's own alias example: "Searcher" itself is NOT a banned name (it is
-            // declared on FixtureVM, not on BaseVM/BaseSearcher), so a name blocklist keyed on
-            // the key's literal first segment would miss this entirely. The declaring-type check
-            // catches it at the SECOND hop instead, where "Wtm" resolves against FixtureSearcher
-            // and is found declared on BaseSearcher.
+            // "Searcher" itself is not a banned type (FixtureSearcher is not one of
+            // BannedGatewayTypes), so this proves the check fires on whichever hop actually
+            // resolves to a banned type — here, the SECOND hop, where "Wtm" resolves against
+            // FixtureSearcher's own Wtm property (type WTMContext).
             var vm = new FixtureVM();
             Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "Searcher.Wtm.ConfigInfo.IsQuickDebug"),
-                "#867: the declaring-type check must catch 'Wtm' as the SECOND hop, proving it " +
-                "is not a literal-first-segment name blocklist.");
+                "#867: the gateway-type check must catch 'Wtm' (type WTMContext) as the SECOND " +
+                "hop, proving the check is not scoped to only the key's first segment.");
         }
 
         [TestMethod]
@@ -123,7 +135,7 @@ namespace WalkingTec.Mvvm.Core.Test.Helper
         {
             var vm = new FixtureVM();
             Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "LoginUserInfo.ITCode"),
-                "#867: 'LoginUserInfo' is declared on BaseVM and is a per-request identity gateway.");
+                "#867: 'LoginUserInfo' resolves to type LoginUserInfo — a per-request identity gateway.");
         }
 
         [TestMethod]
@@ -131,22 +143,179 @@ namespace WalkingTec.Mvvm.Core.Test.Helper
         {
             var vm = new FixtureVM();
             Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "DC.CurrentUserCode"),
-                "#867: 'DC' is declared on BaseVM and is the data-context gateway.");
+                "#867: 'DC' resolves to type IDataContext — the data-context gateway.");
         }
 
-        // ── static-member guard (isolated from the gateway-name guard) ──────
+        // ── the five bypass shapes PR #884's review found (each its own fixture) ─
+
+        // Shape 1: alias property — a downstream VM exposes the exact same singleton under a
+        // name the old declaring-type/name check had never heard of.
+        private class AliasVM : BaseVM
+        {
+            public Configs? Settings => base.ConfigInfo;
+        }
+
+        [TestMethod]
+        public void IsPathAllowed_AliasProperty_ReturnsFalse()
+        {
+            var vm = new AliasVM();
+            Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "Settings.IsQuickDebug"),
+                "#867/PR#884 review shape 1 (alias property): 'Settings' is declared on AliasVM, " +
+                "not BaseVM, and named nothing the old policy recognised — but it resolves to " +
+                "type Configs, so the gateway-TYPE check must still reject it.");
+        }
+
+        // Shape 2: new-shadowing — a downstream VM re-declares the SAME name the base class uses,
+        // hiding (not overriding) BaseVM.ConfigInfo.
+        private class ShadowVM : BaseVM
+        {
+            public new Configs? ConfigInfo => base.ConfigInfo;
+        }
+
+        [TestMethod]
+        public void IsPathAllowed_NewShadowedConfigInfo_ReturnsFalse()
+        {
+            // Verified empirically (not assumed): Type.GetMember("ConfigInfo") on ShadowVM
+            // returns exactly ONE member — the derived, hiding property — not two. .NET's
+            // reflection resolves simple same-kind (property-hides-property) "new" hiding down to
+            // the single most-derived member before this policy ever sees it, so this case is
+            // caught by the gateway-TYPE check alone (the hiding property's own type is Configs),
+            // not by the ambiguous-resolution guard — see
+            // IsPathAllowed_AmbiguousNewShadowedNonGatewayProperty_ReturnsFalse below for the
+            // shape that DOES produce >1 members (hiding across member KINDS, e.g. a field hidden
+            // by a property).
+            var vm = new ShadowVM();
+            Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "ConfigInfo.IsQuickDebug"),
+                "#867/PR#884 review shape 2 (new-shadowing): 'ConfigInfo' declared with 'new' on " +
+                "ShadowVM resolves (as the sole, most-derived member) to type Configs, a banned " +
+                "gateway type — the gateway-TYPE check must reject it.");
+        }
+
+        // Shape 3: interface-typed member — a downstream VM exposes an alias whose DECLARED type
+        // is an interface implemented by a banned gateway type, not the concrete type directly.
+        // (A LITERAL C# "explicit interface implementation" — Configs IHasConfig.X => ... — is
+        // not independently reachable via Type.GetMember(name) at all on the concrete type; that
+        // was confirmed both by this review and independently here, so it is not a distinct
+        // bypass vector through this exact mechanism. The shape that DOES need covering is an
+        // ordinary public member whose declared return type happens to be one of the banned
+        // interfaces — IDataContext, ISessionService, IModelStateService, IDistributedCache,
+        // IStringLocalizer, IUIService — which IS reachable and must be rejected.)
+        private class InterfaceTypedVM : BaseVM
+        {
+            public IDataContext? Ctx => base.DC;
+        }
+
+        [TestMethod]
+        public void IsPathAllowed_InterfaceTypedGatewayAlias_ReturnsFalse()
+        {
+            var vm = new InterfaceTypedVM();
+            Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "Ctx.CurrentUserCode"),
+                "#867/PR#884 review shape 3 (interface-typed member): 'Ctx' is declared on " +
+                "InterfaceTypedVM and resolves to the INTERFACE type IDataContext (not a concrete " +
+                "class) — the gateway-type check must still reject it via IsAssignableFrom, not " +
+                "exact-type equality.");
+        }
+
+        // Shape 4: intermediate base class — the alias is declared on a class BETWEEN BaseVM and
+        // the concrete VM, so a check scoped only to "BaseVM or the concrete type" would miss it.
+        private class IntermediateBaseVM : BaseVM
+        {
+            public Configs? InheritedSettings => base.ConfigInfo;
+        }
+
+        private class ConcreteFromIntermediateVM : IntermediateBaseVM
+        {
+            // Intentionally empty — the alias lives on IntermediateBaseVM, neither on BaseVM
+            // itself nor on this concrete leaf type.
+        }
+
+        [TestMethod]
+        public void IsPathAllowed_AliasOnIntermediateBaseClass_ReturnsFalse()
+        {
+            var vm = new ConcreteFromIntermediateVM();
+            Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "InheritedSettings.IsQuickDebug"),
+                "#867/PR#884 review shape 4 (intermediate base class): 'InheritedSettings' is " +
+                "declared on IntermediateBaseVM — neither BaseVM nor the concrete leaf type — but " +
+                "resolves to type Configs, so the gateway-type check must still reject it " +
+                "regardless of which class in the hierarchy declares it.");
+        }
+
+        // Shape 5: generic type parameter — a downstream VM closes a generic base's type
+        // parameter over one of the banned gateway types.
+        private class GenericGatewayBase<TGateway> : BaseVM where TGateway : class
+        {
+            public TGateway? Gateway { get; set; }
+        }
+
+        private class ConcreteGenericVM : GenericGatewayBase<Configs>
+        {
+        }
+
+        [TestMethod]
+        public void IsPathAllowed_GenericTypeParameterClosedOverConfigs_ReturnsFalse()
+        {
+            var vm = new ConcreteGenericVM();
+            Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "Gateway.IsQuickDebug"),
+                "#867/PR#884 review shape 5 (generic type parameter): 'Gateway' is declared on the " +
+                "OPEN generic GenericGatewayBase<TGateway>, but ConcreteGenericVM closes TGateway " +
+                "over Configs — member.GetMemberType() resolves the SUBSTITUTED closed type " +
+                "(Configs), not the open parameter, so the gateway-type check must still reject it.");
+        }
+
+        // ── ambiguous resolution: fail closed, independent of gateway typing ──
+
+        // Verified empirically that this specific shape — hiding across member KINDS, a base
+        // FIELD hidden by a derived PROPERTY of the same name — is what actually makes
+        // Type.GetMember(name) return more than one result (2, here). Same-kind hiding
+        // (property-hides-property, as in ShadowVM above) does NOT: .NET's reflection resolves
+        // that down to the single most-derived member before this policy ever sees it. Neither
+        // "Label" candidate below resolves to a banned gateway type (both are plain strings),
+        // isolating the ambiguous-resolution guard from the gateway-type guard.
+        private class AmbiguousBaseVM : BaseVM
+        {
+            public string? Label = "base field";
+        }
+
+        private class AmbiguousShadowVM : AmbiguousBaseVM
+        {
+            public new string? Label { get; set; } = "derived property";
+        }
+
+        [TestMethod]
+        public void IsPathAllowed_FieldHiddenByPropertyOfSameName_ReturnsFalse()
+        {
+            // Confirms the premise before asserting on it: PropertyHelper.SetPropertyValue's own
+            // traversal unconditionally takes GetMember(...)[0], so whichever member metadata
+            // ordering puts first is what a real write would use — not a security boundary either
+            // of them should rely on.
+            var rawMembers = typeof(AmbiguousShadowVM).GetMember("Label");
+            Assert.AreEqual(2, rawMembers.Length,
+                "Sanity check: this fixture must genuinely produce an ambiguous GetMember(\"Label\") " +
+                "result (a base field hidden by a derived property) — otherwise this test would not " +
+                "be exercising the ambiguity guard at all.");
+
+            var vm = new AmbiguousShadowVM();
+            Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "Label"),
+                "#867/PR#884 review point 6: Type.GetMember can return more than one member for " +
+                "the same name (a field hidden by a differently-kinded property is the verified " +
+                "concrete case) — this policy must fail closed on ambiguity rather than trust " +
+                "members[0] to be the safe one, even when neither candidate individually resolves " +
+                "to a banned gateway type.");
+        }
+
+        // ── static-member guard (isolated from the gateway-type guard) ──────
 
         [TestMethod]
         public void IsPathAllowed_PublicStaticField_ReturnsFalse()
         {
-            // "StaticSecret" is not one of the curated gateway names, and FixtureVM is not
+            // "StaticSecret" does not resolve to a banned gateway type, and FixtureVM is not
             // BaseVM/BaseSearcher/WTMContext — this isolates the static-member guard from the
-            // gateway-name/declaring-type guard, which would not otherwise fire here.
+            // gateway-type guard, which would not otherwise fire here.
             var vm = new FixtureVM();
             Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "StaticSecret"),
                 "#867: Type.GetMember defaults to Public|Instance|Static, so a public static " +
                 "field is reachable through an instance path and must be rejected independently " +
-                "of the gateway-name check.");
+                "of the gateway-type check.");
         }
 
         [TestMethod]
@@ -173,7 +342,10 @@ namespace WalkingTec.Mvvm.Core.Test.Helper
         {
             // Every individual segment here is a legitimate, non-gateway, non-static member —
             // only the depth (4 > MaxDepth of 3) makes this rejected. Isolates the depth cap from
-            // the other two guards.
+            // the other guards. Still needed after the gateway-TYPE rewrite: the type check closes
+            // the "reachable alias" bypass, it does not bound how deep a chain of ordinary,
+            // non-gateway-typed properties can run before this policy has to give up walking it —
+            // see RequestBindingPolicy's own class doc comment.
             var vm = new FixtureVM();
             Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "Searcher.SortInfo.Property.Length"),
                 "#867: depth cap of 3 must reject a 4-segment path even when every individual " +
@@ -195,8 +367,9 @@ namespace WalkingTec.Mvvm.Core.Test.Helper
         public void IsPathAllowed_SearcherDotPage_ReturnsTrue()
         {
             // Page/Limit/Count/PageCount are declared directly on BaseSearcher itself (not a
-            // downstream subclass) — confirms the gateway-name list is curated, not "everything
-            // declared on BaseSearcher."
+            // downstream subclass), and their type (int/long) is not a banned gateway type —
+            // confirms BannedGatewayTypes is curated by TYPE, not "everything declared on
+            // BaseSearcher."
             var vm = new FixtureVM();
             Assert.IsTrue(RequestBindingPolicy.IsPathAllowed(vm, "Searcher.Page"));
             Assert.IsTrue(RequestBindingPolicy.IsPathAllowed(vm, "Searcher.Limit"));
