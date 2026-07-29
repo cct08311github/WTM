@@ -26,6 +26,7 @@ using SixLabors.ImageSharp.Processing;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Extensions;
 using WalkingTec.Mvvm.Core.Models;
+using WalkingTec.Mvvm.Core.Services;
 using WalkingTec.Mvvm.Core.Support.FileHandlers;
 
 namespace WalkingTec.Mvvm.Mvc
@@ -113,6 +114,23 @@ namespace WalkingTec.Mvvm.Mvc
                 r.RoleCode, "Admin", StringComparison.OrdinalIgnoreCase));
         }
 
+        // #827: _FrameworkController is the CONCRETE class MVC routes every /_Framework/*
+        // request to (see the class declaration above) -- it is not abstract, so a controller
+        // that inherits from it and overrides one of the five hooks below creates a SECOND
+        // controller the front end's hard-coded URLs never call. Resolving an
+        // IWtmFrameworkEndpointAuthorizer from DI, on this same concrete instance, is what
+        // makes a per-caller policy reachable on a real production route. Both null-conditional
+        // operators are required: HttpContext can itself be null in some test/console-invocation
+        // shapes (see the hook call sites' existing tests, several of which build a bare
+        // DefaultHttpContext with no RequestServices at all), and Microsoft.Extensions
+        // .DependencyInjection's own IServiceProvider extension methods are not used here on
+        // purpose -- GetService<T>() calls GetService(Type) internally, but a handful of this
+        // controller's own tests wire a Mock<IServiceProvider> that only stubs the SINGULAR
+        // Type-taking GetService(Type) overload (mirroring FrameworkControllerRbacHooksTest's
+        // CreateController helper); GetRequiredService/GetServices would throw against that mock.
+        private IWtmFrameworkEndpointAuthorizer? ResolveEndpointAuthorizer() =>
+            HttpContext?.RequestServices?.GetService(typeof(IWtmFrameworkEndpointAuthorizer)) as IWtmFrameworkEndpointAuthorizer;
+
         // #796: a bare Forbid() on these two hooks' denied path does NOT put a literal HTTP
         // 403 on the wire when the default cookie auth scheme is in effect — cookie auth
         // (FrameworkServiceExtension.cs, AddCookie(...).AccessDeniedPath) turns Forbid() into a
@@ -149,7 +167,21 @@ namespace WalkingTec.Mvvm.Mvc
         /// </summary>
         /// <param name="vmType">The resolved type of the VM the caller asked to export.</param>
         /// <returns><c>true</c> if the export is allowed; <c>false</c> to return 403.</returns>
-        protected virtual bool CanExportVm(Type vmType) => !(Wtm?.ConfigInfo?.EnforceVmExportAuthorization ?? false);
+        /// <remarks>
+        /// #827: before the config flag is consulted, this now asks a DI-resolved
+        /// <see cref="IWtmFrameworkEndpointAuthorizer"/> (if one is registered) via
+        /// <see cref="ResolveEndpointAuthorizer"/>. <see cref="WtmAuthorizationDecision.Allow"/>/
+        /// <see cref="WtmAuthorizationDecision.Deny"/> short-circuit straight to the matching
+        /// bool; <see cref="WtmAuthorizationDecision.Inherit"/> (including no policy registered
+        /// at all) falls through to exactly the flag-driven answer below -- unregistered, this
+        /// changes nothing.
+        /// </remarks>
+        protected virtual bool CanExportVm(Type vmType) => ResolveEndpointAuthorizer()?.CanExportVm(Wtm, vmType) switch
+        {
+            WtmAuthorizationDecision.Allow => true,
+            WtmAuthorizationDecision.Deny => false,
+            _ => !(Wtm?.ConfigInfo?.EnforceVmExportAuthorization ?? false),
+        };
 
         /// <summary>
         /// #814: Extension hook for per-caller authorization of the <see cref="FileAttachment"/>
@@ -206,7 +238,20 @@ namespace WalkingTec.Mvvm.Mvc
         /// <param name="fileId">The caller-supplied <see cref="FileAttachment"/> id, normalized to
         /// a canonical <see cref="Guid"/> "D"-format string.</param>
         /// <returns><c>true</c> if access is allowed; <c>false</c> to deny.</returns>
-        protected virtual bool CanAccessFile(string fileId) => !(Wtm?.ConfigInfo?.EnforceFileAccessAuthorization ?? false);
+        /// <remarks>
+        /// #827: see <see cref="CanExportVm"/>'s remarks -- same DI-first, flag-fallback shape.
+        /// A registered policy is consulted here for anonymous requests too (e.g.
+        /// <c>IsFilePublic=true</c> serving <c>GetFile</c>/<c>ViewFile</c> without a session):
+        /// <see cref="WTMContext.LoginUserInfo"/> may be <c>null</c> on <see cref="Wtm"/> when
+        /// this runs, and a policy must tolerate that itself -- this method does not special-case
+        /// anonymous callers.
+        /// </remarks>
+        protected virtual bool CanAccessFile(string fileId) => ResolveEndpointAuthorizer()?.CanAccessFile(Wtm, fileId) switch
+        {
+            WtmAuthorizationDecision.Allow => true,
+            WtmAuthorizationDecision.Deny => false,
+            _ => !(Wtm?.ConfigInfo?.EnforceFileAccessAuthorization ?? false),
+        };
 
         /// <summary>
         /// #814: normalizes a caller-supplied file id to a canonical <see cref="Guid"/>
@@ -246,7 +291,15 @@ namespace WalkingTec.Mvvm.Mvc
         /// </summary>
         /// <param name="vmType">The resolved type of the VM the caller is previewing a delete for.</param>
         /// <returns><c>true</c> if the preview is allowed; <c>false</c> to return 403.</returns>
-        protected virtual bool CanPreviewDelete(Type vmType) => !(Wtm?.ConfigInfo?.EnforceDeletePreviewAuthorization ?? false);
+        /// <remarks>
+        /// #827: see <see cref="CanExportVm"/>'s remarks -- same DI-first, flag-fallback shape.
+        /// </remarks>
+        protected virtual bool CanPreviewDelete(Type vmType) => ResolveEndpointAuthorizer()?.CanPreviewDelete(Wtm, vmType) switch
+        {
+            WtmAuthorizationDecision.Allow => true,
+            WtmAuthorizationDecision.Deny => false,
+            _ => !(Wtm?.ConfigInfo?.EnforceDeletePreviewAuthorization ?? false),
+        };
 
         // Note: the file-access hook (CanAccessFile, gating GetFile/GetFileName/ViewFile) was
         // carved out of the #796 work to issue #814 and lives there.
@@ -289,7 +342,15 @@ namespace WalkingTec.Mvvm.Mvc
         /// </summary>
         /// <param name="vmType">The resolved type of the VM the caller asked to import into.</param>
         /// <returns><c>true</c> if the import is allowed; <c>false</c> to return 403.</returns>
-        protected virtual bool CanImportVm(Type vmType) => !(Wtm?.ConfigInfo?.EnforceVmImportAuthorization ?? false);
+        /// <remarks>
+        /// #827: see <see cref="CanExportVm"/>'s remarks -- same DI-first, flag-fallback shape.
+        /// </remarks>
+        protected virtual bool CanImportVm(Type vmType) => ResolveEndpointAuthorizer()?.CanImportVm(Wtm, vmType) switch
+        {
+            WtmAuthorizationDecision.Allow => true,
+            WtmAuthorizationDecision.Deny => false,
+            _ => !(Wtm?.ConfigInfo?.EnforceVmImportAuthorization ?? false),
+        };
 
         // MVC-006 (BREAKING): Selector was previously [Public] (unauthenticated).
         // Changed to [AllRights] so an authenticated session is required.
@@ -492,7 +553,19 @@ namespace WalkingTec.Mvvm.Mvc
         /// <param name="entity">The entity instance that would be mutated.</param>
         /// <param name="propertyName">The property name requested by the client.</param>
         /// <returns><c>true</c> if the edit is allowed; <c>false</c> to return 403.</returns>
-        protected virtual bool CanEditProperty(object entity, string propertyName) => true;
+        /// <remarks>
+        /// #827: see <see cref="CanExportVm"/>'s remarks for the DI-first shape. This hook has
+        /// no <c>Enforce*Authorization</c> config flag at all (it is the only WRITE endpoint
+        /// among the five, and the only one that shipped with no no-code kill switch) -- so its
+        /// Inherit/no-policy fallback is the unconditional <c>true</c> this method always
+        /// returned before #827, unchanged.
+        /// </remarks>
+        protected virtual bool CanEditProperty(object entity, string propertyName) => ResolveEndpointAuthorizer()?.CanEditProperty(Wtm, entity, propertyName) switch
+        {
+            WtmAuthorizationDecision.Allow => true,
+            WtmAuthorizationDecision.Deny => false,
+            _ => true,
+        };
 
         // #532: IDataContext.UpdateProperty<T>(T, string) is generic on the *concrete*
         // entity type because it calls DbContext.Set<T>() internally, which throws for an
