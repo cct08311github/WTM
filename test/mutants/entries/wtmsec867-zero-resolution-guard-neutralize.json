@@ -1,0 +1,24 @@
+{
+  "id": "wtmsec867-zero-resolution-guard-neutralize",
+  "kind": "security",
+  "description": "Issue #867 (PR #884 cross-vendor review round 2, finding 1): reverts RequestBindingPolicy.IsPathAllowed's zero-resolution handling from `return false;` back to `break;` (src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs), reproducing the exact pre-fix bug the review found: when an intermediate segment fails to resolve (members.Length == 0), `break` exits the foreach loop and falls through to the trailing `return true;`, silently allowing the whole key. This was hidden by a comment claiming 'SetPropertyValue's own traversal would stop (middle hop) or no-op (final hop) too' -- which is false. PropertyHelper.SetPropertyValue's own intermediate loop (PropertyHelper.cs:523-551) ALSO `break`s on a middle-segment miss, but it does not reset tempType/temp -- they stay at whatever they were before the failed hop (the original source, for a first-segment miss) -- and execution falls through to resolve and WRITE the final segment against that frozen type (PropertyHelper.cs:553-559). Checked against RequestBindingPolicyTests867.IsPathAllowed_MissingIntermediateSegmentThenStaticFinal_ReturnsFalse ('Missing.StaticSecret' -- 'Missing' doesn't resolve on FixtureVM, but 'StaticSecret' does and IS static) and IsPathAllowed_MissingIntermediateSegmentThenAmbiguousFinal_ReturnsFalse ('Missing.Label' against AmbiguousShadowVM, where 'Label' is ambiguous) -- the exact two regression shapes the review asked for. With the guard reverted, both return true instead of false, which is what turns the assertions red. The green control, IsPathAllowed_SearcherDotCustomFilterField_ReturnsTrue, exercises a path where every segment resolves cleanly and is genuinely unaffected by this mutant.",
+  "target_file": "src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs",
+  "target_symbol": "RequestBindingPolicy.IsPathAllowed(Type, string, string) -- the zero-resolution `return false;` (originally `break;`) inside `if (members.Length == 0) { ... }`",
+  "patch": "patches/wtmsec867-zero-resolution-guard-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj",
+  "red_test_filter": "(FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_MissingIntermediateSegmentThenStaticFinal_ReturnsFalse)|(FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_MissingIntermediateSegmentThenAmbiguousFinal_ReturnsFalse)",
+  "red_tests": [
+    "WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_MissingIntermediateSegmentThenStaticFinal_ReturnsFalse",
+    "WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_MissingIntermediateSegmentThenAmbiguousFinal_ReturnsFalse"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_MissingIntermediateSegmentThenStaticFinal_ReturnsFalse": "Assert\\.IsFalse failed",
+    "WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_MissingIntermediateSegmentThenAmbiguousFinal_ReturnsFalse": "Assert\\.IsFalse failed"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against a clean checkout with the mutant patch applied (stale demo.db under bin/ removed first): both red tests failed with 'Assert.IsFalse failed.' (neither test has a custom message, so this is the full MSTest failure text for both). Confirmed via python3 test/mutants/run_mutant.py --mutant wtmsec867-zero-resolution-guard-neutralize: 'VERDICT: KILLED' / 'GATE: PASS'.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_SearcherDotCustomFilterField_ReturnsTrue",
+  "green_tests": [
+    "WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_SearcherDotCustomFilterField_ReturnsTrue"
+  ]
+}

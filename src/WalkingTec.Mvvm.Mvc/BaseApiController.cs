@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Localization;
 using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Core;
@@ -279,8 +280,15 @@ namespace WalkingTec.Mvvm.Mvc
 
         #region update viewmodel
         /// <summary>
-        /// Set viewmodel's properties to the matching items posted by user
+        /// Set viewmodel's properties to the matching items posted by user.
         /// </summary>
+        /// <remarks>
+        /// Issue #867: identical guard to <see cref="BaseController.RedoUpdateModel(object, string)"/> —
+        /// see that method's remarks for the full rationale. This copy exists because
+        /// <see cref="BaseApiController"/> and <see cref="BaseController"/> do not share a common
+        /// base; both call the same <see cref="RequestBindingPolicy"/> so the policy itself is
+        /// defined in exactly one place.
+        /// </remarks>
         /// <param name="vm">ViewModel</param>
         /// <param name="prefix">prefix</param>
         /// <returns>true if success</returns>
@@ -290,8 +298,16 @@ namespace WalkingTec.Mvvm.Mvc
             try
             {
                 BaseVM bvm = vm as BaseVM;
+                bool enforceScope = ConfigInfo?.EnforceRequestBindingScope != false;
                 foreach (var item in bvm.FC.Keys)
                 {
+                    if (enforceScope && !RequestBindingPolicy.IsPathAllowed(vm, item, prefix))
+                    {
+                        Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseApiController")
+                            ?.LogWarning("RedoUpdateModel rejected out-of-scope binding key '{Key}' for VM type {VmType} (Configs.EnforceRequestBindingScope)",
+                                LogSanitizer.Sanitize(item), vm.GetType().Name);
+                        continue;
+                    }
                     PropertyHelper.SetPropertyValue(vm, item, bvm.FC[item], prefix, true);
                 }
                 return true;

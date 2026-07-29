@@ -1,0 +1,24 @@
+{
+  "id": "wtmsec867-gateway-type-guard-neutralize",
+  "kind": "security",
+  "description": "Issue #867 (PR #884 cross-vendor review fix): neutralizes RequestBindingPolicy.IsPathAllowed's gateway-TYPE guard (`if (IsBannedGatewayType(memberType)) return false;`, src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs) with a compile-preserving `&& false` (not a deletion). This is the rewritten guard that replaced the original declaring-type/name check the review found bypassable via alias properties, new-shadowing, intermediate base classes, interface-typed members, and closed generic type parameters -- see wtmsec867-gateway-type-guard-neutralize-shapes for the mutant covering those five shapes directly. This entry covers the original, simpler end-to-end HTTP exploit the guard also still has to stop: RequestBindingScopeHttpTests867.GetPagingData_HostileConfigInfoIsQuickDebugField_DoesNotFlipConfig_LegitimateSearcherBindingStillWorks (direct key 'ConfigInfo.IsQuickDebug') and GetPagingData_HostileAliasedConfigInfoFields_DoNotFlipConfig (the issue's own alias example, 'Searcher.Wtm.ConfigInfo.IsQuickDebug', plus the depth-cap-isolating 'Wtm.ConfigInfo.IsQuickDebug'). Both assert on WTMContext's actual process-wide IOptionsMonitor<Configs>.CurrentValue.IsQuickDebug value (resolved from the factory's own DI container), not a response status code -- with the guard neutralized, the POST still returns 200 and IsQuickDebug is observably flipped to true. The green control, GetPagingData_HostileSearcherModeBatchField_DoesNotBypassRowFiltering, posts only 'Searcher.ZipCode'/'SearcherMode'/'Ids' -- none of which resolve to a banned gateway type -- so it is genuinely unaffected by this mutant.",
+  "target_file": "src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs",
+  "target_symbol": "RequestBindingPolicy.IsPathAllowed(Type, string, string) -- the `if (IsBannedGatewayType(memberType)) return false;` guard condition",
+  "patch": "patches/wtmsec867-gateway-type-guard-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Api.Test/WalkingTec.Mvvm.Api.Test.csproj",
+  "red_test_filter": "(FullyQualifiedName=WalkingTec.Mvvm.Api.Test.RequestBindingScopeHttpTests867.GetPagingData_HostileConfigInfoIsQuickDebugField_DoesNotFlipConfig_LegitimateSearcherBindingStillWorks)|(FullyQualifiedName=WalkingTec.Mvvm.Api.Test.RequestBindingScopeHttpTests867.GetPagingData_HostileAliasedConfigInfoFields_DoNotFlipConfig)",
+  "red_tests": [
+    "WalkingTec.Mvvm.Api.Test.RequestBindingScopeHttpTests867.GetPagingData_HostileConfigInfoIsQuickDebugField_DoesNotFlipConfig_LegitimateSearcherBindingStillWorks",
+    "WalkingTec.Mvvm.Api.Test.RequestBindingScopeHttpTests867.GetPagingData_HostileAliasedConfigInfoFields_DoNotFlipConfig"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Api.Test.RequestBindingScopeHttpTests867.GetPagingData_HostileConfigInfoIsQuickDebugField_DoesNotFlipConfig_LegitimateSearcherBindingStillWorks": "a caller-supplied 'ConfigInfo\\.IsQuickDebug' form field must never reach the process-wide Configs singleton",
+    "WalkingTec.Mvvm.Api.Test.RequestBindingScopeHttpTests867.GetPagingData_HostileAliasedConfigInfoFields_DoNotFlipConfig": "neither the 'Wtm\\.ConfigInfo\\.IsQuickDebug' nor the aliased 'Searcher\\.Wtm\\.ConfigInfo\\.IsQuickDebug' form field may reach the process-wide Configs singleton"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured verbatim against a clean checkout with the mutant patch applied (stale demo.db under bin/ removed first): GetPagingData_HostileConfigInfoIsQuickDebugField_DoesNotFlipConfig_LegitimateSearcherBindingStillWorks -> 'Assert.IsFalse failed. #867: a caller-supplied '\\''ConfigInfo.IsQuickDebug'\\'' form field must never reach the process-wide Configs singleton through RedoUpdateModel's raw reflection write.'; GetPagingData_HostileAliasedConfigInfoFields_DoNotFlipConfig -> 'Assert.IsFalse failed. #867: neither the '\\''Wtm.ConfigInfo.IsQuickDebug'\\'' nor the aliased '\\''Searcher.Wtm.ConfigInfo.IsQuickDebug'\\'' form field may reach the process-wide Configs singleton — the declaring-type check must catch '\\''Wtm'\\'' wherever in the dotted path it appears, not just as the key's literal first segment.'. Confirmed via python3 test/mutants/run_mutant.py --mutant wtmsec867-gateway-type-guard-neutralize: 'VERDICT: KILLED' / 'GATE: PASS'.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Api.Test.RequestBindingScopeHttpTests867.GetPagingData_HostileSearcherModeBatchField_DoesNotBypassRowFiltering",
+  "green_tests": [
+    "WalkingTec.Mvvm.Api.Test.RequestBindingScopeHttpTests867.GetPagingData_HostileSearcherModeBatchField_DoesNotBypassRowFiltering"
+  ]
+}

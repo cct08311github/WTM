@@ -1,0 +1,16 @@
+diff --git a/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs b/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
+index 03a63e932..1e7a648e2 100644
+--- a/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
++++ b/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
+@@ -248,7 +248,10 @@ namespace WalkingTec.Mvvm.Core
+                 if (IsStaticMember(member)) return false;
+ 
+                 var memberType = member.GetMemberType();
+-                if (IsBannedGatewayType(memberType)) return false;
++                // MUTANT test/mutants wtmsec867-gateway-type-guard-neutralize: condition
++                // neutralized (compile-preserving `&& false`) so the gateway-TYPE guard can never
++                // reject a path. See test/mutants/entries/wtmsec867-gateway-type-guard-neutralize.json.
++                if (IsBannedGatewayType(memberType) && false) return false;
+ 
+                 tempType = memberType;
+             }

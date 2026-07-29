@@ -1,0 +1,17 @@
+diff --git a/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs b/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
+index 03a63e932..39a0c6304 100644
+--- a/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
++++ b/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
+@@ -235,7 +235,11 @@ namespace WalkingTec.Mvvm.Core
+                     // (which would also have to be kept in lockstep with PropertyHelper forever).
+                     return false;
+                 }
+-                if (members.Length > 1)
++                // MUTANT test/mutants wtmsec867-ambiguous-resolution-guard-neutralize: condition
++                // neutralized (compile-preserving `&& false`) so the ambiguous-resolution guard
++                // can never reject a path. See test/mutants/entries/
++                // wtmsec867-ambiguous-resolution-guard-neutralize.json for the mutant record.
++                if (members.Length > 1 && false)
+                 {
+                     // Ambiguous resolution (verified concrete cause: a field hidden by a
+                     // differently-kinded property of the same name — see the class doc comment

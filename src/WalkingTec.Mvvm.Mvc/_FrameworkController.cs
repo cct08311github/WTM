@@ -415,6 +415,14 @@ namespace WalkingTec.Mvvm.Mvc
             if (listVM is IBasePagedListVM<TopBasePoco, ISearcher>)
             {
                 RedoUpdateModel(listVM);
+                // #867: GetPagingData was the only one of the five RedoUpdateModel call sites
+                // that did not re-pin SearcherMode after binding (Selector and both Export
+                // endpoints all do). A caller-supplied "SearcherMode=Batch" here would route
+                // GetSearchQuery through GetBatchQuery, which strips every Where the ListVM's own
+                // GetSearchQuery() applied — including row-level authorization filtering — before
+                // adding an Ids.Contains(...) clause. Pin it back to the mode this endpoint is
+                // actually for.
+                listVM.SearcherMode = ListVMSearchModeEnum.Search;
                 string url = "";
                 if (ConfigInfo.HasMainHost && Wtm.LoginUserInfo?.CurrentTenant == null)
                 {

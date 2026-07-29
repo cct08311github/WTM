@@ -1,0 +1,22 @@
+{
+  "id": "wtmsec867-ambiguous-resolution-guard-neutralize",
+  "kind": "security",
+  "description": "Issue #867 (PR #884 cross-vendor review point 6): neutralizes RequestBindingPolicy.IsPathAllowed's ambiguous-resolution guard (`if (members.Length > 1) { ... return false; }`, src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs) with a compile-preserving `&& false` (not a deletion). PropertyHelper.SetPropertyValue's own traversal unconditionally takes GetMember(...)[0]; the review's point was that this policy must not implicitly trust that ordering to be the safe candidate when Type.GetMember returns more than one member for a name. Empirically verified which C# shape actually produces that (not assumed): same-kind hiding (a property hidden by a `new` property of the same name, as in RequestBindingPolicyTests867's ShadowVM) does NOT -- .NET's reflection resolves that down to the single most-derived member before this policy ever sees it -- but hiding ACROSS member kinds (a base class FIELD hidden by a derived class PROPERTY of the same name) does: `typeof(AmbiguousShadowVM).GetMember(\"Label\").Length == 2`, confirmed by a sanity assertion inside the test itself. Checked against RequestBindingPolicyTests867.IsPathAllowed_FieldHiddenByPropertyOfSameName_ReturnsFalse, where neither candidate member individually resolves to a banned gateway type (both are plain strings) -- isolating this guard from the gateway-type guard. With the guard neutralized, IsPathAllowed reaches the `var member = members[0];` line and evaluates only that one candidate, returning true instead of false, which is what turns the assertion red. The green control, IsPathAllowed_SearcherDotCustomFilterField_ReturnsTrue, exercises an unambiguous legitimate path and is genuinely unaffected by this mutant.",
+  "target_file": "src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs",
+  "target_symbol": "RequestBindingPolicy.IsPathAllowed(Type, string, string) -- the `if (members.Length > 1) { ... return false; }` ambiguous-resolution guard condition",
+  "patch": "patches/wtmsec867-ambiguous-resolution-guard-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_FieldHiddenByPropertyOfSameName_ReturnsFalse",
+  "red_tests": [
+    "WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_FieldHiddenByPropertyOfSameName_ReturnsFalse"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_FieldHiddenByPropertyOfSameName_ReturnsFalse": "this policy must fail closed on ambiguity rather than trust members\\[0\\]"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured verbatim against a clean checkout with the mutant patch applied (stale demo.db under bin/ removed first): 'Assert.IsFalse failed. #867/PR#884 review point 6: Type.GetMember can return more than one member for the same name (a field hidden by a differently-kinded property is the verified concrete case) — this policy must fail closed on ambiguity rather than trust members[0] to be the safe one, even when neither candidate individually resolves to a banned gateway type.'. Confirmed via python3 test/mutants/run_mutant.py --mutant wtmsec867-ambiguous-resolution-guard-neutralize: 'VERDICT: KILLED' / 'GATE: PASS'.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_SearcherDotCustomFilterField_ReturnsTrue",
+  "green_tests": [
+    "WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_SearcherDotCustomFilterField_ReturnsTrue"
+  ]
+}
