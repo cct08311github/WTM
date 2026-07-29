@@ -67,11 +67,36 @@ jobs:
 
     - name: Test with coverage
       run: |
+        # #902: core.slnf spans 7 test projects. MSBuild's default -maxcpucount (4) was
+        # starting 4 testhosts + 4 coverlet collectors in the same second on this runner's
+        # 4 CPU / 3.8GiB Docker VM. That co-scheduling both OOM-killed testhosts mid-run
+        # ("Test Run Aborted" / "Total tests: Unknown" -- Api.Test, Core.Test and Etl.Test
+        # were all victims across different runs, not one assembly's problem) AND broke
+        # wall-clock/concurrency assumptions in unrelated tests via resource contention
+        # (#890's 10s budgets, #878's race preconditions). -m:1 makes MSBuild run one test
+        # project at a time: peak memory drops ~4x, and each serialized testhost gets the
+        # full 4 CPUs to itself, so individual runs get *faster* -- which makes #890/#878
+        # safer, not riskier. The tradeoff is a longer test step wall-clock; that's expected
+        # and was accepted after measurement, not assumed. Do not drop this for "speed up
+        # CI" without re-reading #902. (DOTNET_gcServer/UseSharedCompilation are a
+        # deliberate non-change here -- this step is --no-build and every project here
+        # targets Microsoft.NET.Sdk, which already defaults to workstation GC, so those
+        # knobs are a no-op for this job; see #902's comment. That reasoning does NOT
+        # transfer to e2e-test.yml, whose demo app is Microsoft.NET.Sdk.Web and genuinely
+        # defaults to server GC.)
+        #
+        # #902: all 7 projects previously logged to the same fixed name
+        # ("trx;LogFileName=test-results.trx"), so only the last assembly's TRX ever
+        # survived in ./TestResults -- every earlier one hit "WARNING: Overwriting results
+        # file". Dropping the fixed LogFileName lets VSTest auto-name each project's TRX so
+        # every assembly's results are kept; the "Upload test results" step's glob
+        # (TestResults/**/*.trx, below) already matches auto-named files.
         dotnet test core.slnf \
+          -m:1 \
           --no-build -c Release \
           --verbosity normal \
           --filter "TestCategory!=Integration" \
-          --logger "trx;LogFileName=test-results.trx" \
+          --logger "trx" \
           --collect:"XPlat Code Coverage" \
           --settings coverlet.runsettings \
           --results-directory ./TestResults
