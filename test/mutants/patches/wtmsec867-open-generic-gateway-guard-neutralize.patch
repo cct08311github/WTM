@@ -1,0 +1,21 @@
+diff --git a/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs b/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
+index 196eeda88..75a2a8fa9 100644
+--- a/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
++++ b/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
+@@ -331,7 +331,15 @@ namespace WalkingTec.Mvvm.Core
+ 
+             foreach (var banned in BannedGatewayTypes)
+             {
+-                if (banned.IsGenericTypeDefinition)
++                // MUTANT test/mutants wtmsec867-open-generic-gateway-guard-neutralize: the
++                // IsGenericTypeDefinition dispatch is neutralized (compile-preserving `&& false`)
++                // so every entry, including the open generic ones, falls through to the plain
++                // IsAssignableFrom branch below -- reproducing exactly the bug the review warned
++                // "do not assume the open generic works" about: IsAssignableFrom does not relate
++                // an open generic definition to any of its closed constructions, so
++                // IOptionsMonitor<>/IOptionsSnapshot<>/IOptions<> silently stop matching anything.
++                // See test/mutants/entries/wtmsec867-open-generic-gateway-guard-neutralize.json.
++                if (banned.IsGenericTypeDefinition && false)
+                 {
+                     if (IsOrImplementsOpenGenericDefinition(memberType, banned)) return true;
+                 }

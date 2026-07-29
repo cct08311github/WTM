@@ -388,13 +388,37 @@ namespace WalkingTec.Mvvm.Core.Test.Helper
         }
 
         [TestMethod]
-        public void IsPathAllowed_OptionsSnapshotValue_ReturnsFalse()
+        public void IsPathAllowed_OptionsSnapshotBareSegment_ReturnsFalse()
         {
+            // Deliberately a single-segment key ("Snapshot" alone), NOT "Snapshot.Value.NormalDays"
+            // — verified empirically that the 3-segment form is confounded: unlike
+            // IOptionsMonitor<T>.CurrentValue and IOptions<T>.Value (both declared DIRECTLY on
+            // their own interface), IOptionsSnapshot<T> does not redeclare "Value" — it only
+            // inherits it from IOptions<T> — and Type.GetMember on an INTERFACE type does NOT
+            // walk up to base interfaces the way it does for classes:
+            // typeof(IOptionsSnapshot<ActionLogRetentionOptions>).GetMember("Value").Length == 0.
+            // So "Snapshot.Value.NormalDays" is ALSO rejected by the (already fail-closed)
+            // zero-resolution guard regardless of whether IOptionsSnapshot<> is banned at all,
+            // which would make that key a false positive for isolating THIS guard specifically.
+            // This test instead checks the ONE hop that isolates it: does "Snapshot" itself
+            // (type IOptionsSnapshot<ActionLogRetentionOptions>) get rejected at hop 0.
             var vm = new OptionsFamilyVM();
-            Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "Snapshot.Value.NormalDays"),
+            Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "Snapshot"),
                 "#867/PR#884 review round 3: 'Snapshot' resolves to " +
-                "IOptionsSnapshot<ActionLogRetentionOptions> — must be rejected the same way as " +
-                "IOptionsMonitor<>.");
+                "IOptionsSnapshot<ActionLogRetentionOptions> — a closed construction of the open " +
+                "generic IOptionsSnapshot<> — and must be rejected via " +
+                "IsOrImplementsOpenGenericDefinition at this single hop, independent of any " +
+                "further traversal.");
+        }
+
+        [TestMethod]
+        public void IsPathAllowed_OptionsSnapshotValue_AlsoReturnsFalse_ButViaTheZeroResolutionGuardNotTheTypeGuard()
+        {
+            // Companion to the test above — NOT an independent proof of the open-generic guard
+            // (see that test's comment for why), but pinned here anyway because it IS still a
+            // real, correct outcome: the key must never be allowed, however it gets there.
+            var vm = new OptionsFamilyVM();
+            Assert.IsFalse(RequestBindingPolicy.IsPathAllowed(vm, "Snapshot.Value.NormalDays"));
         }
 
         [TestMethod]
