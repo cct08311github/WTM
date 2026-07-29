@@ -187,16 +187,27 @@ testhost 崩潰），分散在互不相關的 PR 上——形狀都一樣：**�
   的資源用量，但量測顯示真正的瓶頸是「同時幾個瀏覽器+dotnet process 在跑」而非拍照本身；
   改成只在失敗時拍照是可考慮的後續優化，未在本票處理範圍內（另開 issue 追蹤）。
 
-**修法**：`.github/workflows/e2e-test.yml` 的 `strategy.matrix` 加 `max-parallel: 1`，讓三條
-leg 依序跑而非搶著並行。代價是 workflow 總時長增加約一條 leg 的時間（2–4 分鐘），換取
-可預測、不再被資源競爭污染的結果。**沒有**調大 timeout——那只會延後問題、讓 CI 變慢
-（issue 本文已排除）；也沒有逐支修測試的時間假設——除了已經修好的 TC-33（`ccbcbe532`，
-拿掉 `force=True` 讓 Playwright 自己等 layout 穩定）之外，其餘四種失敗的根因是資源競爭
-本身，逐支修無法解決同時開太多瀏覽器這件事。
+**修法**：讓三條 leg 依序跑而非搶著並行。第一次嘗試是 `.github/workflows/e2e-test.yml`
+單一矩陣 job 加 `strategy.matrix.max-parallel: 1`——**這個設定完全沒有效果**：用
+`workflow_dispatch` 重跑後，三條 leg 的 job container 依然在 6 秒內全部啟動、整段並行。
+這是已知的 Gitea Actions 上游缺陷（[go-gitea/gitea#35561](https://github.com/go-gitea/gitea/issues/35561)：
+"Cannot make steps run sequentially with matrix and max-parallel = 1"），不是設定寫錯。
+最終改法：拆掉 matrix，改成三個獨立 job（`e2e-baseline` / `e2e-killswitch` / `e2e-island`），
+用 `needs:` 串接——這是本 repo 其他 workflow 已經在用、確定有效的基本功能（`ci-build.yml`
+的 `security-scan` needs `build-and-test`；`mutation-gate.yml` 的 `mutants` needs
+`changes`），現場重跑驗證確實會依序執行而非並行。下游兩個 job 都帶 `if: always()`，維持
+原本 matrix `fail-fast: false` 的語意——某條 leg 失敗不會連帶跳過後面的 leg。代價是
+workflow 總時長增加約一條 leg 的時間（2–4 分鐘），換取可預測、不再被資源競爭污染的結果。
+**沒有**調大 timeout——那只會延後問題、讓 CI 變慢（issue 本文已排除）；也沒有逐支修測試的
+時間假設——除了已經修好的 TC-33（`ccbcbe532`，拿掉 `force=True` 讓 Playwright 自己等
+layout 穩定）之外，其餘四種失敗的根因是資源競爭本身，逐支修無法解決同時開太多瀏覽器這
+件事。
 
 **SOP 影響**：e2e workflow 現在會比 #837 之前慢；不要因為「怎麼變慢了」重新把三條 leg
-改回並行——那正是 #885 五種失敗的共同觸發器。若未來 host 容量提升或 `local-runner`
-`capacity` 調整，可重新評估這個 `max-parallel` 值。
+改回並行——那正是 #885 五種失敗的共同觸發器。**也不要在這個 repo 的其他 workflow 用
+`strategy.matrix.max-parallel` 期待它限制並行度**——目前這個 Gitea 版本會靜默忽略它。
+若未來 host 容量提升、`local-runner` `capacity` 調整、或 Gitea 修好 #35561，可重新評估
+是否要把這三個 job 併回矩陣。
 
 ---
 
