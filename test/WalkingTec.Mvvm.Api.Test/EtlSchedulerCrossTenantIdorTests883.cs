@@ -6,10 +6,12 @@ using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Core.Services;
 using WalkingTec.Mvvm.Demo.Models._Admin;
 using WalkingTec.Mvvm.Etl.Models;
 using WalkingTec.Mvvm.Etl.Scheduling;
@@ -188,9 +190,32 @@ public class EtlSchedulerCrossTenantIdorTests883
         return new TenantContext(tenant, user, job, runLog);
     }
 
+    /// <summary>
+    /// #883 test-infra note: idempotent by URL -- <c>FrameworkMenu</c> is not <c>ITenant</c>
+    /// (one process-wide, cached-by-URL list; <c>WtmAuthorizationService.IsMenuAccessable</c>
+    /// resolves whichever row <c>Utils.FindMenu</c> finds for a given URL). demo.db is a
+    /// physical file that persists across separate <c>dotnet test</c> process invocations
+    /// (including <c>test/mutants/run_mutant.py</c>'s own multiple internal runs of this same
+    /// class within one mutant check, with no cleanup between them) -- a fresh
+    /// <c>ID = Guid.NewGuid()</c> menu row every <c>ClassInitialize</c> would accumulate
+    /// duplicate rows for the SAME URL over repeated invocations, and once more than one
+    /// exists, <c>FindMenu</c> can resolve to a stale one this run's own
+    /// <c>FunctionPrivilege</c> grants do not reference -- a 403 that looks like a production
+    /// regression but is purely test-data accumulation. Querying for an existing row by URL
+    /// first (and reusing its id) makes this correct regardless of how many times, or how
+    /// interleaved with other test classes, this method has run against the same demo.db.
+    /// </summary>
     private static void GrantMenuAccess(string pageName, string url)
     {
-        var menu = DbTestHelpers.Seed(_strictFactory, new FrameworkMenu
+        using var lookupScope = _strictFactory.Services.CreateScope();
+        var lookupDc = lookupScope.ServiceProvider.GetRequiredService<IWtmDataContextFactory>()
+            .CreateDC(currentTenant: null)!;
+        var existingMenuId = lookupDc.Set<FrameworkMenu>().AsNoTracking()
+            .Where(m => m.Url == url)
+            .Select(m => (Guid?)m.ID)
+            .FirstOrDefault();
+
+        var menuId = existingMenuId ?? DbTestHelpers.Seed(_strictFactory, new FrameworkMenu
         {
             ID = Guid.NewGuid(),
             PageName = pageName,
@@ -202,12 +227,13 @@ public class EtlSchedulerCrossTenantIdorTests883
             DisplayOrder = 0,
             IsInside = true,
             TenantAllowed = true,
-        });
+        }).ID;
+
         DbTestHelpers.Seed(_strictFactory, new FunctionPrivilege
         {
             ID = Guid.NewGuid(),
             RoleCode = RoleCode,
-            MenuItemId = menu.ID,
+            MenuItemId = menuId,
             Allowed = true,
             TenantCode = _tenantA.Tenant.TCode,
         });
@@ -215,7 +241,7 @@ public class EtlSchedulerCrossTenantIdorTests883
         {
             ID = Guid.NewGuid(),
             RoleCode = RoleCode,
-            MenuItemId = menu.ID,
+            MenuItemId = menuId,
             Allowed = true,
             TenantCode = _tenantB.Tenant.TCode,
         });

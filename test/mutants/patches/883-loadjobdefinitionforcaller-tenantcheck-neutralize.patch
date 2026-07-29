@@ -1,8 +1,9 @@
 diff --git a/src/WalkingTec.Mvvm.Etl/Scheduling/EtlSchedulerService.cs b/src/WalkingTec.Mvvm.Etl/Scheduling/EtlSchedulerService.cs
-index 0000000..0000000 100644
+index 8282ae6d4..d0b70b434 100644
 --- a/src/WalkingTec.Mvvm.Etl/Scheduling/EtlSchedulerService.cs
 +++ b/src/WalkingTec.Mvvm.Etl/Scheduling/EtlSchedulerService.cs
-@@ -696,7 +696,7 @@ namespace WalkingTec.Mvvm.Etl.Scheduling;
+@@ -696,7 +696,7 @@ public class EtlSchedulerService
+         CancellationToken cancellationToken = default)
      {
          var query = wtm.DC.Set<EtlJobDefinition>().IgnoreQueryFilters().Where(j => j.ID == jobId);
 -        if (!declaredSystemQuery)
