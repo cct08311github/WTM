@@ -1,0 +1,17 @@
+diff --git a/src/WalkingTec.Mvvm.Core/BaseCRUDVM.cs b/src/WalkingTec.Mvvm.Core/BaseCRUDVM.cs
+index 808a0956e..29d385c1a 100644
+--- a/src/WalkingTec.Mvvm.Core/BaseCRUDVM.cs
++++ b/src/WalkingTec.Mvvm.Core/BaseCRUDVM.cs
+@@ -2389,7 +2389,11 @@ namespace WalkingTec.Mvvm.Core
+                 if (preSaveSnapshot != null)
+                 {
+                     var lookup = LoadExistingSubItemFileIds(f, rejected);
+-                    if (!lookup.Succeeded)
++                    // MUTANT test/mutants existingsubitem875-lookup-failure-guard-neutralize:
++                    // condition neutralized (compile-preserving, `&& false`) so the whole-request
++                    // rejection can never fire. See test/mutants/manifest.json for the mutant
++                    // record.
++                    if (!lookup.Succeeded && false)
+                     {
+                         requestRejected = true;
+                         MSD?.AddModelError(" ", Localizer?["Sys.FileResolutionFailed"] ?? "Could not verify one or more file references; please try again.");

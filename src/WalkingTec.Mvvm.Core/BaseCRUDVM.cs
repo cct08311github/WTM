@@ -693,7 +693,24 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="updateAllFields">为true时，框架会更新当前Entity的全部值，为false时，框架会检查Request.Form里的key，只更新表单提交的字段</param>
         public virtual void DoEdit(bool updateAllFields = false)
         {
-            var _auditSnapshot = LoadEntitySnapshot();
+            var _snapshotResult = LoadEntitySnapshot();
+            if (!_snapshotResult.Succeeded)
+            {
+                // #875 (third site): a snapshot-load failure must never be treated as "no prior
+                // snapshot exists" — RejectUnresolvableFileAttachmentReferences/
+                // ApplyFileAttachmentResolution below reads preSaveSnapshot == null as "this is an
+                // Add, there is no prior state" and, on that reading, skips
+                // LoadExistingSubItemFileIds' restore-vs-drop check entirely for every rejected
+                // sub-item. A caller re-posting an EXISTING child with an unresolvable FileId would
+                // then be silently DROPPED instead of restored — the same emptying-the-collection
+                // → DoEditPreparePart2's Count()==0 branch → delete-every-existing-child chain
+                // Issue #828/#875 already closed for the other two sites, reached here through a
+                // spurious Add-shape misclassification of a real Edit instead of a resolution-query
+                // failure. See LoadEntitySnapshot's doc comment.
+                MSD?.AddModelError(" ", Localizer?["Sys.EditFailed"] ?? "Edit failed");
+                return;
+            }
+            var _auditSnapshot = _snapshotResult.Snapshot;
             if (!DoEditPrepare(updateAllFields, _auditSnapshot))
             {
                 // #815 sixth/seventh round: the file-reference gate rejected the whole request (a
@@ -747,7 +764,14 @@ namespace WalkingTec.Mvvm.Core
 
         public virtual async Task DoEditAsync(bool updateAllFields = false)
         {
-            var _auditSnapshot = await LoadEntitySnapshotAsync();
+            var _snapshotResult = await LoadEntitySnapshotAsync();
+            if (!_snapshotResult.Succeeded)
+            {
+                // #875 (third site): see the sync DoEdit's matching guard above.
+                MSD?.AddModelError(" ", Localizer?["Sys.EditFailed"] ?? "Edit failed");
+                return;
+            }
+            var _auditSnapshot = _snapshotResult.Snapshot;
             // #815 fifth round: the async variant of DoEditPrepare — uses the awaited batched
             // file-reference resolution instead of the sync one, so this async request path
             // never blocks a ThreadPool thread on it.
@@ -1247,7 +1271,16 @@ namespace WalkingTec.Mvvm.Core
             //如果是PersistPoco，则把IsValid设为false，并不进行物理删除
             if (typeof(IPersistPoco).IsAssignableFrom(typeof(TModel)))
             {
-                var _auditSnapshot = LoadEntitySnapshot();
+                var _snapshotResult = LoadEntitySnapshot();
+                if (!_snapshotResult.Succeeded)
+                {
+                    // #875 (third site): see DoEdit's matching guard — a snapshot-load failure
+                    // must not be treated as "no prior snapshot exists" by the file-reference gate
+                    // below.
+                    MSD?.AddModelError("", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DeleteFailed"] ?? "" : "");
+                    return;
+                }
+                var _auditSnapshot = _snapshotResult.Snapshot;
                 FC["Entity.IsValid"] = 0;
                 (Entity as IPersistPoco)!.IsValid = false;
 
@@ -1288,7 +1321,14 @@ namespace WalkingTec.Mvvm.Core
             //如果是PersistPoco，则把IsValid设为false，并不进行物理删除
             if (typeof(IPersistPoco).IsAssignableFrom(typeof(TModel)))
             {
-                var _auditSnapshot = await LoadEntitySnapshotAsync();
+                var _snapshotResult = await LoadEntitySnapshotAsync();
+                if (!_snapshotResult.Succeeded)
+                {
+                    // #875 (third site): see the sync DoDelete's matching guard above.
+                    MSD?.AddModelError("", CoreProgram._localizer != null ? (string?)CoreProgram._localizer["Sys.DeleteFailed"] ?? "" : "");
+                    return;
+                }
+                var _auditSnapshot = _snapshotResult.Snapshot;
                 FC["Entity.IsValid"] = 0;
                 (Entity as IPersistPoco)!.IsValid = false;
                 var pros = typeof(TModel).GetAllProperties();
@@ -1503,33 +1543,76 @@ namespace WalkingTec.Mvvm.Core
         }
 
         /// <summary>
-        /// 從資料庫以 AsNoTracking 讀取 Entity 快照，用於記錄 OldValues。找不到時回傳 null。
+        /// 從資料庫以 AsNoTracking 讀取 Entity 快照，用於記錄 OldValues。找不到時 <see
+        /// cref="EntitySnapshotResult.Snapshot"/> 回傳 null，<see
+        /// cref="EntitySnapshotResult.Succeeded"/> 仍為 true。
+        /// <para>
+        /// <b>Issue #875 (third site) — a query failure is not the same fact as "no such row".</b>
+        /// <c>DoEdit</c>/<c>DoEditAsync</c>/<c>DoDelete</c>/<c>DoDeleteAsync</c> pass this method's
+        /// result on as <c>preSaveSnapshot</c> into
+        /// <see cref="RejectUnresolvableFileAttachmentReferences"/>/its async twin, which treats
+        /// <c>preSaveSnapshot == null</c> as "this is Add, there is no prior DB state" — on the
+        /// Edit/Delete path that call site is the ONLY caller, it always means a real prior row
+        /// exists — and, on that reading,
+        /// <see cref="ApplyFileAttachmentResolution"/> skips the <see
+        /// cref="LoadExistingSubItemFileIds"/> restore-vs-drop check entirely for every rejected
+        /// sub-item (its own <c>preSaveSnapshot != null ? ... : []</c> guard). Before this fix, a
+        /// caught exception here (a transient connection drop, a timeout, ...) collapsed into the
+        /// exact same <see langword="null"/> a legitimate "id not set" or "row genuinely deleted
+        /// concurrently" case already returns, silently making a real Edit request look like a
+        /// brand-new Add to that downstream logic — a caller re-posting an EXISTING child with an
+        /// unresolvable FileId would then be DROPPED instead of restored, which, when it empties
+        /// the whole posted collection, routes into <see cref="DoEditPreparePart2"/>'s
+        /// <c>Count()==0</c> branch and physically deletes EVERY existing child row for the
+        /// parent — the identical Issue #828/#875 data-loss chain, reached through this THIRD
+        /// swallowing site instead of the two already fixed. <see
+        /// cref="EntitySnapshotResult.Succeeded"/> is <see langword="false"/> ONLY when the query
+        /// itself threw; the four Edit/Delete callers reject the whole request (<c>MSD</c> error,
+        /// no <c>SaveChanges</c>) exactly the way Issue #828 already does for a resolution-query
+        /// failure, instead of ever passing an ambiguous <see langword="null"/> onward.
+        /// </para>
+        /// <para>
+        /// <see cref="AppendEditChangeLog"/> is the one remaining caller that does NOT reject on
+        /// failure — it is used by <c>_FrameworkController.UpdateModelProperty</c>'s narrow
+        /// single-property save path, which never calls <see cref="DoEditPrepare"/>/
+        /// <see cref="ApplyFileAttachmentResolution"/> and so cannot reach the deletion branch
+        /// above; a failed snapshot there only degrades that path's <c>ChangeLog.OldValues</c>
+        /// audit field, so it stays best-effort (logged by this method either way).
+        /// </para>
         /// </summary>
-        private TModel? LoadEntitySnapshot()
+        private readonly record struct EntitySnapshotResult(bool Succeeded, TModel? Snapshot);
+
+        private EntitySnapshotResult LoadEntitySnapshot()
         {
             var id = Entity?.GetID();
-            if (id == null) return null;
+            if (id == null) return new EntitySnapshotResult(true, null);
             try
             {
-                return DC!.Set<TModel>().AsNoTracking().CheckID(id).FirstOrDefault();
+                return new EntitySnapshotResult(true, DC!.Set<TModel>().AsNoTracking().CheckID(id).FirstOrDefault());
             }
-            catch
+            catch (Exception ex)
             {
-                return null;
+                Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(ex,
+                    "LoadEntitySnapshot: failed loading the pre-edit snapshot for {Model} id={Id}; snapshot load FAILED, not treated as Add (Issue #875)",
+                    typeof(TModel).Name, id);
+                return new EntitySnapshotResult(false, null);
             }
         }
 
-        private async Task<TModel?> LoadEntitySnapshotAsync()
+        private async Task<EntitySnapshotResult> LoadEntitySnapshotAsync()
         {
             var id = Entity?.GetID();
-            if (id == null) return null;
+            if (id == null) return new EntitySnapshotResult(true, null);
             try
             {
-                return await DC!.Set<TModel>().AsNoTracking().CheckID(id).FirstOrDefaultAsync();
+                return new EntitySnapshotResult(true, await DC!.Set<TModel>().AsNoTracking().CheckID(id).FirstOrDefaultAsync());
             }
-            catch
+            catch (Exception ex)
             {
-                return null;
+                Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(ex,
+                    "LoadEntitySnapshotAsync: failed loading the pre-edit snapshot for {Model} id={Id}; snapshot load FAILED, not treated as Add (Issue #875)",
+                    typeof(TModel).Name, id);
+                return new EntitySnapshotResult(false, null);
             }
         }
 
@@ -2290,9 +2373,37 @@ namespace WalkingTec.Mvvm.Core
                 // with that same id may already exist, PK-violating. Skip the lookup entirely on
                 // Add so every rejected item falls through to the drop path below, same as before
                 // this round.
-                var existingFileIdsById = preSaveSnapshot != null
-                    ? LoadExistingSubItemFileIds(f, rejected)
-                    : [];
+                //
+                // #875: a query that THREW while looking up existing sub-item rows is not the
+                // same fact as "none of these rejected items exist as an existing child row" —
+                // exactly the Issue #828 distinction, one call site over. LoadExistingSubItemFileIds
+                // now reports whether its lookup actually ran to completion; when it did not, the
+                // old code silently fell through to the drop path below for every rejected item,
+                // which — when it empties the whole posted collection — routes into
+                // DoEditPreparePart2's Count()==0 branch and physically deletes EVERY existing
+                // child row for this parent while DoEdit still reports success. Reject the whole
+                // request instead, the same contract Issue #828 already established for the
+                // resolution-query failure above: MSD carries the error, nothing gets staged, and
+                // the caller never calls SaveChanges.
+                Dictionary<string, Guid> existingFileIdsById;
+                if (preSaveSnapshot != null)
+                {
+                    var lookup = LoadExistingSubItemFileIds(f, rejected);
+                    if (!lookup.Succeeded)
+                    {
+                        requestRejected = true;
+                        MSD?.AddModelError(" ", Localizer?["Sys.FileResolutionFailed"] ?? "Could not verify one or more file references; please try again.");
+                        Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(
+                            "RejectUnresolvableFileAttachmentReferences: existing sub-item lookup query failed for {Model}.{Property}; rejecting the whole request instead of dropping rejected items (Issue #875)",
+                            typeof(TModel).Name, f.Name);
+                        continue;
+                    }
+                    existingFileIdsById = lookup.ExistingFileIdsById;
+                }
+                else
+                {
+                    existingFileIdsById = [];
+                }
                 List<ISubFile>? toDrop = null;
                 foreach (var sub in rejected)
                 {
@@ -2336,6 +2447,16 @@ namespace WalkingTec.Mvvm.Core
 
             return requestRejected;
         }
+
+        /// <summary>
+        /// Issue #875: the result of <see cref="LoadExistingSubItemFileIds"/> — <see
+        /// cref="Succeeded"/> is <see langword="false"/> only when the lookup QUERY itself threw,
+        /// never when it ran fine and simply found no existing row for a given rejected item. See
+        /// <see cref="LoadExistingSubItemFileIds"/>'s doc comment for why conflating the two used
+        /// to let a dependency failure delete data, the same shape Issue #828 already fixed for
+        /// <see cref="ResolveFileAttachmentIdsForCaller"/>.
+        /// </summary>
+        private readonly record struct ExistingSubItemLookupResult(bool Succeeded, Dictionary<string, Guid> ExistingFileIdsById);
 
         /// <summary>
         /// #815 sixth round: given a <see cref="ISubFile"/> collection property and the items
@@ -2386,19 +2507,60 @@ namespace WalkingTec.Mvvm.Core
         /// soft-keyed relationship <see cref="Extensions.DCExtension.GetFKName{T}"/> cannot
         /// express as a single EF-navigated FK property — or the resolved name has no matching
         /// CLR property on <paramref name="subFileProperty"/>'s item type, e.g. an EF shadow
-        /// property), parent-scoping is not possible at all: this method returns an empty result
-        /// rather than fall back to the old unscoped lookup, so every rejected item in that shape
-        /// falls through to the caller's drop path. An aborted edit that PK-violates and loses a
-        /// legitimate same-request change is worse than dropping a forged item that ends up
-        /// being a false negative for "restore".
+        /// property), parent-scoping is not possible at all: this method reports success with an
+        /// empty result rather than fall back to the old unscoped lookup, so every rejected item
+        /// in that shape falls through to the caller's drop path. An aborted edit that PK-violates
+        /// and loses a legitimate same-request change is worse than dropping a forged item that
+        /// ends up being a false negative for "restore". This is a deterministic fact about
+        /// <typeparamref name="TModel"/>'s own shape, true on every call regardless of the
+        /// database's health — unlike the QUERY failure below, it is safe to treat as "ran fine,
+        /// found nothing to restore against", never as "unknown, reject the whole request".
+        /// </para>
+        /// <para>
+        /// <b>Issue #875 — a lookup QUERY failure is not the same fact as "these rejected items
+        /// don't exist as a DB row either".</b> Same defect as Issue #828, one call site over:
+        /// before this fix, an exception from the query below (provider parameter cap, a timeout,
+        /// a transient connection drop, ...) was caught, logged, and this method fell through to
+        /// its final <c>return result</c> with whatever partial results happened to accumulate
+        /// before the failure — indistinguishable from "the query ran fine and confirmed none of
+        /// these rejected items have an existing DB row". <see cref="ApplyFileAttachmentResolution"/>
+        /// treated that identically to a confirmed empty result and dropped every rejected item —
+        /// which, when it emptied the whole posted collection, routed into
+        /// <see cref="DoEditPreparePart2"/>'s <c>Count()==0</c> branch and physically deleted
+        /// EVERY existing child row for the parent, while <c>DoEdit</c> still reported success.
+        /// This method now reports <see cref="ExistingSubItemLookupResult.Succeeded"/> alongside
+        /// its result, discarding any partially-accumulated entries when the query throws (same
+        /// as <see cref="ResolveFileAttachmentIdsForCaller"/> discards a partially-resolved set on
+        /// failure — see its doc comment for why). <see cref="ApplyFileAttachmentResolution"/>
+        /// rejects the whole request when <c>Succeeded</c> is <see langword="false"/>, the same
+        /// contract Issue #828 already established for the earlier resolution-query failure.
+        /// </para>
+        /// <para>
+        /// <b>Issue #875 — batched the same way Issue #828 batched FileAttachment resolution.</b>
+        /// <paramref name="rejectedItems"/> can be as large as the whole posted sub-item
+        /// collection (every candidate that failed the earlier resolution step), so a single
+        /// <c>Contains()</c> built from every id in <paramref name="rejectedItems"/> is subject to
+        /// the identical EF Core 10 / SQL Server 2100-parameter-per-query cap
+        /// <see cref="FileAttachmentResolutionBatchSize"/>'s doc comment describes for the
+        /// resolution query — this is defense in depth only, same caveat as there: it removes the
+        /// SPECIFIC parameter-cap trigger as a routine failure mode for a large but legitimate
+        /// form, it does not by itself make an unrelated failure (timeout, connection drop, ...)
+        /// safe. A failure on any one batch discards the whole call's results and reports failure,
+        /// same as <see cref="ResolveFileAttachmentIdsForCaller"/>.
         /// </para>
         /// </summary>
-        private Dictionary<string, Guid> LoadExistingSubItemFileIds(PropertyInfo subFileProperty, List<ISubFile> rejectedItems)
+        /// <param name="subFileProperty">The <see cref="ISubFile"/> collection property being resolved.</param>
+        /// <param name="rejectedItems">
+        /// The items <see cref="ApplyFileAttachmentResolution"/> is about to reject for this
+        /// property; can be as large as the whole posted sub-item collection (see the "batched"
+        /// doc paragraph above).
+        /// </param>
+        private ExistingSubItemLookupResult LoadExistingSubItemFileIds(PropertyInfo subFileProperty, List<ISubFile> rejectedItems)
         {
             var result = new Dictionary<string, Guid>();
             if (DC == null || Entity == null || rejectedItems.Count == 0)
             {
-                return result;
+                return new ExistingSubItemLookupResult(true, result);
             }
 
             var itemType = subFileProperty.PropertyType.GenericTypeArguments.FirstOrDefault();
@@ -2406,7 +2568,7 @@ namespace WalkingTec.Mvvm.Core
             {
                 // Not a shape Utils.CheckDifference can match by id either — nothing to restore
                 // against; the caller falls back to dropping these items, same as before.
-                return result;
+                return new ExistingSubItemLookupResult(true, result);
             }
 
             // #815 seventh round: resolve the same parent FK DoEditPreparePart2's own sub-table
@@ -2420,10 +2582,11 @@ namespace WalkingTec.Mvvm.Core
                 // Parent-scoping is not possible for this relationship shape — fail closed by
                 // restoring nothing (never fall back to the unscoped lookup that could restore a
                 // different parent's row); every rejected item falls through to the drop path.
+                // Deterministic shape fact, not a query failure — Succeeded stays true.
                 Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(
                     "RejectUnresolvableFileAttachmentReferences: could not resolve a parent-scoping FK for {Model}.{Property}; rejected items with no resolved match fall back to being dropped (Issue #815)",
                     typeof(TModel).Name, subFileProperty.Name);
-                return result;
+                return new ExistingSubItemLookupResult(true, result);
             }
 
             var ids = rejectedItems
@@ -2433,42 +2596,54 @@ namespace WalkingTec.Mvvm.Core
                 .ToList();
             if (ids.Count == 0)
             {
-                return result;
+                return new ExistingSubItemLookupResult(true, result);
             }
 
             try
             {
                 var setMethod = EfSetMethodCache.GetClosedSetMethod(DC.GetType(), itemType);
                 var dataquery = setMethod.Invoke(DC, null) as IQueryable<TopBasePoco>;
-                ParameterExpression pe = Expression.Parameter(itemType);
-                var idsLambda = ids.GetContainIdExpression(itemType, pe);
-                Expression fkMember = Expression.MakeMemberAccess(pe, fkProperty);
-                Expression fkRight = Expression.Constant(Entity.GetID(), fkMember.Type);
-                Expression fkCondition = Expression.Equal(fkMember, fkRight);
-                Expression body = Expression.AndAlso(idsLambda.Body, fkCondition);
-                var lambda = Expression.Lambda(body, pe);
-                var exp = Expression.Call(
-                      typeof(Queryable),
-                      "Where",
-                      new Type[] { itemType },
-                      dataquery!.Expression,
-                      lambda);
-                var q = dataquery.Provider.CreateQuery(exp) as IQueryable<TopBasePoco>;
-                foreach (var row in q!.AsNoTracking())
+
+                // Issue #875: batched into FileAttachmentResolutionBatchSize-sized queries — see
+                // the "batched the same way" doc paragraph above.
+                foreach (var idBatch in ids.Chunk(FileAttachmentResolutionBatchSize))
                 {
-                    if (row is ISubFile subRow)
+                    ParameterExpression pe = Expression.Parameter(itemType);
+                    var idsLambda = idBatch.ToList().GetContainIdExpression(itemType, pe);
+                    Expression fkMember = Expression.MakeMemberAccess(pe, fkProperty);
+                    Expression fkRight = Expression.Constant(Entity.GetID(), fkMember.Type);
+                    Expression fkCondition = Expression.Equal(fkMember, fkRight);
+                    Expression body = Expression.AndAlso(idsLambda.Body, fkCondition);
+                    var lambda = Expression.Lambda(body, pe);
+                    var exp = Expression.Call(
+                          typeof(Queryable),
+                          "Where",
+                          new Type[] { itemType },
+                          dataquery!.Expression,
+                          lambda);
+                    var q = dataquery.Provider.CreateQuery(exp) as IQueryable<TopBasePoco>;
+                    foreach (var row in q!.AsNoTracking())
                     {
-                        result[row.GetID().ToString()!] = subRow.FileId;
+                        if (row is ISubFile subRow)
+                        {
+                            result[row.GetID().ToString()!] = subRow.FileId;
+                        }
                     }
                 }
             }
             catch (Exception ex)
             {
+                // #875: discard whatever partial results the batches that succeeded before this
+                // one accumulated — same reasoning as ResolveFileAttachmentIdsForCaller's doc
+                // comment: the caller never uses this result when Succeeded is false anyway, and
+                // keeping it around risks a future caller mistakenly treating "found so far" as
+                // "found, full stop".
                 Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(ex,
-                    "RejectUnresolvableFileAttachmentReferences: failed looking up existing sub-item rows for {Model}.{Property}; rejected items with no resolved match fall back to being dropped (Issue #815)",
+                    "RejectUnresolvableFileAttachmentReferences: failed looking up existing sub-item rows for {Model}.{Property}; lookup FAILED, not narrowed (Issue #875)",
                     typeof(TModel).Name, subFileProperty.Name);
+                return new ExistingSubItemLookupResult(false, []);
             }
-            return result;
+            return new ExistingSubItemLookupResult(true, result);
         }
 
         /// <summary>
@@ -2850,7 +3025,11 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         public void AppendEditChangeLog()
         {
-            var auditSnapshot = LoadEntitySnapshot();
+            // #875: this call site intentionally does not reject on a failed snapshot load — see
+            // LoadEntitySnapshot's doc comment for why it is safe here specifically (this path
+            // never reaches ApplyFileAttachmentResolution's deletion branch). Best-effort, same as
+            // before; LoadEntitySnapshot itself already logs the failure.
+            var auditSnapshot = LoadEntitySnapshot().Snapshot;
             AppendChangeLog("Edit", SerializeScalarProps(auditSnapshot), SerializeScalarProps(Entity));
         }
 
