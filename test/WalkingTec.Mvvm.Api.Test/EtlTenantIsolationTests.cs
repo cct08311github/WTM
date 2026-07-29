@@ -404,8 +404,15 @@ public class EtlTenantIsolationTests
     /// #862 regression, mirroring <see cref="EtlScheduler_ResetGhostRunningJobs_FindsTenantScopedJob_DespiteNoAmbientTenantIdentity"/>
     /// for the write path: <c>EtlSchedulerService.RerunFromSnapshotAsync</c> must still find a
     /// tenant-scoped <see cref="EtlRunLog"/> by id from its own background context (TenantCode
-    /// always null there). <b>Mutant target</b>: removing <c>.IgnoreQueryFilters()</c> from the
-    /// <c>runLog</c> lookup in <c>RerunFromSnapshotAsync</c>
+    /// always null there) <b>when the caller explicitly declares this is a system query</b>.
+    /// <b>#883 update</b>: <c>RerunFromSnapshotAsync</c> is reachable from
+    /// <c>_EtlRunLogController.Rerun</c> over real HTTP, so it is no longer tenant-blind by
+    /// default -- calling it (as this test always has, simulating a background/system caller
+    /// with no HTTP identity) now requires <c>declaredSystemQuery: true</c> to reach the SAME
+    /// pre-#883 "see every tenant's rows" behaviour this test asserts on; without it, the call
+    /// would (correctly, for a real HTTP caller) only match a null-tenant run log, which this
+    /// tenant-scoped one is not. <b>Mutant target</b>: removing <c>.IgnoreQueryFilters()</c>
+    /// from the <c>runLog</c> lookup in <c>RerunFromSnapshotAsync</c>
     /// (<c>src/WalkingTec.Mvvm.Etl/Scheduling/EtlSchedulerService.cs</c>) turns this assertion
     /// red -- the tenant-scoped run log would no longer be found, so <c>RerunFromSnapshotAsync</c>
     /// would silently no-op (its <c>if (runLog == null) return;</c> guard) instead of updating
@@ -439,7 +446,11 @@ public class EtlTenantIsolationTests
         // watermark back) has already completed, so it is expected and ignored here.
         try
         {
-            await scheduler.RerunFromSnapshotAsync(runLog.ID);
+            // #883: declaredSystemQuery: true -- this test simulates a background/system
+            // caller with no HTTP identity, exactly the scenario that named parameter exists
+            // for (see EtlSchedulerService's class remarks). A real HTTP caller must NOT pass
+            // true here; every controller call site in src/ still defaults to false.
+            await scheduler.RerunFromSnapshotAsync(runLog.ID, declaredSystemQuery: true);
         }
         catch (InvalidOperationException)
         {

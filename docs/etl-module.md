@@ -40,9 +40,16 @@ services.AddWtmEtl();
 protected override void OnModelCreating(ModelBuilder modelBuilder)
 {
     base.OnModelCreating(modelBuilder);
-    modelBuilder.ApplyEtlModels();
+    modelBuilder.ApplyEtlModels(this);
 }
 ```
+
+> **#883**: pass `this`. The zero-argument `ApplyEtlModels()` overload is `[Obsolete]` — it still
+> registers tables/columns/indexes, but it has no way to apply the `ITenant` global query filter
+> to `EtlJobDefinition`/`EtlRunLog`/`EtlDeadLetterRow`/`EtlLineageRecord` (issue #862), so every
+> read through it is silently unscoped across tenants. `[Obsolete]` only warns when you recompile
+> against source — a NuGet-only upgrade never sees it, which is exactly how this stayed live
+> after #862 shipped.
 
 此方法建立兩張表：
 

@@ -1,0 +1,12 @@
+diff --git a/src/WalkingTec.Mvvm.Etl/Scheduling/EtlSchedulerService.cs b/src/WalkingTec.Mvvm.Etl/Scheduling/EtlSchedulerService.cs
+index 0000000..0000000 100644
+--- a/src/WalkingTec.Mvvm.Etl/Scheduling/EtlSchedulerService.cs
++++ b/src/WalkingTec.Mvvm.Etl/Scheduling/EtlSchedulerService.cs
+@@ -696,7 +696,7 @@ namespace WalkingTec.Mvvm.Etl.Scheduling;
+     {
+         var query = wtm.DC.Set<EtlJobDefinition>().IgnoreQueryFilters().Where(j => j.ID == jobId);
+-        if (!declaredSystemQuery)
++        if (false)
+         {
+             // EF Core translates == against a null callerTenantCode as "TenantCode IS NULL",
+             // not "match everything" -- the same null-safe-equality precedent this codebase

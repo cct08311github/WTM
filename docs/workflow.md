@@ -133,7 +133,7 @@ Fields must be declared in `fieldWhitelist` or the routing evaluator fails close
 protected override void OnModelCreating(ModelBuilder modelBuilder)
 {
     base.OnModelCreating(modelBuilder);
-    modelBuilder.ApplyEtlModels();        // if also using Etl
+    modelBuilder.ApplyEtlModels(this);    // if also using Etl -- pass `this` (#883, see docs/etl-module.md)
     modelBuilder.ApplyWorkFlowModels();   // WorkFlow tables
 }
 ```

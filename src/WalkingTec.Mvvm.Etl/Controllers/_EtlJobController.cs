@@ -134,7 +134,8 @@ public class _EtlJobController : BaseController
     {
         try
         {
-            await _scheduler.TriggerNowAsync(id);
+            // #883: caller's own tenant -- see EtlSchedulerService's class remarks.
+            await _scheduler.TriggerNowAsync(id, callerTenantCode: Wtm.LoginUserInfo?.CurrentTenant);
             return Ok(new { success = true, message = "已觸發執行" });
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("not found"))
@@ -164,7 +165,11 @@ public class _EtlJobController : BaseController
         try
         {
             var size = sampleSize is int s && s > 0 ? Math.Min(s, 100) : 10;
-            var result = await _scheduler.DryRunAsync(id, size, HttpContext.RequestAborted);
+            // #883: caller's own tenant -- see EtlSchedulerService's class remarks. Was the
+            // most severe of the seven IDOR points: DryRun returns actual source-data preview
+            // rows for whichever job id the caller supplies.
+            var result = await _scheduler.DryRunAsync(
+                id, size, HttpContext.RequestAborted, callerTenantCode: Wtm.LoginUserInfo?.CurrentTenant);
             return Ok(new
             {
                 success = result.Success,
@@ -197,7 +202,8 @@ public class _EtlJobController : BaseController
     {
         try
         {
-            await _scheduler.PauseAsync(id);
+            // #883: caller's own tenant -- see EtlSchedulerService's class remarks.
+            await _scheduler.PauseAsync(id, callerTenantCode: Wtm.LoginUserInfo?.CurrentTenant);
             return Ok(new { success = true, message = "已暫停" });
         }
         catch (InvalidOperationException ex)
@@ -214,7 +220,8 @@ public class _EtlJobController : BaseController
     {
         try
         {
-            await _scheduler.ResumeAsync(id);
+            // #883: caller's own tenant -- see EtlSchedulerService's class remarks.
+            await _scheduler.ResumeAsync(id, callerTenantCode: Wtm.LoginUserInfo?.CurrentTenant);
             return Ok(new { success = true, message = "已恢復" });
         }
         catch (InvalidOperationException ex)
@@ -231,7 +238,8 @@ public class _EtlJobController : BaseController
     {
         try
         {
-            await _scheduler.AbortAsync(id);
+            // #883: caller's own tenant -- see EtlSchedulerService's class remarks.
+            await _scheduler.AbortAsync(id, callerTenantCode: Wtm.LoginUserInfo?.CurrentTenant);
             return Ok(new { success = true, message = "已中止" });
         }
         catch (InvalidOperationException ex)
@@ -248,7 +256,8 @@ public class _EtlJobController : BaseController
     {
         try
         {
-            await _scheduler.SkipNextAsync(id);
+            // #883: caller's own tenant -- see EtlSchedulerService's class remarks.
+            await _scheduler.SkipNextAsync(id, callerTenantCode: Wtm.LoginUserInfo?.CurrentTenant);
             return Ok(new { success = true, message = "已設定跳過下次執行" });
         }
         catch (InvalidOperationException ex)
@@ -267,7 +276,8 @@ public class _EtlJobController : BaseController
             return BadRequest(new { error = "Cron 表達式不可為空" });
         if (!CronExpression.IsValidExpression(request.NewCron))
             return BadRequest(new { error = "無效的 Cron 表達式" });
-        await _scheduler.RescheduleAsync(id, request.NewCron);
+        // #883: caller's own tenant -- see EtlSchedulerService's class remarks.
+        await _scheduler.RescheduleAsync(id, request.NewCron, callerTenantCode: Wtm.LoginUserInfo?.CurrentTenant);
         return Ok(new { success = true, message = "排程已更新" });
     }
 }

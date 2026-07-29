@@ -78,7 +78,8 @@ public class _EtlRunLogController : BaseController
     {
         try
         {
-            await _scheduler.RerunFromSnapshotAsync(runLogId);
+            // #883: caller's own tenant -- see EtlSchedulerService's class remarks.
+            await _scheduler.RerunFromSnapshotAsync(runLogId, callerTenantCode: Wtm.LoginUserInfo?.CurrentTenant);
             return Ok(new { success = true, message = "已從該點重跑" });
         }
         catch (InvalidOperationException ex)

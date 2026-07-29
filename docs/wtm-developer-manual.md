@@ -1741,8 +1741,12 @@ var raw = AnalysisDrillThrough.BuildQuery<Order>(
 services.AddWtmEtl();
 
 // DataContext.OnModelCreating
-modelBuilder.ApplyEtlModels();
+modelBuilder.ApplyEtlModels(this);
 ```
+
+> **#883**：務必傳入 `this`。無參數的 `ApplyEtlModels()` 多載已標 `[Obsolete]`——資料表/欄位/索引仍會註冊，
+> 但完全無法套用 `ITenant` 全域查詢過濾器（#862），所有透過它讀取的 ETL 資料在多租戶環境下不受隔離。
+> `[Obsolete]` 只有重新編譯時才會出現警告，單純升級 NuGet 套件的下游完全看不到。
 
 ### 8.3 Job 定義範例
 
@@ -4768,7 +4772,7 @@ WorkFlow 套件**零內建 migration**，需自行在應用程式的 `DataContex
 protected override void OnModelCreating(ModelBuilder modelBuilder)
 {
     base.OnModelCreating(modelBuilder);
-    modelBuilder.ApplyEtlModels();       // 若同時使用 Etl
+    modelBuilder.ApplyEtlModels(this);   // 若同時使用 Etl -- 務必傳入 this（#883，見 8.2 節）
     modelBuilder.ApplyWorkFlowModels();  // WorkFlow 9 張資料表
 }
 ```
