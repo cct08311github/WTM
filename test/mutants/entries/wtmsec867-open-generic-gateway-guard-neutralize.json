@@ -17,8 +17,8 @@
     "WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_OptionsSnapshotBareSegment_ReturnsFalse": "must be rejected via IsOrImplementsOpenGenericDefinition at this single hop",
     "WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_OptionsValue_ReturnsFalse": "must be rejected the same way as IOptionsMonitor"
   },
-  "red_expected_assertion_patterns_provisional": true,
-  "red_expected_assertion_patterns_observed": null,
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against a clean checkout with the mutant patch applied (stale demo.db under bin/ removed first): all three red tests failed with 'Assert.IsFalse failed.' plus the message text quoted in each red_expected_assertion_patterns entry above. Confirmed via python3 test/mutants/run_mutant.py --mutant wtmsec867-open-generic-gateway-guard-neutralize: 'VERDICT: KILLED' / 'GATE: PASS'. Discovered mid-verification that the FIRST version of the Snapshot red test (a 3-segment 'Snapshot.Value.NormalDays' key) made this mutant SURVIVE -- the test was confounded by the independent zero-resolution guard (IOptionsSnapshot<T> inherits Value from IOptions<T> rather than redeclaring it, and Type.GetMember on an interface does not walk up to base interfaces, so GetMember('Value') on IOptionsSnapshot<T> finds nothing regardless of this mutant). Replaced with the single-segment IsPathAllowed_OptionsSnapshotBareSegment_ReturnsFalse before finalizing this entry.",
   "green_test_filter": "(FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_ServiceProvider_ReturnsFalse)|(FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_SearcherDotCustomFilterField_ReturnsTrue)",
   "green_tests": [
     "WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_ServiceProvider_ReturnsFalse",
