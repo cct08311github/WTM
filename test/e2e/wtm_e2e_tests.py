@@ -33,6 +33,20 @@ WTM Demo E2E Test Suite — TC-01 ~ TC-36
 執行後彙總列印 "Total: N | PASS: n | FAIL: n | ERROR: n | SKIP: n" — N 會隨
 TC_REGISTRY 增減而變動（見 #681），CI log 判讀請認 "FAIL: 0" 與 "ERROR: 0"
 這兩個欄位是否為 0，不要硬編一個固定的 N。
+
+截圖政策（issue #886）：
+  tc_ 函式本身不再逐步無條件拍照——失敗時的截圖統一由 run_tests() 的例外處理路徑
+  透過 _screenshot_on_failure() 補拍一張「失敗當下」的頁面狀態，寫入
+  screenshots/TC-{N}/TC-{N}-{FAIL|ERROR|RETRY-n}.png。新增 tc_ 函式時不要為了
+  「步驟紀錄」在成功路徑上加 page.screenshot() —— 那筆成本在全部 79 個呼叫點
+  乘上三條 CI matrix leg 是白付的（CI 的 screenshot artifact 上傳因 #11 長年
+  continue-on-error，平常沒有人下載查看）。仍然合理的例外：
+    1. 已經寫在 except 分支、只在特定子步驟逾時/失敗時才觸發的截圖（例如
+       login()、TC-04、TC-24 的個別 timeout 分支）——這些本來就是條件式的，
+       成功執行不會被呼叫到，維持原樣。
+    2. TC-21（登入頁視覺驗收）與 TC-22（首頁 Dashboard 完整截圖）——這兩個 TC
+       的截圖本身就是測試的產出物（給人工複核的視覺快照），不是除錯用的步驟
+       紀錄，維持無條件拍照。
 """
 
 import asyncio
@@ -235,7 +249,6 @@ async def tc_01_xss_reflected(page, **_):
         url = f"{BASE_URL}/Login/Login?ReturnUrl={payload}"
         await page.goto(url)
         await page.wait_for_load_state("networkidle")
-        await page.screenshot(path=sc(1, f"01-payload-{i}-loginpage"))
 
         # Step 2: 檢查 hidden input 的 Redirect 值
         redirect_input = page.locator("input[name='Redirect']")
@@ -271,7 +284,6 @@ async def tc_01_xss_reflected(page, **_):
     resp = await nav_info.value
     final_url = page.url
     print(f"  登入後最終 URL: {final_url}")
-    await page.screenshot(path=sc(1, "02-after-login-redirect"))
 
     # 確認沒有被重導到 javascript: URL
     assert not final_url.startswith("javascript:"), \
@@ -326,7 +338,6 @@ async def tc_02_sql_injection(page, **_):
 
         status = response.status
         print(f"  Payload {i}: ITCode={itcode!r} => HTTP {status}")
-        await page.screenshot(path=sc(2, f"01-payload-{i}"))
 
         assert status != 500, f"SQL injection payload {i} 導致 500 錯誤！"
         # 不應登入成功（回傳 200 的登入頁面才是正確的，302 到 / 表示登入成功）
@@ -357,7 +368,6 @@ async def tc_03_csrf_token(page, **_):
     # 導覽到 Student Create 頁面（直接存取 PartialView URL）
     await page.goto(f"{BASE_URL}/Student/Create")
     await page.wait_for_load_state("networkidle")
-    await page.screenshot(path=sc(3, "01-create-form"))
 
     # 檢查 Anti-Forgery Token
     token = page.locator("input[name='__RequestVerificationToken']")
@@ -373,7 +383,6 @@ async def tc_03_csrf_token(page, **_):
         "Entity.Password": "test123",
     })
     print(f"  無 Token POST 回應: HTTP {response.status}")
-    await page.screenshot(path=sc(3, "02-no-token-response"))
     print(f"  [KNOWN-GAP] POST 無 token 成功提交（HTTP {response.status}）— WTM 缺乏 CSRF 保護")
 
     print("[TC-03] PASS -- CSRF 檢查完成（結果記錄為已知安全缺口）")
@@ -417,7 +426,6 @@ async def tc_04_analysis_mode_page(page, **_):
     # Replace bare asyncio.sleep — wait for networkidle so the page is fully settled
     # before we start interacting with toolbar buttons (issue #475: scroll flake)
     await page.wait_for_load_state("networkidle", timeout=TIMEOUT)
-    await page.screenshot(path=sc(4, "01-student-index"))
 
     # 等待 grid toolbar
     try:
@@ -451,7 +459,6 @@ async def tc_04_analysis_mode_page(page, **_):
     analysis_btn = page.locator("button:has-text('分析模式')")
     btn_count = await analysis_btn.count()
     print(f"  「分析模式」按鈕數量: {btn_count}")
-    await page.screenshot(path=sc(4, "02-toolbar"))
     assert btn_count > 0, "找不到「分析模式」按鈕！"
 
     # 點擊切換 — wait for visible BEFORE scroll to avoid layout-fade flake (issue #475)
@@ -478,7 +485,6 @@ async def tc_04_analysis_mode_page(page, **_):
         await page.wait_for_selector("[id^='analysis-panel-']", state="visible", timeout=5000)
     except Exception:
         pass  # fallback: panel may already be visible
-    await page.screenshot(path=sc(4, "03-analysis-panel-open"))
 
     # 確認面板已顯示
     # 面板 ID 格式: analysis-panel-{gridId}，gridId = wtTable_{UniqueId}
@@ -508,7 +514,6 @@ async def tc_04_analysis_mode_page(page, **_):
     print(f"  欄位 pill 數量: {pill_count}")
     assert pill_count > 0, "沒有任何欄位 pill！"
 
-    await page.screenshot(path=sc(4, "04-analysis-fields"))
     print("[TC-04] PASS -- Analysis Mode 頁面測試通過")
 
 
@@ -530,7 +535,6 @@ async def tc_05_analysis_not_enabled(page, **_):
     await login(page)
     await page.goto(f"{BASE_URL}/City/Index")
     await page.wait_for_load_state("networkidle")
-    await page.screenshot(path=sc(5, "01-city-index"))
 
     analysis_btn = page.locator("button:has-text('分析模式')")
     btn_count = await analysis_btn.count()
@@ -563,7 +567,6 @@ async def tc_06_login_failure(page, **_):
     await page.locator("input[name='Password']").fill("wrong_pass")
     await page.locator("button.login-button[type='submit']").click()
     await page.wait_for_load_state("networkidle")
-    await page.screenshot(path=sc(6, "01-login-failed"))
 
     # 確認仍在登入頁
     login_form = page.locator("form[action='/Login/Login']")
@@ -573,7 +576,6 @@ async def tc_06_login_failure(page, **_):
     error_span = page.locator("span.login-error")
     error_text = await error_span.text_content() if await error_span.count() > 0 else ""
     print(f"  錯誤訊息: {error_text!r}")
-    await page.screenshot(path=sc(6, "02-error-message"))
 
     print("[TC-06] PASS -- 登入失敗正確顯示錯誤")
 
@@ -595,12 +597,10 @@ async def tc_07_logout(page, **_):
     print("[TC-07] 開始執行...")
 
     await login(page)
-    await page.screenshot(path=sc(7, "01-logged-in"))
 
     # 登出
     await page.goto(f"{BASE_URL}/Login/Logout")
     await page.wait_for_load_state("networkidle")
-    await page.screenshot(path=sc(7, "02-after-logout"))
 
     # 確認回到登入頁或首頁
     final_url = page.url
@@ -611,7 +611,6 @@ async def tc_07_logout(page, **_):
     await page.wait_for_load_state("networkidle")
     redirected_url = page.url
     print(f"  存取 Student/Index 後 URL: {redirected_url}")
-    await page.screenshot(path=sc(7, "03-protected-page-redirect"))
 
     # 應被重導到登入頁
     assert "Login" in redirected_url or "login" in redirected_url.lower(), \
@@ -643,7 +642,6 @@ async def tc_08_authorization(page, **_):
     )
     status = response.status
     print(f"  未認證 /_analysis/meta 回應: HTTP {status}")
-    await page.screenshot(path=sc(8, "01-unauthorized"))
 
     # 401 或 302 到登入頁都算正確
     assert status in (401, 302, 403, 200), f"預期 401/302/403，實際 {status}"
@@ -678,14 +676,12 @@ async def tc_09_session_fixation(page, **_):
     cookies_before = await page.context.cookies()
     session_before = {c["name"]: c["value"] for c in cookies_before}
     print(f"  登入前 cookie 名稱: {list(session_before.keys())}")
-    await page.screenshot(path=sc(9, "01-before-login"))
 
     await login(page)
 
     cookies_after = await page.context.cookies()
     session_after = {c["name"]: c["value"] for c in cookies_after}
     print(f"  登入後 cookie 名稱: {list(session_after.keys())}")
-    await page.screenshot(path=sc(9, "02-after-login"))
 
     # 檢查是否有 auth cookie（ASP.NET Core 預設 .AspNetCore.Cookies）
     auth_cookie = [c for c in cookies_after if "AspNetCore" in c["name"] or "cookie" in c["name"].lower()]
@@ -726,7 +722,6 @@ async def tc_10_security_headers(page, **_):
         status_icon = "OK" if value != "NOT SET" else "MISSING"
         print(f"  {header}: {value} [{status_icon}]")
 
-    await page.screenshot(path=sc(10, "01-headers"))
     print("[TC-10] PASS -- Security Headers 檢查完成")
 
 
@@ -755,8 +750,6 @@ async def tc_11_cookie_flags(page, **_):
         print(f"    Secure: {c.get('secure', 'N/A')}")
         print(f"    SameSite: {c.get('sameSite', 'N/A')}")
         print(f"    Path: {c.get('path', 'N/A')}")
-
-    await page.screenshot(path=sc(11, "01-cookies"))
 
     # 檢查 auth cookie 的 HttpOnly
     auth_cookies = [c for c in cookies if "AspNetCore" in c["name"]]
@@ -794,8 +787,6 @@ async def tc_12_rate_limiting(page, **_):
         results.append({"attempt": i, "status": response.status, "elapsed": elapsed})
         print(f"  嘗試 {i}: HTTP {response.status}, {elapsed:.2f}s")
 
-    await page.screenshot(path=sc(12, "01-rate-limit-result"))
-
     # 檢查是否有 429 回應
     has_429 = any(r["status"] == 429 for r in results)
     print(f"  是否觸發 429: {has_429}")
@@ -832,8 +823,6 @@ async def tc_13_captcha_exists(page, **_):
     src = await captcha_img.get_attribute("src")
     print(f"  驗證碼 src: {src}")
     assert "GetVerifyCode" in (src or ""), f"驗證碼 src 不正確：{src}"
-
-    await page.screenshot(path=sc(13, "01-captcha"))
 
     # 確認圖片可載入
     captcha_response = await page.request.get(f"{BASE_URL}/_framework/GetVerifyCode?id=test")
@@ -876,7 +865,6 @@ async def tc_14_password_autocomplete(page, **_):
     print(f"  VerifyCode autocomplete: {ac}")
     assert ac == "off", f"驗證碼 autocomplete 不是 off：{ac}"
 
-    await page.screenshot(path=sc(14, "01-form-attrs"))
     print("[TC-14] PASS -- 密碼欄位安全屬性正確")
 
 
@@ -916,7 +904,6 @@ async def tc_15_analysis_no_measures(page, **_):
     assert status == 400, f"預期 400，實際 {status}"
     assert "度量" in body or "measure" in body.lower(), f"錯誤訊息不含度量相關文字：{body}"
 
-    await page.screenshot(path=sc(15, "01-no-measures-400"))
     print("[TC-15] PASS -- 0 measures 正確回傳 400")
 
 
@@ -951,7 +938,6 @@ async def tc_16_analysis_too_many_dims(page, **_):
     print(f"  HTTP {status}: {body[:200]}")
     assert status == 400, f"預期 400，實際 {status}"
 
-    await page.screenshot(path=sc(16, "01-too-many-dims"))
     print("[TC-16] PASS -- 超過 3 維度正確回傳 400")
 
 
@@ -993,7 +979,6 @@ async def tc_17_analysis_query_success(page, **_):
     print(f"  columns: {data['columns']}")
     print(f"  rows 數量: {len(data['rows'])}")
 
-    await page.screenshot(path=sc(17, "01-query-success"))
     print("[TC-17] PASS -- 分析查詢正常回傳")
 
 
@@ -1030,7 +1015,6 @@ async def tc_18_analysis_export(page, **_):
         print(f"  {fmt}: HTTP {status}, Content-Type: {ct}")
         assert status == 200, f"{fmt} 匯出失敗：HTTP {status}"
 
-    await page.screenshot(path=sc(18, "01-export"))
     print("[TC-18] PASS -- 匯出功能正常")
 
 
@@ -1057,7 +1041,6 @@ async def tc_19_analysis_unknown_vm(page, **_):
     print(f"  HTTP {status}: {body[:200]}")
     assert status in (400, 404), f"預期 400/404，實際 {status}"
 
-    await page.screenshot(path=sc(19, "01-unknown-vm"))
     print("[TC-19] PASS -- 不明 VM 型別正確拒絕")
 
 
@@ -1094,7 +1077,6 @@ async def tc_20_analysis_invalid_field(page, **_):
     print(f"  HTTP {status}: {body[:200]}")
     assert status == 400, f"預期 400，實際 {status}"
 
-    await page.screenshot(path=sc(20, "01-invalid-field"))
     print("[TC-20] PASS -- 不合法欄位正確拒絕")
 
 
@@ -1299,11 +1281,6 @@ async def tc_23_analysis_meta_api(page, **_):
     date_fields = [f for f in fields if f.get("isDate")]
     print(f"  日期欄位數量: {len(date_fields)}")
 
-    # 截圖 API 回應（透過頁面顯示 JSON）
-    await page.goto(f"{BASE_URL}/_analysis/meta?listVmType={STUDENT_LIST_VM}")
-    await page.wait_for_load_state("networkidle")
-    await page.screenshot(path=sc(23, "01-meta-response"), full_page=True)
-
     print("[TC-23] PASS -- Meta API 驗證完成（含 #516 allowedValues）")
 
 
@@ -1349,7 +1326,6 @@ async def tc_24_analysis_full_flow(page, **_):
         await page.wait_for_selector(".layui-table-tool", state="attached", timeout=3000)
     except Exception:
         pass  # graceful: toolbar may not be present in this demo config
-    await page.screenshot(path=sc(24, "01-student-grid"))
 
     # Step 1: 開啟分析面板
     analysis_btn = page.locator("button:has-text('分析模式')")
@@ -1379,13 +1355,11 @@ async def tc_24_analysis_full_flow(page, **_):
                 await page.wait_for_selector(".analysis-field-pool", state="visible", timeout=5000)
             except Exception:
                 pass  # fallback if timing varies
-            await page.screenshot(path=sc(24, "02-panel-open"))
 
             # Step 2: 確認欄位載入
             pills = page.locator(".analysis-pill")
             pill_count = await pills.count()
             print(f"  欄位 pill 數量: {pill_count}")
-            await page.screenshot(path=sc(24, "03-fields-loaded"))
 
             # Step 3: 嘗試透過頁面操作拖放
             # 找到維度區的 pill 和拖放區
@@ -1403,11 +1377,9 @@ async def tc_24_analysis_full_flow(page, **_):
                 try:
                     await dim_pills.first.drag_to(dim_zone)
                     await page.wait_for_load_state("networkidle")
-                    await page.screenshot(path=sc(24, "04-dim-dropped"))
 
                     await msr_pills.first.drag_to(msr_zone)
                     await page.wait_for_load_state("networkidle")
-                    await page.screenshot(path=sc(24, "05-msr-dropped"))
 
                     # Step 4: 點擊查詢按鈕
                     query_btn = page.locator("button:has-text('查詢'), button:has-text('執行'), .analysis-btn-query")
@@ -1428,7 +1400,6 @@ async def tc_24_analysis_full_flow(page, **_):
                             await page.wait_for_selector(".analysis-result-section, canvas, .analysis-result-section table", state="visible", timeout=5000)
                         except Exception:
                             pass
-                        await page.screenshot(path=sc(24, "06-query-result"))
 
                         # 確認結果區顯示
                         result_section = page.locator(".analysis-result-section")
@@ -1465,7 +1436,6 @@ async def tc_24_analysis_full_flow(page, **_):
         data = json.loads(await resp.text())
         print(f"  API rows: {len(data.get('rows', []))}")
 
-    await page.screenshot(path=sc(24, "07-final"), full_page=True)
     print("[TC-24] PASS -- Analysis 完整流程截圖完成")
 
 
@@ -1508,7 +1478,6 @@ async def tc_25_grid_paging(page, **_):
         await page.wait_for_selector(".layui-table-body tr[data-index]", state="attached", timeout=3000)
     except Exception:
         pass
-    await page.screenshot(path=sc(25, "01-grid-initial"))
 
     # 確認分頁元件存在
     pager = page.locator(".layui-table-page")
@@ -1516,7 +1485,6 @@ async def tc_25_grid_paging(page, **_):
     print(f"  .layui-table-page 數量: {pager_count}")
 
     if pager_count > 0:
-        await page.screenshot(path=sc(25, "02-pager"))
 
         # LayUI 分頁的「每頁 N 條」select
         page_select = page.locator(".layui-table-page select")
@@ -1538,7 +1506,6 @@ async def tc_25_grid_paging(page, **_):
             info_text = await page_info.first.text_content()
             print(f"  分頁資訊: {info_text!r}")
 
-        await page.screenshot(path=sc(25, "03-pager-detail"))
     else:
         print("  [WARN] 分頁元件不存在（可能資料筆數不足）")
 
@@ -1575,7 +1542,6 @@ async def tc_26_crud_flow(page, **_):
     # Step 1: Create 表單
     await page.goto(f"{BASE_URL}/Student/Create")
     await page.wait_for_load_state("networkidle")
-    await page.screenshot(path=sc(26, "01-create-form"))
 
     # 確認表單欄位
     form_fields = {
@@ -1606,7 +1572,6 @@ async def tc_26_crud_flow(page, **_):
     await page.locator("input[name='Entity.ID']").fill(test_id)
     await page.locator("input[name='Entity.Password']").fill("test123456")
     await page.locator("input[name='Entity.Name']").fill("E2E Test Student")
-    await page.screenshot(path=sc(26, "02-create-filled"))
 
     # 提交按鈕 — WTM <wt:submitbutton /> 渲染為 layui-btn 帶 lay-submit
     submit_btn = page.locator("button[lay-submit], a[lay-submit]")
@@ -1620,7 +1585,6 @@ async def tc_26_crud_flow(page, **_):
         await page.wait_for_selector(".layui-table-body tr[data-index]", state="visible", timeout=3000)
     except Exception:
         pass
-    await page.screenshot(path=sc(26, "03-student-list"))
 
     # Step 4: 搜尋面板
     search_panel = page.locator(".layui-form[id^='wtForm_']")
@@ -1630,7 +1594,6 @@ async def tc_26_crud_flow(page, **_):
     # 搜尋按鈕
     search_btn = page.locator("button:has-text('搜索'), button:has-text('Search')")
     print(f"  搜尋按鈕: {await search_btn.count()}")
-    await page.screenshot(path=sc(26, "04-search-panel"))
 
     print("[TC-26] PASS -- CRUD 流程截圖完成")
 
@@ -1662,7 +1625,6 @@ async def tc_27_user_management(page, **_):
         await page.wait_for_selector(".layui-table-body", state="visible", timeout=3000)
     except Exception:
         pass
-    await page.screenshot(path=sc(27, "01-user-list"))
 
     # 確認 grid 存在
     table = page.locator(".layui-table-body")
@@ -1687,7 +1649,6 @@ async def tc_27_user_management(page, **_):
     search = page.locator(".layui-form")
     print(f"  搜尋面板: {await search.count()}")
 
-    await page.screenshot(path=sc(27, "02-user-grid-detail"))
     print("[TC-27] PASS -- 使用者管理頁面截圖完成")
 
 
@@ -1713,7 +1674,6 @@ async def tc_28_role_management(page, **_):
         await page.wait_for_selector(".layui-table-body", state="visible", timeout=3000)
     except Exception:
         pass
-    await page.screenshot(path=sc(28, "01-role-list"))
 
     # 確認 grid
     table = page.locator(".layui-table-body")
@@ -1735,7 +1695,6 @@ async def tc_28_role_management(page, **_):
         await page.wait_for_selector(".layui-table-body, .layui-form", state="visible", timeout=3000)
     except Exception:
         pass
-    await page.screenshot(path=sc(28, "02-data-privilege"))
 
     # FrameworkMenu
     await page.goto(f"{BASE_URL}/_Admin/FrameworkMenu/Index")
@@ -1744,7 +1703,6 @@ async def tc_28_role_management(page, **_):
         await page.wait_for_selector(".layui-table-body, .layui-nav", state="visible", timeout=3000)
     except Exception:
         pass
-    await page.screenshot(path=sc(28, "03-menu-list"))
 
     menu_table = page.locator(".layui-table-body")
     if await menu_table.count() > 0:
@@ -1781,7 +1739,6 @@ async def tc_29_etl_management(page, **_):
         await page.wait_for_selector(".layui-table-body, input[name='Searcher.Name']", state="visible", timeout=3000)
     except Exception:
         pass
-    await page.screenshot(path=sc(29, "01-etl-job-list"))
 
     # 確認搜尋面板欄位
     name_input = page.locator("input[name='Searcher.Name']")
@@ -1803,7 +1760,6 @@ async def tc_29_etl_management(page, **_):
         await page.wait_for_selector("select[name='Searcher.Result'], .layui-table-body", state="visible", timeout=3000)
     except Exception:
         pass
-    await page.screenshot(path=sc(29, "02-etl-runlog"))
 
     # Run Log 搜尋面板
     result_select = page.locator("select[name='Searcher.Result']")
@@ -1842,7 +1798,6 @@ async def tc_30_import_flow(page, **_):
     # 直接存取 Import PartialView
     await page.goto(f"{BASE_URL}/Student/Import")
     await page.wait_for_load_state("networkidle")
-    await page.screenshot(path=sc(30, "01-import-dialog"))
 
     # 確認下載範本按鈕
     # wt:downloadTemplateButton 渲染為 <a> 或 <button> 帶下載連結
@@ -1878,8 +1833,6 @@ async def tc_30_import_flow(page, **_):
     close = page.locator("button:has-text('关闭'), button:has-text('Close'), a:has-text('关闭')")
     print(f"  Close 按鈕: {await close.count()}")
 
-    await page.screenshot(path=sc(30, "02-import-controls"), full_page=True)
-
     # 嘗試下載範本（不實際下載，只確認 API 可存取）
     template_response = await page.request.get(
         f"{BASE_URL}/Student/Import"  # GET 取得頁面
@@ -1910,7 +1863,6 @@ async def tc_31_workflow_designer_smoke(page, **_):
 
     # Step 0: 登入
     await login(page, BASE)
-    await page.screenshot(path=sc(tc_num, "00-logged-in"))
 
     # Step 1: 確認設計器頁面可存取（AddWtmWorkFlowDesigner 已啟用）
     # FIX-B2: 404 is now a FAIL (not a skip). The demo host has AddWtmWorkFlowDesigner()
@@ -1926,7 +1878,6 @@ async def tc_31_workflow_designer_smoke(page, **_):
     if status == 403:
         print(f"[TC-{tc_num:02d}] SKIP — 設計器 RBAC 未授權 (403)，需配置 FunctionPrivilege")
         return
-    await page.screenshot(path=sc(tc_num, "01-designer-page"))
     print(f"[TC-{tc_num:02d}] 設計器頁面 HTTP {status}")
 
     # Step 2: 確認 bootstrap API 回傳正常
@@ -2015,7 +1966,6 @@ async def tc_31_workflow_designer_smoke(page, **_):
     _pub_outcome = _pub_body.get('Outcome') or _pub_body.get('outcome')
     assert _pub_outcome in ('Published', 'IdempotentNoOp'), \
         f"非預期 outcome: {pub_resp}"
-    await page.screenshot(path=sc(tc_num, "04-published-v1"))
 
     # Step 5: 再次發布完全相同內容 → 應得 IdempotentNoOp
     pub2_resp = await page.evaluate(f"""
@@ -2069,7 +2019,6 @@ async def tc_31_workflow_designer_smoke(page, **_):
     # Step 7: 重新開啟設計器頁面，帶 code 參數
     await page.goto(f"{BASE}/_workflow-designer?code={test_code}")
     await page.wait_for_load_state("networkidle", timeout=TIMEOUT)
-    await page.screenshot(path=sc(tc_num, "07-designer-with-code"))
 
     print(f"[TC-{tc_num:02d}] PASS -- WorkFlow 設計器 smoke 完成 (code={test_code})")
 
@@ -2261,7 +2210,6 @@ async def tc_33_combobox_chain_cascade(page, **_):
 
         print("  [KILLSWITCH] 對話框開啟未拋錯；comboboxes 依 docs/csp-hardening.md "
               "「Honest limits」預期不可互動，略過連動功能斷言")
-        await page.screenshot(path=sc(33, "01-killswitch-degraded"))
         print("[TC-33] PASS -- kill-switch leg：優雅降級驗證通過")
         return
 
@@ -2282,7 +2230,6 @@ async def tc_33_combobox_chain_cascade(page, **_):
     # 會自己等到版面穩定再點，這正是這裡需要的訊號，比盲目的固定等待更準確。
     await tree_box.click()
     await page.wait_for_selector("#LinkTest2VM_SelectedSchool .xm-option", state="attached", timeout=TIMEOUT)
-    await page.screenshot(path=sc(33, "01-tree-open"))
 
     # 資料驅動找出實際擁有 Major 的 School id —— demo.db 未入版控，每次執行都
     # 重新播種，不可假設固定 ID 一定有關聯資料（issue #681 踩雷紀錄）。
@@ -2331,7 +2278,6 @@ async def tc_33_combobox_chain_cascade(page, **_):
         f"({expected_major_count})不符"
     )
 
-    await page.screenshot(path=sc(33, "02-combobox-chain-cascaded"))
     print("[TC-33] PASS -- combobox 聯動串聯（tree → combobox chain/cascade）驗證通過")
 
 
@@ -2388,7 +2334,6 @@ async def tc_34_selector_dialog_flow(page, **_):
 
     select_btn = page.locator("#LinkTestVM_SelectedSchool_Select")
     assert await select_btn.count() > 0, "找不到 wt:selector 的挑選按鈕（id 結尾 _Select）"
-    await page.screenshot(path=sc(34, "01-create-form-with-selector"))
 
     page_errors = []
     page.on("pageerror", lambda e: page_errors.append(str(e)))
@@ -2408,7 +2353,6 @@ async def tc_34_selector_dialog_flow(page, **_):
     layer_count = await layer_pages.count()
     print(f"  Selector 彈出層數量: {layer_count}")
     assert layer_count >= 2, "點擊挑選按鈕後應開啟第二層 Selector 彈出對話框"
-    await page.screenshot(path=sc(34, "02-selector-dialog-open"))
 
     assert not page_errors, f"Selector 對話框拋出未捕捉例外：{page_errors}"
 
@@ -2491,7 +2435,6 @@ async def tc_35_upload_widget_roundtrip(page, **_):
     hidden_field = page.locator("#StudentVM_Entity_PhotoId")
     assert await upload_btn.count() > 0, "找不到上傳按鈕（wt:upload 的 ...button）"
     assert await hidden_field.count() > 0, "找不到上傳結果 hidden input（wt:upload 的回填欄位）"
-    await page.screenshot(path=sc(35, "01-create-form-with-upload"))
 
     if KILLSWITCH_EXPECTED:
         page_errors = []
@@ -2544,7 +2487,6 @@ async def tc_35_upload_widget_roundtrip(page, **_):
     assert chooser_triggered, "點擊上傳按鈕應能觸發瀏覽器原生檔案選擇器"
 
     await page.wait_for_timeout(4000)
-    await page.screenshot(path=sc(35, "02-after-upload-attempt"))
 
     hidden_val = await hidden_field.input_value()
     print(f"  上傳後 hidden input 值: {hidden_val!r}")
@@ -2599,13 +2541,30 @@ async def tc_36_tenant_switch(page, **_):
 
 
 # ─── 錯誤處理輔助函式 ────────────────────────────────────────────────────────
+#
+# Issue #886: 每個 TC 過去對每一步都無條件拍照（79 處 page.screenshot()，13 處
+# full_page=True），不分成敗——但 CI 的 `Upload screenshots` step 因 #11 長年是
+# continue-on-error 的失敗，這些截圖平常沒有人下載查看，只有失敗時才有除錯價值。
+# 現在的政策：TC 主流程（happy path）不再逐步拍照，只靠這裡的 _screenshot_on_failure
+# 在 run_tests() 的例外處理路徑上，對「這次失敗/重試當下」的頁面狀態拍一張。已經
+# 位在 except 分支裡、只在特定子步驟逾時才觸發的截圖（例如 login()、TC-04、TC-24
+# 的個別 timeout 分支）維持原樣不動——它們本來就是條件式的，成功執行不會付出任何
+# 成本。TC-21（登入頁視覺驗收）與 TC-22（首頁 Dashboard 完整截圖）例外：這兩個 TC
+# 的截圖本身就是測試的產出物（視覺驗收快照），不是除錯用的步驟紀錄，維持無條件拍照。
 
 async def _screenshot_on_failure(page, tc_num, label):
-    """失敗時截圖。失敗無害（best-effort）。"""
+    """
+    失敗時截圖。best-effort，但失敗要留痕跡、不能靜默吞掉。
+
+    某些失敗形態（例如 #885 觀測到的 Chromium "Target crashed"）代表瀏覽器行程本身
+    已經死亡，這裡的 page.screenshot() 幾乎必然也會失敗——這種情況下沒有任何辦法
+    生出一張截圖，但至少要在 CI log 留一行訊息說明「這個 TC 沒有截圖，因為連截圖
+    本身都失敗了」，而不是讓截圖目錄悄悄少一個檔案、事後看起來像是忘記拍。
+    """
     try:
         await page.screenshot(path=sc(tc_num, label))
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[TC-{tc_num:02d}] 無法擷取失敗截圖（label={label}）：{type(e).__name__}: {e}")
 
 
 async def _log_console_errors(page, tc_num):
