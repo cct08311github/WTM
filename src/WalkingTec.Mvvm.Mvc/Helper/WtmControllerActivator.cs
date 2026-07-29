@@ -186,11 +186,43 @@ namespace WalkingTec.Mvvm.Mvc.Helper
         /// <see cref="Release"/>/<see cref="ReleaseAsync"/>, delegated to <c>_inner</c> exactly
         /// as before, unaffected by this).
         /// </summary>
+        /// <exception cref="InvalidOperationException">
+        /// #882 review, third round: if <c>_inner</c> implements ONLY <see cref="IAsyncDisposable"/>
+        /// (not <see cref="IDisposable"/>), this throws rather than silently doing nothing.
+        /// Verified against the real installed <c>Microsoft.Extensions.DependencyInjection</c>
+        /// 10.0.9 assembly: <c>ServiceProviderEngineScope.Dispose()</c> hits the identical shape
+        /// for a service it tracked itself and throws <see cref="InvalidOperationException"/>
+        /// with message <c>"'{0}' type only implements IAsyncDisposable. Use DisposeAsync to
+        /// dispose the container."</c> — a LOUD signal telling the caller to use
+        /// <c>DisposeAsync</c> instead. An earlier version of this method only checked
+        /// <see cref="IDisposable"/> and fell through to nothing for an async-only inner —
+        /// exactly the shape this repo has spent a month chasing elsewhere (`BaseCRUDVM`): an
+        /// error state collapsing into something indistinguishable from success. This wrapper
+        /// cannot reach into the container's own tracked-disposables list to get that exact
+        /// exception for free (the container never tracked `_inner`, only the outer wrapper —
+        /// see the class doc's disposal-ownership section), so it reproduces the same signal
+        /// itself instead. Deliberately NOT `.GetAwaiter().GetResult()`-ing the async disposal
+        /// here to "complete" it silently — this repo's own convention
+        /// (`dotnet-conventions.md`: "Never `.GetAwaiter().GetResult()` on a request path") rules
+        /// that out, and scope disposal can happen on a request path.
+        /// </exception>
         public void Dispose()
         {
-            if (_ownsInner && _inner is IDisposable disposable)
+            if (!_ownsInner)
+            {
+                return;
+            }
+
+            if (_inner is IDisposable disposable)
             {
                 disposable.Dispose();
+                return;
+            }
+
+            if (_inner is IAsyncDisposable)
+            {
+                throw new InvalidOperationException(
+                    $"'{_inner.GetType()}' (the inner IControllerActivator {nameof(WtmControllerActivator)} wraps) only implements IAsyncDisposable. Use DisposeAsync to dispose the container.");
             }
         }
 

@@ -464,17 +464,25 @@ namespace WalkingTec.Mvvm.Mvc
             // of silently installing some fallback means a future call-order regression breaks
             // at startup, not as a silently-undone security fix in production.
             //
-            // #882 review, second round: only consider UNKEYED descriptors here. .NET 8+ keyed
-            // services (ServiceDescriptor.IsKeyedService) can register an IControllerActivator
-            // under a key -- its ImplementationType/ImplementationFactory/ImplementationInstance
-            // getters all throw for a keyed descriptor (KeyedImplementationType/-Factory/
-            // -Instance are the ones that apply instead; verified against the real
-            // Microsoft.Extensions.DependencyInjection.Abstractions 10.0.9 assembly). An
-            // unkeyed sp.GetRequiredService<IControllerActivator>() call -- which is what this
-            // activator, and MVC itself, actually performs -- never resolves a keyed
-            // registration regardless of where it sits in registration order, so picking the
-            // last KEYED one here (as the previous version did, with no IsKeyedService check)
-            // would both wrap the wrong thing and throw at first resolution.
+            // #882 review, second round (comment corrected in the third round -- see below):
+            // only consider UNKEYED descriptors here. .NET 8+ keyed services
+            // (ServiceDescriptor.IsKeyedService) can register an IControllerActivator under a
+            // key -- its ImplementationType/ImplementationFactory/ImplementationInstance
+            // getters all return NULL for a keyed descriptor, not throw (verified against the
+            // real Microsoft.Extensions.DependencyInjection.Abstractions 10.0.9 assembly: each
+            // getter's body is `if (!IsKeyedService) { return the real value; } return null;`).
+            // What DOES throw is the reverse misuse: calling the KeyedImplementationType/
+            // -Factory/-Instance getters (the ones that apply to a KEYED descriptor) on an
+            // UNKEYED one. Without this filter, the null ImplementationType/Factory/Instance
+            // would fall through to the `_ => throw ...` arm below when the descriptor picked
+            // out by LastOrDefault happened to be keyed -- an unrelated exception with a
+            // confusing message, not a graceful "not found". Separately, and independent of
+            // which getter throws or returns null: an unkeyed
+            // sp.GetRequiredService<IControllerActivator>() call -- what this activator, and
+            // MVC itself, actually performs -- never resolves a keyed registration regardless
+            // of where it sits in registration order, so picking the last KEYED one here (as
+            // the version before this filter did) would always have wrapped the wrong thing
+            // even before any exception was in play.
             var existingActivatorDescriptor = services
                 .Where(d => d.ServiceType == typeof(IControllerActivator) && !d.IsKeyedService)
                 .LastOrDefault();

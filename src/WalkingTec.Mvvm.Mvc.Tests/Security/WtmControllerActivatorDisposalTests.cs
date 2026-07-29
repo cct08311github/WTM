@@ -134,21 +134,29 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
             inner.DisposeAsyncCount.Should().Be(0, "a pre-built/possibly-shared inner (ownsInner: false) must not be torn down by a single wrapper's disposal");
         }
 
+        /// <summary>
+        /// #882 review, third round -- Blocking 1: a sync <c>Dispose()</c> on an inner that
+        /// implements ONLY <see cref="IAsyncDisposable"/> (not <see cref="IDisposable"/>) must
+        /// THROW, not silently do nothing. Before this fix, <c>Dispose()</c> only checked
+        /// <see cref="IDisposable"/> and fell straight through for an async-only inner -- a
+        /// loud failure (the DI container's own sync scope disposal throws
+        /// <see cref="InvalidOperationException"/> for a tracked service in this exact shape)
+        /// silently became a no-op success. This is the direct regression test for that fix;
+        /// see also <c>AddWtmContext_SyncScopeDispose_ThrowsForAsyncOnlyInnerActivator_
+        /// InsteadOfSilentlySkipping</c> below for the same thing through the real container.
+        /// </summary>
         [TestMethod]
-        public void Dispose_InnerIsNotDisposable_DoesNotThrow()
+        public void Dispose_OwnsInnerTrue_InnerIsAsyncDisposableOnly_ThrowsInsteadOfSilentlySkipping()
         {
-            var inner = new NonDisposableActivator();
+            var inner = new SpyAsyncDisposableActivator();
             var wrapper = new WtmControllerActivator(inner, ownsInner: true);
 
             var act = () => wrapper.Dispose();
 
-            act.Should().NotThrow();
-        }
-
-        private sealed class NonDisposableActivator : IControllerActivator
-        {
-            public object Create(ControllerContext context) => new object();
-            public void Release(ControllerContext context, object controller) { }
+            act.Should().Throw<InvalidOperationException>()
+                .WithMessage("*IAsyncDisposable*")
+                .WithMessage("*DisposeAsync*");
+            inner.DisposeAsyncCount.Should().Be(0, "the sync path cannot actually complete the async disposal -- it must throw, not silently claim success");
         }
 
         // ─── End-to-end: the REAL AddWtmContext wiring, not a mirrored copy ───
@@ -229,6 +237,122 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
             public void Release(ControllerContext context, object controller) { }
 
             public void Dispose() => LastInstanceDisposeCount++;
+        }
+
+        /// <summary>
+        /// Same wiring again, but through the <c>ImplementationFactory</c> branch specifically
+        /// (<c>services.Replace(ServiceDescriptor.Transient&lt;IControllerActivator&gt;(sp =>
+        /// ...))</c>) -- the third of the three ways <c>existingActivatorDescriptor</c> can be
+        /// shaped (<c>ImplementationInstance</c>/<c>ImplementationType</c>/
+        /// <c>ImplementationFactory</c>), and the one the other two disposal tests above don't
+        /// cover.
+        /// </summary>
+        [TestMethod]
+        public void AddWtmContext_DisposesFactoryRegisteredInnerActivator_OnScopeDispose()
+        {
+            var services = new ServiceCollection();
+            services.AddMvcCore();
+            var spy = new SpyDisposableActivator();
+            services.Replace(ServiceDescriptor.Transient<IControllerActivator>(_ => spy));
+
+            var config = BuildMinimalWtmConfig();
+            services.AddWtmContext(config);
+
+            using var provider = services.BuildServiceProvider();
+            using (var scope = provider.CreateScope())
+            {
+                var activator = scope.ServiceProvider.GetRequiredService<IControllerActivator>();
+                activator.Should().BeOfType<WtmControllerActivator>();
+            }
+
+            spy.DisposeCount.Should().Be(
+                1,
+                "AddWtmContext built this inner instance itself by invoking the captured descriptor's ImplementationFactory, bypassing the container's own " +
+                "tracked construction path -- ownsInner must be true for this branch exactly like the ImplementationType branch above");
+        }
+
+        /// <summary>
+        /// #882 review, third round: proves the REAL container's async scope teardown
+        /// (<c>AsyncServiceScope.DisposeAsync</c>) reaches <c>WtmControllerActivator</c>'s
+        /// <c>DisposeAsync</c> -- not its sync <c>Dispose</c> -- and that it in turn prefers the
+        /// inner's <see cref="IAsyncDisposable"/> over any <see cref="IDisposable"/>. The direct
+        /// unit test (<c>DisposeAsync_OwnsInnerTrue_PrefersInnersDisposeAsync_OverDispose</c>)
+        /// proves the class's own logic; this proves the real wiring reaches it.
+        /// </summary>
+        [TestMethod]
+        public async Task AddWtmContext_AsyncScopeDisposeAsync_PrefersInnersAsyncDisposal_ThroughRealContainer()
+        {
+            var services = new ServiceCollection();
+            services.AddMvcCore();
+            services.Replace(ServiceDescriptor.Transient<IControllerActivator, TrackingBothDisposableActivator>());
+
+            var config = BuildMinimalWtmConfig();
+            TrackingBothDisposableActivator.Reset();
+
+            services.AddWtmContext(config);
+
+            await using (var provider = services.BuildServiceProvider())
+            {
+                var scope = provider.CreateAsyncScope();
+                var activator = scope.ServiceProvider.GetRequiredService<IControllerActivator>();
+                activator.Should().BeOfType<WtmControllerActivator>();
+                await scope.DisposeAsync();
+            }
+
+            TrackingBothDisposableActivator.DisposeAsyncCount.Should().Be(1, "an async scope teardown must prefer the inner's DisposeAsync");
+            TrackingBothDisposableActivator.DisposeCount.Should().Be(0, "and must not ALSO call the inner's synchronous Dispose when DisposeAsync is available");
+        }
+
+        private sealed class TrackingBothDisposableActivator : IControllerActivator, IDisposable, IAsyncDisposable
+        {
+            public static int DisposeCount;
+            public static int DisposeAsyncCount;
+
+            public static void Reset()
+            {
+                DisposeCount = 0;
+                DisposeAsyncCount = 0;
+            }
+
+            public object Create(ControllerContext context) => new object();
+
+            public void Release(ControllerContext context, object controller) { }
+
+            public void Dispose() => DisposeCount++;
+
+            public ValueTask DisposeAsync()
+            {
+                DisposeAsyncCount++;
+                return default;
+            }
+        }
+
+        /// <summary>
+        /// #882 review, third round -- Blocking 1, through the real container: a SYNC
+        /// <c>scope.Dispose()</c> against an async-only-disposable inner activator must throw,
+        /// exactly like the DI container's own sync disposal would for a service it tracked
+        /// itself (see <c>WtmControllerActivator.Dispose</c>'s XML doc for the verified
+        /// original exception this reproduces). Registered by TYPE so AddWtmContext builds it
+        /// itself (ownsInner: true) -- the case this bug applied to.
+        /// </summary>
+        [TestMethod]
+        public void AddWtmContext_SyncScopeDispose_ThrowsForAsyncOnlyInnerActivator_InsteadOfSilentlySkipping()
+        {
+            var services = new ServiceCollection();
+            services.AddMvcCore();
+            services.Replace(ServiceDescriptor.Transient<IControllerActivator, SpyAsyncDisposableActivator>());
+
+            var config = BuildMinimalWtmConfig();
+            services.AddWtmContext(config);
+
+            using var provider = services.BuildServiceProvider();
+            var scope = provider.CreateScope();
+            var activator = scope.ServiceProvider.GetRequiredService<IControllerActivator>();
+            activator.Should().BeOfType<WtmControllerActivator>();
+
+            var act = () => scope.Dispose();
+
+            act.Should().Throw<InvalidOperationException>("a sync scope.Dispose() must not silently skip disposing an async-only-disposable inner activator");
         }
 
         /// <summary>
