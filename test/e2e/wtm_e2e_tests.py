@@ -20,6 +20,8 @@ WTM Demo E2E Test Suite — TC-01 ~ TC-36
                       （預設 "0"／未設定＝baseline，行為與現行預設一致）。
                       由 e2e-test.yml 的 "killswitch" matrix leg 設定；
                       本地手動測試 kill-switch 時也可自行 export。
+  WTM_E2E_VISUAL_SNAPSHOTS  "1" 才會產生 TC-21/TC-22 的人工複核用視覺快照
+                      （預設 "0"，見下方截圖政策第 2 點；issue #886 review）。
 
 執行：
   python wtm_e2e_tests.py                       # 全部執行
@@ -33,6 +35,25 @@ WTM Demo E2E Test Suite — TC-01 ~ TC-36
 執行後彙總列印 "Total: N | PASS: n | FAIL: n | ERROR: n | SKIP: n" — N 會隨
 TC_REGISTRY 增減而變動（見 #681），CI log 判讀請認 "FAIL: 0" 與 "ERROR: 0"
 這兩個欄位是否為 0，不要硬編一個固定的 N。
+
+截圖政策（issue #886，2026-07-29 review 後修正）：
+  tc_ 函式本身不再逐步無條件拍照——失敗時的截圖統一由 run_tests() 的例外處理路徑
+  透過 _screenshot_on_failure() 補拍一張「失敗當下」的頁面狀態，寫入
+  screenshots/TC-{N}/TC-{N}-{FAIL|ERROR|RETRY-n}.png。新增 tc_ 函式時不要為了
+  「步驟紀錄」在成功路徑上加 page.screenshot() —— 那筆成本在全部 79 個呼叫點
+  乘上三條 CI matrix leg 是白付的（CI 的 screenshot artifact 上傳因 #11 長年
+  continue-on-error，平常沒有人下載查看）。仍然合理的例外：
+    1. 已經寫在 except 分支、只在特定子步驟逾時/失敗時才觸發的截圖（例如
+       login()、TC-04、TC-24 的個別 timeout 分支，以及 #886 review 後移回
+       except 分支的 TC-04/24/25/26/27/28/29 共 12 處——這些 TC 在這條路徑
+       上沒有任何 assert 保護，swallow 掉的例外若不順手拍照就完全無跡可尋，
+       見各自 except 分支旁的行內註解）——這些本來就是條件式的，成功執行
+       不會被呼叫到，維持原樣、不受下面第 2 點的 opt-in flag 控制。
+    2. TC-21（登入頁視覺驗收）與 TC-22（首頁 Dashboard 版面驗證）——這兩個 TC
+       的判定完全來自 DOM/佈局 assert，截圖本身不是任何斷言的依據，且 CI 的
+       screenshot artifact 上傳本來就不可靠（#11）。因此改為 opt-in：預設不拍，
+       設 WTM_E2E_VISUAL_SNAPSHOTS=1 才會產生，給人工複核視覺版面用（TC-22
+       逾時分支本身的診斷截圖不受此 flag 控制，理由同第 1 點）。
 """
 
 import asyncio
@@ -57,6 +78,14 @@ HEADLESS = os.environ.get("WTM_E2E_HEADLESS", "true").lower() not in ("false", "
 # Issue #681: mirrors the demo process's own WTM_E2E_KILLSWITCH env var (read by
 # _Layout.cshtml) so tc_33/34/35 know which assertions are valid for THIS run.
 KILLSWITCH_EXPECTED = os.environ.get("WTM_E2E_KILLSWITCH", "0").strip() == "1"
+# Issue #886 review (MEDIUM): TC-21/TC-22's screenshots were exempted from the
+# failure-only policy on the theory that "producing the image is the test's
+# purpose" — but no assertion in either TC actually consumes the image (TC-21's
+# verdict comes from the DOM asserts, TC-22's from the layout asserts), and CI
+# can't reliably hand them back anyway (`actions/upload-artifact@v4` vs Gitea's
+# GHES API, #11, continue-on-error). So they don't get an unconditional-by-default
+# pass; they're opt-in for a human doing a manual visual check.
+VISUAL_SNAPSHOTS = os.environ.get("WTM_E2E_VISUAL_SNAPSHOTS", "0").strip() == "1"
 
 # WTM Analysis Mode 已知 VM 型別（demo 中 [EnableAnalysis] 標記的 ListVM）
 STUDENT_LIST_VM = "WalkingTec.Mvvm.Demo.ViewModels.StudentVMs.StudentListVM"
@@ -235,7 +264,6 @@ async def tc_01_xss_reflected(page, **_):
         url = f"{BASE_URL}/Login/Login?ReturnUrl={payload}"
         await page.goto(url)
         await page.wait_for_load_state("networkidle")
-        await page.screenshot(path=sc(1, f"01-payload-{i}-loginpage"))
 
         # Step 2: 檢查 hidden input 的 Redirect 值
         redirect_input = page.locator("input[name='Redirect']")
@@ -271,7 +299,6 @@ async def tc_01_xss_reflected(page, **_):
     resp = await nav_info.value
     final_url = page.url
     print(f"  登入後最終 URL: {final_url}")
-    await page.screenshot(path=sc(1, "02-after-login-redirect"))
 
     # 確認沒有被重導到 javascript: URL
     assert not final_url.startswith("javascript:"), \
@@ -326,7 +353,6 @@ async def tc_02_sql_injection(page, **_):
 
         status = response.status
         print(f"  Payload {i}: ITCode={itcode!r} => HTTP {status}")
-        await page.screenshot(path=sc(2, f"01-payload-{i}"))
 
         assert status != 500, f"SQL injection payload {i} 導致 500 錯誤！"
         # 不應登入成功（回傳 200 的登入頁面才是正確的，302 到 / 表示登入成功）
@@ -357,7 +383,6 @@ async def tc_03_csrf_token(page, **_):
     # 導覽到 Student Create 頁面（直接存取 PartialView URL）
     await page.goto(f"{BASE_URL}/Student/Create")
     await page.wait_for_load_state("networkidle")
-    await page.screenshot(path=sc(3, "01-create-form"))
 
     # 檢查 Anti-Forgery Token
     token = page.locator("input[name='__RequestVerificationToken']")
@@ -373,7 +398,6 @@ async def tc_03_csrf_token(page, **_):
         "Entity.Password": "test123",
     })
     print(f"  無 Token POST 回應: HTTP {response.status}")
-    await page.screenshot(path=sc(3, "02-no-token-response"))
     print(f"  [KNOWN-GAP] POST 無 token 成功提交（HTTP {response.status}）— WTM 缺乏 CSRF 保護")
 
     print("[TC-03] PASS -- CSRF 檢查完成（結果記錄為已知安全缺口）")
@@ -417,7 +441,6 @@ async def tc_04_analysis_mode_page(page, **_):
     # Replace bare asyncio.sleep — wait for networkidle so the page is fully settled
     # before we start interacting with toolbar buttons (issue #475: scroll flake)
     await page.wait_for_load_state("networkidle", timeout=TIMEOUT)
-    await page.screenshot(path=sc(4, "01-student-index"))
 
     # 等待 grid toolbar
     try:
@@ -451,7 +474,6 @@ async def tc_04_analysis_mode_page(page, **_):
     analysis_btn = page.locator("button:has-text('分析模式')")
     btn_count = await analysis_btn.count()
     print(f"  「分析模式」按鈕數量: {btn_count}")
-    await page.screenshot(path=sc(4, "02-toolbar"))
     assert btn_count > 0, "找不到「分析模式」按鈕！"
 
     # 點擊切換 — wait for visible BEFORE scroll to avoid layout-fade flake (issue #475)
@@ -477,8 +499,12 @@ async def tc_04_analysis_mode_page(page, **_):
     try:
         await page.wait_for_selector("[id^='analysis-panel-']", state="visible", timeout=5000)
     except Exception:
-        pass  # fallback: panel may already be visible
-    await page.screenshot(path=sc(4, "03-analysis-panel-open"))
+        # issue #886 review: this wait is swallowed and the assert below can still
+        # PASS if the panel shows up late, so capture the moment of the timeout —
+        # otherwise a silently-slow panel leaves no trace at all. Round 2: use the
+        # non-throwing helper — a capture failure here must not replace this
+        # swallowed timeout with a different, unintended exception.
+        await _screenshot_on_failure(page, 4, "03-analysis-panel-open", full_page=True)
 
     # 確認面板已顯示
     # 面板 ID 格式: analysis-panel-{gridId}，gridId = wtTable_{UniqueId}
@@ -508,7 +534,6 @@ async def tc_04_analysis_mode_page(page, **_):
     print(f"  欄位 pill 數量: {pill_count}")
     assert pill_count > 0, "沒有任何欄位 pill！"
 
-    await page.screenshot(path=sc(4, "04-analysis-fields"))
     print("[TC-04] PASS -- Analysis Mode 頁面測試通過")
 
 
@@ -530,7 +555,6 @@ async def tc_05_analysis_not_enabled(page, **_):
     await login(page)
     await page.goto(f"{BASE_URL}/City/Index")
     await page.wait_for_load_state("networkidle")
-    await page.screenshot(path=sc(5, "01-city-index"))
 
     analysis_btn = page.locator("button:has-text('分析模式')")
     btn_count = await analysis_btn.count()
@@ -563,7 +587,6 @@ async def tc_06_login_failure(page, **_):
     await page.locator("input[name='Password']").fill("wrong_pass")
     await page.locator("button.login-button[type='submit']").click()
     await page.wait_for_load_state("networkidle")
-    await page.screenshot(path=sc(6, "01-login-failed"))
 
     # 確認仍在登入頁
     login_form = page.locator("form[action='/Login/Login']")
@@ -573,7 +596,6 @@ async def tc_06_login_failure(page, **_):
     error_span = page.locator("span.login-error")
     error_text = await error_span.text_content() if await error_span.count() > 0 else ""
     print(f"  錯誤訊息: {error_text!r}")
-    await page.screenshot(path=sc(6, "02-error-message"))
 
     print("[TC-06] PASS -- 登入失敗正確顯示錯誤")
 
@@ -595,12 +617,10 @@ async def tc_07_logout(page, **_):
     print("[TC-07] 開始執行...")
 
     await login(page)
-    await page.screenshot(path=sc(7, "01-logged-in"))
 
     # 登出
     await page.goto(f"{BASE_URL}/Login/Logout")
     await page.wait_for_load_state("networkidle")
-    await page.screenshot(path=sc(7, "02-after-logout"))
 
     # 確認回到登入頁或首頁
     final_url = page.url
@@ -611,7 +631,6 @@ async def tc_07_logout(page, **_):
     await page.wait_for_load_state("networkidle")
     redirected_url = page.url
     print(f"  存取 Student/Index 後 URL: {redirected_url}")
-    await page.screenshot(path=sc(7, "03-protected-page-redirect"))
 
     # 應被重導到登入頁
     assert "Login" in redirected_url or "login" in redirected_url.lower(), \
@@ -643,7 +662,6 @@ async def tc_08_authorization(page, **_):
     )
     status = response.status
     print(f"  未認證 /_analysis/meta 回應: HTTP {status}")
-    await page.screenshot(path=sc(8, "01-unauthorized"))
 
     # 401 或 302 到登入頁都算正確
     assert status in (401, 302, 403, 200), f"預期 401/302/403，實際 {status}"
@@ -678,14 +696,12 @@ async def tc_09_session_fixation(page, **_):
     cookies_before = await page.context.cookies()
     session_before = {c["name"]: c["value"] for c in cookies_before}
     print(f"  登入前 cookie 名稱: {list(session_before.keys())}")
-    await page.screenshot(path=sc(9, "01-before-login"))
 
     await login(page)
 
     cookies_after = await page.context.cookies()
     session_after = {c["name"]: c["value"] for c in cookies_after}
     print(f"  登入後 cookie 名稱: {list(session_after.keys())}")
-    await page.screenshot(path=sc(9, "02-after-login"))
 
     # 檢查是否有 auth cookie（ASP.NET Core 預設 .AspNetCore.Cookies）
     auth_cookie = [c for c in cookies_after if "AspNetCore" in c["name"] or "cookie" in c["name"].lower()]
@@ -726,7 +742,6 @@ async def tc_10_security_headers(page, **_):
         status_icon = "OK" if value != "NOT SET" else "MISSING"
         print(f"  {header}: {value} [{status_icon}]")
 
-    await page.screenshot(path=sc(10, "01-headers"))
     print("[TC-10] PASS -- Security Headers 檢查完成")
 
 
@@ -755,8 +770,6 @@ async def tc_11_cookie_flags(page, **_):
         print(f"    Secure: {c.get('secure', 'N/A')}")
         print(f"    SameSite: {c.get('sameSite', 'N/A')}")
         print(f"    Path: {c.get('path', 'N/A')}")
-
-    await page.screenshot(path=sc(11, "01-cookies"))
 
     # 檢查 auth cookie 的 HttpOnly
     auth_cookies = [c for c in cookies if "AspNetCore" in c["name"]]
@@ -794,8 +807,6 @@ async def tc_12_rate_limiting(page, **_):
         results.append({"attempt": i, "status": response.status, "elapsed": elapsed})
         print(f"  嘗試 {i}: HTTP {response.status}, {elapsed:.2f}s")
 
-    await page.screenshot(path=sc(12, "01-rate-limit-result"))
-
     # 檢查是否有 429 回應
     has_429 = any(r["status"] == 429 for r in results)
     print(f"  是否觸發 429: {has_429}")
@@ -832,8 +843,6 @@ async def tc_13_captcha_exists(page, **_):
     src = await captcha_img.get_attribute("src")
     print(f"  驗證碼 src: {src}")
     assert "GetVerifyCode" in (src or ""), f"驗證碼 src 不正確：{src}"
-
-    await page.screenshot(path=sc(13, "01-captcha"))
 
     # 確認圖片可載入
     captcha_response = await page.request.get(f"{BASE_URL}/_framework/GetVerifyCode?id=test")
@@ -876,7 +885,6 @@ async def tc_14_password_autocomplete(page, **_):
     print(f"  VerifyCode autocomplete: {ac}")
     assert ac == "off", f"驗證碼 autocomplete 不是 off：{ac}"
 
-    await page.screenshot(path=sc(14, "01-form-attrs"))
     print("[TC-14] PASS -- 密碼欄位安全屬性正確")
 
 
@@ -916,7 +924,6 @@ async def tc_15_analysis_no_measures(page, **_):
     assert status == 400, f"預期 400，實際 {status}"
     assert "度量" in body or "measure" in body.lower(), f"錯誤訊息不含度量相關文字：{body}"
 
-    await page.screenshot(path=sc(15, "01-no-measures-400"))
     print("[TC-15] PASS -- 0 measures 正確回傳 400")
 
 
@@ -951,7 +958,6 @@ async def tc_16_analysis_too_many_dims(page, **_):
     print(f"  HTTP {status}: {body[:200]}")
     assert status == 400, f"預期 400，實際 {status}"
 
-    await page.screenshot(path=sc(16, "01-too-many-dims"))
     print("[TC-16] PASS -- 超過 3 維度正確回傳 400")
 
 
@@ -993,7 +999,6 @@ async def tc_17_analysis_query_success(page, **_):
     print(f"  columns: {data['columns']}")
     print(f"  rows 數量: {len(data['rows'])}")
 
-    await page.screenshot(path=sc(17, "01-query-success"))
     print("[TC-17] PASS -- 分析查詢正常回傳")
 
 
@@ -1030,7 +1035,6 @@ async def tc_18_analysis_export(page, **_):
         print(f"  {fmt}: HTTP {status}, Content-Type: {ct}")
         assert status == 200, f"{fmt} 匯出失敗：HTTP {status}"
 
-    await page.screenshot(path=sc(18, "01-export"))
     print("[TC-18] PASS -- 匯出功能正常")
 
 
@@ -1057,7 +1061,6 @@ async def tc_19_analysis_unknown_vm(page, **_):
     print(f"  HTTP {status}: {body[:200]}")
     assert status in (400, 404), f"預期 400/404，實際 {status}"
 
-    await page.screenshot(path=sc(19, "01-unknown-vm"))
     print("[TC-19] PASS -- 不明 VM 型別正確拒絕")
 
 
@@ -1094,7 +1097,6 @@ async def tc_20_analysis_invalid_field(page, **_):
     print(f"  HTTP {status}: {body[:200]}")
     assert status == 400, f"預期 400，實際 {status}"
 
-    await page.screenshot(path=sc(20, "01-invalid-field"))
     print("[TC-20] PASS -- 不合法欄位正確拒絕")
 
 
@@ -1106,23 +1108,28 @@ async def tc_21_login_visual(page, **_):
     優先度: P2
     預估執行: 5s
 
-    截圖登入頁面完整 UI，確認：
+    確認登入頁面完整 UI：
     - 背景圖存在（app-login-back-{1-5} class）
     - 驗證碼圖片存在
-    - 桌面 + 手機響應式截圖
+    - 桌面 + 手機響應式版面
 
     預期結果：
     - 登入表單正確顯示
     - 背景 class 為 app-login-back-{1-5}
     - 驗證碼圖片 #verify_code_img 存在
+
+    issue #886 review：本 TC 的判定完全來自下面的 DOM assert，不依賴任何截圖 ——
+    桌面/手機兩張快照預設不拍（VISUAL_SNAPSHOTS 預設 off），設環境變數
+    WTM_E2E_VISUAL_SNAPSHOTS=1 才會產生，給人工複核視覺版面用。
     """
     print("[TC-21] 開始執行...")
 
-    # 桌面截圖 1280x800
+    # 桌面 1280x800
     await page.set_viewport_size({"width": 1280, "height": 800})
     await page.goto(f"{BASE_URL}/Login/Login")
     await page.wait_for_load_state("networkidle")
-    await page.screenshot(path=sc(21, "01-desktop-1280x800"), full_page=True)
+    if VISUAL_SNAPSHOTS:
+        await page.screenshot(path=sc(21, "01-desktop-1280x800"), full_page=True)
 
     # 確認背景 class
     bg_div = page.locator("div.loginBody")
@@ -1150,28 +1157,31 @@ async def tc_21_login_visual(page, **_):
     logo = page.locator("header.login-header img")
     logo_count = await logo.count()
     print(f"  Logo img 數量: {logo_count}")
-    await page.screenshot(path=sc(21, "02-desktop-elements"))
+    if VISUAL_SNAPSHOTS:
+        await page.screenshot(path=sc(21, "02-desktop-elements"))
 
-    # 手機截圖 375x812
+    # 手機 375x812
     await page.set_viewport_size({"width": 375, "height": 812})
     await page.wait_for_load_state("networkidle")
-    await page.screenshot(path=sc(21, "03-mobile-375x812"), full_page=True)
+    if VISUAL_SNAPSHOTS:
+        await page.screenshot(path=sc(21, "03-mobile-375x812"), full_page=True)
 
     # 還原視窗大小
     await page.set_viewport_size({"width": 1280, "height": 800})
 
-    print("[TC-21] PASS -- 登入頁視覺驗收完成")
+    print("[TC-21] PASS -- 登入頁表單驗證通過"
+          + ("（視覺快照已產生）" if VISUAL_SNAPSHOTS else ""))
 
 
-# ─── TC-22: 首頁 Dashboard 完整截圖 ─────────────────────────────────────────
+# ─── TC-22: 首頁 Dashboard 版面驗證 ─────────────────────────────────────────
 
 async def tc_22_dashboard(page, **_):
     """
-    TC-22: 首頁 Dashboard 完整截圖
+    TC-22: 首頁 Dashboard 版面驗證
     優先度: P2
     預估執行: 8s
 
-    登入後截圖完整首頁，確認：
+    登入後確認完整首頁版面：
     - 側邊選單存在
     - 頂部 header 存在
     - FrontPage 中的 layui-card 區塊存在
@@ -1180,6 +1190,10 @@ async def tc_22_dashboard(page, **_):
     - .layui-layout-admin 存在
     - .layui-side-menu 存在
     - .layui-header 存在
+
+    issue #886 review：判定完全來自下面的佈局 assert，不依賴任何截圖。逾時分支
+    的截圖（sidebar 未如期出現）維持無條件拍照 —— 那是失敗診斷，不是視覺驗收；
+    其餘三張完整版面快照預設不拍，設 WTM_E2E_VISUAL_SNAPSHOTS=1 才會產生。
     """
     print("[TC-22] 開始執行...")
 
@@ -1189,8 +1203,10 @@ async def tc_22_dashboard(page, **_):
         # sidebar 出現代表 dashboard iframe 已完整 render
         await page.wait_for_selector(".layui-side-menu", state="visible", timeout=5000)
     except Exception:
+        # 失敗診斷，不受 VISUAL_SNAPSHOTS 控制 —— 這是 sidebar 逾時未出現的證據。
         await page.screenshot(path=sc(22, "01-dashboard-layout-timeout"), full_page=True)
-    await page.screenshot(path=sc(22, "01-dashboard-full"), full_page=True)
+    if VISUAL_SNAPSHOTS:
+        await page.screenshot(path=sc(22, "01-dashboard-full"), full_page=True)
 
     # 確認主要佈局元素
     layout = page.locator(".layui-layout-admin")
@@ -1216,7 +1232,8 @@ async def tc_22_dashboard(page, **_):
         item_text = await menu_items.nth(i).locator("a > cite").first.text_content()
         print(f"    選單 {i}: {item_text}")
 
-    await page.screenshot(path=sc(22, "02-sidebar-menu"))
+    if VISUAL_SNAPSHOTS:
+        await page.screenshot(path=sc(22, "02-sidebar-menu"))
 
     # 確認使用者名稱顯示
     user_cite = page.locator(".layui-layout-right .layui-nav-item cite")
@@ -1224,12 +1241,13 @@ async def tc_22_dashboard(page, **_):
         user_name = await user_cite.first.text_content()
         print(f"  登入使用者: {user_name}")
 
-    # 截圖 body 區域（FrontPage 內容透過 iframe 載入）
+    # body 區域（FrontPage 內容透過 iframe 載入）
     body = page.locator("#LAY_app_body")
-    if await body.count() > 0:
+    if await body.count() > 0 and VISUAL_SNAPSHOTS:
         await page.screenshot(path=sc(22, "03-main-body"))
 
-    print("[TC-22] PASS -- Dashboard 截圖完成")
+    print("[TC-22] PASS -- Dashboard 佈局驗證通過"
+          + ("（視覺快照已產生）" if VISUAL_SNAPSHOTS else ""))
 
 
 # ─── TC-23: Analysis Meta API 驗證（#516 修復） ─────────────────────────────
@@ -1299,19 +1317,14 @@ async def tc_23_analysis_meta_api(page, **_):
     date_fields = [f for f in fields if f.get("isDate")]
     print(f"  日期欄位數量: {len(date_fields)}")
 
-    # 截圖 API 回應（透過頁面顯示 JSON）
-    await page.goto(f"{BASE_URL}/_analysis/meta?listVmType={STUDENT_LIST_VM}")
-    await page.wait_for_load_state("networkidle")
-    await page.screenshot(path=sc(23, "01-meta-response"), full_page=True)
-
     print("[TC-23] PASS -- Meta API 驗證完成（含 #516 allowedValues）")
 
 
-# ─── TC-24: Analysis 完整查詢流程截圖 ────────────────────────────────────────
+# ─── TC-24: Analysis 完整查詢流程 ────────────────────────────────────────────
 
 async def tc_24_analysis_full_flow(page, **_):
     """
-    TC-24: Analysis 完整查詢流程截圖
+    TC-24: Analysis 完整查詢流程
     優先度: P1
     預估執行: 15s
 
@@ -1324,6 +1337,9 @@ async def tc_24_analysis_full_flow(page, **_):
     - 面板開啟成功
     - 查詢後 analysis-result-section 顯示
     - 有 canvas（ECharts 圖表）或 table
+
+    issue #886 review：本 TC 沒有任何 assert，PASS 只代表流程走完沒有拋出例外，
+    不是真的驗證了任何行為——見 #898（12 個站點吞掉例外後無條件 PASS）。
     """
     print("[TC-24] 開始執行...")
 
@@ -1348,8 +1364,10 @@ async def tc_24_analysis_full_flow(page, **_):
     try:
         await page.wait_for_selector(".layui-table-tool", state="attached", timeout=3000)
     except Exception:
-        pass  # graceful: toolbar may not be present in this demo config
-    await page.screenshot(path=sc(24, "01-student-grid"))
+        # issue #886 review: TC-24 has no assert on this path — a swallowed timeout
+        # here is otherwise completely invisible, so capture it. Round 2: non-throwing
+        # helper — a capture failure must not replace the swallowed timeout.
+        await _screenshot_on_failure(page, 24, "01-student-grid", full_page=True)
 
     # Step 1: 開啟分析面板
     analysis_btn = page.locator("button:has-text('分析模式')")
@@ -1378,14 +1396,14 @@ async def tc_24_analysis_full_flow(page, **_):
             try:
                 await page.wait_for_selector(".analysis-field-pool", state="visible", timeout=5000)
             except Exception:
-                pass  # fallback if timing varies
-            await page.screenshot(path=sc(24, "02-panel-open"))
+                # issue #886 review: no assert follows this on the swallow path — capture
+                # it. Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+                await _screenshot_on_failure(page, 24, "02-panel-open")
 
             # Step 2: 確認欄位載入
             pills = page.locator(".analysis-pill")
             pill_count = await pills.count()
             print(f"  欄位 pill 數量: {pill_count}")
-            await page.screenshot(path=sc(24, "03-fields-loaded"))
 
             # Step 3: 嘗試透過頁面操作拖放
             # 找到維度區的 pill 和拖放區
@@ -1403,11 +1421,9 @@ async def tc_24_analysis_full_flow(page, **_):
                 try:
                     await dim_pills.first.drag_to(dim_zone)
                     await page.wait_for_load_state("networkidle")
-                    await page.screenshot(path=sc(24, "04-dim-dropped"))
 
                     await msr_pills.first.drag_to(msr_zone)
                     await page.wait_for_load_state("networkidle")
-                    await page.screenshot(path=sc(24, "05-msr-dropped"))
 
                     # Step 4: 點擊查詢按鈕
                     query_btn = page.locator("button:has-text('查詢'), button:has-text('執行'), .analysis-btn-query")
@@ -1427,8 +1443,9 @@ async def tc_24_analysis_full_flow(page, **_):
                         try:
                             await page.wait_for_selector(".analysis-result-section, canvas, .analysis-result-section table", state="visible", timeout=5000)
                         except Exception:
-                            pass
-                        await page.screenshot(path=sc(24, "06-query-result"))
+                            # issue #886 review: no assert follows this on the swallow path — capture
+                            # it. Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+                            await _screenshot_on_failure(page, 24, "06-query-result")
 
                         # 確認結果區顯示
                         result_section = page.locator(".analysis-result-section")
@@ -1465,8 +1482,7 @@ async def tc_24_analysis_full_flow(page, **_):
         data = json.loads(await resp.text())
         print(f"  API rows: {len(data.get('rows', []))}")
 
-    await page.screenshot(path=sc(24, "07-final"), full_page=True)
-    print("[TC-24] PASS -- Analysis 完整流程截圖完成")
+    print("[TC-24] PASS -- Analysis 完整流程檢查完成")
 
 
 # ─── TC-25: Grid 分頁功能 ───────────────────────────────────────────────────
@@ -1507,8 +1523,9 @@ async def tc_25_grid_paging(page, **_):
     try:
         await page.wait_for_selector(".layui-table-body tr[data-index]", state="attached", timeout=3000)
     except Exception:
-        pass
-    await page.screenshot(path=sc(25, "01-grid-initial"))
+        # issue #886 review: TC-25 has no assert on this path — capture the swallow.
+        # Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+        await _screenshot_on_failure(page, 25, "01-grid-initial")
 
     # 確認分頁元件存在
     pager = page.locator(".layui-table-page")
@@ -1516,7 +1533,6 @@ async def tc_25_grid_paging(page, **_):
     print(f"  .layui-table-page 數量: {pager_count}")
 
     if pager_count > 0:
-        await page.screenshot(path=sc(25, "02-pager"))
 
         # LayUI 分頁的「每頁 N 條」select
         page_select = page.locator(".layui-table-page select")
@@ -1538,7 +1554,6 @@ async def tc_25_grid_paging(page, **_):
             info_text = await page_info.first.text_content()
             print(f"  分頁資訊: {info_text!r}")
 
-        await page.screenshot(path=sc(25, "03-pager-detail"))
     else:
         print("  [WARN] 分頁元件不存在（可能資料筆數不足）")
 
@@ -1554,7 +1569,7 @@ async def tc_25_grid_paging(page, **_):
 
 async def tc_26_crud_flow(page, **_):
     """
-    TC-26: Student CRUD 完整流程截圖
+    TC-26: Student CRUD 完整流程
     優先度: P1
     預估執行: 15s
 
@@ -1567,6 +1582,9 @@ async def tc_26_crud_flow(page, **_):
     - Create form 有所有必要欄位
     - Edit form 載入正確
     - Delete 有確認訊息
+
+    issue #886 review：本 TC 沒有任何 assert，PASS 只代表流程走完沒有拋出例外，
+    不是真的驗證了任何行為——見 #898（12 個站點吞掉例外後無條件 PASS）。
     """
     print("[TC-26] 開始執行...")
 
@@ -1575,7 +1593,6 @@ async def tc_26_crud_flow(page, **_):
     # Step 1: Create 表單
     await page.goto(f"{BASE_URL}/Student/Create")
     await page.wait_for_load_state("networkidle")
-    await page.screenshot(path=sc(26, "01-create-form"))
 
     # 確認表單欄位
     form_fields = {
@@ -1606,7 +1623,6 @@ async def tc_26_crud_flow(page, **_):
     await page.locator("input[name='Entity.ID']").fill(test_id)
     await page.locator("input[name='Entity.Password']").fill("test123456")
     await page.locator("input[name='Entity.Name']").fill("E2E Test Student")
-    await page.screenshot(path=sc(26, "02-create-filled"))
 
     # 提交按鈕 — WTM <wt:submitbutton /> 渲染為 layui-btn 帶 lay-submit
     submit_btn = page.locator("button[lay-submit], a[lay-submit]")
@@ -1619,8 +1635,9 @@ async def tc_26_crud_flow(page, **_):
     try:
         await page.wait_for_selector(".layui-table-body tr[data-index]", state="visible", timeout=3000)
     except Exception:
-        pass
-    await page.screenshot(path=sc(26, "03-student-list"))
+        # issue #886 review: TC-26 has no assert on this path — capture the swallow.
+        # Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+        await _screenshot_on_failure(page, 26, "03-student-list")
 
     # Step 4: 搜尋面板
     search_panel = page.locator(".layui-form[id^='wtForm_']")
@@ -1630,12 +1647,11 @@ async def tc_26_crud_flow(page, **_):
     # 搜尋按鈕
     search_btn = page.locator("button:has-text('搜索'), button:has-text('Search')")
     print(f"  搜尋按鈕: {await search_btn.count()}")
-    await page.screenshot(path=sc(26, "04-search-panel"))
 
-    print("[TC-26] PASS -- CRUD 流程截圖完成")
+    print("[TC-26] PASS -- CRUD 流程檢查完成")
 
 
-# ─── TC-27: 使用者管理頁面完整截圖 ──────────────────────────────────────────
+# ─── TC-27: 使用者管理頁面 ──────────────────────────────────────────────────
 
 async def tc_27_user_management(page, **_):
     """
@@ -1649,6 +1665,9 @@ async def tc_27_user_management(page, **_):
     預期結果：
     - /_Admin/FrameworkUser/Index 可存取
     - 顯示使用者 grid
+
+    issue #886 review：本 TC 沒有任何 assert，PASS 只代表流程走完沒有拋出例外，
+    不是真的驗證了任何行為——見 #898（12 個站點吞掉例外後無條件 PASS）。
     """
     print("[TC-27] 開始執行...")
 
@@ -1661,8 +1680,10 @@ async def tc_27_user_management(page, **_):
     try:
         await page.wait_for_selector(".layui-table-body", state="visible", timeout=3000)
     except Exception:
-        pass
-    await page.screenshot(path=sc(27, "01-user-list"))
+        # issue #886 review: TC-27 has no assert on this path (table_count==0 still
+        # PASSes below) — capture the swallow, it's the only trace we'd otherwise have.
+        # Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+        await _screenshot_on_failure(page, 27, "01-user-list")
 
     # 確認 grid 存在
     table = page.locator(".layui-table-body")
@@ -1687,8 +1708,7 @@ async def tc_27_user_management(page, **_):
     search = page.locator(".layui-form")
     print(f"  搜尋面板: {await search.count()}")
 
-    await page.screenshot(path=sc(27, "02-user-grid-detail"))
-    print("[TC-27] PASS -- 使用者管理頁面截圖完成")
+    print("[TC-27] PASS -- 使用者管理頁面檢查完成")
 
 
 # ─── TC-28: 角色管理 + 權限設定 ─────────────────────────────────────────────
@@ -1701,7 +1721,10 @@ async def tc_28_role_management(page, **_):
 
     預期結果：
     - 角色列表可存取
-    - 截圖 grid
+    - grid 可載入
+
+    issue #886 review：本 TC 沒有任何 assert，PASS 只代表流程走完沒有拋出例外，
+    不是真的驗證了任何行為——見 #898（12 個站點吞掉例外後無條件 PASS）。
     """
     print("[TC-28] 開始執行...")
 
@@ -1712,8 +1735,9 @@ async def tc_28_role_management(page, **_):
     try:
         await page.wait_for_selector(".layui-table-body", state="visible", timeout=3000)
     except Exception:
-        pass
-    await page.screenshot(path=sc(28, "01-role-list"))
+        # issue #886 review: TC-28 has no assert anywhere — capture the swallow.
+        # Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+        await _screenshot_on_failure(page, 28, "01-role-list")
 
     # 確認 grid
     table = page.locator(".layui-table-body")
@@ -1734,8 +1758,9 @@ async def tc_28_role_management(page, **_):
     try:
         await page.wait_for_selector(".layui-table-body, .layui-form", state="visible", timeout=3000)
     except Exception:
-        pass
-    await page.screenshot(path=sc(28, "02-data-privilege"))
+        # issue #886 review: TC-28 has no assert anywhere — capture the swallow.
+        # Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+        await _screenshot_on_failure(page, 28, "02-data-privilege")
 
     # FrameworkMenu
     await page.goto(f"{BASE_URL}/_Admin/FrameworkMenu/Index")
@@ -1743,15 +1768,16 @@ async def tc_28_role_management(page, **_):
     try:
         await page.wait_for_selector(".layui-table-body, .layui-nav", state="visible", timeout=3000)
     except Exception:
-        pass
-    await page.screenshot(path=sc(28, "03-menu-list"))
+        # issue #886 review: TC-28 has no assert anywhere — capture the swallow.
+        # Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+        await _screenshot_on_failure(page, 28, "03-menu-list")
 
     menu_table = page.locator(".layui-table-body")
     if await menu_table.count() > 0:
         menu_rows = page.locator(".layui-table-body tr[data-index]")
         print(f"  選單項目數: {await menu_rows.count()}")
 
-    print("[TC-28] PASS -- 角色管理截圖完成")
+    print("[TC-28] PASS -- 角色管理檢查完成")
 
 
 # ─── TC-29: ETL 管理頁面 ────────────────────────────────────────────────────
@@ -1769,6 +1795,9 @@ async def tc_29_etl_management(page, **_):
     - /_EtlJob/Index 可存取
     - /_EtlRunLog/Index 可存取
     - 各頁面有搜尋面板和 grid
+
+    issue #886 review：本 TC 沒有任何 assert，PASS 只代表流程走完沒有拋出例外，
+    不是真的驗證了任何行為——見 #898（12 個站點吞掉例外後無條件 PASS）。
     """
     print("[TC-29] 開始執行...")
 
@@ -1780,8 +1809,9 @@ async def tc_29_etl_management(page, **_):
     try:
         await page.wait_for_selector(".layui-table-body, input[name='Searcher.Name']", state="visible", timeout=3000)
     except Exception:
-        pass
-    await page.screenshot(path=sc(29, "01-etl-job-list"))
+        # issue #886 review: TC-29 has no assert anywhere — capture the swallow.
+        # Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+        await _screenshot_on_failure(page, 29, "01-etl-job-list")
 
     # 確認搜尋面板欄位
     name_input = page.locator("input[name='Searcher.Name']")
@@ -1802,8 +1832,9 @@ async def tc_29_etl_management(page, **_):
     try:
         await page.wait_for_selector("select[name='Searcher.Result'], .layui-table-body", state="visible", timeout=3000)
     except Exception:
-        pass
-    await page.screenshot(path=sc(29, "02-etl-runlog"))
+        # issue #886 review: TC-29 has no assert anywhere — capture the swallow.
+        # Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+        await _screenshot_on_failure(page, 29, "02-etl-runlog")
 
     # Run Log 搜尋面板
     result_select = page.locator("select[name='Searcher.Result']")
@@ -1811,14 +1842,14 @@ async def tc_29_etl_management(page, **_):
     print(f"  RunLog 搜尋: Result={await result_select.count()}, "
           f"Trigger={await trigger_select.count()}")
 
-    print("[TC-29] PASS -- ETL 管理頁面截圖完成")
+    print("[TC-29] PASS -- ETL 管理頁面檢查完成")
 
 
 # ─── TC-30: 匯入功能流程 ────────────────────────────────────────────────────
 
 async def tc_30_import_flow(page, **_):
     """
-    TC-30: Student 匯入功能流程截圖
+    TC-30: Student 匯入功能流程
     優先度: P2
     預估執行: 8s
 
@@ -1834,6 +1865,9 @@ async def tc_30_import_flow(page, **_):
     - /Student/Import 頁面可存取
     - 下載範本按鈕存在
     - 上傳控制項存在
+
+    issue #886 review：本 TC 沒有任何 assert，PASS 只代表流程走完沒有拋出例外，
+    不是真的驗證了任何行為——見 #898（12 個站點吞掉例外後無條件 PASS）。
     """
     print("[TC-30] 開始執行...")
 
@@ -1842,7 +1876,6 @@ async def tc_30_import_flow(page, **_):
     # 直接存取 Import PartialView
     await page.goto(f"{BASE_URL}/Student/Import")
     await page.wait_for_load_state("networkidle")
-    await page.screenshot(path=sc(30, "01-import-dialog"))
 
     # 確認下載範本按鈕
     # wt:downloadTemplateButton 渲染為 <a> 或 <button> 帶下載連結
@@ -1878,15 +1911,13 @@ async def tc_30_import_flow(page, **_):
     close = page.locator("button:has-text('关闭'), button:has-text('Close'), a:has-text('关闭')")
     print(f"  Close 按鈕: {await close.count()}")
 
-    await page.screenshot(path=sc(30, "02-import-controls"), full_page=True)
-
     # 嘗試下載範本（不實際下載，只確認 API 可存取）
     template_response = await page.request.get(
         f"{BASE_URL}/Student/Import"  # GET 取得頁面
     )
     print(f"  Import 頁面 HTTP: {template_response.status}")
 
-    print("[TC-30] PASS -- 匯入功能流程截圖完成")
+    print("[TC-30] PASS -- 匯入功能流程檢查完成")
 
 
 # ─── TC-31: WorkFlow 設計器完整創作流程 (T-DSN-18 e2e smoke) ─────────────────
@@ -1910,7 +1941,6 @@ async def tc_31_workflow_designer_smoke(page, **_):
 
     # Step 0: 登入
     await login(page, BASE)
-    await page.screenshot(path=sc(tc_num, "00-logged-in"))
 
     # Step 1: 確認設計器頁面可存取（AddWtmWorkFlowDesigner 已啟用）
     # FIX-B2: 404 is now a FAIL (not a skip). The demo host has AddWtmWorkFlowDesigner()
@@ -1926,7 +1956,6 @@ async def tc_31_workflow_designer_smoke(page, **_):
     if status == 403:
         print(f"[TC-{tc_num:02d}] SKIP — 設計器 RBAC 未授權 (403)，需配置 FunctionPrivilege")
         return
-    await page.screenshot(path=sc(tc_num, "01-designer-page"))
     print(f"[TC-{tc_num:02d}] 設計器頁面 HTTP {status}")
 
     # Step 2: 確認 bootstrap API 回傳正常
@@ -2015,7 +2044,6 @@ async def tc_31_workflow_designer_smoke(page, **_):
     _pub_outcome = _pub_body.get('Outcome') or _pub_body.get('outcome')
     assert _pub_outcome in ('Published', 'IdempotentNoOp'), \
         f"非預期 outcome: {pub_resp}"
-    await page.screenshot(path=sc(tc_num, "04-published-v1"))
 
     # Step 5: 再次發布完全相同內容 → 應得 IdempotentNoOp
     pub2_resp = await page.evaluate(f"""
@@ -2069,7 +2097,6 @@ async def tc_31_workflow_designer_smoke(page, **_):
     # Step 7: 重新開啟設計器頁面，帶 code 參數
     await page.goto(f"{BASE}/_workflow-designer?code={test_code}")
     await page.wait_for_load_state("networkidle", timeout=TIMEOUT)
-    await page.screenshot(path=sc(tc_num, "07-designer-with-code"))
 
     print(f"[TC-{tc_num:02d}] PASS -- WorkFlow 設計器 smoke 完成 (code={test_code})")
 
@@ -2261,7 +2288,6 @@ async def tc_33_combobox_chain_cascade(page, **_):
 
         print("  [KILLSWITCH] 對話框開啟未拋錯；comboboxes 依 docs/csp-hardening.md "
               "「Honest limits」預期不可互動，略過連動功能斷言")
-        await page.screenshot(path=sc(33, "01-killswitch-degraded"))
         print("[TC-33] PASS -- kill-switch leg：優雅降級驗證通過")
         return
 
@@ -2282,7 +2308,6 @@ async def tc_33_combobox_chain_cascade(page, **_):
     # 會自己等到版面穩定再點，這正是這裡需要的訊號，比盲目的固定等待更準確。
     await tree_box.click()
     await page.wait_for_selector("#LinkTest2VM_SelectedSchool .xm-option", state="attached", timeout=TIMEOUT)
-    await page.screenshot(path=sc(33, "01-tree-open"))
 
     # 資料驅動找出實際擁有 Major 的 School id —— demo.db 未入版控，每次執行都
     # 重新播種，不可假設固定 ID 一定有關聯資料（issue #681 踩雷紀錄）。
@@ -2331,7 +2356,6 @@ async def tc_33_combobox_chain_cascade(page, **_):
         f"({expected_major_count})不符"
     )
 
-    await page.screenshot(path=sc(33, "02-combobox-chain-cascaded"))
     print("[TC-33] PASS -- combobox 聯動串聯（tree → combobox chain/cascade）驗證通過")
 
 
@@ -2388,7 +2412,6 @@ async def tc_34_selector_dialog_flow(page, **_):
 
     select_btn = page.locator("#LinkTestVM_SelectedSchool_Select")
     assert await select_btn.count() > 0, "找不到 wt:selector 的挑選按鈕（id 結尾 _Select）"
-    await page.screenshot(path=sc(34, "01-create-form-with-selector"))
 
     page_errors = []
     page.on("pageerror", lambda e: page_errors.append(str(e)))
@@ -2408,7 +2431,6 @@ async def tc_34_selector_dialog_flow(page, **_):
     layer_count = await layer_pages.count()
     print(f"  Selector 彈出層數量: {layer_count}")
     assert layer_count >= 2, "點擊挑選按鈕後應開啟第二層 Selector 彈出對話框"
-    await page.screenshot(path=sc(34, "02-selector-dialog-open"))
 
     assert not page_errors, f"Selector 對話框拋出未捕捉例外：{page_errors}"
 
@@ -2491,7 +2513,6 @@ async def tc_35_upload_widget_roundtrip(page, **_):
     hidden_field = page.locator("#StudentVM_Entity_PhotoId")
     assert await upload_btn.count() > 0, "找不到上傳按鈕（wt:upload 的 ...button）"
     assert await hidden_field.count() > 0, "找不到上傳結果 hidden input（wt:upload 的回填欄位）"
-    await page.screenshot(path=sc(35, "01-create-form-with-upload"))
 
     if KILLSWITCH_EXPECTED:
         page_errors = []
@@ -2544,7 +2565,6 @@ async def tc_35_upload_widget_roundtrip(page, **_):
     assert chooser_triggered, "點擊上傳按鈕應能觸發瀏覽器原生檔案選擇器"
 
     await page.wait_for_timeout(4000)
-    await page.screenshot(path=sc(35, "02-after-upload-attempt"))
 
     hidden_val = await hidden_field.input_value()
     print(f"  上傳後 hidden input 值: {hidden_val!r}")
@@ -2599,13 +2619,48 @@ async def tc_36_tenant_switch(page, **_):
 
 
 # ─── 錯誤處理輔助函式 ────────────────────────────────────────────────────────
+#
+# Issue #886: 每個 TC 過去對每一步都無條件拍照（79 處 page.screenshot()，13 處
+# full_page=True），不分成敗——但 CI 的 `Upload screenshots` step 因 #11 長年是
+# continue-on-error 的失敗，這些截圖平常沒有人下載查看，只有失敗時才有除錯價值。
+# 現在的政策：TC 主流程（happy path）不再逐步拍照，只靠這裡的 _screenshot_on_failure
+# 在 run_tests() 的例外處理路徑上，對「這次失敗/重試當下」的頁面狀態拍一張。已經
+# 位在 except 分支裡、只在特定子步驟逾時才觸發的截圖（例如 login()、TC-04、TC-24
+# 的個別 timeout 分支，以及 #886 review 後移回 except 分支的 TC-04/24/25/26/27/
+# 28/29 共 12 處——這些 TC 在該路徑上沒有任何 assert 保護，swallow 掉的例外若不
+# 順手拍照就完全無跡可尋）維持原樣不動——它們本來就是條件式的，成功執行不會付出
+# 任何成本。TC-21/TC-22 例外（#886 review 後修正）：這兩個 TC 的判定完全來自 DOM/
+# 佈局 assert，截圖本身不是任何斷言的依據，因此改為 opt-in（WTM_E2E_VISUAL_
+# SNAPSHOTS=1），不再無條件拍照——見 VISUAL_SNAPSHOTS 常數旁的說明。
+#
+# #886 review round 2（MEDIUM）：那 12 處 except 分支曾經直接呼叫
+# page.screenshot()——如果截圖本身拋錯（崩潰的瀏覽器正是最可能發生這種事的時候），
+# 那個新例外會**取代**原本被 swallow 的 wait 例外、逃出 except 分支，把一個「等待
+# 逾時但無傷大雅」的分支變成未預期的 ERROR/retry，等於截圖失敗反而改變了判定。
+# 所以這 12 處、以及 run_tests() 既有的失敗路徑，全部改用下面這個保證不拋出的
+# _screenshot_on_failure()，不再各自 inline 呼叫 page.screenshot()。
 
-async def _screenshot_on_failure(page, tc_num, label):
-    """失敗時截圖。失敗無害（best-effort）。"""
+async def _screenshot_on_failure(page, tc_num, label, full_page=False):
+    """
+    最佳努力截圖，保證不拋出——呼叫端（不論是 run_tests() 的失敗處理，還是 tc_
+    函式自己 swallow 掉一個 wait 之後想順手拍照）都不必再包一層 try。
+
+    某些失敗形態（例如 #885 觀測到的 Chromium "Target crashed"）代表瀏覽器行程本身
+    已經死亡，這裡的 page.screenshot() 幾乎必然也會失敗——這種情況下沒有任何辦法
+    生出一張截圖，但至少要在 CI log 留一行訊息說明「這個 TC 沒有截圖，因為連截圖
+    本身都失敗了」，而不是讓截圖目錄悄悄少一個檔案、事後看起來像是忘記拍。
+
+    #886 review round 2：連這行診斷 print 本身都可能拋出（stdout 已關閉時 print()
+    會拋 BrokenPipeError）——整段包在最外層 try，任何例外一律吞掉；印不出診斷就
+    真的什麼都不做，但絕不能讓「想順手留個痕跡」反過來把呼叫端的控制流打斷。
+    """
     try:
-        await page.screenshot(path=sc(tc_num, label))
-    except Exception:
-        pass
+        await page.screenshot(path=sc(tc_num, label), full_page=full_page)
+    except Exception as e:
+        try:
+            print(f"[TC-{tc_num:02d}] 無法擷取失敗截圖（label={label}）：{type(e).__name__}: {e}")
+        except Exception:
+            pass
 
 
 async def _log_console_errors(page, tc_num):
@@ -2630,6 +2685,14 @@ def _is_retryable_error(exc: Exception) -> bool:
     """
     判斷錯誤是否應重試。
     只對 timeout 和 navigation 錯誤重試，不對 assertion 失敗重試。
+
+    issue #886 review：這裡曾經多一條 `isinstance(exc, asyncio.CancelledError)`
+    分支，但呼叫端只把這個函式用在 `except Exception as e:` 抓到的 `e` 上——Python
+    3.8 起 `asyncio.CancelledError` 改繼承 `BaseException`、不是 `Exception`，那個
+    分支永遠不可能被觸發，是死碼。已移除；`asyncio.CancelledError` 若真的發生會
+    直接從 run_tests() 的 try/except 穿出去（未捕捉），這是既有行為，不是本次改動
+    引入的——真要處理它需要另外多一層 `except (Exception, asyncio.CancelledError)`
+    或改用 `except BaseException`，那是設計取捨，留給 #898 一併評估。
     """
     exc_str = str(exc).lower()
     exc_type = type(exc).__name__.lower()
@@ -2639,9 +2702,6 @@ def _is_retryable_error(exc: Exception) -> bool:
         return True
     # Navigation errors
     if any(kw in exc_str for kw in ["navigation", "net::err_", "failed to fetch", "aborted"]):
-        return True
-    # asyncio.CancelledError
-    if isinstance(exc, asyncio.CancelledError):
         return True
     return False
 
@@ -2656,6 +2716,34 @@ class _ConsoleCapture:
 
 
 # ─── 測試註冊表和執行引擎 ───────────────────────────────────────────────────
+
+def _tc_label(tc):
+    """
+    統一 TC 顯示格式：整數 TC 編號格式化為 "TC-NN"；非整數直接轉字串。
+
+    issue #886 review round 3：run_tests() 的例外處理現在會在 results 裡塞一筆
+    "tc": "SUITE-ABORT" 的合成項目（見 run_tests() 的最外層 except）。彙總報告的
+    列印迴圈與 _write_junit_xml() 原本都直接寫 f"TC-{tc:02d}"——對字串值會直接
+    拋 ValueError（":02d" 需要數字），等於合成項目本身會讓彙總報告在印到那一列
+    時崩潰，反而錯過原本要留下的訊號。統一經過這裡就不會有這個問題。
+    """
+    return f"TC-{tc:02d}" if isinstance(tc, int) else str(tc)
+
+
+def _compute_stats(results):
+    """
+    (passed, failed, errors, skipped, total) 統計 — 從 run_tests() 抽出來，因為
+    issue #886 review round 5 的彙總報告 fallback 需要在 try 內外各算一次同一組
+    數字（正常路徑印出來之前，以及 try 失敗後改印到 stderr 之前），單一函式避免
+    兩處算法互相漂移。
+    """
+    passed = sum(1 for r in results if r["status"] == "PASS")
+    failed = sum(1 for r in results if r["status"] == "FAIL")
+    errors = sum(1 for r in results if r["status"] == "ERROR")
+    skipped = sum(1 for r in results if r["status"] == "SKIP")
+    total = len(results)
+    return passed, failed, errors, skipped, total
+
 
 TC_REGISTRY = {
     1: ("XSS 反射測試", tc_01_xss_reflected, "P0"),
@@ -2679,7 +2767,7 @@ TC_REGISTRY = {
     19: ("Analysis 不明 VM 型別 → 404", tc_19_analysis_unknown_vm, "P1"),
     20: ("Analysis 不合法欄位 → 400", tc_20_analysis_invalid_field, "P1"),
     21: ("登入頁視覺驗收", tc_21_login_visual, "P2"),
-    22: ("首頁 Dashboard 截圖", tc_22_dashboard, "P2"),
+    22: ("首頁 Dashboard 版面驗證", tc_22_dashboard, "P2"),
     23: ("Analysis Meta API (#516)", tc_23_analysis_meta_api, "P1"),
     24: ("Analysis 完整查詢流程", tc_24_analysis_full_flow, "P1"),
     25: ("Grid 分頁功能", tc_25_grid_paging, "P2"),
@@ -2718,136 +2806,327 @@ async def run_tests(tc_nums=None, headless=None, slow_mo=0, report_path=None):
     SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 
     results = []
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=headless,
-            slow_mo=slow_mo,
-        )
-
-        for tc_num in tc_nums:
-            if tc_num not in TC_REGISTRY:
-                print(f"[SKIP] TC-{tc_num:02d} 不存在")
-                results.append({"tc": tc_num, "status": "SKIP", "error": "不存在"})
-                continue
-
-            name, func, priority = TC_REGISTRY[tc_num]
-            print(f"\n{'='*60}")
-            print(f"TC-{tc_num:02d}: {name} [{priority}]")
-            print(f"{'='*60}")
-
-            context = await browser.new_context(
-                viewport={"width": 1280, "height": 800},
-                ignore_https_errors=True,
+    try:
+        # issue #886 review round 4 (gap 1): the guard used to sit *inside*
+        # `async with async_playwright() as p:`, so the context manager's own
+        # __aexit__ (driver teardown) was not covered — an exception raised
+        # there escaped exactly like the calls in the lifecycle table did
+        # before round 3. This is row 12 from that table, the one flagged as
+        # "can't be wrapped line-by-line" — it can, by moving the guard to
+        # wrap the whole `async with` statement instead of just its body.
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=headless,
+                slow_mo=slow_mo,
             )
-            page = await context.new_page()
-            page.set_default_timeout(TIMEOUT)
 
-            # Attach console capture for failure diagnostics
-            console_capture = _ConsoleCapture()
-            page.on("console", console_capture)
-            page._captured_console = console_capture.messages
+            for tc_num in tc_nums:
+                if tc_num not in TC_REGISTRY:
+                    print(f"[SKIP] TC-{tc_num:02d} 不存在")
+                    results.append({"tc": tc_num, "status": "SKIP", "error": "不存在"})
+                    continue
 
-            start = datetime.now()
-            retry_count = 0
-            last_error = None
+                name, func, priority = TC_REGISTRY[tc_num]
+                print(f"\n{'='*60}")
+                print(f"TC-{tc_num:02d}: {name} [{priority}]")
+                print(f"{'='*60}")
 
-            # Retry loop — up to MAX_RETRIES on timeout/navigation errors
-            for attempt in range(MAX_RETRIES + 1):
-                try:
-                    await func(page)
-                    elapsed = (datetime.now() - start).total_seconds()
-                    results.append({"tc": tc_num, "status": "PASS", "elapsed": elapsed, "retries": retry_count})
-                    last_error = None
-                    break
-                except TestSkipped as e:
-                    # Real skip (#681): no scenario to test in this environment.
-                    # Distinct status — must NOT be counted as PASS or FAIL.
-                    elapsed = (datetime.now() - start).total_seconds()
-                    print(f"[TC-{tc_num:02d}] SKIP: {e}")
-                    results.append({"tc": tc_num, "status": "SKIP", "error": str(e), "elapsed": elapsed, "retries": retry_count})
-                    last_error = None
-                    break
-                except AssertionError as e:
-                    # Assertion failures: no retry, mark as FAIL immediately
-                    elapsed = (datetime.now() - start).total_seconds()
-                    print(f"[TC-{tc_num:02d}] FAIL: {e}")
-                    await _screenshot_on_failure(page, tc_num, "FAIL")
-                    await _log_console_errors(page, tc_num)
-                    results.append({"tc": tc_num, "status": "FAIL", "error": str(e), "elapsed": elapsed, "retries": retry_count})
-                    last_error = None
-                    break
-                except Exception as e:
-                    elapsed = (datetime.now() - start).total_seconds()
-                    error_str = str(e)
-                    is_retryable = _is_retryable_error(e)
+                context = await browser.new_context(
+                    viewport={"width": 1280, "height": 800},
+                    ignore_https_errors=True,
+                )
+                page = await context.new_page()
+                page.set_default_timeout(TIMEOUT)
 
-                    if is_retryable and attempt < MAX_RETRIES:
-                        retry_count += 1
-                        print(f"[TC-{tc_num:02d}] {error_str} — retry {retry_count}/{MAX_RETRIES}")
-                        await _screenshot_on_failure(page, tc_num, f"RETRY-{retry_count}")
-                        await _log_console_errors(page, tc_num)
-                        # Create fresh context for retry to avoid state leakage
-                        await context.close()
-                        context = await browser.new_context(
-                            viewport={"width": 1280, "height": 800},
-                            ignore_https_errors=True,
-                        )
-                        page = await context.new_page()
-                        page.set_default_timeout(TIMEOUT)
-                        # Re-attach console capture for retry attempt
-                        console_capture = _ConsoleCapture()
-                        page.on("console", console_capture)
-                        page._captured_console = console_capture.messages
-                        continue
+                # Attach console capture for failure diagnostics
+                console_capture = _ConsoleCapture()
+                page.on("console", console_capture)
+                page._captured_console = console_capture.messages
 
-                    # Non-retryable error or retries exhausted
-                    print(f"[TC-{tc_num:02d}] ERROR: {error_str}")
-                    if is_retryable:
-                        print(f"  (retries exhausted after {MAX_RETRIES})")
-                    traceback.print_exc()
-                    await _screenshot_on_failure(page, tc_num, "ERROR")
-                    await _log_console_errors(page, tc_num)
-                    results.append({"tc": tc_num, "status": "ERROR", "error": error_str, "elapsed": elapsed, "retries": retry_count})
-                    last_error = None
-                    break
-            else:
-                # Loop completed without break (shouldn't happen, but safety net)
-                if last_error:
-                    elapsed = (datetime.now() - start).total_seconds()
-                    results.append({"tc": tc_num, "status": "ERROR", "error": str(last_error), "elapsed": elapsed, "retries": retry_count})
+                start = datetime.now()
+                retry_count = 0
+                last_error = None
 
-            await context.close()
+                # Retry loop — up to MAX_RETRIES on timeout/navigation errors
+                for attempt in range(MAX_RETRIES + 1):
+                    try:
+                        await func(page)
+                        elapsed = (datetime.now() - start).total_seconds()
+                        results.append({"tc": tc_num, "status": "PASS", "elapsed": elapsed, "retries": retry_count})
+                        last_error = None
+                        break
+                    except TestSkipped as e:
+                        # Real skip (#681): no scenario to test in this environment.
+                        # Distinct status — must NOT be counted as PASS or FAIL.
+                        # Accounting first, diagnostics best-effort after (issue #886
+                        # review, MEDIUM): a print() can raise BrokenPipeError if stdout
+                        # is closed, and that must never cost us the result record.
+                        elapsed = (datetime.now() - start).total_seconds()
+                        results.append({"tc": tc_num, "status": "SKIP", "error": str(e), "elapsed": elapsed, "retries": retry_count})
+                        last_error = None
+                        try:
+                            print(f"[TC-{tc_num:02d}] SKIP: {e}")
+                        except Exception:
+                            pass  # diagnostics only; the result above is already recorded
+                        break
+                    except AssertionError as e:
+                        # Assertion failures: no retry, mark as FAIL immediately.
+                        # Accounting first, diagnostics best-effort after — see note above.
+                        elapsed = (datetime.now() - start).total_seconds()
+                        results.append({"tc": tc_num, "status": "FAIL", "error": str(e), "elapsed": elapsed, "retries": retry_count})
+                        last_error = None
+                        try:
+                            print(f"[TC-{tc_num:02d}] FAIL: {e}")
+                            await _screenshot_on_failure(page, tc_num, "FAIL")
+                            await _log_console_errors(page, tc_num)
+                        except Exception:
+                            pass  # diagnostics only; the result above is already recorded
+                        break
+                    except Exception as e:
+                        elapsed = (datetime.now() - start).total_seconds()
+                        error_str = str(e)
+                        is_retryable = _is_retryable_error(e)
 
-        await browser.close()
+                        if is_retryable and attempt < MAX_RETRIES:
+                            retry_count += 1
+                            # No results.append() on this path — it's a retry, not a
+                            # final outcome. But everything below MUST still run (the
+                            # continue is what keeps the retry loop alive), so wrap the
+                            # diagnostics: a BrokenPipeError from print() here must not
+                            # escape the except block and abort run_tests() entirely
+                            # (issue #886 review, MEDIUM).
+                            try:
+                                print(f"[TC-{tc_num:02d}] {error_str} — retry {retry_count}/{MAX_RETRIES}")
+                                await _screenshot_on_failure(page, tc_num, f"RETRY-{retry_count}")
+                                await _log_console_errors(page, tc_num)
+                            except Exception:
+                                pass  # diagnostics only; the retry must proceed regardless
 
+                            # Create fresh context for retry to avoid state leakage.
+                            # issue #886 review round 2 (MEDIUM): this rebuild used to be
+                            # unguarded — if context.close()/new_context()/new_page()/
+                            # page.on() itself throws, that exception escaped this
+                            # `except Exception as e:` block entirely, past the `for attempt`
+                            # loop and past `async with async_playwright()`, aborting
+                            # run_tests() for every *remaining* TC, not just this one — the
+                            # one accounting path that could still lose a result (or the
+                            # whole rest of the run) even after round 1's fix. A retry that
+                            # can't get a fresh browser context isn't a retryable condition
+                            # anymore; record it as this TC's final ERROR outcome instead of
+                            # letting it destroy the run.
+                            try:
+                                await context.close()
+                                context = await browser.new_context(
+                                    viewport={"width": 1280, "height": 800},
+                                    ignore_https_errors=True,
+                                )
+                                page = await context.new_page()
+                                page.set_default_timeout(TIMEOUT)
+                                # Re-attach console capture for retry attempt
+                                console_capture = _ConsoleCapture()
+                                page.on("console", console_capture)
+                                page._captured_console = console_capture.messages
+                            except Exception as rebuild_err:
+                                elapsed = (datetime.now() - start).total_seconds()
+                                results.append({
+                                    "tc": tc_num,
+                                    "status": "ERROR",
+                                    "error": f"重試前重建 context 失敗：{type(rebuild_err).__name__}: {rebuild_err}",
+                                    "elapsed": elapsed,
+                                    "retries": retry_count,
+                                })
+                                last_error = None
+                                try:
+                                    print(f"[TC-{tc_num:02d}] ERROR: 重試前重建 context 失敗：{rebuild_err}")
+                                except Exception:
+                                    pass  # diagnostics only; the result above is already recorded
+                                # No extra cleanup here: the unconditional `await
+                                # context.close()` right after this retry loop (same
+                                # cleanup every PASS/FAIL/ERROR/SKIP path already goes
+                                # through) will run next regardless of which of the
+                                # try block's four awaits above failed — closing
+                                # whatever `context` currently references. Duplicating
+                                # that call here would only add a second close attempt
+                                # on possibly-already-closed state for no benefit.
+                                break
+                            continue
+
+                        # Non-retryable error or retries exhausted.
+                        # Accounting first, diagnostics best-effort after — see note above.
+                        results.append({"tc": tc_num, "status": "ERROR", "error": error_str, "elapsed": elapsed, "retries": retry_count})
+                        last_error = None
+                        try:
+                            print(f"[TC-{tc_num:02d}] ERROR: {error_str}")
+                            if is_retryable:
+                                print(f"  (retries exhausted after {MAX_RETRIES})")
+                            traceback.print_exc()
+                            await _screenshot_on_failure(page, tc_num, "ERROR")
+                            await _log_console_errors(page, tc_num)
+                        except Exception:
+                            pass  # diagnostics only; the result above is already recorded
+                        break
+                else:
+                    # Loop completed without break (shouldn't happen, but safety net)
+                    if last_error:
+                        elapsed = (datetime.now() - start).total_seconds()
+                        results.append({"tc": tc_num, "status": "ERROR", "error": str(last_error), "elapsed": elapsed, "retries": retry_count})
+
+                await context.close()
+
+            await browser.close()
+    except Exception as e:
+        # issue #886 (rounds 3-4): rows 3-7/10/11 from the lifecycle audit table
+        # (browser launch, per-TC context/page setup, the unconditional
+        # `context.close()` after the retry loop, `browser.close()` after the
+        # whole TC loop) plus row 12 (`async with`'s own __aexit__, now covered
+        # by wrapping the whole statement above) were all unguarded — any of
+        # them raising used to escape run_tests() entirely, skipping the
+        # summary report and JUnit XML below (`# 彙總報告`, outside this
+        # try/except) no matter how many TCs had already completed correctly.
+        #
+        # The obvious fix — catch here and fall through to the existing summary
+        # code — has a worse failure mode than the one it closes: if NOTHING ran
+        # yet (e.g. browser.launch() itself failed), `results` is still `[]`,
+        # and printing "Total: 0 | PASS: 0 | FAIL: 0 | ERROR: 0 | SKIP: 0"
+        # passes this repo's own CI convention (CLAUDE.md: judge e2e by
+        # `FAIL: 0` and `ERROR: 0` in that summary line) — a suite that never
+        # launched would read as a perfect green. That's exactly the "error
+        # state collapsing into a value the caller can't distinguish from
+        # success" defect class this whole PR exists to close, and it would
+        # have been introduced BY this fix. So: always append a synthetic
+        # ERROR result naming what aborted and how many TCs never ran, so
+        # `errors` is never zero here and `ERROR: 0` can't match — see
+        # test_lifecycle_abort_no_false_green.py.
+        #
+        # issue #886 review round 4 (gap 2): the first version of this handler
+        # printed the abort diagnostic BEFORE appending that synthetic result —
+        # exactly the "diagnostics before accounting" mistake round 2's MEDIUM 3
+        # fix eliminated from the four pre-existing branches (SKIP/FAIL/RETRY/
+        # ERROR). A print() failure here (stdout closed -> BrokenPipeError) would
+        # have skipped results.append() entirely, losing the one thing this whole
+        # guard exists to guarantee. Accounting first, unconditionally; diagnostics
+        # best-effort after, wrapped so nothing there can undo the append above it.
+        completed = {r["tc"] for r in results if isinstance(r.get("tc"), int)}
+        remaining = [t for t in tc_nums if t not in completed]
+        results.append({
+            "tc": "SUITE-ABORT",
+            "status": "ERROR",
+            "error": (
+                f"測試迴圈提前中止（{type(e).__name__}: {e}）—— "
+                f"{len(remaining)}/{len(tc_nums)} 個 TC 未執行：{remaining}"
+            ),
+            "elapsed": 0,
+            "retries": 0,
+        })
+        try:
+            print(f"\n[run_tests] 未預期的例外中止了測試迴圈：{type(e).__name__}: {e}")
+            traceback.print_exc()
+        except Exception:
+            pass  # diagnostics only; the synthetic result above is already recorded
     # 彙總報告
-    print(f"\n{'='*60}")
-    print("測試報告彙總")
-    print(f"{'='*60}")
+    #
+    # issue #886 review round 5: this is the last unguarded place in this
+    # function that could lose the report. It runs on EVERY path — normal
+    # completion and the synthetic-ERROR abort path above both reach here
+    # with `results` fully built — including the all-green path, which the
+    # review flagged as the *most likely* one to actually execute (a suite
+    # that runs 36 TCs successfully prints a lot more output than one that
+    # aborts at browser.launch(), so there's simply more surface for a
+    # BrokenPipeError or a JUnit-XML disk-full to hit). Before this fix, a
+    # failure anywhere in this block — a print(), or `_write_junit_xml()`'s
+    # file I/O — escaped uncaught, meaning `return results` below never ran
+    # and `main()` never got its exit code, on what may have been a run
+    # where every single test actually passed.
+    #
+    # Design decision (review round 5's explicit ask — decide what an
+    # unprintable-but-successful run reports, don't let it fall out):
+    #   1. `results` — the data `main()`'s exit code depends on — is always
+    #      returned, unconditionally, regardless of whether anything below
+    #      could be printed. The exit code must never depend on a print
+    #      succeeding.
+    #   2. The one CI-critical line (`Total: N | PASS: n | FAIL: n |
+    #      ERROR: n | SKIP: n`, the exact string CLAUDE.md's convention
+    #      greps for) is attempted on stdout first. If that attempt — or
+    #      anything before it, the per-TC lines or the JUnit XML write —
+    #      fails, a SECOND attempt at that same line goes to stderr: CI job
+    #      logs interleave stdout and stderr into one stream, so this gives
+    #      the line a real chance to still surface even when stdout
+    #      specifically is what broke. Silence is the fallback of last
+    #      resort, not the first one.
+    #   3. If even the stderr attempt fails, nothing further is attempted —
+    #      a second failure while reporting the first would only obscure
+    #      both, and the exit code (point 1) remains the authoritative,
+    #      always-correct signal regardless.
+    # See test_summary_report_failure_on_green_run_preserves_result() for
+    # this exact scenario: a print failure on an otherwise fully green run.
+    #
+    # issue #886 review round 6: the except block below used to fall back
+    # unconditionally on ANY exception in this try — including one raised
+    # by `_write_junit_xml()` AFTER the stdout "Total:" line had already
+    # printed successfully. That fires the stderr fallback on the wrong
+    # condition: "the report block raised" is not the same thing as "the
+    # summary line was never emitted", and only the second is the one the
+    # fallback exists for. Fault injection proved the bug: stdout AND
+    # stderr both ended up with an identical "Total: ..." line. Fixed by
+    # tracking whether the stdout line actually printed and gating the
+    # fallback on that, not on whether *anything* in the block raised.
+    summary_line_printed = False
+    try:
+        print(f"\n{'='*60}")
+        print("測試報告彙總")
+        print(f"{'='*60}")
 
-    passed = sum(1 for r in results if r["status"] == "PASS")
-    failed = sum(1 for r in results if r["status"] == "FAIL")
-    errors = sum(1 for r in results if r["status"] == "ERROR")
-    skipped = sum(1 for r in results if r["status"] == "SKIP")
-    total = len(results)
+        passed, failed, errors, skipped, total = _compute_stats(results)
 
-    for r in results:
-        tc = r["tc"]
-        name = TC_REGISTRY.get(tc, ("?", None, "?"))[0]
-        priority = TC_REGISTRY.get(tc, ("?", None, "?"))[2]
-        status = r["status"]
-        elapsed_str = f"{r.get('elapsed', 0):.1f}s" if "elapsed" in r else "-"
-        retry_str = f" (retried {r['retries']}x)" if r.get("retries", 0) > 0 else ""
-        error = f" — {r.get('error', '')}" if r.get("error") else ""
-        icon = {"PASS": "OK", "FAIL": "NG", "ERROR": "!!!", "SKIP": "--"}[status]
-        print(f"  [{icon}] TC-{tc:02d} [{priority}] {name}{retry_str} ({elapsed_str}){error}")
+        for r in results:
+            tc = r["tc"]
+            name = TC_REGISTRY.get(tc, ("?", None, "?"))[0]
+            priority = TC_REGISTRY.get(tc, ("?", None, "?"))[2]
+            status = r["status"]
+            elapsed_str = f"{r.get('elapsed', 0):.1f}s" if "elapsed" in r else "-"
+            retry_str = f" (retried {r['retries']}x)" if r.get("retries", 0) > 0 else ""
+            error = f" — {r.get('error', '')}" if r.get("error") else ""
+            icon = {"PASS": "OK", "FAIL": "NG", "ERROR": "!!!", "SKIP": "--"}[status]
+            print(f"  [{icon}] {_tc_label(tc)} [{priority}] {name}{retry_str} ({elapsed_str}){error}")
 
-    print(f"\n  Total: {total} | PASS: {passed} | FAIL: {failed} | ERROR: {errors} | SKIP: {skipped}")
-    print(f"  截圖目錄: {SCREENSHOTS_DIR.resolve()}")
+        print(f"\n  Total: {total} | PASS: {passed} | FAIL: {failed} | ERROR: {errors} | SKIP: {skipped}")
+        summary_line_printed = True  # the one CI-critical line reached stdout — anything
+        # that fails past this point (the screenshot-dir line, the JUnit write) is a
+        # separate, lower-stakes failure and must not re-trigger the stderr fallback.
+        print(f"  截圖目錄: {SCREENSHOTS_DIR.resolve()}")
 
-    if report_path:
-        _write_junit_xml(results, report_path, total, passed, failed, errors, skipped)
-        print(f"  JUnit XML: {Path(report_path).resolve()}")
+        if report_path:
+            _write_junit_xml(results, report_path, total, passed, failed, errors, skipped)
+            print(f"  JUnit XML: {Path(report_path).resolve()}")
+    except Exception as e:
+        if summary_line_printed:
+            # The CI-critical line is already on stdout — falling back here would
+            # only duplicate it, not rescue anything. Note the later failure once,
+            # to stderr, without re-emitting "Total: ...".
+            try:
+                print(
+                    f"[run_tests] 彙總報告在 Total 行印出後仍發生例外"
+                    f"（{type(e).__name__}: {e}），略過 stderr 備援以避免重複輸出"
+                    "（見 issue #886 review round 6）",
+                    file=sys.stderr,
+                )
+            except Exception:
+                pass  # diagnostics only; the line is already out, nothing to rescue
+        else:
+            passed, failed, errors, skipped, total = _compute_stats(results)
+            fallback_line = (
+                f"  Total: {total} | PASS: {passed} | FAIL: {failed} | "
+                f"ERROR: {errors} | SKIP: {skipped}"
+            )
+            try:
+                print(
+                    f"[run_tests] 彙總報告輸出失敗（{type(e).__name__}: {e}），"
+                    "改印到 stderr（見 issue #886 review round 5）：",
+                    file=sys.stderr,
+                )
+                print(fallback_line, file=sys.stderr)
+            except Exception:
+                pass  # nothing more can be done; `results` below is still correct
 
     return results
 
@@ -2867,9 +3146,9 @@ def _write_junit_xml(results, report_path, total, passed, failed, errors, skippe
 
     for r in results:
         tc = r["tc"]
-        name, _, priority = TC_REGISTRY.get(tc, (f"TC-{tc:02d}", None, "?"))
+        name, _, priority = TC_REGISTRY.get(tc, (_tc_label(tc), None, "?"))
         retries = r.get("retries", 0)
-        case_name = f"TC-{tc:02d}: {name} [{priority}]"
+        case_name = f"{_tc_label(tc)}: {name} [{priority}]"
         if retries > 0:
             case_name += f" (retried {retries}x)"
         case = ET.SubElement(suite, "testcase", {
