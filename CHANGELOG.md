@@ -323,6 +323,29 @@ honest than the commit messages describing the same work.
   the issue body and `docs/production-readiness.md`) — remains outstanding.** This entry
   gates one sink as defence in depth, not the architectural fix.
 
+### Fixed
+
+- **`demo/WalkingTec.Mvvm.Vue3Demo/ClientApp/wtmbuild.ts` hardcoded Windows backslash path
+  separators, so `vite build` failed immediately on macOS/Linux (#869).** The custom
+  `wtmBuildPlugin`'s `buildStart` hook built its scan/output paths by string-concatenating
+  literal `"\\src\\views"` / `"\\public\\menu.json"` onto `__dirname` — not a valid path on
+  any non-Windows OS, so the plugin threw
+  `ENOENT: no such file or directory, scandir '...\src\views'` before a single module
+  transformed. Replaced both with `path.join(__dirname, "src", "views")` /
+  `path.join(__dirname, "public", "menu.json")` (Node's `path` module was already imported
+  in this file for `readDir`'s own path handling). `path.join` resolves with the platform's
+  native separator, so this is unchanged behaviour on Windows and a genuine fix on
+  macOS/Linux — verified by running `vite build` on macOS before and after: before,
+  `0 modules transformed` then the ENOENT above; after, the plugin's `buildStart` hook
+  completes and 310 modules transform. This does **not** mean `vite build` fully succeeds
+  on macOS at HEAD — a separate, pre-existing dependency-resolution problem unrelated to
+  path separators (`src/i18n/index.ts`'s CJS-style deep import
+  `element-plus/lib/locale/lang/en` is rejected by `vite@7`'s stricter ESM
+  export-conditions resolver, since `element-plus@2.13.5`'s `package.json` only declares a
+  `require` condition for that path, not `import`) still blocks the Rollup bundling stage
+  on any platform at this dependency combination; tracked separately in #891, not
+  introduced or fixed by this change.
+
 ## [10.18.0] - 2026-07-22
 
 The **LayUI eval-retirement epic (#470) reaches the whole form + grid + dialog family.** Slices G→O plus the docs endgame (Q) complete the opt-in, eval-free island-render migration begun in 10.16.0: every interactive LayUI widget — combobox/tree, transfer, upload, laydate, slider/colorpicker, ueditor/richtext, textarea counters, tree-container, chart, search-panel, and the full data grid (render core, toolbar/row-button dispatch, local-data, and cell editing) — now renders through declarative JSON islands + `data-wtm-*` delegated handlers when `WtmUIOptions.UseSelectIslandRender = true`, instead of inline `<script>`. **Every migration is default-off and byte-identical to before** — this release ships **zero behaviour change** to existing deployments ⚠️ *(the byte-identical and zero-behaviour-change claims in this sentence are **retracted** — see "Corrected" under [Unreleased] and #835)* while making a strict, `unsafe-inline`/`unsafe-eval`-free Content-Security-Policy achievable for the whole form/grid/dialog surface. `framework_layui.js` stays at exactly **one** active-code `eval(` (the deprecated `IsScript` path). Also: a vendored-layui XSS fix (opt-in-legacy only), refresh-token table indexes, and CI/compose ARM64 fixes.
