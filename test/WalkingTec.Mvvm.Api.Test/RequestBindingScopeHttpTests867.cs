@@ -139,35 +139,46 @@ public class RequestBindingScopeHttpTests867
         Assert.IsFalse(configMonitor.CurrentValue.IsQuickDebug,
             "Sanity: baseline IsQuickDebug must be false under _strictFactory before the hostile request.");
 
-        var uniqueZip = $"867{Guid.NewGuid():N}"[..12];
-        SeedStudentWithUniqueZip(uniqueZip);
-
-        var client = await NewAuthClientAsync();
-        var form = new FormUrlEncodedContent(new Dictionary<string, string>
+        // configMonitor.CurrentValue is the SAME process-wide Configs instance every test in this
+        // class (and every real request under _strictFactory) shares — belt-and-suspenders reset
+        // so a would-be flip here (this test's own subject) can never leak into a later test's own
+        // baseline sanity check, regardless of pass/fail.
+        try
         {
-            ["_DONOT_USE_VMNAME"] = StudentListVm,
-            ["ConfigInfo.IsQuickDebug"] = "true",
-            ["Searcher.ZipCode"] = uniqueZip,
-        });
+            var uniqueZip = $"867{Guid.NewGuid():N}"[..12];
+            SeedStudentWithUniqueZip(uniqueZip);
 
-        var resp = await client.PostAsync("/_Framework/GetPagingData", form);
-        var body = await resp.Content.ReadAsStringAsync();
-        Assert.AreEqual(HttpStatusCode.OK, resp.StatusCode,
-            $"#867: GetPagingData should succeed (rejecting the hostile key is a skip, not a " +
-            $"request failure). Got {(int)resp.StatusCode}: {body[..Math.Min(500, body.Length)]}");
+            var client = await NewAuthClientAsync();
+            var form = new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["_DONOT_USE_VMNAME"] = StudentListVm,
+                ["ConfigInfo.IsQuickDebug"] = "true",
+                ["Searcher.ZipCode"] = uniqueZip,
+            });
 
-        // ── the critical assertion: the CONFIG VALUE, not a status code ──
-        Assert.IsFalse(configMonitor.CurrentValue.IsQuickDebug,
-            "#867: a caller-supplied 'ConfigInfo.IsQuickDebug' form field must never reach the " +
-            "process-wide Configs singleton through RedoUpdateModel's raw reflection write.");
+            var resp = await client.PostAsync("/_Framework/GetPagingData", form);
+            var body = await resp.Content.ReadAsStringAsync();
+            Assert.AreEqual(HttpStatusCode.OK, resp.StatusCode,
+                $"#867: GetPagingData should succeed (rejecting the hostile key is a skip, not a " +
+                $"request failure). Got {(int)resp.StatusCode}: {body[..Math.Min(500, body.Length)]}");
 
-        // ── positive control, same request/method: legitimate Searcher.ZipCode still works ──
-        using var doc = JsonDocument.Parse(body);
-        var count = doc.RootElement.GetProperty("Count").GetInt64();
-        Assert.AreEqual(1, count,
-            $"#867: positive control failed — Searcher.ZipCode='{uniqueZip}' should have found " +
-            $"exactly the one seeded student (proving the fix does not simply reject every key). " +
-            $"Body: {body}");
+            // ── the critical assertion: the CONFIG VALUE, not a status code ──
+            Assert.IsFalse(configMonitor.CurrentValue.IsQuickDebug,
+                "#867: a caller-supplied 'ConfigInfo.IsQuickDebug' form field must never reach the " +
+                "process-wide Configs singleton through RedoUpdateModel's raw reflection write.");
+
+            // ── positive control, same request/method: legitimate Searcher.ZipCode still works ──
+            using var doc = JsonDocument.Parse(body);
+            var count = doc.RootElement.GetProperty("Count").GetInt64();
+            Assert.AreEqual(1, count,
+                $"#867: positive control failed — Searcher.ZipCode='{uniqueZip}' should have found " +
+                $"exactly the one seeded student (proving the fix does not simply reject every key). " +
+                $"Body: {body}");
+        }
+        finally
+        {
+            configMonitor.CurrentValue.IsQuickDebug = false;
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -241,24 +252,33 @@ public class RequestBindingScopeHttpTests867
         Assert.IsFalse(configMonitor.CurrentValue.IsQuickDebug,
             "Sanity: baseline IsQuickDebug must be false under _strictFactory before the hostile request.");
 
-        var client = await NewAuthClientAsync();
-        var form = new FormUrlEncodedContent(new Dictionary<string, string>
+        // See GetPagingData_HostileConfigInfoIsQuickDebugField_...'s comment on the same reset —
+        // configMonitor.CurrentValue is shared process-wide state across every test in this class.
+        try
         {
-            ["_DONOT_USE_VMNAME"] = StudentListVm,
-            ["Wtm.ConfigInfo.IsQuickDebug"] = "true",
-            ["Searcher.Wtm.ConfigInfo.IsQuickDebug"] = "true",
-        });
+            var client = await NewAuthClientAsync();
+            var form = new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["_DONOT_USE_VMNAME"] = StudentListVm,
+                ["Wtm.ConfigInfo.IsQuickDebug"] = "true",
+                ["Searcher.Wtm.ConfigInfo.IsQuickDebug"] = "true",
+            });
 
-        var resp = await client.PostAsync("/_Framework/GetPagingData", form);
-        var body = await resp.Content.ReadAsStringAsync();
-        Assert.AreEqual(HttpStatusCode.OK, resp.StatusCode,
-            $"#867: GetPagingData should succeed. Got {(int)resp.StatusCode}: {body[..Math.Min(500, body.Length)]}");
+            var resp = await client.PostAsync("/_Framework/GetPagingData", form);
+            var body = await resp.Content.ReadAsStringAsync();
+            Assert.AreEqual(HttpStatusCode.OK, resp.StatusCode,
+                $"#867: GetPagingData should succeed. Got {(int)resp.StatusCode}: {body[..Math.Min(500, body.Length)]}");
 
-        Assert.IsFalse(configMonitor.CurrentValue.IsQuickDebug,
-            "#867: neither the 'Wtm.ConfigInfo.IsQuickDebug' nor the aliased " +
-            "'Searcher.Wtm.ConfigInfo.IsQuickDebug' form field may reach the process-wide " +
-            "Configs singleton — the declaring-type check must catch 'Wtm' wherever in the " +
-            "dotted path it appears, not just as the key's literal first segment.");
+            Assert.IsFalse(configMonitor.CurrentValue.IsQuickDebug,
+                "#867: neither the 'Wtm.ConfigInfo.IsQuickDebug' nor the aliased " +
+                "'Searcher.Wtm.ConfigInfo.IsQuickDebug' form field may reach the process-wide " +
+                "Configs singleton — the declaring-type check must catch 'Wtm' wherever in the " +
+                "dotted path it appears, not just as the key's literal first segment.");
+        }
+        finally
+        {
+            configMonitor.CurrentValue.IsQuickDebug = false;
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════

@@ -13,8 +13,8 @@
   "red_expected_assertion_patterns": {
     "WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_PublicStaticField_ReturnsFalse": "must be rejected independently of the gateway-name check"
   },
-  "red_expected_assertion_patterns_provisional": true,
-  "red_expected_assertion_patterns_observed": null,
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured verbatim against a clean checkout with the mutant patch applied (stale demo.db under bin/ removed first): 'Assert.IsFalse failed. #867: Type.GetMember defaults to Public|Instance|Static, so a public static field is reachable through an instance path and must be rejected independently of the gateway-name check.'. Confirmed via python3 test/mutants/run_mutant.py --mutant wtmsec867-static-member-guard-neutralize: 'VERDICT: KILLED' / 'GATE: PASS'.",
   "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_SearcherDotCustomFilterField_ReturnsTrue",
   "green_tests": [
     "WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_SearcherDotCustomFilterField_ReturnsTrue"
