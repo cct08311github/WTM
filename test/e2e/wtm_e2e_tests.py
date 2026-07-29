@@ -2717,6 +2717,19 @@ class _ConsoleCapture:
 
 # ─── 測試註冊表和執行引擎 ───────────────────────────────────────────────────
 
+def _tc_label(tc):
+    """
+    統一 TC 顯示格式：整數 TC 編號格式化為 "TC-NN"；非整數直接轉字串。
+
+    issue #886 review round 3：run_tests() 的例外處理現在會在 results 裡塞一筆
+    "tc": "SUITE-ABORT" 的合成項目（見 run_tests() 的最外層 except）。彙總報告的
+    列印迴圈與 _write_junit_xml() 原本都直接寫 f"TC-{tc:02d}"——對字串值會直接
+    拋 ValueError（":02d" 需要數字），等於合成項目本身會讓彙總報告在印到那一列
+    時崩潰，反而錯過原本要留下的訊號。統一經過這裡就不會有這個問題。
+    """
+    return f"TC-{tc:02d}" if isinstance(tc, int) else str(tc)
+
+
 TC_REGISTRY = {
     1: ("XSS 反射測試", tc_01_xss_reflected, "P0"),
     2: ("SQL Injection 測試", tc_02_sql_injection, "P0"),
@@ -2779,165 +2792,206 @@ async def run_tests(tc_nums=None, headless=None, slow_mo=0, report_path=None):
 
     results = []
     async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=headless,
-            slow_mo=slow_mo,
-        )
-
-        for tc_num in tc_nums:
-            if tc_num not in TC_REGISTRY:
-                print(f"[SKIP] TC-{tc_num:02d} 不存在")
-                results.append({"tc": tc_num, "status": "SKIP", "error": "不存在"})
-                continue
-
-            name, func, priority = TC_REGISTRY[tc_num]
-            print(f"\n{'='*60}")
-            print(f"TC-{tc_num:02d}: {name} [{priority}]")
-            print(f"{'='*60}")
-
-            context = await browser.new_context(
-                viewport={"width": 1280, "height": 800},
-                ignore_https_errors=True,
+        try:
+            browser = await p.chromium.launch(
+                headless=headless,
+                slow_mo=slow_mo,
             )
-            page = await context.new_page()
-            page.set_default_timeout(TIMEOUT)
 
-            # Attach console capture for failure diagnostics
-            console_capture = _ConsoleCapture()
-            page.on("console", console_capture)
-            page._captured_console = console_capture.messages
+            for tc_num in tc_nums:
+                if tc_num not in TC_REGISTRY:
+                    print(f"[SKIP] TC-{tc_num:02d} 不存在")
+                    results.append({"tc": tc_num, "status": "SKIP", "error": "不存在"})
+                    continue
 
-            start = datetime.now()
-            retry_count = 0
-            last_error = None
+                name, func, priority = TC_REGISTRY[tc_num]
+                print(f"\n{'='*60}")
+                print(f"TC-{tc_num:02d}: {name} [{priority}]")
+                print(f"{'='*60}")
 
-            # Retry loop — up to MAX_RETRIES on timeout/navigation errors
-            for attempt in range(MAX_RETRIES + 1):
-                try:
-                    await func(page)
-                    elapsed = (datetime.now() - start).total_seconds()
-                    results.append({"tc": tc_num, "status": "PASS", "elapsed": elapsed, "retries": retry_count})
-                    last_error = None
-                    break
-                except TestSkipped as e:
-                    # Real skip (#681): no scenario to test in this environment.
-                    # Distinct status — must NOT be counted as PASS or FAIL.
-                    # Accounting first, diagnostics best-effort after (issue #886
-                    # review, MEDIUM): a print() can raise BrokenPipeError if stdout
-                    # is closed, and that must never cost us the result record.
-                    elapsed = (datetime.now() - start).total_seconds()
-                    results.append({"tc": tc_num, "status": "SKIP", "error": str(e), "elapsed": elapsed, "retries": retry_count})
-                    last_error = None
+                context = await browser.new_context(
+                    viewport={"width": 1280, "height": 800},
+                    ignore_https_errors=True,
+                )
+                page = await context.new_page()
+                page.set_default_timeout(TIMEOUT)
+
+                # Attach console capture for failure diagnostics
+                console_capture = _ConsoleCapture()
+                page.on("console", console_capture)
+                page._captured_console = console_capture.messages
+
+                start = datetime.now()
+                retry_count = 0
+                last_error = None
+
+                # Retry loop — up to MAX_RETRIES on timeout/navigation errors
+                for attempt in range(MAX_RETRIES + 1):
                     try:
-                        print(f"[TC-{tc_num:02d}] SKIP: {e}")
-                    except Exception:
-                        pass  # diagnostics only; the result above is already recorded
-                    break
-                except AssertionError as e:
-                    # Assertion failures: no retry, mark as FAIL immediately.
-                    # Accounting first, diagnostics best-effort after — see note above.
-                    elapsed = (datetime.now() - start).total_seconds()
-                    results.append({"tc": tc_num, "status": "FAIL", "error": str(e), "elapsed": elapsed, "retries": retry_count})
-                    last_error = None
-                    try:
-                        print(f"[TC-{tc_num:02d}] FAIL: {e}")
-                        await _screenshot_on_failure(page, tc_num, "FAIL")
-                        await _log_console_errors(page, tc_num)
-                    except Exception:
-                        pass  # diagnostics only; the result above is already recorded
-                    break
-                except Exception as e:
-                    elapsed = (datetime.now() - start).total_seconds()
-                    error_str = str(e)
-                    is_retryable = _is_retryable_error(e)
-
-                    if is_retryable and attempt < MAX_RETRIES:
-                        retry_count += 1
-                        # No results.append() on this path — it's a retry, not a
-                        # final outcome. But everything below MUST still run (the
-                        # continue is what keeps the retry loop alive), so wrap the
-                        # diagnostics: a BrokenPipeError from print() here must not
-                        # escape the except block and abort run_tests() entirely
-                        # (issue #886 review, MEDIUM).
+                        await func(page)
+                        elapsed = (datetime.now() - start).total_seconds()
+                        results.append({"tc": tc_num, "status": "PASS", "elapsed": elapsed, "retries": retry_count})
+                        last_error = None
+                        break
+                    except TestSkipped as e:
+                        # Real skip (#681): no scenario to test in this environment.
+                        # Distinct status — must NOT be counted as PASS or FAIL.
+                        # Accounting first, diagnostics best-effort after (issue #886
+                        # review, MEDIUM): a print() can raise BrokenPipeError if stdout
+                        # is closed, and that must never cost us the result record.
+                        elapsed = (datetime.now() - start).total_seconds()
+                        results.append({"tc": tc_num, "status": "SKIP", "error": str(e), "elapsed": elapsed, "retries": retry_count})
+                        last_error = None
                         try:
-                            print(f"[TC-{tc_num:02d}] {error_str} — retry {retry_count}/{MAX_RETRIES}")
-                            await _screenshot_on_failure(page, tc_num, f"RETRY-{retry_count}")
+                            print(f"[TC-{tc_num:02d}] SKIP: {e}")
+                        except Exception:
+                            pass  # diagnostics only; the result above is already recorded
+                        break
+                    except AssertionError as e:
+                        # Assertion failures: no retry, mark as FAIL immediately.
+                        # Accounting first, diagnostics best-effort after — see note above.
+                        elapsed = (datetime.now() - start).total_seconds()
+                        results.append({"tc": tc_num, "status": "FAIL", "error": str(e), "elapsed": elapsed, "retries": retry_count})
+                        last_error = None
+                        try:
+                            print(f"[TC-{tc_num:02d}] FAIL: {e}")
+                            await _screenshot_on_failure(page, tc_num, "FAIL")
                             await _log_console_errors(page, tc_num)
                         except Exception:
-                            pass  # diagnostics only; the retry must proceed regardless
+                            pass  # diagnostics only; the result above is already recorded
+                        break
+                    except Exception as e:
+                        elapsed = (datetime.now() - start).total_seconds()
+                        error_str = str(e)
+                        is_retryable = _is_retryable_error(e)
 
-                        # Create fresh context for retry to avoid state leakage.
-                        # issue #886 review round 2 (MEDIUM): this rebuild used to be
-                        # unguarded — if context.close()/new_context()/new_page()/
-                        # page.on() itself throws, that exception escaped this
-                        # `except Exception as e:` block entirely, past the `for attempt`
-                        # loop and past `async with async_playwright()`, aborting
-                        # run_tests() for every *remaining* TC, not just this one — the
-                        # one accounting path that could still lose a result (or the
-                        # whole rest of the run) even after round 1's fix. A retry that
-                        # can't get a fresh browser context isn't a retryable condition
-                        # anymore; record it as this TC's final ERROR outcome instead of
-                        # letting it destroy the run.
-                        try:
-                            await context.close()
-                            context = await browser.new_context(
-                                viewport={"width": 1280, "height": 800},
-                                ignore_https_errors=True,
-                            )
-                            page = await context.new_page()
-                            page.set_default_timeout(TIMEOUT)
-                            # Re-attach console capture for retry attempt
-                            console_capture = _ConsoleCapture()
-                            page.on("console", console_capture)
-                            page._captured_console = console_capture.messages
-                        except Exception as rebuild_err:
-                            elapsed = (datetime.now() - start).total_seconds()
-                            results.append({
-                                "tc": tc_num,
-                                "status": "ERROR",
-                                "error": f"重試前重建 context 失敗：{type(rebuild_err).__name__}: {rebuild_err}",
-                                "elapsed": elapsed,
-                                "retries": retry_count,
-                            })
-                            last_error = None
+                        if is_retryable and attempt < MAX_RETRIES:
+                            retry_count += 1
+                            # No results.append() on this path — it's a retry, not a
+                            # final outcome. But everything below MUST still run (the
+                            # continue is what keeps the retry loop alive), so wrap the
+                            # diagnostics: a BrokenPipeError from print() here must not
+                            # escape the except block and abort run_tests() entirely
+                            # (issue #886 review, MEDIUM).
                             try:
-                                print(f"[TC-{tc_num:02d}] ERROR: 重試前重建 context 失敗：{rebuild_err}")
+                                print(f"[TC-{tc_num:02d}] {error_str} — retry {retry_count}/{MAX_RETRIES}")
+                                await _screenshot_on_failure(page, tc_num, f"RETRY-{retry_count}")
+                                await _log_console_errors(page, tc_num)
                             except Exception:
-                                pass  # diagnostics only; the result above is already recorded
-                            # No extra cleanup here: the unconditional `await
-                            # context.close()` right after this retry loop (same
-                            # cleanup every PASS/FAIL/ERROR/SKIP path already goes
-                            # through) will run next regardless of which of the
-                            # try block's four awaits above failed — closing
-                            # whatever `context` currently references. Duplicating
-                            # that call here would only add a second close attempt
-                            # on possibly-already-closed state for no benefit.
-                            break
-                        continue
+                                pass  # diagnostics only; the retry must proceed regardless
 
-                    # Non-retryable error or retries exhausted.
-                    # Accounting first, diagnostics best-effort after — see note above.
-                    results.append({"tc": tc_num, "status": "ERROR", "error": error_str, "elapsed": elapsed, "retries": retry_count})
-                    last_error = None
-                    try:
-                        print(f"[TC-{tc_num:02d}] ERROR: {error_str}")
-                        if is_retryable:
-                            print(f"  (retries exhausted after {MAX_RETRIES})")
-                        traceback.print_exc()
-                        await _screenshot_on_failure(page, tc_num, "ERROR")
-                        await _log_console_errors(page, tc_num)
-                    except Exception:
-                        pass  # diagnostics only; the result above is already recorded
-                    break
-            else:
-                # Loop completed without break (shouldn't happen, but safety net)
-                if last_error:
-                    elapsed = (datetime.now() - start).total_seconds()
-                    results.append({"tc": tc_num, "status": "ERROR", "error": str(last_error), "elapsed": elapsed, "retries": retry_count})
+                            # Create fresh context for retry to avoid state leakage.
+                            # issue #886 review round 2 (MEDIUM): this rebuild used to be
+                            # unguarded — if context.close()/new_context()/new_page()/
+                            # page.on() itself throws, that exception escaped this
+                            # `except Exception as e:` block entirely, past the `for attempt`
+                            # loop and past `async with async_playwright()`, aborting
+                            # run_tests() for every *remaining* TC, not just this one — the
+                            # one accounting path that could still lose a result (or the
+                            # whole rest of the run) even after round 1's fix. A retry that
+                            # can't get a fresh browser context isn't a retryable condition
+                            # anymore; record it as this TC's final ERROR outcome instead of
+                            # letting it destroy the run.
+                            try:
+                                await context.close()
+                                context = await browser.new_context(
+                                    viewport={"width": 1280, "height": 800},
+                                    ignore_https_errors=True,
+                                )
+                                page = await context.new_page()
+                                page.set_default_timeout(TIMEOUT)
+                                # Re-attach console capture for retry attempt
+                                console_capture = _ConsoleCapture()
+                                page.on("console", console_capture)
+                                page._captured_console = console_capture.messages
+                            except Exception as rebuild_err:
+                                elapsed = (datetime.now() - start).total_seconds()
+                                results.append({
+                                    "tc": tc_num,
+                                    "status": "ERROR",
+                                    "error": f"重試前重建 context 失敗：{type(rebuild_err).__name__}: {rebuild_err}",
+                                    "elapsed": elapsed,
+                                    "retries": retry_count,
+                                })
+                                last_error = None
+                                try:
+                                    print(f"[TC-{tc_num:02d}] ERROR: 重試前重建 context 失敗：{rebuild_err}")
+                                except Exception:
+                                    pass  # diagnostics only; the result above is already recorded
+                                # No extra cleanup here: the unconditional `await
+                                # context.close()` right after this retry loop (same
+                                # cleanup every PASS/FAIL/ERROR/SKIP path already goes
+                                # through) will run next regardless of which of the
+                                # try block's four awaits above failed — closing
+                                # whatever `context` currently references. Duplicating
+                                # that call here would only add a second close attempt
+                                # on possibly-already-closed state for no benefit.
+                                break
+                            continue
 
-            await context.close()
+                        # Non-retryable error or retries exhausted.
+                        # Accounting first, diagnostics best-effort after — see note above.
+                        results.append({"tc": tc_num, "status": "ERROR", "error": error_str, "elapsed": elapsed, "retries": retry_count})
+                        last_error = None
+                        try:
+                            print(f"[TC-{tc_num:02d}] ERROR: {error_str}")
+                            if is_retryable:
+                                print(f"  (retries exhausted after {MAX_RETRIES})")
+                            traceback.print_exc()
+                            await _screenshot_on_failure(page, tc_num, "ERROR")
+                            await _log_console_errors(page, tc_num)
+                        except Exception:
+                            pass  # diagnostics only; the result above is already recorded
+                        break
+                else:
+                    # Loop completed without break (shouldn't happen, but safety net)
+                    if last_error:
+                        elapsed = (datetime.now() - start).total_seconds()
+                        results.append({"tc": tc_num, "status": "ERROR", "error": str(last_error), "elapsed": elapsed, "retries": retry_count})
 
-        await browser.close()
+                await context.close()
+
+            await browser.close()
+        except Exception as e:
+            # issue #886 review round 3 (MEDIUM): rows 4/5/10/11 from the
+            # lifecycle audit table (per-TC context/page setup, the unconditional
+            # `context.close()` after the retry loop, and `browser.close()` after
+            # the whole TC loop) were all unguarded — any of them raising here
+            # used to escape run_tests() entirely, skipping the summary report
+            # and JUnit XML below (`# 彙總報告`, outside this `async with` block)
+            # no matter how many TCs had already completed correctly.
+            #
+            # The obvious fix — catch here and fall through to the existing
+            # summary code — has a worse failure mode than the one it closes:
+            # if NOTHING ran yet (e.g. browser.launch() itself failed), `results`
+            # is still `[]`, and printing "Total: 0 | PASS: 0 | FAIL: 0 |
+            # ERROR: 0 | SKIP: 0" passes this repo's own CI convention (CLAUDE.md:
+            # judge e2e by `FAIL: 0` and `ERROR: 0` in that summary line) — a
+            # suite that never launched would read as a perfect green. That is
+            # exactly the "error state collapsing into a value the caller can't
+            # tell apart from success" defect class this whole PR exists to
+            # close, and it would have been introduced BY this fix. So: always
+            # append a synthetic ERROR result naming what aborted and how many
+            # TCs never ran, so `errors` is never zero here and `ERROR: 0` can't
+            # match — see test_lifecycle_abort_no_false_green.py, which forces
+            # exactly this abort and asserts against that literal string.
+            completed = {r["tc"] for r in results if isinstance(r.get("tc"), int)}
+            remaining = [t for t in tc_nums if t not in completed]
+            print(f"\n[run_tests] 未預期的例外中止了測試迴圈：{type(e).__name__}: {e}")
+            try:
+                traceback.print_exc()
+            except Exception:
+                pass  # diagnostics only; the synthetic result below is what matters
+            results.append({
+                "tc": "SUITE-ABORT",
+                "status": "ERROR",
+                "error": (
+                    f"測試迴圈提前中止（{type(e).__name__}: {e}）—— "
+                    f"{len(remaining)}/{len(tc_nums)} 個 TC 未執行：{remaining}"
+                ),
+                "elapsed": 0,
+                "retries": 0,
+            })
 
     # 彙總報告
     print(f"\n{'='*60}")
@@ -2959,7 +3013,7 @@ async def run_tests(tc_nums=None, headless=None, slow_mo=0, report_path=None):
         retry_str = f" (retried {r['retries']}x)" if r.get("retries", 0) > 0 else ""
         error = f" — {r.get('error', '')}" if r.get("error") else ""
         icon = {"PASS": "OK", "FAIL": "NG", "ERROR": "!!!", "SKIP": "--"}[status]
-        print(f"  [{icon}] TC-{tc:02d} [{priority}] {name}{retry_str} ({elapsed_str}){error}")
+        print(f"  [{icon}] {_tc_label(tc)} [{priority}] {name}{retry_str} ({elapsed_str}){error}")
 
     print(f"\n  Total: {total} | PASS: {passed} | FAIL: {failed} | ERROR: {errors} | SKIP: {skipped}")
     print(f"  截圖目錄: {SCREENSHOTS_DIR.resolve()}")
@@ -2986,9 +3040,9 @@ def _write_junit_xml(results, report_path, total, passed, failed, errors, skippe
 
     for r in results:
         tc = r["tc"]
-        name, _, priority = TC_REGISTRY.get(tc, (f"TC-{tc:02d}", None, "?"))
+        name, _, priority = TC_REGISTRY.get(tc, (_tc_label(tc), None, "?"))
         retries = r.get("retries", 0)
-        case_name = f"TC-{tc:02d}: {name} [{priority}]"
+        case_name = f"{_tc_label(tc)}: {name} [{priority}]"
         if retries > 0:
             case_name += f" (retried {retries}x)"
         case = ET.SubElement(suite, "testcase", {
